@@ -65,14 +65,14 @@ describe('Scoring System', () => {
         test('should increase points for higher wheelie angle', () => {
             const angleDegrees = 60;
             let pointsPerSecond = 20;
-            
-            if (angleDegrees > 60) {
+
+            if (angleDegrees >= 60) {
                 pointsPerSecond = 100;
-            } else if (angleDegrees > 40) {
+            } else if (angleDegrees >= 40) {
                 pointsPerSecond = 60;
             }
-            
-            expect(pointsPerSecond).toBe(60);
+
+            expect(pointsPerSecond).toBe(100);
         });
 
         test('should apply duration bonus for long wheelies', () => {

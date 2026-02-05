@@ -2020,8 +2020,9 @@ class Game {
                 // Check if within checkpoint gate (16 units wide)
                 if (distance < checkpoint.width) {
                     // Check if this is the next expected checkpoint (in order)
+                    const totalCheckpoints = this.environment.checkpoints.length;
                     if (checkpoint.index === this.lastCheckpointIndex + 1 ||
-                        (this.lastCheckpointIndex === 4 && checkpoint.index === 0)) {
+                        (this.lastCheckpointIndex === totalCheckpoints - 1 && checkpoint.index === 0)) {
                         
                         checkpoint.passed = true;
                         this.lastCheckpointIndex = checkpoint.index;
@@ -2085,7 +2086,9 @@ class Game {
                         if (checkpoint.index === 0) {
                             console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points`);
                         } else {
-                            const speedKmh = ((200 / sectionTime) * 3.6).toFixed(1);
+                            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
+                            const dist = checkpoint.position.distanceTo(prevCheckpoint.position);
+                            const speedKmh = ((dist / sectionTime) * 3.6).toFixed(1);
                             console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points (${speedKmh} km/h)`);
                         }
                     }
@@ -2273,14 +2276,15 @@ class Game {
             const comboDisplay = document.getElementById('comboDisplay');
             comboDisplay.textContent = `COMBO x${this.combo}`;
             comboDisplay.style.animation = 'none';
-            setTimeout(() => { comboDisplay.style.animation = 'pulse 0.5s ease-in-out'; }, 10);
+            setTimeout(() => { comboDisplay.style.animation = 'pulse-combo 0.5s ease-in-out'; }, 10);
         }
     }
     
     showCheckpointNotification(checkpointNum, points) {
         const notification = document.createElement('div');
         notification.className = 'checkpoint-notification';
-        notification.textContent = `CHECKPOINT ${checkpointNum}/5! +${points}`;
+        const totalCheckpoints = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 10;
+        notification.textContent = `CHECKPOINT ${checkpointNum}/${totalCheckpoints}! +${points}`;
         document.body.appendChild(notification);
         
         setTimeout(() => {
@@ -2558,7 +2562,6 @@ class SoundManager {
         this.vehicle.wheelieVelocity = 0;
         this.vehicle.jumpRotation = 0;
         this.vehicle.jumpVelocityY = 0;
-        this.vehicle.wheelieAngle = 0;
 
         // Reset start time for timing
         this.startTime = performance.now();

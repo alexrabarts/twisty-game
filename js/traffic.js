@@ -420,15 +420,14 @@ class Car {
         
         // Left side trim
         const leftTrim = new THREE.Mesh(trimGeometry, chromeMaterial);
-        leftTrim.position.set(0, 1.22, -0.3);
+        leftTrim.position.set(0.88, 1.22, -0.3);
         leftTrim.rotation.y = Math.PI / 2;
         this.carGroup.add(leftTrim);
-        
+
         // Right side trim
         const rightTrim = new THREE.Mesh(trimGeometry, chromeMaterial);
-        rightTrim.position.set(0, 1.22, -0.3);
+        rightTrim.position.set(-0.88, 1.22, -0.3);
         rightTrim.rotation.y = Math.PI / 2;
-        rightTrim.position.x = 0;
         this.carGroup.add(rightTrim);
         
         // Wheels with better detail
@@ -1302,7 +1301,7 @@ class AIMotorcycle {
         
         // Smoothly interpolate to target lean angle
         const leanSpeed = 3.0;
-        this.leanAngle += (targetLean - this.leanAngle) * leanSpeed * 0.016;
+        this.leanAngle += (targetLean - this.leanAngle) * leanSpeed * (this.currentDeltaTime || 0.016);
         
         // Clamp lean angle to realistic limits
         const maxLean = Math.PI / 3; // 60 degrees max
@@ -1313,6 +1312,7 @@ class AIMotorcycle {
     }
     
     update(deltaTime, playerPosition, allBikes) {
+        this.currentDeltaTime = deltaTime;
         const segmentLength = 20;
         const distanceToMove = this.currentSpeed * deltaTime;
         const segmentsToMove = distanceToMove / segmentLength;
