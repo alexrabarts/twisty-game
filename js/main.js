@@ -2033,7 +2033,7 @@ class Game {
                         console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
 
                         // Record checkpoint pass time
-                        const currentTime = performance.now();
+                        const currentTime = performance.now() - this.startTime;
                         this.checkpointTimes[checkpoint.index] = currentTime;
 
                         // Record in leaderboard service
