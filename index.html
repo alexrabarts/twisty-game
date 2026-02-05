@@ -247,9 +247,12 @@
             height: 100%;
             background: rgba(0, 0, 0, 0.95);
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             z-index: 1000;
+            overflow-y: auto;
+            padding: 20px 0;
+            box-sizing: border-box;
         }
 
         .tour-selector-panel {
@@ -260,6 +263,7 @@
             border: 3px solid #4a9eff;
             border-radius: 20px;
             box-shadow: 0 0 50px rgba(74, 158, 255, 0.5);
+            margin: auto;
         }
 
         .tour-title {
@@ -377,9 +381,12 @@
             height: 100%;
             background: rgba(0, 0, 0, 0.95);
             display: none;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             z-index: 1000;
+            overflow-y: auto;
+            padding: 20px 0;
+            box-sizing: border-box;
         }
 
         .leaderboard-entry-overlay.active {
@@ -395,6 +402,7 @@
             border-radius: 20px;
             box-shadow: 0 0 50px rgba(74, 158, 255, 0.5);
             text-align: center;
+            margin: auto;
         }
 
         .leaderboard-entry-title {

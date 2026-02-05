@@ -1090,9 +1090,21 @@ class Game {
         finishBanner.id = 'finishBanner';
         finishBanner.style.cssText = `
             position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 20px 0;
+            box-sizing: border-box;
+            z-index: 1000;
+            animation: fadeIn 0.5s ease-out;
+        `;
+        const finishPanel = document.createElement('div');
+        finishPanel.style.cssText = `
             background: linear-gradient(135deg, #2c3e50, #34495e);
             border: 3px solid #f39c12;
             border-radius: 20px;
@@ -1100,9 +1112,9 @@ class Game {
             text-align: center;
             color: white;
             font-family: Arial, sans-serif;
-            z-index: 1000;
             box-shadow: 0 0 30px rgba(0,0,0,0.8);
-            animation: fadeIn 0.5s ease-out;
+            margin: auto;
+            max-width: 90%;
         `;
 
         const positionColor = finalPosition === 1 ? '#FFD700' : finalPosition === 2 ? '#C0C0C0' : finalPosition === 3 ? '#CD7F32' : '#95a5a6';
@@ -1119,7 +1131,7 @@ class Game {
             bestTimeMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW BEST TIME! 🏆</div>';
         }
 
-        finishBanner.innerHTML = `
+        finishPanel.innerHTML = `
             <h1 style="color: #f39c12; margin: 0 0 20px 0; font-size: 48px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">
                 ${titleText}
             </h1>
@@ -1196,12 +1208,13 @@ class Game {
         const style = document.createElement('style');
         style.textContent = `
             @keyframes fadeIn {
-                from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
-                to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+                from { opacity: 0; transform: scale(0.8); }
+                to { opacity: 1; transform: scale(1); }
             }
         `;
         document.head.appendChild(style);
 
+        finishBanner.appendChild(finishPanel);
         document.body.appendChild(finishBanner);
 
         // Enable R key for restart
@@ -1333,23 +1346,35 @@ class Game {
         crashNotification.id = 'crashNotification';
         crashNotification.style.cssText = `
             position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 20px 0;
+            box-sizing: border-box;
+            z-index: 9999;
+            animation: fadeIn 0.5s ease-out;
+        `;
+        const crashPanel = document.createElement('div');
+        crashPanel.style.cssText = `
             background: linear-gradient(135deg, #2c1515, #3e1515);
             border: 3px solid #e74c3c;
             border-radius: 20px;
             padding: 40px;
             text-align: center;
-            z-index: 9999;
             color: white;
             font-family: Arial, sans-serif;
-            animation: fadeIn 0.5s ease-out;
             box-shadow: 0 10px 40px rgba(231, 76, 60, 0.6);
             min-width: 400px;
+            max-width: 90%;
+            margin: auto;
         `;
 
-        crashNotification.innerHTML = `
+        crashPanel.innerHTML = `
             <div style="font-size: 72px; font-weight: bold; color: #e74c3c; margin-bottom: 20px; text-shadow: 0 0 20px rgba(231, 76, 60, 0.8);">
                 CRASHED!
             </div>
@@ -1384,6 +1409,7 @@ class Game {
             </div>
         `;
 
+        crashNotification.appendChild(crashPanel);
         document.body.appendChild(crashNotification);
 
         // Enable R key for restart
