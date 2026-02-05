@@ -286,21 +286,23 @@ class VirtualControls {
         document.body.appendChild(instructions);
         
         // Handle orientation changes
-        window.addEventListener('orientationchange', () => {
+        this.handleOrientationChange = () => {
             setTimeout(() => {
                 this.destroy();
                 this.createControls();
             }, 100);
-        });
-        
+        };
+        window.addEventListener('orientationchange', this.handleOrientationChange);
+
         // Handle resize
-        window.addEventListener('resize', () => {
+        this.handleResize = () => {
             clearTimeout(this.resizeTimeout);
             this.resizeTimeout = setTimeout(() => {
                 this.destroy();
                 this.createControls();
             }, 250);
-        });
+        };
+        window.addEventListener('resize', this.handleResize);
     }
     
     getKey(keyCode) {
@@ -321,9 +323,11 @@ class VirtualControls {
     }
     
     destroy() {
-        const controls = document.querySelector('.virtual-controls');
+        const leftControls = document.querySelector('.virtual-controls-left');
+        const rightControls = document.querySelector('.virtual-controls-right');
         const instructions = document.querySelector('[style*="Throttle"]');
-        if (controls) controls.remove();
+        if (leftControls) leftControls.remove();
+        if (rightControls) rightControls.remove();
         if (instructions) instructions.remove();
         
         // Clean up event listeners

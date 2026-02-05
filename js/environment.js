@@ -3478,7 +3478,7 @@ class Environment {
       patch.rotation.x = -Math.PI / 2;
       patch.position.set(
         (Math.random() - 0.5) * 1500,
-        -80.005, // Match the lowered ground plane
+        -200.005, // Match lake level
         (Math.random() - 0.5) * 1500,
       );
       patch.receiveShadow = true;
@@ -5057,7 +5057,7 @@ class Environment {
         // Wet road - darker, more reflective
         if (this.roadMaterial) {
           this.roadMaterial.roughness =
-            0.3 * (1 - intensity) + 0.85 * intensity; // Smoother when wet
+            0.85 * (1 - intensity) + 0.3 * intensity; // Smoother when wet
           this.roadMaterial.metalness = 0.4 * intensity; // More reflective
           this.roadMaterial.color.setHex(0x1a1a1a); // Darker when wet
           this.roadMaterial.needsUpdate = true;

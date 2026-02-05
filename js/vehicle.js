@@ -655,8 +655,9 @@ class Vehicle {
     }
 
     update(deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput = 0) {
-        // Store brake input for use in updateMesh
+        // Store inputs for use in updateMesh
         this.currentBrakeInput = brakeInput;
+        this.currentDeltaTime = deltaTime;
         
         // Track distance traveled (only when not crashed)
         if (!this.crashed && this.lastPosition) {
@@ -1048,7 +1049,7 @@ class Vehicle {
             setTimeout(() => this.wheelieDebugThrottle = false, 1000); // Reset after 1 second
         }
 
-        if (canStartWheelie && this.wheelieAngle === 0) {
+        if (canStartWheelie && this.wheelieAngle < 0.001) {
             // Start wheelie with a stronger pop
             this.isWheelie = true;
             this.wheelieAngle = 0.05; // Start with more visible angle
@@ -1115,13 +1116,13 @@ class Vehicle {
             // Base points based on angle - higher is better (risk vs reward)
             let pointsPerSecond = 20; // Base points
             
-            if (angleDegrees > 60) {
+            if (angleDegrees >= 60) {
                 // High angle - risky but rewarding!
                 pointsPerSecond = 100;
-            } else if (angleDegrees > 40) {
+            } else if (angleDegrees >= 40) {
                 // Good angle
                 pointsPerSecond = 60;
-            } else if (angleDegrees > 20) {
+            } else if (angleDegrees >= 20) {
                 // Decent angle
                 pointsPerSecond = 40;
             }
@@ -1192,8 +1193,8 @@ class Vehicle {
         // Increase torque when trying to return to upright from a lean
         let steeringTorque = -steeringInput * this.steeringForce * speedFactor;
         
-        // Boost steering torque when steering against current lean (returning to upright)
-        if (Math.sign(steeringInput) !== Math.sign(this.leanAngle) && Math.abs(this.leanAngle) > 0.1) {
+        // Boost steering torque when actively steering against current lean (counter-steering)
+        if (steeringInput !== 0 && Math.sign(steeringInput) !== Math.sign(this.leanAngle) && Math.abs(this.leanAngle) > 0.1) {
             steeringTorque *= 1.5; // 50% more responsive when counter-steering to upright
         }
         
@@ -1268,7 +1269,7 @@ class Vehicle {
         if (!this.wheelRotation) this.wheelRotation = 0;
         const wheelCircumference = 2 * Math.PI * 0.3; // 2πr where r=0.3
         const rotationSpeed = this.speed / wheelCircumference;
-        this.wheelRotation += rotationSpeed * (1/60); // Approximate frame time
+        this.wheelRotation += rotationSpeed * (this.currentDeltaTime || 1/60);
         this.rearWheel.rotation.x = this.wheelRotation;
         this.frontWheel.rotation.x = this.wheelRotation;
         this.rearDisc.rotation.x = this.wheelRotation;
@@ -1339,7 +1340,7 @@ class Vehicle {
 
             // Restore normal bike color
             if (!this.crashed) {
-                this.frame.material.color.setHex(0x1a4db3); // Normal blue
+                this.frame.material.color.setHex(parseInt(this.bikeColor));
             }
         }
 
