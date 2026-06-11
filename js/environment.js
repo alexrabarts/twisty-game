@@ -1,5 +1,5 @@
 class Environment {
-  constructor(scene, startSegment = 0, endSegment = 371, legIndex = 0) {
+  constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0) {
     this.scene = scene;
     this.roadPath = []; // Store the path for other uses (full track for physics/AI)
     this.startSegment = startSegment; // Start of visual geometry range
@@ -107,95 +107,97 @@ class Environment {
     // Define the course as a series of straights and turns
     // Each element defines how many segments and the turn rate per segment
     // Progressive layout: 380 segments across 8 legs with increasing difficulty
+    // Course doubled in length: each section has 2x the segments at half the
+    // turn rate, so every curve keeps its total angle at twice the radius.
     const courseLayout = [
-      // === LEG 1: MOUNTAIN DAWN (0-34) - Gentle winding, 35 segments = 700m ===
-      { segments: 8, turnRate: 0 }, // Long start straight
-      { segments: 4, turnRate: 0.06 }, // Gentle right sweep
-      { segments: 5, turnRate: 0 }, // Flowing straight
-      { segments: 3, turnRate: -0.05 }, // Gentle left
-      { segments: 5, turnRate: 0 }, // Long straight section
-      { segments: 4, turnRate: 0.08 }, // Moderate right
-      { segments: 3, turnRate: 0 }, // Short straight
-      { segments: 3, turnRate: -0.07 }, // Moderate left
+      // === LEG 1: MOUNTAIN DAWN (0-69) - Gentle winding, 70 segments = 1400m ===
+      { segments: 16, turnRate: 0 }, // Long start straight
+      { segments: 8, turnRate: 0.03 }, // Gentle right sweep
+      { segments: 10, turnRate: 0 }, // Flowing straight
+      { segments: 6, turnRate: -0.025 }, // Gentle left
+      { segments: 10, turnRate: 0 }, // Long straight section
+      { segments: 8, turnRate: 0.04 }, // Moderate right
+      { segments: 6, turnRate: 0 }, // Short straight
+      { segments: 6, turnRate: -0.035 }, // Moderate left
 
-      // === LEG 2: VALLEY RUN (35-74) - Fast flowing, 40 segments = 800m ===
-      { segments: 7, turnRate: 0 }, // Fast straight
-      { segments: 5, turnRate: 0.09 }, // Sweeping right
-      { segments: 6, turnRate: 0 }, // Long fast section
-      { segments: 4, turnRate: -0.1 }, // Sweeping left
-      { segments: 7, turnRate: 0 }, // High-speed straight
-      { segments: 4, turnRate: 0.08 }, // Fast right
-      { segments: 4, turnRate: 0 }, // Straight
-      { segments: 3, turnRate: -0.09 }, // Fast left sweep
+      // === LEG 2: VALLEY RUN (70-149) - Fast flowing, 80 segments = 1600m ===
+      { segments: 14, turnRate: 0 }, // Fast straight
+      { segments: 10, turnRate: 0.045 }, // Sweeping right
+      { segments: 12, turnRate: 0 }, // Long fast section
+      { segments: 8, turnRate: -0.05 }, // Sweeping left
+      { segments: 14, turnRate: 0 }, // High-speed straight
+      { segments: 8, turnRate: 0.04 }, // Fast right
+      { segments: 8, turnRate: 0 }, // Straight
+      { segments: 6, turnRate: -0.045 }, // Fast left sweep
 
-      // === LEG 3: COASTAL DESCENT (75-116) - Sweeping, 42 segments = 840m ===
-      { segments: 5, turnRate: 0 }, // Descent approach
-      { segments: 6, turnRate: 0.1 }, // Sweeping right descent
-      { segments: 7, turnRate: 0 }, // Fast downhill
-      { segments: 5, turnRate: -0.11 }, // Sweeping left descent
-      { segments: 8, turnRate: 0 }, // Extended high-speed
-      { segments: 4, turnRate: 0.09 }, // Flowing right
-      { segments: 5, turnRate: 0 }, // Fast straight
-      { segments: 2, turnRate: -0.1 }, // Coastal sweep left
+      // === LEG 3: COASTAL DESCENT (150-233) - Sweeping, 84 segments = 1680m ===
+      { segments: 10, turnRate: 0 }, // Descent approach
+      { segments: 12, turnRate: 0.05 }, // Sweeping right descent
+      { segments: 14, turnRate: 0 }, // Fast downhill
+      { segments: 10, turnRate: -0.055 }, // Sweeping left descent
+      { segments: 16, turnRate: 0 }, // Extended high-speed
+      { segments: 8, turnRate: 0.045 }, // Flowing right
+      { segments: 10, turnRate: 0 }, // Fast straight
+      { segments: 4, turnRate: -0.05 }, // Coastal sweep left
 
-      // === LEG 4: FOGGY GORGE (117-160) - Visibility challenge, 44 segments = 880m ===
-      { segments: 8, turnRate: 0 }, // Fog approach
-      { segments: 5, turnRate: 0.11 }, // Misty right
-      { segments: 6, turnRate: 0 }, // Limited visibility straight
-      { segments: 4, turnRate: -0.12 }, // Foggy left
-      { segments: 7, turnRate: 0 }, // Long fog section
-      { segments: 5, turnRate: 0.1 }, // Technical right
-      { segments: 5, turnRate: 0 }, // Straight
-      { segments: 4, turnRate: -0.11 }, // Exit curve
+      // === LEG 4: FOGGY GORGE (234-321) - Visibility challenge, 88 segments = 1760m ===
+      { segments: 16, turnRate: 0 }, // Fog approach
+      { segments: 10, turnRate: 0.055 }, // Misty right
+      { segments: 12, turnRate: 0 }, // Limited visibility straight
+      { segments: 8, turnRate: -0.06 }, // Foggy left
+      { segments: 14, turnRate: 0 }, // Long fog section
+      { segments: 10, turnRate: 0.05 }, // Technical right
+      { segments: 10, turnRate: 0 }, // Straight
+      { segments: 8, turnRate: -0.055 }, // Exit curve
 
-      // === LEG 5: HIGH PASS (161-206) - Technical hairpins, 46 segments = 920m ===
-      { segments: 5, turnRate: 0 }, // Pass approach
-      { segments: 4, turnRate: 0.15 }, // Sharp right
-      { segments: 3, turnRate: 0 }, // Chicane straight
-      { segments: 4, turnRate: -0.15 }, // Sharp left
-      { segments: 8, turnRate: 0.28 }, // HAIRPIN RIGHT
-      { segments: 3, turnRate: 0 }, // Recovery
-      { segments: 5, turnRate: 0.12 }, // Tight right
-      { segments: 7, turnRate: -0.25 }, // HAIRPIN LEFT
-      { segments: 4, turnRate: 0 }, // Exit
-      { segments: 3, turnRate: 0.14 }, // Technical right
+      // === LEG 5: HIGH PASS (322-413) - Technical hairpins, 92 segments = 1840m ===
+      { segments: 10, turnRate: 0 }, // Pass approach
+      { segments: 8, turnRate: 0.075 }, // Sharp right
+      { segments: 6, turnRate: 0 }, // Chicane straight
+      { segments: 8, turnRate: -0.075 }, // Sharp left
+      { segments: 16, turnRate: 0.14 }, // HAIRPIN RIGHT
+      { segments: 6, turnRate: 0 }, // Recovery
+      { segments: 10, turnRate: 0.06 }, // Tight right
+      { segments: 14, turnRate: -0.125 }, // HAIRPIN LEFT
+      { segments: 8, turnRate: 0 }, // Exit
+      { segments: 6, turnRate: 0.07 }, // Technical right
 
-      // === LEG 6: STORM VALLEY (207-254) - Rain + grip, 48 segments = 960m ===
-      { segments: 7, turnRate: 0 }, // Storm approach
-      { segments: 5, turnRate: 0.09 }, // Wet right curve
-      { segments: 6, turnRate: 0 }, // Rain straight
-      { segments: 5, turnRate: -0.1 }, // Slippery left
-      { segments: 8, turnRate: 0 }, // Long wet section
-      { segments: 5, turnRate: 0.08 }, // Technical right
-      { segments: 6, turnRate: 0 }, // Straight
-      { segments: 4, turnRate: -0.09 }, // Left curve
-      { segments: 2, turnRate: 0 }, // Exit section
+      // === LEG 6: STORM VALLEY (414-509) - Rain + grip, 96 segments = 1920m ===
+      { segments: 14, turnRate: 0 }, // Storm approach
+      { segments: 10, turnRate: 0.045 }, // Wet right curve
+      { segments: 12, turnRate: 0 }, // Rain straight
+      { segments: 10, turnRate: -0.05 }, // Slippery left
+      { segments: 16, turnRate: 0 }, // Long wet section
+      { segments: 10, turnRate: 0.04 }, // Technical right
+      { segments: 12, turnRate: 0 }, // Straight
+      { segments: 8, turnRate: -0.045 }, // Left curve
+      { segments: 4, turnRate: 0 }, // Exit section
 
-      // === LEG 7: NIGHT RIDE (255-303) - Darkness, 49 segments = 980m ===
-      { segments: 8, turnRate: 0 }, // Night approach
-      { segments: 5, turnRate: 0.11 }, // Dark right curve
-      { segments: 6, turnRate: 0 }, // Under stars
-      { segments: 5, turnRate: -0.12 }, // Technical left
-      { segments: 7, turnRate: 0 }, // Long night straight
-      { segments: 5, turnRate: 0.1 }, // Flowing right
-      { segments: 5, turnRate: 0 }, // Link section
-      { segments: 4, turnRate: -0.11 }, // Left curve
-      { segments: 4, turnRate: 0 }, // Straight section
+      // === LEG 7: NIGHT RIDE (510-607) - Darkness, 98 segments = 1960m ===
+      { segments: 16, turnRate: 0 }, // Night approach
+      { segments: 10, turnRate: 0.055 }, // Dark right curve
+      { segments: 12, turnRate: 0 }, // Under stars
+      { segments: 10, turnRate: -0.06 }, // Technical left
+      { segments: 14, turnRate: 0 }, // Long night straight
+      { segments: 10, turnRate: 0.05 }, // Flowing right
+      { segments: 10, turnRate: 0 }, // Link section
+      { segments: 8, turnRate: -0.055 }, // Left curve
+      { segments: 8, turnRate: 0 }, // Straight section
 
-      // === LEG 8: WINTER PASS (304-351) - Ice + snow, 48 segments = 960m ===
-      { segments: 7, turnRate: 0 }, // Winter approach
-      { segments: 5, turnRate: 0.13 }, // Icy right
-      { segments: 5, turnRate: 0 }, // Snow straight
-      { segments: 4, turnRate: -0.14 }, // Slippery left
-      { segments: 6, turnRate: 0 }, // Long snow section
-      { segments: 5, turnRate: 0.12 }, // Technical right
-      { segments: 5, turnRate: 0 }, // Link
-      { segments: 4, turnRate: -0.13 }, // Final left
-      { segments: 7, turnRate: 0 }, // Grand finale straight to finish
+      // === LEG 8: WINTER PASS (608-703) - Ice + snow, 96 segments = 1920m ===
+      { segments: 14, turnRate: 0 }, // Winter approach
+      { segments: 10, turnRate: 0.065 }, // Icy right
+      { segments: 10, turnRate: 0 }, // Snow straight
+      { segments: 8, turnRate: -0.07 }, // Slippery left
+      { segments: 12, turnRate: 0 }, // Long snow section
+      { segments: 10, turnRate: 0.06 }, // Technical right
+      { segments: 10, turnRate: 0 }, // Link
+      { segments: 8, turnRate: -0.065 }, // Final left
+      { segments: 14, turnRate: 0 }, // Grand finale straight to finish
 
       // Extra scenery beyond finish (for +20 runoff rendering)
-      { segments: 15, turnRate: 0 }, // Post-finish straight
-      { segments: 5, turnRate: 0.05 }, // Gentle curve
+      { segments: 30, turnRate: 0 }, // Post-finish straight
+      { segments: 10, turnRate: 0.025 }, // Gentle curve
     ];
 
     // First, build the road path
@@ -322,79 +324,31 @@ class Environment {
   }
 
   addRockFormations() {
-    // Create rock materials with smooth weathered appearance matching cliffs
-    const rockMaterials = [
-      new THREE.MeshStandardMaterial({
-        color: 0x181818,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x1e1e1e,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x242424,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x2a2a2a,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x303030,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x221a12,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x282118,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x2e261c,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x342c20,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x3a3224,
-        roughness: 0.92,
-        metalness: 0.0,
-        envMapIntensity: 0.2,
-        flatShading: false,
-      }),
+    // Create rock materials with smooth weathered appearance matching cliffs.
+    // Wider tonal spread (cool greys, warm browns, slate blues) plus varied
+    // roughness/envMapIntensity so adjacent boulders catch light differently.
+    const rockMaterialParams = [
+      { color: 0x181818, roughness: 0.95, envMapIntensity: 0.15 },
+      { color: 0x1e1e20, roughness: 0.92, envMapIntensity: 0.2 },
+      { color: 0x26262a, roughness: 0.88, envMapIntensity: 0.3 }, // Slate blue-grey
+      { color: 0x2a2a2a, roughness: 0.92, envMapIntensity: 0.2 },
+      { color: 0x34343a, roughness: 0.85, envMapIntensity: 0.35 }, // Lighter weathered face
+      { color: 0x221a12, roughness: 0.94, envMapIntensity: 0.15 },
+      { color: 0x2a2016, roughness: 0.9, envMapIntensity: 0.25 },
+      { color: 0x32281a, roughness: 0.88, envMapIntensity: 0.25 }, // Iron-stained brown
+      { color: 0x3a3226, roughness: 0.86, envMapIntensity: 0.3 },
+      { color: 0x40382a, roughness: 0.9, envMapIntensity: 0.25 }, // Sandy granite
     ];
+    const rockMaterials = rockMaterialParams.map(
+      (params) =>
+        new THREE.MeshStandardMaterial({
+          color: params.color,
+          roughness: params.roughness,
+          metalness: 0.0,
+          envMapIntensity: params.envMapIntensity,
+          flatShading: false,
+        }),
+    );
 
     // NOTE: Most rock formations are now handled by the faceted cliff walls
     // Only adding minimal standalone rocks to avoid floating objects
@@ -545,11 +499,13 @@ class Environment {
     const railHeight = 0.8;
     const postSpacing = 4; // meters between posts
 
-    // Metal rail material
+    // Metal rail material - galvanized steel with a soft sheen that picks
+    // up the environment map along its length
     const railMaterial = new THREE.MeshStandardMaterial({
-      color: 0xc0c0c0,
-      roughness: 0.6,
-      metalness: 0.8,
+      color: 0xb8bcc0,
+      roughness: 0.38,
+      metalness: 0.85,
+      envMapIntensity: 1.1,
     });
 
     // Post material
@@ -1110,22 +1066,14 @@ class Environment {
         for (let r = 0; r < numRocks; r++) {
           if (Math.random() > 0.2) {
             // 80% chance for variety
-            const rockSize = 0.8 + Math.random() * 2.5;
-            const rockGeometry = this.displaceVertices(
-              new THREE.IcosahedronGeometry(rockSize, 3),
-              rockSize * 0.3,
-            );
-            const rock = new THREE.Mesh(
-              rockGeometry,
-              rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
-            );
 
             // Height position on cliff (0 = base, 1 = top) - keep rocks very low to prevent floating
             const heightRatio = Math.random() * 0.25; // Maximum 25% up the cliff
             const cliffHeight = Math.abs(height) * heightRatio;
 
-            // Calculate base distance accounting for slope - ensure rocks are ON the cliff face
-            let distance = 8.5; // Start at cliff base position
+            // Hug the wall base / road edge so the rock field stays dense and
+            // visible, with size capped by proximity below
+            let distance = this.roadWidth / 2 + 0.5;
             if (side > 0 && isDropOff) {
               // Right cliff - account for outward slope but keep close to face
               distance += heightRatio * 25; // Match cliff slope more closely
@@ -1134,8 +1082,23 @@ class Environment {
               distance += heightRatio * 20; // Match cliff overhang
             }
 
-            // Add some random variation in distance
-            distance += (Math.random() - 0.5) * 2;
+            // Random outward variation - farther rocks may be larger
+            distance += Math.random() * 3;
+
+            // Cap size so the rock's scaled radius (max scale 1.5) never
+            // reaches past the road edge: rocks at the lane edge stay small
+            // (fallen-debris look), rocks farther out / up the cliff get big
+            const clearance = distance - this.roadWidth / 2 + 0.4;
+            const maxSize = Math.max(0.4, clearance / 1.5);
+            const rockSize = Math.min(0.8 + Math.random() * 2.5, maxSize);
+            const rockGeometry = this.displaceVertices(
+              new THREE.IcosahedronGeometry(rockSize, 3),
+              rockSize * 0.3,
+            );
+            const rock = new THREE.Mesh(
+              rockGeometry,
+              rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+            );
 
             const perpX = Math.cos(point.heading) * distance * side;
             const perpZ = -Math.sin(point.heading) * distance * side;
@@ -1184,6 +1147,44 @@ class Environment {
             group.add(rock);
           } // Close the if statement from line 700
         } // Close the for loop from line 699
+
+        // Small debris rocks that have fallen off the cliff onto the road
+        // edge - deliberately small (0.2-0.45m) and registered as collidable
+        // boulders so riding into one crashes the bike
+        if (side < 0 && !isDropOff && Math.random() < 0.15) {
+          const debrisSize = 0.2 + Math.random() * 0.25;
+          const debrisGeometry = this.displaceVertices(
+            new THREE.IcosahedronGeometry(debrisSize, 2),
+            debrisSize * 0.25,
+          );
+          const debris = new THREE.Mesh(
+            debrisGeometry,
+            rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+          );
+
+          // Scatter onto the cliff-side portion of the road, from near the
+          // wall to roughly the middle of the left lane
+          const debrisDistance =
+            (this.roadWidth / 2 - 1 - Math.random() * 4) * side;
+          const debrisX = point.x + Math.cos(point.heading) * debrisDistance;
+          const debrisZ = point.z - Math.sin(point.heading) * debrisDistance;
+          const debrisY = (point.y || 0) + debrisSize * 0.4; // Slightly embedded in the road
+
+          debris.position.set(debrisX, debrisY, debrisZ);
+          debris.rotation.set(
+            Math.random() * Math.PI * 2,
+            Math.random() * Math.PI * 2,
+            Math.random() * Math.PI * 2,
+          );
+          debris.castShadow = true;
+          debris.receiveShadow = true;
+          group.add(debris);
+
+          this.boulders.push({
+            position: new THREE.Vector3(debrisX, debrisY, debrisZ),
+            radius: debrisSize,
+          });
+        }
 
         // Add EVEN MORE boulders at the base - DISABLED to prevent floating
         if (false && (i % 2 === 0 || Math.random() > 0.2)) {
@@ -2105,34 +2106,42 @@ class Environment {
       const py = positions1.getY(i);
       const normalizedHeight = (py + peak1Height / 2) / peak1Height;
 
-      // Transition to snow color at the peak
-      if (normalizedHeight > 0.85) {
-        // Snow white with slight blue tint
-        const snowWhite = 0.95 + Math.random() * 0.05;
+      // Transition to snow color at the peak - lower snow line and a
+      // ragged transition for a more dramatic alpine cap
+      if (normalizedHeight > 0.78) {
+        // Bright snow white with slight blue tint
+        const snowWhite = 0.97 + Math.random() * 0.03;
         colors1.push(
-          snowWhite - 0.02, // Slightly less red for blue tint
+          snowWhite - 0.03, // Slightly less red for blue tint
           snowWhite,
+          snowWhite + 0.02,
+        );
+      } else if (normalizedHeight > 0.64) {
+        // Transition zone - ragged mix of rock and snow patches
+        const mixFactor = (normalizedHeight - 0.64) / 0.14;
+        const patchiness = Math.random() < mixFactor * 0.7 ? 0.25 : 0; // Snow patches
+        const rockGrey = 0.35 + normalizedHeight * 0.15;
+        const snowWhite = 0.96;
+        const mixed = Math.min(
+          rockGrey + (snowWhite - rockGrey) * mixFactor + patchiness,
           snowWhite,
         );
-      } else if (normalizedHeight > 0.75) {
-        // Transition zone - mix of rock and snow
-        const mixFactor = (normalizedHeight - 0.75) / 0.1;
-        const rockGrey = 0.35 + normalizedHeight * 0.15;
-        const snowWhite = 0.95;
-        const mixed = rockGrey + (snowWhite - rockGrey) * mixFactor;
         colors1.push(
           mixed + Math.random() * 0.03,
           mixed + Math.random() * 0.03,
-          mixed + Math.random() * 0.03 + 0.02,
+          mixed + Math.random() * 0.03 + 0.03,
         );
       } else {
-        // Rock colors - darker at base, lighter towards peak
-        const baseGrey = 0.25 + normalizedHeight * 0.2;
+        // Rock colors - darker at base, lighter towards peak, with
+        // horizontal strata banding for geological drama
+        const band =
+          Math.sin(normalizedHeight * 28) > 0.55 ? -0.06 : 0; // Dark strata
+        const baseGrey = 0.23 + normalizedHeight * 0.24 + band;
         const variation = Math.random() * 0.05;
         colors1.push(
           baseGrey + variation,
           baseGrey + variation + 0.02,
-          baseGrey + variation + 0.05,
+          baseGrey + variation + 0.06,
         );
       }
     }
@@ -2214,27 +2223,35 @@ class Environment {
       const py = positions.getY(i);
       const normalizedHeight = (py + height / 2) / height;
 
-      if (normalizedHeight > 0.83) {
-        // Slightly lower snow line
-        const snowWhite = 0.94 + Math.random() * 0.06;
-        colors.push(snowWhite - 0.02, snowWhite, snowWhite + 0.01);
-      } else if (normalizedHeight > 0.73) {
-        const mixFactor = (normalizedHeight - 0.73) / 0.1;
+      if (normalizedHeight > 0.75) {
+        // Lower snow line with brighter snow
+        const snowWhite = 0.96 + Math.random() * 0.04;
+        colors.push(snowWhite - 0.03, snowWhite, snowWhite + 0.02);
+      } else if (normalizedHeight > 0.6) {
+        // Ragged transition with snow patches clinging to the rock
+        const mixFactor = (normalizedHeight - 0.6) / 0.15;
+        const patchiness = Math.random() < mixFactor * 0.7 ? 0.22 : 0;
         const rockGrey = 0.35 + normalizedHeight * 0.15;
-        const snowWhite = 0.94;
-        const mixed = rockGrey + (snowWhite - rockGrey) * mixFactor;
+        const snowWhite = 0.95;
+        const mixed = Math.min(
+          rockGrey + (snowWhite - rockGrey) * mixFactor + patchiness,
+          snowWhite,
+        );
         colors.push(
           mixed + Math.random() * 0.03,
           mixed + Math.random() * 0.03,
-          mixed + Math.random() * 0.03 + 0.02,
+          mixed + Math.random() * 0.03 + 0.03,
         );
       } else {
-        const baseGrey = 0.27 + normalizedHeight * 0.18; // Slightly different coloring
+        // Rock with subtle strata banding, slightly different cadence to
+        // distinguish it from the first peak
+        const band = Math.sin(normalizedHeight * 24 + 1.3) > 0.6 ? -0.05 : 0;
+        const baseGrey = 0.25 + normalizedHeight * 0.22 + band;
         const variation = Math.random() * 0.05;
         colors.push(
           baseGrey + variation,
           baseGrey + variation + 0.01,
-          baseGrey + variation + 0.04,
+          baseGrey + variation + 0.05,
         );
       }
     }
@@ -2323,9 +2340,10 @@ class Environment {
     if (height > 200) {
       const snowGeometry = new THREE.SphereGeometry(width / 5, 8, 6);
       const snowMaterial = new THREE.MeshStandardMaterial({
-        color: 0xd8d8d8,
-        roughness: 0.7,
+        color: 0xeaf0f5, // Brighter, cooler snow
+        roughness: 0.55,
         metalness: 0.0,
+        envMapIntensity: 0.8,
       });
       const snowCap = new THREE.Mesh(snowGeometry, snowMaterial);
       // Deform snow cap to be flatter
@@ -2561,6 +2579,26 @@ class Environment {
     ctx.fillStyle = "#3a3a3a";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Large-scale tonal mottling - soft warm/cool patches give the asphalt
+    // depth instead of reading as a flat grey sheet
+    for (let i = 0; i < 18; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const radius = 150 + Math.random() * 300;
+      const warm = Math.random() > 0.5;
+      const r = warm ? 64 : 52;
+      const g = warm ? 60 : 56;
+      const b = warm ? 54 : 62;
+
+      const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, 0.14)`);
+      gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(x, y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     // Add base texture variation
     for (let i = 0; i < 300; i++) {
       const x = Math.random() * canvas.width;
@@ -2571,11 +2609,26 @@ class Environment {
       ctx.fillRect(x, y, size, size);
     }
 
-    // Fine aggregate texture (small stones)
-    for (let i = 0; i < 2000; i++) {
+    // Fine aggregate texture (small stones) - subtle warm/cool tint variation
+    // so the chip seal sparkles slightly instead of being pure grey
+    for (let i = 0; i < 2600; i++) {
       const gray = Math.random() * 30 + 35;
-      ctx.fillStyle = `rgba(${gray}, ${gray}, ${gray}, ${0.4 + Math.random() * 0.5})`;
+      const tint = Math.floor((Math.random() - 0.5) * 12);
+      ctx.fillStyle = `rgba(${gray + tint}, ${gray}, ${gray - tint}, ${0.4 + Math.random() * 0.5})`;
       const size = Math.random() * 2.5 + 0.5;
+      ctx.fillRect(
+        Math.random() * canvas.width,
+        Math.random() * canvas.height,
+        size,
+        size,
+      );
+    }
+
+    // Sparse bright quartz flecks that catch the light
+    for (let i = 0; i < 220; i++) {
+      const bright = 95 + Math.random() * 50;
+      ctx.fillStyle = `rgba(${bright}, ${bright}, ${bright - 5}, ${0.35 + Math.random() * 0.35})`;
+      const size = Math.random() * 1.5 + 0.5;
       ctx.fillRect(
         Math.random() * canvas.width,
         Math.random() * canvas.height,
@@ -2611,6 +2664,27 @@ class Environment {
       ctx.arc(x, y, size / 2, 0, Math.PI * 2);
       ctx.fill();
     }
+
+    // Broad tire-wear darkening down each lane center - soft-edged bands of
+    // polished, rubber-stained asphalt where traffic actually runs
+    ctx.globalAlpha = 1.0;
+    [0.29, 0.71].forEach((laneCenter) => {
+      const cx = canvas.width * laneCenter;
+      const halfWidth = canvas.width * 0.085;
+      const wearGradient = ctx.createLinearGradient(
+        cx - halfWidth,
+        0,
+        cx + halfWidth,
+        0,
+      );
+      wearGradient.addColorStop(0, "rgba(18, 18, 18, 0)");
+      wearGradient.addColorStop(0.35, "rgba(18, 18, 18, 0.22)");
+      wearGradient.addColorStop(0.5, "rgba(14, 14, 14, 0.3)");
+      wearGradient.addColorStop(0.65, "rgba(18, 18, 18, 0.22)");
+      wearGradient.addColorStop(1, "rgba(18, 18, 18, 0)");
+      ctx.fillStyle = wearGradient;
+      ctx.fillRect(cx - halfWidth, 0, halfWidth * 2, canvas.height);
+    });
 
     // Tire tracks and wear marks
     ctx.globalAlpha = 0.4;
@@ -2837,9 +2911,35 @@ class Environment {
 
     ctx.globalAlpha = 1.0;
 
-    // White edge lines - visible road boundaries
+    // White edge lines - visible road boundaries.
+    // Dark underpaint first so the white pops with a crisp edge.
+    ctx.strokeStyle = "#161616";
+    ctx.lineWidth = 50;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.moveTo(100, 0);
+    ctx.lineTo(100, canvas.height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width - 100, 0);
+    ctx.lineTo(canvas.width - 100, canvas.height);
+    ctx.stroke();
+
+    ctx.globalAlpha = 1.0;
+    ctx.strokeStyle = "#f2f2ee";
+    ctx.lineWidth = 36;
+    ctx.beginPath();
+    ctx.moveTo(100, 0);
+    ctx.lineTo(100, canvas.height);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(canvas.width - 100, 0);
+    ctx.lineTo(canvas.width - 100, canvas.height);
+    ctx.stroke();
+
+    // Bright core stripe - reads as fresh retro-reflective paint
     ctx.strokeStyle = "#ffffff";
-    ctx.lineWidth = 40; // Moderate thickness
+    ctx.lineWidth = 16;
     ctx.beginPath();
     ctx.moveTo(100, 0);
     ctx.lineTo(100, canvas.height);
@@ -3328,10 +3428,11 @@ class Environment {
   createGrass() {
     // Create a lake at the bottom instead of grass
     const lakeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2266aa, // Deep blue lake color
+      color: 0x10539e, // Deeper, more saturated alpine blue
       side: THREE.DoubleSide,
-      roughness: 0.1, // Water is reflective
-      metalness: 0.4, // Some metalness for water shine
+      roughness: 0.06, // Glassy water surface
+      metalness: 0.55, // Stronger specular response
+      envMapIntensity: 1.6, // Pick up more sky reflection for shine
     });
 
     const lakeGeometry = new THREE.PlaneGeometry(3000, 3000);
@@ -3576,6 +3677,9 @@ class Environment {
       finishLine.receiveShadow = true;
       this.scene.add(finishLine);
 
+      // Checkered banner gantry over the finish line
+      this.createFinishBanner(this.roadPath[finishSegmentIdx]);
+
       // Store finish line position for detection
       this.finishLinePosition = new THREE.Vector3(
         this.roadPath[finishSegmentIdx].x,
@@ -3586,6 +3690,106 @@ class Environment {
         `Finish line placed at segment ${finishSegmentIdx} (leg range: ${this.startSegment}-${this.endSegment})`,
       );
     }
+  }
+
+  createCheckeredBannerTexture() {
+    if (this.checkeredBannerTexture) {
+      return this.checkeredBannerTexture;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 64;
+    const ctx = canvas.getContext("2d");
+    const square = 16;
+    for (let y = 0; y < canvas.height / square; y++) {
+      for (let x = 0; x < canvas.width / square; x++) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? "#111111" : "#f5f5f5";
+        ctx.fillRect(x * square, y * square, square, square);
+      }
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    this.checkeredBannerTexture = texture;
+    return texture;
+  }
+
+  createFinishBanner(point) {
+    // Overhead gantry spanning the road with a checkered banner, plus
+    // checkered flags on each pole
+    const group = new THREE.Group();
+    const halfSpan = this.roadWidth / 2 + 1.5;
+    const bannerHeight = 5;
+
+    const poleGeometry = new THREE.CylinderGeometry(0.12, 0.15, bannerHeight + 1, 10);
+    const poleMaterial = new THREE.MeshStandardMaterial({
+      color: 0xdddddd,
+      roughness: 0.35,
+      metalness: 0.8,
+    });
+    [-halfSpan, halfSpan].forEach((offset) => {
+      const pole = new THREE.Mesh(poleGeometry, poleMaterial);
+      pole.position.set(offset, (bannerHeight + 1) / 2, 0);
+      pole.castShadow = true;
+      pole.receiveShadow = true;
+      group.add(pole);
+
+      // Small checkered flag at the top of each pole
+      const flagGeometry = new THREE.PlaneGeometry(1.0, 0.65);
+      const flagMaterial = new THREE.MeshStandardMaterial({
+        map: this.createCheckeredBannerTexture(),
+        side: THREE.DoubleSide,
+        roughness: 0.8,
+        metalness: 0.0,
+      });
+      const flag = new THREE.Mesh(flagGeometry, flagMaterial);
+      flag.position.set(offset + (offset > 0 ? -0.55 : 0.55), bannerHeight + 0.6, 0);
+      flag.castShadow = true;
+      group.add(flag);
+    });
+
+    // Banner spanning the road
+    const bannerGeometry = new THREE.PlaneGeometry(halfSpan * 2, 1.1);
+    const bannerMaterial = new THREE.MeshStandardMaterial({
+      map: this.createCheckeredBannerTexture(),
+      side: THREE.DoubleSide,
+      roughness: 0.85,
+      metalness: 0.0,
+    });
+    const banner = new THREE.Mesh(bannerGeometry, bannerMaterial);
+    banner.position.set(0, bannerHeight - 0.55, 0);
+    banner.castShadow = true;
+    group.add(banner);
+
+    // "FINISH" text panel below the banner
+    const textCanvas = document.createElement("canvas");
+    textCanvas.width = 512;
+    textCanvas.height = 96;
+    const textCtx = textCanvas.getContext("2d");
+    textCtx.fillStyle = "#cc1111";
+    textCtx.fillRect(0, 0, textCanvas.width, textCanvas.height);
+    textCtx.fillStyle = "#ffffff";
+    textCtx.font = "bold 72px Arial";
+    textCtx.textAlign = "center";
+    textCtx.textBaseline = "middle";
+    textCtx.fillText("FINISH", textCanvas.width / 2, textCanvas.height / 2);
+    const textTexture = new THREE.CanvasTexture(textCanvas);
+    const textPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(6, 1.1),
+      new THREE.MeshStandardMaterial({
+        map: textTexture,
+        side: THREE.DoubleSide,
+        roughness: 0.85,
+        metalness: 0.0,
+      }),
+    );
+    textPanel.position.set(0, bannerHeight - 1.7, 0);
+    textPanel.castShadow = true;
+    group.add(textPanel);
+
+    // Orient across the road at the finish segment. The group's local X axis
+    // must lie along the road's perpendicular: rotate by heading around Y
+    group.position.set(point.x, point.y || 0, point.z);
+    group.rotation.y = point.heading;
+    this.scene.add(group);
   }
 
   addEnvironmentalDetails() {
@@ -3600,11 +3804,25 @@ class Environment {
       metalness: 0.0,
     });
     const foliageGeometry = new THREE.SphereGeometry(3, 6, 5);
-    const foliageMaterial = new THREE.MeshStandardMaterial({
-      color: 0x228b22,
-      roughness: 0.95,
-      metalness: 0.0,
-    });
+    // Three foliage tones (shared materials) so the treeline reads as a
+    // mixed forest instead of identical green spheres
+    const foliageMaterials = [
+      new THREE.MeshStandardMaterial({
+        color: 0x2e7d32, // Mid forest green
+        roughness: 0.95,
+        metalness: 0.0,
+      }),
+      new THREE.MeshStandardMaterial({
+        color: 0x4a7a2a, // Sunlit olive green
+        roughness: 0.95,
+        metalness: 0.0,
+      }),
+      new THREE.MeshStandardMaterial({
+        color: 0x1c5e38, // Deep pine green
+        roughness: 0.95,
+        metalness: 0.0,
+      }),
+    ];
 
     // Place trees along road path - only on left (mountain) side (only in active segment range)
     const startIdx = Math.max(0, this.startSegment);
@@ -3624,14 +3842,29 @@ class Environment {
         // Ground level for tree base
         const groundLevel = point.y - 0.5;
 
+        // Vary each tree's size and canopy shape slightly
+        const treeScale = 0.8 + Math.random() * 0.55;
+        const canopyWidth = 0.9 + Math.random() * 0.25;
+        const canopyHeight = 0.95 + Math.random() * 0.35;
+
         const leftTrunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
-        leftTrunk.position.set(leftX, groundLevel + 2, leftZ);
+        leftTrunk.scale.setScalar(treeScale);
+        leftTrunk.position.set(leftX, groundLevel + 2 * treeScale, leftZ);
         leftTrunk.castShadow = true;
         leftTrunk.receiveShadow = true;
         this.scene.add(leftTrunk);
 
-        const leftFoliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
-        leftFoliage.position.set(leftX, groundLevel + 5.5, leftZ);
+        const leftFoliage = new THREE.Mesh(
+          foliageGeometry,
+          foliageMaterials[Math.floor(Math.random() * foliageMaterials.length)],
+        );
+        leftFoliage.scale.set(
+          treeScale * canopyWidth,
+          treeScale * canopyHeight,
+          treeScale * canopyWidth,
+        );
+        leftFoliage.rotation.y = Math.random() * Math.PI;
+        leftFoliage.position.set(leftX, groundLevel + 5.5 * treeScale, leftZ);
         leftFoliage.castShadow = true;
         leftFoliage.receiveShadow = true;
         this.scene.add(leftFoliage);
@@ -3642,11 +3875,18 @@ class Environment {
 
     // Bushes along the mountain side only (only in active segment range)
     const bushGeometry = new THREE.SphereGeometry(1, 6, 4);
-    const bushMaterial = new THREE.MeshStandardMaterial({
-      color: 0x2d5016,
-      roughness: 0.9,
-      metalness: 0.0,
-    });
+    const bushMaterials = [
+      new THREE.MeshStandardMaterial({
+        color: 0x2d5016,
+        roughness: 0.9,
+        metalness: 0.0,
+      }),
+      new THREE.MeshStandardMaterial({
+        color: 0x3f6622, // Lighter scrub green for variety
+        roughness: 0.9,
+        metalness: 0.0,
+      }),
+    ];
 
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
@@ -3657,7 +3897,12 @@ class Environment {
         const bushX = point.x - bushDistance * Math.cos(point.heading);
         const bushZ = point.z + bushDistance * Math.sin(point.heading);
 
-        const leftBush = new THREE.Mesh(bushGeometry, bushMaterial);
+        const leftBush = new THREE.Mesh(
+          bushGeometry,
+          bushMaterials[Math.floor(Math.random() * bushMaterials.length)],
+        );
+        const bushScale = 0.7 + Math.random() * 0.7;
+        leftBush.scale.set(bushScale * 1.1, bushScale * 0.8, bushScale * 1.1);
         leftBush.position.set(bushX, point.y - 0.3, bushZ); // Partially embedded
         leftBush.castShadow = true;
         leftBush.receiveShadow = true;
@@ -3734,18 +3979,27 @@ class Environment {
     const postGeometry = new THREE.CylinderGeometry(0.1, 0.1, 1.5);
     const postMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
-      roughness: 0.8,
+      roughness: 0.7,
       metalness: 0.0,
-      emissive: 0x222222,
-      emissiveIntensity: 0.05,
+      emissive: 0x444444,
+      emissiveIntensity: 0.12, // Posts stay readable at dusk
     });
     const reflectorGeometry = new THREE.BoxGeometry(0.2, 0.3, 0.05);
+    // Red retro-reflector for curve posts - glows strongly at dusk/night
     const reflectorMaterial = new THREE.MeshStandardMaterial({
-      color: 0xff0000,
-      emissive: 0xff0000,
-      emissiveIntensity: 0.2,
-      roughness: 0.5,
-      metalness: 0.0,
+      color: 0xff2200,
+      emissive: 0xff3300,
+      emissiveIntensity: 0.85,
+      roughness: 0.3,
+      metalness: 0.2,
+    });
+    // White retro-reflector strip for straight-section delineator posts
+    const whiteReflectorMaterial = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.55,
+      roughness: 0.3,
+      metalness: 0.2,
     });
 
     // Place road posts (only in active segment range)
@@ -3768,6 +4022,15 @@ class Environment {
           leftPost.receiveShadow = true;
           this.scene.add(leftPost);
 
+          // White reflector strip near the top of the post
+          const leftReflector = new THREE.Mesh(
+            reflectorGeometry,
+            whiteReflectorMaterial,
+          );
+          leftReflector.position.set(leftX, 1.2, leftZ);
+          leftReflector.rotation.y = point.heading;
+          this.scene.add(leftReflector);
+
           // Right post
           const rightX = point.x + 9 * Math.sin(point.heading + Math.PI / 2);
           const rightZ = point.z + 9 * Math.cos(point.heading + Math.PI / 2);
@@ -3776,6 +4039,14 @@ class Environment {
           rightPost.castShadow = true;
           rightPost.receiveShadow = true;
           this.scene.add(rightPost);
+
+          const rightReflector = new THREE.Mesh(
+            reflectorGeometry,
+            whiteReflectorMaterial,
+          );
+          rightReflector.position.set(rightX, 1.2, rightZ);
+          rightReflector.rotation.y = point.heading;
+          this.scene.add(rightReflector);
         } else {
           // Curve - post on outside only
           const side = headingChange > 0 ? -1 : 1; // Outside of curve
@@ -4697,7 +4968,9 @@ class Environment {
     // change within the active leg) instead of a hardcoded segment count from
     // an obsolete layout - which placed warnings on a straight in Leg 2 and
     // left the real hairpins in Leg 5 unmarked.
-    const hairpinTurnRate = 0.2; // radians of heading change per segment
+    // Hairpins turn at 0.125-0.14 rad/segment in the doubled layout; the
+    // sharpest ordinary corners are 0.075
+    const hairpinTurnRate = 0.1;
     const hairpins = [];
     const scanStart = Math.max(1, this.startSegment);
     const scanEnd = Math.min(this.endSegment, this.roadPath.length - 1);

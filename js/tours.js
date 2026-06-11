@@ -1,97 +1,97 @@
 class TourSystem {
     constructor() {
         this.legs = [
-            // Leg 1: Easy warm-up (35 segments = 700m)
+            // Leg 1: Easy warm-up (70 segments = 1400m)
             {
                 id: 'mountain-dawn',
                 name: 'Mountain Dawn',
                 description: 'Gentle winding roads through misty mountain passes',
                 startSegment: 0,
-                endSegment: 34,
+                endSegment: 69,
                 timeOfDay: 'dawn',
                 landscapeVariation: 'mountain',
                 weather: 'clear',
                 weatherIntensity: 0
             },
-            // Leg 2: Build confidence (40 segments = 800m)
+            // Leg 2: Build confidence (80 segments = 1600m)
             {
                 id: 'valley-run',
                 name: 'Valley Run',
                 description: 'Fast flowing sections through sunlit valleys',
-                startSegment: 35,
-                endSegment: 74,
+                startSegment: 70,
+                endSegment: 149,
                 timeOfDay: 'golden',
                 landscapeVariation: 'valley',
                 weather: 'clear',
                 weatherIntensity: 0
             },
-            // Leg 3: Technical descents (42 segments = 840m)
+            // Leg 3: Technical descents (84 segments = 1680m)
             {
                 id: 'coastal-descent',
                 name: 'Coastal Descent',
                 description: 'Sweeping descents with ocean views',
-                startSegment: 75,
-                endSegment: 116,
+                startSegment: 150,
+                endSegment: 233,
                 timeOfDay: 'twilight',
                 landscapeVariation: 'coastal',
                 weather: 'clear',
                 weatherIntensity: 0
             },
-            // Leg 4: First weather challenge - visibility (44 segments = 880m)
+            // Leg 4: First weather challenge - visibility (88 segments = 1760m)
             {
                 id: 'foggy-gorge',
                 name: 'Foggy Gorge',
                 description: 'Navigate through dense morning fog and mist',
-                startSegment: 117,
-                endSegment: 160,
+                startSegment: 234,
+                endSegment: 321,
                 timeOfDay: 'golden', // Morning light, but foggy
                 landscapeVariation: 'valley',
                 weather: 'fog',
-                weatherIntensity: 1.5
+                weatherIntensity: 4.0
             },
-            // Leg 5: Technical hairpins (46 segments = 920m)
+            // Leg 5: Technical hairpins (92 segments = 1840m)
             {
                 id: 'high-pass',
                 name: 'High Pass',
                 description: 'Technical hairpins and dramatic elevation changes',
-                startSegment: 161,
-                endSegment: 206,
+                startSegment: 322,
+                endSegment: 413,
                 timeOfDay: 'sunset',
                 landscapeVariation: 'alpine',
                 weather: 'clear',
                 weatherIntensity: 0
             },
-            // Leg 6: Weather + grip challenge (48 segments = 960m)
+            // Leg 6: Weather + grip challenge (96 segments = 1920m)
             {
                 id: 'storm-valley',
                 name: 'Storm Valley',
                 description: 'Battle heavy rain and wet roads in a valley storm',
-                startSegment: 207,
-                endSegment: 254,
+                startSegment: 414,
+                endSegment: 509,
                 timeOfDay: 'twilight', // Dark stormy afternoon
                 landscapeVariation: 'valley',
                 weather: 'rain',
                 weatherIntensity: 0.9
             },
-            // Leg 7: Darkness challenge (49 segments = 980m)
+            // Leg 7: Darkness challenge (98 segments = 1960m)
             {
                 id: 'night-ride',
                 name: 'Night Ride',
                 description: 'Mixed technical challenges under the stars',
-                startSegment: 255,
-                endSegment: 303,
+                startSegment: 510,
+                endSegment: 607,
                 timeOfDay: 'night',
                 landscapeVariation: 'mixed',
                 weather: 'clear',
                 weatherIntensity: 0
             },
-            // Leg 8: Ultimate finale - ice and snow (48 segments = 960m)
+            // Leg 8: Ultimate finale - ice and snow (96 segments = 1920m)
             {
                 id: 'winter-pass',
                 name: 'Winter Pass',
                 description: 'Conquer icy roads and snowfall in the mountain pass',
-                startSegment: 304,
-                endSegment: 351,
+                startSegment: 608,
+                endSegment: 703,
                 timeOfDay: 'twilight', // Overcast winter day
                 landscapeVariation: 'alpine',
                 weather: 'snow',
@@ -100,6 +100,117 @@ class TourSystem {
         ];
 
         this.currentLeg = null;
+
+        // Progression: legs unlock sequentially; riders unlock at completion
+        // milestones. Everyone starts on Tim's scooter and works up.
+        this.characterUnlocks = { tim: 0, shane: 2, alex: 4, steve: 6 };
+        let savedProgress = {};
+        try {
+            savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');
+        } catch (e) { /* corrupted - start fresh */ }
+        this.completedLegs = Array.isArray(savedProgress.completedLegs) ? savedProgress.completedLegs : [];
+
+        // Rider selection (persisted; must be unlocked). CHARACTERS is
+        // defined in vehicle.js, loaded before this file.
+        const savedCharacter = localStorage.getItem('twistyCharacter');
+        this.selectedCharacterId =
+            (typeof CHARACTERS !== 'undefined' &&
+             CHARACTERS.some(c => c.id === savedCharacter) &&
+             this.isCharacterUnlocked(savedCharacter))
+                ? savedCharacter : 'tim';
+    }
+
+    isLegCompleted(legId) {
+        return this.completedLegs.includes(legId);
+    }
+
+    isLegUnlocked(index) {
+        if (index <= 0) return true;
+        return this.isLegCompleted(this.legs[index - 1].id);
+    }
+
+    isCharacterUnlocked(characterId) {
+        const required = this.characterUnlocks[characterId];
+        if (required === undefined) return false;
+        return this.completedLegs.length >= required;
+    }
+
+    // Records a completed leg; returns names of anything newly unlocked so
+    // the finish screen can announce it
+    markLegCompleted(legId) {
+        if (this.isLegCompleted(legId)) return { newLegs: [], newCharacters: [] };
+
+        const charactersBefore = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
+            .filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
+        const legIndex = this.legs.findIndex(l => l.id === legId);
+
+        this.completedLegs.push(legId);
+        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: this.completedLegs }));
+
+        const newCharacters = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
+            .filter(c => this.isCharacterUnlocked(c.id) && !charactersBefore.includes(c.id))
+            .map(c => c.name);
+        const newLegs = [];
+        if (legIndex >= 0 && legIndex + 1 < this.legs.length && !this.isLegCompleted(this.legs[legIndex + 1].id)) {
+            newLegs.push(this.legs[legIndex + 1].name);
+        }
+        return { newLegs, newCharacters };
+    }
+
+    getSelectedCharacter() {
+        if (typeof CHARACTERS === 'undefined') return null;
+        return CHARACTERS.find(c => c.id === this.selectedCharacterId) || CHARACTERS[0];
+    }
+
+    selectCharacter(characterId) {
+        if (!this.isCharacterUnlocked(characterId)) return;
+        this.selectedCharacterId = characterId;
+        localStorage.setItem('twistyCharacter', characterId);
+        document.querySelectorAll('.rider-card').forEach(card => {
+            card.classList.toggle('selected', card.dataset.characterId === characterId);
+        });
+    }
+
+    buildRiderSelectorHTML() {
+        if (typeof CHARACTERS === 'undefined') return '';
+        const statBar = (value) =>
+            `<span style="letter-spacing: 1px; color: #ffd700;">${'■'.repeat(value)}</span><span style="letter-spacing: 1px; color: #334;">${'■'.repeat(5 - value)}</span>`;
+        return `
+            <div class="rider-row" style="display: flex; gap: 12px; justify-content: center; margin-bottom: 18px; flex-wrap: wrap;">
+                ${CHARACTERS.map(c => {
+                    const swatch = '#' + parseInt(c.bikeColor).toString(16).padStart(6, '0');
+                    const unlocked = this.isCharacterUnlocked(c.id);
+                    const required = this.characterUnlocks[c.id] || 0;
+                    const lockHint = unlocked ? '' : `
+                        <div style="color: #cc8833; margin-top: 6px; font-size: 10px;">
+                            🔒 Complete ${required} leg${required === 1 ? '' : 's'} to unlock
+                        </div>`;
+                    return `
+                    <div class="rider-card ${c.id === this.selectedCharacterId ? 'selected' : ''} ${unlocked ? '' : 'locked'}" data-character-id="${c.id}" style="
+                        background: rgba(10, 16, 32, 0.85);
+                        border: 2px solid rgba(120, 140, 200, 0.35);
+                        border-radius: 10px;
+                        padding: 10px 14px;
+                        min-width: 150px;
+                        cursor: ${unlocked ? 'pointer' : 'not-allowed'};
+                        text-align: left;
+                        font-size: 11px;
+                        color: #aab;
+                        ${unlocked ? '' : 'opacity: 0.45; filter: grayscale(0.8);'}
+                    ">
+                        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
+                            <span style="width: 14px; height: 14px; border-radius: 50%; background: ${swatch}; display: inline-block; border: 1px solid rgba(255,255,255,0.4);"></span>
+                            <span style="color: white; font-weight: bold; font-size: 14px;">${unlocked ? '' : '🔒 '}${c.name}</span>
+                        </div>
+                        <div style="color: #8899bb; margin-bottom: 6px;">${c.bikeLabel}</div>
+                        <div>Speed&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
+                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
+                        <div>Handling ${statBar(c.stats.handling)}</div>
+                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
+                        ${lockHint}
+                    </div>`;
+                }).join('')}
+            </div>`;
     }
 
     getLegs() {
@@ -154,7 +265,9 @@ class TourSystem {
             return roadPath[0];
         }
 
-        const startSegment = Math.min(this.currentLeg.startSegment, roadPath.length - 1);
+        // Spawn at the start line (5 segments into the leg) so the abrupt
+        // edge where the rendered road begins is behind the camera
+        const startSegment = Math.min(this.currentLeg.startSegment + 5, roadPath.length - 1);
         return roadPath[startSegment];
     }
 
@@ -233,19 +346,88 @@ class TourSystem {
     }
 
     createLegSelector(container, onLegSelected) {
+        // Rebuildable: lock states change as the player progresses, so the
+        // selector is torn down and re-rendered on every menu visit
+        this.onLegSelected = onLegSelected || this.onLegSelected;
+        const existing = document.querySelector('.tour-selector-overlay');
+        if (existing) existing.remove();
+        if (this.keyboardHandler) {
+            document.removeEventListener('keydown', this.keyboardHandler);
+        }
+
         const selectorHTML = `
             <div class="tour-selector-overlay">
                 <div class="tour-selector-panel">
                     <h1 class="tour-title">TWISTY CHALLENGE TOUR</h1>
-                    <div class="leg-grid">
-                        ${this.legs.map((leg, index) => `
-                            <div class="leg-card" data-leg-id="${leg.id}" data-leg-index="${index}">
-                                <div class="leg-number">LEG ${index + 1}</div>
-                                <h3 class="leg-name">${leg.name}</h3>
-                                <p class="leg-description">${leg.description}</p>
-                                <button class="select-leg-btn" data-leg-id="${leg.id}">START</button>
-                            </div>
-                        `).join('')}
+
+                    <!-- Screen 1: rider selection -->
+                    <div class="character-select-screen">
+                        <div class="rider-select-label" style="text-align: center; color: #8899bb; letter-spacing: 3px; font-size: 13px; margin-bottom: 8px;">CHOOSE YOUR RIDER</div>
+                        ${this.buildRiderSelectorHTML()}
+                        <div style="text-align: center; margin-top: 10px;">
+                            <button id="riderContinueBtn" style="
+                                padding: 14px 60px;
+                                background: linear-gradient(135deg, #2ecc71, #27ae60);
+                                color: white;
+                                border: none;
+                                border-radius: 10px;
+                                font-size: 18px;
+                                font-weight: bold;
+                                letter-spacing: 2px;
+                                cursor: pointer;
+                                box-shadow: 0 4px 18px rgba(46, 204, 113, 0.4);
+                            ">CONTINUE →</button>
+                        </div>
+                    </div>
+
+                    <!-- Screen 2: track selection -->
+                    <div class="track-select-screen" style="display: none;">
+                        <div style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 14px;">
+                            <button id="backToRidersBtn" style="
+                                padding: 8px 18px;
+                                background: rgba(120, 140, 200, 0.15);
+                                border: 1px solid rgba(120, 140, 200, 0.45);
+                                border-radius: 8px;
+                                color: #aac;
+                                font-size: 13px;
+                                font-weight: bold;
+                                cursor: pointer;
+                            ">← RIDER</button>
+                            <div class="rider-select-label" style="color: #8899bb; letter-spacing: 3px; font-size: 13px;">CHOOSE YOUR LEG</div>
+                        </div>
+                        <div class="leg-grid">
+                            ${this.legs.map((leg, index) => {
+                                const unlocked = this.isLegUnlocked(index);
+                                const completed = this.isLegCompleted(leg.id);
+                                const badge = completed
+                                    ? '<span style="color: #2ecc71;">✔ COMPLETED</span>'
+                                    : (unlocked ? '' : '🔒 LOCKED');
+                                return `
+                                <div class="leg-card ${unlocked ? '' : 'locked'}" data-leg-id="${leg.id}" data-leg-index="${index}" style="${unlocked ? '' : 'opacity: 0.45; filter: grayscale(0.8);'}">
+                                    <div class="leg-number">LEG ${index + 1} <span style="float: right; font-size: 10px;">${badge}</span></div>
+                                    <h3 class="leg-name">${leg.name}</h3>
+                                    <p class="leg-description">${unlocked ? leg.description : `Complete Leg ${index} to unlock`}</p>
+                                    ${unlocked ? `
+                                        <button class="select-leg-btn" data-leg-id="${leg.id}">START</button>
+                                        <button class="view-leaderboard-btn" data-leg-id="${leg.id}" style="
+                                            margin-top: 6px;
+                                            width: 100%;
+                                            padding: 6px 0;
+                                            background: rgba(255, 215, 0, 0.12);
+                                            border: 1px solid rgba(255, 215, 0, 0.45);
+                                            border-radius: 6px;
+                                            color: #ffd700;
+                                            font-size: 12px;
+                                            font-weight: bold;
+                                            cursor: pointer;
+                                            letter-spacing: 1px;
+                                        ">🏆 BEST TIMES</button>
+                                    ` : `
+                                        <button class="select-leg-btn" disabled style="opacity: 0.4; cursor: not-allowed;">🔒 LOCKED</button>
+                                    `}
+                                </div>`;
+                            }).join('')}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -253,27 +435,86 @@ class TourSystem {
 
         container.insertAdjacentHTML('beforeend', selectorHTML);
 
-        // Initialize keyboard navigation
-        this.selectedLegIndex = 0;
+        // Initialize keyboard navigation on the first unlocked, uncompleted leg
+        this.selectedLegIndex = this.firstPlayableLegIndex();
         this.legSelectorActive = true;
+        this.menuScreen = 'rider';
         this.updateLegHighlight();
 
-        // Add event listeners for mouse clicks
-        document.querySelectorAll('.select-leg-btn').forEach(btn => {
+        const showTrackScreen = () => {
+            document.querySelector('.character-select-screen').style.display = 'none';
+            document.querySelector('.track-select-screen').style.display = 'block';
+            this.menuScreen = 'track';
+        };
+        const showRiderScreen = () => {
+            document.querySelector('.character-select-screen').style.display = 'block';
+            document.querySelector('.track-select-screen').style.display = 'none';
+            this.menuScreen = 'rider';
+        };
+        this.showTrackScreen = showTrackScreen;
+        this.showRiderScreen = showRiderScreen;
+
+        document.getElementById('riderContinueBtn').addEventListener('click', showTrackScreen);
+        document.getElementById('backToRidersBtn').addEventListener('click', showRiderScreen);
+
+        // Leg start buttons (unlocked only)
+        document.querySelectorAll('.select-leg-btn:not([disabled])').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const legId = e.target.dataset.legId;
                 const leg = this.selectLeg(legId);
-                if (leg && onLegSelected) {
+                if (leg && this.onLegSelected) {
                     this.legSelectorActive = false;
-                    onLegSelected(leg);
+                    this.onLegSelected(leg);
                 }
             });
         });
 
-        // Add keyboard navigation
+        // Rider selection cards (locked ones are rejected in selectCharacter)
+        document.querySelectorAll('.rider-card').forEach(card => {
+            card.addEventListener('click', () => {
+                this.selectCharacter(card.dataset.characterId);
+            });
+        });
+
+        // Leaderboard buttons - handled by the game (set via onViewLeaderboard)
+        document.querySelectorAll('.view-leaderboard-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (this.onViewLeaderboard) {
+                    this.onViewLeaderboard(e.target.dataset.legId);
+                }
+            });
+        });
+
+        // Keyboard navigation
         this.keyboardHandler = (e) => {
             if (!this.legSelectorActive) return;
 
+            // Rider screen: left/right cycles unlocked riders, Enter continues
+            if (this.menuScreen === 'rider') {
+                const unlockedIds = CHARACTERS.filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
+                const current = unlockedIds.indexOf(this.selectedCharacterId);
+                switch (e.code) {
+                    case 'ArrowLeft':
+                    case 'KeyA':
+                        e.preventDefault();
+                        this.selectCharacter(unlockedIds[Math.max(0, current - 1)]);
+                        break;
+                    case 'ArrowRight':
+                    case 'KeyD':
+                        e.preventDefault();
+                        this.selectCharacter(unlockedIds[Math.min(unlockedIds.length - 1, current + 1)]);
+                        break;
+                    case 'Enter':
+                    case 'Space':
+                        e.preventDefault();
+                        showTrackScreen();
+                        break;
+                }
+                return;
+            }
+
+            // Track screen: navigate unlocked legs only
             switch(e.code) {
                 case 'ArrowUp':
                 case 'KeyW':
@@ -291,26 +532,40 @@ class TourSystem {
                 case 'ArrowRight':
                 case 'KeyD':
                     e.preventDefault();
-                    if (this.selectedLegIndex < this.legs.length - 1) {
+                    if (this.selectedLegIndex < this.legs.length - 1 && this.isLegUnlocked(this.selectedLegIndex + 1)) {
                         this.selectedLegIndex++;
                     }
                     this.updateLegHighlight();
                     break;
 
+                case 'Escape':
+                    e.preventDefault();
+                    showRiderScreen();
+                    break;
+
                 case 'Enter':
                 case 'Space':
                     e.preventDefault();
+                    if (!this.isLegUnlocked(this.selectedLegIndex)) break;
                     const selectedLeg = this.legs[this.selectedLegIndex];
                     const leg = this.selectLeg(selectedLeg.id);
-                    if (leg && onLegSelected) {
+                    if (leg && this.onLegSelected) {
                         this.legSelectorActive = false;
-                        onLegSelected(leg);
+                        this.onLegSelected(leg);
                     }
                     break;
             }
         };
 
         document.addEventListener('keydown', this.keyboardHandler);
+    }
+
+    firstPlayableLegIndex() {
+        for (let i = 0; i < this.legs.length; i++) {
+            if (this.isLegUnlocked(i) && !this.isLegCompleted(this.legs[i].id)) return i;
+        }
+        // Everything completed - default to the first leg
+        return 0;
     }
 
     updateLegHighlight() {
@@ -341,22 +596,12 @@ class TourSystem {
     }
 
     showLegSelector() {
-        const overlay = document.querySelector('.tour-selector-overlay');
-        if (overlay) {
-            overlay.style.display = 'flex';
-        }
-        this.legSelectorActive = true;
+        // Rebuild from scratch so newly unlocked legs/riders render correctly
+        this.createLegSelector(document.body, this.onLegSelected);
 
-        // Re-register keyboard navigation (hideLegSelector removed it; without
-        // this, arrows/Enter are dead after returning to the menu)
-        if (this.keyboardHandler) {
-            document.removeEventListener('keydown', this.keyboardHandler);
-            document.addEventListener('keydown', this.keyboardHandler);
-        }
-
-        // Re-highlight the selected card
-        if (typeof this.selectedLegIndex !== 'undefined') {
-            this.updateLegHighlight();
+        // Returning players land on the track screen; their rider is kept
+        if (this.showTrackScreen) {
+            this.showTrackScreen();
         }
     }
 }

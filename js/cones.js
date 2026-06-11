@@ -3,6 +3,7 @@ class Cones {
         this.scene = scene;
         this.environment = environment;
         this.cones = [];
+        this.activeCones = []; // Cones currently sliding/tumbling after a hit
         this.onConeHit = onConeHit; // Callback function for scoring
         this.createCones();
     }
@@ -90,6 +91,7 @@ class Cones {
 
             const cone = new THREE.Mesh(coneGeometry, coneMaterial);
             cone.position.set(pos.x, roadY + 0.4, pos.z); // Position at road elevation + 0.4
+            cone.userData.homePosition = cone.position.clone(); // For reset after being knocked away
             cone.castShadow = true;
             cone.receiveShadow = true;
             cone.hit = false; // Track if cone has been hit
@@ -170,16 +172,9 @@ class Cones {
         }
     }
     
-    checkCollision(vehiclePosition) {
+    checkCollision(vehiclePosition, vehicleVelocity = null, vehicleSpeed = 0) {
         const hitDistance = 2.0; // More generous hit distance
         const heightTolerance = 3; // More generous height tolerance
-
-        // Debug: periodic logging
-        if (!this.collisionDebugCounter) this.collisionDebugCounter = 0;
-        this.collisionDebugCounter++;
-        if (this.collisionDebugCounter % 180 === 0) { // Every 3 seconds at 60fps
-            console.log('Cone collision check - Vehicle at:', vehiclePosition.x.toFixed(1), vehiclePosition.z.toFixed(1), 'Cones:', this.cones.length);
-        }
 
         for (let cone of this.cones) {
             const distance = Math.sqrt(
@@ -191,39 +186,151 @@ class Cones {
 
             if (distance < hitDistance && heightDiff < heightTolerance && !cone.hit) {
                 cone.hit = true;
-                cone.rotation.z = Math.PI / 3;
-                cone.position.y -= 0.2; // Lower the cone when hit
+                this.knockCone(cone, vehiclePosition, vehicleVelocity, vehicleSpeed);
 
                 // Award points for hitting cone
                 if (this.onConeHit) {
                     this.onConeHit(25); // 25 points for cone hit
-                    console.log(`Cone hit! +25 points - distance: ${distance.toFixed(2)}, height diff: ${heightDiff.toFixed(2)}`);
-                } else {
-                    console.log('Cone hit! +25 points - no callback available');
                 }
             }
         }
     }
-    
-    reset() {
-        this.cones.forEach(cone => {
-            cone.rotation.z = 0;
-            // Restore original Y position (road elevation + 0.4)
-            let roadY = 0;
-            if (this.environment && this.environment.roadPath) {
-                let minDist = Infinity;
-                for (const roadPoint of this.environment.roadPath) {
-                    const dist = Math.sqrt(
-                        Math.pow(cone.position.x - roadPoint.x, 2) +
-                        Math.pow(cone.position.z - roadPoint.z, 2)
-                    );
-                    if (dist < minDist) {
-                        minDist = dist;
-                        roadY = roadPoint.y || 0;
+
+    knockCone(cone, vehiclePosition, vehicleVelocity, vehicleSpeed) {
+        // Contact offset: which side of the bike the cone was struck with -
+        // a cone clipped on the left flicks away to the left
+        let contactX = cone.position.x - vehiclePosition.x;
+        let contactZ = cone.position.z - vehiclePosition.z;
+        const contactLen = Math.sqrt(contactX * contactX + contactZ * contactZ) || 1;
+        contactX /= contactLen;
+        contactZ /= contactLen;
+
+        const groundY = cone.position.y - 0.4; // Cone center sits 0.4 above the road
+
+        const slideSpeedThreshold = 12; // m/s (~27 mph)
+        if (vehicleSpeed < slideSpeedThreshold) {
+            // Low speed: nudge the cone - it slides away upright and stays up
+            const pushSpeed = 2 + vehicleSpeed * 0.4;
+            this.activeCones.push({
+                cone,
+                mode: 'slide',
+                groundY,
+                velocity: new THREE.Vector3(contactX * pushSpeed, 0, contactZ * pushSpeed),
+                wobblePhase: Math.random() * Math.PI * 2
+            });
+        } else {
+            // High speed: send it tumbling. Direction blends the bike's travel
+            // direction with the contact offset; energy scales with speed
+            const vx = vehicleVelocity ? vehicleVelocity.x : 0;
+            const vz = vehicleVelocity ? vehicleVelocity.z : 0;
+            const flingX = vx * 0.45 + contactX * vehicleSpeed * 0.5;
+            const flingZ = vz * 0.45 + contactZ * vehicleSpeed * 0.5;
+            const popUp = Math.min(2 + vehicleSpeed * 0.12, 8);
+
+            // Tumble end-over-end around the axis perpendicular to the fling
+            const flingLen = Math.sqrt(flingX * flingX + flingZ * flingZ) || 1;
+            const spinRate = Math.min(4 + vehicleSpeed * 0.25, 18);
+
+            this.activeCones.push({
+                cone,
+                mode: 'tumble',
+                groundY,
+                velocity: new THREE.Vector3(flingX, popUp, flingZ),
+                // Axis perpendicular to travel direction (in XZ), so the cone
+                // flips forward along its flight path
+                spinAxis: new THREE.Vector3(flingZ / flingLen, 0, -flingX / flingLen),
+                spinRate,
+                bounces: 0
+            });
+        }
+    }
+
+    update(deltaTime) {
+        if (!this.activeCones || this.activeCones.length === 0) return;
+
+        const gravity = 18; // Slightly arcade-y gravity for snappy tumbles
+        const stillActive = [];
+
+        for (const state of this.activeCones) {
+            const cone = state.cone;
+
+            if (state.mode === 'slide') {
+                cone.position.x += state.velocity.x * deltaTime;
+                cone.position.z += state.velocity.z * deltaTime;
+
+                // Friction
+                const decel = Math.max(0, 1 - 6 * deltaTime);
+                state.velocity.x *= decel;
+                state.velocity.z *= decel;
+
+                // Slight wobble while sliding, settling upright
+                const slideSpeed = Math.hypot(state.velocity.x, state.velocity.z);
+                state.wobblePhase += deltaTime * 14;
+                cone.rotation.x = Math.sin(state.wobblePhase) * 0.12 * Math.min(slideSpeed, 1);
+                cone.rotation.z = Math.cos(state.wobblePhase) * 0.12 * Math.min(slideSpeed, 1);
+
+                if (slideSpeed < 0.15) {
+                    cone.rotation.x = 0;
+                    cone.rotation.z = 0;
+                    continue; // Settled - drop from active list
+                }
+            } else {
+                // Tumble: ballistic flight with end-over-end rotation
+                state.velocity.y -= gravity * deltaTime;
+                cone.position.x += state.velocity.x * deltaTime;
+                cone.position.y += state.velocity.y * deltaTime;
+                cone.position.z += state.velocity.z * deltaTime;
+
+                cone.rotateOnWorldAxis(state.spinAxis, state.spinRate * deltaTime);
+
+                // Ground contact (cone on its side has center ~0.25 above ground)
+                const restY = state.groundY + 0.25;
+                if (cone.position.y <= restY && state.velocity.y < 0) {
+                    cone.position.y = restY;
+                    state.bounces++;
+                    if (state.bounces >= 2 || Math.abs(state.velocity.y) < 1.5) {
+                        // Settle lying on its side, pointing along the fling direction
+                        cone.rotation.set(0, Math.atan2(state.velocity.x, state.velocity.z), Math.PI / 2);
+                        continue; // Settled
                     }
+                    state.velocity.y = -state.velocity.y * 0.35;
+                    state.velocity.x *= 0.6;
+                    state.velocity.z *= 0.6;
+                    state.spinRate *= 0.5;
                 }
             }
-            cone.position.y = roadY + 0.4;
+
+            stillActive.push(state);
+        }
+
+        this.activeCones = stillActive;
+    }
+    
+    reset() {
+        this.activeCones = [];
+        this.cones.forEach(cone => {
+            cone.rotation.set(0, 0, 0);
+            // Restore original position (knocked cones slide/tumble away)
+            if (cone.userData.homePosition) {
+                cone.position.copy(cone.userData.homePosition);
+            } else {
+                // Fallback: re-derive road elevation
+                let roadY = 0;
+                if (this.environment && this.environment.roadPath) {
+                    let minDist = Infinity;
+                    for (const roadPoint of this.environment.roadPath) {
+                        const dist = Math.sqrt(
+                            Math.pow(cone.position.x - roadPoint.x, 2) +
+                            Math.pow(cone.position.z - roadPoint.z, 2)
+                        );
+                        if (dist < minDist) {
+                            minDist = dist;
+                            roadY = roadPoint.y || 0;
+                        }
+                    }
+                }
+                cone.position.y = roadY + 0.4;
+            }
             cone.hit = false;
         });
     }

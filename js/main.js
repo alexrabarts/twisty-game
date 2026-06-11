@@ -37,7 +37,9 @@ class Game {
                 fillColor: 0xe6f2ff,
                 fillIntensity: 0.15,
                 rimColor: 0xfff8e1,
-                rimIntensity: 0.25
+                rimIntensity: 0.25,
+                exposure: 1.0,
+                sunOffset: { x: 60, y: 90 }
             },
             sunset: {
                 name: 'Sunset',
@@ -53,7 +55,9 @@ class Game {
                 fillColor: 0xff9977,
                 fillIntensity: 0.2,
                 rimColor: 0xffaa66,
-                rimIntensity: 0.3
+                rimIntensity: 0.3,
+                exposure: 0.92,
+                sunOffset: { x: 95, y: 32 }
             },
             twilight: {
                 name: 'Twilight',
@@ -69,7 +73,9 @@ class Game {
                 fillColor: 0x8899dd,
                 fillIntensity: 0.15,
                 rimColor: 0x99aaee,
-                rimIntensity: 0.2
+                rimIntensity: 0.2,
+                exposure: 0.82,
+                sunOffset: { x: 80, y: 45 }
             },
             night: {
                 name: 'Night',
@@ -85,7 +91,9 @@ class Game {
                 fillColor: 0x0f1520,
                 fillIntensity: 0.02,
                 rimColor: 0x1a2028,
-                rimIntensity: 0.03
+                rimIntensity: 0.03,
+                exposure: 0.68,
+                sunOffset: { x: 40, y: 70 }
             },
             dawn: {
                 name: 'Dawn',
@@ -101,13 +109,16 @@ class Game {
                 fillColor: 0xffddaa,
                 fillIntensity: 0.18,
                 rimColor: 0xffeecc,
-                rimIntensity: 0.25
+                rimIntensity: 0.25,
+                exposure: 0.95,
+                sunOffset: { x: -90, y: 35 }
             }
         };
 
         // Create tour system
         console.log('Creating tour system...');
         this.tourSystem = new TourSystem();
+        this.tourSystem.onViewLeaderboard = (legId) => this.showLeaderboardViewer(legId);
 
         // Initialize leaderboard service
         if (typeof LeaderboardService !== 'undefined' && window.firebaseFunctions) {
@@ -192,6 +203,9 @@ class Game {
         // Set time of day for the leg
         this.setTimeOfDay(leg.timeOfDay);
 
+        // Resolve the selected rider before building anything that needs it
+        this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
+
         console.log('Creating environment...');
         try {
             // Create environment with lazy generation for the selected leg
@@ -233,13 +247,13 @@ class Game {
         });
 
         console.log('Creating traffic...');
-        this.traffic = new Traffic(this.scene, this.environment);
+        this.traffic = new Traffic(this.scene, this.environment, this.selectedCharacter ? this.selectedCharacter.name : null);
 
         console.log('Creating particle system...');
         this.particles = new ParticleSystem(this.scene);
 
         console.log('Creating vehicle...');
-        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points));
+        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter);
         this.vehicle.environment = this.environment; // Pass environment reference for elevation
 
         // Connect weather system to vehicle
@@ -255,9 +269,9 @@ class Game {
             this.vehicle.position.z = startPos.z;
             this.vehicle.yawAngle = startPos.heading;
 
-            // Initialize segment tracking to match starting position
-            this.vehicle.currentRoadSegment = leg.startSegment;
-            this.vehicle.segmentProgress = 0;
+            // Initialize segment tracking to match the actual spawn point
+            // (getStartingPosition spawns a few segments into the leg)
+            this.vehicle.findNearestRoadSegment();
 
             console.log(`Starting at segment ${leg.startSegment}: position (${startPos.x.toFixed(1)}, ${startPos.y.toFixed(1)}, ${startPos.z.toFixed(1)})`);
 
@@ -279,6 +293,9 @@ class Game {
         this.finished = false;
         this.vehicle.finished = false;
         this.startTime = performance.now();
+
+        // Classify the freshly built scene for distance culling
+        this.setupPerformanceCulling();
 
         // Start the new leg's loop with a clean timestep accumulator
         this.accumulatedTime = 0;
@@ -302,6 +319,107 @@ class Game {
         console.log('Starting animation loop...');
         // Delay first frame to ensure renderer is fully initialized
         this.animationFrameId = requestAnimationFrame(() => this.animate());
+    }
+
+    // Adaptive resolution: the game is fill-rate bound on high-DPI screens,
+    // so step the render resolution down when FPS sags below the 60fps target
+    // and back up when there's sustained headroom. Runs once per second from
+    // the FPS counter.
+    adaptResolution() {
+        if (!this.renderer || this.paused) return;
+
+        if (!this.dprSteps) {
+            const maxDpr = Math.min(window.devicePixelRatio || 1, 2);
+            this.dprSteps = [maxDpr, maxDpr * 0.875, maxDpr * 0.75, maxDpr * 0.625, maxDpr * 0.5]
+                .filter(v => v >= 0.5);
+            this.dprIndex = 0;
+            this.headroomSeconds = 0;
+        }
+
+        const nowSec = performance.now() / 1000;
+        if (this.fps < 52 && this.dprIndex < this.dprSteps.length - 1) {
+            // If we just stepped up and immediately sagged, stop retrying that
+            // level for a while - prevents visible up/down oscillation
+            if (this.lastStepUpTime && nowSec - this.lastStepUpTime < 6) {
+                this.stepUpBlockedUntil = nowSec + 90;
+            }
+            this.dprIndex++;
+            this.headroomSeconds = 0;
+            this.renderer.setPixelRatio(this.dprSteps[this.dprIndex]);
+            console.log(`Adaptive resolution: pixel ratio -> ${this.dprSteps[this.dprIndex].toFixed(2)} (fps ${this.fps})`);
+        } else if (this.fps >= 58 && this.dprIndex > 0) {
+            // Require sustained headroom before stepping back up
+            this.headroomSeconds++;
+            const blocked = this.stepUpBlockedUntil && nowSec < this.stepUpBlockedUntil;
+            if (this.headroomSeconds >= 10 && !blocked) {
+                this.dprIndex--;
+                this.headroomSeconds = 0;
+                this.lastStepUpTime = nowSec;
+                this.renderer.setPixelRatio(this.dprSteps[this.dprIndex]);
+                console.log(`Adaptive resolution: pixel ratio -> ${this.dprSteps[this.dprIndex].toFixed(2)} (fps ${this.fps})`);
+            }
+        } else {
+            this.headroomSeconds = 0;
+        }
+    }
+
+    // Classify scene meshes for performance: small clutter loses shadow
+    // casting (dashes, debris, cone bases...), and everything but the truly
+    // large scenery gets distance-culled - fog hides the far course anyway,
+    // but without culling every rock/tree/post still costs a draw call
+    setupPerformanceCulling() {
+        this.cullableMeshes = [];
+        const playerGroup = this.vehicle ? this.vehicle.group : null;
+
+        this.scene.traverse(obj => {
+            if (!obj.isMesh) return;
+
+            // Never touch the player bike (its shadow matters up close)
+            for (let p = obj; p; p = p.parent) {
+                if (p === playerGroup) return;
+            }
+
+            if (!obj.geometry.boundingSphere) {
+                obj.geometry.computeBoundingSphere();
+            }
+            if (!obj.geometry.boundingSphere) return;
+
+            const scale = Math.max(Math.abs(obj.scale.x), Math.abs(obj.scale.y), Math.abs(obj.scale.z)) || 1;
+            const effectiveRadius = obj.geometry.boundingSphere.radius * scale;
+
+            if (effectiveRadius < 1.2) {
+                obj.castShadow = false;
+            }
+            if (effectiveRadius < 40) {
+                this.cullableMeshes.push(obj);
+            }
+        });
+
+        // Cull at the distance where fog has fully swallowed the scenery
+        const fogDensity = this.scene.fog ? this.scene.fog.density : 0.0018;
+        this.cullDistance = Math.min(600, Math.max(250, 2.2 / fogDensity));
+        this.lastCullTime = 0;
+
+        console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);
+    }
+
+    updatePerformanceCulling() {
+        if (!this.cullableMeshes || !this.vehicle) return;
+
+        const now = performance.now();
+        if (now - this.lastCullTime < 350) return;
+        this.lastCullTime = now;
+
+        const maxDistSq = this.cullDistance * this.cullDistance;
+        const px = this.vehicle.position.x;
+        const pz = this.vehicle.position.z;
+
+        for (const mesh of this.cullableMeshes) {
+            const pos = mesh.getWorldPosition(this.tempVector);
+            const dx = pos.x - px;
+            const dz = pos.z - pz;
+            mesh.visible = (dx * dx + dz * dz) < maxDistSq;
+        }
     }
 
     // Free GPU resources (geometries, materials, textures) for a removed subtree.
@@ -358,6 +476,9 @@ class Game {
                 this.disposeObject(obj);
             });
         }
+
+        // Drop stale cull references from the removed scene
+        this.cullableMeshes = null;
 
         // Reset game state
         this.finished = false;
@@ -516,6 +637,34 @@ class Game {
         this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 0.8;
         document.body.appendChild(this.renderer.domElement);
+
+        // Peripheral speed-streak overlay. NOTE: this deliberately avoids
+        // backdrop-filter - blurring a full-resolution canvas costs 10ms+ of
+        // GPU per frame. A static streaky radial gradient composites for free
+        // and still sells the speed at the edges of the view.
+        this.speedBlurOverlay = document.createElement('div');
+        this.speedBlurOverlay.id = 'speedBlurOverlay';
+        this.speedBlurOverlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 5;
+            background:
+                repeating-conic-gradient(from 0deg at 50% 50%,
+                    rgba(255,255,255,0) 0deg 5deg,
+                    rgba(235,240,255,0.055) 5.6deg 6.4deg,
+                    rgba(255,255,255,0) 7deg 12deg),
+                radial-gradient(ellipse at center,
+                    rgba(200,215,235,0) 42%,
+                    rgba(205,220,240,0.10) 70%,
+                    rgba(215,228,245,0.16) 100%);
+            -webkit-mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
+            mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
+            opacity: 0;
+            display: none;
+        `;
+        document.body.appendChild(this.speedBlurOverlay);
+        this.lastBlurOpacity = '0';
         
         const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
         pmremGenerator.compileEquirectangularShader();
@@ -618,6 +767,15 @@ class Game {
         this.directionalLight.intensity = config.sunIntensity;
         this.baseSunIntensity = config.sunIntensity;
 
+        // Sun direction: low at dawn/sunset for long dramatic shadows, high
+        // at midday-ish times. Used by the per-frame light-follow code.
+        this.sunOffset = config.sunOffset || { x: 50, y: 80 };
+
+        // Per-time exposure - darker nights/twilights, brighter days
+        if (this.renderer && config.exposure !== undefined) {
+            this.renderer.toneMappingExposure = config.exposure;
+        }
+
         // Update fill light
         this.fillLight.color = new THREE.Color(config.fillColor);
         this.fillLight.intensity = config.fillIntensity;
@@ -674,16 +832,22 @@ class Game {
         this.cameraIntroStartPos = new THREE.Vector3(0, 4, -10);
         this.cameraIntroEndPos = new THREE.Vector3(0, 4, -10);
         
-        // Camera mode system
-        this.cameraMode = 0; // 0 = standard, 1 = high/far, 2 = onboard
+        // Camera mode system - modes carry a `type` so behavior isn't tied to
+        // array order: 'follow' (chase cams), 'onboard' (close rider cam),
+        // 'helmet' (true first-person)
         this.cameraModes = [
-            { name: 'Standard', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 },
-            { name: 'High View', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 },
-            { name: 'Onboard', offset: new THREE.Vector3(0, 1.2, 0.5), lerpFactor: 0.18 }
+            { name: 'Onboard', type: 'onboard', offset: new THREE.Vector3(0, 1.2, 0.5), lerpFactor: 0.18 },
+            { name: 'Helmet Cam', type: 'helmet', offset: new THREE.Vector3(0, 1.15, 0.35), lerpFactor: 1.0 },
+            { name: 'Standard', type: 'follow', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 },
+            { name: 'High View', type: 'high', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 }
         ];
-        
+
+        // Restore the persisted view (defaults to Onboard)
+        const savedMode = parseInt(localStorage.getItem('twistyCameraMode'), 10);
+        this.cameraMode = (savedMode >= 0 && savedMode < this.cameraModes.length) ? savedMode : 0;
+
         // Dynamic camera offset for mountain roads
-        this.baseCameraOffset = this.cameraModes[0].offset.clone();
+        this.baseCameraOffset = this.cameraModes[this.cameraMode].offset.clone();
         this.cameraOffset = this.baseCameraOffset.clone();
         this.cameraTarget = new THREE.Vector3();
         this.currentCameraPos = this.camera.position.clone();
@@ -693,7 +857,7 @@ class Game {
         this.tempMatrix = new THREE.Matrix4();
         this.tempVector = new THREE.Vector3();
         this.tempUpVector = new THREE.Vector3();
-        this.cameraLerpFactor = this.cameraModes[0].lerpFactor;
+        this.cameraLerpFactor = this.cameraModes[this.cameraMode].lerpFactor;
         this.cameraLateralOffset = 0; // Track lateral offset for smooth side movement
         this.previousYawAngle = 0; // Track yaw changes for lateral movement
         
@@ -703,7 +867,59 @@ class Game {
         console.log('Camera setup complete - starting intro animation');
     }
 
+    // True first-person view: camera pinned to the rider's head. The head is
+    // rigidly attached to the bike's orientation (yaw, wheelie/jump pitch, and
+    // lean roll), with a touch of extra rider lean-in toward the corner - so
+    // the world's horizon tilts as the bike lays into a turn.
+    updateHelmetCamera(vehiclePos, adjLerp) {
+        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
 
+        // Bike pitch: nose-up during wheelies, flip rotation during jumps
+        let bikePitch = 0;
+        if (this.vehicle.isJumping) {
+            bikePitch = this.vehicle.jumpRotation;
+        } else if (this.vehicle.isWheelie) {
+            bikePitch = -this.vehicle.wheelieAngle;
+        }
+
+        // Head roll: the bike's lean plus the rider hanging slightly INTO the
+        // corner (same sign convention as the bike mesh, group.rotation.z)
+        const leanIn = THREE.MathUtils.clamp(this.vehicle.leanAngle * 0.2, -0.15, 0.15);
+        const targetRoll = this.vehicle.leanAngle + leanIn;
+        // Light smoothing so engine vibration/lean jitter doesn't shake the horizon
+        this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetRoll, adjLerp(0.45));
+        const roll = this.currentCameraBanking;
+
+        // Full bike-local frame: yaw, then pitch, then roll (interpolated yaw)
+        const helmetYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+        const mountEuler = new THREE.Euler(bikePitch, helmetYaw, roll, 'YXZ');
+
+        // Mount at the rider's visor - swings with the lean like a real head
+        const cameraPos = this.tempVector.set(0, 1.18, 0.3).applyEuler(mountEuler).add(vehiclePos);
+
+        // Engine/road vibration - subtle, speed dependent
+        const vibration = 0.008 + speedRatio * 0.012;
+        cameraPos.x += (Math.random() - 0.5) * vibration;
+        cameraPos.y += (Math.random() - 0.5) * vibration * 0.7;
+
+        this.camera.position.copy(cameraPos);
+        this.currentCameraPos.copy(cameraPos);
+
+        // Look ahead through the same head orientation
+        const lookTarget = new THREE.Vector3(0, 1.05, 25).applyEuler(mountEuler).add(vehiclePos);
+        this.currentLookTarget.copy(lookTarget);
+
+        // The horizon banks with the head: roll the up vector around the view axis
+        const forwardDir = new THREE.Vector3().subVectors(lookTarget, cameraPos).normalize();
+        this.tempMatrix.makeRotationAxis(forwardDir, roll);
+        this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
+        this.camera.up.copy(this.tempUpVector);
+        this.camera.lookAt(lookTarget);
+
+        // Wide FOV with speed rush
+        this.camera.fov = 95 + speedRatio * 12;
+        this.camera.updateProjectionMatrix();
+    }
 
     updateCamera(deltaTime = 1 / 60) {
         // Camera smoothing factors were tuned for 60Hz updates; rescale them to
@@ -757,13 +973,44 @@ class Game {
             return;
         }
         
-        // Normal camera follow behavior
-        const vehiclePos = this.vehicle.position.clone();
-        const vehicleRotation = new THREE.Euler(0, this.vehicle.yawAngle, 0);
-        
+        // Normal camera follow behavior (interpolated render position + yaw)
+        const vehiclePos = (this.vehicle.renderPosition || this.vehicle.position).clone();
+        const vehicleYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+        const vehicleRotation = new THREE.Euler(0, vehicleYaw, 0);
+
+        // Cinematic fall camera: pull up and back, zooming out with fall
+        // distance so the tumbling bike stays in view below
+        if (this.vehicle.fallingOffCliff) {
+            const fallDist = Math.max(0, (this.vehicle.fallStartY || vehiclePos.y) - vehiclePos.y);
+            const zoom = Math.min(fallDist * 0.45, 30);
+            const fallOffset = new THREE.Vector3(0, 7 + zoom * 0.5, -(9 + zoom)).applyEuler(vehicleRotation);
+            const fallCamPos = vehiclePos.clone().add(fallOffset);
+
+            this.currentCameraPos.lerp(fallCamPos, adjLerp(0.07)); // Floaty, detached follow
+            this.camera.position.copy(this.currentCameraPos);
+
+            // Look straight at the tumbling bike, leveling the horizon
+            this.currentLookTarget.lerp(vehiclePos, adjLerp(0.3));
+            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, 0, adjLerp(0.12));
+            const fallForward = new THREE.Vector3().subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
+            this.tempMatrix.makeRotationAxis(fallForward, this.currentCameraBanking);
+            this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
+            this.camera.up.copy(this.tempUpVector);
+            this.camera.lookAt(this.currentLookTarget);
+
+            // Ease the FOV back toward neutral
+            if (!this.currentFOV) this.currentFOV = this.camera.fov;
+            this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, 78, adjLerp(0.06));
+            this.camera.fov = this.currentFOV;
+            this.camera.updateProjectionMatrix();
+
+            this.updateShadowCamera();
+            return;
+        }
+
         // Calculate yaw change for lateral camera lag (normalized to a 60Hz step)
-        const yawDelta = (this.vehicle.yawAngle - this.previousYawAngle) / lerpScale;
-        this.previousYawAngle = this.vehicle.yawAngle;
+        const yawDelta = (vehicleYaw - this.previousYawAngle) / lerpScale;
+        this.previousYawAngle = vehicleYaw;
 
         // Update lateral offset - camera swings opposite to turn direction initially
         const targetLateralOffset = -yawDelta * 25; // Strong lateral movement
@@ -775,8 +1022,15 @@ class Game {
         this.baseCameraOffset = currentMode.offset.clone();
         this.cameraLerpFactor = currentMode.lerpFactor;
         
+        // True first-person view: rigidly mounted at the rider's helmet
+        if (currentMode.type === 'helmet') {
+            this.updateHelmetCamera(vehiclePos, adjLerp);
+            this.updateShadowCamera();
+            return;
+        }
+
         // Mode-specific adjustments
-        if (this.cameraMode === 2) {
+        if (currentMode.type === 'onboard') {
             // Onboard camera - minimal lateral movement, rotates with bike
             this.cameraOffset.x = this.baseCameraOffset.x;
             this.cameraOffset.y = this.baseCameraOffset.y;
@@ -788,7 +1042,7 @@ class Game {
         } else {
             // Standard and High View cameras
             // Dynamic camera offset based on lean angle for better mountain road feel
-            const leanInfluence = this.vehicle.leanAngle * (this.cameraMode === 1 ? 3 : 2); // More influence in high view
+            const leanInfluence = this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2); // More influence in high view
             
             // Combine lateral lag with lean influence
             this.cameraOffset.x = this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
@@ -796,10 +1050,10 @@ class Game {
             // Adjust height based on speed for dramatic effect
             const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
             this.cameraOffset.y = this.baseCameraOffset.y + speedRatio * 0.5; // Slight rise with speed
-            this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (this.cameraMode === 1 ? 2 : 1); // Move back with speed
+            this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (currentMode.type === 'high' ? 2 : 1); // Move back with speed
             
             // Wheelie camera swing - move camera to the side for dramatic wheelie view
-            if (this.vehicle.isWheelie && this.cameraMode !== 1) { // Less swing in high view
+            if (this.vehicle.isWheelie && currentMode.type !== 'high') { // Less swing in high view
                 const wheelieSwing = 8; // How far to swing the camera laterally
                 this.cameraOffset.x += wheelieSwing;
             }
@@ -839,7 +1093,7 @@ class Game {
         this.camera.position.copy(this.currentCameraPos);
 
         // Additional camera shake at high speeds (outside onboard mode)
-        if (this.cameraMode !== 2) {
+        if (currentMode.type !== 'onboard') {
             const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
             const shakeIntensity = speedFactor * 0.05;
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
@@ -849,7 +1103,7 @@ class Game {
         // Mode-specific FOV and look target
         const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
         
-        if (this.cameraMode === 2) {
+        if (currentMode.type === 'onboard') {
             // Onboard camera - wider FOV, look directly ahead
             this.camera.fov = 90 + speedRatio * 10; // 90 to 100 degrees for immersive onboard view
             this.camera.updateProjectionMatrix();
@@ -859,8 +1113,8 @@ class Game {
             this.tempVector.set(0, 0.5, lookAheadDistance);
             this.tempVector.applyEuler(vehicleRotation);
 
-            const lookTarget = this.vehicle.position.clone().add(this.tempVector);
-            
+            const lookTarget = vehiclePos.clone().add(this.tempVector);
+
             this.currentLookTarget.lerp(lookTarget, adjLerp(0.3)); // Fast response for onboard
             
             // Onboard camera banking - calculate BEFORE lookAt with custom up vector
@@ -883,7 +1137,7 @@ class Game {
             const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
 
             // Dynamic FOV - increases with speed for visceral feel
-            const baseFOV = this.cameraMode === 1 ? 70 : 75;
+            const baseFOV = currentMode.type === 'high' ? 70 : 75;
             const maxFOVIncrease = 10; // 75° → 85° at max speed
             const targetFOV = baseFOV + (speedFactor * maxFOVIncrease);
 
@@ -934,22 +1188,22 @@ class Game {
             this.cameraShakeOffset.z = (Math.random() - 0.5) * totalShake * 0.4;
             
             // Look ahead of vehicle for better anticipation on mountain roads
-            const lookAheadDistance = (this.cameraMode === 1 ? 5 : 3) + speedRatio * 7; // Look further in high view
+            const lookAheadDistance = (currentMode.type === 'high' ? 5 : 3) + speedRatio * 7; // Look further in high view
             this.tempVector.set(0, 0, lookAheadDistance);
             this.tempVector.applyEuler(vehicleRotation);
 
-            const lookTarget = this.vehicle.position.clone().add(this.tempVector);
-            lookTarget.y += this.cameraMode === 1 ? 2 : 1; // Look higher in high view
+            const lookTarget = vehiclePos.clone().add(this.tempVector);
+            lookTarget.y += currentMode.type === 'high' ? 2 : 1; // Look higher in high view
             
             // Add lean-based lateral offset for corner viewing (less in high view)
-            const leanLateralOffset = -this.vehicle.leanAngle * (this.cameraMode === 1 ? 2 : 4);
+            const leanLateralOffset = -this.vehicle.leanAngle * (currentMode.type === 'high' ? 2 : 4);
             this.tempUpVector.set(leanLateralOffset, 0, 0);
             this.tempUpVector.applyEuler(vehicleRotation);
             lookTarget.add(this.tempUpVector);
             this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
             
             // Camera banking BEFORE lookAt - subtle lean feedback
-            const bankFactor = this.cameraMode === 1 ? 0.15 : 0.25; // High view more subtle
+            const bankFactor = currentMode.type === 'high' ? 0.15 : 0.25; // High view more subtle
             // Positive lean = right lean, bank camera right (positive rotation around forward axis)
             const bankAmount = this.vehicle.leanAngle * bankFactor;
             const targetBank = THREE.MathUtils.clamp(bankAmount, -0.3, 0.3); // Max ~17° bank
@@ -989,16 +1243,26 @@ class Game {
     }
     
     updateShadowCamera() {
-        // Make the directional lights' shadow cameras follow the player
+        // Make the directional lights' shadow cameras follow the player,
+        // preserving the time-of-day sun direction (low sun = long shadows)
         const playerPos = this.vehicle.position;
-        
+        const sunOffset = this.sunOffset || { x: 50, y: 80 };
+
         // Update near shadow light position to stay relative to player
-        this.directionalLight.position.copy(playerPos).add(this.lightOffset);
+        this.directionalLight.position.set(
+            playerPos.x + sunOffset.x,
+            playerPos.y + sunOffset.y,
+            playerPos.z
+        );
         this.directionalLight.target.position.copy(playerPos);
         this.directionalLight.target.updateMatrixWorld();
-        
-        // Update distant shadow light similarly
-        this.distantLight.position.copy(playerPos).add(this.lightOffset);
+
+        // Update distant fill light similarly
+        this.distantLight.position.set(
+            playerPos.x + sunOffset.x,
+            playerPos.y + sunOffset.y,
+            playerPos.z
+        );
         this.distantLight.target.position.copy(playerPos);
         this.distantLight.target.updateMatrixWorld();
     }
@@ -1042,6 +1306,19 @@ class Game {
                     ui.speed.style.color = '#00FF00'; // Green for good speed
                     ui.speed.style.textShadow = '0 0 15px rgba(0, 255, 0, 0.8)';
                 }
+            }
+        }
+
+        // Peripheral motion blur ramps in above ~45% of max speed
+        if (this.speedBlurOverlay) {
+            const blurRatio = this.vehicle.speed / this.vehicle.maxSpeed;
+            const blurOpacity = Math.min(1, Math.max(0, (blurRatio - 0.45) / 0.55)).toFixed(2);
+            if (blurOpacity !== this.lastBlurOpacity) {
+                this.lastBlurOpacity = blurOpacity;
+                this.speedBlurOverlay.style.opacity = blurOpacity;
+                // Remove from compositing entirely when fully transparent -
+                // an idle backdrop-filter layer still costs GPU time
+                this.speedBlurOverlay.style.display = blurOpacity === '0.00' ? 'none' : 'block';
             }
         }
 
@@ -1167,6 +1444,24 @@ class Game {
         const isLastLeg = this.tourSystem.isLastLeg();
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
 
+        // Record progression: completing a leg unlocks the next leg and,
+        // at milestones, new riders
+        const finishedLeg = this.tourSystem.getCurrentLeg();
+        let unlockMessage = '';
+        if (finishedLeg && this.tourSystem.markLegCompleted) {
+            const unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
+            const parts = [];
+            if (unlocks.newLegs.length > 0) {
+                parts.push(`NEW LEG: ${unlocks.newLegs.join(', ')}`);
+            }
+            if (unlocks.newCharacters.length > 0) {
+                parts.push(`NEW RIDER: ${unlocks.newCharacters.join(', ')}`);
+            }
+            if (parts.length > 0) {
+                unlockMessage = `<div style="color: #2ecc71; font-size: 20px; margin-top: 10px;">🔓 ${parts.join(' &nbsp;•&nbsp; ')}</div>`;
+            }
+        }
+
         // Check for best time (tracked per leg - legs have different lengths)
         const currentLeg = this.tourSystem.getCurrentLeg();
         const bestTimeKey = currentLeg ? `motorcycleBestTime_${currentLeg.id}` : 'motorcycleBestTime';
@@ -1190,6 +1485,7 @@ class Game {
                 <div style="margin-bottom: 10px;">Distance: <span style="color: #3498db;">${distance.toFixed(0)} meters</span></div>
                 <div style="margin-bottom: 10px;">Time: <span style="color: #e74c3c;">${timeSeconds.toFixed(1)} seconds</span></div>
                 ${bestTimeMessage}
+                ${unlockMessage}
                 <div style="margin-bottom: 10px;">Best Time: <span style="color: #2ecc71;">${this.bestTime < 999999 ? this.bestTime.toFixed(1) + 's' : 'N/A'}</span></div>
                 <div style="margin-bottom: 10px;">Average Speed: <span style="color: #9b59b6;">${averageSpeed.toFixed(1)} mph</span></div>
             </div>
@@ -1615,6 +1911,111 @@ class Game {
         errorCloseBtn.addEventListener('click', errorCloseHandler);
     }
 
+    // Read-only leaderboard viewer, reachable from the leg-selector menu
+    async showLeaderboardViewer(legId) {
+        const leg = this.tourSystem.getLegById(legId);
+        const legName = leg ? leg.name : legId;
+
+        // Remove any existing viewer
+        const existing = document.getElementById('leaderboardViewer');
+        if (existing) existing.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'leaderboardViewer';
+        overlay.style.cssText = `
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 3000;
+        `;
+
+        const panel = document.createElement('div');
+        panel.style.cssText = `
+            background: linear-gradient(135deg, #16213a, #1a1a2e);
+            border: 2px solid #ffd700;
+            border-radius: 16px;
+            padding: 28px 36px;
+            min-width: 380px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow-y: auto;
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            box-shadow: 0 0 40px rgba(255, 215, 0, 0.25);
+        `;
+        panel.innerHTML = `
+            <h2 style="color: #ffd700; margin: 0 0 4px 0; letter-spacing: 2px;">🏆 BEST TIMES</h2>
+            <div style="color: #8899bb; margin-bottom: 18px; font-size: 14px;">${legName}</div>
+            <div id="leaderboardViewerBody" style="font-size: 15px; color: #ccd;">Loading…</div>
+            <button id="leaderboardViewerClose" style="
+                margin-top: 22px;
+                padding: 10px 36px;
+                background: linear-gradient(135deg, #3498db, #2980b9);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: bold;
+                cursor: pointer;
+            ">CLOSE</button>
+        `;
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        const close = () => overlay.remove();
+        panel.querySelector('#leaderboardViewerClose').addEventListener('click', close);
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) close();
+        });
+
+        const body = panel.querySelector('#leaderboardViewerBody');
+
+        // Local best time always shows, even offline
+        const localBest = parseFloat(localStorage.getItem(`motorcycleBestTime_${legId}`) || 'NaN');
+        const localBestHtml = Number.isFinite(localBest)
+            ? `<div style="margin-bottom: 14px; color: #2ecc71;">Your best: ${localBest.toFixed(1)}s</div>`
+            : `<div style="margin-bottom: 14px; color: #667;">No personal best yet</div>`;
+
+        if (!this.leaderboardService) {
+            body.innerHTML = localBestHtml +
+                '<div style="color: #889;">Online leaderboard unavailable<br>(no connection to the leaderboard service)</div>';
+            return;
+        }
+
+        try {
+            const result = await this.leaderboardService.fetchLeaderboard(legId, 10);
+            if (result.success && result.entries && result.entries.length > 0) {
+                const rows = result.entries.map((entry, i) => {
+                    const rank = entry.rank !== undefined ? entry.rank : i + 1;
+                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+                    const time = LeaderboardService.formatTime(entry.totalTime);
+                    const flag = entry.flagged ? ' ⚠' : '';
+                    return `<tr>
+                        <td style="padding: 4px 10px; text-align: right; color: #ffd700;">${medal}</td>
+                        <td style="padding: 4px 10px; letter-spacing: 3px; font-weight: bold;">${entry.playerName}</td>
+                        <td style="padding: 4px 10px; color: #6cf;">${time}${flag}</td>
+                    </tr>`;
+                }).join('');
+                body.innerHTML = localBestHtml +
+                    `<table style="margin: 0 auto; border-collapse: collapse;">${rows}</table>`;
+            } else if (result.success) {
+                body.innerHTML = localBestHtml +
+                    '<div style="color: #889;">No times posted yet - be the first!</div>';
+            } else {
+                body.innerHTML = localBestHtml +
+                    '<div style="color: #889;">Could not load the online leaderboard</div>';
+            }
+        } catch (error) {
+            console.error('Leaderboard viewer error:', error);
+            body.innerHTML = localBestHtml +
+                '<div style="color: #889;">Could not load the online leaderboard</div>';
+        }
+    }
+
     showLeaderboardError(message) {
         const entryForm = document.getElementById('leaderboardEntryForm');
         const resultDiv = document.getElementById('leaderboardResult');
@@ -1696,6 +2097,7 @@ class Game {
             this.frameCount = 0;
             this.lastTime = now;
             document.getElementById('fps').textContent = `FPS: ${this.fps}`;
+            this.adaptResolution();
         }
 
         // Get actual frame time and accumulate for fixed timestep
@@ -1843,6 +2245,7 @@ class Game {
         // Check for camera mode switch
         if (this.input.checkCameraSwitch()) {
             this.cameraMode = (this.cameraMode + 1) % this.cameraModes.length;
+            localStorage.setItem('twistyCameraMode', String(this.cameraMode));
             console.log(`Camera mode: ${this.cameraModes[this.cameraMode].name}`);
             
             // Show notification
@@ -1976,7 +2379,7 @@ class Game {
         
         // Check cone collisions
         if (!this.vehicle.crashed) {
-            this.cones.checkCollision(this.vehicle.position);
+            this.cones.checkCollision(this.vehicle.position, this.vehicle.velocity, this.vehicle.speed);
         }
 
             // Consume fixed timestep from accumulated time
@@ -1985,10 +2388,14 @@ class Game {
 
         // PER-FRAME UPDATES: everything below runs once per rendered frame
 
+        // Place the bike mesh between physics states for smooth motion at any
+        // frame rate (frames otherwise alternate 1/2 physics steps and judder)
+        this.vehicle.applyRenderInterpolation(this.accumulatedTime / this.fixedTimeStep);
+
         // Update engine sound based on speed
         if (!this.vehicle.crashed && !this.finished) {
             const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            this.soundManager.playEngineSound(speedRatio);
+            this.soundManager.playEngineSound(speedRatio, throttleInput);
         } else {
             this.soundManager.stopEngineSound();
         }
@@ -1996,6 +2403,14 @@ class Game {
         this.updateRacePosition();
         this.updateCamera(rawDeltaTime);
         this.updateUI();
+
+        // Animate knocked cones (slide/tumble)
+        if (this.cones) {
+            this.cones.update(rawDeltaTime);
+        }
+
+        // Distance-cull far scenery (throttled internally)
+        this.updatePerformanceCulling();
 
         // Update particle system and spawn particles based on vehicle state
         // Update weather system
@@ -2042,8 +2457,11 @@ class Game {
             this.lastJumpState = this.vehicle.isJumping;
         }
 
-        // Update directional light to follow vehicle
-        this.directionalLight.position.x = this.vehicle.position.x + 50;
+        // Update directional light to follow vehicle, keeping the
+        // time-of-day sun direction (low sun = long shadows)
+        const sunOffset = this.sunOffset || { x: 50, y: 80 };
+        this.directionalLight.position.x = this.vehicle.position.x + sunOffset.x;
+        this.directionalLight.position.y = this.vehicle.position.y + sunOffset.y;
         this.directionalLight.position.z = this.vehicle.position.z;
         this.directionalLight.target.position.copy(this.vehicle.position);
         this.directionalLight.target.updateMatrixWorld();
@@ -2054,24 +2472,27 @@ class Game {
         const baseSunIntensity = this.baseSunIntensity !== undefined ? this.baseSunIntensity : 0.8;
         this.directionalLight.intensity = baseSunIntensity * (1 + Math.sin(time * 0.1) * 0.06);
 
-        // Update headlights
+        // Update headlights (interpolated position/yaw so the beam doesn't judder)
+        const renderPos = this.vehicle.renderPosition || this.vehicle.position;
+        const renderYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+        const headlightEuler = new THREE.Euler(0, renderYaw, 0);
         const headlightOffset = new THREE.Vector3(0, 0.5, 0.7);
-        headlightOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
+        headlightOffset.applyEuler(headlightEuler);
 
-        this.leftHeadlight.position.copy(this.vehicle.position).add(new THREE.Vector3(-0.3, 0, 0).applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0))).add(headlightOffset);
-        this.rightHeadlight.position.copy(this.vehicle.position).add(new THREE.Vector3(0.3, 0, 0).applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0))).add(headlightOffset);
+        this.leftHeadlight.position.copy(renderPos).add(new THREE.Vector3(-0.3, 0, 0).applyEuler(headlightEuler)).add(headlightOffset);
+        this.rightHeadlight.position.copy(renderPos).add(new THREE.Vector3(0.3, 0, 0).applyEuler(headlightEuler)).add(headlightOffset);
 
         const targetOffset = new THREE.Vector3(0, 0, 50);
-        targetOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
+        targetOffset.applyEuler(headlightEuler);
 
-        this.leftHeadlight.target.position.copy(this.vehicle.position).add(targetOffset);
-        this.rightHeadlight.target.position.copy(this.vehicle.position).add(targetOffset);
+        this.leftHeadlight.target.position.copy(renderPos).add(targetOffset);
+        this.rightHeadlight.target.position.copy(renderPos).add(targetOffset);
 
         this.leftHeadlight.target.updateMatrixWorld();
         this.rightHeadlight.target.updateMatrixWorld();
 
         // Update rim light to follow behind vehicle
-        this.rimLight.position.set(this.vehicle.position.x, 10, this.vehicle.position.z - 50);
+        this.rimLight.position.set(renderPos.x, 10, renderPos.z - 50);
 
         this.renderer.render(this.scene, this.camera);
     }
@@ -2514,7 +2935,7 @@ class SoundManager {
     }
 
     // Engine sound (continuous)
-    playEngineSound(speed = 0) {
+    playEngineSound(speed = 0, throttle = 0) {
         if (!this.enabled || !this.audioContext) return;
 
         // Resume audio context if suspended (required by Web Audio API)
@@ -2523,58 +2944,120 @@ class SoundManager {
         }
 
         const now = this.audioContext.currentTime;
-        const baseFreq = 80 + (speed * 40); // 80-120 Hz based on speed
+        // Engine revs track speed; throttle adds an extra rev rise + volume
+        const baseFreq = 70 + speed * 55 + throttle * 18;
 
         // This is called every frame: keep one persistent oscillator graph and
-        // ramp its parameters instead of rebuilding ~4 audio nodes per call
-        // (which causes GC pressure and audible clicks)
+        // ramp its parameters instead of rebuilding nodes per call
         if (!this.engineSound) {
-            const oscillator = this.audioContext.createOscillator();
             const gainNode = this.audioContext.createGain();
-            const filter = this.audioContext.createBiquadFilter();
-
-            oscillator.connect(filter);
-            filter.connect(gainNode);
             gainNode.connect(this.audioContext.destination);
+            gainNode.gain.setValueAtTime(this.masterVolume * 0.18, now);
 
-            oscillator.frequency.setValueAtTime(baseFreq, now);
-            oscillator.type = 'sawtooth';
-
-            // Add some harmonics
-            const harmonicOsc = this.audioContext.createOscillator();
-            const harmonicGain = this.audioContext.createGain();
-            harmonicOsc.connect(harmonicGain);
-            harmonicGain.connect(gainNode);
-
-            harmonicOsc.frequency.setValueAtTime(baseFreq * 2, now);
-            harmonicOsc.type = 'square';
-
+            const filter = this.audioContext.createBiquadFilter();
             filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(200 + speed * 100, now);
+            filter.frequency.setValueAtTime(220 + speed * 900, now);
+            filter.Q.value = 1.2;
+            filter.connect(gainNode);
 
-            gainNode.gain.setValueAtTime(this.masterVolume * 0.2, now);
+            // Main "cylinder" pair: two slightly detuned saws beat against
+            // each other for a throatier engine note than a single oscillator
+            const oscillator = this.audioContext.createOscillator();
+            oscillator.type = 'sawtooth';
+            oscillator.frequency.setValueAtTime(baseFreq, now);
+            oscillator.connect(filter);
+
+            const detuneOsc = this.audioContext.createOscillator();
+            detuneOsc.type = 'sawtooth';
+            detuneOsc.frequency.setValueAtTime(baseFreq, now);
+            detuneOsc.detune.setValueAtTime(12, now); // ~12 cents sharp
+            const detuneGain = this.audioContext.createGain();
+            detuneGain.gain.value = 0.6;
+            detuneOsc.connect(detuneGain);
+            detuneGain.connect(filter);
+
+            // Sub-octave thump for low-end weight
+            const subOsc = this.audioContext.createOscillator();
+            subOsc.type = 'triangle';
+            subOsc.frequency.setValueAtTime(baseFreq / 2, now);
+            const subGain = this.audioContext.createGain();
+            subGain.gain.value = 0.8;
+            subOsc.connect(subGain);
+            subGain.connect(filter);
+
+            // Upper harmonic rasp
+            const harmonicOsc = this.audioContext.createOscillator();
+            harmonicOsc.type = 'square';
+            harmonicOsc.frequency.setValueAtTime(baseFreq * 2, now);
+            const harmonicGain = this.audioContext.createGain();
+            harmonicGain.gain.value = 0.25;
+            harmonicOsc.connect(harmonicGain);
+            harmonicGain.connect(filter);
+
+            // Wind noise: looping white noise through a bandpass, swelling
+            // with speed - the main sensation of velocity on a bike
+            const noiseLength = this.audioContext.sampleRate * 2;
+            const noiseBuffer = this.audioContext.createBuffer(1, noiseLength, this.audioContext.sampleRate);
+            const noiseData = noiseBuffer.getChannelData(0);
+            for (let i = 0; i < noiseLength; i++) {
+                noiseData[i] = Math.random() * 2 - 1;
+            }
+            const windSource = this.audioContext.createBufferSource();
+            windSource.buffer = noiseBuffer;
+            windSource.loop = true;
+            const windFilter = this.audioContext.createBiquadFilter();
+            windFilter.type = 'bandpass';
+            windFilter.frequency.setValueAtTime(700, now);
+            windFilter.Q.value = 0.6;
+            const windGain = this.audioContext.createGain();
+            windGain.gain.setValueAtTime(0, now);
+            windSource.connect(windFilter);
+            windFilter.connect(windGain);
+            windGain.connect(this.audioContext.destination);
 
             oscillator.start();
+            detuneOsc.start();
+            subOsc.start();
             harmonicOsc.start();
+            windSource.start();
 
             this.engineSound = {
-                oscillator: oscillator,
-                harmonicOsc: harmonicOsc,
-                gainNode: gainNode,
-                filter: filter,
+                oscillator,
+                detuneOsc,
+                subOsc,
+                harmonicOsc,
+                gainNode,
+                filter,
+                windSource,
+                windFilter,
+                windGain,
                 stop: () => {
                     try {
                         oscillator.stop();
+                        detuneOsc.stop();
+                        subOsc.stop();
                         harmonicOsc.stop();
+                        windSource.stop();
                     } catch (e) {}
                 }
             };
         } else {
-            // Smoothly track the current speed
-            const ramp = 0.05;
-            this.engineSound.oscillator.frequency.linearRampToValueAtTime(baseFreq, now + ramp);
-            this.engineSound.harmonicOsc.frequency.linearRampToValueAtTime(baseFreq * 2, now + ramp);
-            this.engineSound.filter.frequency.linearRampToValueAtTime(200 + speed * 100, now + ramp);
+            // Smoothly track the current speed and throttle
+            const ramp = 0.06;
+            const e = this.engineSound;
+            e.oscillator.frequency.linearRampToValueAtTime(baseFreq, now + ramp);
+            e.detuneOsc.frequency.linearRampToValueAtTime(baseFreq, now + ramp);
+            e.subOsc.frequency.linearRampToValueAtTime(baseFreq / 2, now + ramp);
+            e.harmonicOsc.frequency.linearRampToValueAtTime(baseFreq * 2, now + ramp);
+            // Filter opens with speed and throttle - brighter under load
+            e.filter.frequency.linearRampToValueAtTime(220 + speed * 900 + throttle * 350, now + ramp);
+            // Volume swells with throttle, idles back when coasting
+            const engineLevel = this.masterVolume * (0.12 + throttle * 0.14 + speed * 0.05);
+            e.gainNode.gain.linearRampToValueAtTime(engineLevel, now + ramp);
+            // Wind builds with the square of speed, pitch rises slightly
+            const windLevel = this.masterVolume * speed * speed * 0.5;
+            e.windGain.gain.linearRampToValueAtTime(windLevel, now + ramp);
+            e.windFilter.frequency.linearRampToValueAtTime(600 + speed * 700, now + ramp);
         }
     }
 
