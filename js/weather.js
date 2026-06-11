@@ -84,18 +84,20 @@ class WeatherSystem {
     }
 
     setupRain() {
-        // Create rain particle system
+        // Create rain particle system. Particle positions are LOCAL to the
+        // system, which is re-anchored to the camera every update - so the
+        // rain volume travels with the player instead of staying near the
+        // world origin where the particles were first spawned.
         const rainCount = 3000;
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(rainCount * 3);
         const velocities = new Float32Array(rainCount);
 
-        // Spawn rain in a large area around camera
         for (let i = 0; i < rainCount; i++) {
             const i3 = i * 3;
-            positions[i3] = (Math.random() - 0.5) * 200; // X: -100 to 100
-            positions[i3 + 1] = Math.random() * 100 + 50; // Y: 50 to 150 (above camera)
-            positions[i3 + 2] = (Math.random() - 0.5) * 200; // Z: -100 to 100
+            positions[i3] = (Math.random() - 0.5) * 200; // X: -100 to 100 around camera
+            positions[i3 + 1] = Math.random() * 120 - 30; // Y: -30 to 90 relative to camera
+            positions[i3 + 2] = (Math.random() - 0.5) * 200; // Z: -100 to 100 around camera
 
             velocities[i] = -30 - Math.random() * 20; // Fast falling
         }
@@ -112,6 +114,10 @@ class WeatherSystem {
         });
 
         this.particleSystem = new THREE.Points(geometry, material);
+        this.particleSystem.frustumCulled = false; // Volume always surrounds the camera
+        if (this.camera) {
+            this.particleSystem.position.copy(this.camera.position);
+        }
         this.scene.add(this.particleSystem);
 
         // Adjust fog for stormy conditions
@@ -133,7 +139,7 @@ class WeatherSystem {
         for (let i = 0; i < snowCount; i++) {
             const i3 = i * 3;
             positions[i3] = (Math.random() - 0.5) * 200;
-            positions[i3 + 1] = Math.random() * 100 + 30;
+            positions[i3 + 1] = Math.random() * 120 - 30; // Relative to camera
             positions[i3 + 2] = (Math.random() - 0.5) * 200;
 
             velocities[i] = -5 - Math.random() * 5; // Slower falling
@@ -151,6 +157,10 @@ class WeatherSystem {
         });
 
         this.particleSystem = new THREE.Points(geometry, material);
+        this.particleSystem.frustumCulled = false; // Volume always surrounds the camera
+        if (this.camera) {
+            this.particleSystem.position.copy(this.camera.position);
+        }
         this.scene.add(this.particleSystem);
 
         // White mist fog
@@ -171,34 +181,44 @@ class WeatherSystem {
             return;
         }
 
+        // Re-anchor the particle volume to the camera so precipitation
+        // surrounds the player along the whole course, not just near where it
+        // was first spawned. Particle local positions are compensated by the
+        // camera delta (so drops stay world-stationary) and wrapped at the
+        // volume edges to keep density uniform while moving.
+        const anchor = this.camera ? this.camera.position : vehiclePosition;
+        let shiftX = 0, shiftY = 0, shiftZ = 0;
+        if (anchor) {
+            shiftX = anchor.x - this.particleSystem.position.x;
+            shiftY = anchor.y - this.particleSystem.position.y;
+            shiftZ = anchor.z - this.particleSystem.position.z;
+            this.particleSystem.position.set(anchor.x, anchor.y, anchor.z);
+        }
+
+        const halfExtent = 100; // Volume is ±100 around the camera
         const positions = this.particleSystem.geometry.attributes.position.array;
         const velocities = this.particleSystem.geometry.attributes.velocity.array;
 
-        // Update particle positions
         for (let i = 0; i < positions.length / 3; i++) {
             const i3 = i * 3;
 
-            // Move particle down
-            positions[i3 + 1] += velocities[i] * deltaTime;
+            // Compensate for the volume's movement, then fall
+            positions[i3] -= shiftX;
+            positions[i3 + 1] += velocities[i] * deltaTime - shiftY;
+            positions[i3 + 2] -= shiftZ;
 
-            // Reset particle if it goes below ground
-            if (positions[i3 + 1] < -5) {
-                positions[i3 + 1] = 100 + Math.random() * 50;
-            }
+            // Wrap horizontally at the volume edges
+            if (positions[i3] > halfExtent) positions[i3] -= halfExtent * 2;
+            else if (positions[i3] < -halfExtent) positions[i3] += halfExtent * 2;
+            if (positions[i3 + 2] > halfExtent) positions[i3 + 2] -= halfExtent * 2;
+            else if (positions[i3 + 2] < -halfExtent) positions[i3 + 2] += halfExtent * 2;
 
-            // Keep particles near camera
-            if (this.camera) {
-                const dx = positions[i3] - this.camera.position.x;
-                const dz = positions[i3 + 2] - this.camera.position.z;
-                const dist = Math.sqrt(dx * dx + dz * dz);
-
-                if (dist > 100) {
-                    // Respawn near camera
-                    const angle = Math.random() * Math.PI * 2;
-                    const radius = 50 + Math.random() * 30;
-                    positions[i3] = this.camera.position.x + Math.cos(angle) * radius;
-                    positions[i3 + 2] = this.camera.position.z + Math.sin(angle) * radius;
-                }
+            // Recycle particles that have fallen well below the camera
+            if (positions[i3 + 1] < -40) {
+                positions[i3 + 1] = 60 + Math.random() * 30;
+            } else if (positions[i3 + 1] > 120) {
+                // Pushed too high by a fast descent - bring back into the volume
+                positions[i3 + 1] = 60 + Math.random() * 30;
             }
         }
 

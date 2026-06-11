@@ -406,6 +406,11 @@ class Game {
             return;
         }
 
+        // Make it the tour's current leg - getStartingPosition() and
+        // getCurrentLegIndex() read tourSystem.currentLeg, and a stale value
+        // spawns the bike at the previous leg's start, off the new leg's road
+        this.tourSystem.selectLeg(nextLeg.id);
+
         console.log(`Starting next leg: ${nextLeg.name}`);
 
         // Remove finish banner
@@ -435,6 +440,11 @@ class Game {
             console.error('No first leg available');
             return;
         }
+
+        // Select it so getStartingPosition()/getCurrentLegIndex() match the
+        // leg being initialized (restarting the tour from leg 8 otherwise
+        // spawns the bike at leg 8's start on leg 1's road)
+        this.tourSystem.selectLeg(firstLeg.id);
 
         console.log(`Starting first leg: ${firstLeg.name}`);
 
