@@ -1072,11 +1072,8 @@ class Game {
             this.cameraOffset.y = this.baseCameraOffset.y + speedRatio * 0.5; // Slight rise with speed
             this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (currentMode.type === 'high' ? 2 : 1); // Move back with speed
             
-            // Wheelie camera swing - move camera to the side for dramatic wheelie view
-            if (this.vehicle.isWheelie && currentMode.type !== 'high') { // Less swing in high view
-                const wheelieSwing = 8; // How far to swing the camera laterally
-                this.cameraOffset.x += wheelieSwing;
-            }
+            // (No lateral camera swing during wheelies - the 8-unit sideways
+            // jump made the bike read as tipping left while it was straight)
         }
 
         // Calculate camera position relative to vehicle
@@ -1602,10 +1599,8 @@ class Game {
                 this.input.setMenuActive(false);
             }
 
-            // Cancel leaderboard session if active (restarting without submitting)
-            if (shouldShowLeaderboard) {
-                this.leaderboardService.cancelSession();
-            }
+            // Restarting without submitting: fresh session for the new attempt
+            this.restartLeaderboardSession();
 
             // Trigger reset via input system
             if (this.input) {
@@ -1802,6 +1797,7 @@ class Game {
             this.checkpointsPassed = 0;
             this.lastCheckpointIndex = -1;
             this.checkpointTimes = [];
+            this.restartLeaderboardSession();
             if (this.environment && this.environment.checkpoints) {
                 this.environment.checkpoints.forEach(cp => cp.passed = false);
             }
@@ -2037,6 +2033,21 @@ class Game {
             console.error('Leaderboard viewer error:', error);
             body.innerHTML = localBestHtml +
                 '<div style="color: #889;">Could not load the online leaderboard</div>';
+        }
+    }
+
+    // A full restart invalidates the current leaderboard run; start a fresh
+    // session so the new attempt is submittable
+    restartLeaderboardSession() {
+        if (!this.leaderboardService) return;
+        this.leaderboardService.cancelSession();
+        const leg = this.tourSystem.getCurrentLeg();
+        if (leg) {
+            this.leaderboardService.startRun(leg.id).then(result => {
+                if (result !== true && result.error) {
+                    console.warn('Leaderboard session restart failed:', result.message);
+                }
+            }).catch(error => console.error('Failed to restart leaderboard session:', error));
         }
     }
 
@@ -2425,6 +2436,7 @@ class Game {
             this.checkpointsPassed = 0;
             this.lastCheckpointIndex = -1;
             this.checkpointTimes = []; // Reset checkpoint times
+            this.restartLeaderboardSession();
 
             // Reset checkpoints
             if (this.environment && this.environment.checkpoints) {
@@ -2611,7 +2623,8 @@ class Game {
         // Update rockfalls and check for rock hits
         if (this.rockfalls) {
             const rockHit = this.rockfalls.update(deltaTime, this.vehicle);
-            if (rockHit && rockHit.hit && !this.vehicle.crashed && !this.finished) {
+            if (rockHit && rockHit.hit && !this.vehicle.crashed && !this.finished &&
+                !(rockHit.rock.settled && this.vehicle.attemptHop(rockHit.rock.radius))) {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 this.vehicle.frame.material.color.setHex(0x8b5a2b);
@@ -3123,6 +3136,12 @@ class Game {
 
         // Reset start time for timing
         this.startTime = performance.now();
+
+        // The clock reset makes checkpoint times non-monotonic, so this run
+        // can no longer be validated - drop the leaderboard session
+        if (this.leaderboardService && this.leaderboardService.isActive()) {
+            this.leaderboardService.cancelSession();
+        }
 
          // Reset cones
          this.cones.reset();

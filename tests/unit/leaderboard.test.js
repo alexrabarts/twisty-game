@@ -189,8 +189,8 @@ describe('LeaderboardService', () => {
             leaderboardService.sessionId = 'test-session';
             leaderboardService.sessionToken = 'test-token';
             leaderboardService.currentLegId = 'test-leg';
-            leaderboardService.checkpointTimes = Array(10).fill(0).map((_, i) => (i + 1) * 1000);
-            leaderboardService.proofChain = Array(10).fill('a'.repeat(64));
+            leaderboardService.checkpointTimes = Array(5).fill(0).map((_, i) => (i + 1) * 1000);
+            leaderboardService.proofChain = Array(5).fill('a'.repeat(64));
         });
 
         test('should submit run successfully', async () => {
@@ -206,8 +206,8 @@ describe('LeaderboardService', () => {
             leaderboardService = new LeaderboardService(mockFunctions);
             leaderboardService.sessionId = 'test-session';
             leaderboardService.sessionToken = 'test-token';
-            leaderboardService.checkpointTimes = Array(10).fill(0).map((_, i) => (i + 1) * 1000);
-            leaderboardService.proofChain = Array(10).fill('a'.repeat(64));
+            leaderboardService.checkpointTimes = Array(5).fill(0).map((_, i) => (i + 1) * 1000);
+            leaderboardService.proofChain = Array(5).fill('a'.repeat(64));
 
             const result = await leaderboardService.submitRun('ALEX');
 
@@ -264,8 +264,8 @@ describe('LeaderboardService', () => {
             leaderboardService = new LeaderboardService(mockFunctions);
             leaderboardService.sessionId = 'test-session';
             leaderboardService.sessionToken = 'test-token';
-            leaderboardService.checkpointTimes = Array(10).fill(0).map((_, i) => (i + 1) * 1000);
-            leaderboardService.proofChain = Array(10).fill('a'.repeat(64));
+            leaderboardService.checkpointTimes = Array(5).fill(0).map((_, i) => (i + 1) * 1000);
+            leaderboardService.proofChain = Array(5).fill('a'.repeat(64));
 
             await leaderboardService.submitRun('alex');
 

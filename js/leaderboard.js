@@ -111,13 +111,14 @@ class LeaderboardService {
         // Build data string: legId:index:time:previousHash
         const data = `${this.currentLegId}:${checkpointIndex}:${time}:${previousHash}`;
 
-        // Convert session token (hex string) to Uint8Array
-        const tokenBytes = new Uint8Array(this.sessionToken.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-
-        // Import key for HMAC
+        // Key with the token string's UTF-8 bytes - the server validates with
+        // Node's createHmac('sha256', sessionToken), which uses the hex STRING
+        // as the key, not its decoded bytes. (Decoding to raw bytes here made
+        // every client proof invalid server-side.)
+        const keyEncoder = new TextEncoder();
         const key = await crypto.subtle.importKey(
             'raw',
-            tokenBytes,
+            keyEncoder.encode(this.sessionToken),
             { name: 'HMAC', hash: 'SHA-256' },
             false,
             ['sign']
@@ -172,7 +173,8 @@ class LeaderboardService {
             return { success: false, error: 'No active session' };
         }
 
-        if (this.checkpointTimes.length !== 10 || this.proofChain.length !== 10) {
+        const expectedCheckpoints = 5; // Gates per leg - must match functions/index.js
+        if (this.checkpointTimes.length !== expectedCheckpoints || this.proofChain.length !== expectedCheckpoints) {
             console.error(`Incomplete run: ${this.checkpointTimes.length} checkpoints`);
             return { success: false, error: 'Incomplete run' };
         }

@@ -4000,18 +4000,19 @@ class Environment {
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
       if (index % 7 === 0) {
-        // Every 7th segment for sparser placement
-        // Only place trees on the left (mountain) side
-        const treeDistance = 20 + this.rand() * 10;
+        // Every 7th segment for sparser placement.
+        // Trees grow on the RIGHT cliff slope below the road edge: the
+        // rendered drop-off face tracks the terrain model within ~1 unit
+        // there, so bases reliably embed in the slope. (The left wall's
+        // faceted face has +-8 units of displacement noise, which left wall
+        // trees visibly floating in front of the rock.)
+        const treeDistance = this.roadWidth / 2 + 4 + this.rand() * 7;
 
-        // Left side tree (mountain side)
-        const leftX = point.x - treeDistance * Math.cos(point.heading);
-        const leftZ = point.z + treeDistance * Math.sin(point.heading);
+        const leftX = point.x + treeDistance * Math.cos(point.heading);
+        const leftZ = point.z - treeDistance * Math.sin(point.heading);
 
-        // Ground level for tree base: the mountain face rises with lateral
-        // distance, so use the terrain model (point.y - 0.5 buried trees
-        // inside the wall, or floated them where the slope fell away)
-        const groundLevel = this.groundYAt(leftX, leftZ) - 0.3;
+        // Base sunk slightly into the slope; treetops peek up beside the road
+        const groundLevel = this.groundYAt(leftX, leftZ) - 0.5;
 
         // Vary each tree's size and canopy shape slightly
         const treeScale = 0.8 + this.rand() * 0.55;
@@ -4042,7 +4043,8 @@ class Environment {
         leftFoliage.userData.allowFloating = true; // Canopy sits atop the trunk
         this.scene.add(leftFoliage);
 
-        // No trees on right side (cliff drop-off) to avoid floating trees
+        // No trees on the left (mountain wall) side - the noisy rock face
+        // can't reliably seat them
       }
     }
 
@@ -4065,10 +4067,10 @@ class Environment {
       const point = this.roadPath[index];
       if (index % 6 === 0) {
         // Less frequent
-        // Only left side bushes (mountain side)
-        const bushDistance = 12 + this.rand() * 5;
-        const bushX = point.x - bushDistance * Math.cos(point.heading);
-        const bushZ = point.z + bushDistance * Math.sin(point.heading);
+        // Bushes on the right-hand ledge lip (road height by construction)
+        const bushDistance = this.roadWidth / 2 + 1.0 + this.rand() * 0.8;
+        const bushX = point.x + bushDistance * Math.cos(point.heading);
+        const bushZ = point.z - bushDistance * Math.sin(point.heading);
 
         const leftBush = new THREE.Mesh(
           bushGeometry,

@@ -185,6 +185,10 @@ class Vehicle {
 
     createMesh() {
         this.group = new THREE.Group();
+        // Yaw first, then pitch, then roll: with the default XYZ order the
+        // wheelie/jump pitch (rotation.x) is applied in the WORLD frame, which
+        // rolls the bike sideways on any heading not aligned with the Z axis
+        this.group.rotation.order = 'YXZ';
 
         // Build the bike model variant for the selected character. Every
         // variant satisfies the same contract: rearWheel/frontWheel groups at
@@ -1168,9 +1172,10 @@ class Vehicle {
             rimColor: 0xc8cacc, caliperColor: 0x2255aa, palette: P
         });
 
-        // Long-travel forks with rubber gaiters
+        // Long-travel forks with rubber gaiters (bottom at the axle, top
+        // tucked behind the beak rather than towering over the tank)
         this.buildForkPair({
-            length: 0.68, x: 0.09, y: 0.6, z: 0.68, rake: 0.12,
+            length: 0.58, x: 0.09, y: 0.58, z: 0.68, rake: 0.12,
             gaiters: true, palette: P
         });
 
@@ -1763,9 +1768,30 @@ class Vehicle {
                     }
                 }
             } else {
-                // Normal crash - sliding on road
+                // Normal crash - sliding on road. Crash impulses include an
+                // upward kick, so gravity must pull the bike back down and the
+                // road must catch it (it used to float away on the impulse)
+                this.velocity.y -= 20 * deltaTime;
                 this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
-                this.velocity.multiplyScalar(0.98); // Friction slows it down
+                this.velocity.x *= 0.98; // Friction slows the slide
+                this.velocity.z *= 0.98;
+
+                // Clamp to the road surface (windowed nearest-segment search)
+                const crashRange = this.getSegmentSearchRange();
+                let crashRoadY = this.position.y;
+                let crashBestSq = Infinity;
+                for (let i = crashRange.start; i <= crashRange.end; i++) {
+                    const seg = this.environment && this.environment.roadPath ? this.environment.roadPath[i] : null;
+                    if (!seg) continue;
+                    const dx = this.position.x - seg.x;
+                    const dz = this.position.z - seg.z;
+                    const dSq = dx * dx + dz * dz;
+                    if (dSq < crashBestSq) { crashBestSq = dSq; crashRoadY = seg.y || 0; }
+                }
+                if (this.position.y <= crashRoadY && this.velocity.y < 0) {
+                    this.position.y = crashRoadY;
+                    this.velocity.y = 0;
+                }
             }
             
             this.speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
@@ -1842,8 +1868,9 @@ class Vehicle {
             console.log('Bike is crashed, fallingOffCliff:', this.fallingOffCliff);
         }
         
-        // Check for boulder collisions
-        if (this.environment && this.environment.boulders) {
+        // Check for boulder collisions (skipped while airborne - the bike
+        // clears obstacles it is hopping over)
+        if (this.environment && this.environment.boulders && !this.isJumping) {
             for (const boulder of this.environment.boulders) {
                 const dx = this.position.x - boulder.position.x;
                 const dy = this.position.y - boulder.position.y;
@@ -1852,6 +1879,12 @@ class Vehicle {
                 
                 // Check if we hit the boulder (account for bike size)
                 if (distance < boulder.radius + 1.0) {
+                    // Bikes with enough suspension hop small rocks instead of
+                    // crashing - dirt bike clears most debris, scooter almost none
+                    if (this.attemptHop(boulder.radius)) {
+                        break;
+                    }
+
                     this.crashed = true;
                     this.crashAngle = this.leanAngle || 0.5;
                     this.frame.material.color.setHex(0xff0000); // Red for collision
@@ -2374,9 +2407,14 @@ class Vehicle {
             const rotatedY = pivotY * cosTheta - pivotZ * sinTheta;
             const rotatedZ = pivotY * sinTheta + pivotZ * cosTheta;
             
-            // Translation needed to keep pivot point fixed
+            // Translation needed to keep pivot point fixed. The offset is in
+            // bike-local axes; rotate it into world space by the heading
+            // (applying it raw to world z shoved the bike sideways on any
+            // non-axis-aligned heading)
+            const localZOffset = pivotZ - rotatedZ;
             this.group.position.y = this.position.y + (pivotY - rotatedY);
-            this.group.position.z = this.position.z + (pivotZ - rotatedZ);
+            this.group.position.x = this.position.x + Math.sin(this.yawAngle) * localZOffset;
+            this.group.position.z = this.position.z + Math.cos(this.yawAngle) * localZOffset;
             
             // Apply lean (reduced during wheelie)
             this.group.rotation.z = this.leanAngle * 0.3; // Reduce lean during wheelie
@@ -2864,6 +2902,31 @@ class Vehicle {
         }
     }
     
+    // Small-obstacle hop: bikes with good jump stats bounce over small rocks
+    // instead of crashing. Returns true if the bike hopped.
+    attemptHop(obstacleRadius) {
+        if (this.crashed || this.isJumping) return false;
+
+        // What this bike can clear: scooter ~0.37m, supersport ~0.42m,
+        // adventure ~0.50m, dirt bike ~0.55m
+        const hopThreshold = 0.25 + 0.2 * (this.jumpPowerMult || 1);
+        if (obstacleRadius > hopThreshold) return false;
+
+        // Pop over it - bigger rocks need (and get) more lift
+        this.isJumping = true;
+        this.jumpStartHeight = this.position.y;
+        this.jumpVelocityY = 2.2 + obstacleRadius * 3 * (this.jumpPowerMult || 1);
+        this.jumpRotation = 0;
+        this.jumpAngularVel = 0;
+        this.jumpWheelSpin = Math.min(this.speed / 60, 0.3);
+
+        // The impact scrubs some speed
+        this.speed *= 0.88;
+
+        console.log(`Hopped a ${obstacleRadius.toFixed(2)}m rock`);
+        return true;
+    }
+
     initiateJump(ramp) {
         this.isJumping = true;
         this.jumpStartHeight = this.position.y;

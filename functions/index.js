@@ -88,19 +88,22 @@ exports.startRun = functions.https.onCall(async (data, context) => {
     };
 });
 
+// Every leg has this many checkpoint gates - runs must record all of them
+const EXPECTED_CHECKPOINTS = 5;
+
 /**
  * Validate HMAC proof chain
  */
 function validateProofChain(legId, checkpointTimes, proofChain, sessionToken) {
-    if (!Array.isArray(checkpointTimes) || checkpointTimes.length !== 10) {
-        throw new functions.https.HttpsError('invalid-argument', 'Must have exactly 10 checkpoint times');
+    if (!Array.isArray(checkpointTimes) || checkpointTimes.length !== EXPECTED_CHECKPOINTS) {
+        throw new functions.https.HttpsError('invalid-argument', `Must have exactly ${EXPECTED_CHECKPOINTS} checkpoint times`);
     }
-    if (!Array.isArray(proofChain) || proofChain.length !== 10) {
-        throw new functions.https.HttpsError('invalid-argument', 'Must have exactly 10 proofs');
+    if (!Array.isArray(proofChain) || proofChain.length !== EXPECTED_CHECKPOINTS) {
+        throw new functions.https.HttpsError('invalid-argument', `Must have exactly ${EXPECTED_CHECKPOINTS} proofs`);
     }
 
     let previousHash = '';
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < EXPECTED_CHECKPOINTS; i++) {
         const time = checkpointTimes[i];
         const providedProof = proofChain[i];
 
@@ -202,11 +205,11 @@ exports.submitRun = functions.https.onCall(async (data, context) => {
     if (!playerName || typeof playerName !== 'string' || playerName.length !== 4) {
         throw new functions.https.HttpsError('invalid-argument', 'Player name must be exactly 4 characters');
     }
-    if (!Array.isArray(checkpointTimes) || checkpointTimes.length !== 10) {
-        throw new functions.https.HttpsError('invalid-argument', 'Must have exactly 10 checkpoint times');
+    if (!Array.isArray(checkpointTimes) || checkpointTimes.length !== EXPECTED_CHECKPOINTS) {
+        throw new functions.https.HttpsError('invalid-argument', `Must have exactly ${EXPECTED_CHECKPOINTS} checkpoint times`);
     }
-    if (!Array.isArray(proofChain) || proofChain.length !== 10) {
-        throw new functions.https.HttpsError('invalid-argument', 'Must have exactly 10 proofs');
+    if (!Array.isArray(proofChain) || proofChain.length !== EXPECTED_CHECKPOINTS) {
+        throw new functions.https.HttpsError('invalid-argument', `Must have exactly ${EXPECTED_CHECKPOINTS} proofs`);
     }
 
     // Retrieve session
