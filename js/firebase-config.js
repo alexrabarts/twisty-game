@@ -38,8 +38,11 @@ try {
         firebaseApp = firebase.initializeApp(firebaseConfig);
         firebaseFunctions = firebase.functions();
 
-        // Use Firebase emulator in development (optional)
-        if (window.location.hostname === 'localhost') {
+        // Use the Firebase emulator only when explicitly requested
+        // (?emulator in the URL). Defaulting to it on localhost meant the
+        // leaderboard always failed in local play unless an emulator was up -
+        // the production backend works fine from localhost.
+        if (window.location.search.includes('emulator')) {
             console.log('Using Firebase emulator for local development');
             firebaseFunctions.useEmulator('localhost', 5001);
         }

@@ -119,6 +119,10 @@ class Game {
         console.log('Creating tour system...');
         this.tourSystem = new TourSystem();
         this.tourSystem.onViewLeaderboard = (legId) => this.showLeaderboardViewer(legId);
+        this.tourSystem.onRiderShowcase = (id) => this.showcaseBikes ? this.focusRiderShowcase(id) : this.startRiderShowcase(id);
+        this.tourSystem.onRiderShowcaseStart = (id) => this.startRiderShowcase(id);
+        this.tourSystem.onTrackShowcase = (legIndex) => this.startTrackPreview(legIndex);
+        this.tourSystem.riderTier = (id) => this.riderTier(id);
 
         // Initialize leaderboard service
         if (typeof LeaderboardService !== 'undefined' && window.firebaseFunctions) {
@@ -197,6 +201,9 @@ class Game {
     }
 
     initializeGameWithLeg(leg) {
+        // Tear down any menu showcase (bikes / preview environment / RAF loop)
+        this.endMenuShowcase();
+
         // Hide tour selector
         this.tourSystem.hideLegSelector();
 
@@ -245,6 +252,12 @@ class Game {
             this.showConeHitNotification(points);
             this.soundManager.playConeHitSound();
         });
+
+        console.log('Creating rockfall hazards...');
+        const currentLegIndex = this.tourSystem.getCurrentLegIndex();
+        this.rockfalls = (typeof RockfallSystem !== 'undefined')
+            ? new RockfallSystem(this.scene, this.environment, currentLegIndex)
+            : null;
 
         console.log('Creating traffic...');
         this.traffic = new Traffic(this.scene, this.environment, this.selectedCharacter ? this.selectedCharacter.name : null);
@@ -479,6 +492,12 @@ class Game {
 
         // Drop stale cull references from the removed scene
         this.cullableMeshes = null;
+
+        // Tear down rockfall hazards
+        if (this.rockfalls) {
+            this.rockfalls.dispose();
+            this.rockfalls = null;
+        }
 
         // Reset game state
         this.finished = false;
@@ -897,8 +916,8 @@ class Game {
         // Mount at the rider's visor - swings with the lean like a real head
         const cameraPos = this.tempVector.set(0, 1.18, 0.3).applyEuler(mountEuler).add(vehiclePos);
 
-        // Engine/road vibration - subtle, speed dependent
-        const vibration = 0.008 + speedRatio * 0.012;
+        // Engine/road vibration - subtle, speed dependent, comfort damped
+        const vibration = (0.008 + speedRatio * 0.012) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
         cameraPos.x += (Math.random() - 0.5) * vibration;
         cameraPos.y += (Math.random() - 0.5) * vibration * 0.7;
 
@@ -1036,9 +1055,10 @@ class Game {
             this.cameraOffset.y = this.baseCameraOffset.y;
             this.cameraOffset.z = this.baseCameraOffset.z;
             
-            // Add small vibration for realism
-            this.cameraOffset.x += Math.sin(performance.now() * 0.01) * 0.02;
-            this.cameraOffset.y += Math.sin(performance.now() * 0.013) * 0.01;
+            // Add small vibration for realism (scaled by the bike's comfort)
+            const onboardShake = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
+            this.cameraOffset.x += Math.sin(performance.now() * 0.01) * 0.02 * onboardShake;
+            this.cameraOffset.y += Math.sin(performance.now() * 0.013) * 0.01 * onboardShake;
         } else {
             // Standard and High View cameras
             // Dynamic camera offset based on lean angle for better mountain road feel
@@ -1095,7 +1115,7 @@ class Game {
         // Additional camera shake at high speeds (outside onboard mode)
         if (currentMode.type !== 'onboard') {
             const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
-            const shakeIntensity = speedFactor * 0.05;
+            const shakeIntensity = speedFactor * 0.05 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
         }
@@ -1150,19 +1170,23 @@ class Game {
             // Enhanced camera shake with multiple sources
             if (!this.cameraShakeOffset) this.cameraShakeOffset = new THREE.Vector3();
 
+            // Comfort rating damps every shake source - Tim's scooter
+            // glides where Steve's race bike rattles
+            const comfort = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
+
             // Base speed shake - increases dramatically at high speeds
-            const speedShake = Math.pow(speedFactor, 2) * 0.12;
+            const speedShake = Math.pow(speedFactor, 2) * 0.12 * comfort;
 
             // Terrain/roughness shake - simulates bumpy road
-            const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedFactor;
+            const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedFactor * comfort;
 
             // Landing impact shake - big jolt when landing from jumps
             let landingShake = 0;
             if (this.vehicle.isJumping) {
                 this.lastJumpState = true;
             } else if (this.lastJumpState) {
-                // Just landed - create impact shake
-                this.landingShakeIntensity = 0.3;
+                // Just landed - create impact shake (softened by suspension comfort)
+                this.landingShakeIntensity = 0.3 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
                 this.landingShakeTime = performance.now();
                 this.lastJumpState = false;
             }
@@ -2016,6 +2040,213 @@ class Game {
         }
     }
 
+    // ================= Menu showcases =================
+    // Live 3D backdrops behind the menu: an orbiting camera around the
+    // character bikes (rider screen) and a flythrough of the focused leg
+    // (track screen). One RAF loop serves both; it never runs during play.
+
+    riderDisplayOrder() {
+        const unlocks = this.tourSystem.characterUnlocks || {};
+        return CHARACTERS.slice().sort((a, b) => (unlocks[a.id] || 0) - (unlocks[b.id] || 0));
+    }
+
+    // 'lit' | 'dimmed' | 'silhouette' per the progression tiering
+    riderTier(characterId) {
+        const order = this.riderDisplayOrder();
+        const firstLocked = order.find(c => !this.tourSystem.isCharacterUnlocked(c.id));
+        if (this.tourSystem.isCharacterUnlocked(characterId)) return 'lit';
+        return firstLocked && firstLocked.id === characterId ? 'dimmed' : 'silhouette';
+    }
+
+    startRiderShowcase(focusId) {
+        this.endTrackPreview();
+
+        if (!this.showcaseBikes) {
+            const platformGeometry = new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28);
+            const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 });
+            const silhouetteMaterial = new THREE.MeshBasicMaterial({ color: 0x05070c });
+
+            this.showcaseBikes = {};
+            this.showcaseExtras = [];
+            this.riderDisplayOrder().forEach((c, i) => {
+                const v = new Vehicle(this.scene, null, c);
+                // Stage far below the world so previews never collide with track geometry
+                v.position.set(i * 14, -400, 0);
+                v.yawAngle = 0;
+                v.updateMesh();
+
+                const tier = this.riderTier(c.id);
+                if (tier === 'dimmed') {
+                    v.group.traverse(o => {
+                        if (o.isMesh && o.material) {
+                            if (o.material.color) o.material.color.multiplyScalar(0.22);
+                            if (o.material.emissiveIntensity !== undefined) o.material.emissiveIntensity = 0;
+                        }
+                    });
+                } else if (tier === 'silhouette') {
+                    v.group.traverse(o => {
+                        if (o.isMesh) {
+                            if (o.material && o.material.dispose) o.material.dispose();
+                            o.material = silhouetteMaterial;
+                        }
+                    });
+                }
+
+                const platform = new THREE.Mesh(platformGeometry, platformMaterial);
+                platform.position.set(v.position.x, v.position.y - 0.06, v.position.z);
+                platform.receiveShadow = true;
+                this.scene.add(platform);
+                this.showcaseExtras.push(platform);
+
+                this.showcaseBikes[c.id] = v;
+            });
+        }
+
+        this.showcaseMode = 'rider';
+        this.showcaseFocusId = focusId;
+        this.showcaseOrbitAngle = this.showcaseOrbitAngle || 0;
+        this.startMenuShowcaseLoop();
+    }
+
+    focusRiderShowcase(focusId) {
+        this.showcaseFocusId = focusId;
+    }
+
+    startTrackPreview(legIndex) {
+        this.endRiderShowcase();
+
+        const leg = this.tourSystem.legs[legIndex];
+        if (!leg) return;
+
+        // Every leg previews in full - locked ones are gated in the UI only
+        this.endTrackPreview();
+        this.setTimeOfDay(leg.timeOfDay);
+        this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
+        this.previewEnv.applyLandscapeConfig(
+            this.tourSystem.getLandscapeConfigFor ? this.tourSystem.getLandscapeConfigFor(leg) : this.tourSystem.getLandscapeConfig()
+        );
+        if (leg.weather && leg.weather !== 'clear') {
+            this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
+        }
+
+        // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
+        // keeps the low-poly scenery reading well (wide aerials don't)
+        const path = this.previewEnv.roadPath;
+        const midIdx = Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
+        const mid = path[midIdx];
+        this.previewCenter = new THREE.Vector3(mid.x, (mid.y || 0), mid.z);
+        this.previewRadius = 30;
+        // The road hugs a cliff wall, so a full circle would pass through
+        // rock: the camera instead sways through an arc on the open valley
+        // side. Base angle = the road's right-hand normal.
+        this.previewBaseAngle = -mid.heading;
+
+        this.previewLeg = leg;
+        this.previewOrbitAngle = this.previewOrbitAngle || 0;
+        this.showcaseMode = 'track';
+        this.startMenuShowcaseLoop();
+    }
+
+    endRiderShowcase() {
+        if (this.showcaseBikes) {
+            Object.values(this.showcaseBikes).forEach(v => {
+                this.scene.remove(v.group);
+                this.disposeObject(v.group);
+            });
+            this.showcaseBikes = null;
+        }
+        if (this.showcaseExtras) {
+            this.showcaseExtras.forEach(o => {
+                this.scene.remove(o);
+                this.disposeObject(o);
+            });
+            this.showcaseExtras = null;
+        }
+    }
+
+    endTrackPreview() {
+        if (this.previewEnv) {
+            // Remove everything the preview environment added to the scene
+            const keep = new Set([
+                this.camera,
+                this.directionalLight, this.directionalLight && this.directionalLight.target,
+                this.distantLight, this.distantLight && this.distantLight.target,
+                this.ambientLight, this.hemisphereLight, this.fillLight, this.rimLight,
+                this.leftHeadlight, this.leftHeadlight && this.leftHeadlight.target,
+                this.rightHeadlight, this.rightHeadlight && this.rightHeadlight.target
+            ]);
+            // Showcase bikes/platforms survive an env teardown
+            if (this.showcaseBikes) Object.values(this.showcaseBikes).forEach(v => keep.add(v.group));
+            if (this.showcaseExtras) this.showcaseExtras.forEach(o => keep.add(o));
+
+            this.scene.children.filter(c => !keep.has(c)).forEach(obj => {
+                this.scene.remove(obj);
+                this.disposeObject(obj);
+            });
+            this.previewEnv = null;
+            this.previewLeg = null;
+        }
+    }
+
+    endMenuShowcase() {
+        this.showcaseMode = null;
+        if (this.menuShowcaseRAF) {
+            cancelAnimationFrame(this.menuShowcaseRAF);
+            this.menuShowcaseRAF = null;
+        }
+        this.endRiderShowcase();
+        this.endTrackPreview();
+    }
+
+    startMenuShowcaseLoop() {
+        if (this.menuShowcaseRAF) return; // Already running
+        this.lastShowcaseTime = performance.now();
+        const loop = () => {
+            if (!this.showcaseMode) { this.menuShowcaseRAF = null; return; }
+            this.menuShowcaseRAF = requestAnimationFrame(loop);
+
+            const now = performance.now();
+            const dt = Math.min((now - this.lastShowcaseTime) / 1000, 0.05);
+            this.lastShowcaseTime = now;
+
+            if (this.showcaseMode === 'rider' && this.showcaseBikes) {
+                // Slow orbit around the focused bike
+                this.showcaseOrbitAngle += dt * 0.45;
+                const focus = this.showcaseBikes[this.showcaseFocusId] || Object.values(this.showcaseBikes)[0];
+                const target = focus.position;
+                const r = 4.2;
+                const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
+                const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;
+                // Ease toward the orbit point so focus changes glide across
+                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), Math.min(1, dt * 4));
+                this.camera.up.set(0, 1, 0);
+                this.camera.fov = 50;
+                this.camera.updateProjectionMatrix();
+                this.camera.lookAt(target.x, target.y + 0.65, target.z);
+            } else if (this.showcaseMode === 'track' && this.previewEnv) {
+                // Slow swaying arc over the valley side of a mid-leg viewpoint,
+                // close to the road, looking back at the course and cliff
+                this.previewOrbitAngle += dt * 0.3;
+                const sway = Math.sin(this.previewOrbitAngle) * 1.0; // ±57 degrees
+                const angle = this.previewBaseAngle + sway;
+                const c = this.previewCenter;
+                const r = this.previewRadius;
+                this.camera.position.set(
+                    c.x + Math.cos(angle) * r,
+                    c.y + 9,
+                    c.z + Math.sin(angle) * r
+                );
+                this.camera.up.set(0, 1, 0);
+                this.camera.fov = 55;
+                this.camera.updateProjectionMatrix();
+                this.camera.lookAt(c.x, c.y + 1.5, c.z);
+            }
+
+            this.renderer.render(this.scene, this.camera);
+        };
+        this.menuShowcaseRAF = requestAnimationFrame(loop);
+    }
+
     showLeaderboardError(message) {
         const entryForm = document.getElementById('leaderboardEntryForm');
         const resultDiv = document.getElementById('leaderboardResult');
@@ -2377,6 +2608,31 @@ class Game {
             }
         }
         
+        // Update rockfalls and check for rock hits
+        if (this.rockfalls) {
+            const rockHit = this.rockfalls.update(deltaTime, this.vehicle);
+            if (rockHit && rockHit.hit && !this.vehicle.crashed && !this.finished) {
+                this.vehicle.crashed = true;
+                this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
+                this.vehicle.frame.material.color.setHex(0x8b5a2b);
+                const rockPos = rockHit.rock.mesh.position;
+                const impactDir = new THREE.Vector3(
+                    this.vehicle.position.x - rockPos.x,
+                    0,
+                    this.vehicle.position.z - rockPos.z
+                ).normalize();
+                this.vehicle.velocity = impactDir.multiplyScalar(Math.min(this.vehicle.speed * 0.4, 7));
+                this.vehicle.velocity.y = 3;
+                this.soundManager.playCrashSound();
+                this.showCrashNotification();
+                console.log('CRASHED! Hit by a rockfall');
+
+                if (this.particles) {
+                    this.particles.createDustCloud(rockPos.clone(), 1.2);
+                }
+            }
+        }
+
         // Check cone collisions
         if (!this.vehicle.crashed) {
             this.cones.checkCollision(this.vehicle.position, this.vehicle.velocity, this.vehicle.speed);

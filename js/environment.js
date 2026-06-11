@@ -11,12 +11,18 @@ class Environment {
     this.roadworkObstacles = []; // Store barriers and equipment for collision detection
     this.boulders = []; // Store boulder objects for collision detection
     this.checkpoints = []; // Store checkpoint positions for scoring
+    this.groundedObjects = []; // Objects whose base must rest on the terrain model
 
     // Calculate road width - first 4 legs are wider (easier)
     this.roadWidth = legIndex < 4 ? 20 : 16;
     console.log(
       `Initializing environment for segments ${startSegment}-${endSegment}, leg ${legIndex}, road width ${this.roadWidth}`,
     );
+
+    // Deterministic per-leg generation: the same leg must look identical
+    // every time it's built (menu preview, gameplay, rebuilds). All scenery
+    // randomness goes through this seeded generator instead of this.rand().
+    this.randState = ((startSegment + 1) * 2654435761 ^ (legIndex + 1) * 40503) >>> 0;
 
     this.createRoad(); // Generates full roadPath, but only creates geometry for segment range
     this.createGrass();
@@ -42,6 +48,121 @@ class Environment {
     } else {
       console.log("✅ Terrain validation passed - no road overlaps detected");
     }
+
+    // Validate that every registered scenery object actually rests on the
+    // terrain model (development-time check for floating objects)
+    const groundingViolations = this.validateGrounding();
+    if (groundingViolations.length > 0) {
+      console.error(
+        `❌ FLOATING OBJECTS DETECTED: ${groundingViolations.length} object(s) hover above the terrain (see warnings above)`,
+      );
+    } else {
+      console.log("✅ Grounding validation passed - no floating objects detected");
+    }
+  }
+
+  // Terrain elevation model shared by every scenery placement site. Mirrors
+  // the physics model in Vehicle.getTerrainHeightAt(): the road surface plus
+  // a 2m ledge sit at the segment's y; the right side drops at ~1.33 vertical
+  // per lateral unit down to the lake plane (y = -200); the left side rises
+  // steeply up the mountain wall face (~40 units tall over ~25 lateral units).
+  groundYAt(x, z) {
+    const lakeLevel = -200; // Rendered lake plane
+    if (!this.roadPath || this.roadPath.length === 0) {
+      return lakeLevel;
+    }
+
+    // Find the nearest road segment to (x, z)
+    let closest = null;
+    let closestDistSq = Infinity;
+    for (let i = 0; i < this.roadPath.length; i++) {
+      const point = this.roadPath[i];
+      const dx = x - point.x;
+      const dz = z - point.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < closestDistSq) {
+        closestDistSq = distSq;
+        closest = point;
+      }
+    }
+
+    const roadY = closest.y || 0;
+
+    // Signed lateral offset from the centerline (positive = right/cliff side,
+    // negative = left/mountain side) - same convention as vehicle physics
+    const perpX = Math.cos(closest.heading);
+    const perpZ = -Math.sin(closest.heading);
+    const lateral = (x - closest.x) * perpX + (z - closest.z) * perpZ;
+
+    const halfRoad = this.roadWidth / 2;
+    const ledgeEnd = halfRoad + 2; // Road surface plus the 2m ledge each side
+
+    if (lateral > ledgeEnd) {
+      // Right side: cliff face dropping toward the lake
+      const drop = (lateral - ledgeEnd) * 1.33;
+      return Math.max(roadY - drop, lakeLevel);
+    }
+
+    if (lateral < -ledgeEnd) {
+      // Left side: mountain wall face rising (~40 over ~25 lateral units)
+      const rise = (-lateral - ledgeEnd) * 1.6;
+      return Math.min(roadY + rise, roadY + 40);
+    }
+
+    // On the road or its ledges
+    return roadY;
+  }
+
+  // Register an object whose bounding-box bottom must rest on (or below) the
+  // terrain model at its position. Objects flagged with
+  // userData.allowFloating = true are skipped during validation.
+  registerGrounded(object, label) {
+    this.groundedObjects.push({ object, label });
+  }
+
+  // Development-time validation: every registered object's bounding-box
+  // bottom must be at or below groundYAt() at its position (within tolerance).
+  // Returns an array of violations and console.warns each one.
+  validateGrounding(tolerance = 0.75) {
+    const violations = [];
+    if (!this.groundedObjects || this.groundedObjects.length === 0) {
+      return violations;
+    }
+
+    const box = new THREE.Box3();
+    this.groundedObjects.forEach(({ object, label }) => {
+      if (object.userData && object.userData.allowFloating) return;
+
+      box.setFromObject(object);
+      if (box.isEmpty()) return;
+
+      const centerX = (box.min.x + box.max.x) / 2;
+      const centerZ = (box.min.z + box.max.z) / 2;
+      const groundY = this.groundYAt(centerX, centerZ);
+      const delta = box.min.y - groundY;
+
+      if (delta > tolerance) {
+        violations.push({
+          label,
+          delta,
+          position: { x: centerX, y: box.min.y, z: centerZ },
+        });
+        console.warn(
+          `⚠️ Floating object: ${label} bottom y=${box.min.y.toFixed(2)} hovers ${delta.toFixed(2)} above ground y=${groundY.toFixed(2)} at (${centerX.toFixed(1)}, ${centerZ.toFixed(1)})`,
+        );
+      }
+    });
+
+    return violations;
+  }
+
+  // Mulberry32 - small, fast, deterministic
+  rand() {
+    this.randState = (this.randState + 0x6d2b79f5) >>> 0;
+    let t = this.randState;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
   displaceVertices(geometry, amount) {
@@ -364,64 +485,67 @@ class Environment {
         // Much less frequent
         // Left side cliff rocks (elevated side) - properly grounded
         const cliffX =
-          point.x - (18 + Math.random() * 8) * Math.cos(point.heading);
+          point.x - (18 + this.rand() * 8) * Math.cos(point.heading);
         const cliffZ =
-          point.z + (18 + Math.random() * 8) * Math.sin(point.heading);
-        const cliffY = point.y - 1; // Ground level, partially embedded
+          point.z + (18 + this.rand() * 8) * Math.sin(point.heading);
+        // Rest the rock cluster on the mountain face at this lateral offset
+        // (the old point.y - 1 buried it inside the wall, or left it floating
+        // when the wall dipped). Group center at ground = roughly half embedded.
+        const cliffY = this.groundYAt(cliffX, cliffZ);
 
         // Create irregular rock shape using multiple merged geometries
         const rockGroup = new THREE.Group();
 
         // Main rock body - smooth with natural angular variation
-        const size = 2 + Math.random() * 2;
+        const size = 2 + this.rand() * 2;
         const mainRockGeometry = this.displaceVertices(
           new THREE.IcosahedronGeometry(size, 4),
           size * 0.3,
         );
         const mainRock = new THREE.Mesh(
           mainRockGeometry,
-          rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+          rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
         );
         mainRock.position.set(0, 0, 0);
         mainRock.rotation.set(
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
+          this.rand() * Math.PI,
+          this.rand() * Math.PI,
+          this.rand() * Math.PI,
         );
         mainRock.scale.set(
-          1 + Math.random() * 0.5,
-          0.7 + Math.random() * 0.6,
-          1 + Math.random() * 0.5,
+          1 + this.rand() * 0.5,
+          0.7 + this.rand() * 0.6,
+          1 + this.rand() * 0.5,
         );
         mainRock.castShadow = true;
         mainRock.receiveShadow = true;
         rockGroup.add(mainRock);
 
         // Additional rock chunks for detail - smooth spheres with irregular scaling
-        for (let j = 0; j < 2 + Math.floor(Math.random() * 2); j++) {
-          const chunkSize = 1 + Math.random() * 2;
+        for (let j = 0; j < 2 + Math.floor(this.rand() * 2); j++) {
+          const chunkSize = 1 + this.rand() * 2;
           const chunkGeometry = this.displaceVertices(
             new THREE.IcosahedronGeometry(chunkSize, 3),
             chunkSize * 0.35,
           );
           const chunk = new THREE.Mesh(
             chunkGeometry,
-            rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+            rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
           );
           chunk.position.set(
-            (Math.random() - 0.5) * 4,
-            (Math.random() - 0.5) * 3,
-            (Math.random() - 0.5) * 4,
+            (this.rand() - 0.5) * 4,
+            (this.rand() - 0.5) * 3,
+            (this.rand() - 0.5) * 4,
           );
           chunk.rotation.set(
-            Math.random() * Math.PI,
-            Math.random() * Math.PI,
-            Math.random() * Math.PI,
+            this.rand() * Math.PI,
+            this.rand() * Math.PI,
+            this.rand() * Math.PI,
           );
           chunk.scale.set(
-            1 + Math.random() * 0.4,
-            0.6 + Math.random() * 0.5,
-            1 + Math.random() * 0.4,
+            1 + this.rand() * 0.4,
+            0.6 + this.rand() * 0.5,
+            1 + this.rand() * 0.4,
           );
           chunk.castShadow = true;
           chunk.receiveShadow = true;
@@ -430,14 +554,15 @@ class Environment {
 
         rockGroup.position.set(cliffX, cliffY, cliffZ);
         this.scene.add(rockGroup);
+        this.registerGrounded(rockGroup, `cliff rock cluster (segment ${index})`);
       }
 
       // Small boulders only near the road edge - DISABLED to prevent floating
       // These are replaced by better-grounded boulders in createRoadWalls()
-      if (false && index % 8 === 0 && Math.random() > 0.7) {
+      if (false && index % 8 === 0 && this.rand() > 0.7) {
         // Disabled
-        const side = Math.random() > 0.5 ? 1 : -1;
-        const baseDistance = 10 + Math.random() * 3;
+        const side = this.rand() > 0.5 ? 1 : -1;
+        const baseDistance = 10 + this.rand() * 3;
         const boulderX =
           point.x + side * baseDistance * Math.cos(point.heading);
         const boulderZ =
@@ -446,7 +571,7 @@ class Environment {
         // Calculate proper Y position accounting for terrain drop-off
         const roadY = point.y || 0;
         let boulderY;
-        const boulderRadius = 0.5 + Math.random() * 1.5;
+        const boulderRadius = 0.5 + this.rand() * 1.5;
 
         if (side > 0) {
           // Right side - account for drop-off
@@ -465,18 +590,18 @@ class Environment {
         );
         const boulder = new THREE.Mesh(
           boulderGeometry,
-          rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+          rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
         );
         boulder.position.set(boulderX, boulderY, boulderZ);
         boulder.scale.set(
-          1 + Math.random() * 0.3,
-          0.7 + Math.random() * 0.4,
-          1 + Math.random() * 0.3,
+          1 + this.rand() * 0.3,
+          0.7 + this.rand() * 0.4,
+          1 + this.rand() * 0.3,
         );
         boulder.rotation.set(
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
-          Math.random() * Math.PI,
+          this.rand() * Math.PI,
+          this.rand() * Math.PI,
+          this.rand() * Math.PI,
         );
         boulder.castShadow = true;
         boulder.receiveShadow = true;
@@ -767,7 +892,7 @@ class Environment {
               Math.sin(lengthProgress * Math.PI * 8) * 0.5 + // 8 major peaks and valleys
               Math.sin(lengthProgress * Math.PI * 15) * 0.25 + // 15 medium variations
               Math.sin(lengthProgress * Math.PI * 27) * 0.15 + // 27 small details
-              (Math.random() - 0.5) * 0.2; // Random noise (20%)
+              (this.rand() - 0.5) * 0.2; // Random noise (20%)
 
             const variableHeight = height * cliffHeightMultiplier;
             const currentHeight = variableHeight * verticalProgress;
@@ -868,7 +993,7 @@ class Environment {
             );
 
             // More realistic mountain rock colors with grey variations
-            const greyBase = 0.35 + Math.random() * 0.25; // 0.35 to 0.6
+            const greyBase = 0.35 + this.rand() * 0.25; // 0.35 to 0.6
 
             // Add geological stratification layers
             const stratumHeight = 8; // Height of each stratum in units
@@ -1061,15 +1186,16 @@ class Environment {
         const point = this.roadPath[i];
 
         // Add 2-3 rocks per segment
-        const numRocks = 2 + Math.floor(Math.random() * 2);
+        const numRocks = 2 + Math.floor(this.rand() * 2);
 
         for (let r = 0; r < numRocks; r++) {
-          if (Math.random() > 0.2) {
+          if (this.rand() > 0.2) {
             // 80% chance for variety
 
-            // Height position on cliff (0 = base, 1 = top) - keep rocks very low to prevent floating
-            const heightRatio = Math.random() * 0.25; // Maximum 25% up the cliff
-            const cliffHeight = Math.abs(height) * heightRatio;
+            // Height position on cliff (0 = base, 1 = top) - keep rocks very
+            // low; only drives the lateral spread, the actual elevation comes
+            // from the terrain model below
+            const heightRatio = this.rand() * 0.25; // Maximum 25% up the cliff
 
             // Hug the wall base / road edge so the rock field stays dense and
             // visible, with size capped by proximity below
@@ -1083,102 +1209,90 @@ class Environment {
             }
 
             // Random outward variation - farther rocks may be larger
-            distance += Math.random() * 3;
+            distance += this.rand() * 3;
 
             // Cap size so the rock's scaled radius (max scale 1.5) never
             // reaches past the road edge: rocks at the lane edge stay small
             // (fallen-debris look), rocks farther out / up the cliff get big
             const clearance = distance - this.roadWidth / 2 + 0.4;
             const maxSize = Math.max(0.4, clearance / 1.5);
-            const rockSize = Math.min(0.8 + Math.random() * 2.5, maxSize);
+            const rockSize = Math.min(0.8 + this.rand() * 2.5, maxSize);
             const rockGeometry = this.displaceVertices(
               new THREE.IcosahedronGeometry(rockSize, 3),
               rockSize * 0.3,
             );
             const rock = new THREE.Mesh(
               rockGeometry,
-              rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+              rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
             );
 
             const perpX = Math.cos(point.heading) * distance * side;
             const perpZ = -Math.sin(point.heading) * distance * side;
 
-            // Position the rock embedded into cliff face
-            const embedDepth = rockSize * 0.5; // Embed 50% into cliff (increased from 40%)
-
-            let rockY;
-            if (height > 0) {
-              // Left side - mountain wall going up
-              rockY = (point.y || 0) + cliffHeight - embedDepth;
-              rock.position.set(point.x + perpX, rockY, point.z + perpZ);
-            } else {
-              // Right side - cliff going down
-              rockY = (point.y || 0) - cliffHeight + embedDepth;
-              rock.position.set(point.x + perpX, rockY, point.z + perpZ);
-            }
-
-            // Validate embedded rock isn't floating
-            const roadY = point.y || 0;
-            const expectedMinY = roadY - Math.abs(height);
-            if (rockY > roadY + rockSize && heightRatio < 0.1) {
-              // Rock too high and near base - skip it
-              console.warn(
-                `Skipping floating embedded rock at height ${rockY.toFixed(1)} above road ${roadY.toFixed(1)}`,
-              );
-              continue;
-            }
+            // Rest the rock ON the cliff face at this lateral offset: the
+            // terrain model maps the lateral distance to the face elevation
+            // (rising mountain wall on the left, dropping cliff on the
+            // right), so the rock center sits on the face (~half embedded).
+            // The old heightRatio-based y used a slope that didn't match the
+            // rendered face, leaving rocks hovering off the wall or buried.
+            const rockWorldX = point.x + perpX;
+            const rockWorldZ = point.z + perpZ;
+            const rockY = this.groundYAt(rockWorldX, rockWorldZ);
+            rock.position.set(rockWorldX, rockY, rockWorldZ);
 
             // Random rotation for natural look
             rock.rotation.set(
-              Math.random() * Math.PI * 2,
-              Math.random() * Math.PI * 2,
-              Math.random() * Math.PI * 2,
+              this.rand() * Math.PI * 2,
+              this.rand() * Math.PI * 2,
+              this.rand() * Math.PI * 2,
             );
 
             // Varied scaling for natural appearance
             rock.scale.set(
-              1.0 + Math.random() * 0.5,
-              0.7 + Math.random() * 0.4,
-              1.0 + Math.random() * 0.5,
+              1.0 + this.rand() * 0.5,
+              0.7 + this.rand() * 0.4,
+              1.0 + this.rand() * 0.5,
             );
 
             rock.castShadow = true;
             rock.receiveShadow = true;
             group.add(rock);
+            this.registerGrounded(rock, `embedded cliff rock (segment ${i}, side ${side})`);
           } // Close the if statement from line 700
         } // Close the for loop from line 699
 
         // Small debris rocks that have fallen off the cliff onto the road
         // edge - deliberately small (0.2-0.45m) and registered as collidable
         // boulders so riding into one crashes the bike
-        if (side < 0 && !isDropOff && Math.random() < 0.15) {
-          const debrisSize = 0.2 + Math.random() * 0.25;
+        if (side < 0 && !isDropOff && this.rand() < 0.15) {
+          const debrisSize = 0.2 + this.rand() * 0.25;
           const debrisGeometry = this.displaceVertices(
             new THREE.IcosahedronGeometry(debrisSize, 2),
             debrisSize * 0.25,
           );
           const debris = new THREE.Mesh(
             debrisGeometry,
-            rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+            rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
           );
 
           // Scatter onto the cliff-side portion of the road, from near the
           // wall to roughly the middle of the left lane
           const debrisDistance =
-            (this.roadWidth / 2 - 1 - Math.random() * 4) * side;
+            (this.roadWidth / 2 - 1 - this.rand() * 4) * side;
           const debrisX = point.x + Math.cos(point.heading) * debrisDistance;
           const debrisZ = point.z - Math.sin(point.heading) * debrisDistance;
           const debrisY = (point.y || 0) + debrisSize * 0.4; // Slightly embedded in the road
 
           debris.position.set(debrisX, debrisY, debrisZ);
           debris.rotation.set(
-            Math.random() * Math.PI * 2,
-            Math.random() * Math.PI * 2,
-            Math.random() * Math.PI * 2,
+            this.rand() * Math.PI * 2,
+            this.rand() * Math.PI * 2,
+            this.rand() * Math.PI * 2,
           );
           debris.castShadow = true;
           debris.receiveShadow = true;
           group.add(debris);
+          this.registerGrounded(debris, `road debris rock (segment ${i})`);
 
           this.boulders.push({
             position: new THREE.Vector3(debrisX, debrisY, debrisZ),
@@ -1187,23 +1301,23 @@ class Environment {
         }
 
         // Add EVEN MORE boulders at the base - DISABLED to prevent floating
-        if (false && (i % 2 === 0 || Math.random() > 0.2)) {
+        if (false && (i % 2 === 0 || this.rand() > 0.2)) {
           // Every 2 segments or 80% chance
           // Create 2-5 boulders per position
-          const numBoulders = 2 + Math.floor(Math.random() * 4);
+          const numBoulders = 2 + Math.floor(this.rand() * 4);
 
           for (let b = 0; b < numBoulders; b++) {
-            const baseBoulderSize = 0.8 + Math.random() * 3.0; // More varied sizes (0.8-3.8)
+            const baseBoulderSize = 0.8 + this.rand() * 3.0; // More varied sizes (0.8-3.8)
             const baseBoulder = new THREE.Mesh(
               this.displaceVertices(
                 new THREE.IcosahedronGeometry(baseBoulderSize, 3),
                 baseBoulderSize * 0.3,
               ),
-              rockMaterials[Math.floor(Math.random() * rockMaterials.length)],
+              rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
             );
 
             // Position at cliff base with variation
-            const baseDistance = 10 + Math.random() * 8 + b * 2; // Minimum 10 units from road center
+            const baseDistance = 10 + this.rand() * 8 + b * 2; // Minimum 10 units from road center
             const perpX = Math.cos(point.heading) * baseDistance * side;
             const perpZ = -Math.sin(point.heading) * baseDistance * side;
 
@@ -1270,15 +1384,15 @@ class Environment {
 
             // Random rotation with some stability (not fully random)
             baseBoulder.rotation.set(
-              Math.random() * Math.PI * 0.5, // Less rotation on X
-              Math.random() * Math.PI * 2, // Full rotation on Y
-              Math.random() * Math.PI * 0.3, // Minimal tilt
+              this.rand() * Math.PI * 0.5, // Less rotation on X
+              this.rand() * Math.PI * 2, // Full rotation on Y
+              this.rand() * Math.PI * 0.3, // Minimal tilt
             );
 
             baseBoulder.scale.set(
-              1.0 + Math.random() * 0.6,
-              0.7 + Math.random() * 0.4,
-              1.0 + Math.random() * 0.6,
+              1.0 + this.rand() * 0.6,
+              0.7 + this.rand() * 0.4,
+              1.0 + this.rand() * 0.6,
             );
 
             baseBoulder.castShadow = true;
@@ -1305,13 +1419,13 @@ class Environment {
 
       // Create major vertical cracks (only in active segment range)
       for (let i = startIdx; i <= endIdx; i += 25) {
-        if (Math.random() > 0.5) {
+        if (this.rand() > 0.5) {
           const point = this.roadPath[i];
 
           // Create crack geometry as thin box
-          const crackHeight = Math.abs(height) * (0.4 + Math.random() * 0.4);
-          const crackWidth = 0.1 + Math.random() * 0.15;
-          const crackDepth = 0.5 + Math.random() * 0.5;
+          const crackHeight = Math.abs(height) * (0.4 + this.rand() * 0.4);
+          const crackWidth = 0.1 + this.rand() * 0.15;
+          const crackDepth = 0.5 + this.rand() * 0.5;
 
           const crackGeometry = new THREE.BoxGeometry(
             crackWidth,
@@ -1320,9 +1434,11 @@ class Environment {
           );
           const crack = new THREE.Mesh(crackGeometry, crackMaterial);
 
-          // Position crack on cliff face
-          let distance = 7.8 + Math.random() * 2;
-          const verticalOffset = Math.random() * Math.abs(height) * 0.3;
+          // Position crack on cliff face (roadWidth-relative so the crack
+          // hugs the wall base instead of standing on the road surface on
+          // wider legs)
+          let distance = this.roadWidth / 2 + 1.3 + this.rand() * 2;
+          const verticalOffset = this.rand() * Math.abs(height) * 0.3;
 
           if (side > 0 && isDropOff) {
             distance += (verticalOffset / Math.abs(height)) * 30;
@@ -1350,16 +1466,17 @@ class Environment {
           // Rotate crack to align with cliff face
           crack.rotation.y =
             point.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-          crack.rotation.z = (Math.random() - 0.5) * 0.3; // Slight tilt
+          crack.rotation.z = (this.rand() - 0.5) * 0.3; // Slight tilt
 
           crack.castShadow = true;
           crack.receiveShadow = true;
+          crack.userData.allowFloating = true; // Wall decal embedded in the cliff face
           group.add(crack);
 
           // Add smaller branching cracks
-          const numBranches = 1 + Math.floor(Math.random() * 2);
+          const numBranches = 1 + Math.floor(this.rand() * 2);
           for (let b = 0; b < numBranches; b++) {
-            const branchHeight = crackHeight * (0.3 + Math.random() * 0.3);
+            const branchHeight = crackHeight * (0.3 + this.rand() * 0.3);
             const branchGeometry = new THREE.BoxGeometry(
               crackWidth * 0.6,
               branchHeight,
@@ -1369,15 +1486,16 @@ class Environment {
 
             // Position relative to main crack
             branch.position.copy(crack.position);
-            branch.position.x += (Math.random() - 0.5) * 2;
-            branch.position.y += (Math.random() - 0.5) * crackHeight * 0.5;
-            branch.position.z += (Math.random() - 0.5) * 2;
+            branch.position.x += (this.rand() - 0.5) * 2;
+            branch.position.y += (this.rand() - 0.5) * crackHeight * 0.5;
+            branch.position.z += (this.rand() - 0.5) * 2;
 
-            branch.rotation.y = crack.rotation.y + (Math.random() - 0.5) * 0.5;
-            branch.rotation.z = (Math.random() - 0.5) * 0.4;
+            branch.rotation.y = crack.rotation.y + (this.rand() - 0.5) * 0.5;
+            branch.rotation.z = (this.rand() - 0.5) * 0.4;
 
             branch.castShadow = true;
             branch.receiveShadow = true;
+            branch.userData.allowFloating = true; // Wall decal embedded in the cliff face
             group.add(branch);
           }
         }
@@ -1410,13 +1528,13 @@ class Environment {
 
       // Create water seepage patches (only in active segment range)
       for (let i = startIdx; i <= endIdx; i += 30) {
-        if (Math.random() > 0.5) {
+        if (this.rand() > 0.5) {
           const point = this.roadPath[i];
 
           // Create irregular seepage patch
           const seepageGeometry = new THREE.PlaneGeometry(
-            1.5 + Math.random() * 2,
-            3 + Math.random() * 4,
+            1.5 + this.rand() * 2,
+            3 + this.rand() * 4,
             4,
             6,
           );
@@ -1426,15 +1544,16 @@ class Environment {
           for (let v = 0; v < positions.count; v++) {
             const x = positions.getX(v);
             const y = positions.getY(v);
-            positions.setZ(v, (Math.random() - 0.5) * 0.2);
-            positions.setX(v, x * (0.8 + Math.random() * 0.4));
+            positions.setZ(v, (this.rand() - 0.5) * 0.2);
+            positions.setX(v, x * (0.8 + this.rand() * 0.4));
           }
 
           const seepage = new THREE.Mesh(seepageGeometry, seepageMaterial);
 
-          // Position on cliff face
-          const seepageHeight = Math.abs(height) * (0.2 + Math.random() * 0.5);
-          let distance = 7.6 + Math.random() * 0.5;
+          // Position on cliff face (roadWidth-relative so the patch stays on
+          // the wall instead of hovering over the road edge on wider legs)
+          const seepageHeight = Math.abs(height) * (0.2 + this.rand() * 0.5);
+          let distance = this.roadWidth / 2 + 1.5 + this.rand() * 0.5;
 
           if (side > 0 && isDropOff) {
             distance += (seepageHeight / Math.abs(height)) * 30;
@@ -1462,6 +1581,7 @@ class Environment {
           seepage.rotation.y =
             point.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
           seepage.receiveShadow = true;
+          seepage.userData.allowFloating = true; // Wall decal on the cliff face
           group.add(seepage);
         }
       }
@@ -1476,13 +1596,13 @@ class Environment {
 
       // Create hanging vines from cliff ledges (only in active segment range)
       for (let i = startIdx; i <= endIdx; i += 20) {
-        if (Math.random() > 0.6) {
+        if (this.rand() > 0.6) {
           const point = this.roadPath[i];
 
           // Create vine as elongated curved mesh
-          const vineLength = 3 + Math.random() * 5;
+          const vineLength = 3 + this.rand() * 5;
           const vineGeometry = new THREE.PlaneGeometry(
-            0.3 + Math.random() * 0.2,
+            0.3 + this.rand() * 0.2,
             vineLength,
             1,
             8,
@@ -1499,9 +1619,10 @@ class Environment {
 
           const vine = new THREE.Mesh(vineGeometry, vineMaterial);
 
-          // Position vine hanging from cliff face
-          const vineHeight = Math.abs(height) * (0.3 + Math.random() * 0.4);
-          let distance = 7.5 + Math.random() * 1;
+          // Position vine hanging from cliff face (roadWidth-relative so the
+          // vine clings to the wall instead of hanging over the road edge)
+          const vineHeight = Math.abs(height) * (0.3 + this.rand() * 0.4);
+          let distance = this.roadWidth / 2 + 1.4 + this.rand() * 1;
 
           if (side > 0 && isDropOff) {
             distance += (vineHeight / Math.abs(height)) * 30;
@@ -1530,10 +1651,11 @@ class Environment {
 
           vine.rotation.y =
             point.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-          vine.rotation.x = (Math.random() - 0.5) * 0.2;
+          vine.rotation.x = (this.rand() - 0.5) * 0.2;
 
           vine.castShadow = true;
           vine.receiveShadow = true;
+          vine.userData.allowFloating = true; // Hangs from the cliff face by design
           group.add(vine);
         }
       }
@@ -1545,16 +1667,16 @@ class Environment {
         const point = this.roadPath[i];
 
         // Add vegetation at various heights
-        if (Math.random() > 0.4) {
-          const numPatches = 1 + Math.floor(Math.random() * 2);
+        if (this.rand() > 0.4) {
+          const numPatches = 1 + Math.floor(this.rand() * 2);
 
           for (let p = 0; p < numPatches; p++) {
             // Height on cliff (favor lower areas for vegetation)
-            const heightRatio = Math.random() * 0.5; // Lower half of cliff
+            const heightRatio = this.rand() * 0.5; // Lower half of cliff
             const cliffHeight = Math.abs(height) * heightRatio;
 
             // Calculate position with slope
-            let distance = 7.2 + Math.random() * 0.5;
+            let distance = 7.2 + this.rand() * 0.5;
             if (side > 0 && isDropOff) {
               distance += heightRatio * heightRatio * 25;
             } else if (side < 0 && !isDropOff) {
@@ -1565,11 +1687,11 @@ class Environment {
             const perpZ = -Math.sin(point.heading) * distance * side;
 
             // Choose between moss patch or small bush
-            if (Math.random() > 0.5) {
+            if (this.rand() > 0.5) {
               // Moss patch (flat against cliff)
               const mossGeometry = new THREE.PlaneGeometry(
-                1.5 + Math.random() * 2,
-                1 + Math.random() * 1.5,
+                1.5 + this.rand() * 2,
+                1 + this.rand() * 1.5,
               );
               const moss = new THREE.Mesh(mossGeometry, mossMaterial);
 
@@ -1584,15 +1706,15 @@ class Environment {
               // Rotate to face outward from cliff
               moss.rotation.y =
                 point.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-              moss.rotation.x = (Math.random() - 0.5) * 0.3;
-              moss.rotation.z = (Math.random() - 0.5) * 0.3;
+              moss.rotation.x = (this.rand() - 0.5) * 0.3;
+              moss.rotation.z = (this.rand() - 0.5) * 0.3;
 
               moss.receiveShadow = true;
               group.add(moss);
             } else {
               // Small bush/grass tuft
               const bushGeometry = new THREE.SphereGeometry(
-                0.3 + Math.random() * 0.4,
+                0.3 + this.rand() * 0.4,
                 5,
                 4,
               );
@@ -1613,9 +1735,9 @@ class Environment {
               }
 
               bush.scale.set(
-                1.2 + Math.random() * 0.3,
-                0.8 + Math.random() * 0.3,
-                1 + Math.random() * 0.3,
+                1.2 + this.rand() * 0.3,
+                0.8 + this.rand() * 0.3,
+                1 + this.rand() * 0.3,
               );
 
               bush.castShadow = true;
@@ -1637,32 +1759,38 @@ class Environment {
         });
 
         for (let i = startIdx; i <= endIdx; i += 8) {
-          if (Math.random() > 0.4 && height > 30) {
+          if (this.rand() > 0.4 && height > 30) {
             const point = this.roadPath[i];
             const snowGeometry = new THREE.PlaneGeometry(
-              3 + Math.random() * 4,
-              2 + Math.random() * 3,
+              3 + this.rand() * 4,
+              2 + this.rand() * 3,
             );
             const snow = new THREE.Mesh(snowGeometry, snowMaterial);
 
-            const perpX =
-              Math.cos(point.heading) * (8 + Math.random() * 2) * side;
-            const perpZ =
-              -Math.sin(point.heading) * (8 + Math.random() * 2) * side;
+            // Pin the patch to the upper cliff face: the wall slopes outward
+            // by verticalProgress^2 * 25 as it rises, so the lateral offset
+            // must follow that slope. The old fixed 8-10 unit offset left the
+            // snow hovering in mid-air ~15 units in front of the face.
+            const snowProgress = 0.7 + this.rand() * 0.3;
+            const snowDistance =
+              this.roadWidth / 2 + 1 + snowProgress * snowProgress * 25;
+            const perpX = Math.cos(point.heading) * snowDistance * side;
+            const perpZ = -Math.sin(point.heading) * snowDistance * side;
 
             snow.position.set(
               point.x + perpX,
-              (point.y || 0) + height * (0.7 + Math.random() * 0.3),
+              (point.y || 0) + height * snowProgress,
               point.z + perpZ,
             );
 
             // Rotate to face outward and add some randomness
             snow.rotation.y =
               point.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-            snow.rotation.x = (Math.random() - 0.5) * 0.3;
-            snow.rotation.z = (Math.random() - 0.5) * 0.3;
+            snow.rotation.x = (this.rand() - 0.5) * 0.3;
+            snow.rotation.z = (this.rand() - 0.5) * 0.3;
 
             snow.receiveShadow = true;
+            snow.userData.allowFloating = true; // Wall decal on the cliff face
             group.add(snow);
           }
         }
@@ -1678,7 +1806,7 @@ class Environment {
         });
 
         for (let i = 0; i < this.roadPath.length; i += 15) {
-          if (Math.random() > 0.6) {
+          if (this.rand() > 0.6) {
             const point = this.roadPath[i];
             const bush = new THREE.Mesh(alpineBushGeometry, alpineBushMaterial);
 
@@ -1692,9 +1820,9 @@ class Environment {
             );
 
             bush.scale.set(
-              1 + Math.random() * 0.3,
-              0.6 + Math.random() * 0.3,
-              1 + Math.random() * 0.3,
+              1 + this.rand() * 0.3,
+              0.6 + this.rand() * 0.3,
+              1 + this.rand() * 0.3,
             );
 
             bush.castShadow = true;
@@ -1839,11 +1967,15 @@ class Environment {
     const maxHeight = 400;
     const width = 3000; // Wider to cover horizon
 
-    // Create mountain silhouette
+    // Create mountain silhouette. The silhouette base extends to -300 so it
+    // reaches below the lake plane (y = -200) even for the offset/scaled
+    // second range - a base at -80 left the whole range hovering above the
+    // water line.
+    const silhouetteBase = -300;
     const points = [];
 
     // Start from left edge
-    points.push(new THREE.Vector3(-width / 2, -80, baseDistance));
+    points.push(new THREE.Vector3(-width / 2, silhouetteBase, baseDistance));
 
     // Generate smooth rolling mountain silhouette
     for (let i = 0; i <= numPeaks * 4; i++) {
@@ -1861,7 +1993,7 @@ class Environment {
     }
 
     // End at right edge
-    points.push(new THREE.Vector3(width / 2, -80, baseDistance));
+    points.push(new THREE.Vector3(width / 2, silhouetteBase, baseDistance));
 
     // Create triangulated mountain face
     for (let i = 0; i < points.length - 1; i++) {
@@ -1874,8 +2006,8 @@ class Environment {
       // Add vertices
       vertices.push(p1.x, p1.y, p1.z); // Top left
       vertices.push(p2.x, p2.y, p2.z); // Top right
-      vertices.push(p2.x, -80, p2.z); // Bottom right
-      vertices.push(p1.x, -80, p1.z); // Bottom left
+      vertices.push(p2.x, silhouetteBase, p2.z); // Bottom right
+      vertices.push(p1.x, silhouetteBase, p1.z); // Bottom left
 
       // Add indices for two triangles
       indices.push(baseIndex, baseIndex + 1, baseIndex + 2);
@@ -1883,9 +2015,9 @@ class Environment {
 
       // Atmospheric perspective - darker blue-grey color
       const atmosphericColor = {
-        r: 0.35 + Math.random() * 0.05,
-        g: 0.4 + Math.random() * 0.05,
-        b: 0.5 + Math.random() * 0.05,
+        r: 0.35 + this.rand() * 0.05,
+        g: 0.4 + this.rand() * 0.05,
+        b: 0.5 + this.rand() * 0.05,
       };
 
       // Add colors for all 4 vertices
@@ -1913,6 +2045,7 @@ class Environment {
     const distantMountains = new THREE.Mesh(geometry, material);
     distantMountains.receiveShadow = true;
     this.scene.add(distantMountains);
+    this.registerGrounded(distantMountains, "distant mountain range");
 
     // Add a second distant range slightly offset and behind
     const secondRangeGeometry = geometry.clone();
@@ -1924,6 +2057,7 @@ class Environment {
     secondRange.position.set(-2000, 50, 6000); // MOVED: Far left and much further back
     secondRange.scale.set(0.8, 0.9, 1);
     this.scene.add(secondRange);
+    this.registerGrounded(secondRange, "second distant mountain range");
   }
 
   createMidRangeMountains() {
@@ -1933,12 +2067,15 @@ class Environment {
     // Create several individual peaks - MOVED to avoid road overlap
     // Actual road bounds: X: 0-3622, Z: 0-2488
     // Placing peaks far left (X < -500) to guarantee clearance
+    // Heights compensate for the peaks now being grounded at the lake plane
+    // (y = -200) instead of floating at -50: each height grew by ~137 so the
+    // apex stays at its original skyline elevation.
     const peaks = [
-      { x: -900, z: 700, height: 250, width: 300 }, // Left back - MOVED from -600
-      { x: -700, z: 1200, height: 200, width: 280 }, // Left-center back - MOVED from -200
-      { x: -1000, z: 1800, height: 280, width: 350 }, // Left far - MOVED from 300
-      { x: -600, z: 2200, height: 230, width: 290 }, // Left-back - MOVED from 800
-      { x: -800, z: 2600, height: 260, width: 310 }, // Left end - MOVED from 1200
+      { x: -900, z: 700, height: 385, width: 300 }, // Left back - MOVED from -600
+      { x: -700, z: 1200, height: 340, width: 280 }, // Left-center back - MOVED from -200
+      { x: -1000, z: 1800, height: 415, width: 350 }, // Left far - MOVED from 300
+      { x: -600, z: 2200, height: 370, width: 290 }, // Left-back - MOVED from 800
+      { x: -800, z: 2600, height: 395, width: 310 }, // Left end - MOVED from 1200
     ];
 
     peaks.forEach((peak) => {
@@ -1954,6 +2091,7 @@ class Environment {
 
     this.tagMeshes(group, "mountain");
     this.scene.add(group);
+    this.registerGrounded(group, "mid-range mountains");
   }
 
   createNearHills() {
@@ -1967,17 +2105,20 @@ class Environment {
 
     this.tagMeshes(group, "mountain");
     this.scene.add(group);
+    this.registerGrounded(group, "lake island mountain");
   }
 
   createLakeIslandMountain() {
     // Create a dramatic mountain rising from the lake in the center of the map
     const group = new THREE.Group();
 
-    // Main mountain peak rising from the lake - smaller to avoid road
+    // Main mountain peak rising from the lake - smaller to avoid road.
+    // Heights compensate for the peaks now being grounded at the lake plane
+    // (y = -200) instead of floating at -50, keeping the apex elevations.
     const mainPeak = this.createMountainPeak(
       350, // Center of the map area
       100, // Slightly forward from true center
-      180, // Reduced height to avoid crossing road
+      320, // Grounded at the lake; apex stays at ~y=130
       250, // Smaller base
       0x3a4540, // Darker grey-green for contrast with lake
     );
@@ -1987,7 +2128,7 @@ class Environment {
     const secondaryPeak = this.createMountainPeak(
       250, // Offset to the left
       -50, // Move further forward/left to avoid road
-      120, // Smaller height
+      265, // Grounded at the lake; apex stays at ~y=70
       150, // Smaller width
       0x424845, // Similar but slightly different color
     );
@@ -2005,26 +2146,29 @@ class Environment {
     // Create rocky base formations
     for (let i = 0; i < 5; i++) {
       const angle = ((Math.PI * 2) / 5) * i;
-      const distance = 100 + Math.random() * 40;
+      const distance = 100 + this.rand() * 40;
       const rockX = 350 + Math.cos(angle) * distance;
       const rockZ = 100 + Math.sin(angle) * distance;
 
-      const rockSize = 15 + Math.random() * 10;
+      const rockSize = 15 + this.rand() * 10;
       const rockGeometry = this.displaceVertices(
         new THREE.IcosahedronGeometry(rockSize, 3),
         rockSize * 0.25,
       );
       const rock = new THREE.Mesh(rockGeometry, rockMaterial);
-      rock.position.set(rockX, -70, rockZ); // Just above water level
+      // Mostly submerged at the lake surface (y = -200) so the tops break the
+      // water around the island base. The old -70 left them floating ~130
+      // units above the water.
+      rock.position.set(rockX, -200 + rockSize * 0.2, rockZ);
       rock.rotation.set(
-        Math.random() * Math.PI,
-        Math.random() * Math.PI,
-        Math.random() * Math.PI,
+        this.rand() * Math.PI,
+        this.rand() * Math.PI,
+        this.rand() * Math.PI,
       );
       rock.scale.set(
-        1 + Math.random() * 0.5,
-        0.6 + Math.random() * 0.3,
-        1 + Math.random() * 0.5,
+        1 + this.rand() * 0.5,
+        0.6 + this.rand() * 0.3,
+        1 + this.rand() * 0.5,
       );
       rock.castShadow = true;
       rock.receiveShadow = true;
@@ -2110,7 +2254,7 @@ class Environment {
       // ragged transition for a more dramatic alpine cap
       if (normalizedHeight > 0.78) {
         // Bright snow white with slight blue tint
-        const snowWhite = 0.97 + Math.random() * 0.03;
+        const snowWhite = 0.97 + this.rand() * 0.03;
         colors1.push(
           snowWhite - 0.03, // Slightly less red for blue tint
           snowWhite,
@@ -2119,7 +2263,7 @@ class Environment {
       } else if (normalizedHeight > 0.64) {
         // Transition zone - ragged mix of rock and snow patches
         const mixFactor = (normalizedHeight - 0.64) / 0.14;
-        const patchiness = Math.random() < mixFactor * 0.7 ? 0.25 : 0; // Snow patches
+        const patchiness = this.rand() < mixFactor * 0.7 ? 0.25 : 0; // Snow patches
         const rockGrey = 0.35 + normalizedHeight * 0.15;
         const snowWhite = 0.96;
         const mixed = Math.min(
@@ -2127,9 +2271,9 @@ class Environment {
           snowWhite,
         );
         colors1.push(
-          mixed + Math.random() * 0.03,
-          mixed + Math.random() * 0.03,
-          mixed + Math.random() * 0.03 + 0.03,
+          mixed + this.rand() * 0.03,
+          mixed + this.rand() * 0.03,
+          mixed + this.rand() * 0.03 + 0.03,
         );
       } else {
         // Rock colors - darker at base, lighter towards peak, with
@@ -2137,7 +2281,7 @@ class Environment {
         const band =
           Math.sin(normalizedHeight * 28) > 0.55 ? -0.06 : 0; // Dark strata
         const baseGrey = 0.23 + normalizedHeight * 0.24 + band;
-        const variation = Math.random() * 0.05;
+        const variation = this.rand() * 0.05;
         colors1.push(
           baseGrey + variation,
           baseGrey + variation + 0.02,
@@ -2175,6 +2319,7 @@ class Environment {
 
     this.tagMeshes(group, "mountain");
     this.scene.add(group);
+    this.registerGrounded(group, "majestic twin peaks");
   }
 
   createSecondPeak(x, z, height, width) {
@@ -2225,12 +2370,12 @@ class Environment {
 
       if (normalizedHeight > 0.75) {
         // Lower snow line with brighter snow
-        const snowWhite = 0.96 + Math.random() * 0.04;
+        const snowWhite = 0.96 + this.rand() * 0.04;
         colors.push(snowWhite - 0.03, snowWhite, snowWhite + 0.02);
       } else if (normalizedHeight > 0.6) {
         // Ragged transition with snow patches clinging to the rock
         const mixFactor = (normalizedHeight - 0.6) / 0.15;
-        const patchiness = Math.random() < mixFactor * 0.7 ? 0.22 : 0;
+        const patchiness = this.rand() < mixFactor * 0.7 ? 0.22 : 0;
         const rockGrey = 0.35 + normalizedHeight * 0.15;
         const snowWhite = 0.95;
         const mixed = Math.min(
@@ -2238,16 +2383,16 @@ class Environment {
           snowWhite,
         );
         colors.push(
-          mixed + Math.random() * 0.03,
-          mixed + Math.random() * 0.03,
-          mixed + Math.random() * 0.03 + 0.03,
+          mixed + this.rand() * 0.03,
+          mixed + this.rand() * 0.03,
+          mixed + this.rand() * 0.03 + 0.03,
         );
       } else {
         // Rock with subtle strata banding, slightly different cadence to
         // distinguish it from the first peak
         const band = Math.sin(normalizedHeight * 24 + 1.3) > 0.6 ? -0.05 : 0;
         const baseGrey = 0.25 + normalizedHeight * 0.22 + band;
-        const variation = Math.random() * 0.05;
+        const variation = this.rand() * 0.05;
         colors.push(
           baseGrey + variation,
           baseGrey + variation + 0.01,
@@ -2332,7 +2477,12 @@ class Environment {
     });
 
     const mountain = new THREE.Mesh(geometry, material);
-    mountain.position.set(x, -50, z); // Base at lake level
+    // Ground the peak: the flattened lower hemisphere extends (width/2)*0.1
+    // below the mesh origin, so position the origin such that the base sits
+    // 2 units below the lake plane (y = -200). The old fixed -50 left the
+    // whole mountain hovering ~140 units above the water.
+    const baseDepthBelowOrigin = (width / 2) * 0.1;
+    mountain.position.set(x, -200 + baseDepthBelowOrigin - 2, z);
     mountain.castShadow = true;
     mountain.receiveShadow = true;
 
@@ -2354,7 +2504,12 @@ class Environment {
           snowPositions.setY(i, sy * 0.3);
         }
       }
-      snowCap.position.set(x, height * 0.85 - 50, z);
+      // Snow cap is a child of the mountain mesh, so its position is LOCAL:
+      // (0, height * 0.85, 0) sits on the upper flank below the apex (local
+      // y = height). The old world-coordinate position (x, ..., z) was added
+      // on top of the parent transform, leaving snow caps floating in the
+      // sky at twice the mountain's world offset.
+      snowCap.position.set(0, height * 0.85, 0);
       snowCap.scale.set(1.2, 0.6, 1.2);
       mountain.add(snowCap);
     }
@@ -2403,7 +2558,7 @@ class Environment {
       const baseGreen = 0.35 + heightRatio * 0.12;
       const baseColor = {
         r: 0.18 + heightRatio * 0.08,
-        g: baseGreen + Math.random() * 0.06,
+        g: baseGreen + this.rand() * 0.06,
         b: 0.15 + heightRatio * 0.06,
       };
 
@@ -2436,13 +2591,13 @@ class Environment {
     });
 
     // Add trees on the hill
-    const numTrees = Math.floor(3 + Math.random() * 4);
+    const numTrees = Math.floor(3 + this.rand() * 4);
     for (let i = 0; i < numTrees; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const distance = width * 0.2 + Math.random() * width * 0.3;
+      const angle = this.rand() * Math.PI * 2;
+      const distance = width * 0.2 + this.rand() * width * 0.3;
       const treeX = x + Math.cos(angle) * distance;
       const treeZ = z + Math.sin(angle) * distance;
-      const treeY = -60 + height * (0.3 + Math.random() * 0.4);
+      const treeY = -60 + height * (0.3 + this.rand() * 0.4);
 
       // Simple tree
       const treeGeometry = new THREE.ConeGeometry(8, 20, 5);
@@ -2460,16 +2615,16 @@ class Environment {
       metalness: 0.0,
     });
 
-    const numBushes = Math.floor(5 + Math.random() * 5);
+    const numBushes = Math.floor(5 + this.rand() * 5);
     for (let i = 0; i < numBushes; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const distance = width * 0.15 + Math.random() * width * 0.35;
+      const angle = this.rand() * Math.PI * 2;
+      const distance = width * 0.15 + this.rand() * width * 0.35;
       const bushX = x + Math.cos(angle) * distance;
       const bushZ = z + Math.sin(angle) * distance;
-      const bushY = -60 + height * (0.2 + Math.random() * 0.3);
+      const bushY = -60 + height * (0.2 + this.rand() * 0.3);
 
       const bushGeometry = new THREE.SphereGeometry(
-        3 + Math.random() * 2,
+        3 + this.rand() * 2,
         4,
         3,
       );
@@ -2499,7 +2654,7 @@ class Environment {
     const data = imageData.data;
 
     for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 30;
+      const noise = (this.rand() - 0.5) * 30;
       data[i] += noise; // Red
       data[i + 1] += noise; // Green
       data[i + 2] += noise; // Blue
@@ -2512,11 +2667,11 @@ class Environment {
     ctx.lineWidth = 1;
     ctx.globalAlpha = 0.3;
 
-    for (let y = 0; y < canvas.height; y += 15 + Math.random() * 10) {
+    for (let y = 0; y < canvas.height; y += 15 + this.rand() * 10) {
       ctx.beginPath();
       ctx.moveTo(0, y);
       for (let x = 0; x < canvas.width; x += 20) {
-        ctx.lineTo(x, y + (Math.random() - 0.5) * 3);
+        ctx.lineTo(x, y + (this.rand() - 0.5) * 3);
       }
       ctx.stroke();
     }
@@ -2527,18 +2682,18 @@ class Environment {
     ctx.globalAlpha = 0.4;
 
     for (let i = 0; i < 15; i++) {
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
       ctx.beginPath();
       ctx.moveTo(startX, startY);
 
       let x = startX;
       let y = startY;
-      const steps = 5 + Math.random() * 10;
+      const steps = 5 + this.rand() * 10;
 
       for (let j = 0; j < steps; j++) {
-        x += (Math.random() - 0.5) * 30;
-        y += Math.random() * 20;
+        x += (this.rand() - 0.5) * 30;
+        y += this.rand() * 20;
         ctx.lineTo(x, y);
       }
       ctx.stroke();
@@ -2550,15 +2705,15 @@ class Environment {
     ctx.globalAlpha = 0.2;
 
     for (let i = 0; i < 5; i++) {
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
       ctx.beginPath();
       ctx.moveTo(startX, startY);
       ctx.quadraticCurveTo(
-        startX + Math.random() * 100,
-        startY + Math.random() * 100,
-        startX + Math.random() * 200,
-        startY + Math.random() * 200,
+        startX + this.rand() * 100,
+        startY + this.rand() * 100,
+        startX + this.rand() * 200,
+        startY + this.rand() * 200,
       );
       ctx.stroke();
     }
@@ -2582,10 +2737,10 @@ class Environment {
     // Large-scale tonal mottling - soft warm/cool patches give the asphalt
     // depth instead of reading as a flat grey sheet
     for (let i = 0; i < 18; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 150 + Math.random() * 300;
-      const warm = Math.random() > 0.5;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const radius = 150 + this.rand() * 300;
+      const warm = this.rand() > 0.5;
       const r = warm ? 64 : 52;
       const g = warm ? 60 : 56;
       const b = warm ? 54 : 62;
@@ -2601,10 +2756,10 @@ class Environment {
 
     // Add base texture variation
     for (let i = 0; i < 300; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const size = Math.random() * 8 + 3;
-      const darkness = Math.random() * 20;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const size = this.rand() * 8 + 3;
+      const darkness = this.rand() * 20;
       ctx.fillStyle = `rgba(${40 - darkness}, ${40 - darkness}, ${40 - darkness}, 0.3)`;
       ctx.fillRect(x, y, size, size);
     }
@@ -2612,13 +2767,13 @@ class Environment {
     // Fine aggregate texture (small stones) - subtle warm/cool tint variation
     // so the chip seal sparkles slightly instead of being pure grey
     for (let i = 0; i < 2600; i++) {
-      const gray = Math.random() * 30 + 35;
-      const tint = Math.floor((Math.random() - 0.5) * 12);
-      ctx.fillStyle = `rgba(${gray + tint}, ${gray}, ${gray - tint}, ${0.4 + Math.random() * 0.5})`;
-      const size = Math.random() * 2.5 + 0.5;
+      const gray = this.rand() * 30 + 35;
+      const tint = Math.floor((this.rand() - 0.5) * 12);
+      ctx.fillStyle = `rgba(${gray + tint}, ${gray}, ${gray - tint}, ${0.4 + this.rand() * 0.5})`;
+      const size = this.rand() * 2.5 + 0.5;
       ctx.fillRect(
-        Math.random() * canvas.width,
-        Math.random() * canvas.height,
+        this.rand() * canvas.width,
+        this.rand() * canvas.height,
         size,
         size,
       );
@@ -2626,12 +2781,12 @@ class Environment {
 
     // Sparse bright quartz flecks that catch the light
     for (let i = 0; i < 220; i++) {
-      const bright = 95 + Math.random() * 50;
-      ctx.fillStyle = `rgba(${bright}, ${bright}, ${bright - 5}, ${0.35 + Math.random() * 0.35})`;
-      const size = Math.random() * 1.5 + 0.5;
+      const bright = 95 + this.rand() * 50;
+      ctx.fillStyle = `rgba(${bright}, ${bright}, ${bright - 5}, ${0.35 + this.rand() * 0.35})`;
+      const size = this.rand() * 1.5 + 0.5;
       ctx.fillRect(
-        Math.random() * canvas.width,
-        Math.random() * canvas.height,
+        this.rand() * canvas.width,
+        this.rand() * canvas.height,
         size,
         size,
       );
@@ -2639,13 +2794,13 @@ class Environment {
 
     // Coarse aggregate (larger stones)
     for (let i = 0; i < 250; i++) {
-      const gray = Math.random() * 25 + 45;
+      const gray = this.rand() * 25 + 45;
       ctx.fillStyle = `rgba(${gray}, ${gray}, ${gray}, 0.7)`;
-      const size = Math.random() * 5 + 2;
+      const size = this.rand() * 5 + 2;
       ctx.beginPath();
       ctx.arc(
-        Math.random() * canvas.width,
-        Math.random() * canvas.height,
+        this.rand() * canvas.width,
+        this.rand() * canvas.height,
         size / 2,
         0,
         Math.PI * 2,
@@ -2655,10 +2810,10 @@ class Environment {
 
     // Embedded larger rocks
     for (let i = 0; i < 80; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const size = Math.random() * 4 + 3;
-      const gray = Math.random() * 20 + 50;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const size = this.rand() * 4 + 3;
+      const gray = this.rand() * 20 + 50;
       ctx.fillStyle = `rgba(${gray}, ${gray}, ${gray}, 0.8)`;
       ctx.beginPath();
       ctx.arc(x, y, size / 2, 0, Math.PI * 2);
@@ -2725,13 +2880,13 @@ class Environment {
     ctx.strokeStyle = "#0a0a0a";
     for (let i = 0; i < 15; i++) {
       // Reduced from 25
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
-      const length = 60 + Math.random() * 250;
-      const angle = (Math.random() - 0.5) * 0.6;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
+      const length = 60 + this.rand() * 250;
+      const angle = (this.rand() - 0.5) * 0.6;
 
-      ctx.lineWidth = 6 + Math.random() * 20;
-      ctx.globalAlpha = 0.25 + Math.random() * 0.4;
+      ctx.lineWidth = 6 + this.rand() * 20;
+      ctx.globalAlpha = 0.25 + this.rand() * 0.4;
 
       ctx.beginPath();
       ctx.moveTo(startX, startY);
@@ -2750,15 +2905,15 @@ class Environment {
     ctx.globalAlpha = 0.4;
     for (let i = 0; i < 12; i++) {
       // Reduced from 18
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const width = 18 + Math.random() * 35;
-      const height = 35 + Math.random() * 70;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const width = 18 + this.rand() * 35;
+      const height = 35 + this.rand() * 70;
 
       ctx.fillStyle = "#0f0f0f";
       ctx.save();
       ctx.translate(x, y);
-      ctx.rotate((Math.random() - 0.5) * 0.6);
+      ctx.rotate((this.rand() - 0.5) * 0.6);
       ctx.fillRect(-width / 2, -height / 2, width, height);
       ctx.restore();
     }
@@ -2767,13 +2922,13 @@ class Environment {
     ctx.globalAlpha = 0.35;
     for (let i = 0; i < 10; i++) {
       // Reduced from 15
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
-      const angle = Math.random() * Math.PI * 2;
-      const length = 40 + Math.random() * 100;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
+      const angle = this.rand() * Math.PI * 2;
+      const length = 40 + this.rand() * 100;
 
       ctx.strokeStyle = "#151515";
-      ctx.lineWidth = 10 + Math.random() * 12;
+      ctx.lineWidth = 10 + this.rand() * 12;
       ctx.beginPath();
       ctx.moveTo(startX, startY);
       ctx.lineTo(
@@ -2788,11 +2943,11 @@ class Environment {
     ctx.strokeStyle = "#1a1a1a";
     for (let i = 0; i < 6; i++) {
       // Reduced from 10
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
-      const length = 80 + Math.random() * 150;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
+      const length = 80 + this.rand() * 150;
 
-      ctx.lineWidth = 8 + Math.random() * 10;
+      ctx.lineWidth = 8 + this.rand() * 10;
       ctx.beginPath();
       ctx.moveTo(startX, startY);
 
@@ -2806,9 +2961,9 @@ class Environment {
     // Oil stains and patches
     ctx.globalAlpha = 0.15;
     for (let i = 0; i < 5; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 10 + Math.random() * 20;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const radius = 10 + this.rand() * 20;
 
       const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
       gradient.addColorStop(0, "rgba(20, 20, 20, 0.5)");
@@ -2827,14 +2982,14 @@ class Environment {
     for (let i = 0; i < 20; i++) {
       // Reduced from 35
       ctx.beginPath();
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
       ctx.moveTo(startX, startY);
 
       for (let j = 0; j < 5; j++) {
         ctx.lineTo(
-          startX + (Math.random() - 0.5) * 50,
-          startY + Math.random() * 60,
+          startX + (this.rand() - 0.5) * 50,
+          startY + this.rand() * 60,
         );
       }
       ctx.stroke();
@@ -2844,18 +2999,18 @@ class Environment {
     ctx.globalAlpha = 0.35;
     for (let i = 0; i < 12; i++) {
       // Reduced from 20
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const width = 25 + Math.random() * 50;
-      const height = 25 + Math.random() * 50;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const width = 25 + this.rand() * 50;
+      const height = 25 + this.rand() * 50;
 
       ctx.fillStyle = "#424242";
       ctx.fillRect(x, y, width, height);
 
       for (let j = 0; j < 30; j++) {
-        const px = x + Math.random() * width;
-        const py = y + Math.random() * height;
-        ctx.fillStyle = `rgba(${48 + Math.random() * 22}, ${48 + Math.random() * 22}, ${48 + Math.random() * 22}, 0.6)`;
+        const px = x + this.rand() * width;
+        const py = y + this.rand() * height;
+        ctx.fillStyle = `rgba(${48 + this.rand() * 22}, ${48 + this.rand() * 22}, ${48 + this.rand() * 22}, 0.6)`;
         ctx.fillRect(px, py, 1.5, 1.5);
       }
     }
@@ -2864,14 +3019,14 @@ class Environment {
     ctx.globalAlpha = 0.3;
     for (let i = 0; i < 8; i++) {
       // Reduced from 12
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const size = 30 + Math.random() * 60;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const size = 30 + this.rand() * 60;
 
       ctx.fillStyle = "#3f3f3f";
       ctx.beginPath();
       for (let angle = 0; angle < Math.PI * 2; angle += 0.5) {
-        const radius = size * (0.7 + Math.random() * 0.3);
+        const radius = size * (0.7 + this.rand() * 0.3);
         ctx.lineTo(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius);
       }
       ctx.closePath();
@@ -2883,7 +3038,7 @@ class Environment {
     ctx.strokeStyle = "#1a1a1a";
     ctx.lineWidth = 6;
     for (let i = 0; i < 8; i++) {
-      const y = Math.random() * canvas.height;
+      const y = this.rand() * canvas.height;
       ctx.beginPath();
       ctx.moveTo(0, y);
       for (let x = 0; x < canvas.width; x += 10) {
@@ -2895,9 +3050,9 @@ class Environment {
     // Weathering stains
     ctx.globalAlpha = 0.2;
     for (let i = 0; i < 25; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 8 + Math.random() * 15;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const radius = 8 + this.rand() * 15;
 
       const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
       gradient.addColorStop(0, "rgba(30, 30, 30, 0.4)");
@@ -2953,7 +3108,7 @@ class Environment {
     ctx.globalAlpha = 0.3;
     ctx.strokeStyle = "#3a3a3a";
     ctx.lineWidth = 2;
-    for (let y = 0; y < canvas.height; y += 30 + Math.random() * 20) {
+    for (let y = 0; y < canvas.height; y += 30 + this.rand() * 20) {
       ctx.beginPath();
       ctx.moveTo(45, y);
       ctx.lineTo(55, y + 10);
@@ -2969,16 +3124,16 @@ class Environment {
     ctx.globalAlpha = 0.25;
     ctx.strokeStyle = "#0d0d0d";
     for (let i = 0; i < 4; i++) {
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
-      const segments = 4 + Math.floor(Math.random() * 3);
-      ctx.lineWidth = 10 + Math.random() * 6;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
+      const segments = 4 + Math.floor(this.rand() * 3);
+      ctx.lineWidth = 10 + this.rand() * 6;
 
       for (let j = 0; j < segments; j++) {
         ctx.beginPath();
         const segY = startY + j * 25;
         ctx.moveTo(startX, segY);
-        ctx.lineTo(startX + (Math.random() - 0.5) * 4, segY + 10);
+        ctx.lineTo(startX + (this.rand() - 0.5) * 4, segY + 10);
         ctx.stroke();
       }
     }
@@ -2986,13 +3141,13 @@ class Environment {
     // Corner entry marks - reduced
     ctx.globalAlpha = 0.3;
     for (let i = 0; i < 5; i++) {
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
-      const length = 50 + Math.random() * 80;
-      const curve = (Math.random() - 0.5) * 0.3;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
+      const length = 50 + this.rand() * 80;
+      const curve = (this.rand() - 0.5) * 0.3;
 
       ctx.strokeStyle = "#0a0a0a";
-      ctx.lineWidth = 12 + Math.random() * 8;
+      ctx.lineWidth = 12 + this.rand() * 8;
       ctx.beginPath();
       ctx.moveTo(startX, startY);
 
@@ -3006,14 +3161,14 @@ class Environment {
     // Motorcycle lean marks - reduced
     ctx.globalAlpha = 0.25;
     for (let i = 0; i < 5; i++) {
-      const cx = Math.random() * canvas.width;
-      const cy = Math.random() * canvas.height;
-      const radius = 40 + Math.random() * 80;
-      const arcStart = Math.random() * Math.PI;
-      const arcLength = Math.PI * 0.3 + Math.random() * Math.PI * 0.3;
+      const cx = this.rand() * canvas.width;
+      const cy = this.rand() * canvas.height;
+      const radius = 40 + this.rand() * 80;
+      const arcStart = this.rand() * Math.PI;
+      const arcLength = Math.PI * 0.3 + this.rand() * Math.PI * 0.3;
 
       ctx.strokeStyle = "#121212";
-      ctx.lineWidth = 7 + Math.random() * 5;
+      ctx.lineWidth = 7 + this.rand() * 5;
       ctx.beginPath();
       ctx.arc(cx, cy, radius, arcStart, arcStart + arcLength);
       ctx.stroke();
@@ -3023,9 +3178,9 @@ class Environment {
     ctx.globalAlpha = 0.2;
     ctx.fillStyle = "#080808";
     for (let i = 0; i < 50; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const size = 2 + Math.random() * 4;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const size = 2 + this.rand() * 4;
       ctx.beginPath();
       ctx.arc(x, y, size / 2, 0, Math.PI * 2);
       ctx.fill();
@@ -3034,9 +3189,9 @@ class Environment {
     // Circular pothole repairs - reduced
     ctx.globalAlpha = 0.3;
     for (let i = 0; i < 4; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 15 + Math.random() * 20;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const radius = 15 + this.rand() * 20;
 
       ctx.fillStyle = "#2a2a2a";
       ctx.beginPath();
@@ -3053,11 +3208,11 @@ class Environment {
     // Utility cut repairs - reduced
     ctx.globalAlpha = 0.25;
     for (let i = 0; i < 3; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const width = 20 + Math.random() * 15;
-      const length = 80 + Math.random() * 120;
-      const angle = (Math.random() - 0.5) * 0.6;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const width = 20 + this.rand() * 15;
+      const length = 80 + this.rand() * 120;
+      const angle = (this.rand() - 0.5) * 0.6;
 
       ctx.fillStyle = "#404040";
       ctx.save();
@@ -3081,9 +3236,9 @@ class Environment {
     // Rain staining - reduced
     ctx.globalAlpha = 0.15;
     for (let i = 0; i < 8; i++) {
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
-      const length = 40 + Math.random() * 80;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
+      const length = 40 + this.rand() * 80;
 
       const gradient = ctx.createLinearGradient(
         startX,
@@ -3095,15 +3250,15 @@ class Environment {
       gradient.addColorStop(1, "rgba(25, 25, 25, 0)");
 
       ctx.fillStyle = gradient;
-      ctx.fillRect(startX, startY, 6 + Math.random() * 4, length);
+      ctx.fillRect(startX, startY, 6 + this.rand() * 4, length);
     }
 
     // Surface oxidation - reduced
     ctx.globalAlpha = 0.08;
     for (let i = 0; i < 12; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = 80 + Math.random() * 100;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const radius = 80 + this.rand() * 100;
 
       const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
       gradient.addColorStop(0, "rgba(60, 60, 60, 0.15)");
@@ -3121,14 +3276,14 @@ class Environment {
     ctx.lineWidth = 2;
     for (let i = 0; i < 10; i++) {
       ctx.beginPath();
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
       ctx.moveTo(startX, startY);
 
       for (let j = 0; j < 3; j++) {
         ctx.lineTo(
-          startX + (Math.random() - 0.5) * 30,
-          startY + Math.random() * 40,
+          startX + (this.rand() - 0.5) * 30,
+          startY + this.rand() * 40,
         );
       }
       ctx.stroke();
@@ -3198,7 +3353,7 @@ class Environment {
 
       if (normalizedHeight > 0.7) {
         // Extensive snow coverage
-        const snow = 0.92 + Math.random() * 0.08;
+        const snow = 0.92 + this.rand() * 0.08;
         colors.push(snow, snow, snow + 0.03);
       } else if (normalizedHeight > 0.5) {
         // Mixed zone
@@ -3236,7 +3391,7 @@ class Environment {
       -100,
       endPoint.z - perpZ * 1000,
     );
-    finalPeak1.rotation.y = Math.random() * Math.PI;
+    finalPeak1.rotation.y = this.rand() * Math.PI;
     finalPeak1.castShadow = true;
     finalPeak1.receiveShadow = true;
     group.add(finalPeak1);
@@ -3252,7 +3407,7 @@ class Environment {
       endPoint.z + perpZ * 1200,
     );
     finalPeak2.scale.set(1.2, 1.3, 1.2);
-    finalPeak2.rotation.y = Math.random() * Math.PI;
+    finalPeak2.rotation.y = this.rand() * Math.PI;
     finalPeak2.castShadow = true;
     finalPeak2.receiveShadow = true;
     group.add(finalPeak2);
@@ -3272,7 +3427,7 @@ class Environment {
       threeQuarterPoint.z - perpZ3Q * 800,
     );
     finalPeak3.scale.set(0.9, 1.1, 0.9);
-    finalPeak3.rotation.y = Math.random() * Math.PI;
+    finalPeak3.rotation.y = this.rand() * Math.PI;
     finalPeak3.castShadow = true;
     finalPeak3.receiveShadow = true;
     group.add(finalPeak3);
@@ -3299,27 +3454,30 @@ class Environment {
 
       // Position behind and to the sides of the end point
       const angle = (Math.PI * 0.5 * i) / 4 - Math.PI / 4; // Semi-circle behind
-      const distance = 1500 + Math.random() * 400;
+      const distance = 1500 + this.rand() * 400;
 
       // Calculate position relative to road direction
       const forwardX = Math.sin(endHeading);
       const forwardZ = Math.cos(endHeading);
 
+      // y keeps the cone base (height 250, min y-scale 0.7 => base extends
+      // >= 87.5 below center) under the lake plane at -200; at -100 the
+      // shortest peaks floated ~12 units above the water
       smallPeak.position.set(
         endPoint.x +
           forwardX * distance * Math.cos(angle) +
           perpX * distance * Math.sin(angle),
-        -100 - Math.random() * 50,
+        -160 - this.rand() * 50,
         endPoint.z +
           forwardZ * distance * Math.cos(angle) +
           perpZ * distance * Math.sin(angle),
       );
       smallPeak.scale.set(
-        0.8 + Math.random() * 0.4,
-        0.7 + Math.random() * 0.6,
-        0.8 + Math.random() * 0.4,
+        0.8 + this.rand() * 0.4,
+        0.7 + this.rand() * 0.6,
+        0.8 + this.rand() * 0.4,
       );
-      smallPeak.rotation.y = Math.random() * Math.PI;
+      smallPeak.rotation.y = this.rand() * Math.PI;
       smallPeak.castShadow = true;
       smallPeak.receiveShadow = true;
       group.add(smallPeak);
@@ -3336,8 +3494,8 @@ class Environment {
     // Create a long mountain range to the left
     for (let i = 0; i < 8; i++) {
       const distantGeometry = new THREE.ConeGeometry(
-        800 + Math.random() * 400, // Wider bases
-        600 + Math.random() * 300, // Varied heights
+        800 + this.rand() * 400, // Wider bases
+        600 + this.rand() * 300, // Varied heights
         16,
         8,
       );
@@ -3372,15 +3530,15 @@ class Environment {
 
       distantPeak.position.set(
         roadPoint.x - localPerpX * (2000 + i * 300), // 2000-4400 units to left
-        -200 - Math.random() * 100,
+        -200 - this.rand() * 100,
         roadPoint.z - localPerpZ * (2000 + i * 300),
       );
       distantPeak.scale.set(
-        1.5 + Math.random() * 0.5,
-        1.2 + Math.random() * 0.4,
-        1.5 + Math.random() * 0.5,
+        1.5 + this.rand() * 0.5,
+        1.2 + this.rand() * 0.4,
+        1.5 + this.rand() * 0.5,
       );
-      distantPeak.rotation.y = Math.random() * Math.PI;
+      distantPeak.rotation.y = this.rand() * Math.PI;
       distantPeak.castShadow = true;
       distantPeak.receiveShadow = true;
       group.add(distantPeak);
@@ -3407,15 +3565,15 @@ class Environment {
 
       farPeak.position.set(
         endPoint.x - perpX * leftDist + Math.sin(endHeading) * forwardDist,
-        -300 - Math.random() * 100,
+        -300 - this.rand() * 100,
         endPoint.z - perpZ * leftDist + Math.cos(endHeading) * forwardDist,
       );
       farPeak.scale.set(
-        1.8 + Math.random() * 0.6,
-        1.5 + Math.random() * 0.5,
-        1.8 + Math.random() * 0.6,
+        1.8 + this.rand() * 0.6,
+        1.5 + this.rand() * 0.5,
+        1.8 + this.rand() * 0.6,
       );
-      farPeak.rotation.y = Math.random() * Math.PI * 2;
+      farPeak.rotation.y = this.rand() * Math.PI * 2;
       farPeak.castShadow = false; // Too distant for shadows
       farPeak.receiveShadow = true;
       group.add(farPeak);
@@ -3423,6 +3581,7 @@ class Environment {
 
     this.tagMeshes(group, "mountain");
     this.scene.add(group);
+    this.registerGrounded(group, "end-course mountains");
   }
 
   createGrass() {
@@ -3525,10 +3684,10 @@ class Environment {
       // Add darker grass patches for texture
       grassCtx.globalAlpha = 0.3;
       for (let i = 0; i < 100; i++) {
-        const x = Math.random() * grassCanvas.width;
-        const y = Math.random() * grassCanvas.height;
-        const size = Math.random() * 8 + 2;
-        const darkness = Math.random() * 30;
+        const x = this.rand() * grassCanvas.width;
+        const y = this.rand() * grassCanvas.height;
+        const size = this.rand() * 8 + 2;
+        const darkness = this.rand() * 30;
         grassCtx.fillStyle = `rgb(${Math.max(0, r - darkness)}, ${Math.max(0, g - darkness)}, ${Math.max(0, b - darkness)})`;
         grassCtx.fillRect(x, y, size, size);
       }
@@ -3536,9 +3695,9 @@ class Environment {
       // Add lighter highlights
       grassCtx.globalAlpha = 0.2;
       for (let i = 0; i < 50; i++) {
-        const x = Math.random() * grassCanvas.width;
-        const y = Math.random() * grassCanvas.height;
-        const size = Math.random() * 4 + 1;
+        const x = this.rand() * grassCanvas.width;
+        const y = this.rand() * grassCanvas.height;
+        const size = this.rand() * 4 + 1;
         grassCtx.fillStyle = `rgb(${Math.min(255, r + 20)}, ${Math.min(255, g + 20)}, ${Math.min(255, b + 15)})`;
         grassCtx.fillRect(x, y, size, size);
       }
@@ -3571,7 +3730,7 @@ class Environment {
 
     // Add some water depth variation patches
     for (let i = 0; i < 20; i++) {
-      const patchSize = 50 + Math.random() * 100;
+      const patchSize = 50 + this.rand() * 100;
       const patchGeometry = new THREE.PlaneGeometry(patchSize, patchSize);
       const patchMaterial = new THREE.MeshStandardMaterial({
         color: 0x1a5599, // Darker blue for deeper water
@@ -3582,9 +3741,9 @@ class Environment {
       const patch = new THREE.Mesh(patchGeometry, patchMaterial);
       patch.rotation.x = -Math.PI / 2;
       patch.position.set(
-        (Math.random() - 0.5) * 1500,
+        (this.rand() - 0.5) * 1500,
         -200.005, // Match lake level
-        (Math.random() - 0.5) * 1500,
+        (this.rand() - 0.5) * 1500,
       );
       patch.receiveShadow = true;
       this.scene.add(patch);
@@ -3648,6 +3807,7 @@ class Environment {
       );
       startLine.receiveShadow = true;
       this.scene.add(startLine);
+      this.registerGrounded(startLine, "start line");
 
       // Checkered pattern for finish line at end of leg
       const finishMaterial = new THREE.MeshStandardMaterial({
@@ -3676,6 +3836,7 @@ class Environment {
       );
       finishLine.receiveShadow = true;
       this.scene.add(finishLine);
+      this.registerGrounded(finishLine, "finish line");
 
       // Checkered banner gantry over the finish line
       this.createFinishBanner(this.roadPath[finishSegmentIdx]);
@@ -3743,6 +3904,7 @@ class Environment {
       const flag = new THREE.Mesh(flagGeometry, flagMaterial);
       flag.position.set(offset + (offset > 0 ? -0.55 : 0.55), bannerHeight + 0.6, 0);
       flag.castShadow = true;
+      flag.userData.allowFloating = true; // Mounted at the top of the pole
       group.add(flag);
     });
 
@@ -3757,6 +3919,7 @@ class Environment {
     const banner = new THREE.Mesh(bannerGeometry, bannerMaterial);
     banner.position.set(0, bannerHeight - 0.55, 0);
     banner.castShadow = true;
+    banner.userData.allowFloating = true; // Overhead span between the poles
     group.add(banner);
 
     // "FINISH" text panel below the banner
@@ -3782,7 +3945,11 @@ class Environment {
       }),
     );
     textPanel.position.set(0, bannerHeight - 1.7, 0);
+    // Face the approaching rider (planes face +Z but riders arrive traveling
+    // along +Z, so they were seeing the DoubleSide back face - mirrored text)
+    textPanel.rotation.y = Math.PI;
     textPanel.castShadow = true;
+    textPanel.userData.allowFloating = true; // Hangs below the overhead banner
     group.add(textPanel);
 
     // Orient across the road at the finish segment. The group's local X axis
@@ -3790,6 +3957,8 @@ class Environment {
     group.position.set(point.x, point.y || 0, point.z);
     group.rotation.y = point.heading;
     this.scene.add(group);
+    // Pole bases rest on the road; banner/flags/text are tagged allowFloating
+    this.registerGrounded(group, "finish banner gantry");
   }
 
   addEnvironmentalDetails() {
@@ -3833,19 +4002,21 @@ class Environment {
       if (index % 7 === 0) {
         // Every 7th segment for sparser placement
         // Only place trees on the left (mountain) side
-        const treeDistance = 20 + Math.random() * 10;
+        const treeDistance = 20 + this.rand() * 10;
 
         // Left side tree (mountain side)
         const leftX = point.x - treeDistance * Math.cos(point.heading);
         const leftZ = point.z + treeDistance * Math.sin(point.heading);
 
-        // Ground level for tree base
-        const groundLevel = point.y - 0.5;
+        // Ground level for tree base: the mountain face rises with lateral
+        // distance, so use the terrain model (point.y - 0.5 buried trees
+        // inside the wall, or floated them where the slope fell away)
+        const groundLevel = this.groundYAt(leftX, leftZ) - 0.3;
 
         // Vary each tree's size and canopy shape slightly
-        const treeScale = 0.8 + Math.random() * 0.55;
-        const canopyWidth = 0.9 + Math.random() * 0.25;
-        const canopyHeight = 0.95 + Math.random() * 0.35;
+        const treeScale = 0.8 + this.rand() * 0.55;
+        const canopyWidth = 0.9 + this.rand() * 0.25;
+        const canopyHeight = 0.95 + this.rand() * 0.35;
 
         const leftTrunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
         leftTrunk.scale.setScalar(treeScale);
@@ -3853,20 +4024,22 @@ class Environment {
         leftTrunk.castShadow = true;
         leftTrunk.receiveShadow = true;
         this.scene.add(leftTrunk);
+        this.registerGrounded(leftTrunk, `tree trunk (segment ${index})`);
 
         const leftFoliage = new THREE.Mesh(
           foliageGeometry,
-          foliageMaterials[Math.floor(Math.random() * foliageMaterials.length)],
+          foliageMaterials[Math.floor(this.rand() * foliageMaterials.length)],
         );
         leftFoliage.scale.set(
           treeScale * canopyWidth,
           treeScale * canopyHeight,
           treeScale * canopyWidth,
         );
-        leftFoliage.rotation.y = Math.random() * Math.PI;
+        leftFoliage.rotation.y = this.rand() * Math.PI;
         leftFoliage.position.set(leftX, groundLevel + 5.5 * treeScale, leftZ);
         leftFoliage.castShadow = true;
         leftFoliage.receiveShadow = true;
+        leftFoliage.userData.allowFloating = true; // Canopy sits atop the trunk
         this.scene.add(leftFoliage);
 
         // No trees on right side (cliff drop-off) to avoid floating trees
@@ -3893,20 +4066,28 @@ class Environment {
       if (index % 6 === 0) {
         // Less frequent
         // Only left side bushes (mountain side)
-        const bushDistance = 12 + Math.random() * 5;
+        const bushDistance = 12 + this.rand() * 5;
         const bushX = point.x - bushDistance * Math.cos(point.heading);
         const bushZ = point.z + bushDistance * Math.sin(point.heading);
 
         const leftBush = new THREE.Mesh(
           bushGeometry,
-          bushMaterials[Math.floor(Math.random() * bushMaterials.length)],
+          bushMaterials[Math.floor(this.rand() * bushMaterials.length)],
         );
-        const bushScale = 0.7 + Math.random() * 0.7;
+        const bushScale = 0.7 + this.rand() * 0.7;
         leftBush.scale.set(bushScale * 1.1, bushScale * 0.8, bushScale * 1.1);
-        leftBush.position.set(bushX, point.y - 0.3, bushZ); // Partially embedded
+        // Center slightly above the terrain model so the sphere is roughly
+        // half embedded in the mountain slope (point.y - 0.3 buried bushes
+        // placed where the face has already risen)
+        leftBush.position.set(
+          bushX,
+          this.groundYAt(bushX, bushZ) + bushScale * 0.2,
+          bushZ,
+        );
         leftBush.castShadow = true;
         leftBush.receiveShadow = true;
         this.scene.add(leftBush);
+        this.registerGrounded(leftBush, `roadside bush (segment ${index})`);
 
         // No bushes on cliff side
       }
@@ -3931,26 +4112,42 @@ class Environment {
         );
 
         if (headingChange < 0.01) {
-          const leftX = point.x - 8.5 * Math.cos(point.heading);
-          const leftZ = point.z + 8.5 * Math.sin(point.heading);
+          // Just off the road edge (still on the flat ledge of the terrain
+          // model) regardless of the leg's road width
+          const coneDistance = this.roadWidth / 2 + 0.5;
+          const leftX = point.x - coneDistance * Math.cos(point.heading);
+          const leftZ = point.z + coneDistance * Math.sin(point.heading);
           const leftCone = new THREE.Mesh(coneGeometry, coneMaterial);
           leftCone.position.set(leftX, coneY, leftZ);
           leftCone.castShadow = true;
           leftCone.receiveShadow = true;
           this.scene.add(leftCone);
+          this.registerGrounded(leftCone, `track cone left (segment ${index})`);
 
-          const rightX = point.x + 8.5 * Math.cos(point.heading);
-          const rightZ = point.z - 8.5 * Math.sin(point.heading);
+          const rightX = point.x + coneDistance * Math.cos(point.heading);
+          const rightZ = point.z - coneDistance * Math.sin(point.heading);
           const rightCone = new THREE.Mesh(coneGeometry, coneMaterial);
           rightCone.position.set(rightX, coneY, rightZ);
           rightCone.castShadow = true;
           rightCone.receiveShadow = true;
           this.scene.add(rightCone);
+          this.registerGrounded(rightCone, `track cone right (segment ${index})`);
         }
       }
     }
 
-    // Start sign
+    // Start sign - beside the road at the start of the active leg. The old
+    // hardcoded world position (-5, 1, 10) ignored the road elevation (~31)
+    // and the active leg entirely.
+    const startSignPoint =
+      this.roadPath[Math.min(Math.max(0, this.startSegment), this.roadPath.length - 1)];
+    const startSignDistance = this.roadWidth / 2 + 1; // On the roadside ledge
+    const startSignX =
+      startSignPoint.x + Math.cos(startSignPoint.heading) * startSignDistance;
+    const startSignZ =
+      startSignPoint.z - Math.sin(startSignPoint.heading) * startSignDistance;
+    const startSignGroundY = this.groundYAt(startSignX, startSignZ);
+
     const signPostGeometry = new THREE.CylinderGeometry(0.05, 0.05, 2, 8);
     const signPostMaterial = new THREE.MeshStandardMaterial({
       color: 0x8b4513,
@@ -3958,10 +4155,11 @@ class Environment {
       metalness: 0.0,
     });
     const signPost = new THREE.Mesh(signPostGeometry, signPostMaterial);
-    signPost.position.set(-5, 1, 10);
+    signPost.position.set(startSignX, startSignGroundY + 1, startSignZ);
     signPost.castShadow = true;
     signPost.receiveShadow = true;
     this.scene.add(signPost);
+    this.registerGrounded(signPost, "start sign post");
 
     const signGeometry = new THREE.PlaneGeometry(2, 1);
     const signMaterial = new THREE.MeshStandardMaterial({
@@ -3970,9 +4168,11 @@ class Environment {
       metalness: 0.0,
     });
     const sign = new THREE.Mesh(signGeometry, signMaterial);
-    sign.position.set(-5, 2, 10);
+    sign.position.set(startSignX, startSignGroundY + 2, startSignZ);
+    sign.rotation.y = startSignPoint.heading;
     sign.castShadow = true;
     sign.receiveShadow = true;
+    sign.userData.allowFloating = true; // Board mounted on the post
     this.scene.add(sign);
 
     // Posts along the road - especially on curves
@@ -4011,64 +4211,82 @@ class Environment {
         const nextIndex = Math.min(index + 1, this.roadPath.length - 1);
         const headingChange = this.roadPath[nextIndex].heading - point.heading;
 
+        // Posts sit on the roadside ledge (terrain model = road height
+        // there). y positions are relative to point.y - the old hardcoded
+        // 0.75/1.2 ignored the road elevation (13-39), burying every post
+        // far below the surface.
+        const postDistance = this.roadWidth / 2 + 1;
+
         if (Math.abs(headingChange) < 0.01) {
           // Straight section - posts on both sides
           // Left post
-          const leftX = point.x - 9 * Math.sin(point.heading + Math.PI / 2);
-          const leftZ = point.z - 9 * Math.cos(point.heading + Math.PI / 2);
+          const leftX =
+            point.x - postDistance * Math.sin(point.heading + Math.PI / 2);
+          const leftZ =
+            point.z - postDistance * Math.cos(point.heading + Math.PI / 2);
           const leftPost = new THREE.Mesh(postGeometry, postMaterial);
-          leftPost.position.set(leftX, 0.75, leftZ);
+          leftPost.position.set(leftX, point.y + 0.75, leftZ);
           leftPost.castShadow = true;
           leftPost.receiveShadow = true;
           this.scene.add(leftPost);
+          this.registerGrounded(leftPost, `delineator post left (segment ${index})`);
 
           // White reflector strip near the top of the post
           const leftReflector = new THREE.Mesh(
             reflectorGeometry,
             whiteReflectorMaterial,
           );
-          leftReflector.position.set(leftX, 1.2, leftZ);
+          leftReflector.position.set(leftX, point.y + 1.2, leftZ);
           leftReflector.rotation.y = point.heading;
+          leftReflector.userData.allowFloating = true; // Mounted on the post
           this.scene.add(leftReflector);
 
           // Right post
-          const rightX = point.x + 9 * Math.sin(point.heading + Math.PI / 2);
-          const rightZ = point.z + 9 * Math.cos(point.heading + Math.PI / 2);
+          const rightX =
+            point.x + postDistance * Math.sin(point.heading + Math.PI / 2);
+          const rightZ =
+            point.z + postDistance * Math.cos(point.heading + Math.PI / 2);
           const rightPost = new THREE.Mesh(postGeometry, postMaterial);
-          rightPost.position.set(rightX, 0.75, rightZ);
+          rightPost.position.set(rightX, point.y + 0.75, rightZ);
           rightPost.castShadow = true;
           rightPost.receiveShadow = true;
           this.scene.add(rightPost);
+          this.registerGrounded(rightPost, `delineator post right (segment ${index})`);
 
           const rightReflector = new THREE.Mesh(
             reflectorGeometry,
             whiteReflectorMaterial,
           );
-          rightReflector.position.set(rightX, 1.2, rightZ);
+          rightReflector.position.set(rightX, point.y + 1.2, rightZ);
           rightReflector.rotation.y = point.heading;
+          rightReflector.userData.allowFloating = true; // Mounted on the post
           this.scene.add(rightReflector);
         } else {
           // Curve - post on outside only
           const side = headingChange > 0 ? -1 : 1; // Outside of curve
           const postX =
-            point.x + side * 9 * Math.sin(point.heading + Math.PI / 2);
+            point.x +
+            side * postDistance * Math.sin(point.heading + Math.PI / 2);
           const postZ =
-            point.z + side * 9 * Math.cos(point.heading + Math.PI / 2);
+            point.z +
+            side * postDistance * Math.cos(point.heading + Math.PI / 2);
           const post = new THREE.Mesh(postGeometry, postMaterial);
-          post.position.set(postX, 0.75, postZ);
+          post.position.set(postX, point.y + 0.75, postZ);
           post.castShadow = true;
           post.receiveShadow = true;
           this.scene.add(post);
+          this.registerGrounded(post, `curve post (segment ${index})`);
 
           // Add reflector
           const reflector = new THREE.Mesh(
             reflectorGeometry,
             reflectorMaterial,
           );
-          reflector.position.set(postX, 1.2, postZ);
+          reflector.position.set(postX, point.y + 1.2, postZ);
           reflector.rotation.y = point.heading;
           reflector.castShadow = true;
           reflector.receiveShadow = true;
+          reflector.userData.allowFloating = true; // Mounted on the post
           this.scene.add(reflector);
         }
       }
@@ -4177,12 +4395,16 @@ class Environment {
         cone.castShadow = true;
         cone.receiveShadow = true;
         this.scene.add(cone);
+        this.registerGrounded(cone, `construction cone (segment ${i})`);
 
-        // Add reflective stripe
+        // Add reflective stripe band near the cone base (the ring radius
+        // 0.28-0.32 matches the cone surface just above the base; at the old
+        // +0.6 height it floated as a detached halo around the cone tip)
         const stripe = new THREE.Mesh(stripeGeometry, stripeMaterial);
         stripe.position.copy(cone.position);
-        stripe.position.y += 0.2;
+        stripe.position.y -= 0.32;
         stripe.rotation.x = -Math.PI / 2;
+        stripe.userData.allowFloating = true; // Decal band on the cone
         this.scene.add(stripe);
 
         // For major zones only, add edge cones
@@ -4199,6 +4421,7 @@ class Environment {
           rightCone.castShadow = true;
           rightCone.receiveShadow = true;
           this.scene.add(rightCone);
+          this.registerGrounded(rightCone, `construction edge cone (segment ${i})`);
         }
       }
     }
@@ -4222,6 +4445,7 @@ class Environment {
           rightCone.castShadow = true;
           rightCone.receiveShadow = true;
           this.scene.add(rightCone);
+          this.registerGrounded(rightCone, `warning cone (segment ${i})`);
         }
       }
     }
@@ -4252,17 +4476,23 @@ class Environment {
       const barrierX = point.x - Math.cos(point.heading) * 25;
       const barrierZ = point.z + Math.sin(point.heading) * 25;
 
+      // The mountain face has risen well above road height 25 units out, so
+      // rest the barrier on the terrain model (the old point.y left it at
+      // road height inside the wall). Collision entry matches the visual.
+      const barrierY = this.groundYAt(barrierX, barrierZ) + 0.5;
+
       const barrier = new THREE.Mesh(barrierGeometry, barrierMaterial);
-      barrier.position.set(barrierX, point.y + 0.5, barrierZ);
+      barrier.position.set(barrierX, barrierY, barrierZ);
       barrier.rotation.y = point.heading;
       barrier.castShadow = true;
       barrier.receiveShadow = true;
       this.scene.add(barrier);
+      this.registerGrounded(barrier, `construction barrier (segment ${i})`);
 
       // Store barrier for collision detection
       this.roadworkObstacles.push({
         type: "barrier",
-        position: new THREE.Vector3(barrierX, point.y + 0.5, barrierZ),
+        position: new THREE.Vector3(barrierX, barrierY, barrierZ),
         width: 4,
         height: 1,
         depth: 0.8,
@@ -4283,6 +4513,7 @@ class Environment {
       stripePanel.position.copy(barrier.position);
       stripePanel.position.y += 0.7;
       stripePanel.rotation.y = barrier.rotation.y;
+      stripePanel.userData.allowFloating = true; // Mounted atop the barrier
       this.scene.add(stripePanel);
     }
 
@@ -4301,11 +4532,15 @@ class Environment {
 
       this.createDirtRamp(offsetPoint, midSegment);
 
-      // Add construction equipment (static bulldozer) - moved far from road on mountain side
+      // Add construction equipment (static bulldozer) - moved far from road
+      // on mountain side, resting on the terrain model (the mountain face
+      // has risen well above road height 30 units out)
+      const dozerX = rampPoint.x - Math.cos(rampPoint.heading) * 30;
+      const dozerZ = rampPoint.z + Math.sin(rampPoint.heading) * 30;
       this.createBulldozer(
-        rampPoint.x - Math.cos(rampPoint.heading) * 30,
-        rampPoint.y,
-        rampPoint.z + Math.sin(rampPoint.heading) * 30,
+        dozerX,
+        this.groundYAt(dozerX, dozerZ),
+        dozerZ,
         rampPoint.heading,
       );
 
@@ -4328,11 +4563,15 @@ class Environment {
       // For minor zones, just add some work equipment
       const workPoint = this.roadPath[startSegment];
 
-      // Add a simple work truck instead of bulldozer (moved far from road on mountain side)
+      // Add a simple work truck instead of bulldozer (moved far from road on
+      // mountain side, resting on the terrain model rather than at road
+      // height inside the rising mountain face)
+      const truckX = workPoint.x - Math.cos(workPoint.heading) * 25;
+      const truckZ = workPoint.z + Math.sin(workPoint.heading) * 25;
       this.createWorkTruck(
-        workPoint.x - Math.cos(workPoint.heading) * 25,
-        workPoint.y,
-        workPoint.z + Math.sin(workPoint.heading) * 25,
+        truckX,
+        this.groundYAt(truckX, truckZ),
+        truckZ,
         workPoint.heading,
       );
     }
@@ -4513,6 +4752,7 @@ class Environment {
     ramp.castShadow = true;
     ramp.receiveShadow = true;
     this.scene.add(ramp);
+    this.registerGrounded(ramp, `dirt ramp (segment ${segmentIndex})`);
 
     // Store ramp info for collision detection
     this.jumpRamps.push({
@@ -4537,21 +4777,21 @@ class Environment {
 
     // Add large dirt clumps and variations
     for (let i = 0; i < 150; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const radius = Math.random() * 4 + 1;
-      const brightness = Math.random() * 60 - 30;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const radius = this.rand() * 4 + 1;
+      const brightness = this.rand() * 60 - 30;
 
       // Vary between very dark dirt tones
       const r = Math.max(
         0,
-        Math.min(255, 58 + brightness + Math.random() * 15),
+        Math.min(255, 58 + brightness + this.rand() * 15),
       );
       const g = Math.max(
         0,
-        Math.min(255, 34 + brightness + Math.random() * 12),
+        Math.min(255, 34 + brightness + this.rand() * 12),
       );
-      const b = Math.max(0, Math.min(255, 16 + brightness + Math.random() * 8));
+      const b = Math.max(0, Math.min(255, 16 + brightness + this.rand() * 8));
 
       ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.6)`;
       ctx.beginPath();
@@ -4562,10 +4802,10 @@ class Environment {
     // Add darker soil patches
     ctx.globalAlpha = 0.4;
     for (let i = 0; i < 25; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const width = Math.random() * 25 + 8;
-      const height = Math.random() * 25 + 8;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const width = this.rand() * 25 + 8;
+      const height = this.rand() * 25 + 8;
 
       ctx.fillStyle = "#281810";
       ctx.fillRect(x, y, width, height);
@@ -4574,9 +4814,9 @@ class Environment {
     // Add some small rocks/pebbles
     ctx.globalAlpha = 0.7;
     for (let i = 0; i < 40; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const size = Math.random() * 2 + 1;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const size = this.rand() * 2 + 1;
 
       ctx.fillStyle = "#666666";
       ctx.fillRect(x, y, size, size);
@@ -4585,10 +4825,10 @@ class Environment {
     // Add sparse grass patches on top
     ctx.globalAlpha = 0.3;
     for (let i = 0; i < 15; i++) {
-      const x = Math.random() * canvas.width;
-      const y = Math.random() * canvas.height;
-      const width = Math.random() * 20 + 5;
-      const height = Math.random() * 15 + 3;
+      const x = this.rand() * canvas.width;
+      const y = this.rand() * canvas.height;
+      const width = this.rand() * 20 + 5;
+      const height = this.rand() * 15 + 3;
 
       ctx.fillStyle = "#228B22";
       ctx.fillRect(x, y, width, height);
@@ -4600,14 +4840,14 @@ class Environment {
     ctx.lineWidth = 2;
     for (let i = 0; i < 8; i++) {
       ctx.beginPath();
-      const startX = Math.random() * canvas.width;
-      const startY = Math.random() * canvas.height;
+      const startX = this.rand() * canvas.width;
+      const startY = this.rand() * canvas.height;
       ctx.moveTo(startX, startY);
 
       // Create irregular track marks
       for (let j = 0; j < 5; j++) {
-        const nextX = startX + (Math.random() - 0.5) * 30;
-        const nextY = startY + Math.random() * 20;
+        const nextX = startX + (this.rand() - 0.5) * 30;
+        const nextY = startY + this.rand() * 20;
         ctx.lineTo(nextX, nextY);
       }
       ctx.stroke();
@@ -4720,6 +4960,7 @@ class Environment {
     });
 
     this.scene.add(group);
+    this.registerGrounded(group, "construction bulldozer");
 
     // Store bulldozer for collision detection
     this.roadworkObstacles.push({
@@ -4759,11 +5000,12 @@ class Environment {
     board.position.set(0, 3, 0);
     signGroup.add(board);
 
-    // Position sign beside road
-    const signX = point.x - Math.cos(point.heading) * 10;
-    const signZ = point.z + Math.sin(point.heading) * 10;
+    // Position sign beside road (roadWidth-relative, base on the terrain model)
+    const signDistance = this.roadWidth / 2 + 1.2;
+    const signX = point.x - Math.cos(point.heading) * signDistance;
+    const signZ = point.z + Math.sin(point.heading) * signDistance;
 
-    signGroup.position.set(signX, point.y, signZ);
+    signGroup.position.set(signX, this.groundYAt(signX, signZ), signZ);
     signGroup.rotation.y = point.heading;
 
     signGroup.traverse((child) => {
@@ -4774,6 +5016,7 @@ class Environment {
     });
 
     this.scene.add(signGroup);
+    this.registerGrounded(signGroup, `construction sign "${text}"`);
   }
 
   createWorkTruck(x, y, z, rotation) {
@@ -4844,6 +5087,7 @@ class Environment {
     });
 
     this.scene.add(group);
+    this.registerGrounded(group, "work truck");
 
     // Store work truck for collision detection
     this.roadworkObstacles.push({
@@ -4907,6 +5151,7 @@ class Environment {
     container.castShadow = true;
     container.receiveShadow = true;
     this.scene.add(container);
+    this.registerGrounded(container, "shipping container");
 
     // Store container for collision detection
     this.roadworkObstacles.push({
@@ -5036,6 +5281,12 @@ class Environment {
       const barrierZ =
         point.z - Math.sin(point.heading) * barrierDistance * outsideSide;
 
+      // Rest the barrier on the terrain model: 2.5 units off the road edge
+      // is just past the 2m ledge, where the cliff has started to drop on
+      // the right (and the wall to rise on the left), so road height alone
+      // left cliff-side barriers hovering. Collision entry matches.
+      const barrierY = this.groundYAt(barrierX, barrierZ) + 0.6;
+
       // Create red and white striped barrier
       const barrierGeometry = new THREE.BoxGeometry(3, 1.2, 0.5);
       const barrierMaterial = new THREE.MeshStandardMaterial({
@@ -5045,16 +5296,17 @@ class Environment {
       });
 
       const barrier = new THREE.Mesh(barrierGeometry, barrierMaterial);
-      barrier.position.set(barrierX, point.y + 0.6, barrierZ);
+      barrier.position.set(barrierX, barrierY, barrierZ);
       barrier.rotation.y = point.heading;
       barrier.castShadow = true;
       barrier.receiveShadow = true;
       this.scene.add(barrier);
+      this.registerGrounded(barrier, `hairpin barrier (segment ${segmentIndex})`);
 
       // Store hairpin barrier for collision detection
       this.roadworkObstacles.push({
         type: "hairpin_barrier",
-        position: new THREE.Vector3(barrierX, point.y + 0.6, barrierZ),
+        position: new THREE.Vector3(barrierX, barrierY, barrierZ),
         width: 3,
         height: 1.2,
         depth: 0.5,
@@ -5106,11 +5358,12 @@ class Environment {
     board.position.set(0, 3, 0);
     signGroup.add(board);
 
-    // Position sign beside road
-    const signX = point.x - Math.cos(point.heading) * 10;
-    const signZ = point.z + Math.sin(point.heading) * 10;
+    // Position sign beside road (roadWidth-relative, base on the terrain model)
+    const signDistance = this.roadWidth / 2 + 1.2;
+    const signX = point.x - Math.cos(point.heading) * signDistance;
+    const signZ = point.z + Math.sin(point.heading) * signDistance;
 
-    signGroup.position.set(signX, point.y, signZ);
+    signGroup.position.set(signX, this.groundYAt(signX, signZ), signZ);
     signGroup.rotation.y = point.heading;
 
     signGroup.traverse((child) => {
@@ -5121,6 +5374,7 @@ class Environment {
     });
 
     this.scene.add(signGroup);
+    this.registerGrounded(signGroup, `hairpin warning sign "${text}"`);
   }
 
   createChevronMarker(point, direction) {
@@ -5174,12 +5428,13 @@ class Environment {
 
     chevronGroup.add(chevron);
 
-    // Position on outside of turn
-    const markerDistance = 8;
+    // Position on outside of turn (roadWidth-relative so the marker sits on
+    // the roadside ledge, base on the terrain model)
+    const markerDistance = this.roadWidth / 2 + 1;
     const markerX = point.x - Math.cos(point.heading) * markerDistance;
     const markerZ = point.z + Math.sin(point.heading) * markerDistance;
 
-    chevronGroup.position.set(markerX, point.y, markerZ);
+    chevronGroup.position.set(markerX, this.groundYAt(markerX, markerZ), markerZ);
     chevronGroup.rotation.y = point.heading;
 
     chevronGroup.traverse((child) => {
@@ -5190,6 +5445,7 @@ class Environment {
     });
 
     this.scene.add(chevronGroup);
+    this.registerGrounded(chevronGroup, "chevron marker");
   }
 
   createRoadworksStripeTexture() {
@@ -5299,6 +5555,7 @@ class Environment {
       });
 
       this.scene.add(gateGroup);
+      this.registerGrounded(gateGroup, `checkpoint gate ${i}`);
 
       // Store checkpoint info
       this.checkpoints.push({

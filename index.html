@@ -381,6 +381,186 @@
             background: rgba(4, 32, 18, 0.72);
         }
 
+        /* While the menu is up, hide the in-game HUD (it bleeds through the
+           transparent showcase overlay) */
+        body.in-menu .score-display,
+        body.in-menu .info,
+        body.in-menu .speedometer,
+        body.in-menu .wheelie-indicator,
+        body.in-menu #speedVignette,
+        body.in-menu #speedBlurOverlay,
+        body.in-menu .virtual-controls-left,
+        body.in-menu .virtual-controls-right,
+        body.in-menu .virtual-button-camera,
+        body.in-menu .virtual-controls-instructions {
+            display: none !important;
+        }
+
+        /* Showcase mode: the menu floats over a live 3D backdrop, so the
+           overlay/panel go transparent and content pins top and bottom */
+        .tour-selector-overlay.showcase-mode {
+            background: none;
+            pointer-events: none;
+        }
+
+        .tour-selector-panel.showcase-panel {
+            background: none;
+            border: none;
+            box-shadow: none;
+            max-width: 100%;
+            width: 100%;
+            height: 100%;
+            max-height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 28px 40px 32px;
+            pointer-events: none;
+        }
+
+        .showcase-panel .tour-title {
+            text-shadow: 0 2px 18px rgba(0, 0, 0, 0.9), 0 0 30px rgba(74, 158, 255, 0.5);
+        }
+
+        .showcase-panel .character-select-screen,
+        .showcase-panel .track-select-screen {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .showcase-spacer {
+            flex: 1;
+        }
+
+        .showcase-label {
+            text-align: center;
+            color: #aaccee;
+            letter-spacing: 3px;
+            font-size: 13px;
+            margin-bottom: 8px;
+            text-shadow: 0 1px 8px rgba(0, 0, 0, 0.9);
+        }
+
+        .showcase-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 22px;
+            pointer-events: none;
+        }
+
+        .carousel-arrow {
+            pointer-events: auto;
+            width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            border: 2px solid rgba(120, 160, 220, 0.6);
+            background: rgba(8, 14, 26, 0.75);
+            color: #cde;
+            font-size: 30px;
+            line-height: 1;
+            cursor: pointer;
+            transition: transform 0.15s ease, border-color 0.15s ease;
+        }
+
+        .carousel-arrow:hover {
+            transform: scale(1.1);
+            border-color: var(--accent-blue);
+        }
+
+        .carousel-back {
+            pointer-events: auto;
+            padding: 6px 14px;
+            background: rgba(8, 14, 26, 0.75);
+            border: 1px solid rgba(120, 140, 200, 0.5);
+            border-radius: 8px;
+            color: #aac;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .showcase-info {
+            pointer-events: auto;
+            min-width: 320px;
+            max-width: 420px;
+            background: rgba(6, 10, 20, 0.82);
+            border: 1px solid rgba(120, 160, 220, 0.45);
+            border-radius: 14px;
+            padding: 16px 24px;
+            text-align: center;
+            color: #aab;
+            font-size: 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+        }
+
+        .showcase-name {
+            color: white;
+            font-size: 20px;
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+
+        .showcase-sub {
+            color: #8899bb;
+            font-size: 13px;
+            margin-top: 2px;
+        }
+
+        .showcase-hint {
+            color: #cc8833;
+            font-size: 12px;
+            margin-top: 8px;
+        }
+
+        .showcase-stats {
+            margin-top: 10px;
+            text-align: left;
+            display: inline-block;
+            font-family: var(--font-mono, monospace);
+            line-height: 1.6;
+        }
+
+        .stat-on { color: #ffd700; letter-spacing: 1px; }
+        .stat-off { color: #334; letter-spacing: 1px; }
+
+        .showcase-continue {
+            pointer-events: auto;
+            padding: 13px 56px;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 17px;
+            font-weight: bold;
+            letter-spacing: 2px;
+            cursor: pointer;
+            box-shadow: 0 4px 18px rgba(46, 204, 113, 0.4);
+        }
+
+        .showcase-continue:disabled {
+            background: #2a3142;
+            color: #667;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        .showcase-secondary {
+            pointer-events: auto;
+            margin-left: 12px;
+            padding: 13px 22px;
+            background: rgba(255, 215, 0, 0.12);
+            border: 1px solid rgba(255, 215, 0, 0.45);
+            border-radius: 10px;
+            color: #ffd700;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
         .rider-card {
             transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
         }
@@ -730,6 +910,7 @@
     <script src="js/vehicle.js"></script>
     <script src="js/environment.js"></script>
     <script src="js/cones.js"></script>
+    <script src="js/rockfalls.js"></script>
     <script src="js/traffic.js"></script>
     <script src="js/main.js"></script>
 </body>

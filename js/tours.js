@@ -120,6 +120,25 @@ class TourSystem {
                 ? savedCharacter : 'tim';
     }
 
+    riderDisplayOrder() {
+        if (typeof CHARACTERS === 'undefined') return [];
+        const unlocks = this.characterUnlocks || {};
+        return CHARACTERS.slice().sort((a, b) => (unlocks[a.id] || 0) - (unlocks[b.id] || 0));
+    }
+
+    // 'lit' (selectable), 'dimmed' (next to unlock - shows requirement),
+    // 'silhouette' (everything beyond - just LOCKED)
+    riderTierFor(characterId) {
+        if (this.isCharacterUnlocked(characterId)) return 'lit';
+        const firstLocked = this.riderDisplayOrder().find(c => !this.isCharacterUnlocked(c.id));
+        return firstLocked && firstLocked.id === characterId ? 'dimmed' : 'silhouette';
+    }
+
+    legTierFor(index) {
+        if (this.isLegUnlocked(index)) return 'lit';
+        return this.isLegUnlocked(index - 1) ? 'dimmed' : 'silhouette';
+    }
+
     isLegCompleted(legId) {
         return this.completedLegs.includes(legId);
     }
@@ -346,8 +365,7 @@ class TourSystem {
     }
 
     createLegSelector(container, onLegSelected) {
-        // Rebuildable: lock states change as the player progresses, so the
-        // selector is torn down and re-rendered on every menu visit
+        // Rebuildable: lock states change as the player progresses
         this.onLegSelected = onLegSelected || this.onLegSelected;
         const existing = document.querySelector('.tour-selector-overlay');
         if (existing) existing.remove();
@@ -356,77 +374,39 @@ class TourSystem {
         }
 
         const selectorHTML = `
-            <div class="tour-selector-overlay">
-                <div class="tour-selector-panel">
+            <div class="tour-selector-overlay showcase-mode">
+                <div class="tour-selector-panel showcase-panel">
                     <h1 class="tour-title">TWISTY CHALLENGE TOUR</h1>
 
-                    <!-- Screen 1: rider selection -->
+                    <!-- Screen 1: rider carousel -->
                     <div class="character-select-screen">
-                        <div class="rider-select-label" style="text-align: center; color: #8899bb; letter-spacing: 3px; font-size: 13px; margin-bottom: 8px;">CHOOSE YOUR RIDER</div>
-                        ${this.buildRiderSelectorHTML()}
-                        <div style="text-align: center; margin-top: 10px;">
-                            <button id="riderContinueBtn" style="
-                                padding: 14px 60px;
-                                background: linear-gradient(135deg, #2ecc71, #27ae60);
-                                color: white;
-                                border: none;
-                                border-radius: 10px;
-                                font-size: 18px;
-                                font-weight: bold;
-                                letter-spacing: 2px;
-                                cursor: pointer;
-                                box-shadow: 0 4px 18px rgba(46, 204, 113, 0.4);
-                            ">CONTINUE →</button>
+                        <div class="rider-select-label showcase-label">CHOOSE YOUR RIDER</div>
+                        <div class="showcase-spacer"></div>
+                        <div class="showcase-controls">
+                            <button class="carousel-arrow" id="riderPrevBtn">‹</button>
+                            <div class="showcase-info" id="riderInfoCard"></div>
+                            <button class="carousel-arrow" id="riderNextBtn">›</button>
+                        </div>
+                        <div style="text-align: center; margin-top: 14px;">
+                            <button id="riderContinueBtn" class="showcase-continue">CONTINUE →</button>
                         </div>
                     </div>
 
-                    <!-- Screen 2: track selection -->
+                    <!-- Screen 2: track carousel -->
                     <div class="track-select-screen" style="display: none;">
-                        <div style="display: flex; align-items: center; justify-content: center; gap: 16px; margin-bottom: 14px;">
-                            <button id="backToRidersBtn" style="
-                                padding: 8px 18px;
-                                background: rgba(120, 140, 200, 0.15);
-                                border: 1px solid rgba(120, 140, 200, 0.45);
-                                border-radius: 8px;
-                                color: #aac;
-                                font-size: 13px;
-                                font-weight: bold;
-                                cursor: pointer;
-                            ">← RIDER</button>
-                            <div class="rider-select-label" style="color: #8899bb; letter-spacing: 3px; font-size: 13px;">CHOOSE YOUR LEG</div>
+                        <div class="showcase-label" style="display: flex; align-items: center; justify-content: center; gap: 16px;">
+                            <button id="backToRidersBtn" class="carousel-back">← RIDER</button>
+                            <span>CHOOSE YOUR LEG</span>
                         </div>
-                        <div class="leg-grid">
-                            ${this.legs.map((leg, index) => {
-                                const unlocked = this.isLegUnlocked(index);
-                                const completed = this.isLegCompleted(leg.id);
-                                const badge = completed
-                                    ? '<span style="color: #2ecc71;">✔ COMPLETED</span>'
-                                    : (unlocked ? '' : '🔒 LOCKED');
-                                return `
-                                <div class="leg-card ${unlocked ? '' : 'locked'}" data-leg-id="${leg.id}" data-leg-index="${index}" style="${unlocked ? '' : 'opacity: 0.45; filter: grayscale(0.8);'}">
-                                    <div class="leg-number">LEG ${index + 1} <span style="float: right; font-size: 10px;">${badge}</span></div>
-                                    <h3 class="leg-name">${leg.name}</h3>
-                                    <p class="leg-description">${unlocked ? leg.description : `Complete Leg ${index} to unlock`}</p>
-                                    ${unlocked ? `
-                                        <button class="select-leg-btn" data-leg-id="${leg.id}">START</button>
-                                        <button class="view-leaderboard-btn" data-leg-id="${leg.id}" style="
-                                            margin-top: 6px;
-                                            width: 100%;
-                                            padding: 6px 0;
-                                            background: rgba(255, 215, 0, 0.12);
-                                            border: 1px solid rgba(255, 215, 0, 0.45);
-                                            border-radius: 6px;
-                                            color: #ffd700;
-                                            font-size: 12px;
-                                            font-weight: bold;
-                                            cursor: pointer;
-                                            letter-spacing: 1px;
-                                        ">🏆 BEST TIMES</button>
-                                    ` : `
-                                        <button class="select-leg-btn" disabled style="opacity: 0.4; cursor: not-allowed;">🔒 LOCKED</button>
-                                    `}
-                                </div>`;
-                            }).join('')}
+                        <div class="showcase-spacer"></div>
+                        <div class="showcase-controls">
+                            <button class="carousel-arrow" id="legPrevBtn">‹</button>
+                            <div class="showcase-info" id="legInfoCard"></div>
+                            <button class="carousel-arrow" id="legNextBtn">›</button>
+                        </div>
+                        <div style="text-align: center; margin-top: 14px;">
+                            <button id="legStartBtn" class="showcase-continue">START</button>
+                            <button id="legLeaderboardBtn" class="showcase-secondary">🏆 BEST TIMES</button>
                         </div>
                     </div>
                 </div>
@@ -434,130 +414,155 @@ class TourSystem {
         `;
 
         container.insertAdjacentHTML('beforeend', selectorHTML);
+        document.body.classList.add('in-menu');
 
-        // Initialize keyboard navigation on the first unlocked, uncompleted leg
-        this.selectedLegIndex = this.firstPlayableLegIndex();
+        // Carousel focus state
+        const riderOrder = this.riderDisplayOrder();
+        this.riderFocusIndex = Math.max(0, riderOrder.findIndex(c => c.id === this.selectedCharacterId));
+        this.legFocusIndex = this.firstPlayableLegIndex();
         this.legSelectorActive = true;
         this.menuScreen = 'rider';
-        this.updateLegHighlight();
+
+        const renderRiderCard = () => {
+            const c = riderOrder[this.riderFocusIndex];
+            const tier = this.riderTierFor(c.id);
+            const statBar = (value) =>
+                `<span class="stat-on">${'■'.repeat(value)}</span><span class="stat-off">${'■'.repeat(5 - value)}</span>`;
+            const card = document.getElementById('riderInfoCard');
+            if (tier === 'silhouette') {
+                card.innerHTML = `
+                    <div class="showcase-name">🔒 ???</div>
+                    <div class="showcase-sub">LOCKED</div>`;
+            } else if (tier === 'dimmed') {
+                const required = this.characterUnlocks[c.id] || 0;
+                card.innerHTML = `
+                    <div class="showcase-name">🔒 ${c.name}</div>
+                    <div class="showcase-sub">${c.bikeLabel}</div>
+                    <div class="showcase-hint">Complete ${required} leg${required === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required})</div>`;
+            } else {
+                card.innerHTML = `
+                    <div class="showcase-name">${c.name}</div>
+                    <div class="showcase-sub">${c.bikeLabel}</div>
+                    <div class="showcase-stats">
+                        <div>Speed&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
+                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
+                        <div>Handling ${statBar(c.stats.handling)}</div>
+                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
+                        <div>Comfort&nbsp; ${statBar(c.stats.comfort)}</div>
+                    </div>`;
+            }
+            document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
+            if (this.onRiderShowcase) this.onRiderShowcase(c.id);
+        };
+
+        const renderLegCard = () => {
+            const index = this.legFocusIndex;
+            const leg = this.legs[index];
+            const tier = this.legTierFor(index);
+            const completed = this.isLegCompleted(leg.id);
+            const card = document.getElementById('legInfoCard');
+            if (tier !== 'lit') {
+                card.innerHTML = `
+                    <div class="showcase-name">🔒 LEG ${index + 1}: ${leg.name}</div>
+                    <div class="showcase-sub">${leg.description}</div>
+                    <div class="showcase-hint">Complete Leg ${index} to unlock</div>`;
+            } else {
+                card.innerHTML = `
+                    <div class="showcase-name">LEG ${index + 1}: ${leg.name} ${completed ? '<span style="color:#2ecc71;font-size:13px;">✔ COMPLETED</span>' : ''}</div>
+                    <div class="showcase-sub">${leg.description}</div>`;
+            }
+            document.getElementById('legStartBtn').disabled = tier !== 'lit';
+            document.getElementById('legLeaderboardBtn').style.visibility = tier === 'lit' ? 'visible' : 'hidden';
+            if (this.onTrackShowcase) this.onTrackShowcase(index);
+        };
+        this.renderLegCard = renderLegCard;
 
         const showTrackScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'none';
             document.querySelector('.track-select-screen').style.display = 'block';
             this.menuScreen = 'track';
+            renderLegCard();
         };
         const showRiderScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'block';
             document.querySelector('.track-select-screen').style.display = 'none';
             this.menuScreen = 'rider';
+            if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
+            renderRiderCard();
         };
         this.showTrackScreen = showTrackScreen;
         this.showRiderScreen = showRiderScreen;
 
-        document.getElementById('riderContinueBtn').addEventListener('click', showTrackScreen);
+        const moveRiderFocus = (delta) => {
+            this.riderFocusIndex = Math.max(0, Math.min(riderOrder.length - 1, this.riderFocusIndex + delta));
+            renderRiderCard();
+        };
+        const moveLegFocus = (delta) => {
+            this.legFocusIndex = Math.max(0, Math.min(this.legs.length - 1, this.legFocusIndex + delta));
+            renderLegCard();
+        };
+
+        document.getElementById('riderPrevBtn').addEventListener('click', () => moveRiderFocus(-1));
+        document.getElementById('riderNextBtn').addEventListener('click', () => moveRiderFocus(1));
+        document.getElementById('legPrevBtn').addEventListener('click', () => moveLegFocus(-1));
+        document.getElementById('legNextBtn').addEventListener('click', () => moveLegFocus(1));
         document.getElementById('backToRidersBtn').addEventListener('click', showRiderScreen);
 
-        // Leg start buttons (unlocked only)
-        document.querySelectorAll('.select-leg-btn:not([disabled])').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                const legId = e.target.dataset.legId;
-                const leg = this.selectLeg(legId);
-                if (leg && this.onLegSelected) {
-                    this.legSelectorActive = false;
-                    this.onLegSelected(leg);
-                }
-            });
+        document.getElementById('riderContinueBtn').addEventListener('click', () => {
+            const c = riderOrder[this.riderFocusIndex];
+            if (!this.isCharacterUnlocked(c.id)) return;
+            this.selectCharacter(c.id);
+            showTrackScreen();
         });
 
-        // Rider selection cards (locked ones are rejected in selectCharacter)
-        document.querySelectorAll('.rider-card').forEach(card => {
-            card.addEventListener('click', () => {
-                this.selectCharacter(card.dataset.characterId);
-            });
+        document.getElementById('legStartBtn').addEventListener('click', () => {
+            const index = this.legFocusIndex;
+            if (!this.isLegUnlocked(index)) return;
+            const leg = this.selectLeg(this.legs[index].id);
+            if (leg && this.onLegSelected) {
+                this.legSelectorActive = false;
+                this.onLegSelected(leg);
+            }
         });
 
-        // Leaderboard buttons - handled by the game (set via onViewLeaderboard)
-        document.querySelectorAll('.view-leaderboard-btn').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (this.onViewLeaderboard) {
-                    this.onViewLeaderboard(e.target.dataset.legId);
-                }
-            });
+        document.getElementById('legLeaderboardBtn').addEventListener('click', () => {
+            if (this.onViewLeaderboard) {
+                this.onViewLeaderboard(this.legs[this.legFocusIndex].id);
+            }
         });
 
         // Keyboard navigation
         this.keyboardHandler = (e) => {
             if (!this.legSelectorActive) return;
 
-            // Rider screen: left/right cycles unlocked riders, Enter continues
+            const isLeft = e.code === 'ArrowLeft' || e.code === 'KeyA';
+            const isRight = e.code === 'ArrowRight' || e.code === 'KeyD';
+            const isConfirm = e.code === 'Enter' || e.code === 'Space';
+
             if (this.menuScreen === 'rider') {
-                const unlockedIds = CHARACTERS.filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
-                const current = unlockedIds.indexOf(this.selectedCharacterId);
-                switch (e.code) {
-                    case 'ArrowLeft':
-                    case 'KeyA':
-                        e.preventDefault();
-                        this.selectCharacter(unlockedIds[Math.max(0, current - 1)]);
-                        break;
-                    case 'ArrowRight':
-                    case 'KeyD':
-                        e.preventDefault();
-                        this.selectCharacter(unlockedIds[Math.min(unlockedIds.length - 1, current + 1)]);
-                        break;
-                    case 'Enter':
-                    case 'Space':
-                        e.preventDefault();
-                        showTrackScreen();
-                        break;
+                if (isLeft) { e.preventDefault(); moveRiderFocus(-1); }
+                else if (isRight) { e.preventDefault(); moveRiderFocus(1); }
+                else if (isConfirm) {
+                    e.preventDefault();
+                    document.getElementById('riderContinueBtn').click();
                 }
                 return;
             }
 
-            // Track screen: navigate unlocked legs only
-            switch(e.code) {
-                case 'ArrowUp':
-                case 'KeyW':
-                case 'ArrowLeft':
-                case 'KeyA':
-                    e.preventDefault();
-                    if (this.selectedLegIndex > 0) {
-                        this.selectedLegIndex--;
-                    }
-                    this.updateLegHighlight();
-                    break;
-
-                case 'ArrowDown':
-                case 'KeyS':
-                case 'ArrowRight':
-                case 'KeyD':
-                    e.preventDefault();
-                    if (this.selectedLegIndex < this.legs.length - 1 && this.isLegUnlocked(this.selectedLegIndex + 1)) {
-                        this.selectedLegIndex++;
-                    }
-                    this.updateLegHighlight();
-                    break;
-
-                case 'Escape':
-                    e.preventDefault();
-                    showRiderScreen();
-                    break;
-
-                case 'Enter':
-                case 'Space':
-                    e.preventDefault();
-                    if (!this.isLegUnlocked(this.selectedLegIndex)) break;
-                    const selectedLeg = this.legs[this.selectedLegIndex];
-                    const leg = this.selectLeg(selectedLeg.id);
-                    if (leg && this.onLegSelected) {
-                        this.legSelectorActive = false;
-                        this.onLegSelected(leg);
-                    }
-                    break;
+            if (isLeft) { e.preventDefault(); moveLegFocus(-1); }
+            else if (isRight) { e.preventDefault(); moveLegFocus(1); }
+            else if (e.code === 'Escape') { e.preventDefault(); showRiderScreen(); }
+            else if (isConfirm) {
+                e.preventDefault();
+                document.getElementById('legStartBtn').click();
             }
         };
 
         document.addEventListener('keydown', this.keyboardHandler);
+
+        // Kick off the 3D rider showcase
+        if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
+        renderRiderCard();
     }
 
     firstPlayableLegIndex() {
@@ -569,17 +574,8 @@ class TourSystem {
     }
 
     updateLegHighlight() {
-        // Remove highlight from all cards
-        document.querySelectorAll('.leg-card').forEach(card => {
-            card.classList.remove('selected');
-        });
-
-        // Add highlight to selected card
-        const selectedCard = document.querySelector(`.leg-card[data-leg-index="${this.selectedLegIndex}"]`);
-        if (selectedCard) {
-            selectedCard.classList.add('selected');
-            selectedCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        }
+        // Carousel UI - focus rendering happens in renderLegCard
+        if (this.renderLegCard) this.renderLegCard();
     }
 
     hideLegSelector() {
@@ -587,6 +583,7 @@ class TourSystem {
         if (overlay) {
             overlay.style.display = 'none';
         }
+        document.body.classList.remove('in-menu');
         this.legSelectorActive = false;
 
         // Remove keyboard event listener
