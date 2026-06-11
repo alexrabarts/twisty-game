@@ -2,20 +2,23 @@
 // (built by Vehicle.createMesh) and stat multipliers applied to the baseline
 // Vehicle physics. stats are the 1-5 star ratings shown in the selection UI;
 // physics are the multipliers actually applied to the handling model.
+// `suspension` is the suspension-travel / offroad stat (1-5 stars in the UI).
+// It replaces the old separate jump and comfort stats: the physics.suspension
+// multiplier below drives jump/hop height, how big a rock the bike can ride
+// over, and how much the ride shakes (more travel = smoother + clears more).
 const CHARACTERS = [
     {
         id: 'steve',
         name: 'Steve',
         bikeLabel: 'Super Sports',
         bikeColor: '0xcc1111', // Red race plastics
-        stats: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
+        stats: { speed: 5, accel: 4, handling: 3, suspension: 1 },
         physics: {
-            comfortShake: 1.25,     // Race-firm - you feel everything
+            suspension: 0.6,       // Race-firm, short travel - harsh, no offroad
             maxSpeed: 1.10,        // 74.8 m/s top end
             acceleration: 1.10,    // 16.5 m/s²
             brakeForce: 1.05,      // 21 m/s²
             steeringForce: 1.0,    // 9.5 baseline
-            jumpPower: 0.85,       // Stiff suspension, low clearance
             wheeliePop: 1.3,       // Power wheelies come easily
             wheelieThrottle: 1.15
         }
@@ -25,14 +28,13 @@ const CHARACTERS = [
         name: 'Alex',
         bikeLabel: 'Adventure',
         bikeColor: '0xc9a227', // Sandy gold
-        stats: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
+        stats: { speed: 3, accel: 3, handling: 4, suspension: 4 },
         physics: {
-            comfortShake: 0.55,     // Long-travel suspension soaks it up
+            suspension: 1.25,      // Long-travel - soaks up bumps, clears most rocks
             maxSpeed: 1.0,         // 68 m/s
             acceleration: 1.0,     // 15 m/s²
             brakeForce: 1.05,      // 21 m/s²
             steeringForce: 1.1,    // 10.45 - wide bars
-            jumpPower: 1.25,       // Long-travel suspension
             wheeliePop: 1.0,
             wheelieThrottle: 1.0
         }
@@ -42,14 +44,13 @@ const CHARACTERS = [
         name: 'Tim',
         bikeLabel: 'Maxi Scooter',
         bikeColor: '0x8d96a8', // Executive silver-grey
-        stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
+        stats: { speed: 2, accel: 2, handling: 4, suspension: 2 },
         physics: {
-            comfortShake: 0.3,      // Plush armchair ride
+            suspension: 0.85,      // Modest travel - smooth on tarmac, poor offroad
             maxSpeed: 0.75,        // 51 m/s
             acceleration: 0.8,     // 12 m/s² - smooth CVT
             brakeForce: 1.0,       // 20 m/s²
             steeringForce: 1.1,    // 10.45 - nimble at low speed
-            jumpPower: 0.6,        // Terrible jumper
             wheeliePop: 0.75,
             wheelieThrottle: 0.9
         }
@@ -59,14 +60,13 @@ const CHARACTERS = [
         name: 'Shane',
         bikeLabel: 'Dirt Bike',
         bikeColor: '0xff6600', // KTM orange
-        stats: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
+        stats: { speed: 2, accel: 4, handling: 5, suspension: 5 },
         physics: {
-            comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
+            suspension: 1.5,       // Long MX travel - rolls over most debris, big air
             maxSpeed: 0.85,        // 57.8 m/s
             acceleration: 1.1,     // 16.5 m/s²
             brakeForce: 1.0,       // 20 m/s²
             steeringForce: 1.15,   // 10.93 - flickable
-            jumpPower: 1.5,        // Built for air
             wheeliePop: 1.2,
             wheelieThrottle: 1.1
         }
@@ -165,10 +165,17 @@ class Vehicle {
         this.acceleration *= charPhysics.acceleration || 1;
         this.brakeForce *= charPhysics.brakeForce || 1;
         this.steeringForce *= charPhysics.steeringForce || 1;
-        this.jumpPowerMult = charPhysics.jumpPower || 1;
-        this.comfortShake = charPhysics.comfortShake !== undefined ? charPhysics.comfortShake : 1;
         this.wheeliePopMult = charPhysics.wheeliePop || 1;
         this.wheelieThrottleMult = charPhysics.wheelieThrottle || 1;
+
+        // Suspension travel (offroad ability). One stat drives three things:
+        //  - jump/hop power off ramps and obstacles
+        //  - the biggest rock radius the bike can simply ride over (no crash)
+        //  - how much the ride/camera shakes (inverse: more travel = smoother)
+        this.suspension = charPhysics.suspension !== undefined ? charPhysics.suspension : 1;
+        this.jumpPowerMult = this.suspension;
+        this.rideOverRadius = 0.18 + 0.22 * this.suspension; // ~0.31m..0.51m
+        this.suspensionShake = Math.max(0.3, 1.45 - 0.65 * this.suspension); // ~1.06..0.48
 
         // Bodywork paint colour comes from the character (string form so the
         // existing parseInt(this.bikeColor) call sites keep working)
@@ -235,12 +242,12 @@ class Vehicle {
             rearTireRadius: 0.3, rearTireWidth: 0.16,
             frontTireRadius: 0.28, frontTireWidth: 0.12,
             rimRadius: 0.19, style: 'alloy', spokePairs: 5,
-            discRadius: 0.25, caliperColor: 0xc42020, palette: P
+            discRadius: 0.15, caliperColor: 0xc42020, palette: P
         });
 
         // Upside-down forks with gold sliders + chrome stanchions
         this.buildForkPair({
-            length: 0.52, x: 0.1, y: 0.55, z: 0.7, radius: 0.024,
+            length: 0.52, x: 0.1, y: 0.55, z: 0.7, radius: 0.024, rake: 0.14,
             usd: true, sliderColor: 0xb8923e, palette: P
         });
 
@@ -401,7 +408,7 @@ class Vehicle {
 
         // ---- Windscreen: double-bubble + emissive dash ----
         const windscreenGeometry = new THREE.SphereGeometry(0.24, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2.4);
-        this.windscreen = this.attachPart(windscreenGeometry, P.glass, 0, 0.98, 0.44, { rx: -0.95, sx: 0.75, sy: 1.05, sz: 1.1 });
+        this.windscreen = this.attachPart(windscreenGeometry, P.glass, 0, 0.98, 0.44, { rx: 0.95, sx: 0.75, sy: 1.05, sz: 1.1 });
         this.attachPart(new THREE.BoxGeometry(0.16, 0.05, 0.08), P.darkMetal, 0, 0.93, 0.52, { rx: -0.5 });
         this.attachPart(new THREE.BoxGeometry(0.12, 0.035, 0.008), P.dash, 0, 0.95, 0.55, { rx: -0.5 });
 
@@ -821,7 +828,10 @@ class Vehicle {
             const leg = new THREE.Mesh(
                 new THREE.CylinderGeometry(radius, radius, length, 10), stanchionMaterial);
             leg.position.set(side * x, y, z);
-            leg.rotation.x = rake;
+            // Rake tilts the fork so the axle sits AHEAD of the steering head
+            // (bottom forward, top back). A positive rotation.x did the reverse
+            // - the old forks raked backwards - so negate it.
+            leg.rotation.x = -rake;
             leg.castShadow = true;
             leg.receiveShadow = true;
             // Thick outer tube over half the leg
@@ -1168,7 +1178,7 @@ class Vehicle {
         this.buildWheelSet({
             rearTireRadius: 0.3, rearTireWidth: 0.13,
             frontTireRadius: 0.3, frontTireWidth: 0.1,
-            style: 'wire', wireSpokes: 14, discRadius: 0.22,
+            style: 'wire', wireSpokes: 14, discRadius: 0.16,
             rimColor: 0xc8cacc, caliperColor: 0x2255aa, palette: P
         });
 
@@ -1349,12 +1359,12 @@ class Vehicle {
         this.buildWheelSet({
             rearTireRadius: 0.3, rearTireWidth: 0.17,
             frontTireRadius: 0.28, frontTireWidth: 0.15,
-            style: 'solid', discRadius: 0.14, frontDiscRadius: 0.16,
+            style: 'solid', discRadius: 0.12, frontDiscRadius: 0.14,
             rimColor: 0xcfd2d6, caliperColor: 0x3a3e46, palette: P
         });
 
         // Stubby forks mostly hidden behind the bodywork
-        this.buildForkPair({ length: 0.4, x: 0.08, y: 0.5, z: 0.68, radius: 0.022, palette: P });
+        this.buildForkPair({ length: 0.4, x: 0.08, y: 0.5, z: 0.68, radius: 0.022, rake: 0.12, palette: P });
 
         // ---- Main body: smooth under-seat hump (colour-feedback frame) ----
         const bodyGeometry = new THREE.CapsuleGeometry(0.21, 0.5, 6, 14);
@@ -1492,7 +1502,7 @@ class Vehicle {
             rearTireRadius: 0.28, rearTireWidth: 0.11,
             frontTireRadius: 0.3, frontTireWidth: 0.08,
             style: 'wire', wireSpokes: 14, knobby: true, knobCount: 18,
-            discRadius: 0.18, frontDiscRadius: 0.2,
+            discRadius: 0.15, frontDiscRadius: 0.16,
             rimColor: 0x23252b, caliperColor: 0x9aa0a6, palette: P
         });
 
@@ -1654,10 +1664,15 @@ class Vehicle {
         }
         this.prevRenderYaw = this.yawAngle;
 
-        // Track distance traveled (only when not crashed)
+        // Track distance traveled (only when not crashed). Ignore teleport
+        // jumps from resets/checkpoint restarts: at the fixed 60Hz step a bike
+        // can't really move more than ~1.2m in a tick, so a large delta is a
+        // reposition, not travel. (This kept average-speed honest.)
         if (!this.crashed && this.lastPosition) {
             const distanceDelta = this.position.distanceTo(this.lastPosition);
-            this.distanceTraveled += distanceDelta;
+            if (distanceDelta < 5) {
+                this.distanceTraveled += distanceDelta;
+            }
         }
         this.lastPosition = this.position.clone();
 
@@ -1879,9 +1894,9 @@ class Vehicle {
                 
                 // Check if we hit the boulder (account for bike size)
                 if (distance < boulder.radius + 1.0) {
-                    // Bikes with enough suspension hop small rocks instead of
-                    // crashing - dirt bike clears most debris, scooter almost none
-                    if (this.attemptHop(boulder.radius)) {
+                    // Bikes with enough suspension travel ride over small rocks
+                    // instead of crashing - dirt bike clears most debris, sport almost none
+                    if (this.attemptRideOver(boulder.radius)) {
                         break;
                     }
 
@@ -2136,9 +2151,17 @@ class Vehicle {
                 const brakePower = 5.5 + (angleDegrees / 60) * 1.5;
                 this.wheelieVelocity -= brakeInput * brakePower * deltaTime;
             }
-            
-            // Note: Wheelie key (Space/Shift) is only used to START the wheelie
-            // After that, use throttle (W) to maintain it
+
+            // The wheelie key is a hold control: keep it pressed to hold/raise
+            // the wheelie, release it to bring the front wheel back down. This
+            // is the recovery the old "throttle-only" model lacked - holding
+            // throttle used to climb you straight into a backflip with no way
+            // down. Releasing the key now overpowers throttle lift at any angle.
+            if (wheelieInput > 0) {
+                this.wheelieVelocity += 1.6 * deltaTime; // active hold/lift
+            } else {
+                this.wheelieVelocity -= 4.5 * deltaTime; // released -> nose down
+            }
             
             // Update wheelie angle
             this.wheelieAngle += this.wheelieVelocity * deltaTime;
@@ -2539,7 +2562,14 @@ class Vehicle {
         this.groundHitLogged = false;
         this.crashRecoveryTime = 0;
         this.crashPenaltyApplied = false;
-        
+
+        // Clear trip distance so a RESTART LEG doesn't carry the previous
+        // attempt's distance into the average-speed calc. lastPosition is
+        // nulled so the first tick after the bike is repositioned doesn't
+        // count the teleport as travel.
+        this.distanceTraveled = 0;
+        this.lastPosition = null;
+
         const bikeColorHex = parseInt(this.bikeColor);
         this.frame.material.color.setHex(bikeColorHex);
         this.fuelTank.material.color.setHex(bikeColorHex);
@@ -2902,28 +2932,27 @@ class Vehicle {
         }
     }
     
-    // Small-obstacle hop: bikes with good jump stats bounce over small rocks
-    // instead of crashing. Returns true if the bike hopped.
-    attemptHop(obstacleRadius) {
-        if (this.crashed || this.isJumping) return false;
+    // Ride-over: small rocks get rolled/popped over instead of crashing the
+    // bike. What you can clear is set by suspension travel (offroad ability):
+    // dirt bike ~0.51m, adventure ~0.46m, scooter ~0.37m, sport ~0.31m.
+    // Returns true if the bike cleared the obstacle.
+    attemptRideOver(obstacleRadius) {
+        if (this.crashed) return false;
+        if (obstacleRadius > this.rideOverRadius) return false;
+        if (this.isJumping) return true; // already airborne - clears it anyway
 
-        // What this bike can clear: scooter ~0.37m, supersport ~0.42m,
-        // adventure ~0.50m, dirt bike ~0.55m
-        const hopThreshold = 0.25 + 0.2 * (this.jumpPowerMult || 1);
-        if (obstacleRadius > hopThreshold) return false;
-
-        // Pop over it - bigger rocks need (and get) more lift
+        // Pop over it - tiny rocks barely register, near-limit rocks need a
+        // real bump and scrub more speed.
+        const severity = Math.min(1, obstacleRadius / this.rideOverRadius);
         this.isJumping = true;
         this.jumpStartHeight = this.position.y;
-        this.jumpVelocityY = 2.2 + obstacleRadius * 3 * (this.jumpPowerMult || 1);
+        this.jumpVelocityY = 1.3 + obstacleRadius * 3.5;
         this.jumpRotation = 0;
         this.jumpAngularVel = 0;
         this.jumpWheelSpin = Math.min(this.speed / 60, 0.3);
+        this.speed *= 1 - 0.14 * severity;
 
-        // The impact scrubs some speed
-        this.speed *= 0.88;
-
-        console.log(`Hopped a ${obstacleRadius.toFixed(2)}m rock`);
+        console.log(`Rode over a ${obstacleRadius.toFixed(2)}m rock`);
         return true;
     }
 
@@ -2935,7 +2964,7 @@ class Vehicle {
         const jumpAngle = Math.atan2(ramp.height, ramp.length * 0.6); // Approximate ramp angle
         this.jumpVelocityY = Math.sin(jumpAngle) * this.speed * 0.6; // Even higher jump force
 
-        // Better extra lift, scaled by the character's suspension (jump stat)
+        // Better extra lift, scaled by the character's suspension travel
         this.jumpVelocityY += 2.5;
         this.jumpVelocityY *= this.jumpPowerMult || 1;
 

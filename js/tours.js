@@ -13,11 +13,14 @@ class TourSystem {
                 weather: 'clear',
                 weatherIntensity: 0
             },
-            // Leg 2: Build confidence (80 segments = 1600m)
+            // Leg 2: Points leg - no timer, score as much as possible on the
+            // fast, open, jump-friendly valley run. (mode: 'points'; every
+            // other leg defaults to a time trial.)
             {
                 id: 'valley-run',
                 name: 'Valley Run',
                 description: 'Fast flowing sections through sunlit valleys',
+                mode: 'points',
                 startSegment: 70,
                 endSegment: 149,
                 timeOfDay: 'golden',
@@ -222,10 +225,10 @@ class TourSystem {
                             <span style="color: white; font-weight: bold; font-size: 14px;">${unlocked ? '' : '🔒 '}${c.name}</span>
                         </div>
                         <div style="color: #8899bb; margin-bottom: 6px;">${c.bikeLabel}</div>
-                        <div>Speed&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
-                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
-                        <div>Handling ${statBar(c.stats.handling)}</div>
-                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
+                        <div>Speed&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
+                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
+                        <div>Handling&nbsp;&nbsp; ${statBar(c.stats.handling)}</div>
+                        <div>Suspension ${statBar(c.stats.suspension)}</div>
                         ${lockHint}
                     </div>`;
                 }).join('')}
@@ -238,6 +241,23 @@ class TourSystem {
 
     getLegById(id) {
         return this.legs.find(leg => leg.id === id);
+    }
+
+    // A leg is either a time trial (default) or a points leg. Time legs are
+    // ranked by finish time with a live timer; points legs hide the timer and
+    // rank by score. Pass a leg object or an id.
+    getLegMode(legOrId) {
+        const leg = typeof legOrId === 'string' ? this.getLegById(legOrId) : legOrId;
+        return leg && leg.mode === 'points' ? 'points' : 'time';
+    }
+
+    // m:ss.t clock for the live HUD timer
+    static formatClock(milliseconds) {
+        const totalSeconds = Math.max(0, milliseconds) / 1000;
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = Math.floor(totalSeconds % 60);
+        const tenths = Math.floor((totalSeconds * 10) % 10);
+        return `${minutes}:${seconds.toString().padStart(2, '0')}.${tenths}`;
     }
 
     selectLeg(legId) {
@@ -444,11 +464,10 @@ class TourSystem {
                     <div class="showcase-name">${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
                     <div class="showcase-stats">
-                        <div>Speed&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
+                        <div>Speed&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
                         <div>Accel&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
-                        <div>Handling ${statBar(c.stats.handling)}</div>
-                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
-                        <div>Comfort&nbsp; ${statBar(c.stats.comfort)}</div>
+                        <div>Handling&nbsp;&nbsp; ${statBar(c.stats.handling)}</div>
+                        <div>Suspension ${statBar(c.stats.suspension)}</div>
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
@@ -467,12 +486,19 @@ class TourSystem {
                     <div class="showcase-sub">${leg.description}</div>
                     <div class="showcase-hint">Complete Leg ${index} to unlock</div>`;
             } else {
+                const isPoints = this.getLegMode(leg) === 'points';
+                const modeBadge = isPoints
+                    ? '<span style="color:#f39c12;">◆ POINTS — score attack, no timer</span>'
+                    : '<span style="color:#6cf;">◆ TIME TRIAL — beat the clock</span>';
                 card.innerHTML = `
                     <div class="showcase-name">LEG ${index + 1}: ${leg.name} ${completed ? '<span style="color:#2ecc71;font-size:13px;">✔ COMPLETED</span>' : ''}</div>
-                    <div class="showcase-sub">${leg.description}</div>`;
+                    <div class="showcase-sub">${leg.description}</div>
+                    <div class="showcase-hint">${modeBadge}</div>`;
             }
             document.getElementById('legStartBtn').disabled = tier !== 'lit';
-            document.getElementById('legLeaderboardBtn').style.visibility = tier === 'lit' ? 'visible' : 'hidden';
+            const lbBtn = document.getElementById('legLeaderboardBtn');
+            lbBtn.style.visibility = tier === 'lit' ? 'visible' : 'hidden';
+            lbBtn.textContent = this.getLegMode(leg) === 'points' ? '🏆 BEST SCORES' : '🏆 BEST TIMES';
             if (this.onTrackShowcase) this.onTrackShowcase(index);
         };
         this.renderLegCard = renderLegCard;

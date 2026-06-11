@@ -26,6 +26,7 @@ class Environment {
 
     this.createRoad(); // Generates full roadPath, but only creates geometry for segment range
     this.createGrass();
+    this.createValleyFog(); // Haze layer hiding the lake floor below the road
     this.createLayeredMountains(); // Add layered mountain scenery
     this.createRoadMarkings();
     this.addEnvironmentalDetails();
@@ -3584,6 +3585,37 @@ class Environment {
     this.registerGrounded(group, "end-course mountains");
   }
 
+  // A band of mist filling the valley between the lake (y = -200) and the
+  // road (~y +25). The lake floor reads starkly when you look over the cliff
+  // edge; a few stacked translucent sheets soften it into haze - denser low,
+  // wispier near the top. Purely cosmetic (no collision, unlit, no shadow).
+  createValleyFog() {
+    const fogGroup = new THREE.Group();
+    const layers = 5;
+    const top = -15; // stays well below the lowest road point (~y +11)
+    const bottom = -190; // just above the lake surface (-200)
+    for (let i = 0; i < layers; i++) {
+      const t = layers > 1 ? i / (layers - 1) : 0;
+      const y = bottom + (top - bottom) * t;
+      // Lower sheets denser, upper sheets wispier
+      const opacity = 0.1 + 0.12 * (1 - t);
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xc2cdd8, // soft grey-blue haze
+        transparent: true,
+        opacity,
+        depthWrite: false, // don't occlude; just tint what's behind
+        side: THREE.DoubleSide,
+        fog: false,
+      });
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(3400, 3400), material);
+      plane.rotation.x = -Math.PI / 2;
+      plane.position.set(0, y, 0);
+      fogGroup.add(plane);
+    }
+    this.scene.add(fogGroup);
+    this.valleyFog = fogGroup;
+  }
+
   createGrass() {
     // Create a lake at the bottom instead of grass
     const lakeMaterial = new THREE.MeshStandardMaterial({
@@ -3841,12 +3873,16 @@ class Environment {
       // Checkered banner gantry over the finish line
       this.createFinishBanner(this.roadPath[finishSegmentIdx]);
 
-      // Store finish line position for detection
+      // Store finish line position + orientation for crossing detection.
+      // Detection uses a plane-crossing test along this heading (see main.js),
+      // so the heading and segment index are needed alongside the point.
       this.finishLinePosition = new THREE.Vector3(
         this.roadPath[finishSegmentIdx].x,
         finishY,
         this.roadPath[finishSegmentIdx].z,
       );
+      this.finishLineHeading = this.roadPath[finishSegmentIdx].heading;
+      this.finishSegmentIdx = finishSegmentIdx;
       console.log(
         `Finish line placed at segment ${finishSegmentIdx} (leg range: ${this.startSegment}-${this.endSegment})`,
       );

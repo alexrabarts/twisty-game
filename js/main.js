@@ -307,6 +307,15 @@ class Game {
         this.vehicle.finished = false;
         this.startTime = performance.now();
 
+        // Time trial vs points leg: drives the HUD (live timer vs score),
+        // the finish screen, and which leaderboard the leg uses.
+        this.currentLegMode = this.tourSystem.getLegMode(leg);
+        this.applyHudModeForLeg();
+
+        // Clear any stale Escape press from the menu so the leg doesn't bail
+        // out on its first frame.
+        if (this.input) this.input.escapePressed = false;
+
         // Classify the freshly built scene for distance culling
         this.setupPerformanceCulling();
 
@@ -316,8 +325,10 @@ class Game {
             this.clock.getDelta();
         }
 
-        // Start leaderboard session
-        if (this.leaderboardService) {
+        // Start leaderboard session. The online board is time-trial only
+        // (it ranks HMAC-proofed checkpoint times), so points legs skip it and
+        // use a local per-leg high-score board instead.
+        if (this.leaderboardService && this.currentLegMode === 'time') {
             this.leaderboardService.startRun(leg.id).then(result => {
                 if (result === true) {
                     console.log('Leaderboard session started for leg:', leg.id);
@@ -917,7 +928,7 @@ class Game {
         const cameraPos = this.tempVector.set(0, 1.18, 0.3).applyEuler(mountEuler).add(vehiclePos);
 
         // Engine/road vibration - subtle, speed dependent, comfort damped
-        const vibration = (0.008 + speedRatio * 0.012) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+        const vibration = (0.008 + speedRatio * 0.012) * (this.vehicle.suspensionShake !== undefined ? this.vehicle.suspensionShake : 1);
         cameraPos.x += (Math.random() - 0.5) * vibration;
         cameraPos.y += (Math.random() - 0.5) * vibration * 0.7;
 
@@ -1056,7 +1067,7 @@ class Game {
             this.cameraOffset.z = this.baseCameraOffset.z;
             
             // Add small vibration for realism (scaled by the bike's comfort)
-            const onboardShake = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
+            const onboardShake = this.vehicle.suspensionShake !== undefined ? this.vehicle.suspensionShake : 1;
             this.cameraOffset.x += Math.sin(performance.now() * 0.01) * 0.02 * onboardShake;
             this.cameraOffset.y += Math.sin(performance.now() * 0.013) * 0.01 * onboardShake;
         } else {
@@ -1112,7 +1123,7 @@ class Game {
         // Additional camera shake at high speeds (outside onboard mode)
         if (currentMode.type !== 'onboard') {
             const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
-            const shakeIntensity = speedFactor * 0.05 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+            const shakeIntensity = speedFactor * 0.05 * (this.vehicle.suspensionShake !== undefined ? this.vehicle.suspensionShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
         }
@@ -1167,15 +1178,15 @@ class Game {
             // Enhanced camera shake with multiple sources
             if (!this.cameraShakeOffset) this.cameraShakeOffset = new THREE.Vector3();
 
-            // Comfort rating damps every shake source - Tim's scooter
+            // Suspension travel damps every shake source - Shane's dirt bike
             // glides where Steve's race bike rattles
-            const comfort = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
+            const shakeMult = this.vehicle.suspensionShake !== undefined ? this.vehicle.suspensionShake : 1;
 
             // Base speed shake - increases dramatically at high speeds
-            const speedShake = Math.pow(speedFactor, 2) * 0.12 * comfort;
+            const speedShake = Math.pow(speedFactor, 2) * 0.12 * shakeMult;
 
             // Terrain/roughness shake - simulates bumpy road
-            const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedFactor * comfort;
+            const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedFactor * shakeMult;
 
             // Landing impact shake - big jolt when landing from jumps
             let landingShake = 0;
@@ -1183,7 +1194,7 @@ class Game {
                 this.lastJumpState = true;
             } else if (this.lastJumpState) {
                 // Just landed - create impact shake (softened by suspension comfort)
-                this.landingShakeIntensity = 0.3 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+                this.landingShakeIntensity = 0.3 * (this.vehicle.suspensionShake !== undefined ? this.vehicle.suspensionShake : 1);
                 this.landingShakeTime = performance.now();
                 this.lastJumpState = false;
             }
@@ -1361,6 +1372,9 @@ class Game {
 
         // Update score display
         this.updateScoreDisplay();
+
+        // Update the live time-trial timer (no-op on points legs)
+        this.updateTimerDisplay();
     }
     
     
@@ -1483,15 +1497,39 @@ class Game {
             }
         }
 
-        // Check for best time (tracked per leg - legs have different lengths)
+        // Personal best + the headline stats depend on the leg mode: time
+        // trials rank by fastest time, points legs by highest score. Both are
+        // tracked per leg (legs differ in length and feature mix).
         const currentLeg = this.tourSystem.getCurrentLeg();
-        const bestTimeKey = currentLeg ? `motorcycleBestTime_${currentLeg.id}` : 'motorcycleBestTime';
-        this.bestTime = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
-        let bestTimeMessage = '';
-        if (timeSeconds < this.bestTime) {
-            this.bestTime = timeSeconds;
-            localStorage.setItem(bestTimeKey, timeSeconds.toString());
-            bestTimeMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW BEST TIME! 🏆</div>';
+        const isPointsLeg = this.currentLegMode === 'points';
+        let bestMetricMessage = '';
+        let metricRows = '';
+        if (isPointsLeg) {
+            const bestScoreKey = currentLeg ? `motorcycleHighScore_${currentLeg.id}` : 'motorcycleHighScore';
+            const prevBestScore = parseInt(localStorage.getItem(bestScoreKey) || '0', 10);
+            if (totalScore > prevBestScore) {
+                localStorage.setItem(bestScoreKey, totalScore.toString());
+                bestMetricMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW HIGH SCORE! 🏆</div>';
+            }
+            const bestScore = Math.max(prevBestScore, totalScore);
+            metricRows = `
+                <div style="margin-bottom: 10px;">Time: <span style="color: #e74c3c;">${timeSeconds.toFixed(1)}s</span></div>
+                ${bestMetricMessage}
+                ${unlockMessage}
+                <div style="margin-bottom: 10px;">Best Score: <span style="color: #2ecc71;">${bestScore.toLocaleString()}</span></div>`;
+        } else {
+            const bestTimeKey = currentLeg ? `motorcycleBestTime_${currentLeg.id}` : 'motorcycleBestTime';
+            this.bestTime = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
+            if (timeSeconds < this.bestTime) {
+                this.bestTime = timeSeconds;
+                localStorage.setItem(bestTimeKey, timeSeconds.toString());
+                bestMetricMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW BEST TIME! 🏆</div>';
+            }
+            metricRows = `
+                <div style="margin-bottom: 10px;">Time: <span style="color: #e74c3c;">${timeSeconds.toFixed(1)} seconds</span></div>
+                ${bestMetricMessage}
+                ${unlockMessage}
+                <div style="margin-bottom: 10px;">Best Time: <span style="color: #2ecc71;">${this.bestTime < 999999 ? this.bestTime.toFixed(1) + 's' : 'N/A'}</span></div>`;
         }
 
         finishBanner.innerHTML = `
@@ -1504,10 +1542,7 @@ class Game {
             </div>
             <div style="font-size: 24px; margin-bottom: 20px;">
                 <div style="margin-bottom: 10px;">Distance: <span style="color: #3498db;">${distance.toFixed(0)} meters</span></div>
-                <div style="margin-bottom: 10px;">Time: <span style="color: #e74c3c;">${timeSeconds.toFixed(1)} seconds</span></div>
-                ${bestTimeMessage}
-                ${unlockMessage}
-                <div style="margin-bottom: 10px;">Best Time: <span style="color: #2ecc71;">${this.bestTime < 999999 ? this.bestTime.toFixed(1) + 's' : 'N/A'}</span></div>
+                ${metricRows}
                 <div style="margin-bottom: 10px;">Average Speed: <span style="color: #9b59b6;">${averageSpeed.toFixed(1)} mph</span></div>
             </div>
             <div style="font-size: 36px; font-weight: bold; color: #f39c12; margin-bottom: 20px;">
@@ -1935,6 +1970,8 @@ class Game {
     async showLeaderboardViewer(legId) {
         const leg = this.tourSystem.getLegById(legId);
         const legName = leg ? leg.name : legId;
+        const isPointsLeg = this.tourSystem.getLegMode(legId) === 'points';
+        const boardTitle = isPointsLeg ? '🏆 BEST SCORES' : '🏆 BEST TIMES';
 
         // Remove any existing viewer
         const existing = document.getElementById('leaderboardViewer');
@@ -1968,7 +2005,7 @@ class Game {
             box-shadow: 0 0 40px rgba(255, 215, 0, 0.25);
         `;
         panel.innerHTML = `
-            <h2 style="color: #ffd700; margin: 0 0 4px 0; letter-spacing: 2px;">🏆 BEST TIMES</h2>
+            <h2 style="color: #ffd700; margin: 0 0 4px 0; letter-spacing: 2px;">${boardTitle}</h2>
             <div style="color: #8899bb; margin-bottom: 18px; font-size: 14px;">${legName}</div>
             <div id="leaderboardViewerBody" style="font-size: 15px; color: #ccd;">Loading…</div>
             <button id="leaderboardViewerClose" style="
@@ -1993,6 +2030,18 @@ class Game {
         });
 
         const body = panel.querySelector('#leaderboardViewerBody');
+
+        // Points legs aren't on the online (time-trial) board - show the local
+        // per-leg high score instead.
+        if (isPointsLeg) {
+            const bestScore = parseInt(localStorage.getItem(`motorcycleHighScore_${legId}`) || '0', 10);
+            const bestScoreHtml = bestScore > 0
+                ? `<div style="margin-bottom: 14px; color: #2ecc71;">Your best: ${bestScore.toLocaleString()} pts</div>`
+                : `<div style="margin-bottom: 14px; color: #667;">No score posted yet</div>`;
+            body.innerHTML = bestScoreHtml +
+                '<div style="color: #889;">Points legs are scored locally — chase your own high score.</div>';
+            return;
+        }
 
         // Local best time always shows, even offline
         const localBest = parseFloat(localStorage.getItem(`motorcycleBestTime_${legId}`) || 'NaN');
@@ -2355,6 +2404,22 @@ class Game {
             }
         }
 
+        // Escape bails out of the race back to the menu (works even if paused)
+        if (this.input.checkEscape()) {
+            const fb = document.getElementById('finishBanner');
+            if (fb) fb.remove();
+            const cn = document.getElementById('crashNotification');
+            if (cn) cn.remove();
+            this.paused = false;
+            // Abandoning a run mid-race: don't submit it to the leaderboard
+            if (this.leaderboardService && this.leaderboardService.isActive()) {
+                this.leaderboardService.cancelSession();
+            }
+            this.input.setMenuActive(false);
+            this.returnToMenu();
+            return; // leg torn down, this animation loop is cancelled
+        }
+
         // Skip all game logic if paused, but continue rendering
         if (this.paused) {
             this.renderer.render(this.scene, this.camera);
@@ -2544,10 +2609,28 @@ class Game {
             this.checkNearMisses();
         }
 
-        // Check for finish line crossing
+        // Check for finish line crossing.
+        // A 3D "within 5 units of the centre point" sphere test missed the
+        // finish whenever the rider crossed off-centre (the road is 16-20 wide,
+        // so an edge crossing is ~8-10 units from the centreline), while
+        // airborne/on a slope (vertical distance), or very fast (tunnelling).
+        // Instead, detect when the rider passes the finish *plane*: project the
+        // rider onto the finish heading and trigger once they're at/past it and
+        // within a generous lateral band. Gated to the finish area by road
+        // segment so earlier curves in the road can't trigger it early.
         if (!this.finished && !this.vehicle.crashed && this.environment.finishLinePosition) {
-            const distanceToFinish = this.vehicle.position.distanceTo(this.environment.finishLinePosition);
-            if (distanceToFinish < 5) { // Within 5 units of finish line
+            const fp = this.environment.finishLinePosition;
+            const h = this.environment.finishLineHeading || 0;
+            const fwdX = Math.sin(h);
+            const fwdZ = Math.cos(h);
+            const dx = this.vehicle.position.x - fp.x;
+            const dz = this.vehicle.position.z - fp.z;
+            const ahead = dx * fwdX + dz * fwdZ;            // >= 0 once past the finish plane
+            const lateral = dx * Math.cos(h) - dz * Math.sin(h);
+            const halfBand = (this.environment.roadWidth || 20) / 2 + 8;
+            const nearFinish = this.vehicle.currentRoadSegment >=
+                ((this.environment.finishSegmentIdx || 0) - 3);
+            if (nearFinish && ahead >= 0 && Math.abs(lateral) < halfBand) {
                 this.finished = true;
                 this.vehicle.finished = true; // Prevent crashes after finishing
                 this.finishTime = performance.now() - this.startTime;
@@ -2624,7 +2707,7 @@ class Game {
         if (this.rockfalls) {
             const rockHit = this.rockfalls.update(deltaTime, this.vehicle);
             if (rockHit && rockHit.hit && !this.vehicle.crashed && !this.finished &&
-                !(rockHit.rock.settled && this.vehicle.attemptHop(rockHit.rock.radius))) {
+                !(rockHit.rock.settled && this.vehicle.attemptRideOver(rockHit.rock.radius))) {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 this.vehicle.frame.material.color.setHex(0x8b5a2b);
@@ -3052,7 +3135,38 @@ class Game {
         }
         this.lastDisplayedCombo = this.combo;
     }
-    
+
+    // Show the live timer on time-trial legs and the score panel on points
+    // legs. Called once when a leg starts; the menu CSS hides both anyway
+    // while the selector is up.
+    applyHudModeForLeg() {
+        const isPoints = this.currentLegMode === 'points';
+        const scoreEl = document.querySelector('.score-display');
+        const timerEl = document.getElementById('timerDisplay');
+        if (scoreEl) scoreEl.style.display = isPoints ? '' : 'none';
+        if (timerEl) timerEl.style.display = isPoints ? 'none' : '';
+        this.lastTimerText = null; // force a timer redraw next frame
+    }
+
+    // Per-frame live timer for time-trial legs. Freezes at the finish time
+    // once the leg is done.
+    updateTimerDisplay() {
+        if (this.currentLegMode !== 'time') return;
+        if (!this.timerElements) {
+            this.timerElements = { value: document.getElementById('timerValue') };
+        }
+        const el = this.timerElements.value;
+        if (!el) return;
+        const elapsed = this.finished
+            ? this.finishTime
+            : (performance.now() - this.startTime);
+        const text = TourSystem.formatClock(elapsed);
+        if (text !== this.lastTimerText) {
+            this.lastTimerText = text;
+            el.textContent = text;
+        }
+    }
+
     showCheckpointNotification(checkpointNum, points) {
         const notification = document.createElement('div');
         notification.className = 'checkpoint-notification';

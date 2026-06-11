@@ -13,6 +13,7 @@ class InputHandler {
         this.checkpointRestartPressed = false;
         this.cameraSwitchPressed = false;
         this.pausePressed = false;
+        this.escapePressed = false;
         this.virtualControls = null;
         this.steeringSmoothing = 0.4; // How quickly steering ramps up (0-1, higher = faster)
         this.menuActive = false; // Track if crash/finish menu is showing
@@ -66,6 +67,11 @@ class InputHandler {
                 this.pausePressed = true;
             }
 
+            // Escape brings up the menu mid-race (handled in the game loop)
+            if (event.code === 'Escape') {
+                this.escapePressed = true;
+            }
+
             // Test key to force falling
             if (event.code === 'KeyF') {
                 console.log('F key pressed - forcing fall test');
@@ -105,6 +111,10 @@ class InputHandler {
 
             if (event.code === 'KeyP') {
                 this.pausePressed = false;
+            }
+
+            if (event.code === 'Escape') {
+                this.escapePressed = false;
             }
         });
     }
@@ -243,6 +253,15 @@ class InputHandler {
     checkPause() {
         if (this.pausePressed) {
             this.pausePressed = false;
+            return true;
+        }
+        return false;
+    }
+
+    // One-shot: true the frame Escape was pressed (used to bail to the menu)
+    checkEscape() {
+        if (this.escapePressed) {
+            this.escapePressed = false;
             return true;
         }
         return false;

@@ -2,7 +2,9 @@
  * Rockfall hazard system.
  * On later legs, rocks periodically break off the mountain wall ahead of the
  * player, tumble down onto the road, bounce, roll across and settle briefly
- * before crumbling away. Hitting one (or being hit) crashes the bike.
+ * before crumbling away. Small rocks can be ridden over if the bike has the
+ * suspension travel for it (see Vehicle.attemptRideOver); bigger ones, or any
+ * rock still in the air, crash the bike.
  */
 class RockfallSystem {
     constructor(scene, environment, legIndex) {
@@ -132,7 +134,11 @@ class RockfallSystem {
         const count = 2 + Math.floor(Math.random() * (2 + this.intensity * 2));
 
         for (let i = 0; i < count && this.rocks.length < this.maxRocks; i++) {
-            const radius = 0.35 + Math.random() * (0.5 + this.intensity * 0.5);
+            // Skewed small: most rocks are little (rideable by bikes with
+            // enough suspension travel), with the occasional big crasher.
+            // r*r biases toward the low end; intensity widens the top.
+            const r = Math.random();
+            const radius = 0.12 + r * r * (0.45 + this.intensity * 0.35);
             const mesh = new THREE.Mesh(
                 this.geometries[Math.floor(Math.random() * this.geometries.length)],
                 this.materials[Math.floor(Math.random() * this.materials.length)]

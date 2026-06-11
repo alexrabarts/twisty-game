@@ -183,6 +183,43 @@
             animation: pulse-combo 0.5s ease-in-out;
         }
 
+        /* Time-trial timer mirrors the score panel, in a cyan accent */
+        .timer-display {
+            position: absolute;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            text-align: center;
+            z-index: 100;
+            padding: 8px 28px 12px;
+            background: linear-gradient(180deg, rgba(8, 12, 18, 0.5) 0%, rgba(8, 12, 18, 0.25) 100%);
+            border: 1px solid var(--panel-border);
+            border-radius: var(--radius-panel);
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+        }
+
+        #timerValue {
+            font-size: 46px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+            color: #6cf;
+            text-shadow:
+                0 2px 4px rgba(0, 0, 0, 0.8),
+                0 0 22px rgba(102, 204, 255, 0.35);
+            margin: 0;
+            line-height: 1.05;
+            letter-spacing: 1px;
+        }
+
+        #timerLabel {
+            font-size: 12px;
+            font-weight: 700;
+            color: rgba(102, 204, 255, 0.75);
+            letter-spacing: 4px;
+            margin: 0 0 2px;
+        }
+
         @keyframes pulse-combo {
             0% { transform: scale(1); }
             50% { transform: scale(1.2); }
@@ -384,6 +421,7 @@
         /* While the menu is up, hide the in-game HUD (it bleeds through the
            transparent showcase overlay) */
         body.in-menu .score-display,
+        body.in-menu .timer-display,
         body.in-menu .info,
         body.in-menu .speedometer,
         body.in-menu .wheelie-indicator,
@@ -808,11 +846,17 @@
     <div class="controls">
     </div>
     
-    <!-- Score Display -->
+    <!-- Score Display (points legs) -->
     <div class="score-display">
         <p id="scoreLabel">SCORE</p>
         <p id="score">0</p>
         <div id="comboDisplay"></div>
+    </div>
+
+    <!-- Timer Display (time-trial legs) -->
+    <div class="timer-display" id="timerDisplay" style="display: none;">
+        <p id="timerLabel">TIME</p>
+        <p id="timerValue">0:00.0</p>
     </div>
     
     <!-- Top right info -->
