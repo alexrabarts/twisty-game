@@ -134,27 +134,33 @@ class LeaderboardService {
     }
 
     /**
-     * Record a checkpoint pass
+     * Record a checkpoint pass.
+     * Recordings are serialized through a promise queue: each proof chains on
+     * the previous proof's hash, so two in-flight recordings reading the same
+     * previousHash would break the HMAC chain and get the run flagged.
      */
-    async recordCheckpoint(checkpointIndex, time) {
-        if (!this.sessionId || !this.sessionToken) {
-            console.warn('No active leaderboard session');
-            return;
-        }
+    recordCheckpoint(checkpointIndex, time) {
+        this.recordQueue = (this.recordQueue || Promise.resolve()).then(async () => {
+            if (!this.sessionId || !this.sessionToken) {
+                console.warn('No active leaderboard session');
+                return;
+            }
 
-        // Get previous hash (empty string for first checkpoint)
-        const previousHash = this.proofChain.length > 0
-            ? this.proofChain[this.proofChain.length - 1]
-            : '';
+            // Get previous hash (empty string for first checkpoint)
+            const previousHash = this.proofChain.length > 0
+                ? this.proofChain[this.proofChain.length - 1]
+                : '';
 
-        // Generate proof
-        const proof = await this.generateProof(checkpointIndex, time, previousHash);
+            // Generate proof
+            const proof = await this.generateProof(checkpointIndex, time, previousHash);
 
-        // Store checkpoint time and proof
-        this.checkpointTimes.push(time);
-        this.proofChain.push(proof);
+            // Store checkpoint time and proof
+            this.checkpointTimes.push(time);
+            this.proofChain.push(proof);
 
-        console.log(`Checkpoint ${checkpointIndex} recorded: ${time}ms, proof: ${proof.substring(0, 8)}...`);
+            console.log(`Checkpoint ${checkpointIndex} recorded: ${time}ms, proof: ${proof.substring(0, 8)}...`);
+        });
+        return this.recordQueue;
     }
 
     /**

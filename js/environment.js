@@ -571,15 +571,15 @@ class Environment {
       // Determine if this section needs guard rails based on elevation drop
       const elevationDrop = Math.abs(point.y);
       const nextIndex = Math.min(i + 1, this.roadPath.length - 1);
-      const headingChange = Math.abs(
-        this.roadPath[nextIndex].heading - point.heading,
-      );
+      const headingDelta = this.roadPath[nextIndex].heading - point.heading;
+      const headingChange = Math.abs(headingDelta);
 
       // Add rails on curves and high elevation sections
       if (elevationDrop > 5 || headingChange > 0.02) {
-        // Determine which side needs rails (outside of curves or both on dangerous sections)
+        // Rail goes on the outside of the curve: right turn (positive
+        // delta) -> left side (-1), left turn -> right side (1)
         const railSide =
-          headingChange > 0.02 ? (headingChange > 0 ? -1 : 1) : 0;
+          headingChange > 0.02 ? (headingDelta > 0 ? -1 : 1) : 0;
 
         if (railSide <= 0) {
           // Left side rail - create as vertical cylindrical rail
@@ -1951,6 +1951,7 @@ class Environment {
       group.add(mountain);
     });
 
+    this.tagMeshes(group, "mountain");
     this.scene.add(group);
   }
 
@@ -1963,6 +1964,7 @@ class Environment {
     const centralMountain = this.createLakeIslandMountain();
     group.add(centralMountain);
 
+    this.tagMeshes(group, "mountain");
     this.scene.add(group);
   }
 
@@ -2162,6 +2164,7 @@ class Environment {
     );
     group.add(mountain2);
 
+    this.tagMeshes(group, "mountain");
     this.scene.add(group);
   }
 
@@ -3318,6 +3321,7 @@ class Environment {
       group.add(farPeak);
     }
 
+    this.tagMeshes(group, "mountain");
     this.scene.add(group);
   }
 
@@ -3529,6 +3533,9 @@ class Environment {
       startLine.rotation.x = -Math.PI / 2;
       // Place start line at beginning of leg
       const startSegmentIdx = Math.min(this.startSegment + 5, this.endSegment);
+      // Align across the road like the finish line - heading is non-zero on
+      // every leg except the very first segment of the track
+      startLine.rotation.z = this.roadPath[startSegmentIdx].heading;
       const startY =
         this.roadPath[startSegmentIdx].y !== undefined
           ? this.roadPath[startSegmentIdx].y + 0.03
@@ -3798,11 +3805,30 @@ class Environment {
   }
 
   createRoadworks() {
-    // Define construction zones with variety - some with ramps, some without
-    // Adjusted for new track layout with hairpin
+    // Place construction zones relative to the ACTIVE LEG rather than at
+    // hardcoded full-track segments (27-29/48-49), which only fell inside
+    // legs 1-2 and left floating geometry + phantom collision obstacles when
+    // other legs were rendered.
+    const legStart = this.startSegment;
+    const legEnd = Math.min(this.endSegment, this.roadPath.length - 1);
+    const legLength = legEnd - legStart;
+
+    const majorStart = legStart + Math.floor(legLength * 0.55);
+    const minorStart = legStart + Math.floor(legLength * 0.85);
+
     const roadworksLocations = [
-      { startSegment: 27, endSegment: 29, hasRamp: true, type: "major" }, // After hairpin major construction with jump
-      { startSegment: 48, endSegment: 49, hasRamp: false, type: "minor" }, // Near end minor repairs
+      {
+        startSegment: majorStart,
+        endSegment: majorStart + 2,
+        hasRamp: true,
+        type: "major",
+      }, // Mid-leg major construction with jump
+      {
+        startSegment: minorStart,
+        endSegment: minorStart + 1,
+        hasRamp: false,
+        type: "minor",
+      }, // Near end minor repairs
     ];
 
     roadworksLocations.forEach((zone) => {
@@ -4323,6 +4349,10 @@ class Environment {
   }
 
   createConstructionStripeTexture() {
+    // Cache - this is called once per barrier in a loop
+    if (this.constructionStripeTexture !== undefined) {
+      return this.constructionStripeTexture;
+    }
     const canvas = document.createElement("canvas");
     canvas.width = 256;
     canvas.height = 64;
@@ -4350,11 +4380,10 @@ class Environment {
       ctx.restore();
     }
 
-    // TEMP DISABLED to debug render issue
-    return null;
-    // const texture = new THREE.CanvasTexture(canvas);
-    // texture.wrapS = THREE.RepeatWrapping;
-    // return texture;
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    this.constructionStripeTexture = texture;
+    return texture;
   }
 
   createBulldozer(x, y, z, rotation) {
@@ -4664,57 +4693,75 @@ class Environment {
   }
 
   addHairpinWarnings() {
-    // Find the extreme hairpin segment (around segment 34 based on our layout)
-    let hairpinStartSegment = 0;
-    let segmentCount = 0;
+    // Detect hairpins from the actual road geometry (runs of sharp heading
+    // change within the active leg) instead of a hardcoded segment count from
+    // an obsolete layout - which placed warnings on a straight in Leg 2 and
+    // left the real hairpins in Leg 5 unmarked.
+    const hairpinTurnRate = 0.2; // radians of heading change per segment
+    const hairpins = [];
+    const scanStart = Math.max(1, this.startSegment);
+    const scanEnd = Math.min(this.endSegment, this.roadPath.length - 1);
 
-    // Calculate where the hairpin is
-    const layout = [
-      { segments: 10 },
-      { segments: 6 },
-      { segments: 4 },
-      { segments: 8 },
-      { segments: 3 },
-      { segments: 10 },
-      { segments: 5 },
-      { segments: 2 },
-      { segments: 7 }, // This is the hairpin
-    ];
-
-    for (let i = 0; i < 8; i++) {
-      segmentCount += layout[i].segments;
+    let runStart = -1;
+    let runDirection = 0;
+    for (let i = scanStart; i <= scanEnd + 1; i++) {
+      const delta =
+        i <= scanEnd
+          ? this.roadPath[i].heading - this.roadPath[i - 1].heading
+          : 0;
+      const isSharp = Math.abs(delta) >= hairpinTurnRate;
+      if (isSharp && runStart === -1) {
+        runStart = i - 1;
+        runDirection = Math.sign(delta);
+      } else if (!isSharp && runStart !== -1) {
+        hairpins.push({ start: runStart, end: i - 1, direction: runDirection });
+        runStart = -1;
+      }
     }
-    hairpinStartSegment = segmentCount;
 
-    // Add chevron warning signs before the hairpin
+    hairpins.forEach((hairpin) => {
+      this.createHairpinWarningsFor(hairpin);
+    });
+  }
+
+  createHairpinWarningsFor(hairpin) {
+    const turnLength = hairpin.end - hairpin.start;
+    // Outside of the turn: right turn (positive heading delta) -> left side
+    const outsideSide = -hairpin.direction;
+    const chevronDirection = hairpin.direction > 0 ? "right" : "left";
+
+    // Add warning signs before the hairpin
     this.createHairpinSign(
-      this.roadPath[Math.max(0, hairpinStartSegment - 5)],
+      this.roadPath[Math.max(0, hairpin.start - 5)],
       "EXTREME HAIRPIN",
     );
 
     this.createHairpinSign(
-      this.roadPath[Math.max(0, hairpinStartSegment - 3)],
+      this.roadPath[Math.max(0, hairpin.start - 3)],
       "SLOW DOWN!",
     );
 
     // Add chevron markers through the turn
-    for (let i = 0; i < 7; i++) {
-      if (hairpinStartSegment + i >= this.roadPath.length) break;
-      const point = this.roadPath[hairpinStartSegment + i];
-      this.createChevronMarker(point, "right");
+    for (let i = 0; i <= turnLength; i++) {
+      if (hairpin.start + i >= this.roadPath.length) break;
+      const point = this.roadPath[hairpin.start + i];
+      this.createChevronMarker(point, chevronDirection);
     }
 
     // Add safety barriers on the outside of the hairpin
-    for (let i = -1; i < 8; i++) {
-      const segmentIndex = hairpinStartSegment + i;
+    for (let i = -1; i <= turnLength + 1; i++) {
+      const segmentIndex = hairpin.start + i;
       if (segmentIndex < 0 || segmentIndex >= this.roadPath.length) continue;
 
       const point = this.roadPath[segmentIndex];
 
-      // Place barrier on outside of turn (left side since it's a right turn)
-      const barrierDistance = 9;
-      const barrierX = point.x - Math.cos(point.heading) * barrierDistance;
-      const barrierZ = point.z + Math.sin(point.heading) * barrierDistance;
+      // Place barrier on the outside of the turn, clear of the road surface
+      // and its 2m ledge (these barriers are collidable)
+      const barrierDistance = this.roadWidth / 2 + 2.5;
+      const barrierX =
+        point.x + Math.cos(point.heading) * barrierDistance * outsideSide;
+      const barrierZ =
+        point.z - Math.sin(point.heading) * barrierDistance * outsideSide;
 
       // Create red and white striped barrier
       const barrierGeometry = new THREE.BoxGeometry(3, 1.2, 0.5);
@@ -4907,21 +4954,29 @@ class Environment {
   }
 
   createCheckpoints() {
-    // Place checkpoints evenly throughout the track
-    const totalSegments = this.roadPath.length;
-    const checkpointInterval = Math.floor(totalSegments / 5); // 5 checkpoints
+    // Place checkpoints evenly through the ACTIVE LEG (startSegment..endSegment),
+    // in riding order. Distributing over the full track put at most one
+    // checkpoint in any leg, so ordered checkpoint scoring could never trigger.
+    const legStart = this.startSegment;
+    const legEnd = Math.min(this.endSegment, this.roadPath.length - 1);
+    const legLength = legEnd - legStart;
+    const checkpointCount = 5;
 
-    // Start checkpoints after the first quarter of the track to avoid immediate scoring
-    const startOffset = Math.floor(totalSegments / 4);
+    // Skip the first ~15% of the leg to avoid immediate scoring, and leave
+    // room before the finish line
+    const firstCheckpoint = legStart + Math.max(2, Math.floor(legLength * 0.15));
+    const lastCheckpoint = legEnd - Math.max(2, Math.floor(legLength * 0.1));
+    const checkpointInterval = Math.max(
+      1,
+      Math.floor((lastCheckpoint - firstCheckpoint) / (checkpointCount - 1)),
+    );
 
-    // Create roadworks stripe texture
-    const stripeTexture = this.createRoadworksStripeTexture();
-
-    for (let i = 0; i < 5; i++) {
-      const segmentIndex =
-        (startOffset + i * checkpointInterval) % totalSegments;
+    for (let i = 0; i < checkpointCount; i++) {
+      const segmentIndex = Math.min(
+        firstCheckpoint + i * checkpointInterval,
+        lastCheckpoint,
+      );
       const point = this.roadPath[segmentIndex];
-      const nextPoint = this.roadPath[(segmentIndex + 1) % totalSegments];
 
       // Create checkpoint gate
       const gateGroup = new THREE.Group();
@@ -5005,6 +5060,16 @@ class Environment {
     if (config.fogDensity !== undefined) {
       this.updateFog(config.fogDensity);
     }
+  }
+
+  // Tag every mesh in a subtree so the recolor functions below can find it.
+  // Without these tags, per-leg landscape colors and weather tints were no-ops.
+  tagMeshes(object, type) {
+    object.traverse((child) => {
+      if (child.isMesh) {
+        child.userData.type = type;
+      }
+    });
   }
 
   updateTerrainColors(grassColor) {

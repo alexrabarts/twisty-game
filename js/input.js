@@ -133,8 +133,9 @@ class InputHandler {
             this.targetSteeringInput = -1;  // D/Right now steers left
         }
 
-        // Smooth steering towards target
-        this.steeringInput = this.steeringInput + (this.targetSteeringInput - this.steeringInput) * this.steeringSmoothing;
+        // Steering smoothing happens in getSteeringInput() - updateInputs()
+        // runs on every key event and every getter call, so smoothing here
+        // made steering response depend on call frequency and frame rate
 
         // Throttle and brake - combine WASD and arrow keys
         this.throttleInput = (keyW || keyUp) ? 1 : 0;
@@ -148,6 +149,15 @@ class InputHandler {
     getSteeringInput() {
         // Update inputs before returning (for virtual controls and smoothing)
         this.updateInputs();
+
+        // Smooth steering towards target, scaled by elapsed time so the ramp
+        // rate is the same at any display refresh rate
+        const now = performance.now();
+        const elapsed = Math.min((now - (this.lastSteeringTime || now)) / 1000, 0.1);
+        this.lastSteeringTime = now;
+        const blend = 1 - Math.pow(1 - this.steeringSmoothing, elapsed * 60);
+        this.steeringInput = this.steeringInput + (this.targetSteeringInput - this.steeringInput) * blend;
+
         return this.steeringInput;
     }
     

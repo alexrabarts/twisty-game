@@ -126,6 +126,11 @@ class VirtualControls {
                 line-height: 1.2;
             `;
 
+            // Store base colors so press/release handlers can restore the
+            // per-type color coding instead of resetting every button to white
+            button.dataset.baseBg = bgColor;
+            button.dataset.baseBorder = borderColor;
+
             // Store button reference
             this.buttons[btn.key] = button;
             
@@ -142,30 +147,23 @@ class VirtualControls {
                 }
             });
             
+            const restoreBaseColors = () => {
+                button.style.background = button.dataset.baseBg;
+                button.style.borderColor = button.dataset.baseBorder;
+            };
+
             button.addEventListener('touchend', (e) => {
                 e.preventDefault();
                 this.touches[btn.key] = false;
-                if (isSpaceButton) {
-                    button.style.background = 'rgba(255, 200, 0, 0.1)';
-                    button.style.borderColor = 'rgba(255, 200, 0, 0.4)';
-                } else {
-                    button.style.background = 'rgba(255, 255, 255, 0.1)';
-                    button.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-                }
+                restoreBaseColors();
             });
-            
+
             button.addEventListener('touchcancel', (e) => {
                 e.preventDefault();
                 this.touches[btn.key] = false;
-                if (isSpaceButton) {
-                    button.style.background = 'rgba(255, 200, 0, 0.1)';
-                    button.style.borderColor = 'rgba(255, 200, 0, 0.4)';
-                } else {
-                    button.style.background = 'rgba(255, 255, 255, 0.1)';
-                    button.style.borderColor = 'rgba(255, 255, 255, 0.3)';
-                }
+                restoreBaseColors();
             });
-            
+
             // Mouse events for testing
             button.addEventListener('mousedown', (e) => {
                 e.preventDefault();
@@ -173,18 +171,16 @@ class VirtualControls {
                 button.style.background = 'rgba(255, 255, 255, 0.3)';
                 button.style.borderColor = 'rgba(255, 255, 255, 0.6)';
             });
-            
+
             button.addEventListener('mouseup', (e) => {
                 e.preventDefault();
                 this.touches[btn.key] = false;
-                button.style.background = 'rgba(255, 255, 255, 0.1)';
-                button.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                restoreBaseColors();
             });
-            
+
             button.addEventListener('mouseleave', (e) => {
                 this.touches[btn.key] = false;
-                button.style.background = 'rgba(255, 255, 255, 0.1)';
-                button.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                restoreBaseColors();
             });
             
             btn.container.appendChild(button);
@@ -270,6 +266,7 @@ class VirtualControls {
         const controlsHeight = tallButtonHeight;
         const instructionsBottom = bottomPosition + controlsHeight + 10;
         const instructions = document.createElement('div');
+        instructions.className = 'virtual-controls-instructions';
         instructions.style.cssText = `
             position: fixed;
             left: 50%;
@@ -315,6 +312,9 @@ class VirtualControls {
             if (active) {
                 button.style.background = 'rgba(255, 255, 255, 0.3)';
                 button.style.borderColor = 'rgba(255, 255, 255, 0.6)';
+            } else if (button.dataset.baseBg) {
+                button.style.background = button.dataset.baseBg;
+                button.style.borderColor = button.dataset.baseBorder;
             } else {
                 button.style.background = 'rgba(255, 255, 255, 0.1)';
                 button.style.borderColor = 'rgba(255, 255, 255, 0.3)';
@@ -323,13 +323,15 @@ class VirtualControls {
     }
     
     destroy() {
-        const leftControls = document.querySelector('.virtual-controls-left');
-        const rightControls = document.querySelector('.virtual-controls-right');
-        const instructions = document.querySelector('[style*="Throttle"]');
-        if (leftControls) leftControls.remove();
-        if (rightControls) rightControls.remove();
-        if (instructions) instructions.remove();
-        
+        // Remove every element this instance created - the camera button and
+        // instructions previously leaked on each resize/orientation rebuild
+        document.querySelectorAll(
+            '.virtual-controls-left, .virtual-controls-right, .virtual-button-camera, .virtual-controls-instructions'
+        ).forEach(el => el.remove());
+
+        this.buttons = {};
+        this.touches = {};
+
         // Clean up event listeners
         window.removeEventListener('orientationchange', this.handleOrientationChange);
         window.removeEventListener('resize', this.handleResize);

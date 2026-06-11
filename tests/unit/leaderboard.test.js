@@ -3,6 +3,24 @@
  * Tests for client-side leaderboard functionality
  */
 
+import { jest } from '@jest/globals';
+import { readFileSync } from 'fs';
+import { webcrypto } from 'crypto';
+import { TextEncoder } from 'util';
+
+// js/leaderboard.js is a classic browser script (no exports); evaluate it and
+// expose the class so the real implementation is under test.
+const leaderboardSource = readFileSync(new URL('../../js/leaderboard.js', import.meta.url), 'utf8');
+(0, eval)(`${leaderboardSource}\nglobalThis.LeaderboardService = LeaderboardService;`);
+
+// jsdom does not provide crypto.subtle or TextEncoder; use Node's implementations
+if (!globalThis.crypto?.subtle) {
+    Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
+}
+if (!globalThis.TextEncoder) {
+    globalThis.TextEncoder = TextEncoder;
+}
+
 describe('LeaderboardService', () => {
     let leaderboardService;
     let mockFunctions;
@@ -187,6 +205,7 @@ describe('LeaderboardService', () => {
             mockFunctions.httpsCallable = jest.fn(() => mockSubmitRun);
             leaderboardService = new LeaderboardService(mockFunctions);
             leaderboardService.sessionId = 'test-session';
+            leaderboardService.sessionToken = 'test-token';
             leaderboardService.checkpointTimes = Array(10).fill(0).map((_, i) => (i + 1) * 1000);
             leaderboardService.proofChain = Array(10).fill('a'.repeat(64));
 
@@ -244,6 +263,7 @@ describe('LeaderboardService', () => {
             mockFunctions.httpsCallable = jest.fn(() => mockSubmitRun);
             leaderboardService = new LeaderboardService(mockFunctions);
             leaderboardService.sessionId = 'test-session';
+            leaderboardService.sessionToken = 'test-token';
             leaderboardService.checkpointTimes = Array(10).fill(0).map((_, i) => (i + 1) * 1000);
             leaderboardService.proofChain = Array(10).fill('a'.repeat(64));
 

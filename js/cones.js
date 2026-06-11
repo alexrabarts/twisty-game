@@ -64,9 +64,11 @@ class Cones {
             }
         }
         
-        // Create the cone meshes
+        // Create the cone meshes (geometry and materials shared across all cones)
         const coneGeometry = new THREE.ConeGeometry(0.25, 0.8, 6);
         const coneMaterial = new THREE.MeshStandardMaterial({ color: 0xff6600, roughness: 0.8, metalness: 0.0, emissive: 0x331100, emissiveIntensity: 0.1 });
+        const baseGeometry = new THREE.CylinderGeometry(0.35, 0.35, 0.05, 6);
+        const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.0 });
         
         conePositions.forEach((pos, index) => {
             // Find the road elevation at this position
@@ -94,18 +96,14 @@ class Cones {
             this.scene.add(cone);
             this.cones.push(cone);
 
-            // Add sparse point lights for ambient illumination
-            if (index % 10 === 0) {
-                const ambientLight = new THREE.PointLight(0xffaa00, 0.3, 30);
-                ambientLight.position.set(pos.x, 2, pos.z);
-                this.scene.add(ambientLight);
-            }
+            // No per-cone point lights: every extra light in the forward
+            // renderer raises per-fragment cost for the whole scene, and the
+            // cones already have an emissive tint
 
-            // Add base
-            const baseGeometry = new THREE.CylinderGeometry(0.35, 0.35, 0.05, 6);
-            const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.0 });
+            // Add base at the road elevation (a fixed y=0.025 left bases
+            // floating or buried on elevated road sections)
             const base = new THREE.Mesh(baseGeometry, baseMaterial);
-            base.position.set(pos.x, 0.025, pos.z);
+            base.position.set(pos.x, roadY + 0.025, pos.z);
             base.castShadow = true;
             base.receiveShadow = true;
             this.scene.add(base);

@@ -280,6 +280,12 @@ class Game {
         this.vehicle.finished = false;
         this.startTime = performance.now();
 
+        // Start the new leg's loop with a clean timestep accumulator
+        this.accumulatedTime = 0;
+        if (this.clock) {
+            this.clock.getDelta();
+        }
+
         // Start leaderboard session
         if (this.leaderboardService) {
             this.leaderboardService.startRun(leg.id).then(result => {
@@ -298,6 +304,25 @@ class Game {
         this.animationFrameId = requestAnimationFrame(() => this.animate());
     }
 
+    // Free GPU resources (geometries, materials, textures) for a removed subtree.
+    // Without this, every leg change/restart leaks WebGL buffers until reload.
+    disposeObject(root) {
+        root.traverse(obj => {
+            if (obj.geometry) {
+                obj.geometry.dispose();
+            }
+            const materials = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+            materials.forEach(material => {
+                Object.values(material).forEach(value => {
+                    if (value && value.isTexture) {
+                        value.dispose();
+                    }
+                });
+                material.dispose();
+            });
+        });
+    }
+
     cleanupCurrentLeg() {
         // Stop game loop
         if (this.animationFrameId) {
@@ -312,18 +337,26 @@ class Game {
 
         // Clear scene objects (keep camera and lights)
         if (this.scene) {
-            const objectsToRemove = [];
-            this.scene.children.forEach(child => {
-                if (child !== this.camera &&
-                    child !== this.directionalLight &&
-                    child !== this.distantLight &&
-                    child !== this.ambientLight &&
-                    child !== this.leftHeadlight &&
-                    child !== this.rightHeadlight) {
-                    objectsToRemove.push(child);
-                }
+            const keep = new Set([
+                this.camera,
+                this.directionalLight,
+                this.directionalLight ? this.directionalLight.target : null,
+                this.distantLight,
+                this.distantLight ? this.distantLight.target : null,
+                this.ambientLight,
+                this.hemisphereLight,
+                this.fillLight,
+                this.rimLight,
+                this.leftHeadlight,
+                this.leftHeadlight ? this.leftHeadlight.target : null,
+                this.rightHeadlight,
+                this.rightHeadlight ? this.rightHeadlight.target : null
+            ]);
+            const objectsToRemove = this.scene.children.filter(child => !keep.has(child));
+            objectsToRemove.forEach(obj => {
+                this.scene.remove(obj);
+                this.disposeObject(obj);
             });
-            objectsToRemove.forEach(obj => this.scene.remove(obj));
         }
 
         // Reset game state
@@ -504,8 +537,8 @@ class Game {
         this.directionalLight = new THREE.DirectionalLight(0xfff4e6, 0.85);
         this.directionalLight.position.set(50, 80, 0);
         this.directionalLight.castShadow = true;
-        this.directionalLight.shadow.mapSize.width = 4096;
-        this.directionalLight.shadow.mapSize.height = 4096;
+        this.directionalLight.shadow.mapSize.width = 2048;
+        this.directionalLight.shadow.mapSize.height = 2048;
         this.directionalLight.shadow.camera.near = 0.1;
         this.directionalLight.shadow.camera.far = 300;
         this.directionalLight.shadow.camera.left = -60;
@@ -518,19 +551,12 @@ class Game {
         // Store initial light offset from origin
         this.lightOffset = this.directionalLight.position.clone();
         
-        // Secondary directional light for distant shadows
+        // Secondary directional light for distant fill (shadows disabled - a
+        // second full shadow pass per frame is too expensive for the subtle
+        // distant shadows it added, especially on mobile)
         this.distantLight = new THREE.DirectionalLight(0xffffff, 0.2);
         this.distantLight.position.set(50, 80, 0);
-        this.distantLight.castShadow = true;
-        this.distantLight.shadow.mapSize.width = 1024;
-        this.distantLight.shadow.mapSize.height = 1024;
-        this.distantLight.shadow.camera.near = 50;
-        this.distantLight.shadow.camera.far = 800;
-        this.distantLight.shadow.camera.left = -200;
-        this.distantLight.shadow.camera.right = 200;
-        this.distantLight.shadow.camera.top = 200;
-        this.distantLight.shadow.camera.bottom = -200;
-        this.distantLight.shadow.bias = -0.001;
+        this.distantLight.castShadow = false;
         this.scene.add(this.distantLight);
 
         // Fill light from opposite side with cool blue tone
@@ -543,17 +569,14 @@ class Game {
         this.rimLight.position.set(0, 10, -50);
         this.scene.add(this.rimLight);
 
-        // Vehicle headlights - subtle
+        // Vehicle headlights - subtle. Shadow casting disabled: two extra
+        // shadow passes per frame for barely-visible headlight shadows
         this.leftHeadlight = new THREE.SpotLight(0xffffff, 0.5, 100, Math.PI/6, 0.1, 2);
-        this.leftHeadlight.castShadow = true;
-        this.leftHeadlight.shadow.mapSize.width = 1024;
-        this.leftHeadlight.shadow.mapSize.height = 1024;
+        this.leftHeadlight.castShadow = false;
         this.scene.add(this.leftHeadlight);
 
         this.rightHeadlight = new THREE.SpotLight(0xffffff, 0.5, 100, Math.PI/6, 0.1, 2);
-        this.rightHeadlight.castShadow = true;
-        this.rightHeadlight.shadow.mapSize.width = 1024;
-        this.rightHeadlight.shadow.mapSize.height = 1024;
+        this.rightHeadlight.castShadow = false;
         this.scene.add(this.rightHeadlight);
     }
 
@@ -583,6 +606,7 @@ class Game {
         // Update directional light (sun/moon)
         this.directionalLight.color = new THREE.Color(config.sunColor);
         this.directionalLight.intensity = config.sunIntensity;
+        this.baseSunIntensity = config.sunIntensity;
 
         // Update fill light
         this.fillLight.color = new THREE.Color(config.fillColor);
@@ -671,7 +695,12 @@ class Game {
 
 
 
-    updateCamera() {
+    updateCamera(deltaTime = 1 / 60) {
+        // Camera smoothing factors were tuned for 60Hz updates; rescale them to
+        // the actual frame delta so camera feel is frame-rate independent
+        const lerpScale = Math.min(deltaTime * 60, 3);
+        const adjLerp = (f) => 1 - Math.pow(1 - f, lerpScale);
+
         // Handle camera intro animation
         if (this.cameraIntroActive) {
             const elapsed = performance.now() - this.cameraIntroStartTime;
@@ -713,7 +742,7 @@ class Game {
         
         // Safety check - if vehicle doesn't exist or lean angle is extreme, reset banking
         if (!this.vehicle || Math.abs(this.vehicle.leanAngle) > Math.PI) {
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, 0, 0.2);
+            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, 0, adjLerp(0.2));
             this.camera.rotation.z = this.currentCameraBanking;
             return;
         }
@@ -722,13 +751,14 @@ class Game {
         const vehiclePos = this.vehicle.position.clone();
         const vehicleRotation = new THREE.Euler(0, this.vehicle.yawAngle, 0);
         
-        // Calculate yaw change for lateral camera lag
-        const yawDelta = this.vehicle.yawAngle - this.previousYawAngle;
+        // Calculate yaw change for lateral camera lag (normalized to a 60Hz step)
+        const yawDelta = (this.vehicle.yawAngle - this.previousYawAngle) / lerpScale;
         this.previousYawAngle = this.vehicle.yawAngle;
-        
+
         // Update lateral offset - camera swings opposite to turn direction initially
         const targetLateralOffset = -yawDelta * 25; // Strong lateral movement
-        this.cameraLateralOffset = this.cameraLateralOffset * 0.85 + targetLateralOffset * 0.15;
+        const lateralBlend = adjLerp(0.15);
+        this.cameraLateralOffset = this.cameraLateralOffset * (1 - lateralBlend) + targetLateralOffset * lateralBlend;
 
         // Get current camera mode settings
         const currentMode = this.cameraModes[this.cameraMode];
@@ -788,7 +818,7 @@ class Game {
             lerpFactor *= 1.15;
         }
         
-        this.currentCameraPos.lerp(cameraPos, lerpFactor);
+        this.currentCameraPos.lerp(cameraPos, adjLerp(lerpFactor));
         
         // Ensure camera never goes below bike level (bike is at roughly y=2)
         const minCameraHeight = vehiclePos.y + 2; // At least 2 units above bike
@@ -821,13 +851,13 @@ class Game {
 
             const lookTarget = this.vehicle.position.clone().add(this.tempVector);
             
-            this.currentLookTarget.lerp(lookTarget, 0.3); // Fast response for onboard
+            this.currentLookTarget.lerp(lookTarget, adjLerp(0.3)); // Fast response for onboard
             
             // Onboard camera banking - calculate BEFORE lookAt with custom up vector
             // Onboard view banks WITH the bike - aggressive tilt for immersive feel
             const onboardBankAmount = this.vehicle.leanAngle * 0.9; // 90% banking, same direction
             const targetOnboardBank = THREE.MathUtils.clamp(onboardBankAmount, -0.7, 0.7); // Max ~40° bank
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetOnboardBank, 0.2);
+            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetOnboardBank, adjLerp(0.2));
 
             // Create custom up vector rotated around camera's forward direction (view axis)
             const forwardDir = new THREE.Vector3();
@@ -849,7 +879,7 @@ class Game {
 
             // Smooth FOV transition
             if (!this.currentFOV) this.currentFOV = baseFOV;
-            this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, targetFOV, 0.05);
+            this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
             this.camera.fov = this.currentFOV;
             this.camera.updateProjectionMatrix();
 
@@ -906,14 +936,14 @@ class Game {
             this.tempUpVector.set(leanLateralOffset, 0, 0);
             this.tempUpVector.applyEuler(vehicleRotation);
             lookTarget.add(this.tempUpVector);
-            this.currentLookTarget.lerp(lookTarget, this.cameraLerpFactor * 1.5);
+            this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
             
             // Camera banking BEFORE lookAt - subtle lean feedback
             const bankFactor = this.cameraMode === 1 ? 0.15 : 0.25; // High view more subtle
             // Positive lean = right lean, bank camera right (positive rotation around forward axis)
             const bankAmount = this.vehicle.leanAngle * bankFactor;
             const targetBank = THREE.MathUtils.clamp(bankAmount, -0.3, 0.3); // Max ~17° bank
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetBank, 0.15);
+            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetBank, adjLerp(0.15));
 
             // Wheelie camera tilt - pitch camera up to follow bike angle
             let wheelieTilt = 0;
@@ -924,7 +954,7 @@ class Game {
 
             // Smooth wheelie tilt transition
             if (!this.currentWheelieTilt) this.currentWheelieTilt = 0;
-            this.currentWheelieTilt = THREE.MathUtils.lerp(this.currentWheelieTilt, wheelieTilt, 0.1);
+            this.currentWheelieTilt = THREE.MathUtils.lerp(this.currentWheelieTilt, wheelieTilt, adjLerp(0.1));
 
             // Adjust look target height during wheelies for subtle upward view
             if (this.currentWheelieTilt > 0.05) {
@@ -964,47 +994,63 @@ class Game {
     }
 
     updateUI() {
+        // Cache DOM lookups - this runs every frame
+        if (!this.uiElements) {
+            this.uiElements = {
+                dashboard: document.querySelector('.dashboard'),
+                speed: document.getElementById('speed'),
+                speedVignette: document.getElementById('speedVignette')
+            };
+        }
+        const ui = this.uiElements;
+
         if (this.finished) {
             // Dashboard remains visible but update for finish state
-            const dashboard = document.querySelector('.dashboard');
-            if (dashboard) {
-                dashboard.style.opacity = '0.5';
+            if (ui.dashboard) {
+                ui.dashboard.style.opacity = '0.5';
             }
             return;
         }
 
-        // Update speedometer
+        // Update speedometer (only write to the DOM when the value changes)
         const speed = this.vehicle.getSpeed().toFixed(0);
-        const speedElement = document.getElementById('speed');
-        speedElement.textContent = speed;
+        if (ui.speed && speed !== this.lastDisplayedSpeed) {
+            this.lastDisplayedSpeed = speed;
+            ui.speed.textContent = speed;
 
-        // Color code speed for speedometer
-        if (speed < 20) {
-            speedElement.style.color = '#FF4444'; // Red for too slow
-            speedElement.style.textShadow = '0 0 15px rgba(255, 68, 68, 0.8)';
-        } else if (speed < 40) {
-            speedElement.style.color = '#FFAA44'; // Orange for slow
-            speedElement.style.textShadow = '0 0 15px rgba(255, 170, 68, 0.8)';
-        } else {
-            speedElement.style.color = '#00FF00'; // Green for good speed
-            speedElement.style.textShadow = '0 0 15px rgba(0, 255, 0, 0.8)';
+            // Color code speed for speedometer
+            const speedBand = speed < 20 ? 0 : speed < 40 ? 1 : 2;
+            if (speedBand !== this.lastSpeedBand) {
+                this.lastSpeedBand = speedBand;
+                if (speedBand === 0) {
+                    ui.speed.style.color = '#FF4444'; // Red for too slow
+                    ui.speed.style.textShadow = '0 0 15px rgba(255, 68, 68, 0.8)';
+                } else if (speedBand === 1) {
+                    ui.speed.style.color = '#FFAA44'; // Orange for slow
+                    ui.speed.style.textShadow = '0 0 15px rgba(255, 170, 68, 0.8)';
+                } else {
+                    ui.speed.style.color = '#00FF00'; // Green for good speed
+                    ui.speed.style.textShadow = '0 0 15px rgba(0, 255, 0, 0.8)';
+                }
+            }
         }
 
         // Update speed vignette - tunnel vision effect at high speeds
-        const speedVignette = document.getElementById('speedVignette');
-        if (speedVignette) {
+        if (ui.speedVignette) {
             const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
             // Vignette kicks in at 50% speed, full effect at max speed
-            const vignetteOpacity = Math.max(0, (speedRatio - 0.5) * 2);
-            speedVignette.style.opacity = vignetteOpacity;
+            const vignetteOpacity = Math.max(0, (speedRatio - 0.5) * 2).toFixed(2);
+            if (vignetteOpacity !== this.lastVignetteOpacity) {
+                this.lastVignetteOpacity = vignetteOpacity;
+                ui.speedVignette.style.opacity = vignetteOpacity;
+            }
         }
 
-        // Update FPS
-        document.getElementById('fps').textContent = `FPS: ${this.fps}`;
+        // FPS display is updated once per second in animate()
 
         // Update wheelie indicator
         this.updateWheelieIndicator();
-        
+
         // Update score display
         this.updateScoreDisplay();
     }
@@ -1111,11 +1157,14 @@ class Game {
         const isLastLeg = this.tourSystem.isLastLeg();
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
 
-        // Check for best time
+        // Check for best time (tracked per leg - legs have different lengths)
+        const currentLeg = this.tourSystem.getCurrentLeg();
+        const bestTimeKey = currentLeg ? `motorcycleBestTime_${currentLeg.id}` : 'motorcycleBestTime';
+        this.bestTime = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
         let bestTimeMessage = '';
         if (timeSeconds < this.bestTime) {
             this.bestTime = timeSeconds;
-            localStorage.setItem('motorcycleBestTime', timeSeconds.toString());
+            localStorage.setItem(bestTimeKey, timeSeconds.toString());
             bestTimeMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW BEST TIME! 🏆</div>';
         }
 
@@ -1192,15 +1241,18 @@ class Game {
             </div>
         `;
 
-        // Add CSS animation
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
-                to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-            }
-        `;
-        document.head.appendChild(style);
+        // Add CSS animation (once - this method runs on every finish)
+        if (!document.getElementById('finishBannerStyles')) {
+            const style = document.createElement('style');
+            style.id = 'finishBannerStyles';
+            style.textContent = `
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
+                    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+                }
+            `;
+            document.head.appendChild(style);
+        }
 
         document.body.appendChild(finishBanner);
 
@@ -1235,6 +1287,7 @@ class Game {
                     this.vehicle.position.y = startPos.y;
                     this.vehicle.position.z = startPos.z;
                     this.vehicle.yawAngle = startPos.heading;
+                    this.vehicle.findNearestRoadSegment();
                 }
                 this.cones.reset();
                 this.finished = false;
@@ -1406,6 +1459,9 @@ class Game {
                 this.vehicle.position.y = startPos.y;
                 this.vehicle.position.z = startPos.z;
                 this.vehicle.yawAngle = startPos.heading;
+                // Re-sync segment tracking with the teleported position so the
+                // windowed wall/elevation searches don't use a stale index
+                this.vehicle.findNearestRoadSegment();
             }
             this.cones.reset();
             this.finished = false;
@@ -1510,61 +1566,42 @@ class Game {
 
         submitBtn.addEventListener('click', submitHandler);
 
-        // Handle cancel
-        const cancelHandler = () => {
-            this.leaderboardService.cancelSession();
+        // Single shared teardown - the buttons are persistent DOM elements, so
+        // every handler must be removed on every exit path or stale handlers
+        // (with captured onComplete callbacks) accumulate across legs
+        let finished = false;
+        const finish = () => {
+            if (finished) return;
+            finished = true;
+
             overlay.classList.remove('active');
             nameInput.disabled = false;
             submitBtn.disabled = false;
             cancelBtn.disabled = false;
 
-            // Clean up event listeners
-            nameInput.removeEventListener('input', inputHandler);
-            nameInput.removeEventListener('keypress', keyHandler);
-            submitBtn.removeEventListener('click', submitHandler);
-            cancelBtn.removeEventListener('click', cancelHandler);
-
-            // Call completion callback
-            if (onComplete) onComplete();
-        };
-        cancelBtn.addEventListener('click', cancelHandler);
-
-        // Handle close after successful submission
-        const closeHandler = () => {
-            overlay.classList.remove('active');
-            nameInput.disabled = false;
-            submitBtn.disabled = false;
-            cancelBtn.disabled = false;
-
-            // Clean up event listeners
             nameInput.removeEventListener('input', inputHandler);
             nameInput.removeEventListener('keypress', keyHandler);
             submitBtn.removeEventListener('click', submitHandler);
             cancelBtn.removeEventListener('click', cancelHandler);
             closeBtn.removeEventListener('click', closeHandler);
+            errorCloseBtn.removeEventListener('click', errorCloseHandler);
 
-            // Call completion callback
             if (onComplete) onComplete();
         };
+
+        // Handle cancel
+        const cancelHandler = () => {
+            this.leaderboardService.cancelSession();
+            finish();
+        };
+        cancelBtn.addEventListener('click', cancelHandler);
+
+        // Handle close after successful submission
+        const closeHandler = () => finish();
         closeBtn.addEventListener('click', closeHandler);
 
         // Handle error close
-        const errorCloseHandler = () => {
-            overlay.classList.remove('active');
-            nameInput.disabled = false;
-            submitBtn.disabled = false;
-            cancelBtn.disabled = false;
-
-            // Clean up event listeners
-            nameInput.removeEventListener('input', inputHandler);
-            nameInput.removeEventListener('keypress', keyHandler);
-            submitBtn.removeEventListener('click', submitHandler);
-            cancelBtn.removeEventListener('click', cancelHandler);
-            errorCloseBtn.removeEventListener('click', errorCloseHandler);
-
-            // Call completion callback
-            if (onComplete) onComplete();
-        };
+        const errorCloseHandler = () => finish();
         errorCloseBtn.addEventListener('click', errorCloseHandler);
     }
 
@@ -1582,7 +1619,20 @@ class Game {
 
     updateRacePosition() {
         if (!this.traffic || !this.traffic.motorcycles || !this.vehicle || !this.environment || !this.environment.roadPath) return;
-        
+
+        // Cache the elements; skip all the work if the UI doesn't include them
+        if (this.racePositionElements === undefined) {
+            this.racePositionElements = {
+                position: document.getElementById('position'),
+                suffix: document.querySelector('.position-suffix'),
+                total: document.getElementById('totalRacers')
+            };
+            if (!this.racePositionElements.position && !this.racePositionElements.suffix && !this.racePositionElements.total) {
+                this.racePositionElements = null;
+            }
+        }
+        if (!this.racePositionElements) return;
+
         const playerSegment = Math.floor(this.vehicle.currentRoadSegment || 0);
         const playerProgress = this.vehicle.segmentProgress || 0;
         const totalSegments = this.environment.roadPath.length;
@@ -1610,25 +1660,23 @@ class Game {
             }
         });
         
-        const positionElement = document.getElementById('position');
-        const suffix = position === 1 ? 'st' : position === 2 ? 'nd' : position === 3 ? 'rd' : 'th';
-        
-        if (positionElement) {
-            positionElement.textContent = position;
-        }
-        const suffixElement = document.querySelector('.position-suffix');
-        if (suffixElement) {
-            suffixElement.textContent = suffix;
-        }
-        
-        const totalElement = document.getElementById('totalRacers');
-        if (totalElement) {
-            totalElement.textContent = this.traffic.motorcycles.length + 1;
+        if (position !== this.lastDisplayedPosition) {
+            this.lastDisplayedPosition = position;
+            const suffix = position === 1 ? 'st' : position === 2 ? 'nd' : position === 3 ? 'rd' : 'th';
+            if (this.racePositionElements.position) {
+                this.racePositionElements.position.textContent = position;
+            }
+            if (this.racePositionElements.suffix) {
+                this.racePositionElements.suffix.textContent = suffix;
+            }
+            if (this.racePositionElements.total) {
+                this.racePositionElements.total.textContent = this.traffic.motorcycles.length + 1;
+            }
         }
     }
     
     animate() {
-        requestAnimationFrame(() => this.animate());
+        this.animationFrameId = requestAnimationFrame(() => this.animate());
 
         // FPS calculation
         this.frameCount++;
@@ -1664,13 +1712,8 @@ class Game {
         const brakeInput = this.input.getBrakeInput();
         const wheelieInput = this.input.getWheelieInput();
 
-        // Run physics in fixed timesteps - ensures consistent movement
-        // regardless of variable frame timing
-        while (this.accumulatedTime >= this.fixedTimeStep) {
-            const deltaTime = this.fixedTimeStep; // Always 16.67ms
+        // Handle one-shot input actions once per frame (not per physics step)
 
-            this.updateRacePosition();
-        
         // Check for menu return
         if (this.input.checkMenuReturn()) {
             // Remove finish banner if it exists
@@ -1691,6 +1734,8 @@ class Game {
             }
 
             this.returnToMenu();
+            // Leg state was torn down and this loop cancelled - stop this frame
+            return;
         }
 
         // Check for reset
@@ -1722,6 +1767,9 @@ class Game {
                 this.vehicle.position.y = startPos.y;
                 this.vehicle.position.z = startPos.z;
                 this.vehicle.yawAngle = startPos.heading;
+                // Re-sync segment tracking with the teleported position so the
+                // windowed wall/elevation searches don't use a stale index
+                this.vehicle.findNearestRoadSegment();
             }
             this.cones.reset();
             this.finished = false;
@@ -1764,6 +1812,8 @@ class Game {
             }
 
             this.startNextLeg();
+            // New leg scheduled its own loop; stop this frame
+            return;
         }
 
         // Check for sound toggle
@@ -1805,7 +1855,12 @@ class Game {
             document.body.appendChild(notification);
             setTimeout(() => notification.remove(), 1000);
         }
-        
+
+        // Run physics in fixed timesteps - ensures consistent movement
+        // regardless of variable frame timing
+        while (this.accumulatedTime >= this.fixedTimeStep) {
+            const deltaTime = this.fixedTimeStep; // Always 16.67ms
+
         // Check for crash (before updating vehicle)
         const wasCrashed = this.vehicle.crashed;
 
@@ -1823,14 +1878,6 @@ class Game {
                 this.showWheelieHelpNotification();
                 this.hasShownWheelieHelp = true;
             }
-        }
-
-        // Update engine sound based on speed
-        if (!this.vehicle.crashed && !this.finished) {
-            const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            this.soundManager.playEngineSound(speedRatio);
-        } else {
-            this.soundManager.stopEngineSound();
         }
 
         // Check for checkpoint passes and jump scoring
@@ -1921,22 +1968,37 @@ class Game {
         if (!this.vehicle.crashed) {
             this.cones.checkCollision(this.vehicle.position);
         }
-        
-        this.updateCamera();
+
+            // Consume fixed timestep from accumulated time
+            this.accumulatedTime -= this.fixedTimeStep;
+        } // End of fixed timestep physics loop
+
+        // PER-FRAME UPDATES: everything below runs once per rendered frame
+
+        // Update engine sound based on speed
+        if (!this.vehicle.crashed && !this.finished) {
+            const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
+            this.soundManager.playEngineSound(speedRatio);
+        } else {
+            this.soundManager.stopEngineSound();
+        }
+
+        this.updateRacePosition();
+        this.updateCamera(rawDeltaTime);
         this.updateUI();
 
         // Update particle system and spawn particles based on vehicle state
         // Update weather system
         if (this.weatherSystem && !this.vehicle.crashed) {
-            this.weatherSystem.update(deltaTime, this.vehicle.position);
+            this.weatherSystem.update(rawDeltaTime, this.vehicle.position);
         }
 
         if (this.particles && !this.vehicle.crashed) {
-            this.particles.update(deltaTime);
+            this.particles.update(rawDeltaTime);
 
             // Track brake duration
             if (brakeInput > 0.3) {
-                this.brakeHeldTime += deltaTime;
+                this.brakeHeldTime += rawDeltaTime;
             } else {
                 this.brakeHeldTime = 0;
             }
@@ -1970,21 +2032,17 @@ class Game {
             this.lastJumpState = this.vehicle.isJumping;
         }
 
-            // Consume fixed timestep from accumulated time
-            this.accumulatedTime -= this.fixedTimeStep;
-        } // End of fixed timestep physics loop
-
-        // RENDERING: Everything below runs once per frame, not per physics step
-
         // Update directional light to follow vehicle
         this.directionalLight.position.x = this.vehicle.position.x + 50;
         this.directionalLight.position.z = this.vehicle.position.z;
         this.directionalLight.target.position.copy(this.vehicle.position);
         this.directionalLight.target.updateMatrixWorld();
 
-        // Subtle intensity variation for natural lighting
+        // Subtle intensity variation for natural lighting, relative to the
+        // time-of-day base so night legs stay dark
         const time = performance.now() * 0.001;
-        this.directionalLight.intensity = 0.8 + Math.sin(time * 0.1) * 0.05;
+        const baseSunIntensity = this.baseSunIntensity !== undefined ? this.baseSunIntensity : 0.8;
+        this.directionalLight.intensity = baseSunIntensity * (1 + Math.sin(time * 0.1) * 0.06);
 
         // Update headlights
         const headlightOffset = new THREE.Vector3(0, 0.5, 0.7);
@@ -2270,14 +2328,29 @@ class Game {
     }
     
     updateScoreDisplay() {
-        document.getElementById('score').textContent = this.score.toLocaleString();
+        if (!this.scoreElements) {
+            this.scoreElements = {
+                score: document.getElementById('score'),
+                combo: document.getElementById('comboDisplay')
+            };
+        }
 
-        if (this.combo > 0) {
-            const comboDisplay = document.getElementById('comboDisplay');
+        if (this.scoreElements.score && this.score !== this.lastDisplayedScore) {
+            this.lastDisplayedScore = this.score;
+            this.scoreElements.score.textContent = this.score.toLocaleString();
+        }
+
+        // Only touch the combo display (and restart its pulse animation) when
+        // the combo value actually changes - this runs every frame
+        if (this.combo > 0 && this.combo !== this.lastDisplayedCombo && this.scoreElements.combo) {
+            const comboDisplay = this.scoreElements.combo;
             comboDisplay.textContent = `COMBO x${this.combo}`;
             comboDisplay.style.animation = 'none';
             setTimeout(() => { comboDisplay.style.animation = 'pulse-combo 0.5s ease-in-out'; }, 10);
+        } else if (this.combo === 0 && this.lastDisplayedCombo > 0 && this.scoreElements.combo) {
+            this.scoreElements.combo.textContent = '';
         }
+        this.lastDisplayedCombo = this.combo;
     }
     
     showCheckpointNotification(checkpointNum, points) {
@@ -2332,6 +2405,53 @@ class Game {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    restartFromCheckpoint() {
+        if (!this.lastCheckpointPosition) {
+            console.log('No checkpoint position available for restart');
+            return;
+        }
+
+        console.log('Restarting from checkpoint at:', this.lastCheckpointPosition.x.toFixed(1), this.lastCheckpointPosition.z.toFixed(1));
+
+        // Apply penalty - lose some score
+        const penalty = 500;
+        this.addScore(-penalty);
+
+        // Reset vehicle to checkpoint position
+        this.vehicle.position.copy(this.lastCheckpointPosition);
+        this.vehicle.yawAngle = this.lastCheckpointHeading;
+        this.vehicle.speed = 15; // Reset to moderate speed
+        this.vehicle.leanAngle = 0;
+        this.vehicle.leanVelocity = 0;
+        this.vehicle.crashed = false;
+        this.vehicle.isJumping = false;
+        this.vehicle.isWheelie = false;
+        this.vehicle.wheelieAngle = 0;
+        this.vehicle.wheelieVelocity = 0;
+        this.vehicle.jumpRotation = 0;
+        this.vehicle.jumpVelocityY = 0;
+        this.vehicle.findNearestRoadSegment();
+
+        // Reset start time for timing
+        this.startTime = performance.now();
+
+         // Reset cones
+         this.cones.reset();
+
+        // Show notification
+        const notification = document.createElement('div');
+        notification.className = 'checkpoint-notification';
+        notification.style.color = '#ff6600';
+        notification.textContent = `RESTARTED FROM CHECKPOINT (-${penalty} points)`;
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.remove();
+        }, 2000);
+
+        console.log('Restarted from checkpoint with penalty');
     }
 }
 
@@ -2392,51 +2512,60 @@ class SoundManager {
             this.audioContext.resume();
         }
 
-        // Stop previous engine sound
-        if (this.engineSound) {
-            this.engineSound.stop();
-        }
-
+        const now = this.audioContext.currentTime;
         const baseFreq = 80 + (speed * 40); // 80-120 Hz based on speed
-        const oscillator = this.audioContext.createOscillator();
-        const gainNode = this.audioContext.createGain();
-        const filter = this.audioContext.createBiquadFilter();
 
-        oscillator.connect(filter);
-        filter.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
+        // This is called every frame: keep one persistent oscillator graph and
+        // ramp its parameters instead of rebuilding ~4 audio nodes per call
+        // (which causes GC pressure and audible clicks)
+        if (!this.engineSound) {
+            const oscillator = this.audioContext.createOscillator();
+            const gainNode = this.audioContext.createGain();
+            const filter = this.audioContext.createBiquadFilter();
 
-        oscillator.frequency.setValueAtTime(baseFreq, this.audioContext.currentTime);
-        oscillator.type = 'sawtooth';
+            oscillator.connect(filter);
+            filter.connect(gainNode);
+            gainNode.connect(this.audioContext.destination);
 
-        // Add some harmonics
-        const harmonicOsc = this.audioContext.createOscillator();
-        const harmonicGain = this.audioContext.createGain();
-        harmonicOsc.connect(harmonicGain);
-        harmonicGain.connect(gainNode);
+            oscillator.frequency.setValueAtTime(baseFreq, now);
+            oscillator.type = 'sawtooth';
 
-        harmonicOsc.frequency.setValueAtTime(baseFreq * 2, this.audioContext.currentTime);
-        harmonicOsc.type = 'square';
+            // Add some harmonics
+            const harmonicOsc = this.audioContext.createOscillator();
+            const harmonicGain = this.audioContext.createGain();
+            harmonicOsc.connect(harmonicGain);
+            harmonicGain.connect(gainNode);
 
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(200 + speed * 100, this.audioContext.currentTime);
+            harmonicOsc.frequency.setValueAtTime(baseFreq * 2, now);
+            harmonicOsc.type = 'square';
 
-        gainNode.gain.setValueAtTime(this.masterVolume * 0.2, this.audioContext.currentTime);
+            filter.type = 'lowpass';
+            filter.frequency.setValueAtTime(200 + speed * 100, now);
 
-        oscillator.start();
-        harmonicOsc.start();
+            gainNode.gain.setValueAtTime(this.masterVolume * 0.2, now);
 
-        this.engineSound = {
-            oscillator: oscillator,
-            harmonicOsc: harmonicOsc,
-            gainNode: gainNode,
-            stop: () => {
-                try {
-                    oscillator.stop();
-                    harmonicOsc.stop();
-                } catch (e) {}
-            }
-        };
+            oscillator.start();
+            harmonicOsc.start();
+
+            this.engineSound = {
+                oscillator: oscillator,
+                harmonicOsc: harmonicOsc,
+                gainNode: gainNode,
+                filter: filter,
+                stop: () => {
+                    try {
+                        oscillator.stop();
+                        harmonicOsc.stop();
+                    } catch (e) {}
+                }
+            };
+        } else {
+            // Smoothly track the current speed
+            const ramp = 0.05;
+            this.engineSound.oscillator.frequency.linearRampToValueAtTime(baseFreq, now + ramp);
+            this.engineSound.harmonicOsc.frequency.linearRampToValueAtTime(baseFreq * 2, now + ramp);
+            this.engineSound.filter.frequency.linearRampToValueAtTime(200 + speed * 100, now + ramp);
+        }
     }
 
     stopEngineSound() {
@@ -2537,51 +2666,6 @@ class SoundManager {
         }, 1000);
     }
 
-    restartFromCheckpoint() {
-        if (!this.lastCheckpointPosition) {
-            console.log('No checkpoint position available for restart');
-            return;
-        }
-
-        console.log('Restarting from checkpoint at:', this.lastCheckpointPosition.x.toFixed(1), this.lastCheckpointPosition.z.toFixed(1));
-
-        // Apply penalty - lose some score
-        const penalty = 500;
-        this.addScore(-penalty);
-
-        // Reset vehicle to checkpoint position
-        this.vehicle.position.copy(this.lastCheckpointPosition);
-        this.vehicle.yawAngle = this.lastCheckpointHeading;
-        this.vehicle.speed = 15; // Reset to moderate speed
-        this.vehicle.leanAngle = 0;
-        this.vehicle.leanVelocity = 0;
-        this.vehicle.crashed = false;
-        this.vehicle.isJumping = false;
-        this.vehicle.isWheelie = false;
-        this.vehicle.wheelieAngle = 0;
-        this.vehicle.wheelieVelocity = 0;
-        this.vehicle.jumpRotation = 0;
-        this.vehicle.jumpVelocityY = 0;
-
-        // Reset start time for timing
-        this.startTime = performance.now();
-
-         // Reset cones
-         this.cones.reset();
-
-        // Show notification
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#ff6600';
-        notification.textContent = `RESTARTED FROM CHECKPOINT (-${penalty} points)`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 2000);
-
-        console.log('Restarted from checkpoint with penalty');
-    }
 }
 
 // Debug key events

@@ -2,7 +2,19 @@ class ParticleSystem {
     constructor(scene) {
         this.scene = scene;
         this.particleGroups = [];
-        this.maxParticles = 1000;
+        this.maxGroups = 100; // Bound concurrent emissions (each group is a draw call)
+    }
+
+    trackGroup(particles) {
+        // Enforce the cap by retiring the oldest group
+        if (this.particleGroups.length >= this.maxGroups) {
+            const oldest = this.particleGroups.shift();
+            this.scene.remove(oldest);
+            oldest.geometry.dispose();
+            oldest.material.dispose();
+        }
+        this.scene.add(particles);
+        this.particleGroups.push(particles);
     }
 
     createTireSmoke(position, velocity, intensity = 1.0) {
@@ -50,9 +62,9 @@ class ParticleSystem {
         particles.userData.age = 0;
         particles.userData.maxLife = 1.0;
         particles.userData.type = 'smoke';
+        particles.userData.baseOpacity = material.opacity;
 
-        this.scene.add(particles);
-        this.particleGroups.push(particles);
+        this.trackGroup(particles);
     }
 
     createDustCloud(position, intensity = 1.0) {
@@ -102,9 +114,9 @@ class ParticleSystem {
         particles.userData.age = 0;
         particles.userData.maxLife = 0.8;
         particles.userData.type = 'dust';
+        particles.userData.baseOpacity = material.opacity;
 
-        this.scene.add(particles);
-        this.particleGroups.push(particles);
+        this.trackGroup(particles);
     }
 
     createCollisionSparks(position, impactDirection, intensity = 1.0) {
@@ -162,9 +174,9 @@ class ParticleSystem {
         particles.userData.age = 0;
         particles.userData.maxLife = 0.3;
         particles.userData.type = 'sparks';
+        particles.userData.baseOpacity = material.opacity;
 
-        this.scene.add(particles);
-        this.particleGroups.push(particles);
+        this.trackGroup(particles);
     }
 
     createSpeedTrail(position, velocity) {
@@ -209,9 +221,9 @@ class ParticleSystem {
         particles.userData.age = 0;
         particles.userData.maxLife = 0.25;
         particles.userData.type = 'trail';
+        particles.userData.baseOpacity = material.opacity;
 
-        this.scene.add(particles);
-        this.particleGroups.push(particles);
+        this.trackGroup(particles);
     }
 
     update(deltaTime) {
@@ -254,9 +266,12 @@ class ParticleSystem {
             positions.needsUpdate = true;
             velocities.needsUpdate = true;
 
-            // Fade out based on age
+            // Fade out based on age, from the effect's authored base opacity
+            // (fading from 1.0 rendered subtle effects at 2.5-6x their intended
+            // opacity for most of their life)
             const ageRatio = particleGroup.userData.age / particleGroup.userData.maxLife;
-            particleGroup.material.opacity = Math.max(0, 1 - ageRatio);
+            const baseOpacity = particleGroup.userData.baseOpacity !== undefined ? particleGroup.userData.baseOpacity : 1;
+            particleGroup.material.opacity = Math.max(0, baseOpacity * (1 - ageRatio));
 
             // Mark for removal if expired
             if (particleGroup.userData.age >= particleGroup.userData.maxLife) {

@@ -681,10 +681,10 @@ class Vehicle {
                 // Apply stronger gravity for dramatic falling
                 this.velocity.y -= 15 * deltaTime;
 
-                // Add air resistance (proportional to velocity squared)
+                // Add air resistance (proportional to velocity squared, opposing motion)
                 const airResistance = 0.1 * Math.abs(this.velocity.y) * this.velocity.y * deltaTime;
                 if (this.velocity.y < 0) {
-                    this.velocity.y += airResistance; // Slow down falling speed
+                    this.velocity.y -= airResistance; // Slow down falling speed
                 }
 
                 // Apply air resistance to horizontal movement too
@@ -891,19 +891,21 @@ class Vehicle {
 
         // Check if bike has fallen through the road surface (especially when crashed on side)
         if (this.environment && this.environment.roadPath && !this.fallingOffCliff) {
-            // Find closest road segment
+            // Find closest road segment (windowed search - full scans here cost
+            // O(roadPath) per physics tick)
             let closestSegment = null;
-            let minDistance = Infinity;
-            this.environment.roadPath.forEach(segment => {
-                const distance = Math.sqrt(
-                    Math.pow(this.position.x - segment.x, 2) +
-                    Math.pow(this.position.z - segment.z, 2)
-                );
-                if (distance < minDistance) {
-                    minDistance = distance;
+            let minDistanceSq = Infinity;
+            const fallRange = this.getSegmentSearchRange();
+            for (let i = fallRange.start; i <= fallRange.end; i++) {
+                const segment = this.environment.roadPath[i];
+                const dx = this.position.x - segment.x;
+                const dz = this.position.z - segment.z;
+                const distanceSq = dx * dx + dz * dz;
+                if (distanceSq < minDistanceSq) {
+                    minDistanceSq = distanceSq;
                     closestSegment = segment;
                 }
-            });
+            }
 
             if (closestSegment && this.position.y < closestSegment.y - 2.0) {
                 // Bike is significantly below road surface - correct position
@@ -965,19 +967,20 @@ class Vehicle {
             forward.applyEuler(new THREE.Euler(0, this.yawAngle, 0));
             const aheadPos = this.position.clone().add(forward);
             
-            // Find elevation ahead
+            // Find elevation ahead (windowed search around current segment)
             let aheadY = currentY;
-            let minDist = Infinity;
-            this.environment.roadPath.forEach(segment => {
-                const dist = Math.sqrt(
-                    Math.pow(aheadPos.x - segment.x, 2) + 
-                    Math.pow(aheadPos.z - segment.z, 2)
-                );
-                if (dist < minDist) {
-                    minDist = dist;
+            let minDistSq = Infinity;
+            const gradientRange = this.getSegmentSearchRange();
+            for (let i = gradientRange.start; i <= gradientRange.end; i++) {
+                const segment = this.environment.roadPath[i];
+                const dx = aheadPos.x - segment.x;
+                const dz = aheadPos.z - segment.z;
+                const distSq = dx * dx + dz * dz;
+                if (distSq < minDistSq) {
+                    minDistSq = distSq;
                     aheadY = segment.y || 0;
                 }
-            });
+            }
             
             // Calculate gradient (rise over run)
             const gradient = (aheadY - currentY) / lookDistance;
@@ -1127,19 +1130,26 @@ class Vehicle {
                 pointsPerSecond = 40;
             }
             
-            // Duration bonus - longer wheelies are worth more
-            const durationBonus = Math.min(wheelieDuration / 3, 2); // Up to 2x after 6 seconds
-            
+            // Duration bonus - longer wheelies are worth more (1x to 2x after 6 seconds)
+            const durationBonus = 1 + Math.min(wheelieDuration / 6, 1);
+
             // Speed bonus - faster is better
             const speedMph = this.speed * 2.237;
             const speedMultiplier = 1 + (speedMph / 100); // +1% per mph
-            
+
             // Calculate points for this frame
             const pointsThisFrame = pointsPerSecond * deltaTime * durationBonus * speedMultiplier;
-            
+
             if (onWheelieScore && pointsThisFrame > 0) {
-                onWheelieScore(Math.round(pointsThisFrame));
                 this.wheelieScoreAccumulated += pointsThisFrame;
+                // Per-tick points are fractional (e.g. ~0.3 at 60Hz); accumulate
+                // and award whole points so they aren't rounded away every tick
+                this.wheeliePendingScore = (this.wheeliePendingScore || 0) + pointsThisFrame;
+                const wholePoints = Math.floor(this.wheeliePendingScore);
+                if (wholePoints > 0) {
+                    this.wheeliePendingScore -= wholePoints;
+                    onWheelieScore(wholePoints);
+                }
             }
 
             // End wheelie if angle gets to zero or speed too low
@@ -1379,9 +1389,13 @@ class Vehicle {
         this.wheelieBalance = 0;
         this.wheelieStartTime = 0;
         this.wheelieScoreAccumulated = 0;
+        this.wheeliePendingScore = 0;
         this.wheelieCombo = 0;
         this.wheeliePerfectFrames = 0;
         this.wheelieLastInputTime = 0;
+        this.currentRoadSegment = 0;
+        this.segmentProgress = 0;
+        this.wasNearEdge = false;
         this.fallingOffCliff = false;
         this.hitGround = false;
         this.fallStartY = 0;
@@ -1401,21 +1415,26 @@ class Vehicle {
         // Start with lake level
         let baseHeight = -80;
         
-        // Check if we're near the road - if so, use road height
+        // Check if we're near the road - if so, use road height.
+        // Windowed search: this runs several times per tick while falling
+        // (calculateSlopeNormal samples it 5x), so a full path scan is costly.
+        // Use a wider window since a falling bike can drift from the road.
         if (this.environment && this.environment.roadPath) {
             // Find closest road segment
             let closestDist = Infinity;
             let closestHeight = baseHeight;
-            
-            for (const point of this.environment.roadPath) {
+
+            const terrainRange = this.getSegmentSearchRange(25);
+            for (let i = terrainRange.start; i <= terrainRange.end; i++) {
+                const point = this.environment.roadPath[i];
                 const dx = x - point.x;
                 const dz = z - point.z;
                 const dist = Math.sqrt(dx * dx + dz * dz);
-                
+
                 if (dist < closestDist && dist < 100) { // Within 100 units of road
                     closestDist = dist;
                     closestHeight = point.y || 0;
-                    
+
                     // Interpolate height based on distance from road
                     if (dist > 20) {
                         // Slope down from road to lake
@@ -1424,7 +1443,7 @@ class Vehicle {
                     }
                 }
             }
-            
+
             if (closestDist < 100) {
                 return closestHeight;
             }
@@ -1480,10 +1499,9 @@ class Vehicle {
         this.weatherSystem = weatherSystem;
     }
 
-    getSegmentSearchRange() {
+    getSegmentSearchRange(searchRadius = 10) {
         // Return a range of segments to search (nearby segments only)
         // This dramatically improves performance vs searching all segments
-        const searchRadius = 10; // Search ±10 segments around current position
 
         if (!this.environment || !this.environment.roadPath || this.environment.roadPath.length === 0) {
             return { start: 0, end: 0 };
@@ -1494,6 +1512,33 @@ class Vehicle {
         const end = Math.min(pathLength - 1, this.currentRoadSegment + searchRadius);
 
         return { start, end };
+    }
+
+    findNearestRoadSegment() {
+        // One-time full scan to re-sync segment tracking after a teleport
+        // (reset, checkpoint restart). The per-frame searches are windowed
+        // around currentRoadSegment, so a stale index after a teleport makes
+        // wall/elevation checks use a segment far from the bike.
+        if (!this.environment || !this.environment.roadPath || this.environment.roadPath.length === 0) {
+            return 0;
+        }
+
+        let best = 0;
+        let bestDistSq = Infinity;
+        this.environment.roadPath.forEach((segment, index) => {
+            const dx = this.position.x - segment.x;
+            const dz = this.position.z - segment.z;
+            const distSq = dx * dx + dz * dz;
+            if (distSq < bestDistSq) {
+                bestDistSq = distSq;
+                best = index;
+            }
+        });
+
+        this.currentRoadSegment = best;
+        this.segmentProgress = 0;
+        this.wasNearEdge = false;
+        return best;
     }
 
     updateElevation() {
@@ -1632,14 +1677,16 @@ class Vehicle {
                 const toVehicleX = this.position.x - currentSegment.x;
                 const toVehicleZ = this.position.z - currentSegment.z;
 
-                const roadWidth = 8; // Half of total road width (16m)
                 // Improved road boundary logic with hysteresis
-                // Use environment's road width to calculate boundaries (scales with difficulty)
+                // Use environment's road width to calculate boundaries (scales with difficulty).
+                // Thresholds match the rendered geometry: the road mesh extends
+                // ~2m past the lane on the right (the ledge) and the rock wall
+                // face starts ~1m past the lane on the left.
                 const halfRoadWidth = this.environment.roadWidth / 2;
                 const roadEdge = halfRoadWidth; // Edge of the road (matches actual road width)
                 const safetyZone = halfRoadWidth + 2.0; // Safety zone - slow down but don't crash
-                const cliffEdge = halfRoadWidth; // Cliff edge - fall past this
-                const wallBuffer = halfRoadWidth; // Wall crash buffer
+                const cliffEdge = halfRoadWidth + 2.0; // Cliff edge - fall past the rendered ledge
+                const wallBuffer = halfRoadWidth + 1.0; // Wall crash buffer - where the rock face starts
 
                 // Dot product gives signed distance (positive = right of road, negative = left of road)
                 const perpDistance = toVehicleX * perpX + toVehicleZ * perpZ;
@@ -1734,18 +1781,20 @@ class Vehicle {
         
         // Check for landing
         if (this.environment && this.environment.roadPath) {
-            // Find the road height at current position
+            // Find the road height at current position (windowed search - jumps
+            // travel forward, so use a wider window than the on-road checks)
             let targetRoadHeight = 0;
-            let minDistance = Infinity;
-            
-            for (const segment of this.environment.roadPath) {
-                const distance = Math.sqrt(
-                    Math.pow(this.position.x - segment.x, 2) + 
-                    Math.pow(this.position.z - segment.z, 2)
-                );
-                
-                if (distance < minDistance) {
-                    minDistance = distance;
+            let minDistanceSq = Infinity;
+
+            const jumpRange = this.getSegmentSearchRange(25);
+            for (let i = jumpRange.start; i <= jumpRange.end; i++) {
+                const segment = this.environment.roadPath[i];
+                const dx = this.position.x - segment.x;
+                const dz = this.position.z - segment.z;
+                const distanceSq = dx * dx + dz * dz;
+
+                if (distanceSq < minDistanceSq) {
+                    minDistanceSq = distanceSq;
                     targetRoadHeight = segment.y || 0;
                 }
             }

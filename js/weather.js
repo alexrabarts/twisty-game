@@ -53,9 +53,15 @@ class WeatherSystem {
     }
 
     clearWeather() {
-        // Remove particles
+        // Remove particles and free their GPU buffers (rain is 3000 particles)
         if (this.particleSystem) {
             this.scene.remove(this.particleSystem);
+            if (this.particleSystem.geometry) {
+                this.particleSystem.geometry.dispose();
+            }
+            if (this.particleSystem.material) {
+                this.particleSystem.material.dispose();
+            }
             this.particleSystem = null;
         }
 

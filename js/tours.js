@@ -347,6 +347,13 @@ class TourSystem {
         }
         this.legSelectorActive = true;
 
+        // Re-register keyboard navigation (hideLegSelector removed it; without
+        // this, arrows/Enter are dead after returning to the menu)
+        if (this.keyboardHandler) {
+            document.removeEventListener('keydown', this.keyboardHandler);
+            document.addEventListener('keydown', this.keyboardHandler);
+        }
+
         // Re-highlight the selected card
         if (typeof this.selectedLegIndex !== 'undefined') {
             this.updateLegHighlight();

@@ -195,13 +195,13 @@ class Traffic {
             
             if (!collisionResult && car.checkCollision(playerPosition)) {
                 car.onCollision();
-                collisionResult = { hit: true, vehicle: car };
+                collisionResult = { hit: true, car: car };
             }
         });
         
         // Update all motorcycles with pack dynamics
         this.motorcycles.forEach(motorcycle => {
-            motorcycle.update(deltaTime, playerPosition, this.motorcycles);
+            motorcycle.update(deltaTime, playerPosition, this.motorcycles, this.cars);
             
             // Collisions with AI motorcycles disabled
             // if (!collisionResult && motorcycle.checkCollision(playerPosition)) {
@@ -856,8 +856,9 @@ class Car {
     
     remove() {
         this.scene.remove(this.carGroup);
+        disposeGroupResources(this.carGroup);
     }
-    
+
     checkForRoadworks() {
         if (!this.environment.roadworksZones) return;
         
@@ -1311,7 +1312,7 @@ class AIMotorcycle {
         this.bikeGroup.rotation.z = this.leanAngle;
     }
     
-    update(deltaTime, playerPosition, allBikes) {
+    update(deltaTime, playerPosition, allBikes, allCars) {
         this.currentDeltaTime = deltaTime;
         const segmentLength = 20;
         const distanceToMove = this.currentSpeed * deltaTime;
@@ -1326,41 +1327,43 @@ class AIMotorcycle {
         
         const previousSpeed = this.currentSpeed;
         
+        // "Ahead" is measured as progress along the road path, not world +Z -
+        // on a winding course the road frequently heads in -Z, where raw z
+        // comparisons invert (drafting off bikes behind, braking for cars behind)
+        const myProgress = this.currentSegment + this.segmentProgress;
+
         // Check for nearby bikes (pack dynamics)
         let nearestBikeAhead = null;
         let minDistanceAhead = Infinity;
-        
+
         if (allBikes) {
             allBikes.forEach(otherBike => {
                 if (otherBike !== this && otherBike.bikeGroup) {
-                    const dx = otherBike.bikeGroup.position.x - this.bikeGroup.position.x;
-                    const dz = otherBike.bikeGroup.position.z - this.bikeGroup.position.z;
-                    const distance = Math.sqrt(dx * dx + dz * dz);
-                    
-                    // Check if ahead
-                    if (otherBike.bikeGroup.position.z > this.bikeGroup.position.z && distance < minDistanceAhead) {
-                        minDistanceAhead = distance;
+                    const otherProgress = otherBike.currentSegment + otherBike.segmentProgress;
+                    const aheadMeters = (otherProgress - myProgress) * segmentLength;
+
+                    if (aheadMeters > 0 && aheadMeters < minDistanceAhead) {
+                        minDistanceAhead = aheadMeters;
                         nearestBikeAhead = otherBike;
                     }
                 }
             });
         }
-        
-        // Check for cars ahead and avoid
+
+        // Check for cars ahead and avoid (the Traffic owner passes its car
+        // list - traversing the whole scene graph per bike per tick is O(scene))
         let carAhead = false;
-        if (this.scene) {
-            this.scene.traverse((obj) => {
-                if (obj.name === 'carBody' && obj.parent) {
-                    const carPos = obj.parent.position;
-                    const dx = carPos.x - this.bikeGroup.position.x;
-                    const dz = carPos.z - this.bikeGroup.position.z;
-                    const distance = Math.sqrt(dx * dx + dz * dz);
-                    
-                    if (dz > 0 && distance < 25) {
-                        carAhead = true;
-                    }
+        if (allCars) {
+            for (const car of allCars) {
+                if (!car.carGroup) continue;
+                const carProgress = car.currentSegment + car.segmentProgress;
+                const aheadMeters = (carProgress - myProgress) * segmentLength;
+
+                if (aheadMeters > 0 && aheadMeters < 25) {
+                    carAhead = true;
+                    break;
                 }
-            });
+            }
         }
         
         if (carAhead) {
@@ -1463,5 +1466,27 @@ class AIMotorcycle {
     
     remove() {
         this.scene.remove(this.bikeGroup);
+        disposeGroupResources(this.bikeGroup);
     }
+}
+
+// Free GPU resources for a removed vehicle - every Car/AIMotorcycle builds
+// dozens of unique geometries and materials, and Traffic.reset() rebuilds the
+// whole fleet, so removal without disposal leaks WebGL buffers
+function disposeGroupResources(group) {
+    if (!group) return;
+    group.traverse(obj => {
+        if (obj.geometry) {
+            obj.geometry.dispose();
+        }
+        const materials = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
+        materials.forEach(material => {
+            Object.values(material).forEach(value => {
+                if (value && value.isTexture) {
+                    value.dispose();
+                }
+            });
+            material.dispose();
+        });
+    });
 }
