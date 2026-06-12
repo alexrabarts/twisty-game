@@ -2536,7 +2536,19 @@ class Vehicle {
         
         // Update lean angle
         this.leanAngle += this.leanVelocity * deltaTime;
-        
+
+        // Clamp the lean to the limit instead of lowsiding the instant it's
+        // exceeded. Holding a steer key (full input on a keyboard) used to ramp
+        // the lean past the limit in ~0.2s and crash, turning every corner into
+        // a restart loop. Now it just sustains the hardest turn.
+        if (this.leanAngle > this.maxLeanAngle) {
+            this.leanAngle = this.maxLeanAngle;
+            if (this.leanVelocity > 0) this.leanVelocity = 0;
+        } else if (this.leanAngle < -this.maxLeanAngle) {
+            this.leanAngle = -this.maxLeanAngle;
+            if (this.leanVelocity < 0) this.leanVelocity = 0;
+        }
+
         // Turn based on lean angle - bike turns in direction of lean
         if (Math.abs(this.leanAngle) > 0.01) {
             // Realistic motorcycle turning physics

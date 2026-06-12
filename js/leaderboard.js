@@ -237,10 +237,10 @@ class LeaderboardService {
      * Format time for display
      */
     static formatTime(milliseconds) {
-        const totalSeconds = Math.floor(milliseconds / 1000);
-        const minutes = Math.floor(totalSeconds / 60);
-        const seconds = totalSeconds % 60;
-        const ms = milliseconds % 1000;
+        const totalMs = Math.max(0, Math.round(milliseconds));
+        const minutes = Math.floor(totalMs / 60000);
+        const seconds = Math.floor((totalMs % 60000) / 1000);
+        const ms = totalMs % 1000;
         return `${minutes}:${seconds.toString().padStart(2, '0')}.${ms.toString().padStart(3, '0')}`;
     }
 
