@@ -908,7 +908,10 @@ class Game {
         let bikePitch = 0;
         if (this.vehicle.isJumping) {
             bikePitch = this.vehicle.jumpRotation;
-        } else if (this.vehicle.isWheelie) {
+        } else if (this.vehicle.isWheelie && !this.vehicle.powerWheelie) {
+            // Only follow the bike's pitch on a deliberate (key) wheelie - a
+            // power wheelie pops up and down on its own, and tracking it would
+            // make the camera bob/zoom constantly.
             bikePitch = -this.vehicle.wheelieAngle;
         }
 
@@ -1243,8 +1246,9 @@ class Game {
 
             // Wheelie camera tilt - pitch camera up to follow bike angle
             let wheelieTilt = 0;
-            if (this.vehicle.isWheelie && this.vehicle.wheelieAngle) {
-                // Tilt camera up proportional to wheelie angle (max ~15°)
+            if (this.vehicle.isWheelie && this.vehicle.wheelieAngle && !this.vehicle.powerWheelie) {
+                // Tilt camera up proportional to wheelie angle (max ~15°) - only
+                // for a deliberate pop, not the self-popping power wheelie.
                 wheelieTilt = Math.min(this.vehicle.wheelieAngle * 0.4, 0.26); // ~15° max
             }
 
@@ -1382,6 +1386,12 @@ class Game {
         const indicator = document.getElementById('wheelieIndicator');
         const zoneText = document.getElementById('wheelieZone');
         const comboText = document.getElementById('wheelieCombo');
+
+        // Time trials keep a clean HUD - no wheelie indicator/popups
+        if (this.currentLegMode === 'time') {
+            if (indicator) indicator.classList.remove('active');
+            return;
+        }
 
         if (this.vehicle.isWheelie) {
             const angleDegrees = this.vehicle.wheelieAngle * 180 / Math.PI;
@@ -2744,10 +2754,12 @@ class Game {
         // frame rate (frames otherwise alternate 1/2 physics steps and judder)
         this.vehicle.applyRenderInterpolation(this.accumulatedTime / this.fixedTimeStep);
 
-        // Update engine sound based on speed
+        // Engine note follows the gearbox rpm (rises through each gear, drops
+        // on the upshift) rather than raw speed, so shifts are audible.
         if (!this.vehicle.crashed && !this.finished) {
-            const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            this.soundManager.playEngineSound(speedRatio, throttleInput);
+            const rpm = this.vehicle.engineRpm !== undefined ? this.vehicle.engineRpm
+                : this.vehicle.speed / this.vehicle.maxSpeed;
+            this.soundManager.playEngineSound(rpm, throttleInput);
         } else {
             this.soundManager.stopEngineSound();
         }
@@ -2956,6 +2968,7 @@ class Game {
     }
     
     showSpeedBonus() {
+        if (this.currentLegMode === 'time') return; // time trials stay clean of score popups
         const notification = document.createElement('div');
         notification.style.cssText = `
             position: fixed;
@@ -3012,6 +3025,7 @@ class Game {
     }
     
     showNearMissBonus() {
+        if (this.currentLegMode === 'time') return; // time trials stay clean of score popups
         const notification = document.createElement('div');
         notification.style.cssText = `
             position: fixed;
@@ -3087,11 +3101,20 @@ class Game {
                 
                 jumpScore *= this.comboMultiplier;
                 this.addScore(jumpScore);
-                
+
                 // Increase combo for successful jump
                 this.combo++;
                 if (this.combo >= 3) {
                     this.comboMultiplier = Math.min(this.combo / 2, 5);
+                }
+
+                // Landed rear-wheel-first into a wheelie: reward the chained
+                // stunt on top of the jump score.
+                if (this.vehicle.stuntChain) {
+                    this.vehicle.stuntChain = false;
+                    const chainBonus = Math.round(300 * this.comboMultiplier);
+                    this.addScore(chainBonus);
+                    this.showJumpBonus(`STUNT CHAIN! +${chainBonus}`);
                 }
             }
         } else {
@@ -3180,6 +3203,7 @@ class Game {
     }
     
     showJumpBonus(text) {
+        if (this.currentLegMode === 'time') return; // time trials stay clean of score popups
         const notification = document.createElement('div');
         notification.className = 'checkpoint-notification';
         notification.style.color = '#FF69B4';

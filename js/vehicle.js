@@ -70,6 +70,38 @@ const CHARACTERS = [
             wheeliePop: 1.2,
             wheelieThrottle: 1.1
         }
+    },
+    {
+        id: 'casper',
+        name: 'Casper',
+        bikeLabel: 'Kids MX 50',
+        bikeColor: '0x1565c0', // Bright blue
+        stats: { speed: 1, accel: 2, handling: 5, suspension: 4 },
+        physics: {
+            suspension: 1.3,       // Little long-travel MX bike - soaks up bumps
+            maxSpeed: 0.55,        // Tiny engine, very slow
+            acceleration: 0.8,
+            brakeForce: 1.0,
+            steeringForce: 1.25,   // Featherweight, super flickable
+            wheeliePop: 1.1,
+            wheelieThrottle: 1.0
+        }
+    },
+    {
+        id: 'guy',
+        name: 'Guy',
+        bikeLabel: 'Streetfighter',
+        bikeColor: '0x18181c', // Murdered-out black
+        stats: { speed: 4, accel: 5, handling: 4, suspension: 3 },
+        physics: {
+            suspension: 1.0,
+            maxSpeed: 1.05,        // 71 m/s
+            acceleration: 1.2,     // Punchy naked-bike torque
+            brakeForce: 1.05,
+            steeringForce: 1.05,
+            wheeliePop: 1.45,      // Torquey naked - the wheelie machine
+            wheelieThrottle: 1.25
+        }
     }
 ];
 
@@ -211,6 +243,15 @@ class Vehicle {
                 break;
             case 'shane':
                 this.buildDirtBike();
+                break;
+            case 'casper':
+                // Same MX bike as Shane, pint-sized. Scaling about the group
+                // origin (ground level) keeps the wheels on the road.
+                this.buildDirtBike();
+                this.group.scale.setScalar(0.66);
+                break;
+            case 'guy':
+                this.buildNakedBike();
                 break;
             default:
                 this.buildSportBike();
@@ -423,8 +464,9 @@ class Vehicle {
         fenderGeometry.rotateZ(Math.PI / 2);
         this.frontFender = this.attachPart(fenderGeometry, P.carbon, 0, 0.3, 0.7);
         this.attachPart(new THREE.BoxGeometry(0.18, 0.012, 0.05), P.carbon, 0, 0.62, 0.71);
-        // Rear hugger over the back tire
-        const huggerGeometry = new THREE.CylinderGeometry(0.345, 0.345, 0.16, 12, 1, true, 2.7, 1.5);
+        // Rear hugger over the back tire. thetaStart was 2.7, which wrapped the
+        // rear/underside of the wheel; 1.4 brings it forward to sit over the top.
+        const huggerGeometry = new THREE.CylinderGeometry(0.345, 0.345, 0.16, 12, 1, true, 1.4, 1.5);
         huggerGeometry.rotateZ(Math.PI / 2);
         this.attachPart(huggerGeometry, P.carbon, 0, 0.3, -0.7);
 
@@ -462,8 +504,10 @@ class Vehicle {
         const heelGeometry = new THREE.BoxGeometry(0.01, 0.07, 0.1);
         this.attachPart(heelGeometry, P.carbon, -0.2, 0.49, -0.2);
         this.attachPart(heelGeometry, P.carbon, 0.2, 0.49, -0.2);
-        this.attachPart(new THREE.CylinderGeometry(0.011, 0.011, 0.3, 8), P.steelDark, -0.16, 0.18, 0.05, { rz: 0.55, rx: 0.25 });
-        this.attachPart(new THREE.BoxGeometry(0.05, 0.014, 0.05), P.steelDark, -0.235, 0.045, 0.09);
+        // Side stand: foot angles down-and-OUT (away from the bike). rz was
+        // positive, which kicked the foot inward under the bike.
+        this.attachPart(new THREE.CylinderGeometry(0.011, 0.011, 0.3, 8), P.steelDark, -0.16, 0.18, 0.05, { rz: -0.55, rx: 0.25 });
+        this.attachPart(new THREE.BoxGeometry(0.05, 0.014, 0.05), P.steelDark, -0.3, 0.045, 0.09);
 
         // ---- Rider: full racing tuck with aero hump and knee sliders ----
         this.buildVariantRider({
@@ -1249,7 +1293,7 @@ class Vehicle {
         const barGeometry = new THREE.TorusGeometry(0.17, 0.013, 5, 10, Math.PI * 1.2);
         [-1, 1].forEach((side) => {
             const bar = this.attachPart(barGeometry, P.steel, side * 0.2, 0.56, 0.3,
-                { ry: Math.PI / 2, rz: -0.5 });
+                { rx: 0.5 - Math.PI, ry: -Math.PI / 2 }); // wrap the engine, not arch over it
             this.attachPart(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 6), P.steel,
                 side * 0.2, 0.62, 0.22, { rx: 0.5 });
             // Spotlight pod: body + emissive lens
@@ -1562,10 +1606,12 @@ class Vehicle {
         this.addCable([[-0.1, 0.66, 0.3], [-0.08, 0.6, 0.22], [-0.04, 0.58, 0.14]], 0.011, P.rubber);
 
         // ---- High fenders, front number plate, side plates ----
+        // Outline mirrored vertically (about y=0.99) so the fender curves down
+        // toward its forward tip instead of sweeping up like a rear fender.
         const frontFenderGeometry = this.makePanel([
-            [0.42, 0.86], [0.8, 0.96, 1.05, 1.12], [0.95, 1.06], [0.62, 0.92, 0.42, 0.9]
+            [0.42, 1.12], [0.8, 1.02, 1.05, 0.86], [0.95, 0.92], [0.62, 1.06, 0.42, 1.08]
         ], 0.15, 0.012);
-        this.attachPart(frontFenderGeometry, P.paint, 0, 0, 0);
+        this.attachPart(frontFenderGeometry, P.paint, 0, -0.18, 0); // lowered closer to the wheel
         const rearFenderGeometry = this.makePanel([
             [-0.3, 0.88], [-0.7, 0.98, -0.92, 1.12], [-0.88, 1.04], [-0.55, 0.92, -0.3, 0.84]
         ], 0.16, 0.012);
@@ -1644,6 +1690,87 @@ class Vehicle {
             helmetColor: P.paintHex, helmetAccent: 0xeceff1, style: 'mx',
             hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06],
             elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22
+        });
+    }
+
+    // ---- Guy: blacked-out naked streetfighter. Exposed trellis frame and
+    // engine, round LED headlight, upright bars, stubby tail - no fairings. ----
+    buildNakedBike() {
+        const P = this.makeBikePalette(0x6a6a72); // gunmetal accent
+        // Sporty alloy wheels with dark rims and a gold caliper
+        this.buildWheelSet({
+            rearTireRadius: 0.3, rearTireWidth: 0.16,
+            frontTireRadius: 0.28, frontTireWidth: 0.12,
+            rimRadius: 0.19, style: 'alloy', spokePairs: 5,
+            discRadius: 0.15, rimColor: 0x2a2c30, caliperColor: 0xd4a017, palette: P
+        });
+        // USD forks, modest rake
+        this.buildForkPair({
+            length: 0.54, x: 0.1, y: 0.56, z: 0.7, radius: 0.025, rake: 0.16,
+            usd: true, sliderColor: 0x3a3c40, palette: P
+        });
+
+        // ---- Trellis frame spine (paint = crash/wheelie feedback material) ----
+        this.frame = this.attachPart(new THREE.BoxGeometry(0.09, 0.14, 0.9), P.paint, 0, 0.62, 0.02);
+        const trellis = new THREE.CylinderGeometry(0.016, 0.016, 0.4, 7);
+        this.attachPart(trellis, P.accent, -0.1, 0.6, 0.28, { rx: 0.7 });
+        this.attachPart(trellis, P.accent, 0.1, 0.6, 0.28, { rx: 0.7 });
+        this.attachPart(trellis, P.accent, -0.1, 0.52, -0.18, { rx: -0.6 });
+        this.attachPart(trellis, P.accent, 0.1, 0.52, -0.18, { rx: -0.6 });
+
+        // ---- Exposed engine: block, finned cylinder bank, round cases ----
+        this.engine = this.attachPart(new THREE.BoxGeometry(0.3, 0.3, 0.4), P.darkMetal, 0, 0.4, 0.05);
+        const jug = this.attachPart(new THREE.BoxGeometry(0.24, 0.22, 0.2), P.steel, 0, 0.58, 0.18, { rx: -0.45 });
+        for (let i = 0; i < 4; i++) {
+            const fin = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.012, 0.21), P.steelDark);
+            fin.position.set(0, -0.06 + i * 0.04, 0);
+            jug.add(fin);
+        }
+        const caseGeo = new THREE.CylinderGeometry(0.1, 0.1, 0.04, 16);
+        this.attachPart(caseGeo, P.steel, 0.16, 0.36, -0.02, { rz: Math.PI / 2 });
+        this.attachPart(caseGeo, P.steel, -0.16, 0.36, -0.02, { rz: Math.PI / 2 });
+        // Header sweeping down to a short underslung can
+        this.attachPart(new THREE.CylinderGeometry(0.022, 0.022, 0.4, 8), P.chrome, 0.06, 0.4, 0.28, { rx: 0.9 });
+        this.attachPart(new THREE.CylinderGeometry(0.05, 0.045, 0.26, 10), P.steelDark, 0.12, 0.26, -0.28, { rz: Math.PI / 2 - 0.1, rx: 0.1 });
+
+        // ---- Muscular tank ----
+        const tankGeometry = this.makeLathe([
+            [0.0, 0.0], [0.16, 0.02], [0.19, 0.1], [0.16, 0.19], [0.07, 0.24], [0.0, 0.25]
+        ], 16);
+        this.fuelTank = this.attachPart(tankGeometry, P.paint, 0, 0.74, 0.16, { rx: 0.08, sx: 1.0, sy: 1.0, sz: 1.5 });
+        this.attachPart(new THREE.CylinderGeometry(0.03, 0.034, 0.014, 8), P.darkMetal, 0, 1.0, 0.12);
+
+        // ---- Round LED headlight on a bracket (no fairing) + tiny flyscreen ----
+        this.attachPart(new THREE.CylinderGeometry(0.12, 0.12, 0.06, 18), P.darkMetal, 0, 0.92, 0.6, { rx: Math.PI / 2 });
+        this.attachPart(new THREE.CircleGeometry(0.1, 18), P.headlight, 0, 0.92, 0.632);
+        this.attachPart(new THREE.BoxGeometry(0.14, 0.05, 0.02), P.darkMetal, 0, 1.02, 0.55, { rx: -0.3 });
+
+        // ---- Stubby tail + seat + LED brake light ----
+        this.attachPart(new THREE.BoxGeometry(0.18, 0.1, 0.34), P.paint, 0, 0.74, -0.5, { rx: 0.18 });
+        this.attachPart(new THREE.BoxGeometry(0.34, 0.07, 0.42), P.leather, 0, 0.66, -0.12); // seat
+        this.buildBrakeLight(0, 0.78, -0.66, 0.2);
+
+        // ---- Short front hugger fender ----
+        const fenderGeometry = new THREE.CylinderGeometry(0.34, 0.34, 0.13, 12, 1, true, 0.6, 1.4);
+        fenderGeometry.rotateZ(Math.PI / 2);
+        this.attachPart(fenderGeometry, P.paintDark, 0, 0.3, 0.7);
+
+        // ---- Wide upright bars with risers + mirrors ----
+        this.buildHandlebar({ y: 1.02, z: 0.56, width: 0.56, risers: true, mirrors: true, cables: true, palette: P });
+
+        // ---- Footpegs + side stand (foot kicks out to the left) ----
+        this.attachPart(new THREE.BoxGeometry(0.08, 0.02, 0.04), P.steel, -0.2, 0.42, -0.1);
+        this.attachPart(new THREE.BoxGeometry(0.08, 0.02, 0.04), P.steel, 0.2, 0.42, -0.1);
+        this.attachPart(new THREE.CylinderGeometry(0.011, 0.011, 0.3, 8), P.steelDark, -0.16, 0.18, 0.0, { rz: -0.55, rx: 0.25 });
+        this.attachPart(new THREE.BoxGeometry(0.05, 0.014, 0.05), P.steelDark, -0.3, 0.045, 0.04);
+
+        // ---- Upright, aggressive rider ----
+        this.buildVariantRider({
+            y: 1.12, z: -0.05, torsoLean: 0.35,
+            suitColor: 0x18181c, suitAccent: 0x6a6a72,
+            helmetColor: 0x1b1b1f, helmetAccent: 0xcccccc, style: 'road',
+            hand: [0.2, -0.02, 0.6], foot: [0.21, -0.66, -0.08],
+            elbowOut: 0.08, kneeOut: 0.06, kneeForward: 0.14
         });
     }
 
@@ -1816,6 +1943,10 @@ class Vehicle {
         
         // Update speed based on throttle/brake
         this.updateSpeed(deltaTime, throttleInput, brakeInput);
+
+        // Automatic gearbox: rpm climbs across each gear then drops on the
+        // upshift (drives the power wheelie and the engine note)
+        this.computeGearState();
 
         // Update wheelie physics
         this.updateWheelie(deltaTime, throttleInput, brakeInput, wheelieInput, this.onWheelieScore);
@@ -2065,7 +2196,14 @@ class Vehicle {
 
         // Apply throttle (reduced during wheelie for challenge)
         if (throttleInput > 0) {
-            const wheeliePenalty = this.isWheelie ? 0.3 : 1.0; // Only 30% acceleration during wheelie
+            // Wheelies bog the drive, but the penalty ramps in with the wheelie
+            // ANGLE - merely being "armed" in wheelie-mode at ~0deg doesn't cut
+            // power. (A flat cut there starved the revs, dropped the front, and
+            // set up a stop/go limit cycle that made the bike jump.) Manual
+            // wheelies bog harder than power wheelies.
+            const penAngleFrac = Math.min(1, this.wheelieAngle / 0.5);
+            const minWheeliePenalty = this.powerWheelie ? 0.6 : 0.3;
+            const wheeliePenalty = this.isWheelie ? (1 - (1 - minWheeliePenalty) * penAngleFrac) : 1.0;
             this.speed += this.acceleration * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
         }
 
@@ -2083,6 +2221,35 @@ class Vehicle {
         
         // Clamp speed
         this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
+    }
+
+    // Automatic gearbox model. There are no manual gears; instead the engine
+    // rpm (0..1) rises across each gear's speed band and snaps back down on the
+    // upshift, producing a sawtooth that drives the power wheelie and engine
+    // note. currentGear/engineRpm are read by updateWheelie and the sound.
+    computeGearState() {
+        if (!this.gearTops) {
+            // Fraction of maxSpeed at which each gear hits redline. 1st is kept
+            // short (shifts up early) since it makes so much torque.
+            this.gearTops = [0.12, 0.28, 0.45, 0.63, 0.82, 1.0];
+            // Per-gear torque multiplier: lower gears make more torque, so the
+            // front lifts much more easily down low.
+            this.gearTorque = [1.4, 1.15, 1.0, 0.9, 0.82, 0.75];
+            this.currentGear = 0;
+            this.engineRpm = 0.4;
+        }
+        const frac = this.maxSpeed > 0 ? Math.max(0, this.speed / this.maxSpeed) : 0;
+        let gear = 0;
+        while (gear < this.gearTops.length - 1 && frac > this.gearTops[gear]) gear++;
+        this.currentGear = gear;
+        const bottom = gear === 0 ? 0 : this.gearTops[gear - 1];
+        const top = this.gearTops[gear];
+        // Reach redline at ~65% through the gear so the engine revs out and
+        // holds against the limiter for a decent window before the upshift -
+        // that sustained-high-rev window is when the power wheelie builds.
+        const within = top > bottom ? (frac - bottom) / ((top - bottom) * 0.65) : 1;
+        // rpm settles to ~0.4 just after a shift, climbs to 1.0 at redline
+        this.engineRpm = 0.4 + 0.6 * Math.max(0, Math.min(1, within));
     }
 
     updateWheelie(deltaTime, throttleInput, brakeInput, wheelieInput = 0, onWheelieScore = null) {
@@ -2121,6 +2288,7 @@ class Vehicle {
         if (canStartWheelie && this.wheelieAngle < 0.001) {
             // Start wheelie with a stronger pop
             this.isWheelie = true;
+            this.powerWheelie = false; // deliberate pop (camera should react)
             this.wheelieAngle = 0.05; // Start with more visible angle
             this.wheelieVelocity = 3.5 * (this.wheeliePopMult || 1); // Initial lift (character-dependent)
             this.wheelieStartTime = performance.now();
@@ -2129,69 +2297,102 @@ class Vehicle {
             console.log('Speed:', this.speed.toFixed(1) + 'm/s (' + (this.speed * 2.237).toFixed(1) + ' mph)');
         }
 
+        // Engine-torque available to lift the front: scales with the bike's
+        // wheelie pop, the gear (lower gears make more torque) and the revs.
+        const gear = this.currentGear || 0;
+        const gearTorque = this.gearTorque ? this.gearTorque[gear] : 1;
+        // Lift torque is concentrated at the TOP of the rev range (nothing below
+        // ~60% revs, peaking at redline) so the power wheelie only comes up when
+        // you're really revving it out - not constantly.
+        const revFactor = Math.max(0, Math.min(1, ((this.engineRpm || 0.5) - 0.6) / 0.4));
+        // Surplus drive - and so the torque available to lift the front - falls
+        // off toward top speed as drag eats the power. Taper the lift to zero as
+        // we approach max speed (negligible at low speed, so low-gear wheelies
+        // are unaffected).
+        const speedFrac = this.maxSpeed > 0 ? this.speed / this.maxSpeed : 0;
+        const speedTaper = Math.max(0, 1 - speedFrac * speedFrac);
+        const liftRaw = (this.wheeliePopMult || 1) * gearTorque * revFactor * 8.5 * speedTaper;
+
+        // Power wheelie auto-start: when engine torque beats the bike's weight
+        // at the flat, the front comes up on throttle alone (punchy bikes, high
+        // revs, low gears). No wheelie key needed; it settles below the balance
+        // point so throttle can never loop it.
+        if (!this.isWheelie && !this.isJumping && !this.crashed &&
+            throttleInput > 0.5 && liftRaw > 5.2) {
+            this.isWheelie = true;
+            this.powerWheelie = true;
+            this.wheelieAngle = 0.02;
+            this.wheelieVelocity = 0;
+            this.wheelieStartTime = performance.now();
+            this.wheelieScoreAccumulated = 0;
+        }
+
         if (this.isWheelie) {
-            // SIMPLIFIED WHEELIE PHYSICS - More fun, less punishing
-            
             const angleDegrees = this.wheelieAngle * 180 / Math.PI;
-            
-            // Natural gravity - wheelie wants to fall back down with progressive difficulty
-            const gravityPull = 2.3 + (angleDegrees / 45) * 1.6; // 2.3-3.9 based on angle
-            this.wheelieVelocity -= gravityPull * deltaTime;
-            
-            // Throttle control - main way to control wheelie after initiation
+            const balanceRad = 1.43; // ~82deg: balanced on the rear wheel
+            const balanceFrac = this.wheelieAngle / balanceRad;
+
+            // Restoring (nose-down) torque is strong when the front is low,
+            // fades to zero at the balance point, and reverses beyond it (tips
+            // into a loop). So a higher wheelie needs less power to hold than a
+            // low one - and at the limit you just balance with no input.
+            const restoring = 5.0 * (1 - balanceFrac);
+            this.wheelieVelocity -= restoring * deltaTime;
+
+            // Throttle lift fades faster than the restoring torque (^1.5), so
+            // throttle settles at a stable angle that climbs with revs/torque
+            // but stops short of the balance point - throttle alone can't loop.
             if (throttleInput > 0) {
-                // Progressive throttle response - more sensitive at higher angles
-                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.wheelieThrottleMult || 1);
-                this.wheelieVelocity += throttleInput * throttleSensitivity * deltaTime;
-            }
-            
-            // Brake brings it down - useful to save from crash
-            if (brakeInput > 0) {
-                // Progressive brake response - more effective at higher angles
-                const brakePower = 5.5 + (angleDegrees / 60) * 1.5;
-                this.wheelieVelocity -= brakeInput * brakePower * deltaTime;
+                const fade = Math.pow(Math.max(0, 1 - balanceFrac), 1.5);
+                this.wheelieVelocity += throttleInput * liftRaw * fade * deltaTime;
             }
 
-            // The wheelie key is a hold control: keep it pressed to hold/raise
-            // the wheelie, release it to bring the front wheel back down. This
-            // is the recovery the old "throttle-only" model lacked - holding
-            // throttle used to climb you straight into a backflip with no way
-            // down. Releasing the key now overpowers throttle lift at any angle.
-            if (wheelieInput > 0) {
-                this.wheelieVelocity += 1.6 * deltaTime; // active hold/lift
-            } else {
-                this.wheelieVelocity -= 4.5 * deltaTime; // released -> nose down
+            // Brake brings it down - useful to save from a loop
+            if (brakeInput > 0) {
+                this.wheelieVelocity -= brakeInput * (5.5 + angleDegrees / 60 * 1.5) * deltaTime;
             }
-            
+
+            // The wheelie key adds deliberate lift that does NOT fade near the
+            // balance point, so it (and only it) can ride the bike past balance
+            // into a loop. Releasing it lets the front settle back to whatever
+            // the throttle alone supports (or down to flat).
+            if (wheelieInput > 0) {
+                this.powerWheelie = false; // manual control
+                this.wheelieVelocity += 3.2 * deltaTime;
+            }
+
             // Update wheelie angle
             this.wheelieAngle += this.wheelieVelocity * deltaTime;
-            
-            // Check for backwards flip crash with warning zone
-            const dangerAngleDegrees = 70; // Warning zone
-            const crashAngleDegrees = 77; // Crash threshold
-            
+            this.wheelieAngle = Math.max(0, this.wheelieAngle);
+            // Don't let downward velocity pile up while resting at 0 (armed
+            // power wheelie) - otherwise it lags before popping back up.
+            if (this.wheelieAngle <= 0 && this.wheelieVelocity < 0) this.wheelieVelocity = 0;
+
+            // Throttle alone is pinned just below the balance point as a safety
+            // net (the physics already settles below it); only the wheelie key
+            // can push past into a loop.
+            if (wheelieInput === 0 && this.wheelieAngle > balanceRad * 0.97) {
+                this.wheelieAngle = balanceRad * 0.97;
+                if (this.wheelieVelocity > 0) this.wheelieVelocity = 0;
+            }
+
+            // Loop crash - only reachable by riding the wheelie key past balance
+            const crashAngleDegrees = 92;
             if (angleDegrees >= crashAngleDegrees) {
-                // CRASHED! Went too far back
                 this.crashed = true;
                 this.isWheelie = false;
                 this.wheelieAngle = 0;
                 this.wheelieVelocity = 0;
-                console.log('WHEELIE CRASH! Flipped backwards at', angleDegrees.toFixed(1) + '°');
+                console.log('WHEELIE CRASH! Looped at', angleDegrees.toFixed(1) + '°');
                 return;
-            } else if (angleDegrees >= dangerAngleDegrees) {
-                // In danger zone - provide extra gravity assistance
-                this.wheelieVelocity -= 0.5 * deltaTime;
             }
-            
-            // Don't clamp the angle - let it go all the way to crash
-            // This allows the player to actually flip if they're not careful
-            this.wheelieAngle = Math.max(0, this.wheelieAngle);
 
             // SIMPLE FUN SCORING - Just rack up points!
             const wheelieDuration = (performance.now() - this.wheelieStartTime) / 1000;
             
-            // Base points based on angle - higher is better (risk vs reward)
-            let pointsPerSecond = 20; // Base points
+            // Base points based on angle - higher is better (risk vs reward).
+            // No points for a flat (~0deg) power-wheelie idle between rev peaks.
+            let pointsPerSecond = angleDegrees < 5 ? 0 : 20;
             
             if (angleDegrees >= 60) {
                 // High angle - risky but rewarding!
@@ -2226,9 +2427,17 @@ class Vehicle {
                 }
             }
 
-            // End wheelie if angle gets to zero or speed too low
-            if (this.wheelieAngle <= 0 || this.speed < 5) {
+            // End the wheelie. A power wheelie stays "armed" the whole time
+            // you're on the throttle - the front just glides down to 0 between
+            // rev peaks instead of ending, so the state never toggles (toggling
+            // is what made the bike jump). It only ends when you ease off the
+            // throttle or get slow. A manual (key) wheelie ends once it's down.
+            const wheelieEnded = this.powerWheelie
+                ? (throttleInput < 0.25 || this.speed < 5)
+                : (this.wheelieAngle <= 0 || this.speed < 5);
+            if (wheelieEnded) {
                 this.isWheelie = false;
+                this.powerWheelie = false;
                 this.wheelieAngle = 0;
                 this.wheelieVelocity = 0;
                 const wheelieDuration = (performance.now() - this.wheelieStartTime) / 1000;
@@ -2350,6 +2559,14 @@ class Vehicle {
         this.group.rotation.y = this.yawAngle;
         this.meshNeedsBaseCapture = true;
 
+        // Keep the bike its own colour at all times. The body material is shared
+        // with the frame, so the old crash tint recoloured the WHOLE bike red
+        // (jarring on e.g. Casper's blue). The CRASHED banner + fall animation
+        // carry that feedback now. (The wheelie branch below re-brightens it.)
+        if (this.frame) {
+            this.frame.material.color.setHex(parseInt(this.bikeColor));
+        }
+
         // Rider stands up over the jump and settles back on landing - an
         // eased blend rather than a pose snap
         if (this.riderBasePos) {
@@ -2420,11 +2637,17 @@ class Vehicle {
             const angle = -this.wheelieAngle;
             const cosTheta = Math.cos(angle);
             const sinTheta = Math.sin(angle);
-            
-            // Original vector from origin to pivot point (rear wheel center)
+
+            // Pivot about the rear tyre's CONTACT patch. The group origin sits
+            // at ground level (the wheels' bottoms are at local y=0), so the
+            // pivot's Y is 0. The old value (0.3 - cgHeight = -0.3) wrongly
+            // assumed the origin was at CG height; that put the pivot below
+            // ground and injected a fore/aft slide ~0.3*sin(angle) - the bike
+            // appeared to slide back and forth instead of pivoting cleanly.
+            const s = this.group.scale.x || 1; // Casper's bike is scaled down
             const pivotX = 0;
-            const pivotY = 0.3 - this.cgHeight; // wheel center height - CG height = 0.3 - 0.6 = -0.3
-            const pivotZ = -0.7; // rear wheel is 0.7m behind center
+            const pivotY = 0;
+            const pivotZ = -0.7 * s; // rear wheel sits 0.7m (x scale) behind centre
             
             // After rotation, this vector becomes:
             const rotatedY = pivotY * cosTheta - pivotZ * sinTheta;
@@ -2439,9 +2662,12 @@ class Vehicle {
             this.group.position.x = this.position.x + Math.sin(this.yawAngle) * localZOffset;
             this.group.position.z = this.position.z + Math.cos(this.yawAngle) * localZOffset;
             
-            // Apply lean (reduced during wheelie)
-            this.group.rotation.z = this.leanAngle * 0.3; // Reduce lean during wheelie
-            this.rider.rotation.z = this.leanAngle * 0.1;
+            // Apply lean, reduced as the front comes up. Scaling by angle keeps
+            // it continuous with the normal branch at angle 0, so entering or
+            // leaving wheelie-mode doesn't snap the roll.
+            const wLeanFrac = Math.min(1, this.wheelieAngle / 0.5);
+            this.group.rotation.z = this.leanAngle * (1 - 0.7 * wLeanFrac);
+            this.rider.rotation.z = this.leanAngle * (0.2 - 0.1 * wLeanFrac);
             
             // Simple visual feedback - bike gets brighter during wheelie,
             // brightening the character's own paint color
@@ -2539,6 +2765,8 @@ class Vehicle {
         this.jumpVelocityY = 0;
         this.jumpStartHeight = 0;
         this.jumpRotation = 0;
+        this.stuntChain = false;
+        this.powerWheelie = false;
         this.previousSpeed = 0;
         this.isWheelie = false;
         this.wheelieAngle = 0;
@@ -3048,7 +3276,23 @@ class Vehicle {
         // Check landing quality based on rotation angle
         const landingAngle = Math.abs(this.jumpRotation);
         const landingSpeed = Math.abs(this.jumpVelocityY);
-        
+
+        // Rear-wheel-first landing (nose up) at speed flows straight into a
+        // wheelie instead of slamming the front back down - and chaining the
+        // two stunts pays a bonus (surfaced by main.js checkJumpScoring).
+        const noseUp = this.jumpRotation < -0.18; // ~10deg+ front-up
+        if (noseUp && landingAngle < Math.PI * 0.42 && this.speed > 8 && !this.crashed) {
+            this.isWheelie = true;
+            this.wheelieAngle = Math.min(landingAngle, this.wheelieCrashAngle * 0.85);
+            this.wheelieVelocity = 1.0; // slight hold so it doesn't instantly drop
+            this.wheelieStartTime = performance.now();
+            this.wheelieScoreAccumulated = 0;
+            this.jumpRotation = 0;
+            this.stuntChain = true; // jump -> wheelie combo
+            console.log('STUNT CHAIN! Jump landed into a wheelie');
+            return;
+        }
+
         // Good landing if bike is mostly level (within 45 degrees)
         if (landingAngle < Math.PI / 4) {
             console.log('Perfect landing! Angle:', (landingAngle * 180 / Math.PI).toFixed(0) + '°');
