@@ -1747,6 +1747,14 @@ class Game {
             localStorage.setItem('motorcycleHighScore', this.highScore.toString());
         }
 
+        // Surface this leg's leaderboard right away - best times for a time
+        // trial, local high scores for a points leg (the per-leg bests were
+        // just written above, so they're reflected). Closing it drops back to
+        // the finish banner's continue / restart / menu buttons.
+        if (currentLeg) {
+            this.showLeaderboardViewer(currentLeg.id);
+        }
+
         console.log(`COURSE FINISHED! Distance: ${distance.toFixed(0)}m, Time: ${timeSeconds.toFixed(1)}s, Score: ${totalScore}`);
     }
 
@@ -3228,14 +3236,50 @@ class Game {
     }
 
     showConeHitNotification(points) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FFA500'; // Orange color for cones
-        notification.textContent = `CONE HIT! +${points}`;
-        document.body.appendChild(notification);
+        // Reuse one banner so clipping a row of cones reads as a single
+        // combo-counted popup instead of a stack of overlapping toasts.
+        if (!this.coneBanner) {
+            const el = document.createElement('div');
+            el.id = 'coneBanner';
+            el.style.cssText = `
+                position: fixed;
+                top: 38%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(255, 140, 0, 0.92);
+                color: #fff;
+                padding: 14px 38px;
+                border-radius: 12px;
+                font-family: Arial, sans-serif;
+                font-size: 32px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                z-index: 1500;
+                box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+                text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+                opacity: 0;
+                transition: opacity 0.25s ease-out;
+                pointer-events: none;
+            `;
+            document.body.appendChild(el);
+            this.coneBanner = el;
+            this.coneComboCount = 0;
+            this.coneComboPoints = 0;
+        }
 
-        setTimeout(() => {
-            notification.remove();
+        // Accumulate while hits keep coming within the display window
+        this.coneComboCount = (this.coneComboCount || 0) + 1;
+        this.coneComboPoints = (this.coneComboPoints || 0) + points;
+        this.coneBanner.textContent = this.coneComboCount > 1
+            ? `CONES x${this.coneComboCount}!  +${this.coneComboPoints}`
+            : `CONE!  +${points}`;
+        this.coneBanner.style.opacity = '1';
+
+        clearTimeout(this._coneBannerTimer);
+        this._coneBannerTimer = setTimeout(() => {
+            if (this.coneBanner) this.coneBanner.style.opacity = '0';
+            this.coneComboCount = 0;
+            this.coneComboPoints = 0;
         }, 1000);
     }
     

@@ -464,9 +464,10 @@ class Vehicle {
         fenderGeometry.rotateZ(Math.PI / 2);
         this.frontFender = this.attachPart(fenderGeometry, P.carbon, 0, 0.3, 0.7);
         this.attachPart(new THREE.BoxGeometry(0.18, 0.012, 0.05), P.carbon, 0, 0.62, 0.71);
-        // Rear hugger over the back tire. thetaStart was 2.7, which wrapped the
-        // rear/underside of the wheel; 1.4 brings it forward to sit over the top.
-        const huggerGeometry = new THREE.CylinderGeometry(0.345, 0.345, 0.16, 12, 1, true, 1.4, 1.5);
+        // Rear hugger over the back tire, rotated forward (~60deg past the old
+        // 1.4) so it sits over the front-top of the wheel toward the swingarm,
+        // the way a real hugger hangs - not draped over the back.
+        const huggerGeometry = new THREE.CylinderGeometry(0.345, 0.345, 0.16, 12, 1, true, 0.35, 1.5);
         huggerGeometry.rotateZ(Math.PI / 2);
         this.attachPart(huggerGeometry, P.carbon, 0, 0.3, -0.7);
 
