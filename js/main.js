@@ -698,12 +698,54 @@ class Game {
         
         const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
         pmremGenerator.compileEquirectangularShader();
-        
-        const envScene = new THREE.Scene();
-        envScene.background = new THREE.Color(0xb8d4e8);
-        this.scene.environment = pmremGenerator.fromScene(envScene).texture;
-        
+        this.scene.environment = this.buildEnvMap(pmremGenerator);
+
         window.addEventListener('resize', () => this.onWindowResize());
+    }
+
+    // A graded sky/ground environment with a bright sun, baked once via PMREM.
+    // Replacing the old flat-colour env gives every metal/paint surface
+    // realistic graded reflections and a crisp specular highlight - a big
+    // fidelity win at zero runtime cost (it's prefiltered a single time).
+    buildEnvMap(pmrem) {
+        const envScene = new THREE.Scene();
+
+        // Vertical sky->horizon->ground gradient on the inside of a dome
+        const canvas = document.createElement('canvas');
+        canvas.width = 8;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        const grad = ctx.createLinearGradient(0, 0, 0, 256);
+        grad.addColorStop(0.00, '#a3caee'); // zenith
+        grad.addColorStop(0.46, '#d9e8f3'); // upper haze
+        grad.addColorStop(0.50, '#eef4f7'); // horizon band (brightest)
+        grad.addColorStop(0.54, '#b6bec6'); // just under the horizon
+        grad.addColorStop(1.00, '#4b525a'); // ground
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 8, 256);
+        const skyTex = new THREE.CanvasTexture(canvas);
+        skyTex.colorSpace = THREE.SRGBColorSpace;
+        const sky = new THREE.Mesh(
+            new THREE.SphereGeometry(40, 32, 24),
+            new THREE.MeshBasicMaterial({ map: skyTex, side: THREE.BackSide })
+        );
+        envScene.add(sky);
+
+        // Bright sun disc for sharp specular glints on chrome and paint
+        const sun = new THREE.Mesh(
+            new THREE.SphereGeometry(2.4, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        sun.position.set(16, 26, 8);
+        envScene.add(sun);
+
+        const texture = pmrem.fromScene(envScene, 0.02).texture;
+        sky.geometry.dispose();
+        sky.material.dispose();
+        skyTex.dispose();
+        sun.geometry.dispose();
+        sun.material.dispose();
+        return texture;
     }
 
     setupScene() {

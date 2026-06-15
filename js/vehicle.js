@@ -532,18 +532,22 @@ class Vehicle {
         return {
             paintHex,
             accentHex,
-            paint: new THREE.MeshStandardMaterial({
-                color: paintHex, roughness: 0.14, metalness: 0.68, envMapIntensity: 1.6
+            // Automotive clearcoat paint: a coloured metallic base under a
+            // glossy clear layer - deep reflections + a crisp specular highlight.
+            paint: new THREE.MeshPhysicalMaterial({
+                color: paintHex, roughness: 0.42, metalness: 0.35,
+                clearcoat: 1.0, clearcoatRoughness: 0.06, envMapIntensity: 1.5
             }),
-            paintDark: new THREE.MeshStandardMaterial({
-                color: darkShade, roughness: 0.32, metalness: 0.6, envMapIntensity: 1.1
+            paintDark: new THREE.MeshPhysicalMaterial({
+                color: darkShade, roughness: 0.4, metalness: 0.45,
+                clearcoat: 0.85, clearcoatRoughness: 0.12, envMapIntensity: 1.3
             }),
             accent: new THREE.MeshStandardMaterial({
                 color: accentHex, roughness: 0.18, metalness: 0.75,
-                emissive: accentHex, emissiveIntensity: 0.05, envMapIntensity: 1.5
+                emissive: accentHex, emissiveIntensity: 0.05, envMapIntensity: 1.6
             }),
             chrome: new THREE.MeshStandardMaterial({
-                color: 0xe4e6ea, roughness: 0.05, metalness: 1.0, envMapIntensity: 2.2
+                color: 0xeef0f3, roughness: 0.035, metalness: 1.0, envMapIntensity: 2.6
             }),
             steel: new THREE.MeshStandardMaterial({
                 color: 0x9aa0a6, roughness: 0.42, metalness: 0.95, envMapIntensity: 1.0
@@ -554,9 +558,9 @@ class Vehicle {
             darkMetal: new THREE.MeshStandardMaterial({
                 color: 0x17171c, roughness: 0.45, metalness: 0.75
             }),
-            carbon: new THREE.MeshStandardMaterial({
-                color: 0x121317, roughness: 0.35, metalness: 0.55, envMapIntensity: 1.2,
-                side: THREE.DoubleSide
+            carbon: new THREE.MeshPhysicalMaterial({
+                color: 0x121317, roughness: 0.38, metalness: 0.5, envMapIntensity: 1.3,
+                clearcoat: 1.0, clearcoatRoughness: 0.1, side: THREE.DoubleSide
             }),
             rubber: new THREE.MeshStandardMaterial({
                 color: 0x161616, roughness: 0.96, metalness: 0.0
@@ -822,21 +826,48 @@ class Vehicle {
     // Brake disc with carrier and a ring of drilled-look holes
     makeBrakeDisc(radius, P) {
         const discMaterial = new THREE.MeshStandardMaterial({
-            color: 0xb9bcc2, roughness: 0.32, metalness: 1.0, envMapIntensity: 1.4
+            color: 0xc2c5cb, roughness: 0.26, metalness: 1.0, envMapIntensity: 1.8
         });
-        const disc = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 0.012, 22), discMaterial);
+        // Friction ring (finer, thinner). Sub-parts live in this mesh's local
+        // X-Z plane (cylinder axis Y); the contract spins it via rotation.x.
+        const disc = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 0.01, 36), discMaterial);
         disc.rotation.z = Math.PI / 2;
         disc.castShadow = true;
         disc.receiveShadow = true;
-        const carrier = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.45, radius * 0.45, 0.018, 12), P.darkMetal);
+
+        // Anodised inner carrier hub
+        const carrier = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.4, radius * 0.4, 0.022, 20), P.steelDark);
         carrier.castShadow = true;
         disc.add(carrier);
-        const holeGeometry = new THREE.CylinderGeometry(0.01, 0.01, 0.018, 5);
-        for (let i = 0; i < 8; i++) {
-            const a = (i * Math.PI * 2) / 8;
-            const hole = new THREE.Mesh(holeGeometry, P.darkMetal);
-            hole.position.set(Math.cos(a) * radius * 0.74, 0, Math.sin(a) * radius * 0.74);
-            disc.add(hole);
+
+        // Five carrier arms reaching out to the ring (floating-rotor look)
+        const armGeo = new THREE.BoxGeometry(0.03, 0.015, radius * 0.5);
+        for (let i = 0; i < 5; i++) {
+            const a = (i * Math.PI * 2) / 5;
+            const arm = new THREE.Mesh(armGeo, P.steelDark);
+            arm.position.set(Math.cos(a) * radius * 0.58, 0, Math.sin(a) * radius * 0.58);
+            arm.rotation.y = Math.PI / 2 - a;
+            disc.add(arm);
+        }
+
+        // Two rings of drilled cooling holes
+        const holeGeo = new THREE.CylinderGeometry(0.0085, 0.0085, 0.016, 6);
+        [{ r: 0.66, n: 12 }, { r: 0.83, n: 16 }].forEach(({ r, n }, ri) => {
+            for (let i = 0; i < n; i++) {
+                const a = (i * Math.PI * 2) / n + ri * 0.26;
+                const hole = new THREE.Mesh(holeGeo, P.darkMetal);
+                hole.position.set(Math.cos(a) * radius * r, 0, Math.sin(a) * radius * r);
+                disc.add(hole);
+            }
+        });
+
+        // Floating bobbins where the carrier meets the ring
+        const bobGeo = new THREE.CylinderGeometry(0.013, 0.013, 0.024, 8);
+        for (let i = 0; i < 5; i++) {
+            const a = (i * Math.PI * 2) / 5 + 0.3;
+            const bob = new THREE.Mesh(bobGeo, P.chrome);
+            bob.position.set(Math.cos(a) * radius * 0.45, 0, Math.sin(a) * radius * 0.45);
+            disc.add(bob);
         }
         return disc;
     }
