@@ -54,6 +54,64 @@ window.twistyDev = {
         game.camera.lookAt(v.x + fx * ahead, v.y, v.z + fz * ahead);
     },
 
+    // Stop the live animation loop so frames only happen when step() runs.
+    // Call it in the same synchronous turn as start(): any frame in between
+    // would advance the ride by wall-clock time and make runs differ.
+    freeze() {
+        const game = window.game;
+        if (!this.frozen) {
+            cancelAnimationFrame(game.animationFrameId);
+            // Each animate() call schedules the next frame; none may run on its own
+            window.requestAnimationFrame = () => 0;
+            game.clock.getDelta = () => 1 / 60;
+            // Driven by wall-clock time at the top of animate()
+            game.adaptResolution = () => {};
+            this.ticks = 0;
+            this.frozen = true;
+        }
+        // start() builds a new vehicle for each leg, so count its updates here
+        const vehicle = game.vehicle;
+        if (vehicle && !vehicle.tickCounted) {
+            const update = vehicle.update.bind(vehicle);
+            vehicle.update = (...args) => {
+                this.ticks++;
+                return update(...args);
+            };
+            vehicle.tickCounted = true;
+        }
+    },
+
+    // Run n real frames of Game.animate, one fixed physics tick each:
+    // 0 + 1/60 >= 1/60 runs the loop body once and leaves exactly 0 behind.
+    // Rendering is skipped unless { render: true }.
+    step(n = 1, options = {}) {
+        const game = window.game;
+        this.freeze();
+        const graphics = game.graphics;
+        const render = graphics.render;
+        const update = graphics.update;
+        if (!options.render) {
+            graphics.render = () => {};
+            graphics.update = () => {};
+        }
+        const before = this.ticks;
+        try {
+            for (let i = 0; i < n; i++) {
+                game.paused = false;
+                game.accumulatedTime = 0;
+                game.animate();
+            }
+        } finally {
+            graphics.render = render;
+            graphics.update = update;
+        }
+        // Fails loudly if animate() is ever restructured, so no stepped proof can pass vacuously
+        if (this.ticks - before !== n || game.accumulatedTime !== 0) {
+            throw new Error('step: animate() shape changed');
+        }
+        return this.ticks;
+    },
+
     teleport(segment) {
         const game = window.game;
         const p = game.environment.roadPath[segment];
