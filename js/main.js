@@ -76,8 +76,8 @@ class Game {
                 fillIntensity: 0.225,
                 rimColor: 0x99aaee,
                 rimIntensity: 0.2,
-                exposure: 0.82,
-                headlight: 0.55,
+                exposure: 0.95,
+                headlight: 0.8,
                 sunOffset: { x: 80, y: 45, z: 30 }
             },
             // Moonlit: dark enough that the headlight matters, bright enough
@@ -254,6 +254,7 @@ class Game {
                 // Apply weather visuals to environment
                 this.environment.applyWeatherVisuals(weatherType, weatherIntensity);
                 this.graphics.setWeather(weatherType, weatherIntensity);
+                this.applyWeatherLighting(weatherType);
 
                 console.log(`Weather set to: ${weatherType} (intensity: ${weatherIntensity})`);
             } else {
@@ -320,6 +321,10 @@ class Game {
 
         // Reset game state for new leg
         this.resetRunState();
+
+        // Tag the new scene's textures and vertex colours before the first
+        // frame (the periodic scan would show it washed out for a moment)
+        this.graphics.fixColorSpaces();
 
         // Classify the freshly built scene for distance culling
         this.setupPerformanceCulling();
@@ -467,6 +472,10 @@ class Game {
         root.traverse(obj => {
             if (obj.geometry) {
                 obj.geometry.dispose();
+            }
+            // Releases the per-instance matrix and colour buffers
+            if (obj.isInstancedMesh) {
+                obj.dispose();
             }
             const materials = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
             materials.forEach(material => {
@@ -927,6 +936,11 @@ class Game {
         this.directionalLight.intensity = config.sunIntensity;
         this.baseSunIntensity = config.sunIntensity;
 
+        // Shadowless companion of the sun: same colour, a quarter of its
+        // strength (it was a fixed white 0.2, also at night)
+        this.distantLight.color = new THREE.Color(config.sunColor);
+        this.distantLight.intensity = config.sunIntensity * 0.25;
+
         // Sun direction: low at dawn/sunset for long dramatic shadows, high
         // at midday-ish times. Used by the per-frame light-follow code.
         this.sunOffset = config.sunOffset || { x: 50, y: 80 };
@@ -956,6 +970,21 @@ class Game {
 
         // Show notification (disabled - don't show popup at level start)
         // this.showTimeOfDayNotification(config.name);
+    }
+
+    // Under cloud the sun or moon is hidden: most of its light arrives
+    // scattered from the whole sky. Call after setTimeOfDay(), which restores
+    // the clear-sky values. (A full-strength hidden sun also put a hard white
+    // reflection on the wet road.)
+    applyWeatherLighting(weatherType) {
+        const overcast = weatherType === 'rain' || weatherType === 'snow';
+        const hazy = weatherType === 'fog';
+        const config = this.timeConfigs[this.timeOfDay];
+        const direct = overcast ? 0.25 : hazy ? 0.6 : 1;
+        this.baseSunIntensity = config.sunIntensity * direct;
+        this.directionalLight.intensity = this.baseSunIntensity;
+        this.distantLight.intensity = config.sunIntensity * 0.25 * direct;
+        this.hemisphereLight.intensity = config.hemisphereIntensity * (overcast ? 1.35 : hazy ? 1.15 : 1);
     }
 
     showTimeOfDayNotification(timeName) {
@@ -2245,6 +2274,8 @@ class Game {
             this.showcaseExtras.push(floor);
         }
 
+        this.graphics.fixColorSpaces();
+
         this.showcaseMode = 'rider';
         this.showcaseFocusId = focusId;
         this.showcaseOrbitAngle = this.showcaseOrbitAngle || 0;
@@ -2272,6 +2303,7 @@ class Game {
             this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
         }
         this.graphics.setWeather(leg.weather || 'clear', leg.weatherIntensity || 0);
+        this.applyWeatherLighting(leg.weather || 'clear');
 
         // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
         // keeps the low-poly scenery reading well (wide aerials don't)
@@ -2284,6 +2316,8 @@ class Game {
         // rock: the camera instead sways through an arc on the open valley
         // side. Base angle = the road's right-hand normal.
         this.previewBaseAngle = -mid.heading;
+
+        this.graphics.fixColorSpaces();
 
         this.previewLeg = leg;
         this.previewOrbitAngle = this.previewOrbitAngle || 0;
@@ -2653,15 +2687,22 @@ class Game {
         // Update traffic
         if (this.traffic) {
             const collision = this.traffic.update(deltaTime, this.vehicle.position);
-            if (collision && collision.hit && !this.vehicle.crashed && !inRoadworksZone) {
+            // The roadworks leave one corridor for both directions, so a car
+            // on its detour (which starts before the zone and ends after it)
+            // cannot be avoided: no crash against it
+            const carOnDetour = collision && collision.car && collision.car.inDetour;
+            if (collision && collision.hit && !this.vehicle.crashed && !inRoadworksZone && !carOnDetour) {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 this.vehicle.frame.material.color.setHex(0xff00ff);
                 this.showCollisionWarning();
                 // The crash was set after vehicle.update(), so the generic
-                // "just crashed" check above never sees this one
-                this.soundManager.playCrashSound();
-                this.showCrashNotification();
+                // "just crashed" check above never sees this one. (Not after
+                // the finish: the results banner must stay in charge.)
+                if (!this.finished) {
+                    this.soundManager.playCrashSound();
+                    this.showCrashNotification();
+                }
                 
                 // Calculate impact direction based on car position
                 const car = collision.car;
@@ -2838,8 +2879,18 @@ class Game {
             this.headlightBeam.rotation.set(0.045, renderYaw, 0);
         }
 
-        // Update rim light to follow behind vehicle
-        this.rimLight.position.set(renderPos.x, 10, renderPos.z - 50);
+        // Rim light: from behind and above the bike, aimed at it. (It used to
+        // keep its default target at the world origin, so on a far leg it
+        // shone almost level across the scene from an arbitrary side and
+        // threw a white glare across the wet road.)
+        const rimYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+        this.rimLight.position.set(
+            renderPos.x - Math.sin(rimYaw) * 30,
+            renderPos.y + 22,
+            renderPos.z - Math.cos(rimYaw) * 30
+        );
+        this.rimLight.target.position.copy(renderPos);
+        this.rimLight.target.updateMatrixWorld();
 
         this.graphics.update(
             rawDeltaTime,
@@ -3162,6 +3213,9 @@ class Game {
     }
 
     restartFromCheckpoint() {
+        // The run is over once the line is crossed; the finish banner owns
+        // what happens next
+        if (this.finished) return;
         if (!this.lastCheckpointPosition) {
             console.log('No checkpoint position available for restart');
             return;

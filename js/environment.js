@@ -191,7 +191,8 @@ class Environment {
     const drop = this.cliffDrop(roadY);
     const minDistance = this.roadWidth / 2 + 1.4;
 
-    let previousDistance = minDistance;
+    // Row 0 of the mesh sits at the end of the ledge
+    let previousDistance = this.roadWidth / 2 + 2;
     let previousY = roadY;
     for (let j = 1; j <= rows; j++) {
       const progress = j / rows;
@@ -2804,7 +2805,7 @@ class Environment {
     // Asphalt base with variation
     // (lighter than it looks: #3a3a3a is 4% reflectance once decoded, half
     // that of real asphalt, and vanished in anything but full sun)
-    ctx.fillStyle = "#4e4d4b";
+    ctx.fillStyle = "#5a5957";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Large-scale tonal mottling - soft warm/cool patches give the asphalt
@@ -5870,8 +5871,8 @@ class Environment {
           this.roadMaterial.roughness =
             0.85 * (1 - intensity) + 0.2 * intensity;
           this.roadMaterial.metalness = 0.12 * intensity;
-          this.roadMaterial.envMapIntensity = 0.3 + 1.3 * intensity;
-          this.roadMaterial.color.setHex(0x8a9098);
+          this.roadMaterial.envMapIntensity = 0.3 + 1.9 * intensity;
+          this.roadMaterial.color.setHex(0xc8ccd2);
           this.roadMaterial.needsUpdate = true;
         }
         // Darker grass and mountains

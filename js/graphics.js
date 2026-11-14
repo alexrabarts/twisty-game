@@ -250,6 +250,11 @@ const GFX_SKY_FRAGMENT = `
         sky = mix(sky, uHorizon, uFogBlend * (1.0 - smoothstep(0.0, 1.2, up) * (1.0 - uFogBlend)));
 
         gl_FragColor = vec4(max(sky, vec3(0.0)), 1.0);
+
+        // No-ops inside the HDR pipeline (the composite pass does both).
+        // Without it the renderer tone-maps and encodes in each material.
+        #include <tonemapping_fragment>
+        #include <encodings_fragment>
     }
 `;
 
@@ -481,6 +486,7 @@ class Graphics {
         this.flash = 0;
         this.sunDirection = new THREE.Vector3(0.5, 0.8, 0).normalize();
         this.lastColorScan = 0;
+        this.linearFogColor = new THREE.Color();
         this.bufferSize = new THREE.Vector2();
         this.seenTextures = new WeakSet();
         this.seenGeometries = new WeakSet();
@@ -560,7 +566,8 @@ class Graphics {
             depthWrite: false,
             depthFunc: THREE.LessEqualDepth,
             fog: false,
-            toneMapped: false
+            // Tone-mapped by the composite pass, or here when there is none
+            toneMapped: !this.postEnabled
         });
         this.skyMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 16), this.skyMaterial);
         this.skyMesh.frustumCulled = false;
@@ -644,7 +651,7 @@ class Graphics {
         // Overcast weather at night or dusk must not paint a daytime sky
         if ((this.weatherType === 'rain' || this.weatherType === 'snow') &&
             (this.timeKey === 'night' || this.timeKey === 'twilight')) {
-            const dim = this.timeKey === 'night' ? 0.08 : (this.weatherType === 'snow' ? 0.55 : 0.4);
+            const dim = this.timeKey === 'night' ? 0.08 : (this.weatherType === 'snow' ? 0.6 : 0.7);
             u.uZenith.value.multiplyScalar(dim);
             u.uMid.value.multiplyScalar(dim);
             u.uCloudLit.value.multiplyScalar(dim);
@@ -867,8 +874,16 @@ class Graphics {
         }
 
         if (!this.postEnabled) {
+            // Materials mix fog in after they encode to sRGB, so they need
+            // the fog colour in sRGB for this path
+            const fogColor = scene.fog ? scene.fog.color : null;
+            if (fogColor) {
+                this.linearFogColor.copy(fogColor);
+                fogColor.convertLinearToSRGB();
+            }
             this.renderer.setRenderTarget(null);
             this.renderer.render(scene, camera);
+            if (fogColor) fogColor.copy(this.linearFogColor);
             return;
         }
 
