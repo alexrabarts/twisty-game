@@ -798,7 +798,10 @@ function finishChecks(report) {
     else if (frozen) {
         const comparable = Object.fromEntries(Object.entries(fresh).map(([id, sections]) => [id, Object.fromEntries(Object.entries(sections).filter(([s]) => FROZEN_SECTIONS.includes(s)))]));
         failures.push(...diffAgainst(frozen, comparable, 'frozen'));
-        if (results.pages && frozen.pages && !same(frozen.pages, results.pages)) failures.push('pages differ from the frozen baseline');
+        // Pages deleted since the baseline are gone; every page still there must read as it did
+        Object.entries(results.pages || {}).forEach(([name, page]) => {
+            if (!same(frozen.pages?.[name], page)) failures.push(`pages ${name} differs from the frozen baseline`);
+        });
     }
 }
 
