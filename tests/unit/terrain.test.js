@@ -15,11 +15,14 @@ describe('Terrain module (pure)', () => {
     const geo = { path: straightRoad(), roadWidth: 20, startSegment: 0, endSegment: 39 };
     const groundAt = (lateral, exact = false) => Terrain.groundY(Terrain.forLeg(0), geo, lateral, 400, 0, geo.path.length - 1, exact);
 
-    test('leg table: legs 2, 3, 6 and 8 have their own profiles, the other legs are still cliffLake', () => {
+    test('leg table: only legs 1 and 5 are still cliffLake', () => {
         expect(Terrain.LEG_PROFILES).toHaveLength(8);
         expect(Terrain.LEG_PROFILES.map(profile => profile.id)).toEqual([
-            'cliffLake', 'valleyFloor', 'coast', 'cliffLake', 'cliffLake', 'forest', 'cliffLake', 'ridge'
+            'cliffLake', 'valleyFloor', 'coast', 'canyon', 'cliffLake', 'forest', 'forest', 'ridge'
         ]);
+        expect(Terrain.LEG_PROFILES[3]).toBe(Terrain.profiles.canyon);
+        expect(Terrain.LEG_PROFILES[6]).toBe(Terrain.profiles.forestNight);
+        expect(Terrain.LEG_PROFILES.filter(profile => profile.id === 'cliffLake')).toHaveLength(2);
         expect(Terrain.LEG_PROFILES[1]).toBe(Terrain.profiles.valleyFloor);
         expect(Terrain.LEG_PROFILES[2]).toBe(Terrain.profiles.coast);
         expect(Terrain.LEG_PROFILES[5]).toBe(Terrain.profiles.forest);
@@ -142,8 +145,8 @@ describe('Environment reads the terrain profile', () => {
         const normal = buildEnvironment(game, 0);
 
         expect(at(normal.env, 10, 20)).toBeCloseTo(22.7634, 4);
-        expect(at(normal.env, 10, -20)).toBeCloseTo(46.7288, 4);
-        expect(at(mirrored.env, 10, 20)).toBeCloseTo(46.7288, 4);
+        expect(at(normal.env, 10, -20)).toBeCloseTo(64.676, 4);
+        expect(at(mirrored.env, 10, 20)).toBeCloseTo(64.676, 4);
         expect(at(mirrored.env, 10, -20)).toBeCloseTo(22.7634, 4);
 
         const [normalLeft, normalRight] = ribbonMeshes(normal.env);
@@ -163,7 +166,7 @@ describe('Environment reads the terrain profile', () => {
         expect(typeof prototype.decorateRockFace).toBe('function');
     });
 
-    test('the valley face is what groundYAt reports; the mountain wall is known to differ', () => {
+    test('groundYAt reports the drawn face on both sides: the valley face and the mountain wall', () => {
         const { env, scene } = buildEnvironment(game, 0);
         const ribbons = ribbonMeshes(env);
         ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
@@ -171,7 +174,10 @@ describe('Environment reads the terrain profile', () => {
         const point = env.roadPath[10];
         const hit = lateral => rayDown(game.THREE, ribbons, point.x + lateral, point.z);
         [13, 20, 34].forEach(lateral => expect(Math.abs(hit(lateral) - at(env, 10, lateral))).toBeLessThanOrEqual(5e-3));
-        // Today's left side keeps the plain slope, which the drawn wall does not match (phase 6 closes this)
-        expect(hit(-20) - at(env, 10, -20)).toBeGreaterThan(10);
+        // The wall is exact too (declared delta D6): what a rock rests on is what is drawn
+        [-13, -20, -34].forEach(lateral => expect(Math.abs(hit(lateral) - at(env, 10, lateral))).toBeLessThanOrEqual(5e-3));
+        expect(at(env, 10, -13)).toBeCloseTo(43.4586, 4);
+        expect(at(env, 10, -20)).toBeCloseTo(64.676, 4);
+        expect(at(env, 10, -34)).toBeCloseTo(88.6702, 4);
     });
 });

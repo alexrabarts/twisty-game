@@ -1111,6 +1111,20 @@ class Game {
         this.camera.updateProjectionMatrix();
     }
 
+    // Height of the tunnel roof over the bike, or null in the open. The
+    // camera trails the bike by up to a segment, so a roof one segment either
+    // side counts.
+    tunnelRoofY() {
+        const { environment, vehicle } = this;
+        if (!environment || !vehicle || !environment.setPieces.length) return null;
+        const segment = vehicle.currentRoadSegment || 0;
+        for (const index of [segment, segment - 1, segment + 1]) {
+            const ceiling = Terrain.ceilingAt(environment.terrain, index);
+            if (ceiling !== undefined) return environment.roadPath[segment].y + ceiling;
+        }
+        return null;
+    }
+
     updateCamera(deltaTime = 1 / 60) {
         // Camera smoothing factors were tuned for 60Hz updates; rescale them to
         // the actual frame delta so camera feel is frame-rate independent
@@ -1277,7 +1291,14 @@ class Game {
         if (this.currentCameraPos.y < minCameraHeight) {
             this.currentCameraPos.y = minCameraHeight;
         }
-        
+
+        // Under a tunnel roof the camera stays beneath it: High View sits 8
+        // above the bike, higher than the 7.5 m roof
+        const roofY = this.tunnelRoofY();
+        if (roofY !== null && this.currentCameraPos.y > roofY - 1.0) {
+            this.currentCameraPos.y = Math.max(roofY - 1.0, minCameraHeight);
+        }
+
         this.camera.position.copy(this.currentCameraPos);
 
         // Additional camera shake at high speeds (outside onboard mode)
@@ -2318,9 +2339,9 @@ class Game {
         const preview = Terrain.legConfig(leg.id).preview || { radius: 30, height: 9 };
         this.previewRadius = preview.radius;
         this.previewHeight = preview.height;
-        // The road hugs a cliff wall, so a full circle would pass through
-        // rock: the camera instead sways through an arc on the open valley
-        // side. Base angle = the road's right-hand normal.
+        // A full circle would pass through whatever stands beside the road:
+        // the camera instead sways through an arc about the road's right-hand
+        // normal, at the radius and height the leg gives above.
         this.previewBaseAngle = -mid.heading;
 
         this.graphics.fixColorSpaces();

@@ -267,9 +267,17 @@ describe('the coast and the ridge built', () => {
         }));
         expect(cliff).toBeGreaterThanOrEqual(8);
         expect(sand).toBe(20);
-        // The hill on the left is the same as ever: the physics slope under the drawn wall
-        const [lx, lz] = world(env, 180, -20);
-        expect(hitAt(lx, lz)).toBeGreaterThan(env.groundYAt(lx, lz));
+        // The hill on the left is a drawn wall like the cliff legs': scenery rests on it
+        let wall = 0;
+        [160, 180, 205].forEach(segment => [-13, -20, -34].forEach(lateral => {
+            const [lx, lz] = world(env, segment, lateral);
+            const hit = hitAt(lx, lz);
+            // Beyond the last row of the wall there is nothing drawn to meet
+            if (hit === null) return;
+            expect(Math.abs(hit - env.groundYAt(lx, lz))).toBeLessThanOrEqual(5e-3);
+            wall++;
+        }));
+        expect(wall).toBeGreaterThanOrEqual(6);
     });
 
     test('coast: the sea is one plane at absolute height 0, and it is what a ray finds past the cliff', () => {
@@ -321,10 +329,10 @@ describe('the coast and the ridge built', () => {
                 expect(matrix.elements[13]).toBeGreaterThanOrEqual(14);
             }
         });
-        // The land side keeps the legacy roadworks entries and the plant on the hill
+        // The land side is a hill: the roadworks plant is not built up it, and nothing is solid
         expect(env.boulders.filter(b => b.solid)).toHaveLength(0);
-        const bulldozer = env.roadworkObstacles.find(o => o.type === 'bulldozer');
-        expect(lateralOf(env, bulldozer.position.x, bulldozer.position.z)).toBeCloseTo(-30, 1);
+        expect(env.groundedObjects.filter(({ label }) => /construction bulldozer|construction barrier|work truck/.test(label))).toEqual([]);
+        expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(['container', 'container']);
     });
 
     test('ridge: a frozen lake at -200 under both sides, and no water', () => {

@@ -12,6 +12,7 @@ class RockfallSystem {
         // The leg's rockfall rate: 0 on the early legs, ramping up to 1
         this.intensity = environment.config.dressing.rockfall;
         // Rocks come off whichever side of the road the profile makes a wall
+        // (both, in a gorge); a fall picks the wall at its own segment
         this.wallSign = Terrain.wallSign(environment.terrain);
         this.enabled = this.intensity > 0 && this.wallSign !== 0;
 
@@ -86,8 +87,13 @@ class RockfallSystem {
                 const groundY = this.groundY(rock.mesh.position.x, rock.mesh.position.z);
                 if (rock.mesh.position.y - rock.radius <= groundY && rock.velocity.y < 0) {
                     rock.mesh.position.y = groundY + rock.radius;
-                    rock.bounces++;
-                    if (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5) {
+                    // A rock still high on the wall is on a slope, not at rest: it
+                    // goes on down toward the road and does not settle there (unless
+                    // it has been tumbling for 10 s, so none sits there for good)
+                    const roadY = this.environment.roadPath[this.lastFallSegment || 0].y || 0;
+                    const highUp = rock.mesh.position.y - roadY > 3 && rock.age < 10;
+                    if (!highUp) rock.bounces++;
+                    if (!highUp && (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5)) {
                         rock.settled = true;
                         rock.settleUntil = rock.age + 5 + Math.random() * 4;
                         rock.velocity.set(0, 0, 0);
@@ -129,7 +135,15 @@ class RockfallSystem {
             (vehicle.currentRoadSegment || 0) + aheadSegments,
             path.length - 1
         );
+        // No rock is aimed at a bridge, a tunnel or a village, or at the
+        // segment beside one: it spreads 12 m along the road and could land in it
+        if (this.environment.inSetPiece && this.environment.inSetPiece(segIdx, 1)) return segIdx;
         const seg = path[segIdx];
+        const walls = Terrain.wallSignsAt(this.environment.terrain, segIdx);
+        // One wall sheds the whole fall; a draw is spent only when there is a choice
+        const wallSign = walls.length > 1
+            ? walls[Math.floor(Math.random() * walls.length)]
+            : (walls[0] ?? this.wallSign);
         const count = 2 + Math.floor(Math.random() * (2 + this.intensity * 2));
         // groundY searches around the last fall
         this.lastFallSegment = segIdx;
@@ -146,7 +160,7 @@ class RockfallSystem {
 
             // Spawn high on the wall
             const halfRoad = this.environment.roadWidth / 2;
-            const wallLateral = this.wallSign * (halfRoad + 4 + Math.random() * 6);
+            const wallLateral = wallSign * (halfRoad + 4 + Math.random() * 6);
             const perpX = Math.cos(seg.heading);
             const perpZ = -Math.sin(seg.heading);
             const along = (Math.random() - 0.5) * 24; // Spread along the road
@@ -161,7 +175,7 @@ class RockfallSystem {
             this.scene.add(mesh);
 
             // Initial velocity: off the wall toward/over the road
-            const towardRoad = -this.wallSign * (3.5 + Math.random() * 5);
+            const towardRoad = -wallSign * (3.5 + Math.random() * 5);
             this.rocks.push({
                 mesh,
                 radius,

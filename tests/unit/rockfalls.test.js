@@ -97,7 +97,7 @@ describe('rockfalls on the shared terrain model', () => {
         expect(rocks.update(1 / 60, { crashed: false, position: { x: 0, y: 0, z: 0 } })).toBeNull();
     });
 
-    test('rest on the shared ground: the wall slope and the drawn cliff face', () => {
+    test('rest on the shared ground: the drawn wall and the drawn cliff face', () => {
         const rocks = system(profile);
         rocks.lastFallSegment = SEGMENT;
         const point = env.roadPath[SEGMENT];
@@ -106,7 +106,9 @@ describe('rockfalls on the shared terrain model', () => {
         );
         expect(typeof rocks.groundYAt).toBe('undefined');
         const spy = jest.spyOn(game.Terrain, 'groundY');
-        expect(at(-13)).toBeCloseTo(32.4484, 4);
+        // The wall is the drawn one, as high as a ray from above meets it (declared
+        // delta D6); it was 32.4484 on the plain slope
+        expect(at(-13)).toBeCloseTo(38.7538, 4);
         expect(at(20)).toBeCloseTo(13.7306, 4);
         expect(spy).toHaveBeenCalled();
     });

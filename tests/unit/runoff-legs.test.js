@@ -15,10 +15,10 @@ const DAWN = 0;
 // What each leg's course hashes to. A change to a road height, a band width, a
 // run-off rate or where trees stand changes lap times, so it must change this
 // value, and a changed value needs a new trackVersion (a new board). Legs 2, 3,
-// 6 and 8 are version 2; the rest are version 1 and must never move.
+// 4, 6, 7 and 8 are version 2; legs 1 and 5 are version 1 and must never move.
 const COURSE_DIGESTS = [
-    '3d45a50bb5fbede1', '846a661b635154fa', '1d8e018d4b1500c6', '3d45a50bb5fbede1',
-    'b5649303e1d76374', '5abc36dddb5df4ec', 'b5649303e1d76374', 'cdd0b1b28f83f268'
+    '3d45a50bb5fbede1', '846a661b635154fa', '1d8e018d4b1500c6', 'ae1a79fc32686238',
+    'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', 'cdd0b1b28f83f268'
 ];
 
 describe('run-off profiles (pure)', () => {
@@ -135,7 +135,9 @@ describe('run-off profiles (pure)', () => {
         const side = s => ({
             flat: s.flat, bands: s.bands, runoff: s.runoff ?? null, stations: s.stations ?? null, undulation: s.undulation ?? null,
             ...(s.fallDepth !== undefined && { fallDepth: s.fallDepth }),
-            ...(s.lipDepth !== undefined && { lipDepth: s.lipDepth })
+            ...(s.lipDepth !== undefined && { lipDepth: s.lipDepth }),
+            // How tall a gorge wall stands and how much it swings (the mountain walls have no variation)
+            ...(s.face && s.face.variation !== undefined && { wall: [s.face.height, s.face.variation] })
         });
         const elevation = Array.from({ length: 744 }, (_, i) =>
             Math.round(Terrain.elevation(profile, i, leg.startSegment, leg.endSegment) * 1e6));
@@ -143,7 +145,7 @@ describe('run-off profiles (pure)', () => {
             version: config.trackVersion,
             roadWidth: config.roadWidth,
             floor: profile.floor,
-            trees: config.dressing.forest.layout ?? null,
+            trees: config.dressing.forest?.layout ?? null,
             elevation,
             left: side(profile.left),
             right: side(profile.right),
@@ -151,6 +153,8 @@ describe('run-off profiles (pure)', () => {
             ...(profile.spans && {
                 spans: profile.spans.map(span => ({
                     from: span.from, to: span.to ?? null,
+                    ...(span.type !== undefined && { type: span.type }),
+                    ...(span.ceiling !== undefined && { ceiling: span.ceiling }),
                     left: span.left ? side(span.left) : null, right: span.right ? side(span.right) : null
                 }))
             }),
@@ -366,14 +370,11 @@ describe('the run-off legs built', () => {
         env.roadworkObstacles.forEach(o => expect(Math.abs(lateralOf(env, o.position.x, o.position.z))).toBeGreaterThan(5.5));
     });
 
-    test('mountain-dawn keeps the old roadworks entries, nothing solid, and the plant on the wall', () => {
+    test('mountain-dawn: nothing solid, the plant is not built up the wall, only the containers on the road are obstacles', () => {
         const { env } = leg(DAWN);
         expect(env.boulders.filter(b => b.solid)).toHaveLength(0);
-        expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(
-            ['barrier', 'bulldozer', 'container', 'container', 'worktruck']
-        );
-        const bulldozer = env.roadworkObstacles.find(o => o.type === 'bulldozer');
-        expect(lateralOf(env, bulldozer.position.x, bulldozer.position.z)).toBeCloseTo(-30, 1);
+        expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(['container', 'container']);
+        expect(env.groundedObjects.filter(({ label }) => /construction bulldozer|construction barrier|work truck/.test(label))).toEqual([]);
     });
 
     test.each([VALLEY, FOREST])('leg %i: nothing floats and nothing overlaps the road', (index) => {
@@ -503,8 +504,8 @@ describe('board ids and best-time keys', () => {
     test('only the changed legs carry a version; progression keeps plain ids', () => {
         const legs = new game.TourSystem().legs;
         expect(legs.map(l => game.TourSystem.boardId(l))).toEqual([
-            'mountain-dawn', 'valley-run-v2', 'coastal-descent-v2', 'foggy-gorge',
-            'high-pass', 'storm-valley-v2', 'night-ride', 'winter-pass-v2'
+            'mountain-dawn', 'valley-run-v2', 'coastal-descent-v2', 'foggy-gorge-v2',
+            'high-pass', 'storm-valley-v2', 'night-ride-v2', 'winter-pass-v2'
         ]);
         expect(legs.map(l => l.id)).toEqual([
             'mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge',

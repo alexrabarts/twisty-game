@@ -1926,7 +1926,7 @@ class Vehicle {
             }
         }
         
-        // Check for roadwork obstacle collisions (barriers, bulldozers, trucks)
+        // Check for roadwork obstacle collisions (shipping containers, hairpin barriers)
         if (this.environment && this.environment.roadworkObstacles) {
             for (const obstacle of this.environment.roadworkObstacles) {
                 const dx = this.position.x - obstacle.position.x;
@@ -1934,13 +1934,7 @@ class Vehicle {
 
                 // Simple box collision detection
                 let collisionDistance;
-                if (obstacle.type === 'barrier') {
-                    collisionDistance = 2.0; // Barrier collision radius (reasonable for distant obstacles)
-                } else if (obstacle.type === 'bulldozer') {
-                    collisionDistance = 3.0; // Larger collision radius for bulldozer
-                } else if (obstacle.type === 'worktruck') {
-                    collisionDistance = 2.5; // Work truck collision radius
-                } else if (obstacle.type === 'container') {
+                if (obstacle.type === 'container') {
                     collisionDistance = 2.5; // Shipping container collision radius
                 } else {
                     collisionDistance = 2;
