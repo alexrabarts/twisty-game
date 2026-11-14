@@ -229,3 +229,20 @@ export function captureLeg(game, legIndex) {
     if (legIndex === 0 || legIndex === 4) record.grounded = groundedRecords(env);
     return record;
 }
+
+// Methods of the Game class in js/main.js, which cannot be loaded whole (it
+// builds the page on load). Each named method is cut out of the real source by
+// its 4-space indent and bound to `self`; `globals` are the free names it reads.
+export function gameMethods(names, self = {}, globals = {}) {
+    const lines = loadScript('main.js').split('\n');
+    const found = {};
+    for (const name of names) {
+        const start = lines.findIndex(line => new RegExp(`^    (async )?${name}\\(.*\\) \\{$`).test(line));
+        if (start === -1) throw new Error(`Game.${name} not found in js/main.js`);
+        const end = lines.findIndex((line, n) => n > start && line === '    }');
+        const source = lines.slice(start, end + 1).join('\n');
+        const factory = new Function(...Object.keys(globals), `return ({ ${source} });`);
+        found[name] = factory(...Object.values(globals))[name].bind(self);
+    }
+    return found;
+}

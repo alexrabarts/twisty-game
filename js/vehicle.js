@@ -1880,10 +1880,19 @@ class Vehicle {
             console.log('CRASHED! Speed too low:', (this.speed * 2.237).toFixed(1) + ' mph');
         }
 
-        // Check for boulder collisions (skipped while airborne - the bike
-        // clears obstacles it is hopping over)
-        if (this.environment && this.environment.boulders && !this.isJumping) {
+        // Check for boulder collisions. A loose boulder is skipped while
+        // airborne (the bike clears what it is hopping over). A solid one
+        // (a trunk, a rock on run-off ground, a piece of roadworks plant) is
+        // tested in the air too, by horizontal distance and height: a bike
+        // above its top clears it, one below it hits it and is never hopped.
+        if (this.environment && this.environment.boulders) {
             for (const boulder of this.environment.boulders) {
+                if (boulder.solid) {
+                    if (this.hitSolid(boulder)) break;
+                    continue;
+                }
+                if (this.isJumping) continue;
+
                 const dx = this.position.x - boulder.position.x;
                 const dy = this.position.y - boulder.position.y;
                 const dz = this.position.z - boulder.position.z;
@@ -2877,6 +2886,18 @@ class Vehicle {
             const bounceDir = new THREE.Vector3(-sign * perpX, 0, -sign * perpZ);
             this.velocity = bounceDir.multiplyScalar(this.speed * 0.2);
             this.velocity.y = 0.5; // Small upward bounce
+        } else if (zone.kind === 'wall' && this.crashed && !this.fallingOffCliff) {
+            // A bike already sliding on its side (it hit a trunk or a rock
+            // first) stops at the wall instead of sliding through it into
+            // ground it can no longer be placed on
+            const adjustment = sign * zone.start - perpDistance;
+            this.position.x += perpX * adjustment;
+            this.position.z += perpZ * adjustment;
+            const outward = this.velocity.x * perpX * sign + this.velocity.z * perpZ * sign;
+            if (outward > 0) {
+                this.velocity.x -= outward * perpX * sign;
+                this.velocity.z -= outward * perpZ * sign;
+            }
         }
 
         // Gone off a fall edge (a bike already sliding on its side goes over too)
@@ -2916,11 +2937,13 @@ class Vehicle {
 
         const environment = this.environment;
         const range = this.getSegmentSearchRange();
+        const loc = {};
         const ground = Terrain.groundY(
             environment.terrain, environment.terrainGeometry,
-            this.position.x, this.position.z, range.start, range.end, false
+            this.position.x, this.position.z, range.start, range.end, false, loc
         );
-        if (environment.terrain.floor.kind !== 'none' && ground <= environment.terrain.floor.y) {
+        const water = Terrain.waterLevel(environment.terrain, loc.roadY);
+        if (water !== null && ground <= water) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5;
             this.frame.material.color.setHex(0x1e5a8a); // Blue for water
@@ -2931,6 +2954,27 @@ class Vehicle {
             this.frame.material.color.setHex(0xff6600); // Orange, as for the low-speed fall
             console.log('CRASHED! Off the road for', this.maxOffRoadTime.toFixed(1), 's');
         }
+    }
+
+    // A solid obstacle: hit when the bike is within `radius + 1.0` of it on
+    // the ground plane and below its top. Returns true when it crashed the bike.
+    hitSolid(solid) {
+        const dx = this.position.x - solid.position.x;
+        const dz = this.position.z - solid.position.z;
+        if (dx * dx + dz * dz >= (solid.radius + 1.0) ** 2) return false;
+        if (this.position.y - solid.position.y >= solid.height) return false;
+
+        this.crashed = true;
+        // Not left in the jump state, as the forced landing does
+        this.isJumping = false;
+        this.crashAngle = this.leanAngle || 0.5;
+        this.frame.material.color.setHex(0xff0000); // Red for collision
+
+        const impactDir = new THREE.Vector3(dx, 0, dz).normalize();
+        this.velocity = impactDir.multiplyScalar(this.speed * 0.5);
+        this.velocity.y = 2;
+        console.log(`CRASHED! Hit a ${solid.label || 'solid obstacle'} at`, (this.speed * 2.237).toFixed(1) + ' mph');
+        return true;
     }
 
     // Small-obstacle hop: bikes with good jump stats bounce over small rocks

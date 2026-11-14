@@ -342,7 +342,7 @@ class Game {
 
         // Start leaderboard session
         if (this.leaderboardService) {
-            this.leaderboardService.startRun(leg.id).then(result => {
+            this.leaderboardService.startRun(TourSystem.boardId(leg)).then(result => {
                 if (result === true) {
                     console.log('Leaderboard session started for leg:', leg.id);
                 } else if (result.error) {
@@ -1658,7 +1658,7 @@ class Game {
 
         // Check for best time (tracked per leg - legs have different lengths)
         const currentLeg = this.tourSystem.getCurrentLeg();
-        const bestTimeKey = currentLeg ? `motorcycleBestTime_${currentLeg.id}` : 'motorcycleBestTime';
+        const bestTimeKey = currentLeg ? this.bestTimeKey(currentLeg) : 'motorcycleBestTime';
         this.bestTime = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
         let bestTimeMessage = '';
         if (timeSeconds < this.bestTime) {
@@ -2052,6 +2052,12 @@ class Game {
     }
 
     // Read-only leaderboard viewer, reachable from the leg-selector menu
+    // Local best times are kept per board, so a leg whose course changed
+    // starts a new record instead of inheriting one set on the old road
+    bestTimeKey(leg) {
+        return `motorcycleBestTime_${TourSystem.boardId(leg)}`;
+    }
+
     async showLeaderboardViewer(legId) {
         const leg = this.tourSystem.getLegById(legId);
         const legName = leg ? leg.name : legId;
@@ -2115,7 +2121,7 @@ class Game {
         const body = panel.querySelector('#leaderboardViewerBody');
 
         // Local best time always shows, even offline
-        const localBest = parseFloat(localStorage.getItem(`motorcycleBestTime_${legId}`) || 'NaN');
+        const localBest = parseFloat(localStorage.getItem(this.bestTimeKey(legId)) || 'NaN');
         const localBestHtml = Number.isFinite(localBest)
             ? `<div style="margin-bottom: 14px; color: #2ecc71;">Your best: ${localBest.toFixed(1)}s</div>`
             : `<div style="margin-bottom: 14px; color: #667;">No personal best yet</div>`;
@@ -2127,7 +2133,7 @@ class Game {
         }
 
         try {
-            const result = await this.leaderboardService.fetchLeaderboard(legId, 10);
+            const result = await this.leaderboardService.fetchLeaderboard(TourSystem.boardId(legId), 10);
             if (result.success && result.entries && result.entries.length > 0) {
                 const rows = result.entries.map((entry, i) => {
                     const rank = entry.rank !== undefined ? entry.rank : i + 1;
@@ -2163,7 +2169,7 @@ class Game {
         this.leaderboardService.cancelSession();
         const leg = this.tourSystem.getCurrentLeg();
         if (leg) {
-            this.leaderboardService.startRun(leg.id).then(result => {
+            this.leaderboardService.startRun(TourSystem.boardId(leg)).then(result => {
                 if (result !== true && result.error) {
                     console.warn('Leaderboard session restart failed:', result.message);
                 }
@@ -2307,7 +2313,11 @@ class Game {
         const midIdx = Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
         const mid = path[midIdx];
         this.previewCenter = new THREE.Vector3(mid.x, (mid.y || 0), mid.z);
-        this.previewRadius = 30;
+        // How far out and how high the camera stands comes from the leg: a
+        // leg with trees beside the road has no room for the default 30
+        const preview = Terrain.legConfig(leg.id).preview || { radius: 30, height: 9 };
+        this.previewRadius = preview.radius;
+        this.previewHeight = preview.height;
         // The road hugs a cliff wall, so a full circle would pass through
         // rock: the camera instead sways through an arc on the open valley
         // side. Base angle = the road's right-hand normal.
@@ -2405,7 +2415,7 @@ class Game {
                 const r = this.previewRadius;
                 this.camera.position.set(
                     c.x + Math.cos(angle) * r,
-                    c.y + 9,
+                    c.y + this.previewHeight,
                     c.z + Math.sin(angle) * r
                 );
                 this.camera.up.set(0, 1, 0);
@@ -2648,16 +2658,8 @@ class Game {
         }
 
         // Check for finish line crossing
-        if (!this.finished && !this.vehicle.crashed && this.environment.finishLinePosition) {
-            // Gate test in road space: a short band along the road, the full
-            // road and both ledges across it
-            const finish = this.environment.finishLinePosition;
-            const finishHeading = this.environment.finishLineHeading || 0;
-            const fdx = this.vehicle.position.x - finish.x;
-            const fdz = this.vehicle.position.z - finish.z;
-            const along = fdx * Math.sin(finishHeading) + fdz * Math.cos(finishHeading);
-            const across = fdx * Math.cos(finishHeading) - fdz * Math.sin(finishHeading);
-            if (Math.abs(along) < 5 && Math.abs(across) < this.environment.roadWidth / 2 + 2) {
+        if (!this.finished && !this.vehicle.crashed && this.environment.finishGate) {
+            if (this.inGate(this.environment.finishGate, this.vehicle.position)) {
                 this.finished = true;
                 this.vehicle.finished = true; // Prevent crashes after finishing
                 this.finishTime = performance.now() - this.startTime;
@@ -2896,6 +2898,19 @@ class Game {
         this.graphics.render(this.scene, this.camera);
     }
 
+    // Whether a position is on a gate: a short band along the road, and across
+    // it every metre a bike can legally be at that gate (gate.left and
+    // gate.right, set when the gate is built). Road space comes from the
+    // gate's own position and heading. There is no segment test: the band is
+    // the only guard, and it cannot reach another stretch of road.
+    inGate(gate, position) {
+        const dx = position.x - gate.position.x;
+        const dz = position.z - gate.position.z;
+        const along = dx * Math.sin(gate.heading) + dz * Math.cos(gate.heading);
+        const across = dx * Math.cos(gate.heading) - dz * Math.sin(gate.heading);
+        return Math.abs(along) < 5 && across > -gate.left && across < gate.right;
+    }
+
     checkCheckpoints() {
         if (!this.environment || !this.environment.checkpoints) return;
         
@@ -2904,9 +2919,11 @@ class Game {
                 const dx = this.vehicle.position.x - checkpoint.position.x;
                 const dz = this.vehicle.position.z - checkpoint.position.z;
                 const distance = Math.sqrt(dx * dx + dz * dz);
-                
-                // Check if within checkpoint gate (16 units wide)
-                if (distance < checkpoint.width) {
+
+                // Within the 16 unit circle round the gate (a rider on the
+                // road triggers it exactly where it always did), or anywhere
+                // across the gate's band, which reaches the rideable ground
+                if (distance < checkpoint.width || this.inGate(checkpoint, this.vehicle.position)) {
                     // Check if this is the next expected checkpoint (in order)
                     const totalCheckpoints = this.environment.checkpoints.length;
                     if (checkpoint.index === this.lastCheckpointIndex + 1 ||

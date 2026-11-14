@@ -3,8 +3,11 @@
 import { buildEnvironment, loadGame } from '../helpers/load-game.js';
 
 const ROAD_WIDTHS = [20, 20, 20, 20, 16, 16, 16, 16];
-// Today's rockfall rate: off on legs 1 to 4, then 0.25, 0.5, 0.75, 1
-const ROCKFALL = [0, 0, 0, 0, 0.25, 0.5, 0.75, 1];
+// Rockfall rate: off on legs 1 to 4, then 0.25, 0.5, 0.75, 1 as before. Storm-valley
+// has run-off ground and no wall to fall from, so it has none.
+const ROCKFALL = [0, 0, 0, 0, 0.25, 0, 0.75, 1];
+// Only the two legs whose road changed carry a new track version
+const TRACK_VERSION = [1, 2, 1, 1, 1, 2, 1, 1];
 // The grass, mountain and fog values the old tours.js variations gave each leg
 const LOOK = [
     [0x4a7c4a, 0x6b5c42, 0.0015],
@@ -28,12 +31,12 @@ describe('Terrain.LEGS', () => {
         expect(game.Terrain.LEGS.map(leg => leg.id)).toEqual(ids);
     });
 
-    test('keeps today\'s road width, rockfall rate, look and track version', () => {
+    test('keeps today\'s road width and look; rockfall and track version follow the leg\'s profile', () => {
         game.Terrain.LEGS.forEach((leg, index) => {
             expect(leg.roadWidth).toBe(ROAD_WIDTHS[index]);
             expect(leg.dressing.rockfall).toBe(ROCKFALL[index]);
             expect([leg.look.grassColor, leg.look.mountainColor, leg.look.fogDensity]).toEqual(LOOK[index]);
-            expect(leg.trackVersion).toBe(1);
+            expect(leg.trackVersion).toBe(TRACK_VERSION[index]);
         });
     });
 
