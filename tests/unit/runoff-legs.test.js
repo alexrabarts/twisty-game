@@ -370,14 +370,11 @@ describe('the run-off legs built', () => {
         env.roadworkObstacles.forEach(o => expect(Math.abs(lateralOf(env, o.position.x, o.position.z))).toBeGreaterThan(5.5));
     });
 
-    test('mountain-dawn keeps the old roadworks entries, nothing solid, and the plant on the wall', () => {
+    test('mountain-dawn: nothing solid, the plant is not built up the wall, only the containers on the road are obstacles', () => {
         const { env } = leg(DAWN);
         expect(env.boulders.filter(b => b.solid)).toHaveLength(0);
-        expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(
-            ['barrier', 'bulldozer', 'container', 'container', 'worktruck']
-        );
-        const bulldozer = env.roadworkObstacles.find(o => o.type === 'bulldozer');
-        expect(lateralOf(env, bulldozer.position.x, bulldozer.position.z)).toBeCloseTo(-30, 1);
+        expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(['container', 'container']);
+        expect(env.groundedObjects.filter(({ label }) => /construction bulldozer|construction barrier|work truck/.test(label))).toEqual([]);
     });
 
     test.each([VALLEY, FOREST])('leg %i: nothing floats and nothing overlaps the road', (index) => {

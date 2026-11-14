@@ -87,8 +87,13 @@ class RockfallSystem {
                 const groundY = this.groundY(rock.mesh.position.x, rock.mesh.position.z);
                 if (rock.mesh.position.y - rock.radius <= groundY && rock.velocity.y < 0) {
                     rock.mesh.position.y = groundY + rock.radius;
-                    rock.bounces++;
-                    if (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5) {
+                    // A rock still high on the wall is on a slope, not at rest: it
+                    // goes on down toward the road and does not settle there (unless
+                    // it has been tumbling for 10 s, so none sits there for good)
+                    const roadY = this.environment.roadPath[this.lastFallSegment || 0].y || 0;
+                    const highUp = rock.mesh.position.y - roadY > 3 && rock.age < 10;
+                    if (!highUp) rock.bounces++;
+                    if (!highUp && (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5)) {
                         rock.settled = true;
                         rock.settleUntil = rock.age + 5 + Math.random() * 4;
                         rock.velocity.set(0, 0, 0);

@@ -22,24 +22,19 @@ class Environment {
     this.floorY = this.config.floor.y;
     // Clutter the left side carries (rocks, roadworks plant) stands on ground a
     // bike can ride on when that side is run-off, so it collides as a solid
-    // circle in `boulders`. Beside a wall it is out of reach and keeps its
-    // old entries, or has none.
+    // circle in `boulders`. Beside a wall it is out of reach: the rocks are
+    // scenery only, and the roadworks plant (bulldozer, barrier, work truck) is
+    // not built, because up a wall it would hang on the rock face.
     this.solidClutter = !!this.terrain.left.runoff;
-    // The roadworks plant stands on ground the bike can ride on. Up a wall it
-    // would hang on the rock face, out of reach, so it is not built there.
-    this.buildsPlant = this.solidClutter || !this.terrain.left.exact;
     // Where the leg has a bridge, a tunnel or a village: scenery keeps out
     this.setPieces = Terrain.setPieces(this.terrain);
 
     this.roadWidth = this.config.roadWidth;
-    // How far out on the left the roadworks plant stands: well up the wall on
-    // a wall side, a few metres onto the run-off ground otherwise
+    // How far out on the left the roadworks plant stands: a few metres onto the
+    // run-off ground (a leg whose run-off is narrow says so in its `plant`)
     const halfRoad = this.roadWidth / 2;
-    // (a leg whose run-off is narrow says so in its `plant`)
     const past = { bulldozer: 9, barrier: 6, truck: 6, ...this.config.plant };
-    this.plantLateral = this.solidClutter
-      ? { bulldozer: halfRoad + past.bulldozer, barrier: halfRoad + past.barrier, truck: halfRoad + past.truck }
-      : { bulldozer: 30, barrier: 25, truck: 25 };
+    this.plantLateral = { bulldozer: halfRoad + past.bulldozer, barrier: halfRoad + past.barrier, truck: halfRoad + past.truck };
     // What Terrain needs to read the road: the path fills in during createRoad
     this.terrainGeometry = {
       path: this.roadPath,
@@ -98,8 +93,8 @@ class Environment {
   // Terrain elevation model shared by every scenery placement site. Mirrors
   // the physics model in Vehicle.getTerrainHeightAt(): the road surface plus
   // a 2m ledge sit at the segment's y; beyond the ledge each side follows
-  // its profile (see js/terrain.js). On the valley side the answer is the
-  // drawn face itself.
+  // its profile (see js/terrain.js). Where a side has a rock face (the cliff
+  // wall and the drop) the answer is the drawn face itself.
   groundYAt(x, z) {
     return Terrain.groundY(
       this.terrain,
@@ -132,8 +127,10 @@ class Environment {
   }
 
   // Development-time validation: every registered object's bounding-box
-  // bottom must be at or below groundYAt() at its position (within tolerance).
-  // Returns an array of violations and console.warns each one.
+  // bottom must be at or below the highest groundYAt() under its footprint
+  // (the centre and the middle of each edge), within tolerance: an object on
+  // a steep wall touches it on its uphill side. Returns an array of
+  // violations and console.warns each one.
   validateGrounding(tolerance = 0.75) {
     const violations = [];
     if (!this.groundedObjects || this.groundedObjects.length === 0) {
@@ -149,7 +146,13 @@ class Environment {
 
       const centerX = (box.min.x + box.max.x) / 2;
       const centerZ = (box.min.z + box.max.z) / 2;
-      const groundY = this.groundYAt(centerX, centerZ);
+      const groundY = Math.max(
+        this.groundYAt(centerX, centerZ),
+        this.groundYAt(box.min.x, centerZ),
+        this.groundYAt(box.max.x, centerZ),
+        this.groundYAt(centerX, box.min.z),
+        this.groundYAt(centerX, box.max.z),
+      );
       const delta = box.min.y - groundY;
 
       if (delta > tolerance) {
@@ -3971,7 +3974,7 @@ class Environment {
       if (hasRamp && Math.abs(i - rampSegment) <= 4) {
         continue;
       }
-      if (!this.buildsPlant) continue;
+      if (!this.solidClutter) continue;
 
       const point = this.roadPath[i];
 
@@ -3993,27 +3996,16 @@ class Environment {
       this.registerGrounded(barrier, `construction barrier (segment ${i})`);
 
       // Store barrier for collision detection: a circle of radius 1 for each
-      // 2 m of its length (it lies across the road) on run-off ground, else
-      // the old box entry
-      if (this.solidClutter) {
-        for (const along of [-1, 1]) {
-          this.addSolidCircle(
-            barrierX + Math.cos(point.heading) * along,
-            barrierY,
-            barrierZ - Math.sin(point.heading) * along,
-            1,
-            3,
-            "barrier",
-          );
-        }
-      } else {
-        this.roadworkObstacles.push({
-          type: "barrier",
-          position: new THREE.Vector3(barrierX, barrierY, barrierZ),
-          width: 4,
-          height: 1,
-          depth: 0.8,
-        });
+      // 2 m of its length (it lies across the road)
+      for (const along of [-1, 1]) {
+        this.addSolidCircle(
+          barrierX + Math.cos(point.heading) * along,
+          barrierY,
+          barrierZ - Math.sin(point.heading) * along,
+          1,
+          3,
+          "barrier",
+        );
       }
 
       // Add orange and white stripes
@@ -4053,7 +4045,7 @@ class Environment {
       // Add construction equipment (static bulldozer) - moved far from road
       // on mountain side, resting on the terrain model (the mountain face
       // has risen well above road height 30 units out)
-      if (this.buildsPlant) {
+      if (this.solidClutter) {
         const dozerX = rampPoint.x - Math.cos(rampPoint.heading) * this.plantLateral.bulldozer;
         const dozerZ = rampPoint.z + Math.sin(rampPoint.heading) * this.plantLateral.bulldozer;
         this.createBulldozer(
@@ -4086,7 +4078,7 @@ class Environment {
       // Add a simple work truck instead of bulldozer (moved far from road on
       // mountain side, resting on the terrain model rather than at road
       // height inside the rising mountain face)
-      if (this.buildsPlant) {
+      if (this.solidClutter) {
         const truckX = workPoint.x - Math.cos(workPoint.heading) * this.plantLateral.truck;
         const truckZ = workPoint.z + Math.sin(workPoint.heading) * this.plantLateral.truck;
         this.createWorkTruck(
@@ -4478,20 +4470,8 @@ class Environment {
     this.scene.add(group);
     this.registerGrounded(group, "construction bulldozer");
 
-    // Store bulldozer for collision detection: one circle of radius 3 on
-    // run-off ground, else the old entry
-    if (this.solidClutter) {
-      this.addSolidCircle(x, y, z, 3, 3, "bulldozer");
-    } else {
-      this.roadworkObstacles.push({
-        type: "bulldozer",
-        position: new THREE.Vector3(x, y, z),
-        width: 4,
-        height: 3,
-        depth: 5,
-        rotation: rotation,
-      });
-    }
+    // Store bulldozer for collision detection: one circle of radius 3
+    this.addSolidCircle(x, y, z, 3, 3, "bulldozer");
   }
 
   // Lettered face for a 4 x 1.5 sign board. The boards were blank: their
@@ -4654,27 +4634,16 @@ class Environment {
     this.registerGrounded(group, "work truck");
 
     // Store work truck for collision detection: two circles of radius 2 along
-    // its length on run-off ground, else the old entry
-    if (this.solidClutter) {
-      for (const along of [-1, 1]) {
-        this.addSolidCircle(
-          x + Math.sin(rotation) * along,
-          y,
-          z + Math.cos(rotation) * along,
-          2,
-          3,
-          "work truck",
-        );
-      }
-    } else {
-      this.roadworkObstacles.push({
-        type: "worktruck",
-        position: new THREE.Vector3(x, y, z),
-        width: 2,
-        height: 2.5,
-        depth: 4,
-        rotation: rotation,
-      });
+    // its length
+    for (const along of [-1, 1]) {
+      this.addSolidCircle(
+        x + Math.sin(rotation) * along,
+        y,
+        z + Math.cos(rotation) * along,
+        2,
+        3,
+        "work truck",
+      );
     }
   }
 
@@ -5120,15 +5089,17 @@ class Environment {
     const piers = [];
     for (let i = piece.from; i <= piece.to; i++) {
       const point = this.roadPath[i];
-      deck.push({ geometry: this.pieceBox(point, 0, -1.3, this.roadWidth + 2.4, 1.2, 20.4, origin), color: [0x4b4944, 0x77726a] });
+      // The boxes are level and the road is not: they stand 0.4 under it and the
+      // parapet starts that far under it too, so no joint shows through
+      deck.push({ geometry: this.pieceBox(point, 0, -1.6, this.roadWidth + 2.4, 1.2, 20.4, origin), color: [0x4b4944, 0x77726a] });
       for (const sign of [-1, 1]) {
-        deck.push({ geometry: this.pieceBox(point, sign * (halfRoad + 0.8), 0, 0.4, 1.1, 20.4, origin), color: [0x7d7870, 0x9c968c] });
+        deck.push({ geometry: this.pieceBox(point, sign * (halfRoad + 0.8), -0.4, 0.4, 1.5, 20.4, origin), color: [0x7d7870, 0x9c968c] });
       }
       // A pair of piers every third segment, standing on the river bed
       if ((i - piece.from) % 3 === 0) {
         const depth = 62;
         for (const sign of [-1, 1]) {
-          piers.push({ geometry: this.pieceBox(point, sign * (halfRoad - 2.5), -1.3 - depth, 2.2, depth, 2.2, origin), color: [0x2e2c2a, 0x5d5953] });
+          piers.push({ geometry: this.pieceBox(point, sign * (halfRoad - 2.5), -1.6 - depth, 2.2, depth, 2.2, origin), color: [0x2e2c2a, 0x5d5953] });
         }
       }
     }
@@ -5194,8 +5165,10 @@ class Environment {
       geometry.computeVertexNormals();
       return geometry;
     };
-    const material = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide });
-    this.addPieceMesh(group, shell(lining), material(0x5b5a5e), origin);
+    const material = (color, emissive = 0x000000) =>
+      new THREE.MeshStandardMaterial({ color, emissive, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide });
+    // The lining takes a faint glow of the lamps along it, so it reads at night
+    this.addPieceMesh(group, shell(lining), material(0x5b5a5e, 0x24242a), origin);
     this.addPieceMesh(group, shell(cap), material(0x2c4727), origin);
     this.addPieceMesh(group, shell(portals), material(0x6e6a63), origin);
 

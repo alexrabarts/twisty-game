@@ -275,7 +275,7 @@ describe('the gorge and the night forest built', () => {
         expect(instanced).toEqual([]);
         const labels = env.groundedObjects.map(({ label }) => label);
         expect(labels.filter(label => /construction bulldozer|construction barrier|work truck/.test(label))).toEqual([]);
-        expect(env.buildsPlant).toBe(false);
+        expect(env.solidClutter).toBe(false);
         // The containers and the ramp are on the road and stay
         expect(labels.some(label => /shipping container/.test(label))).toBe(true);
         expect(labels.filter(label => /embedded cliff rock .*side -1\)$/.test(label)).length).toBeGreaterThan(10);
@@ -509,6 +509,18 @@ describe('the bike at the pieces', () => {
         expect(onDeck.crashTick).toBeNull();
     });
 
+    test('P18: a wall on the right crashes a bike at once, with no fall', () => {
+        const vehicle = place(GORGE, 240, 11.5, 25);
+        const { history, crashTick, lines } = ride(vehicle, 5);
+        expect(crashTick).toBe(1);
+        expect(history[1].falling).toBe(false);
+        expect(vehicle.crashAngle).toBeCloseTo(Math.PI / 6, 9);
+        expect(lines.some(line => line.startsWith('CRASHED! Hit the right wall at'))).toBe(true);
+        expect(history[1].speed).toBeLessThanOrEqual(5);
+        // The bridge's parapet, a segment inside it, is the same wall
+        expect(ride(place(GORGE, 286, 11.5, 25), 5).crashTick).toBe(1);
+    });
+
     test('coasting on the road never crashes through the bridge, the tunnel or the village', () => {
         [[GORGE, 280], [GORGE, 290], [NIGHT, 512], [NIGHT, 516], [NIGHT, 583]].forEach(([index, segment]) => {
             expect(ride(place(index, segment, 0, 25), 200).crashTick).toBeNull();
@@ -621,4 +633,140 @@ describe('rockfalls from both walls of the gorge (P-W12)', () => {
         expect(rockfalls.rocks.length).toBeGreaterThanOrEqual(2);
         expect(draws).toBe(2 + 18 * rockfalls.rocks.length);
     });
+
+    // Rocks tumble for 10 s from where they are aimed; the share that gets as far as
+    // the tarmac is what makes a fall a hazard
+    function tumble(environment, environmentScene, start, falls) {
+        const half = environment.roadWidth / 2;
+        const restore = seedMath(seeded(11));
+        const bySign = { '-1': { total: 0, reached: 0 }, 1: { total: 0, reached: 0 } };
+        try {
+            for (let n = 0; n < falls; n++) {
+                const rockfalls = new game.RockfallSystem(environmentScene, environment);
+                rockfalls.triggerFall({ currentRoadSegment: start });
+                const rocks = rockfalls.rocks.slice();
+                const closest = rocks.map(() => Infinity);
+                const side = rocks.map(() => 0);
+                for (let tick = 0; tick < 600; tick++) {
+                    rockfalls.update(1 / 60, null);
+                    rocks.forEach((rock, i) => {
+                        let nearest = rockfalls.lastFallSegment;
+                        let best = Infinity;
+                        for (let k = rockfalls.lastFallSegment - 3; k <= rockfalls.lastFallSegment + 3; k++) {
+                            const point = environment.roadPath[k];
+                            const d = (rock.mesh.position.x - point.x) ** 2 + (rock.mesh.position.z - point.z) ** 2;
+                            if (d < best) { best = d; nearest = k; }
+                        }
+                        const point = environment.roadPath[nearest];
+                        const lateral = (rock.mesh.position.x - point.x) * Math.cos(point.heading) - (rock.mesh.position.z - point.z) * Math.sin(point.heading);
+                        if (tick === 0) side[i] = Math.sign(lateral);
+                        closest[i] = Math.min(closest[i], Math.abs(lateral));
+                    });
+                }
+                rocks.forEach((rock, i) => {
+                    bySign[side[i]].total++;
+                    if (closest[i] < half) bySign[side[i]].reached++;
+                });
+                rockfalls.dispose();
+            }
+        } finally {
+            restore();
+        }
+        return bySign;
+    }
+
+    test('rocks off the gorge walls reach the road from each wall', () => {
+        const result = tumble(env, scene, 268, 60);
+        expect(result['-1'].total).toBeGreaterThan(20);
+        expect(result[1].total).toBeGreaterThan(20);
+        expect(result['-1'].reached / result['-1'].total).toBeGreaterThan(0.9);
+        expect(result[1].reached / result[1].total).toBeGreaterThan(0.9);
+    }, 60000);
+
+    test('on the hairpin leg the exact left wall (D6) keeps rocks reaching the road: 164 of 166 seeded rocks before, at least 158 now', () => {
+        const { env: hairpin, scene: hairScene } = buildEnvironment(game, 4);
+        const { '-1': left } = tumble(hairpin, hairScene, 332, 60);
+        expect(left.total).toBe(166);
+        expect(left.reached).toBeGreaterThanOrEqual(158);
+    }, 60000);
+
+    test('a rock that tumbles down a wall is gone within a minute: none rests on the wall for good', () => {
+        const restore = seedMath(seeded(5));
+        try {
+            const rockfalls = new game.RockfallSystem(scene, env);
+            rockfalls.triggerFall({ currentRoadSegment: 268 });
+            expect(rockfalls.rocks.length).toBeGreaterThan(0);
+            for (let tick = 0; tick < 60 * 60; tick++) rockfalls.update(1 / 60, null);
+            expect(rockfalls.rocks).toEqual([]);
+            rockfalls.dispose();
+        } finally {
+            restore();
+        }
+    }, 60000);
+});
+
+describe('what the roadworks plant left behind on the cliff legs (P23, amended)', () => {
+    let game;
+    let log;
+    const built = new Map();
+
+    beforeAll(() => {
+        log = [];
+        game = loadGame(undefined, log);
+    });
+
+    function leg(index) {
+        if (!built.has(index)) built.set(index, buildEnvironment(game, index));
+        const entry = built.get(index);
+        entry.env.boulders = [];
+        return entry;
+    }
+
+    test.each([[0, 10], [4, 8]])('leg %i: hairpin barrier entries sit where their mesh does, clear of the road edge', (index, halfRoad) => {
+        const { env } = leg(index);
+        const entries = env.roadworkObstacles.filter(o => o.type === 'hairpin_barrier');
+        expect(entries.length).toBe(index === 4 ? 36 : 0);
+        const barriers = env.groundedObjects.filter(({ label }) => /^hairpin barrier/.test(label));
+        entries.forEach(entry => {
+            const mesh = barriers.find(({ object }) => Math.abs(object.position.x - entry.position.x) < 1e-9 && Math.abs(object.position.z - entry.position.z) < 1e-9);
+            expect(mesh).toBeDefined();
+            expect(Math.abs(mesh.object.position.y - entry.position.y)).toBeLessThan(1e-9);
+            // The collision distance (2) never reaches the tarmac from the barrier's lateral, halfRoad + 2.5
+            const loc = game.Terrain.locate(env.roadPath, entry.position.x, entry.position.z, 0, env.roadPath.length - 1, {});
+            expect(Math.abs(loc.lateral) - 2).toBeGreaterThanOrEqual(halfRoad);
+        });
+    });
+
+    test.each([[0, 10], [4, 8]])('leg %i: riding past where the bulldozer, barrier and work truck stood crashes on none of them', (index, halfRoad) => {
+        const { env, scene } = leg(index);
+        const zones = env.roadworksZones;
+        expect(zones.length).toBeGreaterThan(0);
+        for (const zone of zones) {
+            for (const segment of [zone.startSegment, Math.floor((zone.startSegment + zone.endSegment) / 2), zone.endSegment]) {
+                const vehicle = new game.Vehicle(scene);
+                const point = env.roadPath[segment];
+                const lateral = -(halfRoad - 0.5);
+                vehicle.environment = env;
+                vehicle.position.set(point.x + Math.cos(point.heading) * lateral, point.y, point.z - Math.sin(point.heading) * lateral);
+                vehicle.yawAngle = point.heading;
+                vehicle.speed = 25;
+                vehicle.currentRoadSegment = segment;
+                log.length = 0;
+                for (let tick = 0; tick < 60; tick++) vehicle.update(DT, 0, 0, 0);
+                // A container on the road may be in the way: none of the three props is
+                expect(log.filter(line => /Hit construction (bulldozer|barrier|worktruck)|Hit a (bulldozer|barrier|work truck)|Hit the left wall/.test(line))).toEqual([]);
+            }
+        }
+    });
+
+    test('all eight legs build with spans, set pieces and the exact wall: nothing floats, nothing overlaps the road (P24)', () => {
+        for (let index = 0; index < 8; index++) {
+            log.length = 0;
+            const { env } = buildEnvironment(game, index);
+            expect(log.filter(line => /FLOATING|TERRAIN-ROAD OVERLAP/.test(line))).toEqual([]);
+            expect(log.some(line => line.includes('Grounding validation passed'))).toBe(true);
+            expect(env.finishGate).not.toBeNull();
+            expect(env.checkpoints).toHaveLength(5);
+        }
+    }, 60000);
 });

@@ -63,7 +63,6 @@ const Terrain = (() => {
       // Distance past the road edge where each band ends; the last band runs
       // outward without limit. A fall starts where the ledge ends.
       bands: [{ to: LEDGE, kind: 'shoulder' }, { kind: 'fall' }],
-      exact: true, // Physics walks the rendered column
       face: { kind: 'drop', height: faceHeight, rockSpread },
       // Vertical units lost per lateral unit past the ledge, floored at the lake
       base: (dPast, roadY) => Math.max(roadY - dPast * slope, floorY),
@@ -89,14 +88,12 @@ const Terrain = (() => {
   // `variation` scales how far the wall's height swings along the road (1 is
   // today's cliff; a canyon keeps its walls close to one height); `snow: false`
   // keeps the patches of snow off a wet wall.
-  function cliffWallSide({ height, rockSpread, slope = 1.6, variation, snow, exact = false }) {
+  function cliffWallSide({ height, rockSpread, slope = 1.6, variation, snow }) {
     const swing = variation ?? 1;
     return {
       flat: LEDGE,
       // The rock face starts 1m past the road edge, inside the 2m ledge
       bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
-      // Physics keeps the plain slope on this side; the drawn wall differs
-      exact,
       face: {
         kind: 'rise', height, rockSpread,
         ...(variation !== undefined && { variation }),
@@ -168,7 +165,6 @@ const Terrain = (() => {
     return {
       flat: 0,
       bands,
-      exact: false,
       face: null,
       runoff,
       shade,
@@ -318,7 +314,7 @@ const Terrain = (() => {
   // face of the mountain legs; the bridge replaces them with a parapet and a
   // sheer drop to the river bed for its length.
   const BRIDGE = { from: 285, to: 293 };
-  const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false, exact: true });
+  const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false });
   const gorgeSide = () =>
     heightfieldSide({
       // Parapet at 0.8 m, then down past the river (60 m below the road) to its bed and back up the far wall
@@ -617,9 +613,21 @@ const Terrain = (() => {
     // Row 0 of the mesh sits at the end of the ledge
     let previousDistance = halfRoad + side.flat;
     let previousY = roadY;
+    // A wall leans out over the road as it rises, so its rows can fold back: more
+    // than one row segment then spans the same distance. What a rock or a ray
+    // meets from above is the highest of them.
+    const folds = side.face && side.face.kind === 'rise';
+    let highest = null;
     for (let j = 1; j <= ROWS; j++) {
       rowAt(profile, sign, j, ctx, out);
-      if (d <= out.d) {
+      if (folds) {
+        const low = Math.min(previousDistance, out.d);
+        if (d >= low && d <= Math.max(previousDistance, out.d)) {
+          const span = out.d - previousDistance;
+          const y = Math.abs(span) > 0.001 ? previousY + ((out.y - previousY) * (d - previousDistance)) / span : out.y;
+          if (highest === null || y > highest) highest = y;
+        }
+      } else if (d <= out.d) {
         const span = out.d - previousDistance;
         const t = span > 0.001 ? (d - previousDistance) / span : 1;
         return previousY + (out.y - previousY) * Math.max(0, Math.min(1, t));
@@ -627,7 +635,7 @@ const Terrain = (() => {
       previousDistance = out.d;
       previousY = out.y;
     }
-    return previousY;
+    return highest ?? previousY;
   }
 
   // The road height at the located point, interpolated along its segment the
@@ -647,8 +655,9 @@ const Terrain = (() => {
     return null;
   }
 
-  // Ground height at a located point. `exact` walks the drawn face on sides
-  // that support it; otherwise the smooth `side.base` model answers.
+  // Ground height at a located point. `exact` walks the drawn face on a side
+  // that has one (a rock face); ground with no face, and a caller that does not
+  // ask, get the smooth `side.base` model.
   function heightAt(profile, geo, loc, exact) {
     const roadY = loc.roadY;
     const right = loc.lateral > 0;
@@ -658,7 +667,7 @@ const Terrain = (() => {
     const ledgeEnd = geo.roadWidth / 2 + side.flat;
 
     if (d > ledgeEnd) {
-      if (exact && side.exact) {
+      if (exact && side.face) {
         const walked = surfaceY(profile, sign, side, geo, loc, d);
         // A floor with no fixed height (a river under the road) is not a limit
         if (walked !== null) return profile.floor.y === undefined ? walked : Math.max(walked, profile.floor.y);

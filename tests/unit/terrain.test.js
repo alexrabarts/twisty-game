@@ -145,8 +145,8 @@ describe('Environment reads the terrain profile', () => {
         const normal = buildEnvironment(game, 0);
 
         expect(at(normal.env, 10, 20)).toBeCloseTo(22.7634, 4);
-        expect(at(normal.env, 10, -20)).toBeCloseTo(46.7288, 4);
-        expect(at(mirrored.env, 10, 20)).toBeCloseTo(46.7288, 4);
+        expect(at(normal.env, 10, -20)).toBeCloseTo(64.676, 4);
+        expect(at(mirrored.env, 10, 20)).toBeCloseTo(64.676, 4);
         expect(at(mirrored.env, 10, -20)).toBeCloseTo(22.7634, 4);
 
         const [normalLeft, normalRight] = ribbonMeshes(normal.env);
@@ -166,7 +166,7 @@ describe('Environment reads the terrain profile', () => {
         expect(typeof prototype.decorateRockFace).toBe('function');
     });
 
-    test('the valley face is what groundYAt reports; the mountain wall is known to differ', () => {
+    test('groundYAt reports the drawn face on both sides: the valley face and the mountain wall', () => {
         const { env, scene } = buildEnvironment(game, 0);
         const ribbons = ribbonMeshes(env);
         ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
@@ -174,7 +174,10 @@ describe('Environment reads the terrain profile', () => {
         const point = env.roadPath[10];
         const hit = lateral => rayDown(game.THREE, ribbons, point.x + lateral, point.z);
         [13, 20, 34].forEach(lateral => expect(Math.abs(hit(lateral) - at(env, 10, lateral))).toBeLessThanOrEqual(5e-3));
-        // Today's left side keeps the plain slope, which the drawn wall does not match (phase 6 closes this)
-        expect(hit(-20) - at(env, 10, -20)).toBeGreaterThan(10);
+        // The wall is exact too (declared delta D6): what a rock rests on is what is drawn
+        [-13, -20, -34].forEach(lateral => expect(Math.abs(hit(lateral) - at(env, 10, lateral))).toBeLessThanOrEqual(5e-3));
+        expect(at(env, 10, -13)).toBeCloseTo(43.4586, 4);
+        expect(at(env, 10, -20)).toBeCloseTo(64.676, 4);
+        expect(at(env, 10, -34)).toBeCloseTo(88.6702, 4);
     });
 });
