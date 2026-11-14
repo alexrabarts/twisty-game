@@ -1,7 +1,8 @@
 // The frozen phase 0 goldens are the definition of "unchanged" for the terrain
 // work. Each leg is built through the real Environment constructor on real
 // three r150 and compared with tests/golden/terrain-baseline.json, which
-// tools/terrain-check.mjs record-jest captured from untouched source.
+// tools/terrain-check.mjs record-jest captured from untouched source. The one
+// declared difference is the decals (D5), so `full` must differ.
 import { readFileSync } from 'fs';
 import { buildEnvironment, captureLeg, fingerprints, loadGame } from '../helpers/load-game.js';
 
@@ -27,7 +28,13 @@ describe('terrain equivalence with the phase 0 golden', () => {
         const captured = captureLeg(game, index);
         // Compared piece by piece so a failure names the quantity that moved
         expect(captured.randState).toBe(golden.legs[index].randState);
-        expect(captured.fingerprints).toEqual(golden.legs[index].fingerprints);
+        // The four decal placers read the drawn face now (declared delta D5):
+        // only the decals move, so `full` differs and nothing else does
+        const { full, ...rest } = captured.fingerprints;
+        const { full: goldenFull, ...goldenRest } = golden.legs[index].fingerprints;
+        expect(rest).toEqual(goldenRest);
+        expect(full.hash).not.toBe(goldenFull.hash);
+        expect(full.meshes).toBe(goldenFull.meshes);
         expect(captured.faceHashes).toEqual(golden.legs[index].faceHashes);
         expect(captured.decalCounts).toEqual(golden.legs[index].decalCounts);
         expect(captured.d6Entries).toBe(golden.legs[index].d6Entries);

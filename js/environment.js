@@ -908,6 +908,26 @@ class Environment {
     return mainCliff;
   }
 
+  // World position of the point a fraction v of the way up the drawn face
+  // (0 is the foot of the face, 1 the top) beside road point i. Decals are
+  // placed only through this, so they sit on whatever the profile draws.
+  decalPoint(sign, side, i, v) {
+    const point = this.roadPath[i];
+    const ctx = {
+      halfRoad: this.roadWidth / 2,
+      roadY: point.y || 0,
+      column: (i - Math.max(0, this.startSegment)) * Terrain.COLUMNS_PER_SEGMENT,
+      index: i,
+      pathLength: this.roadPath.length,
+    };
+    const face = Terrain.facePoint(side, v, ctx, {});
+    return {
+      x: point.x + Math.cos(point.heading) * face.d * sign,
+      y: face.y,
+      z: point.z - Math.sin(point.heading) * face.d * sign,
+    };
+  }
+
   // Rock dressing of one face: embedded rocks, road debris, cracks, seepage,
   // vines and snow. Rocks sit on the terrain model; the rest hang off the
   // face by design.
@@ -1058,34 +1078,12 @@ class Environment {
         );
         const crack = new THREE.Mesh(crackGeometry, crackMaterial);
 
-        // Position crack on cliff face (roadWidth-relative so the crack
-        // hugs the wall base instead of standing on the road surface on
-        // wider legs)
-        let distance = this.roadWidth / 2 + 1.3 + this.rand() * 2;
-        const verticalOffset = this.rand() * Math.abs(height) * 0.3;
-
-        if (isDropOff) {
-          distance += (verticalOffset / Math.abs(height)) * 30;
-        } else {
-          distance += (verticalOffset / Math.abs(height)) * 15;
-        }
-
-        const perpX = Math.cos(point.heading) * distance * sign;
-        const perpZ = -Math.sin(point.heading) * distance * sign;
-
-        if (height > 0) {
-          crack.position.set(
-            point.x + perpX,
-            (point.y || 0) + crackHeight / 2 + verticalOffset,
-            point.z + perpZ,
-          );
-        } else {
-          crack.position.set(
-            point.x + perpX,
-            (point.y || 0) - crackHeight / 2 - verticalOffset,
-            point.z + perpZ,
-          );
-        }
+        // Centre the crack on the drawn face, up to 30% of the way along it.
+        // The first draw is discarded: it used to set a lateral offset the
+        // face now answers, and dropping it would shift the seeded stream.
+        this.rand();
+        const onFace = this.decalPoint(sign, side, i, this.rand() * 0.3);
+        crack.position.set(onFace.x, onFace.y, onFace.z);
 
         // Rotate crack to align with cliff face
         crack.rotation.y =
@@ -1095,6 +1093,7 @@ class Environment {
         crack.castShadow = true;
         crack.receiveShadow = true;
         crack.userData.allowFloating = true; // Wall decal embedded in the cliff face
+        crack.userData.decal = "crack";
         group.add(crack);
 
         // Add smaller branching cracks
@@ -1120,6 +1119,7 @@ class Environment {
           branch.castShadow = true;
           branch.receiveShadow = true;
           branch.userData.allowFloating = true; // Wall decal embedded in the cliff face
+          branch.userData.decal = "branch";
           group.add(branch);
         }
       }
@@ -1174,38 +1174,17 @@ class Environment {
 
         const seepage = new THREE.Mesh(seepageGeometry, seepageMaterial);
 
-        // Position on cliff face (roadWidth-relative so the patch stays on
-        // the wall instead of hovering over the road edge on wider legs)
-        const seepageHeight = Math.abs(height) * (0.2 + this.rand() * 0.5);
-        let distance = this.roadWidth / 2 + 1.5 + this.rand() * 0.5;
-
-        if (isDropOff) {
-          distance += (seepageHeight / Math.abs(height)) * 30;
-        } else {
-          distance += (seepageHeight / Math.abs(height)) * 15;
-        }
-
-        const perpX = Math.cos(point.heading) * distance * sign;
-        const perpZ = -Math.sin(point.heading) * distance * sign;
-
-        if (height > 0) {
-          seepage.position.set(
-            point.x + perpX,
-            (point.y || 0) + seepageHeight,
-            point.z + perpZ,
-          );
-        } else {
-          seepage.position.set(
-            point.x + perpX,
-            (point.y || 0) - seepageHeight,
-            point.z + perpZ,
-          );
-        }
+        // Centre the patch on the drawn face, 20-70% of the way along it.
+        // The second draw is discarded (see the cracks above).
+        const onFace = this.decalPoint(sign, side, i, 0.2 + this.rand() * 0.5);
+        this.rand();
+        seepage.position.set(onFace.x, onFace.y, onFace.z);
 
         seepage.rotation.y =
           point.heading + (sign > 0 ? Math.PI / 2 : -Math.PI / 2);
         seepage.receiveShadow = true;
         seepage.userData.allowFloating = true; // Wall decal on the cliff face
+        seepage.userData.decal = "seepage";
         group.add(seepage);
       }
     }
@@ -1243,35 +1222,11 @@ class Environment {
 
         const vine = new THREE.Mesh(vineGeometry, vineMaterial);
 
-        // Position vine hanging from cliff face (roadWidth-relative so the
-        // vine clings to the wall instead of hanging over the road edge)
-        const vineHeight = Math.abs(height) * (0.3 + this.rand() * 0.4);
-        let distance = this.roadWidth / 2 + 1.4 + this.rand() * 1;
-
-        if (isDropOff) {
-          distance += (vineHeight / Math.abs(height)) * 30;
-        } else {
-          distance += (vineHeight / Math.abs(height)) * 15;
-        }
-
-        const perpX = Math.cos(point.heading) * distance * sign;
-        const perpZ = -Math.sin(point.heading) * distance * sign;
-
-        const roadY = point.y || 0;
-
-        if (height > 0) {
-          vine.position.set(
-            point.x + perpX,
-            roadY + vineHeight - vineLength / 2,
-            point.z + perpZ,
-          );
-        } else {
-          vine.position.set(
-            point.x + perpX,
-            roadY - vineHeight - vineLength / 2,
-            point.z + perpZ,
-          );
-        }
+        // Centre the vine on the drawn face, 30-70% of the way along it.
+        // The second draw is discarded (see the cracks above).
+        const onFace = this.decalPoint(sign, side, i, 0.3 + this.rand() * 0.4);
+        this.rand();
+        vine.position.set(onFace.x, onFace.y, onFace.z);
 
         vine.rotation.y =
           point.heading + (sign > 0 ? Math.PI / 2 : -Math.PI / 2);
@@ -1279,7 +1234,8 @@ class Environment {
 
         vine.castShadow = true;
         vine.receiveShadow = true;
-        vine.userData.allowFloating = true; // Hangs from the cliff face by design
+        vine.userData.allowFloating = true; // Clings to the cliff face by design
+        vine.userData.decal = "vine";
         group.add(vine);
       }
     }
@@ -1302,21 +1258,9 @@ class Environment {
           );
           const snow = new THREE.Mesh(snowGeometry, snowMaterial);
 
-          // Pin the patch to the upper cliff face: the wall slopes outward
-          // by verticalProgress^2 * 25 as it rises, so the lateral offset
-          // must follow that slope. The old fixed 8-10 unit offset left the
-          // snow hovering in mid-air ~15 units in front of the face.
-          const snowProgress = 0.7 + this.rand() * 0.3;
-          const snowDistance =
-            this.roadWidth / 2 + 1 + snowProgress * snowProgress * 25;
-          const perpX = Math.cos(point.heading) * snowDistance * sign;
-          const perpZ = -Math.sin(point.heading) * snowDistance * sign;
-
-          snow.position.set(
-            point.x + perpX,
-            (point.y || 0) + height * snowProgress,
-            point.z + perpZ,
-          );
+          // Pin the patch to the upper 30% of the drawn face
+          const onFace = this.decalPoint(sign, side, i, 0.7 + this.rand() * 0.3);
+          snow.position.set(onFace.x, onFace.y, onFace.z);
 
           // Rotate to face outward and add some randomness
           snow.rotation.y =
@@ -1326,6 +1270,7 @@ class Environment {
 
           snow.receiveShadow = true;
           snow.userData.allowFloating = true; // Wall decal on the cliff face
+          snow.userData.decal = "snow";
           group.add(snow);
         }
       }

@@ -35,6 +35,50 @@ describe('Terrain module (pure)', () => {
         expect(groundAt(-200)).toBe(50);
     });
 
+    test('zones: the road, then each side\'s bands, with the edge where each band starts', () => {
+        const kindAt = lateral => Terrain.zoneAt(Terrain.forLeg(0), 5, lateral, 10).kind;
+        expect([0, 5, 10, -10].map(kindAt)).toEqual(['road', 'road', 'road', 'road']);
+        // Left: shoulder to 1 past the road edge, then a wall
+        expect([-10.5, -11, -11.01, -30].map(kindAt)).toEqual(['shoulder', 'shoulder', 'wall', 'wall']);
+        // Right: shoulder to 2 past the road edge, then a fall
+        expect([10.5, 12, 12.01, 300].map(kindAt)).toEqual(['shoulder', 'shoulder', 'fall', 'fall']);
+        expect(Terrain.zoneAt(Terrain.forLeg(0), 5, -20, 10)).toMatchObject({ kind: 'wall', sign: -1, start: 11 });
+        expect(Terrain.zoneAt(Terrain.forLeg(0), 5, 20, 10)).toMatchObject({ kind: 'fall', sign: 1, start: 12 });
+    });
+
+    test('the side that ends in a wall is the one rocks come off', () => {
+        const { left, right, ...rest } = Terrain.profiles.cliffLake;
+        expect(Terrain.wallSign(Terrain.profiles.cliffLake)).toBe(-1);
+        expect(Terrain.wallSign({ ...rest, left: right, right: left })).toBe(1);
+        expect(Terrain.wallSign({ ...rest, left: right, right })).toBe(0);
+    });
+
+    test('a fall ends at the water\'s rest height, else a set depth below the road, else it is refused', () => {
+        const { right } = Terrain.profiles.cliffLake;
+        const lake = Terrain.profiles.cliffLake;
+        expect(Terrain.restY(lake, right, 30)).toBe(-195);
+        const dry = { id: 'dry', floor: { kind: 'none' } };
+        expect(Terrain.restY(dry, { fallDepth: 40 }, 30)).toBe(-10);
+        expect(() => Terrain.restY(dry, {}, 30)).toThrow(/no rest height/);
+    });
+
+    test('a face point lies on the rendered column: the ends are rows, between them is interpolation', () => {
+        const ctx = { halfRoad: 10, roadY: 30, column: 7, index: 7, pathLength: 744 };
+        [Terrain.profiles.cliffLake.left, Terrain.profiles.cliffLake.right].forEach(side => {
+            const foot = Terrain.facePoint(side, 0, ctx, {});
+            const top = Terrain.facePoint(side, 1, ctx, {});
+            expect(foot).toEqual({ d: Terrain.row(side, 0, ctx, {}).d, y: 30 });
+            expect(top.d).toBeCloseTo(Terrain.row(side, Terrain.ROWS, ctx, {}).d, 9);
+            expect(top.y).toBeCloseTo(Terrain.row(side, Terrain.ROWS, ctx, {}).y, 9);
+
+            const rowA = Terrain.row(side, 10, ctx, {});
+            const rowB = Terrain.row(side, 11, ctx, {});
+            const middle = Terrain.facePoint(side, (10 + 0.5) / Terrain.ROWS, ctx, {});
+            expect(middle.d).toBeCloseTo((rowA.d + rowB.d) / 2, 9);
+            expect(middle.y).toBeCloseTo((rowA.y + rowB.y) / 2, 9);
+        });
+    });
+
     test('an empty path answers with the floor', () => {
         expect(Terrain.groundY(Terrain.forLeg(0), { path: [], roadWidth: 20 }, 0, 0, 0, -1, true)).toBe(-200);
     });
