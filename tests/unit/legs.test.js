@@ -3,11 +3,11 @@
 import { buildEnvironment, loadGame } from '../helpers/load-game.js';
 
 const ROAD_WIDTHS = [20, 20, 20, 20, 16, 16, 16, 16];
-// Rockfall rate: off on legs 1 to 4, then 0.25 and 0.75 on the two cliff legs left. The
-// run-off legs (storm-valley, winter-pass) have no wall to fall from, so they have none.
-const ROCKFALL = [0, 0, 0, 0, 0.25, 0, 0.75, 0];
+// Rockfall rate: the gorge (0.5) and the hairpin leg (0.25) are the only legs with walls
+// that shed rocks. The run-off legs have no wall to fall from, so they have none.
+const ROCKFALL = [0, 0, 0, 0.5, 0.25, 0, 0, 0];
 // Only the legs whose road changed carry a new track version
-const TRACK_VERSION = [1, 2, 2, 1, 1, 2, 1, 2];
+const TRACK_VERSION = [1, 2, 2, 2, 1, 2, 2, 2];
 // The grass, mountain and fog values the old tours.js variations gave each leg
 const LOOK = [
     [0x4a7c4a, 0x6b5c42, 0.0015],
@@ -41,7 +41,11 @@ describe('Terrain.LEGS', () => {
     });
 
     test('only the last leg is snowed in', () => {
-        expect(game.Terrain.LEGS.map(leg => leg.dressing.forest.snowy)).toEqual([false, false, false, false, false, false, false, true]);
+        expect(game.Terrain.LEGS.map(leg => leg.dressing.forest?.snowy ?? false)).toEqual([false, false, false, false, false, false, false, true]);
+    });
+
+    test('the gorge has no forest at all', () => {
+        expect(game.Terrain.LEGS.map(leg => leg.dressing.forest === null)).toEqual([false, false, false, true, false, false, false, false]);
     });
 
     test('the floor lives once, on the profile', () => {
@@ -110,13 +114,13 @@ describe('the world build reads the table', () => {
 
     test('RockfallSystem reads its rate from the environment', () => {
         const dawn = buildEnvironment(game, 0);
-        const night = buildEnvironment(game, 6);
+        const gorge = buildEnvironment(game, 3);
         const winter = buildEnvironment(game, 7);
         const quiet = new game.RockfallSystem(dawn.scene, dawn.env);
-        const loud = new game.RockfallSystem(night.scene, night.env);
+        const loud = new game.RockfallSystem(gorge.scene, gorge.env);
         const snowed = new game.RockfallSystem(winter.scene, winter.env);
         expect([quiet.enabled, quiet.intensity]).toEqual([false, 0]);
-        expect([loud.enabled, loud.intensity]).toEqual([true, 0.75]);
+        expect([loud.enabled, loud.intensity]).toEqual([true, 0.5]);
         expect([snowed.enabled, snowed.intensity]).toEqual([false, 0]);
     });
 

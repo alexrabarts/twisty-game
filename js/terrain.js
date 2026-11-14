@@ -86,14 +86,22 @@ const Terrain = (() => {
 
   // Mountain side: a wall rising `height` times a slowly varying multiplier,
   // with a lip at its foot and a quadratic overhang above.
-  function cliffWallSide({ height, rockSpread, slope = 1.6 }) {
+  // `variation` scales how far the wall's height swings along the road (1 is
+  // today's cliff; a canyon keeps its walls close to one height); `snow: false`
+  // keeps the patches of snow off a wet wall.
+  function cliffWallSide({ height, rockSpread, slope = 1.6, variation, snow, exact = false }) {
+    const swing = variation ?? 1;
     return {
       flat: LEDGE,
       // The rock face starts 1m past the road edge, inside the 2m ledge
       bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
       // Physics keeps the plain slope on this side; the drawn wall differs
-      exact: false,
-      face: { kind: 'rise', height, rockSpread },
+      exact,
+      face: {
+        kind: 'rise', height, rockSpread,
+        ...(variation !== undefined && { variation }),
+        ...(snow === false && { snow })
+      },
       base: (dPast, roadY) => Math.min(roadY + dPast * slope, roadY + height),
       row(j, ctx, out) {
         const verticalProgress = j / ROWS;
@@ -102,9 +110,9 @@ const Terrain = (() => {
         const lengthProgress = ctx.index / ctx.pathLength;
         const heightMultiplier =
           1.0 +
-          Math.sin(lengthProgress * Math.PI * 8) * 0.5 + // 8 major peaks and valleys
-          Math.sin(lengthProgress * Math.PI * 15) * 0.25 + // 15 medium variations
-          Math.sin(lengthProgress * Math.PI * 27) * 0.15; // 27 small details
+          Math.sin(lengthProgress * Math.PI * 8) * 0.5 * swing + // 8 major peaks and valleys
+          Math.sin(lengthProgress * Math.PI * 15) * 0.25 * swing + // 15 medium variations
+          Math.sin(lengthProgress * Math.PI * 27) * 0.15 * swing; // 27 small details
         const currentHeight = height * heightMultiplier * verticalProgress;
 
         // Start just outside the road edge
@@ -241,17 +249,19 @@ const Terrain = (() => {
     })
   };
 
-  // Rolling forest floor, dark, undulating a few metres either side of the road
-  function forestProfile({ elevation, amplitude }) {
+  // Rolling forest floor, dark, undulating a few metres either side of the road.
+  // `reach` is how far out the ground climbs to its last station: a leg with
+  // tighter bends needs a narrower ribbon (see the radius rule in outermost).
+  function forestProfile({ elevation, amplitude, reach = 165, spans }) {
     const side = () =>
       heightfieldSide({
-        stations: [[0, 0], [15, -0.6], [25, -1.0], [31, 3.0], [90, 5.0], [165, 40]],
+        stations: [[0, 0], [15, -0.6], [25, -1.0], [31, 3.0], [reach - 75, 5.0], [reach, 40]],
         bands: RUNOFF_BANDS(25),
         runoff: RUNOFF,
         undulation: { amplitude, wavelength: 14, phase: 0.8, ramp: 15 },
         shade: 0.5
       });
-    return { id: 'forest', floor: { kind: 'none' }, elevation, left: side(), right: side() };
+    return { id: 'forest', floor: { kind: 'none' }, elevation, left: side(), right: side(), ...(spans && { spans }) };
   }
   const forest = forestProfile({
     elevation: (i, start, end) => {
@@ -261,6 +271,74 @@ const Terrain = (() => {
     },
     amplitude: 3
   });
+
+  // The night leg's forest: a climb with less roll, and two set pieces cut into
+  // it. Segments are global, and `to` is exclusive, so the tunnel is segments
+  // 514 to 521 and the village 583 to 590 (both on straights, clear of every
+  // checkpoint and every roadworks zone).
+  const TUNNEL = { from: 514, to: 522, ceiling: 7.5 };
+  const VILLAGE = { from: 583, to: 591 };
+
+  // Hill over the road: wall at the lining (1 m past the edge), the ground
+  // climbing to the roof's crest 2.5 m out, then on up as a hill
+  const hillSide = () =>
+    heightfieldSide({
+      stations: [[0, 0], [1, 0], [2.5, 9], [8, 11], [40, 14], [135, 40]],
+      bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
+      shade: 0.5
+    });
+
+  // Pavement, level with the road and as slow to ride as the run-off beside
+  // it, then the house fronts and garden walls (a wall that crashes)
+  const streetSide = () =>
+    heightfieldSide({
+      stations: [[0, 0], [3, 0], [3.3, 7], [12, 8], [60, 12], [135, 40]],
+      bands: [{ to: 3, kind: 'runoff' }, { kind: 'wall' }],
+      runoff: RUNOFF,
+      tint: 0x5c5851
+    });
+
+  const forestNight = forestProfile({
+    elevation: (i, start, end) => {
+      const k = i - start;
+      const t = Math.min(1, Math.max(0, k / (end - start)));
+      return 26 + 12 * t + Math.sin(k * 0.07) * 2;
+    },
+    amplitude: 2,
+    // The tightest bend of this leg is 307.7 m: no row may reach past half of it
+    reach: 135,
+    spans: [
+      { type: 'tunnel', ...TUNNEL, left: hillSide(), right: hillSide() },
+      { type: 'village', ...VILLAGE, left: streetSide(), right: streetSide() }
+    ]
+  });
+
+  // A gorge: rock walls 45 to 70 m high close to the road on both sides, with
+  // a river far below that only the bridge shows. The walls are the cliff
+  // face of the mountain legs; the bridge replaces them with a parapet and a
+  // sheer drop to the river bed for its length.
+  const BRIDGE = { from: 285, to: 293 };
+  const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false, exact: true });
+  const gorgeSide = () =>
+    heightfieldSide({
+      // Parapet at 0.8 m, then down past the river (60 m below the road) to its bed and back up the far wall
+      stations: [[0, 0], [0.8, 0], [1.6, -10], [3, -26], [5, -44], [10, -62], [40, -64], [80, -40], [115, 32]],
+      bands: [{ to: 0.8, kind: 'shoulder' }, { kind: 'wall' }],
+      tint: 0x6e6860
+    });
+  const canyon = {
+    id: 'canyon',
+    // The river runs under the road, 60 m down
+    floor: { kind: 'river', below: 60, side: 1, from: -25, to: 25 },
+    elevation: (i, start, end) => {
+      const k = i - start;
+      const t = Math.min(1, Math.max(0, k / (end - start)));
+      return 30 - 6 * t + Math.sin(k * 0.07) * 2.5;
+    },
+    left: gorgeWall(),
+    right: gorgeWall(),
+    spans: [{ type: 'bridge', ...BRIDGE, left: gorgeSide(), right: gorgeSide() }]
+  };
 
   // The sea road: a hill on the land side (left) and a drop to the sea on the
   // right that ends in a beach. The road descends from high above the water to
@@ -314,7 +392,7 @@ const Terrain = (() => {
     right: ridgeSide()
   };
 
-  const profiles = { cliffLake, valleyFloor, forest, coast, ridge };
+  const profiles = { cliffLake, valleyFloor, forest, forestNight, coast, canyon, ridge };
 
   // The per-leg table: the only source of per-leg world values. `profile` is
   // the shape of the ground beside the road; `floor` is defined once, on the
@@ -343,9 +421,12 @@ const Terrain = (() => {
       look: { grassColor: 0x6aac6a, mountainColor: 0x5a4c32, fogDensity: 0.001 },
       // The default forest is kept: it only stands where the cliff face is 15 m above the sea
       dressing: { forest: { coniferShare: 0.3, snowy: false }, rockfall: 0, backdrop: [] } },
-    { id: 'foggy-gorge', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+    // The gorge has no trees (rock to the road edge), and its two walls shed rocks
+    { id: 'foggy-gorge', profile: canyon, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
-      dressing: { forest: { coniferShare: 0.55, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+      dressing: { forest: null, rockfall: 0.5, backdrop: [] },
+      // Between the walls: a camera 30 m out on the right would be inside the rock
+      preview: { radius: 3, height: 8 } },
     { id: 'high-pass', profile: cliffLake, trackVersion: 1, roadWidth: 16,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
       dressing: { forest: { coniferShare: 0.9, snowy: false }, rockfall: 0.25, backdrop: BACKDROP } },
@@ -358,9 +439,14 @@ const Terrain = (() => {
       },
       // The trees stand 13 m out: the camera sits in the gap above the road edge
       preview: { radius: 8, height: 5 } },
-    { id: 'night-ride', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+    { id: 'night-ride', profile: forestNight, trackVersion: 2, roadWidth: 16,
       look: { grassColor: 0x4a8c4a, mountainColor: 0x6a5c42, fogDensity: 0.0012 },
-      dressing: { forest: { coniferShare: 0.6, snowy: false }, rockfall: 0.75, backdrop: BACKDROP } },
+      // As the storm leg's forest, a little thinner; no walls, so no rockfalls
+      dressing: {
+        forest: { coniferShare: 0.6, snowy: false, layout: { perSegment: [3, 5], offset: 5, reach: 77, exclude: [] } },
+        rockfall: 0, backdrop: []
+      },
+      preview: { radius: 8, height: 5 } },
     { id: 'winter-pass', profile: ridge, trackVersion: 2, roadWidth: 16,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
       // Snowy conifers on the slopes below the snowfield only (none within 12 m of the road edge); no walls, so no rockfalls
@@ -421,10 +507,24 @@ const Terrain = (() => {
     return profile[key];
   }
 
+  // The roof of the span in force at a segment (a tunnel), as metres above
+  // the road, or undefined in the open. Segment indices are global.
+  function ceilingAt(profile, segIndex) {
+    for (const span of profile.spans || []) {
+      if (span.ceiling !== undefined && segIndex >= span.from && segIndex < span.to) return span.ceiling;
+    }
+    return undefined;
+  }
+
+  // The set pieces a profile builds: its typed spans, as inclusive segment
+  // ranges. Forest, rockfalls and debris keep out of them.
+  function setPieces(profile) {
+    return (profile.spans || []).filter((span) => span.type).map(({ type, from, to }) => ({ type, from, to: to - 1 }));
+  }
+
   // The same vertex as row(), for the side of a profile as it is DRAWN: the
-  // side in force changes at a span edge, and the rows blend over the one
-  // segment (four columns) before `from` and after `to`, so the ribbon has
-  // no step there. ctx.s is the position along the road in segments.
+  // side in force changes at a span edge, and the rows blend over one segment
+  // (four columns) at each edge, so the ribbon has no step there. ctx.s is the position along the road in segments.
   const blendFrom = {};
   const blendTo = {};
   function rowAt(profile, sign, j, ctx, out) {
@@ -434,10 +534,12 @@ const Terrain = (() => {
     for (const span of profile.spans || []) {
       const inner = span[key];
       if (!inner) continue;
+      // The edges are centred on the physics' boundary between two segments
+      // (half a segment before `from`, half a segment before `to`)
       let weight;
       if (s < span.from) weight = s - (span.from - 1);
-      else if (span.to === undefined || s < span.to) weight = 1;
-      else weight = 1 - (s - span.to);
+      else if (span.to === undefined || s <= span.to - 1) weight = 1;
+      else weight = span.to - s;
       if (weight <= 0) continue;
       if (weight >= 1) return inner.row(j, ctx, out);
       base.row(j, ctx, blendFrom);
@@ -558,7 +660,8 @@ const Terrain = (() => {
     if (d > ledgeEnd) {
       if (exact && side.exact) {
         const walked = surfaceY(profile, sign, side, geo, loc, d);
-        if (walked !== null) return Math.max(walked, profile.floor.y);
+        // A floor with no fixed height (a river under the road) is not a limit
+        if (walked !== null) return profile.floor.y === undefined ? walked : Math.max(walked, profile.floor.y);
       }
       if (side.interpolatesRoad) {
         return side.base(d - ledgeEnd, interpolatedRoadY(geo, loc), loc.index + loc.along / SEGMENT_LENGTH);
@@ -634,6 +737,15 @@ const Terrain = (() => {
     return 0;
   }
 
+  // The signs of the sides that end in a wall at a segment (left first):
+  // where a rock can come off
+  function wallSignsAt(profile, segIndex) {
+    return [-1, 1].filter((sign) => {
+      const { bands } = sideAt(profile, sign, segIndex);
+      return bands[bands.length - 1].kind === 'wall';
+    });
+  }
+
   // Finite height where a fall ends: the reachable water's rest height, else
   // a fixed depth below the road. Nothing may fall without end.
   function restY(profile, side, roadY) {
@@ -672,6 +784,9 @@ const Terrain = (() => {
     faceRange,
     zoneAt,
     wallSign,
+    wallSignsAt,
+    ceilingAt,
+    setPieces,
     restY,
     facePoint,
     cliffDropSide,

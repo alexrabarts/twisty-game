@@ -24,15 +24,16 @@ describe('terrain equivalence with the phase 0 golden', () => {
         expect(new game.TourSystem().legs.map(leg => leg.id)).toEqual(LEG_IDS);
     });
 
-    // valley-run and storm-valley changed profile and road height in phase 4, and
-    // coastal-descent and winter-pass in phase 5, so the golden no longer describes
-    // them; every other leg is still bound by it (high-pass among them: it keeps
-    // its hairpins, its heights and its unversioned board)
-    const CHANGED = ['valley-run', 'storm-valley', 'coastal-descent', 'winter-pass'];
+    // valley-run and storm-valley changed profile and road height in phase 4,
+    // coastal-descent and winter-pass in phase 5, and foggy-gorge and night-ride
+    // in phase 6, so the golden no longer describes them; the two cliff legs are
+    // still bound by it (high-pass keeps its hairpins, its heights and its
+    // unversioned board)
+    const CHANGED = ['valley-run', 'storm-valley', 'coastal-descent', 'winter-pass', 'foggy-gorge', 'night-ride'];
     const BOUND = LEG_IDS.map((id, index) => [id, index]).filter(([id]) => !CHANGED.includes(id));
 
-    test('exactly the four changed legs are released from the golden', () => {
-        expect(BOUND.map(([, index]) => index)).toEqual([0, 3, 4, 6]);
+    test('exactly the six changed legs are released from the golden', () => {
+        expect(BOUND.map(([, index]) => index)).toEqual([0, 4]);
     });
 
     test.each(CHANGED.map(id => [id, LEG_IDS.indexOf(id)]))('%s no longer builds to the golden', (id, index) => {

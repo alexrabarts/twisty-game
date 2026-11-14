@@ -25,6 +25,11 @@ class Environment {
     // circle in `boulders`. Beside a wall it is out of reach and keeps its
     // old entries, or has none.
     this.solidClutter = !!this.terrain.left.runoff;
+    // The roadworks plant stands on ground the bike can ride on. Up a wall it
+    // would hang on the rock face, out of reach, so it is not built there.
+    this.buildsPlant = this.solidClutter || !this.terrain.left.exact;
+    // Where the leg has a bridge, a tunnel or a village: scenery keeps out
+    this.setPieces = Terrain.setPieces(this.terrain);
 
     this.roadWidth = this.config.roadWidth;
     // How far out on the left the roadworks plant stands: well up the wall on
@@ -60,6 +65,7 @@ class Environment {
     this.createRoadworks(); // Add construction zones
     this.addHairpinWarnings(); // Add hairpin bend warnings
     this.createCheckpoints(); // Add scoring checkpoints
+    this.createSetPieces(); // Bridge, tunnel and village
 
     // Validate terrain-road clearance (development-time check)
     const terrainErrors = this.validateAllTerrainClearance();
@@ -104,6 +110,12 @@ class Environment {
       this.roadPath.length - 1,
       true,
     );
+  }
+
+  // Whether a segment lies inside a set piece, widened by `margin` segments
+  // each side (a rock aimed just before a bridge can land on it)
+  inSetPiece(index, margin = 0) {
+    return this.setPieces.some((piece) => index >= piece.from - margin && index <= piece.to + margin);
   }
 
   // A circle a bike collides with at any height below `height` above it
@@ -483,7 +495,7 @@ class Environment {
 
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
-      if (index % 15 === 0) {
+      if (index % 15 === 0 && !this.inSetPiece(index)) {
         // Much less frequent
         // Left side cliff rocks (elevated side) - properly grounded
         const cliffX =
@@ -1006,6 +1018,8 @@ class Environment {
 
     // Add MANY more boulders along the cliff base (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 3) {
+      // A bridge, tunnel or village has no rock face to dress
+      if (this.inSetPiece(i)) continue;
       // Much denser spacing
       const point = this.roadPath[i];
 
@@ -1130,6 +1144,7 @@ class Environment {
 
     // Create major vertical cracks (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 25) {
+      if (this.inSetPiece(i)) continue;
       if (this.rand() > 0.5) {
         const point = this.roadPath[i];
 
@@ -1219,6 +1234,7 @@ class Environment {
 
     // Create water seepage patches (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 30) {
+      if (this.inSetPiece(i)) continue;
       if (this.rand() > 0.5) {
         const point = this.roadPath[i];
 
@@ -1266,6 +1282,7 @@ class Environment {
 
     // Create hanging vines from cliff ledges (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 20) {
+      if (this.inSetPiece(i)) continue;
       if (this.rand() > 0.6) {
         const point = this.roadPath[i];
 
@@ -1317,7 +1334,8 @@ class Environment {
       });
 
       for (let i = startIdx; i <= endIdx; i += 8) {
-        if (this.rand() > 0.4 && height > 30) {
+        if (this.inSetPiece(i)) continue;
+        if (this.rand() > 0.4 && height > 30 && side.face.snow !== false) {
           const point = this.roadPath[i];
           const snowGeometry = new THREE.PlaneGeometry(
             3 + this.rand() * 4,
@@ -3426,6 +3444,8 @@ class Environment {
     const startIdx = Math.max(0, this.startSegment);
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
 
+    // A leg of bare rock (the gorge) has no forest at all
+    if (!this.config.dressing.forest) return;
     // Higher, colder legs are mostly conifers; the last leg is snowed in
     const { coniferShare, snowy, layout } = this.config.dressing.forest;
 
@@ -3461,6 +3481,8 @@ class Environment {
     };
 
     for (let index = startIdx; index <= endIdx; index++) {
+      // No trees in a tunnel, a village, or the segment either side of one
+      if (this.inSetPiece(index, 1)) continue;
       const point = this.roadPath[index];
       if (layout) {
         this.plantRunoffTrees(index, point, layout, plant);
@@ -3542,7 +3564,7 @@ class Environment {
 
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
-      if (index % 6 === 0) {
+      if (index % 6 === 0 && !this.inSetPiece(index)) {
         // Less frequent
         // Bushes on the right-hand ledge lip (road height by construction)
         const bushDistance = this.roadWidth / 2 + 1.0 + this.rand() * 0.8;
@@ -3684,7 +3706,8 @@ class Environment {
     // Place road posts (only in active segment range)
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
-      if (index % 3 === 0) {
+      // (a bridge has parapets and a tunnel a lining of its own)
+      if (index % 3 === 0 && !this.inSetPiece(index)) {
         // Every 3rd segment (60m spacing)
         // Posts on outside of curves, both sides on straights
         const nextIndex = Math.min(index + 1, this.roadPath.length - 1);
@@ -3944,10 +3967,11 @@ class Environment {
 
     // Place barriers along the construction zone (skip around ramp)
     for (let i = startSegment; i <= endSegment; i += 2) {
-      // Skip placing barriers near the ramp (within 4 segments)
+      // Skip placing barriers near the ramp (within 4 segments), and up a wall
       if (hasRamp && Math.abs(i - rampSegment) <= 4) {
         continue;
       }
+      if (!this.buildsPlant) continue;
 
       const point = this.roadPath[i];
 
@@ -4029,14 +4053,16 @@ class Environment {
       // Add construction equipment (static bulldozer) - moved far from road
       // on mountain side, resting on the terrain model (the mountain face
       // has risen well above road height 30 units out)
-      const dozerX = rampPoint.x - Math.cos(rampPoint.heading) * this.plantLateral.bulldozer;
-      const dozerZ = rampPoint.z + Math.sin(rampPoint.heading) * this.plantLateral.bulldozer;
-      this.createBulldozer(
-        dozerX,
-        this.groundYAt(dozerX, dozerZ),
-        dozerZ,
-        rampPoint.heading,
-      );
+      if (this.buildsPlant) {
+        const dozerX = rampPoint.x - Math.cos(rampPoint.heading) * this.plantLateral.bulldozer;
+        const dozerZ = rampPoint.z + Math.sin(rampPoint.heading) * this.plantLateral.bulldozer;
+        this.createBulldozer(
+          dozerX,
+          this.groundYAt(dozerX, dozerZ),
+          dozerZ,
+          rampPoint.heading,
+        );
+      }
 
       // Add shipping containers for collision - positioned on mountain side to avoid drop-off
       // Placed at -6 and -7 units (left side) for better visibility while avoiding dirt pile
@@ -4060,14 +4086,16 @@ class Environment {
       // Add a simple work truck instead of bulldozer (moved far from road on
       // mountain side, resting on the terrain model rather than at road
       // height inside the rising mountain face)
-      const truckX = workPoint.x - Math.cos(workPoint.heading) * this.plantLateral.truck;
-      const truckZ = workPoint.z + Math.sin(workPoint.heading) * this.plantLateral.truck;
-      this.createWorkTruck(
-        truckX,
-        this.groundYAt(truckX, truckZ),
-        truckZ,
-        workPoint.heading,
-      );
+      if (this.buildsPlant) {
+        const truckX = workPoint.x - Math.cos(workPoint.heading) * this.plantLateral.truck;
+        const truckZ = workPoint.z + Math.sin(workPoint.heading) * this.plantLateral.truck;
+        this.createWorkTruck(
+          truckX,
+          this.groundYAt(truckX, truckZ),
+          truckZ,
+          workPoint.heading,
+        );
+      }
     }
 
     // Add appropriate signage based on zone type
@@ -5020,6 +5048,244 @@ class Environment {
       this.scene.add(mesh);
       this.registerGrounded(mesh, `${label} limit post`);
     }
+  }
+
+  // The road's centre line at a fractional segment index (straights only: the
+  // set pieces sit on them, so the heading is the nearest point's)
+  pointAtSegment(s) {
+    const a = Math.floor(s);
+    const f = s - a;
+    const p = this.roadPath[a];
+    const q = this.roadPath[Math.min(a + 1, this.roadPath.length - 1)];
+    return {
+      x: p.x + (q.x - p.x) * f,
+      y: p.y + (q.y - p.y) * f,
+      z: p.z + (q.z - p.z) * f,
+      heading: p.heading,
+    };
+  }
+
+  // A point beside the road in a set piece's own frame (origin at `origin`):
+  // `lateral` to the right of the centre line, `y` above the road
+  piecePoint(point, lateral, y, origin) {
+    return [
+      point.x + Math.cos(point.heading) * lateral - origin.x,
+      point.y + y - origin.y,
+      point.z - Math.sin(point.heading) * lateral - origin.z,
+    ];
+  }
+
+  // One box lying along the road at a road point: `width` runs across the
+  // road, `length` along it, and `bottom` is its lower face above the road.
+  pieceBox(point, lateral, bottom, width, height, length, origin) {
+    const geometry = new THREE.BoxGeometry(width, height, length);
+    geometry.rotateY(point.heading);
+    geometry.translate(...this.piecePoint(point, lateral, bottom + height / 2, origin));
+    return geometry;
+  }
+
+  // A mesh standing at the centre of its set piece. Culling measures the
+  // distance to a mesh's origin, so a merged mesh left at the world origin
+  // would be culled by where it is not.
+  addPieceMesh(group, geometry, material, origin) {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.copy(origin);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    return mesh;
+  }
+
+  // Bridge, tunnel and village: each a group named for its type, with a few
+  // merged meshes and no lights of its own. The ground under and beside each
+  // is the matching span of the profile (see Terrain.setPieces).
+  createSetPieces() {
+    const builders = { bridge: this.buildBridge, tunnel: this.buildTunnel, village: this.buildVillage };
+    for (const piece of this.setPieces) {
+      const mid = this.roadPath[Math.floor((piece.from + piece.to) / 2)];
+      const origin = new THREE.Vector3(mid.x, mid.y, mid.z);
+      const group = new THREE.Group();
+      group.name = piece.type;
+      group.userData.setPiece = piece.type;
+      builders[piece.type].call(this, piece, group, origin);
+      this.scene.add(group);
+    }
+  }
+
+  // A deck with parapets, and piers down to the river bed. The parapet stands
+  // at the profile's wall (0.8 m past the road edge) and is 1.1 m high.
+  buildBridge(piece, group, origin) {
+    const halfRoad = this.roadWidth / 2;
+    const deck = [];
+    const piers = [];
+    for (let i = piece.from; i <= piece.to; i++) {
+      const point = this.roadPath[i];
+      deck.push({ geometry: this.pieceBox(point, 0, -1.3, this.roadWidth + 2.4, 1.2, 20.4, origin), color: [0x4b4944, 0x77726a] });
+      for (const sign of [-1, 1]) {
+        deck.push({ geometry: this.pieceBox(point, sign * (halfRoad + 0.8), 0, 0.4, 1.1, 20.4, origin), color: [0x7d7870, 0x9c968c] });
+      }
+      // A pair of piers every third segment, standing on the river bed
+      if ((i - piece.from) % 3 === 0) {
+        const depth = 62;
+        for (const sign of [-1, 1]) {
+          piers.push({ geometry: this.pieceBox(point, sign * (halfRoad - 2.5), -1.3 - depth, 2.2, depth, 2.2, origin), color: [0x2e2c2a, 0x5d5953] });
+        }
+      }
+    }
+    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: true });
+    this.addPieceMesh(group, this.mergeColoredGeometries(deck), material, origin);
+    this.addPieceMesh(group, this.mergeColoredGeometries(piers), material, origin);
+  }
+
+  // A roof over the road: an elliptical lining (inside faces), the hill over
+  // it, the two portals, and a strip of emissive lamps along the crown. The
+  // lining is as wide as the wall band (1 m past the road edge) and as high as
+  // the span's ceiling; the hill's crest, 1.5 m above the ceiling, is where
+  // the ribbon of the profile's hill sides ends.
+  buildTunnel(piece, group, origin) {
+    const span = this.terrain.spans.find((candidate) => candidate.type === 'tunnel');
+    const halfWidth = this.roadWidth / 2 + 1;
+    const crest = this.roadWidth / 2 + 2.5;
+    const { ceiling } = span;
+    const capHeight = ceiling + 1.5;
+    const steps = 16;
+    // Rings stand half a segment outside the span, so the portals are at its ends
+    const first = piece.from - 0.5;
+    const rings = piece.to - piece.from + 2;
+
+    const lining = [];
+    const cap = [];
+    const portals = [];
+    // Two triangles for the quad of (a, b) on one ring and (a, b) on the next
+    const quad = (list, a0, b0, a1, b1) => list.push(...a0, ...b0, ...a1, ...b0, ...b1, ...a1);
+    const arch = (point, t) => this.piecePoint(point, halfWidth * Math.cos(t), ceiling * Math.sin(t), origin);
+
+    for (let k = 0; k < rings - 1; k++) {
+      const near = this.pointAtSegment(first + k);
+      const far = this.pointAtSegment(first + k + 1);
+      for (let n = 0; n < steps; n++) {
+        const t0 = (n / steps) * Math.PI;
+        const t1 = ((n + 1) / steps) * Math.PI;
+        quad(lining, arch(near, t0), arch(near, t1), arch(far, t0), arch(far, t1));
+      }
+      quad(
+        cap,
+        this.piecePoint(near, -crest, capHeight, origin), this.piecePoint(near, crest, capHeight, origin),
+        this.piecePoint(far, -crest, capHeight, origin), this.piecePoint(far, crest, capHeight, origin),
+      );
+    }
+    // A portal at each end: the ring between the opening and the hill's outline
+    for (const point of [this.pointAtSegment(first), this.pointAtSegment(first + rings - 1)]) {
+      // Where a ray from the road's centre at angle t leaves the outline
+      const outline = (t) => {
+        const reach = Math.min(crest / Math.max(1e-6, Math.abs(Math.cos(t))), capHeight / Math.max(1e-6, Math.sin(t)));
+        return this.piecePoint(point, reach * Math.cos(t), reach * Math.sin(t), origin);
+      };
+      for (let n = 0; n < steps; n++) {
+        const t0 = (n / steps) * Math.PI;
+        const t1 = ((n + 1) / steps) * Math.PI;
+        quad(portals, arch(point, t0), arch(point, t1), outline(t0), outline(t1));
+      }
+    }
+
+    const shell = (positions) => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.computeVertexNormals();
+      return geometry;
+    };
+    const material = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide });
+    this.addPieceMesh(group, shell(lining), material(0x5b5a5e), origin);
+    this.addPieceMesh(group, shell(cap), material(0x2c4727), origin);
+    this.addPieceMesh(group, shell(portals), material(0x6e6a63), origin);
+
+    // Two rows of emissive bars under the crown, one pair at each ring. They
+    // glow past the bloom threshold but are not lights: the scene keeps its seven.
+    const lampMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd9a0, emissiveIntensity: 3, roughness: 0.6 });
+    const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.12, 2.4), lampMaterial, (rings - 2) * 2);
+    const matrix = new THREE.Matrix4();
+    const turn = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const unit = new THREE.Vector3(1, 1, 1);
+    for (let k = 1; k < rings - 1; k++) {
+      const point = this.pointAtSegment(first + k);
+      turn.setFromAxisAngle(up, point.heading);
+      [-1, 1].forEach((sign, n) => {
+        matrix.compose(new THREE.Vector3(...this.piecePoint(point, sign * 3, ceiling - 0.45, origin)), turn, unit);
+        lamps.setMatrixAt((k - 1) * 2 + n, matrix);
+      });
+    }
+    lamps.instanceMatrix.needsUpdate = true;
+    lamps.position.copy(origin);
+    lamps.frustumCulled = false;
+    group.add(lamps);
+  }
+
+  // House fronts either side with a few lit windows, and lamp posts on the
+  // pavement. The light on the road is a pool of additive glow under each lamp
+  // head: no light objects, because every light costs every lit fragment.
+  buildVillage(piece, group, origin) {
+    const halfRoad = this.roadWidth / 2;
+    // The wall band starts 3 m past the road edge: the fronts stand on it
+    const front = halfRoad + 3;
+    const depth = 9;
+    const houses = [];
+    const windows = [];
+    const washes = [0xb9a58a, 0xa88f7a, 0xc8b8a0, 0x9a8a7c];
+    for (let i = piece.from; i <= piece.to; i++) {
+      const point = this.roadPath[i];
+      for (const sign of [-1, 1]) {
+        const storeys = 2 + Math.floor(this.rand() * 2);
+        const height = 3.4 * storeys + 0.6;
+        const wash = washes[Math.floor(this.rand() * washes.length)];
+        houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), -0.5, depth, height + 0.5, 15.4, origin), color: [wash, wash] });
+        houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), height, depth + 0.8, 0.6, 16.2, origin), color: [0x4a3328, 0x4a3328] });
+        for (let floor = 0; floor < storeys; floor++) {
+          for (const along of [-4.5, 0, 4.5]) {
+            if (this.rand() < 0.35) continue;
+            const spot = { ...point, x: point.x + Math.sin(point.heading) * along, z: point.z + Math.cos(point.heading) * along };
+            windows.push({ geometry: this.pieceBox(spot, sign * (front - 0.07), 1.4 + floor * 3.4, 0.14, 1.4, 1.2, origin), color: [0xffc070, 0xffc070] });
+          }
+        }
+      }
+    }
+    const wallMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: true });
+    const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1208, emissive: 0xffc070, emissiveIntensity: 2.4, roughness: 0.5 });
+    this.addPieceMesh(group, this.mergeColoredGeometries(houses), wallMaterial, origin);
+    this.addPieceMesh(group, this.mergeColoredGeometries(windows), windowMaterial, origin).castShadow = false;
+
+    // Lamp posts, heads and pools: one pair every segment, instanced
+    const count = (piece.to - piece.from + 1) * 2;
+    const postMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.7, metalness: 0.4 });
+    const headMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd49a, emissiveIntensity: 3.2, roughness: 0.5 });
+    const poolMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffc070, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false,
+      polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+    });
+    const poolGeometry = new THREE.CircleGeometry(3.5, 16);
+    poolGeometry.rotateX(-Math.PI / 2);
+    const posts = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.08, 0.11, 5, 6), postMaterial, count);
+    const heads = new THREE.InstancedMesh(new THREE.SphereGeometry(0.3, 8, 6), headMaterial, count);
+    const pools = new THREE.InstancedMesh(poolGeometry, poolMaterial, count);
+    const matrix = new THREE.Matrix4();
+    let n = 0;
+    for (let i = piece.from; i <= piece.to; i++) {
+      const point = this.roadPath[i];
+      for (const sign of [-1, 1]) {
+        posts.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * (halfRoad + 1.2), 2.5, origin)));
+        heads.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * (halfRoad + 1.2), 5.1, origin)));
+        pools.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * (halfRoad - 1.5), 0.06, origin)));
+        n++;
+      }
+    }
+    posts.castShadow = true;
+    pools.renderOrder = 1;
+    [posts, heads, pools].forEach((mesh) => {
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.position.copy(origin);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+    });
   }
 
   createCheckpoints() {
