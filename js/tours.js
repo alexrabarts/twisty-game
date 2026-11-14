@@ -9,7 +9,6 @@ class TourSystem {
                 startSegment: 0,
                 endSegment: 69,
                 timeOfDay: 'dawn',
-                landscapeVariation: 'mountain',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -21,7 +20,6 @@ class TourSystem {
                 startSegment: 70,
                 endSegment: 149,
                 timeOfDay: 'golden',
-                landscapeVariation: 'valley',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -33,7 +31,6 @@ class TourSystem {
                 startSegment: 150,
                 endSegment: 233,
                 timeOfDay: 'twilight',
-                landscapeVariation: 'coastal',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -45,7 +42,6 @@ class TourSystem {
                 startSegment: 234,
                 endSegment: 321,
                 timeOfDay: 'golden', // Morning light, but foggy
-                landscapeVariation: 'valley',
                 weather: 'fog',
                 weatherIntensity: 4.0
             },
@@ -57,7 +53,6 @@ class TourSystem {
                 startSegment: 322,
                 endSegment: 413,
                 timeOfDay: 'sunset',
-                landscapeVariation: 'alpine',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -69,7 +64,6 @@ class TourSystem {
                 startSegment: 414,
                 endSegment: 509,
                 timeOfDay: 'twilight', // Dark stormy afternoon
-                landscapeVariation: 'valley',
                 weather: 'rain',
                 weatherIntensity: 0.9
             },
@@ -81,7 +75,6 @@ class TourSystem {
                 startSegment: 510,
                 endSegment: 607,
                 timeOfDay: 'night',
-                landscapeVariation: 'mixed',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -93,7 +86,6 @@ class TourSystem {
                 startSegment: 608,
                 endSegment: 703,
                 timeOfDay: 'twilight', // Overcast winter day
-                landscapeVariation: 'alpine',
                 weather: 'snow',
                 weatherIntensity: 1.0
             }
@@ -288,42 +280,6 @@ class TourSystem {
         // edge where the rendered road begins is behind the camera
         const startSegment = Math.min(this.currentLeg.startSegment + 5, roadPath.length - 1);
         return roadPath[startSegment];
-    }
-
-    getLandscapeConfig(leg = this.currentLeg) {
-        if (!leg) {
-            return { variation: 'mountain' };
-        }
-
-        const configs = {
-            mountain: {
-                grassColor: 0x4a7c4a,
-                mountainColor: 0x6b5c42,
-                fogDensity: 0.0015
-            },
-            valley: {
-                grassColor: 0x5a9c5a,
-                mountainColor: 0x7a6c52,
-                fogDensity: 0.0008
-            },
-            alpine: {
-                grassColor: 0x3a6c3a,
-                mountainColor: 0x8b8b8b,
-                fogDensity: 0.002
-            },
-            coastal: {
-                grassColor: 0x6aac6a,
-                mountainColor: 0x5a4c32,
-                fogDensity: 0.001
-            },
-            mixed: {
-                grassColor: 0x4a8c4a,
-                mountainColor: 0x6a5c42,
-                fogDensity: 0.0012
-            }
-        };
-
-        return configs[leg.landscapeVariation] || configs.mountain;
     }
 
     createLegSelector(container, onLegSelected) {

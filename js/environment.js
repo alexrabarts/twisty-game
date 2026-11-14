@@ -15,11 +15,13 @@ class Environment {
 
     this.vergeBaseColor = 0x4a3d34; // Bare dirt shoulder
 
-    // The ground beside the road comes from one terrain profile per leg
-    this.terrain = Terrain.forLeg(legIndex);
+    // Every per-leg world value comes from one table entry; only this
+    // constructor looks it up, everything else reads this.config
+    this.config = Terrain.legConfig(legIndex);
+    this.terrain = this.config.profile;
+    this.floorY = this.config.floor.y;
 
-    // Calculate road width - first 4 legs are wider (easier)
-    this.roadWidth = legIndex < 4 ? 20 : 16;
+    this.roadWidth = this.config.roadWidth;
     // What Terrain needs to read the road: the path fills in during createRoad
     this.terrainGeometry = {
       path: this.roadPath,
@@ -37,7 +39,8 @@ class Environment {
     this.randState = ((startSegment + 1) * 2654435761 ^ (legIndex + 1) * 40503) >>> 0;
 
     this.createRoad(); // Generates full roadPath, but only creates geometry for segment range
-    this.createGrass();
+    this.createFloor();
+    this.createRoadWalls(); // Vertical walls connecting road to terrain
     this.createLayeredMountains(); // Add layered mountain scenery
     this.createRoadMarkings();
     this.addEnvironmentalDetails();
@@ -1333,20 +1336,15 @@ class Environment {
   createLayeredMountains() {
     // Create multiple layers of mountains for depth
 
-    // Layer 1: Distant mountain range (far background)
-    this.createDistantMountainRange();
-
-    // Layer 2: Mid-range mountains
-    this.createMidRangeMountains();
-
-    // Layer 3: Near hills with more detail
-    this.createNearHills();
-
-    // Layer 4: Majestic peak - the dominant mountain
-    this.createMajesticPeak();
-
-    // Layer 5: End course dramatic mountains
-    this.createEndCourseMountains();
+    // Each leg lists the layers it wants, in build order
+    const layers = {
+      distant: () => this.createDistantMountainRange(), // far background
+      mid: () => this.createMidRangeMountains(),
+      near: () => this.createNearHills(), // more detail
+      majestic: () => this.createMajesticPeak(), // the dominant mountain
+      endCourse: () => this.createEndCourseMountains(), // dramatic end mountains
+    };
+    this.config.dressing.backdrop.forEach((key) => layers[key]());
   }
 
   createDistantMountainRange() {
@@ -1554,7 +1552,7 @@ class Environment {
       // Mostly submerged at the lake surface (y = -200) so the tops break the
       // water around the island base. The old -70 left them floating ~130
       // units above the water.
-      rock.position.set(rockX, -200 + rockSize * 0.2, rockZ);
+      rock.position.set(rockX, this.floorY + rockSize * 0.2, rockZ);
       rock.rotation.set(
         this.rand() * Math.PI,
         this.rand() * Math.PI,
@@ -1877,7 +1875,7 @@ class Environment {
     // 2 units below the lake plane (y = -200). The old fixed -50 left the
     // whole mountain hovering ~140 units above the water.
     const baseDepthBelowOrigin = (width / 2) * 0.1;
-    mountain.position.set(x, -200 + baseDepthBelowOrigin - 2, z);
+    mountain.position.set(x, this.floorY + baseDepthBelowOrigin - 2, z);
     mountain.castShadow = true;
     mountain.receiveShadow = true;
 
@@ -2931,7 +2929,7 @@ class Environment {
 
       distantPeak.position.set(
         roadPoint.x - localPerpX * (2000 + i * 300), // 2000-4400 units to left
-        -200 - this.rand() * 100,
+        this.floorY - this.rand() * 100,
         roadPoint.z - localPerpZ * (2000 + i * 300),
       );
       distantPeak.scale.set(
@@ -2985,7 +2983,7 @@ class Environment {
     this.registerGrounded(group, "end-course mountains");
   }
 
-  createGrass() {
+  createFloor() {
     // Lake under the whole active leg. (A fixed 3000-unit plane at the world
     // origin only reached the first leg; later legs dropped into nothing.)
     const legMid = this.roadPath[
@@ -3005,13 +3003,10 @@ class Environment {
           });
     const lake = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000), lakeMaterial);
     lake.rotation.x = -Math.PI / 2;
-    lake.position.set(legMid.x, -200, legMid.z);
+    lake.position.set(legMid.x, this.floorY, legMid.z);
     lake.receiveShadow = true;
     lake.userData.part = "floor";
     this.scene.add(lake);
-
-    // Add vertical walls connecting road to terrain
-    this.createRoadWalls();
   }
 
   createRoadMarkings() {
@@ -3317,8 +3312,7 @@ class Environment {
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
 
     // Higher, colder legs are mostly conifers; the last leg is snowed in
-    const coniferShare = [0.75, 0.35, 0.3, 0.55, 0.9, 0.5, 0.6, 1.0][this.legIndex] ?? 0.6;
-    const snowy = this.legIndex === 7;
+    const { coniferShare, snowy } = this.config.dressing.forest;
 
     const placements = { conifer: [], broadleaf: [] };
     const matrix = new THREE.Matrix4();
@@ -3338,7 +3332,7 @@ class Environment {
         const x = point.x + lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
         const z = point.z - lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
         const groundY = this.groundYAt(x, z);
-        if (groundY < -185) continue; // At the waterline
+        if (groundY < this.floorY + 15) continue; // At the waterline
 
         // Trees right beside the road stay small so they do not wall off
         // the view across the valley

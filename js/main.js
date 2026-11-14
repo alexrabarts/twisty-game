@@ -238,8 +238,7 @@ class Game {
             console.log('Environment created successfully');
 
             // Apply landscape configuration for the leg
-            const landscapeConfig = this.tourSystem.getLandscapeConfig();
-            this.environment.applyLandscapeConfig(landscapeConfig);
+            this.environment.applyLandscapeConfig(this.environment.config.look);
 
             // Initialize weather system
             console.log('Initializing weather system...');
@@ -273,9 +272,8 @@ class Game {
         });
 
         console.log('Creating rockfall hazards...');
-        const currentLegIndex = this.tourSystem.getCurrentLegIndex();
         this.rockfalls = (typeof RockfallSystem !== 'undefined')
-            ? new RockfallSystem(this.scene, this.environment, currentLegIndex)
+            ? new RockfallSystem(this.scene, this.environment)
             : null;
 
         console.log('Creating traffic...');
@@ -2296,9 +2294,7 @@ class Game {
         this.endTrackPreview();
         this.setTimeOfDay(leg.timeOfDay);
         this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
-        this.previewEnv.applyLandscapeConfig(
-            this.tourSystem.getLandscapeConfig(leg)
-        );
+        this.previewEnv.applyLandscapeConfig(this.previewEnv.config.look);
         if (leg.weather && leg.weather !== 'clear') {
             this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
         }

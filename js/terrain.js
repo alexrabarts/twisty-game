@@ -133,10 +133,57 @@ const Terrain = (() => {
   };
 
   const profiles = { cliffLake };
-  const LEG_PROFILES = [cliffLake, cliffLake, cliffLake, cliffLake, cliffLake, cliffLake, cliffLake, cliffLake];
+
+  // The per-leg table: the only source of per-leg world values. `profile` is
+  // the shape of the ground beside the road; `floor` is defined once, on the
+  // profile, and shared here; `look` keeps the key names applyLandscapeConfig
+  // reads; `dressing` holds what the world build scatters. Order is leg order.
+  const BACKDROP = ['distant', 'mid', 'near', 'majestic', 'endCourse'];
+  const LEGS = [
+    { id: 'mountain-dawn', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+      look: { grassColor: 0x4a7c4a, mountainColor: 0x6b5c42, fogDensity: 0.0015 },
+      dressing: { forest: { coniferShare: 0.75, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+    { id: 'valley-run', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+      look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
+      dressing: { forest: { coniferShare: 0.35, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+    { id: 'coastal-descent', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+      look: { grassColor: 0x6aac6a, mountainColor: 0x5a4c32, fogDensity: 0.001 },
+      dressing: { forest: { coniferShare: 0.3, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+    { id: 'foggy-gorge', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+      look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
+      dressing: { forest: { coniferShare: 0.55, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+    { id: 'high-pass', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+      look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
+      dressing: { forest: { coniferShare: 0.9, snowy: false }, rockfall: 0.25, backdrop: BACKDROP } },
+    { id: 'storm-valley', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+      look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
+      dressing: { forest: { coniferShare: 0.5, snowy: false }, rockfall: 0.5, backdrop: BACKDROP } },
+    { id: 'night-ride', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+      look: { grassColor: 0x4a8c4a, mountainColor: 0x6a5c42, fogDensity: 0.0012 },
+      dressing: { forest: { coniferShare: 0.6, snowy: false }, rockfall: 0.75, backdrop: BACKDROP } },
+    { id: 'winter-pass', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+      look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
+      dressing: { forest: { coniferShare: 1.0, snowy: true }, rockfall: 1, backdrop: BACKDROP } }
+  ];
+  LEGS.forEach((leg) => {
+    leg.floor = leg.profile.floor;
+  });
+  const LEG_PROFILES = LEGS.map((leg) => leg.profile);
+
+  // The table entry for a leg index or a leg id. A missing or out-of-range
+  // index falls back to the first leg; an unknown string id throws, so a
+  // mistyped id can never resolve to another leg's settings.
+  function legConfig(key) {
+    if (typeof key === 'string') {
+      const found = LEGS.find((leg) => leg.id === key);
+      if (!found) throw new Error(`Unknown leg id: ${key}`);
+      return found;
+    }
+    return LEGS[key] || LEGS[0];
+  }
 
   function forLeg(legIndex) {
-    return LEG_PROFILES[legIndex] || LEG_PROFILES[0];
+    return legConfig(legIndex).profile;
   }
 
   // Road y for global segment `i`; the active leg's function applies to the whole path
@@ -242,7 +289,9 @@ const Terrain = (() => {
     COLUMNS_PER_SEGMENT,
     SEGMENT_LENGTH,
     profiles,
+    LEGS,
     LEG_PROFILES,
+    legConfig,
     cliffDropSide,
     cliffWallSide,
     forLeg,
