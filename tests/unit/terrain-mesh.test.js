@@ -1,5 +1,5 @@
 // Rock dressing reads the profile's face description, not the side sign.
-import { buildEnvironment, decalMeshes, groundedRecords, loadGame, ribbonMeshes } from '../helpers/load-game.js';
+import { buildEnvironment, decalMeshes, groundedRecords, loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
 
 describe('embedded rock spread reads side.face.rockSpread', () => {
     let game;
@@ -160,5 +160,100 @@ describe('decals sit on the drawn face', () => {
             else expect(decal.position.y).toBeLessThanOrEqual(nearest.y);
             expect(faceDistance(env, ribbons, decal)).toBeLessThanOrEqual(0.75);
         });
+    }, 60000);
+});
+
+describe('the ground the bike rides is the wall it sees', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    // A canyon and a sea-road hill rise from the ribbon's own first row, 1.4 m
+    // past the road edge. The ground model must start the wall there too, or a
+    // bike a metre into the wall rides inside it.
+    test.each([
+        [3, 'foggy-gorge', [239, 249, 259]],
+        [2, 'coastal-descent', [175, 185, 195, 225]]
+    ])('leg %i (%s): groundYAt agrees with a ray down the drawn wall at +-12 m', (legIndex, name, segments) => {
+        const { env, scene } = buildEnvironment(game, legIndex);
+        scene.updateMatrixWorld(true);
+        const ribbons = ribbonMeshes(env);
+        let checked = 0;
+        segments.forEach(index => {
+            const point = env.roadPath[index];
+            [-12, 12].forEach(lateral => {
+                const x = point.x + Math.cos(point.heading) * lateral;
+                const z = point.z - Math.sin(point.heading) * lateral;
+                const hit = rayDown(game.THREE, ribbons, x, z);
+                if (hit === null) return;
+                checked++;
+                expect(Math.abs(hit - env.groundYAt(x, z))).toBeLessThanOrEqual(0.75);
+            });
+        });
+        expect(checked).toBeGreaterThan(0);
+    }, 60000);
+});
+
+describe('raycast: the drawn wall and the ground the physics reads', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    // A folded wall puts a fold of its rows exactly at a lateral now and then; a
+    // ray finds the highest fold there, and so must the ground model
+    test.each([
+        [3, 'foggy-gorge', 270, 20],
+        [3, 'foggy-gorge', 270, -20],
+        [4, 'high-pass', 402, -34]
+    ])('leg %i (%s) seg %i, lateral %i: the highest fold of the wall, at every column', (legIndex, name, segment, lateral) => {
+        const { env, scene } = buildEnvironment(game, legIndex);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        [0, 0.25, 0.5, 0.75].forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, segment, fraction, lateral);
+            expect(hit).not.toBeNull();
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
+        });
+    }, 60000);
+});
+
+function across(game, env, ribbons, segment, fraction, lateral) {
+    const a = env.roadPath[segment];
+    const b = env.roadPath[segment + 1];
+    const heading = a.heading + (b.heading - a.heading) * fraction;
+    const x = a.x + (b.x - a.x) * fraction + Math.cos(heading) * lateral;
+    const z = a.z + (b.z - a.z) * fraction - Math.sin(heading) * lateral;
+    return { hit: rayDown(game.THREE, ribbons, x, z), ground: env.groundYAt(x, z) };
+}
+
+describe('span blend: the ground model blends rows at a span edge as the ribbon does', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    // The tunnel on leg 7 (segments 514 to 521) and the bridge on leg 4 (285 to 292)
+    test.each([
+        [6, 'night-ride tunnel', [512, 513, 514, 520, 521, 522], 8],
+        [3, 'foggy-gorge bridge', [284, 285, 292, 293], 10]
+    ])('leg %i (%s): ray and groundYAt agree at the edges, columns 0 to 0.75', (legIndex, name, segments, halfRoad) => {
+        const { env, scene } = buildEnvironment(game, legIndex);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        let checked = 0;
+        segments.forEach(segment => [-20, -12, -10, 10, 12, 20].forEach(lateral => [0, 0.25, 0.5, 0.75].forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, segment, fraction, lateral);
+            // Nothing is drawn on the road itself
+            if (hit === null) return;
+            checked++;
+            // The first drawn row of the ribbon, at the road edge, is a ledge a ray finds a little off the model
+            const bound = Math.abs(lateral) <= halfRoad + 0.5 ? 0.12 : 5e-3;
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(bound);
+        })));
+        expect(checked).toBeGreaterThan(60);
     }, 60000);
 });

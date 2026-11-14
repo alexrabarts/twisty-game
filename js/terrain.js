@@ -14,6 +14,10 @@ const Terrain = (() => {
   const SEGMENT_LENGTH = 20;
   // Road surface plus a 2m ledge on each side before the face starts
   const LEDGE = 2;
+  // The least distance past the road edge a wall's ribbon vertex can have
+  const WALL_FOOT = 1.4;
+  // Rounding slack when a distance is tested against a fold of a wall's rows
+  const FOLD_EPSILON = 1e-6;
 
   // Layered, quantised sine displacement of a ribbon vertex. A pure function
   // of the grid position so the physics walk can reproduce the mesh.
@@ -88,12 +92,18 @@ const Terrain = (() => {
   // `variation` scales how far the wall's height swings along the road (1 is
   // today's cliff; a canyon keeps its walls close to one height); `snow: false`
   // keeps the patches of snow off a wet wall.
-  function cliffWallSide({ height, rockSpread, slope = 1.6, variation, snow }) {
+  function cliffWallSide({ height, rockSpread, slope = 1.6, variation, snow, drawnFoot = false }) {
     const swing = variation ?? 1;
     return {
       flat: LEDGE,
       // The rock face starts 1m past the road edge, inside the 2m ledge
       bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
+      // Where the drawn face really starts: row 0 of the ribbon sits 1.4 m past
+      // the road edge, not at the end of the 2 m ledge. A wall that sets this
+      // has its exact ground read from there, so the ground a bike is judged
+      // on is the wall it sees. The mountain walls leave it off: their
+      // recorded ground (and with it their baseline) must not move.
+      ...(drawnFoot && { foot: WALL_FOOT }),
       face: {
         kind: 'rise', height, rockSpread,
         ...(variation !== undefined && { variation }),
@@ -124,7 +134,7 @@ const Terrain = (() => {
 
         const displacement = cliffDisplacement(ctx.column, j, verticalProgress);
         const displacementScale = cliffDisplacementScale(verticalProgress, false);
-        out.d = Math.max(baseDistance + displacement * displacementScale, ctx.halfRoad + 1.4);
+        out.d = Math.max(baseDistance + displacement * displacementScale, ctx.halfRoad + WALL_FOOT);
         out.y = ctx.roadY + currentHeight;
         out.rise = currentHeight;
         out.displacement = displacement;
@@ -314,7 +324,7 @@ const Terrain = (() => {
   // face of the mountain legs; the bridge replaces them with a parapet and a
   // sheer drop to the river bed for its length.
   const BRIDGE = { from: 285, to: 293 };
-  const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false });
+  const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false, drawnFoot: true });
   const gorgeSide = () =>
     heightfieldSide({
       // Parapet at 0.8 m, then down past the river (60 m below the road) to its bed and back up the far wall
@@ -359,7 +369,7 @@ const Terrain = (() => {
       const t = Math.min(1, Math.max(0, (i - start) / (end - start)));
       return 6 + 52 * Math.pow(1 - t, 1.7);
     },
-    left: cliffWallSide({ height: 40, rockSpread: 20 }),
+    left: cliffWallSide({ height: 40, rockSpread: 20, drawnFoot: true }),
     right: cliffDropSide({ floorY: SEA_Y, faceHeight: -60, rockSpread: 25, lipDepth: 2 }),
     spans: [{ from: BEACH_FROM, right: beach }]
   };
@@ -607,41 +617,55 @@ const Terrain = (() => {
     return out;
   }
 
-  // Height of the rendered face at distance d from the centre line. Walks the
-  // same vertex column the ribbon builder generated. Returns null outside the
-  // built range (callers fall back to the plain slope model).
-  function surfaceY(profile, sign, side, geo, loc, d) {
-    const startIdx = Math.max(0, geo.startSegment);
-    const endIdx = Math.min(geo.path.length - 1, geo.endSegment + 20);
-    const segmentIndex = loc.index;
-    if (segmentIndex < startIdx || segmentIndex > endIdx) return null;
+  // Whether the ribbon on a side is blending between two sides at a position
+  // along the road (in segments): the one segment either side of a span edge
+  function blendingAt(profile, key, s) {
+    for (const span of profile.spans || []) {
+      if (!span[key]) continue;
+      if (s > span.from - 1 && s < span.from) return true;
+      if (span.to !== undefined && s > span.to - 1 && s < span.to) return true;
+    }
+    return false;
+  }
 
-    const column = Math.round((segmentIndex - startIdx + loc.along / SEGMENT_LENGTH) * COLUMNS_PER_SEGMENT);
-    if (column < 0) return null;
-
+  // Height of the rendered face at distance d from the centre line, down one
+  // vertex column. Walks the rows the ribbon builder generated. `blended` is a
+  // span edge: the rows are those of the blend, and may be any kind of side.
+  // `roadHeight` is the road's height at the point asked for, where it is not
+  // the column's own.
+  function walkColumn(profile, sign, side, geo, d, column, startIdx, blended, roadHeight) {
     const halfRoad = geo.roadWidth / 2;
+    const segmentIndex = startIdx + Math.floor(column / COLUMNS_PER_SEGMENT);
     const point = geo.path[segmentIndex];
-    const neighbour = geo.path[Math.min(geo.path.length - 1, Math.max(0, segmentIndex + (loc.along >= 0 ? 1 : -1)))];
-    const roadY = point.y + (neighbour.y - point.y) * Math.min(1, Math.abs(loc.along) / SEGMENT_LENGTH);
+    const next = geo.path[Math.min(geo.path.length - 1, segmentIndex + 1)];
+    const roadY = roadHeight ?? point.y + (next.y - point.y) * ((column % COLUMNS_PER_SEGMENT) / COLUMNS_PER_SEGMENT);
     const ctx = {
       halfRoad, roadY, column, index: segmentIndex, pathLength: geo.path.length,
       s: startIdx + column / COLUMNS_PER_SEGMENT
     };
     const out = {};
-
-    // Row 0 of the mesh sits at the end of the ledge
-    let previousDistance = halfRoad + side.flat;
+    let previousDistance;
     let previousY = roadY;
+    if (blended) {
+      rowAt(profile, sign, 0, ctx, out);
+      previousDistance = out.d;
+      previousY = out.y;
+      if (d <= out.d) return roadY;
+    } else {
+      // Row 0 of the mesh sits at the end of the ledge
+      previousDistance = halfRoad + (side.foot ?? side.flat);
+    }
     // A wall leans out over the road as it rises, so its rows can fold back: more
     // than one row segment then spans the same distance. What a rock or a ray
     // meets from above is the highest of them.
-    const folds = side.face && side.face.kind === 'rise';
+    const folds = blended || (side.face && side.face.kind === 'rise');
     let highest = null;
     for (let j = 1; j <= ROWS; j++) {
       rowAt(profile, sign, j, ctx, out);
       if (folds) {
         const low = Math.min(previousDistance, out.d);
-        if (d >= low && d <= Math.max(previousDistance, out.d)) {
+        // A point on a row's own distance is on it to within rounding: a ray finds that fold too
+        if (d >= low - FOLD_EPSILON && d <= Math.max(previousDistance, out.d) + FOLD_EPSILON) {
           const span = out.d - previousDistance;
           const y = Math.abs(span) > 0.001 ? previousY + ((out.y - previousY) * (d - previousDistance)) / span : out.y;
           if (highest === null || y > highest) highest = y;
@@ -655,6 +679,36 @@ const Terrain = (() => {
       previousY = out.y;
     }
     return highest ?? previousY;
+  }
+
+  // Height of the rendered face at distance d from the centre line. Walks the
+  // same vertex column the ribbon builder generated. Returns null outside the
+  // built range (callers fall back to the plain slope model). At a span edge
+  // the ribbon is a blend of two sides, drawn between two columns: the walk
+  // then reads both columns and joins them the way the triangles do.
+  function surfaceY(profile, sign, side, geo, loc, d, blended = false) {
+    const startIdx = Math.max(0, geo.startSegment);
+    const endIdx = Math.min(geo.path.length - 1, geo.endSegment + 20);
+    const segmentIndex = loc.index;
+    if (segmentIndex < startIdx || segmentIndex > endIdx) return null;
+
+    const exactColumn = (segmentIndex - startIdx + loc.along / SEGMENT_LENGTH) * COLUMNS_PER_SEGMENT;
+    if (blended) {
+      const first = Math.floor(exactColumn);
+      const last = Math.ceil(exactColumn);
+      if (first < 0 || startIdx + Math.floor(last / COLUMNS_PER_SEGMENT) > endIdx) return null;
+      const low = walkColumn(profile, sign, side, geo, d, first, startIdx, true);
+      if (last === first) return low;
+      const high = walkColumn(profile, sign, side, geo, d, last, startIdx, true);
+      return low + (high - low) * (exactColumn - first);
+    }
+
+    const column = Math.round(exactColumn);
+    if (column < 0) return null;
+    const point = geo.path[segmentIndex];
+    const neighbour = geo.path[Math.min(geo.path.length - 1, Math.max(0, segmentIndex + (loc.along >= 0 ? 1 : -1)))];
+    const roadY = point.y + (neighbour.y - point.y) * Math.min(1, Math.abs(loc.along) / SEGMENT_LENGTH);
+    return walkColumn(profile, sign, side, geo, d, column, startIdx, false, roadY);
   }
 
   // The road height at the located point, interpolated along its segment the
@@ -684,8 +738,16 @@ const Terrain = (() => {
     const side = sideAt(profile, sign, loc.index);
     const d = right ? loc.lateral : -loc.lateral;
     const ledgeEnd = geo.roadWidth / 2 + side.flat;
+    // An exact read of a wall that sets its drawn foot starts at the foot
+    const faceStart = exact && side.face && side.foot !== undefined ? geo.roadWidth / 2 + side.foot : ledgeEnd;
 
-    if (d > ledgeEnd) {
+    // A span edge is drawn as a blend of two sides, whatever either side is
+    if (exact && blendingAt(profile, right ? 'right' : 'left', loc.index + loc.along / SEGMENT_LENGTH)) {
+      const walked = surfaceY(profile, sign, side, geo, loc, d, true);
+      if (walked !== null) return profile.floor.y === undefined ? walked : Math.max(walked, profile.floor.y);
+    }
+
+    if (d > faceStart) {
       if (exact && side.face) {
         const walked = surfaceY(profile, sign, side, geo, loc, d);
         // A floor with no fixed height (a river under the road) is not a limit
@@ -738,19 +800,13 @@ const Terrain = (() => {
   }
 
   // How far from the centre line a gate reaches on a side. A side with
-  // run-off ground is crossable out to its rideable limit; a bare wall or
-  // fall side keeps the road's own two metres of ledge.
+  // run-off ground is crossable out to its rideable limit plus the two metres
+  // of a bike's width; a bare wall or fall side keeps the road's own two metres
+  // of ledge.
   function gateReach(profile, segIndex, sign, halfRoad) {
     const side = sideAt(profile, sign, segIndex);
     const open = side.bands.some((band) => band.kind === 'runoff');
-    return open ? reachLimit(profile, segIndex, sign, halfRoad) : halfRoad + 2;
-  }
-
-  // How far from the centre line a bike's body can touch something: the
-  // rideable limit plus the two metres of its width. One rule for gates and
-  // for which trunks are solid.
-  function reachLimit(profile, segIndex, sign, halfRoad) {
-    return rideableLimit(profile, segIndex, sign, halfRoad) + 2;
+    return open ? rideableLimit(profile, segIndex, sign, halfRoad) + 2 : halfRoad + 2;
   }
 
   // The largest distance from the centre line any row of a side reaches. Rows
@@ -829,7 +885,6 @@ const Terrain = (() => {
     heightfieldSide,
     rideableLimit,
     gateReach,
-    reachLimit,
     waterLevel,
     outermost,
     forLeg,

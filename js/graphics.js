@@ -422,12 +422,16 @@ const GFX_COMPOSITE = `
             vec3 origin = uCamWorld[3].xyz;
             vec3 ray = (uCamWorld * vec4(view.xyz / view.w, 1.0)).xyz - origin;
             float rayLength = max(length(ray), 1e-4);
-            float reach = min(rayLength, uFogReach);
+            // The fog starts 15 m out along the ray: any fog that starts at the
+            // camera tints the road at the bike's wheels, so the near road
+            // stays exactly clear and only the distance thickens
+            const float fogNear = 15.0;
+            float reach = max(min(rayLength, uFogReach) - fogNear, 0.0);
             float slope = uHeightFog.z * ray.y / rayLength;
             // Density never exceeds the base density: below the base height it
             // stays flat, so a camera low in a valley does not fog the road at
             // its feet
-            float height = origin.y - uHeightFog.y;
+            float height = origin.y + ray.y / rayLength * fogNear - uHeightFog.y;
             float tau;
             if (height >= 0.0) {
                 float atOrigin = uHeightFog.x * exp(-uHeightFog.z * height);

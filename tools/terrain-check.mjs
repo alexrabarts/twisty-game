@@ -9,7 +9,8 @@
 //   node tools/terrain-check.mjs <probe> --update-baseline --legs id [--part ground,decals]
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
-// Probes: legs snapshot raycast surface frames traj gates look shortcuts pages budget mutate
+// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate
+// (`shortcuts` runs its own doubled-back control)
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
 // Exit: 0 ok, 1 failures, 2 no Chrome or no window.game, 3 --gpu without a hardware renderer.
 //
@@ -30,6 +31,7 @@ const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
 const JEST_GOLDEN = join(root, 'tests/golden/terrain-baseline.json');
 const PARTS = join(root, 'tests/golden/parts-baseline.json');
+const AMENDMENTS = join(root, 'tests/golden/amendments.json');
 const LEG_IDS = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'];
 const FROZEN_SECTIONS = ['snapshot', 'raycast', 'frames', 'traj', 'gates', 'look', 'shortcuts', 'budget'];
 const BLOCKED_HOSTS = ['cloudfunctions.net', 'firebasedatabase.app', 'firebaseio.com'];
@@ -354,19 +356,9 @@ function installProbe(d6Sources, latSet) {
         return out;
     };
 
-    // Chord search: no straight rideable chord may be much shorter than the road it replaces
-    P.shortcuts = legIndex => {
-        const { env } = P.build(legIndex);
-        const path = env.roadPath;
-        const a = env.startSegment, b = Math.min(env.endSegment, path.length - 1);
-        const halfRoad = env.roadWidth / 2;
-        // The rideable ground: the profile's own limit on the side the sample falls, or
-        // the road plus its ledge on a tree that has no profiles (the frozen baselines)
-        const limitAt = (n, x, z) => {
-            if (typeof Terrain === 'undefined' || !env.terrain) return halfRoad + 2;
-            const lateral = (x - path[n].x) * Math.cos(path[n].heading) - (z - path[n].z) * Math.sin(path[n].heading);
-            return Terrain.rideableLimit(env.terrain, n, lateral < 0 ? -1 : 1, halfRoad);
-        };
+    // Chord search: no straight rideable chord may be much shorter than the road it replaces.
+    // `limitAt(n, x, z)` is the rideable limit beside road point n at a sample (x, z).
+    const searchChords = (path, a, b, limitAt) => {
         const dist = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
         const cum = [0];
         for (let i = a + 1; i <= b; i++) cum[i - a] = cum[i - a - 1] + dist(path[i - 1], path[i]);
@@ -392,6 +384,31 @@ function installProbe(d6Sources, latSet) {
             }
         }
         return open;
+    };
+
+    P.shortcuts = legIndex => {
+        const { env } = P.build(legIndex);
+        const path = env.roadPath;
+        const halfRoad = env.roadWidth / 2;
+        // The rideable ground: the profile's own limit on the side the sample falls, or
+        // the road plus its ledge on a tree that has no profiles (the frozen baselines)
+        const limitAt = (n, x, z) => {
+            if (typeof Terrain === 'undefined' || !env.terrain) return halfRoad + 2;
+            const lateral = (x - path[n].x) * Math.cos(path[n].heading) - (z - path[n].z) * Math.sin(path[n].heading);
+            return Terrain.rideableLimit(env.terrain, n, lateral < 0 ? -1 : 1, halfRoad);
+        };
+        return searchChords(path, env.startSegment, Math.min(env.endSegment, path.length - 1), limitAt);
+    };
+
+    // The positive control of `shortcuts`: a road that doubles back on itself with
+    // its two runs 6 m apart. The search must report a chord across it, or an
+    // all-empty answer on the real legs says nothing.
+    P.shortcutsControl = () => {
+        const path = [];
+        for (let k = 0; k <= 9; k++) path.push({ x: 20 * k, z: 0 });
+        path.push({ x: 210, z: 3 });
+        for (let k = 9; k >= 0; k--) path.push({ x: 20 * k, z: 6 });
+        return searchChords(path, 0, path.length - 1, () => 12);
     };
 
     // Where the leg's gates sit and the nearest foreign road stretch inside each gate's band
@@ -437,6 +454,111 @@ function installProbe(d6Sources, latSet) {
             if (gate === 'finish' ? game.finished : game.checkpointsPassed >= 1) { result.fired = true; break; }
         }
         return result;
+    };
+
+    // Run-off clock: the bike at 25 m/s, 14 m out on the right of valley-run (4 m past the
+    // road edge). `driven` starts on the centre line and lets the autopilot steer out to lane
+    // 14, so the clock starts only when the bike reaches the edge; `placed` starts at lateral
+    // 14 with the heading along the road, so the clock runs from tick 0
+    P.runoff = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        const run = placed => {
+            window.__reseed(1);
+            twistyDev.start(leg.id);
+            twistyDev.freeze();
+            game.rockfalls = null;
+            const logs = [];
+            const original = console.log;
+            console.log = (...a) => { logs.push(a.join(' ')); };
+            try {
+                const segment = leg.startSegment + 20;
+                twistyDev.teleport(segment);
+                const v = game.vehicle;
+                v.speed = 25;
+                if (placed) {
+                    const p = game.environment.roadPath[segment];
+                    v.position.x += Math.cos(p.heading) * 14;
+                    v.position.z -= Math.sin(p.heading) * 14;
+                    v.findNearestRoadSegment();
+                }
+                twistyDev.autopilot({ speed: 25, lane: 14 });
+                const out = {};
+                let tick = 0;
+                for (const seconds of [3, 7, 10]) {
+                    while (tick < seconds * 60) { twistyDev.step(1); tick++; }
+                    out[seconds] = { crashed: !!v.crashed, offRoadTime: round(v.offRoadTime), speed: round(v.speed) };
+                }
+                out.offRoadLines = logs.filter(l => l.includes('Off the road for 6.0 s')).length;
+                return out;
+            } finally {
+                console.log = original;
+            }
+        };
+        return { driven: run(false), placed: run(true) };
+    };
+
+    // Height fog follows depth: render a fixed view with the leg's fog and with none. Pixels whose
+    // view ray meets ground within 15 m (the near road) must not change; pixels whose ray meets
+    // ground beyond 150 m must. Each pixel is the mean of a 5 x 5 patch, in 1/255 levels.
+    P.fog = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        game.scene.traverse(o => { if (o.isPoints) o.visible = false; });
+        const canvas = game.graphics.renderer.domElement;
+        const read = document.createElement('canvas');
+        read.width = 960; read.height = 540;
+        const ctx = read.getContext('2d', { willReadFrequently: true });
+        const atmosphere = game.graphics.atmosphere;
+        const density = atmosphere.heightFog.density;
+        const shoot = fogDensity => {
+            atmosphere.heightFog.density = fogDensity;
+            game.graphics.time = 0;
+            game.graphics.render(game.scene, game.camera);
+            ctx.drawImage(canvas, 0, 0, 960, 540);
+            return ctx.getImageData(0, 0, 960, 540).data;
+        };
+        const patch = (data, x, y) => {
+            let sum = 0;
+            for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+                const i = ((y + dy) * 960 + x + dx) * 4;
+                sum += data[i] + data[i + 1] + data[i + 2];
+            }
+            return sum / 75;
+        };
+        const meshes = [];
+        game.scene.traverse(o => { if (o.isMesh && o.visible && o.geometry.attributes.position && !o.isInstancedMesh) meshes.push(o); });
+        const caster = new THREE.Raycaster();
+        const mid = Math.floor((leg.startSegment + leg.endSegment) / 2);
+        const views = { camera: [30, 12, 25, 40], chase: [0, 3, 12, 40], low: [0, 1.5, 8, 40], opposite: [-30, 12, 25, 40] };
+        const out = {};
+        twistyDev.teleport(mid);
+        for (const [name, view] of Object.entries(views)) {
+            twistyDev.view(...view);
+            game.camera.updateMatrixWorld(true);
+            const clear = shoot(0);
+            const fogged = shoot(density);
+            const again = shoot(density);
+            const near = [], far = [];
+            let noise = 0;
+            for (let y = 8; y < 532; y += 12) {
+                for (const x of [120, 320, 480, 640, 840]) {
+                    caster.setFromCamera(new THREE.Vector2((x / 960) * 2 - 1, -(y / 540) * 2 + 1), game.camera);
+                    const hit = caster.intersectObjects(meshes, false)[0];
+                    if (!hit || hit.object.material.transparent) continue;
+                    const delta = Math.abs(patch(fogged, x, y) - patch(clear, x, y));
+                    noise = Math.max(noise, Math.abs(patch(fogged, x, y) - patch(again, x, y)));
+                    if (hit.distance < 15) near.push(delta);
+                    else if (hit.distance > 150) far.push(delta);
+                }
+            }
+            const mean = list => (list.length ? round(list.reduce((a, b) => a + b, 0) / list.length, 100) : null);
+            out[name] = { nearSamples: near.length, nearMax: near.length ? round(Math.max(...near), 100) : null, farSamples: far.length, farMean: mean(far), farMin: far.length ? round(Math.min(...far), 100) : null, noise: round(noise, 100) };
+        }
+        atmosphere.heightFog.density = density;
+        return out;
     };
 
     // A stepped autopilot ride of a whole leg
@@ -597,7 +719,10 @@ const PROBES = {
     parts: (page, i) => inPage(page, 'parts', i),
     frames: (page, i) => inPage(page, 'frames', i),
     look: (page, i) => inPage(page, 'look', i),
+    runoff: (page, i) => inPage(page, 'runoff', i),
+    fog: (page, i) => inPage(page, 'fog', i),
     shortcuts: (page, i) => inPage(page, 'shortcuts', i),
+    shortcutsControl: (page, i) => inPage(page, 'shortcutsControl', i),
     async gates(page, i) {
         const map = await inPage(page, 'gateMap', i);
         const approaches = [];
@@ -698,7 +823,7 @@ async function main() {
         console.log(JSON.stringify(out, null, 1));
         return;
     }
-    if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts pages budget mutate | record-jest | record-frozen | baseline-diff');
+    if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate | record-jest | record-frozen | baseline-diff');
 
     const executablePath = chromePath();
     const gpu = flag('gpu');
@@ -732,7 +857,7 @@ async function main() {
         } else {
             // Writing to the mutable file re-runs every frozen section first, as the guard
             const guarded = flag('add') || flag('update-baseline') ? FROZEN_SECTIONS : [];
-            const sections = [...new Set([...guarded, ...probes.flatMap(name => (name === 'record-frozen' ? [...FROZEN_SECTIONS, 'pages'] : [name]))])];
+            const sections = [...new Set([...guarded, ...probes.flatMap(name => (name === 'record-frozen' ? [...FROZEN_SECTIONS, 'pages'] : name === 'shortcuts' ? [name, 'shortcutsControl'] : [name]))])];
             for (const name of sections) {
                 if (name === 'pages') {
                     report.results.pages = await withBrowser(browser => pagesProbe(browser, port));
@@ -775,6 +900,41 @@ function finishChecks(report) {
                 if (Math.abs(lateral) === edge && !(part === 'ground' && Math.abs(delta) <= 0.15)) failures.push(`${id}: segment ${segment} lateral ${lateral} does not hit ground within 0.15 (delta ${delta})`);
             });
         });
+    }
+    if (results.snapshot) {
+        // A leg whose stable fingerprint moves only by declared meshes is bound to the
+        // golden's own fingerprint with those meshes left out, not to the golden itself
+        const amendments = readJson(AMENDMENTS) || {};
+        Object.entries(results.snapshot).forEach(([id, r]) => {
+            const amended = amendments[id];
+            if (!amended) return;
+            const stable = r.fingerprints.stable;
+            if (stable.hash === amended.stable.hash && stable.meshes === amended.stable.meshes) {
+                notes.push(`${id}: stable ${stable.hash}/${stable.meshes} equals the golden ${amended.goldenStable.hash}/${amended.goldenStable.meshes} less the declared meshes (amendments.json)`);
+            } else {
+                failures.push(`${id}: stable ${stable.hash}/${stable.meshes} is neither the golden nor the amended ${amended.stable.hash}/${amended.stable.meshes}`);
+            }
+        });
+    }
+    if (results.runoff) {
+        // The placed run starts out on the run-off, so the 6 s clock is exact; the driven run
+        // is the autopilot steering out from the centre line, which only starts the clock at the edge
+        Object.entries(results.runoff).forEach(([id, r]) => {
+            const { placed } = r;
+            if (placed[3].crashed || placed[3].offRoadTime < 2 || placed[3].offRoadTime > 3.2) failures.push(`${id}: placed at lateral 14, 3 s: crashed ${placed[3].crashed}, offRoadTime ${placed[3].offRoadTime}`);
+            if (!placed[7].crashed || placed.offRoadLines !== 1) failures.push(`${id}: placed at lateral 14, 7 s: not crashed once for the clock (${placed.offRoadLines} lines)`);
+            if (placed[10].speed >= 0.5) failures.push(`${id}: placed at lateral 14, 10 s: speed ${placed[10].speed}`);
+        });
+    }
+    if (results.fog) {
+        Object.entries(results.fog).forEach(([id, views]) => Object.entries(views).forEach(([name, r]) => {
+            if (r.nearMax !== null && r.nearMax >= 2) failures.push(`${id}: fog changes the near road by ${r.nearMax}/255 in view ${name}`);
+            if (r.farMean !== null && r.farMean < 8) failures.push(`${id}: fog changes far ground by only ${r.farMean}/255 in view ${name}`);
+        }));
+    }
+    if (results.shortcutsControl) {
+        // Without this the all-empty answer on the real legs could mean a probe that cannot see
+        Object.entries(results.shortcutsControl).forEach(([id, open]) => { if (!open.length) failures.push(`${id}: the shortcuts probe missed a chord it was built to find`); });
     }
     if (results.mutate) {
         Object.entries(results.mutate).forEach(([id, r]) => { if (!r.differs) failures.push(`${id}: a 0.5 ground shift did not move every fingerprint mode`); });

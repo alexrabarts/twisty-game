@@ -453,11 +453,10 @@ describe('the run-off legs built', () => {
                 expect(near(-(limit + 1))).toBe(true);
                 expect(near(limit + 4)).toBe(false);
                 expect(near(-(limit + 4))).toBe(false);
-                // The band along the road is the gate's width each way (5 m for the finish)
-                const band = gate.width || 5;
-                expect(inGate(gate, onGate(gate, band - 0.1, 0))).toBe(true);
-                expect(inGate(gate, onGate(gate, band + 0.1, 0))).toBe(false);
-                expect(inGate(gate, onGate(gate, -(band + 0.1), 0))).toBe(false);
+                // The band along the road is 5 m each way
+                expect(inGate(gate, onGate(gate, 4.9, 0))).toBe(true);
+                expect(inGate(gate, onGate(gate, 5.1, 0))).toBe(false);
+                expect(inGate(gate, onGate(gate, -5.1, 0))).toBe(false);
             });
         });
 
@@ -491,8 +490,7 @@ describe('the run-off legs built', () => {
                         const dz = point.z - gate.position.z;
                         const along = dx * Math.sin(gate.heading) + dz * Math.cos(gate.heading);
                         const across = dx * Math.cos(gate.heading) - dz * Math.sin(gate.heading);
-                        const band = gate.width || 5;
-                        if (Math.abs(along) < band) expect(Math.abs(across)).toBeGreaterThan(Math.max(gate.left, gate.right) + band);
+                        if (Math.abs(along) < 5) expect(Math.abs(across)).toBeGreaterThan(Math.max(gate.left, gate.right) + 5);
                     }
                 });
             });

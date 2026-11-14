@@ -1340,6 +1340,10 @@ class Game {
             const shakeIntensity = speedFactor * 0.05 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
+            // The shake must not lift the camera through the tunnel roof
+            if (roofY !== null && this.camera.position.y > roofY - 1.0) {
+                this.camera.position.y = Math.max(roofY - 1.0, minCameraHeight);
+            }
         }
 
         // Mode-specific FOV and look target
@@ -2958,8 +2962,7 @@ class Game {
         this.graphics.render(this.scene, this.camera);
     }
 
-    // Whether a position is on a gate: a band along the road (gate.width, 5 for
-    // a gate without one), and across
+    // Whether a position is on a gate: a short band along the road, and across
     // it every metre a bike can legally be at that gate (gate.left and
     // gate.right, set when the gate is built). Road space comes from the
     // gate's own position and heading. There is no segment test: the band is
@@ -2969,7 +2972,7 @@ class Game {
         const dz = position.z - gate.position.z;
         const along = dx * Math.sin(gate.heading) + dz * Math.cos(gate.heading);
         const across = dx * Math.cos(gate.heading) - dz * Math.sin(gate.heading);
-        return Math.abs(along) < (gate.width || 5) && across > -gate.left && across < gate.right;
+        return Math.abs(along) < 5 && across > -gate.left && across < gate.right;
     }
 
     checkCheckpoints() {
@@ -2977,9 +2980,15 @@ class Game {
         
         for (let checkpoint of this.environment.checkpoints) {
             if (!checkpoint.passed) {
-                // Anywhere across the gate's band, which reaches the rideable
-                // ground: the one gate rule
-                if (this.inGate(checkpoint, this.vehicle.position)) {
+                const dx = this.vehicle.position.x - checkpoint.position.x;
+                const dz = this.vehicle.position.z - checkpoint.position.z;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+
+                // Within the 16 unit circle round the gate (a rider on the
+                // road triggers it exactly where it always did: the mountain-dawn
+                // board is not versioned), or anywhere across the gate's band,
+                // which reaches the rideable ground
+                if (distance < checkpoint.width || this.inGate(checkpoint, this.vehicle.position)) {
                     // Check if this is the next expected checkpoint (in order)
                     const totalCheckpoints = this.environment.checkpoints.length;
                     if (checkpoint.index === this.lastCheckpointIndex + 1 ||

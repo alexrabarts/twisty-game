@@ -21,7 +21,18 @@ Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without
 ## Run-off, tunnel and bridge legs
 
 - Valley-run, storm-valley, coastal-descent, winter-pass, foggy-gorge and night-ride have loose ground beside the road, not a wall. A bike on it slows to a floor speed and has low grip. After 6 s off the road it crashes with `Off the road for 6.0 s`. The road resets that clock.
-- A lane past the road edge tests this: for example `twistyDev.autopilot({ speed: 25, lane: 14 })` on valley-run crashes at about 6 s once the bike is out on the run-off. Step the game to read `vehicle.offRoadTime`.
+- A lane past the road edge tests this: for example `twistyDev.autopilot({ speed: 25, lane: 14 })` on valley-run. The autopilot starts on the centre line and steers out, so the off-road clock only starts when the bike reaches the edge (about 2.3 s in): `vehicle.offRoadTime` is 0.5 to 0.75 at 3 s and 4.5 to 4.75 at 7 s, and the crash comes between 7 and 10 s. To time the clock from tick 0, put the bike out there first with `twistyDev.teleport(segment)` and a lateral of 14 (`node tools/terrain-check.mjs runoff --legs valley-run`): `offRoadTime` is 3.0 at 3 s and the bike crashes by 7 s with one `Off the road for 6.0 s` line. Step the game to read `vehicle.offRoadTime`.
 - Trees on run-off ground are solid: a trunk crashes the bike inside 1.6 m. Water (the valley-run river, the coast and gorge floors) crashes the bike at once.
 - Night-ride has a tunnel around segment 517. The camera stays under the roof, so check High View there. Foggy-gorge has a bridge across the gorge around segments 285 to 292.
 - `side > 0` in `twistyDev.view` is the right of the road, whatever ground is there.
+
+## Browser proof harness
+
+`tools/terrain-check.mjs` serves the repo, drives the real page in Chrome and prints one JSON report. Set `TWISTY_CHROME` to a Chrome binary. Run `node tools/terrain-check.mjs <probe>[,<probe>] [--legs id,id] [--gpu]`.
+
+- Probes: `legs` (every leg starts, with no page error), `snapshot` (scene fingerprints against `tests/golden/browser-baseline.json`), `raycast`, `surface` (ground height against the drawn ground), `frames` (tile colours from fixed poses), `parts`, `traj`, `gates`, `look`, `shortcuts` (runs its own doubled-back control and fails if the control finds nothing), `runoff`, `fog`, `pages`, `budget`, `mutate`. The header and the usage message of the tool list the same probes.
+- `--gpu` runs a visible Chrome on the real GPU. It exits 3 when the renderer is SwiftShader or llvmpipe. Use it for fog and light checks, which a software renderer can round differently.
+- The default run uses SwiftShader and three parallel pages. Pass `--jobs 1` to run one leg at a time.
+- `tests/golden/amendments.json` holds the declared changes to a frozen baseline. A leg listed there is compared with the amended value, and the frozen file does not change.
+
+`twistyDev.step(n)` runs n fixed physics ticks of `Game.animate`, one tick of 1/60 s each, with the loop frozen. Call `twistyDev.freeze()` in the same turn as `start()`. Pass `{ render: true }` to draw the frames. 180 ticks are 3 s.

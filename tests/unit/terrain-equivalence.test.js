@@ -10,6 +10,9 @@ import { D6_CLASSES, LATERALS, buildEnvironment, captureLeg, fingerprints, groun
 const golden = JSON.parse(readFileSync(new URL('../golden/terrain-baseline.json', import.meta.url), 'utf8'));
 const LEG_IDS = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'];
 
+// The golden leg 5 stable fingerprint without its 108 hairpin stripe meshes
+const AMENDED_LEG5_STABLE = { hash: '2163990f1a78dc2e', meshes: 421 };
+
 describe('terrain equivalence with the phase 0 golden', () => {
     let game;
     beforeAll(() => {
@@ -71,22 +74,28 @@ describe('terrain equivalence with the phase 0 golden', () => {
         const dawn = captureLeg(game, 0);
         expect(dawn.fingerprints.stable).toEqual(golden.legs[0].fingerprints.stable);
 
-        // Leg 5: each of the 19 hairpin barriers carries three stripe meshes. They
-        // are children of the barrier now, so they ride up with it and the stable
-        // mode skips them with it. The golden's stable hash counted them as
-        // loose scene meshes, so it cannot equal this one: it holds exactly
-        // those 57 more meshes, and the rest of the scene is checked by the face,
-        // decal and random-state comparisons of the test below.
+        // Leg 5: each of the 36 hairpin barriers carries three stripe meshes
+        // (BoxGeometry 0.5 x 1.2 x 0.51). They were loose scene meshes in the
+        // golden and are children of their barrier now, so they ride with it and
+        // the stable mode skips them with it: that is 108 meshes fewer. The
+        // golden's stable hash therefore cannot equal this one. What binds the
+        // rest of the scene is the golden build's own stable hash with those
+        // same 108 meshes left out: AMENDED_LEG5_STABLE, captured by building
+        // leg 5 from the 6c525be sources (git archive js, with the loader of
+        // e44721d) and skipping every BoxGeometry(0.5, 1.2, 0.51) mesh.
         const { env, scene } = buildEnvironment(game, 4);
         const barriers = env.groundedObjects.filter(({ label }) => /^hairpin barrier/.test(label));
         expect(barriers).toHaveLength(36);
         let stripes = 0;
         barriers.forEach(({ object }) => {
             expect(object.children.map(child => child.geometry.parameters.width)).toEqual([0.5, 0.5, 0.5]);
+            // Local y 0: each stripe stands exactly where its barrier is grounded
+            object.children.forEach(child => expect(child.position.y).toBe(0));
             stripes += object.children.length;
         });
         expect(stripes).toBe(108);
-        expect(fingerprints(env, scene).stable.meshes).toBe(golden.legs[4].fingerprints.stable.meshes - stripes);
+        expect(golden.legs[4].fingerprints.stable.meshes - stripes).toBe(AMENDED_LEG5_STABLE.meshes);
+        expect(fingerprints(env, scene).stable).toEqual(AMENDED_LEG5_STABLE);
     }, 30000);
 
     test.each(BOUND)('%s: D6 moves only the left-wall rocks and the wall-side hairpin barriers, and builds three fewer props', (id, index) => {
