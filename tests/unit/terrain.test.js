@@ -15,13 +15,15 @@ describe('Terrain module (pure)', () => {
     const geo = { path: straightRoad(), roadWidth: 20, startSegment: 0, endSegment: 39 };
     const groundAt = (lateral, exact = false) => Terrain.groundY(Terrain.forLeg(0), geo, lateral, 400, 0, geo.path.length - 1, exact);
 
-    test('leg table: valley-run and storm-valley have run-off profiles, the other legs are still cliffLake', () => {
+    test('leg table: legs 2, 3, 6 and 8 have their own profiles, the other legs are still cliffLake', () => {
         expect(Terrain.LEG_PROFILES).toHaveLength(8);
         expect(Terrain.LEG_PROFILES.map(profile => profile.id)).toEqual([
-            'cliffLake', 'valleyFloor', 'cliffLake', 'cliffLake', 'cliffLake', 'forest', 'cliffLake', 'cliffLake'
+            'cliffLake', 'valleyFloor', 'coast', 'cliffLake', 'cliffLake', 'forest', 'cliffLake', 'ridge'
         ]);
         expect(Terrain.LEG_PROFILES[1]).toBe(Terrain.profiles.valleyFloor);
+        expect(Terrain.LEG_PROFILES[2]).toBe(Terrain.profiles.coast);
         expect(Terrain.LEG_PROFILES[5]).toBe(Terrain.profiles.forest);
+        expect(Terrain.LEG_PROFILES[7]).toBe(Terrain.profiles.ridge);
         expect(Terrain.forLeg(99)).toBe(Terrain.profiles.cliffLake);
     });
 

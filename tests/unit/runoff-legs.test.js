@@ -14,11 +14,11 @@ const DAWN = 0;
 
 // What each leg's course hashes to. A change to a road height, a band width, a
 // run-off rate or where trees stand changes lap times, so it must change this
-// value, and a changed value needs a new trackVersion (a new board). Legs 2
-// and 6 are version 2; the rest are version 1 and must never move.
+// value, and a changed value needs a new trackVersion (a new board). Legs 2, 3,
+// 6 and 8 are version 2; the rest are version 1 and must never move.
 const COURSE_DIGESTS = [
-    '3d45a50bb5fbede1', '846a661b635154fa', '3d45a50bb5fbede1', '3d45a50bb5fbede1',
-    'b5649303e1d76374', '5abc36dddb5df4ec', 'b5649303e1d76374', 'b5649303e1d76374'
+    '3d45a50bb5fbede1', '846a661b635154fa', '1d8e018d4b1500c6', '3d45a50bb5fbede1',
+    'b5649303e1d76374', '5abc36dddb5df4ec', 'b5649303e1d76374', 'cdd0b1b28f83f268'
 ];
 
 describe('run-off profiles (pure)', () => {
@@ -130,7 +130,13 @@ describe('run-off profiles (pure)', () => {
         const leg = new game.TourSystem().legs[index];
         const config = Terrain.LEGS[index];
         const { profile } = config;
-        const side = s => ({ flat: s.flat, bands: s.bands, runoff: s.runoff ?? null, stations: s.stations ?? null, undulation: s.undulation ?? null });
+        // Where a fall ends and how long its lip is change a fall's outcome, so they
+        // are part of the course; a side that has neither hashes as it always did
+        const side = s => ({
+            flat: s.flat, bands: s.bands, runoff: s.runoff ?? null, stations: s.stations ?? null, undulation: s.undulation ?? null,
+            ...(s.fallDepth !== undefined && { fallDepth: s.fallDepth }),
+            ...(s.lipDepth !== undefined && { lipDepth: s.lipDepth })
+        });
         const elevation = Array.from({ length: 744 }, (_, i) =>
             Math.round(Terrain.elevation(profile, i, leg.startSegment, leg.endSegment) * 1e6));
         return createHash('sha256').update(JSON.stringify({
@@ -140,7 +146,15 @@ describe('run-off profiles (pure)', () => {
             trees: config.dressing.forest.layout ?? null,
             elevation,
             left: side(profile.left),
-            right: side(profile.right)
+            right: side(profile.right),
+            // A side that changes along the leg, and where the roadworks plant stands
+            ...(profile.spans && {
+                spans: profile.spans.map(span => ({
+                    from: span.from, to: span.to ?? null,
+                    left: span.left ? side(span.left) : null, right: span.right ? side(span.right) : null
+                }))
+            }),
+            ...(config.plant && { plant: config.plant })
         })).digest('hex').slice(0, 16);
     }
 
@@ -489,8 +503,8 @@ describe('board ids and best-time keys', () => {
     test('only the changed legs carry a version; progression keeps plain ids', () => {
         const legs = new game.TourSystem().legs;
         expect(legs.map(l => game.TourSystem.boardId(l))).toEqual([
-            'mountain-dawn', 'valley-run-v2', 'coastal-descent', 'foggy-gorge',
-            'high-pass', 'storm-valley-v2', 'night-ride', 'winter-pass'
+            'mountain-dawn', 'valley-run-v2', 'coastal-descent-v2', 'foggy-gorge',
+            'high-pass', 'storm-valley-v2', 'night-ride', 'winter-pass-v2'
         ]);
         expect(legs.map(l => l.id)).toEqual([
             'mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge',

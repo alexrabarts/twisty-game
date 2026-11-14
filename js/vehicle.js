@@ -1776,9 +1776,13 @@ class Vehicle {
                             this.velocity.z *= boost;
                         }
                     } else {
-                        // Gentle slope or flat - stop
+                        // Gentle slope or flat - stop. Rest is judged on the
+                        // ground speed: gravity keeps a resting bike's vertical
+                        // velocity at about -1.4 for as long as it sits there, so
+                        // the full length never fell under 0.5 and a bike at the
+                        // foot of a fall never counted as landed.
                         this.velocity.multiplyScalar(0.85); // Quick stop
-                        if (this.velocity.length() < 0.5) {
+                        if (Math.hypot(this.velocity.x, this.velocity.z) < 0.5) {
                             this.velocity.set(0, 0, 0);
                             this.speed = 0;
                             this.hitGround = true;

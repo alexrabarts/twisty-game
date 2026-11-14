@@ -473,6 +473,18 @@ function createWaterMaterial() {
     return material;
 }
 
+// Frozen lake: pale, glossy and still, so it reads as ice and not as water
+function createIceMaterial() {
+    return new THREE.MeshStandardMaterial({
+        color: 0xcfe3ee,
+        roughness: 0.2,
+        metalness: 0.1,
+        envMapIntensity: 1.2,
+        normalMap: makeWaterNormalTexture(),
+        normalScale: new THREE.Vector2(0.15, 0.15)
+    });
+}
+
 class Graphics {
     constructor(renderer, scene, camera) {
         this.renderer = renderer;
