@@ -1911,7 +1911,9 @@ class Environment {
       // Asymmetric edges to match asymmetric cliff walls, with slight shift
       const shiftRight = -0.5; // Shift entire strip left by 0.5m
       const leftEdge = -(this.roadWidth / 2 + 1.6) + shiftRight;
-      const rightEdge = this.roadWidth / 2 + 2 + shiftRight;
+      // (overlaps the top row of the drop-off face at roadWidth / 2 + 2;
+      // stopping short of it left a slot with the lake showing through)
+      const rightEdge = this.roadWidth / 2 + 2.4;
       // The strip runs under the road too (it closes the gap to both rock
       // faces), so push it back in depth: 0.1 below the tarmac is not
       // enough to stop it flickering through at a distance
@@ -5128,6 +5130,48 @@ class Environment {
     });
   }
 
+  // Lettered face for a 4 x 1.5 sign board. The boards were blank: their
+  // text was passed in and never drawn. The face sits on the side the rider
+  // approaches from (local -Z once the sign is turned to the road heading).
+  createSignFace(text, background, ink) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 192;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 10;
+    ctx.strokeRect(9, 9, canvas.width - 18, canvas.height - 18);
+    ctx.fillStyle = ink;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    // Shrink long messages to fit the board
+    let fontSize = 92;
+    do {
+      ctx.font = `900 ${fontSize}px Arial, Helvetica, sans-serif`;
+      fontSize -= 4;
+    } while (ctx.measureText(text).width > canvas.width - 60 && fontSize > 24);
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.anisotropy = 8;
+    const face = new THREE.Mesh(
+      new THREE.PlaneGeometry(3.9, 1.4),
+      new THREE.MeshStandardMaterial({
+        map: texture,
+        roughness: 0.6,
+        metalness: 0.0,
+        emissive: 0xffffff,
+        emissiveMap: texture,
+        emissiveIntensity: 0.25, // Retro-reflective: readable at dusk
+      }),
+    );
+    face.position.set(0, 3, -0.06);
+    face.rotation.y = Math.PI;
+    return face;
+  }
+
   createConstructionSign(point, text) {
     const signGroup = new THREE.Group();
 
@@ -5154,6 +5198,7 @@ class Environment {
     const board = new THREE.Mesh(boardGeometry, boardMaterial);
     board.position.set(0, 3, 0);
     signGroup.add(board);
+    signGroup.add(this.createSignFace(text, "#ff6600", "#111111"));
 
     // Position sign beside road (roadWidth-relative, base on the terrain model)
     const signDistance = this.roadWidth / 2 + 1.2;
@@ -5513,6 +5558,7 @@ class Environment {
     const board = new THREE.Mesh(boardGeometry, boardMaterial);
     board.position.set(0, 3, 0);
     signGroup.add(board);
+    signGroup.add(this.createSignFace(text, "#ffdd00", "#111111"));
 
     // Position sign beside road (roadWidth-relative, base on the terrain model)
     const signDistance = this.roadWidth / 2 + 1.2;

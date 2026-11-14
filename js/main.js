@@ -45,10 +45,12 @@ class Game {
                 name: 'Sunset',
                 skyColor: 0xff8866,
                 fogColor: 0xf0aa90,
-                ambientColor: 0x402020,
+                ambientColor: 0x30283a,
                 ambientIntensity: 0.48,
-                hemisphereTop: 0xd98a78,
-                hemisphereBottom: 0x4a2a1a,
+                // (light from above comes from the violet zenith; a red sky
+                // light turned the grey road maroon)
+                hemisphereTop: 0x9088bc,
+                hemisphereBottom: 0x4a3a30,
                 hemisphereIntensity: 1.04,
                 sunColor: 0xffa066,
                 sunIntensity: 0.9,
@@ -103,9 +105,9 @@ class Game {
                 name: 'Dawn',
                 skyColor: 0xffa588,
                 fogColor: 0xffb899,
-                ambientColor: 0x403020,
+                ambientColor: 0x34303a,
                 ambientIntensity: 0.448,
-                hemisphereTop: 0xffcc99,
+                hemisphereTop: 0xa9b3d6,
                 hemisphereBottom: 0x4a3a2a,
                 hemisphereIntensity: 0.91,
                 sunColor: 0xffe0bb,
@@ -752,32 +754,36 @@ class Game {
         // Sky, image-based lighting and HDR post-processing
         this.graphics = new Graphics(this.renderer, this.scene);
 
-        // Peripheral speed-streak overlay. NOTE: this deliberately avoids
-        // backdrop-filter - blurring a full-resolution canvas costs 10ms+ of
-        // GPU per frame. A static streaky radial gradient composites for free
-        // and still sells the speed at the edges of the view.
-        this.speedBlurOverlay = document.createElement('div');
-        this.speedBlurOverlay.id = 'speedBlurOverlay';
-        this.speedBlurOverlay.style.cssText = `
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            z-index: 5;
-            background:
-                repeating-conic-gradient(from 0deg at 50% 50%,
-                    rgba(255,255,255,0) 0deg 5deg,
-                    rgba(235,240,255,0.055) 5.6deg 6.4deg,
-                    rgba(255,255,255,0) 7deg 12deg),
-                radial-gradient(ellipse at center,
-                    rgba(200,215,235,0) 42%,
-                    rgba(205,220,240,0.10) 70%,
-                    rgba(215,228,245,0.16) 100%);
-            -webkit-mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
-            mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
-            opacity: 0;
-            display: none;
-        `;
-        document.body.appendChild(this.speedBlurOverlay);
+        // The post-processing pass blurs the screen edges at speed. Without
+        // it (no float render targets), fall back to a CSS overlay.
+        if (!this.graphics.postEnabled) {
+            // Peripheral speed-streak overlay. NOTE: this deliberately avoids
+            // backdrop-filter - blurring a full-resolution canvas costs 10ms+ of
+            // GPU per frame. A static streaky radial gradient composites for free
+            // and still sells the speed at the edges of the view.
+            this.speedBlurOverlay = document.createElement('div');
+            this.speedBlurOverlay.id = 'speedBlurOverlay';
+            this.speedBlurOverlay.style.cssText = `
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                z-index: 5;
+                background:
+                    repeating-conic-gradient(from 0deg at 50% 50%,
+                        rgba(255,255,255,0) 0deg 5deg,
+                        rgba(235,240,255,0.055) 5.6deg 6.4deg,
+                        rgba(255,255,255,0) 7deg 12deg),
+                    radial-gradient(ellipse at center,
+                        rgba(200,215,235,0) 42%,
+                        rgba(205,220,240,0.10) 70%,
+                        rgba(215,228,245,0.16) 100%);
+                -webkit-mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
+                mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
+                opacity: 0;
+                display: none;
+            `;
+            document.body.appendChild(this.speedBlurOverlay);
+        }
         this.lastBlurOpacity = '0';
         
         window.addEventListener('resize', () => this.onWindowResize());
@@ -2160,6 +2166,15 @@ class Game {
         this.endTrackPreview();
 
         if (!this.showcaseBikes) {
+            // Always present the riders in clear daylight, whatever leg was
+            // ridden or previewed last
+            this.setTimeOfDay('golden');
+            this.graphics.setWeather('clear', 0);
+            this.scene.fog.color.setHex(this.timeConfigs.golden.fogColor);
+            this.scene.fog.density = 0.0018;
+            // Start on the bike instead of flying in from the last camera position
+            this.showcaseSnap = true;
+
             const platformGeometry = new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28);
             const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 });
             const silhouetteMaterial = new THREE.MeshBasicMaterial({ color: 0x05070c });
@@ -2198,6 +2213,36 @@ class Game {
 
                 this.showcaseBikes[c.id] = v;
             });
+
+            // Showroom floor: glossy, fading out to the horizon haze so the
+            // stage does not end in a hard edge
+            const fadeCanvas = document.createElement('canvas');
+            fadeCanvas.width = 128;
+            fadeCanvas.height = 128;
+            const fadeCtx = fadeCanvas.getContext('2d');
+            const fade = fadeCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            fade.addColorStop(0, '#ffffff');
+            fade.addColorStop(0.55, '#ffffff');
+            fade.addColorStop(1, '#000000');
+            fadeCtx.fillStyle = fade;
+            fadeCtx.fillRect(0, 0, 128, 128);
+            const riderCount = Object.keys(this.showcaseBikes).length;
+            const floor = new THREE.Mesh(
+                new THREE.PlaneGeometry(riderCount * 14 + 160, 160),
+                new THREE.MeshStandardMaterial({
+                    color: 0x1b2230,
+                    roughness: 0.4,
+                    metalness: 0.5,
+                    envMapIntensity: 1.2,
+                    alphaMap: new THREE.CanvasTexture(fadeCanvas),
+                    transparent: true
+                })
+            );
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set((riderCount - 1) * 7, -400.13, 0);
+            floor.receiveShadow = true;
+            this.scene.add(floor);
+            this.showcaseExtras.push(floor);
         }
 
         this.showcaseMode = 'rider';
@@ -2310,7 +2355,12 @@ class Game {
                 const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
                 const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;
                 // Ease toward the orbit point so focus changes glide across
-                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), Math.min(1, dt * 4));
+                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
+                this.showcaseSnap = false;
+                // The sun and its shadow frustum follow the stage
+                this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
+                this.directionalLight.target.position.copy(target);
+                this.directionalLight.target.updateMatrixWorld();
                 this.camera.up.set(0, 1, 0);
                 this.camera.fov = 50;
                 this.camera.updateProjectionMatrix();

@@ -712,8 +712,9 @@ class Car {
         
         // Ensure car is placed at correct road elevation
         const roadElevation = y || 0;
-        // Lower the car to sit properly on the road (wheels are 0.3 radius)
-        this.carGroup.position.set(x + perpX, roadElevation, z + perpZ);
+        // The wheel hubs are at the model origin: lift the car by the wheel
+        // radius, or the tyres run half sunk into the road
+        this.carGroup.position.set(x + perpX, roadElevation + 0.32, z + perpZ);
         
         // Calculate the car's facing direction based on movement
         // The car should look where it's going
