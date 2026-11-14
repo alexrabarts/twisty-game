@@ -152,7 +152,6 @@ class Vehicle {
 
         // Road boundary state tracking for hysteresis
         this.wasNearEdge = false; // Prevents oscillating between edge states
-        this.lastPerpDistance = 0; // For hysteresis calculations
 
          // Physics tuning
         this.steeringForce = 9.5; // How much force steering creates - more responsive
@@ -1884,11 +1883,6 @@ class Vehicle {
             console.log('CRASHED! Speed too low:', (this.speed * 2.237).toFixed(1) + ' mph');
         }
 
-        // Debug: Log crash state
-        if (this.crashed) {
-            console.log('Bike is crashed, fallingOffCliff:', this.fallingOffCliff);
-        }
-        
         // Check for boulder collisions (skipped while airborne - the bike
         // clears obstacles it is hopping over)
         if (this.environment && this.environment.boulders && !this.isJumping) {

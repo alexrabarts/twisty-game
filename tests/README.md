@@ -1,125 +1,41 @@
-# Testing Architecture
+# Tests
 
-## Overview
-This testing architecture provides comprehensive coverage for the Twisty Game motorcycle racing game using Jest for unit tests and Puppeteer for integration tests.
+Jest runs the unit tests under jsdom. A Chrome-driven harness (`tools/terrain-check.mjs`) proves the real page in a browser.
 
-## Structure
+## Layout
 
 ```
 tests/
-├── unit/           # Unit tests for individual modules
-│   ├── vehicle.test.js
-│   └── input.test.js
-├── integration/    # Integration tests using Puppeteer
-│   └── puppeteer.test.js
-├── fixtures/       # Test data and fixtures
-├── mocks/         # Mock implementations
-└── setup.js       # Jest setup and global mocks
+├── setup.js          Global THREE mock and browser stubs for the jest suites
+├── helpers/
+│   └── load-game.js  Loads the real game scripts against real three r150
+├── golden/           Frozen terrain baselines (see below)
+├── unit/             Jest unit tests
+└── integration/      gameloop test, leaderboard flow (needs the Firebase emulator, skipped by default)
 ```
 
-## Test Types
+## What is real and what is a replica
 
-### Unit Tests
-- Test individual classes and functions in isolation
-- Mock Three.js and browser APIs
-- Focus on game logic, physics calculations, and state management
-- Located in `tests/unit/`
+Most unit tests exercise a replica: they restate the game's formulas inline or run against the mock in `setup.js`, so they cannot notice drift in `js/`. Two kinds of test load real game files:
 
-### Integration Tests
-- Test the full application in a real browser environment
-- Use Puppeteer for browser automation
-- Test user interactions, rendering, and cross-component functionality
-- Located in `tests/integration/`
+- `tests/unit/leaderboard.test.js` evaluates `js/leaderboard.js` (a classic script, no exports) and tests the real `LeaderboardService`.
+- `tests/helpers/load-game.js` loads `vehicle.js`, `environment.js`, `tours.js` and `rockfalls.js` and passes the real three r150 (devDependency `three`) in as a function parameter, with a stub 2D canvas. The mock in `setup.js` is neither used nor replaced. `tests/unit/terrain-equivalence.test.js` builds all eight legs through it.
 
-## Running Tests
+## Running
 
 ```bash
-# Run all tests
-npm test
-
-# Run only unit tests
-npm run test:unit
-
-# Run only integration tests
-npm run test:integration
-
-# Run tests in watch mode
-npm run test:watch
-
-# Generate coverage report
+node --experimental-vm-modules node_modules/.bin/jest                      # all
+node --experimental-vm-modules node_modules/.bin/jest tests/unit/vehicle.test.js   # one file
 npm run test:coverage
+npm run test:integration                                                   # node tools/terrain-check.mjs legs,pages
 ```
 
-## Writing Tests
+The browser harness needs Chrome: set `TWISTY_CHROME`, pass `--chrome <path>`, or run `npx puppeteer browsers install chrome`. It starts its own static server on an ephemeral port and aborts every request to `cloudfunctions.net`, `firebasedatabase.app` and `firebaseio.com`, so no run reaches production.
 
-### Unit Test Example
-```javascript
-import { jest } from '@jest/globals';
+## Golden files
 
-describe('Vehicle', () => {
-  test('should accelerate correctly', () => {
-    const vehicle = new Vehicle();
-    const initialSpeed = vehicle.speed;
-    vehicle.accelerate(0.1);
-    expect(vehicle.speed).toBeGreaterThan(initialSpeed);
-  });
-});
-```
+`tests/golden/terrain-baseline.json` (jest) and `tests/golden/browser-baseline.json` (browser) were captured once from untouched game source at commit 6c525be. Each records the HEAD sha, the `js/` tree id and a clean-tree check. They are the definition of "unchanged" for the terrain work and are never regenerated; compare with `shasum -a 256`. `tests/golden/parts-baseline.json` holds the per-leg `parts` and `surface` records, which later phases may re-record through the guarded `--update-baseline` path of `tools/terrain-check.mjs`.
 
-### Integration Test Example
-```javascript
-test('should respond to keyboard input', async () => {
-  await page.goto('http://localhost:8081/index.html');
-  await page.keyboard.down('ArrowUp');
-  const accelerating = await page.evaluate(() => {
-    return window.game.input.isAccelerating();
-  });
-  expect(accelerating).toBe(true);
-});
-```
+## Writing tests
 
-## Mocking Strategy
-
-### Three.js Mocks
-The `setup.js` file provides comprehensive mocks for Three.js objects including:
-- Vector3 with basic math operations
-- Group, Mesh, and Scene classes
-- Geometry and Material classes
-- Clock for timing
-
-### Browser API Mocks
-- localStorage with full functionality
-- document methods and properties
-- window dimensions and event listeners
-- performance.now() for timing
-
-## Coverage Goals
-
-Target coverage metrics:
-- Statements: 80%
-- Branches: 75%
-- Functions: 80%
-- Lines: 80%
-
-Focus areas for testing:
-1. Vehicle physics and state management
-2. Input handling (keyboard and touch)
-3. Collision detection
-4. Score calculation
-5. Game state transitions
-6. UI updates
-
-## CI/CD Integration
-
-The test suite is designed to be easily integrated into CI/CD pipelines:
-1. Unit tests run quickly without browser dependencies
-2. Integration tests can run headless using Puppeteer
-3. Coverage reports in multiple formats (text, lcov, html)
-
-## Best Practices
-
-1. **Isolation**: Each test should be independent
-2. **Clarity**: Test names should clearly describe what is being tested
-3. **Speed**: Unit tests should run in milliseconds
-4. **Coverage**: Aim for high coverage but focus on critical paths
-5. **Maintenance**: Update tests when features change
+Prefer the real module over a replica. Load it with `loadGame()` from `tests/helpers/load-game.js` and build a leg with `buildEnvironment(game, legIndex)`.

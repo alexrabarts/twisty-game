@@ -536,6 +536,7 @@ class Environment {
     roadMesh.receiveShadow = true;
     // A flat ribbon has nothing to shadow, and casting made it shadow itself
     roadMesh.castShadow = false;
+    roadMesh.userData.part = "ground";
     this.scene.add(roadMesh);
 
     console.log(
@@ -657,210 +658,9 @@ class Environment {
         this.scene.add(rockGroup);
         this.registerGrounded(rockGroup, `cliff rock cluster (segment ${index})`);
       }
-
-      // Small boulders only near the road edge - DISABLED to prevent floating
-      // These are replaced by better-grounded boulders in createRoadWalls()
-      if (false && index % 8 === 0 && this.rand() > 0.7) {
-        // Disabled
-        const side = this.rand() > 0.5 ? 1 : -1;
-        const baseDistance = 10 + this.rand() * 3;
-        const boulderX =
-          point.x + side * baseDistance * Math.cos(point.heading);
-        const boulderZ =
-          point.z - side * baseDistance * Math.sin(point.heading);
-
-        // Calculate proper Y position accounting for terrain drop-off
-        const roadY = point.y || 0;
-        let boulderY;
-        const boulderRadius = 0.5 + this.rand() * 1.5;
-
-        if (side > 0) {
-          // Right side - account for drop-off
-          const dropDistance = Math.max(0, baseDistance - 8);
-          const terrainDropRate = 3;
-          const dropAmount = Math.min(dropDistance * terrainDropRate, 50);
-          boulderY = roadY - dropAmount - boulderRadius * 0.7; // 70% embedded
-        } else {
-          // Left side - at road level
-          boulderY = roadY - boulderRadius * 0.7;
-        }
-
-        const boulderGeometry = this.displaceVertices(
-          new THREE.IcosahedronGeometry(boulderRadius, 3),
-          boulderRadius * 0.25,
-        );
-        const boulder = new THREE.Mesh(
-          boulderGeometry,
-          rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
-        );
-        boulder.position.set(boulderX, boulderY, boulderZ);
-        boulder.scale.set(
-          1 + this.rand() * 0.3,
-          0.7 + this.rand() * 0.4,
-          1 + this.rand() * 0.3,
-        );
-        boulder.rotation.set(
-          this.rand() * Math.PI,
-          this.rand() * Math.PI,
-          this.rand() * Math.PI,
-        );
-        boulder.castShadow = true;
-        boulder.receiveShadow = true;
-        this.scene.add(boulder);
-
-        // Store boulder for collision detection
-        this.boulders.push({
-          position: new THREE.Vector3(boulderX, boulderY, boulderZ),
-          radius: boulderRadius,
-          mesh: boulder,
-        });
-      }
     }
 
     // Rock face walls removed - now handled by faceted cliff walls in createRoadWalls()
-  }
-
-  createGuardRails() {
-    // Create metal guard rails for dangerous sections
-    const railHeight = 0.8;
-    const postSpacing = 4; // meters between posts
-
-    // Metal rail material - galvanized steel with a soft sheen that picks
-    // up the environment map along its length
-    const railMaterial = new THREE.MeshStandardMaterial({
-      color: 0xb8bcc0,
-      roughness: 0.38,
-      metalness: 0.85,
-      envMapIntensity: 1.1,
-    });
-
-    // Post material
-    const postMaterial = new THREE.MeshStandardMaterial({
-      color: 0x808080,
-      roughness: 0.8,
-      metalness: 0.6,
-    });
-
-    // Only create rail sections for the active segment range (lazy generation)
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
-
-    // Create continuous rail sections
-    for (let i = startIdx; i < endIdx; i++) {
-      const point = this.roadPath[i];
-      const nextPoint = this.roadPath[i + 1];
-
-      // Determine if this section needs guard rails based on elevation drop
-      const elevationDrop = Math.abs(point.y);
-      const nextIndex = Math.min(i + 1, this.roadPath.length - 1);
-      const headingDelta = this.roadPath[nextIndex].heading - point.heading;
-      const headingChange = Math.abs(headingDelta);
-
-      // Add rails on curves and high elevation sections
-      if (elevationDrop > 5 || headingChange > 0.02) {
-        // Rail goes on the outside of the curve: right turn (positive
-        // delta) -> left side (-1), left turn -> right side (1)
-        const railSide =
-          headingChange > 0.02 ? (headingDelta > 0 ? -1 : 1) : 0;
-
-        if (railSide <= 0) {
-          // Left side rail - create as vertical cylindrical rail
-          const railGeometry = new THREE.CylinderGeometry(
-            0.05,
-            0.05,
-            Math.sqrt(
-              Math.pow(nextPoint.x - point.x, 2) +
-                Math.pow(nextPoint.z - point.z, 2),
-            ),
-            8,
-          );
-          const rail = new THREE.Mesh(railGeometry, railMaterial);
-
-          const perpX = Math.cos(point.heading) * 8.2;
-          const perpZ = -Math.sin(point.heading) * 8.2;
-
-          // Position and rotate properly
-          rail.position.set(
-            (point.x + nextPoint.x) / 2 - perpX,
-            (point.y + nextPoint.y) / 2 + railHeight,
-            (point.z + nextPoint.z) / 2 - perpZ,
-          );
-          rail.rotation.z = Math.PI / 2; // Rotate to horizontal
-          rail.rotation.y = point.heading;
-          rail.castShadow = true;
-          rail.receiveShadow = true;
-          this.scene.add(rail);
-        }
-
-        if (railSide >= 0 || elevationDrop > 10) {
-          // Right side rail - create as vertical cylindrical rail
-          const railGeometry = new THREE.CylinderGeometry(
-            0.05,
-            0.05,
-            Math.sqrt(
-              Math.pow(nextPoint.x - point.x, 2) +
-                Math.pow(nextPoint.z - point.z, 2),
-            ),
-            8,
-          );
-          const rail = new THREE.Mesh(railGeometry, railMaterial);
-
-          const perpX = Math.cos(point.heading) * 8.2;
-          const perpZ = -Math.sin(point.heading) * 8.2;
-
-          // Position and rotate properly
-          rail.position.set(
-            (point.x + nextPoint.x) / 2 + perpX,
-            (point.y + nextPoint.y) / 2 + railHeight,
-            (point.z + nextPoint.z) / 2 + perpZ,
-          );
-          rail.rotation.z = Math.PI / 2; // Rotate to horizontal
-          rail.rotation.y = point.heading;
-          rail.castShadow = true;
-          rail.receiveShadow = true;
-          this.scene.add(rail);
-        }
-
-        // Add posts every few segments
-        if (i % 2 === 0) {
-          const postGeometry = new THREE.BoxGeometry(
-            0.1,
-            railHeight + 0.2,
-            0.1,
-          );
-
-          if (railSide <= 0) {
-            // Left post
-            const perpX = Math.cos(point.heading) * 8.2;
-            const perpZ = -Math.sin(point.heading) * 8.2;
-            const post = new THREE.Mesh(postGeometry, postMaterial);
-            post.position.set(
-              point.x - perpX,
-              point.y + (railHeight + 0.2) / 2,
-              point.z - perpZ,
-            );
-            post.castShadow = true;
-            post.receiveShadow = true;
-            this.scene.add(post);
-          }
-
-          if (railSide >= 0 || elevationDrop > 10) {
-            // Right post
-            const perpX = Math.cos(point.heading) * 8.2;
-            const perpZ = -Math.sin(point.heading) * 8.2;
-            const post = new THREE.Mesh(postGeometry, postMaterial);
-            post.position.set(
-              point.x + perpX,
-              point.y + (railHeight + 0.2) / 2,
-              point.z + perpZ,
-            );
-            post.castShadow = true;
-            post.receiveShadow = true;
-            this.scene.add(post);
-          }
-        }
-      }
-    }
   }
 
   createRoadWalls() {
@@ -1163,89 +963,8 @@ class Environment {
       const mainCliff = new THREE.Mesh(geometry, cliffMaterial);
       mainCliff.receiveShadow = true;
       mainCliff.castShadow = true;
+      mainCliff.userData.part = "ground";
       group.add(mainCliff);
-
-      // Enhanced boulder position testing with more comprehensive checks
-      const testBoulderPosition = (x, y, z, roadPoint, boulderRadius, side) => {
-        // Test 1: Not on the road (must be at least 10 units from center)
-        const perpDist = Math.sqrt(
-          Math.pow(x - roadPoint.x, 2) + Math.pow(z - roadPoint.z, 2),
-        );
-        if (perpDist < 10) {
-          console.warn(
-            `Boulder too close to road: ${perpDist.toFixed(1)} units from center`,
-          );
-          return false;
-        }
-
-        // Test 2: Calculate expected ground level based on terrain
-        let expectedGroundY;
-        const roadY = roadPoint.y || 0;
-
-        if (side > 0) {
-          // Right side - calculate drop-off based on distance from road
-          const dropDistance = Math.max(0, perpDist - 8); // Distance beyond road edge
-          const terrainDropRate = 3; // Must match boulder placement calculation
-          const terrainDrop = Math.min(dropDistance * terrainDropRate, 50); // Progressive drop, max 50
-          expectedGroundY = roadY - terrainDrop;
-        } else {
-          // Left side - should be at road level
-          expectedGroundY = roadY;
-        }
-
-        // Test 3: Boulder bottom should be at or below expected ground - STRICT
-        const boulderBottom = y - boulderRadius * 1.1; // Account for scaled geometry
-        const tolerance = 0.1; // Very strict tolerance
-
-        if (boulderBottom > expectedGroundY + tolerance) {
-          console.warn(
-            `Boulder FLOATING (size ${boulderRadius.toFixed(1)}): Bottom at ${boulderBottom.toFixed(1)}, expected ground at ${expectedGroundY.toFixed(1)}, FORCING DOWN`,
-          );
-          // Force deep embedding for all boulders
-          const embedDepth = 0.6 + (boulderRadius < 1.5 ? 0.2 : 0);
-          return {
-            valid: false,
-            correctY: expectedGroundY - boulderRadius * embedDepth,
-          };
-        }
-
-        // Test 4: Boulder shouldn't be too deep (more than 80% embedded)
-        const boulderTop = y + boulderRadius;
-        if (boulderTop < expectedGroundY - boulderRadius * 0.5) {
-          console.warn(
-            `Boulder too deep: Top at ${boulderTop.toFixed(1)}, ground at ${expectedGroundY.toFixed(1)}`,
-          );
-          return {
-            valid: false,
-            correctY: expectedGroundY - boulderRadius * 0.4,
-          };
-        }
-
-        // Test 5: Check against cliff wall position (left side)
-        if (side < 0) {
-          // Ensure boulder isn't inside the cliff wall (starts around 8.5 units)
-          const distFromCenter = Math.abs(perpDist);
-          if (distFromCenter < 9 && distFromCenter > 7) {
-            console.warn(
-              `Boulder conflicting with cliff base at ${distFromCenter.toFixed(1)} units`,
-            );
-            return false;
-          }
-        }
-
-        // Test 6: Additional floating check - ensure center is below expected ground
-        if (y > expectedGroundY + boulderRadius * 0.3) {
-          console.warn(
-            `Boulder center too high (size ${boulderRadius.toFixed(1)}): Center at ${y.toFixed(1)}, ground at ${expectedGroundY.toFixed(1)}, FORCING DOWN`,
-          );
-          return {
-            valid: false,
-            correctY: expectedGroundY - boulderRadius * 0.6,
-          };
-        }
-
-        return { valid: true };
-      };
 
       // Add MANY more boulders along the cliff base (only in active segment range)
       for (let i = startIdx; i <= endIdx; i += 3) {
@@ -1366,115 +1085,7 @@ class Environment {
             radius: debrisSize,
           });
         }
-
-        // Add EVEN MORE boulders at the base - DISABLED to prevent floating
-        if (false && (i % 2 === 0 || this.rand() > 0.2)) {
-          // Every 2 segments or 80% chance
-          // Create 2-5 boulders per position
-          const numBoulders = 2 + Math.floor(this.rand() * 4);
-
-          for (let b = 0; b < numBoulders; b++) {
-            const baseBoulderSize = 0.8 + this.rand() * 3.0; // More varied sizes (0.8-3.8)
-            const baseBoulder = new THREE.Mesh(
-              this.displaceVertices(
-                new THREE.IcosahedronGeometry(baseBoulderSize, 3),
-                baseBoulderSize * 0.3,
-              ),
-              rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
-            );
-
-            // Position at cliff base with variation
-            const baseDistance = 10 + this.rand() * 8 + b * 2; // Minimum 10 units from road center
-            const perpX = Math.cos(point.heading) * baseDistance * side;
-            const perpZ = -Math.sin(point.heading) * baseDistance * side;
-
-            // Calculate position
-            const boulderX = point.x + perpX;
-            const boulderZ = point.z + perpZ;
-            let boulderY;
-
-            // FIXED: Use actual road point Y value, not cliff height
-            const roadY = point.y || 0;
-
-            if (side > 0) {
-              // Right side - properly calculate drop-off position
-              const dropDistance = Math.max(0, baseDistance - 8); // Distance beyond road edge
-              const terrainDropRate = 3; // Drop 3 units per unit distance from road
-              const dropAmount = Math.min(dropDistance * terrainDropRate, 50); // Cap at 50 units drop
-              // All boulders embedded at least 50% of their radius
-              const embedRatio = 0.5 + (baseBoulderSize < 1.5 ? 0.2 : 0);
-              boulderY = roadY - dropAmount - baseBoulderSize * embedRatio;
-            } else {
-              // Left side - at road level, properly embedded
-              // All boulders embedded at least 50% of their radius
-              const embedRatio = 0.5 + (baseBoulderSize < 1.5 ? 0.2 : 0);
-              boulderY = roadY - baseBoulderSize * embedRatio;
-            }
-
-            // Special handling for very small boulders - use consistent drop calculation
-            if (baseBoulderSize < 1.2) {
-              // Force small boulders to be deeply embedded
-              if (side > 0) {
-                const dropDistance = Math.max(0, baseDistance - 8);
-                const terrainDropRate = 3; // MUST match the rate used above
-                const dropAmount = Math.min(dropDistance * terrainDropRate, 50);
-                boulderY = roadY - dropAmount - baseBoulderSize * 0.7; // 70% embedded
-              } else {
-                boulderY = roadY - baseBoulderSize * 0.7;
-              }
-            }
-
-            // Run comprehensive position tests
-            const testResult = testBoulderPosition(
-              boulderX,
-              boulderY,
-              boulderZ,
-              point,
-              baseBoulderSize,
-              side,
-            );
-
-            if (!testResult || !testResult.valid) {
-              if (testResult && testResult.correctY !== undefined) {
-                // Use corrected Y position
-                boulderY = testResult.correctY;
-                console.log(
-                  `Boulder size ${baseBoulderSize.toFixed(1)} corrected to Y=${boulderY.toFixed(1)}`,
-                );
-              } else {
-                // Skip this boulder entirely
-                continue;
-              }
-            }
-
-            baseBoulder.position.set(boulderX, boulderY, boulderZ);
-
-            // Random rotation with some stability (not fully random)
-            baseBoulder.rotation.set(
-              this.rand() * Math.PI * 0.5, // Less rotation on X
-              this.rand() * Math.PI * 2, // Full rotation on Y
-              this.rand() * Math.PI * 0.3, // Minimal tilt
-            );
-
-            baseBoulder.scale.set(
-              1.0 + this.rand() * 0.6,
-              0.7 + this.rand() * 0.4,
-              1.0 + this.rand() * 0.6,
-            );
-
-            baseBoulder.castShadow = true;
-            baseBoulder.receiveShadow = true;
-            group.add(baseBoulder);
-
-            // Store boulder for collision detection
-            this.boulders.push({
-              position: new THREE.Vector3(boulderX, boulderY, boulderZ),
-              radius: baseBoulderSize * 0.6,
-              mesh: baseBoulder,
-            });
-          }
-        }
-      } // Close the for loop from line 693
+      }
 
       // Add crack systems to cliff face
       const crackMaterial = new THREE.MeshStandardMaterial({
@@ -1727,95 +1338,6 @@ class Environment {
         }
       }
 
-      // Add moss and small vegetation patches - DISABLED to prevent floating
-      // These were positioned using cliff height which caused floating objects
-      if (false) {
-      for (let i = 0; i < this.roadPath.length; i += 12) {
-        const point = this.roadPath[i];
-
-        // Add vegetation at various heights
-        if (this.rand() > 0.4) {
-          const numPatches = 1 + Math.floor(this.rand() * 2);
-
-          for (let p = 0; p < numPatches; p++) {
-            // Height on cliff (favor lower areas for vegetation)
-            const heightRatio = this.rand() * 0.5; // Lower half of cliff
-            const cliffHeight = Math.abs(height) * heightRatio;
-
-            // Calculate position with slope
-            let distance = 7.2 + this.rand() * 0.5;
-            if (side > 0 && isDropOff) {
-              distance += heightRatio * heightRatio * 25;
-            } else if (side < 0 && !isDropOff) {
-              distance += heightRatio * heightRatio * 12;
-            }
-
-            const perpX = Math.cos(point.heading) * distance * side;
-            const perpZ = -Math.sin(point.heading) * distance * side;
-
-            // Choose between moss patch or small bush
-            if (this.rand() > 0.5) {
-              // Moss patch (flat against cliff)
-              const mossGeometry = new THREE.PlaneGeometry(
-                1.5 + this.rand() * 2,
-                1 + this.rand() * 1.5,
-              );
-              const moss = new THREE.Mesh(mossGeometry, mossMaterial);
-
-              // Position moss on cliff face
-              const mossY =
-                height > 0
-                  ? (point.y || 0) + cliffHeight // Mountain side
-                  : (point.y || 0) - cliffHeight; // Drop-off side
-
-              moss.position.set(point.x + perpX, mossY, point.z + perpZ);
-
-              // Rotate to face outward from cliff
-              moss.rotation.y =
-                point.heading + (side > 0 ? Math.PI / 2 : -Math.PI / 2);
-              moss.rotation.x = (this.rand() - 0.5) * 0.3;
-              moss.rotation.z = (this.rand() - 0.5) * 0.3;
-
-              moss.receiveShadow = true;
-              group.add(moss);
-            } else {
-              // Small bush/grass tuft
-              const bushGeometry = new THREE.SphereGeometry(
-                0.3 + this.rand() * 0.4,
-                5,
-                4,
-              );
-              const bush = new THREE.Mesh(bushGeometry, vegetationMaterial);
-
-              if (height > 0) {
-                bush.position.set(
-                  point.x + perpX,
-                  (point.y || 0) + cliffHeight,
-                  point.z + perpZ,
-                );
-              } else {
-                bush.position.set(
-                  point.x + perpX,
-                  (point.y || 0) - cliffHeight,
-                  point.z + perpZ,
-                );
-              }
-
-              bush.scale.set(
-                1.2 + this.rand() * 0.3,
-                0.8 + this.rand() * 0.3,
-                1 + this.rand() * 0.3,
-              );
-
-              bush.castShadow = true;
-              bush.receiveShadow = true;
-              group.add(bush);
-            }
-          }
-        }
-      }
-      } // Close if (false) for vegetation patches
-
       // Add snow patches and rocky outcrops on upper mountain (if going up)
       if (height > 20) {
         // Snow patches on upper elevations
@@ -1861,44 +1383,12 @@ class Environment {
             group.add(snow);
           }
         }
-
-        // Sparse alpine vegetation - DISABLED to prevent floating
-        // These were positioned using cliff height which caused floating
-        if (false) {
-        const alpineBushGeometry = new THREE.SphereGeometry(0.6, 4, 3);
-        const alpineBushMaterial = new THREE.MeshStandardMaterial({
-          color: 0x1a3a1a,
-          roughness: 0.9,
-          metalness: 0.0,
-        });
-
-        for (let i = 0; i < this.roadPath.length; i += 15) {
-          if (this.rand() > 0.6) {
-            const point = this.roadPath[i];
-            const bush = new THREE.Mesh(alpineBushGeometry, alpineBushMaterial);
-
-            const perpX = Math.cos(point.heading) * 9 * side;
-            const perpZ = -Math.sin(point.heading) * 9 * side;
-
-            bush.position.set(
-              point.x + perpX,
-              (point.y || 0) + height * 0.3,
-              point.z + perpZ,
-            );
-
-            bush.scale.set(
-              1 + this.rand() * 0.3,
-              0.6 + this.rand() * 0.3,
-              1 + this.rand() * 0.3,
-            );
-
-            bush.castShadow = true;
-            bush.receiveShadow = true;
-            group.add(bush);
-          }
-        }
-        }
       }
+
+      // Everything else the cliff builder added to its group dresses the face
+      group.children.forEach((child) => {
+        if (!child.userData.part) child.userData.part = "decals";
+      });
 
       return group;
     };
@@ -1987,6 +1477,7 @@ class Environment {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.receiveShadow = true;
       mesh.userData.type = "terrain";
+      mesh.userData.part = "ground";
       return mesh;
     };
 
@@ -3680,134 +3171,11 @@ class Environment {
     lake.rotation.x = -Math.PI / 2;
     lake.position.set(legMid.x, -200, legMid.z);
     lake.receiveShadow = true;
+    lake.userData.part = "floor";
     this.scene.add(lake);
-
-    // Create continuous terrain strips along the road (only in active segment range)
-    // Extend by 20 segments to match road geometry and decorative elements
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
-
-    const createTerrainStrip = (side, offset, dropAmount, color) => {
-      const points = [];
-      const geometry = new THREE.BufferGeometry();
-      const vertices = [];
-      const indices = [];
-
-      // Create vertices for terrain strip (only for active range)
-      for (let i = startIdx; i < endIdx; i++) {
-        const point = this.roadPath[i];
-        const nextPoint = this.roadPath[i + 1];
-        const roadY = point.y !== undefined ? point.y : 0;
-        const nextRoadY = nextPoint.y !== undefined ? nextPoint.y : 0;
-
-        // Calculate perpendicular offset
-        const perpX = Math.cos(point.heading) * offset * side;
-        const perpZ = -Math.sin(point.heading) * offset * side;
-        const nextPerpX = Math.cos(nextPoint.heading) * offset * side;
-        const nextPerpZ = -Math.sin(nextPoint.heading) * offset * side;
-
-        // Inner edge (closer to road)
-        vertices.push(
-          point.x + perpX,
-          roadY + dropAmount,
-          point.z + perpZ,
-          nextPoint.x + nextPerpX,
-          nextRoadY + dropAmount,
-          nextPoint.z + nextPerpZ,
-        );
-
-        // Outer edge (further from road) - extend much further for mountainside
-        vertices.push(
-          point.x + perpX * 8,
-          roadY + dropAmount * 2,
-          point.z + perpZ * 8,
-          nextPoint.x + nextPerpX * 8,
-          nextRoadY + dropAmount * 2,
-          nextPoint.z + nextPerpZ * 8,
-        );
-      }
-
-      // Create triangles
-      const segmentCount = endIdx - startIdx;
-      for (let i = 0; i < segmentCount; i++) {
-        const baseIndex = i * 4;
-        // Two triangles per segment
-        indices.push(
-          baseIndex,
-          baseIndex + 1,
-          baseIndex + 2,
-          baseIndex + 1,
-          baseIndex + 3,
-          baseIndex + 2,
-        );
-      }
-
-      geometry.setAttribute(
-        "position",
-        new THREE.Float32BufferAttribute(vertices, 3),
-      );
-      geometry.setIndex(indices);
-      geometry.computeVertexNormals();
-
-      // Create simple grass texture
-      const grassCanvas = document.createElement("canvas");
-      grassCanvas.width = 256;
-      grassCanvas.height = 256;
-      const grassCtx = grassCanvas.getContext("2d");
-
-      // Base color from parameter
-      const r = (color >> 16) & 0xff;
-      const g = (color >> 8) & 0xff;
-      const b = color & 0xff;
-      grassCtx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-      grassCtx.fillRect(0, 0, grassCanvas.width, grassCanvas.height);
-
-      // Add darker grass patches for texture
-      grassCtx.globalAlpha = 0.3;
-      for (let i = 0; i < 100; i++) {
-        const x = this.rand() * grassCanvas.width;
-        const y = this.rand() * grassCanvas.height;
-        const size = this.rand() * 8 + 2;
-        const darkness = this.rand() * 30;
-        grassCtx.fillStyle = `rgb(${Math.max(0, r - darkness)}, ${Math.max(0, g - darkness)}, ${Math.max(0, b - darkness)})`;
-        grassCtx.fillRect(x, y, size, size);
-      }
-
-      // Add lighter highlights
-      grassCtx.globalAlpha = 0.2;
-      for (let i = 0; i < 50; i++) {
-        const x = this.rand() * grassCanvas.width;
-        const y = this.rand() * grassCanvas.height;
-        const size = this.rand() * 4 + 1;
-        grassCtx.fillStyle = `rgb(${Math.min(255, r + 20)}, ${Math.min(255, g + 20)}, ${Math.min(255, b + 15)})`;
-        grassCtx.fillRect(x, y, size, size);
-      }
-
-      const grassTexture = new THREE.CanvasTexture(grassCanvas);
-      grassTexture.wrapS = THREE.RepeatWrapping;
-      grassTexture.wrapT = THREE.RepeatWrapping;
-      grassTexture.repeat.set(4, 4);
-
-      const material = new THREE.MeshStandardMaterial({
-        map: grassTexture,
-        roughness: 0.95,
-        metalness: 0.0,
-        side: THREE.DoubleSide,
-      });
-
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.receiveShadow = true;
-      mesh.castShadow = true;
-      return mesh;
-    };
-
-    // No terrain strips needed - using white road edge lines instead
 
     // Add vertical walls connecting road to terrain
     this.createRoadWalls();
-
-    // Guard rails commented out due to rendering issues
-    // this.createGuardRails();
   }
 
   createRoadMarkings() {
@@ -4740,12 +4108,6 @@ class Environment {
         this.roadPath[Math.max(0, startSegment - 5)],
         "ROAD WORK AHEAD",
       );
-
-      // Add warning lights for major zones - REMOVED
-      // this.createWarningLight(
-      //     this.roadPath[Math.max(0, startSegment - 1)],
-      //     'right'
-      // );
     } else {
       // Minor zones just get a simple sign
       this.createConstructionSign(
@@ -5365,50 +4727,6 @@ class Environment {
     });
   }
 
-  createWarningLight(point, side) {
-    const lightGroup = new THREE.Group();
-
-    // Light pole
-    const poleGeometry = new THREE.CylinderGeometry(0.05, 0.05, 2);
-    const poleMaterial = new THREE.MeshStandardMaterial({
-      color: 0x333333,
-      roughness: 0.8,
-      metalness: 0.5,
-    });
-    const pole = new THREE.Mesh(poleGeometry, poleMaterial);
-    pole.position.set(0, 1, 0);
-    lightGroup.add(pole);
-
-    // Warning light
-    const lightGeometry = new THREE.SphereGeometry(0.2, 8, 6);
-    const lightMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffa500,
-      emissive: 0xffa500,
-      emissiveIntensity: 0.8,
-      roughness: 0.2,
-      metalness: 0.1,
-    });
-    const warningLight = new THREE.Mesh(lightGeometry, lightMaterial);
-    warningLight.position.set(0, 2, 0);
-    lightGroup.add(warningLight);
-
-    // Position beside construction zone entrance
-    const offset = side === "left" ? -4 : 4;
-    const lightX = point.x + Math.cos(point.heading) * offset;
-    const lightZ = point.z - Math.sin(point.heading) * offset;
-
-    lightGroup.position.set(lightX, point.y, lightZ);
-
-    lightGroup.traverse((child) => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-
-    this.scene.add(lightGroup);
-  }
-
   addHairpinWarnings() {
     // Detect hairpins from the actual road geometry (runs of sharp heading
     // change within the active leg) instead of a hardcoded segment count from
@@ -5917,34 +5235,6 @@ class Environment {
         // Terrain colors will be set by applyLandscapeConfig
         break;
     }
-  }
-
-  getLandscapeVariation(segmentIndex) {
-    // Return subtle landscape characteristics based on segment position
-    // This can be used for procedural variation within legs
-    const variation = {
-      elevation: 1.0,
-      roughness: 1.0,
-      density: 1.0,
-    };
-
-    // Example: Increase elevation in high pass sections (segments 120-179)
-    if (segmentIndex >= 120 && segmentIndex < 180) {
-      variation.elevation = 1.5;
-      variation.roughness = 1.3;
-    }
-    // Valley sections (segments 60-119) are flatter
-    else if (segmentIndex >= 60 && segmentIndex < 120) {
-      variation.elevation = 0.7;
-      variation.density = 1.2;
-    }
-    // Coastal descent (segments 180-239)
-    else if (segmentIndex >= 180 && segmentIndex < 240) {
-      variation.elevation = 0.8;
-      variation.roughness = 0.9;
-    }
-
-    return variation;
   }
 
   // Terrain validation methods to prevent road-terrain overlap

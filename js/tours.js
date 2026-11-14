@@ -290,34 +290,6 @@ class TourSystem {
         return roadPath[startSegment];
     }
 
-    getCheckpointPositions(roadPath) {
-        if (!this.currentLeg) {
-            console.warn('No leg selected, using full track for checkpoints');
-            return this.generateCheckpoints(roadPath, 0, roadPath.length - 1);
-        }
-
-        return this.generateCheckpoints(
-            roadPath,
-            this.currentLeg.startSegment,
-            this.currentLeg.endSegment
-        );
-    }
-
-    generateCheckpoints(roadPath, startSegment, endSegment) {
-        const checkpoints = [];
-        const segmentRange = endSegment - startSegment;
-        const checkpointInterval = Math.floor(segmentRange / 10); // 10 checkpoints per leg
-
-        for (let i = 1; i <= 10; i++) {
-            const segmentIndex = startSegment + (checkpointInterval * i);
-            if (segmentIndex < roadPath.length) {
-                checkpoints.push(roadPath[segmentIndex]);
-            }
-        }
-
-        return checkpoints;
-    }
-
     getLandscapeConfig(leg = this.currentLeg) {
         if (!leg) {
             return { variation: 'mountain' };
@@ -327,37 +299,27 @@ class TourSystem {
             mountain: {
                 grassColor: 0x4a7c4a,
                 mountainColor: 0x6b5c42,
-                fogDensity: 0.0015,
-                treeTypes: ['pine', 'spruce'],
-                rockFrequency: 0.3
+                fogDensity: 0.0015
             },
             valley: {
                 grassColor: 0x5a9c5a,
                 mountainColor: 0x7a6c52,
-                fogDensity: 0.0008,
-                treeTypes: ['oak', 'pine'],
-                rockFrequency: 0.15
+                fogDensity: 0.0008
             },
             alpine: {
                 grassColor: 0x3a6c3a,
                 mountainColor: 0x8b8b8b,
-                fogDensity: 0.002,
-                treeTypes: ['pine'],
-                rockFrequency: 0.5
+                fogDensity: 0.002
             },
             coastal: {
                 grassColor: 0x6aac6a,
                 mountainColor: 0x5a4c32,
-                fogDensity: 0.001,
-                treeTypes: ['palm', 'oak'],
-                rockFrequency: 0.2
+                fogDensity: 0.001
             },
             mixed: {
                 grassColor: 0x4a8c4a,
                 mountainColor: 0x6a5c42,
-                fogDensity: 0.0012,
-                treeTypes: ['pine', 'oak'],
-                rockFrequency: 0.25
+                fogDensity: 0.0012
             }
         };
 

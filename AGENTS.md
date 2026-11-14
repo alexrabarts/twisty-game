@@ -1,25 +1,27 @@
 # Agent Guidelines
 
+Twisty Game is a browser motorcycle racing game: classic scripts under `js/`, three r150, no build step. Project notes for agents live in `.agent/` (start with `.agent/README.md`).
+
 ## Build/Test Commands
-- Run tests: `go test -v -timeout 120s ./...`
-- Run single test: `go test -v -timeout 120s -run TestName ./package`
-- Build: `go build ./...`
-- Format: `go fmt ./...`
-- Lint: `go tool vet ./...` or use `golangci-lint run`
+- Serve locally: `npm run serve` (http://localhost:8080)
+- Run all tests: `node --experimental-vm-modules node_modules/.bin/jest`
+- Run one file: `node --experimental-vm-modules node_modules/.bin/jest tests/unit/vehicle.test.js`
+- Browser proofs: `node tools/terrain-check.mjs legs,pages` (`npm run test:integration`). Needs Chrome: set `TWISTY_CHROME` to a Chrome binary, pass `--chrome <path>`, or run `npx puppeteer browsers install chrome`
+- Ride a leg in the console: inject `tools/autopilot.js`, then `twistyDev.start('mountain-dawn')` and `twistyDev.autopilot({ speed: 25 })`
+
+## Terrain baselines
+- `tests/golden/terrain-baseline.json` and `tests/golden/browser-baseline.json` define "unchanged" for the terrain work. They are captured once from untouched game source and never regenerated. Check them with `shasum -a 256 tests/golden/*-baseline.json`.
+- `tests/golden/parts-baseline.json` is the mutable per-leg record; `tools/terrain-check.mjs` guards how it is rewritten.
+- `tools/terrain-check.mjs` aborts every request to `cloudfunctions.net`; never point a page at production functions.
 
 ## Code Style
 - Use British English for human-facing text, American English for code
 - Single word variable names preferred; refactor if scope becomes too large
 - No ASCII art dividers in comments; use single line comments with blank lines for paragraphs
 - Document WHY not WHAT; avoid obvious comments
-- Use modern Go features (generics, go tool instead of global installs)
-- Prefer `github.com/tidwall/gjson` over `encoding/json` for flexible JSON structures
-- Use `regexp.MustCompile` with function name prefix and RE suffix for regexes
-- SQL: lowercase with 2-space indents, use `jsonb_build_object` with explicit field/value pairs
 
 ## Error Handling
 - Handle errors explicitly; no silent failures
-- Use standard Go error patterns
 
 ## General
 - Don't apologize for mistakes; provide corrected response
