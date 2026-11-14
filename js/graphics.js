@@ -319,9 +319,45 @@ const GFX_BLOOM_UP = `
     }
 `;
 
+// Light shafts: march from each pixel toward the sun's screen position and
+// gather bright sky (depth 1) on the way, fading with distance
+const GFX_SHAFTS = `
+    uniform sampler2D tScene;
+    uniform sampler2D tDepth;
+    uniform vec2 uSun;
+    varying vec2 vUv;
+    void main() {
+        const int STEPS = 24;
+        vec2 delta = (uSun - vUv) * (0.9 / float(STEPS));
+        vec2 uv = vUv;
+        float decay = 1.0;
+        vec3 acc = vec3(0.0);
+        for (int i = 0; i < STEPS; i++) {
+            uv += delta;
+            vec2 sampleUv = clamp(uv, 0.0, 1.0);
+            if (texture2D(tDepth, sampleUv).r >= 0.9999) {
+                vec3 c = texture2D(tScene, sampleUv).rgb;
+                float luma = dot(c, vec3(0.2126, 0.7152, 0.0722));
+                acc += c * smoothstep(0.6, 2.0, luma) * decay;
+            }
+            decay *= 0.95;
+        }
+        gl_FragColor = vec4(min(acc / float(STEPS), vec3(4.0)), 1.0);
+    }
+`;
+
 const GFX_COMPOSITE = `
     uniform sampler2D tScene;
     uniform sampler2D tBloom;
+    uniform sampler2D tDepth;
+    uniform sampler2D tShafts;
+    uniform mat4 uProjInv;
+    uniform mat4 uCamWorld;
+    uniform vec3 uFogColor;
+    uniform vec3 uHeightFog; // density at base height, base height, falloff per metre
+    uniform float uHeightFogOn;
+    uniform float uShafts;
+    uniform float uFogReach;
     uniform float uExposure;
     uniform float uBloom;
     uniform float uVignette;
@@ -375,6 +411,27 @@ const GFX_COMPOSITE = `
                 acc += texture2D(tScene, vUv - fromCenter * amount * (float(i) / 5.0)).rgb;
             }
             color = acc / 6.0;
+        }
+
+        // Height fog: the fog thickens toward the floor. Integrate an
+        // exponentially falling density along the view ray; sky pixels (depth
+        // 1) reach as far as uFogReach, which gives the mist band at the horizon
+        if (uHeightFogOn > 0.5) {
+            float depth = texture2D(tDepth, vUv).r;
+            vec4 view = uProjInv * vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            vec3 origin = uCamWorld[3].xyz;
+            vec3 ray = (uCamWorld * vec4(view.xyz / view.w, 1.0)).xyz - origin;
+            float rayLength = max(length(ray), 1e-4);
+            float reach = min(rayLength, uFogReach);
+            float slope = uHeightFog.z * ray.y / rayLength;
+            float atOrigin = uHeightFog.x * exp(min(-uHeightFog.z * (origin.y - uHeightFog.y), 4.0));
+            float thickness = abs(slope) < 1e-4 ? reach : (1.0 - exp(-slope * reach)) / slope;
+            float amount = 1.0 - exp(-min(atOrigin * thickness, 6.0));
+            color = mix(color, uFogColor, amount);
+        }
+
+        if (uShafts > 0.0) {
+            color += texture2D(tShafts, vUv).rgb * uShafts;
         }
 
         color += texture2D(tBloom, vUv).rgb * uBloom;
@@ -508,6 +565,16 @@ class Graphics {
         const caps = renderer.capabilities;
         this.postEnabled = !!(caps.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float'));
 
+        // The depth texture feeds height fog and light shafts. The mobile
+        // multisampled-render-to-texture path is a different, unexamined
+        // branch in three r150, so there the atmosphere stays off.
+        this.atmosphereSupported = this.postEnabled && !renderer.extensions.has('WEBGL_multisampled_render_to_texture');
+        this.atmosphere = null;
+        this.shaftsActive = false;
+        this.ringStrength = 1;
+        this.sunScreen = new THREE.Vector2();
+        this.sunView = new THREE.Vector3();
+
         if (this.postEnabled) {
             renderer.toneMapping = THREE.NoToneMapping;
             renderer.outputEncoding = THREE.LinearEncoding;
@@ -621,6 +688,18 @@ class Graphics {
         }
     }
 
+    // Per-leg depth atmosphere (height fog, light shafts) and far-ring strength.
+    // `atmosphere` is a Terrain.LEGS entry's { heightFog, shafts }, `render` its
+    // { ring }, `baseY` the leg's lowest road height. Pass null to reset. The
+    // ring strength is read by applySky, so call this before setWeather. Height
+    // fog and shafts need the depth texture and stay off without it.
+    setAtmosphere(atmosphere, render, baseY = 0) {
+        this.ringStrength = render && render.ring !== undefined ? render.ring : 1;
+        this.atmosphere = atmosphere && this.atmosphereSupported
+            ? { heightFog: atmosphere.heightFog, shafts: atmosphere.shafts || 0, baseY }
+            : null;
+    }
+
     setTimeOfDay(timeKey, config) {
         this.timeKey = SKY_PRESETS[timeKey] ? timeKey : 'golden';
         this.timeConfig = config || this.timeConfig || null;
@@ -658,7 +737,7 @@ class Graphics {
         u.uSunIntensity.value = preset.sunIntensity * sunScale;
         u.uGlow.value = preset.glowStrength * (0.25 + 0.75 * sunScale);
         u.uFogBlend.value = weather.fogBlend || 0;
-        u.uMountains.value = 1 - (weather.fogBlend || 0);
+        u.uMountains.value = (1 - (weather.fogBlend || 0)) * this.ringStrength;
 
         // Overcast weather at night or dusk must not paint a daytime sky
         if ((this.weatherType === 'rain' || this.weatherType === 'snow') &&
@@ -757,7 +836,16 @@ class Graphics {
             depthBuffer: false,
             stencilBuffer: false
         };
-        this.sceneTarget = new THREE.WebGLRenderTarget(4, 4, Object.assign({}, targetOptions, { depthBuffer: true, samples: 4 }));
+        // The depth texture goes in the constructor options: three attaches it
+        // when the framebuffer is first set up, so it can never be added later.
+        // DepthFormat only (no stencil), and only sampled in a pass that draws
+        // to another target.
+        const sceneOptions = { depthBuffer: true, samples: 4 };
+        if (this.atmosphereSupported) sceneOptions.depthTexture = new THREE.DepthTexture(4, 4);
+        this.sceneTarget = new THREE.WebGLRenderTarget(4, 4, Object.assign({}, targetOptions, sceneOptions));
+        if (this.atmosphereSupported) {
+            this.shaftTarget = new THREE.WebGLRenderTarget(2, 2, targetOptions);
+        }
         this.bloomLevels = 5;
         this.bloomTargets = [];
         for (let i = 0; i < this.bloomLevels; i++) {
@@ -794,9 +882,25 @@ class Graphics {
             uTexel: { value: new THREE.Vector2() },
             uWeight: { value: 1.0 }
         }, { blending: THREE.AdditiveBlending, transparent: true });
+        if (this.atmosphereSupported) {
+            this.shaftsMaterial = pass(GFX_SHAFTS, {
+                tScene: { value: null },
+                tDepth: { value: null },
+                uSun: { value: this.sunScreen }
+            });
+        }
         this.compositeMaterial = pass(GFX_COMPOSITE, {
             tScene: { value: null },
             tBloom: { value: null },
+            tDepth: { value: null },
+            tShafts: { value: null },
+            uProjInv: { value: new THREE.Matrix4() },
+            uCamWorld: { value: new THREE.Matrix4() },
+            uFogColor: { value: new THREE.Color(1, 1, 1) },
+            uHeightFog: { value: new THREE.Vector3() },
+            uHeightFogOn: { value: 0 },
+            uShafts: { value: 0 },
+            uFogReach: { value: 900 },
             uExposure: { value: 1 },
             uBloom: { value: 0.7 },
             uVignette: { value: 0.28 },
@@ -815,6 +919,9 @@ class Graphics {
         const height = Math.max(2, Math.floor(this.bufferSize.y));
         if (this.sceneTarget.width === width && this.sceneTarget.height === height) return;
         this.sceneTarget.setSize(width, height);
+        if (this.shaftTarget) {
+            this.shaftTarget.setSize(Math.max(2, Math.floor(width / 4)), Math.max(2, Math.floor(height / 4)));
+        }
         let w = width;
         let h = height;
         for (let i = 0; i < this.bloomLevels; i++) {
@@ -844,7 +951,7 @@ class Graphics {
             if (this.weatherType === 'fog' && this.scene.fog.density !== undefined) {
                 const thick = Math.min(1, this.scene.fog.density / 0.008);
                 this.skyUniforms.uFogBlend.value = 0.55 + 0.45 * thick;
-                this.skyUniforms.uMountains.value = 1 - thick;
+                this.skyUniforms.uMountains.value = (1 - thick) * this.ringStrength;
             }
         }
 
@@ -861,6 +968,42 @@ class Graphics {
             this.lastColorScan = now;
             this.fixColorSpaces();
         }
+    }
+
+    // Fill the composite pass's atmosphere uniforms, and draw the quarter-
+    // resolution light shafts when the sun is in front of the camera
+    renderAtmosphere(scene, camera) {
+        const c = this.compositeMaterial.uniforms;
+        const atmosphere = this.atmosphere;
+        const fog = atmosphere && atmosphere.heightFog;
+        c.uHeightFogOn.value = fog ? 1 : 0;
+        this.shaftsActive = false;
+        c.uShafts.value = 0;
+        if (!atmosphere) return;
+
+        camera.updateMatrixWorld();
+        c.tDepth.value = this.sceneTarget.depthTexture;
+        c.uProjInv.value.copy(camera.projectionMatrixInverse);
+        c.uCamWorld.value.copy(camera.matrixWorld);
+        if (scene.fog) c.uFogColor.value.copy(scene.fog.color);
+        c.uHeightFog.value.set(fog.density, atmosphere.baseY, fog.falloff);
+
+        // The moon casts no shafts
+        const preset = SKY_PRESETS[this.timeKey];
+        if (!(atmosphere.shafts > 0) || (preset && preset.moon)) return;
+        this.sunView.copy(this.sunDirection).transformDirection(camera.matrixWorldInverse);
+        if (this.sunView.z >= 0) return;
+        // Project a point far along the sun direction (camera-relative)
+        this.sunView.multiplyScalar(1000).applyMatrix4(camera.projectionMatrix);
+        this.sunScreen.set(this.sunView.x * 0.5 + 0.5, this.sunView.y * 0.5 + 0.5);
+
+        const shafts = this.shaftsMaterial.uniforms;
+        shafts.tScene.value = this.sceneTarget.texture;
+        shafts.tDepth.value = this.sceneTarget.depthTexture;
+        this.renderPass(this.shaftsMaterial, this.shaftTarget);
+        c.tShafts.value = this.shaftTarget.texture;
+        c.uShafts.value = atmosphere.shafts;
+        this.shaftsActive = true;
     }
 
     // Redraw the cloud panorama: at once when the sky changed, otherwise a
@@ -927,6 +1070,7 @@ class Graphics {
         renderer.autoClear = autoClear;
 
         const c = this.compositeMaterial.uniforms;
+        this.renderAtmosphere(scene, camera);
         c.tScene.value = this.sceneTarget.texture;
         c.tBloom.value = targets[0].texture;
         c.uExposure.value = renderer.toneMappingExposure;
