@@ -106,6 +106,10 @@ class Vehicle {
         this.crashAngle = 0;
         this.previousSpeed = 0;
         this.fallingOffCliff = false;
+        this.fallSide = 0; // -1 left, +1 right: the side the bike went over
+        this.offRoadTime = 0; // Seconds in run-off without touching the road
+        this.maxOffRoadTime = 6.0; // A rider this long off the road crashes
+        this.runoff = null; // Run-off settings of the zone the bike is in, if any
         this.hitGround = false;
         this.tumbleSpeed = 0;
         this.tumbleAngle = 0;
@@ -1686,7 +1690,7 @@ class Vehicle {
 
         // Check for wall/edge collision FIRST (even when crashed, in case we need to fall)
         if (!this.fallingOffCliff) {
-            this.checkWallCollision();
+            this.checkWallCollision(deltaTime);
         }
         
         if (this.crashed) {
@@ -1722,6 +1726,7 @@ class Vehicle {
 
                 // Check terrain collision - sample terrain height at current position
                 const terrainHeight = this.getTerrainHeightAt(this.position.x, this.position.z);
+                const lip = this.fallLip();
                 
                 // Check if hit terrain or lake
                 if (this.position.y <= terrainHeight + 0.5) {
@@ -1737,7 +1742,7 @@ class Vehicle {
 
                     // Ground contact scrubs tumble energy (only once it has
                     // actually descended - keep cartwheeling over the lip)
-                    if (this.tumbleSpeed && this.fallStartY - this.position.y > 8) {
+                    if (this.tumbleSpeed && this.fallStartY - this.position.y > lip) {
                         this.tumbleSpeed *= Math.max(0, 1 - 1.2 * deltaTime);
                         if (this.tumbleSpeed < 0.3) this.tumbleSpeed = 0;
                     }
@@ -1760,7 +1765,7 @@ class Vehicle {
                         
                         // Apply friction
                         this.velocity.multiplyScalar(0.98);
-                    } else if (this.fallStartY - this.position.y < 8) {
+                    } else if (this.fallStartY - this.position.y < lip) {
                         // Still on the flat shoulder at the cliff lip - keep
                         // the bike rolling outward so it carries over the edge
                         // and tumbles down the hill instead of stalling here
@@ -1796,17 +1801,9 @@ class Vehicle {
                 this.velocity.z *= 0.98;
 
                 // Clamp to the road surface (windowed nearest-segment search)
-                const crashRange = this.getSegmentSearchRange();
-                let crashRoadY = this.position.y;
-                let crashBestSq = Infinity;
-                for (let i = crashRange.start; i <= crashRange.end; i++) {
-                    const seg = this.environment && this.environment.roadPath ? this.environment.roadPath[i] : null;
-                    if (!seg) continue;
-                    const dx = this.position.x - seg.x;
-                    const dz = this.position.z - seg.z;
-                    const dSq = dx * dx + dz * dz;
-                    if (dSq < crashBestSq) { crashBestSq = dSq; crashRoadY = seg.y || 0; }
-                }
+                const crashRoadY = this.environment && this.environment.roadPath
+                    ? this.surfaceAt(this.position.x, this.position.z)
+                    : this.position.y;
                 if (this.position.y <= crashRoadY && this.velocity.y < 0) {
                     this.position.y = crashRoadY;
                     this.velocity.y = 0;
@@ -1965,25 +1962,12 @@ class Vehicle {
 
         // Check if bike has fallen through the road surface (especially when crashed on side)
         if (this.environment && this.environment.roadPath && !this.fallingOffCliff) {
-            // Find closest road segment (windowed search - full scans here cost
-            // O(roadPath) per physics tick)
-            let closestSegment = null;
-            let minDistanceSq = Infinity;
-            const fallRange = this.getSegmentSearchRange();
-            for (let i = fallRange.start; i <= fallRange.end; i++) {
-                const segment = this.environment.roadPath[i];
-                const dx = this.position.x - segment.x;
-                const dz = this.position.z - segment.z;
-                const distanceSq = dx * dx + dz * dz;
-                if (distanceSq < minDistanceSq) {
-                    minDistanceSq = distanceSq;
-                    closestSegment = segment;
-                }
-            }
+            // Windowed search - full scans here cost O(roadPath) per physics tick
+            const surfaceY = this.surfaceAt(this.position.x, this.position.z);
 
-            if (closestSegment && this.position.y < closestSegment.y - 2.0) {
-                // Bike is significantly below road surface - correct position
-                this.position.y = closestSegment.y;
+            if (this.position.y < surfaceY - 2.0) {
+                // Bike is significantly below the surface - correct position
+                this.position.y = surfaceY;
                 this.velocity.y = Math.max(0, this.velocity.y); // Prevent downward velocity
 
                 // If not already crashed, crash it now
@@ -2028,6 +2012,23 @@ class Vehicle {
         this.updateMesh();
     }
     
+    // Weather grip, further reduced on loose run-off ground
+    physicsMultipliers() {
+        const weather = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers() : {
+            lateralFriction: 1.0,
+            brakeForce: 1.0,
+            acceleration: 1.0
+        };
+        if (!this.runoff) return weather;
+        const { grip } = this.runoff;
+        return {
+            ...weather,
+            lateralFriction: weather.lateralFriction * grip,
+            brakeForce: weather.brakeForce * grip,
+            acceleration: weather.acceleration * grip
+        };
+    }
+
     updateSpeed(deltaTime, throttleInput, brakeInput) {
         // Calculate road gradient effect
         let gradientForce = 0;
@@ -2044,19 +2045,7 @@ class Vehicle {
             const aheadPos = this.position.clone().add(forward);
             
             // Find elevation ahead (windowed search around current segment)
-            let aheadY = currentY;
-            let minDistSq = Infinity;
-            const gradientRange = this.getSegmentSearchRange();
-            for (let i = gradientRange.start; i <= gradientRange.end; i++) {
-                const segment = this.environment.roadPath[i];
-                const dx = aheadPos.x - segment.x;
-                const dz = aheadPos.z - segment.z;
-                const distSq = dx * dx + dz * dz;
-                if (distSq < minDistSq) {
-                    minDistSq = distSq;
-                    aheadY = segment.y || 0;
-                }
-            }
+            const aheadY = this.surfaceAt(aheadPos.x, aheadPos.z);
             
             // Calculate gradient (rise over run)
             const gradient = (aheadY - currentY) / lookDistance;
@@ -2067,11 +2056,7 @@ class Vehicle {
         }
         
         // Get weather physics multipliers
-        const weatherMultipliers = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers() : {
-            lateralFriction: 1.0,
-            brakeForce: 1.0,
-            acceleration: 1.0
-        };
+        const weatherMultipliers = this.physicsMultipliers();
 
         // Apply throttle (reduced during wheelie for challenge)
         if (throttleInput > 0) {
@@ -2260,11 +2245,7 @@ class Vehicle {
 
     updatePhysics(deltaTime, steeringInput) {
         // Get weather physics multipliers
-        const weatherMultipliers = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers() : {
-            lateralFriction: 1.0,
-            brakeForce: 1.0,
-            acceleration: 1.0
-        };
+        const weatherMultipliers = this.physicsMultipliers();
 
         // Steering visualization
         this.steeringAngle = steeringInput * 0.3;
@@ -2557,6 +2538,9 @@ class Vehicle {
         this.segmentProgress = 0;
         this.wasNearEdge = false;
         this.fallingOffCliff = false;
+        this.fallSide = 0; // -1 left, +1 right: the side the bike went over
+        this.offRoadTime = 0; // Seconds in run-off without touching the road
+        this.runoff = null; // Run-off settings of the zone the bike is in, if any
         this.hitGround = false;
         this.tumbleSpeed = 0;
         this.tumbleAngle = 0;
@@ -2579,60 +2563,44 @@ class Vehicle {
         this.updateMesh();
     }
     
+    // Ground height read from the same profile the world is built from,
+    // for the falling bike. Never below the height where a fall ends.
     getTerrainHeightAt(x, z) {
-        // Terrain model matching the rendered geometry: the road sits on a
-        // cliff whose right face drops ~200 units over ~150 lateral units
-        // (~53 degrees) down to the lake plane at y=-200. The old model kept
-        // everything within 20 units at road height, so falling bikes tumbled
-        // along an invisible plateau beside the road instead of following the
-        // cliff down.
-        const lakeLevel = -195; // Just above the rendered lake plane (-200)
-
-        if (!this.environment || !this.environment.roadPath || this.environment.roadPath.length === 0) {
-            return lakeLevel;
+        const environment = this.environment;
+        if (!environment || !environment.roadPath || environment.roadPath.length === 0) {
+            return 0;
         }
 
-        // Windowed nearest-segment search (this runs several times per tick
-        // while falling - calculateSlopeNormal samples it 5x)
-        let closest = null;
-        let closestDistSq = Infinity;
-        const terrainRange = this.getSegmentSearchRange(30);
-        for (let i = terrainRange.start; i <= terrainRange.end; i++) {
-            const point = this.environment.roadPath[i];
-            const dx = x - point.x;
-            const dz = z - point.z;
-            const distSq = dx * dx + dz * dz;
-            if (distSq < closestDistSq) {
-                closestDistSq = distSq;
-                closest = point;
-            }
-        }
-
-        if (!closest) {
-            return lakeLevel;
-        }
-
-        const roadY = closest.y || 0;
-
-        // Signed lateral distance from the road centerline (positive = right,
-        // toward the drop-off; negative = left, into the mountain wall)
-        const perpX = Math.cos(closest.heading);
-        const perpZ = -Math.sin(closest.heading);
-        const lateral = (x - closest.x) * perpX + (z - closest.z) * perpZ;
-
-        const halfRoad = this.environment.roadWidth ? this.environment.roadWidth / 2 : 8;
-        const ledgeEnd = halfRoad + 2; // Road surface plus the 2m ledge
-
-        if (lateral <= ledgeEnd) {
-            // On the road/ledge, or on the left (mountain) side
-            return roadY;
-        }
-
-        // Cliff face: steep descent matching the rendered drop-off
-        const drop = (lateral - ledgeEnd) * 1.33;
-        return Math.max(roadY - drop, lakeLevel);
+        const range = this.getSegmentSearchRange(30);
+        const loc = {};
+        const ground = Terrain.groundY(
+            environment.terrain, environment.terrainGeometry, x, z, range.start, range.end, false, loc
+        );
+        const side = Terrain.sideAt(environment.terrain, loc.lateral < 0 ? -1 : 1, loc.index);
+        return Math.max(ground, Terrain.restY(environment.terrain, side, loc.roadY));
     }
-    
+
+    // Where the bike rides: the road height of the nearest segment, lowered or
+    // raised to the ground in a run-off band. On road, shoulder, wall and fall
+    // zones the answer is the road height itself.
+    // How far the bike must drop before it counts as over the lip of the
+    // side it fell from. A low drop ends in a short lip.
+    fallLip() {
+        const side = Terrain.sideAt(this.environment.terrain, this.fallSide, this.currentRoadSegment);
+        return Math.min(8, side.lipDepth ?? 8);
+    }
+
+    surfaceAt(x, z, radius = 10) {
+        const environment = this.environment;
+        if (environment.roadPath.length === 0) return this.position.y;
+        const range = this.getSegmentSearchRange(radius);
+        const loc = {};
+        Terrain.locate(environment.roadPath, x, z, range.start, range.end, loc);
+        const zone = Terrain.zoneAt(environment.terrain, loc.index, loc.lateral, environment.roadWidth / 2);
+        if (zone.kind !== 'runoff') return loc.roadY;
+        return Terrain.heightAt(environment.terrain, environment.terrainGeometry, loc, false);
+    }
+
     calculateSlopeNormal(x, z) {
         // Calculate the normal vector of the terrain slope at this position
         const epsilon = 1.0; // Sample distance
@@ -2808,12 +2776,14 @@ class Vehicle {
                 // At high speeds: responsive (0.40) to prevent jitter from lag
                 const speedRatio = Math.min(this.speed / 30, 1.0); // Normalize to 0-1 at 30 m/s
                 const lerpFactor = 0.15 + (speedRatio * 0.25); // 0.15 at low speed, 0.40 at high speed
+                // Interpolation follows the road; run-off adds the ground's offset from it
+                targetY += this.surfaceAt(this.position.x, this.position.z) - closest.segment.y;
                 this.position.y = this.position.y * (1 - lerpFactor) + targetY * lerpFactor;
             }
         }
     }
     
-    checkWallCollision() {
+    checkWallCollision(deltaTime = 0) {
         // Check if bike has gone off the road edges
         if (!this.environment) {
             console.log('ERROR: No environment set on vehicle');
@@ -2828,114 +2798,141 @@ class Vehicle {
             return;
         }
 
-        if (this.environment && this.environment.roadPath) {
-            // Get search range (only search nearby segments for performance)
-            const range = this.getSegmentSearchRange();
+        // Get search range (only search nearby segments for performance)
+        const range = this.getSegmentSearchRange();
 
-            // Use the closest segment for accurate perpDistance calculation
-            let currentSegment = null;
-            let minDistance = Infinity;
+        // Use the closest segment for accurate perpDistance calculation
+        let currentSegment = null;
+        let minDistance = Infinity;
 
-            for (let index = range.start; index <= range.end; index++) {
-                const segment = this.environment.roadPath[index];
-                const distance = Math.sqrt(
-                    Math.pow(this.position.x - segment.x, 2) +
-                    Math.pow(this.position.z - segment.z, 2)
-                );
+        for (let index = range.start; index <= range.end; index++) {
+            const segment = this.environment.roadPath[index];
+            const distance = Math.sqrt(
+                Math.pow(this.position.x - segment.x, 2) +
+                Math.pow(this.position.z - segment.z, 2)
+            );
 
-                if (distance < minDistance) {
-                    minDistance = distance;
-                    currentSegment = segment;
-                    this.currentRoadSegment = index; // Update current segment
-                }
-            }
-
-            if (currentSegment) {
-                // Calculate perpendicular distance from road centerline
-                // Use the same perpendicular calculation as environment.js
-                const perpX = Math.cos(currentSegment.heading);
-                const perpZ = -Math.sin(currentSegment.heading);
-                const toVehicleX = this.position.x - currentSegment.x;
-                const toVehicleZ = this.position.z - currentSegment.z;
-
-                // Improved road boundary logic with hysteresis
-                // Use environment's road width to calculate boundaries (scales with difficulty).
-                // Thresholds match the rendered geometry: the road mesh extends
-                // ~2m past the lane on the right (the ledge) and the rock wall
-                // face starts ~1m past the lane on the left.
-                const halfRoadWidth = this.environment.roadWidth / 2;
-                const roadEdge = halfRoadWidth; // Edge of the road (matches actual road width)
-                const safetyZone = halfRoadWidth + 2.0; // Safety zone - slow down but don't crash
-                const cliffEdge = halfRoadWidth + 2.0; // Cliff edge - fall past the rendered ledge
-                const wallBuffer = halfRoadWidth + 1.0; // Wall crash buffer - where the rock face starts
-
-                // Dot product gives signed distance (positive = right of road, negative = left of road)
-                const perpDistance = toVehicleX * perpX + toVehicleZ * perpZ;
-
-                // Hysteresis to prevent oscillating between states
-                const hysteresisBuffer = 0.5; // Half unit buffer
-                const effectiveRoadEdge = this.wasNearEdge ? roadEdge - hysteresisBuffer : roadEdge;
-                const effectiveSafetyZone = this.wasNearEdge ? safetyZone - hysteresisBuffer : safetyZone;
-                const effectiveCliffEdge = this.wasNearEdge ? cliffEdge - hysteresisBuffer : cliffEdge;
-
-                // Update hysteresis state
-                this.wasNearEdge = Math.abs(perpDistance) > effectiveRoadEdge;
-
-                // Check if we're on the ledge areas (slow down but don't crash)
-                if (Math.abs(perpDistance) > effectiveRoadEdge && Math.abs(perpDistance) < effectiveSafetyZone) {
-                    // On the edge/ledge - slow down but don't crash
-                    this.speed *= 0.95; // Gradual speed reduction
-                }
-                
-                // Check if we've hit the left cliff wall (negative perpDistance)
-                if (perpDistance < -wallBuffer && !this.crashed) {
-                    // Hit the cliff wall on the left - crash with bounce
-                    this.crashed = true;
-                    this.fallingOffCliff = false; // Not falling, we hit a wall
-                    this.crashAngle = -Math.PI/6; // Crash leaning left into the wall
-                    this.frame.material.color.setHex(0x8B0000); // Dark red for crash
-                    console.log('CRASHED! Hit the left cliff wall at', (this.speed * 2.237).toFixed(1) + ' mph');
-                    console.log('Left wall hit at distance:', perpDistance);
-
-                    // Move bike back to wall position and apply bounce
-                    const targetPerpDistance = -wallBuffer;
-                    const adjustment = (targetPerpDistance - perpDistance);
-                    this.position.x += perpX * adjustment;
-                    this.position.z += perpZ * adjustment;
-
-                    // Bounce off the wall - toward road center
-                    const bounceDir = new THREE.Vector3(perpX, 0, perpZ); // Bounce back toward road center
-                    this.velocity = bounceDir.multiplyScalar(this.speed * 0.2);
-                    this.velocity.y = 0.5; // Small upward bounce
-                }
-
-
-
-                // Check if we've gone off the right cliff edge (positive perpDistance)
-                // (a bike already sliding on its side goes over the edge too)
-                if (perpDistance > effectiveCliffEdge) {
-                    console.log('=== FALLING OFF RIGHT CLIFF! ===');
-                    console.log('perpDistance:', perpDistance, 'effectiveCliffEdge:', effectiveCliffEdge, 'cliffEdge:', cliffEdge);
-                    console.log('Vehicle position:', this.position.x.toFixed(1), this.position.z.toFixed(1), 'Y:', this.position.y.toFixed(1));
-                    console.log('CRASHED! Fell off the right cliff edge at', (this.speed * 2.237).toFixed(1) + ' mph');
-                    this.crashed = true;
-                    this.fallingOffCliff = true; // Fall off the right cliff edge
-                    this.fallStartY = this.position.y;
-                    this.groundHitLogged = false;
-                    // Tumble end-over-end down the hill, faster with speed
-                    this.tumbleAngle = 0;
-                    this.tumbleRoll = 0;
-                    this.tumbleSpeed = 3 + this.speed * 0.12;
-                    this.crashAngle = -Math.PI/4; // Fall to the left after going off right edge
-                    this.frame.material.color.setHex(0x8B0000); // Dark red for falling
-
-                    // Continue forward momentum but start falling
-                    this.velocity.y = -8; // Start falling downward
-                }
+            if (distance < minDistance) {
+                minDistance = distance;
+                currentSegment = segment;
+                this.currentRoadSegment = index; // Update current segment
             }
         }
+
+        if (!currentSegment) return;
+
+        // Calculate perpendicular distance from road centerline
+        // Use the same perpendicular calculation as environment.js
+        const perpX = Math.cos(currentSegment.heading);
+        const perpZ = -Math.sin(currentSegment.heading);
+        const toVehicleX = this.position.x - currentSegment.x;
+        const toVehicleZ = this.position.z - currentSegment.z;
+
+        // Dot product gives signed distance (positive = right of road, negative = left of road)
+        const perpDistance = toVehicleX * perpX + toVehicleZ * perpZ;
+        const sign = perpDistance < 0 ? -1 : 1;
+        const sideName = sign < 0 ? 'left' : 'right';
+        const halfRoadWidth = this.environment.roadWidth / 2;
+        const terrain = this.environment.terrain;
+
+        // Where the bike is, by the profile's bands. Hysteresis pulls the
+        // edges in by half a unit once the bike has been past the road edge,
+        // so it cannot oscillate between states. A wall has none (it clamps
+        // the bike to its face); the run-off timer and drag read the bike's
+        // true lateral and ignore it.
+        const hysteresisBuffer = 0.5;
+        const bias = this.wasNearEdge ? hysteresisBuffer : 0;
+        const zone = Terrain.zoneAt(terrain, this.currentRoadSegment, perpDistance, halfRoadWidth);
+        const edgeZone = Terrain.zoneAt(terrain, this.currentRoadSegment, perpDistance + sign * bias, halfRoadWidth);
+        const reach = Math.abs(perpDistance) + bias;
+
+        // Update hysteresis state
+        this.wasNearEdge = reach > halfRoadWidth;
+
+        // On the ledge (slow down but don't crash). Run-off has its own drag.
+        if (reach > halfRoadWidth && reach < halfRoadWidth + zone.side.flat && edgeZone.kind !== 'runoff') {
+            this.speed *= 0.95; // Gradual speed reduction
+        }
+
+        this.runoff = zone.kind === 'runoff' ? zone.side.runoff : null;
+        if (this.runoff) this.checkRunoff(deltaTime, zone);
+        // The road resets the clock; a shoulder in between neither adds nor clears it
+        if (zone.kind === 'road') this.offRoadTime = 0;
+
+        // Hit a wall: crash with a bounce back toward the road
+        if (zone.kind === 'wall' && !this.crashed) {
+            this.crashed = true;
+            this.fallingOffCliff = false; // Not falling, we hit a wall
+            this.crashAngle = sign * Math.PI / 6; // Crash leaning into the wall
+            this.frame.material.color.setHex(0x8B0000); // Dark red for crash
+            console.log(`CRASHED! Hit the ${sideName} wall at`, (this.speed * 2.237).toFixed(1) + ' mph');
+            console.log('Wall hit at distance:', perpDistance);
+
+            // Move bike back to the wall face and apply bounce
+            const adjustment = sign * zone.start - perpDistance;
+            this.position.x += perpX * adjustment;
+            this.position.z += perpZ * adjustment;
+
+            // Bounce off the wall - toward road center
+            const bounceDir = new THREE.Vector3(-sign * perpX, 0, -sign * perpZ);
+            this.velocity = bounceDir.multiplyScalar(this.speed * 0.2);
+            this.velocity.y = 0.5; // Small upward bounce
+        }
+
+        // Gone off a fall edge (a bike already sliding on its side goes over too)
+        if (edgeZone.kind === 'fall') {
+            console.log(`=== FALLING OFF ${sideName.toUpperCase()} EDGE ===`);
+            console.log('perpDistance:', perpDistance, 'edge start:', edgeZone.start);
+            console.log('Vehicle position:', this.position.x.toFixed(1), this.position.z.toFixed(1), 'Y:', this.position.y.toFixed(1));
+            console.log(`CRASHED! Fell off the ${sideName} edge at`, (this.speed * 2.237).toFixed(1) + ' mph');
+            this.crashed = true;
+            this.fallingOffCliff = true;
+            this.fallSide = sign;
+            this.fallStartY = this.position.y;
+            this.groundHitLogged = false;
+            // Tumble end-over-end down the hill, faster with speed
+            this.tumbleAngle = 0;
+            this.tumbleRoll = 0;
+            this.tumbleSpeed = 3 + this.speed * 0.12;
+            this.crashAngle = -sign * Math.PI / 4; // Fall toward the other side
+            this.frame.material.color.setHex(0x8B0000); // Dark red for falling
+
+            // Continue forward momentum but start falling
+            this.velocity.y = -8; // Start falling downward
+        }
     }
-    
+
+    // Run-off: loose ground beside the road. It drags the bike down to a floor
+    // speed, and a bike that stays off the road too long, or rolls into water,
+    // crashes. A crashed bike gets none of this and slides as on the road.
+    checkRunoff(deltaTime, zone) {
+        if (this.crashed) return;
+
+        const { drag, floorSpeed } = zone.side.runoff;
+        // Drag only ever slows the bike: one that enters below the floor keeps its speed
+        const floor = Math.min(this.speed, floorSpeed);
+        this.speed = Math.max(this.speed - drag * this.speed * deltaTime, floor);
+        this.offRoadTime += deltaTime;
+
+        const environment = this.environment;
+        const range = this.getSegmentSearchRange();
+        const ground = Terrain.groundY(
+            environment.terrain, environment.terrainGeometry,
+            this.position.x, this.position.z, range.start, range.end, false
+        );
+        if (environment.terrain.floor.kind !== 'none' && ground <= environment.terrain.floor.y) {
+            this.crashed = true;
+            this.crashAngle = this.leanAngle || 0.5;
+            this.frame.material.color.setHex(0x1e5a8a); // Blue for water
+            console.log('CRASHED! Rode into the water at', (this.speed * 2.237).toFixed(1) + ' mph');
+        } else if (this.offRoadTime >= this.maxOffRoadTime) {
+            this.crashed = true;
+            this.crashAngle = this.leanAngle || 0.5;
+            this.frame.material.color.setHex(0xff6600); // Orange, as for the low-speed fall
+            console.log('CRASHED! Off the road for', this.maxOffRoadTime.toFixed(1), 's');
+        }
+    }
+
     // Small-obstacle hop: bikes with good jump stats bounce over small rocks
     // instead of crashing. Returns true if the bike hopped.
     attemptHop(obstacleRadius) {
@@ -3010,21 +3007,7 @@ class Vehicle {
         if (this.environment && this.environment.roadPath) {
             // Find the road height at current position (windowed search - jumps
             // travel forward, so use a wider window than the on-road checks)
-            let targetRoadHeight = 0;
-            let minDistanceSq = Infinity;
-
-            const jumpRange = this.getSegmentSearchRange(25);
-            for (let i = jumpRange.start; i <= jumpRange.end; i++) {
-                const segment = this.environment.roadPath[i];
-                const dx = this.position.x - segment.x;
-                const dz = this.position.z - segment.z;
-                const distanceSq = dx * dx + dz * dz;
-
-                if (distanceSq < minDistanceSq) {
-                    minDistanceSq = distanceSq;
-                    targetRoadHeight = segment.y || 0;
-                }
-            }
+            const targetRoadHeight = this.surfaceAt(this.position.x, this.position.z, 25);
             
             // Check if we've landed
             if (this.jumpVelocityY < 0 && this.position.y <= targetRoadHeight + 0.1) {

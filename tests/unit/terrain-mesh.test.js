@@ -1,5 +1,5 @@
 // Rock dressing reads the profile's face description, not the side sign.
-import { buildEnvironment, groundedRecords, loadGame } from '../helpers/load-game.js';
+import { buildEnvironment, decalMeshes, groundedRecords, loadGame, ribbonMeshes } from '../helpers/load-game.js';
 
 describe('embedded rock spread reads side.face.rockSpread', () => {
     let game;
@@ -72,4 +72,92 @@ describe('embedded rock spread reads side.face.rockSpread', () => {
         expect(bySide['-1'].some(s => s > 3.5)).toBe(true);
         expect(bySide[1].some(s => s > 3.5)).toBe(true);
     });
+});
+
+describe('decals sit on the drawn face', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    const FACE_DECALS = ['crack', 'seepage', 'vine', 'snow'];
+
+    function build(legIndex, swap = false) {
+        const original = game.Terrain.LEGS[legIndex].profile;
+        if (swap) {
+            const { left, right, ...rest } = original;
+            game.Terrain.LEGS[legIndex].profile = { ...rest, left: right, right: left };
+        }
+        try {
+            return buildEnvironment(game, legIndex);
+        } finally {
+            game.Terrain.LEGS[legIndex].profile = original;
+        }
+    }
+
+    // Smallest distance from the decal centre to the ribbon along +perp, -perp, up
+    // and down. A decal sits exactly on a column of vertices, so the first and
+    // last column are mesh edges, which a ray misses; each ray also starts 1 cm
+    // either side along the road.
+    function faceDistance(env, ribbons, decal) {
+        const { THREE } = game;
+        let nearest = env.roadPath[0];
+        let best = Infinity;
+        env.roadPath.forEach(point => {
+            const d = (point.x - decal.position.x) ** 2 + (point.z - decal.position.z) ** 2;
+            if (d < best) { best = d; nearest = point; }
+        });
+        const perp = new THREE.Vector3(Math.cos(nearest.heading), 0, -Math.sin(nearest.heading));
+        const along = new THREE.Vector3(Math.sin(nearest.heading), 0, Math.cos(nearest.heading));
+        const directions = [perp, perp.clone().negate(), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0)];
+        const origins = [0.01, -0.01].map(shift => decal.position.clone().addScaledVector(along, shift));
+        return Math.min(...origins.flatMap(origin => directions.map(direction => {
+            const hit = new THREE.Raycaster(origin, direction).intersectObjects(ribbons, false)[0];
+            return hit ? hit.distance : Infinity;
+        })));
+    }
+
+    const faceDecals = env => ribbonMeshes(env)
+        .flatMap(ribbon => ribbon.parent.children)
+        .filter(object => FACE_DECALS.includes(object.userData.decal));
+
+    test.each([[0, 'mountain-dawn'], [4, 'high-pass'], [7, 'winter-pass']])('%i (%s): every decal centre is within 0.75 of the face', (legIndex) => {
+        const { env, scene } = build(legIndex);
+        scene.updateMatrixWorld(true);
+        const ribbons = ribbonMeshes(env);
+        const decals = faceDecals(env);
+        expect(decals.length).toBeGreaterThan(0);
+        decals.forEach(decal => expect(faceDistance(env, ribbons, decal)).toBeLessThanOrEqual(0.75));
+    }, 60000);
+
+    test('the decal set is exactly the meshes tagged userData.decal, and the counts per side are unchanged', () => {
+        const counts = [[13, 7], [11, 8], [18, 7]];
+        [0, 4, 7].forEach((legIndex, n) => {
+            const { env } = build(legIndex);
+            const byTag = [];
+            env.scene.traverse(object => {
+                if (object.userData && object.userData.decal) byTag.push(object);
+            });
+            expect(new Set(byTag)).toEqual(new Set(decalMeshes(env).flat()));
+            expect(decalMeshes(env).map(list => list.length)).toEqual(counts[n]);
+        });
+    }, 60000);
+
+    test('a mirrored profile puts decals above the road on the rising side and below on the dropping side', () => {
+        const { env, scene } = build(0, true);
+        scene.updateMatrixWorld(true);
+        const ribbons = ribbonMeshes(env);
+        faceDecals(env).forEach(decal => {
+            let nearest = env.roadPath[0];
+            let best = Infinity;
+            env.roadPath.forEach(point => {
+                const d = (point.x - decal.position.x) ** 2 + (point.z - decal.position.z) ** 2;
+                if (d < best) { best = d; nearest = point; }
+            });
+            const lateral = (decal.position.x - nearest.x) * Math.cos(nearest.heading) - (decal.position.z - nearest.z) * Math.sin(nearest.heading);
+            if (lateral > 0) expect(decal.position.y).toBeGreaterThanOrEqual(nearest.y);
+            else expect(decal.position.y).toBeLessThanOrEqual(nearest.y);
+            expect(faceDistance(env, ribbons, decal)).toBeLessThanOrEqual(0.75);
+        });
+    }, 60000);
 });

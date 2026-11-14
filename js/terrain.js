@@ -58,6 +58,9 @@ const Terrain = (() => {
     const depth = margin - floorY;
     return {
       flat: LEDGE,
+      // Distance past the road edge where each band ends; the last band runs
+      // outward without limit. A fall starts where the ledge ends.
+      bands: [{ to: LEDGE, kind: 'shoulder' }, { kind: 'fall' }],
       exact: true, // Physics walks the rendered column
       face: { kind: 'drop', height: faceHeight, rockSpread },
       // Vertical units lost per lateral unit past the ledge, floored at the lake
@@ -84,6 +87,8 @@ const Terrain = (() => {
   function cliffWallSide({ height, rockSpread, slope = 1.6 }) {
     return {
       flat: LEDGE,
+      // The rock face starts 1m past the road edge, inside the 2m ledge
+      bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
       // Physics keeps the plain slope on this side; the drawn wall differs
       exact: false,
       face: { kind: 'rise', height, rockSpread },
@@ -125,7 +130,8 @@ const Terrain = (() => {
 
   const cliffLake = {
     id: 'cliffLake',
-    floor: { kind: 'lake', y: LAKE_Y },
+    // restY is where a fall ends: just above the drawn lake plane
+    floor: { kind: 'lake', y: LAKE_Y, restY: LAKE_Y + 5 },
     // Road y for global segment i: gentle rolling terrain
     elevation: (i) => Math.sin(i * 0.04) * 8 + Math.cos(i * 0.025) * 6 + 25,
     left: cliffWallSide({ height: 40, rockSpread: 20 }),
@@ -279,9 +285,69 @@ const Terrain = (() => {
     return roadY;
   }
 
-  function groundY(profile, geo, x, z, from, to, exact) {
+  // `loc` receives the located point (index, roadY, lateral, along) so a
+  // caller that also needs the side or road height does not search twice
+  function groundY(profile, geo, x, z, from, to, exact, loc = {}) {
     if (!geo.path || geo.path.length === 0) return profile.floor.y;
-    return heightAt(profile, geo, locate(geo.path, x, z, from, to, {}), exact);
+    return heightAt(profile, geo, locate(geo.path, x, z, from, to, loc), exact);
+  }
+
+  // The side in force at a segment. segIndex is reserved for span overrides.
+  function sideAt(profile, sign, segIndex) {
+    return sign < 0 ? profile.left : profile.right;
+  }
+
+  // What the ground is at a signed lateral (positive right): the road, or the
+  // band of the side that lateral falls in. `start` is where that zone begins,
+  // as a distance from the centre line.
+  function zoneAt(profile, segIndex, lateral, halfRoad) {
+    const sign = lateral < 0 ? -1 : 1;
+    const side = sideAt(profile, sign, segIndex);
+    const reach = Math.abs(lateral);
+    if (reach <= halfRoad) return { kind: 'road', side, sign, start: 0 };
+
+    let start = halfRoad;
+    for (const band of side.bands) {
+      if (band.to === undefined || reach <= halfRoad + band.to) {
+        return { kind: band.kind, side, sign, start };
+      }
+      start = halfRoad + band.to;
+    }
+    throw new Error(`Side of ${profile.id} has no outermost band`);
+  }
+
+  // The sign of the first side that ends in a wall (left first), or 0 when
+  // neither does. Rocks come off a wall.
+  function wallSign(profile) {
+    for (const sign of [-1, 1]) {
+      const { bands } = sideAt(profile, sign, 0);
+      if (bands[bands.length - 1].kind === 'wall') return sign;
+    }
+    return 0;
+  }
+
+  // Finite height where a fall ends: the reachable water's rest height, else
+  // a fixed depth below the road. Nothing may fall without end.
+  function restY(profile, side, roadY) {
+    if (profile.floor.restY !== undefined) return profile.floor.restY;
+    if (side.fallDepth !== undefined) return roadY - side.fallDepth;
+    throw new Error(`Profile ${profile.id} has no rest height for a fall`);
+  }
+
+  // Point (d, y) on the drawn column at vertical fraction v of the face, by
+  // linear interpolation between two rows. Decals find the face only here.
+  // ctx is the same as for row(); out receives d and y.
+  const lower = {};
+  const upper = {};
+  function facePoint(side, v, ctx, out) {
+    const scaled = Math.max(0, Math.min(1, v)) * ROWS;
+    const j = Math.min(Math.floor(scaled), ROWS - 1);
+    const t = scaled - j;
+    side.row(j, ctx, lower);
+    side.row(j + 1, ctx, upper);
+    out.d = lower.d + (upper.d - lower.d) * t;
+    out.y = lower.y + (upper.y - lower.y) * t;
+    return out;
   }
 
   return {
@@ -292,6 +358,11 @@ const Terrain = (() => {
     LEGS,
     LEG_PROFILES,
     legConfig,
+    sideAt,
+    zoneAt,
+    wallSign,
+    restY,
+    facePoint,
     cliffDropSide,
     cliffWallSide,
     forLeg,
