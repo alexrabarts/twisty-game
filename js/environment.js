@@ -536,6 +536,7 @@ class Environment {
     roadMesh.receiveShadow = true;
     // A flat ribbon has nothing to shadow, and casting made it shadow itself
     roadMesh.castShadow = false;
+    roadMesh.userData.part = "ground";
     this.scene.add(roadMesh);
 
     console.log(
@@ -1163,6 +1164,7 @@ class Environment {
       const mainCliff = new THREE.Mesh(geometry, cliffMaterial);
       mainCliff.receiveShadow = true;
       mainCliff.castShadow = true;
+      mainCliff.userData.part = "ground";
       group.add(mainCliff);
 
       // Enhanced boulder position testing with more comprehensive checks
@@ -1900,6 +1902,11 @@ class Environment {
         }
       }
 
+      // Everything else the cliff builder added to its group dresses the face
+      group.children.forEach((child) => {
+        if (!child.userData.part) child.userData.part = "decals";
+      });
+
       return group;
     };
 
@@ -1987,6 +1994,7 @@ class Environment {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.receiveShadow = true;
       mesh.userData.type = "terrain";
+      mesh.userData.part = "ground";
       return mesh;
     };
 
@@ -3680,6 +3688,7 @@ class Environment {
     lake.rotation.x = -Math.PI / 2;
     lake.position.set(legMid.x, -200, legMid.z);
     lake.receiveShadow = true;
+    lake.userData.part = "floor";
     this.scene.add(lake);
 
     // Create continuous terrain strips along the road (only in active segment range)
