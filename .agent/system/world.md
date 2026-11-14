@@ -1,6 +1,6 @@
 # World
 
-On the cliff legs (mountain-dawn, high-pass) the road runs along a cliff. Positive lateral offset is the valley (drop-off) side. Negative is the mountain wall. Riders keep to the wall side; oncoming cars use the valley side. Valley-run and storm-valley are open ground instead: run-off on both sides (see "Run-off legs"). Coastal-descent and winter-pass have their own shapes (see "Coast and ridge").
+Every leg has a terrain profile: what lies on each side of the road (a wall, a fall, or run-off ground) and what lies under it. A side is described outward from the centre line, so the code never assumes which side is the valley. Positive lateral is the right of the road; which ground is there is the profile's choice. The cliff legs (mountain-dawn, high-pass, profile `cliffLake`) are one case: the left is a mountain wall and the right is the drop-off, so riders keep to the wall side and oncoming cars use the valley side. Valley-run and storm-valley are open ground with run-off on both sides (see "Run-off legs"). Coastal-descent and winter-pass have their own shapes (see "Coast and ridge").
 
 ## One terrain model
 
@@ -8,7 +8,7 @@ On the cliff legs (mountain-dawn, high-pass) the road runs along a cliff. Positi
 
 A leg has a profile (`Terrain.forLeg(legIndex)`, held as `environment.terrain`). A profile has a `floor`, an `elevation(i)` for the road height and a `left` and a `right` side. Legs 1 and 5 use `cliffLake`: a wall on the left, a drop to the lake (y = -200) on the right. Valley-run uses `valleyFloor`, storm-valley uses `forest` (see "Run-off legs"), coastal-descent uses `coast` and winter-pass uses `ridge` (see "Coast and ridge"), foggy-gorge uses `canyon` and night-ride uses `forestNight` (see "Gorge and night forest"). Distance `d` on a side is always outward from the centre line, so a side does not know which way it faces.
 
-Three things must agree: the rendered ribbon, `Environment.groundYAt()` and `Vehicle.getTerrainHeightAt()`. All three read the profile: the vehicle and the rockfalls call `Terrain.groundY()` (the vehicle with `exact = false`, the rockfalls with `exact = true`) and clamp or settle on what it returns.
+Three things must agree: the rendered ribbon, `Environment.groundYAt()` and the bike's ground height. All three read the profile: the vehicle and the rockfalls call `Terrain.groundY()` (the vehicle with `exact = false`, the rockfalls with `exact = true`) and clamp or settle on what it returns.
 
 - `Terrain.row(side, j, ctx, out)` gives one cross-section vertex. `Environment.buildTerrainRibbon(sign, side)` draws the mesh from it, one `this.rand()` per vertex.
 - `Environment.decorateRockFace(sign, side, group, rockMaterials)` adds rocks, cracks, seepage, vines and snow. It runs only for a side with a `face`. `side.face.rockSpread` says how far rocks spread outward per unit of random height.
@@ -66,6 +66,10 @@ A span with a `type` is a set piece: `Terrain.setPieces(profile)` lists them as 
 `Environment.createSetPieces()` builds each as a group named for its type, with a few merged meshes standing at the piece's centre (culling reads a mesh origin): the bridge a deck with parapets and piers; the tunnel a lining, hill, two portals and an emissive lamp strip; the village houses, windows, lamp posts, lamp heads and light pools. No piece adds a light: the scene keeps its seven. `Game.tunnelRoofY()` gives the roof over the bike (a segment either side counts) and `updateCamera` keeps the camera 1 m under it. All three legs have a `preview` for the menu camera.
 
 Both legs have `trackVersion` 2: `foggy-gorge-v2` and `night-ride-v2`. After this only mountain-dawn and high-pass keep plain board ids.
+
+## What is still in environment.js
+
+`js/terrain.js` holds the ground model and the profiles. `js/environment.js` still builds every mesh: the ribbon, road, walls, forest, set pieces, roadworks plant and gates. A new profile should add its builders next to the existing ones by profile, and keep ground, height and zone rules in `terrain.js`, so `environment.js` does not grow with each leg.
 
 ## Only the active leg exists
 

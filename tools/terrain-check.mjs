@@ -359,7 +359,14 @@ function installProbe(d6Sources, latSet) {
         const { env } = P.build(legIndex);
         const path = env.roadPath;
         const a = env.startSegment, b = Math.min(env.endSegment, path.length - 1);
-        const limit = env.roadWidth / 2 + 2; // road plus ledge: the rideable ground today
+        const halfRoad = env.roadWidth / 2;
+        // The rideable ground: the profile's own limit on the side the sample falls, or
+        // the road plus its ledge on a tree that has no profiles (the frozen baselines)
+        const limitAt = (n, x, z) => {
+            if (typeof Terrain === 'undefined' || !env.terrain) return halfRoad + 2;
+            const lateral = (x - path[n].x) * Math.cos(path[n].heading) - (z - path[n].z) * Math.sin(path[n].heading);
+            return Terrain.rideableLimit(env.terrain, n, lateral < 0 ? -1 : 1, halfRoad);
+        };
         const dist = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
         const cum = [0];
         for (let i = a + 1; i <= b; i++) cum[i - a] = cum[i - a - 1] + dist(path[i - 1], path[i]);
@@ -374,12 +381,12 @@ function installProbe(d6Sources, latSet) {
                 for (let k = 0; k <= steps && ok; k++) {
                     const x = path[i].x + (path[j].x - path[i].x) * k / steps;
                     const z = path[i].z + (path[j].z - path[i].z) * k / steps;
-                    let best = Infinity;
+                    let best = Infinity, nearest = i;
                     for (let n = Math.max(a, i - 3); n <= Math.min(b, j + 3); n++) {
                         const d = Math.hypot(x - path[n].x, z - path[n].z);
-                        if (d < best) best = d;
+                        if (d < best) { best = d; nearest = n; }
                     }
-                    ok = best <= limit;
+                    ok = best <= limitAt(nearest, x, z);
                 }
                 if (ok) open.push([i, j, round(chord, 10), round(road, 10)]);
             }

@@ -327,7 +327,18 @@ describe('the run-off legs built', () => {
         expect(Math.max(...reach)).toBeLessThanOrEqual(90.0);
     });
 
-    test.each([[VALLEY, 45 + 2], [FOREST, 33 + 2]])('leg %i: every trunk a bike can reach is solid, and none further out is', (index, reachable) => {
+    test('every solid trunk stands within the planted band, read from its nearest segment', () => {
+        const { env } = leg(VALLEY);
+        const trunks = env.boulders.filter(b => b.solid && b.label === 'tree');
+        expect(trunks.length).toBeGreaterThanOrEqual(20);
+        trunks.forEach(trunk => {
+            const lateral = Math.abs(lateralOf(env, trunk.position.x, trunk.position.z));
+            expect(lateral).toBeGreaterThanOrEqual(10 + 3);
+            expect(lateral).toBeLessThanOrEqual(10 + 35);
+        });
+    });
+
+    test.each([[VALLEY, 45], [FOREST, 33]])('leg %i: every trunk a bike can reach is solid, and none further out is', (index, reachable) => {
         const { env, scene } = leg(index);
         const trunks = env.boulders.filter(b => b.solid && b.label === 'tree');
         trunks.forEach(trunk => {
@@ -442,10 +453,11 @@ describe('the run-off legs built', () => {
                 expect(near(-(limit + 1))).toBe(true);
                 expect(near(limit + 4)).toBe(false);
                 expect(near(-(limit + 4))).toBe(false);
-                // The band along the road is 5 m each way
-                expect(inGate(gate, onGate(gate, 4.9, 0))).toBe(true);
-                expect(inGate(gate, onGate(gate, 5.1, 0))).toBe(false);
-                expect(inGate(gate, onGate(gate, -5.1, 0))).toBe(false);
+                // The band along the road is the gate's width each way (5 m for the finish)
+                const band = gate.width || 5;
+                expect(inGate(gate, onGate(gate, band - 0.1, 0))).toBe(true);
+                expect(inGate(gate, onGate(gate, band + 0.1, 0))).toBe(false);
+                expect(inGate(gate, onGate(gate, -(band + 0.1), 0))).toBe(false);
             });
         });
 
@@ -479,7 +491,8 @@ describe('the run-off legs built', () => {
                         const dz = point.z - gate.position.z;
                         const along = dx * Math.sin(gate.heading) + dz * Math.cos(gate.heading);
                         const across = dx * Math.cos(gate.heading) - dz * Math.sin(gate.heading);
-                        if (Math.abs(along) < 5) expect(Math.abs(across)).toBeGreaterThan(Math.max(gate.left, gate.right) + 5);
+                        const band = gate.width || 5;
+                        if (Math.abs(along) < band) expect(Math.abs(across)).toBeGreaterThan(Math.max(gate.left, gate.right) + band);
                     }
                 });
             });
@@ -655,6 +668,11 @@ describe('the bike on the run-off legs', () => {
         expect(Math.abs(history[1].speed - reference[1].speed)).toBeLessThan(0.01);
         expect(Math.abs(history[60].speed - reference[60].speed)).toBeLessThan(0.1);
         expect(history[60].crashed).toBe(reference[60].crashed);
+    });
+
+    test('run-off never raises speed: entering at 5 m/s the speed stays at or below 5 on every tick', () => {
+        const { history } = ride(place(SEGMENT, 13, 5), 60);
+        history.slice(1).forEach(entry => expect(entry.speed).toBeLessThanOrEqual(5.0));
     });
 
     test('the bike rides on the drawn ground beside the road, not the road height', () => {

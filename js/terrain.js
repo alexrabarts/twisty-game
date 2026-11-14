@@ -743,7 +743,14 @@ const Terrain = (() => {
   function gateReach(profile, segIndex, sign, halfRoad) {
     const side = sideAt(profile, sign, segIndex);
     const open = side.bands.some((band) => band.kind === 'runoff');
-    return open ? rideableLimit(profile, segIndex, sign, halfRoad) + 2 : halfRoad + 2;
+    return open ? reachLimit(profile, segIndex, sign, halfRoad) : halfRoad + 2;
+  }
+
+  // How far from the centre line a bike's body can touch something: the
+  // rideable limit plus the two metres of its width. One rule for gates and
+  // for which trunks are solid.
+  function reachLimit(profile, segIndex, sign, halfRoad) {
+    return rideableLimit(profile, segIndex, sign, halfRoad) + 2;
   }
 
   // The largest distance from the centre line any row of a side reaches. Rows
@@ -822,6 +829,7 @@ const Terrain = (() => {
     heightfieldSide,
     rideableLimit,
     gateReach,
+    reachLimit,
     waterLevel,
     outermost,
     forLeg,

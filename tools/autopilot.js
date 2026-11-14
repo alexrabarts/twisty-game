@@ -39,7 +39,7 @@ window.twistyDev = {
     },
 
     // Freeze the game and look at the bike from a point beside the road.
-    // side > 0 is the valley side, back > 0 is behind the bike.
+    // side > 0 is the right of the road (which ground is there depends on the leg's profile), back > 0 is behind the bike.
     view(side = 30, up = 12, back = 25, ahead = 40) {
         const game = window.game;
         game.paused = true;

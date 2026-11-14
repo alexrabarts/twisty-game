@@ -375,6 +375,19 @@ describe('the coast and the ridge built', () => {
         expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(['container', 'container']);
     });
 
+    test('ridge: the plant is pinned inside the 7 m of run-off the ridge allows, not at the valley-run offsets', () => {
+        // The ridge allows run-off to halfRoad + 7 = 15, so the plan's -17/-14/-14 would be over the drop
+        const { env } = leg(RIDGE);
+        // A barrier or truck is two circles side by side along its length: pin the centre
+        const centre = label => {
+            const list = env.boulders.filter(b => b.solid && b.label === label).map(b => lateralOf(env, b.position.x, b.position.z));
+            return list.reduce((sum, l) => sum + l, 0) / list.length;
+        };
+        expect(centre('bulldozer')).toBeCloseTo(-12.5, 1);
+        expect(centre('barrier')).toBeCloseTo(-10.5, 1);
+        expect(centre('work truck')).toBeCloseTo(-11, 1);
+    });
+
     test('ridge and coast have no rockfall', () => {
         [COAST, RIDGE].forEach(index => {
             const { env, scene } = leg(index);

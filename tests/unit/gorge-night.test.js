@@ -318,9 +318,10 @@ describe('the gorge and the night forest built', () => {
         expect(tunnelRoofY()).toBeCloseTo(road(517) + 7.5, 9);
         // The camera trails the bike: just outside either end still counts
         self.vehicle.currentRoadSegment = 513;
-        expect(tunnelRoofY()).toBeCloseTo(road(513) + 7.5, 9);
+        // ... and the roof rides on the lower of the road under it and the bike's own
+        expect(tunnelRoofY()).toBeCloseTo(Math.min(road(513), road(514)) + 7.5, 9);
         self.vehicle.currentRoadSegment = 522;
-        expect(tunnelRoofY()).toBeCloseTo(road(522) + 7.5, 9);
+        expect(tunnelRoofY()).toBeCloseTo(Math.min(road(522), road(521)) + 7.5, 9);
         self.vehicle.currentRoadSegment = 530;
         expect(tunnelRoofY()).toBeNull();
         self.vehicle.currentRoadSegment = 586;

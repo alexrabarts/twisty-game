@@ -91,7 +91,7 @@ class Environment {
   }
 
   // Terrain elevation model shared by every scenery placement site. Mirrors
-  // the physics model in Vehicle.getTerrainHeightAt(): the road surface plus
+  // the physics model, Terrain.groundY: the road surface plus
   // a 2m ledge sit at the segment's y; beyond the ledge each side follows
   // its profile (see js/terrain.js). Where a side has a rock face (the cliff
   // wall and the drop) the answer is the drawn face itself.
@@ -3055,9 +3055,7 @@ class Environment {
     lake.position.set(legMid.x, this.floorY, legMid.z);
     lake.receiveShadow = true;
     lake.userData.part = "floor";
-    // The plain lake of the cliff legs stays unnamed (its scene fingerprint is frozen)
-    if (floor.kind === "sea") lake.name = "floor-sea";
-    if (frozen) lake.name = "floor-lake";
+    lake.name = floor.kind === "sea" ? "floor-sea" : "floor-lake";
     this.scene.add(lake);
   }
 
@@ -3416,7 +3414,8 @@ class Environment {
     const [fewest, most] = layout.perSegment;
     const halfRoad = this.roadWidth / 2;
     for (const sign of [-1, 1]) {
-      const reachable = Terrain.rideableLimit(this.terrain, index, sign, halfRoad) + 2;
+      // A trunk is solid where a bike can ride: out to the rideable limit
+      const reachable = Terrain.rideableLimit(this.terrain, index, sign, halfRoad);
       const count = fewest + Math.floor(this.rand() * (most - fewest + 1));
       for (let t = 0; t < count; t++) {
         const band = this.rand();
@@ -3426,9 +3425,17 @@ class Environment {
         if (skipped) continue;
         const x = point.x + sign * lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
         const z = point.z - sign * lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
+        // On a bend the nearest segment is not the one the tree was placed from,
+        // so where the tree stands (and whether a bike can reach it) is read
+        // back from the nearest segment, as the bike's own tests read it
+        const found = Terrain.locate(
+          this.roadPath, x, z,
+          Math.max(0, index - 6), Math.min(this.roadPath.length - 1, index + 6), {},
+        );
+        const standing = Math.abs(found.lateral);
         const groundY = this.groundYAt(x, z);
         plant(x, z, groundY, lateral);
-        if (lateral <= reachable) {
+        if (standing <= reachable) {
           this.boulders.push({
             position: new THREE.Vector3(x, groundY, z),
             radius: 0.6,
@@ -4825,12 +4832,13 @@ class Environment {
       });
 
       for (let s = -1; s <= 1; s++) {
+        // A child of the barrier, so it rides wherever the barrier is grounded
         const stripe = new THREE.Mesh(stripeGeometry, stripeMaterial);
-        stripe.position.copy(barrier.position);
-        stripe.position.x += Math.sin(point.heading) * s * 0.8;
-        stripe.position.z += Math.cos(point.heading) * s * 0.8;
-        stripe.rotation.y = barrier.rotation.y;
-        this.scene.add(stripe);
+        stripe.position
+          .set(Math.sin(point.heading) * s * 0.8, 0, Math.cos(point.heading) * s * 0.8)
+          .applyAxisAngle(new THREE.Vector3(0, 1, 0), -barrier.rotation.y);
+        stripe.userData.barrierStripe = true;
+        barrier.add(stripe);
       }
     }
   }

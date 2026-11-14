@@ -2045,6 +2045,11 @@ class Vehicle {
             // Find the road gradient by looking ahead and behind
             const lookDistance = 5; // meters
             let currentY = this.position.y;
+            // Beside the road the slope is the road's: the ground there falls
+            // away sideways, which would otherwise read as downhill along the
+            // track and speed a bike up on loose ground
+            const onRunoff = !!this.runoff;
+            if (onRunoff) currentY = this.roadYAt(this.position.x, this.position.z);
             
             // Find point ahead
             const forward = new THREE.Vector3(0, 0, lookDistance);
@@ -2052,7 +2057,9 @@ class Vehicle {
             const aheadPos = this.position.clone().add(forward);
             
             // Find elevation ahead (windowed search around current segment)
-            const aheadY = this.surfaceAt(aheadPos.x, aheadPos.z);
+            const aheadY = onRunoff
+                ? this.roadYAt(aheadPos.x, aheadPos.z)
+                : this.surfaceAt(aheadPos.x, aheadPos.z);
             
             // Calculate gradient (rise over run)
             const gradient = (aheadY - currentY) / lookDistance;
@@ -2597,6 +2604,16 @@ class Vehicle {
         return Math.min(8, side.lipDepth ?? 8);
     }
 
+    // Height of the road centreline nearest to (x, z)
+    roadYAt(x, z, radius = 10) {
+        const environment = this.environment;
+        if (environment.roadPath.length === 0) return this.position.y;
+        const range = this.getSegmentSearchRange(radius);
+        const loc = {};
+        Terrain.locate(environment.roadPath, x, z, range.start, range.end, loc);
+        return loc.roadY;
+    }
+
     surfaceAt(x, z, radius = 10) {
         const environment = this.environment;
         if (environment.roadPath.length === 0) return this.position.y;
@@ -2873,7 +2890,6 @@ class Vehicle {
             this.crashAngle = sign * Math.PI / 6; // Crash leaning into the wall
             this.frame.material.color.setHex(0x8B0000); // Dark red for crash
             console.log(`CRASHED! Hit the ${sideName} wall at`, (this.speed * 2.237).toFixed(1) + ' mph');
-            console.log('Wall hit at distance:', perpDistance);
 
             // Move bike back to the wall face and apply bounce
             const adjustment = sign * zone.start - perpDistance;
@@ -2901,8 +2917,6 @@ class Vehicle {
         // Gone off a fall edge (a bike already sliding on its side goes over too)
         if (edgeZone.kind === 'fall') {
             console.log(`=== FALLING OFF ${sideName.toUpperCase()} EDGE ===`);
-            console.log('perpDistance:', perpDistance, 'edge start:', edgeZone.start);
-            console.log('Vehicle position:', this.position.x.toFixed(1), this.position.z.toFixed(1), 'Y:', this.position.y.toFixed(1));
             console.log(`CRASHED! Fell off the ${sideName} edge at`, (this.speed * 2.237).toFixed(1) + ' mph');
             this.crashed = true;
             this.fallingOffCliff = true;

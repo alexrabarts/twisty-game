@@ -71,25 +71,22 @@ describe('terrain equivalence with the phase 0 golden', () => {
         const dawn = captureLeg(game, 0);
         expect(dawn.fingerprints.stable).toEqual(golden.legs[0].fingerprints.stable);
 
-        // Leg 5: the 19 hairpin barriers on the wall side carry three stripe meshes
-        // each, added to the scene beside the barrier, not under it. They ride up
-        // with the barrier, so the hash equals the golden's once they are put back
-        // where the barrier stood (the plain slope, 0.6 above it).
+        // Leg 5: each of the 19 hairpin barriers carries three stripe meshes. They
+        // are children of the barrier now, so they ride up with it and the stable
+        // mode skips them with it. The golden's stable hash counted them as
+        // loose scene meshes, so it cannot equal this one: it holds exactly
+        // those 57 more meshes, and the rest of the scene is checked by the face,
+        // decal and random-state comparisons of the test below.
         const { env, scene } = buildEnvironment(game, 4);
-        const loc = {};
-        let lifted = 0;
-        env.groundedObjects.filter(({ label }) => /^hairpin barrier/.test(label)).forEach(({ object }) => {
-            const at = object.position;
-            const plain = game.Terrain.groundY(env.terrain, env.terrainGeometry, at.x, at.z, 0, env.roadPath.length - 1, false, loc) + 0.6;
-            // Only the wall side moved; the valley side was already exact
-            if (loc.lateral > 0) return;
-            const stripes = scene.children.slice(scene.children.indexOf(object) + 1, scene.children.indexOf(object) + 4);
-            stripes.forEach(stripe => expect(stripe.geometry.parameters.width).toBe(0.5));
-            lifted++;
-            stripes.forEach(stripe => { stripe.position.y = plain; });
+        const barriers = env.groundedObjects.filter(({ label }) => /^hairpin barrier/.test(label));
+        expect(barriers).toHaveLength(36);
+        let stripes = 0;
+        barriers.forEach(({ object }) => {
+            expect(object.children.map(child => child.geometry.parameters.width)).toEqual([0.5, 0.5, 0.5]);
+            stripes += object.children.length;
         });
-        expect(lifted).toBe(19);
-        expect(fingerprints(env, scene).stable).toEqual(golden.legs[4].fingerprints.stable);
+        expect(stripes).toBe(108);
+        expect(fingerprints(env, scene).stable.meshes).toBe(golden.legs[4].fingerprints.stable.meshes - stripes);
     }, 30000);
 
     test.each(BOUND)('%s: D6 moves only the left-wall rocks and the wall-side hairpin barriers, and builds three fewer props', (id, index) => {

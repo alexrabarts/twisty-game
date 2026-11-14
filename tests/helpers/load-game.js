@@ -189,7 +189,8 @@ export function groundedRecords(env) {
         const position = object.getWorldPosition(new env.scene.position.constructor());
         const hash = createHash('sha256');
         object.traverse(child => {
-            if (child.isMesh) hash.update(bytes(child.geometry.attributes.position.array));
+            // The stripes on a hairpin barrier are its children now; the record is of the barrier's own box
+            if (child.isMesh && !child.userData.barrierStripe) hash.update(bytes(child.geometry.attributes.position.array));
         });
         return {
             label,

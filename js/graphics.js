@@ -424,9 +424,24 @@ const GFX_COMPOSITE = `
             float rayLength = max(length(ray), 1e-4);
             float reach = min(rayLength, uFogReach);
             float slope = uHeightFog.z * ray.y / rayLength;
-            float atOrigin = uHeightFog.x * exp(min(-uHeightFog.z * (origin.y - uHeightFog.y), 4.0));
-            float thickness = abs(slope) < 1e-4 ? reach : (1.0 - exp(-slope * reach)) / slope;
-            float amount = 1.0 - exp(-min(atOrigin * thickness, 6.0));
+            // Density never exceeds the base density: below the base height it
+            // stays flat, so a camera low in a valley does not fog the road at
+            // its feet
+            float height = origin.y - uHeightFog.y;
+            float tau;
+            if (height >= 0.0) {
+                float atOrigin = uHeightFog.x * exp(-uHeightFog.z * height);
+                tau = atOrigin * (abs(slope) < 1e-4 ? reach : (1.0 - exp(-slope * reach)) / slope);
+            } else {
+                float rise = ray.y / rayLength;
+                float level = rise > 1e-4 ? min(-height / rise, reach) : reach;
+                tau = uHeightFog.x * level;
+                float rest = reach - level;
+                if (rest > 0.0) {
+                    tau += uHeightFog.x * (abs(slope) < 1e-4 ? rest : (1.0 - exp(-slope * rest)) / slope);
+                }
+            }
+            float amount = 1.0 - exp(-min(tau, 6.0));
             color = mix(color, uFogColor, amount);
         }
 
