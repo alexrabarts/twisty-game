@@ -453,8 +453,27 @@ const Terrain = (() => {
       // The snowfield is 6 m wide: the roadworks plant stands on it, past the road edge by these amounts
       plant: { bulldozer: 4.5, barrier: 2.5, truck: 3 } }
   ];
+  // Depth atmosphere and render reach, per leg (Graphics.setAtmosphere and the
+  // culling and shadow set-up in main.js read these). heightFog: density per
+  // metre at the leg's lowest road height, and the falloff per metre of climb.
+  // shafts: light-shaft strength, 0 for off. ring: scales the far mountain
+  // ring. cullMax: upper bound on the cull distance. shadowSpan: width of the
+  // shadow box.
+  const DEFAULT_RENDER = { ring: 1, cullMax: 600, shadowSpan: 120 };
+  const ATMOSPHERE = {
+    'mountain-dawn': { atmosphere: { heightFog: { density: 0.0025, falloff: 0.05 }, shafts: 0.35 }, render: {} },
+    'valley-run': { atmosphere: { heightFog: { density: 0.004, falloff: 0.04 }, shafts: 0.35 }, render: { cullMax: 800 } },
+    'coastal-descent': { atmosphere: { heightFog: { density: 0.003, falloff: 0.04 }, shafts: 0 }, render: { ring: 0.35, cullMax: 800 } },
+    'foggy-gorge': { atmosphere: { heightFog: { density: 0.004, falloff: 0.06 }, shafts: 0.35 }, render: { shadowSpan: 200 } },
+    'high-pass': { atmosphere: { heightFog: { density: 0.003, falloff: 0.05 }, shafts: 0.35 }, render: {} },
+    'storm-valley': { atmosphere: { heightFog: { density: 0.003, falloff: 0.05 }, shafts: 0 }, render: {} },
+    'night-ride': { atmosphere: { heightFog: { density: 0.002, falloff: 0.05 }, shafts: 0 }, render: {} },
+    'winter-pass': { atmosphere: { heightFog: { density: 0.003, falloff: 0.04 }, shafts: 0 }, render: { cullMax: 800 } }
+  };
   LEGS.forEach((leg) => {
     leg.floor = leg.profile.floor;
+    leg.atmosphere = ATMOSPHERE[leg.id].atmosphere;
+    leg.render = Object.assign({}, DEFAULT_RENDER, ATMOSPHERE[leg.id].render);
   });
   const LEG_PROFILES = LEGS.map((leg) => leg.profile);
 

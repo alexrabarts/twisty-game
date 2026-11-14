@@ -10,6 +10,8 @@ class WeatherSystem {
         this.weatherIntensity = 1.0;
         this.particles = null;
         this.particleSystem = null;
+        // The leg's lowest road height; main.js sets it at leg start
+        this.baseY = 0;
         this.originalFogDensity = scene.fog ? scene.fog.density : 0.0008;
         this.lightningTimer = 0;
         this.lightningInterval = 5 + Math.random() * 5; // 5-10 seconds
@@ -283,8 +285,7 @@ class WeatherSystem {
         // Fog is denser in valleys (lower elevation)
         if (!this.scene.fog || !vehiclePosition) return;
 
-        const baseY = 0; // Assume road base level
-        const elevationFactor = Math.max(0, Math.min(1, (vehiclePosition.y - baseY) / 50));
+        const elevationFactor = Math.max(0, Math.min(1, (vehiclePosition.y - this.baseY) / 50));
 
         // Denser fog at low elevation, lighter at high elevation
         const baseDensity = 0.003 * this.weatherIntensity;

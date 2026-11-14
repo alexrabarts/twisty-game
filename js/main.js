@@ -239,11 +239,16 @@ class Game {
 
             // Apply landscape configuration for the leg
             this.environment.applyLandscapeConfig(this.environment.config.look);
+            // Before setWeather below: the far-ring strength is read by applySky
+            const roadBaseY = this.lowestRoadHeight(this.environment, leg);
+            this.graphics.setAtmosphere(this.environment.config.atmosphere, this.environment.config.render, roadBaseY);
+            this.applyShadowBox(this.environment.config.render);
 
             // Initialize weather system
             console.log('Initializing weather system...');
             if (typeof WeatherSystem !== 'undefined') {
                 this.weatherSystem = new WeatherSystem(this.scene, this.camera);
+                this.weatherSystem.baseY = roadBaseY;
 
                 // Apply weather from leg
                 const weatherType = leg.weather || 'clear';
@@ -439,7 +444,8 @@ class Game {
 
         // Cull at the distance where fog has fully swallowed the scenery
         const fogDensity = this.scene.fog ? this.scene.fog.density : 0.0018;
-        this.cullDistance = Math.min(600, Math.max(250, 2.2 / fogDensity));
+        const cullMax = this.environment && this.environment.config ? this.environment.config.render.cullMax : 600;
+        this.cullDistance = Math.min(cullMax, Math.max(250, 2.2 / fogDensity));
         this.lastCullTime = 0;
 
         console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);
@@ -801,6 +807,30 @@ class Game {
         this.scene.background = new THREE.Color(0xb8d4e8);
         // Enhanced fog with warmer tone for golden hour atmosphere
         this.scene.fog = new THREE.FogExp2(0xc8dae8, 0.0018);
+    }
+
+    // The lowest point of the leg's road: the base of the height fog, and the
+    // level above which the weather thins the fog
+    lowestRoadHeight(environment, leg) {
+        const path = environment.roadPath;
+        const last = Math.min(leg.endSegment, path.length - 1);
+        let lowest = Infinity;
+        for (let i = leg.startSegment; i <= last; i++) {
+            lowest = Math.min(lowest, path[i].y || 0);
+        }
+        return Number.isFinite(lowest) ? lowest : 0;
+    }
+
+    // Size the sun's shadow box for the leg: wide canyon walls need more
+    applyShadowBox(render) {
+        const half = render.shadowSpan / 2;
+        const shadow = this.directionalLight.shadow.camera;
+        shadow.left = -half;
+        shadow.right = half;
+        shadow.top = half;
+        shadow.bottom = -half;
+        shadow.far = Math.max(300, render.shadowSpan * 2);
+        shadow.updateProjectionMatrix();
     }
 
     setupLighting() {
@@ -2223,6 +2253,7 @@ class Game {
             // Always present the riders in clear daylight, whatever leg was
             // ridden or previewed last
             this.setTimeOfDay('golden');
+            this.graphics.setAtmosphere(null);
             this.graphics.setWeather('clear', 0);
             this.scene.fog.color.setHex(this.timeConfigs.golden.fogColor);
             this.scene.fog.density = 0.0018;
@@ -2325,6 +2356,11 @@ class Game {
         if (leg.weather && leg.weather !== 'clear') {
             this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
         }
+        this.graphics.setAtmosphere(
+            this.previewEnv.config.atmosphere,
+            this.previewEnv.config.render,
+            this.lowestRoadHeight(this.previewEnv, leg)
+        );
         this.graphics.setWeather(leg.weather || 'clear', leg.weatherIntensity || 0);
         this.applyWeatherLighting(leg.weather || 'clear');
 
