@@ -35,6 +35,22 @@ describe('terrain equivalence with the phase 0 golden', () => {
         expect(captured.grounded).toEqual(golden.legs[index].grounded);
     }, 30000);
 
+    test('groundYAt grid: the heights the scenery and physics read', () => {
+        const at = (env, segment, lateral) => {
+            const point = env.roadPath[segment];
+            return env.groundYAt(point.x + Math.cos(point.heading) * lateral, point.z - Math.sin(point.heading) * lateral);
+        };
+        const dawn = buildEnvironment(game, 0).env;
+        expect(dawn.roadPath[10].y).toBeCloseTo(33.9288, 4);
+        const dawnGrid = { '-40': 73.9288, '-20': 46.7288, '-13': 35.5288, 13: 32.5331, 20: 22.7634, 34: 4.8271, 40: -2.4664, 80: -56.1025, 200: -200 };
+        Object.entries(dawnGrid).forEach(([lateral, y]) => expect(at(dawn, 10, Number(lateral))).toBeCloseTo(y, 4));
+
+        const pass = buildEnvironment(game, 4).env;
+        expect(pass.roadPath[332].y).toBeCloseTo(27.6484, 4);
+        const passGrid = { '-11.5': 30.0484, 11.5: 25.5521, 20: 13.7306, 80: -64.6008 };
+        Object.entries(passGrid).forEach(([lateral, y]) => expect(at(pass, 332, Number(lateral))).toBeCloseTo(y, 4));
+    });
+
     test('a build is repeatable, so a changed hash is a changed world', () => {
         const first = buildEnvironment(game, 0);
         const second = buildEnvironment(game, 0);

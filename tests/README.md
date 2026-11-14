@@ -19,7 +19,7 @@ tests/
 Most unit tests exercise a replica: they restate the game's formulas inline or run against the mock in `setup.js`, so they cannot notice drift in `js/`. Two kinds of test load real game files:
 
 - `tests/unit/leaderboard.test.js` evaluates `js/leaderboard.js` (a classic script, no exports) and tests the real `LeaderboardService`.
-- `tests/helpers/load-game.js` loads `vehicle.js`, `environment.js`, `tours.js` and `rockfalls.js` and passes the real three r150 (devDependency `three`) in as a function parameter, with a stub 2D canvas. The mock in `setup.js` is neither used nor replaced. `tests/unit/terrain-equivalence.test.js` builds all eight legs through it.
+- `tests/helpers/load-game.js` loads `terrain.js`, `vehicle.js`, `environment.js`, `tours.js` and `rockfalls.js` and passes the real three r150 (devDependency `three`) in as a function parameter, with a stub 2D canvas. The mock in `setup.js` is neither used nor replaced. `tests/unit/terrain-equivalence.test.js` builds all eight legs through it.
 
 ## Running
 
