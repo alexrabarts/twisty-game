@@ -28,90 +28,94 @@ class Game {
                 skyColor: 0xb8d4e8,
                 fogColor: 0xc8dae8,
                 ambientColor: 0x303030,
-                ambientIntensity: 0.25,
+                ambientIntensity: 0.4,
                 hemisphereTop: 0x8ab8d6,
-                hemisphereBottom: 0x2a3f2a,
-                hemisphereIntensity: 0.3,
+                hemisphereBottom: 0x4a4638,
+                hemisphereIntensity: 0.78,
                 sunColor: 0xfff4e6,
                 sunIntensity: 0.85,
                 fillColor: 0xe6f2ff,
-                fillIntensity: 0.15,
+                fillIntensity: 0.225,
                 rimColor: 0xfff8e1,
                 rimIntensity: 0.25,
                 exposure: 1.0,
-                sunOffset: { x: 60, y: 90 }
+                sunOffset: { x: 60, y: 90, z: 45 }
             },
             sunset: {
                 name: 'Sunset',
                 skyColor: 0xff8866,
-                fogColor: 0xffa588,
+                fogColor: 0xf0aa90,
                 ambientColor: 0x402020,
-                ambientIntensity: 0.3,
-                hemisphereTop: 0xff8844,
+                ambientIntensity: 0.48,
+                hemisphereTop: 0xd98a78,
                 hemisphereBottom: 0x4a2a1a,
-                hemisphereIntensity: 0.4,
-                sunColor: 0xff6633,
+                hemisphereIntensity: 1.04,
+                sunColor: 0xffa066,
                 sunIntensity: 0.9,
-                fillColor: 0xff9977,
-                fillIntensity: 0.2,
+                fillColor: 0xd9a8b8,
+                fillIntensity: 0.3,
                 rimColor: 0xffaa66,
                 rimIntensity: 0.3,
                 exposure: 0.92,
-                sunOffset: { x: 95, y: 32 }
+                sunOffset: { x: 95, y: 30, z: -55 }
             },
             twilight: {
                 name: 'Twilight',
                 skyColor: 0x4466aa,
                 fogColor: 0x5577bb,
                 ambientColor: 0x202040,
-                ambientIntensity: 0.35,
+                ambientIntensity: 0.56,
                 hemisphereTop: 0x5577cc,
                 hemisphereBottom: 0x2a2a4a,
-                hemisphereIntensity: 0.35,
+                hemisphereIntensity: 0.91,
                 sunColor: 0x6688cc,
                 sunIntensity: 0.5,
                 fillColor: 0x8899dd,
-                fillIntensity: 0.15,
+                fillIntensity: 0.225,
                 rimColor: 0x99aaee,
                 rimIntensity: 0.2,
                 exposure: 0.82,
-                sunOffset: { x: 80, y: 45 }
+                headlight: 0.55,
+                sunOffset: { x: 80, y: 45, z: 30 }
             },
+            // Moonlit: dark enough that the headlight matters, bright enough
+            // to read the road edge and the rock face
             night: {
                 name: 'Night',
                 skyColor: 0x020408,
-                fogColor: 0x050a12,
-                ambientColor: 0x030306,
-                ambientIntensity: 0.03,
-                hemisphereTop: 0x080f18,
-                hemisphereBottom: 0x020204,
-                hemisphereIntensity: 0.05,
-                sunColor: 0x223344,  // Moon
-                sunIntensity: 0.08,
-                fillColor: 0x0f1520,
-                fillIntensity: 0.02,
-                rimColor: 0x1a2028,
-                rimIntensity: 0.03,
-                exposure: 0.68,
-                sunOffset: { x: 40, y: 70 }
+                fogColor: 0x060a14,
+                ambientColor: 0x0c1020,
+                ambientIntensity: 0.3,
+                hemisphereTop: 0x6f8fd0,
+                hemisphereBottom: 0x161c2c,
+                hemisphereIntensity: 0.5,
+                sunColor: 0x9fb6e6,  // Moon
+                sunIntensity: 0.6,
+                fillColor: 0x1a2440,
+                fillIntensity: 0.1,
+                rimColor: 0x2a3550,
+                rimIntensity: 0.1,
+                exposure: 1.3,
+                headlight: 1.0,
+                sunOffset: { x: 45, y: 70, z: 50 }
             },
             dawn: {
                 name: 'Dawn',
                 skyColor: 0xffa588,
                 fogColor: 0xffb899,
                 ambientColor: 0x403020,
-                ambientIntensity: 0.28,
+                ambientIntensity: 0.448,
                 hemisphereTop: 0xffcc99,
                 hemisphereBottom: 0x4a3a2a,
-                hemisphereIntensity: 0.35,
+                hemisphereIntensity: 0.91,
                 sunColor: 0xffe0bb,
                 sunIntensity: 0.75,
                 fillColor: 0xffddaa,
-                fillIntensity: 0.18,
+                fillIntensity: 0.27,
                 rimColor: 0xffeecc,
                 rimIntensity: 0.25,
                 exposure: 0.95,
-                sunOffset: { x: -90, y: 35 }
+                sunOffset: { x: 80, y: 28, z: 60 }
             }
         };
 
@@ -192,6 +196,14 @@ class Game {
         this.soundManager = new SoundManager();
         this.soundManager.masterVolume = 0.3;
 
+        // requestAnimationFrame stops on a hidden tab, so nothing else would
+        // silence the engine drone
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.soundManager.stopEngineSound();
+            }
+        });
+
         // Show tour selector and wait for leg selection
         console.log('Showing tour selector...');
         this.tourSystem.createLegSelector(document.body, (leg) => {
@@ -203,6 +215,9 @@ class Game {
     initializeGameWithLeg(leg) {
         // Tear down any menu showcase (bikes / preview environment / RAF loop)
         this.endMenuShowcase();
+
+        // No banner from an earlier run may sit over the new leg
+        this.removeRunOverlays();
 
         // Hide tour selector
         this.tourSystem.hideLegSelector();
@@ -236,6 +251,7 @@ class Game {
 
                 // Apply weather visuals to environment
                 this.environment.applyWeatherVisuals(weatherType, weatherIntensity);
+                this.graphics.setWeather(weatherType, weatherIntensity);
 
                 console.log(`Weather set to: ${weatherType} (intensity: ${weatherIntensity})`);
             } else {
@@ -301,11 +317,7 @@ class Game {
         }
 
         // Reset game state for new leg
-        this.score = 0;
-        this.checkpointsPassed = 0;
-        this.finished = false;
-        this.vehicle.finished = false;
-        this.startTime = performance.now();
+        this.resetRunState();
 
         // Classify the freshly built scene for distance culling
         this.setupPerformanceCulling();
@@ -315,6 +327,13 @@ class Game {
         if (this.clock) {
             this.clock.getDelta();
         }
+        // The first second after a scene build is slow; do not let the
+        // adaptive resolution read it as the steady frame rate
+        this.lastTime = performance.now();
+        this.frameCount = 0;
+        // Shaders compile during the first seconds of a leg; frame rates
+        // measured then say nothing about the steady state
+        this.adaptGraceUntil = performance.now() + 4000;
 
         // Start leaderboard session
         if (this.leaderboardService) {
@@ -340,6 +359,7 @@ class Game {
     // the FPS counter.
     adaptResolution() {
         if (!this.renderer || this.paused) return;
+        if (this.adaptGraceUntil && performance.now() < this.adaptGraceUntil) return;
 
         if (!this.dprSteps) {
             const maxDpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -386,6 +406,10 @@ class Game {
 
         this.scene.traverse(obj => {
             if (!obj.isMesh) return;
+
+            // The sky dome is a unit sphere at the origin drawn at infinity;
+            // by its bounds it looks like a small prop far from the player
+            if (obj.userData.isSky || obj.userData.skipCulling) return;
 
             // Never touch the player bike (its shadow matters up close)
             for (let p = obj; p; p = p.parent) {
@@ -454,6 +478,89 @@ class Game {
         });
     }
 
+    // Per-run state. Every way of starting a run (new leg, restart button,
+    // R key) goes through here so none of them can leave a stale checkpoint,
+    // combo or timer behind.
+    resetRunState() {
+        this.score = 0;
+        this.combo = 0;
+        this.comboMultiplier = 1;
+        this.checkpointsPassed = 0;
+        this.lastCheckpointIndex = -1;
+        this.checkpointTimes = [];
+        this.lastCheckpointPosition = null;
+        this.lastCheckpointHeading = 0;
+        this.speedStreakTime = 0;
+        this.lastSpeedCheck = 0;
+        this.wasJumping = false;
+        this.lastJumpState = false;
+        this.brakeHeldTime = 0;
+        this.finished = false;
+        this.paused = false;
+        this.startTime = performance.now();
+        if (this.vehicle) {
+            this.vehicle.finished = false;
+        }
+        if (this.environment && this.environment.checkpoints) {
+            this.environment.checkpoints.forEach(cp => { cp.passed = false; });
+        }
+        this.updateScoreDisplay();
+    }
+
+    removeRunOverlays() {
+        ['finishBanner', 'crashNotification'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) element.remove();
+        });
+        if (this.input) {
+            this.input.setMenuActive(false);
+        }
+    }
+
+    // Put the bike back on the start line of the current leg
+    restartLeg() {
+        this.removeRunOverlays();
+
+        this.vehicle.reset();
+        if (this.environment.roadPath && this.environment.roadPath.length > 0) {
+            const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
+            this.vehicle.position.set(startPos.x, startPos.y, startPos.z);
+            this.vehicle.yawAngle = startPos.heading;
+            // Re-sync segment tracking with the teleported position so the
+            // windowed wall/elevation searches don't use a stale index
+            this.vehicle.findNearestRoadSegment();
+            this.vehicle.updateMesh();
+        }
+        this.cones.reset();
+        if (this.traffic && this.traffic.reset) {
+            this.traffic.reset();
+        }
+        this.resetRunState();
+        this.restartLeaderboardSession();
+
+        const dashboard = document.querySelector('.dashboard');
+        if (dashboard) {
+            dashboard.style.opacity = '1';
+        }
+    }
+
+    // Scene objects that outlive a leg: camera, lights and the sky dome
+    persistentSceneObjects() {
+        const keep = new Set([
+            this.camera,
+            this.ambientLight, this.hemisphereLight, this.fillLight, this.rimLight,
+            this.graphics ? this.graphics.skyMesh : null,
+            this.headlightBeam
+        ]);
+        [this.directionalLight, this.distantLight, this.headlight].forEach(light => {
+            if (light) {
+                keep.add(light);
+                keep.add(light.target);
+            }
+        });
+        return keep;
+    }
+
     cleanupCurrentLeg() {
         // Stop game loop
         if (this.animationFrameId) {
@@ -468,21 +575,7 @@ class Game {
 
         // Clear scene objects (keep camera and lights)
         if (this.scene) {
-            const keep = new Set([
-                this.camera,
-                this.directionalLight,
-                this.directionalLight ? this.directionalLight.target : null,
-                this.distantLight,
-                this.distantLight ? this.distantLight.target : null,
-                this.ambientLight,
-                this.hemisphereLight,
-                this.fillLight,
-                this.rimLight,
-                this.leftHeadlight,
-                this.leftHeadlight ? this.leftHeadlight.target : null,
-                this.rightHeadlight,
-                this.rightHeadlight ? this.rightHeadlight.target : null
-            ]);
+            const keep = this.persistentSceneObjects();
             const objectsToRemove = this.scene.children.filter(child => !keep.has(child));
             objectsToRemove.forEach(obj => {
                 this.scene.remove(obj);
@@ -653,9 +746,11 @@ class Game {
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.shadowMap.autoUpdate = true;
-        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 0.8;
         document.body.appendChild(this.renderer.domElement);
+
+        // Sky, image-based lighting and HDR post-processing
+        this.graphics = new Graphics(this.renderer, this.scene);
 
         // Peripheral speed-streak overlay. NOTE: this deliberately avoids
         // backdrop-filter - blurring a full-resolution canvas costs 10ms+ of
@@ -684,13 +779,6 @@ class Game {
         `;
         document.body.appendChild(this.speedBlurOverlay);
         this.lastBlurOpacity = '0';
-        
-        const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-        pmremGenerator.compileEquirectangularShader();
-        
-        const envScene = new THREE.Scene();
-        envScene.background = new THREE.Color(0xb8d4e8);
-        this.scene.environment = pmremGenerator.fromScene(envScene).texture;
         
         window.addEventListener('resize', () => this.onWindowResize());
     }
@@ -723,7 +811,10 @@ class Game {
         this.directionalLight.shadow.camera.right = 60;
         this.directionalLight.shadow.camera.top = 60;
         this.directionalLight.shadow.camera.bottom = -60;
-        this.directionalLight.shadow.bias = -0.0001;
+        // A low sun grazes the road: without a normal offset the surface
+        // shadows itself in stripes
+        this.directionalLight.shadow.bias = -0.0004;
+        this.directionalLight.shadow.normalBias = 0.06;
         this.scene.add(this.directionalLight);
         
         // Store initial light offset from origin
@@ -747,15 +838,59 @@ class Game {
         this.rimLight.position.set(0, 10, -50);
         this.scene.add(this.rimLight);
 
-        // Vehicle headlights - subtle. Shadow casting disabled: two extra
-        // shadow passes per frame for barely-visible headlight shadows
-        this.leftHeadlight = new THREE.SpotLight(0xffffff, 0.5, 100, Math.PI/6, 0.1, 2);
-        this.leftHeadlight.castShadow = false;
-        this.scene.add(this.leftHeadlight);
+        // Bike headlight: one wide, soft-edged beam. It is switched off
+        // entirely in daylight (see setTimeOfDay): a spot light costs every
+        // lit fragment in the scene whether or not its beam shows.
+        this.headlight = new THREE.SpotLight(0xfff1d6, 0, 150, 0.52, 0.65, 1.1);
+        this.headlight.castShadow = false;
+        this.headlight.visible = false;
+        this.scene.add(this.headlight);
 
-        this.rightHeadlight = new THREE.SpotLight(0xffffff, 0.5, 100, Math.PI/6, 0.1, 2);
-        this.rightHeadlight.castShadow = false;
-        this.scene.add(this.rightHeadlight);
+        // Visible beam: light scattering in the night air ahead of the bike
+        const beamGeometry = new THREE.ConeGeometry(3.4, 16, 28, 1, true);
+        beamGeometry.translate(0, -8, 0);
+        beamGeometry.rotateX(-Math.PI / 2); // Apex at the lamp, opening along +Z
+        this.headlightBeam = new THREE.Mesh(beamGeometry, new THREE.ShaderMaterial({
+            uniforms: {
+                uColor: { value: new THREE.Color(0xfff1d6) },
+                uStrength: { value: 0 }
+            },
+            vertexShader: `
+                varying float vAlong;
+                varying vec3 vNormalView;
+                varying vec3 vViewDir;
+                void main() {
+                    vAlong = position.z / 16.0;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    vNormalView = normalize(normalMatrix * normal);
+                    vViewDir = normalize(-mvPosition.xyz);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                uniform float uStrength;
+                varying float vAlong;
+                varying vec3 vNormalView;
+                varying vec3 vViewDir;
+                void main() {
+                    // Bright at the lamp, gone by the end; soft at the silhouette
+                    float along = (1.0 - vAlong) * (1.0 - vAlong);
+                    float rim = pow(abs(dot(normalize(vNormalView), normalize(vViewDir))), 1.6);
+                    gl_FragColor = vec4(uColor * along * rim * uStrength, 1.0);
+                }
+            `,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            fog: false
+        }));
+        this.headlightBeam.rotation.order = 'YXZ';
+        this.headlightBeam.frustumCulled = false;
+        this.headlightBeam.visible = false;
+        this.headlightBeam.userData.skipCulling = true;
+        this.scene.add(this.headlightBeam);
     }
 
     setTimeOfDay(timeKey) {
@@ -795,6 +930,9 @@ class Game {
             this.renderer.toneMappingExposure = config.exposure;
         }
 
+        // Sky dome, far ranges and reflections follow the time of day
+        this.graphics.setTimeOfDay(timeKey, config);
+
         // Update fill light
         this.fillLight.color = new THREE.Color(config.fillColor);
         this.fillLight.intensity = config.fillIntensity;
@@ -803,14 +941,12 @@ class Game {
         this.rimLight.color = new THREE.Color(config.rimColor);
         this.rimLight.intensity = config.rimIntensity;
 
-        // Enhance headlights for night mode
-        if (timeKey === 'night') {
-            this.leftHeadlight.intensity = 1.5;
-            this.rightHeadlight.intensity = 1.5;
-        } else {
-            this.leftHeadlight.intensity = 0.5;
-            this.rightHeadlight.intensity = 0.5;
-        }
+        // Headlight only when it is dark enough to see the beam
+        this.headlightStrength = config.headlight || 0;
+        this.headlight.visible = this.headlightStrength > 0;
+        this.headlight.intensity = this.headlightStrength * 14;
+        this.headlightBeam.visible = this.headlight.visible;
+        this.headlightBeam.material.uniforms.uStrength.value = this.headlightStrength * 0.22;
 
         // Show notification (disabled - don't show popup at level start)
         // this.showTimeOfDayNotification(config.name);
@@ -838,7 +974,9 @@ class Game {
     }
 
     setupCamera() {
-        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        // (near 0.25: a 0.1 near plane wastes most of the depth precision and
+        // distant coplanar surfaces flicker)
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.25, 5000);
         
         // Initial camera position - start in follow position
         this.camera.position.set(0, 4, -10); // Behind bike
@@ -1273,7 +1411,7 @@ class Game {
         this.directionalLight.position.set(
             playerPos.x + sunOffset.x,
             playerPos.y + sunOffset.y,
-            playerPos.z
+            playerPos.z + (sunOffset.z || 0)
         );
         this.directionalLight.target.position.copy(playerPos);
         this.directionalLight.target.updateMatrixWorld();
@@ -1282,7 +1420,7 @@ class Game {
         this.distantLight.position.set(
             playerPos.x + sunOffset.x,
             playerPos.y + sunOffset.y,
-            playerPos.z
+            playerPos.z + (sunOffset.z || 0)
         );
         this.distantLight.target.position.copy(playerPos);
         this.distantLight.target.updateMatrixWorld();
@@ -1423,9 +1561,11 @@ class Game {
         // Calculate final position
         let finalPosition = 1;
         if (this.traffic && this.traffic.motorcycles) {
-            const playerZ = this.vehicle.position.z;
+            // Track progress, not world Z: half the course runs toward -Z
+            const playerProgress = Math.floor(this.vehicle.currentRoadSegment || 0) + (this.vehicle.segmentProgress || 0);
             this.traffic.motorcycles.forEach(bike => {
-                if (bike.bikeGroup && bike.bikeGroup.position.z > playerZ) {
+                const bikeProgress = Math.floor(bike.currentSegment || 0) + (bike.segmentProgress || 0);
+                if (bikeProgress > playerProgress) {
                     finalPosition++;
                 }
             });
@@ -1599,35 +1739,7 @@ class Game {
                 this.input.setMenuActive(false);
             }
 
-            // Restarting without submitting: fresh session for the new attempt
-            this.restartLeaderboardSession();
-
-            // Trigger reset via input system
-            if (this.input) {
-                // Simulate reset action
-                this.vehicle.reset();
-                if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-                    const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
-                    this.vehicle.position.x = startPos.x;
-                    this.vehicle.position.y = startPos.y;
-                    this.vehicle.position.z = startPos.z;
-                    this.vehicle.yawAngle = startPos.heading;
-                    this.vehicle.findNearestRoadSegment();
-                }
-                this.cones.reset();
-                this.finished = false;
-                this.startTime = performance.now();
-                this.score = 0;
-                this.combo = 0;
-                this.comboMultiplier = 1;
-                this.checkpointsPassed = 0;
-                this.lastCheckpointIndex = -1;
-                this.checkpointTimes = [];
-                if (this.environment && this.environment.checkpoints) {
-                    this.environment.checkpoints.forEach(cp => cp.passed = false);
-                }
-                this.updateScoreDisplay();
-            }
+            this.restartLeg();
         });
 
         document.getElementById('returnToMenuBtn').addEventListener('click', () => {
@@ -1776,32 +1888,7 @@ class Game {
             if (this.input) {
                 this.input.setMenuActive(false);
             }
-            // Reset the vehicle
-            this.vehicle.reset();
-            if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-                const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
-                this.vehicle.position.x = startPos.x;
-                this.vehicle.position.y = startPos.y;
-                this.vehicle.position.z = startPos.z;
-                this.vehicle.yawAngle = startPos.heading;
-                // Re-sync segment tracking with the teleported position so the
-                // windowed wall/elevation searches don't use a stale index
-                this.vehicle.findNearestRoadSegment();
-            }
-            this.cones.reset();
-            this.finished = false;
-            this.startTime = performance.now();
-            this.score = 0;
-            this.combo = 0;
-            this.comboMultiplier = 1;
-            this.checkpointsPassed = 0;
-            this.lastCheckpointIndex = -1;
-            this.checkpointTimes = [];
-            this.restartLeaderboardSession();
-            if (this.environment && this.environment.checkpoints) {
-                this.environment.checkpoints.forEach(cp => cp.passed = false);
-            }
-            this.updateScoreDisplay();
+            this.restartLeg();
         });
 
         document.getElementById('menuCrashBtn').addEventListener('click', () => {
@@ -2016,7 +2103,7 @@ class Game {
                     const flag = entry.flagged ? ' ⚠' : '';
                     return `<tr>
                         <td style="padding: 4px 10px; text-align: right; color: #ffd700;">${medal}</td>
-                        <td style="padding: 4px 10px; letter-spacing: 3px; font-weight: bold;">${entry.playerName}</td>
+                        <td style="padding: 4px 10px; letter-spacing: 3px; font-weight: bold;">${String(entry.playerName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</td>
                         <td style="padding: 4px 10px; color: #6cf;">${time}${flag}</td>
                     </tr>`;
                 }).join('');
@@ -2134,11 +2221,12 @@ class Game {
         this.setTimeOfDay(leg.timeOfDay);
         this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
         this.previewEnv.applyLandscapeConfig(
-            this.tourSystem.getLandscapeConfigFor ? this.tourSystem.getLandscapeConfigFor(leg) : this.tourSystem.getLandscapeConfig()
+            this.tourSystem.getLandscapeConfig(leg)
         );
         if (leg.weather && leg.weather !== 'clear') {
             this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
         }
+        this.graphics.setWeather(leg.weather || 'clear', leg.weatherIntensity || 0);
 
         // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
         // keeps the low-poly scenery reading well (wide aerials don't)
@@ -2178,14 +2266,7 @@ class Game {
     endTrackPreview() {
         if (this.previewEnv) {
             // Remove everything the preview environment added to the scene
-            const keep = new Set([
-                this.camera,
-                this.directionalLight, this.directionalLight && this.directionalLight.target,
-                this.distantLight, this.distantLight && this.distantLight.target,
-                this.ambientLight, this.hemisphereLight, this.fillLight, this.rimLight,
-                this.leftHeadlight, this.leftHeadlight && this.leftHeadlight.target,
-                this.rightHeadlight, this.rightHeadlight && this.rightHeadlight.target
-            ]);
+            const keep = this.persistentSceneObjects();
             // Showcase bikes/platforms survive an env teardown
             if (this.showcaseBikes) Object.values(this.showcaseBikes).forEach(v => keep.add(v.group));
             if (this.showcaseExtras) this.showcaseExtras.forEach(o => keep.add(o));
@@ -2253,7 +2334,8 @@ class Game {
                 this.camera.lookAt(c.x, c.y + 1.5, c.z);
             }
 
-            this.renderer.render(this.scene, this.camera);
+            this.graphics.update(dt);
+            this.graphics.render(this.scene, this.camera);
         };
         this.menuShowcaseRAF = requestAnimationFrame(loop);
     }
@@ -2351,13 +2433,18 @@ class Game {
         if (this.input.checkPause()) {
             this.paused = !this.paused;
             if (this.paused) {
+                this.pauseStartedAt = performance.now();
                 this.soundManager.stopEngineSound();
+            } else if (this.pauseStartedAt) {
+                // Time spent paused is not race time
+                this.startTime += performance.now() - this.pauseStartedAt;
+                this.pauseStartedAt = 0;
             }
         }
 
         // Skip all game logic if paused, but continue rendering
         if (this.paused) {
-            this.renderer.render(this.scene, this.camera);
+            this.graphics.render(this.scene, this.camera);
             return;
         }
 
@@ -2394,81 +2481,17 @@ class Game {
 
         // Check for reset
         if (this.input.checkReset()) {
-            // Remove finish banner if it exists
-            const finishBanner = document.getElementById('finishBanner');
-            if (finishBanner) {
-                finishBanner.remove();
-            }
-
-            // Remove crash notification if it exists
-            const crashNotification = document.getElementById('crashNotification');
-            if (crashNotification) {
-                crashNotification.remove();
-            }
-
-            // Disable R key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-
-            // High score is updated when finishing the course, not on reset
-
-            this.vehicle.reset();
-            if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-                // Reset to the leg's starting position (not always segment 0)
-                const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
-                this.vehicle.position.x = startPos.x;
-                this.vehicle.position.y = startPos.y;
-                this.vehicle.position.z = startPos.z;
-                this.vehicle.yawAngle = startPos.heading;
-                // Re-sync segment tracking with the teleported position so the
-                // windowed wall/elevation searches don't use a stale index
-                this.vehicle.findNearestRoadSegment();
-            }
-            this.cones.reset();
-            this.finished = false;
-            this.startTime = performance.now();
-
-            // Reset scoring
-            this.score = 0;
-            this.combo = 0;
-            this.comboMultiplier = 1;
-            this.checkpointsPassed = 0;
-            this.lastCheckpointIndex = -1;
-            this.checkpointTimes = []; // Reset checkpoint times
-            this.restartLeaderboardSession();
-
-            // Reset checkpoints
-            if (this.environment && this.environment.checkpoints) {
-                this.environment.checkpoints.forEach(cp => cp.passed = false);
-            }
-
-            // Reset UI
-            this.updateScoreDisplay();
-
-            // Show dashboard again
-            const dashboard = document.querySelector('.dashboard');
-            if (dashboard) {
-                dashboard.style.opacity = '1';
-            }
+            this.restartLeg();
         }
 
-        // Check for next leg (N key)
+        // Next leg (N key): only offered by the finish banner of a non-final
+        // leg, and it must take the same path as the button (name entry)
         if (this.input.checkNextLeg()) {
-            // Remove finish banner if it exists
-            const finishBanner = document.getElementById('finishBanner');
-            if (finishBanner) {
-                finishBanner.remove();
+            const nextLegBtn = document.getElementById('nextLegBtn');
+            if (nextLegBtn) {
+                nextLegBtn.click();
+                return;
             }
-
-            // Disable N key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-
-            this.startNextLeg();
-            // New leg scheduled its own loop; stop this frame
-            return;
         }
 
         // Check for sound toggle
@@ -2546,8 +2569,15 @@ class Game {
 
         // Check for finish line crossing
         if (!this.finished && !this.vehicle.crashed && this.environment.finishLinePosition) {
-            const distanceToFinish = this.vehicle.position.distanceTo(this.environment.finishLinePosition);
-            if (distanceToFinish < 5) { // Within 5 units of finish line
+            // Gate test in road space: a short band along the road, the full
+            // road and both ledges across it
+            const finish = this.environment.finishLinePosition;
+            const finishHeading = this.environment.finishLineHeading || 0;
+            const fdx = this.vehicle.position.x - finish.x;
+            const fdz = this.vehicle.position.z - finish.z;
+            const along = fdx * Math.sin(finishHeading) + fdz * Math.cos(finishHeading);
+            const across = fdx * Math.cos(finishHeading) - fdz * Math.sin(finishHeading);
+            if (Math.abs(along) < 5 && Math.abs(across) < this.environment.roadWidth / 2 + 2) {
                 this.finished = true;
                 this.vehicle.finished = true; // Prevent crashes after finishing
                 this.finishTime = performance.now() - this.startTime;
@@ -2578,6 +2608,10 @@ class Game {
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 this.vehicle.frame.material.color.setHex(0xff00ff);
                 this.showCollisionWarning();
+                // The crash was set after vehicle.update(), so the generic
+                // "just crashed" check above never sees this one
+                this.soundManager.playCrashSound();
+                this.showCrashNotification();
                 
                 // Calculate impact direction based on car position
                 const car = collision.car;
@@ -2683,7 +2717,7 @@ class Game {
 
         // Update particle system and spawn particles based on vehicle state
         // Update weather system
-        if (this.weatherSystem && !this.vehicle.crashed) {
+        if (this.weatherSystem) {
             this.weatherSystem.update(rawDeltaTime, this.vehicle.position);
         }
 
@@ -2701,8 +2735,10 @@ class Game {
             if (brakeInput > 0.3 && this.vehicle.speed > 30 && this.brakeHeldTime > 0.4) {
                 const smokeIntensity = brakeInput * Math.min(this.vehicle.speed / 50, 1.0);
                 // Spawn from rear wheel position
+                // (0.7 behind the bike along its heading, not along world Z)
                 const rearWheelPos = this.vehicle.position.clone();
-                rearWheelPos.z -= 0.7; // Rear wheel offset
+                rearWheelPos.x -= Math.sin(this.vehicle.yawAngle) * 0.7;
+                rearWheelPos.z -= Math.cos(this.vehicle.yawAngle) * 0.7;
                 this.particles.createTireSmoke(rearWheelPos, this.vehicle.velocity, smokeIntensity);
             }
 
@@ -2726,14 +2762,7 @@ class Game {
             this.lastJumpState = this.vehicle.isJumping;
         }
 
-        // Update directional light to follow vehicle, keeping the
-        // time-of-day sun direction (low sun = long shadows)
-        const sunOffset = this.sunOffset || { x: 50, y: 80 };
-        this.directionalLight.position.x = this.vehicle.position.x + sunOffset.x;
-        this.directionalLight.position.y = this.vehicle.position.y + sunOffset.y;
-        this.directionalLight.position.z = this.vehicle.position.z;
-        this.directionalLight.target.position.copy(this.vehicle.position);
-        this.directionalLight.target.updateMatrixWorld();
+        // (updateCamera() already re-anchored the sun to the bike)
 
         // Subtle intensity variation for natural lighting, relative to the
         // time-of-day base so night legs stay dark
@@ -2741,29 +2770,33 @@ class Game {
         const baseSunIntensity = this.baseSunIntensity !== undefined ? this.baseSunIntensity : 0.8;
         this.directionalLight.intensity = baseSunIntensity * (1 + Math.sin(time * 0.1) * 0.06);
 
-        // Update headlights (interpolated position/yaw so the beam doesn't judder)
+        // Update the headlight (interpolated position/yaw so the beam doesn't judder)
         const renderPos = this.vehicle.renderPosition || this.vehicle.position;
-        const renderYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
-        const headlightEuler = new THREE.Euler(0, renderYaw, 0);
-        const headlightOffset = new THREE.Vector3(0, 0.5, 0.7);
-        headlightOffset.applyEuler(headlightEuler);
+        if (this.headlight.visible) {
+            const renderYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+            const sinYaw = Math.sin(renderYaw);
+            const cosYaw = Math.cos(renderYaw);
+            // The light source sits well above the lamp and is dipped onto the
+            // road about 30 m ahead: a beam from lamp height only grazes the
+            // tarmac and leaves it black. The visible beam cone below starts
+            // at the real lamp.
+            this.headlight.position.set(renderPos.x + sinYaw * 0.8, renderPos.y + 2.9, renderPos.z + cosYaw * 0.8);
+            this.headlight.target.position.set(renderPos.x + sinYaw * 30, renderPos.y - 0.4, renderPos.z + cosYaw * 30);
+            this.headlight.target.updateMatrixWorld();
 
-        this.leftHeadlight.position.copy(renderPos).add(new THREE.Vector3(-0.3, 0, 0).applyEuler(headlightEuler)).add(headlightOffset);
-        this.rightHeadlight.position.copy(renderPos).add(new THREE.Vector3(0.3, 0, 0).applyEuler(headlightEuler)).add(headlightOffset);
-
-        const targetOffset = new THREE.Vector3(0, 0, 50);
-        targetOffset.applyEuler(headlightEuler);
-
-        this.leftHeadlight.target.position.copy(renderPos).add(targetOffset);
-        this.rightHeadlight.target.position.copy(renderPos).add(targetOffset);
-
-        this.leftHeadlight.target.updateMatrixWorld();
-        this.rightHeadlight.target.updateMatrixWorld();
+            this.headlightBeam.position.set(renderPos.x + sinYaw * 0.8, renderPos.y + 0.9, renderPos.z + cosYaw * 0.8);
+            this.headlightBeam.rotation.set(0.045, renderYaw, 0);
+        }
 
         // Update rim light to follow behind vehicle
         this.rimLight.position.set(renderPos.x, 10, renderPos.z - 50);
 
-        this.renderer.render(this.scene, this.camera);
+        this.graphics.update(
+            rawDeltaTime,
+            this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,
+            this.weatherSystem ? (this.weatherSystem.flash || 0) * 0.35 : 0
+        );
+        this.graphics.render(this.scene, this.camera);
     }
 
     checkCheckpoints() {
@@ -2792,7 +2825,7 @@ class Game {
                         console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
 
                         // Record checkpoint pass time
-                        const currentTime = performance.now() - this.startTime;
+                        const currentTime = Math.round(performance.now() - this.startTime);
                         this.checkpointTimes[checkpoint.index] = currentTime;
 
                         // Record in leaderboard service
@@ -2825,7 +2858,8 @@ class Game {
                         }
 
                         // Apply combo multiplier
-                        const points = basePoints * this.comboMultiplier;
+                        // (the multiplier steps in halves: keep the award whole)
+                        const points = Math.round(basePoints * this.comboMultiplier);
                         this.addScore(points);
                         
                         // Increase combo
@@ -2984,7 +3018,8 @@ class Game {
                 this.wasJumping = false;
                 
                 // Calculate jump score based on air time and rotation
-                const jumpRotation = Math.abs(this.vehicle.jumpRotation);
+                // land() zeroes jumpRotation, so read the value it saved
+                const jumpRotation = Math.abs(this.vehicle.lastJumpRotation || 0);
                 let jumpScore = 50; // Base jump score
                 
                 // Bonus for flips
@@ -3054,51 +3089,20 @@ class Game {
     }
     
     showCheckpointNotification(checkpointNum, points) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
         const totalCheckpoints = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 10;
-        notification.textContent = `CHECKPOINT ${checkpointNum}/${totalCheckpoints}! +${points}`;
-        document.body.appendChild(notification);
-        
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(`CHECKPOINT ${checkpointNum}/${totalCheckpoints}! +${points}`, '#fff', 1000);
     }
     
     showJumpBonus(text) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FF69B4';
-        notification.textContent = text;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(text, '#FF69B4', 1000);
     }
 
     showWheelieHelpNotification() {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FFD700';
-        notification.textContent = 'Press SPACE to pop clutch for a wheelie!';
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 3000); // Longer duration for help text
+        showCallout('Press SPACE to pop clutch for a wheelie!', '#FFD700', 3000);
     }
 
     showConeHitNotification(points) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FFA500'; // Orange color for cones
-        notification.textContent = `CONE HIT! +${points}`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(`CONE HIT! +${points}`, '#FFA500', 1000);
     }
     
     onWindowResize() {
@@ -3115,30 +3119,28 @@ class Game {
 
         console.log('Restarting from checkpoint at:', this.lastCheckpointPosition.x.toFixed(1), this.lastCheckpointPosition.z.toFixed(1));
 
-        // Apply penalty - lose some score
-        const penalty = 500;
+        // Apply penalty - lose some score (never below zero)
+        const penalty = Math.min(500, this.score);
         this.addScore(-penalty);
 
         // Reset vehicle to checkpoint position
+        // reset() clears every crash, fall, jump and wheelie flag; a partial
+        // reset here left the bike in cliff-fall state after a C restart
+        const distanceSoFar = this.vehicle.distanceTraveled;
+        this.vehicle.reset();
+        this.vehicle.distanceTraveled = distanceSoFar;
         this.vehicle.position.copy(this.lastCheckpointPosition);
         this.vehicle.yawAngle = this.lastCheckpointHeading;
         this.vehicle.speed = 15; // Reset to moderate speed
-        this.vehicle.leanAngle = 0;
-        this.vehicle.leanVelocity = 0;
-        this.vehicle.crashed = false;
-        this.vehicle.isJumping = false;
-        this.vehicle.isWheelie = false;
-        this.vehicle.wheelieAngle = 0;
-        this.vehicle.wheelieVelocity = 0;
-        this.vehicle.jumpRotation = 0;
-        this.vehicle.jumpVelocityY = 0;
         this.vehicle.findNearestRoadSegment();
+        this.vehicle.updateMesh();
 
-        // Reset start time for timing
-        this.startTime = performance.now();
+        // The crash banner belongs to the crash that was just undone
+        this.removeRunOverlays();
 
-        // The clock reset makes checkpoint times non-monotonic, so this run
-        // can no longer be validated - drop the leaderboard session
+        // The clock keeps running (a restart must not produce a record time),
+        // but a teleported run can no longer be validated - drop the
+        // leaderboard session
         if (this.leaderboardService && this.leaderboardService.isActive()) {
             this.leaderboardService.cancelSession();
         }
@@ -3147,18 +3149,21 @@ class Game {
          this.cones.reset();
 
         // Show notification
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#ff6600';
-        notification.textContent = `RESTARTED FROM CHECKPOINT (-${penalty} points)`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 2000);
+        showCallout(`RESTARTED FROM CHECKPOINT (-${penalty} points)`, '#ff6600', 2000);
 
         console.log('Restarted from checkpoint with penalty');
     }
+}
+
+// Short centre-screen message; the CSS animation is stretched to its lifetime
+function showCallout(text, color = '#fff', durationMs = 1000) {
+    const notification = document.createElement('div');
+    notification.className = 'checkpoint-notification';
+    notification.style.color = color;
+    notification.style.animationDuration = `${durationMs}ms`;
+    notification.textContent = text;
+    document.body.appendChild(notification);
+    setTimeout(() => notification.remove(), durationMs);
 }
 
 class SoundManager {
@@ -3423,15 +3428,7 @@ class SoundManager {
     }
 
     showSoundToggleNotification(enabled) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = enabled ? '#00ff00' : '#ff0000';
-        notification.textContent = `SOUND ${enabled ? 'ON' : 'OFF'}`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(`SOUND ${enabled ? 'ON' : 'OFF'}`, enabled ? '#00ff00' : '#ff0000', 1000);
     }
 
 }

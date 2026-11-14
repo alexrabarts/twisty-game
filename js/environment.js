@@ -13,6 +13,13 @@ class Environment {
     this.checkpoints = []; // Store checkpoint positions for scoring
     this.groundedObjects = []; // Objects whose base must rest on the terrain model
 
+    // Drop-off face: vertical units per lateral unit past the ledge (matches
+    // Vehicle.getTerrainHeightAt) and the resolution of its vertex grid
+    this.vergeBaseColor = 0x4a3d34; // Bare dirt shoulder
+    this.cliffSlope = 1.33;
+    this.cliffHorizontalSubdivisions = 4;
+    this.cliffVerticalSegments = 35;
+
     // Calculate road width - first 4 legs are wider (easier)
     this.roadWidth = legIndex < 4 ? 20 : 16;
     console.log(
@@ -74,6 +81,7 @@ class Environment {
 
     // Find the nearest road segment to (x, z)
     let closest = null;
+    let closestIndex = 0;
     let closestDistSq = Infinity;
     for (let i = 0; i < this.roadPath.length; i++) {
       const point = this.roadPath[i];
@@ -83,6 +91,7 @@ class Environment {
       if (distSq < closestDistSq) {
         closestDistSq = distSq;
         closest = point;
+        closestIndex = i;
       }
     }
 
@@ -98,8 +107,16 @@ class Environment {
     const ledgeEnd = halfRoad + 2; // Road surface plus the 2m ledge each side
 
     if (lateral > ledgeEnd) {
-      // Right side: cliff face dropping toward the lake
-      const drop = (lateral - ledgeEnd) * 1.33;
+      // Right side: cliff face dropping toward the lake. Prefer the exact
+      // rendered surface (the rock face is displaced around the slope).
+      const along =
+        (x - closest.x) * Math.sin(closest.heading) +
+        (z - closest.z) * Math.cos(closest.heading);
+      const surfaceY = this.dropOffSurfaceY(closestIndex, along, lateral);
+      if (surfaceY !== null) {
+        return Math.max(surfaceY, lakeLevel);
+      }
+      const drop = (lateral - ledgeEnd) * this.cliffSlope;
       return Math.max(roadY - drop, lakeLevel);
     }
 
@@ -111,6 +128,88 @@ class Environment {
 
     // On the road or its ledges
     return roadY;
+  }
+
+  // Total height of the drop-off face below a road point at height roadY:
+  // down to the lake (y = -200) plus a margin so it ends under the water
+  cliffDrop(roadY) {
+    return roadY + 206;
+  }
+
+  // Layered, quantised sine displacement of a cliff face vertex. A pure
+  // function of the grid position so groundYAt() can reproduce the mesh.
+  cliffDisplacement(idx, j, verticalProgress) {
+    // Reduce displacement at base to prevent gaps
+    const heightFactor = Math.min(verticalProgress * 2, 1);
+
+    // Large rock formations
+    const primary =
+      (Math.sin(idx * 0.12 + j * 0.18) * Math.cos(j * 0.08) +
+        Math.sin(idx * 0.08 - j * 0.15) * 0.7) *
+      8.0 *
+      heightFactor;
+    // Medium rock faces
+    const secondary =
+      (Math.sin(idx * 0.35 + j * 0.45) * Math.cos(idx * 0.25) +
+        Math.cos(idx * 0.5 - j * 0.3) * 0.8) *
+      4.0 *
+      heightFactor;
+    // Small surface details
+    const tertiary =
+      (Math.sin(idx * 1.2 + j * 1.5) * 0.6 +
+        Math.cos(idx * 1.8 - j * 2.0) * 0.4) *
+      1.5 *
+      heightFactor;
+    const micro = Math.sin(idx * 3.5 + j * 4.0) * 0.5 * heightFactor;
+
+    // Quantise into facets for an angular, chiselled look
+    const facetSize = 0.7 + Math.sin(idx * 0.3) * 0.3;
+    return Math.floor((primary + secondary + tertiary + micro) / facetSize) * facetSize;
+  }
+
+  cliffDisplacementScale(verticalProgress, isDropOff) {
+    if (verticalProgress === 0) return 0.15;
+    return isDropOff ? 0.45 : 0.7;
+  }
+
+  // Height of the rendered drop-off face at a point on the valley side.
+  // Walks the same vertex column the mesh builder generated. Returns null
+  // outside the built range (callers fall back to the plain slope model).
+  dropOffSurfaceY(segmentIndex, along, lateral) {
+    const startIdx = Math.max(0, this.startSegment);
+    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    if (segmentIndex < startIdx || segmentIndex > endIdx) return null;
+
+    const subdivisions = this.cliffHorizontalSubdivisions;
+    const rows = this.cliffVerticalSegments;
+    const column = Math.round((segmentIndex - startIdx + along / 20) * subdivisions);
+    if (column < 0) return null;
+
+    const point = this.roadPath[segmentIndex];
+    const neighbour = this.roadPath[Math.min(this.roadPath.length - 1, Math.max(0, segmentIndex + (along >= 0 ? 1 : -1)))];
+    const roadY = point.y + (neighbour.y - point.y) * Math.min(1, Math.abs(along) / 20);
+    const drop = this.cliffDrop(roadY);
+    const minDistance = this.roadWidth / 2 + 1.4;
+
+    let previousDistance = minDistance;
+    let previousY = roadY;
+    for (let j = 1; j <= rows; j++) {
+      const progress = j / rows;
+      const distance = Math.max(
+        minDistance,
+        this.roadWidth / 2 + 2 + (drop * progress) / this.cliffSlope +
+          this.cliffDisplacement(column, j, progress) * this.cliffDisplacementScale(progress, true),
+      );
+      const y = roadY - drop * progress;
+      if (lateral <= distance) {
+        const span = distance - previousDistance;
+        const t = span > 0.001 ? (lateral - previousDistance) / span : 1;
+        return previousY + (y - previousY) * Math.max(0, Math.min(1, t));
+      }
+      previousDistance = distance;
+      previousY = y;
+    }
+    return roadY - drop;
   }
 
   // Register an object whose bounding-box bottom must rest on (or below) the
@@ -434,7 +533,8 @@ class Environment {
     // Create the road mesh
     const roadMesh = new THREE.Mesh(geometry, roadMaterial);
     roadMesh.receiveShadow = true;
-    roadMesh.castShadow = true;
+    // A flat ribbon has nothing to shadow, and casting made it shadow itself
+    roadMesh.castShadow = false;
     this.scene.add(roadMesh);
 
     console.log(
@@ -449,16 +549,16 @@ class Environment {
     // Wider tonal spread (cool greys, warm browns, slate blues) plus varied
     // roughness/envMapIntensity so adjacent boulders catch light differently.
     const rockMaterialParams = [
-      { color: 0x181818, roughness: 0.95, envMapIntensity: 0.15 },
-      { color: 0x1e1e20, roughness: 0.92, envMapIntensity: 0.2 },
-      { color: 0x26262a, roughness: 0.88, envMapIntensity: 0.3 }, // Slate blue-grey
-      { color: 0x2a2a2a, roughness: 0.92, envMapIntensity: 0.2 },
-      { color: 0x34343a, roughness: 0.85, envMapIntensity: 0.35 }, // Lighter weathered face
-      { color: 0x221a12, roughness: 0.94, envMapIntensity: 0.15 },
-      { color: 0x2a2016, roughness: 0.9, envMapIntensity: 0.25 },
-      { color: 0x32281a, roughness: 0.88, envMapIntensity: 0.25 }, // Iron-stained brown
-      { color: 0x3a3226, roughness: 0.86, envMapIntensity: 0.3 },
-      { color: 0x40382a, roughness: 0.9, envMapIntensity: 0.25 }, // Sandy granite
+      { color: 0x7a756c, roughness: 0.95, envMapIntensity: 0.15 },
+      { color: 0x86807a, roughness: 0.92, envMapIntensity: 0.2 },
+      { color: 0x8d8a90, roughness: 0.88, envMapIntensity: 0.3 }, // Slate blue-grey
+      { color: 0x948e84, roughness: 0.92, envMapIntensity: 0.2 },
+      { color: 0xa39d96, roughness: 0.85, envMapIntensity: 0.35 }, // Lighter weathered face
+      { color: 0x7d6a55, roughness: 0.94, envMapIntensity: 0.15 },
+      { color: 0x8c7860, roughness: 0.9, envMapIntensity: 0.25 },
+      { color: 0x9a8468, roughness: 0.88, envMapIntensity: 0.25 }, // Iron-stained brown
+      { color: 0xa69478, roughness: 0.86, envMapIntensity: 0.3 },
+      { color: 0xb3a58a, roughness: 0.9, envMapIntensity: 0.25 }, // Sandy granite
     ];
     const rockMaterials = rockMaterialParams.map(
       (params) =>
@@ -467,7 +567,7 @@ class Environment {
           roughness: params.roughness,
           metalness: 0.0,
           envMapIntensity: params.envMapIntensity,
-          flatShading: false,
+          flatShading: true,
         }),
     );
 
@@ -766,62 +866,62 @@ class Environment {
     // Rock materials for boulders - very dark, no green
     const rockMaterials = [
       new THREE.MeshStandardMaterial({
-        color: 0x181818,
+        color: 0x707070,
         roughness: 0.98,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x1e1e1e,
+        color: 0x838383,
         roughness: 0.97,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x242424,
+        color: 0x959595,
         roughness: 0.96,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x2a2a2a,
+        color: 0xa8a8a8,
         roughness: 0.98,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x303030,
+        color: 0xbababa,
         roughness: 0.97,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x221a12,
+        color: 0x8f765d,
         roughness: 0.98,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x282118,
+        color: 0xa28c70,
         roughness: 0.97,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x2e261c,
+        color: 0xb49b7c,
         roughness: 0.96,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x342c20,
+        color: 0xc7ae89,
         roughness: 0.98,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x3a3224,
+        color: 0xd9c195,
         roughness: 0.97,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x363636,
+        color: 0xcdcdcd,
         roughness: 0.96,
         metalness: 0.0,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x3c3c3c,
+        color: 0xe0e0e0,
         roughness: 0.97,
         metalness: 0.0,
       }),
@@ -841,9 +941,11 @@ class Environment {
         vertexColors: true,
         roughness: 0.92,
         metalness: 0.0,
-        flatShading: false,
+        // Hard facets read as chiselled rock; smooth normals over this
+        // displacement shaded like melted wax
+        flatShading: true,
         side: THREE.DoubleSide,
-        envMapIntensity: 0.2,
+        envMapIntensity: 0.6,
       });
 
       // Create main cliff face geometry
@@ -854,8 +956,8 @@ class Environment {
       const uvs = [];
 
       // Higher resolution for detailed faceting
-      const horizontalSubdivisions = 4; // Increased from 2 for finer horizontal detail
-      const verticalSegments = 35; // Increased from 20 for finer vertical detail
+      const horizontalSubdivisions = this.cliffHorizontalSubdivisions;
+      const verticalSegments = this.cliffVerticalSegments;
 
       // Only create geometry for the active segment range (lazy generation)
       // Extend by 20 segments to match road geometry and decorative elements
@@ -891,10 +993,17 @@ class Environment {
               1.0 +
               Math.sin(lengthProgress * Math.PI * 8) * 0.5 + // 8 major peaks and valleys
               Math.sin(lengthProgress * Math.PI * 15) * 0.25 + // 15 medium variations
-              Math.sin(lengthProgress * Math.PI * 27) * 0.15 + // 27 small details
-              (this.rand() - 0.5) * 0.2; // Random noise (20%)
+              Math.sin(lengthProgress * Math.PI * 27) * 0.15; // 27 small details
+            // (no per-vertex random term: it changed every row and turned
+            // the skyline into a saw blade)
 
-            const variableHeight = height * cliffHeightMultiplier;
+            // The drop-off face follows the terrain model exactly (see
+            // cliffDrop()): scenery and the falling bike are placed with
+            // that model, and a face that sagged below it left trees and
+            // rocks hanging in the air.
+            const variableHeight = isDropOff
+              ? -this.cliffDrop(interpY)
+              : height * cliffHeightMultiplier;
             const currentHeight = variableHeight * verticalProgress;
 
             // Calculate base perpendicular distance with slope for walls
@@ -902,17 +1011,10 @@ class Environment {
             let baseDistance = 6.5; // Reduced from 8 to eliminate gap
 
             if (side > 0 && isDropOff) {
-              // Right wall (drop-off) - add dramatic overhanging slope
-              // Start at road edge, slope inward as we go down
-              const slopeAmount = verticalProgress * verticalProgress * 50; // Quadratic slope for overhang
-              baseDistance -= slopeAmount;
-
-              // Debug: Log slope amount for first segment
-              if (i === 0 && h === 0 && j % 5 === 0) {
-                console.log(
-                  `Right cliff overhang at height ${verticalProgress.toFixed(2)}: base=${baseDistance.toFixed(1)}, slope=${slopeAmount.toFixed(1)}`,
-                );
-              }
+              // Right wall (drop-off): flat ledge, then a constant slope
+              baseDistance =
+                this.roadWidth / 2 + 2 +
+                (this.cliffDrop(interpY) * verticalProgress) / this.cliffSlope;
             } else if (side < 0 && !isDropOff) {
               // Left wall (mountain) - with lip at bottom
               baseDistance = this.roadWidth / 2 + 1; // Start just outside road edge
@@ -932,52 +1034,14 @@ class Environment {
             // Multi-layer displacement for natural rock face
             // Use 0-based index for vertex calculations
             const idx = (i - startIdx) * horizontalSubdivisions + h;
+            const facetedDisplacement = this.cliffDisplacement(idx, j, verticalProgress);
 
-            // Reduce displacement at base to prevent gaps
-            const heightFactor = Math.min(verticalProgress * 2, 1); // Ramps up from 0 at base to 1
-
-            // Layer 1: Large rock formations (increased amplitude)
-            const primary =
-              (Math.sin(idx * 0.12 + j * 0.18) * Math.cos(j * 0.08) +
-                Math.sin(idx * 0.08 - j * 0.15) * 0.7) *
-              8.0 *
-              heightFactor;
-
-            // Layer 2: Medium rock faces (more variation)
-            const secondary =
-              (Math.sin(idx * 0.35 + j * 0.45) * Math.cos(idx * 0.25) +
-                Math.cos(idx * 0.5 - j * 0.3) * 0.8) *
-              4.0 *
-              heightFactor;
-
-            // Layer 3: Small surface details (increased frequency and amplitude)
-            const tertiary =
-              (Math.sin(idx * 1.2 + j * 1.5) * 0.6 +
-                Math.cos(idx * 1.8 - j * 2.0) * 0.4) *
-              1.5 *
-              heightFactor;
-
-            // Layer 4: Micro details for texture
-            const micro = Math.sin(idx * 3.5 + j * 4.0) * 0.5 * heightFactor;
-
-            // Combine displacements with height-based variation
-            const totalDisplacement = primary + secondary + tertiary + micro;
-
-            // Apply faceting by quantizing displacement - smaller facets for more angular look
-            const facetSize = 0.7 + Math.sin(idx * 0.3) * 0.3; // Reduced from 1.2±0.4 to 0.7±0.3 for sharper angles
-            const facetedDisplacement =
-              Math.floor(totalDisplacement / facetSize) * facetSize;
-
-            // Calculate base final distance
-            const displacementScale = verticalProgress === 0 ? 0.15 : 0.7; // Increased from 0.55 to 0.70 for more pronounced faceting
+            // Calculate base final distance. The drop-off uses a smaller
+            // scale: its displacement is horizontal on a 53 degree slope, so
+            // every unit moves the surface 1.33 units vertically.
+            const displacementScale = this.cliffDisplacementScale(verticalProgress, isDropOff);
             let finalDistance =
               baseDistance + facetedDisplacement * displacementScale;
-
-            // Apply slope for overhang
-            if (side > 0 && isDropOff) {
-              const slopeAmount = verticalProgress * 150;
-              finalDistance += slopeAmount;
-            }
 
             // Ensure minimum distance to prevent gaps at road edge (scales with road width)
             finalDistance = Math.max(finalDistance, this.roadWidth / 2 + 1.4);
@@ -993,7 +1057,7 @@ class Environment {
             );
 
             // More realistic mountain rock colors with grey variations
-            const greyBase = 0.35 + this.rand() * 0.25; // 0.35 to 0.6
+            const greyBase = 0.6 + this.rand() * 0.25; // 0.6 to 0.85
 
             // Add geological stratification layers
             const stratumHeight = 8; // Height of each stratum in units
@@ -1022,9 +1086,9 @@ class Environment {
 
             // Regular rock colors
             const finalGrey = Math.max(
-              0.2,
+              0.38,
               Math.min(
-                0.8,
+                1.0,
                 greyBase +
                   heightVariation -
                   depthVariation +
@@ -1042,14 +1106,16 @@ class Environment {
             const greenTintStrength = horizontalFactor * 0.08;
 
             // Slight color tints for realism
-            const redTint = finalGrey + mineralStreak - greenTintStrength * 0.2;
+            // Warm sandstone cast
+            const redTint = finalGrey + 0.03 + mineralStreak - greenTintStrength * 0.2;
             const greenTint = finalGrey - 0.02 + greenTintStrength;
-            const blueTint = finalGrey + 0.03 - greenTintStrength * 0.15;
+            const blueTint = finalGrey - 0.07 - greenTintStrength * 0.15;
 
             colors.push(redTint, greenTint, blueTint);
 
             // UV coordinates
-            uvs.push(idx * 0.1, verticalProgress);
+            // Roughly square texels: columns are 5 units apart
+            uvs.push(idx * 0.3125, Math.abs(currentHeight) / 16);
           }
         }
       }
@@ -1841,12 +1907,14 @@ class Environment {
       const geometry = new THREE.BufferGeometry();
       const vertices = [];
       const indices = [];
-      const colors = [];
 
       // Asymmetric edges to match asymmetric cliff walls, with slight shift
       const shiftRight = -0.5; // Shift entire strip left by 0.5m
       const leftEdge = -(this.roadWidth / 2 + 1.6) + shiftRight;
       const rightEdge = this.roadWidth / 2 + 2 + shiftRight;
+      // The strip runs under the road too (it closes the gap to both rock
+      // faces), so push it back in depth: 0.1 below the tarmac is not
+      // enough to stop it flickering through at a distance
 
       // Only create geometry for the active segment range (lazy generation)
       const startIdx = Math.max(0, this.startSegment);
@@ -1883,10 +1951,6 @@ class Environment {
           nextPoint.z + nextPerpZ2,
         );
 
-        // Brown color
-        for (let j = 0; j < 4; j++) {
-          colors.push(0.25, 0.2, 0.18);
-        }
 
         indices.push(
           baseIndex,
@@ -1902,23 +1966,24 @@ class Environment {
         "position",
         new THREE.Float32BufferAttribute(vertices, 3),
       );
-      geometry.setAttribute(
-        "color",
-        new THREE.Float32BufferAttribute(colors, 3),
-      );
       geometry.setIndex(indices);
       geometry.computeVertexNormals();
 
+      // Plain colour (no vertex colours) so the per-leg and weather verge
+      // tints in updateTerrainColors() show
       const material = new THREE.MeshStandardMaterial({
-        vertexColors: true,
+        color: this.vergeBaseColor,
         roughness: 0.95,
         metalness: 0.0,
+        polygonOffset: true,
+        polygonOffsetFactor: 2,
+        polygonOffsetUnits: 8,
         side: THREE.DoubleSide // Make sure both sides render
       });
 
       const mesh = new THREE.Mesh(geometry, material);
       mesh.receiveShadow = true;
-      mesh.castShadow = true;
+      mesh.userData.type = "terrain";
       return mesh;
     };
 
@@ -2509,6 +2574,7 @@ class Environment {
       // y = height). The old world-coordinate position (x, ..., z) was added
       // on top of the parent transform, leaving snow caps floating in the
       // sky at twice the mountain's world offset.
+      snowCap.userData.snow = true; // Not recoloured by the leg's rock tint
       snowCap.position.set(0, height * 0.85, 0);
       snowCap.scale.set(1.2, 0.6, 1.2);
       mountain.add(snowCap);
@@ -2646,7 +2712,10 @@ class Environment {
     const ctx = canvas.getContext("2d");
 
     // Base rock color
-    ctx.fillStyle = "#656565";
+    // Light, slightly warm stone: the texture is multiplied by the cliff's
+    // vertex colours, and a mid-grey base times mid-grey vertices rendered
+    // the whole mountain near black
+    ctx.fillStyle = "#b9b1a6";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Add noise for rough surface
@@ -2663,7 +2732,7 @@ class Environment {
     ctx.putImageData(imageData, 0, 0);
 
     // Add stratification lines
-    ctx.strokeStyle = "#4a4a4a";
+    ctx.strokeStyle = "#7d756c";
     ctx.lineWidth = 1;
     ctx.globalAlpha = 0.3;
 
@@ -2677,7 +2746,7 @@ class Environment {
     }
 
     // Add cracks
-    ctx.strokeStyle = "#2a2a2a";
+    ctx.strokeStyle = "#4c4640";
     ctx.lineWidth = 0.5;
     ctx.globalAlpha = 0.4;
 
@@ -2700,7 +2769,7 @@ class Environment {
     }
 
     // Add mineral veins
-    ctx.strokeStyle = "#7a7570";
+    ctx.strokeStyle = "#d6cfc4";
     ctx.lineWidth = 2;
     ctx.globalAlpha = 0.2;
 
@@ -2731,7 +2800,9 @@ class Environment {
     const ctx = canvas.getContext("2d");
 
     // Asphalt base with variation
-    ctx.fillStyle = "#3a3a3a";
+    // (lighter than it looks: #3a3a3a is 4% reflectance once decoded, half
+    // that of real asphalt, and vanished in anything but full sun)
+    ctx.fillStyle = "#4e4d4b";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Large-scale tonal mottling - soft warm/cool patches give the asphalt
@@ -3585,19 +3656,26 @@ class Environment {
   }
 
   createGrass() {
-    // Create a lake at the bottom instead of grass
-    const lakeMaterial = new THREE.MeshStandardMaterial({
-      color: 0x10539e, // Deeper, more saturated alpine blue
-      side: THREE.DoubleSide,
-      roughness: 0.06, // Glassy water surface
-      metalness: 0.55, // Stronger specular response
-      envMapIntensity: 1.6, // Pick up more sky reflection for shine
-    });
-
-    const lakeGeometry = new THREE.PlaneGeometry(3000, 3000);
-    const lake = new THREE.Mesh(lakeGeometry, lakeMaterial);
+    // Lake under the whole active leg. (A fixed 3000-unit plane at the world
+    // origin only reached the first leg; later legs dropped into nothing.)
+    const legMid = this.roadPath[
+      Math.floor(
+        (Math.max(0, this.startSegment) +
+          Math.min(this.endSegment, this.roadPath.length - 1)) / 2,
+      )
+    ];
+    const lakeMaterial =
+      typeof createWaterMaterial === "function"
+        ? createWaterMaterial()
+        : new THREE.MeshStandardMaterial({
+            color: 0x10539e,
+            roughness: 0.06,
+            metalness: 0.55,
+            envMapIntensity: 1.6,
+          });
+    const lake = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000), lakeMaterial);
     lake.rotation.x = -Math.PI / 2;
-    lake.position.set(0, -200, 0); // Below cliff level
+    lake.position.set(legMid.x, -200, legMid.z);
     lake.receiveShadow = true;
     this.scene.add(lake);
 
@@ -3727,27 +3805,6 @@ class Environment {
 
     // Guard rails commented out due to rendering issues
     // this.createGuardRails();
-
-    // Add some water depth variation patches
-    for (let i = 0; i < 20; i++) {
-      const patchSize = 50 + this.rand() * 100;
-      const patchGeometry = new THREE.PlaneGeometry(patchSize, patchSize);
-      const patchMaterial = new THREE.MeshStandardMaterial({
-        color: 0x1a5599, // Darker blue for deeper water
-        side: THREE.DoubleSide,
-        roughness: 0.15, // Still water-like
-        metalness: 0.35,
-      });
-      const patch = new THREE.Mesh(patchGeometry, patchMaterial);
-      patch.rotation.x = -Math.PI / 2;
-      patch.position.set(
-        (this.rand() - 0.5) * 1500,
-        -200.005, // Match lake level
-        (this.rand() - 0.5) * 1500,
-      );
-      patch.receiveShadow = true;
-      this.scene.add(patch);
-    }
   }
 
   createRoadMarkings() {
@@ -3841,7 +3898,8 @@ class Environment {
       // Checkered banner gantry over the finish line
       this.createFinishBanner(this.roadPath[finishSegmentIdx]);
 
-      // Store finish line position for detection
+      // Store finish line position and direction for detection
+      this.finishLineHeading = this.roadPath[finishSegmentIdx].heading;
       this.finishLinePosition = new THREE.Vector3(
         this.roadPath[finishSegmentIdx].x,
         finishY,
@@ -3961,105 +4019,200 @@ class Environment {
     this.registerGrounded(group, "finish banner gantry");
   }
 
+  // Concatenate geometries into one non-indexed, vertex-coloured geometry.
+  // Each part is { geometry, color: [bottomHex, topHex] }: the colour runs
+  // from the part's lowest vertex to its highest.
+  mergeColoredGeometries(parts) {
+    const positions = [];
+    const colors = [];
+    const bottom = new THREE.Color();
+    const top = new THREE.Color();
+    const mixed = new THREE.Color();
+
+    parts.forEach(({ geometry, color }) => {
+      const flat = geometry.index ? geometry.toNonIndexed() : geometry;
+      const position = flat.attributes.position;
+      flat.computeBoundingBox();
+      const minY = flat.boundingBox.min.y;
+      const spanY = Math.max(0.001, flat.boundingBox.max.y - minY);
+      // Colours are authored as sRGB hex; the renderer decodes float vertex
+      // colours once (Graphics.fixColorSpaces), so store them undecoded
+      bottom.setHex(color[0], THREE.NoColorSpace || "");
+      top.setHex(color[1], THREE.NoColorSpace || "");
+      for (let v = 0; v < position.count; v++) {
+        const y = position.getY(v);
+        positions.push(position.getX(v), y, position.getZ(v));
+        mixed.copy(bottom).lerp(top, (y - minY) / spanY);
+        colors.push(mixed.r, mixed.g, mixed.b);
+      }
+      if (flat !== geometry) flat.dispose();
+      geometry.dispose();
+    });
+
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    merged.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    merged.computeVertexNormals();
+    return merged;
+  }
+
+  // Low-poly conifer: a trunk and three stacked, slightly irregular tiers
+  createConiferGeometry() {
+    const tier = (radius, height, y, twist) => {
+      const g = new THREE.ConeGeometry(radius, height, 7, 1);
+      const p = g.attributes.position;
+      for (let v = 0; v < p.count; v++) {
+        // Push the skirt in and out so the silhouette is not a perfect cone
+        if (p.getY(v) < 0) {
+          const wobble = 0.85 + this.rand() * 0.3;
+          p.setX(v, p.getX(v) * wobble);
+          p.setZ(v, p.getZ(v) * wobble);
+          p.setY(v, p.getY(v) - this.rand() * 0.25);
+        }
+      }
+      g.rotateY(twist);
+      g.translate(0, y, 0);
+      return g;
+    };
+    const trunk = new THREE.CylinderGeometry(0.22, 0.34, 2.2, 6, 1);
+    trunk.translate(0, 1.1, 0);
+    return this.mergeColoredGeometries([
+      { geometry: trunk, color: [0x3b2a1e, 0x5a4030] },
+      { geometry: tier(2.3, 3.2, 3.0, 0.0), color: [0x1b3d27, 0x2a5a33] },
+      { geometry: tier(1.8, 2.9, 4.9, 0.5), color: [0x20472b, 0x33683a] },
+      { geometry: tier(1.2, 2.6, 6.7, 1.1), color: [0x275330, 0x467a42] },
+    ]);
+  }
+
+  // Low-poly broadleaf: a trunk under a cluster of faceted canopy lobes
+  createBroadleafGeometry() {
+    const lobe = (radius, x, y, z) => {
+      const g = this.displaceVertices(new THREE.IcosahedronGeometry(radius, 1), radius * 0.22);
+      g.scale(1, 0.82, 1);
+      g.translate(x, y, z);
+      return g;
+    };
+    const trunk = new THREE.CylinderGeometry(0.26, 0.42, 3.4, 6, 1);
+    trunk.translate(0, 1.7, 0);
+    return this.mergeColoredGeometries([
+      { geometry: trunk, color: [0x40301f, 0x6a4c33] },
+      { geometry: lobe(2.3, 0.0, 4.9, 0.0), color: [0x2b4f25, 0x55803a] },
+      { geometry: lobe(1.7, 1.5, 4.1, 0.6), color: [0x264822, 0x4a7436] },
+      { geometry: lobe(1.6, -1.3, 4.3, -0.7), color: [0x294b23, 0x507a36] },
+      { geometry: lobe(1.4, 0.2, 6.3, -0.3), color: [0x33592a, 0x688f42] },
+    ]);
+  }
+
+  // Scatter an instanced forest over the drop-off slope. Two draw calls for
+  // the whole leg, and every tree stands on the rendered rock face.
+  createForest() {
+    const startIdx = Math.max(0, this.startSegment);
+    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+
+    // Higher, colder legs are mostly conifers; the last leg is snowed in
+    const coniferShare = [0.75, 0.35, 0.3, 0.55, 0.9, 0.5, 0.6, 1.0][this.legIndex] ?? 0.6;
+    const snowy = this.legIndex === 7;
+
+    const placements = { conifer: [], broadleaf: [] };
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const up = new THREE.Vector3(0, 1, 0);
+
+    for (let index = startIdx; index <= endIdx; index++) {
+      const point = this.roadPath[index];
+      // Trees per segment thin out with distance down the slope
+      const count = 5 + Math.floor(this.rand() * 4);
+      for (let t = 0; t < count; t++) {
+        const band = this.rand();
+        const lateral = this.roadWidth / 2 + 3.5 + band * band * 85;
+        const along = (this.rand() - 0.5) * 20;
+        const x = point.x + lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
+        const z = point.z - lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
+        const groundY = this.groundYAt(x, z);
+        if (groundY < -185) continue; // At the waterline
+
+        // Trees right beside the road stay small so they do not wall off
+        // the view across the valley
+        const nearRoad = lateral < this.roadWidth / 2 + 9;
+        const size = (nearRoad ? 0.55 : 0.8) + this.rand() * (nearRoad ? 0.35 : 0.75);
+        position.set(x, groundY - 0.6, z);
+        quaternion.setFromAxisAngle(up, this.rand() * Math.PI * 2);
+        scale.set(size * (0.85 + this.rand() * 0.3), size, size * (0.85 + this.rand() * 0.3));
+        matrix.compose(position, quaternion, scale);
+
+        // Per-tree tint: mostly healthy green, the odd dry or dark one
+        const tint = new THREE.Color().setHSL(
+          0.24 + (this.rand() - 0.5) * 0.1,
+          0.15 + this.rand() * 0.25,
+          0.6 + this.rand() * 0.3,
+          THREE.SRGBColorSpace,
+        );
+        if (snowy) tint.lerp(new THREE.Color(0xffffff), 0.55).multiplyScalar(1.5);
+
+        const kind = this.rand() < coniferShare ? "conifer" : "broadleaf";
+        placements[kind].push({ matrix: matrix.clone(), tint });
+      }
+    }
+
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      flatShading: true,
+      roughness: 0.92,
+      metalness: 0.0,
+      envMapIntensity: 0.5,
+    });
+
+    const build = (kind, geometry) => {
+      const list = placements[kind];
+      if (list.length === 0) {
+        geometry.dispose();
+        return;
+      }
+      const mesh = new THREE.InstancedMesh(geometry, material, list.length);
+      list.forEach((placement, n) => {
+        mesh.setMatrixAt(n, placement.matrix);
+        mesh.setColorAt(n, placement.tint);
+      });
+      mesh.instanceMatrix.needsUpdate = true;
+      mesh.instanceColor.needsUpdate = true;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      // One mesh spans the whole leg: its own bounds say nothing about
+      // where the instances are
+      mesh.frustumCulled = false;
+      mesh.userData.skipCulling = true;
+      this.scene.add(mesh);
+    };
+    build("conifer", this.createConiferGeometry());
+    build("broadleaf", this.createBroadleafGeometry());
+  }
+
   addEnvironmentalDetails() {
     // Rock formations and cliff details
     this.addRockFormations();
 
-    // Trees along the roadside - only on the mountain side (left)
-    const trunkGeometry = new THREE.CylinderGeometry(0.5, 0.6, 4);
-    const trunkMaterial = new THREE.MeshStandardMaterial({
-      color: 0x8b4513,
-      roughness: 0.9,
-      metalness: 0.0,
-    });
-    const foliageGeometry = new THREE.SphereGeometry(3, 6, 5);
-    // Three foliage tones (shared materials) so the treeline reads as a
-    // mixed forest instead of identical green spheres
-    const foliageMaterials = [
-      new THREE.MeshStandardMaterial({
-        color: 0x2e7d32, // Mid forest green
-        roughness: 0.95,
-        metalness: 0.0,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x4a7a2a, // Sunlit olive green
-        roughness: 0.95,
-        metalness: 0.0,
-      }),
-      new THREE.MeshStandardMaterial({
-        color: 0x1c5e38, // Deep pine green
-        roughness: 0.95,
-        metalness: 0.0,
-      }),
-    ];
+    // Forest on the valley slope below the road
+    this.createForest();
 
-    // Place trees along road path - only on left (mountain) side (only in active segment range)
     const startIdx = Math.max(0, this.startSegment);
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
 
-    for (let index = startIdx; index <= endIdx; index++) {
-      const point = this.roadPath[index];
-      if (index % 7 === 0) {
-        // Every 7th segment for sparser placement.
-        // Trees grow on the RIGHT cliff slope below the road edge: the
-        // rendered drop-off face tracks the terrain model within ~1 unit
-        // there, so bases reliably embed in the slope. (The left wall's
-        // faceted face has +-8 units of displacement noise, which left wall
-        // trees visibly floating in front of the rock.)
-        const treeDistance = this.roadWidth / 2 + 4 + this.rand() * 7;
-
-        const leftX = point.x + treeDistance * Math.cos(point.heading);
-        const leftZ = point.z - treeDistance * Math.sin(point.heading);
-
-        // Base sunk slightly into the slope; treetops peek up beside the road
-        const groundLevel = this.groundYAt(leftX, leftZ) - 0.5;
-
-        // Vary each tree's size and canopy shape slightly
-        const treeScale = 0.8 + this.rand() * 0.55;
-        const canopyWidth = 0.9 + this.rand() * 0.25;
-        const canopyHeight = 0.95 + this.rand() * 0.35;
-
-        const leftTrunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
-        leftTrunk.scale.setScalar(treeScale);
-        leftTrunk.position.set(leftX, groundLevel + 2 * treeScale, leftZ);
-        leftTrunk.castShadow = true;
-        leftTrunk.receiveShadow = true;
-        this.scene.add(leftTrunk);
-        this.registerGrounded(leftTrunk, `tree trunk (segment ${index})`);
-
-        const leftFoliage = new THREE.Mesh(
-          foliageGeometry,
-          foliageMaterials[Math.floor(this.rand() * foliageMaterials.length)],
-        );
-        leftFoliage.scale.set(
-          treeScale * canopyWidth,
-          treeScale * canopyHeight,
-          treeScale * canopyWidth,
-        );
-        leftFoliage.rotation.y = this.rand() * Math.PI;
-        leftFoliage.position.set(leftX, groundLevel + 5.5 * treeScale, leftZ);
-        leftFoliage.castShadow = true;
-        leftFoliage.receiveShadow = true;
-        leftFoliage.userData.allowFloating = true; // Canopy sits atop the trunk
-        this.scene.add(leftFoliage);
-
-        // No trees on the left (mountain wall) side - the noisy rock face
-        // can't reliably seat them
-      }
-    }
-
     // Bushes along the mountain side only (only in active segment range)
-    const bushGeometry = new THREE.SphereGeometry(1, 6, 4);
+    const bushGeometry = this.displaceVertices(new THREE.IcosahedronGeometry(1, 1), 0.2);
     const bushMaterials = [
       new THREE.MeshStandardMaterial({
-        color: 0x2d5016,
+        color: 0x3d6b22,
         roughness: 0.9,
         metalness: 0.0,
+        flatShading: true,
       }),
       new THREE.MeshStandardMaterial({
-        color: 0x3f6622, // Lighter scrub green for variety
+        color: 0x5a8a2e, // Lighter scrub green for variety
         roughness: 0.9,
         metalness: 0.0,
+        flatShading: true,
       }),
     ];
 
@@ -5299,7 +5452,8 @@ class Environment {
 
       const barrier = new THREE.Mesh(barrierGeometry, barrierMaterial);
       barrier.position.set(barrierX, barrierY, barrierZ);
-      barrier.rotation.y = point.heading;
+      // The box is long in local X: turn it to run along the road
+      barrier.rotation.y = point.heading + Math.PI / 2;
       barrier.castShadow = true;
       barrier.receiveShadow = true;
       this.scene.add(barrier);
@@ -5327,7 +5481,7 @@ class Environment {
         stripe.position.copy(barrier.position);
         stripe.position.x += Math.sin(point.heading) * s * 0.8;
         stripe.position.z += Math.cos(point.heading) * s * 0.8;
-        stripe.position.z += 0.01; // Slightly in front
+        stripe.rotation.y = barrier.rotation.y;
         this.scene.add(stripe);
       }
     }
@@ -5433,8 +5587,10 @@ class Environment {
     // Position on outside of turn (roadWidth-relative so the marker sits on
     // the roadside ledge, base on the terrain model)
     const markerDistance = this.roadWidth / 2 + 1;
-    const markerX = point.x - Math.cos(point.heading) * markerDistance;
-    const markerZ = point.z + Math.sin(point.heading) * markerDistance;
+    // Right turn -> left (mountain) side, left turn -> right (valley) side
+    const markerSide = direction === "right" ? -1 : 1;
+    const markerX = point.x + Math.cos(point.heading) * markerDistance * markerSide;
+    const markerZ = point.z - Math.sin(point.heading) * markerDistance * markerSide;
 
     chevronGroup.position.set(markerX, this.groundYAt(markerX, markerZ), markerZ);
     chevronGroup.rotation.y = point.heading;
@@ -5538,11 +5694,13 @@ class Environment {
       });
 
       const leftPole = new THREE.Mesh(poleGeometry, poleMaterial);
-      leftPole.position.set(-6, 2.5, 0);
+      // On the ledges, clear of both lanes
+      const poleOffset = this.roadWidth / 2 + 0.6;
+      leftPole.position.set(-poleOffset, 2.5, 0);
       gateGroup.add(leftPole);
 
       const rightPole = new THREE.Mesh(poleGeometry, poleMaterial);
-      rightPole.position.set(6, 2.5, 0);
+      rightPole.position.set(poleOffset, 2.5, 0);
       gateGroup.add(rightPole);
 
       // Position and orient the checkpoint
@@ -5608,7 +5766,8 @@ class Environment {
     // Update terrain strips (grass/ground next to road)
     this.scene.traverse((object) => {
       if (object.isMesh && object.userData.type === "terrain") {
-        object.material.color.setHex(grassColor);
+        // A worn verge: the leg's grass colour over bare dirt
+        object.material.color.setHex(grassColor).lerp(new THREE.Color(this.vergeBaseColor), 0.6).multiplyScalar(0.75);
         object.material.needsUpdate = true;
       }
     });
@@ -5617,7 +5776,13 @@ class Environment {
   updateMountainColors(mountainColor) {
     // Update mountain meshes
     this.scene.traverse((object) => {
-      if (object.isMesh && object.userData.type === "mountain") {
+      // Snow caps and vertex-coloured peaks carry their own colours
+      if (
+        object.isMesh &&
+        object.userData.type === "mountain" &&
+        !object.userData.snow &&
+        !object.material.vertexColors
+      ) {
         object.material.color.setHex(mountainColor);
         object.material.needsUpdate = true;
       }
@@ -5653,10 +5818,14 @@ class Environment {
       case "rain":
         // Wet road - darker, more reflective
         if (this.roadMaterial) {
+          // A film of water: slightly darker, glossy, and mirror-like at
+          // the shallow angle the rider sees it from. (Near-black with high
+          // metalness had nothing bright to reflect and rendered as a void.)
           this.roadMaterial.roughness =
-            0.85 * (1 - intensity) + 0.3 * intensity; // Smoother when wet
-          this.roadMaterial.metalness = 0.4 * intensity; // More reflective
-          this.roadMaterial.color.setHex(0x1a1a1a); // Darker when wet
+            0.85 * (1 - intensity) + 0.2 * intensity;
+          this.roadMaterial.metalness = 0.12 * intensity;
+          this.roadMaterial.envMapIntensity = 0.3 + 1.3 * intensity;
+          this.roadMaterial.color.setHex(0x8a9098);
           this.roadMaterial.needsUpdate = true;
         }
         // Darker grass and mountains
@@ -5667,9 +5836,10 @@ class Environment {
       case "snow":
         // Icy road - very reflective
         if (this.roadMaterial) {
-          this.roadMaterial.roughness = 0.2; // Very smooth/icy
-          this.roadMaterial.metalness = 0.5; // Highly reflective
-          this.roadMaterial.color.setHex(0xc0d0e0); // Lighter, icy blue tint
+          this.roadMaterial.roughness = 0.32; // Packed snow and ice
+          this.roadMaterial.metalness = 0.08;
+          this.roadMaterial.envMapIntensity = 1.2;
+          this.roadMaterial.color.setHex(0xdfe8f0); // Lighter, icy blue tint
           this.roadMaterial.needsUpdate = true;
         }
         // Snow-covered terrain
@@ -5688,6 +5858,7 @@ class Environment {
         if (this.roadMaterial) {
           this.roadMaterial.roughness = 0.85;
           this.roadMaterial.metalness = 0.0;
+          this.roadMaterial.envMapIntensity = 0.3;
           // Don't override texture color - use white to show texture
           if (this.roadMaterial.map) {
             this.roadMaterial.color.setHex(0xffffff);

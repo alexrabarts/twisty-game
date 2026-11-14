@@ -18,12 +18,19 @@ class InputHandler {
         this.menuActive = false; // Track if crash/finish menu is showing
         this.setupEventListeners();
         this.setupMobileControls();
+        window.addEventListener('blur', () => this.releaseAllKeys());
     }
 
     setupEventListeners() {
         document.addEventListener('keydown', (event) => {
+            // Typing a leaderboard name must not ride the bike or fire hotkeys
+            if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
+
             this.keys[event.code] = true;
             this.updateInputs();
+
+            // One-shot actions fire once per press, not on key auto-repeat
+            if (event.repeat) return;
 
             // Highlight virtual controls
             if (this.virtualControls && ['KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(event.code)) {
@@ -107,6 +114,19 @@ class InputHandler {
                 this.pausePressed = false;
             }
         });
+    }
+
+    // A lost keyup (Alt-Tab while holding a key) would leave it held forever
+    releaseAllKeys() {
+        this.keys = {};
+        this.resetPressed = false;
+        this.menuReturnPressed = false;
+        this.nextLegPressed = false;
+        this.soundTogglePressed = false;
+        this.checkpointRestartPressed = false;
+        this.cameraSwitchPressed = false;
+        this.pausePressed = false;
+        this.updateInputs();
     }
 
     updateInputs() {

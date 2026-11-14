@@ -318,8 +318,8 @@ class TourSystem {
         return checkpoints;
     }
 
-    getLandscapeConfig() {
-        if (!this.currentLeg) {
+    getLandscapeConfig(leg = this.currentLeg) {
+        if (!leg) {
             return { variation: 'mountain' };
         }
 
@@ -361,7 +361,7 @@ class TourSystem {
             }
         };
 
-        return configs[this.currentLeg.landscapeVariation] || configs.mountain;
+        return configs[leg.landscapeVariation] || configs.mountain;
     }
 
     createLegSelector(container, onLegSelected) {
@@ -534,6 +534,8 @@ class TourSystem {
         // Keyboard navigation
         this.keyboardHandler = (e) => {
             if (!this.legSelectorActive) return;
+            // The best-times viewer sits on top of the menu
+            if (document.getElementById('leaderboardViewer')) return;
 
             const isLeft = e.code === 'ArrowLeft' || e.code === 'KeyA';
             const isRight = e.code === 'ArrowRight' || e.code === 'KeyD';

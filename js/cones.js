@@ -8,12 +8,6 @@ class Cones {
         this.createCones();
     }
 
-    createCheckeredTexture() {
-        // Temporarily disabled to debug rendering issue
-        // Will use solid colors instead
-        return null;
-    }
-    
     createCones() {
         // Place cones strategically for slalom and corner markers
         const conePositions = [];
@@ -22,39 +16,48 @@ class Cones {
         if (this.environment && this.environment.roadPath) {
             // Place cones at strategic intervals
             // More cones on straights for slalom, fewer in corners
-            this.environment.roadPath.forEach((point, index) => {
+            const env = this.environment;
+            const path = env.roadPath;
+            // Only the active leg has a road to stand on
+            const legStart = Math.max(0, env.startSegment || 0);
+            const legEnd = Math.min(path.length - 1, env.endSegment !== undefined ? env.endSegment : path.length - 1);
+            const checkpoints = env.checkpoints || [];
+            // Just inside the edge line, so a cone can be clipped for points
+            // without leaving the road
+            const edgeOffset = (env.roadWidth || 16) / 2 - 0.8;
+
+            for (let index = legStart + 8; index <= legEnd - 3; index++) {
+                const point = path[index];
                 // Check if this is a turning section by looking at heading change
                 const prevIndex = Math.max(0, index - 1);
-                const nextIndex = Math.min(index + 1, this.environment.roadPath.length - 1);
-                const signedHeadingChange = this.environment.roadPath[nextIndex].heading -
-                    this.environment.roadPath[prevIndex].heading;
+                const nextIndex = Math.min(index + 1, path.length - 1);
+                const signedHeadingChange = path[nextIndex].heading - path[prevIndex].heading;
                 const headingChange = Math.abs(signedHeadingChange);
 
-                // Place cones based on section type - avoid checkpoints and start later
-                // Checkpoints are at segments: ~18, 32, 46, 60, 2 (wrapped)
-                const checkpointSegments = [18, 32, 46, 60, 2];
-                const isNearCheckpoint = checkpointSegments.some(cp => Math.abs(index - cp) < 5);
+                // Keep clear of checkpoint gates to avoid double alerts
+                if (checkpoints.some(cp => Math.abs(index - cp.segmentIndex) < 3)) continue;
 
-                 if (headingChange < 0.02) {
-                     // Straight section - place slalom cones every 4 segments on alternating sides on grass
-                     // Start well after first checkpoint (segment 18) to avoid double alerts
-                     if (index % 4 === 0 && index > 50 && index < this.environment.roadPath.length - 10 && !isNearCheckpoint) {
-                        const sideOffset = (Math.floor(index / 4) % 2 === 0) ? 10 : -10;
-                        conePositions.push({
-                            x: point.x + sideOffset,
-                            z: point.z
-                        });
+                let side = 0;
+                if (headingChange < 0.02) {
+                    // Straight: slalom cones every 4 segments on alternating sides
+                    if (index % 4 === 0) {
+                        side = (Math.floor(index / 4) % 2 === 0) ? 1 : -1;
                     }
-                 } else if (index % 6 === 0 && index > 50 && !isNearCheckpoint) {
-                    // Corner section - place cones at apex, offset to the inside on grass (less frequent)
-                    const turnDirection = signedHeadingChange > 0 ? 1 : -1;
-                    const offset = turnDirection * 10;
-                    conePositions.push({
-                        x: point.x + offset,
-                        z: point.z
-                    });
+                } else if (index % 6 === 0) {
+                    // Corner: one cone on the inside at the apex. Heading
+                    // grows in a right turn, and right is the positive side.
+                    side = signedHeadingChange > 0 ? 1 : -1;
                 }
-            });
+                if (side === 0) continue;
+
+                // Offset along the road's perpendicular (a world-X offset put
+                // cones in the lanes wherever the road was not heading north)
+                conePositions.push({
+                    x: point.x + Math.cos(point.heading) * edgeOffset * side,
+                    y: point.y || 0,
+                    z: point.z - Math.sin(point.heading) * edgeOffset * side
+                });
+            }
         } else {
             // Fallback: simple straight line
             for (let i = 0; i < 20; i++) {
@@ -72,22 +75,7 @@ class Cones {
         const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.0 });
         
         conePositions.forEach((pos, index) => {
-            // Find the road elevation at this position
-            let roadY = 0;
-            if (this.environment && this.environment.roadPath) {
-                // Find nearest road point to get elevation
-                let minDist = Infinity;
-                for (const roadPoint of this.environment.roadPath) {
-                    const dist = Math.sqrt(
-                        Math.pow(pos.x - roadPoint.x, 2) +
-                        Math.pow(pos.z - roadPoint.z, 2)
-                    );
-                    if (dist < minDist) {
-                        minDist = dist;
-                        roadY = roadPoint.y || 0;
-                    }
-                }
-            }
+            const roadY = pos.y || 0;
 
             const cone = new THREE.Mesh(coneGeometry, coneMaterial);
             cone.position.set(pos.x, roadY + 0.4, pos.z); // Position at road elevation + 0.4
@@ -110,66 +98,9 @@ class Cones {
             base.receiveShadow = true;
             this.scene.add(base);
         });
-        
-        // Add start/finish lines
-        this.createStartFinishMarkers();
-    }
-    
-    createStartFinishMarkers() {
-        const checkeredTexture = this.createCheckeredTexture();
 
-        // Start line
-        const startGeometry = new THREE.PlaneGeometry(16, 2);
-        const startMaterialProps = {
-            color: 0x000000,
-            transparent: true,
-            opacity: 0.9,
-            roughness: 0.7,
-            metalness: 0.0
-        };
-        if (checkeredTexture) {
-            startMaterialProps.map = checkeredTexture;
-            startMaterialProps.color = 0xffffff;
-        }
-        const startMaterial = new THREE.MeshStandardMaterial(startMaterialProps);
-        const startLine = new THREE.Mesh(startGeometry, startMaterial);
-        startLine.rotation.x = -Math.PI / 2;
-        startLine.position.set(0, 0.03, 20);
-        startLine.receiveShadow = true;
-        this.scene.add(startLine);
-
-        // Start line light
-        const startLight = new THREE.PointLight(0x00ff00, 0.5, 50);
-        startLight.position.set(0, 5, 20);
-        this.scene.add(startLight);
-
-        // Finish line
-        if (this.environment && this.environment.roadPath.length > 0) {
-            const lastPoint = this.environment.roadPath[this.environment.roadPath.length - 1];
-            const finishMaterialProps = {
-                color: 0x000000,
-                transparent: true,
-                opacity: 0.9,
-                roughness: 0.7,
-                metalness: 0.0
-            };
-            if (checkeredTexture) {
-                finishMaterialProps.map = checkeredTexture;
-                finishMaterialProps.color = 0xffffff;
-            }
-            const finishMaterial = new THREE.MeshStandardMaterial(finishMaterialProps);
-            const finishLine = new THREE.Mesh(startGeometry, finishMaterial);
-            finishLine.rotation.x = -Math.PI / 2;
-            finishLine.rotation.z = -lastPoint.heading;
-            finishLine.position.set(lastPoint.x, 0.03, lastPoint.z + 20);
-            finishLine.receiveShadow = true;
-            this.scene.add(finishLine);
-
-            // Finish line light
-            const finishLight = new THREE.PointLight(0xffffff, 0.5, 50);
-            finishLight.position.set(lastPoint.x, 5, lastPoint.z + 20);
-            this.scene.add(finishLight);
-        }
+        // Start and finish lines are drawn by Environment.createRoadMarkings()
+        // at the leg's real start and end
     }
     
     checkCollision(vehiclePosition, vehicleVelocity = null, vehicleSpeed = 0) {

@@ -801,6 +801,34 @@
             margin: 20px 0;
         }
 
+    
+        /* Transient gameplay call-outs (checkpoint, flip bonus, cone hit...) */
+        .checkpoint-notification {
+            position: fixed;
+            top: 22%;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 500;
+            color: #fff;
+            font-family: 'Inter', -apple-system, 'Segoe UI', Arial, sans-serif;
+            font-size: clamp(18px, 2.4vw, 30px);
+            font-weight: 800;
+            font-style: italic;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            pointer-events: none;
+            text-shadow: 0 2px 10px rgba(0, 0, 0, 0.75), 0 0 24px rgba(255, 200, 80, 0.35);
+            animation: callout-pop 2s ease-out forwards;
+        }
+
+        @keyframes callout-pop {
+            0% { opacity: 0; transform: translateX(-50%) translateY(14px) scale(0.9); }
+            12% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1.06); }
+            22% { transform: translateX(-50%) translateY(0) scale(1); }
+            80% { opacity: 1; }
+            100% { opacity: 0; transform: translateX(-50%) translateY(-18px) scale(1); }
+        }
     </style>
 </head>
 <body>
@@ -902,6 +930,7 @@
     <script src="js/leaderboard.js"></script>
 
     <!-- Game Scripts -->
+    <script src="js/graphics.js"></script>
     <script src="js/virtualcontrols.js"></script>
     <script src="js/input.js"></script>
     <script src="js/particles.js"></script>

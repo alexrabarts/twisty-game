@@ -279,7 +279,7 @@ class VirtualControls {
             font-family: monospace;
             pointer-events: none;
         `;
-        instructions.innerHTML = 'Left: Steering | Right: ↓Throttle ↑Brake<br>Z: Camera';
+        instructions.innerHTML = 'Left: Steering | Right: ↑Throttle ↓Brake<br>Z: Camera';
         document.body.appendChild(instructions);
         
         // Handle orientation changes

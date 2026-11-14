@@ -1,3 +1,12 @@
+// Segment span that has road geometry for the current leg (the leg plus its
+// run-off past the finish line)
+function legSegmentRange(environment) {
+    const last = environment.roadPath.length - 1;
+    const start = Math.max(0, Math.min(last, environment.startSegment || 0));
+    const legEnd = environment.endSegment !== undefined ? environment.endSegment : last;
+    return { start, end: Math.max(start, Math.min(last, legEnd + 16)) };
+}
+
 class Traffic {
     constructor(scene, environment, playerRiderName = null) {
         this.scene = scene;
@@ -15,10 +24,12 @@ class Traffic {
     }
     
     initializeCars() {
-        const totalSegments = this.environment.roadPath.length;
-        
+        // Oncoming traffic lives on the active leg: only that part of the
+        // course has geometry
+        const range = legSegmentRange(this.environment);
+
         for (let i = 0; i < 1; i++) {
-            const startSegment = Math.floor(Math.random() * totalSegments);
+            const startSegment = range.start + Math.floor((0.5 + Math.random() * 0.5) * (range.end - range.start));
             const car = new Car(this.scene, this.environment, {
                 direction: -1,
                 speed: 15 + Math.random() * 10,
@@ -31,8 +42,7 @@ class Traffic {
     }
     
     initializeMotorcycles() {
-        const totalSegments = this.environment.roadPath.length;
-        const spacing = Math.floor(totalSegments / this.maxMotorcycles);
+        const range = legSegmentRange(this.environment);
 
         // The Touring Crew - Fixed riders with personalities
         const touringCrew = [
@@ -82,7 +92,12 @@ class Traffic {
         const activeCrew = touringCrew.filter(rider => rider.name !== this.playerRiderName);
 
         for (let i = 0; i < activeCrew.length; i++) {
-            const startSegment = (i * spacing + Math.floor(Math.random() * spacing * 0.3)) % totalSegments;
+            // Grid the crew on the leg, just ahead of the start line. Spacing
+            // them over the whole 700-segment course left most legs empty.
+            // (slowest rider nearest the start line, so there is someone to
+            // catch; the quick ones begin further up the road)
+            const slot = activeCrew.length - 1 - i;
+            const startSegment = Math.min(range.end, range.start + 8 + slot * 3 + Math.floor(Math.random() * 2));
             const riderConfig = activeCrew[i];
 
             const motorcycle = new AIMotorcycle(this.scene, this.environment, {
@@ -681,10 +696,10 @@ class Car {
         let laneOffset;
         if (this.inDetour) {
             // Use detour lane with wider offset to avoid construction
-            if (this.detourSide === 'far-left') {
-                laneOffset = -6; // Far left for opposite direction avoiding construction
-            } else if (this.detourSide === 'left') {
-                laneOffset = -5; // Left lane to avoid right lane construction
+            if (this.detourSide === 'far-left' || this.detourSide === 'left') {
+                // Between the containers (inner edge at -4) and the centre
+                // cones (-0.5); -5 and -6 drove through the containers
+                laneOffset = -2.2;
             } else {
                 laneOffset = 5; // Right detour
             }
@@ -781,8 +796,7 @@ class Car {
         
         // Rotate wheels based on speed
         if (!this.wheelRotation) this.wheelRotation = 0;
-        const wheelCircumference = 2 * Math.PI * 0.32;
-        const rotationSpeed = this.currentSpeed / wheelCircumference;
+        const rotationSpeed = this.currentSpeed / 0.32; // rad/s = v / r
         this.wheelRotation += rotationSpeed * deltaTime * this.direction;
         
         if (this.wheels) {
@@ -804,16 +818,14 @@ class Car {
             this.currentSegment -= 1;
         }
         
-        // Check if car needs to wrap around
-        const totalSegments = this.environment.roadPath.length;
-        const previousSegment = this.currentSegment;
-        
+        // Loop within the active leg (the only part with road geometry)
+        const range = legSegmentRange(this.environment);
+
         // Hide car during wrap-around transition
-        if (this.currentSegment >= totalSegments || this.currentSegment < 0) {
+        if (this.currentSegment > range.end || this.currentSegment < range.start) {
             this.carGroup.visible = false;
-            
-            // Wrap around
-            this.currentSegment = ((this.currentSegment % totalSegments) + totalSegments) % totalSegments;
+
+            this.currentSegment = this.direction < 0 ? range.end : range.start;
             
             // Make visible again after a brief delay to ensure smooth transition
             setTimeout(() => {
@@ -855,17 +867,21 @@ class Car {
     }
     
     onCollision() {
-        // Flash the car body red briefly on collision
+        // Flash the car body red briefly on collision. This runs every tick
+        // while the bike overlaps the car: a second call must not capture the
+        // red as the colour to restore.
+        if (this.flashTimeout) return;
         const originalColor = this.body.material.color.getHex();
         this.body.material.color.setHex(0xff0000);
         this.body.material.emissive = new THREE.Color(0xff0000);
         this.body.material.emissiveIntensity = 0.3;
         
         // Reset after a short delay
-        setTimeout(() => {
+        this.flashTimeout = setTimeout(() => {
             this.body.material.color.setHex(originalColor);
             this.body.material.emissive = new THREE.Color(0x000000);
             this.body.material.emissiveIntensity = 0;
+            this.flashTimeout = null;
         }, 200);
     }
     
@@ -1398,8 +1414,7 @@ class AIMotorcycle {
         const segmentsToMove = distanceToMove / segmentLength;
         
         if (!this.wheelRotation) this.wheelRotation = 0;
-        const wheelCircumference = 2 * Math.PI * 0.3;
-        const rotationSpeed = this.currentSpeed / wheelCircumference;
+        const rotationSpeed = this.currentSpeed / 0.3; // rad/s = v / r
         this.wheelRotation += rotationSpeed * deltaTime;
         this.rearWheel.rotation.x = this.wheelRotation;
         this.frontWheel.rotation.x = this.wheelRotation;
@@ -1451,6 +1466,11 @@ class AIMotorcycle {
             // Pack riding - match speed with slight increase for drafting effect
             const draftBoost = minDistanceAhead < 10 ? 1.4 : 1.35;
             this.currentSpeed = Math.min(this.baseSpeed * draftBoost, 58);
+            // Close enough to touch: hold the leader's pace instead of
+            // riding through its back wheel
+            if (minDistanceAhead < 6) {
+                this.currentSpeed = Math.min(this.currentSpeed, nearestBikeAhead.currentSpeed);
+            }
             
             // Small lateral variation for pack dynamics
             if (!this.packLateralOffset) this.packLateralOffset = 0;
@@ -1511,17 +1531,15 @@ class AIMotorcycle {
             this.currentSegment -= 1;
         }
         
-        const totalSegments = this.environment.roadPath.length;
-        if (this.currentSegment >= totalSegments || this.currentSegment < 0) {
+        // A rider that runs out of rendered road has finished the leg: park
+        // it out of sight at the end (it still counts as ahead of the player)
+        const range = legSegmentRange(this.environment);
+        if (this.currentSegment >= range.end) {
+            this.currentSegment = range.end;
+            this.segmentProgress = 0;
             this.bikeGroup.visible = false;
-            this.currentSegment = ((this.currentSegment % totalSegments) + totalSegments) % totalSegments;
-            setTimeout(() => {
-                this.bikeGroup.visible = true;
-            }, 100);
-        } else {
-            if (!this.bikeGroup.visible) {
-                this.bikeGroup.visible = true;
-            }
+        } else if (!this.bikeGroup.visible) {
+            this.bikeGroup.visible = true;
         }
         
         this.updatePosition();

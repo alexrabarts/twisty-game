@@ -1665,6 +1665,26 @@ class Vehicle {
         // (checkWallCollision and updateElevation) which find the true closest segment.
         // The old Z-delta tracking was unreliable on curves and caused oscillation.
         
+        // After the finish line the run is over: roll to a stop upright.
+        // Live physics here let the bike fall over or ride off the cliff
+        // behind the results banner.
+        if (this.finished && !this.crashed) {
+            this.speed *= Math.max(0, 1 - 1.5 * deltaTime);
+            this.leanAngle *= Math.max(0, 1 - 6 * deltaTime);
+            this.leanVelocity = 0;
+            this.steeringAngle = 0;
+            this.isWheelie = false;
+            this.wheelieAngle *= Math.max(0, 1 - 6 * deltaTime);
+            if (!this.isJumping) {
+                const roll = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(0, this.yawAngle, 0));
+                this.velocity.copy(roll.multiplyScalar(this.speed));
+                this.position.add(this.velocity.clone().multiplyScalar(deltaTime));
+                this.updateElevation();
+                this.updateMesh();
+                return;
+            }
+        }
+
         // Check for wall/edge collision FIRST (even when crashed, in case we need to fall)
         if (!this.fallingOffCliff) {
             this.checkWallCollision();
@@ -1812,8 +1832,9 @@ class Vehicle {
                 const dz = this.position.z - ramp.position.z;
                 
                 // Rotate to ramp's local space
-                const cos = Math.cos(-ramp.rotation);
-                const sin = Math.sin(-ramp.rotation);
+                // Inverse of the ramp mesh's rotation.y = heading
+                const cos = Math.cos(ramp.rotation);
+                const sin = Math.sin(ramp.rotation);
                 const localX = dx * cos - dz * sin;
                 const localZ = dx * sin + dz * cos;
                 
@@ -1940,6 +1961,14 @@ class Vehicle {
             }
         }
 
+        // An obstacle crash set a bounce-back velocity above. Stop here, or
+        // the normal movement below overwrites it and the bike slides
+        // straight through the obstacle at full speed.
+        if (this.crashed) {
+            this.updateMesh();
+            return;
+        }
+
         // Check if bike has fallen through the road surface (especially when crashed on side)
         if (this.environment && this.environment.roadPath && !this.fallingOffCliff) {
             // Find closest road segment (windowed search - full scans here cost
@@ -2008,7 +2037,9 @@ class Vehicle {
     updateSpeed(deltaTime, throttleInput, brakeInput) {
         // Calculate road gradient effect
         let gradientForce = 0;
-        if (this.environment && this.environment.roadPath) {
+        // (not in the air: position.y is then above the road and reads as a
+        // steep downhill)
+        if (this.environment && this.environment.roadPath && !this.isJumping) {
             // Find the road gradient by looking ahead and behind
             const lookDistance = 5; // meters
             let currentY = this.position.y;
@@ -2145,7 +2176,7 @@ class Vehicle {
             
             // Check for backwards flip crash with warning zone
             const dangerAngleDegrees = 70; // Warning zone
-            const crashAngleDegrees = 77; // Crash threshold
+            const crashAngleDegrees = this.wheelieCrashAngle * 180 / Math.PI; // Same threshold the HUD scales to
             
             if (angleDegrees >= crashAngleDegrees) {
                 // CRASHED! Went too far back
@@ -2255,7 +2286,9 @@ class Vehicle {
         let steeringTorque = -steeringInput * this.steeringForce * speedFactor;
         
         // Boost steering torque when actively steering against current lean (counter-steering)
-        if (steeringInput !== 0 && Math.sign(steeringInput) !== Math.sign(this.leanAngle) && Math.abs(this.leanAngle) > 0.1) {
+        // (torque is -steeringInput, so input and lean share a sign when the
+        // rider is picking the bike up)
+        if (steeringInput !== 0 && Math.sign(steeringInput) === Math.sign(this.leanAngle) && Math.abs(this.leanAngle) > 0.1) {
             steeringTorque *= 1.5; // 50% more responsive when counter-steering to upright
         }
         
@@ -2345,8 +2378,7 @@ class Vehicle {
         
         // Rotate wheels and discs based on speed
         if (!this.wheelRotation) this.wheelRotation = 0;
-        const wheelCircumference = 2 * Math.PI * 0.3; // 2πr where r=0.3
-        const rotationSpeed = this.speed / wheelCircumference;
+        const rotationSpeed = this.speed / 0.3; // rad/s = v / r, wheel radius 0.3
         this.wheelRotation += rotationSpeed * (this.currentDeltaTime || 1/60);
         this.rearWheel.rotation.x = this.wheelRotation;
         this.frontWheel.rotation.x = this.wheelRotation;
@@ -2400,7 +2432,7 @@ class Vehicle {
             
             // Original vector from origin to pivot point (rear wheel center)
             const pivotX = 0;
-            const pivotY = 0.3 - this.cgHeight; // wheel center height - CG height = 0.3 - 0.6 = -0.3
+            const pivotY = 0.3; // Rear axle height: the model origin is on the ground, not at the CG
             const pivotZ = -0.7; // rear wheel is 0.7m behind center
             
             // After rotation, this vector becomes:
@@ -2539,6 +2571,12 @@ class Vehicle {
         this.groundHitLogged = false;
         this.crashRecoveryTime = 0;
         this.crashPenaltyApplied = false;
+        this.distanceTraveled = 0;
+        this.lastPosition = null;
+        this.lastJumpRotation = 0;
+        this.finished = false;
+        // Do not blend the mesh from the old position to the new one
+        this.prevRenderPos = null;
         
         const bikeColorHex = parseInt(this.bikeColor);
         this.frame.material.color.setHex(bikeColorHex);
@@ -2700,8 +2738,9 @@ class Vehicle {
                 const dz = this.position.z - ramp.position.z;
                 
                 // Rotate to ramp's local space
-                const cos = Math.cos(-ramp.rotation);
-                const sin = Math.sin(-ramp.rotation);
+                // Inverse of the ramp mesh's rotation.y = heading
+                const cos = Math.cos(ramp.rotation);
+                const sin = Math.sin(ramp.rotation);
                 const localX = dx * cos - dz * sin;
                 const localZ = dx * sin + dz * cos;
                 
@@ -2879,7 +2918,8 @@ class Vehicle {
 
 
                 // Check if we've gone off the right cliff edge (positive perpDistance)
-                if (perpDistance > effectiveCliffEdge && !this.crashed) {
+                // (a bike already sliding on its side goes over the edge too)
+                if (perpDistance > effectiveCliffEdge) {
                     console.log('=== FALLING OFF RIGHT CLIFF! ===');
                     console.log('perpDistance:', perpDistance, 'effectiveCliffEdge:', effectiveCliffEdge, 'cliffEdge:', cliffEdge);
                     console.log('Vehicle position:', this.position.x.toFixed(1), this.position.z.toFixed(1), 'Y:', this.position.y.toFixed(1));
@@ -3008,6 +3048,8 @@ class Vehicle {
     }
     
     land(groundHeight) {
+        // Total rotation of this jump, for flip scoring (zeroed below)
+        this.lastJumpRotation = this.jumpRotation;
         this.isJumping = false;
         this.position.y = groundHeight;
         this.jumpVelocityY = 0;
