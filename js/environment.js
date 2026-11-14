@@ -5,7 +5,7 @@ class Environment {
     this.startSegment = startSegment; // Start of visual geometry range
     this.endSegment = endSegment; // End of visual geometry range
     this.legIndex = legIndex; // Current leg index (0-7)
-    this.finishLinePosition = null; // Store finish line position for detection
+    this.finishGate = null; // The finish as a gate record: position, heading, segment, reach each side
     this.roadworksZones = []; // Store construction zones
     this.jumpRamps = []; // Store jump ramp objects for collision detection
     this.roadworkObstacles = []; // Store barriers and equipment for collision detection
@@ -20,8 +20,19 @@ class Environment {
     this.config = Terrain.legConfig(legIndex);
     this.terrain = this.config.profile;
     this.floorY = this.config.floor.y;
+    // Clutter the left side carries (rocks, roadworks plant) stands on ground a
+    // bike can ride on when that side is run-off, so it collides as a solid
+    // circle in `boulders`. Beside a wall it is out of reach and keeps its
+    // old entries, or has none.
+    this.solidClutter = !!this.terrain.left.runoff;
 
     this.roadWidth = this.config.roadWidth;
+    // How far out on the left the roadworks plant stands: well up the wall on
+    // a wall side, a few metres onto the run-off ground otherwise
+    const halfRoad = this.roadWidth / 2;
+    this.plantLateral = this.solidClutter
+      ? { bulldozer: halfRoad + 9, barrier: halfRoad + 6, truck: halfRoad + 6 }
+      : { bulldozer: 30, barrier: 25, truck: 25 };
     // What Terrain needs to read the road: the path fills in during createRoad
     this.terrainGeometry = {
       path: this.roadPath,
@@ -91,6 +102,12 @@ class Environment {
       this.roadPath.length - 1,
       true,
     );
+  }
+
+  // A circle a bike collides with at any height below `height` above it
+  // (see Vehicle's boulder loop): clutter on run-off ground
+  addSolidCircle(x, y, z, radius, height, label) {
+    this.boulders.push({ position: new THREE.Vector3(x, y, z), radius, solid: true, height, label });
   }
 
   // Register an object whose bounding-box bottom must rest on (or below) the
@@ -538,6 +555,15 @@ class Environment {
         rockGroup.position.set(cliffX, cliffY, cliffZ);
         this.scene.add(rockGroup);
         this.registerGrounded(rockGroup, `cliff rock cluster (segment ${index})`);
+        if (this.solidClutter) {
+          this.boulders.push({
+            position: new THREE.Vector3(cliffX, cliffY, cliffZ),
+            radius: size * 1.2,
+            solid: true,
+            height: size * 1.2,
+            label: "rock",
+          });
+        }
       }
     }
 
@@ -720,22 +746,33 @@ class Environment {
   // columns in order, which keeps the seeded stream identical to the old
   // hand-written cliff.
   buildTerrainRibbon(sign, side) {
-    // Create rock texture
-    const rockTexture = this.createRockTexture();
+    // Ground with no rock face (meadow, forest floor) is grass-coloured
+    // vertices on a plain material; a rock face carries the rock texture
+    const isGround = side.face === null;
+    const grass = new THREE.Color(this.config.look.grassColor).multiplyScalar(side.shade ?? 1);
 
     // Rock material with smooth shading for realistic weathered appearance
-    const cliffMaterial = new THREE.MeshStandardMaterial({
-      map: rockTexture,
-      color: 0xffffff,
-      vertexColors: true,
-      roughness: 0.92,
-      metalness: 0.0,
-      // Hard facets read as chiselled rock; smooth normals over this
-      // displacement shaded like melted wax
-      flatShading: true,
-      side: THREE.DoubleSide,
-      envMapIntensity: 0.6,
-    });
+    const cliffMaterial = isGround
+      ? new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          vertexColors: true,
+          roughness: 0.95,
+          metalness: 0.0,
+          side: THREE.DoubleSide,
+          envMapIntensity: 0.3,
+        })
+      : new THREE.MeshStandardMaterial({
+          map: this.createRockTexture(),
+          color: 0xffffff,
+          vertexColors: true,
+          roughness: 0.92,
+          metalness: 0.0,
+          // Hard facets read as chiselled rock; smooth normals over this
+          // displacement shaded like melted wax
+          flatShading: true,
+          side: THREE.DoubleSide,
+          envMapIntensity: 0.6,
+        });
 
     // Create main cliff face geometry
     const geometry = new THREE.BufferGeometry();
@@ -759,6 +796,7 @@ class Environment {
       roadY: 0,
       column: 0,
       index: 0,
+      s: 0,
       pathLength: this.roadPath.length,
     };
     const vertex = {};
@@ -786,6 +824,7 @@ class Environment {
         rowContext.roadY = interpY;
         rowContext.column = idx;
         rowContext.index = i;
+        rowContext.s = i + hProgress;
 
         // Create vertical segments
         for (let j = 0; j <= verticalSegments; j++) {
@@ -802,6 +841,14 @@ class Environment {
 
           // More realistic mountain rock colors with grey variations
           const greyBase = 0.6 + this.rand() * 0.25; // 0.6 to 0.85
+
+          if (isGround) {
+            // Patchy grass: one seeded tint per vertex, from the same draw as rock grey
+            const tint = 0.85 + ((greyBase - 0.6) / 0.25) * 0.3;
+            colors.push(grass.r * tint, grass.g * tint, grass.b * tint);
+            uvs.push(0, 0);
+            continue;
+          }
 
           // Add geological stratification layers
           const stratumHeight = 8; // Height of each stratum in units
@@ -2929,6 +2976,12 @@ class Environment {
   }
 
   createFloor() {
+    const { floor } = this.terrain;
+    if (floor.kind === "none") return;
+    if (floor.kind === "river") {
+      this.createRiver(floor);
+      return;
+    }
     // Lake under the whole active leg. (A fixed 3000-unit plane at the world
     // origin only reached the first leg; later legs dropped into nothing.)
     const legMid = this.roadPath[
@@ -2952,6 +3005,50 @@ class Environment {
     lake.receiveShadow = true;
     lake.userData.part = "floor";
     this.scene.add(lake);
+  }
+
+  // A river ribbon beside the road: a strip from lateral `from` to `to` on
+  // one side, `below` metres under the road along the whole built range. The
+  // ground dips beneath it, so the water shows only where the ground is lower.
+  createRiver(floor) {
+    const startIdx = Math.max(0, this.startSegment);
+    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const vertices = [];
+    const uvs = [];
+    const indices = [];
+    for (let i = startIdx; i <= endIdx; i++) {
+      const point = this.roadPath[i];
+      // The water's normal map tiles every 10 m
+      const tileWidth = (floor.to - floor.from) / 10;
+      uvs.push(0, i * 2, tileWidth, i * 2);
+      for (const lateral of [floor.from, floor.to]) {
+        const offset = lateral * floor.side;
+        vertices.push(
+          point.x + Math.cos(point.heading) * offset,
+          Terrain.waterLevel(this.terrain, point.y),
+          point.z - Math.sin(point.heading) * offset,
+        );
+      }
+      if (i > startIdx) {
+        const base = (i - startIdx - 1) * 2;
+        indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    const material =
+      typeof createWaterMaterial === "function"
+        ? createWaterMaterial()
+        : new THREE.MeshStandardMaterial({ color: 0x10539e, roughness: 0.06, metalness: 0.55, envMapIntensity: 1.6 });
+    material.side = THREE.DoubleSide;
+    const river = new THREE.Mesh(geometry, material);
+    river.name = "floor-river";
+    river.receiveShadow = true;
+    river.userData.part = "floor";
+    this.scene.add(river);
   }
 
   createRoadMarkings() {
@@ -3045,13 +3142,19 @@ class Environment {
       // Checkered banner gantry over the finish line
       this.createFinishBanner(this.roadPath[finishSegmentIdx]);
 
-      // Store finish line position and direction for detection
-      this.finishLineHeading = this.roadPath[finishSegmentIdx].heading;
-      this.finishLinePosition = new THREE.Vector3(
-        this.roadPath[finishSegmentIdx].x,
-        finishY,
-        this.roadPath[finishSegmentIdx].z,
-      );
+      // The finish as a gate, tested by Game.inGate like the checkpoints
+      this.finishGate = {
+        kind: "finish",
+        position: new THREE.Vector3(
+          this.roadPath[finishSegmentIdx].x,
+          finishY,
+          this.roadPath[finishSegmentIdx].z,
+        ),
+        heading: this.roadPath[finishSegmentIdx].heading,
+        segmentIndex: finishSegmentIdx,
+        ...this.gateReach(finishSegmentIdx),
+      };
+      this.createGateLimitPosts(this.roadPath[finishSegmentIdx], this.finishGate, "finish gate");
       console.log(
         `Finish line placed at segment ${finishSegmentIdx} (leg range: ${this.startSegment}-${this.endSegment})`,
       );
@@ -3250,6 +3353,40 @@ class Environment {
     ]);
   }
 
+  // Trees on loose ground, both sides of the road, from `offset` past the road
+  // edge outward (thinning with distance, `reach` further at most). A trunk
+  // within a bike's reach is solid: it joins `boulders` with a height, and a
+  // bike that is airborne above it still clears it. Trees further out can not
+  // be reached, so they get no entry.
+  plantRunoffTrees(index, point, layout, plant) {
+    const [fewest, most] = layout.perSegment;
+    const halfRoad = this.roadWidth / 2;
+    for (const sign of [-1, 1]) {
+      const reachable = Terrain.rideableLimit(this.terrain, index, sign, halfRoad) + 2;
+      const count = fewest + Math.floor(this.rand() * (most - fewest + 1));
+      for (let t = 0; t < count; t++) {
+        const band = this.rand();
+        const lateral = halfRoad + layout.offset + band * band * layout.reach;
+        const along = (this.rand() - 0.5) * 20;
+        const skipped = layout.exclude.some((zone) => zone.sign === sign && lateral >= zone.from && lateral <= zone.to);
+        if (skipped) continue;
+        const x = point.x + sign * lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
+        const z = point.z - sign * lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
+        const groundY = this.groundYAt(x, z);
+        plant(x, z, groundY, lateral);
+        if (lateral <= reachable) {
+          this.boulders.push({
+            position: new THREE.Vector3(x, groundY, z),
+            radius: 0.6,
+            solid: true,
+            height: 6,
+            label: "tree",
+          });
+        }
+      }
+    }
+  }
+
   // Scatter an instanced forest over the drop-off slope. Two draw calls for
   // the whole leg, and every tree stands on the rendered rock face.
   createForest() {
@@ -3257,7 +3394,7 @@ class Environment {
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
 
     // Higher, colder legs are mostly conifers; the last leg is snowed in
-    const { coniferShare, snowy } = this.config.dressing.forest;
+    const { coniferShare, snowy, layout } = this.config.dressing.forest;
 
     const placements = { conifer: [], broadleaf: [] };
     const matrix = new THREE.Matrix4();
@@ -3266,8 +3403,36 @@ class Environment {
     const scale = new THREE.Vector3();
     const up = new THREE.Vector3(0, 1, 0);
 
+    // Everything about one tree once its spot is chosen: size, turn, tint, kind
+    const plant = (x, z, groundY, lateral) => {
+      // Trees right beside the road stay small so they do not wall off
+      // the view across the valley
+      const nearRoad = lateral < this.roadWidth / 2 + 9;
+      const size = (nearRoad ? 0.55 : 0.8) + this.rand() * (nearRoad ? 0.35 : 0.75);
+      position.set(x, groundY - 0.6, z);
+      quaternion.setFromAxisAngle(up, this.rand() * Math.PI * 2);
+      scale.set(size * (0.85 + this.rand() * 0.3), size, size * (0.85 + this.rand() * 0.3));
+      matrix.compose(position, quaternion, scale);
+
+      // Per-tree tint: mostly healthy green, the odd dry or dark one
+      const tint = new THREE.Color().setHSL(
+        0.24 + (this.rand() - 0.5) * 0.1,
+        0.15 + this.rand() * 0.25,
+        0.6 + this.rand() * 0.3,
+        THREE.SRGBColorSpace,
+      );
+      if (snowy) tint.lerp(new THREE.Color(0xffffff), 0.55).multiplyScalar(1.5);
+
+      const kind = this.rand() < coniferShare ? "conifer" : "broadleaf";
+      placements[kind].push({ matrix: matrix.clone(), tint });
+    };
+
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
+      if (layout) {
+        this.plantRunoffTrees(index, point, layout, plant);
+        continue;
+      }
       // Trees per segment thin out with distance down the slope
       const count = 5 + Math.floor(this.rand() * 4);
       for (let t = 0; t < count; t++) {
@@ -3278,27 +3443,7 @@ class Environment {
         const z = point.z - lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
         const groundY = this.groundYAt(x, z);
         if (groundY < this.floorY + 15) continue; // At the waterline
-
-        // Trees right beside the road stay small so they do not wall off
-        // the view across the valley
-        const nearRoad = lateral < this.roadWidth / 2 + 9;
-        const size = (nearRoad ? 0.55 : 0.8) + this.rand() * (nearRoad ? 0.35 : 0.75);
-        position.set(x, groundY - 0.6, z);
-        quaternion.setFromAxisAngle(up, this.rand() * Math.PI * 2);
-        scale.set(size * (0.85 + this.rand() * 0.3), size, size * (0.85 + this.rand() * 0.3));
-        matrix.compose(position, quaternion, scale);
-
-        // Per-tree tint: mostly healthy green, the odd dry or dark one
-        const tint = new THREE.Color().setHSL(
-          0.24 + (this.rand() - 0.5) * 0.1,
-          0.15 + this.rand() * 0.25,
-          0.6 + this.rand() * 0.3,
-          THREE.SRGBColorSpace,
-        );
-        if (snowy) tint.lerp(new THREE.Color(0xffffff), 0.55).multiplyScalar(1.5);
-
-        const kind = this.rand() < coniferShare ? "conifer" : "broadleaf";
-        placements[kind].push({ matrix: matrix.clone(), tint });
+        plant(x, z, groundY, lateral);
       }
     }
 
@@ -3774,8 +3919,8 @@ class Environment {
       const point = this.roadPath[i];
 
       // Place barrier on left side (mountain side) to avoid floating over cliff
-      const barrierX = point.x - Math.cos(point.heading) * 25;
-      const barrierZ = point.z + Math.sin(point.heading) * 25;
+      const barrierX = point.x - Math.cos(point.heading) * this.plantLateral.barrier;
+      const barrierZ = point.z + Math.sin(point.heading) * this.plantLateral.barrier;
 
       // The mountain face has risen well above road height 25 units out, so
       // rest the barrier on the terrain model (the old point.y left it at
@@ -3790,14 +3935,29 @@ class Environment {
       this.scene.add(barrier);
       this.registerGrounded(barrier, `construction barrier (segment ${i})`);
 
-      // Store barrier for collision detection
-      this.roadworkObstacles.push({
-        type: "barrier",
-        position: new THREE.Vector3(barrierX, barrierY, barrierZ),
-        width: 4,
-        height: 1,
-        depth: 0.8,
-      });
+      // Store barrier for collision detection: a circle of radius 1 for each
+      // 2 m of its length (it lies across the road) on run-off ground, else
+      // the old box entry
+      if (this.solidClutter) {
+        for (const along of [-1, 1]) {
+          this.addSolidCircle(
+            barrierX + Math.cos(point.heading) * along,
+            barrierY,
+            barrierZ - Math.sin(point.heading) * along,
+            1,
+            3,
+            "barrier",
+          );
+        }
+      } else {
+        this.roadworkObstacles.push({
+          type: "barrier",
+          position: new THREE.Vector3(barrierX, barrierY, barrierZ),
+          width: 4,
+          height: 1,
+          depth: 0.8,
+        });
+      }
 
       // Add orange and white stripes
       const stripeTexture = this.createConstructionStripeTexture();
@@ -3836,8 +3996,8 @@ class Environment {
       // Add construction equipment (static bulldozer) - moved far from road
       // on mountain side, resting on the terrain model (the mountain face
       // has risen well above road height 30 units out)
-      const dozerX = rampPoint.x - Math.cos(rampPoint.heading) * 30;
-      const dozerZ = rampPoint.z + Math.sin(rampPoint.heading) * 30;
+      const dozerX = rampPoint.x - Math.cos(rampPoint.heading) * this.plantLateral.bulldozer;
+      const dozerZ = rampPoint.z + Math.sin(rampPoint.heading) * this.plantLateral.bulldozer;
       this.createBulldozer(
         dozerX,
         this.groundYAt(dozerX, dozerZ),
@@ -3867,8 +4027,8 @@ class Environment {
       // Add a simple work truck instead of bulldozer (moved far from road on
       // mountain side, resting on the terrain model rather than at road
       // height inside the rising mountain face)
-      const truckX = workPoint.x - Math.cos(workPoint.heading) * 25;
-      const truckZ = workPoint.z + Math.sin(workPoint.heading) * 25;
+      const truckX = workPoint.x - Math.cos(workPoint.heading) * this.plantLateral.truck;
+      const truckZ = workPoint.z + Math.sin(workPoint.heading) * this.plantLateral.truck;
       this.createWorkTruck(
         truckX,
         this.groundYAt(truckX, truckZ),
@@ -4257,15 +4417,20 @@ class Environment {
     this.scene.add(group);
     this.registerGrounded(group, "construction bulldozer");
 
-    // Store bulldozer for collision detection
-    this.roadworkObstacles.push({
-      type: "bulldozer",
-      position: new THREE.Vector3(x, y, z),
-      width: 4,
-      height: 3,
-      depth: 5,
-      rotation: rotation,
-    });
+    // Store bulldozer for collision detection: one circle of radius 3 on
+    // run-off ground, else the old entry
+    if (this.solidClutter) {
+      this.addSolidCircle(x, y, z, 3, 3, "bulldozer");
+    } else {
+      this.roadworkObstacles.push({
+        type: "bulldozer",
+        position: new THREE.Vector3(x, y, z),
+        width: 4,
+        height: 3,
+        depth: 5,
+        rotation: rotation,
+      });
+    }
   }
 
   // Lettered face for a 4 x 1.5 sign board. The boards were blank: their
@@ -4427,15 +4592,29 @@ class Environment {
     this.scene.add(group);
     this.registerGrounded(group, "work truck");
 
-    // Store work truck for collision detection
-    this.roadworkObstacles.push({
-      type: "worktruck",
-      position: new THREE.Vector3(x, y, z),
-      width: 2,
-      height: 2.5,
-      depth: 4,
-      rotation: rotation,
-    });
+    // Store work truck for collision detection: two circles of radius 2 along
+    // its length on run-off ground, else the old entry
+    if (this.solidClutter) {
+      for (const along of [-1, 1]) {
+        this.addSolidCircle(
+          x + Math.sin(rotation) * along,
+          y,
+          z + Math.cos(rotation) * along,
+          2,
+          3,
+          "work truck",
+        );
+      }
+    } else {
+      this.roadworkObstacles.push({
+        type: "worktruck",
+        position: new THREE.Vector3(x, y, z),
+        width: 2,
+        height: 2.5,
+        depth: 4,
+        rotation: rotation,
+      });
+    }
   }
 
   createShippingContainer(x, y, z, rotation) {
@@ -4780,6 +4959,36 @@ class Environment {
     // return texture;
   }
 
+  // How far a gate at a segment reaches to each side of the centre line: the
+  // road and its ledges, or out across the run-off ground a bike can ride on
+  gateReach(segmentIndex) {
+    const halfRoad = this.roadWidth / 2;
+    return {
+      left: Terrain.gateReach(this.terrain, segmentIndex, -1, halfRoad),
+      right: Terrain.gateReach(this.terrain, segmentIndex, 1, halfRoad),
+    };
+  }
+
+  // Where a gate reaches across run-off ground, one thin post on each side
+  // shows the rider its extent. Nothing is added when the gate stops at the
+  // road's own ledges.
+  createGateLimitPosts(point, reach, label) {
+    const halfRoad = this.roadWidth / 2;
+    const post = new THREE.CylinderGeometry(0.06, 0.06, 3);
+    const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, emissive: 0x444444, emissiveIntensity: 0.12 });
+    for (const [sign, side] of [[-1, reach.left], [1, reach.right]]) {
+      if (side <= halfRoad + 2) continue;
+      const lateral = side - 2;
+      const x = point.x + sign * lateral * Math.cos(point.heading);
+      const z = point.z - sign * lateral * Math.sin(point.heading);
+      const mesh = new THREE.Mesh(post, material);
+      mesh.position.set(x, this.groundYAt(x, z) + 1.5, z);
+      mesh.castShadow = true;
+      this.scene.add(mesh);
+      this.registerGrounded(mesh, `${label} limit post`);
+    }
+  }
+
   createCheckpoints() {
     // Place checkpoints evenly through the ACTIVE LEG (startSegment..endSegment),
     // in riding order. Distributing over the full track put at most one
@@ -4858,14 +5067,18 @@ class Environment {
       this.registerGrounded(gateGroup, `checkpoint gate ${i}`);
 
       // Store checkpoint info
+      const reach = this.gateReach(segmentIndex);
       this.checkpoints.push({
+        kind: "checkpoint",
         index: i,
         position: new THREE.Vector3(point.x, point.y, point.z),
         heading: point.heading,
         passed: false,
         width: 16, // Width of checkpoint gate
         segmentIndex: segmentIndex,
+        ...reach,
       });
+      this.createGateLimitPosts(point, reach, `checkpoint gate ${i}`);
     }
   }
 

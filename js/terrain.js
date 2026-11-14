@@ -126,6 +126,74 @@ const Terrain = (() => {
     };
   }
 
+  // Loose ground beside the road: a height profile (`stations`, pairs of
+  // [distance past the road edge, height relative to the road]) joined
+  // linearly, plus an optional rolling undulation along the road that fades
+  // in over `ramp` metres. The ribbon rows sit on the stations, so the drawn
+  // ground and the `base` model the physics reads agree to rounding.
+  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1 }) {
+    const last = bands[bands.length - 1];
+    if (last.to !== undefined || (last.kind !== 'wall' && last.kind !== 'fall')) {
+      throw new Error('A side must end in an unbounded wall or fall band so its rideable limit is finite');
+    }
+    const rowDistances = spreadRows(stations.map(([d]) => d));
+    const offsetAt = (dPast) => {
+      if (dPast <= stations[0][0]) return stations[0][1];
+      for (let n = 1; n < stations.length; n++) {
+        const [d1, y1] = stations[n];
+        if (dPast <= d1) {
+          const [d0, y0] = stations[n - 1];
+          return y0 + ((y1 - y0) * (dPast - d0)) / (d1 - d0);
+        }
+      }
+      return stations[stations.length - 1][1];
+    };
+    // `s` is the position along the road in segments, continuous
+    const rolling = (dPast, s) =>
+      undulation
+        ? undulation.amplitude *
+          Math.sin((2 * Math.PI * s) / undulation.wavelength + undulation.phase) *
+          Math.min(1, dPast / undulation.ramp)
+        : 0;
+    return {
+      flat: 0,
+      bands,
+      exact: false,
+      face: null,
+      runoff,
+      shade,
+      stations,
+      undulation,
+      // The nearest road point's height is a step function of position;
+      // this side asks for the height interpolated along the segment
+      interpolatesRoad: true,
+      base: (dPast, roadY, s) => roadY + offsetAt(dPast) + rolling(dPast, s),
+      row(j, ctx, out) {
+        const dPast = rowDistances[j];
+        out.d = ctx.halfRoad + dPast;
+        out.y = ctx.roadY + offsetAt(dPast) + rolling(dPast, ctx.s);
+        out.rise = out.y - ctx.roadY;
+        out.displacement = 0;
+        return out;
+      }
+    };
+  }
+
+  // ROWS + 1 distances that include every given one, by splitting the widest
+  // gap until there are enough
+  function spreadRows(given) {
+    const distances = [...new Set(given)].sort((a, b) => a - b);
+    if (distances.length > ROWS + 1) throw new Error(`A heightfield side has at most ${ROWS + 1} stations`);
+    while (distances.length < ROWS + 1) {
+      let widest = 1;
+      for (let n = 2; n < distances.length; n++) {
+        if (distances[n] - distances[n - 1] > distances[widest] - distances[widest - 1]) widest = n;
+      }
+      distances.splice(widest, 0, (distances[widest - 1] + distances[widest]) / 2);
+    }
+    return distances;
+  }
+
   const LAKE_Y = -200;
 
   const cliffLake = {
@@ -138,7 +206,56 @@ const Terrain = (() => {
     right: cliffDropSide({ floorY: LAKE_Y, faceHeight: LAKE_Y, rockSpread: 25 })
   };
 
-  const profiles = { cliffLake };
+  const RUNOFF = { drag: 0.35, grip: 0.5, floorSpeed: 6 };
+  const RUNOFF_BANDS = (to) => [{ to, kind: 'runoff' }, { kind: 'wall' }];
+
+  // Open meadow: gentle slope away from the road for 35 m, then a low bank on
+  // the left and a river on the right, then the valley sides rising out of
+  // sight. Road height is rolling and descends over the leg.
+  const valleyFloor = {
+    id: 'valleyFloor',
+    // The river is a ribbon 3 m below the road, lateral 35 to 50 on the right
+    floor: { kind: 'river', below: 3.0, side: 1, from: 35, to: 50 },
+    elevation: (i, start, end) => {
+      const k = i - start;
+      const t = Math.min(1, Math.max(0, k / (end - start)));
+      return 30 - 12 * t + Math.sin(k * 0.11) * 2.2;
+    },
+    left: heightfieldSide({
+      stations: [[0, 0], [35, -2.1], [41, 2.0], [100, 4.0], [180, 38]],
+      bands: RUNOFF_BANDS(35),
+      runoff: RUNOFF
+    }),
+    right: heightfieldSide({
+      // Bank into the river bed (below the water plane from 37.5 to 48), then up and away
+      stations: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [60, -1.0], [100, 0], [180, 36]],
+      bands: RUNOFF_BANDS(35),
+      runoff: RUNOFF
+    })
+  };
+
+  // Rolling forest floor, dark, undulating a few metres either side of the road
+  function forestProfile({ elevation, amplitude }) {
+    const side = () =>
+      heightfieldSide({
+        stations: [[0, 0], [15, -0.6], [25, -1.0], [31, 3.0], [90, 5.0], [165, 40]],
+        bands: RUNOFF_BANDS(25),
+        runoff: RUNOFF,
+        undulation: { amplitude, wavelength: 14, phase: 0.8, ramp: 15 },
+        shade: 0.5
+      });
+    return { id: 'forest', floor: { kind: 'none' }, elevation, left: side(), right: side() };
+  }
+  const forest = forestProfile({
+    elevation: (i, start, end) => {
+      const k = i - start;
+      const t = Math.min(1, Math.max(0, k / (end - start)));
+      return 34 - 14 * t + Math.sin(k * 0.09) * 3;
+    },
+    amplitude: 3
+  });
+
+  const profiles = { cliffLake, valleyFloor, forest };
 
   // The per-leg table: the only source of per-leg world values. `profile` is
   // the shape of the ground beside the road; `floor` is defined once, on the
@@ -149,9 +266,20 @@ const Terrain = (() => {
     { id: 'mountain-dawn', profile: cliffLake, trackVersion: 1, roadWidth: 20,
       look: { grassColor: 0x4a7c4a, mountainColor: 0x6b5c42, fogDensity: 0.0015 },
       dressing: { forest: { coniferShare: 0.75, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
-    { id: 'valley-run', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+    // Changed legs carry trackVersion 2: a new road height is a new course, so a
+    // new leaderboard and best-time key (TourSystem.boardId)
+    { id: 'valley-run', profile: valleyFloor, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
-      dressing: { forest: { coniferShare: 0.35, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+      // Sparse broadleaf clumps both sides, none in the river; no fixed peaks
+      dressing: {
+        forest: {
+          coniferShare: 0, snowy: false,
+          layout: { perSegment: [1, 3], offset: 6, reach: 104, exclude: [{ sign: 1, from: 33, to: 52 }] }
+        },
+        rockfall: 0, backdrop: []
+      },
+      // Where the menu preview camera stands: metres out from the mid-leg point, and above it
+      preview: { radius: 30, height: 9 } },
     { id: 'coastal-descent', profile: cliffLake, trackVersion: 1, roadWidth: 20,
       look: { grassColor: 0x6aac6a, mountainColor: 0x5a4c32, fogDensity: 0.001 },
       dressing: { forest: { coniferShare: 0.3, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
@@ -161,9 +289,15 @@ const Terrain = (() => {
     { id: 'high-pass', profile: cliffLake, trackVersion: 1, roadWidth: 16,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
       dressing: { forest: { coniferShare: 0.9, snowy: false }, rockfall: 0.25, backdrop: BACKDROP } },
-    { id: 'storm-valley', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+    { id: 'storm-valley', profile: forest, trackVersion: 2, roadWidth: 16,
       look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
-      dressing: { forest: { coniferShare: 0.5, snowy: false }, rockfall: 0.5, backdrop: BACKDROP } },
+      // Dense trees both sides, none beyond 90 m; no walls, so no rockfalls
+      dressing: {
+        forest: { coniferShare: 0.5, snowy: false, layout: { perSegment: [4, 6], offset: 5, reach: 77, exclude: [] } },
+        rockfall: 0, backdrop: []
+      },
+      // The trees stand 13 m out: the camera sits in the gap above the road edge
+      preview: { radius: 8, height: 5 } },
     { id: 'night-ride', profile: cliffLake, trackVersion: 1, roadWidth: 16,
       look: { grassColor: 0x4a8c4a, mountainColor: 0x6a5c42, fogDensity: 0.0012 },
       dressing: { forest: { coniferShare: 0.6, snowy: false }, rockfall: 0.75, backdrop: BACKDROP } },
@@ -265,6 +399,23 @@ const Terrain = (() => {
     return previousY;
   }
 
+  // The road height at the located point, interpolated along its segment the
+  // way the ribbon rows are, instead of the nearest centre-line point's own
+  function interpolatedRoadY(geo, loc) {
+    const point = geo.path[loc.index];
+    const neighbour = geo.path[Math.min(geo.path.length - 1, Math.max(0, loc.index + (loc.along >= 0 ? 1 : -1)))];
+    return point.y + (neighbour.y - point.y) * Math.min(1, Math.abs(loc.along) / SEGMENT_LENGTH);
+  }
+
+  // Height of the water at a road height, or null where the profile has none.
+  // A river keeps to a fixed depth below the road; a lake or sea is absolute.
+  function waterLevel(profile, roadY) {
+    const { floor } = profile;
+    if (floor.y !== undefined) return floor.y;
+    if (floor.below !== undefined) return roadY - floor.below;
+    return null;
+  }
+
   // Ground height at a located point. `exact` walks the drawn face on sides
   // that support it; otherwise the smooth `side.base` model answers.
   function heightAt(profile, geo, loc, exact) {
@@ -279,6 +430,9 @@ const Terrain = (() => {
         const walked = surfaceY(side, geo, loc, d);
         if (walked !== null) return Math.max(walked, profile.floor.y);
       }
+      if (side.interpolatesRoad) {
+        return side.base(d - ledgeEnd, interpolatedRoadY(geo, loc), loc.index + loc.along / SEGMENT_LENGTH);
+      }
       return side.base(d - ledgeEnd, roadY);
     }
     // On the road or its ledges
@@ -288,7 +442,7 @@ const Terrain = (() => {
   // `loc` receives the located point (index, roadY, lateral, along) so a
   // caller that also needs the side or road height does not search twice
   function groundY(profile, geo, x, z, from, to, exact, loc = {}) {
-    if (!geo.path || geo.path.length === 0) return profile.floor.y;
+    if (!geo.path || geo.path.length === 0) return waterLevel(profile, 0) ?? 0;
     return heightAt(profile, geo, locate(geo.path, x, z, from, to, loc), exact);
   }
 
@@ -314,6 +468,35 @@ const Terrain = (() => {
       start = halfRoad + band.to;
     }
     throw new Error(`Side of ${profile.id} has no outermost band`);
+  }
+
+  // The largest lateral, from the centre line, a bike can occupy on that side
+  // without crashing or falling: the outer edge of the last shoulder or run-off
+  // band. Always finite, because a side must end in a wall or a fall.
+  function rideableLimit(profile, segIndex, sign, halfRoad) {
+    let edge = 0;
+    for (const band of sideAt(profile, sign, segIndex).bands) {
+      if (band.to !== undefined && (band.kind === 'shoulder' || band.kind === 'runoff')) edge = band.to;
+    }
+    return halfRoad + edge;
+  }
+
+  // How far from the centre line a gate reaches on a side. A side with
+  // run-off ground is crossable out to its rideable limit; a bare wall or
+  // fall side keeps the road's own two metres of ledge.
+  function gateReach(profile, segIndex, sign, halfRoad) {
+    const side = sideAt(profile, sign, segIndex);
+    const open = side.bands.some((band) => band.kind === 'runoff');
+    return open ? rideableLimit(profile, segIndex, sign, halfRoad) + 2 : halfRoad + 2;
+  }
+
+  // The largest distance from the centre line any row of a side reaches. Rows
+  // wider than half the tightest bend's radius would fold over on its inside.
+  function outermost(side, ctx) {
+    const out = {};
+    let widest = 0;
+    for (let j = 0; j <= ROWS; j++) widest = Math.max(widest, side.row(j, ctx, out).d);
+    return widest;
   }
 
   // The sign of the first side that ends in a wall (left first), or 0 when
@@ -365,6 +548,11 @@ const Terrain = (() => {
     facePoint,
     cliffDropSide,
     cliffWallSide,
+    heightfieldSide,
+    rideableLimit,
+    gateReach,
+    waterLevel,
+    outermost,
     forLeg,
     elevation,
     row,

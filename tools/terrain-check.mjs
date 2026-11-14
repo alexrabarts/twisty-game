@@ -392,11 +392,9 @@ function installProbe(d6Sources, latSet) {
         const { env } = P.build(legIndex);
         const path = env.roadPath;
         const gates = env.checkpoints.map(c => ({ name: `cp${c.index}`, position: c.position, heading: c.heading, segment: c.segmentIndex }));
-        if (env.finishLinePosition) {
-            const f = env.finishLinePosition;
-            let best = 0, bd = Infinity;
-            path.forEach((p, i) => { const d = Math.hypot(p.x - f.x, p.z - f.z); if (d < bd) { bd = d; best = i; } });
-            gates.push({ name: 'finish', position: f, heading: env.finishLineHeading, segment: best });
+        if (env.finishGate) {
+            const f = env.finishGate.position;
+            gates.push({ name: 'finish', position: f, heading: env.finishGate.heading, segment: env.finishGate.segmentIndex });
         }
         return gates.map(g => {
             let nearest = null;
@@ -421,10 +419,7 @@ function installProbe(d6Sources, latSet) {
         game.showFinishScreen = () => {};
         if (gate === 'finish') {
             // Ten segments short of the finish line, which sits just past endSegment
-            const f = game.environment.finishLinePosition;
-            let near = 0, best = Infinity;
-            game.environment.roadPath.forEach((p, i) => { const d = Math.hypot(p.x - f.x, p.z - f.z); if (d < best) { best = d; near = i; } });
-            twistyDev.teleport(near - 10);
+            twistyDev.teleport(game.environment.finishGate.segmentIndex - 10);
         }
         twistyDev.autopilot({ speed: 15, lane });
         const result = { gate, lane, fired: false, crashed: false, ticks: 0 };

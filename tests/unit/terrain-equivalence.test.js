@@ -24,7 +24,26 @@ describe('terrain equivalence with the phase 0 golden', () => {
         expect(new game.TourSystem().legs.map(leg => leg.id)).toEqual(LEG_IDS);
     });
 
-    test.each(LEG_IDS.map((id, index) => [id, index]))('%s builds to the golden', (id, index) => {
+    // valley-run and storm-valley changed profile and road height in phase 4, so
+    // the golden no longer describes them; every other leg is still bound by it
+    const CHANGED = ['valley-run', 'storm-valley'];
+    const BOUND = LEG_IDS.map((id, index) => [id, index]).filter(([id]) => !CHANGED.includes(id));
+
+    test('exactly the two run-off legs are released from the golden', () => {
+        expect(BOUND.map(([, index]) => index)).toEqual([0, 2, 3, 4, 6, 7]);
+    });
+
+    test.each(CHANGED.map(id => [id, LEG_IDS.indexOf(id)]))('%s no longer builds to the golden', (id, index) => {
+        const captured = captureLeg(game, index);
+        // Different ground, different trees, different draws
+        expect(captured.randState).not.toBe(golden.legs[index].randState);
+        ['full', 'noDecal', 'stable'].forEach(mode => {
+            expect(captured.fingerprints[mode].hash).not.toBe(golden.legs[index].fingerprints[mode].hash);
+        });
+        expect(captured.faceHashes).not.toEqual(golden.legs[index].faceHashes);
+    }, 30000);
+
+    test.each(BOUND)('%s builds to the golden', (id, index) => {
         const captured = captureLeg(game, index);
         // Compared piece by piece so a failure names the quantity that moved
         expect(captured.randState).toBe(golden.legs[index].randState);

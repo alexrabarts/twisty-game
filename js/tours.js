@@ -112,6 +112,16 @@ class TourSystem {
                 ? savedCharacter : 'tim';
     }
 
+    // The id the leaderboard and the local best time are keyed by. A leg whose
+    // course changed carries a track version above 1 and so gets a board of its
+    // own; version 1 keeps the plain leg id and its history. Takes a leg or an
+    // id; an unknown id throws, so a typo cannot read another leg's board.
+    static boardId(leg) {
+        const id = typeof leg === 'string' ? leg : leg.id;
+        const { trackVersion } = Terrain.legConfig(id);
+        return trackVersion === 1 ? id : `${id}-v${trackVersion}`;
+    }
+
     riderDisplayOrder() {
         if (typeof CHARACTERS === 'undefined') return [];
         const unlocks = this.characterUnlocks || {};
