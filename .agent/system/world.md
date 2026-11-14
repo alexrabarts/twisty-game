@@ -1,12 +1,12 @@
 # World
 
-On the cliff legs (mountain-dawn, high-pass) the road runs along a cliff. Positive lateral offset is the valley (drop-off) side. Negative is the mountain wall. Riders keep to the wall side; oncoming cars use the valley side. Valley-run and storm-valley are open ground instead: run-off on both sides (see "Run-off legs").
+On the cliff legs (mountain-dawn, high-pass) the road runs along a cliff. Positive lateral offset is the valley (drop-off) side. Negative is the mountain wall. Riders keep to the wall side; oncoming cars use the valley side. Valley-run and storm-valley are open ground instead: run-off on both sides (see "Run-off legs"). Coastal-descent and winter-pass have their own shapes (see "Coast and ridge").
 
 ## One terrain model
 
 `js/terrain.js` is the single source of the ground beside the road. It is pure: no THREE, no DOM, no `Math.random`. It loads before `vehicle.js` and `tours.js`; without it every `Environment` constructor throws `Terrain is not defined`, the menu preview included.
 
-A leg has a profile (`Terrain.forLeg(legIndex)`, held as `environment.terrain`). A profile has a `floor`, an `elevation(i)` for the road height and a `left` and a `right` side. Six legs use `cliffLake`: a wall on the left, a drop to the lake (y = -200) on the right. Valley-run uses `valleyFloor` and storm-valley uses `forest` (see "Run-off legs"). Distance `d` on a side is always outward from the centre line, so a side does not know which way it faces.
+A leg has a profile (`Terrain.forLeg(legIndex)`, held as `environment.terrain`). A profile has a `floor`, an `elevation(i)` for the road height and a `left` and a `right` side. Legs 1, 4, 5 and 7 use `cliffLake`: a wall on the left, a drop to the lake (y = -200) on the right. Valley-run uses `valleyFloor`, storm-valley uses `forest` (see "Run-off legs"), coastal-descent uses `coast` and winter-pass uses `ridge` (see "Coast and ridge"). Distance `d` on a side is always outward from the centre line, so a side does not know which way it faces.
 
 Three things must agree: the rendered ribbon, `Environment.groundYAt()` and `Vehicle.getTerrainHeightAt()`. All three read the profile: the vehicle and the rockfalls call `Terrain.groundY()` (the vehicle with `exact = false`, the rockfalls with `exact = true`) and clamp or settle on what it returns.
 
@@ -31,6 +31,21 @@ The mountain wall is not modelled exactly. `groundYAt()` is lower than the rende
 - A gate (`environment.finishGate`, `environment.checkpoints`) reaches `Terrain.gateReach()` each side: the rideable limit plus 2 over run-off, the road's ledge beside a wall or fall. `Game.inGate(gate, position)` is the only gate test; there is no segment window.
 - A changed course has `trackVersion` 2 in `Terrain.LEGS`, so `TourSystem.boardId()` gives `valley-run-v2` and `storm-valley-v2` and local best times use `Game.bestTimeKey()`. `tests/unit/runoff-legs.test.js` pins a digest of each leg's course: change a road height, band, run-off rate or tree layout and it fails until the version is bumped. Progression keeps the plain leg ids.
 - The menu preview camera takes its radius and height from `Terrain.LEGS[i].preview`.
+
+## Coast and ridge
+
+`coast` (coastal-descent) has a hill on the left (the cliff wall as on `cliffLake`) and a sea cliff on the right: a fall with a short lip (`lipDepth` 2) onto a sea at absolute height 0 (`floor-sea`, a fall ends at 0.5). The road descends from 58 to 6, so the right side changes along the leg: `profile.spans` replaces it from segment 216 with a run-off beach (sand, 20 past the road edge) that ends in a fall into the sea.
+
+- `profile.spans` is a list of `{ from, to?, left?, right? }` in global segment indices. `Terrain.sideAt(profile, sign, segIndex)` returns the side in force; every consumer (zones, gates, heights, the fall rules) asks it, never `profile.left` or `profile.right`. `from` is inclusive, `to` exclusive and open when absent.
+- The ribbon is drawn with `Terrain.rowAt()`, which blends the two sides over the one segment (four columns) before `from` and after `to`. `Terrain.groundY(exact)` walks the same blended rows. The beach is not exact: `base()` and the mesh agree to 0.10 inside the span, and differ by up to the blend in the half segment before it.
+- Rock decoration (embedded rocks, cracks, vines) hangs only where the side has a `face`: `Terrain.faceRange()` bounds it, so the beach gets none. A ribbon that is a face for part of its length keeps the rock material and colours its ground columns by vertex (`side.tint`, else the leg's grass).
+- The land side keeps the plant on the hill (-30, -25) with the legacy roadworks entries. Putting that plant on a wall is a known mismatch (`groundYAt` is under the drawn wall) and is not changed here.
+
+`ridge` (winter-pass) has a snowfield 6 m wide each side of the road (run-off, white), then a fall of 40 m (`fallDepth`) onto a shelf, over a frozen lake at -200 (`floor-lake`, `ice` material, `createIceMaterial` in `js/graphics.js`). A fall ends 40 m under the road because the floor is not water. Snowy conifers stand only on the slopes, 12 m or more from the road edge, and none are solid. The roadworks plant (`LEGS[7].plant`) stands inside the snowfield. The leg has no wall, so no rockfalls.
+
+Both legs have `trackVersion` 2: `coastal-descent-v2` and `winter-pass-v2`. High-pass keeps its heights and its plain board id.
+
+A bike at rest after a fall counts as landed (`hitGround`) when its ground speed is under 0.5; a resting bike's vertical velocity never falls under 0.5.
 
 ## Only the active leg exists
 

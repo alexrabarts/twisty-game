@@ -30,8 +30,10 @@ class Environment {
     // How far out on the left the roadworks plant stands: well up the wall on
     // a wall side, a few metres onto the run-off ground otherwise
     const halfRoad = this.roadWidth / 2;
+    // (a leg whose run-off is narrow says so in its `plant`)
+    const past = { bulldozer: 9, barrier: 6, truck: 6, ...this.config.plant };
     this.plantLateral = this.solidClutter
-      ? { bulldozer: halfRoad + 9, barrier: halfRoad + 6, truck: halfRoad + 6 }
+      ? { bulldozer: halfRoad + past.bulldozer, barrier: halfRoad + past.barrier, truck: halfRoad + past.truck }
       : { bulldozer: 30, barrier: 25, truck: 25 };
     // What Terrain needs to read the road: the path fills in during createRoad
     this.terrainGeometry = {
@@ -728,10 +730,15 @@ class Environment {
     this.scene.add(groundStrip);
 
     // Left face first, then right: one group per side, ribbon then dressing
+    const first = Math.max(0, this.startSegment);
+    const last = Math.min(this.roadPath.length - 1, this.endSegment + 20);
     for (const [sign, side] of [[-1, this.terrain.left], [1, this.terrain.right]]) {
       const group = new THREE.Group();
       group.add(this.buildTerrainRibbon(sign, side));
-      if (side.face) this.decorateRockFace(sign, side, group, rockMaterials);
+      // Only the segments whose side is a rock face are dressed: a beach that
+      // follows a sea cliff has no face to hang cracks and vines on
+      const faces = Terrain.faceRange(this.terrain, sign, first, last);
+      if (faces) this.decorateRockFace(sign, side, group, rockMaterials, faces);
 
       // Everything else a face builder added to its group dresses the face
       group.children.forEach((child) => {
@@ -746,10 +753,21 @@ class Environment {
   // columns in order, which keeps the seeded stream identical to the old
   // hand-written cliff.
   buildTerrainRibbon(sign, side) {
-    // Ground with no rock face (meadow, forest floor) is grass-coloured
-    // vertices on a plain material; a rock face carries the rock texture
-    const isGround = side.face === null;
-    const grass = new THREE.Color(this.config.look.grassColor).multiplyScalar(side.shade ?? 1);
+    // Ground with no rock face (meadow, forest floor, sand, snow) is coloured
+    // vertices on a plain material; a rock face carries the rock texture. A
+    // ribbon that is a face for some of its length (a sea cliff, then a beach)
+    // keeps the rock material and colours its ground columns by vertex.
+    const isGround = Terrain.sidesOf(this.terrain, sign).every((candidate) => candidate.face === null);
+    const groundColors = new Map();
+    const groundColor = (columnSide) => {
+      if (!groundColors.has(columnSide)) {
+        groundColors.set(
+          columnSide,
+          new THREE.Color(columnSide.tint ?? this.config.look.grassColor).multiplyScalar(columnSide.shade ?? 1),
+        );
+      }
+      return groundColors.get(columnSide);
+    };
 
     // Rock material with smooth shading for realistic weathered appearance
     const cliffMaterial = isGround
@@ -829,7 +847,7 @@ class Environment {
         // Create vertical segments
         for (let j = 0; j <= verticalSegments; j++) {
           const verticalProgress = j / verticalSegments;
-          Terrain.row(side, j, rowContext, vertex);
+          Terrain.rowAt(this.terrain, sign, j, rowContext, vertex);
           const currentHeight = vertex.rise;
           const facetedDisplacement = vertex.displacement;
 
@@ -842,9 +860,11 @@ class Environment {
           // More realistic mountain rock colors with grey variations
           const greyBase = 0.6 + this.rand() * 0.25; // 0.6 to 0.85
 
-          if (isGround) {
-            // Patchy grass: one seeded tint per vertex, from the same draw as rock grey
+          const columnSide = Terrain.sideAt(this.terrain, sign, i);
+          if (columnSide.face === null) {
+            // Patchy ground: one seeded tint per vertex, from the same draw as rock grey
             const tint = 0.85 + ((greyBase - 0.6) / 0.25) * 0.3;
+            const grass = groundColor(columnSide);
             colors.push(grass.r * tint, grass.g * tint, grass.b * tint);
             uvs.push(0, 0);
             continue;
@@ -978,11 +998,11 @@ class Environment {
   // Rock dressing of one face: embedded rocks, road debris, cracks, seepage,
   // vines and snow. Rocks sit on the terrain model; the rest hang off the
   // face by design.
-  decorateRockFace(sign, side, group, rockMaterials) {
+  decorateRockFace(sign, side, group, rockMaterials, faces) {
     const height = side.face.height;
     const isDropOff = side.face.kind === 'drop';
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const startIdx = faces.from;
+    const endIdx = faces.to;
 
     // Add MANY more boulders along the cliff base (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 3) {
@@ -2990,20 +3010,33 @@ class Environment {
           Math.min(this.endSegment, this.roadPath.length - 1)) / 2,
       )
     ];
-    const lakeMaterial =
-      typeof createWaterMaterial === "function"
-        ? createWaterMaterial()
-        : new THREE.MeshStandardMaterial({
-            color: 0x10539e,
-            roughness: 0.06,
-            metalness: 0.55,
-            envMapIntensity: 1.6,
-          });
+    const frozen = floor.kind === "ice";
+    let lakeMaterial;
+    if (frozen) {
+      lakeMaterial =
+        typeof createIceMaterial === "function"
+          ? createIceMaterial()
+          : new THREE.MeshStandardMaterial({ color: 0xcfe3ee, roughness: 0.2, metalness: 0.1, envMapIntensity: 1.2 });
+      lakeMaterial.name = "ice";
+    } else {
+      lakeMaterial =
+        typeof createWaterMaterial === "function"
+          ? createWaterMaterial()
+          : new THREE.MeshStandardMaterial({
+              color: 0x10539e,
+              roughness: 0.06,
+              metalness: 0.55,
+              envMapIntensity: 1.6,
+            });
+    }
     const lake = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000), lakeMaterial);
     lake.rotation.x = -Math.PI / 2;
     lake.position.set(legMid.x, this.floorY, legMid.z);
     lake.receiveShadow = true;
     lake.userData.part = "floor";
+    // The plain lake of the cliff legs stays unnamed (its scene fingerprint is frozen)
+    if (floor.kind === "sea") lake.name = "floor-sea";
+    if (frozen) lake.name = "floor-lake";
     this.scene.add(lake);
   }
 

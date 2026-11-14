@@ -121,7 +121,7 @@ describe('decals sit on the drawn face', () => {
         .flatMap(ribbon => ribbon.parent.children)
         .filter(object => FACE_DECALS.includes(object.userData.decal));
 
-    test.each([[0, 'mountain-dawn'], [4, 'high-pass'], [7, 'winter-pass']])('%i (%s): every decal centre is within 0.75 of the face', (legIndex) => {
+    test.each([[0, 'mountain-dawn'], [2, 'coastal-descent'], [4, 'high-pass']])('%i (%s): every decal centre is within 0.75 of the face', (legIndex) => {
         const { env, scene } = build(legIndex);
         scene.updateMatrixWorld(true);
         const ribbons = ribbonMeshes(env);
@@ -131,8 +131,9 @@ describe('decals sit on the drawn face', () => {
     }, 60000);
 
     test('the decal set is exactly the meshes tagged userData.decal, and the counts per side are unchanged', () => {
-        const counts = [[13, 7], [11, 8], [18, 7]];
-        [0, 4, 7].forEach((legIndex, n) => {
+        // Legs 1 and 5 are as the golden has them; the coast dresses its sea cliff only, not its beach
+        const counts = [[13, 7], [11, 8], [13, 7]];
+        [0, 4, 2].forEach((legIndex, n) => {
             const { env } = build(legIndex);
             const byTag = [];
             env.scene.traverse(object => {

@@ -54,10 +54,12 @@ const Terrain = (() => {
   // Valley side: a flat ledge, then a face dropping at a constant slope to a
   // floor, with the displacement above pushed around the slope. The ribbon
   // runs `margin` below the floor so it ends under the water.
-  function cliffDropSide({ floorY, faceHeight, rockSpread, slope = 1.33, margin = 6 }) {
+  function cliffDropSide({ floorY, faceHeight, rockSpread, slope = 1.33, margin = 6, lipDepth }) {
     const depth = margin - floorY;
     return {
       flat: LEDGE,
+      // How far a bike must drop to count as over the lip: a low cliff has a short lip
+      ...(lipDepth !== undefined && { lipDepth }),
       // Distance past the road edge where each band ends; the last band runs
       // outward without limit. A fall starts where the ledge ends.
       bands: [{ to: LEDGE, kind: 'shoulder' }, { kind: 'fall' }],
@@ -131,7 +133,7 @@ const Terrain = (() => {
   // linearly, plus an optional rolling undulation along the road that fades
   // in over `ramp` metres. The ribbon rows sit on the stations, so the drawn
   // ground and the `base` model the physics reads agree to rounding.
-  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1 }) {
+  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1, tint, fallDepth, lipDepth }) {
     const last = bands[bands.length - 1];
     if (last.to !== undefined || (last.kind !== 'wall' && last.kind !== 'fall')) {
       throw new Error('A side must end in an unbounded wall or fall band so its rideable limit is finite');
@@ -162,6 +164,11 @@ const Terrain = (() => {
       face: null,
       runoff,
       shade,
+      // Ground colour where it is not the leg's grass (sand, snow)
+      ...(tint !== undefined && { tint }),
+      // Where a fall off this side ends when the floor is no water: this far below the road
+      ...(fallDepth !== undefined && { fallDepth }),
+      ...(lipDepth !== undefined && { lipDepth }),
       stations,
       undulation,
       // The nearest road point's height is a step function of position;
@@ -255,7 +262,59 @@ const Terrain = (() => {
     amplitude: 3
   });
 
-  const profiles = { cliffLake, valleyFloor, forest };
+  // The sea road: a hill on the land side (left) and a drop to the sea on the
+  // right that ends in a beach. The road descends from high above the water to
+  // a few metres over it, so the right side changes along the leg: a sea cliff
+  // while the drop is tall, then (from BEACH_FROM) loose sand a bike can ride on.
+  const SEA_Y = 0;
+  const BEACH_FROM = 216;
+  const beach = heightfieldSide({
+    // Sand sloping gently away from the road, then the shore falling into the sea
+    stations: [[0, 0], [8, -0.8], [16, -2.0], [20, -2.8], [24, -4.5], [34, -10], [60, -26], [100, -46], [150, -70]],
+    bands: [{ to: 20, kind: 'runoff' }, { kind: 'fall' }],
+    runoff: RUNOFF,
+    tint: 0xd2bf8a,
+    lipDepth: 2
+  });
+  const coast = {
+    id: 'coast',
+    // Absolute sea level; a fall ends just above it
+    floor: { kind: 'sea', y: SEA_Y, restY: SEA_Y + 0.5 },
+    // 58 at the start, easing down to 6 at the end of the leg (global segment i)
+    elevation: (i, start, end) => {
+      const t = Math.min(1, Math.max(0, (i - start) / (end - start)));
+      return 6 + 52 * Math.pow(1 - t, 1.7);
+    },
+    left: cliffWallSide({ height: 40, rockSpread: 20 }),
+    right: cliffDropSide({ floorY: SEA_Y, faceHeight: -60, rockSpread: 25, lipDepth: 2 }),
+    spans: [{ from: BEACH_FROM, right: beach }]
+  };
+
+  // An exposed ridge: a snowfield 6 m wide each side of the road, then a drop
+  // of 40 m onto a shelf, with a frozen lake far below. The shelf, not the
+  // lake, is where a bike that goes over comes to rest.
+  const ridgeSide = () =>
+    heightfieldSide({
+      stations: [[0, 0], [6, -0.4], [8, -4], [14, -22], [22, -40], [80, -40]],
+      bands: [{ to: 6, kind: 'runoff' }, { kind: 'fall' }],
+      runoff: RUNOFF,
+      tint: 0xdfe8f0,
+      fallDepth: 40
+    });
+  const ridge = {
+    id: 'ridge',
+    floor: { kind: 'ice', y: LAKE_Y },
+    // Climbs gently from 14 to 28 with a slow roll
+    elevation: (i, start, end) => {
+      const k = i - start;
+      const t = Math.min(1, Math.max(0, k / (end - start)));
+      return 14 + 14 * t + Math.sin(k * 0.07) * 2.5;
+    },
+    left: ridgeSide(),
+    right: ridgeSide()
+  };
+
+  const profiles = { cliffLake, valleyFloor, forest, coast, ridge };
 
   // The per-leg table: the only source of per-leg world values. `profile` is
   // the shape of the ground beside the road; `floor` is defined once, on the
@@ -280,9 +339,10 @@ const Terrain = (() => {
       },
       // Where the menu preview camera stands: metres out from the mid-leg point, and above it
       preview: { radius: 30, height: 9 } },
-    { id: 'coastal-descent', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+    { id: 'coastal-descent', profile: coast, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x6aac6a, mountainColor: 0x5a4c32, fogDensity: 0.001 },
-      dressing: { forest: { coniferShare: 0.3, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
+      // The default forest is kept: it only stands where the cliff face is 15 m above the sea
+      dressing: { forest: { coniferShare: 0.3, snowy: false }, rockfall: 0, backdrop: [] } },
     { id: 'foggy-gorge', profile: cliffLake, trackVersion: 1, roadWidth: 20,
       look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
       dressing: { forest: { coniferShare: 0.55, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
@@ -301,9 +361,15 @@ const Terrain = (() => {
     { id: 'night-ride', profile: cliffLake, trackVersion: 1, roadWidth: 16,
       look: { grassColor: 0x4a8c4a, mountainColor: 0x6a5c42, fogDensity: 0.0012 },
       dressing: { forest: { coniferShare: 0.6, snowy: false }, rockfall: 0.75, backdrop: BACKDROP } },
-    { id: 'winter-pass', profile: cliffLake, trackVersion: 1, roadWidth: 16,
+    { id: 'winter-pass', profile: ridge, trackVersion: 2, roadWidth: 16,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
-      dressing: { forest: { coniferShare: 1.0, snowy: true }, rockfall: 1, backdrop: BACKDROP } }
+      // Snowy conifers on the slopes below the snowfield only (none within 12 m of the road edge); no walls, so no rockfalls
+      dressing: {
+        forest: { coniferShare: 1.0, snowy: true, layout: { perSegment: [1, 2], offset: 12, reach: 60, exclude: [] } },
+        rockfall: 0, backdrop: []
+      },
+      // The snowfield is 6 m wide: the roadworks plant stands on it, past the road edge by these amounts
+      plant: { bulldozer: 4.5, barrier: 2.5, truck: 3 } }
   ];
   LEGS.forEach((leg) => {
     leg.floor = leg.profile.floor;
@@ -337,6 +403,66 @@ const Terrain = (() => {
     return side.row(j, ctx, out);
   }
 
+  // Every side a profile has on one side of the road: the plain side first,
+  // then each span's replacement. Callers that ask "does any of it ...".
+  function sidesOf(profile, sign) {
+    const key = sign < 0 ? 'left' : 'right';
+    return [profile[key], ...(profile.spans || []).map((span) => span[key]).filter(Boolean)];
+  }
+
+  // The side in force at a segment: a span replaces the profile's own side
+  // from `from` (inclusive) to `to` (exclusive, open when absent). Segment
+  // indices are global, the same as ctx.index and loc.index.
+  function sideAt(profile, sign, segIndex) {
+    const key = sign < 0 ? 'left' : 'right';
+    for (const span of profile.spans || []) {
+      if (span[key] && segIndex >= span.from && (span.to === undefined || segIndex < span.to)) return span[key];
+    }
+    return profile[key];
+  }
+
+  // The same vertex as row(), for the side of a profile as it is DRAWN: the
+  // side in force changes at a span edge, and the rows blend over the one
+  // segment (four columns) before `from` and after `to`, so the ribbon has
+  // no step there. ctx.s is the position along the road in segments.
+  const blendFrom = {};
+  const blendTo = {};
+  function rowAt(profile, sign, j, ctx, out) {
+    const key = sign < 0 ? 'left' : 'right';
+    const base = profile[key];
+    const s = ctx.s ?? ctx.index;
+    for (const span of profile.spans || []) {
+      const inner = span[key];
+      if (!inner) continue;
+      let weight;
+      if (s < span.from) weight = s - (span.from - 1);
+      else if (span.to === undefined || s < span.to) weight = 1;
+      else weight = 1 - (s - span.to);
+      if (weight <= 0) continue;
+      if (weight >= 1) return inner.row(j, ctx, out);
+      base.row(j, ctx, blendFrom);
+      inner.row(j, ctx, blendTo);
+      for (const field of ['d', 'y', 'rise', 'displacement']) {
+        out[field] = blendFrom[field] + (blendTo[field] - blendFrom[field]) * weight;
+      }
+      return out;
+    }
+    return base.row(j, ctx, out);
+  }
+
+  // The first and last segment in [from, to] whose side on `sign` carries a
+  // rock face to dress, or null when none does
+  function faceRange(profile, sign, from, to) {
+    let first = -1;
+    let last = -1;
+    for (let i = from; i <= to; i++) {
+      if (!sideAt(profile, sign, i).face) continue;
+      if (first < 0) first = i;
+      last = i;
+    }
+    return first < 0 ? null : { from: first, to: last };
+  }
+
   // Nearest centre-line point in [from, to] to (x, z). Fills out with
   // index, roadY, lateral (positive right) and along (positive forward).
   function locate(path, x, z, from, to, out) {
@@ -367,7 +493,7 @@ const Terrain = (() => {
   // Height of the rendered face at distance d from the centre line. Walks the
   // same vertex column the ribbon builder generated. Returns null outside the
   // built range (callers fall back to the plain slope model).
-  function surfaceY(side, geo, loc, d) {
+  function surfaceY(profile, sign, side, geo, loc, d) {
     const startIdx = Math.max(0, geo.startSegment);
     const endIdx = Math.min(geo.path.length - 1, geo.endSegment + 20);
     const segmentIndex = loc.index;
@@ -380,14 +506,17 @@ const Terrain = (() => {
     const point = geo.path[segmentIndex];
     const neighbour = geo.path[Math.min(geo.path.length - 1, Math.max(0, segmentIndex + (loc.along >= 0 ? 1 : -1)))];
     const roadY = point.y + (neighbour.y - point.y) * Math.min(1, Math.abs(loc.along) / SEGMENT_LENGTH);
-    const ctx = { halfRoad, roadY, column, index: segmentIndex, pathLength: geo.path.length };
+    const ctx = {
+      halfRoad, roadY, column, index: segmentIndex, pathLength: geo.path.length,
+      s: startIdx + column / COLUMNS_PER_SEGMENT
+    };
     const out = {};
 
     // Row 0 of the mesh sits at the end of the ledge
     let previousDistance = halfRoad + side.flat;
     let previousY = roadY;
     for (let j = 1; j <= ROWS; j++) {
-      side.row(j, ctx, out);
+      rowAt(profile, sign, j, ctx, out);
       if (d <= out.d) {
         const span = out.d - previousDistance;
         const t = span > 0.001 ? (d - previousDistance) / span : 1;
@@ -421,13 +550,14 @@ const Terrain = (() => {
   function heightAt(profile, geo, loc, exact) {
     const roadY = loc.roadY;
     const right = loc.lateral > 0;
-    const side = right ? profile.right : profile.left;
+    const sign = right ? 1 : -1;
+    const side = sideAt(profile, sign, loc.index);
     const d = right ? loc.lateral : -loc.lateral;
     const ledgeEnd = geo.roadWidth / 2 + side.flat;
 
     if (d > ledgeEnd) {
       if (exact && side.exact) {
-        const walked = surfaceY(side, geo, loc, d);
+        const walked = surfaceY(profile, sign, side, geo, loc, d);
         if (walked !== null) return Math.max(walked, profile.floor.y);
       }
       if (side.interpolatesRoad) {
@@ -444,11 +574,6 @@ const Terrain = (() => {
   function groundY(profile, geo, x, z, from, to, exact, loc = {}) {
     if (!geo.path || geo.path.length === 0) return waterLevel(profile, 0) ?? 0;
     return heightAt(profile, geo, locate(geo.path, x, z, from, to, loc), exact);
-  }
-
-  // The side in force at a segment. segIndex is reserved for span overrides.
-  function sideAt(profile, sign, segIndex) {
-    return sign < 0 ? profile.left : profile.right;
   }
 
   // What the ground is at a signed lateral (positive right): the road, or the
@@ -542,6 +667,9 @@ const Terrain = (() => {
     LEG_PROFILES,
     legConfig,
     sideAt,
+    sidesOf,
+    rowAt,
+    faceRange,
     zoneAt,
     wallSign,
     restY,
