@@ -408,7 +408,8 @@ These have high impact for low effort:
 
 ### File Structure
 - `js/main.js` (65KB) - Core game loop, camera, scoring
-- `js/environment.js` (185KB) - Terrain, cliffs, boulders, roads
+- `js/terrain.js` - Terrain profiles: the ground beside the road
+- `js/environment.js` (185KB) - Road, cliff ribbon and rock dressing, boulders
 - `js/vehicle.js` (68KB) - Physics, controls, wheelies
 - `js/traffic.js` (47KB) - AI motorcycles, cars
 - `js/cones.js` (10KB) - Checkpoint system
