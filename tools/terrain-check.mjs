@@ -652,6 +652,12 @@ const same = (a, b) => JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 // Rendered tiles carry sub-level noise between page loads (film grain, GPU rounding), so frames
 // are equal when every tile channel is within one level of 255; everything else is exact
 function sectionEqual(section, stored, fresh) {
+    // treeTypes and rockFrequency were dead config (read nowhere) removed in phase 0c
+    if (section === 'look') {
+        const live = ({ treeTypes, rockFrequency, ...config }) => config;
+        const view = ({ ride, preview }) => ({ ride: { ...ride, config: live(ride.config) }, preview: preview.error ? preview : { ...preview, config: live(preview.config) } });
+        return same(view(stored), view(fresh));
+    }
     if (section !== 'frames') return same(stored, fresh);
     return stored.length === fresh.length && stored.every((pose, i) => pose.segment === fresh[i].segment
         && JSON.stringify(pose.view) === JSON.stringify(fresh[i].view)
