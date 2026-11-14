@@ -5,14 +5,13 @@
  * before crumbling away. Hitting one (or being hit) crashes the bike.
  */
 class RockfallSystem {
-    constructor(scene, environment, legIndex) {
+    constructor(scene, environment) {
         this.scene = scene;
         this.environment = environment;
-        this.legIndex = legIndex;
 
-        // Hazard only on the later, harder legs; frequency ramps up
-        this.enabled = legIndex >= 4; // Legs 5-8
-        this.intensity = this.enabled ? (legIndex - 3) / 4 : 0; // 0.25 .. 1.0
+        // The leg's rockfall rate: 0 on the early legs, ramping up to 1
+        this.intensity = environment.config.dressing.rockfall;
+        this.enabled = this.intensity > 0;
 
         this.rocks = [];
         this.maxRocks = 10;

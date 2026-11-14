@@ -16,13 +16,13 @@ describe('embedded rock spread reads side.face.rockSpread', () => {
 
     // Distance past the road edge of each embedded rock, by side
     function spreads(profile) {
-        const original = game.Terrain.LEG_PROFILES[0];
-        game.Terrain.LEG_PROFILES[0] = profile;
+        const original = game.Terrain.LEGS[0].profile;
+        game.Terrain.LEGS[0].profile = profile;
         let built;
         try {
             built = buildEnvironment(game, 0);
         } finally {
-            game.Terrain.LEG_PROFILES[0] = original;
+            game.Terrain.LEGS[0].profile = original;
         }
         const { env } = built;
         const bySide = { '-1': [], 1: [] };

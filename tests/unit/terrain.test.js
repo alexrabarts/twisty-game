@@ -61,12 +61,12 @@ describe('Environment reads the terrain profile', () => {
 
     // Build leg 1 with a stand-in profile, restoring the table afterwards
     const buildWith = (profile) => {
-        const original = game.Terrain.LEG_PROFILES[0];
-        game.Terrain.LEG_PROFILES[0] = profile;
+        const original = game.Terrain.LEGS[0].profile;
+        game.Terrain.LEGS[0].profile = profile;
         try {
             return buildEnvironment(game, 0);
         } finally {
-            game.Terrain.LEG_PROFILES[0] = original;
+            game.Terrain.LEGS[0].profile = original;
         }
     };
     const at = (env, segment, lateral) => {
