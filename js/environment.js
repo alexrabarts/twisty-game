@@ -1,3 +1,31 @@
+// The steepest drawn ground a rock stands on (up to 35 degrees) and a bush
+// roots in (up to 40), as the y of the surface's unit normal. Steeper is a
+// face: rocks are sunk into it, bushes and clusters are not placed.
+const GENTLE_NORMAL_Y = Math.cos((35 * Math.PI) / 180);
+const PLANT_NORMAL_Y = Math.cos((40 * Math.PI) / 180);
+// From 55 degrees a face is sheer: a rock in it shows as a low boss only
+const SHEER_NORMAL_Y = Math.cos((55 * Math.PI) / 180);
+
+// At most this share of a rock on a steep face may stand clear of it, and
+// of a rock resting on gentle ground (a rock on a bench smaller than itself
+// overhangs it); no rock's lowest point more than this many metres over the
+// ground under it
+const ROCK_AIR = 0.25;
+const ROCK_PERCH = 0.6;
+const ROCK_HANG = 0.3;
+// Points evenly through a unit ball (a grid of fifths), to measure that share
+const ROCK_SAMPLES = (() => {
+  const points = [];
+  for (let i = -2; i <= 2; i++) {
+    for (let j = -2; j <= 2; j++) {
+      for (let k = -2; k <= 2; k++) {
+        if (Math.hypot(i, j, k) <= 2.5) points.push([i / 2.5, j / 2.5, k / 2.5]);
+      }
+    }
+  }
+  return points;
+})();
+
 // Legs 6 to 8 as the course was laid out before they were sharpened: the far
 // backdrop of the cliff legs is still placed along it (see createRoad)
 const LAYOUT_BEFORE_SHARPENING = [
@@ -130,6 +158,146 @@ class Environment {
       this.roadPath.length - 1,
       true,
     );
+  }
+
+  // The drawn surface at (x, z): { y, nx, ny, nz }, the normal facing up
+  surfaceAt(x, z) {
+    return Terrain.surfaceAt(this.terrain, this.terrainGeometry, x, z, 0, this.roadPath.length - 1);
+  }
+
+  // Seats a rock built at (x, z) with radius `radius`, turned by `turn` (three
+  // angles) and scaled by its own `scale`, on the drawn surface. `offset` is
+  // where its parent stands (a cluster's rocks are children of the cluster).
+  //
+  // Gentle ground: the centre on the surface, about half the rock under it,
+  // or sunk `buried` of its thickness more (an outcrop is a cap).
+  // A steep face: the rock is turned so its own y axis (its thinnest) is the
+  // face normal, spun about it by the first angle, and sunk along the normal
+  // by half its thickness or more, so a cap stands out of the face and the
+  // face holds the rest. A rock centred on a steep face had half its bulk out in the air,
+  // and on a wall that reads as a boulder stuck to the rock.
+  //
+  // The drawn face is faceted and folds, so a seat is then checked against
+  // it: no more than ROCK_AIR of the rock's bulk may be in the air on a steep
+  // face, ROCK_PERCH on gentle ground, and its lowest point never more than
+  // ROCK_HANG over the ground under it. A rock that fails is sunk deeper
+  // along the normal, then not placed: false is returned and the caller
+  // leaves it out.
+  //
+  // High-pass keeps its old placement: the frozen golden recorded every one.
+  seatRock(object, x, z, radius, turn, offset = null, buried = 0) {
+    if (this.terrain.columnWalk) {
+      object.position.set(x, this.groundYAt(x, z), z);
+      object.rotation.set(turn[0], turn[1], turn[2]);
+      if (offset) object.position.sub(offset);
+      return true;
+    }
+    const surface = this.surfaceAt(x, z);
+    const normal = new THREE.Vector3(surface.nx, surface.ny, surface.nz);
+    const steep = surface.ny < GENTLE_NORMAL_Y;
+    if (steep) {
+      object.quaternion
+        .setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal)
+        .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn[0]));
+    } else {
+      object.rotation.set(turn[0], turn[1], turn[2]);
+    }
+    const thickness = radius * object.scale.y;
+    // The steeper the face, the less of the rock stands out of it: under
+    // half its thickness at 35 degrees, a low boss from 55. A boulder
+    // standing half out of a near-vertical wall still reads as stuck to it.
+    const steepness = Math.min(1, (GENTLE_NORMAL_Y - surface.ny) / (GENTLE_NORMAL_Y - SHEER_NORMAL_Y));
+    const sunk = Math.max(buried, 0.55 + 0.3 * steepness);
+    for (const sink of steep ? [sunk, (sunk + 1) / 2] : [buried, buried + 0.5]) {
+      object.position.set(x, surface.y, z).addScaledVector(normal, -sink * thickness);
+      object.updateMatrix();
+      if (this.rockHeld(object.matrix, object.geometry, radius, steep)) {
+        if (offset) object.position.sub(offset);
+        // The ground it was seated on, for a model put in its place
+        object.userData.seat = { nx: surface.nx, ny: surface.ny, nz: surface.nz };
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Whether the drawn ground holds a rock placed by `matrix` (no parent
+  // transform), its `geometry` in its own units and its bulk the ball of
+  // `radius` in those units: no more than ROCK_AIR of its bulk clear of a
+  // face (`steep`, or any ground over or under its centre is one) or ROCK_PERCH of
+  // gentle ground, and its lowest point no more than ROCK_HANG over the
+  // ground under it
+  rockHeld(matrix, geometry, radius, steep) {
+    const face = steep || this.surfaceAt(matrix.elements[12], matrix.elements[14]).least < GENTLE_NORMAL_Y;
+    const ball = matrix.clone().multiply(new THREE.Matrix4().makeScale(radius, radius, radius));
+    // Every sample lies within a few metres of the rock: the nearest road
+    // point to it is within two segments of the rock's own
+    const last = this.roadPath.length - 1;
+    const near = Terrain.locate(this.roadPath, matrix.elements[12], matrix.elements[14], 0, last, {}).index;
+    const from = Math.max(0, near - 2);
+    const to = Math.min(last, near + 2);
+    const clear = (p) => Terrain.clearance(this.terrain, this.terrainGeometry, p.x, p.y, p.z, from, to);
+    const point = new THREE.Vector3();
+    const position = geometry.attributes.position;
+    const lowest = new THREE.Vector3(0, Infinity, 0);
+    for (let i = 0; i < position.count; i++) {
+      point.fromBufferAttribute(position, i).applyMatrix4(matrix);
+      if (point.y < lowest.y) lowest.copy(point);
+    }
+    if (clear(lowest) > ROCK_HANG) return false;
+    const most = Math.floor((face ? ROCK_AIR : ROCK_PERCH) * ROCK_SAMPLES.length);
+    let air = 0;
+    for (const [a, b, c] of ROCK_SAMPLES) {
+      if (clear(point.set(a, b, c).applyMatrix4(ball)) > 0.02 && ++air > most) return false;
+    }
+    return true;
+  }
+
+  // Whether any vertex of a rock placed by `matrix` stands clear of the
+  // drawn ground: one wholly under it is never seen
+  rockShows(matrix, geometry) {
+    const last = this.roadPath.length - 1;
+    const near = Terrain.locate(this.roadPath, matrix.elements[12], matrix.elements[14], 0, last, {}).index;
+    const from = Math.max(0, near - 2);
+    const to = Math.min(last, near + 2);
+    const position = geometry.attributes.position;
+    const point = new THREE.Vector3();
+    for (let i = 0; i < position.count; i++) {
+      point.fromBufferAttribute(position, i).applyMatrix4(matrix);
+      if (Terrain.clearance(this.terrain, this.terrainGeometry, point.x, point.y, point.z, from, to) > 0.02) return true;
+    }
+    return false;
+  }
+
+  // A modelled rock (js/sceneassets.js) stands where its procedural one did
+  // but has its own shape, so the ground may not hold it there: it is sunk
+  // further along the ground's normal, a quarter of its thickness at a time,
+  // until the ground holds it. Returns the matrix it is held at, or null
+  // where nothing does. `matrix` scales a geometry whose bulk is a unit ball;
+  // `seat` is the ground the procedural rock was seated on (its normal).
+  holdRock(matrix, geometry, seat) {
+    if (this.terrain.columnWalk) return matrix;
+    const at = new THREE.Vector3().setFromMatrixPosition(matrix);
+    const surface = seat || this.surfaceAt(at.x, at.z);
+    const steep = surface.ny < GENTLE_NORMAL_Y;
+    const thickness = new THREE.Vector3().setFromMatrixColumn(matrix, 1).length();
+    const moved = matrix.clone();
+    // Deeper until the ground holds it; then, where the model is slighter
+    // than the rock it stands in for and none of it shows, back out. A rock
+    // the ground holds nowhere, or that shows nowhere it is held, is left out.
+    for (const sink of [0, 0.25, 0.5, 0.75, 1, -0.2, -0.4, -0.6]) {
+      moved.setPosition(at.x - surface.nx * sink * thickness, at.y - surface.ny * sink * thickness, at.z - surface.nz * sink * thickness);
+      if (!this.rockHeld(moved, geometry, 1, steep)) continue;
+      if (this.rockShows(moved, geometry)) return moved;
+      if (sink > 0) break;
+    }
+    return null;
+  }
+
+  // Whether the drawn surface at (x, z) is gentle enough for a rock to stand
+  // on (cluster) or a bush to root in. High-pass always is (frozen golden).
+  gentleAt(x, z, limit) {
+    return !!this.terrain.columnWalk || this.surfaceAt(x, z).least >= limit;
   }
 
   // Whether a segment lies inside a set piece, widened by `margin` segments
@@ -583,9 +751,11 @@ class Environment {
           point.x + side * (18 + this.rand() * 8) * Math.cos(point.heading);
         const cliffZ =
           point.z - side * (18 + this.rand() * 8) * Math.sin(point.heading);
-        // Rest the rock cluster on the mountain face at this lateral offset
-        // (the old point.y - 1 buried it inside the wall, or left it floating
-        // when the wall dipped). Group center at ground = roughly half embedded.
+        // A cluster stands on gentle ground only: up a wall it is a heap of
+        // boulders stuck to the face. Its draws are taken either way, so
+        // the rest of the leg is unchanged.
+        const placed = this.gentleAt(cliffX, cliffZ, GENTLE_NORMAL_Y);
+        // Group center at ground = roughly half embedded
         const cliffY = this.groundYAt(cliffX, cliffZ);
 
         // Create irregular rock shape using multiple merged geometries
@@ -602,11 +772,14 @@ class Environment {
           rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
         );
         mainRock.position.set(0, 0, 0);
-        mainRock.rotation.set(
+        const mainTurn = [
           this.rand() * Math.PI,
           this.rand() * Math.PI,
           this.rand() * Math.PI,
-        );
+        ];
+        mainRock.rotation.set(mainTurn[0], mainTurn[1], mainTurn[2]);
+        // The angles each rock of the cluster was drawn with, to seat it by
+        const turns = new Map([[mainRock, mainTurn]]);
         mainRock.scale.set(
           1 + this.rand() * 0.5,
           0.7 + this.rand() * 0.6,
@@ -633,16 +806,18 @@ class Environment {
             (this.rand() - 0.5) * 3,
             (this.rand() - 0.5) * 4,
           );
-          chunk.rotation.set(
+          const chunkTurn = [
             this.rand() * Math.PI,
             this.rand() * Math.PI,
             this.rand() * Math.PI,
-          );
+          ];
+          chunk.rotation.set(chunkTurn[0], chunkTurn[1], chunkTurn[2]);
           chunk.scale.set(
             1 + this.rand() * 0.4,
             0.6 + this.rand() * 0.5,
             1 + this.rand() * 0.4,
           );
+          turns.set(chunk, chunkTurn);
           chunk.castShadow = true;
           chunk.receiveShadow = true;
           chunk.userData.dressing = { kind: "rock", radius: chunkSize };
@@ -650,6 +825,24 @@ class Environment {
         }
 
         rockGroup.position.set(cliffX, cliffY, cliffZ);
+        if (!placed) {
+          rockGroup.traverse((child) => child.isMesh && child.geometry.dispose());
+          continue;
+        }
+        // Each rock of the cluster on the drawn surface under it: the old
+        // fixed offsets left the downhill ones standing clear of a slope
+        if (!this.terrain.columnWalk) {
+          for (const child of [...rockGroup.children]) {
+            if (this.seatRock(child, cliffX + child.position.x, cliffZ + child.position.z, child.userData.dressing.radius, turns.get(child), rockGroup.position)) continue;
+            rockGroup.remove(child);
+            child.geometry.dispose();
+          }
+          // The solid circle is the main rock's: without it there is no cluster
+          if (mainRock.parent !== rockGroup) {
+            rockGroup.traverse((child) => child.isMesh && child.geometry.dispose());
+            continue;
+          }
+        }
         this.scene.add(rockGroup);
         this.registerGrounded(rockGroup, `cliff rock cluster (segment ${index})`);
         if (this.solidClutter) {
@@ -1161,23 +1354,13 @@ class Environment {
           const perpX = Math.cos(point.heading) * distance * sign;
           const perpZ = -Math.sin(point.heading) * distance * sign;
 
-          // Rest the rock ON the cliff face at this lateral offset: the
-          // terrain model maps the lateral distance to the face elevation
-          // (rising mountain wall on the left, dropping cliff on the
-          // right), so the rock center sits on the face (~half embedded).
-          // The old heightRatio-based y used a slope that didn't match the
-          // rendered face, leaving rocks hovering off the wall or buried.
           const rockWorldX = point.x + perpX;
           const rockWorldZ = point.z + perpZ;
-          const rockY = this.groundYAt(rockWorldX, rockWorldZ);
-          rock.position.set(rockWorldX, rockY, rockWorldZ);
-
-          // Random rotation for natural look
-          rock.rotation.set(
+          const turn = [
             this.rand() * Math.PI * 2,
             this.rand() * Math.PI * 2,
             this.rand() * Math.PI * 2,
-          );
+          ];
 
           // Varied scaling for natural appearance
           rock.scale.set(
@@ -1185,6 +1368,13 @@ class Environment {
             0.7 + this.rand() * 0.4,
             1.0 + this.rand() * 0.5,
           );
+          // On the drawn face at this lateral offset: on a ledge it rests,
+          // on the wall or the drop it is sunk into the face, and where the
+          // face cannot hold it, it is left out (its draws are taken)
+          if (!this.seatRock(rock, rockWorldX, rockWorldZ, rockSize, turn)) {
+            rockGeometry.dispose();
+            continue;
+          }
 
           rock.castShadow = true;
           rock.receiveShadow = true;
@@ -3979,10 +4169,10 @@ class Environment {
     // Never in the river (the trees keep out of the same band)
     const exclude = (this.config.dressing.forest && this.config.dressing.forest.layout && this.config.dressing.forest.layout.exclude) || [];
     const placements = [];
-    const position = new THREE.Vector3();
-    const quaternion = new THREE.Quaternion();
-    const euler = new THREE.Euler();
-    const scale = new THREE.Vector3();
+    const geometry = this.displaceVertices(new THREE.IcosahedronGeometry(1, 1), 0.28);
+    // Each rock is seated as a mesh of the shared geometry, then instanced
+    const rock = new THREE.Mesh(geometry);
+    const scale = rock.scale;
     for (let index = startIdx; index <= endIdx; index++) {
       // A leg whose ground keeps one shape has its rocks at full weight throughout
       const w = outcrops.everywhere ? 1 : Terrain.closingAt(this.terrain, index);
@@ -3994,7 +4184,7 @@ class Environment {
         const lateral = Terrain.rideableLimit(this.terrain, index, sign, halfRoad) + 4 + this.rand() * 70;
         const along = (this.rand() - 0.5) * 20;
         const size = (1.2 + this.rand() * 2.4) * (0.6 + 0.6 * w);
-        euler.set(this.rand() * Math.PI, this.rand() * Math.PI, this.rand() * Math.PI);
+        const turn = [this.rand() * Math.PI, this.rand() * Math.PI, this.rand() * Math.PI];
         scale.set(size * (1 + this.rand() * 0.6), size * (0.6 + this.rand() * 0.5), size * (1 + this.rand() * 0.6));
         // Snow lies on top of a snowed-in leg's rocks: they read pale, a few dark
         const shade = outcrops.snowy ? 0.9 + this.rand() * 0.9 : 0.65 + this.rand() * 0.35;
@@ -4002,13 +4192,17 @@ class Environment {
         if (exclude.some((zone) => zone.sign === sign && lateral + reach >= zone.from && lateral - reach <= zone.to)) continue;
         const x = point.x + sign * lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
         const z = point.z - sign * lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
-        position.set(x, this.groundYAt(x, z) - scale.y * 0.5, z);
-        quaternion.setFromEuler(euler);
-        placements.push({ matrix: new THREE.Matrix4().compose(position, quaternion, scale), shade });
+        // Half its thickness under the drawn ground; on a face, sunk into it
+        // along its normal, and left out where the face cannot hold it
+        if (!this.seatRock(rock, x, z, 1, turn, null, 0.5)) continue;
+        rock.updateMatrix();
+        placements.push({ matrix: rock.matrix.clone(), shade });
       }
     }
-    if (placements.length === 0) return;
-    const geometry = this.displaceVertices(new THREE.IcosahedronGeometry(1, 1), 0.28);
+    if (placements.length === 0) {
+      geometry.dispose();
+      return;
+    }
     const material = new THREE.MeshStandardMaterial({ color: 0x67635c, roughness: 0.95, metalness: 0.0, flatShading: true, envMapIntensity: 0.2 });
     const mesh = new THREE.InstancedMesh(geometry, material, placements.length);
     const tint = new THREE.Color();
@@ -4199,6 +4393,8 @@ class Environment {
           bushMaterials[Math.floor(this.rand() * bushMaterials.length)],
         );
         const bushScale = 0.7 + this.rand() * 0.7;
+        // No plant roots in a face steeper than 40 degrees
+        if (!this.gentleAt(bushX, bushZ, PLANT_NORMAL_Y)) continue;
         leftBush.scale.set(bushScale * 1.1, bushScale * 0.8, bushScale * 1.1);
         // Center slightly above the terrain model so the sphere is roughly
         // half embedded in the mountain slope (point.y - 0.3 buried bushes
