@@ -76,7 +76,14 @@ The roadworks plant (bulldozer, barrier, work truck) is not built beside a wall:
 - Rock decoration (embedded rocks, cracks, vines) hangs only where the side has a `face`: `Terrain.faceRange()` bounds it, so the beach gets none. A ribbon that is a face for part of its length keeps the rock material and colours its ground columns by vertex (`side.tint`, else the leg's grass).
 - The land side is a drawn wall like the cliff legs': the roadworks plant is not built up it.
 
-`ridge` (winter-pass) has a snowfield 6 m wide each side of the road (run-off, white), then a fall of 40 m (`fallDepth`) onto a shelf, over a frozen lake at -200 (`floor-lake`, `ice` material, `createIceMaterial` in `js/graphics.js`). A fall ends 40 m under the road because the floor is not water. Snowy conifers stand only on the slopes, 12 m or more from the road edge, and none are solid. The roadworks plant (`LEGS[7].plant`) stands inside the snowfield. The leg has no wall, so no rockfalls.
+`ridge` (winter-pass) has a snowfield 6 m wide each side of the road (run-off, white), then a fall of 40 m (`fallDepth`) onto a shelf, over a frozen lake at -200 (`floor-lake`, `ice` material, `createIceMaterial` in `js/graphics.js`). A fall ends 40 m under the road because the floor is not water. The drop is steeper than the side's `rockSlope` (1.0), so it is drawn as a band of bare rock under the snowfield. The roadworks plant (`LEGS[7].plant`) stands inside the snowfield. The leg has no wall, so no rockfalls.
+
+Winter-pass is dressed as a high pass:
+
+- Peaks (`backdrop: ['peaks']`, `createPassPeaks`, one merged mesh `pass-peaks`): every 5 segments a peak each side, 260 to 560 m out plus half its radius, 220 to 480 m over the lowest road, snow from 55 to 75% of its height. Each clears the road by its radius plus 60 (`env.passPeaks`). They stand on a base 140 m under the lowest road, so their feet are in the haze below the shelf.
+- Conifers: snow-laden (white upper tier slopes in the geometry's colours), 2 to 4 a side a segment, only on the slopes 12 m or more from the road edge, none solid.
+- Boulders (`outcrops` with `everywhere: true, snowy: true`): 3 a segment at full weight the whole leg, past the rideable limit plus 4 (on the rock band and the shelf), pale with snow. Not solid.
+- `dressing.pass` (`createPassMarkers`): a red, white and black snow pole each side of every segment, 3.5 m past the road edge (instanced `snow-poles`, sunk 0.3 m, not solid); a stone cairn every 12 segments on alternate sides, 5 m past the edge (instanced `cairns`, each a solid circle); and a summit marker (`summit-marker`, two solid posts) on the right-hand snowfield at the highest road point at least 4 segments short of the finish (`env.summitSegment`). None stands in a roadworks zone or the segment either side of one. Only a leg with `pass` builds them, so no other leg's `rand()` draws move.
 
 Both legs have `trackVersion` 2: `coastal-descent-v2` and `winter-pass-v2`. High-pass keeps its heights and its plain board id.
 

@@ -219,7 +219,8 @@ describe('the coast and the ridge built', () => {
         const laterals = [];
         const matrix = new game.THREE.Matrix4();
         scene.traverse(object => {
-            if (!object.isInstancedMesh) return;
+            // The forest only: a pass also has instanced poles, cairns and rocks
+            if (!object.isInstancedMesh || !/^forest-/.test(object.name)) return;
             for (let n = 0; n < object.count; n++) {
                 object.getMatrixAt(n, matrix);
                 laterals.push(lateralOf(env, matrix.elements[12], matrix.elements[14]));
@@ -358,6 +359,52 @@ describe('the coast and the ridge built', () => {
         const decals = [];
         scene.traverse(object => { if (object.userData && object.userData.decal) decals.push(object); });
         expect(decals).toHaveLength(0);
+    });
+
+    test('ridge: a high pass, with peaks clear of the road, poles and cairns on the snowfield and a summit marker', () => {
+        const { env, scene } = leg(RIDGE);
+        const halfRoad = env.roadWidth / 2;
+        const named = name => {
+            let found = null;
+            scene.traverse(object => { if (object.name === name) found = object; });
+            return found;
+        };
+        // Peaks either side, none within its radius plus 60 m of the road drawn
+        expect(env.passPeaks.length).toBeGreaterThan(20);
+        expect(new Set(env.passPeaks.map(peak => Math.sign(lateralOf(env, peak.x, peak.z)))).size).toBe(2);
+        env.passPeaks.forEach(peak => {
+            for (let i = env.startSegment; i <= env.endSegment + 20; i++) {
+                expect(Math.hypot(peak.x - env.roadPath[i].x, peak.z - env.roadPath[i].z)).toBeGreaterThanOrEqual(peak.radius + 60);
+            }
+        });
+        // Poles stand in the snowfield, sunk 0.3 m into the ground under them
+        const poles = named('snow-poles');
+        const matrix = new game.THREE.Matrix4();
+        expect(poles.count).toBeGreaterThan(150);
+        for (let n = 0; n < poles.count; n++) {
+            poles.getMatrixAt(n, matrix);
+            const [x, y, z] = [matrix.elements[12], matrix.elements[13], matrix.elements[14]];
+            expect(Math.abs(Math.abs(lateralOf(env, x, z)) - (halfRoad + 3.5))).toBeLessThan(0.6);
+            expect(y).toBeCloseTo(env.groundYAt(x, z) - 0.3, 1);
+        }
+        // Cairns and the summit posts are solid, inside the snowfield a bike can reach
+        const cairns = env.boulders.filter(b => b.label === 'cairn');
+        expect(cairns.length).toBe(named('cairns').count);
+        expect(cairns.length).toBeGreaterThanOrEqual(8);
+        [...cairns, ...env.boulders.filter(b => b.label === 'summit marker post')].forEach(b => {
+            expect(b.solid).toBe(true);
+            expect(Math.abs(lateralOf(env, b.position.x, b.position.z)) + b.radius).toBeLessThanOrEqual(halfRoad + 6);
+        });
+        // The marker stands short of the finish, where the gantry is
+        expect(named('summit-marker')).not.toBeNull();
+        expect(env.summitSegment).toBeLessThanOrEqual(env.endSegment - 4);
+        expect(env.summitSegment).toBeGreaterThan(env.endSegment - 20);
+    });
+
+    test('only the pass has pass dressing', () => {
+        const { scene } = leg(COAST);
+        scene.traverse(object => expect(['snow-poles', 'cairns', 'summit-marker', 'pass-peaks']).not.toContain(object.name));
+        expect(leg(COAST).env.passPeaks).toBeUndefined();
     });
 
     test('ridge: the roadworks plant stands on the snowfield as solid circles, and the legacy entries are gone', () => {

@@ -61,6 +61,7 @@ class Environment {
     this.addHairpinWarnings(); // Add hairpin bend warnings
     this.createCheckpoints(); // Add scoring checkpoints
     this.createSetPieces(); // Bridge, tunnel and village
+    this.createPassMarkers(); // Snow poles, cairns and the summit marker of a high pass
 
     // Validate terrain-road clearance (development-time check)
     const terrainErrors = this.validateAllTerrainClearance();
@@ -1398,6 +1399,7 @@ class Environment {
       majestic: () => this.createMajesticPeak(), // the dominant mountain
       endCourse: () => this.createEndCourseMountains(), // dramatic end mountains
       approach: () => this.createApproachRange(), // the next leg's mountains, ahead
+      peaks: () => this.createPassPeaks(), // snow-capped peaks either side of a high pass
     };
     this.config.dressing.backdrop.forEach((key) => layers[key]());
   }
@@ -1503,11 +1505,11 @@ class Environment {
   // One peak of the approach range: a cone with ridged, uneven flanks, rock
   // darkening toward the foot and snow over the top of the taller ones.
   // Colours are stored undecoded, as the other vertex-coloured peaks are.
-  addApproachPeak({ x, z, height, radius, twist, seed, baseY }, positions, colors, indices) {
+  addApproachPeak({ x, z, height, radius, twist, seed, baseY, snow }, positions, colors, indices) {
     const rings = 7;
     const around = 12;
     const offset = positions.length / 3;
-    const snowLine = height > 380 ? 0.68 : height > 300 ? 0.8 : 2;
+    const snowLine = snow ?? (height > 380 ? 0.68 : height > 300 ? 0.8 : 2);
     for (let r = 0; r <= rings; r++) {
       const v = r / rings;
       for (let k = 0; k < around; k++) {
@@ -1534,6 +1536,67 @@ class Environment {
         indices.push(a, c, b, b, c, d);
       }
     }
+  }
+
+  // The peaks of a high pass: either side of the whole leg, close enough to
+  // stand out of the snow haze, each with its snow line low on its flanks and
+  // rock below. They rise from far under the road (the shelf beside it is 40 m
+  // down), stay clear of the road by their radius plus 60, and are one merged
+  // mesh, never culled.
+  createPassPeaks() {
+    const path = this.roadPath;
+    const first = Math.max(0, this.startSegment);
+    const last = Math.min(path.length - 1, this.endSegment + 20);
+    let lowest = Infinity;
+    for (let i = first; i <= last; i++) lowest = Math.min(lowest, path[i].y);
+    const baseY = lowest - 140;
+    const clear = (x, z, radius) => {
+      for (let i = Math.max(0, first - 20); i <= last; i++) {
+        if (Math.hypot(x - path[i].x, z - path[i].z) < radius + 60) return false;
+      }
+      return true;
+    };
+    const positions = [];
+    const colors = [];
+    const indices = [];
+    this.passPeaks = [];
+    for (let a = first; a <= last; a += 5) {
+      const anchor = path[a];
+      for (const sign of [-1, 1]) {
+        const height = 220 + this.rand() * 260;
+        const radius = (height + 140) * (0.4 + this.rand() * 0.2);
+        const out = (260 + this.rand() * 300) * sign + sign * radius * 0.5;
+        const ahead = (this.rand() - 0.5) * 120;
+        const twist = this.rand() * Math.PI * 2;
+        const seed = this.rand() * 100;
+        const snow = 0.55 + this.rand() * 0.2;
+        const x = anchor.x + Math.cos(anchor.heading) * out + Math.sin(anchor.heading) * ahead;
+        const z = anchor.z - Math.sin(anchor.heading) * out + Math.cos(anchor.heading) * ahead;
+        if (!clear(x, z, radius)) continue;
+        this.passPeaks.push({ x, z, apex: lowest + height, radius });
+        this.addApproachPeak({ x, z, height: height + 140, radius, twist, seed, baseY, snow }, positions, colors, indices);
+      }
+    }
+    if (indices.length === 0) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.95,
+      metalness: 0.0,
+      flatShading: true,
+      envMapIntensity: 0.3,
+    });
+    const range = new THREE.Mesh(geometry, material);
+    range.name = "pass-peaks";
+    range.userData.skipCulling = true;
+    range.frustumCulled = false;
+    this.tagMeshes(range, "mountain");
+    this.scene.add(range);
+    this.registerGrounded(range, "pass peaks");
   }
 
   createDistantMountainRange() {
@@ -3515,7 +3578,7 @@ class Environment {
   }
 
   // Low-poly conifer: a trunk and three stacked, slightly irregular tiers
-  createConiferGeometry() {
+  createConiferGeometry(snowy = false) {
     const tier = (radius, height, y, twist) => {
       const g = new THREE.ConeGeometry(radius, height, 7, 1);
       const p = g.attributes.position;
@@ -3534,11 +3597,13 @@ class Environment {
     };
     const trunk = new THREE.CylinderGeometry(0.22, 0.34, 2.2, 6, 1);
     trunk.translate(0, 1.1, 0);
+    // Snow-laden: each tier carries snow on its upper slope over dark needles
+    const snow = 0xeef3f8;
     return this.mergeColoredGeometries([
       { geometry: trunk, color: [0x3b2a1e, 0x5a4030] },
-      { geometry: tier(2.3, 3.2, 3.0, 0.0), color: [0x1b3d27, 0x2a5a33] },
-      { geometry: tier(1.8, 2.9, 4.9, 0.5), color: [0x20472b, 0x33683a] },
-      { geometry: tier(1.2, 2.6, 6.7, 1.1), color: [0x275330, 0x467a42] },
+      { geometry: tier(2.3, 3.2, 3.0, 0.0), color: [0x1b3d27, snowy ? snow : 0x2a5a33] },
+      { geometry: tier(1.8, 2.9, 4.9, 0.5), color: [0x20472b, snowy ? snow : 0x33683a] },
+      { geometry: tier(1.2, 2.6, 6.7, 1.1), color: [0x275330, snowy ? snow : 0x467a42] },
     ]);
   }
 
@@ -3658,7 +3723,8 @@ class Environment {
         0.6 + this.rand() * 0.3,
         THREE.SRGBColorSpace,
       );
-      if (snowy) tint.lerp(new THREE.Color(0xffffff), 0.55).multiplyScalar(1.5);
+      // The snow is in the geometry's colours; the tint only lightens the needles
+      if (snowy) tint.lerp(new THREE.Color(0xffffff), 0.3).multiplyScalar(1.15);
 
       const kind = this.rand() < share ? "conifer" : "broadleaf";
       placements[kind].push({ matrix: matrix.clone(), tint });
@@ -3717,7 +3783,7 @@ class Environment {
       mesh.userData.skipCulling = true;
       this.scene.add(mesh);
     };
-    build("conifer", this.createConiferGeometry());
+    build("conifer", this.createConiferGeometry(snowy));
     build("broadleaf", this.createBroadleafGeometry());
   }
 
@@ -3740,7 +3806,8 @@ class Environment {
     const euler = new THREE.Euler();
     const scale = new THREE.Vector3();
     for (let index = startIdx; index <= endIdx; index++) {
-      const w = Terrain.closingAt(this.terrain, index);
+      // A leg whose ground keeps one shape has its rocks at full weight throughout
+      const w = outcrops.everywhere ? 1 : Terrain.closingAt(this.terrain, index);
       if (w <= 0) continue;
       const count = Math.floor(outcrops.perSegment * w + this.rand());
       const point = this.roadPath[index];
@@ -3751,7 +3818,8 @@ class Environment {
         const size = (1.2 + this.rand() * 2.4) * (0.6 + 0.6 * w);
         euler.set(this.rand() * Math.PI, this.rand() * Math.PI, this.rand() * Math.PI);
         scale.set(size * (1 + this.rand() * 0.6), size * (0.6 + this.rand() * 0.5), size * (1 + this.rand() * 0.6));
-        const shade = 0.65 + this.rand() * 0.35;
+        // Snow lies on top of a snowed-in leg's rocks: they read pale, a few dark
+        const shade = outcrops.snowy ? 0.9 + this.rand() * 0.9 : 0.65 + this.rand() * 0.35;
         const reach = Math.max(scale.x, scale.z) * 1.3;
         if (exclude.some((zone) => zone.sign === sign && lateral + reach >= zone.from && lateral - reach <= zone.to)) continue;
         const x = point.x + sign * lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
@@ -3779,6 +3847,133 @@ class Environment {
     mesh.frustumCulled = false;
     mesh.userData.skipCulling = true;
     this.scene.add(mesh);
+  }
+
+  // The road furniture of a high pass (`dressing.pass`): a snow pole on each
+  // side of every segment, banded so it shows above drifts, a stone cairn
+  // every `cairnEvery` segments on alternate sides, and a marker at the
+  // summit, the leg's highest road point. All of it stands on the snowfield,
+  // a run-off a bike can ride, so the cairns and the marker's posts are solid;
+  // a pole is too thin to stop a bike. None stands in a roadworks zone, and
+  // none is built on a leg without `pass`, so no other leg draws from rand().
+  createPassMarkers() {
+    const pass = this.config.dressing.pass;
+    if (!pass) return;
+    const startIdx = Math.max(0, this.startSegment);
+    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const halfRoad = this.roadWidth / 2;
+    const inWorks = (index) => this.roadworksZones.some((zone) => index >= zone.startSegment - 1 && index <= zone.endSegment + 1);
+    const at = (point, lateral) => {
+      const x = point.x + lateral * Math.cos(point.heading);
+      const z = point.z - lateral * Math.sin(point.heading);
+      return { x, z, y: this.groundYAt(x, z) };
+    };
+
+    // Poles: red and white bands, 2.4 m, one instanced mesh
+    const band = (y, color) => {
+      const g = new THREE.CylinderGeometry(0.05, 0.05, 0.4, 6, 1);
+      g.translate(0, y + 0.2, 0);
+      return { geometry: g, color: [color, color] };
+    };
+    const poleParts = [];
+    for (let n = 0; n < 6; n++) poleParts.push(band(n * 0.4, n % 2 === 0 ? 0x2a2a2a : n === 5 ? 0xd8261c : 0xf2f2f2));
+    const poleGeometry = this.mergeColoredGeometries(poleParts);
+    const poleMatrices = [];
+    const matrix = new THREE.Matrix4();
+    for (let index = startIdx; index <= endIdx; index++) {
+      if (inWorks(index)) continue;
+      const point = this.roadPath[index];
+      for (const sign of [-1, 1]) {
+        const p = at(point, sign * (halfRoad + pass.poleLateral));
+        // Pushed 0.3 m into the snow, so it stands in it on the snowfield's fall
+        poleMatrices.push(matrix.makeTranslation(p.x, p.y - 0.3, p.z).clone());
+      }
+    }
+    const poleMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0.0 });
+    const poles = new THREE.InstancedMesh(poleGeometry, poleMaterial, poleMatrices.length);
+    poleMatrices.forEach((m, n) => poles.setMatrixAt(n, m));
+    poles.instanceMatrix.needsUpdate = true;
+    poles.name = "snow-poles";
+    poles.frustumCulled = false;
+    poles.userData.skipCulling = true;
+    this.scene.add(poles);
+
+    // Cairns: four stacked stones, one instanced mesh, each a solid circle
+    const stone = (r, y, sx, sz) => {
+      const g = this.displaceVertices(new THREE.IcosahedronGeometry(r, 0), r * 0.18);
+      g.scale(sx, 0.6, sz);
+      g.translate(0, y, 0);
+      return { geometry: g, color: [0x6c6964, 0x8d8a84] };
+    };
+    const cairnGeometry = this.mergeColoredGeometries([
+      stone(0.75, 0.3, 1, 1),
+      stone(0.6, 0.85, 0.9, 1),
+      stone(0.45, 1.3, 1, 0.9),
+      { geometry: (() => { const g = new THREE.IcosahedronGeometry(0.32, 0); g.scale(1, 0.7, 1); g.translate(0, 1.62, 0); return g; })(), color: [0xdfe5ea, 0xf4f7fa] },
+    ]);
+    const cairnMatrices = [];
+    const turn = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const one = new THREE.Vector3(1, 1, 1);
+    let side = 1;
+    for (let index = startIdx + Math.floor(pass.cairnEvery / 2); index <= endIdx; index += pass.cairnEvery) {
+      if (inWorks(index)) continue;
+      const point = this.roadPath[index];
+      side = -side;
+      const p = at(point, side * (halfRoad + pass.cairnLateral));
+      turn.setFromAxisAngle(up, this.rand() * Math.PI * 2);
+      cairnMatrices.push(new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y - 0.1, p.z), turn, one));
+      this.addSolidCircle(p.x, p.y, p.z, 0.8, 1.9, "cairn");
+    }
+    const cairnMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: true });
+    const cairns = new THREE.InstancedMesh(cairnGeometry, cairnMaterial, Math.max(1, cairnMatrices.length));
+    cairns.count = cairnMatrices.length;
+    cairnMatrices.forEach((m, n) => cairns.setMatrixAt(n, m));
+    cairns.instanceMatrix.needsUpdate = true;
+    cairns.castShadow = true;
+    cairns.receiveShadow = true;
+    cairns.name = "cairns";
+    cairns.frustumCulled = false;
+    cairns.userData.skipCulling = true;
+    this.scene.add(cairns);
+
+    // Summit marker: a sign on two posts, side-on to the road so a passing
+    // rider reads it, on the right-hand snowfield at the highest road point
+    // short of the finish (the road climbs to the line; the gantry stands there)
+    let summit = startIdx;
+    for (let index = startIdx; index <= Math.min(this.endSegment - 4, this.roadPath.length - 1); index++) {
+      if (this.roadPath[index].y > this.roadPath[summit].y) summit = index;
+    }
+    while (inWorks(summit) && summit > startIdx) summit--;
+    const point = this.roadPath[summit];
+    const metres = Math.round(2200 + point.y * 4);
+    const p = at(point, halfRoad + pass.cairnLateral);
+    const marker = new THREE.Group();
+    const postMaterial = new THREE.MeshStandardMaterial({ color: 0x5a4632, roughness: 0.9 });
+    for (const along of [-1.6, 1.6]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.11, 3.6, 8), postMaterial);
+      post.position.set(along, 1.8 - 0.3, 0);
+      marker.add(post);
+    }
+    marker.add(this.createSignFace(`WINTER PASS ${metres.toLocaleString("en-GB")} m`, "#7a3b1d", "#f4ead8"));
+    marker.position.set(p.x, p.y, p.z);
+    // Local -Z (the face) toward the road: turned a quarter beyond the heading
+    marker.rotation.y = point.heading + Math.PI / 2;
+    marker.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    marker.name = "summit-marker";
+    this.scene.add(marker);
+    this.registerGrounded(marker, "summit marker");
+    const along = new THREE.Vector3(Math.sin(point.heading), 0, Math.cos(point.heading));
+    for (const offset of [-1.6, 1.6]) {
+      // The posts stand along the road; local X is the road direction once turned
+      this.addSolidCircle(p.x - along.x * offset, p.y, p.z - along.z * offset, 0.3, 3.6, "summit marker post");
+    }
+    this.summitSegment = summit;
   }
 
   addEnvironmentalDetails() {

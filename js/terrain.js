@@ -149,7 +149,7 @@ const Terrain = (() => {
   // linearly, plus an optional rolling undulation along the road that fades
   // in over `ramp` metres. The ribbon rows sit on the stations, so the drawn
   // ground and the `base` model the physics reads agree to rounding.
-  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1, tint, rock = false, fallDepth, lipDepth }) {
+  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1, tint, rock = false, fallDepth, lipDepth, rockSlope }) {
     const last = bands[bands.length - 1];
     if (last.to !== undefined || (last.kind !== 'wall' && last.kind !== 'fall')) {
       throw new Error('A side must end in an unbounded wall or fall band so its rideable limit is finite');
@@ -183,6 +183,8 @@ const Terrain = (() => {
       ...(tint !== undefined && { tint }),
       // Drawn as bare rock (colour and texture), though it has no face to dress
       ...(rock && { rock }),
+      // Ground steeper than this shows as bare rock (the drawn colour only)
+      ...(rockSlope !== undefined && { rockSlope }),
       // Where a fall off this side ends when the floor is no water: this far below the road
       ...(fallDepth !== undefined && { fallDepth }),
       ...(lipDepth !== undefined && { lipDepth }),
@@ -541,14 +543,16 @@ const Terrain = (() => {
 
   // An exposed ridge: a snowfield 6 m wide each side of the road, then a drop
   // of 40 m onto a shelf, with a frozen lake far below. The shelf, not the
-  // lake, is where a bike that goes over comes to rest.
+  // lake, is where a bike that goes over comes to rest. The drop is too steep
+  // to hold snow, so it shows as a band of bare rock under the snowfield.
   const ridgeSide = () =>
     heightfieldSide({
       stations: [[0, 0], [6, -0.4], [8, -4], [14, -22], [22, -40], [80, -40]],
       bands: [{ to: 6, kind: 'runoff' }, { kind: 'fall' }],
       runoff: RUNOFF,
       tint: 0xdfe8f0,
-      fallDepth: 40
+      fallDepth: 40,
+      rockSlope: 1.0
     });
   const ridge = {
     id: 'ridge',
@@ -635,10 +639,16 @@ const Terrain = (() => {
       preview: { radius: 8, height: 5 } },
     { id: 'winter-pass', profile: ridge, trackVersion: 2, roadWidth: 16,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
-      // Snowy conifers on the slopes below the snowfield only (none within 12 m of the road edge); no walls, so no rockfalls
+      // A high pass: snow-capped peaks all round (`peaks`), snow-laden conifers
+      // on the slopes below the snowfield only (none within 12 m of the road
+      // edge), boulders on the rock band and the shelf (`outcrops`, the same
+      // weight the whole leg), snow poles and cairns along the snowfield and a
+      // marker at the summit (`pass`). No walls, so no rockfalls.
       dressing: {
-        forest: { coniferShare: 1.0, snowy: true, layout: { perSegment: [1, 2], offset: 12, reach: 60, exclude: [] } },
-        rockfall: 0, backdrop: []
+        forest: { coniferShare: 1.0, snowy: true, layout: { perSegment: [2, 4], offset: 12, reach: 60, exclude: [] } },
+        outcrops: { perSegment: 3, everywhere: true, snowy: true },
+        pass: { poleLateral: 3.5, cairnEvery: 12, cairnLateral: 5 },
+        rockfall: 0, backdrop: ['peaks']
       },
       // The snowfield is 6 m wide: the roadworks plant stands on it, past the road edge by these amounts
       plant: { bulldozer: 4.5, barrier: 2.5, truck: 3 } }

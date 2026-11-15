@@ -22,7 +22,7 @@ const CLIFF = 1;
 // had shipped to players yet.)
 const COURSE_DIGESTS = [
     '062f790295a7e5d4', '5b41d6a35ad33203', '1d8e018d4b1500c6', 'dec5762639099e6c',
-    'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', 'cdd0b1b28f83f268'
+    'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', '4193062a49e547f3'
 ];
 
 describe('run-off profiles (pure)', () => {
@@ -303,7 +303,9 @@ describe('run-off profiles (pure)', () => {
                     left: span.left ? side(span.left) : null, right: span.right ? side(span.right) : null
                 }))
             }),
-            ...(config.plant && { plant: config.plant })
+            ...(config.plant && { plant: config.plant }),
+            // A high pass's cairns and summit marker are solid, on the snowfield
+            ...(config.dressing.pass && { pass: config.dressing.pass })
         })).digest('hex').slice(0, 16);
     }
 
