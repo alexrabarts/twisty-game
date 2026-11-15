@@ -135,7 +135,7 @@ class RockfallSystem {
             (vehicle.currentRoadSegment || 0) + aheadSegments,
             path.length - 1
         );
-        // No rock is aimed at a bridge, a tunnel or a village, or at the
+        // No rock is aimed at a tunnel or a village, or at the
         // segment beside one: it spreads 12 m along the road and could land in it
         if (this.environment.inSetPiece && this.environment.inSetPiece(segIdx, 1)) return segIdx;
         const seg = path[segIdx];

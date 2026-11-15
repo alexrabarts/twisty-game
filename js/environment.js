@@ -26,7 +26,7 @@ class Environment {
     // scenery only, and the roadworks plant (bulldozer, barrier, work truck) is
     // not built, because up a wall it would hang on the rock face.
     this.solidClutter = !!this.terrain.left.runoff;
-    // Where the leg has a bridge, a tunnel or a village: scenery keeps out
+    // Where the leg has a tunnel or a village: scenery keeps out
     this.setPieces = Terrain.setPieces(this.terrain);
 
     this.roadWidth = this.config.roadWidth;
@@ -108,7 +108,7 @@ class Environment {
   }
 
   // Whether a segment lies inside a set piece, widened by `margin` segments
-  // each side (a rock aimed just before a bridge can land on it)
+  // each side (a rock aimed just before a tunnel can land in it)
   inSetPiece(index, margin = 0) {
     return this.setPieces.some((piece) => index >= piece.from - margin && index <= piece.to + margin);
   }
@@ -1023,7 +1023,7 @@ class Environment {
 
     // Add MANY more boulders along the cliff base (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 3) {
-      // A bridge, tunnel or village has no rock face to dress
+      // A tunnel or village has no rock face to dress
       if (this.inSetPiece(i)) continue;
       const side = faceAt(i);
       if (!side.face) continue;
@@ -3730,7 +3730,7 @@ class Environment {
     // Place road posts (only in active segment range)
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
-      // (a bridge has parapets and a tunnel a lining of its own)
+      // (a tunnel has a lining of its own)
       if (index % 3 === 0 && !this.inSetPiece(index)) {
         // Every 3rd segment (60m spacing)
         // Posts on outside of curves, both sides on straights
@@ -5087,11 +5087,11 @@ class Environment {
     return mesh;
   }
 
-  // Bridge, tunnel and village: each a group named for its type, with a few
+  // Tunnel and village: each a group named for its type, with a few
   // merged meshes and no lights of its own. The ground under and beside each
   // is the matching span of the profile (see Terrain.setPieces).
   createSetPieces() {
-    const builders = { bridge: this.buildBridge, tunnel: this.buildTunnel, village: this.buildVillage };
+    const builders = { tunnel: this.buildTunnel, village: this.buildVillage };
     for (const piece of this.setPieces) {
       const mid = this.roadPath[Math.floor((piece.from + piece.to) / 2)];
       const origin = new THREE.Vector3(mid.x, mid.y, mid.z);
@@ -5101,33 +5101,6 @@ class Environment {
       builders[piece.type].call(this, piece, group, origin);
       this.scene.add(group);
     }
-  }
-
-  // A deck with parapets, and piers down to the river bed. The parapet stands
-  // at the profile's wall (0.8 m past the road edge) and is 1.1 m high.
-  buildBridge(piece, group, origin) {
-    const halfRoad = this.roadWidth / 2;
-    const deck = [];
-    const piers = [];
-    for (let i = piece.from; i <= piece.to; i++) {
-      const point = this.roadPath[i];
-      // The boxes are level and the road is not: they stand 0.4 under it and the
-      // parapet starts that far under it too, so no joint shows through
-      deck.push({ geometry: this.pieceBox(point, 0, -1.6, this.roadWidth + 2.4, 1.2, 20.4, origin), color: [0x4b4944, 0x77726a] });
-      for (const sign of [-1, 1]) {
-        deck.push({ geometry: this.pieceBox(point, sign * (halfRoad + 0.8), -0.4, 0.4, 1.5, 20.4, origin), color: [0x7d7870, 0x9c968c] });
-      }
-      // A pair of piers every third segment, standing on the river bed
-      if ((i - piece.from) % 3 === 0) {
-        const depth = 62;
-        for (const sign of [-1, 1]) {
-          piers.push({ geometry: this.pieceBox(point, sign * (halfRoad - 2.5), -1.6 - depth, 2.2, depth, 2.2, origin), color: [0x2e2c2a, 0x5d5953] });
-        }
-      }
-    }
-    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: true });
-    this.addPieceMesh(group, this.mergeColoredGeometries(deck), material, origin);
-    this.addPieceMesh(group, this.mergeColoredGeometries(piers), material, origin);
   }
 
   // A roof over the road: an elliptical lining (inside faces), the hill over

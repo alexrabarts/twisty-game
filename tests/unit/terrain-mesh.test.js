@@ -270,10 +270,10 @@ describe('span blend: the ground model blends rows at a span edge as the ribbon 
         game = loadGame();
     });
 
-    // The tunnel on leg 7 (segments 514 to 521) and the bridge on leg 4 (285 to 292)
+    // The tunnel on leg 7 (segments 514 to 521) and the second gorge tunnel on leg 4 (286 to 293)
     test.each([
         [6, 'night-ride tunnel', [512, 513, 514, 520, 521, 522], 8],
-        [3, 'foggy-gorge bridge', [284, 285, 292, 293], 10]
+        [3, 'foggy-gorge tunnel', [285, 286, 293, 294], 10]
     ])('leg %i (%s): ray and groundYAt agree at the edges, columns 0 to 0.75', (legIndex, name, segments, halfRoad) => {
         const { env, scene } = buildEnvironment(game, legIndex);
         const ribbons = ribbonMeshes(env);
