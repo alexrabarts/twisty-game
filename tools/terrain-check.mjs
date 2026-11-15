@@ -442,6 +442,8 @@ function installProbe(d6Sources, latSet) {
         twistyDev.start(leg.id);
         twistyDev.freeze();
         game.rockfalls = null;
+        // An approach proves the gate fires on a lateral; a collision with a rival bike says nothing about the gate
+        game.traffic = null;
         game.showFinishScreen = () => {};
         if (gate === 'finish') {
             // Ten segments short of the finish line, which sits just past endSegment
