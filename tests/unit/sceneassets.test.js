@@ -102,6 +102,57 @@ describe('foggy-gorge modelled scenery', () => {
         });
     });
 
+    // The wall's two maps before this detail were a photo's, 522082 bytes
+    test('the rock face\'s maps are no larger than the photo they replaced', () => {
+        const { map, normalMap } = game.SceneAssets.LEGS[GORGE].rockFace;
+        const total = [map, normalMap].reduce((sum, file) => sum + statSync(new URL(file, root)).size, 0);
+        expect(total).toBeLessThanOrEqual(522082);
+    });
+
+    // The shader reads the detail by a level distance and world height: u is
+    // the distance along the road's edge (one value up a column, growing from
+    // column to column), v the level distance out from that edge
+    test('the rock face carries level distances for its detail', () => {
+        const rows = game.Terrain.ROWS + 1;
+        ribbons.forEach(r => {
+            const { uv, rock, position } = r.geometry.attributes;
+            expect(rock.count).toBe(position.count);
+            let last = -1;
+            for (let column = 0; column < position.count / rows; column++) {
+                const first = column * rows;
+                if (rock.getX(first) === 0) continue;
+                expect(uv.getX(first)).toBeGreaterThan(last);
+                last = uv.getX(first);
+                expect(uv.getY(first)).toBe(0);
+                for (let j = 1; j < rows; j++) {
+                    expect(uv.getX(first + j)).toBe(last);
+                    expect(uv.getY(first + j)).toBeGreaterThanOrEqual(uv.getY(first + j - 1));
+                }
+            }
+            expect(last).toBeGreaterThan(1000);
+        });
+    });
+
+    // The detail is worked in by replacing three chunks of three's own
+    // shader; a three whose shader lacks one must fail here, not draw a plain wall
+    test('the rock face\'s shader fits three\'s standard shader', () => {
+        const { tile } = game.SceneAssets.LEGS[GORGE].rockFace;
+        ribbons.forEach(r => {
+            const lib = game.THREE.ShaderLib.standard;
+            const shader = { uniforms: {}, vertexShader: lib.vertexShader, fragmentShader: lib.fragmentShader };
+            r.material.onBeforeCompile(shader);
+            expect(shader.uniforms.rockTile.value).toBe(tile);
+            expect(shader.vertexShader).toContain('vRockAt =');
+            expect(shader.fragmentShader).toContain('rockPatches(rockUv');
+            ['#include <map_fragment>', '#include <normal_fragment_maps>'].forEach(chunk => expect(shader.fragmentShader).not.toContain(chunk));
+            expect(r.material.customProgramCacheKey()).toMatch(/^rock-face/);
+        });
+    });
+
+    test('high-pass, bound to the frozen golden, names no modelled scenery', () => {
+        expect(game.SceneAssets.LEGS[4]).toBeUndefined();
+    });
+
     test('nothing the bike or the ground model reads has moved', () => {
         expect(JSON.stringify(env.boulders)).toBe(boulders);
         ribbons.forEach((r, n) => expect(r.geometry.attributes.position.array).toEqual(ribbonPositions[n]));
