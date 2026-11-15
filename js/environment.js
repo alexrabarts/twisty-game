@@ -3423,8 +3423,6 @@ class Environment {
     const [fewest, most] = layout.perSegment;
     const halfRoad = this.roadWidth / 2;
     for (const sign of [-1, 1]) {
-      // A trunk is solid where a bike can ride: out to the rideable limit
-      const reachable = Terrain.rideableLimit(this.terrain, index, sign, halfRoad);
       const count = fewest + Math.floor(this.rand() * (most - fewest + 1));
       for (let t = 0; t < count; t++) {
         const band = this.rand();
@@ -3442,6 +3440,9 @@ class Environment {
           Math.max(0, index - 6), Math.min(this.roadPath.length - 1, index + 6), {},
         );
         const standing = Math.abs(found.lateral);
+        // A trunk is solid where a bike can ride: out to the rideable limit
+        // beside that segment (a valley's run-off narrows along the road)
+        const reachable = Terrain.rideableLimit(this.terrain, found.index, sign, halfRoad);
         const groundY = this.groundYAt(x, z);
         plant(x, z, groundY, lateral);
         if (standing <= reachable) {
