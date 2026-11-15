@@ -2,15 +2,16 @@
 // Browser proof harness for the terrain work. Serves the repo on an ephemeral
 // port, drives the real page in Chrome and prints one JSON document.
 //
-//   node tools/terrain-check.mjs <probe>[,<probe>] [--legs id,id] [--chrome <path>] [--gpu]
+//   node tools/terrain-check.mjs <probe>[,<probe>] [--legs id,id] [--chrome <path>] [--gpu] [--no-assets]
 //   node tools/terrain-check.mjs record-frozen          (phase 0a only: writes tests/golden/browser-baseline.json)
 //   node tools/terrain-check.mjs record-jest            (phase 0a only: writes tests/golden/terrain-baseline.json)
 //   node tools/terrain-check.mjs <probe> --add parts,surface   (writes tests/golden/parts-baseline.json)
 //   node tools/terrain-check.mjs <probe> --update-baseline --legs id [--part ground,decals]
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
-// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate
+// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime mutate
 // (`shortcuts` runs its own doubled-back control)
+// --no-assets keeps every leg's procedural dressing (js/sceneassets.js loads nothing), for a before/after measure.
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
 // Exit: 0 ok, 1 failures, 2 no Chrome or no window.game, 3 --gpu without a hardware renderer.
 //
@@ -37,8 +38,10 @@ const FROZEN_SECTIONS = ['snapshot', 'raycast', 'frames', 'traj', 'gates', 'look
 const BLOCKED_HOSTS = ['cloudfunctions.net', 'firebasedatabase.app', 'firebaseio.com'];
 // The plan's bound on environment.boulders[] entries the bike can hit, per leg
 const SOLID_BOULDER_BUDGET = 1500;
+// Per leg, counted as the budget probe counts them, with any modelled scenery (js/sceneassets.js) in place
+const LEG_BUDGET = { meshes: 800, triangles: 450000, instances: 1400 };
 const LATERALS = [-80, -40, -20, -12, 0, 12, 20, 40, 80];
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.webp': 'image/webp', '.glb': 'model/gltf-binary' };
 
 // ---------------------------------------------------------------- CLI
 const argv = process.argv.slice(2);
@@ -98,7 +101,7 @@ function startServer() {
     return new Promise(done => server.listen(0, '127.0.0.1', () => done(server)));
 }
 
-const state = { blocked: [], notFound: [], pageErrors: [], lastError: '' };
+const state = { blocked: [], notFound: [], pageErrors: [], lastError: '', injected: false };
 
 async function openPage(browser, port, url = '/') {
     const page = await browser.newPage();
@@ -150,6 +153,13 @@ async function openGame(browser, port) {
         // frame depend on how many pages ran beside it
         await page.evaluate(() => { window.game.adaptResolution = () => {}; });
         await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+        // The modelled scenery's loader, until index.html loads it itself
+        if (flag('no-assets')) {
+            await page.evaluate(() => { if (typeof SceneAssets !== 'undefined') SceneAssets.dress = () => null; });
+        } else if (await page.evaluate(() => typeof SceneAssets === 'undefined')) {
+            await page.addScriptTag({ url: '/js/sceneassets.js' });
+            state.injected = true;
+        }
         await page.evaluate(installProbe, D6_CLASSES.map(r => r.source), LATERALS);
         return page;
     }
@@ -262,8 +272,11 @@ function installProbe(d6Sources, latSet) {
         return rows;
     };
 
-    P.snapshot = async legIndex => {
+    // `dressed`: wait for the leg's modelled scenery (js/sceneassets.js) to replace its procedural dressing first
+    P.snapshot = async (legIndex, dressed = false) => {
         const { env, scene, marks, buildMs } = P.build(legIndex);
+        const assets = dressed && env.dressing ? await env.dressing : null;
+        if (assets) scene.updateMatrixWorld(true);
         const hashes = [];
         const instances = [];
         let triangles = 0;
@@ -301,6 +314,7 @@ function installProbe(d6Sources, latSet) {
             fingerprints: await P.fingerprints(env, scene),
             decalCounts: P.decals(env).map(list => list.length),
             counts: { meshes: hashes.length, triangles: Math.round(triangles), instances: instanceCount, grounded: env.groundedObjects.length, d6: env.groundedObjects.filter(g => d6.some(r => r.test(g.label))).length },
+            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
             buildMs: round(buildMs, 1)
         };
     };
@@ -589,6 +603,41 @@ function installProbe(d6Sources, latSet) {
         return out;
     };
 
+    // Milliseconds to render one frame (scene, post and a 1-pixel read-back
+    // that waits for the GPU), at five points along the leg from the chase
+    // view, after the leg's modelled scenery has loaded. The median of `count`
+    // frames per point, and of all of them.
+    P.frametime = async (legIndex, count = 15) => {
+        const leg = game.tourSystem.legs[legIndex];
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        game.traffic = null;
+        const assets = game.environment.dressing ? await game.environment.dressing : null;
+        game.directionalLight.intensity = game.baseSunIntensity !== undefined ? game.baseSunIntensity : 0.8;
+        const gl = game.graphics.renderer.getContext();
+        const pixel = new Uint8Array(4);
+        const frame = () => {
+            const t0 = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return performance.now() - t0;
+        };
+        const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+        const all = [];
+        const points = [0.1, 0.3, 0.5, 0.7, 0.9].map(f => {
+            const segment = Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment));
+            twistyDev.teleport(segment);
+            twistyDev.view(0, 3, 12, 40);
+            for (let i = 0; i < 3; i++) frame();
+            const times = Array.from({ length: count }, frame);
+            all.push(...times);
+            return { segment, ms: round(median(times), 10) };
+        });
+        return { ms: round(median(all), 10), points, dressed: !!assets };
+    };
+
     // Mean RGB per tile of the main canvas, from fixed poses
     P.frames = legIndex => {
         const leg = game.tourSystem.legs[legIndex];
@@ -750,10 +799,11 @@ const PROBES = {
         return last;
     },
     async budget(page, i) {
-        const snap = await inPage(page, 'snapshot', i);
+        const snap = await inPage(page, 'snapshot', i, true);
         // Solid boulders are collision work on every tick, so they count against the budget with the meshes
-        return { ...snap.counts, solidBoulders: snap.boulders.filter(b => b[4] === true).length, buildMs: snap.buildMs };
+        return { ...snap.counts, solidBoulders: snap.boulders.filter(b => b[4] === true).length, ...(snap.assets && { assets: snap.assets }), buildMs: snap.buildMs };
     },
+    frametime: (page, i) => inPage(page, 'frametime', i),
     async mutate(page, i) {
         const clean = (await inPage(page, 'snapshot', i)).fingerprints;
         const moved = await inPage(page, 'mutate', i, 0.5);
@@ -906,6 +956,7 @@ async function main() {
     } finally {
         server.close();
     }
+    if (state.injected) report.notes.push('js/sceneassets.js was injected: index.html does not load it');
     report.failures.length && (exit = exit || 1);
     console.log(JSON.stringify(report, null, 1));
     process.exit(exit);
@@ -970,6 +1021,9 @@ function finishChecks(report) {
     if (results.budget) {
         Object.entries(results.budget).forEach(([id, r]) => {
             if (!(r.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.solidBoulders} solid boulders, over the budget of ${SOLID_BOULDER_BUDGET} per leg`);
+            Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${id}: ${r[key]} ${key}, over the budget of ${most} per leg`); });
+            if (r.assets?.floating) failures.push(`${id}: ${r.assets.floating} modelled rocks float`);
+            ['rocks', 'portals', 'rockFace'].forEach(part => { if (r.assets?.[part]?.error) failures.push(`${id}: modelled ${part} did not load: ${r.assets[part].error}`); });
         });
     }
     if (results.mutate) {
