@@ -782,8 +782,8 @@ const same = (a, b) => JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 // per bound leg, its amended stable fingerprint and each declared field with its expected value
 function readAmendments() {
     const raw = readJson(AMENDMENTS) || {};
-    const { released, ...legs } = raw;
-    return { released: new Set(released?.legs || []), releasedReason: released?.reason || '', legs };
+    const { released, pages, ...legs } = raw;
+    return { released: new Set(released?.legs || []), releasedReason: released?.reason || '', pages: pages || {}, legs };
 }
 const amendedStable = (amend, stable) => !!stable && stable.hash === amend.stable.hash && stable.meshes === amend.stable.meshes;
 function resolvePath(value, keys) {
@@ -1027,7 +1027,14 @@ function finishChecks(report) {
         });
         failures.push(...diffAgainst(frozen, comparable, 'frozen'));
         // Pages deleted since the baseline are gone; every page still there must read as it did
+        // A page the plan changes on purpose (debug.html loads js/terrain.js from phase 1) is bound to its declared record
         Object.entries(results.pages || {}).forEach(([name, page]) => {
+            const declared = amendments.pages[name];
+            if (declared) {
+                if (!same(declared.record, page)) failures.push(`pages ${name} is not its declared record (amendments.json)`);
+                else notes.push(`pages ${name} equals its declared record (amendments.json): ${declared.reason}`);
+                return;
+            }
             if (!same(frozen.pages?.[name], page)) failures.push(`pages ${name} differs from the frozen baseline`);
         });
     }

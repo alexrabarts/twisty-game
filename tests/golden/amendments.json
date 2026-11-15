@@ -11,6 +11,16 @@
   ],
   "reason": "A new course with a new board (trackVersion 2): the golden no longer describes it. Mountain-dawn was released in the follow-up that made it the open valley; high-pass is the one leg still bound."
  },
+ "pages": {
+  "debug.html": {
+   "record": {
+    "pageErrors": [],
+    "definesEnvironment": true,
+    "definesTerrain": true
+   },
+   "reason": "Plan section 3 step 3: a kept page that builds Environment loads js/terrain.js from phase 1 (7df6802), so Terrain is defined; the golden recorded it undefined."
+  }
+ },
  "high-pass": {
   "stable": {
    "hash": "fc237664af8c93f2",
