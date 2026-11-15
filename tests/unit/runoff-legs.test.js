@@ -21,7 +21,7 @@ const CLIFF = 1;
 // 1, 2 and 4 changed again under version 2 on this branch: no version 2 board
 // had shipped to players yet.)
 const COURSE_DIGESTS = [
-    'c5bbfd9ceb5c34d0', '5b41d6a35ad33203', '1d8e018d4b1500c6', '88826e1280e63dbc',
+    'c5bbfd9ceb5c34d0', '5b41d6a35ad33203', '1d8e018d4b1500c6', 'dec5762639099e6c',
     'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', 'cdd0b1b28f83f268'
 ];
 

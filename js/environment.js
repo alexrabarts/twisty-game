@@ -877,7 +877,7 @@ class Environment {
           const greyBase = 0.6 + this.rand() * 0.25; // 0.6 to 0.85
 
           const columnSide = Terrain.sideAt(this.terrain, sign, i);
-          if (columnSide.face === null) {
+          if (columnSide.face === null && !columnSide.rock) {
             // Patchy ground: one seeded tint per vertex, from the same draw as rock grey
             const tint = 0.85 + ((greyBase - 0.6) / 0.25) * 0.3;
             const grass = groundColor(columnSide);

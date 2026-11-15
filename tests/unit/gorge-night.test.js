@@ -184,9 +184,22 @@ describe('canyon and night forest profiles (pure)', () => {
         sides.forEach(side => expect(Terrain.outermost(side, ctxFor(halfRoad, 30, 7))).toBeLessThanOrEqual(limit));
     });
 
-    test('every side of a set piece ends in ground that rises well above the road, so no ribbon stops against the haze', () => {
-        [tunnel, village, gorgeTunnel, secondTunnel].forEach(span => {
+    test('every side of a set piece ends where no ribbon stops against the haze: well above the road, or under the water', () => {
+        [tunnel, village].forEach(span => {
             [span.left, span.right].forEach(side => expect(side.stations[side.stations.length - 1][1]).toBeGreaterThanOrEqual(30));
+        });
+        // The gorge's tunnel spurs climb beside the walls, then run down into the lake: they end
+        // below the water at every road height of the leg (the lowest road is 32.5 - (-28) = 60.5 over it)
+        const legs = new game.TourSystem().legs;
+        const { startSegment, endSegment } = legs[GORGE];
+        let highest = -Infinity;
+        for (let i = startSegment; i <= endSegment + 20; i++) highest = Math.max(highest, Terrain.elevation(canyon, i, startSegment, endSegment));
+        [gorgeTunnel, secondTunnel].forEach(span => {
+            [span.left, span.right].forEach(side => {
+                expect(side.rock).toBe(true);
+                expect(Math.max(...side.stations.map(([, y]) => y))).toBeGreaterThanOrEqual(30);
+                expect(highest + side.stations[side.stations.length - 1][1]).toBeLessThan(canyon.floor.y);
+            });
         });
     });
 

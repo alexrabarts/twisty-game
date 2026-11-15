@@ -149,7 +149,7 @@ const Terrain = (() => {
   // linearly, plus an optional rolling undulation along the road that fades
   // in over `ramp` metres. The ribbon rows sit on the stations, so the drawn
   // ground and the `base` model the physics reads agree to rounding.
-  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1, tint, fallDepth, lipDepth }) {
+  function heightfieldSide({ stations, bands, runoff, undulation = null, shade = 1, tint, rock = false, fallDepth, lipDepth }) {
     const last = bands[bands.length - 1];
     if (last.to !== undefined || (last.kind !== 'wall' && last.kind !== 'fall')) {
       throw new Error('A side must end in an unbounded wall or fall band so its rideable limit is finite');
@@ -181,6 +181,8 @@ const Terrain = (() => {
       shade,
       // Ground colour where it is not the leg's grass (sand, snow)
       ...(tint !== undefined && { tint }),
+      // Drawn as bare rock (colour and texture), though it has no face to dress
+      ...(rock && { rock }),
       // Where a fall off this side ends when the floor is no water: this far below the road
       ...(fallDepth !== undefined && { fallDepth }),
       ...(lipDepth !== undefined && { lipDepth }),
@@ -348,14 +350,17 @@ const Terrain = (() => {
   const GORGE_CLIFFS = [{ from: 272, to: 286 }, { from: 294 }];
   const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false, drawnFoot: true });
   const gorgeDrop = () => cliffDropSide({ floorY: GORGE_LAKE_Y, faceHeight: -55, rockSpread: 25 });
-  // Rock over the tunnel: the lining at 1 m past the edge, the rock climbing to
-  // the roof's crest 2.5 m out, then on up to the height of the gorge walls.
-  // It reaches no further than 105 m: the leg's tightest bend is 266.7 m.
+  // The rock spur each tunnel cuts through: the lining at 1 m past the edge,
+  // the rock climbing to the roof's crest 2.5 m out and on up beside the walls,
+  // then falling away into the gorge's lake, so seen from a cliff road it is a
+  // ridge running down into the water, not a fin standing over it. It ends 66 m
+  // under the road, below the lake at every road height of the leg (21.5 to
+  // 32.5), and reaches no further than 110 m: the tightest bend is 266.7 m.
   const gorgeHill = () =>
     heightfieldSide({
-      stations: [[0, 0], [1, 0], [2.5, 9], [8, 12], [30, 30], [105, 57]],
+      stations: [[0, 0], [1, 0], [2.5, 9], [8, 14], [28, 40], [45, 40], [75, -12], [110, -66]],
       bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
-      tint: 0x6e6860
+      rock: true
     });
   const canyon = {
     id: 'canyon',
