@@ -623,7 +623,10 @@ const Terrain = (() => {
     { id: 'high-pass', profile: cliffLake, trackVersion: 1, roadWidth: 16,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
       dressing: { forest: { coniferShare: 0.9, snowy: false }, rockfall: 0.25, backdrop: BACKDROP } },
-    { id: 'storm-valley', profile: forest, trackVersion: 2, roadWidth: 16,
+    // grip: the road's own grip under the weather's (1 when absent). It steps
+    // down over the last three legs; with the rain and snow, storm-valley and
+    // winter-pass have the least
+    { id: 'storm-valley', profile: forest, trackVersion: 2, roadWidth: 16, grip: 0.95,
       look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
       // Dense trees both sides, none beyond 90 m; no walls, so no rockfalls
       dressing: {
@@ -632,7 +635,7 @@ const Terrain = (() => {
       },
       // The trees stand 13 m out: the camera sits in the gap above the road edge
       preview: { radius: 8, height: 5 } },
-    { id: 'night-ride', profile: forestNight, trackVersion: 2, roadWidth: 16,
+    { id: 'night-ride', profile: forestNight, trackVersion: 2, roadWidth: 16, grip: 0.9,
       look: { grassColor: 0x4a8c4a, mountainColor: 0x6a5c42, fogDensity: 0.0012 },
       // As the storm leg's forest, a little thinner; no walls, so no rockfalls
       dressing: {
@@ -640,7 +643,7 @@ const Terrain = (() => {
         rockfall: 0, backdrop: []
       },
       preview: { radius: 8, height: 5 } },
-    { id: 'winter-pass', profile: ridge, trackVersion: 2, roadWidth: 16,
+    { id: 'winter-pass', profile: ridge, trackVersion: 2, roadWidth: 16, grip: 0.85,
       look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
       // A high pass: snow-capped peaks all round (`peaks`), snow-laden conifers
       // on the slopes below the snowfield only (none within 12 m of the road

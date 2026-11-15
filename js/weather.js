@@ -12,6 +12,9 @@ class WeatherSystem {
         this.particleSystem = null;
         // The leg's lowest road height; main.js sets it at leg start
         this.baseY = 0;
+        // The road's own grip on the leg (Terrain.LEGS[i].grip), under the
+        // weather's: the tour's later legs have colder, dirtier tarmac
+        this.surfaceGrip = 1;
         this.originalFogDensity = scene.fog ? scene.fog.density : 0.0008;
         this.lightningTimer = 0;
         this.lightningInterval = 5 + Math.random() * 5; // 5-10 seconds
@@ -323,6 +326,15 @@ class WeatherSystem {
     }
 
     getPhysicsMultipliers() {
+        const weather = this.weatherPhysics();
+        return {
+            ...weather,
+            lateralFriction: weather.lateralFriction * this.surfaceGrip,
+            brakeForce: weather.brakeForce * this.surfaceGrip
+        };
+    }
+
+    weatherPhysics() {
         switch(this.weatherType) {
             case 'rain':
                 return {

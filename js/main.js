@@ -249,6 +249,7 @@ class Game {
             if (typeof WeatherSystem !== 'undefined') {
                 this.weatherSystem = new WeatherSystem(this.scene, this.camera);
                 this.weatherSystem.baseY = roadBaseY;
+                this.weatherSystem.surfaceGrip = this.environment.config.grip ?? 1;
 
                 // Apply weather from leg
                 const weatherType = leg.weather || 'clear';
