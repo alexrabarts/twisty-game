@@ -392,21 +392,24 @@ const SceneAssets = (() => {
       if (object.isMesh && object.userData.part === "ground" && object.material.map && object.material.vertexColors && object.geometry.attributes.uv) ribbons.push(object);
     });
     if (!ribbons.length || !ribbons.every((ribbon) => attached(ribbon, env))) return { ribbons: 0 };
+    const texture = (image, srgb) => {
+      const out = new THREE.Texture(image);
+      out.wrapS = out.wrapT = THREE.RepeatWrapping;
+      out.repeat.set(spec.repeat, spec.repeat);
+      out.anisotropy = 4;
+      if (srgb) out.encoding = THREE.sRGBEncoding;
+      out.needsUpdate = true;
+      return out;
+    };
+    // One upload of each map for both sides
+    const colour = texture(map, true);
+    const bumps = texture(normalMap, false);
     for (const ribbon of ribbons) {
       const material = ribbon.material;
       const old = material.map;
-      const texture = (image, srgb) => {
-        const out = new THREE.Texture(image);
-        out.wrapS = out.wrapT = THREE.RepeatWrapping;
-        out.repeat.set(spec.repeat, spec.repeat);
-        out.anisotropy = 4;
-        if (srgb) out.encoding = THREE.sRGBEncoding;
-        out.needsUpdate = true;
-        return out;
-      };
       surfaceUVs(ribbon.geometry);
-      material.map = texture(map, true);
-      material.normalMap = texture(normalMap, false);
+      material.map = colour;
+      material.normalMap = bumps;
       material.normalScale.set(1.2, -1.2);
       material.userData.modelled = "rockFace";
       material.needsUpdate = true;
