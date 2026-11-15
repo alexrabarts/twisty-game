@@ -396,24 +396,27 @@ const SceneAssets = (() => {
   // the further off the wall the plainer the pattern. The face's own vertex
   // colours (strata bands, gullies, stains) stay the look at a distance, and
   // the texture is detail on them near the camera:
-  // - it is read at (a level distance, world height), so its beds lie level
-  //   on a leaning wall and round a spur, and a slow noise lifts and drops
-  //   them a little so they are not ruled lines;
+  // - the tile holds only grain and a few fractures, read at (a level
+  //   distance, world height) so its grain lies level on a leaning wall and
+  //   round a spur;
   // - the face is cut into irregular patches by a noise that also climbs
   //   steadily along and up the wall, each patch reading the tile at its own
   //   shift, blended into the next (two reads of each map). A patch number
-  //   never comes back, so no stretch of wall is a copy of another. Shifts are
-  //   whole beds upward (BEDS), so beds run on from patch to patch;
-  // - its strength falls with distance (FADE), and slower noises vary the
-  //   stone's brightness and warmth over tens of metres and band it in beds
-  //   a few metres thick;
-  // - the same tile is read again several times larger (COARSE) and comes in
-  //   as the fine detail goes, so a far wall has broad beds and no grain;
-  // - a near-level facet (a ledge, a spur's crown) is read in plan: height
-  //   does not change across it, so the beds would smear.
-  const BEDS = 8;
-  const FADE = { from: 12, to: 150, far: 0.25 };
-  const COARSE = { scale: 0.23, strength: 0.9, from: 25, to: 140 };
+  //   never comes back, so no stretch of wall is a copy of another;
+  // - the bedding planes are not in the tile but drawn from world height
+  //   (BED), so beds are of any thickness, level everywhere, and open and
+  //   close along the wall. A tile's beds came out as even courses, and with
+  //   its joints as a built wall;
+  // - all of it is faint from the saddle and plain only close up (FADE), so
+  //   the facets and the vertex colours stay what the wall is. The same tile
+  //   is read again several times larger (COARSE) and comes in with distance;
+  // - a near-level facet (a ledge, a spur's crown) is read in plan and takes
+  //   no bedding planes: height does not change across it.
+  const FADE = { from: 5, to: 45, far: 0.2 };
+  const COARSE = { scale: 0.23, strength: 0.5, from: 25, to: 140 };
+  // Bedding planes: one may lie in each `pitch` metres of height, and about a
+  // third do, so beds run from thin ledges to massive faces several metres thick
+  const BED = { pitch: 0.9, dark: 0.4, shadow: 0.18, lift: 0.06, relief: 0.5 };
   // The share of a facet's normal that points up, from which it counts as level (26 degrees of slope)
   const LEVEL = 0.9;
   const ROCK_PARS = /* glsl */ `
@@ -422,6 +425,7 @@ const SceneAssets = (() => {
     varying vec3 vRockAt;
     varying float vRock;
     vec3 rockBump;
+    float rockLedge;
     vec2 rockUv;
 
     float rockHash(vec2 p) {
@@ -436,7 +440,7 @@ const SceneAssets = (() => {
       return mix(mix(rockHash(i), rockHash(i + vec2(1.0, 0.0)), f.x), mix(rockHash(i + vec2(0.0, 1.0)), rockHash(i + vec2(1.0, 1.0)), f.x), f.y);
     }
     vec2 rockShift(float n) {
-      return vec2(rockHash(vec2(n, 17.0)), floor(rockHash(vec2(n, 59.0)) * ${BEDS}.0) / ${BEDS}.0);
+      return vec2(rockHash(vec2(n, 17.0)), rockHash(vec2(n, 59.0)));
     }
     // Two places to read the tile for the point \`at\` (in tiles), one for the
     // patch it is in and one for the next; returns how far it is into the next
@@ -478,7 +482,7 @@ const SceneAssets = (() => {
     vec2 rockMetres = mix(vec2(mix(vUv.x, vUv.y, rockOut), vRockAt.y), vUv, rockLevel);
     float rockBroad = rockNoise(rockMetres * vec2(0.021, 0.034));
     float rockMid = rockNoise(rockMetres * vec2(0.09, 0.19) + 40.0);
-    rockUv = vec2(rockMetres.x, rockMetres.y + (rockMid - 0.5) * 1.4) / rockTile;
+    rockUv = rockMetres / rockTile;
     float rockRange = length(vViewPosition);
 
     vec2 rockA;
@@ -487,7 +491,8 @@ const SceneAssets = (() => {
     float rockDetailA = texture2D(map, rockA).r;
     float rockDetailB = texture2D(map, rockB).r;
     float rockBlend = rockMix(rockDetailA, rockDetailB, rockEdge);
-    float rockNear = mix(${FADE.far.toFixed(2)}, 1.0, 1.0 - smoothstep(${FADE.from.toFixed(1)}, ${FADE.to.toFixed(1)}, rockRange)) * vRock;
+    float rockClose = 1.0 - smoothstep(${FADE.from.toFixed(1)}, ${FADE.to.toFixed(1)}, rockRange);
+    float rockNear = mix(${FADE.far.toFixed(2)}, 1.0, rockClose) * vRock;
     // The texture's neutral grey is 0.5 (tools/blender/rockface_detail.py)
     float rockDetail = mix(1.0, mix(rockDetailA, rockDetailB, rockBlend) * 2.0, rockNear);
     rockBump = mix(vec3(0.5, 0.5, 1.0), mix(texture2D(normalMap, rockA).xyz, texture2D(normalMap, rockB).xyz, rockBlend), rockNear);
@@ -501,16 +506,36 @@ const SceneAssets = (() => {
     float rockCoarse = mix(rockCoarseC, rockCoarseD, rockMix(rockCoarseC, rockCoarseD, rockFarEdge)) * 2.0 - 1.0;
     rockDetail *= 1.0 + rockCoarse * ${COARSE.strength} * smoothstep(${COARSE.from.toFixed(1)}, ${COARSE.to.toFixed(1)}, rockRange) * vRock;
 
-    // Thick beds a few metres deep, swelling and pinching along the wall
-    float rockBed = (rockMetres.y + (rockBroad - 0.5) * 9.0 + (rockMid - 0.5) * 1.6) / 2.7;
-    float rockBand = mix(rockHash(vec2(floor(rockBed), 7.0)), rockHash(vec2(floor(rockBed) + 1.0, 7.0)), smoothstep(0.42, 0.58, fract(rockBed)));
+    // Bedding planes, from world height: the tile has none, so no two beds
+    // need be the same thickness. Each cell of height holds one plane at its
+    // own level, open along some stretches of the wall and closed along others.
+    float rockHeight = (rockMetres.y + (rockBroad - 0.5) * 2.5 + (rockMid - 0.5) * 0.6) / ${BED.pitch};
+    float rockCell = floor(rockHeight);
+    // Metres above the cell's plane
+    float rockPlane = (fract(rockHeight) - 0.15 - 0.7 * rockHash(vec2(rockCell, 3.0))) * ${BED.pitch};
+    float rockOpen = smoothstep(0.72, 0.9, rockHash(vec2(rockCell, 11.0)) * 0.55 + rockNoise(vec2(rockMetres.x * 0.045 + rockCell * 7.31, rockCell * 0.37)) * 0.75);
+    rockOpen *= (1.0 - rockLevel) * vRock * mix(0.45, 1.0, rockClose);
+    // Never thinner than a pixel, or a far wall would shimmer
+    float rockWidth = max(0.03, 1.2 * fwidth(rockMetres.y));
+    float rockCrack = 1.0 - smoothstep(0.0, rockWidth, abs(rockPlane));
+    // The bed above overhangs a little: a soft shadow under the plane
+    float rockShadow = step(rockPlane, 0.0) * (1.0 - smoothstep(0.0, 0.45, -rockPlane));
+    // and the bed above it a shade lighter at its foot
+    float rockLift = step(0.0, rockPlane) * (1.0 - smoothstep(0.0, 1.2, rockPlane));
+    rockDetail *= 1.0 - rockOpen * (${BED.dark} * rockCrack + ${BED.shadow} * rockShadow - ${BED.lift} * rockLift);
+    rockLedge = -sign(rockPlane) * rockOpen * rockClose * ${BED.relief} * (1.0 - smoothstep(0.0, 0.12, abs(rockPlane)));
+
+    // Broad bands a few metres deep, swelling and pinching along the wall
+    float rockBed = (rockMetres.y + (rockBroad - 0.5) * 3.0 + (rockMid - 0.5) * 0.8) / 3.4;
+    float rockBand = mix(rockHash(vec2(floor(rockBed), 7.0)), rockHash(vec2(floor(rockBed) + 1.0, 7.0)), smoothstep(0.3, 0.7, fract(rockBed)));
     rockBand = mix(rockBand, 0.5, rockLevel);
-    vec3 rockStone = rockTint * mix(vec3(1.05, 1.0, 0.94), vec3(0.96, 1.0, 1.05), rockBroad) * (0.82 + 0.14 * rockMid + 0.24 * rockBand);
+    vec3 rockStone = rockTint * mix(vec3(1.04, 1.0, 0.95), vec3(0.97, 1.0, 1.04), rockBroad) * (0.88 + 0.1 * rockMid + 0.14 * rockBand);
     diffuseColor.rgb *= mix(vec3(1.0), rockStone, vRock) * rockDetail;
   `;
   const ROCK_NORMAL = /* glsl */ `
     vec3 mapN = rockBump * 2.0 - 1.0;
     mapN.xy *= normalScale;
+    mapN.y += rockLedge;
     normal = rockPerturb(-vViewPosition, normal, mapN, faceDirection);
   `;
 
@@ -556,7 +581,7 @@ const SceneAssets = (() => {
       faceUVs(ribbon.geometry);
       material.map = detail;
       material.normalMap = bumps;
-      material.normalScale.set(spec.relief ?? 0.5, spec.relief ?? 0.5);
+      material.normalScale.set(spec.relief ?? 0.35, spec.relief ?? 0.35);
       material.onBeforeCompile = (shader) => rockShader(shader, spec);
       material.customProgramCacheKey = () => `rock-face-${spec.tile}-${spec.tint}`;
       material.userData.modelled = "rockFace";

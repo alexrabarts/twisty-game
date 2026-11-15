@@ -1,7 +1,8 @@
-# The rock face's detail texture: bedded, jointed rock generated from seeded
-# noise, as a grey detail map and an OpenGL normal map that tile both ways.
-# The game does not lay it as a wallpaper: js/sceneassets.js samples it at
-# shifting offsets in world space and multiplies it into the face's own vertex
+# The rock face's detail texture: the grain of a rock surface and a few
+# fractures, generated from seeded noise, as a grey detail map and an OpenGL
+# normal map that tile both ways. It holds no beds and no blocks: the game
+# draws the bedding planes from world height (js/sceneassets.js, BED), reads
+# this at shifting offsets and multiplies it into the face's own vertex
 # colours, so it carries no colour and no feature that stands out from the
 # rest (a photo's one odd block shows every time it comes round).
 #   blender --background --factory-startup --python tools/blender/rockface_detail.py
@@ -14,9 +15,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 from common import ASSETS, new_image, reset, save_webp  # noqa: E402
 
 SIZE = 1024
-# Beds to a tile, all one pitch: the game shifts the texture by whole beds, so
-# the bedding planes of two shifted patches meet (js/sceneassets.js, BEDS)
-BEDS = 8
 # The stored grey that leaves the face's colour as it is; the game divides by it
 NEUTRAL = 0.5
 # Slope of the relief in the normal map, in texels of height per texel
@@ -39,78 +37,30 @@ def smooth(edge0, edge1, x):
     return t * t * (3 - 2 * t)
 
 
-def joints(rng):
-    """Where the joints cross one bed, as fractions of the tile, and how open each is: blocks 0.12 to 0.45 of it long."""
-    out = []
-    at = rng.uniform(0, 0.15)
-    while at < 0.9:
-        out.append(at)
-        at += rng.uniform(0.12, 0.45)
-    return numpy.array(out), rng.uniform(0.25, 1.0, len(out))
+# Fracture sets as (turns, rise, wander): a line crosses the tile `turns`
+# times across and `rise` times up, whole numbers so it tiles. Two sets stand
+# near upright (the joints), two run at a slant.
+FRACTURES = ((1, 0, 0.05), (2, 1, 0.03), (-1, 2, 0.03), (1, -3, 0.02))
 
 
 def build():
     rng = numpy.random.default_rng(7)
     y, x = numpy.mgrid[0:SIZE, 0:SIZE] / SIZE
-    # Bedding planes wander slowly, so beds swell and pinch along their length
-    warp = 0.22 * noise(rng, 1, 3, stretch=0.6) + 0.035 * noise(rng, 5, 20, stretch=0.6)
-    s = y * BEDS + warp
-    bed = numpy.floor(s).astype(int) % BEDS
-    t = s - numpy.floor(s)
-
-    # A joint leans and wanders as it crosses its bed
-    along = (x + 0.006 * noise(rng, 3, 14) + (t - 0.5) * 0.1 * noise(rng, 1, 5)) % 1.0
-    block = numpy.zeros((SIZE, SIZE), dtype=int)
-    gap = numpy.ones((SIZE, SIZE))
-    width = numpy.ones((SIZE, SIZE))
-    across = numpy.zeros((SIZE, SIZE))
-    count = 0
-    for b in range(BEDS):
-        cuts, opening = joints(rng)
-        inside = bed == b
-        index = (numpy.searchsorted(cuts, along[inside], side="right") - 1) % len(cuts)
-        near = numpy.abs(along[inside][:, None] - cuts[None, :])
-        near = numpy.minimum(near, 1 - near)
-        block[inside] = count + index
-        gap[inside] = near.min(axis=1)
-        width[inside] = opening[near.argmin(axis=1)]
-        # Position across the block, -0.5 to 0.5, for its tilt
-        length = numpy.diff(numpy.append(cuts, cuts[0] + 1))[index]
-        across[inside] = ((along[inside] - cuts[index]) % 1.0) / length - 0.5
-        count += len(cuts)
-
-    # Each block is a flat facet: how far it stands out, which way it tilts, its shade
-    proud = 0.75 + rng.uniform(-0.25, 0.25, count)[block]
-    tilt = rng.uniform(-0.3, 0.3, count)[block] * across + rng.uniform(-0.25, 0.25, count)[block] * (t - 0.5)
-    shade = rng.uniform(-1, 1, count)[block]
-    # A bedding plane opens and closes along its length: a ledge here, a hairline there
-    # (closed for a stretch, two beds read as one thick one)
-    parting = smooth(-0.25, 0.35, noise(rng, 1, 6, stretch=0.35))
-    # Fractures that cut across the beds at a slant, each open for part of its
-    # length. Whole numbers of turns a tile, so they tile.
+    # Each fracture is open for about a third of its length and wanders, so
+    # the joints are few, broken and never a grid
     fracture = numpy.ones((SIZE, SIZE))
-    for turns, rise in ((1, 2), (-1, 3), (2, -3)):
-        offset = rng.uniform()
-        line = numpy.abs((x * turns + y * rise + offset + 0.02 * noise(rng, 2, 10)) % 1.0 - 0.5) / numpy.hypot(turns, rise)
-        fracture *= 1 - (1 - smooth(0.0, 0.003, line)) * 0.8 * smooth(0.1, 0.6, noise(rng, 1, 5))
-    # A joint is a narrow crack, a bedding plane an undercut ledge; both have hard edges
-    joint = (1 - (1 - smooth(0.0, 0.004, gap)) * width) * fracture
-    ledge = 1 - (1 - smooth(0.0, 0.05, t) * smooth(0.0, 0.1, 1 - t)) * (0.2 + 0.8 * parting)
+    for turns, rise, wander in FRACTURES:
+        line = numpy.abs((x * turns + y * rise + rng.uniform() + wander * noise(rng, 1, 6) + 0.006 * noise(rng, 8, 30)) % 1.0 - 0.5) / numpy.hypot(turns, rise)
+        fracture *= 1 - (1 - smooth(0.0, 0.0028, line)) * smooth(0.15, 0.5, noise(rng, 1, 4))
+
     rough = noise(rng, 20, 220)
-    lumps = noise(rng, 3, 12)
-    height = (proud + tilt) * (0.25 + 0.75 * ledge) * (0.4 + 0.6 * joint) + 0.04 * lumps + 0.025 * rough
+    lumps = noise(rng, 2, 10)
+    # Laminations: short level dashes, in drifts
+    phase = y * 40 + 0.4 * noise(rng, 2, 8, stretch=0.4)
+    lines = smooth(0.92, 1.0, numpy.sin(phase * 2 * numpy.pi)) * smooth(0.15, 0.5, noise(rng, 4, 24, stretch=0.2)) * smooth(-0.2, 0.4, noise(rng, 1, 3))
+    height = 0.5 + 0.12 * lumps + 0.06 * rough - 0.05 * lines - 0.5 * (1 - fracture)
 
-    # Laminations inside a bed: short level dashes
-    phase = s * 5 + 0.25 * noise(rng, 2, 8, stretch=0.4)
-    lines = smooth(0.9, 1.0, numpy.sin(phase * 2 * numpy.pi)) * smooth(0.1, 0.45, noise(rng, 4, 24, stretch=0.2))
-    height -= 0.05 * lines
-
-    # Grey detail: the cracks and the undersides dark, the top edge of a ledge
-    # a little light, each block a little off its neighbours
-    under = 1 - smooth(0.0, 0.045, t)
-    rim = smooth(0.82, 0.93, t) * (1 - smooth(0.95, 1.0, t))
-    crack = (1 - joint) * 0.6 + (under * 0.6 - rim * 0.06) * (0.2 + 0.8 * parting)
-    detail = 1 + 0.1 * shade + 0.05 * lumps + 0.05 * rough - 0.2 * lines - numpy.clip(crack, -0.2, 0.75)
+    detail = 1 + 0.1 * lumps + 0.09 * rough - 0.16 * lines - 0.45 * (1 - fracture)
     detail = numpy.clip(detail, 0.2, 1.6)
     detail *= 1 / detail.mean()
 
