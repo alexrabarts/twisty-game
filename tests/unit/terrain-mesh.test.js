@@ -208,16 +208,32 @@ describe('raycast: the drawn wall and the ground the physics reads', () => {
         [3, 'foggy-gorge', 270, -20],
         [4, 'high-pass', 402, -34]
     ])('leg %i (%s) seg %i, lateral %i: the highest fold of the wall, at every column', (legIndex, name, segment, lateral) => {
+        expectFoldMatches(legIndex, segment, lateral, [0, 0.25, 0.5, 0.75]);
+    }, 60000);
+
+    // Coastal-descent seg 186 is a tight bend. Between two centre-line points `locate` measures the
+    // lateral from the nearest point's heading, not the column's, so it is off by up to a metre there
+    // and the fold read at fractions above 0 is the neighbouring one. Re-measuring against the column
+    // line fixes that but moves the leg 1 stable fingerprint the plan binds (P13b), so it waits for a
+    // plan ruling. At the centre-line point itself the lateral is exact and the bound holds.
+    test('leg 3 (coastal-descent) seg 186, lateral -20: the highest fold of the wall, at the centre-line point', () => {
+        expectFoldMatches(2, 186, -20, [0]);
+    }, 60000);
+
+    function expectFoldMatches(legIndex, segment, lateral, fractions) {
         const { env, scene } = buildEnvironment(game, legIndex);
         const ribbons = ribbonMeshes(env);
         ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
         scene.updateMatrixWorld(true);
-        [0, 0.25, 0.5, 0.75].forEach(fraction => {
-            const { hit, ground } = across(game, env, ribbons, segment, fraction, lateral);
+        // A fold sits exactly on these laterals. A lateral rebuilt from the heading is only good to about 1e-13,
+        // and a ray lands on either side of a fold within that, so the ray is cast 0.01 m outside it
+        const outside = lateral + Math.sign(lateral) * 0.01;
+        fractions.forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, segment, fraction, outside);
             expect(hit).not.toBeNull();
             expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
         });
-    }, 60000);
+    }
 });
 
 function across(game, env, ribbons, segment, fraction, lateral) {

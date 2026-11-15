@@ -1,7 +1,39 @@
 {
  "high-pass": {
-  "stable": { "hash": "fc237664af8c93f2", "meshes": 421 },
-  "goldenStable": { "hash": "281d816232444384", "meshes": 529 },
-  "reason": "Leg 5 stable fingerprint with the 108 hairpin stripe meshes (BoxGeometry 0.5 x 1.2 x 0.51) left out. They were loose scene meshes in the frozen golden and are children of their barrier now. Captured by running the snapshot probe from the e44721d tree (the 6c525be game sources, the frozen golden's own) with the same exclusion."
+  "stable": {
+   "hash": "fc237664af8c93f2",
+   "meshes": 421
+  },
+  "goldenStable": {
+   "hash": "281d816232444384",
+   "meshes": 529
+  },
+  "reason": "Leg 5 stable fingerprint with the 108 hairpin stripe meshes (BoxGeometry 0.5 x 1.2 x 0.51) left out. They were loose scene meshes in the frozen golden and are children of their barrier now. Captured by running the snapshot probe from the e44721d tree (the 6c525be game sources, the frozen golden's own) with the same exclusion.",
+  "jestStable": {
+   "hash": "2163990f1a78dc2e",
+   "meshes": 421
+  },
+  "movedFields": {
+   "fields": [
+    "groundGrid",
+    "counts",
+    "fingerprints.full",
+    "fingerprints.noDecal",
+    "hashes"
+   ],
+   "reason": "D6 changes groundGrid and the grounded and d6 counts; the stripe children (U8) and the U3 plant change meshes, triangles and the hashes list. Declared in the plan (U8, U12). Bound instead: stable (amended), randState, instances, boulders, decalCounts."
+  }
+ },
+ "mountain-dawn": {
+  "movedFields": {
+   "fields": [
+    "groundGrid",
+    "counts",
+    "fingerprints.full",
+    "fingerprints.noDecal",
+    "hashes"
+   ],
+   "reason": "U12: D6 groundGrid change and the U3 delta (14 fewer meshes, 3 fewer grounded, d6 68 -> 65). Bound instead: stable equal to the golden, randState, instances, boulders, decalCounts."
+  }
  }
 }

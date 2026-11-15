@@ -48,6 +48,8 @@ const option = name => {
 const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : undefined;
 const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
+// The run-off probe pins valley-run's timings and lateral 14, which is a wall or a drop on other legs
+const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['valley-run'] : legIds);
 const jobs = Number(option('jobs') || 3);
 
 const fail = (code, message) => {
@@ -862,7 +864,7 @@ async function main() {
                 if (name === 'pages') {
                     report.results.pages = await withBrowser(browser => pagesProbe(browser, port));
                 } else if (PROBES[name]) {
-                    report.results[name] = await withBrowser(browser => runPool(browser, port, legIds, (page, i, id) => PROBES[name](page, i, id)));
+                    report.results[name] = await withBrowser(browser => runPool(browser, port, probeLegIds(name), (page, i, id) => PROBES[name](page, i, id)));
                 } else {
                     report.failures.push(`unknown probe ${name}`);
                 }
@@ -907,7 +909,7 @@ function finishChecks(report) {
         const amendments = readJson(AMENDMENTS) || {};
         Object.entries(results.snapshot).forEach(([id, r]) => {
             const amended = amendments[id];
-            if (!amended) return;
+            if (!amended?.stable) return;
             const stable = r.fingerprints.stable;
             if (stable.hash === amended.stable.hash && stable.meshes === amended.stable.meshes) {
                 notes.push(`${id}: stable ${stable.hash}/${stable.meshes} equals the golden ${amended.goldenStable.hash}/${amended.goldenStable.meshes} less the declared meshes (amendments.json)`);
@@ -959,6 +961,25 @@ function finishChecks(report) {
     if (probes.includes('record-frozen') || flag('update-baseline') || flag('add')) writeBaselines(report, fresh, frozen);
     else if (frozen) {
         const comparable = Object.fromEntries(Object.entries(fresh).map(([id, sections]) => [id, Object.fromEntries(Object.entries(sections).filter(([s]) => FROZEN_SECTIONS.includes(s)))]));
+        // A leg with declared deltas (U8, U12; tests/golden/amendments.json) is compared with the golden's value swapped in
+        // for the stable fingerprint it amends and for each field declared moved. Everything else must still be equal.
+        const amendments = readJson(AMENDMENTS) || {};
+        Object.entries(comparable).forEach(([id, sections]) => {
+            const base = frozen[id]?.snapshot;
+            const amend = amendments[id];
+            if (!sections.snapshot || !base || !amend) return;
+            const snap = structuredClone(sections.snapshot);
+            const stable = snap.fingerprints?.stable;
+            if (amend.stable && stable.hash === amend.stable.hash && stable.meshes === amend.stable.meshes) snap.fingerprints.stable = base.fingerprints.stable;
+            (amend.movedFields?.fields || []).forEach(path => {
+                const keys = path.split('.');
+                const last = keys.pop();
+                const from = keys.reduce((o, k) => o?.[k], base);
+                const into = keys.reduce((o, k) => o?.[k], snap);
+                if (from && into) into[last] = from[last];
+            });
+            sections.snapshot = snap;
+        });
         failures.push(...diffAgainst(frozen, comparable, 'frozen'));
         // Pages deleted since the baseline are gone; every page still there must read as it did
         Object.entries(results.pages || {}).forEach(([name, page]) => {

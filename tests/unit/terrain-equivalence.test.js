@@ -10,8 +10,8 @@ import { D6_CLASSES, LATERALS, buildEnvironment, captureLeg, fingerprints, groun
 const golden = JSON.parse(readFileSync(new URL('../golden/terrain-baseline.json', import.meta.url), 'utf8'));
 const LEG_IDS = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'];
 
-// The golden leg 5 stable fingerprint without its 108 hairpin stripe meshes
-const AMENDED_LEG5_STABLE = { hash: '2163990f1a78dc2e', meshes: 421 };
+// The golden leg 5 stable fingerprint without its 108 hairpin stripe meshes: one registry, shared with the browser probe
+const AMENDED_LEG5_STABLE = JSON.parse(readFileSync(new URL('../golden/amendments.json', import.meta.url), 'utf8'))['high-pass'].jestStable;
 
 describe('terrain equivalence with the phase 0 golden', () => {
     let game;

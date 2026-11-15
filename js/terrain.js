@@ -17,7 +17,8 @@ const Terrain = (() => {
   // The least distance past the road edge a wall's ribbon vertex can have
   const WALL_FOOT = 1.4;
   // Rounding slack when a distance is tested against a fold of a wall's rows
-  const FOLD_EPSILON = 1e-6;
+  // Terrain.locate returns a lateral good to about 1e-3, so a point on a row's own distance is only known to that
+  const FOLD_EPSILON = 1e-3;
 
   // Layered, quantised sine displacement of a ribbon vertex. A pure function
   // of the grid position so the physics walk can reproduce the mesh.
