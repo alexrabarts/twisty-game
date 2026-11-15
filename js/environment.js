@@ -10,9 +10,17 @@ const SHEER_NORMAL_Y = Math.cos((55 * Math.PI) / 180);
 // of a rock resting on gentle ground (a rock on a bench smaller than itself
 // overhangs it); no rock's lowest point more than this many metres over the
 // ground under it
-const ROCK_AIR = 0.25;
+const ROCK_AIR = 0.15;
 const ROCK_PERCH = 0.6;
 const ROCK_HANG = 0.3;
+// A rock in a face is no wider than this from its centre (metres): one
+// boulder metres across read as stuck to the wall however deep it sat
+const FACE_ROCK_REACH = 1.6;
+// How far a rock in a face is sunk along the face normal, as a share of its
+// thickness: at 35 degrees and from 55. The cap left out of the face is the
+// rest, so a third of the thickness at most.
+const FACE_SINK = 0.68;
+const SHEER_SINK = 0.88;
 // Points evenly through a unit ball (a grid of fifths), to measure that share
 const ROCK_SAMPLES = (() => {
   const points = [];
@@ -173,8 +181,8 @@ class Environment {
   // or sunk `buried` of its thickness more (an outcrop is a cap).
   // A steep face: the rock is turned so its own y axis (its thinnest) is the
   // face normal, spun about it by the first angle, and sunk along the normal
-  // by half its thickness or more, so a cap stands out of the face and the
-  // face holds the rest. A rock centred on a steep face had half its bulk out in the air,
+  // by two thirds of its thickness or more, so a low cap stands out of the
+  // face and the face holds the rest. A rock centred on a steep face had half its bulk out in the air,
   // and on a wall that reads as a boulder stuck to the rock.
   //
   // The drawn face is faceted and folds, so a seat is then checked against
@@ -185,7 +193,11 @@ class Environment {
   // leaves it out.
   //
   // High-pass keeps its old placement: the frozen golden recorded every one.
-  seatRock(object, x, z, radius, turn, offset = null, buried = 0) {
+  //
+  // `face` says the rock stands in a rock face whatever the ground under it:
+  // a bench up a wall holds a rock as the wall does, sunk in and cut down,
+  // since a boulder resting on a bench of a wall still reads as stuck to it.
+  seatRock(object, x, z, radius, turn, offset = null, buried = 0, face = false) {
     if (this.terrain.columnWalk) {
       object.position.set(x, this.groundYAt(x, z), z);
       object.rotation.set(turn[0], turn[1], turn[2]);
@@ -194,7 +206,7 @@ class Environment {
     }
     const surface = this.surfaceAt(x, z);
     const normal = new THREE.Vector3(surface.nx, surface.ny, surface.nz);
-    const steep = surface.ny < GENTLE_NORMAL_Y;
+    const steep = face || surface.ny < GENTLE_NORMAL_Y;
     if (steep) {
       object.quaternion
         .setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal)
@@ -202,19 +214,26 @@ class Environment {
     } else {
       object.rotation.set(turn[0], turn[1], turn[2]);
     }
+    // A rock in a face is cut down to FACE_ROCK_REACH: the wall is made of
+    // facets a few metres across, and a boulder wider than they are covers
+    // them instead of standing out of them
+    if (steep) {
+      const reach = radius * Math.max(object.scale.x, object.scale.z);
+      if (reach > FACE_ROCK_REACH) object.scale.multiplyScalar(FACE_ROCK_REACH / reach);
+    }
     const thickness = radius * object.scale.y;
-    // The steeper the face, the less of the rock stands out of it: under
-    // half its thickness at 35 degrees, a low boss from 55. A boulder
+    // The steeper the face, the less of the rock stands out of it: a third
+    // of its thickness at 35 degrees, a low boss from 55. A boulder
     // standing half out of a near-vertical wall still reads as stuck to it.
-    const steepness = Math.min(1, (GENTLE_NORMAL_Y - surface.ny) / (GENTLE_NORMAL_Y - SHEER_NORMAL_Y));
-    const sunk = Math.max(buried, 0.55 + 0.3 * steepness);
+    const steepness = Math.min(1, Math.max(0, (GENTLE_NORMAL_Y - surface.ny) / (GENTLE_NORMAL_Y - SHEER_NORMAL_Y)));
+    const sunk = Math.max(buried, FACE_SINK + (SHEER_SINK - FACE_SINK) * steepness);
     for (const sink of steep ? [sunk, (sunk + 1) / 2] : [buried, buried + 0.5]) {
       object.position.set(x, surface.y, z).addScaledVector(normal, -sink * thickness);
       object.updateMatrix();
       if (this.rockHeld(object.matrix, object.geometry, radius, steep)) {
         if (offset) object.position.sub(offset);
         // The ground it was seated on, for a model put in its place
-        object.userData.seat = { nx: surface.nx, ny: surface.ny, nz: surface.nz };
+        object.userData.seat = { y: surface.y, nx: surface.nx, ny: surface.ny, nz: surface.nz, face: steep };
         return true;
       }
     }
@@ -279,17 +298,24 @@ class Environment {
     if (this.terrain.columnWalk) return matrix;
     const at = new THREE.Vector3().setFromMatrixPosition(matrix);
     const surface = seat || this.surfaceAt(at.x, at.z);
-    const steep = surface.ny < GENTLE_NORMAL_Y;
+    const steep = surface.face ?? surface.ny < GENTLE_NORMAL_Y;
     const thickness = new THREE.Vector3().setFromMatrixColumn(matrix, 1).length();
     const moved = matrix.clone();
     // Deeper until the ground holds it; then, where the model is slighter
     // than the rock it stands in for and none of it shows, back out. A rock
     // the ground holds nowhere, or that shows nowhere it is held, is left out.
-    for (const sink of [0, 0.25, 0.5, 0.75, 1, -0.2, -0.4, -0.6]) {
+    const held = (sink) => {
       moved.setPosition(at.x - surface.nx * sink * thickness, at.y - surface.ny * sink * thickness, at.z - surface.nz * sink * thickness);
-      if (!this.rockHeld(moved, geometry, 1, steep)) continue;
+      return this.rockHeld(moved, geometry, 1, steep);
+    };
+    for (const sink of [0, 0.25, 0.5, 0.75, 1]) {
+      if (!held(sink)) continue;
       if (this.rockShows(moved, geometry)) return moved;
-      if (sink > 0) break;
+      // Held but hidden: deeper hides it too, so it is backed out
+      break;
+    }
+    for (const sink of [-0.15, -0.3, -0.45, -0.6]) {
+      if (held(sink) && this.rockShows(moved, geometry)) return moved;
     }
     return null;
   }
@@ -755,6 +781,9 @@ class Environment {
         // boulders stuck to the face. Its draws are taken either way, so
         // the rest of the leg is unchanged.
         const placed = this.gentleAt(cliffX, cliffZ, GENTLE_NORMAL_Y);
+        // Beside a rock face the cluster stands on a bench of it: its rocks
+        // are outcrops of the face, sunk in and in its colour
+        const inFace = !this.terrain.columnWalk && !!Terrain.sideAt(this.terrain, side, index).face;
         // Group center at ground = roughly half embedded
         const cliffY = this.groundYAt(cliffX, cliffZ);
 
@@ -833,7 +862,15 @@ class Environment {
         // fixed offsets left the downhill ones standing clear of a slope
         if (!this.terrain.columnWalk) {
           for (const child of [...rockGroup.children]) {
-            if (this.seatRock(child, cliffX + child.position.x, cliffZ + child.position.z, child.userData.dressing.radius, turns.get(child), rockGroup.position)) continue;
+            const x = cliffX + child.position.x;
+            const z = cliffZ + child.position.z;
+            if (this.seatRock(child, x, z, child.userData.dressing.radius, turns.get(child), rockGroup.position, 0, inFace)) {
+              if (inFace) {
+                const pick = rockMaterials.indexOf(child.material) / rockMaterials.length;
+                child.material = this.outcropLook(child, this.ribbons[side], pick, index, x, child.userData.seat.y, z);
+              }
+              continue;
+            }
             rockGroup.remove(child);
             child.geometry.dispose();
           }
@@ -861,6 +898,10 @@ class Environment {
   }
 
   createRoadWalls() {
+    // The drawn ribbon of each side (-1, 1), for the colour of its face
+    this.ribbons = {};
+    // The material of the rocks of each ribbon's face (outcropLook)
+    this.outcrops = new Map();
     // Rock materials for boulders - very dark, no green
     const rockMaterials = [
       new THREE.MeshStandardMaterial({
@@ -1022,11 +1063,13 @@ class Environment {
     const last = Math.min(this.roadPath.length - 1, this.endSegment + 20);
     for (const [sign, side] of [[-1, this.terrain.left], [1, this.terrain.right]]) {
       const group = new THREE.Group();
-      group.add(this.buildTerrainRibbon(sign, side));
+      const ribbon = this.buildTerrainRibbon(sign, side);
+      this.ribbons[sign] = ribbon;
+      group.add(ribbon);
       // Only the segments whose side is a rock face are dressed: a beach that
       // follows a sea cliff has no face to hang cracks and vines on
       const faces = Terrain.faceRange(this.terrain, sign, first, last);
-      if (faces) this.decorateRockFace(sign, group, rockMaterials, faces);
+      if (faces) this.decorateRockFace(sign, group, rockMaterials, faces, ribbon);
 
       // Everything else a face builder added to its group dresses the face
       group.children.forEach((child) => {
@@ -1275,6 +1318,66 @@ class Environment {
     return mainCliff;
   }
 
+  // A rock of a face is an outcrop of it: it carries the face's own texture
+  // and the colour the face has where the rock sits (x, y, z beside road
+  // point i). The grey and sand materials stood out of a brown wall as pale
+  // boulders stuck on it. `pick` (0 to 1) shades it a little off its face.
+  // Colours the rock's vertices and returns its material, one per ribbon.
+  outcropLook(rock, ribbon, pick, i, x, y, z) {
+    if (!this.outcrops.has(ribbon)) {
+      this.outcrops.set(ribbon, new THREE.MeshStandardMaterial({
+        map: ribbon.material.map,
+        color: 0xffffff,
+        vertexColors: true,
+        roughness: 0.92,
+        metalness: 0.0,
+        flatShading: true,
+        envMapIntensity: 0.6,
+      }));
+    }
+    const face = this.faceColor(ribbon, i, x, y, z);
+    const shade = 0.94 + pick * 0.1;
+    const count = rock.geometry.attributes.position.count;
+    const colors = new Float32Array(count * 3);
+    for (let n = 0; n < count; n++) {
+      colors[n * 3] = face.r * shade;
+      colors[n * 3 + 1] = face.g * shade;
+      colors[n * 3 + 2] = face.b * shade;
+    }
+    rock.geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    return this.outcrops.get(ribbon);
+  }
+
+  // The colour the drawn ribbon has at (x, y, z) beside road point i: its
+  // vertex colours there, the four nearest weighted by nearness. One vertex
+  // alone may be a dark water stain or a pale streak a metre wide.
+  faceColor(ribbon, i, x, y, z) {
+    const position = ribbon.geometry.attributes.position;
+    const color = ribbon.geometry.attributes.color;
+    const perSegment = Terrain.COLUMNS_PER_SEGMENT * (Terrain.ROWS + 1);
+    const first = Math.max(0, this.startSegment);
+    const from = Math.max(0, (i - first - 1) * perSegment);
+    const to = Math.min(position.count, (i - first + 2) * perSegment);
+    const nearest = [];
+    for (let n = from; n < to; n++) {
+      const gap = Math.hypot(position.getX(n) - x, position.getY(n) - y, position.getZ(n) - z);
+      if (nearest.length === 4 && gap >= nearest[3].gap) continue;
+      nearest.push({ n, gap });
+      nearest.sort((a, b) => a.gap - b.gap);
+      if (nearest.length > 4) nearest.pop();
+    }
+    const out = new THREE.Color(0, 0, 0);
+    let total = 0;
+    nearest.forEach(({ n, gap }) => {
+      const weight = 1 / (gap + 0.5);
+      out.r += color.getX(n) * weight;
+      out.g += color.getY(n) * weight;
+      out.b += color.getZ(n) * weight;
+      total += weight;
+    });
+    return out.multiplyScalar(1 / total);
+  }
+
   // World position of the point a fraction v of the way up the drawn face
   // (0 is the foot of the face, 1 the top) beside road point i. Decals are
   // placed only through this, so they sit on whatever the profile draws.
@@ -1298,9 +1401,13 @@ class Environment {
   // Rock dressing of one face: embedded rocks, road debris, cracks, seepage,
   // vines and snow. Rocks sit on the terrain model; the rest hang off the
   // face by design.
-  decorateRockFace(sign, group, rockMaterials, faces) {
+  decorateRockFace(sign, group, rockMaterials, faces, ribbon) {
     const startIdx = faces.from;
     const endIdx = faces.to;
+    const dress = (rock, pick, i, x, y, z) =>
+      this.terrain.columnWalk
+        ? rockMaterials[Math.floor(pick * rockMaterials.length)]
+        : this.outcropLook(rock, ribbon, pick, i, x, y, z);
     // The face in force at a segment: a leg can change from a wall to a drop
     // on one side (the gorge's cliff roads), and a span may have no face
     const faceAt = (i) => Terrain.sideAt(this.terrain, sign, i);
@@ -1346,10 +1453,8 @@ class Environment {
             new THREE.IcosahedronGeometry(rockSize, 3),
             rockSize * 0.3,
           );
-          const rock = new THREE.Mesh(
-            rockGeometry,
-            rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
-          );
+          const rock = new THREE.Mesh(rockGeometry);
+          const pick = this.rand();
 
           const perpX = Math.cos(point.heading) * distance * sign;
           const perpZ = -Math.sin(point.heading) * distance * sign;
@@ -1371,10 +1476,17 @@ class Environment {
           // On the drawn face at this lateral offset: on a ledge it rests,
           // on the wall or the drop it is sunk into the face, and where the
           // face cannot hold it, it is left out (its draws are taken)
-          if (!this.seatRock(rock, rockWorldX, rockWorldZ, rockSize, turn)) {
+          // Past the ledge the ground is the face, its benches too; so is
+          // ground over the ledge that stands off the road's height (a
+          // fold of a leaning wall)
+          const onFace =
+            distance - this.roadWidth / 2 > side.flat ||
+            Math.abs(this.surfaceAt(rockWorldX, rockWorldZ).y - (point.y || 0)) > 1;
+          if (!this.seatRock(rock, rockWorldX, rockWorldZ, rockSize, turn, null, 0, onFace)) {
             rockGeometry.dispose();
             continue;
           }
+          rock.material = dress(rock, pick, i, rockWorldX, rock.userData.seat ? rock.userData.seat.y : rock.position.y, rockWorldZ);
 
           rock.castShadow = true;
           rock.receiveShadow = true;
@@ -1393,10 +1505,8 @@ class Environment {
           new THREE.IcosahedronGeometry(debrisSize, 2),
           debrisSize * 0.25,
         );
-        const debris = new THREE.Mesh(
-          debrisGeometry,
-          rockMaterials[Math.floor(this.rand() * rockMaterials.length)],
-        );
+        const debris = new THREE.Mesh(debrisGeometry);
+        const pick = this.rand();
 
         // Scatter onto the cliff-side portion of the road, from near the
         // wall to roughly the middle of the left lane
@@ -1407,6 +1517,10 @@ class Environment {
         const debrisY = (point.y || 0) + debrisSize * 0.4; // Slightly embedded in the road
 
         debris.position.set(debrisX, debrisY, debrisZ);
+        // Fallen from the wall: the colour of its foot beside the road
+        const footX = point.x + Math.cos(point.heading) * (this.roadWidth / 2 + 2) * sign;
+        const footZ = point.z - Math.sin(point.heading) * (this.roadWidth / 2 + 2) * sign;
+        debris.material = dress(debris, pick, i, footX, debrisY, footZ);
         debris.rotation.set(
           this.rand() * Math.PI * 2,
           this.rand() * Math.PI * 2,

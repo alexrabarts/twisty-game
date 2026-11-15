@@ -270,7 +270,7 @@ describe('the gorge and the night forest built', () => {
         return hit ? { y: hit.point.y, distance: hit.distance, name: hit.object.parent && hit.object.parent.name } : null;
     }
 
-    const ribbons = scene => meshesOf(scene, object => object.geometry.attributes.color && !object.parent.userData.setPiece && object.parent.type === 'Group' && !object.parent.name);
+    const ribbons = scene => meshesOf(scene, object => object.userData.part === 'ground' && object.geometry.attributes.color && !object.parent.userData.setPiece && object.parent.type === 'Group' && !object.parent.name);
 
     test.each([[GORGE, 10], [NIGHT, 8]])('leg %i: nothing floats, nothing overlaps the road', (index) => {
         const { log: lines } = leg(index);
