@@ -705,10 +705,7 @@ const Terrain = (() => {
 
     const column = Math.round(exactColumn);
     if (column < 0) return null;
-    const point = geo.path[segmentIndex];
-    const neighbour = geo.path[Math.min(geo.path.length - 1, Math.max(0, segmentIndex + (loc.along >= 0 ? 1 : -1)))];
-    const roadY = point.y + (neighbour.y - point.y) * Math.min(1, Math.abs(loc.along) / SEGMENT_LENGTH);
-    return walkColumn(profile, sign, side, geo, d, column, startIdx, false, roadY);
+    return walkColumn(profile, sign, side, geo, d, column, startIdx, false, interpolatedRoadY(geo, loc));
   }
 
   // The road height at the located point, interpolated along its segment the
