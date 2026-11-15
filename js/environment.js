@@ -1,3 +1,17 @@
+// Legs 6 to 8 as the course was laid out before they were sharpened: the far
+// backdrop of the cliff legs is still placed along it (see createRoad)
+const LAYOUT_BEFORE_SHARPENING = [
+  { segments: 14, turnRate: 0 }, { segments: 10, turnRate: 0.045 }, { segments: 12, turnRate: 0 },
+  { segments: 10, turnRate: -0.05 }, { segments: 16, turnRate: 0 }, { segments: 10, turnRate: 0.04 },
+  { segments: 12, turnRate: 0 }, { segments: 8, turnRate: -0.045 }, { segments: 4, turnRate: 0 },
+  { segments: 16, turnRate: 0 }, { segments: 10, turnRate: 0.055 }, { segments: 12, turnRate: 0 },
+  { segments: 10, turnRate: -0.06 }, { segments: 14, turnRate: 0 }, { segments: 10, turnRate: 0.05 },
+  { segments: 10, turnRate: 0 }, { segments: 8, turnRate: -0.055 }, { segments: 8, turnRate: 0 },
+  { segments: 14, turnRate: 0 }, { segments: 10, turnRate: 0.065 }, { segments: 10, turnRate: 0 },
+  { segments: 8, turnRate: -0.07 }, { segments: 12, turnRate: 0 }, { segments: 10, turnRate: 0.06 },
+  { segments: 10, turnRate: 0 }, { segments: 8, turnRate: -0.065 }, { segments: 14, turnRate: 0 },
+];
+
 class Environment {
   constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0) {
     this.scene = scene;
@@ -263,6 +277,7 @@ class Environment {
     // Progressive layout: 380 segments across 8 legs with increasing difficulty
     // Course doubled in length: each section has 2x the segments at half the
     // turn rate, so every curve keeps its total angle at twice the radius.
+    const stormFirst = { segments: 14, turnRate: 0 };
     const courseLayout = [
       // === LEG 1: MOUNTAIN DAWN (0-69) - Gentle winding, 70 segments = 1400m ===
       { segments: 16, turnRate: 0 }, // Long start straight
@@ -316,43 +331,76 @@ class Environment {
       { segments: 8, turnRate: 0 }, // Exit
       { segments: 6, turnRate: 0.07 }, // Technical right
 
+      // Legs 6 to 8 get sharper toward the end of the tour: each bend keeps
+      // its angle on a tighter radius over fewer segments, and the segments
+      // it gives up go to the straight after it, so every leg keeps its
+      // length and every set piece its straight. A rate is the bend's angle
+      // over its segments. Storm-valley's first bend is left as it was:
+      // high-pass draws its road to segment 433, and that must not move.
+
       // === LEG 6: STORM VALLEY (414-509) - Rain + grip, 96 segments = 1920m ===
-      { segments: 14, turnRate: 0 }, // Storm approach
+      stormFirst, // Storm approach
       { segments: 10, turnRate: 0.045 }, // Wet right curve
       { segments: 12, turnRate: 0 }, // Rain straight
-      { segments: 10, turnRate: -0.05 }, // Slippery left
-      { segments: 16, turnRate: 0 }, // Long wet section
-      { segments: 10, turnRate: 0.04 }, // Technical right
-      { segments: 12, turnRate: 0 }, // Straight
-      { segments: 8, turnRate: -0.045 }, // Left curve
-      { segments: 4, turnRate: 0 }, // Exit section
+      { segments: 8, turnRate: -0.5 / 8 }, // Slippery left
+      { segments: 18, turnRate: 0 }, // Long wet section
+      { segments: 8, turnRate: 0.4 / 8 }, // Technical right
+      { segments: 14, turnRate: 0 }, // Straight
+      { segments: 7, turnRate: -0.36 / 7 }, // Left curve
+      { segments: 5, turnRate: 0 }, // Exit section
 
       // === LEG 7: NIGHT RIDE (510-607) - Darkness, 98 segments = 1960m ===
-      { segments: 16, turnRate: 0 }, // Night approach
-      { segments: 10, turnRate: 0.055 }, // Dark right curve
-      { segments: 12, turnRate: 0 }, // Under stars
-      { segments: 10, turnRate: -0.06 }, // Technical left
-      { segments: 14, turnRate: 0 }, // Long night straight
-      { segments: 10, turnRate: 0.05 }, // Flowing right
-      { segments: 10, turnRate: 0 }, // Link section
-      { segments: 8, turnRate: -0.055 }, // Left curve
-      { segments: 8, turnRate: 0 }, // Straight section
+      { segments: 16, turnRate: 0 }, // Night approach (tunnel 514-521)
+      { segments: 8, turnRate: 0.55 / 8 }, // Dark right curve
+      { segments: 14, turnRate: 0 }, // Under stars
+      { segments: 8, turnRate: -0.6 / 8 }, // Technical left
+      { segments: 16, turnRate: 0 }, // Long night straight
+      { segments: 8, turnRate: 0.5 / 8 }, // Flowing right
+      { segments: 12, turnRate: 0 }, // Link section (village 583-590)
+      { segments: 6, turnRate: -0.44 / 6 }, // Left curve
+      { segments: 10, turnRate: 0 }, // Straight section
 
       // === LEG 8: WINTER PASS (608-703) - Ice + snow, 96 segments = 1920m ===
-      { segments: 14, turnRate: 0 }, // Winter approach
-      { segments: 10, turnRate: 0.065 }, // Icy right
-      { segments: 10, turnRate: 0 }, // Snow straight
-      { segments: 8, turnRate: -0.07 }, // Slippery left
-      { segments: 12, turnRate: 0 }, // Long snow section
-      { segments: 10, turnRate: 0.06 }, // Technical right
-      { segments: 10, turnRate: 0 }, // Link
-      { segments: 8, turnRate: -0.065 }, // Final left
-      { segments: 14, turnRate: 0 }, // Grand finale straight to finish
+      // The approach runs to 627 so night-ride, which draws its road 20
+      // segments past its finish, ends on a straight
+      { segments: 20, turnRate: 0 }, // Winter approach
+      { segments: 7, turnRate: 0.65 / 7 }, // Icy right
+      { segments: 7, turnRate: 0 }, // Snow straight
+      { segments: 6, turnRate: -0.56 / 6 }, // Slippery left
+      { segments: 14, turnRate: 0 }, // Long snow section
+      { segments: 7, turnRate: 0.6 / 7 }, // Technical right
+      { segments: 13, turnRate: 0 }, // Link
+      { segments: 6, turnRate: -0.52 / 6 }, // Final left
+      { segments: 16, turnRate: 0 }, // Grand finale straight to finish
 
       // Extra scenery beyond finish (for +20 runoff rendering)
       { segments: 30, turnRate: 0 }, // Post-finish straight
       { segments: 10, turnRate: 0.025 }, // Gentle curve
     ];
+
+    // The far backdrop of the cliff legs (createEndCourseMountains) stands
+    // along the last stretches of the course as it was laid out before legs 6
+    // to 8 were sharpened. It is placed from this path (x, z and heading), so
+    // high-pass, which is bound to the frozen golden, keeps its mountains.
+    const lateLegs = courseLayout.findIndex((section) => section === stormFirst);
+    this.backdropPath = [];
+    {
+      let x = 0;
+      let z = 0;
+      let heading = 0;
+      courseLayout.slice(0, lateLegs).concat(LAYOUT_BEFORE_SHARPENING, courseLayout.slice(-2)).forEach((section) => {
+        for (let i = 0; i < section.segments; i++) {
+          this.backdropPath.push({
+            x: x + (segmentLength / 2) * Math.sin(heading),
+            z: z + (segmentLength / 2) * Math.cos(heading),
+            heading,
+          });
+          x += segmentLength * Math.sin(heading);
+          z += segmentLength * Math.cos(heading);
+          heading += section.turnRate;
+        }
+      });
+    }
 
     // First, build the road path
     let segmentIndex = 0;
@@ -2971,9 +3019,9 @@ class Environment {
     const group = new THREE.Group();
 
     // Calculate positions based on the last quarter of the road path
-    const lastQuarterIndex = Math.floor(this.roadPath.length * 0.75);
-    const endPoint = this.roadPath[this.roadPath.length - 1];
-    const threeQuarterPoint = this.roadPath[lastQuarterIndex];
+    const lastQuarterIndex = Math.floor(this.backdropPath.length * 0.75);
+    const endPoint = this.backdropPath[this.backdropPath.length - 1];
+    const threeQuarterPoint = this.backdropPath[lastQuarterIndex];
 
     // Create a dramatic mountain wall on the left side for the final section
     const finalMountainGeometry = new THREE.ConeGeometry(600, 700, 24, 12);
@@ -3190,9 +3238,9 @@ class Environment {
 
       // Position along the left side, getting closer to the end
       const progressAlongEnd = 0.6 + (i / 8) * 0.4; // From 60% to 100% of road
-      const roadIndex = Math.floor(this.roadPath.length * progressAlongEnd);
+      const roadIndex = Math.floor(this.backdropPath.length * progressAlongEnd);
       const roadPoint =
-        this.roadPath[Math.min(roadIndex, this.roadPath.length - 1)];
+        this.backdropPath[Math.min(roadIndex, this.backdropPath.length - 1)];
       const localHeading = roadPoint.heading || 0;
       const localPerpX = Math.cos(localHeading);
       const localPerpZ = -Math.sin(localHeading);

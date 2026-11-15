@@ -425,7 +425,10 @@ const Terrain = (() => {
       const t = Math.min(1, Math.max(0, k / (end - start)));
       return 34 - 14 * t + Math.sin(k * 0.09) * 3;
     },
-    amplitude: 3
+    amplitude: 3,
+    // Half the tightest bend storm-valley draws (night-ride's first, 291 m,
+    // at its segments 526 to 529) is 145 m: no row may reach past it
+    reach: 130
   });
 
   // The night leg's forest: a climb with less roll, and two set pieces cut into
@@ -439,7 +442,7 @@ const Terrain = (() => {
   // climbing to the roof's crest 2.5 m out, then on up as a hill
   const hillSide = () =>
     heightfieldSide({
-      stations: [[0, 0], [1, 0], [2.5, 9], [8, 11], [40, 14], [135, 40]],
+      stations: [[0, 0], [1, 0], [2.5, 9], [8, 11], [40, 14], [115, 40]],
       bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
       shade: 0.5
     });
@@ -448,7 +451,7 @@ const Terrain = (() => {
   // it, then the house fronts and garden walls (a wall that crashes)
   const streetSide = () =>
     heightfieldSide({
-      stations: [[0, 0], [3, 0], [3.3, 7], [12, 8], [60, 12], [135, 40]],
+      stations: [[0, 0], [3, 0], [3.3, 7], [12, 8], [60, 12], [115, 40]],
       bands: [{ to: 3, kind: 'runoff' }, { kind: 'wall' }],
       runoff: RUNOFF,
       tint: 0x5c5851
@@ -461,8 +464,8 @@ const Terrain = (() => {
       return 26 + 12 * t + Math.sin(k * 0.07) * 2;
     },
     amplitude: 2,
-    // The tightest bend of this leg is 307.7 m: no row may reach past half of it
-    reach: 135,
+    // The tightest bend of this leg is 266.7 m: no row may reach past half of it
+    reach: 115,
     spans: [
       { type: 'tunnel', ...TUNNEL, left: hillSide(), right: hillSide() },
       { type: 'village', ...VILLAGE, left: streetSide(), right: streetSide() }

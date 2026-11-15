@@ -147,7 +147,7 @@ describe('spans and the two new profiles (pure)', () => {
     ];
 
     // Rows wider than half the tightest bend's radius would fold over on its inside
-    test.each([['coast', 10, 181], ['ridge', 8, 142]])('%s: no row reaches past half the tightest bend radius of its leg', (name, halfRoad, limit) => {
+    test.each([['coast', 10, 181], ['ridge', 8, 107]])('%s: no row reaches past half the tightest bend radius of its leg', (name, halfRoad, limit) => {
         const profile = Terrain.profiles[name];
         [profile.left, profile.right, ...(profile.spans || []).map(span => span.right)].forEach(side => {
             expect(Terrain.outermost(side, ctxFor(halfRoad, 30, 7))).toBeLessThanOrEqual(limit);

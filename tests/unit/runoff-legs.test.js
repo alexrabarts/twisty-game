@@ -22,7 +22,7 @@ const CLIFF = 1;
 // had shipped to players yet.)
 const COURSE_DIGESTS = [
     '062f790295a7e5d4', '5b41d6a35ad33203', '1d8e018d4b1500c6', 'dec5762639099e6c',
-    'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', '4193062a49e547f3'
+    'b5649303e1d76374', 'b85972ab577ffde4', 'c6ac0a14718e2f58', '4193062a49e547f3'
 ];
 
 describe('run-off profiles (pure)', () => {
@@ -109,7 +109,8 @@ describe('run-off profiles (pure)', () => {
     // Rows wider than half the tightest bend's radius would fold over on its inside
     test.each([
         ['valleyFloor', 10, 200],
-        ['forest', 8, 181]
+        // storm-valley draws night-ride's first bend (291 m) at 526 to 529
+        ['forest', 8, 145]
     ])('%s: no row reaches past half the tightest bend radius of its leg', (name, halfRoad, limit) => {
         const profile = Terrain.profiles[name];
         [profile.left, profile.right].forEach(side => {

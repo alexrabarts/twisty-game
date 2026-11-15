@@ -177,7 +177,7 @@ describe('canyon and night forest profiles (pure)', () => {
 
     test.each([
         ['canyon', 10, 133],
-        ['forestNight', 8, 153]
+        ['forestNight', 8, 133]
     ])('%s: no row of any side or span reaches past half the tightest bend radius of its leg', (name, halfRoad, limit) => {
         const profile = Terrain.profiles[name];
         const sides = [profile.left, profile.right, ...profile.spans.flatMap(span => [span.left, span.right])].filter(Boolean);
