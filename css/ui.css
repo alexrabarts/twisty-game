@@ -1309,7 +1309,7 @@ body.in-menu .virtual-button-camera {
     display: none;
     align-items: center;
     justify-content: center;
-    z-index: var(--z-run-card);
+    z-index: var(--z-overlay);
     background: rgba(4, 8, 16, 0.78);
 }
 
