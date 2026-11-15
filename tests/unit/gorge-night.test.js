@@ -456,15 +456,20 @@ describe('the gorge and the night forest built', () => {
         expect(Terrain.legConfig('night-ride').preview.radius).toBeLessThanOrEqual(8 + 5);
     });
 
-    test('the camera clamp is wired into updateCamera, after the minimum height and before the camera takes the position', () => {
+    test('the camera clamp runs once in updateCamera, after the camera takes the position and after the shake', () => {
         const source = loadScript('main.js');
         const minimum = source.indexOf('const minCameraHeight');
+        const apply = source.indexOf('this.camera.position.copy(this.currentCameraPos);', minimum);
+        const shake = source.indexOf('this.camera.position.y += (Math.random() - 0.5) * shakeIntensity', apply);
         const clamp = source.indexOf('this.tunnelRoofY()');
-        const apply = source.indexOf('this.camera.position.copy(this.currentCameraPos);', clamp);
         expect(minimum).toBeGreaterThan(0);
-        expect(clamp).toBeGreaterThan(minimum);
-        expect(apply).toBeGreaterThan(clamp);
-        expect(source.slice(clamp, apply)).toMatch(/roofY - 1\.0/);
+        expect(apply).toBeGreaterThan(minimum);
+        expect(shake).toBeGreaterThan(apply);
+        expect(clamp).toBeGreaterThan(shake);
+        // One roof read and one clamp: the camera itself is held at roofY - 1.0
+        expect(source.split('this.tunnelRoofY()')).toHaveLength(2);
+        expect(source.split('roofY - 1.0')).toHaveLength(3);
+        expect(source.slice(clamp, clamp + 400)).toMatch(/this\.camera\.position\.y = Math\.max\(roofY - 1\.0, minCameraHeight\)/);
     });
 
     test('P-W11: the village is a group of at most five meshes, standing at its own centre, and adds no light', () => {

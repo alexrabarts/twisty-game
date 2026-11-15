@@ -1325,13 +1325,6 @@ class Game {
             this.currentCameraPos.y = minCameraHeight;
         }
 
-        // Under a tunnel roof the camera stays beneath it: High View sits 8
-        // above the bike, higher than the 7.5 m roof
-        const roofY = this.tunnelRoofY();
-        if (roofY !== null && this.currentCameraPos.y > roofY - 1.0) {
-            this.currentCameraPos.y = Math.max(roofY - 1.0, minCameraHeight);
-        }
-
         this.camera.position.copy(this.currentCameraPos);
 
         // Additional camera shake at high speeds (outside onboard mode)
@@ -1340,10 +1333,16 @@ class Game {
             const shakeIntensity = speedFactor * 0.05 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
-            // The shake must not lift the camera through the tunnel roof
-            if (roofY !== null && this.camera.position.y > roofY - 1.0) {
-                this.camera.position.y = Math.max(roofY - 1.0, minCameraHeight);
-            }
+        }
+
+        // Under a tunnel roof the camera stays beneath it, shake included: High
+        // View sits 8 above the bike, higher than the 7.5 m roof. The smoothed
+        // position keeps the clamp too, so the camera eases out of the tunnel
+        // rather than jumping to where it would have been
+        const roofY = this.tunnelRoofY();
+        if (roofY !== null && this.camera.position.y > roofY - 1.0) {
+            this.camera.position.y = Math.max(roofY - 1.0, minCameraHeight);
+            this.currentCameraPos.y = Math.min(this.currentCameraPos.y, this.camera.position.y);
         }
 
         // Mode-specific FOV and look target
