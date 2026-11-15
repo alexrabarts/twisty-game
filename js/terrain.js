@@ -220,6 +220,9 @@ const Terrain = (() => {
 
   const cliffLake = {
     id: 'cliffLake',
+    // Exact reads walk the nearest vertex column, not the drawn triangles:
+    // high-pass is bound to the frozen golden that recorded the walk
+    columnWalk: true,
     // restY is where a fall ends: just above the drawn lake plane
     floor: { kind: 'lake', y: LAKE_Y, restY: LAKE_Y + 5 },
     // Road y for global segment i: gentle rolling terrain
@@ -610,6 +613,8 @@ const Terrain = (() => {
     }
 
     out.index = closestIndex;
+    out.x = x;
+    out.z = z;
     out.roadY = closest.y || 0;
     const perpX = Math.cos(closest.heading);
     const perpZ = -Math.sin(closest.heading);
@@ -709,6 +714,91 @@ const Terrain = (() => {
     return walkColumn(profile, sign, side, geo, d, column, startIdx, false, interpolatedRoadY(geo, loc));
   }
 
+  // Column c of the ribbon (counted from the first built segment), laid out
+  // exactly as Environment.buildTerrainRibbon lays it: its foot on the road
+  // between two points, its heading interpolated, and the row context
+  function columnFrame(geo, startIdx, c, out) {
+    const i = startIdx + Math.floor(c / COLUMNS_PER_SEGMENT);
+    const t = (c % COLUMNS_PER_SEGMENT) / COLUMNS_PER_SEGMENT;
+    const point = geo.path[i];
+    const next = i < geo.path.length - 1 ? geo.path[i + 1] : point;
+    const roadY = point.y || 0;
+    out.x = point.x + (next.x - point.x) * t;
+    out.z = point.z + (next.z - point.z) * t;
+    out.heading = point.heading + (next.heading - point.heading) * t;
+    out.ctx = { halfRoad: geo.roadWidth / 2, roadY: roadY + ((next.y || 0) - roadY) * t, column: c, index: i, s: i + t, pathLength: geo.path.length };
+    return out;
+  }
+
+  // The drawn vertices of one column, rounded to the float32 the mesh stores,
+  // so a triangle here is the triangle a ray meets
+  function columnVertices(profile, sign, geo, startIdx, c) {
+    const frame = columnFrame(geo, startIdx, c, {});
+    const cos = Math.cos(frame.heading) * sign;
+    const sin = Math.sin(frame.heading) * sign;
+    const out = {};
+    const vertices = new Array(ROWS + 1);
+    for (let j = 0; j <= ROWS; j++) {
+      rowAt(profile, sign, j, frame.ctx, out);
+      vertices[j] = [Math.fround(frame.x + cos * out.d), Math.fround(out.y), Math.fround(frame.z - sin * out.d)];
+    }
+    return { frame, vertices };
+  }
+
+  // Height of vertical line (x, z) on a triangle, or null when it misses.
+  // The tolerance keeps a point on a shared edge inside both triangles.
+  function triangleY(a, b, c, x, z) {
+    const det = (b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2]);
+    if (Math.abs(det) < 1e-12) return null;
+    const u = ((x - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (z - a[2])) / det;
+    const v = ((b[0] - a[0]) * (z - a[2]) - (x - a[0]) * (b[2] - a[2])) / det;
+    const slack = 1e-7;
+    if (u < -slack || v < -slack || u + v > 1 + slack) return null;
+    return a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * v;
+  }
+
+  // The highest drawn surface over (x, z) on one side, read from the triangles
+  // themselves: every vertex of a column lies on the column's line, so (x, z)
+  // falls in the strip between two column lines, and one strip's triangles
+  // are all that can cover it. On a bend the nearest centre-line point is not
+  // the column the point lies beside, and between two columns the surface is
+  // not either column's, so neither the located lateral nor a column walk is
+  // exact there. Returns null where no triangle covers the point (the ledge,
+  // past the top row, outside the built range).
+  function meshY(profile, sign, geo, loc, x, z) {
+    const startIdx = Math.max(0, geo.startSegment);
+    const endIdx = Math.min(geo.path.length - 1, geo.endSegment + 20);
+    const columns = (endIdx - startIdx + 1) * COLUMNS_PER_SEGMENT;
+    const centre = (loc.index - startIdx) * COLUMNS_PER_SEGMENT;
+    const first = Math.max(0, centre - 2 * COLUMNS_PER_SEGMENT);
+    const last = Math.min(columns - 1, centre + 2 * COLUMNS_PER_SEGMENT);
+    if (first >= last) return null;
+    // Signed distance of (x, z) ahead of each column line
+    const frame = {};
+    const ahead = [];
+    for (let c = first; c <= last; c++) {
+      columnFrame(geo, startIdx, c, frame);
+      ahead.push((x - frame.x) * Math.sin(frame.heading) + (z - frame.z) * Math.cos(frame.heading));
+    }
+    let highest = null;
+    for (let c = first; c < last; c++) {
+      // Between line c and line c + 1; a point on a line reads both strips beside it
+      if (ahead[c - first] < -1e-6 || ahead[c + 1 - first] > 1e-6) continue;
+      const left = columnVertices(profile, sign, geo, startIdx, c).vertices;
+      const right = columnVertices(profile, sign, geo, startIdx, c + 1).vertices;
+      for (let row = 0; row < ROWS; row++) {
+        const bl = left[row], tl = left[row + 1], br = right[row], tr = right[row + 1];
+        // The same diagonals as the ribbon's triangles
+        const pair = (c + row) % 2 === 0 ? [[bl, br, tl], [br, tr, tl]] : [[bl, tr, tl], [bl, br, tr]];
+        for (const [a, b, d] of pair) {
+          const y = triangleY(a, b, d, x, z);
+          if (y !== null && (highest === null || y > highest)) highest = y;
+        }
+      }
+    }
+    return highest;
+  }
+
   // The road height at the located point, interpolated along its segment the
   // way the ribbon rows are, instead of the nearest centre-line point's own
   function interpolatedRoadY(geo, loc) {
@@ -739,8 +829,20 @@ const Terrain = (() => {
     // An exact read of a wall that sets its drawn foot starts at the foot
     const faceStart = exact && side.face && side.foot !== undefined ? geo.roadWidth / 2 + side.foot : ledgeEnd;
 
+    const blending = exact && blendingAt(profile, right ? 'right' : 'left', loc.index + loc.along / SEGMENT_LENGTH);
+    // An exact read beside the road is the drawn triangles themselves, rock or
+    // ground, and on the road or a ledge the road height the road mesh draws.
+    // cliffLake keeps the column walk: its frozen golden recorded that.
+    if (exact && !profile.columnWalk && loc.x !== undefined) {
+      if (blending || d > geo.roadWidth / 2) {
+        const drawn = meshY(profile, sign, geo, loc, loc.x, loc.z);
+        if (drawn !== null) return profile.floor.y === undefined ? drawn : Math.max(drawn, profile.floor.y);
+      }
+      if (d <= faceStart) return interpolatedRoadY(geo, loc);
+    }
+
     // A span edge is drawn as a blend of two sides, whatever either side is
-    if (exact && blendingAt(profile, right ? 'right' : 'left', loc.index + loc.along / SEGMENT_LENGTH)) {
+    if (blending) {
       const walked = surfaceY(profile, sign, side, geo, loc, d, true);
       if (walked !== null) return profile.floor.y === undefined ? walked : Math.max(walked, profile.floor.y);
     }

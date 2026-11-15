@@ -211,13 +211,26 @@ describe('raycast: the drawn wall and the ground the physics reads', () => {
         expectFoldMatches(legIndex, segment, lateral, [0, 0.25, 0.5, 0.75]);
     }, 60000);
 
-    // Coastal-descent seg 186 is a tight bend. Between two centre-line points `locate` measures the
-    // lateral from the nearest point's heading, not the column's, so it is off by up to a metre there
-    // and the fold read at fractions above 0 is the neighbouring one. Re-measuring against the column
-    // line fixes that but moves the leg 1 stable fingerprint the plan binds (P13b), so it waits for a
-    // plan ruling. At the centre-line point itself the lateral is exact and the bound holds.
-    test('leg 3 (coastal-descent) seg 186, lateral -20: the highest fold of the wall, at the centre-line point', () => {
-        expectFoldMatches(2, 186, -20, [0]);
+    // Coastal-descent seg 186 is a tight bend. The ground model once took the
+    // lateral from the nearest centre-line point's heading and walked the
+    // nearest vertex column, so between two columns it read a neighbouring
+    // fold (a 1.56 m miss at fraction 0). It now reads the drawn triangles of
+    // the strip the point lies in, so the bound holds at every fraction, and
+    // at the very point that missed.
+    test('leg 3 (coastal-descent) seg 186, lateral -20: the highest fold of the wall, at every column', () => {
+        expectFoldMatches(2, 186, -20, [0, 0.25, 0.5, 0.75]);
+    }, 60000);
+
+    test('leg 3 (coastal-descent) seg 186, lateral -20 exactly: the model is the drawn surface a ray meets', () => {
+        const { env, scene } = buildEnvironment(game, 2);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        [0, 0.25, 0.5, 0.75].forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, 186, fraction, -20);
+            expect(hit).not.toBeNull();
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
+        });
     }, 60000);
 
     function expectFoldMatches(legIndex, segment, lateral, fractions) {
@@ -266,9 +279,8 @@ describe('span blend: the ground model blends rows at a span edge as the ribbon 
             // Nothing is drawn on the road itself
             if (hit === null) return;
             checked++;
-            // The first drawn row of the ribbon, at the road edge, is a ledge a ray finds a little off the model
-            const bound = Math.abs(lateral) <= halfRoad + 0.5 ? 0.12 : 5e-3;
-            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(bound);
+            // The model reads the drawn triangles, so the plan's 5e-3 holds at the road edge too
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
         })));
         expect(checked).toBeGreaterThan(60);
     }, 60000);
