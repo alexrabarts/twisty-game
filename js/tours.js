@@ -337,6 +337,7 @@ class TourSystem {
             document.removeEventListener('keydown', this.keyboardHandler);
         }
 
+        const icon = name => (typeof UiIcons !== 'undefined' ? UiIcons.svg(name) : '');
         const selectorHTML = `
             <div class="tour-selector-overlay showcase-mode">
                 <div class="tour-selector-panel showcase-panel">
@@ -351,14 +352,14 @@ class TourSystem {
                             <div class="showcase-info" id="riderInfoCard"></div>
                             <button class="carousel-arrow" id="riderNextBtn">›</button>
                         </div>
-                        <div style="text-align: center; margin-top: 14px;">
+                        <div class="showcase-actions">
                             <button id="riderContinueBtn" class="showcase-continue">CONTINUE →</button>
                         </div>
                     </div>
 
                     <!-- Screen 2: track carousel -->
                     <div class="track-select-screen" style="display: none;">
-                        <div class="showcase-label" style="display: flex; align-items: center; justify-content: center; gap: 16px;">
+                        <div class="showcase-label">
                             <button id="backToRidersBtn" class="carousel-back">← RIDER</button>
                             <span>CHOOSE YOUR LEG</span>
                         </div>
@@ -368,9 +369,9 @@ class TourSystem {
                             <div class="showcase-info" id="legInfoCard"></div>
                             <button class="carousel-arrow" id="legNextBtn">›</button>
                         </div>
-                        <div style="text-align: center; margin-top: 14px;">
+                        <div class="showcase-actions">
                             <button id="legStartBtn" class="showcase-continue">START</button>
-                            <button id="legLeaderboardBtn" class="showcase-secondary">🏆 BEST TIMES</button>
+                            <button id="legLeaderboardBtn" class="showcase-secondary">${icon('trophy')} BEST TIMES</button>
                         </div>
                     </div>
                 </div>
@@ -391,18 +392,18 @@ class TourSystem {
             const c = riderOrder[this.riderFocusIndex];
             const tier = this.riderTierFor(c.id);
             const statBar = (value) =>
-                `<span class="stat-on">${'■'.repeat(value)}</span><span class="stat-off">${'■'.repeat(5 - value)}</span>`;
+                `<span class="stat-bar" aria-label="${value} of 5">${Array.from({ length: 5 }, (_, i) => `<i${i < value ? ' class="on"' : ''}></i>`).join('')}</span>`;
             const card = document.getElementById('riderInfoCard');
             card.classList.remove('fresh');
             if (tier === 'silhouette') {
                 card.innerHTML = `
-                    <div class="showcase-name">🔒 ???</div>
+                    <div class="showcase-name">${icon('lock')} ???</div>
                     <div class="showcase-sub">LOCKED</div>`;
             } else if (tier === 'dimmed') {
                 const required = this.characterUnlocks[c.id] || 0;
                 const remaining = Math.max(0, required - this.completedLegs.length);
                 card.innerHTML = `
-                    <div class="showcase-name">🔒 ${c.name}</div>
+                    <div class="showcase-name">${icon('lock')} ${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
                     <div class="showcase-hint">${remaining} more leg${remaining === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required} completed)</div>`;
             } else {
@@ -413,11 +414,11 @@ class TourSystem {
                     <div class="showcase-name">${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
                     <div class="showcase-stats">
-                        <div>Speed&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
-                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
-                        <div>Handling ${statBar(c.stats.handling)}</div>
-                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
-                        <div>Comfort&nbsp; ${statBar(c.stats.comfort)}</div>
+                        <span>SPEED</span>${statBar(c.stats.speed)}
+                        <span>ACCEL</span>${statBar(c.stats.accel)}
+                        <span>HANDLING</span>${statBar(c.stats.handling)}
+                        <span>JUMP</span>${statBar(c.stats.jump)}
+                        <span>COMFORT</span>${statBar(c.stats.comfort)}
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
@@ -432,17 +433,18 @@ class TourSystem {
             const card = document.getElementById('legInfoCard');
             if (tier !== 'lit') {
                 card.innerHTML = `
-                    <div class="showcase-name">🔒 LEG ${index + 1}: ${leg.name}</div>
+                    <div class="showcase-name">${icon('lock')} Leg ${index + 1}: ${leg.name}</div>
                     <div class="showcase-sub">${leg.description}</div>
                     <div class="showcase-hint">Complete Leg ${index} to unlock</div>`;
             } else {
                 card.innerHTML = `
-                    <div class="showcase-name">LEG ${index + 1}: ${leg.name} ${completed ? '<span style="color:#2ecc71;font-size:13px;">✔ COMPLETED</span>' : ''}</div>
-                    <div class="showcase-sub">${leg.description}</div>`;
+                    <div class="showcase-name">Leg ${index + 1}: ${leg.name}</div>
+                    <div class="showcase-sub">${leg.description}</div>
+                    ${completed ? `<div class="showcase-done">${icon('check')} COMPLETED</div>` : ''}`;
             }
             const progress = this.unlockProgressText();
             if (progress) {
-                card.insertAdjacentHTML('beforeend', `<div class="showcase-progress">🔓 ${progress}</div>`);
+                card.insertAdjacentHTML('beforeend', `<div class="showcase-progress">${icon('unlock')} ${progress}</div>`);
             }
             document.getElementById('legStartBtn').disabled = tier !== 'lit';
             document.getElementById('legLeaderboardBtn').style.visibility = tier === 'lit' ? 'visible' : 'hidden';
