@@ -82,6 +82,10 @@ class Environment {
     this.createCheckpoints(); // Add scoring checkpoints
     this.createSetPieces(); // Bridge, tunnel and village
     this.createPassMarkers(); // Snow poles, cairns and the summit marker of a high pass
+    // Modelled assets for a leg that has them (js/sceneassets.js) replace the
+    // tagged procedural dressing once they load; until then, or if they fail,
+    // the procedural meshes stay. Null where the script is not loaded (tests).
+    this.dressing = typeof SceneAssets !== "undefined" ? SceneAssets.dress(this) : null;
 
     // Validate terrain-road clearance (development-time check)
     const terrainErrors = this.validateAllTerrainClearance();
@@ -610,6 +614,7 @@ class Environment {
         );
         mainRock.castShadow = true;
         mainRock.receiveShadow = true;
+        mainRock.userData.dressing = { kind: "rock", radius: size };
         rockGroup.add(mainRock);
 
         // Additional rock chunks for detail - smooth spheres with irregular scaling
@@ -640,6 +645,7 @@ class Environment {
           );
           chunk.castShadow = true;
           chunk.receiveShadow = true;
+          chunk.userData.dressing = { kind: "rock", radius: chunkSize };
           rockGroup.add(chunk);
         }
 
@@ -1182,6 +1188,7 @@ class Environment {
 
           rock.castShadow = true;
           rock.receiveShadow = true;
+          rock.userData.dressing = { kind: "rock", radius: rockSize };
           group.add(rock);
           this.registerGrounded(rock, `embedded cliff rock (segment ${i}, side ${sign})`);
         } // Close the if statement from line 700
@@ -1217,6 +1224,7 @@ class Environment {
         );
         debris.castShadow = true;
         debris.receiveShadow = true;
+        debris.userData.dressing = { kind: "debris", radius: debrisSize };
         group.add(debris);
         this.registerGrounded(debris, `road debris rock (segment ${i})`);
 
@@ -5818,7 +5826,19 @@ class Environment {
     this.addPieceMesh(group, shell(lining), material(0x5b5a5e, 0x24242a), origin);
     // The cap is the hill's own ground: grass in the forest, rock in the gorge
     this.addPieceMesh(group, shell(cap), material(span.cap ?? 0x2c4727), origin);
-    this.addPieceMesh(group, shell(portals), material(0x6e6a63), origin);
+    const portalMesh = this.addPieceMesh(group, shell(portals), material(0x6e6a63), origin);
+    // What a modelled portal needs to stand in for this one (js/sceneassets.js):
+    // each end's road point, which way it faces along the road, and which of
+    // its sides runs on into a rock wall that a wing wall can stand against
+    const isWall = (sign, i) => Terrain.sideAt(this.terrain, sign, i).face?.kind === 'rise';
+    portalMesh.userData.dressing = {
+      kind: 'portal',
+      halfWidth, ceiling, crest, capHeight,
+      ends: [
+        { point: this.pointAtSegment(first), facing: -1, walls: { left: isWall(-1, piece.from - 1), right: isWall(1, piece.from - 1) } },
+        { point: this.pointAtSegment(first + rings - 1), facing: 1, walls: { left: isWall(-1, piece.to + 1), right: isWall(1, piece.to + 1) } },
+      ],
+    };
 
     // Two rows of emissive bars under the crown, one pair at each ring. They
     // glow past the bloom threshold but are not lights: the scene keeps its seven.
