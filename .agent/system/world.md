@@ -109,6 +109,8 @@ A wall is 1 m past the road edge, 57 m high with its height swinging 18% along t
 
 A span with a `type` is a set piece: `Terrain.setPieces(profile)` lists them as inclusive segment ranges (`environment.setPieces`), and the world build keeps forest, rock dressing, bushes, delineator posts and rockfalls out of them (rockfalls out of the range widened by one segment each side).
 
+A roadworks zone keeps everything it builds (the board 5 segments ahead of a major zone, 3 ahead of a minor one, and the cones a segment past each end; `Environment.roadworksReach()`) off every set piece and the segment either side (`ROADWORKS_SET_PIECE_MARGIN`), and keeps a checkpoint (`Environment.checkpointSegments()`) out of the zone itself. `roadworksStartClear()` moves a zone that breaks either rule to the nearest start that keeps both, the later on a tie. Only night-ride's minor zone moves: it was segments 592 to 593, with its board in the village, and is now 597 to 598. The gorge's zones and every leg without a set piece keep their places.
+
 | Piece | Leg | Segments | Terrain |
 |---|---|---|---|
 | Tunnel | foggy-gorge | 265 to 271 | Wall 1 m past the edge, `ceiling` 7.5, rock over the road |

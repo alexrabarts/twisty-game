@@ -295,6 +295,43 @@ describe('the gorge and the night forest built', () => {
         }
     });
 
+    // The night village's board once stood inside the houses (zone 592-593, board at 589)
+    // and could only clear the fronts by hanging over the road
+    test('no roadworks zone, board or cone stands on a set piece or the segment either side', () => {
+        const props = /construction|warning cone|dirt ramp|work truck|shipping container/;
+        const margin = 1;
+        for (const index of [0, 1, 2, 3, 4, 5, 6, 7]) {
+            const { env } = leg(index);
+            const near = ({ from, to }, segment) => segment >= from - margin && segment <= to + margin;
+            const last = Math.min(env.endSegment + 20, env.roadPath.length - 1);
+            // The segment a prop stands on: the one whose stretch [i, i + 1) holds its foot
+            const segmentOf = position => {
+                let best = env.startSegment;
+                const gap = i => Math.hypot(env.roadPath[i].x - position.x, env.roadPath[i].z - position.z);
+                for (let i = env.startSegment; i <= last; i++) if (gap(i) < gap(best)) best = i;
+                const point = env.roadPath[best];
+                const next = env.roadPath[Math.min(best + 1, last)];
+                const ahead = (position.x - point.x) * (next.x - point.x) + (position.z - point.z) * (next.z - point.z);
+                return ahead < 0 ? best - 1 : best;
+            };
+            const placed = env.groundedObjects.filter(({ label }) => props.test(label));
+            expect(placed.length).toBeGreaterThan(0);
+            for (const piece of env.setPieces) {
+                for (const zone of env.roadworksZones) {
+                    const reach = env.roadworksReach(zone.startSegment, zone.endSegment, zone.type);
+                    for (let segment = reach.from; segment <= reach.to; segment++) expect([index, zone.type, segment, near(piece, segment)]).toEqual([index, zone.type, segment, false]);
+                }
+                const inside = placed.filter(({ object }) => near(piece, segmentOf(object.getWorldPosition(new game.THREE.Vector3()))));
+                expect(inside.map(({ label }) => label)).toEqual([]);
+            }
+        }
+        // High-pass has no set piece and keeps its zones; the night village's minor zone
+        // moves to the nearest start clear of the village and of a checkpoint (596)
+        expect(leg(4).env.roadworksZones.map(z => [z.startSegment, z.endSegment])).toEqual([[372, 374], [399, 400]]);
+        expect(leg(NIGHT).env.roadworksZones.map(z => [z.startSegment, z.endSegment])).toEqual([[563, 565], [597, 598]]);
+        expect(leg(GORGE).env.roadworksZones.map(z => [z.startSegment, z.endSegment])).toEqual([[281, 283], [307, 308]]);
+    });
+
     test('the cliff roads: the wall and the drop on the stated sides, each the surface a ray meets', () => {
         const { env, scene } = leg(GORGE);
         const ground = ribbons(scene);

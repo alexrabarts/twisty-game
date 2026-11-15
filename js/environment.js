@@ -12,6 +12,9 @@ const LAYOUT_BEFORE_SHARPENING = [
   { segments: 10, turnRate: 0 }, { segments: 8, turnRate: -0.065 }, { segments: 14, turnRate: 0 },
 ];
 
+// Segments kept clear between a set piece and any roadworks prop (board, cones)
+const ROADWORKS_SET_PIECE_MARGIN = 1;
+
 class Environment {
   constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0) {
     this.scene = scene;
@@ -4359,6 +4362,9 @@ class Environment {
     ];
 
     roadworksLocations.forEach((zone) => {
+      const start = this.roadworksStartClear(zone.startSegment, zone.endSegment - zone.startSegment, zone.type, legStart, legEnd);
+      zone.endSegment += start - zone.startSegment;
+      zone.startSegment = start;
       this.createConstructionZone(
         zone.startSegment,
         zone.endSegment,
@@ -4366,6 +4372,37 @@ class Environment {
         zone.type,
       );
     });
+  }
+
+  // The segments a zone's props reach: its board stands 5 segments ahead of a
+  // major zone (3 ahead of a minor one) and its cones run one segment past
+  // either end
+  roadworksReach(startSegment, endSegment, zoneType) {
+    return { from: startSegment - (zoneType === "major" ? 5 : 3), to: endSegment + 1 };
+  }
+
+  // The start segment nearest `wanted` whose props stay out of every set
+  // piece widened by ROADWORKS_SET_PIECE_MARGIN: a board beside the village
+  // can only clear the house fronts by hanging over the road, and a tunnel
+  // has no room for one. Nor may a checkpoint gate stand among the cones of
+  // the zone itself. Later wins a tie; `wanted` itself when nothing fits.
+  roadworksStartClear(wanted, length, zoneType, legStart, legEnd) {
+    const checkpoints = this.checkpointSegments();
+    const fits = (start) => {
+      const reach = this.roadworksReach(start, start + length, zoneType);
+      if (reach.from < legStart || reach.to > legEnd) return false;
+      if (checkpoints.some((segment) => segment >= start && segment <= start + length)) return false;
+      for (let i = reach.from; i <= reach.to; i++) {
+        if (this.inSetPiece(i, ROADWORKS_SET_PIECE_MARGIN)) return false;
+      }
+      return true;
+    };
+    for (let step = 0; step <= legEnd - legStart; step++) {
+      if (fits(wanted + step)) return wanted + step;
+      if (fits(wanted - step)) return wanted - step;
+    }
+    console.warn(`No roadworks start clear of the set pieces near segment ${wanted}`);
+    return wanted;
   }
 
   createConstructionZone(
@@ -5778,10 +5815,11 @@ class Environment {
     });
   }
 
-  createCheckpoints() {
-    // Place checkpoints evenly through the ACTIVE LEG (startSegment..endSegment),
-    // in riding order. Distributing over the full track put at most one
-    // checkpoint in any leg, so ordered checkpoint scoring could never trigger.
+  // Where the checkpoints stand, evenly through the ACTIVE LEG
+  // (startSegment..endSegment), in riding order. Distributing over the full
+  // track put at most one checkpoint in any leg, so ordered checkpoint scoring
+  // could never trigger. The roadworks read it before the gates are built.
+  checkpointSegments() {
     const legStart = this.startSegment;
     const legEnd = Math.min(this.endSegment, this.roadPath.length - 1);
     const legLength = legEnd - legStart;
@@ -5795,12 +5833,15 @@ class Environment {
       1,
       Math.floor((lastCheckpoint - firstCheckpoint) / (checkpointCount - 1)),
     );
+    return Array.from({ length: checkpointCount }, (_, i) =>
+      Math.min(firstCheckpoint + i * checkpointInterval, lastCheckpoint),
+    );
+  }
 
-    for (let i = 0; i < checkpointCount; i++) {
-      const segmentIndex = Math.min(
-        firstCheckpoint + i * checkpointInterval,
-        lastCheckpoint,
-      );
+  createCheckpoints() {
+    const segments = this.checkpointSegments();
+    for (let i = 0; i < segments.length; i++) {
+      const segmentIndex = segments[i];
       const point = this.roadPath[segmentIndex];
 
       // Create checkpoint gate
