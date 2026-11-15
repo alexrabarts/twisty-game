@@ -153,26 +153,105 @@
             box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
         }
 
-        #score {
-            font-size: 46px;
+        #raceTimer {
+            font-size: clamp(34px, 6vw, 50px);
             font-weight: 800;
             font-variant-numeric: tabular-nums;
-            color: var(--accent-gold);
+            color: #ffffff;
             text-shadow:
                 0 2px 4px rgba(0, 0, 0, 0.8),
-                0 0 22px rgba(255, 215, 0, 0.35);
+                0 0 22px rgba(120, 200, 255, 0.35);
             margin: 0;
             line-height: 1.05;
             letter-spacing: 1px;
         }
 
-        #scoreLabel {
-            font-size: 12px;
+        .style-line {
+            margin: 2px 0 0;
+            font-size: 14px;
             font-weight: 700;
-            color: rgba(255, 215, 0, 0.75);
-            letter-spacing: 4px;
-            margin: 0 0 2px;
+            color: var(--accent-gold);
+            font-variant-numeric: tabular-nums;
+            opacity: 0.9;
         }
+
+        #scoreLabel {
+            font-size: 10px;
+            color: rgba(255, 215, 0, 0.7);
+            letter-spacing: 3px;
+            margin-right: 4px;
+        }
+
+        /* Checkpoint split, just under the timer */
+        .split-popup {
+            position: absolute;
+            top: max(150px, 22vh);
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 101;
+            display: none;
+            min-width: 220px;
+            max-width: calc(100vw - 32px);
+            padding: 8px 18px 10px;
+            border-radius: 12px;
+            background: rgba(8, 12, 18, 0.78);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            color: #fff;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            box-shadow: 0 6px 22px rgba(0, 0, 0, 0.45);
+            pointer-events: none;
+        }
+
+        .split-popup.show {
+            display: block;
+            animation: split-in 0.25s ease-out;
+        }
+
+        @keyframes split-in {
+            from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+
+        .split-gate {
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 3px;
+            color: #9fb6d6;
+        }
+
+        .split-time {
+            font-size: 26px;
+            font-weight: 800;
+            line-height: 1.15;
+        }
+
+        .split-deltas {
+            display: flex;
+            gap: 14px;
+            justify-content: center;
+            flex-wrap: wrap;
+            font-size: 18px;
+            font-weight: 800;
+        }
+
+        .split-deltas small {
+            font-size: 10px;
+            letter-spacing: 2px;
+            color: #9fb6d6;
+            margin-left: 4px;
+        }
+
+        .split-style {
+            margin-top: 2px;
+            font-size: 11px;
+            color: rgba(255, 215, 0, 0.8);
+        }
+
+        .delta-ahead { color: #2ee86f; }
+        .delta-behind { color: #ff4d4d; }
+        .delta-even { color: #e8e8e8; }
+        .delta-none { color: #8899aa; }
 
         #comboDisplay {
             font-size: 20px;
@@ -384,6 +463,7 @@
         /* While the menu is up, hide the in-game HUD (it bleeds through the
            transparent showcase overlay) */
         body.in-menu .score-display,
+        body.in-menu .split-popup,
         body.in-menu .info,
         body.in-menu .speedometer,
         body.in-menu .wheelie-indicator,
@@ -833,6 +913,211 @@
         }
 
     
+        /* Finish screen: the time leads, style points follow */
+        .finish-banner {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000;
+            box-sizing: border-box;
+            width: min(640px, calc(100vw - 32px));
+            max-height: calc(100vh - 32px);
+            max-height: calc(100dvh - 32px);
+            overflow-y: auto;
+            padding: clamp(16px, 4vw, 28px);
+            background: linear-gradient(135deg, #1f2b38, #2c3e50);
+            border: 3px solid #f39c12;
+            border-radius: 20px;
+            text-align: center;
+            color: white;
+            font-family: 'Inter', -apple-system, 'Segoe UI', Arial, sans-serif;
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        .finish-title {
+            color: #f39c12;
+            font-size: clamp(22px, 5vw, 32px);
+            font-weight: 900;
+            letter-spacing: 2px;
+        }
+
+        .finish-time-label {
+            margin-top: 8px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 4px;
+            color: #9fb6d6;
+        }
+
+        .finish-time {
+            font-size: clamp(48px, 13vw, 76px);
+            font-weight: 900;
+            line-height: 1;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 0 24px rgba(120, 200, 255, 0.35);
+        }
+
+        .finish-deltas {
+            margin-top: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .finish-delta {
+            font-size: clamp(18px, 4.5vw, 24px);
+            font-weight: 800;
+        }
+
+        .finish-delta small {
+            font-size: 13px;
+            font-weight: 600;
+            color: #b5c4d8;
+        }
+
+        .finish-board {
+            font-size: 12px;
+            color: #8ea2bd;
+        }
+
+        .finish-best-badge {
+            font-size: clamp(16px, 4.2vw, 22px);
+            font-weight: 900;
+            color: #ffd700;
+        }
+
+        .finish-progress {
+            margin-top: 12px;
+            color: #7fd8ff;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .finish-meta {
+            margin-top: 12px;
+            color: #b5c4d8;
+            font-size: 14px;
+        }
+
+        .finish-style {
+            margin-top: 4px;
+            color: rgba(255, 215, 0, 0.85);
+            font-size: 14px;
+        }
+
+        .finish-buttons {
+            margin-top: 18px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+        }
+
+        .finish-btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 15px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            cursor: pointer;
+            background: linear-gradient(135deg, #3d5068, #2c3a4c);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+        }
+
+        .finish-btn.primary {
+            flex-basis: 100%;
+            padding: 15px 24px;
+            font-size: 18px;
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+            box-shadow: 0 4px 15px rgba(46, 204, 113, 0.45);
+        }
+
+        .finish-btn:focus-visible {
+            outline: 3px solid #ffd700;
+            outline-offset: 2px;
+        }
+
+        /* The unlock moment */
+        .unlock-panel {
+            margin-top: 16px;
+            padding: 12px;
+            border-radius: 14px;
+            background: radial-gradient(circle at 50% 0%, rgba(255, 215, 0, 0.25), rgba(255, 215, 0, 0.05) 70%);
+            border: 2px solid rgba(255, 215, 0, 0.7);
+            animation: unlock-pop 0.7s cubic-bezier(0.2, 1.4, 0.4, 1) 0.35s both;
+        }
+
+        .unlock-head {
+            font-size: clamp(18px, 5vw, 24px);
+            font-weight: 900;
+            letter-spacing: 4px;
+            color: #ffd700;
+            text-shadow: 0 0 18px rgba(255, 215, 0, 0.6);
+            margin-bottom: 10px;
+        }
+
+        .unlock-cards {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .unlock-card {
+            flex: 1 1 160px;
+            max-width: 240px;
+            padding: 10px;
+            border-radius: 12px;
+            background: rgba(6, 10, 20, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        .unlock-bike {
+            border-color: var(--bike);
+            box-shadow: 0 0 22px color-mix(in srgb, var(--bike) 55%, transparent);
+        }
+
+        .unlock-bike-art {
+            width: 110px;
+            height: 58px;
+        }
+
+        .unlock-leg-art {
+            height: 58px;
+            border-radius: 8px;
+            background:
+                linear-gradient(170deg, transparent 58%, #2b2f36 59%, #2b2f36 70%, transparent 71%),
+                linear-gradient(180deg, var(--sky-top), var(--sky-bottom));
+        }
+
+        .unlock-kind {
+            margin-top: 6px;
+            font-size: 11px;
+            font-weight: 900;
+            letter-spacing: 3px;
+            color: #ffd700;
+        }
+
+        .unlock-name {
+            font-size: 20px;
+            font-weight: 900;
+        }
+
+        .unlock-sub {
+            font-size: 12px;
+            color: #b5c4d8;
+        }
+
+        @keyframes unlock-pop {
+            from { opacity: 0; transform: scale(0.6); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
         /* Transient gameplay call-outs (checkpoint, flip bonus, cone hit...) */
         .checkpoint-notification {
             position: fixed;
@@ -867,12 +1152,15 @@
     <div class="controls">
     </div>
     
-    <!-- Score Display -->
+    <!-- Race timer: time decides the leaderboard; style points are a bonus -->
     <div class="score-display">
-        <p id="scoreLabel">SCORE</p>
-        <p id="score">0</p>
+        <p id="raceTimer">0:00.00</p>
+        <p class="style-line"><span id="scoreLabel">STYLE</span> <span id="score">0</span></p>
         <div id="comboDisplay"></div>
     </div>
+
+    <!-- Checkpoint split: elapsed time and the gap to the best and the record -->
+    <div id="splitPopup" class="split-popup" aria-live="polite"></div>
     
     <!-- Top right info -->
     <div class="info">
@@ -966,6 +1254,7 @@
     <script src="js/input.js"></script>
     <script src="js/particles.js"></script>
     <script src="js/terrain.js"></script>
+    <script src="js/race.js"></script>
     <script src="js/tours.js"></script>
     <script src="js/weather.js"></script>
     <script src="js/vehicle.js"></script>

@@ -357,6 +357,7 @@ class Game {
                 console.error('Failed to start leaderboard session:', error);
             });
         }
+        this.loadSplitReferences(leg);
 
         console.log('Starting animation loop...');
         // Delay first frame to ensure renderer is fully initialized
@@ -519,6 +520,7 @@ class Game {
         if (this.environment && this.environment.checkpoints) {
             this.environment.checkpoints.forEach(cp => { cp.passed = false; });
         }
+        this.hideSplit();
         this.updateScoreDisplay();
     }
 
@@ -617,7 +619,9 @@ class Game {
         console.log('Cleaned up current leg');
     }
 
-    returnToMenu() {
+    // options.riderId opens the rider screen on that rider (a new unlock)
+    // instead of the track screen
+    returnToMenu(options = {}) {
         console.log('Returning to menu...');
 
         // Remove finish banner if exists
@@ -636,7 +640,11 @@ class Game {
         this.cleanupCurrentLeg();
 
         // Show leg selector
-        this.tourSystem.showLegSelector();
+        if (options.riderId) {
+            this.tourSystem.showRiderSelector(options.riderId);
+        } else {
+            this.tourSystem.showLegSelector();
+        }
 
         // Hide dashboard
         const dashboard = document.querySelector('.dashboard');
@@ -1669,132 +1677,88 @@ class Game {
         
         const totalScore = this.score;
 
-        // Create finish banner
-        const finishBanner = document.createElement('div');
-        finishBanner.id = 'finishBanner';
-        finishBanner.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #2c3e50, #34495e);
-            border: 3px solid #f39c12;
-            border-radius: 20px;
-            padding: 30px;
-            text-align: center;
-            color: white;
-            font-family: Arial, sans-serif;
-            z-index: 1000;
-            box-shadow: 0 0 30px rgba(0,0,0,0.8);
-            animation: fadeIn 0.5s ease-out;
-        `;
-
         const positionColor = finalPosition === 1 ? '#FFD700' : finalPosition === 2 ? '#C0C0C0' : finalPosition === 3 ? '#CD7F32' : '#95a5a6';
 
-        // Check if this is the last leg
         const isLastLeg = this.tourSystem.isLastLeg();
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
 
         // Record progression: completing a leg unlocks the next leg and,
         // at milestones, new riders
         const finishedLeg = this.tourSystem.getCurrentLeg();
-        let unlockMessage = '';
+        let unlocks = { legs: [], characters: [] };
         if (finishedLeg && this.tourSystem.markLegCompleted) {
-            const unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
-            const parts = [];
-            if (unlocks.newLegs.length > 0) {
-                parts.push(`NEW LEG: ${unlocks.newLegs.join(', ')}`);
-            }
-            if (unlocks.newCharacters.length > 0) {
-                parts.push(`NEW RIDER: ${unlocks.newCharacters.join(', ')}`);
-            }
-            if (parts.length > 0) {
-                unlockMessage = `<div style="color: #2ecc71; font-size: 20px; margin-top: 10px;">🔓 ${parts.join(' &nbsp;•&nbsp; ')}</div>`;
-            }
+            unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
         }
+        const flow = TourSystem.finishFlow(unlocks, isLastLeg);
 
-        // Check for best time (tracked per leg - legs have different lengths)
-        const currentLeg = this.tourSystem.getCurrentLeg();
-        const bestTimeKey = currentLeg ? this.bestTimeKey(currentLeg) : 'motorcycleBestTime';
-        this.bestTime = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
-        let bestTimeMessage = '';
-        if (timeSeconds < this.bestTime) {
+        // Time is what ranks a run: compare it with the personal best (per
+        // board) and the record. Best splits are rewritten only by a full run
+        // that beat the best time.
+        const bestTimeKey = finishedLeg ? this.bestTimeKey(finishedLeg) : 'motorcycleBestTime';
+        const previousBest = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
+        const previousBestMs = previousBest < 999999 ? previousBest * 1000 : NaN;
+        const boardMs = this.checkpointTimes[RaceTiming.CHECKPOINTS - 1];
+        const result = RaceTiming.finish(this.finishTime, previousBestMs, boardMs, this.record);
+        this.bestTime = previousBest;
+        if (result.isBest) {
             this.bestTime = timeSeconds;
             localStorage.setItem(bestTimeKey, timeSeconds.toString());
-            bestTimeMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW BEST TIME! 🏆</div>';
+            if (finishedLeg) {
+                RaceTiming.saveSplitsIfBest(localStorage, this.bestSplitsKey(finishedLeg), this.checkpointTimes, true);
+            }
         }
 
+        const finishBanner = document.createElement('div');
+        finishBanner.id = 'finishBanner';
+        finishBanner.className = 'finish-banner';
+
+        const deltaSpan = ms => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}</span>`;
+        const pbLine = result.pbDelta === null
+            ? '<div class="finish-best-badge">🏆 FIRST BEST TIME SET</div>'
+            : result.isBest
+                ? `<div class="finish-best-badge">🏆 NEW PERSONAL BEST ${deltaSpan(result.pbDelta)}</div>`
+                : `<div class="finish-delta">${deltaSpan(result.pbDelta)} <small>vs your best ${RaceTiming.formatTime(previousBestMs)}</small></div>`;
+        const escape = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+        let recordLine = '';
+        if (this.record && result.recordDelta !== null) {
+            // The board ranks the time to the last gate, so that is what is compared
+            recordLine = `<div class="finish-delta">${deltaSpan(result.recordDelta)} <small>vs record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>
+                <div class="finish-board">Leaderboard time (to the last gate) ${RaceTiming.formatTime(result.boardTime)}</div>`;
+        } else if (this.record) {
+            recordLine = `<div class="finish-delta"><small>Record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>`;
+        }
+
+        const unlockPanel = this.buildUnlockPanel(unlocks);
+        // Until the next bike is in hand, say how far away it is
+        const progress = flow.riders.length > 0 ? '' : this.tourSystem.unlockProgressText();
+        const button = (id, cls, label) => `<button id="${id}" class="finish-btn ${cls}">${label}</button>`;
+        const tourButton = isLastLeg
+            ? button('restartTourBtn', flow.primary === 'restart-tour' ? 'primary' : 'secondary', '<u>R</u>ESTART TOUR')
+            : button('nextLegBtn', flow.primary === 'next-leg' ? 'primary' : 'secondary', '<u>N</u>EXT LEG →');
+        const chooseButton = flow.primary === 'choose-rider'
+            ? button('chooseRiderBtn', 'primary', 'CHOOSE YOUR NEW BIKE →')
+            : '';
+
         finishBanner.innerHTML = `
-            <h1 style="color: #f39c12; margin: 0 0 20px 0; font-size: 48px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">
-                ${titleText}
-            </h1>
-            <div style="font-size: 48px; font-weight: bold; margin-bottom: 20px; color: ${positionColor}; text-shadow: 0 0 20px ${positionColor};">
-                ${finalPosition}${positionSuffix} PLACE
-                <div style="font-size: 20px; color: #95a5a6; margin-top: 5px;">out of ${totalRacers} racers</div>
+            <div class="finish-title">${titleText}</div>
+            <div class="finish-time-label">YOUR TIME</div>
+            <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
+            <div class="finish-deltas">
+                ${pbLine}
+                ${recordLine}
             </div>
-            <div style="font-size: 24px; margin-bottom: 20px;">
-                <div style="margin-bottom: 10px;">Distance: <span style="color: #3498db;">${distance.toFixed(0)} meters</span></div>
-                <div style="margin-bottom: 10px;">Time: <span style="color: #e74c3c;">${timeSeconds.toFixed(1)} seconds</span></div>
-                ${bestTimeMessage}
-                ${unlockMessage}
-                <div style="margin-bottom: 10px;">Best Time: <span style="color: #2ecc71;">${this.bestTime < 999999 ? this.bestTime.toFixed(1) + 's' : 'N/A'}</span></div>
-                <div style="margin-bottom: 10px;">Average Speed: <span style="color: #9b59b6;">${averageSpeed.toFixed(1)} mph</span></div>
+            ${unlockPanel}
+            ${progress ? `<div class="finish-progress">🔓 ${progress}</div>` : ''}
+            <div class="finish-meta">
+                <span style="color: ${positionColor};">${finalPosition}${positionSuffix}</span> of ${totalRacers} racers
+                · ${distance.toFixed(0)} m · ${averageSpeed.toFixed(1)} mph avg
             </div>
-            <div style="font-size: 36px; font-weight: bold; color: #f39c12; margin-bottom: 20px;">
-                SCORE: ${totalScore.toLocaleString()}
-            </div>
-            <div style="margin-top: 20px; display: flex; gap: 20px; justify-content: center;">
-                ${isLastLeg ? `
-                    <button id="restartTourBtn" style="
-                        font-size: 20px;
-                        padding: 15px 30px;
-                        background: linear-gradient(135deg, #2ecc71, #27ae60);
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        cursor: pointer;
-                        font-weight: bold;
-                        box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
-                        transition: all 0.3s;
-                    "><u>R</u>ESTART TOUR</button>
-                ` : `
-                    <button id="nextLegBtn" style="
-                        font-size: 20px;
-                        padding: 15px 30px;
-                        background: linear-gradient(135deg, #2ecc71, #27ae60);
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        cursor: pointer;
-                        font-weight: bold;
-                        box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
-                        transition: all 0.3s;
-                    "><u>N</u>EXT LEG →</button>
-                `}
-                <button id="restartLegBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #3498db, #2980b9);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
-                    transition: all 0.3s;
-                "><u>R</u>ESTART LEG</button>
-                <button id="returnToMenuBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #e74c3c, #c0392b);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
-                    transition: all 0.3s;
-                ">RETURN TO <u>M</u>ENU</button>
+            <div class="finish-style">Style bonus <strong>${totalScore.toLocaleString()}</strong> pts</div>
+            <div class="finish-buttons">
+                ${chooseButton}
+                ${tourButton}
+                ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG')}
+                ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU')}
             </div>
         `;
 
@@ -1872,6 +1836,28 @@ class Game {
             }
         }
 
+        // A new bike: the default action takes the player to the rider screen
+        // with it focused, after the name entry when a run is submittable
+        const chooseRiderBtn = document.getElementById('chooseRiderBtn');
+        if (chooseRiderBtn) {
+            chooseRiderBtn.addEventListener('click', () => {
+                if (this.input) {
+                    this.input.setMenuActive(false);
+                }
+                finishBanner.remove();
+                const open = () => this.returnToMenu({ riderId: flow.riders[0] });
+                if (shouldShowLeaderboard) {
+                    this.showLeaderboardEntryUI(open);
+                } else {
+                    open();
+                }
+            });
+        }
+
+        // Enter takes the default action
+        const primaryBtn = finishBanner.querySelector('.finish-btn.primary');
+        if (primaryBtn) primaryBtn.focus({ preventScroll: true });
+
         // Add event listener for restart tour button (if last leg)
         if (isLastLeg) {
             const restartTourBtn = document.getElementById('restartTourBtn');
@@ -1905,6 +1891,53 @@ class Game {
         }
 
         console.log(`COURSE FINISHED! Distance: ${distance.toFixed(0)}m, Time: ${timeSeconds.toFixed(1)}s, Score: ${totalScore}`);
+    }
+
+    // The unlock moment on the finish screen: one card per unlocked leg or
+    // bike, with the bike drawn in its own colour and the leg in its light
+    buildUnlockPanel(unlocks) {
+        const legs = (unlocks && unlocks.legs) || [];
+        const characters = (unlocks && unlocks.characters) || [];
+        if (legs.length === 0 && characters.length === 0) return '';
+        const skies = {
+            dawn: ['#f6a96b', '#5b6fa8'],
+            golden: ['#f7c548', '#c86b28'],
+            twilight: ['#c86b9c', '#2b2f63'],
+            night: ['#26305c', '#070a1c'],
+            storm: ['#59677a', '#1e2530']
+        };
+        const bikeCards = characters.map(c => {
+            const colour = '#' + parseInt(c.bikeColor).toString(16).padStart(6, '0');
+            return `
+                <div class="unlock-card unlock-bike" style="--bike: ${colour};">
+                    <svg class="unlock-bike-art" viewBox="0 0 120 64" aria-hidden="true">
+                        <circle cx="26" cy="46" r="14" fill="none" stroke="#e8edf5" stroke-width="5"/>
+                        <circle cx="94" cy="46" r="14" fill="none" stroke="#e8edf5" stroke-width="5"/>
+                        <path d="M26 46 L48 24 L78 24 L94 46" fill="none" stroke="#aab4c4" stroke-width="4" stroke-linejoin="round"/>
+                        <path d="M40 30 Q52 12 74 16 L86 26 Q70 34 50 34 Z" fill="var(--bike)"/>
+                        <path d="M78 14 L88 8" stroke="#e8edf5" stroke-width="4" stroke-linecap="round"/>
+                        <circle cx="56" cy="38" r="6" fill="var(--bike)"/>
+                    </svg>
+                    <div class="unlock-kind">NEW BIKE</div>
+                    <div class="unlock-name">${c.name}</div>
+                    <div class="unlock-sub">${c.bikeLabel}</div>
+                </div>`;
+        });
+        const legCards = legs.map(leg => {
+            const sky = skies[leg.timeOfDay] || ['#4a9eff', '#1a2a4a'];
+            return `
+                <div class="unlock-card unlock-leg" style="--sky-top: ${sky[0]}; --sky-bottom: ${sky[1]};">
+                    <div class="unlock-leg-art" aria-hidden="true"></div>
+                    <div class="unlock-kind">NEW LEG</div>
+                    <div class="unlock-name">${leg.name}</div>
+                    <div class="unlock-sub">${leg.description || ''}</div>
+                </div>`;
+        });
+        return `
+            <div class="unlock-panel">
+                <div class="unlock-head">🔓 UNLOCKED</div>
+                <div class="unlock-cards">${bikeCards.join('')}${legCards.join('')}</div>
+            </div>`;
     }
 
     showCrashNotification() {
@@ -2113,6 +2146,30 @@ class Game {
     // starts a new record instead of inheriting one set on the old road
     bestTimeKey(leg) {
         return `motorcycleBestTime_${TourSystem.boardId(leg)}`;
+    }
+
+    bestSplitsKey(leg) {
+        return RaceTiming.splitsKey(TourSystem.boardId(leg));
+    }
+
+    // What the splits compare against: the local best splits now, and the
+    // online record once it arrives. The start never waits on the network,
+    // and a failed fetch only means no record comparison this run.
+    loadSplitReferences(leg) {
+        this.bestSplits = RaceTiming.loadSplits(localStorage, this.bestSplitsKey(leg));
+        this.record = null;
+        if (!this.leaderboardService) return;
+        const board = TourSystem.boardId(leg);
+        this.recordBoard = board;
+        this.leaderboardService.fetchLeaderboard(board, 10).then(result => {
+            // A leg change while the fetch was in flight makes this stale
+            if (this.recordBoard !== board) return;
+            if (result && result.success) {
+                this.record = RaceTiming.pickRecord(result.entries);
+            } else {
+                console.warn('Record unavailable for', board, result && result.error);
+            }
+        }).catch(error => console.warn('Record fetch failed for', board, error));
     }
 
     async showLeaderboardViewer(legId) {
@@ -3048,7 +3105,7 @@ class Game {
                         }
                         
                         // Show checkpoint notification
-                        this.showCheckpointNotification(checkpoint.index + 1, points);
+                        this.showSplit(checkpoint.index, currentTime, points);
 
                         // Play checkpoint sound
                         this.soundManager.playCheckpointSound();
@@ -3241,12 +3298,28 @@ class Game {
         }
     }
     
+    // Race time as shown: frozen at the finish and while paused
+    raceElapsed() {
+        if (this.finished) return this.finishTime;
+        if (this.paused && this.pauseStartedAt) return this.pauseStartedAt - this.startTime;
+        return performance.now() - this.startTime;
+    }
+
     updateScoreDisplay() {
         if (!this.scoreElements) {
             this.scoreElements = {
+                timer: document.getElementById('raceTimer'),
                 score: document.getElementById('score'),
                 combo: document.getElementById('comboDisplay')
             };
+        }
+
+        if (this.scoreElements.timer && typeof this.startTime === 'number') {
+            const shown = RaceTiming.formatTime(Math.max(0, this.raceElapsed()));
+            if (shown !== this.lastDisplayedTime) {
+                this.lastDisplayedTime = shown;
+                this.scoreElements.timer.textContent = shown;
+            }
         }
 
         if (this.scoreElements.score && this.score !== this.lastDisplayedScore) {
@@ -3267,6 +3340,41 @@ class Game {
         this.lastDisplayedCombo = this.combo;
     }
     
+    // The split at a gate: elapsed time first, then the gap to the personal
+    // best split and, when the backend sends them, the record split
+    showSplit(index, elapsed, points) {
+        const popup = document.getElementById('splitPopup');
+        if (!popup) {
+            this.showCheckpointNotification(index + 1, points);
+            return;
+        }
+        const total = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : RaceTiming.CHECKPOINTS;
+        const split = RaceTiming.split(index, elapsed, this.bestSplits, this.record);
+        const delta = (ms, label) => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}<small>${label}</small></span>`;
+        const deltas = [];
+        if (split.pbDelta !== null) deltas.push(delta(split.pbDelta, 'PB'));
+        if (split.recordDelta !== null) deltas.push(delta(split.recordDelta, 'REC'));
+        if (deltas.length === 0) deltas.push('<span class="delta-none">FIRST SPLIT<small>SET A BEST</small></span>');
+        popup.innerHTML = `
+            <div class="split-gate">CHECKPOINT ${index + 1}/${total}</div>
+            <div class="split-time">${RaceTiming.formatTime(elapsed)}</div>
+            <div class="split-deltas">${deltas.join('')}</div>
+            <div class="split-style">+${points} style</div>`;
+        this.lastSplit = split;
+        popup.classList.remove('show');
+        // Reflow so the entry animation replays for back-to-back gates
+        void popup.offsetWidth;
+        popup.classList.add('show');
+        clearTimeout(this.splitTimer);
+        this.splitTimer = setTimeout(() => popup.classList.remove('show'), 3000);
+    }
+
+    hideSplit() {
+        clearTimeout(this.splitTimer);
+        const popup = document.getElementById('splitPopup');
+        if (popup) popup.classList.remove('show');
+    }
+
     showCheckpointNotification(checkpointNum, points) {
         const totalCheckpoints = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 10;
         showCallout(`CHECKPOINT ${checkpointNum}/${totalCheckpoints}! +${points}`, '#fff', 1000);
