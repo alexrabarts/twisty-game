@@ -10,4 +10,5 @@ build/
 *~
 .idea/
 .vscode/
-*.sublime-*__pycache__/
+*.sublime-*
+__pycache__/
