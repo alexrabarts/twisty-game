@@ -41,6 +41,17 @@ No sign, post, chevron, marker or gate pole reaches into a wall band (declared d
 
 The roadworks plant (bulldozer, barrier, work truck) is not built beside a wall: on rock it would hang on the face, out of reach, and it has no obstacle entry. The two shipping containers on the road and the hairpin barriers (whose lateral is unchanged, only their height follows the wall) remain.
 
+## Rocks and bushes on the drawn surface
+
+A rock, a rock cluster, an outcrop and a roadside bush are seated on the drawn ribbon, not on the smooth `base()`. `tests/unit/scenery-seating.test.js` holds the rules on every leg but high-pass.
+
+- `Terrain.crossings()` lists every drawn surface a vertical line meets (a wall folds, so there can be several). `Terrain.surfaceAt()` picks the one scenery rests on and gives its normal; `least` is the steepest of the surfaces with air above them. `Terrain.clearance()` says how far a point stands clear of the drawn ground (0 inside it). The drawn columns are kept per road and profile, so these reads are cheap.
+- `Environment.seatRock()` places a rock. On ground gentler than 35 degrees the rock rests with its centre on the surface. On a steeper face the rock turns its thin axis to the face normal and sinks along it: 0.55 of its thickness at 35 degrees, 0.85 from 55 degrees, so a sheer wall shows a low boss only.
+- A seat is then measured. At most 25% of the rock's bulk may stand clear of a face (60% of gentle ground), and its lowest point at most 0.3 m over the ground. A rock that fails sinks deeper once, then is left out. Its `rand()` draws are taken in both cases.
+- A rock cluster stands only on ground gentler than 35 degrees. A roadside bush roots only in ground gentler than 40 degrees.
+- A modelled rock (`js/sceneassets.js`) has its own shape. `Environment.holdRock()` sinks it further until the same measure passes, backs it out when none of it shows, and leaves it out when neither works.
+- High-pass (`columnWalk`) keeps the old placement: the frozen golden recorded each rock. Its rocks still stand half out of the wall.
+
 ## Run-off legs
 
 `forest` (leg 6) is built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 25 past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.
