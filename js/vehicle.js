@@ -2604,22 +2604,27 @@ class Vehicle {
         return Math.min(8, side.lipDepth ?? 8);
     }
 
-    // Height of the road centreline nearest to (x, z)
-    roadYAt(x, z, radius = 10) {
+    // Where (x, z) lies against the road, searched within `radius` segments of
+    // the bike; null before the road exists
+    locateNear(x, z, radius) {
         const environment = this.environment;
-        if (environment.roadPath.length === 0) return this.position.y;
+        if (environment.roadPath.length === 0) return null;
         const range = this.getSegmentSearchRange(radius);
         const loc = {};
         Terrain.locate(environment.roadPath, x, z, range.start, range.end, loc);
-        return loc.roadY;
+        return loc;
+    }
+
+    // Height of the road centreline nearest to (x, z)
+    roadYAt(x, z, radius = 10) {
+        const loc = this.locateNear(x, z, radius);
+        return loc ? loc.roadY : this.position.y;
     }
 
     surfaceAt(x, z, radius = 10) {
+        const loc = this.locateNear(x, z, radius);
+        if (!loc) return this.position.y;
         const environment = this.environment;
-        if (environment.roadPath.length === 0) return this.position.y;
-        const range = this.getSegmentSearchRange(radius);
-        const loc = {};
-        Terrain.locate(environment.roadPath, x, z, range.start, range.end, loc);
         const zone = Terrain.zoneAt(environment.terrain, loc.index, loc.lateral, environment.roadWidth / 2);
         if (zone.kind !== 'runoff') return loc.roadY;
         return Terrain.heightAt(environment.terrain, environment.terrainGeometry, loc, false);
