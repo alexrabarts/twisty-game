@@ -69,7 +69,7 @@ describe('unlock detection', () => {
         tour.showRiderSelector('shane');
 
         expect(tour.menuScreen).toBe('rider');
-        expect(document.querySelector('.character-select-screen').style.display).toBe('block');
+        expect(document.querySelector('.character-select-screen').style.display).toBe('flex');
         const card = document.getElementById('riderInfoCard');
         expect(card.textContent).toContain('Shane');
         expect(card.querySelector('.new-badge')).not.toBeNull();

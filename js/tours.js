@@ -452,12 +452,12 @@ class TourSystem {
 
         const showTrackScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'none';
-            document.querySelector('.track-select-screen').style.display = 'block';
+            document.querySelector('.track-select-screen').style.display = 'flex';
             this.menuScreen = 'track';
             renderLegCard();
         };
         const showRiderScreen = () => {
-            document.querySelector('.character-select-screen').style.display = 'block';
+            document.querySelector('.character-select-screen').style.display = 'flex';
             document.querySelector('.track-select-screen').style.display = 'none';
             this.menuScreen = 'rider';
             if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
