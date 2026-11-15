@@ -48,8 +48,8 @@ const option = name => {
 const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : undefined;
 const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
-// The run-off probe pins valley-run's timings and lateral 14, which is a wall or a drop on other legs
-const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['valley-run'] : legIds);
+// The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
+const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : legIds);
 const jobs = Number(option('jobs') || 3);
 
 const fail = (code, message) => {
@@ -458,7 +458,7 @@ function installProbe(d6Sources, latSet) {
         return result;
     };
 
-    // Run-off clock: the bike at 25 m/s, 14 m out on the right of valley-run (4 m past the
+    // Run-off clock: the bike at 25 m/s, 14 m out on the right of mountain-dawn (4 m past the
     // road edge). `driven` starts on the centre line and lets the autopilot steer out to lane
     // 14, so the clock starts only when the bike reaches the edge; `placed` starts at lateral
     // 14 with the heading along the road, so the clock runs from tick 0
@@ -778,6 +778,29 @@ const readdirHtml = () => execFileSync('git', ['ls-files', '*.html'], { cwd: roo
 const strip = value => JSON.parse(JSON.stringify(value, (key, v) => (key === 'buildMs' ? undefined : v)));
 const same = (a, b) => JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 
+// tests/golden/amendments.json, read once: the legs released from the frozen golden and,
+// per bound leg, its amended stable fingerprint and each declared field with its expected value
+function readAmendments() {
+    const raw = readJson(AMENDMENTS) || {};
+    const { released, ...legs } = raw;
+    return { released: new Set(released?.legs || []), releasedReason: released?.reason || '', legs };
+}
+const amendedStable = (amend, stable) => !!stable && stable.hash === amend.stable.hash && stable.meshes === amend.stable.meshes;
+function resolvePath(value, keys) {
+    let at = value;
+    for (const key of keys) {
+        if (at === null || typeof at !== 'object' || !(key in at)) return { found: false };
+        at = at[key];
+    }
+    return { found: true, value: at };
+}
+function assignPath(value, keys, replacement) {
+    if (!keys.length) return replacement;
+    const last = keys[keys.length - 1];
+    keys.slice(0, -1).reduce((o, k) => o[k], value)[last] = replacement;
+    return value;
+}
+
 // Rendered tiles carry sub-level noise between page loads (film grain, GPU rounding), so frames
 // are equal when every tile channel is within one level of 255; everything else is exact
 function sectionEqual(section, stored, fresh) {
@@ -903,15 +926,15 @@ function finishChecks(report) {
             });
         });
     }
+    const amendments = readAmendments();
     if (results.snapshot) {
         // A leg whose stable fingerprint moves only by declared meshes is bound to the
         // golden's own fingerprint with those meshes left out, not to the golden itself
-        const amendments = readJson(AMENDMENTS) || {};
         Object.entries(results.snapshot).forEach(([id, r]) => {
-            const amended = amendments[id];
+            const amended = amendments.legs[id];
             if (!amended?.stable) return;
             const stable = r.fingerprints.stable;
-            if (stable.hash === amended.stable.hash && stable.meshes === amended.stable.meshes) {
+            if (amendedStable(amended, stable)) {
                 notes.push(`${id}: stable ${stable.hash}/${stable.meshes} equals the golden ${amended.goldenStable.hash}/${amended.goldenStable.meshes} less the declared meshes (amendments.json)`);
             } else {
                 failures.push(`${id}: stable ${stable.hash}/${stable.meshes} is neither the golden nor the amended ${amended.stable.hash}/${amended.stable.meshes}`);
@@ -960,25 +983,47 @@ function finishChecks(report) {
     const frozen = readJson(FROZEN);
     if (probes.includes('record-frozen') || flag('update-baseline') || flag('add')) writeBaselines(report, fresh, frozen);
     else if (frozen) {
-        const comparable = Object.fromEntries(Object.entries(fresh).map(([id, sections]) => [id, Object.fromEntries(Object.entries(sections).filter(([s]) => FROZEN_SECTIONS.includes(s)))]));
-        // A leg with declared deltas (U8, U12; tests/golden/amendments.json) is compared with the golden's value swapped in
-        // for the stable fingerprint it amends and for each field declared moved. Everything else must still be equal.
-        const amendments = readJson(AMENDMENTS) || {};
+        const comparable = {};
+        Object.entries(fresh).forEach(([id, sections]) => {
+            // A leg released from the golden (a new course, a new board) is compared with nothing
+            if (amendments.released.has(id)) {
+                notes.push(`${id}: released from the frozen golden (amendments.json): ${amendments.releasedReason}`);
+                return;
+            }
+            comparable[id] = Object.fromEntries(Object.entries(sections).filter(([s]) => FROZEN_SECTIONS.includes(s)));
+        });
+        // A leg with declared deltas (tests/golden/amendments.json) must show each declared field at its
+        // declared value; that field is then compared no further. Everything else must equal the golden.
         Object.entries(comparable).forEach(([id, sections]) => {
-            const base = frozen[id]?.snapshot;
-            const amend = amendments[id];
-            if (!sections.snapshot || !base || !amend) return;
-            const snap = structuredClone(sections.snapshot);
-            const stable = snap.fingerprints?.stable;
-            if (amend.stable && stable.hash === amend.stable.hash && stable.meshes === amend.stable.meshes) snap.fingerprints.stable = base.fingerprints.stable;
-            (amend.movedFields?.fields || []).forEach(path => {
-                const keys = path.split('.');
-                const last = keys.pop();
-                const from = keys.reduce((o, k) => o?.[k], base);
-                const into = keys.reduce((o, k) => o?.[k], snap);
-                if (from && into) into[last] = from[last];
+            const amend = amendments.legs[id];
+            if (!amend || !frozen[id]) return;
+            // A section the plan rules is no equality bind on this leg is recorded, not compared
+            Object.entries(amend.unbound || {}).forEach(([section, reason]) => {
+                if (!sections[section]) return;
+                notes.push(`${id}.${section} is not compared with the golden (amendments.json): ${reason}`);
+                delete sections[section];
             });
-            sections.snapshot = snap;
+            const snap = sections.snapshot;
+            if (snap && amend.stable && amendedStable(amend, snap.fingerprints?.stable)) {
+                sections.snapshot = structuredClone(snap);
+                sections.snapshot.fingerprints.stable = frozen[id].snapshot.fingerprints.stable;
+            }
+            Object.entries(amend.declared || {}).forEach(([path, expected]) => {
+                const [section, ...keys] = path.split('.');
+                if (!sections[section]) return;
+                const golden = resolvePath(frozen[id][section], keys);
+                const now = resolvePath(sections[section], keys);
+                if (!golden.found || !now.found) {
+                    failures.push(`${id}: declared path ${path} does not resolve in the ${golden.found ? 'fresh result' : 'golden'} (amendments.json)`);
+                    return;
+                }
+                if (!same(now.value, expected)) {
+                    failures.push(`${id}: ${path} is not the declared value (amendments.json)`);
+                    return;
+                }
+                notes.push(`${id}: ${path} equals its declared value (amendments.json)`);
+                sections[section] = assignPath(structuredClone(sections[section]), keys, golden.value);
+            });
         });
         failures.push(...diffAgainst(frozen, comparable, 'frozen'));
         // Pages deleted since the baseline are gone; every page still there must read as it did
