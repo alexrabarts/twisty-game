@@ -1,6 +1,7 @@
 // Modelled scenery for the legs that have it: rocks, tunnel portals and the
 // rock face's texture, built by the Blender scripts in tools/blender into
 // assets/. Environment calls SceneAssets.dress() at the end of every build.
+// The bikes and the rider (js/bikemodels.js) come through the same reader.
 // The leg starts with its procedural dressing; when the files arrive the
 // tagged procedural meshes (userData.dressing) are swapped for the models at
 // the same places and sizes. Nothing here touches the ground, the physics or
@@ -66,12 +67,15 @@ const SceneAssets = (() => {
     }
   }
 
-  const COMPONENTS = { 5121: Uint8Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
+  const COMPONENTS = { 5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array, 5125: Uint32Array, 5126: Float32Array };
   const SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 };
 
-  // A glTF binary as { meshes: name -> [{ geometry, material }] }, one entry
-  // per primitive (per material), in the shape the Blender exporter writes:
-  // one node per mesh, no node transforms, no interleaving.
+  // A glTF binary as { meshes: name -> [{ geometry, material }], places: name
+  // -> Vector3 }, one mesh entry per primitive (per material), in the shape
+  // the Blender exporter writes: one node per mesh, no interleaving. A node
+  // may carry a translation (its place: a part's pivot, or a bare named
+  // point), never a rotation or a scale. Vertex colours (COLOR_0) are read as
+  // the baked occlusion they hold and switch the material to use them.
   async function parseGlb(buffer, url) {
     const view = new DataView(buffer);
     if (view.getUint32(0, true) !== 0x46546c67) throw new Error(`${url}: not a glTF binary`);
@@ -88,17 +92,30 @@ const SceneAssets = (() => {
 
     const slice = (index) => {
       const bufferView = json.bufferViews[index];
-      if (bufferView.byteStride) throw new Error(`${url}: interleaved buffer views are not read`);
-      return { offset: bin + (bufferView.byteOffset || 0), length: bufferView.byteLength };
+      return { offset: bin + (bufferView.byteOffset || 0), length: bufferView.byteLength, stride: bufferView.byteStride || 0 };
     };
     const accessor = (index) => {
       const def = json.accessors[index];
       const type = COMPONENTS[def.componentType];
-      const { offset } = slice(def.bufferView);
-      const count = def.count * SIZES[def.type];
+      const { offset, stride } = slice(def.bufferView);
+      const size = SIZES[def.type];
+      const count = def.count * size;
+      const start = offset + (def.byteOffset || 0);
+      const packed = size * type.BYTES_PER_ELEMENT;
       // Copied out, so the geometry does not pin the whole file
-      const array = new type(buffer.slice(offset + (def.byteOffset || 0), offset + (def.byteOffset || 0) + count * type.BYTES_PER_ELEMENT));
-      return new THREE.BufferAttribute(array, SIZES[def.type], !!def.normalized);
+      let array;
+      if (!stride || stride === packed) {
+        array = new type(buffer.slice(start, start + count * type.BYTES_PER_ELEMENT));
+      } else {
+        // One attribute padded out to its stride (byte normals, four bytes
+        // apiece); a view that interleaves several attributes is not read
+        if (stride < packed || stride % type.BYTES_PER_ELEMENT) throw new Error(`${url}: a stride of ${stride} is not read`);
+        const padded = new type(buffer.slice(start, start + (def.count - 1) * stride + packed));
+        const step = stride / type.BYTES_PER_ELEMENT;
+        array = new type(count);
+        for (let i = 0; i < def.count; i++) for (let c = 0; c < size; c++) array[i * size + c] = padded[i * step + c];
+      }
+      return new THREE.BufferAttribute(array, size, !!def.normalized);
     };
     const images = await Promise.all((json.images || []).map((def) => {
       const { offset, length } = slice(def.bufferView);
@@ -139,7 +156,10 @@ const SceneAssets = (() => {
       return material;
     });
     const meshes = new Map();
+    const places = new Map();
     for (const node of json.nodes || []) {
+      if (node.rotation || node.scale || node.matrix) throw new Error(`${url}: node ${node.name} is turned or scaled, which is not read`);
+      places.set(node.name, new THREE.Vector3().fromArray(node.translation || [0, 0, 0]));
       if (node.mesh === undefined) continue;
       meshes.set(node.name, json.meshes[node.mesh].primitives.map((primitive) => {
         const geometry = new THREE.BufferGeometry();
@@ -150,13 +170,17 @@ const SceneAssets = (() => {
           // three r150 reads the occlusion map through a second UV set
           geometry.setAttribute("uv2", geometry.attributes.uv);
         }
+        if (primitive.attributes.COLOR_0 !== undefined) {
+          geometry.setAttribute("color", accessor(primitive.attributes.COLOR_0));
+          materials[primitive.material].vertexColors = true;
+        }
         if (primitive.indices !== undefined) geometry.setIndex(accessor(primitive.indices));
         geometry.computeBoundingSphere();
         geometry.computeBoundingBox();
         return { geometry, material: materials[primitive.material] };
       }));
     }
-    return { meshes };
+    return { meshes, places };
   }
 
   const models = new Map();
@@ -461,5 +485,5 @@ const SceneAssets = (() => {
     return spec ? [spec.rocks, spec.portal, spec.rockFace.map, spec.rockFace.normalMap] : [];
   }
 
-  return { dress, files, LEGS };
+  return { dress, files, loadModel, LEGS };
 })();
