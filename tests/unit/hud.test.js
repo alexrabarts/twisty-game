@@ -1,14 +1,15 @@
 /**
  * The HUD rules and the DOM they drive: the controls hint fades after the
  * first seconds (sooner once the rider rides), the FPS counter is off unless
- * asked for, and per-frame writes reuse text nodes.
+ * asked for, touch controls exist only on touch devices, and per-frame writes
+ * reuse text nodes.
  */
 
 import { jest } from '@jest/globals';
 import { readFileSync } from 'fs';
 
 const read = name => readFileSync(new URL(`../../js/${name}`, import.meta.url), 'utf8');
-(0, eval)(`${read('hud.js')}\nglobalThis.HudRules = HudRules; globalThis.Hud = Hud; globalThis.UiIcons = UiIcons;`);
+(0, eval)(`${read('hud.js')}\n${read('virtualcontrols.js')}\n${read('input.js')}\nglobalThis.HudRules = HudRules; globalThis.Hud = Hud; globalThis.UiIcons = UiIcons; globalThis.VirtualControls = VirtualControls; globalThis.InputHandler = InputHandler;`);
 
 const markup = `
     <p id="raceTimer">0:00.00</p>
@@ -195,5 +196,45 @@ describe('Hud', () => {
         expect(document.getElementById('splitPopup').classList.contains('show')).toBe(false);
         expect(document.getElementById('callouts').children).toHaveLength(0);
         expect(document.body.classList.contains('run-over')).toBe(false);
+    });
+});
+
+describe('touch controls', () => {
+    const realMatchMedia = window.matchMedia;
+
+    afterEach(() => {
+        window.matchMedia = realMatchMedia;
+        document.body.innerHTML = '';
+        document.body.className = '';
+    });
+
+    const stubPointer = coarse => {
+        window.matchMedia = query => ({ matches: coarse ? /coarse/.test(query) : /fine/.test(query) });
+    };
+
+    test('a desktop gets no on-screen buttons until it is touched', () => {
+        stubPointer(false);
+        const input = new InputHandler();
+        expect(input.virtualControls).toBeNull();
+        expect(document.querySelector('.virtual-controls-left')).toBeNull();
+
+        window.dispatchEvent(new Event('touchstart'));
+        expect(input.virtualControls).not.toBeNull();
+        expect(document.body.classList.contains('touch')).toBe(true);
+    });
+
+    test('a phone gets labelled thumb buttons that report their keys', () => {
+        stubPointer(true);
+        const input = new InputHandler();
+        const throttle = document.querySelector('.virtual-button.throttle');
+        expect(throttle.getAttribute('aria-label')).toBe('Throttle');
+        expect(document.querySelectorAll('.virtual-button')).toHaveLength(5);
+        expect(document.querySelector('.virtual-button-camera')).not.toBeNull();
+
+        throttle.dispatchEvent(new Event('touchstart', { cancelable: true }));
+        expect(input.virtualControls.getKey('KeyW')).toBe(true);
+        expect(throttle.classList.contains('pressed')).toBe(true);
+        throttle.dispatchEvent(new Event('touchend', { cancelable: true }));
+        expect(input.virtualControls.getKey('KeyW')).toBe(false);
     });
 });

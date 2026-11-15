@@ -268,11 +268,18 @@ class InputHandler {
         return false;
     }
 
+    // On-screen buttons only on touch-first devices; a touch screen on a
+    // laptop gets them at its first touch
     setupMobileControls() {
-        // Always create virtual controls for WASD-style on-screen buttons
-        if (typeof VirtualControls !== 'undefined') {
-            this.virtualControls = new VirtualControls();
+        if (typeof VirtualControls === 'undefined') return;
+        const create = () => {
+            if (!this.virtualControls) this.virtualControls = new VirtualControls();
+        };
+        if (typeof HudRules !== 'undefined' && !HudRules.isTouch(window)) {
+            window.addEventListener('touchstart', create, { once: true, passive: true });
+            return;
         }
+        create();
     }
 
     setMenuActive(active) {
