@@ -31,6 +31,12 @@ describe('leg atmosphere and render table', () => {
         });
     });
 
+    test('only mountain-dawn raises its far ring over the leg, from faint to full', () => {
+        game.Terrain.LEGS.forEach(leg => {
+            expect(leg.render.ringRise).toEqual(leg.id === 'mountain-dawn' ? [0.15, 1] : undefined);
+        });
+    });
+
     test('light shafts are on for legs 1, 2, 4 and 5 only', () => {
         const on = game.Terrain.LEGS.filter(leg => leg.atmosphere.shafts > 0).map(leg => leg.id);
         expect(on).toEqual(['mountain-dawn', 'valley-run', 'foggy-gorge', 'high-pass']);
@@ -109,6 +115,26 @@ describe('Graphics.setAtmosphere', () => {
         const graphics = fresh(false);
         graphics.setAtmosphere(atmosphere, { ring: 0.35 }, 0);
         expect(graphics.atmosphere).toBeNull();
+        expect(graphics.ringStrength).toBe(0.35);
+    });
+
+    test('a rising ring starts faint and follows the ride to full, under the weather', () => {
+        const graphics = fresh(true);
+        graphics.skyUniforms = { uMountains: { value: 1 } };
+        graphics.weatherType = 'clear';
+        graphics.setAtmosphere(atmosphere, { ring: 1, ringRise: [0.15, 1] }, 0);
+        expect(graphics.ringStrength).toBe(0.15);
+        graphics.setRingProgress(0.5);
+        expect(graphics.ringStrength).toBeCloseTo(0.575, 9);
+        expect(graphics.skyUniforms.uMountains.value).toBeCloseTo(0.575, 9);
+        // Past either end of the leg it holds its end value
+        graphics.setRingProgress(1.3);
+        expect(graphics.ringStrength).toBe(1);
+        graphics.setRingProgress(-0.2);
+        expect(graphics.ringStrength).toBe(0.15);
+        // A leg with no rise keeps its ring whatever the progress
+        graphics.setAtmosphere(atmosphere, { ring: 0.35 }, 0);
+        graphics.setRingProgress(0.9);
         expect(graphics.ringStrength).toBe(0.35);
     });
 });

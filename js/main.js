@@ -2954,6 +2954,11 @@ class Game {
         this.rimLight.target.position.copy(renderPos);
         this.rimLight.target.updateMatrixWorld();
 
+        // The far ring of a leg that nears the mountains rises with the ride
+        const env = this.environment;
+        this.graphics.setRingProgress(
+            ((this.vehicle.currentRoadSegment || 0) - env.startSegment) / Math.max(1, env.endSegment - env.startSegment)
+        );
         this.graphics.update(
             rawDeltaTime,
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,

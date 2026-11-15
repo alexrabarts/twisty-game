@@ -599,6 +599,7 @@ class Graphics {
         this.atmosphere = null;
         this.shaftsActive = false;
         this.ringStrength = 1;
+        this.ringRise = null;
         this.sunScreen = new THREE.Vector2();
         this.sunView = new THREE.Vector3();
 
@@ -725,9 +726,22 @@ class Graphics {
     // fog and shafts need the depth texture and stay off without it.
     setAtmosphere(atmosphere, render, baseY = 0) {
         this.ringStrength = render && render.ring !== undefined ? render.ring : 1;
+        // A leg the far ring rises over starts it at its first value (setRingProgress)
+        this.ringRise = render && render.ringRise ? render.ringRise : null;
+        if (this.ringRise) this.ringStrength = this.ringRise[0];
         this.atmosphere = atmosphere && this.atmosphereSupported
             ? { heightFog: atmosphere.heightFog, shafts: atmosphere.shafts || 0, baseY }
             : null;
+    }
+
+    // How far along the leg the rider is (0 to 1), on a leg whose far ring
+    // rises: the ring strength follows, under whatever the weather leaves of it
+    setRingProgress(progress) {
+        if (!this.ringRise) return;
+        const t = Math.min(1, Math.max(0, progress));
+        this.ringStrength = this.ringRise[0] + (this.ringRise[1] - this.ringRise[0]) * t;
+        const weather = SKY_WEATHER[this.weatherType] || {};
+        this.skyUniforms.uMountains.value = (1 - (weather.fogBlend || 0)) * this.ringStrength;
     }
 
     setTimeOfDay(timeKey, config) {

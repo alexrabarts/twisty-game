@@ -579,7 +579,8 @@ const Terrain = (() => {
       // As the valley closes (Terrain.closingAt) the trees thicken and turn to
       // conifers (`closed` holds the values at full weight), rock outcrops
       // break through the slopes, and the range ahead (`approach`, the
-      // mountains of leg 2) comes nearer.
+      // mountains of leg 2) comes nearer; the far ring in the sky strengthens
+      // with it (render.ringRise).
       dressing: {
         forest: {
           coniferShare: 0, snowy: false,
@@ -651,7 +652,8 @@ const Terrain = (() => {
   const DEFAULT_RENDER = { ring: 1, cullMax: 600, shadowSpan: 120 };
   const ATMOSPHERE = {
     // The open valley sees far; the cliff road keeps the cliff legs' reach
-    'mountain-dawn': { atmosphere: { heightFog: { density: 0.0025, falloff: 0.05 }, shafts: 0.35 }, render: { cullMax: 800 } },
+    // The far ring in the sky rises from faint to full over the leg, as the mountains near
+    'mountain-dawn': { atmosphere: { heightFog: { density: 0.0025, falloff: 0.05 }, shafts: 0.35 }, render: { cullMax: 800, ringRise: [0.15, 1] } },
     'valley-run': { atmosphere: { heightFog: { density: 0.004, falloff: 0.04 }, shafts: 0.35 }, render: {} },
     'coastal-descent': { atmosphere: { heightFog: { density: 0.003, falloff: 0.04 }, shafts: 0 }, render: { ring: 0.35, cullMax: 800 } },
     'foggy-gorge': { atmosphere: { heightFog: { density: 0.004, falloff: 0.06 }, shafts: 0.35 }, render: { shadowSpan: 200 } },
