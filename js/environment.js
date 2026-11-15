@@ -12,6 +12,9 @@ const LAYOUT_BEFORE_SHARPENING = [
   { segments: 10, turnRate: 0 }, { segments: 8, turnRate: -0.065 }, { segments: 14, turnRate: 0 },
 ];
 
+// The share of the scene fog's density the high pass's peaks take
+const PASS_PEAK_FOG = 0.5;
+
 // Segments kept clear between a set piece and any roadworks prop (board, cones)
 const ROADWORKS_SET_PIECE_MARGIN = 1;
 
@@ -1574,11 +1577,11 @@ class Environment {
   // One peak of the approach range: a cone with ridged, uneven flanks, rock
   // darkening toward the foot and snow over the top of the taller ones.
   // Colours are stored undecoded, as the other vertex-coloured peaks are.
-  addApproachPeak({ x, z, height, radius, twist, seed, baseY, snow }, positions, colors, indices) {
+  addApproachPeak({ x, z, height, radius, twist, seed, baseY }, positions, colors, indices) {
     const rings = 7;
     const around = 12;
     const offset = positions.length / 3;
-    const snowLine = snow ?? (height > 380 ? 0.68 : height > 300 ? 0.8 : 2);
+    const snowLine = height > 380 ? 0.68 : height > 300 ? 0.8 : 2;
     for (let r = 0; r <= rings; r++) {
       const v = r / rings;
       for (let k = 0; k < around; k++) {
@@ -1603,6 +1606,74 @@ class Environment {
         const c = a + around;
         const d = b + around;
         indices.push(a, c, b, b, c, d);
+      }
+    }
+  }
+
+  // One peak of a high pass, drawn face by face so each face takes its own
+  // colour: ridges stand out and gullies cut in between them, and snow lies
+  // only where a face is gentle enough to hold it, more of them the higher
+  // up. Below the snow line the rock is bare and dark; each face's shade
+  // varies a little so the flanks read in flat light. The jitter is hashed
+  // from the peak's seed, so no rand() draw is added. Colours are stored
+  // undecoded, as the other vertex-coloured peaks are.
+  addPassPeak({ x, z, height, radius, twist, seed, baseY, snow }, positions, colors) {
+    const rings = 9;
+    const around = 14;
+    const hash = (a, b) => {
+      const h = Math.sin(seed * 12.9898 + a * 78.233 + b * 37.719) * 43758.5453;
+      return h - Math.floor(h);
+    };
+    const ring = [];
+    for (let r = 0; r <= rings; r++) {
+      const v = r / rings;
+      const row = [];
+      for (let k = 0; k < around; k++) {
+        const angle = (k / around) * Math.PI * 2 + twist;
+        if (r === rings) {
+          row.push([x, baseY + height, z]);
+          continue;
+        }
+        // A crest every third of the way round, a gully between: the gullies
+        // fall back toward the axis and the crests stand out
+        const crest = Math.abs(Math.sin(angle * 1.5 + seed));
+        const ridge = (0.78 + 0.38 * Math.pow(crest, 0.7) + 0.1 * Math.sin(angle * 7 + seed * 1.7) * (1 - v)) * (0.94 + 0.12 * hash(r, k));
+        // Concave flanks: steep near the top, spreading wide at the foot
+        const spread = radius * Math.pow(1 - v, 1.25) * (1 + 0.3 * (1 - v) * (1 - v)) * ridge;
+        const lift = height * v * (1 + 0.07 * (hash(k, r + 31) - 0.5) + 0.05 * Math.sin(angle * 5 + seed + r));
+        row.push([x + Math.cos(angle) * spread, baseY + lift, z + Math.sin(angle) * spread]);
+      }
+      ring.push(row);
+    }
+    const face = (a, b, c, key) => {
+      const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+      const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      // How level the face is: 1 flat, 0 sheer
+      const level = Math.abs(ny) / Math.max(1e-6, Math.hypot(nx, ny, nz));
+      const v = ((a[1] + b[1] + c[1]) / 3 - baseY) / height;
+      const shade = 0.82 + 0.3 * hash(key, 7);
+      // Above the snow line a face holds snow unless it is sheer; below it only
+      // a gentle ledge does, and the higher the gentler it may be
+      const above = v - snow;
+      const holds = above > 0.08 ? level > 0.22 : above > -0.2 ? level > 0.48 - above * 1.5 : level > 0.8 && v > snow - 0.35;
+      let rgb;
+      if (holds) {
+        const white = 0.84 + 0.12 * hash(key, 3);
+        rgb = [white * 0.97, white * 0.985, white];
+      } else {
+        // Bare rock, darker at the foot and in the gullies' shadow
+        const rock = (0.13 + 0.1 * Math.min(1, v)) * shade;
+        rgb = [rock * 1.06, rock, rock * 0.93];
+      }
+      positions.push(...a, ...b, ...c);
+      colors.push(...rgb, ...rgb, ...rgb);
+    };
+    for (let r = 0; r < rings; r++) {
+      for (let k = 0; k < around; k++) {
+        const n = (k + 1) % around;
+        face(ring[r][k], ring[r + 1][k], ring[r][n], r * around + k);
+        if (r + 1 < rings) face(ring[r][n], ring[r + 1][k], ring[r + 1][n], r * around + k + 0.5);
       }
     }
   }
@@ -1643,14 +1714,13 @@ class Environment {
         const z = anchor.z - Math.sin(anchor.heading) * out + Math.cos(anchor.heading) * ahead;
         if (!clear(x, z, radius)) continue;
         this.passPeaks.push({ x, z, apex: lowest + height, radius });
-        this.addApproachPeak({ x, z, height: height + 140, radius, twist, seed, baseY, snow }, positions, colors, indices);
+        this.addPassPeak({ x, z, height: height + 140, radius, twist, seed, baseY, snow }, positions, colors);
       }
     }
-    if (indices.length === 0) return;
+    if (positions.length === 0) return;
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
     geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-    geometry.setIndex(indices);
     geometry.computeVertexNormals();
     const material = new THREE.MeshStandardMaterial({
       vertexColors: true,
@@ -1659,8 +1729,32 @@ class Environment {
       flatShading: true,
       envMapIntensity: 0.3,
     });
+    // The snow haze took the whole scene fog at full strength and left even the
+    // nearest peak a pale silhouette: the peaks take part of it, so the near
+    // ones keep their rock and the far ones still fade (the height fog of the
+    // depth pass is untouched, and with it the road's)
+    const haze = { fog: PASS_PEAK_FOG };
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uPeakFog = { value: haze.fog };
+      shader.fragmentShader = `uniform float uPeakFog;\n${shader.fragmentShader}`.replace(
+        "#include <fog_fragment>",
+        [
+          "#ifdef USE_FOG",
+          "\t#ifdef FOG_EXP2",
+          "\t\tfloat peakDensity = fogDensity * uPeakFog;",
+          "\t\tfloat fogFactor = 1.0 - exp( - peakDensity * peakDensity * vFogDepth * vFogDepth );",
+          "\t#else",
+          "\t\tfloat fogFactor = smoothstep( fogNear, fogFar, vFogDepth ) * uPeakFog;",
+          "\t#endif",
+          "\tgl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );",
+          "#endif",
+        ].join("\n"),
+      );
+    };
+    material.customProgramCacheKey = () => "pass-peaks-haze";
     const range = new THREE.Mesh(geometry, material);
     range.name = "pass-peaks";
+    range.userData.haze = haze;
     range.userData.skipCulling = true;
     range.frustumCulled = false;
     this.tagMeshes(range, "mountain");
@@ -5946,12 +6040,14 @@ class Environment {
     });
   }
 
-  updateTerrainColors(grassColor) {
+  // `worn` false keeps the colour as given: snow lies over the verge's dirt
+  updateTerrainColors(grassColor, worn = true) {
     // Update terrain strips (grass/ground next to road)
     this.scene.traverse((object) => {
       if (object.isMesh && object.userData.type === "terrain") {
+        object.material.color.setHex(grassColor);
         // A worn verge: the leg's grass colour over bare dirt
-        object.material.color.setHex(grassColor).lerp(new THREE.Color(this.vergeBaseColor), 0.6).multiplyScalar(0.75);
+        if (worn) object.material.color.lerp(new THREE.Color(this.vergeBaseColor), 0.6).multiplyScalar(0.75);
         object.material.needsUpdate = true;
       }
     });
@@ -6027,7 +6123,7 @@ class Environment {
           this.roadMaterial.needsUpdate = true;
         }
         // Snow-covered terrain
-        this.updateTerrainColors(0xe0e8f0); // White/pale blue
+        this.updateTerrainColors(0xeef2f6, false);
         this.updateMountainColors(0xd0d8e0); // Snowy mountains
         break;
 

@@ -553,7 +553,9 @@ const Terrain = (() => {
       stations: [[0, 0], [6, -0.4], [8, -4], [14, -22], [22, -40], [80, -40]],
       bands: [{ to: 6, kind: 'runoff' }, { kind: 'fall' }],
       runoff: RUNOFF,
-      tint: 0xdfe8f0,
+      // Near white: the ground colours are stored undecoded, so a pale blue
+      // tint rendered as a saturated blue band beside the road
+      tint: 0xf4f6f8,
       fallDepth: 40,
       rockSlope: 1.0
     });

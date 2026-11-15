@@ -401,6 +401,43 @@ describe('the coast and the ridge built', () => {
         expect(env.summitSegment).toBeGreaterThan(env.endSegment - 20);
     });
 
+    // The peaks were pale silhouettes in the snow haze: bare dark rock below the
+    // snow, snow on the gentler faces, and a fog response the haze cannot whiten out
+    test('ridge: the peaks show dark rock below gentler snow, and take half the scene fog', () => {
+        const { scene } = leg(RIDGE);
+        let peaks = null;
+        scene.traverse(object => { if (object.name === 'pass-peaks') peaks = object; });
+        const position = peaks.geometry.attributes.position;
+        const color = peaks.geometry.attributes.color;
+        expect(peaks.geometry.index).toBeNull();
+        const a = new game.THREE.Vector3(), b = new game.THREE.Vector3(), c = new game.THREE.Vector3();
+        const snow = [], rock = [];
+        const shades = new Set();
+        for (let f = 0; f < position.count; f += 3) {
+            a.fromBufferAttribute(position, f);
+            b.fromBufferAttribute(position, f + 1);
+            c.fromBufferAttribute(position, f + 2);
+            const normal = new game.THREE.Triangle(a, b, c).getNormal(new game.THREE.Vector3());
+            if (!Number.isFinite(normal.y) || normal.lengthSq() === 0) continue;
+            // One colour a face
+            expect(color.getX(f + 1)).toBe(color.getX(f));
+            expect(color.getX(f + 2)).toBe(color.getX(f));
+            const level = Math.abs(normal.y);
+            (color.getX(f) > 0.6 ? snow : rock).push(level);
+            shades.add(color.getX(f).toFixed(3));
+        }
+        expect(snow.length).toBeGreaterThan(position.count / 3 * 0.1);
+        expect(rock.length).toBeGreaterThan(position.count / 3 * 0.4);
+        // No sheer face holds snow, whatever its height
+        expect(rock.filter(level => level < 0.22).length).toBeGreaterThan(0);
+        expect(snow.filter(level => level < 0.22)).toEqual([]);
+        let darkest = 1;
+        for (let n = 0; n < color.count; n++) darkest = Math.min(darkest, color.getX(n));
+        expect(darkest).toBeLessThan(0.15);
+        expect(shades.size).toBeGreaterThan(50);
+        expect(peaks.userData.haze.fog).toBe(0.5);
+    });
+
     test('only the pass has pass dressing', () => {
         const { scene } = leg(COAST);
         scene.traverse(object => expect(['snow-poles', 'cairns', 'summit-marker', 'pass-peaks']).not.toContain(object.name));
