@@ -36,7 +36,7 @@ The wall of a leg keeps its shape and its vertex colours (strata bands, gullies,
 - The detail is faint from the saddle and plain only within a few metres (`FADE`), so the facets and the vertex colours stay what the wall is. The same tile, read several times larger (`COARSE`), comes in with distance. Slow noises vary the stone's brightness and warmth a little.
 - Cost on foggy-gorge: six texture reads a fragment, two before. Measured with `tools/terrain-check.mjs frametime`, interleaved with the photo version: about 2.4 to 2.8 ms a frame on an Apple M5, 196 to 226 ms in SwiftShader.
 
-To give another leg's wall the same treatment, add `rockFace: { map, normalMap, tile, tint }` to its entry in `LEGS`, naming the same two files: `tile` is the metres one copy covers, `tint` the stone the vertex colours shade. A leg with no models of its own also needs `dress()` to skip the parts its entry does not name; today it asks for all three. Not high-pass: it is bound to the frozen golden (`.agent/system/world.md`, "Golden bindings").
+To give another leg's wall the same treatment, add `rockFace: { map, normalMap, tile, tint }` to its entry in `LEGS`, naming the same two files: `tile` is the metres one copy covers, `tint` the stone the vertex colours shade.  An entry names only the parts the leg has: one with `rockFace` alone gets no rocks or portals. Not high-pass: it is bound to the frozen golden (`.agent/system/world.md`, "Golden bindings").
 
 ## Adding a leg
 

@@ -235,6 +235,22 @@ describe('where the modelled scenery does not apply', () => {
         expect(build(game, 4).dressing).toBeNull();
     });
 
+    // Another leg's wall can take the detail without models of its own
+    test('a leg that names only a rock face gets that and nothing else', async () => {
+        const game = loadWithAssets();
+        game.SceneAssets.LEGS[1] = { rockFace: game.SceneAssets.LEGS[GORGE].rockFace };
+        expect(game.SceneAssets.files(1)).toHaveLength(2);
+        const env = build(game, 1);
+        const rocks = tagged(env.scene, ['rock', 'debris']).length;
+        const result = await env.dressing;
+        expect(result.rockFace.ribbons).toBeGreaterThan(0);
+        expect(result.rocks).toEqual({ rocks: 0 });
+        expect(result.portals).toEqual({ portals: 0 });
+        expect(result.violations).toEqual([]);
+        expect(tagged(env.scene, ['rock', 'debris'])).toHaveLength(rocks);
+        expect(game.log.filter(line => line.includes('SceneAssets'))).toEqual([]);
+    });
+
     test('a file that fails leaves its part procedural and the others dressed', async () => {
         const game = loadWithAssets({ failing: ['rocks.glb'] });
         const env = build(game, GORGE);

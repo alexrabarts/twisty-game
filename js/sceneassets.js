@@ -601,10 +601,11 @@ const SceneAssets = (() => {
       console.error(`SceneAssets: ${name} for leg ${env.legIndex} kept its procedural meshes:`, error);
       return { error: String(error.message || error) };
     });
+    // A leg names the parts it has; one it does not name is left as built
     const parts = {
-      rocks: part("rocks", () => loadModel(spec.rocks), (model) => dressRocks(env, model, spec)),
-      portals: part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)),
-      rockFace: part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)),
+      rocks: spec.rocks ? part("rocks", () => loadModel(spec.rocks), (model) => dressRocks(env, model, spec)) : { rocks: 0 },
+      portals: spec.portal ? part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)) : { portals: 0 },
+      rockFace: spec.rockFace ? part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)) : { ribbons: 0 },
     };
     return Promise.all(Object.values(parts)).then(([rocks, portals, rockFace]) => ({
       rocks,
@@ -618,7 +619,7 @@ const SceneAssets = (() => {
 
   function files(legIndex) {
     const spec = LEGS[legIndex];
-    return spec ? [spec.rocks, spec.portal, spec.rockFace.map, spec.rockFace.normalMap] : [];
+    return spec ? [spec.rocks, spec.portal, spec.rockFace?.map, spec.rockFace?.normalMap].filter(Boolean) : [];
   }
 
   return { dress, files, LEGS };
