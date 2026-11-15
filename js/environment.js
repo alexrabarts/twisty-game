@@ -114,6 +114,24 @@ class Environment {
     return this.setPieces.some((piece) => index >= piece.from - margin && index <= piece.to + margin);
   }
 
+  // How far past the road edge something reaching `extent` either side of its
+  // centre (across the road's line) can stand on a side, wanted `want` past
+  // the edge, without reaching into a wall band (Terrain.zoneAt) at its
+  // segment or the segment either side: `want`, or pulled in toward the road
+  // to clear the wall by 5 cm. A sign, post or marker is never set into a
+  // wall. Null when it would have to stand nearer the road edge than `least`.
+  clearOfWall(index, sign, want, extent, least = 0.3) {
+    const halfRoad = this.roadWidth / 2;
+    let wall = Infinity;
+    const last = this.roadPath.length - 1;
+    for (let i = Math.max(0, index - 1); i <= Math.min(last, index + 1); i++) {
+      const outer = Terrain.zoneAt(this.terrain, i, sign * 1e4, halfRoad);
+      if (outer.kind === "wall") wall = Math.min(wall, outer.start - halfRoad);
+    }
+    const past = Math.min(want, wall - extent - 0.05);
+    return past >= least ? past : null;
+  }
+
   // A circle a bike collides with at any height below `height` above it
   // (see Vehicle's boulder loop): clutter on run-off ground
   addSolidCircle(x, y, z, radius, height, label) {
@@ -3456,7 +3474,13 @@ class Environment {
     // Overhead gantry spanning the road with a checkered banner, plus
     // checkered flags on each pole
     const group = new THREE.Group();
-    const halfSpan = this.roadWidth / 2 + 1.5;
+    // The poles stand 1.5 m past each edge, or nearer where a wall starts
+    // (the same on both sides: the banner spans the road symmetrically)
+    const finishIndex = this.roadPath.indexOf(point);
+    const halfSpan = this.roadWidth / 2 + Math.min(
+      this.clearOfWall(finishIndex, -1, 1.5, 0.15) ?? 0.3,
+      this.clearOfWall(finishIndex, 1, 1.5, 0.15) ?? 0.3,
+    );
     const bannerHeight = 5;
 
     const poleGeometry = new THREE.CylinderGeometry(0.12, 0.15, bannerHeight + 1, 10);
@@ -3537,6 +3561,7 @@ class Environment {
     group.rotation.y = point.heading;
     this.scene.add(group);
     // Pole bases rest on the road; banner/flags/text are tagged allowFloating
+    group.userData.sign = true;
     this.registerGrounded(group, "finish banner gantry");
   }
 
@@ -3966,6 +3991,7 @@ class Environment {
       }
     });
     marker.name = "summit-marker";
+    marker.userData.sign = true;
     this.scene.add(marker);
     this.registerGrounded(marker, "summit marker");
     const along = new THREE.Vector3(Math.sin(point.heading), 0, Math.cos(point.heading));
@@ -4086,8 +4112,15 @@ class Environment {
     // and the active leg entirely.
     const startSignPoint =
       this.roadPath[Math.min(Math.max(0, this.startSegment), this.roadPath.length - 1)];
-    // On the roadside ledge of the side that drops, clear of a wall
-    const startSignDistance = (this.roadWidth / 2 + 1) * (Terrain.fallSignAt(this.terrain, Math.max(0, this.startSegment)) || 1);
+    // On the roadside ledge of the side that drops, clear of a wall. The
+    // board faces along the road, 2 m across it; where that would reach into
+    // a wall (the gorge has one each side) it turns side-on to the road and
+    // the post stands on the shoulder
+    const startIndex = Math.max(0, this.startSegment);
+    const startSignSide = Terrain.fallSignAt(this.terrain, startIndex) || 1;
+    const startSignFacing = this.clearOfWall(startIndex, startSignSide, 1, 1);
+    const startSignPast = startSignFacing ?? this.clearOfWall(startIndex, startSignSide, 1, 0.1);
+    const startSignDistance = (this.roadWidth / 2 + startSignPast) * startSignSide;
     const startSignX =
       startSignPoint.x + Math.cos(startSignPoint.heading) * startSignDistance;
     const startSignZ =
@@ -4115,10 +4148,12 @@ class Environment {
     });
     const sign = new THREE.Mesh(signGeometry, signMaterial);
     sign.position.set(startSignX, startSignGroundY + 2, startSignZ);
-    sign.rotation.y = startSignPoint.heading;
+    sign.rotation.y = startSignPoint.heading + (startSignFacing === null ? -startSignSide * Math.PI / 2 : 0);
     sign.castShadow = true;
     sign.receiveShadow = true;
     sign.userData.allowFloating = true; // Board mounted on the post
+    sign.userData.sign = true;
+    signPost.userData.sign = true;
     this.scene.add(sign);
 
     // Posts along the road - especially on curves
@@ -4162,19 +4197,22 @@ class Environment {
         // there). y positions are relative to point.y - the old hardcoded
         // 0.75/1.2 ignored the road elevation (13-39), burying every post
         // far below the surface.
-        const postDistance = this.roadWidth / 2 + 1;
+        // A metre past the edge, or nearer where a wall starts there (a
+        // post is 0.1 in radius, its reflector as wide)
+        const postDistance = (sign) => this.roadWidth / 2 + (this.clearOfWall(index, sign, 1, 0.1) ?? 0.3);
 
         if (Math.abs(headingChange) < 0.01) {
           // Straight section - posts on both sides
           // Left post
           const leftX =
-            point.x - postDistance * Math.sin(point.heading + Math.PI / 2);
+            point.x - postDistance(-1) * Math.sin(point.heading + Math.PI / 2);
           const leftZ =
-            point.z - postDistance * Math.cos(point.heading + Math.PI / 2);
+            point.z - postDistance(-1) * Math.cos(point.heading + Math.PI / 2);
           const leftPost = new THREE.Mesh(postGeometry, postMaterial);
           leftPost.position.set(leftX, point.y + 0.75, leftZ);
           leftPost.castShadow = true;
           leftPost.receiveShadow = true;
+          leftPost.userData.sign = true;
           this.scene.add(leftPost);
           this.registerGrounded(leftPost, `delineator post left (segment ${index})`);
 
@@ -4186,17 +4224,19 @@ class Environment {
           leftReflector.position.set(leftX, point.y + 1.2, leftZ);
           leftReflector.rotation.y = point.heading;
           leftReflector.userData.allowFloating = true; // Mounted on the post
+          leftReflector.userData.sign = true;
           this.scene.add(leftReflector);
 
           // Right post
           const rightX =
-            point.x + postDistance * Math.sin(point.heading + Math.PI / 2);
+            point.x + postDistance(1) * Math.sin(point.heading + Math.PI / 2);
           const rightZ =
-            point.z + postDistance * Math.cos(point.heading + Math.PI / 2);
+            point.z + postDistance(1) * Math.cos(point.heading + Math.PI / 2);
           const rightPost = new THREE.Mesh(postGeometry, postMaterial);
           rightPost.position.set(rightX, point.y + 0.75, rightZ);
           rightPost.castShadow = true;
           rightPost.receiveShadow = true;
+          rightPost.userData.sign = true;
           this.scene.add(rightPost);
           this.registerGrounded(rightPost, `delineator post right (segment ${index})`);
 
@@ -4207,20 +4247,22 @@ class Environment {
           rightReflector.position.set(rightX, point.y + 1.2, rightZ);
           rightReflector.rotation.y = point.heading;
           rightReflector.userData.allowFloating = true; // Mounted on the post
+          rightReflector.userData.sign = true;
           this.scene.add(rightReflector);
         } else {
           // Curve - post on outside only
           const side = headingChange > 0 ? -1 : 1; // Outside of curve
           const postX =
             point.x +
-            side * postDistance * Math.sin(point.heading + Math.PI / 2);
+            side * postDistance(side) * Math.sin(point.heading + Math.PI / 2);
           const postZ =
             point.z +
-            side * postDistance * Math.cos(point.heading + Math.PI / 2);
+            side * postDistance(side) * Math.cos(point.heading + Math.PI / 2);
           const post = new THREE.Mesh(postGeometry, postMaterial);
           post.position.set(postX, point.y + 0.75, postZ);
           post.castShadow = true;
           post.receiveShadow = true;
+          post.userData.sign = true;
           this.scene.add(post);
           this.registerGrounded(post, `curve post (segment ${index})`);
 
@@ -4234,6 +4276,7 @@ class Environment {
           reflector.castShadow = true;
           reflector.receiveShadow = true;
           reflector.userData.allowFloating = true; // Mounted on the post
+          reflector.userData.sign = true;
           this.scene.add(reflector);
         }
       }
@@ -4986,23 +5029,7 @@ class Environment {
     signGroup.add(board);
     signGroup.add(this.createSignFace(text, "#ff6600", "#111111"));
 
-    // Position sign beside road (roadWidth-relative, base on the terrain model)
-    const signDistance = this.roadWidth / 2 + 1.2;
-    const signX = point.x - Math.cos(point.heading) * signDistance;
-    const signZ = point.z + Math.sin(point.heading) * signDistance;
-
-    signGroup.position.set(signX, this.groundYAt(signX, signZ), signZ);
-    signGroup.rotation.y = point.heading;
-
-    signGroup.traverse((child) => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-
-    this.scene.add(signGroup);
-    this.registerGrounded(signGroup, `construction sign "${text}"`);
+    this.placeWarningSign(signGroup, point, `construction sign "${text}"`);
   }
 
   createWorkTruck(x, y, z, rotation) {
@@ -5278,6 +5305,42 @@ class Environment {
     }
   }
 
+  // A warning board faces oncoming riders, so it reaches 2 m either side of
+  // its post across the road's line. It stands 1.2 m past the left edge, the
+  // right edge where the left is a wall, or pulled in toward the road (over
+  // the shoulder, above a rider's head) where both are; where it cannot
+  // clear a wall at all it is not built
+  placeWarningSign(signGroup, point, label) {
+    const index = this.roadPath.indexOf(point);
+    let sign = -1;
+    let past = this.clearOfWall(index, -1, 1.2, 2);
+    if (past === null || past < 1.2) {
+      const right = this.clearOfWall(index, 1, 1.2, 2);
+      if (right !== null && (past === null || right > past)) {
+        sign = 1;
+        past = right;
+      }
+    }
+    if (past === null) return;
+    const signDistance = (this.roadWidth / 2 + past) * sign;
+    const signX = point.x + Math.cos(point.heading) * signDistance;
+    const signZ = point.z - Math.sin(point.heading) * signDistance;
+
+    signGroup.position.set(signX, this.groundYAt(signX, signZ), signZ);
+    signGroup.rotation.y = point.heading;
+
+    signGroup.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    signGroup.userData.sign = true;
+
+    this.scene.add(signGroup);
+    this.registerGrounded(signGroup, label);
+  }
+
   createHairpinSign(point, text) {
     const signGroup = new THREE.Group();
 
@@ -5306,23 +5369,7 @@ class Environment {
     signGroup.add(board);
     signGroup.add(this.createSignFace(text, "#ffdd00", "#111111"));
 
-    // Position sign beside road (roadWidth-relative, base on the terrain model)
-    const signDistance = this.roadWidth / 2 + 1.2;
-    const signX = point.x - Math.cos(point.heading) * signDistance;
-    const signZ = point.z + Math.sin(point.heading) * signDistance;
-
-    signGroup.position.set(signX, this.groundYAt(signX, signZ), signZ);
-    signGroup.rotation.y = point.heading;
-
-    signGroup.traverse((child) => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
-    });
-
-    this.scene.add(signGroup);
-    this.registerGrounded(signGroup, `hairpin warning sign "${text}"`);
+    this.placeWarningSign(signGroup, point, `hairpin warning sign "${text}"`);
   }
 
   createChevronMarker(point, direction) {
@@ -5378,9 +5425,11 @@ class Environment {
 
     // Position on outside of turn (roadWidth-relative so the marker sits on
     // the roadside ledge, base on the terrain model)
-    const markerDistance = this.roadWidth / 2 + 1;
-    // Right turn -> left (mountain) side, left turn -> right (valley) side
+    // Right turn -> left (mountain) side, left turn -> right (valley) side;
+    // the arrow reaches 0.45 m either side of its post across the road, so
+    // beside a wall it stands nearer the edge
     const markerSide = direction === "right" ? -1 : 1;
+    const markerDistance = this.roadWidth / 2 + (this.clearOfWall(this.roadPath.indexOf(point), markerSide, 1, 0.45) ?? 0.3);
     const markerX = point.x + Math.cos(point.heading) * markerDistance * markerSide;
     const markerZ = point.z - Math.sin(point.heading) * markerDistance * markerSide;
 
@@ -5394,6 +5443,7 @@ class Environment {
       }
     });
 
+    chevronGroup.userData.sign = true;
     this.scene.add(chevronGroup);
     this.registerGrounded(chevronGroup, "chevron marker");
   }
@@ -5451,12 +5501,14 @@ class Environment {
     const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, emissive: 0x444444, emissiveIntensity: 0.12 });
     for (const [sign, side] of [[-1, reach.left], [1, reach.right]]) {
       if (side <= halfRoad + 2) continue;
-      const lateral = side - 2;
+      // Half a metre inside the rideable limit, where the run-off meets a wall
+      const lateral = side - 2.5;
       const x = point.x + sign * lateral * Math.cos(point.heading);
       const z = point.z - sign * lateral * Math.sin(point.heading);
       const mesh = new THREE.Mesh(post, material);
       mesh.position.set(x, this.groundYAt(x, z) + 1.5, z);
       mesh.castShadow = true;
+      mesh.userData.sign = true;
       this.scene.add(mesh);
       this.registerGrounded(mesh, `${label} limit post`);
     }
@@ -5752,6 +5804,7 @@ class Environment {
         }
       });
 
+      gateGroup.userData.sign = true;
       this.scene.add(gateGroup);
       this.registerGrounded(gateGroup, `checkpoint gate ${i}`);
 

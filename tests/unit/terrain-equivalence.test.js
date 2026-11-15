@@ -55,6 +55,12 @@ describe('terrain equivalence with the phase 0 golden', () => {
     // wall. The two cliff legs are bound by everything D6 does not touch.
     const PLANT = /^(construction bulldozer|construction barrier|work truck)/;
     const isClass = label => D6_CLASSES.some(pattern => pattern.test(label));
+    // Declared delta S1: no sign, post or marker reaches into a wall band
+    // (tests/unit/signs.test.js). On high-pass the wall-side posts and chevrons
+    // stand nearer the road edge, the warning boards stand on the drop side and
+    // the finish gantry's poles stand 0.8 m past each edge, its banner narrower
+    // with them. They move across the road's line only, never along it.
+    const SIGN_CLEAR = /^(delineator post left|curve post|chevron marker|hairpin warning sign|construction sign|finish banner gantry)/;
 
     test.each(BOUND)('%s builds to the golden, apart from declared delta D6', (id, index) => {
         const captured = captureLeg(game, index);
@@ -114,9 +120,17 @@ describe('terrain equivalence with the phase 0 golden', () => {
         now.forEach((record, n) => {
             const was = before[n];
             const same = record.position.every((v, k) => Math.abs(v - was.position[k]) < 1e-9);
+            const [x, y, z] = was.position;
+            if (SIGN_CLEAR.test(record.label)) {
+                // Along the road the sign stands where it stood; only the gantry is rebuilt
+                const p = env.roadPath[game.Terrain.locate(env.roadPath, x, z, 0, env.roadPath.length - 1, {}).index];
+                const along = (v, w) => (v[0] - w[0]) * Math.sin(p.heading) + (v[2] - w[2]) * Math.cos(p.heading);
+                expect(Math.abs(along(record.position, was.position))).toBeLessThan(0.01);
+                if (!/^finish banner gantry/.test(record.label)) expect(record.hash).toBe(was.hash);
+                return;
+            }
             // Nothing is rebuilt: every object keeps its geometry
             expect(record.hash).toBe(was.hash);
-            const [x, y, z] = was.position;
             const moves = isClass(record.label);
             if (!moves) {
                 // P23 (4): every object outside the D6 classes keeps its position

@@ -469,7 +469,8 @@ describe('the coast and the ridge built', () => {
         expect(posts).toHaveLength(1);
         const gate = env.finishGate;
         const lateral = lateralOf(env, posts[0].object.position.x, posts[0].object.position.z);
-        expect(lateral).toBeCloseTo(gate.right - 2, 0);
+        // Half a metre inside the rideable limit (the gate reaches 2 m past it)
+        expect(lateral).toBeCloseTo(gate.right - 2.5, 1);
     });
 });
 
