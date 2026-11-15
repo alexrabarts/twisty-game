@@ -48,7 +48,8 @@
     "triangles": 229197,
     "instances": 723,
     "grounded": 359,
-    "d6": 115
+    "d6": 115,
+    "solidBoulders": 0
    },
    "snapshot.fingerprints.full": {
     "hash": "8f48a35efa8d5bad",

@@ -35,6 +35,8 @@ const AMENDMENTS = join(root, 'tests/golden/amendments.json');
 const LEG_IDS = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'];
 const FROZEN_SECTIONS = ['snapshot', 'raycast', 'frames', 'traj', 'gates', 'look', 'shortcuts', 'budget'];
 const BLOCKED_HOSTS = ['cloudfunctions.net', 'firebasedatabase.app', 'firebaseio.com'];
+// The plan's bound on environment.boulders[] entries the bike can hit, per leg
+const SOLID_BOULDER_BUDGET = 1500;
 const LATERALS = [-80, -40, -20, -12, 0, 12, 20, 40, 80];
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg' };
 
@@ -748,7 +750,8 @@ const PROBES = {
     },
     async budget(page, i) {
         const snap = await inPage(page, 'snapshot', i);
-        return { ...snap.counts, buildMs: snap.buildMs };
+        // Solid boulders are collision work on every tick, so they count against the budget with the meshes
+        return { ...snap.counts, solidBoulders: snap.boulders.filter(b => b[4] === true).length, buildMs: snap.buildMs };
     },
     async mutate(page, i) {
         const clean = (await inPage(page, 'snapshot', i)).fingerprints;
@@ -962,6 +965,11 @@ function finishChecks(report) {
     if (results.shortcutsControl) {
         // Without this the all-empty answer on the real legs could mean a probe that cannot see
         Object.entries(results.shortcutsControl).forEach(([id, open]) => { if (!open.length) failures.push(`${id}: the shortcuts probe missed a chord it was built to find`); });
+    }
+    if (results.budget) {
+        Object.entries(results.budget).forEach(([id, r]) => {
+            if (!(r.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.solidBoulders} solid boulders, over the budget of ${SOLID_BOULDER_BUDGET} per leg`);
+        });
     }
     if (results.mutate) {
         Object.entries(results.mutate).forEach(([id, r]) => { if (!r.differs) failures.push(`${id}: a 0.5 ground shift did not move every fingerprint mode`); });
