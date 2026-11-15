@@ -51,7 +51,8 @@ const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : undefined;
 const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
-const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : legIds);
+// The shortcuts control builds its own road and reads no leg, so it runs once, filed under the first leg asked for
+const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : legIds);
 const jobs = Number(option('jobs') || 3);
 
 const fail = (code, message) => {
