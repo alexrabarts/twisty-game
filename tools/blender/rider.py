@@ -36,7 +36,7 @@ def limb(k, name, rows, mat, ring=8):
         sections.append((-length / 2 + t * length, -radius, radius + bulge, radius, 2.2, 2.2, radius / (2 * radius + bulge)))
     sections += [(length / 2 + last * 0.5, -last * 0.8, last * 0.8, last * 0.8), (length / 2 + last * 0.85, -last * 0.3, last * 0.3, last * 0.3)]
     k.begin(name)
-    k.loft(sections, mat, axis="y", ring=ring, steps=1)
+    k.loft(sections, mat, axis="y", ring=ring, steps=1, sharp=80)
 
 
 def build():
@@ -65,11 +65,11 @@ def build():
         (0.235, -0.075, 0.07, 0.1, 2.4, 2.4),
         (0.27, -0.055, 0.05, 0.058),
         (0.3, -0.05, 0.045, 0.052),
-    ], jacket, axis="y", ring=16, steps=2)
+    ], jacket, axis="y", ring=16, steps=2, sharp=80)
 
     k.begin("hump")
-    k.loft([(-0.02, -0.14, -0.08, 0.03), (0.04, -0.175, -0.08, 0.07, 2.4, 2.4), (0.14, -0.185, -0.08, 0.078, 2.4, 2.4), (0.21, -0.15, -0.07, 0.06), (0.24, -0.11, -0.06, 0.03)],
-           "suit", axis="y", ring=10, steps=2)
+    k.loft([(0.0, -0.13, -0.08, 0.025), (0.06, -0.15, -0.08, 0.05, 2.4, 2.4), (0.15, -0.16, -0.08, 0.058, 2.4, 2.4), (0.21, -0.14, -0.07, 0.045), (0.24, -0.11, -0.06, 0.02)],
+           "suit", axis="y", ring=10, steps=2, sharp=80)
 
     # Helmet: an egg, longer than it is wide, with a chin bar, the visor
     # across the eye port, a stripe over the crown and a lip at the back
@@ -92,7 +92,7 @@ def build():
         (0.1, -0.12, 0.098, 0.11, 2.0, 2.0),
         (0.132, -0.08, 0.055, 0.072, 2.0, 2.0),
         (0.146, -0.03, 0.018, 0.028),
-    ], shell, axis="y", ring=16, steps=3)
+    ], shell, axis="y", ring=16, steps=3, sharp=80)
     k.box((0.07, 0.022, 0.02), (0, -0.098, 0.146), "visor", rot=(0.25, 0, 0), bevel=0.006)
     for side in (-1, 1):
         k.box((0.03, 0.012, 0.045), (side * 0.05, 0.128, 0.03), "visor", rot=(0.35, 0, 0), bevel=0.004)
@@ -118,12 +118,12 @@ def build():
 
     k.begin("glove")
     k.loft([(-0.06, -0.022, 0.022, 0.03), (-0.04, -0.034, 0.036, 0.044, 3, 3), (0.0, -0.038, 0.042, 0.05, 3, 3), (0.04, -0.036, 0.036, 0.048, 3, 3), (0.058, -0.02, 0.02, 0.036)],
-           lambda u, up, side: "suit_accent" if (up > 0.7 and 0.3 < u < 0.8) else "glove", ring=10, steps=1)
+           lambda u, up, side: "suit_accent" if (up > 0.7 and 0.3 < u < 0.8) else "glove", ring=10, steps=1, sharp=80)
 
     k.begin("boot")
     k.loft([(-0.085, -0.03, 0.03, 0.03), (-0.07, -0.038, 0.06, 0.044, 2.4, 4), (-0.02, -0.038, 0.075, 0.05, 2.4, 4), (0.05, -0.038, 0.04, 0.052, 2.4, 4),
             (0.13, -0.038, 0.018, 0.049, 2.4, 4), (0.17, -0.034, 0.0, 0.034, 2.4, 3)],
-           lambda u, up, side: "suit_accent" if up < -0.8 else "glove", ring=10, steps=2)
+           lambda u, up, side: "suit_accent" if up < -0.8 else "glove", ring=10, steps=2, sharp=80)
 
     k.finish(OUT, budget=5000, alone=tuple(k.nodes))
     parts.preview(k, "rider")

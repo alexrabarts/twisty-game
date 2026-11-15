@@ -47,39 +47,42 @@ def build(low=False):
     parts.clipons(k, GRIP, inner=(0.1, 0.95, 0.55))
 
     k.begin("brake_light", (0, 0.99, -0.84))
-    k.box((0.12, 0.034, 0.03), (0, 0.992, -0.868), "brake", rot=(0.25, 0, 0), bevel=0.008)
+    k.box((0.11, 0.03, 0.03), (0, 1.045, -0.812), "brake", rot=(0.3, 0, 0), bevel=0.008)
 
+    # Twin lights set in the blunt face of the nose
     k.begin("headlight", (-0.07, 0.74, 0.85))
     for side in (-1, 1):
-        k.box((0.1, 0.04, 0.06), (side * 0.085, 0.765, 0.892), "headlight", rot=(-0.55, side * 0.5, side * -0.3), bevel=0.012)
+        k.box((0.062, 0.036, 0.02), (side * 0.046, 0.766, 0.968), "headlight", rot=(-0.1, 0, side * -0.28), bevel=0.008)
 
     k.begin("body")
 
-    # Fairing: the nose runs over the front wheel, the flanks drop behind it
-    # to the belly pan. Painted above, dark below, a stripe of accent between.
+    # Fairing: a blunt-faced nose over the front wheel, flat flanks that end
+    # above a narrower belly pan, the frame and engine showing behind them
     def fairing(u, up, side):
-        if up < -0.72:
-            return "paint_dark"
-        if -0.72 <= up < -0.38 and u > 0.34:
+        if -0.86 < up < -0.6 and u > 0.26:
             return "accent"
+        # A vent let into each flank
+        if 0.56 < u < 0.8 and -0.5 < up < -0.12:
+            return "vent"
         return "paint"
 
     k.loft([
-        (0.96, 0.74, 0.80, 0.02),
-        (0.93, 0.67, 0.86, 0.105, 2.2, 2.6),
-        (0.86, 0.63, 0.905, 0.165, 2.2, 3.0),
-        (0.74, 0.62, 0.93, 0.2, 2.3, 3.2),
-        (0.6, 0.6, 0.935, 0.215, 2.4, 3.2),
-        (0.47, 0.5, 0.915, 0.225, 2.6, 3.0, 0.62),
-        (0.4, 0.3, 0.88, 0.225, 2.8, 3.0, 0.68),
-        (0.3, 0.21, 0.8, 0.22, 3.0, 3.2, 0.66),
-        (0.14, 0.2, 0.7, 0.21, 3.0, 3.2, 0.6),
-        (0.0, 0.21, 0.6, 0.195, 3.0, 3.0, 0.55),
-        (-0.12, 0.25, 0.5, 0.17, 2.8, 2.8),
-        (-0.2, 0.3, 0.44, 0.12, 2.4, 2.4),
-    ], fairing, ring=20, steps=3, sharp=50)
-    # Ram-air mouth between the lights
-    k.box((0.09, 0.045, 0.05), (0, 0.7, 0.93), "vent", rot=(-0.3, 0, 0), bevel=0.012)
+        (0.965, 0.72, 0.8, 0.085, 3, 3),
+        (0.94, 0.675, 0.845, 0.14, 3, 3),
+        (0.86, 0.635, 0.885, 0.185, 3.0, 3.2),
+        (0.74, 0.62, 0.915, 0.21, 3.0, 3.4, 0.5, 0.8),
+        (0.6, 0.6, 0.93, 0.22, 3.0, 3.4, 0.5, 0.78),
+        (0.48, 0.52, 0.915, 0.225, 3.0, 3.4, 0.6, 0.78),
+        (0.4, 0.43, 0.88, 0.225, 3.0, 3.4, 0.62, 0.8),
+        (0.3, 0.4, 0.8, 0.22, 3.0, 3.4, 0.6),
+        (0.14, 0.42, 0.7, 0.21, 3.0, 3.2, 0.55),
+        (0.0, 0.47, 0.62, 0.195, 3.0, 3.0),
+        (-0.1, 0.52, 0.58, 0.15),
+    ], fairing, ring=20, steps=3, sharp=26)
+    k.loft([(0.47, 0.3, 0.44, 0.09), (0.38, 0.22, 0.45, 0.165, 3, 3.4), (0.2, 0.2, 0.44, 0.178, 3, 3.4), (0.0, 0.2, 0.42, 0.172, 3, 3.4),
+            (-0.16, 0.23, 0.38, 0.13, 3, 3), (-0.27, 0.27, 0.34, 0.05)], "paint_dark", ring=14, steps=2)
+    # Ram-air mouth under the lights
+    k.box((0.1, 0.03, 0.03), (0, 0.712, 0.955), "vent", rot=(-0.4, 0, 0), bevel=0.008)
 
     # Bubble screen: its edges sit on the fairing, its crown stands clear of the bars
     def screen(u, v):
@@ -110,35 +113,35 @@ def build(low=False):
     ], tank, ring=20, steps=3)
     k.cylinder(0.036, 0.012, (0, 1.032, 0.2), "chrome", seg=12)
 
-    # Seat and pillion pad
-    k.loft([(-0.05, 0.83, 0.895, 0.12), (-0.12, 0.82, 0.9, 0.15, 3, 3), (-0.26, 0.82, 0.895, 0.145, 3, 3), (-0.36, 0.83, 0.905, 0.12, 3, 3), (-0.4, 0.85, 0.92, 0.08)],
+    # Seat, and a pillion pad on the tail
+    k.loft([(-0.05, 0.83, 0.895, 0.12), (-0.12, 0.82, 0.9, 0.15, 3, 3), (-0.26, 0.82, 0.895, 0.145, 3, 3), (-0.36, 0.84, 0.92, 0.12, 3, 3), (-0.4, 0.86, 0.94, 0.08)],
            "seat", ring=12, steps=2)
-    k.loft([(-0.42, 0.9, 0.975, 0.07), (-0.47, 0.89, 0.995, 0.1, 3, 3), (-0.6, 0.93, 1.03, 0.085, 3, 3), (-0.66, 0.96, 1.045, 0.05)], "seat", ring=12, steps=2)
+    k.loft([(-0.4, 0.93, 1.0, 0.06), (-0.45, 0.93, 1.03, 0.09, 3, 3), (-0.58, 0.99, 1.085, 0.075, 3, 3), (-0.64, 1.02, 1.09, 0.04)], "seat", ring=10, steps=2)
 
-    # Tail: rises to a blunt tip that carries the brake light
+    # Tail: short and upswept, a stop behind the rider, ending in the brake light
     def tail(u, up, side):
-        return "paint_dark" if up < -0.55 else ("accent" if (0.3 < u < 0.75 and -0.55 <= up < -0.1) else "paint")
+        return "paint_dark" if up < -0.55 else ("accent" if (0.3 < u < 0.8 and -0.55 <= up < -0.15) else "paint")
 
     k.loft([
         (0.0, 0.68, 0.84, 0.13),
         (-0.14, 0.7, 0.86, 0.16, 3, 2.6),
-        (-0.32, 0.74, 0.885, 0.16, 3, 2.6),
-        (-0.5, 0.82, 0.965, 0.14, 3, 2.6),
-        (-0.68, 0.895, 1.02, 0.11, 3, 2.6),
-        (-0.82, 0.94, 1.04, 0.085, 3, 2.6),
-        (-0.87, 0.96, 1.035, 0.06),
+        (-0.3, 0.75, 0.9, 0.158, 3, 2.6),
+        (-0.46, 0.84, 0.99, 0.14, 3, 2.6),
+        (-0.62, 0.93, 1.06, 0.115, 3, 2.6),
+        (-0.75, 0.99, 1.085, 0.085, 3, 2.6),
+        (-0.81, 1.015, 1.075, 0.06),
     ], tail, ring=16, steps=2)
-    k.beam((0, 0.9, -0.66), (0, 0.66, -0.93), (0.03, 0.02), "dark_metal")
-    k.box((0.16, 0.1, 0.008), (0, 0.67, -0.93), "plate", rot=(0.3, 0, 0), bevel=0)
+    k.beam((0, 0.96, -0.66), (0, 0.7, -0.9), (0.03, 0.02), "dark_metal")
+    k.box((0.16, 0.1, 0.008), (0, 0.71, -0.9), "plate", rot=(0.3, 0, 0), bevel=0)
     for side in (-1, 1):
-        k.rod((side * 0.05, 0.78, -0.8), (side * 0.14, 0.79, -0.81), 0.008, "dark_metal", seg=5)
-        k.box((0.04, 0.022, 0.03), (side * 0.155, 0.79, -0.81), "signal", bevel=0.008)
+        k.rod((side * 0.05, 0.84, -0.78), (side * 0.14, 0.85, -0.79), 0.008, "dark_metal", seg=5)
+        k.box((0.04, 0.022, 0.03), (side * 0.155, 0.85, -0.79), "signal", bevel=0.008)
 
     # Twin-spar frame from the headstock to the pivot plates, and a subframe
     for side in (-1, 1):
         k.beam((side * 0.085, 0.84, 0.47), (side * 0.15, 0.56, -0.02), (0.04, 0.11), "steel", bevel=0.012)
         k.panel([(-0.02, 0.62), (-0.16, 0.6), (-0.2, 0.42), (-0.14, 0.34), (-0.06, 0.36), (0.0, 0.48)], side * 0.15, 0.035, "steel", bevel=0.01)
-        k.beam((side * 0.12, 0.72, -0.08), (side * 0.1, 0.9, -0.6), (0.022, 0.03), "dark_metal", bevel=0)
+        k.beam((side * 0.12, 0.72, -0.08), (side * 0.09, 0.96, -0.6), (0.022, 0.03), "dark_metal", bevel=0)
     k.cylinder(0.05, 0.2, (0, 0.84, 0.5), "steel", rot=(-0.26, 0, 0), seg=10)
 
     # Engine: block, inclined bank, covers and sump, seen through the frame
