@@ -148,3 +148,26 @@ describe('Graphics post set-up', () => {
         expect(graphics.shaftTarget.height).toBe(Math.floor(graphics.sceneTarget.height / 4));
     });
 });
+
+describe('the night sky', () => {
+    const source = loadScript('graphics.js');
+    const starBlock = source.slice(source.indexOf('// Stars'), source.indexOf('// Sun or moon disc'));
+
+    test('stars twinkle slowly and faintly: 8% at 0.3 to 1.0 rad/s', () => {
+        const match = starBlock.match(/float twinkle = ([\d.]+) \+ ([\d.]+) \* sin\(uTime \* \(([\d.]+) \+ r \* ([\d.]+)\)/);
+        expect(match).not.toBeNull();
+        const [, base, amplitude, slowest, extra] = match.map(Number);
+        expect(base + amplitude).toBeCloseTo(1, 9);
+        expect(amplitude).toBeLessThanOrEqual(0.1);
+        expect(slowest).toBeGreaterThanOrEqual(0.3);
+        expect(slowest + extra).toBeLessThanOrEqual(1.0);
+    });
+
+    test('a star is spread over at least a pixel and dimmed by the same area, so it does not shimmer', () => {
+        expect(starBlock).toMatch(/fwidth\(suv\)/);
+        expect(starBlock).toMatch(/float radius = max\(0\.09, 0\.75 \* max\(pixel\.x, pixel\.y\)\)/);
+        expect(starBlock).toMatch(/\(0\.09 \* 0\.09\) \/ \(radius \* radius\)/);
+        // Both sky materials ask for derivatives, for WebGL1
+        expect((source.match(/extensions: \{ derivatives: true \}/g) || []).length).toBe(2);
+    });
+});

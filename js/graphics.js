@@ -195,8 +195,16 @@ const GFX_SKY_FRAGMENT = `
             float r = gfxHash(id);
             vec2 jitter = vec2(gfxHash(id + 3.1), gfxHash(id + 7.7)) - 0.5;
             float dist = length(fract(suv) - 0.5 - jitter * 0.6);
-            float twinkle = 0.75 + 0.25 * sin(uTime * (1.5 + r * 4.0) + r * 60.0);
-            float star = step(0.965, r) * (1.0 - smoothstep(0.0, 0.09, dist)) * twinkle * (0.4 + 0.6 * gfxHash(id + 1.3));
+            // A star smaller than a pixel lands on a pixel centre in one frame
+            // and between pixels in the next, so it shimmers as the view moves.
+            // Spread it over at least a pixel and dim it by the same area: the
+            // light it gives is the same at any size, and it no longer flickers.
+            vec2 pixel = fwidth(suv);
+            float radius = max(0.09, 0.75 * max(pixel.x, pixel.y));
+            float spread = (0.09 * 0.09) / (radius * radius);
+            // A slow, faint twinkle: 8% at 0.3 to 1.0 rad/s
+            float twinkle = 0.92 + 0.08 * sin(uTime * (0.3 + r * 0.7) + r * 60.0);
+            float star = step(0.965, r) * (1.0 - smoothstep(0.0, radius, dist)) * spread * twinkle * (0.4 + 0.6 * gfxHash(id + 1.3));
             star *= smoothstep(0.02, 0.25, h);
             sky += vec3(0.85, 0.9, 1.0) * star * uStars * 2.5 * clear;
         }
@@ -660,6 +668,8 @@ class Graphics {
             uniforms: this.skyUniforms,
             vertexShader: GFX_SKY_VERTEX,
             fragmentShader: GFX_SKY_FRAGMENT,
+            // fwidth() in the star field; WebGL2 has it built in
+            extensions: { derivatives: true },
             side: THREE.BackSide,
             depthWrite: false,
             depthFunc: THREE.LessEqualDepth,
@@ -688,6 +698,7 @@ class Graphics {
                 }
             `,
             fragmentShader: GFX_SKY_FRAGMENT,
+            extensions: { derivatives: true },
             side: THREE.BackSide,
             depthWrite: false,
             fog: false,
