@@ -197,6 +197,7 @@ class Game {
         this.input = new InputHandler();
         this.soundManager = new SoundManager();
         this.soundManager.masterVolume = 0.3;
+        this.hud = new Hud(document, window);
 
         // requestAnimationFrame stops on a hidden tab, so nothing else would
         // silence the engine drone
@@ -521,8 +522,19 @@ class Game {
         if (this.environment && this.environment.checkpoints) {
             this.environment.checkpoints.forEach(cp => { cp.passed = false; });
         }
+        this.firstInputAt = NaN;
+        if (this.hud) {
+            const leg = this.tourSystem && this.tourSystem.getCurrentLeg();
+            const index = leg ? this.tourSystem.getCurrentLegIndex() : -1;
+            this.hud.startRun(leg ? `Leg ${index + 1} · ${leg.name}` : '');
+            this.hud.setGates(0, this.gateTotal());
+        }
         this.hideSplit();
         this.updateScoreDisplay();
+    }
+
+    gateTotal() {
+        return this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : RaceTiming.CHECKPOINTS;
     }
 
     removeRunOverlays() {
@@ -530,6 +542,7 @@ class Game {
             const element = document.getElementById(id);
             if (element) element.remove();
         });
+        document.body.classList.remove('run-over');
         if (this.input) {
             this.input.setMenuActive(false);
         }
@@ -1028,24 +1041,7 @@ class Game {
     }
 
     showTimeOfDayNotification(timeName) {
-        const notification = document.createElement('div');
-        notification.className = 'notification';
-        notification.textContent = timeName;
-        notification.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 15px 30px;
-            border-radius: 10px;
-            font-size: 24px;
-            z-index: 1000;
-            animation: fadeInOut 2s ease-out;
-        `;
-        document.body.appendChild(notification);
-        setTimeout(() => notification.remove(), 2000);
+        showCallout(timeName, 'info', 2000);
     }
 
     setupCamera() {
@@ -1533,7 +1529,6 @@ class Game {
         if (!this.uiElements) {
             this.uiElements = {
                 dashboard: document.querySelector('.dashboard'),
-                speed: document.getElementById('speed'),
                 speedVignette: document.getElementById('speedVignette')
             };
         }
@@ -1547,27 +1542,10 @@ class Game {
             return;
         }
 
-        // Update speedometer (only write to the DOM when the value changes)
-        const speed = this.vehicle.getSpeed().toFixed(0);
-        if (ui.speed && speed !== this.lastDisplayedSpeed) {
-            this.lastDisplayedSpeed = speed;
-            ui.speed.textContent = speed;
-
-            // Color code speed for speedometer
-            const speedBand = speed < 20 ? 0 : speed < 40 ? 1 : 2;
-            if (speedBand !== this.lastSpeedBand) {
-                this.lastSpeedBand = speedBand;
-                if (speedBand === 0) {
-                    ui.speed.style.color = '#FF4444'; // Red for too slow
-                    ui.speed.style.textShadow = '0 0 15px rgba(255, 68, 68, 0.8)';
-                } else if (speedBand === 1) {
-                    ui.speed.style.color = '#FFAA44'; // Orange for slow
-                    ui.speed.style.textShadow = '0 0 15px rgba(255, 170, 68, 0.8)';
-                } else {
-                    ui.speed.style.color = '#00FF00'; // Green for good speed
-                    ui.speed.style.textShadow = '0 0 15px rgba(0, 255, 0, 0.8)';
-                }
-            }
+        // The HUD writes only when the shown speed changes
+        if (this.hud) {
+            this.hud.setSpeed(this.vehicle.getSpeed(), this.vehicle.maxSpeed * 2.237);
+            this.hud.update(this.raceElapsed(), this.firstInputAt);
         }
 
         // Peripheral motion blur ramps in above ~45% of max speed
@@ -1605,53 +1583,35 @@ class Game {
     
     
     updateWheelieIndicator() {
-        const indicator = document.getElementById('wheelieIndicator');
-        const zoneText = document.getElementById('wheelieZone');
-        const comboText = document.getElementById('wheelieCombo');
-
-        if (this.vehicle.isWheelie) {
-            const angleDegrees = this.vehicle.wheelieAngle * 180 / Math.PI;
-            const maxAngleDegrees = this.vehicle.wheelieCrashAngle * 180 / Math.PI; // 81 degrees
-            const angleRatio = Math.min(1, angleDegrees / maxAngleDegrees); // 0 to 1 as we approach crash
-
-            indicator.classList.add('active');
-
-            // Remove all color classes to prevent position shifts
-            indicator.classList.remove('perfect', 'good', 'danger', 'low');
-
-            // Continuous color transition from green to orange to red
-            let r, g, b;
-            if (angleRatio < 0.5) {
-                // Green to orange (0 to 0.5 ratio)
-                const transition = angleRatio * 2; // 0 to 1
-                r = Math.round(0 + transition * 255); // 0 to 255
-                g = Math.round(255 - transition * 0); // 255 to 255
-                b = 0;
-            } else {
-                // Orange to red (0.5 to 1.0 ratio)
-                const transition = (angleRatio - 0.5) * 2; // 0 to 1
-                r = Math.round(255 - transition * 0); // 255 to 255
-                g = Math.round(165 - transition * 165); // 165 to 0
-                b = 0;
-            }
-
-            // Apply the color continuously
-            indicator.style.color = `rgb(${r}, ${g}, ${b})`;
-            indicator.style.background = `rgba(${r}, ${g}, ${b}, 0.2)`;
-            indicator.style.textShadow = `0 0 20px rgba(${r}, ${g}, ${b}, 0.8)`;
-
-            // Show wheelie text with angle
-            zoneText.textContent = `WHEELIE ${angleDegrees.toFixed(0)}°`;
-
-            // Clear combo text (no longer using combo system)
-            comboText.textContent = '';
-        } else {
-            indicator.classList.remove('active');
-            // Reset styles when not active
-            indicator.style.color = '';
-            indicator.style.background = '';
-            indicator.style.textShadow = '';
+        if (!this.wheelieElements) {
+            this.wheelieElements = {
+                indicator: document.getElementById('wheelieIndicator'),
+                zone: document.getElementById('wheelieZone')
+            };
         }
+        const { indicator, zone } = this.wheelieElements;
+        if (!indicator || !zone) return;
+
+        if (!this.vehicle.isWheelie) {
+            if (this.shownWheelieAngle !== null) {
+                this.shownWheelieAngle = null;
+                indicator.classList.remove('active');
+            }
+            return;
+        }
+
+        // Whole degrees: the DOM is touched only when the shown angle changes
+        const degrees = Math.round(this.vehicle.wheelieAngle * 180 / Math.PI);
+        if (degrees === this.shownWheelieAngle) return;
+        if (this.shownWheelieAngle === null || this.shownWheelieAngle === undefined) indicator.classList.add('active');
+        this.shownWheelieAngle = degrees;
+
+        // Green to amber to red as the angle nears the crash angle
+        const maxDegrees = this.vehicle.wheelieCrashAngle * 180 / Math.PI;
+        const ratio = Math.min(1, Math.max(0, degrees / maxDegrees));
+        const hue = Math.round(140 * (1 - ratio));
+        indicator.style.setProperty('--tone', `hsl(${hue}, 90%, 60%)`);
+        zone.textContent = `WHEELIE ${degrees}°`;
     }
 
     showFinishScreen() {
@@ -1681,7 +1641,7 @@ class Game {
         
         const totalScore = this.score;
 
-        const positionColor = finalPosition === 1 ? '#FFD700' : finalPosition === 2 ? '#C0C0C0' : finalPosition === 3 ? '#CD7F32' : '#95a5a6';
+        const positionColor = finalPosition === 1 ? 'var(--c-gold)' : finalPosition === 2 ? '#d4dbe4' : finalPosition === 3 ? '#e09a5a' : 'var(--c-text)';
 
         const isLastLeg = this.tourSystem.isLastLeg();
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
@@ -1718,9 +1678,9 @@ class Game {
 
         const deltaSpan = ms => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}</span>`;
         const pbLine = result.pbDelta === null
-            ? '<div class="finish-best-badge">🏆 FIRST BEST TIME SET</div>'
+            ? `<div class="finish-best-badge">${UiIcons.svg('trophy')} FIRST BEST TIME SET</div>`
             : result.isBest
-                ? `<div class="finish-best-badge">🏆 NEW PERSONAL BEST ${deltaSpan(result.pbDelta)}</div>`
+                ? `<div class="finish-best-badge">${UiIcons.svg('trophy')} NEW PERSONAL BEST ${deltaSpan(result.pbDelta)}</div>`
                 : `<div class="finish-delta">${deltaSpan(result.pbDelta)} <small>vs your best ${RaceTiming.formatTime(previousBestMs)}</small></div>`;
         const escape = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
         let recordLine = '';
@@ -1743,42 +1703,37 @@ class Game {
             ? button('chooseRiderBtn', 'primary', 'CHOOSE YOUR NEW BIKE →')
             : '';
 
+        // Two blocks so a short landscape screen can put them side by side
         finishBanner.innerHTML = `
-            <div class="finish-title">${titleText}</div>
-            <div class="finish-time-label">YOUR TIME</div>
-            <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
-            <div class="finish-deltas">
-                ${pbLine}
-                ${recordLine}
+            <div class="finish-main">
+                <div class="finish-title">${titleText}</div>
+                <div class="finish-time-label">YOUR TIME</div>
+                <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
+                <div class="finish-deltas">
+                    ${pbLine}
+                    ${recordLine}
+                </div>
+                <div class="finish-meta">
+                    <span style="color: ${positionColor};">${finalPosition}${positionSuffix}</span> of ${totalRacers} racers
+                    · ${distance.toFixed(0)} m · ${averageSpeed.toFixed(1)} mph avg
+                </div>
+                <div class="finish-style">Style bonus <strong>${totalScore.toLocaleString()}</strong> pts</div>
             </div>
-            ${unlockPanel}
-            ${progress ? `<div class="finish-progress">🔓 ${progress}</div>` : ''}
-            <div class="finish-meta">
-                <span style="color: ${positionColor};">${finalPosition}${positionSuffix}</span> of ${totalRacers} racers
-                · ${distance.toFixed(0)} m · ${averageSpeed.toFixed(1)} mph avg
-            </div>
-            <div class="finish-style">Style bonus <strong>${totalScore.toLocaleString()}</strong> pts</div>
-            <div class="finish-buttons">
-                ${chooseButton}
-                ${tourButton}
-                ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG')}
-                ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU')}
+            <div class="finish-side">
+                ${unlockPanel}
+                ${progress ? `<div class="finish-progress">${UiIcons.svg('unlock')} ${progress}</div>` : ''}
+                <div class="finish-buttons">
+                    ${chooseButton}
+                    ${tourButton}
+                    ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG')}
+                    ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU')}
+                </div>
             </div>
         `;
 
-        // Add CSS animation (once - this method runs on every finish)
-        if (!document.getElementById('finishBannerStyles')) {
-            const style = document.createElement('style');
-            style.id = 'finishBannerStyles';
-            style.textContent = `
-                @keyframes fadeIn {
-                    from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
-                    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-
+        // The results card owns the screen: no HUD or touch controls behind it
+        if (this.hud) this.hud.clearTransient();
+        document.body.classList.add('run-over');
         document.body.appendChild(finishBanner);
 
         // Enable R key for restart
@@ -1939,68 +1894,33 @@ class Game {
         });
         return `
             <div class="unlock-panel">
-                <div class="unlock-head">🔓 UNLOCKED</div>
+                <div class="unlock-head">${UiIcons.svg('unlock')} UNLOCKED</div>
                 <div class="unlock-cards">${bikeCards.join('')}${legCards.join('')}</div>
             </div>`;
     }
 
-    showCrashNotification() {
-        // Create crash notification
+    // cause: what the rider hit, when the game knows it
+    showCrashNotification(cause) {
+        // A card over the upper half: the crashed bike stays in view below it
         const crashNotification = document.createElement('div');
         crashNotification.id = 'crashNotification';
-        crashNotification.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #2c1515, #3e1515);
-            border: 3px solid #e74c3c;
-            border-radius: 20px;
-            padding: 40px;
-            text-align: center;
-            z-index: 9999;
-            color: white;
-            font-family: Arial, sans-serif;
-            animation: fadeIn 0.5s ease-out;
-            box-shadow: 0 10px 40px rgba(231, 76, 60, 0.6);
-            min-width: 400px;
-        `;
-
+        crashNotification.className = 'run-card crash-card';
+        crashNotification.setAttribute('role', 'alertdialog');
+        crashNotification.setAttribute('aria-label', 'Crashed');
+        const tip = this.lastCheckpointPosition
+            ? '<div class="crash-tip"><span class="kbd">C</span> back to the last checkpoint</div>'
+            : '';
         crashNotification.innerHTML = `
-            <div style="font-size: 72px; font-weight: bold; color: #e74c3c; margin-bottom: 20px; text-shadow: 0 0 20px rgba(231, 76, 60, 0.8);">
-                CRASHED!
-            </div>
-            <div style="font-size: 24px; color: #95a5a6; margin-bottom: 30px;">
-                Better luck next time!
-            </div>
-            <div style="margin-top: 30px; display: flex; gap: 20px; justify-content: center;">
-                <button id="restartCrashBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #3498db, #2980b9);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
-                    transition: all 0.3s;
-                "><u>R</u>ESTART</button>
-                <button id="menuCrashBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #e74c3c, #c0392b);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
-                    transition: all 0.3s;
-                "><u>M</u>ENU</button>
+            <div class="crash-title">CRASHED</div>
+            <div class="crash-sub">${cause || 'Better luck next time!'}</div>
+            ${tip}
+            <div class="run-buttons">
+                <button id="restartCrashBtn" class="btn btn-primary"><u>R</u>estart</button>
+                <button id="menuCrashBtn" class="btn"><u>M</u>enu</button>
             </div>
         `;
 
+        if (this.hud) this.hud.clearTransient();
         document.body.appendChild(crashNotification);
 
         // Enable R key for restart
@@ -2186,46 +2106,16 @@ class Game {
 
         const overlay = document.createElement('div');
         overlay.id = 'leaderboardViewer';
-        overlay.style.cssText = `
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.75);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 3000;
-        `;
+        overlay.className = 'lb-viewer';
 
         const panel = document.createElement('div');
-        panel.style.cssText = `
-            background: linear-gradient(135deg, #16213a, #1a1a2e);
-            border: 2px solid #ffd700;
-            border-radius: 16px;
-            padding: 28px 36px;
-            min-width: 380px;
-            max-width: 90vw;
-            max-height: 80vh;
-            overflow-y: auto;
-            color: white;
-            font-family: Arial, sans-serif;
-            text-align: center;
-            box-shadow: 0 0 40px rgba(255, 215, 0, 0.25);
-        `;
+        panel.className = 'lb-panel';
+        const safeLegName = String(legName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
         panel.innerHTML = `
-            <h2 style="color: #ffd700; margin: 0 0 4px 0; letter-spacing: 2px;">🏆 BEST TIMES</h2>
-            <div style="color: #8899bb; margin-bottom: 18px; font-size: 14px;">${legName}</div>
-            <div id="leaderboardViewerBody" style="font-size: 15px; color: #ccd;">Loading…</div>
-            <button id="leaderboardViewerClose" style="
-                margin-top: 22px;
-                padding: 10px 36px;
-                background: linear-gradient(135deg, #3498db, #2980b9);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: bold;
-                cursor: pointer;
-            ">CLOSE</button>
+            <h2 class="lb-title">${UiIcons.svg('trophy')} Best times</h2>
+            <div class="lb-leg">${safeLegName}</div>
+            <div id="leaderboardViewerBody" class="lb-body">Loading…</div>
+            <button id="leaderboardViewerClose" class="lb-close">Close</button>
         `;
         overlay.appendChild(panel);
         document.body.appendChild(overlay);
@@ -2241,12 +2131,12 @@ class Game {
         // Local best time always shows, even offline
         const localBest = parseFloat(localStorage.getItem(this.bestTimeKey(legId)) || 'NaN');
         const localBestHtml = Number.isFinite(localBest)
-            ? `<div style="margin-bottom: 14px; color: #2ecc71;">Your best: ${localBest.toFixed(1)}s</div>`
-            : `<div style="margin-bottom: 14px; color: #667;">No personal best yet</div>`;
+            ? `<div class="lb-best">Your best: ${RaceTiming.formatTime(localBest * 1000)}</div>`
+            : '<div class="lb-best none">No personal best yet</div>';
 
         if (!this.leaderboardService) {
             body.innerHTML = localBestHtml +
-                '<div style="color: #889;">Online leaderboard unavailable<br>(no connection to the leaderboard service)</div>';
+                '<div class="lb-note">Online leaderboard unavailable<br>(no connection to the leaderboard service)</div>';
             return;
         }
 
@@ -2255,28 +2145,28 @@ class Game {
             if (result.success && result.entries && result.entries.length > 0) {
                 const rows = result.entries.map((entry, i) => {
                     const rank = entry.rank !== undefined ? entry.rank : i + 1;
-                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+                    const medal = `${rank}.`;
                     const time = LeaderboardService.formatTime(entry.totalTime);
                     const flag = entry.flagged ? ' ⚠' : '';
                     return `<tr>
-                        <td style="padding: 4px 10px; text-align: right; color: #ffd700;">${medal}</td>
-                        <td style="padding: 4px 10px; letter-spacing: 3px; font-weight: bold;">${String(entry.playerName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</td>
-                        <td style="padding: 4px 10px; color: #6cf;">${time}${flag}</td>
+                        <td class="lb-rank">${medal}</td>
+                        <td class="lb-name">${String(entry.playerName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</td>
+                        <td class="lb-time">${time}${flag}</td>
                     </tr>`;
                 }).join('');
                 body.innerHTML = localBestHtml +
-                    `<table style="margin: 0 auto; border-collapse: collapse;">${rows}</table>`;
+                    `<table class="lb-table">${rows}</table>`;
             } else if (result.success) {
                 body.innerHTML = localBestHtml +
-                    '<div style="color: #889;">No times posted yet - be the first!</div>';
+                    '<div class="lb-note">No times posted yet - be the first!</div>';
             } else {
                 body.innerHTML = localBestHtml +
-                    '<div style="color: #889;">Could not load the online leaderboard</div>';
+                    '<div class="lb-note">Could not load the online leaderboard</div>';
             }
         } catch (error) {
             console.error('Leaderboard viewer error:', error);
             body.innerHTML = localBestHtml +
-                '<div style="color: #889;">Could not load the online leaderboard</div>';
+                '<div class="lb-note">Could not load the online leaderboard</div>';
         }
     }
 
@@ -2635,7 +2525,7 @@ class Game {
             this.fps = this.frameCount;
             this.frameCount = 0;
             this.lastTime = now;
-            document.getElementById('fps').textContent = `FPS: ${this.fps}`;
+            if (this.hud) this.hud.setFps(this.fps);
             this.adaptResolution();
         }
 
@@ -2667,6 +2557,9 @@ class Game {
         const throttleInput = this.input.getThrottleInput();
         const brakeInput = this.input.getBrakeInput();
         const wheelieInput = this.input.getWheelieInput();
+        if (!Number.isFinite(this.firstInputAt) && (steeringInput || throttleInput || brakeInput || wheelieInput)) {
+            this.firstInputAt = this.raceElapsed();
+        }
 
         // Handle one-shot input actions once per frame (not per physics step)
 
@@ -2729,25 +2622,7 @@ class Game {
             localStorage.setItem('twistyCameraMode', String(this.cameraMode));
             console.log(`Camera mode: ${this.cameraModes[this.cameraMode].name}`);
             
-            // Show notification
-            const notification = document.createElement('div');
-            notification.className = 'notification';
-            notification.textContent = `Camera: ${this.cameraModes[this.cameraMode].name}`;
-            notification.style.cssText = `
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                background: rgba(0, 0, 0, 0.7);
-                color: white;
-                padding: 10px 20px;
-                border-radius: 5px;
-                font-size: 20px;
-                z-index: 1000;
-                animation: fadeInOut 1s ease-out;
-            `;
-            document.body.appendChild(notification);
-            setTimeout(() => notification.remove(), 1000);
+            showCallout(`Camera: ${this.cameraModes[this.cameraMode].name}`, 'info', 1000);
         }
 
         // Run physics in fixed timesteps - ensures consistent movement
@@ -2818,13 +2693,14 @@ class Game {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 this.vehicle.frame.material.color.setHex(0xff00ff);
-                this.showCollisionWarning();
                 // The crash was set after vehicle.update(), so the generic
                 // "just crashed" check above never sees this one. (Not after
                 // the finish: the results banner must stay in charge.)
                 if (!this.finished) {
                     this.soundManager.playCrashSound();
-                    this.showCrashNotification();
+                    this.showCrashNotification('You hit a car');
+                } else {
+                    this.showCollisionWarning();
                 }
                 
                 // Calculate impact direction based on car position
@@ -2885,7 +2761,7 @@ class Game {
                 this.vehicle.velocity = impactDir.multiplyScalar(Math.min(this.vehicle.speed * 0.4, 7));
                 this.vehicle.velocity.y = 3;
                 this.soundManager.playCrashSound();
-                this.showCrashNotification();
+                this.showCrashNotification('Hit by a rockfall');
                 console.log('CRASHED! Hit by a rockfall');
 
                 if (this.particles) {
@@ -3152,25 +3028,7 @@ class Game {
     }
     
     showSpeedBonus() {
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 40%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(255, 140, 0, 0.9);
-            color: white;
-            padding: 20px 40px;
-            border-radius: 10px;
-            font-size: 28px;
-            font-weight: bold;
-            z-index: 500;
-            animation: speedPulse 1s ease-out;
-        `;
-        notification.textContent = 'SPEED STREAK! +250';
-        document.body.appendChild(notification);
-        
-        setTimeout(() => notification.remove(), 1000);
+        showCallout('Speed streak +250', 'gold', 1000);
     }
     
     checkNearMisses() {
@@ -3208,47 +3066,11 @@ class Game {
     }
     
     showNearMissBonus() {
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 35%;
-            right: 50px;
-            background: rgba(255, 215, 0, 0.9);
-            color: black;
-            padding: 15px 30px;
-            border-radius: 8px;
-            font-size: 24px;
-            font-weight: bold;
-            z-index: 500;
-            animation: slideInRight 0.3s ease-out;
-        `;
-        notification.textContent = 'NEAR MISS! +100';
-        document.body.appendChild(notification);
-        
-        setTimeout(() => notification.remove(), 800);
+        showCallout('Near miss +100', 'gold', 900);
     }
     
     showCollisionWarning() {
-        const warning = document.createElement('div');
-        warning.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(255, 0, 0, 0.9);
-            color: white;
-            padding: 30px 50px;
-            border-radius: 15px;
-            font-size: 36px;
-            font-weight: bold;
-            z-index: 600;
-            border: 4px solid white;
-            animation: shake 0.5s ease-out;
-        `;
-        warning.textContent = 'COLLISION!';
-        document.body.appendChild(warning);
-        
-        setTimeout(() => warning.remove(), 1500);
+        showCallout('Collision!', 'bad', 1500);
     }
     
     checkJumpScoring() {
@@ -3315,90 +3137,54 @@ class Game {
     }
 
     updateScoreDisplay() {
-        if (!this.scoreElements) {
-            this.scoreElements = {
-                timer: document.getElementById('raceTimer'),
-                score: document.getElementById('score'),
-                combo: document.getElementById('comboDisplay')
-            };
+        if (!this.hud) return;
+        if (typeof this.startTime === 'number') {
+            this.hud.setTime(RaceTiming.formatTime(Math.max(0, this.raceElapsed())));
         }
-
-        if (this.scoreElements.timer && typeof this.startTime === 'number') {
-            const shown = RaceTiming.formatTime(Math.max(0, this.raceElapsed()));
-            if (shown !== this.lastDisplayedTime) {
-                this.lastDisplayedTime = shown;
-                this.scoreElements.timer.textContent = shown;
-            }
-        }
-
-        if (this.scoreElements.score && this.score !== this.lastDisplayedScore) {
-            this.lastDisplayedScore = this.score;
-            this.scoreElements.score.textContent = this.score.toLocaleString();
-        }
-
-        // Only touch the combo display (and restart its pulse animation) when
-        // the combo value actually changes - this runs every frame
-        if (this.combo > 0 && this.combo !== this.lastDisplayedCombo && this.scoreElements.combo) {
-            const comboDisplay = this.scoreElements.combo;
-            comboDisplay.textContent = `COMBO x${this.combo}`;
-            comboDisplay.style.animation = 'none';
-            setTimeout(() => { comboDisplay.style.animation = 'pulse-combo 0.5s ease-in-out'; }, 10);
-        } else if (this.combo === 0 && this.lastDisplayedCombo > 0 && this.scoreElements.combo) {
-            this.scoreElements.combo.textContent = '';
-        }
-        this.lastDisplayedCombo = this.combo;
+        this.hud.setScore(this.score);
+        this.hud.setCombo(this.combo);
     }
     
     // The split at a gate: elapsed time first, then the gap to the personal
     // best split and, when the backend sends them, the record split
     showSplit(index, elapsed, points) {
-        const popup = document.getElementById('splitPopup');
-        if (!popup) {
-            this.showCheckpointNotification(index + 1, points);
-            return;
-        }
-        const total = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : RaceTiming.CHECKPOINTS;
+        const total = this.gateTotal();
         const split = RaceTiming.split(index, elapsed, this.bestSplits, this.record);
         const delta = (ms, label) => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}<small>${label}</small></span>`;
         const deltas = [];
         if (split.pbDelta !== null) deltas.push(delta(split.pbDelta, 'PB'));
         if (split.recordDelta !== null) deltas.push(delta(split.recordDelta, 'REC'));
         if (deltas.length === 0) deltas.push('<span class="delta-none">FIRST SPLIT<small>SET A BEST</small></span>');
-        popup.innerHTML = `
+        this.lastSplit = split;
+        if (this.hud) this.hud.setGates(Math.min(total, index + 1), total);
+        const shown = this.hud && this.hud.showSplit(`
             <div class="split-gate">CHECKPOINT ${index + 1}/${total}</div>
             <div class="split-time">${RaceTiming.formatTime(elapsed)}</div>
             <div class="split-deltas">${deltas.join('')}</div>
-            <div class="split-style">+${points} style</div>`;
-        this.lastSplit = split;
-        popup.classList.remove('show');
-        // Reflow so the entry animation replays for back-to-back gates
-        void popup.offsetWidth;
-        popup.classList.add('show');
-        clearTimeout(this.splitTimer);
-        this.splitTimer = setTimeout(() => popup.classList.remove('show'), 3000);
+            <div class="split-style">+${points} style</div>`);
+        if (!shown) this.showCheckpointNotification(index + 1, points);
     }
 
     hideSplit() {
-        clearTimeout(this.splitTimer);
-        const popup = document.getElementById('splitPopup');
-        if (popup) popup.classList.remove('show');
+        if (this.hud) this.hud.hideSplit(true);
     }
 
     showCheckpointNotification(checkpointNum, points) {
         const totalCheckpoints = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 10;
-        showCallout(`CHECKPOINT ${checkpointNum}/${totalCheckpoints}! +${points}`, '#fff', 1000);
+        showCallout(`Checkpoint ${checkpointNum}/${totalCheckpoints} +${points}`, 'info', 1000);
     }
     
     showJumpBonus(text) {
-        showCallout(text, '#FF69B4', 1000);
+        showCallout(text, 'gold', 1000);
     }
 
     showWheelieHelpNotification() {
-        showCallout('Press SPACE to pop clutch for a wheelie!', '#FFD700', 3000);
+        const touch = document.body.classList.contains('touch');
+        showCallout(touch ? 'Tip: tap Wheelie' : 'Tip: Space for a wheelie', 'gold', 3000);
     }
 
     showConeHitNotification(points) {
-        showCallout(`CONE HIT! +${points}`, '#FFA500', 1000);
+        showCallout(`Cone hit +${points}`, 'warn', 1000);
     }
     
     onWindowResize() {
@@ -3448,21 +3234,20 @@ class Game {
          this.cones.reset();
 
         // Show notification
-        showCallout(`RESTARTED FROM CHECKPOINT (-${penalty} points)`, '#ff6600', 2000);
+        showCallout(`Back to checkpoint -${penalty}`, 'warn', 2000);
 
         console.log('Restarted from checkpoint with penalty');
     }
 }
 
-// Short centre-screen message; the CSS animation is stretched to its lifetime
-function showCallout(text, color = '#fff', durationMs = 1000) {
-    const notification = document.createElement('div');
-    notification.className = 'checkpoint-notification';
-    notification.style.color = color;
-    notification.style.animationDuration = `${durationMs}ms`;
-    notification.textContent = text;
-    document.body.appendChild(notification);
-    setTimeout(() => notification.remove(), durationMs);
+// Short gameplay message in the HUD's call-out stack. tone: info, good, bad, warn or gold
+function showCallout(text, tone = 'info', durationMs = 1000) {
+    const hud = window.game && window.game.hud;
+    if (!hud) {
+        console.warn('Call-out before the HUD exists:', text);
+        return;
+    }
+    hud.callout(text, tone, durationMs);
 }
 
 class SoundManager {
@@ -3727,7 +3512,7 @@ class SoundManager {
     }
 
     showSoundToggleNotification(enabled) {
-        showCallout(`SOUND ${enabled ? 'ON' : 'OFF'}`, enabled ? '#00ff00' : '#ff0000', 1000);
+        showCallout(`Sound ${enabled ? 'on' : 'off'}`, enabled ? 'good' : 'info', 1000);
     }
 
 }
