@@ -91,6 +91,8 @@ describe('foggy-gorge modelled scenery', () => {
         expect(rocks).toBeGreaterThan(100);
         expect(portals).toBe(2);
         expect(result.rocks.rocks).toBe(rocks);
+        // A few the drawn ground cannot hold in a model's shape are left out
+        expect(result.rocks.placed).toBeGreaterThan(rocks * 0.9);
         expect(result.portals.portals).toBe(4);
         expect(result.rockFace.ribbons).toBe(2);
         expect(tagged(env.scene, ['rock', 'debris', 'portal'])).toHaveLength(0);
@@ -111,6 +113,37 @@ describe('foggy-gorge modelled scenery', () => {
     test('no modelled rock floats', () => {
         expect(result.violations.filter(v => v.kind === 'floating')).toEqual([]);
         expect(game.log.some(line => line.includes('FLOATING'))).toBe(false);
+    });
+
+    // A modelled rock stands where its procedural one did, turned and sunk the
+    // same way, so on a steep face it too is mostly inside the face
+    test('a modelled rock on a face is sunk into it, and none is buried out of sight', () => {
+        const { THREE, Terrain } = game;
+        const last = env.roadPath.length - 1;
+        const clear = p => Terrain.clearance(env.terrain, env.terrainGeometry, p.x, p.y, p.z, 0, last);
+        const face = Math.cos((40 * Math.PI) / 180);
+        const ball = [];
+        for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) for (let k = -2; k <= 2; k++) {
+            if (Math.hypot(i, j, k) <= 2.5) ball.push([i / 2.5, j / 2.5, k / 2.5]);
+        }
+        const matrix = new THREE.Matrix4();
+        const point = new THREE.Vector3();
+        const hanging = [];
+        let onFace = 0;
+        env.scene.traverse(o => {
+            if (!o.isInstancedMesh || o.userData.modelled !== 'rocks') return;
+            for (let n = 0; n < o.count; n++) {
+                o.getMatrixAt(n, matrix);
+                const centre = new THREE.Vector3().setFromMatrixPosition(matrix);
+                if (Terrain.surfaceAt(env.terrain, env.terrainGeometry, centre.x, centre.z, 0, last).least >= face) continue;
+                onFace++;
+                const air = ball.filter(p => clear(point.set(...p).applyMatrix4(matrix)) > 0.02).length / ball.length;
+                if (air > 0.25) hanging.push({ at: centre.toArray().map(v => Math.round(v)), air });
+            }
+        });
+        expect(onFace).toBeGreaterThan(40);
+        expect(hanging).toEqual([]);
+        expect(result.violations).toEqual([]);
     });
 
     test('the dressed leg stays within the per-leg budget', () => {

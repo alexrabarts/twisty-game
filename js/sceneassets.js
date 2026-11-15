@@ -220,12 +220,20 @@ const SceneAssets = (() => {
     const groups = new Map();
     const matrix = new THREE.Matrix4();
     const radius = new THREE.Matrix4();
+    let held = 0;
     for (const rock of rocks) {
       rock.updateWorldMatrix(true, false);
       const r = rock.userData.dressing.radius;
       matrix.copy(rock.matrixWorld).multiply(radius.makeScale(r, r, r));
       const at = new THREE.Vector3().setFromMatrixPosition(matrix);
       const variant = pick(at.x, at.z, variants.length);
+      // A variant is not the procedural rock's shape: on a face it may stand
+      // out where the procedural one did not, so it is sunk until the drawn
+      // ground holds it, and left out where nothing does
+      const hold = env.holdRock(matrix, variants[variant].geometry, rock.userData.seat);
+      if (!hold) continue;
+      matrix.copy(hold);
+      held++;
       const key = `${variant}:${Math.floor(at.x / spec.cell)}:${Math.floor(at.z / spec.cell)}`;
       if (!groups.has(key)) groups.set(key, { variant, matrices: [], small: true });
       const group = groups.get(key);
@@ -265,30 +273,35 @@ const SceneAssets = (() => {
     const violations = checkGrounding(env, groups, variants);
     rocks.forEach(discard);
     env.scene.add(root);
-    return { rocks: rocks.length, meshes: groups.size, violations };
+    return { rocks: rocks.length, placed: held, meshes: groups.size, violations };
   }
 
-  // The floating-object rule of Environment.validateGrounding, on the exact
-  // vertices of every instance: its lowest point may stand at most 0.75 over
-  // the highest ground under its footprint. A rock whose top is under the
-  // ground at its centre is buried, which hides it, and is counted too.
+  // Each instance against the drawn ground (Terrain.clearance, the ribbon's
+  // own triangles, folds of a leaning wall included), on its exact vertices:
+  // its lowest point may stand at most 0.75 over the ground under it, and an
+  // instance with no vertex clear of the ground is buried, which hides it,
+  // and is counted too.
   function checkGrounding(env, groups, variants) {
     const violations = [];
     const point = new THREE.Vector3();
+    const last = env.roadPath.length - 1;
+    const clear = (p) => Terrain.clearance(env.terrain, env.terrainGeometry, p.x, p.y, p.z, 0, last);
     for (const { variant, matrices } of groups.values()) {
       const positions = variants[variant].geometry.attributes.position;
       for (const m of matrices) {
-        const box = new THREE.Box3();
-        for (let i = 0; i < positions.count; i++) box.expandByPoint(point.fromBufferAttribute(positions, i).applyMatrix4(m));
-        const cx = (box.min.x + box.max.x) / 2;
-        const cz = (box.min.z + box.max.z) / 2;
-        const centre = env.groundYAt(cx, cz);
-        const ground = Math.max(centre, env.groundYAt(box.min.x, cz), env.groundYAt(box.max.x, cz), env.groundYAt(cx, box.min.z), env.groundYAt(cx, box.max.z));
-        if (box.min.y - ground > 0.75) {
-          violations.push({ kind: "floating", x: cx, z: cz, delta: box.min.y - ground });
-          console.warn(`⚠️ Floating object: modelled rock bottom y=${box.min.y.toFixed(2)} hovers ${(box.min.y - ground).toFixed(2)} above ground y=${ground.toFixed(2)} at (${cx.toFixed(1)}, ${cz.toFixed(1)})`);
-        } else if (box.max.y < centre) {
-          violations.push({ kind: "buried", x: cx, z: cz, delta: box.max.y - centre });
+        const lowest = new THREE.Vector3(0, Infinity, 0);
+        let shows = false;
+        for (let i = 0; i < positions.count; i++) {
+          point.fromBufferAttribute(positions, i).applyMatrix4(m);
+          if (point.y < lowest.y) lowest.copy(point);
+          if (!shows && clear(point) > 0.02) shows = true;
+        }
+        const hang = clear(lowest);
+        if (hang > 0.75) {
+          violations.push({ kind: "floating", x: lowest.x, z: lowest.z, delta: hang });
+          console.warn(`⚠️ Floating object: modelled rock bottom y=${lowest.y.toFixed(2)} hovers ${hang.toFixed(2)} above the drawn ground at (${lowest.x.toFixed(1)}, ${lowest.z.toFixed(1)})`);
+        } else if (!shows) {
+          violations.push({ kind: "buried", x: lowest.x, z: lowest.z, delta: 0 });
         }
       }
     }
