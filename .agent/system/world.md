@@ -51,7 +51,7 @@ A rock, a rock cluster, an outcrop and a roadside bush are seated on the drawn r
 - A seat is then measured. At most 15% of the rock's bulk may stand clear of a face (60% of gentle ground), and its lowest point at most 0.3 m over the ground. A rock that fails sinks deeper once, then is left out. Its `rand()` draws are taken in both cases.
 - A rock of a face is an outcrop of it (`Environment.outcropLook()`). It uses the face's texture and one vertex colour: the ribbon's colour at its seat (`faceColor()`, the four nearest vertices), times a shade of 0.94 to 1.04. The draw that picked one of the old grey and sand materials sets the shade, so the draw count is the same. Road debris takes the colour of the wall's foot.
 - A rock cluster stands only on ground gentler than 35 degrees. A roadside bush roots only in ground gentler than 40 degrees.
-- A modelled rock (`js/sceneassets.js`) has its own shape. `Environment.holdRock()` sinks it further until the same measure passes, backs it out when none of it shows, and leaves it out when neither works. The gorge's modelled rocks keep their one tint (`rockTint`), not the face colour.
+- A modelled rock (`js/sceneassets.js`) has its own shape. `Environment.holdRock()` sinks it further until the same measure passes, backs it out when none of it shows, and leaves it out when neither works. The gorge's modelled rocks keep their one tint (`rockTint`, the stone of the wall's detail: see `tools/blender/README.md`, "Rock face detail"), not the face colour at each seat.
 - High-pass (`columnWalk`) keeps the old placement: the frozen golden recorded each rock. Its rocks still stand half out of the wall, in the old grey and sand materials.
 
 ## Run-off legs

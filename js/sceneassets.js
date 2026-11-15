@@ -23,8 +23,8 @@ const SceneAssets = (() => {
       // side in metres one copy covers, `tint` the stone that the face's
       // vertex colours shade. Any leg with a rock face can name the same files.
       rockFace: { map: "assets/rockface/detail.webp", normalMap: "assets/rockface/normal.webp", tile: 12, tint: 0xcbb8a6 },
-      // The baked rocks are lighter than the gorge's rock; this darkens them to it
-      rockTint: 0xa39a90,
+      // The baked rocks are a light grey; this brings them to the face's stone
+      rockTint: 0xb9a592,
       cell: 400,
     },
   };
