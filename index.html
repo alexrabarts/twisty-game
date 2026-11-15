@@ -524,6 +524,37 @@
             line-height: 1.6;
         }
 
+        .showcase-progress {
+            color: #7fd8ff;
+            font-size: 12px;
+            font-weight: 700;
+            margin-top: 10px;
+        }
+
+        /* A bike unlocked this session and not yet chosen past */
+        .showcase-info.fresh {
+            border-color: #ffd700;
+            box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.35), 0 0 34px rgba(255, 215, 0, 0.45);
+            animation: fresh-glow 1.6s ease-in-out infinite;
+        }
+
+        .new-badge {
+            display: inline-block;
+            margin-bottom: 8px;
+            padding: 3px 12px;
+            border-radius: 999px;
+            background: linear-gradient(135deg, #ffd700, #ff9f1a);
+            color: #1a1200;
+            font-size: 12px;
+            font-weight: 900;
+            letter-spacing: 2px;
+        }
+
+        @keyframes fresh-glow {
+            0%, 100% { box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.35), 0 0 22px rgba(255, 215, 0, 0.3); }
+            50% { box-shadow: 0 0 0 3px rgba(255, 215, 0, 0.6), 0 0 44px rgba(255, 215, 0, 0.6); }
+        }
+
         .stat-on { color: #ffd700; letter-spacing: 1px; }
         .stat-off { color: #334; letter-spacing: 1px; }
 

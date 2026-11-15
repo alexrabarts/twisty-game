@@ -101,6 +101,8 @@ class TourSystem {
             savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');
         } catch (e) { /* corrupted - start fresh */ }
         this.completedLegs = Array.isArray(savedProgress.completedLegs) ? savedProgress.completedLegs : [];
+        // Riders unlocked this session and not yet looked at: badged NEW
+        this.freshRiders = new Set();
 
         // Rider selection (persisted; must be unlocked). CHARACTERS is
         // defined in vehicle.js, loaded before this file.
@@ -156,10 +158,11 @@ class TourSystem {
         return this.completedLegs.length >= required;
     }
 
-    // Records a completed leg; returns names of anything newly unlocked so
-    // the finish screen can announce it
+    // Records a completed leg; returns what it newly unlocked so the finish
+    // screen can announce it: names (newLegs, newCharacters) and the records
+    // themselves (legs, characters) for pictures, colours and ids
     markLegCompleted(legId) {
-        if (this.isLegCompleted(legId)) return { newLegs: [], newCharacters: [] };
+        if (this.isLegCompleted(legId)) return { newLegs: [], newCharacters: [], legs: [], characters: [] };
 
         const charactersBefore = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
             .filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
@@ -168,14 +171,47 @@ class TourSystem {
         this.completedLegs.push(legId);
         localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: this.completedLegs }));
 
-        const newCharacters = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
-            .filter(c => this.isCharacterUnlocked(c.id) && !charactersBefore.includes(c.id))
-            .map(c => c.name);
-        const newLegs = [];
+        const characters = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
+            .filter(c => this.isCharacterUnlocked(c.id) && !charactersBefore.includes(c.id));
+        const legs = [];
         if (legIndex >= 0 && legIndex + 1 < this.legs.length && !this.isLegCompleted(this.legs[legIndex + 1].id)) {
-            newLegs.push(this.legs[legIndex + 1].name);
+            legs.push(this.legs[legIndex + 1]);
         }
-        return { newLegs, newCharacters };
+        characters.forEach(c => this.freshRiders.add(c.id));
+        return {
+            newLegs: legs.map(l => l.name),
+            newCharacters: characters.map(c => c.name),
+            legs,
+            characters
+        };
+    }
+
+    // The next rider still locked and how many more completed legs it needs
+    nextCharacterUnlock() {
+        const next = this.riderDisplayOrder().find(c => !this.isCharacterUnlocked(c.id));
+        if (!next) return null;
+        const required = this.characterUnlocks[next.id] || 0;
+        return { character: next, required, remaining: Math.max(0, required - this.completedLegs.length) };
+    }
+
+    unlockProgressText() {
+        const next = this.nextCharacterUnlock();
+        if (!next) return '';
+        const legs = next.remaining === 1 ? 'leg' : 'legs';
+        return `${next.remaining} more ${legs} to unlock ${next.character.name}'s ${next.character.bikeLabel}`;
+    }
+
+    // What the finish screen offers first. A new rider sends the player back
+    // to the rider screen to try it; otherwise the tour carries on.
+    static finishFlow(unlocks, isLastLeg) {
+        const riders = unlocks && Array.isArray(unlocks.characters) ? unlocks.characters.map(c => c.id) : [];
+        let primary = isLastLeg ? 'restart-tour' : 'next-leg';
+        if (riders.length > 0) primary = 'choose-rider';
+        return { primary, riders };
+    }
+
+    isRiderFresh(characterId) {
+        return this.freshRiders.has(characterId);
     }
 
     getSelectedCharacter() {
@@ -357,18 +393,23 @@ class TourSystem {
             const statBar = (value) =>
                 `<span class="stat-on">${'■'.repeat(value)}</span><span class="stat-off">${'■'.repeat(5 - value)}</span>`;
             const card = document.getElementById('riderInfoCard');
+            card.classList.remove('fresh');
             if (tier === 'silhouette') {
                 card.innerHTML = `
                     <div class="showcase-name">🔒 ???</div>
                     <div class="showcase-sub">LOCKED</div>`;
             } else if (tier === 'dimmed') {
                 const required = this.characterUnlocks[c.id] || 0;
+                const remaining = Math.max(0, required - this.completedLegs.length);
                 card.innerHTML = `
                     <div class="showcase-name">🔒 ${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
-                    <div class="showcase-hint">Complete ${required} leg${required === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required})</div>`;
+                    <div class="showcase-hint">${remaining} more leg${remaining === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required} completed)</div>`;
             } else {
+                const fresh = this.isRiderFresh(c.id);
+                card.classList.toggle('fresh', fresh);
                 card.innerHTML = `
+                    ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
                     <div class="showcase-name">${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
                     <div class="showcase-stats">
@@ -398,6 +439,10 @@ class TourSystem {
                 card.innerHTML = `
                     <div class="showcase-name">LEG ${index + 1}: ${leg.name} ${completed ? '<span style="color:#2ecc71;font-size:13px;">✔ COMPLETED</span>' : ''}</div>
                     <div class="showcase-sub">${leg.description}</div>`;
+            }
+            const progress = this.unlockProgressText();
+            if (progress) {
+                card.insertAdjacentHTML('beforeend', `<div class="showcase-progress">🔓 ${progress}</div>`);
             }
             document.getElementById('legStartBtn').disabled = tier !== 'lit';
             document.getElementById('legLeaderboardBtn').style.visibility = tier === 'lit' ? 'visible' : 'hidden';
@@ -440,6 +485,8 @@ class TourSystem {
             const c = riderOrder[this.riderFocusIndex];
             if (!this.isCharacterUnlocked(c.id)) return;
             this.selectCharacter(c.id);
+            // Once chosen past, nothing is new any more
+            this.freshRiders.clear();
             showTrackScreen();
         });
 
@@ -520,6 +567,15 @@ class TourSystem {
         if (this.keyboardHandler) {
             document.removeEventListener('keydown', this.keyboardHandler);
         }
+    }
+
+    // After a bike unlocks: open the rider screen on the new bike
+    showRiderSelector(focusId) {
+        this.createLegSelector(document.body, this.onLegSelected);
+        const order = this.riderDisplayOrder();
+        const index = order.findIndex(c => c.id === focusId);
+        if (index >= 0) this.riderFocusIndex = index;
+        if (this.showRiderScreen) this.showRiderScreen();
     }
 
     showLegSelector() {
