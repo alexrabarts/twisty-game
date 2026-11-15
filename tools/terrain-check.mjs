@@ -941,7 +941,7 @@ function finishChecks(report) {
             if (!amended?.stable) return;
             const stable = r.fingerprints.stable;
             if (amendedStable(amended, stable)) {
-                notes.push(`${id}: stable ${stable.hash}/${stable.meshes} equals the golden ${amended.goldenStable.hash}/${amended.goldenStable.meshes} less the declared meshes (amendments.json)`);
+                notes.push(`${id}: stable ${stable.hash}/${stable.meshes} is the amended value for the golden ${amended.goldenStable.hash}/${amended.goldenStable.meshes} (amendments.json: its reason lists the declared meshes)`);
             } else {
                 failures.push(`${id}: stable ${stable.hash}/${stable.meshes} is neither the golden nor the amended ${amended.stable.hash}/${amended.stable.meshes}`);
             }
