@@ -46,11 +46,13 @@ The roadworks plant (bulldozer, barrier, work truck) is not built beside a wall:
 A rock, a rock cluster, an outcrop and a roadside bush are seated on the drawn ribbon, not on the smooth `base()`. `tests/unit/scenery-seating.test.js` holds the rules on every leg but high-pass.
 
 - `Terrain.crossings()` lists every drawn surface a vertical line meets (a wall folds, so there can be several). `Terrain.surfaceAt()` picks the one scenery rests on and gives its normal; `least` is the steepest of the surfaces with air above them. `Terrain.clearance()` says how far a point stands clear of the drawn ground (0 inside it). The drawn columns are kept per road and profile, so these reads are cheap.
-- `Environment.seatRock()` places a rock. On ground gentler than 35 degrees the rock rests with its centre on the surface. On a steeper face the rock turns its thin axis to the face normal and sinks along it: 0.55 of its thickness at 35 degrees, 0.85 from 55 degrees, so a sheer wall shows a low boss only.
-- A seat is then measured. At most 25% of the rock's bulk may stand clear of a face (60% of gentle ground), and its lowest point at most 0.3 m over the ground. A rock that fails sinks deeper once, then is left out. Its `rand()` draws are taken in both cases.
+- `Environment.seatRock()` places a rock. On ground gentler than 35 degrees the rock rests with its centre on the surface. On a steeper face the rock turns its thin axis to the face normal and sinks along it: 0.68 of its thickness at 35 degrees, 0.88 from 55 degrees, so the cap left out is a third of the thickness at most. A rock in a face is also cut down to reach 1.6 m from its centre. A wide boulder covers the wall's facets and reads as stuck on at any depth.
+- A bench of a wall counts as the face (`face` argument): a rock past the wall's ledge, a rock on a fold over the ledge that is off the road's height, and every rock of a cluster beside a rock face. These sink and shrink as on a steep face.
+- A seat is then measured. At most 15% of the rock's bulk may stand clear of a face (60% of gentle ground), and its lowest point at most 0.3 m over the ground. A rock that fails sinks deeper once, then is left out. Its `rand()` draws are taken in both cases.
+- A rock of a face is an outcrop of it (`Environment.outcropLook()`). It uses the face's texture and one vertex colour: the ribbon's colour at its seat (`faceColor()`, the four nearest vertices), times a shade of 0.94 to 1.04. The draw that picked one of the old grey and sand materials sets the shade, so the draw count is the same. Road debris takes the colour of the wall's foot.
 - A rock cluster stands only on ground gentler than 35 degrees. A roadside bush roots only in ground gentler than 40 degrees.
-- A modelled rock (`js/sceneassets.js`) has its own shape. `Environment.holdRock()` sinks it further until the same measure passes, backs it out when none of it shows, and leaves it out when neither works.
-- High-pass (`columnWalk`) keeps the old placement: the frozen golden recorded each rock. Its rocks still stand half out of the wall.
+- A modelled rock (`js/sceneassets.js`) has its own shape. `Environment.holdRock()` sinks it further until the same measure passes, backs it out when none of it shows, and leaves it out when neither works. The gorge's modelled rocks keep their one tint (`rockTint`), not the face colour.
+- High-pass (`columnWalk`) keeps the old placement: the frozen golden recorded each rock. Its rocks still stand half out of the wall, in the old grey and sand materials.
 
 ## Run-off legs
 
