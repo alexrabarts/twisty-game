@@ -184,20 +184,36 @@ describe('terrain equivalence with the phase 0 golden', () => {
         Object.entries(passGrid).forEach(([lateral, y]) => expect(at(pass, 332, Number(lateral))).toBeCloseTo(y, 4));
     });
 
-    // A changed leg asserts what it now is, not only that it differs
-    test.each([
-        ['mountain-dawn', 0, 'valleyFloor', 'floor-river', ['runoff', 'wall'], ['runoff', 'wall']],
-        ['valley-run', 1, 'cliffLakeMirrored', 'floor-lake', ['shoulder', 'fall'], ['shoulder', 'wall']],
-        ['foggy-gorge', 3, 'canyon', 'floor-lake', ['shoulder', 'wall'], ['shoulder', 'wall']]
-    ])('%s is what the follow-up made it: profile, floor and band kinds', (id, index, profile, floor, left, right) => {
-        const { env, scene } = buildEnvironment(game, index);
+    // A changed leg asserts what it now is, not only that it differs: every released leg is
+    // here, on its own board (trackVersion 2); the forest legs draw no floor
+    const NOW = [
+        ['mountain-dawn', 'valleyFloor', ['floor-river'], ['runoff', 'wall'], ['runoff', 'wall']],
+        ['valley-run', 'cliffLakeMirrored', ['floor-lake'], ['shoulder', 'fall'], ['shoulder', 'wall']],
+        ['coastal-descent', 'coast', ['floor-sea'], ['shoulder', 'wall'], ['shoulder', 'fall']],
+        ['foggy-gorge', 'canyon', ['floor-lake'], ['shoulder', 'wall'], ['shoulder', 'wall']],
+        ['storm-valley', 'forest', [], ['runoff', 'wall'], ['runoff', 'wall']],
+        ['night-ride', 'forest', [], ['runoff', 'wall'], ['runoff', 'wall']],
+        ['winter-pass', 'ridge', ['floor-lake'], ['runoff', 'fall'], ['runoff', 'fall']]
+    ];
+
+    test('every changed leg has a positive record', () => {
+        expect(NOW.map(([id]) => id).sort()).toEqual([...CHANGED].sort());
+    });
+
+    test.each(NOW)('%s is what it was changed to: profile, floor, band kinds and board', (id, profile, floors, left, right) => {
+        const { env, scene } = buildEnvironment(game, LEG_IDS.indexOf(id));
         expect(env.terrain.id).toBe(profile);
-        const floors = [];
-        scene.traverse(object => { if (object.userData && object.userData.part === 'floor') floors.push(object.name); });
-        expect(floors).toEqual([floor]);
+        const drawn = [];
+        scene.traverse(object => { if (object.userData && object.userData.part === 'floor') drawn.push(object.name); });
+        expect(drawn).toEqual(floors);
         expect(env.terrain.left.bands.map(band => band.kind)).toEqual(left);
         expect(env.terrain.right.bands.map(band => band.kind)).toEqual(right);
+        expect(game.Terrain.legConfig(id).trackVersion).toBe(2);
     }, 30000);
+
+    test('high-pass keeps its unversioned board', () => {
+        expect(game.Terrain.legConfig('high-pass').trackVersion).toBe(1);
+    });
 
     test('a build is repeatable, so a changed hash is a changed world', () => {
         const first = buildEnvironment(game, 4);
