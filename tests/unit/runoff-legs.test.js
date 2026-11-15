@@ -21,7 +21,7 @@ const CLIFF = 1;
 // 1, 2 and 4 changed again under version 2 on this branch: no version 2 board
 // had shipped to players yet.)
 const COURSE_DIGESTS = [
-    'c5bbfd9ceb5c34d0', '5b41d6a35ad33203', '1d8e018d4b1500c6', 'dec5762639099e6c',
+    '062f790295a7e5d4', '5b41d6a35ad33203', '1d8e018d4b1500c6', 'dec5762639099e6c',
     'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', 'cdd0b1b28f83f268'
 ];
 
@@ -66,28 +66,36 @@ describe('run-off profiles (pure)', () => {
         expect(() => Terrain.heightfieldSide({ stations: Array.from({ length: 37 }, (_, n) => [n, 0]), bands: [{ kind: 'wall' }], runoff })).toThrow(/at most 36/);
     });
 
-    test('zones: run-off out to 35 (valley) and 25 (forest) past the road edge, then a wall', () => {
+    test('zones: run-off out to 35 (open valley) and 25 (forest) past the road edge, then a wall', () => {
         const valley = Terrain.profiles.valleyFloor;
-        const kind = (profile, lateral, halfRoad) => Terrain.zoneAt(profile, 80, lateral, halfRoad).kind;
-        expect([0, 10, 10.01, 45, 45.01, -45, -45.01].map(l => kind(valley, l, 10)))
+        const kind = (profile, segment, lateral, halfRoad) => Terrain.zoneAt(profile, segment, lateral, halfRoad).kind;
+        // Open country (the first 30% of leg 1)
+        expect([0, 10, 10.01, 45, 45.01, -45, -45.01].map(l => kind(valley, 10, l, 10)))
             .toEqual(['road', 'road', 'runoff', 'runoff', 'wall', 'runoff', 'wall']);
+        // The foothills: the run-off has narrowed to 14 on the left and 24 on the right
+        expect([-24, -24.01, 34, 34.01].map(l => kind(valley, 80, l, 10))).toEqual(['runoff', 'wall', 'runoff', 'wall']);
         const forest = Terrain.profiles.forest;
-        expect([8, 8.01, 33, 33.01, -33.01].map(l => kind(forest, l, 8))).toEqual(['road', 'runoff', 'runoff', 'wall', 'wall']);
-        expect(Terrain.zoneAt(valley, 80, 20, 10)).toMatchObject({ kind: 'runoff', sign: 1, start: 10 });
-        expect(Terrain.zoneAt(valley, 80, 50, 10)).toMatchObject({ kind: 'wall', sign: 1, start: 45 });
+        expect([8, 8.01, 33, 33.01, -33.01].map(l => kind(forest, 80, l, 8))).toEqual(['road', 'runoff', 'runoff', 'wall', 'wall']);
+        expect(Terrain.zoneAt(valley, 10, 20, 10)).toMatchObject({ kind: 'runoff', sign: 1, start: 10 });
+        expect(Terrain.zoneAt(valley, 10, 50, 10)).toMatchObject({ kind: 'wall', sign: 1, start: 45 });
+        expect(Terrain.zoneAt(valley, 80, 40, 10)).toMatchObject({ kind: 'wall', sign: 1, start: 34 });
     });
 
     test('rideableLimit is the outer edge of the last shoulder or run-off band', () => {
-        const limit = (profile, sign, halfRoad) => Terrain.rideableLimit(profile, 80, sign, halfRoad);
-        expect([limit(Terrain.profiles.valleyFloor, -1, 10), limit(Terrain.profiles.valleyFloor, 1, 10)]).toEqual([45, 45]);
+        const limit = (profile, sign, halfRoad, segment = 80) => Terrain.rideableLimit(profile, segment, sign, halfRoad);
+        const valley = Terrain.profiles.valleyFloor;
+        expect([limit(valley, -1, 10, 10), limit(valley, 1, 10, 10)]).toEqual([45, 45]);
+        expect([limit(valley, -1, 10), limit(valley, 1, 10)]).toEqual([24, 34]);
         expect([limit(Terrain.profiles.forest, -1, 8), limit(Terrain.profiles.forest, 1, 8)]).toEqual([33, 33]);
         // cliffLake: a 1 m shoulder before the wall, a 2 m ledge before the fall
         expect([limit(Terrain.profiles.cliffLake, -1, 10), limit(Terrain.profiles.cliffLake, 1, 10)]).toEqual([11, 12]);
     });
 
     test('a gate reaches the rideable limit plus 2 over run-off, and only the ledge beside a wall or fall', () => {
-        const reach = (profile, sign, halfRoad) => Terrain.gateReach(profile, 80, sign, halfRoad);
-        expect([reach(Terrain.profiles.valleyFloor, -1, 10), reach(Terrain.profiles.valleyFloor, 1, 10)]).toEqual([47, 47]);
+        const reach = (profile, sign, halfRoad, segment = 80) => Terrain.gateReach(profile, segment, sign, halfRoad);
+        const valley = Terrain.profiles.valleyFloor;
+        expect([reach(valley, -1, 10, 10), reach(valley, 1, 10, 10)]).toEqual([47, 47]);
+        expect([reach(valley, -1, 10), reach(valley, 1, 10)]).toEqual([26, 36]);
         expect([reach(Terrain.profiles.forest, -1, 8), reach(Terrain.profiles.forest, 1, 8)]).toEqual([35, 35]);
         expect([reach(Terrain.profiles.cliffLake, -1, 10), reach(Terrain.profiles.cliffLake, 1, 10)]).toEqual([12, 12]);
     });
@@ -111,9 +119,17 @@ describe('run-off profiles (pure)', () => {
 
     test('every side ends in ground that rises well above the road, so no ribbon stops against the haze', () => {
         runoffSides().forEach(([, side]) => {
-            const last = side.stations[side.stations.length - 1];
-            expect(last[1]).toBeGreaterThanOrEqual(30);
+            for (const stations of [side.stations, side.closedStations].filter(Boolean)) {
+                expect(stations[stations.length - 1][1]).toBeGreaterThanOrEqual(30);
+            }
         });
+        // And at every weight between, rolling ridge included
+        const valley = Terrain.profiles.valleyFloor;
+        for (let s = 0; s <= 89; s += 0.25) {
+            [valley.left, valley.right].forEach(side => {
+                expect(Terrain.row(side, Terrain.ROWS, ctxFor(10, 0, s), {}).y).toBeGreaterThanOrEqual(30);
+            });
+        }
     });
 
     test('road heights: gentle steps along the whole path, and the two leg shapes differ', () => {
@@ -125,8 +141,127 @@ describe('run-off profiles (pure)', () => {
             y.slice(1).forEach((value, n) => expect(Math.abs(value - y[n])).toBeLessThanOrEqual(0.5));
             expect(y.every(Number.isFinite)).toBe(true);
         });
-        expect(Terrain.elevation(Terrain.LEGS[VALLEY].profile, 0, 0, 69)).toBeCloseTo(30, 9);
+        expect(Terrain.elevation(Terrain.LEGS[VALLEY].profile, 0, 0, 69)).toBeCloseTo(12, 9);
         expect(Terrain.elevation(Terrain.LEGS[FOREST].profile, 414, 414, 509)).toBeCloseTo(34, 9);
+    });
+
+    describe('leg 1 closes in toward the mountains', () => {
+        const valley = Terrain.profiles.valleyFloor;
+        const sides = [['left', valley.left], ['right', valley.right]];
+        const legs = new game.TourSystem().legs;
+
+        test('one weight, from the leg\'s own range: open for the first 30%, closed from 80%, smooth between', () => {
+            expect([legs[VALLEY].startSegment, legs[VALLEY].endSegment]).toEqual([0, 69]);
+            const w = s => Terrain.closingAt(valley, s);
+            for (let s = 0; s <= 0.3 * 69; s += 0.25) expect(w(s)).toBe(0);
+            for (let s = 0.8 * 69; s <= 89; s += 0.25) expect(w(s)).toBe(1);
+            for (let s = 0.25; s <= 89; s += 0.25) {
+                expect(w(s)).toBeGreaterThanOrEqual(w(s - 0.25));
+                // No step: at most 0.02 a column (0.25 of a segment)
+                expect(w(s) - w(s - 0.25)).toBeLessThanOrEqual(0.02);
+            }
+            expect(w(0.55 * 69)).toBeCloseTo(0.5, 9);
+            // A profile that keeps one shape never closes
+            expect(Terrain.closingAt(Terrain.profiles.forest, 60)).toBe(0);
+        });
+
+        test.each(sides)('%s: at every weight the physics base equals the drawn row, and rows run outward', (name, side) => {
+            for (const s of [0, 20.7, 30.25, 37.5, 44.75, 55.2, 69, 80]) {
+                const ctx = ctxFor(10, 25, s);
+                let previous = -Infinity;
+                for (let j = 0; j <= Terrain.ROWS; j++) {
+                    const row = Terrain.row(side, j, ctx, {});
+                    expect(row.d).toBeGreaterThan(previous);
+                    previous = row.d;
+                    expect(Math.abs(side.base(row.d - 10, 25, s) - row.y)).toBeLessThan(1e-9);
+                }
+                expect(Terrain.row(side, 0, ctx, {})).toMatchObject({ d: 10, y: 25 });
+            }
+        });
+
+        test.each(sides)('%s: every station of both shapes is a row at its own weight', (name, side) => {
+            [[0, side.stations], [80, side.closedStations]].forEach(([s, stations]) => {
+                const rows = Array.from({ length: Terrain.ROWS + 1 }, (_, j) => Terrain.row(side, j, ctxFor(10, 0, s), {}).d);
+                stations.forEach(([dPast]) => expect(rows.some(d => Math.abs(d - (10 + dPast)) < 1e-9)).toBe(true));
+            });
+        });
+
+        test.each(sides)('%s: slopes stay buildable and the run-off stays rideable at every weight', (name, side) => {
+            for (let s = 0; s <= 89; s += 0.25) {
+                const ctx = ctxFor(10, 0, s);
+                const limit = Terrain.rideableLimit(valley, s, name === 'left' ? -1 : 1, 10);
+                let previous = Terrain.row(side, 0, ctx, {});
+                for (let j = 1; j <= Terrain.ROWS; j++) {
+                    const row = Terrain.row(side, j, ctx, {});
+                    const slope = Math.abs(row.y - previous.y) / (row.d - previous.d);
+                    // About 50 degrees at the steepest foothill
+                    expect(slope).toBeLessThanOrEqual(1.2);
+                    // Inside the run-off (left of the river bank) the ground is near level
+                    if (row.d <= Math.min(limit, 35)) expect(slope).toBeLessThanOrEqual(0.15);
+                    previous = row;
+                }
+            }
+        });
+
+        test.each(sides)('%s: no row jumps between two columns (5 m along the road)', (name, side) => {
+            for (let s = 0.25; s <= 89; s += 0.25) {
+                for (let j = 0; j <= Terrain.ROWS; j++) {
+                    const now = Terrain.row(side, j, ctxFor(10, 0, s), {});
+                    const before = Terrain.row(side, j, ctxFor(10, 0, s - 0.25), {});
+                    // No steeper along the road than the steepest slope across it
+                    expect(Math.abs(now.y - before.y)).toBeLessThanOrEqual(1.2 * 5);
+                    expect(Math.abs(now.d - before.d)).toBeLessThanOrEqual(1);
+                }
+            }
+        });
+
+        test('the left bank rises where the run-off ends, at every weight', () => {
+            for (const s of [0, 30, 38, 45, 55, 80]) {
+                const edge = Terrain.rideableLimit(valley, s, -1, 10) - 10;
+                const at = d => valley.left.base(d, 0, s);
+                expect(at(edge + 4)).toBeGreaterThan(at(edge) + 2);
+            }
+        });
+
+        test('the river bed holds its place at every weight: the water is a fixed ribbon', () => {
+            for (const s of [0, 30, 40, 50, 80]) {
+                for (let d = 0; d <= 40; d += 0.5) expect(valley.right.base(d, 0, s)).toBeCloseTo(valley.right.base(d, 0, 0), 9);
+                // Below the water (3 m under the road) from 27.5 to 38 past the edge only
+                expect(valley.right.base(32, 0, s)).toBeLessThan(-3);
+                expect(valley.right.base(26, 0, s)).toBeGreaterThan(-3);
+                expect(valley.right.base(40, 0, s)).toBeGreaterThan(-3);
+            }
+        });
+
+        test('the valley sides rise from low hills to foothills over 100 m high', () => {
+            const top = (side, s) => side.base(150, 0, s);
+            sides.forEach(([, side]) => {
+                expect(top(side, 0)).toBeLessThan(25);
+                expect(top(side, 80)).toBeGreaterThan(80);
+            });
+            // 50 m past the road edge the open meadow is still low and the foothill already high
+            expect(valley.left.base(50, 0, 0)).toBeLessThan(4);
+            expect(valley.left.base(50, 0, 80)).toBeGreaterThan(25);
+        });
+
+        test('no row reaches past half the tightest bend radius at any weight', () => {
+            for (let s = 0; s <= 89; s += 0.25) {
+                sides.forEach(([, side]) => expect(Terrain.outermost(side, ctxFor(10, 0, s))).toBeLessThanOrEqual(200));
+            }
+        });
+
+        test('the road climbs out of the valley and meets leg 2 with no step', () => {
+            const { profile } = Terrain.LEGS[VALLEY];
+            const y = i => Terrain.elevation(profile, i, 0, 69);
+            // Low through the open country, climbing through the middle
+            expect(Math.max(...Array.from({ length: 21 }, (_, i) => y(i)))).toBeLessThan(15);
+            expect(y(62) - y(20)).toBeGreaterThan(14);
+            // From the end of the leg on, the road is leg 2's own, so the finish
+            // and the 20 built segments past it are leg 2's road, and leg 2 starts where leg 1 ends
+            const cliff = Terrain.LEGS[CLIFF].profile;
+            for (let i = 69; i <= 89; i++) expect(y(i)).toBe(Terrain.elevation(cliff, i, 70, 149));
+            expect(Math.abs(y(69) - Terrain.elevation(cliff, 70, 70, 149))).toBeLessThanOrEqual(0.5);
+        });
     });
 
     // R5: the course guard
@@ -141,7 +276,12 @@ describe('run-off profiles (pure)', () => {
             ...(s.fallDepth !== undefined && { fallDepth: s.fallDepth }),
             ...(s.lipDepth !== undefined && { lipDepth: s.lipDepth }),
             // How tall a gorge wall stands and how much it swings (the mountain walls have no variation)
-            ...(s.face && s.face.variation !== undefined && { wall: [s.face.height, s.face.variation] })
+            ...(s.face && s.face.variation !== undefined && { wall: [s.face.height, s.face.variation] }),
+            // A side that closes in along the leg: its other shape, and how far it has closed at each segment
+            ...(s.closedStations && {
+                closed: s.closedStations, roll: s.roll, wave: s.wave,
+                closing: Array.from({ length: 744 }, (_, i) => Math.round(s.closing(i) * 1e6))
+            })
         });
         const elevation = Array.from({ length: 744 }, (_, i) =>
             Math.round(Terrain.elevation(profile, i, leg.startSegment, leg.endSegment) * 1e6));
@@ -150,6 +290,7 @@ describe('run-off profiles (pure)', () => {
             roadWidth: config.roadWidth,
             floor: profile.floor,
             trees: config.dressing.forest?.layout ?? null,
+            ...(config.dressing.forest?.closed && { treesClosed: config.dressing.forest.closed }),
             elevation,
             left: side(profile.left),
             right: side(profile.right),
@@ -207,19 +348,35 @@ describe('the run-off legs built', () => {
         return (x - point.x) * Math.cos(point.heading) - (z - point.z) * Math.sin(point.heading);
     };
 
-    // Lateral of every tree instance (the trees are the only instanced meshes)
-    function treeLaterals(env, scene) {
-        const laterals = [];
+    // The nearest built segment to (x, z)
+    const segmentOf = (env, x, z) => {
+        let best = Infinity;
+        let nearest = 0;
+        for (let i = env.startSegment; i <= env.endSegment + 20; i++) {
+            const d = (x - env.roadPath[i].x) ** 2 + (z - env.roadPath[i].z) ** 2;
+            if (d < best) {
+                best = d;
+                nearest = i;
+            }
+        }
+        return nearest;
+    };
+
+    // Every tree instance (the forest meshes are named for their kind)
+    function trees(env, scene) {
+        const out = [];
         const matrix = new game.THREE.Matrix4();
         scene.traverse(object => {
-            if (!object.isInstancedMesh) return;
+            if (!object.isInstancedMesh || !/^forest-/.test(object.name)) return;
             for (let n = 0; n < object.count; n++) {
                 object.getMatrixAt(n, matrix);
-                laterals.push(lateralOf(env, matrix.elements[12], matrix.elements[14]));
+                const [x, z] = [matrix.elements[12], matrix.elements[14]];
+                out.push({ x, y: matrix.elements[13], z, lateral: lateralOf(env, x, z), segment: segmentOf(env, x, z), kind: object.name.slice(7) });
             }
         });
-        return laterals;
+        return out;
     }
+    const treeLaterals = (env, scene) => trees(env, scene).map(tree => tree.lateral);
 
     const at = (env, segment, lateral) => {
         const point = env.roadPath[segment];
@@ -271,6 +428,38 @@ describe('the run-off legs built', () => {
         expect(checked).toBe(36);
     });
 
+    test('mountain-dawn: on the run-off the drawn ground and the smooth ground the bike rides agree to 0.10, all along the closing valley', () => {
+        const { env, scene } = leg(VALLEY);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        const raycaster = new game.THREE.Raycaster();
+        let worst = 0;
+        let checked = 0;
+        for (let segment = env.startSegment + 1; segment <= env.endSegment + 5; segment += 2) {
+            const point = env.roadPath[segment];
+            for (const along of [0, 7.5]) {
+                for (const sign of [-1, 1]) {
+                    for (let lateral = 10.5; lateral <= 46; lateral += 1.5) {
+                        const x = point.x + Math.cos(point.heading) * lateral * sign + Math.sin(point.heading) * along;
+                        const z = point.z - Math.sin(point.heading) * lateral * sign + Math.cos(point.heading) * along;
+                        // Run-off as the bike reads it: the band beside its own nearest segment
+                        const loc = game.Terrain.locate(env.roadPath, x, z, 0, env.roadPath.length - 1, {});
+                        if (Math.abs(loc.lateral) > game.Terrain.rideableLimit(env.terrain, loc.index, sign, 10)) continue;
+                        raycaster.set(new game.THREE.Vector3(x, 500, z), new game.THREE.Vector3(0, -1, 0));
+                        const hit = raycaster.intersectObjects(ribbons, false)[0];
+                        expect(hit).toBeDefined();
+                        const smooth = game.Terrain.groundY(env.terrain, env.terrainGeometry, x, z, 0, env.roadPath.length - 1, false);
+                        worst = Math.max(worst, Math.abs(hit.point.y - smooth));
+                        checked++;
+                    }
+                }
+            }
+        }
+        expect(checked).toBeGreaterThan(2000);
+        expect(worst).toBeLessThanOrEqual(0.10);
+    });
+
     test('mountain-dawn: a river 3 m below the road shows from lateral 37.5 to 48 on the right and nowhere else', () => {
         const { env, scene } = leg(VALLEY);
         const rivers = [];
@@ -298,22 +487,99 @@ describe('the run-off legs built', () => {
         });
     });
 
-    test('mountain-dawn: meadow with sparse trees on both sides, none in the river, none nearer than 16', () => {
+    test('mountain-dawn: sparse broadleaf meadow at the start, conifer forest at the end, none in the river, none nearer than 16', () => {
         const { env, scene } = leg(VALLEY);
-        const laterals = treeLaterals(env, scene);
-        const left = laterals.filter(l => l < 0);
-        const right = laterals.filter(l => l > 0);
-        expect(left.length).toBeGreaterThanOrEqual(120);
-        expect(left.length).toBeLessThanOrEqual(260);
-        expect(right.length).toBeGreaterThanOrEqual(120);
-        expect(right.length).toBeLessThanOrEqual(260);
+        const all = trees(env, scene);
+        const laterals = all.map(tree => tree.lateral);
+        // Open country: segments 0 to 20, closed: 56 on (the weight is 1 from 55.2)
+        const open = all.filter(tree => tree.segment <= 20);
+        const closed = all.filter(tree => tree.segment >= 56);
+        const perSegment = (list, from, to) => list.length / (to - from + 1);
+        [-1, 1].forEach(sign => {
+            const side = list => list.filter(tree => Math.sign(tree.lateral) === sign);
+            expect(perSegment(side(open), 0, 20)).toBeGreaterThanOrEqual(1);
+            expect(perSegment(side(open), 0, 20)).toBeLessThanOrEqual(3);
+            expect(perSegment(side(closed), 56, 89)).toBeGreaterThanOrEqual(3);
+            expect(perSegment(side(closed), 56, 89)).toBeLessThanOrEqual(5.5);
+        });
+        expect(open.filter(tree => tree.kind === 'conifer')).toHaveLength(0);
+        expect(closed.filter(tree => tree.kind === 'conifer').length / closed.length).toBeGreaterThanOrEqual(0.7);
         expect(Math.min(...laterals.map(Math.abs))).toBeGreaterThanOrEqual(16.0);
         expect(Math.min(...laterals.map(Math.abs))).toBeLessThanOrEqual(18.0);
-        expect(right.filter(l => l >= 33 && l <= 52)).toHaveLength(0);
-        // No fixed backdrop peaks
+        expect(laterals.filter(l => l >= 33 && l <= 52)).toHaveLength(0);
+        // Every tree stands on the drawn ground (planted 0.6 into it; the instance matrix is float32)
+        all.slice(0, 200).forEach(tree => expect(tree.y).toBeCloseTo(env.groundYAt(tree.x, tree.z) - 0.6, 4));
+    });
+
+    test('mountain-dawn: rock outcrops only where the valley has closed in, out of reach, out of the river, set into the ground', () => {
+        const { env, scene } = leg(VALLEY);
+        const meshes = [];
+        scene.traverse(object => { if (object.name === 'outcrops') meshes.push(object); });
+        expect(meshes).toHaveLength(1);
+        const [outcrops] = meshes;
+        expect(outcrops.isInstancedMesh).toBe(true);
+        expect(outcrops.count).toBeGreaterThan(60);
+        const matrix = new game.THREE.Matrix4();
+        const position = new game.THREE.Vector3();
+        const scale = new game.THREE.Vector3();
+        const quaternion = new game.THREE.Quaternion();
+        const segments = [];
+        for (let n = 0; n < outcrops.count; n++) {
+            outcrops.getMatrixAt(n, matrix);
+            matrix.decompose(position, quaternion, scale);
+            const segment = segmentOf(env, position.x, position.z);
+            segments.push(segment);
+            const lateral = lateralOf(env, position.x, position.z);
+            // No bike reaches one (it is not a solid entry)
+            expect(Math.abs(lateral)).toBeGreaterThan(game.Terrain.rideableLimit(env.terrain, segment, Math.sign(lateral), 10) + 2);
+            // Clear of the river band, rock and all
+            const reach = Math.max(scale.x, scale.z) * 1.3;
+            expect(lateral + reach < 33 || lateral - reach > 52).toBe(true);
+            // The centre is under the drawn ground: the rock shows as a cap the ground cuts
+            expect(position.y).toBeLessThan(env.groundYAt(position.x, position.z));
+        }
+        // None in open country; most where the valley has closed
+        expect(Math.min(...segments)).toBeGreaterThanOrEqual(19);
+        expect(segments.filter(s => s >= 50).length).toBeGreaterThan(segments.length / 2);
+        expect(env.boulders.filter(b => b.solid && b.label === 'rock')).toHaveLength(
+            env.groundedObjects.filter(({ label }) => /^cliff rock cluster/.test(label)).length
+        );
+    });
+
+    test('mountain-dawn: the next leg\'s mountains stand ahead, clear of the road, fading in as the rider nears', () => {
+        const { env, scene } = leg(VALLEY);
+        const ranges = [];
         const mountains = [];
-        scene.traverse(object => { if (object.userData.type === 'mountain') mountains.push(object); });
-        expect(mountains).toHaveLength(0);
+        scene.traverse(object => {
+            if (object.name === 'approach-range') ranges.push(object);
+            if (object.userData.type === 'mountain') mountains.push(object);
+        });
+        // One merged mesh, and no other backdrop
+        expect(ranges).toHaveLength(1);
+        expect(mountains).toEqual(ranges);
+        const [range] = ranges;
+        expect(range.userData.skipCulling).toBe(true);
+        const { near, far } = range.userData.fade;
+        const peaks = env.approachPeaks;
+        expect(peaks.length).toBeGreaterThanOrEqual(15);
+        const distance = (peak, segment) => Math.hypot(peak.x - env.roadPath[segment].x, peak.z - env.roadPath[segment].z);
+        // Clear of every road segment this leg draws, by the peak's own radius
+        peaks.forEach(peak => {
+            for (let i = env.startSegment; i <= env.endSegment + 20; i++) expect(distance(peak, i)).toBeGreaterThan(peak.radius + 100);
+        });
+        // At 10% of the leg every peak's foot is past where the fade starts, and most are gone;
+        // at 95% the nearest stand inside the fade, whole
+        const nearest = segment => Math.min(...peaks.map(peak => distance(peak, segment) - peak.radius));
+        const start = env.startSegment + 7;
+        const end = env.startSegment + 66;
+        expect(nearest(start)).toBeGreaterThan(near);
+        expect(peaks.filter(peak => distance(peak, start) > far).length).toBeGreaterThan(peaks.length / 2);
+        expect(nearest(end)).toBeLessThan(near / 2);
+        // And they draw nearer all the way
+        for (let i = start + 1; i <= end; i++) expect(nearest(i)).toBeLessThan(nearest(start));
+        // The range stands on a base below the lowest road of the leg, under the valley sides
+        range.geometry.computeBoundingBox();
+        expect(range.geometry.boundingBox.min.y).toBeLessThan(Math.min(...env.roadPath.slice(0, 70).map(p => p.y)) - 50);
     });
 
     test('storm-valley: dense forest both sides, nothing nearer than 13 or beyond 90, 1400 at most', () => {
@@ -343,15 +609,19 @@ describe('the run-off legs built', () => {
         });
     });
 
-    test.each([[VALLEY, 45], [FOREST, 33]])('leg %i: every trunk a bike can reach is solid, and none further out is', (index, reachable) => {
+    test.each([VALLEY, FOREST])('leg %i: every trunk a bike can reach is solid, and none further out is', (index) => {
         const { env, scene } = leg(index);
+        const halfRoad = env.roadWidth / 2;
+        // The rideable limit beside a point's nearest segment (it narrows along the valley)
+        const reachable = (x, z, lateral) => game.Terrain.rideableLimit(env.terrain, segmentOf(env, x, z), Math.sign(lateral) || 1, halfRoad);
         const trunks = env.boulders.filter(b => b.solid && b.label === 'tree');
         trunks.forEach(trunk => {
             expect(trunk.radius).toBe(0.6);
             expect(trunk.height).toBe(6);
-            expect(Math.abs(lateralOf(env, trunk.position.x, trunk.position.z))).toBeLessThanOrEqual(reachable + 1e-6);
+            const lateral = lateralOf(env, trunk.position.x, trunk.position.z);
+            expect(Math.abs(lateral)).toBeLessThanOrEqual(reachable(trunk.position.x, trunk.position.z, lateral) + 1e-6);
         });
-        const withinReach = treeLaterals(env, scene).filter(l => Math.abs(l) <= reachable);
+        const withinReach = trees(env, scene).filter(tree => Math.abs(tree.lateral) <= reachable(tree.x, tree.z, tree.lateral));
         expect(trunks).toHaveLength(withinReach.length);
         expect(trunks.length).toBeGreaterThan(0);
         // A trunk stands on the ground it was planted in
@@ -441,23 +711,37 @@ describe('the run-off legs built', () => {
         });
 
         test('over run-off a gate reaches the rideable limit plus 2; beside a wall or fall only the ledge', () => {
-            expect([leg(VALLEY).env.finishGate.left, leg(VALLEY).env.finishGate.right]).toEqual([47, 47]);
+            // The valley's finish stands in the foothills, where the run-off has narrowed
+            expect([leg(VALLEY).env.finishGate.left, leg(VALLEY).env.finishGate.right]).toEqual([26, 36]);
             expect([leg(FOREST).env.finishGate.left, leg(FOREST).env.finishGate.right]).toEqual([35, 35]);
             expect([leg(CLIFF).env.finishGate.left, leg(CLIFF).env.finishGate.right]).toEqual([12, 12]);
-            leg(VALLEY).env.checkpoints.forEach(cp => expect([cp.left, cp.right]).toEqual([47, 47]));
+            // Each valley gate spans its own segment's rideable ground, narrowing along the leg
+            const gates = [...leg(VALLEY).env.checkpoints, leg(VALLEY).env.finishGate];
+            gates.forEach(gate => {
+                expect(gate.left).toBe(game.Terrain.rideableLimit(leg(VALLEY).env.terrain, gate.segmentIndex, -1, 10) + 2);
+                expect(gate.right).toBe(game.Terrain.rideableLimit(leg(VALLEY).env.terrain, gate.segmentIndex, 1, 10) + 2);
+            });
+            expect([gates[0].left, gates[0].right]).toEqual([47, 47]);
+            gates.slice(1).forEach((gate, n) => {
+                expect(gate.left).toBeLessThanOrEqual(gates[n].left);
+                expect(gate.right).toBeLessThanOrEqual(gates[n].right);
+            });
         });
 
         test('a rider anywhere on the rideable ground fires the gate, and one beyond it does not', () => {
             const { env } = leg(VALLEY);
             [env.finishGate, ...env.checkpoints].forEach(gate => {
                 const near = across => inGate(gate, onGate(gate, 0, across));
-                const limit = 45;
+                // The rideable limit each side at this gate
+                const right = gate.right - 2;
+                const left = gate.left - 2;
                 expect(near(0)).toBe(true);
-                expect(near(limit - 1)).toBe(true);
-                expect(near(limit + 1)).toBe(true);
-                expect(near(-(limit + 1))).toBe(true);
-                expect(near(limit + 4)).toBe(false);
-                expect(near(-(limit + 4))).toBe(false);
+                expect(near(right - 1)).toBe(true);
+                expect(near(right + 1)).toBe(true);
+                expect(near(-(left - 1))).toBe(true);
+                expect(near(-(left + 1))).toBe(true);
+                expect(near(right + 4)).toBe(false);
+                expect(near(-(left + 4))).toBe(false);
                 // The band along the road is 5 m each way
                 expect(inGate(gate, onGate(gate, 4.9, 0))).toBe(true);
                 expect(inGate(gate, onGate(gate, 5.1, 0))).toBe(false);

@@ -4,7 +4,7 @@ Every leg has a terrain profile: what lies on each side of the road (a wall, a f
 
 | Leg | Profile | Left | Right | Board |
 |---|---|---|---|---|
-| 1 mountain-dawn | `valleyFloor` | run-off meadow | run-off meadow, river | `mountain-dawn-v2` |
+| 1 mountain-dawn | `valleyFloor` | run-off meadow, closing to foothills | run-off meadow, river, closing to foothills | `mountain-dawn-v2` |
 | 2 valley-run | `cliffLakeMirrored` | drop to the lake | wall | `valley-run-v2` |
 | 3 coastal-descent | `coast` | wall | sea cliff, then beach | `coastal-descent-v2` |
 | 4 foggy-gorge | `canyon` | wall; drop after the second tunnel | wall; drop between the tunnels | `foggy-gorge-v2` |
@@ -41,14 +41,31 @@ The roadworks plant (bulldozer, barrier, work truck) is not built beside a wall:
 
 ## Run-off legs
 
-`valleyFloor` (leg 1, mountain-dawn) and `forest` (leg 6) are built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 35 (valley) or 25 (forest) past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.
+`forest` (leg 6) is built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 25 past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.
+
+`valleyFloor` (leg 1, mountain-dawn) is the journey over to the mountains. It is built with `Terrain.closingSide`: two station lists of the same length, `open` and `closed`, and one weight, `profile.closing(s)`, that moves every station from its open place and height to its closed ones. The weight is a smoothstep over the leg (global segments 0 to 69, `VALLEY_LEG` in `js/terrain.js`, pinned to `js/tours.js` by a test): 0 for the first 30% of the leg, 1 from 80%, smooth between. `Terrain.closingAt(profile, s)` reads it; a profile that keeps one shape answers 0.
+
+| Part of the leg | Ground | Run-off past the road edge | Dressing |
+|---|---|---|---|
+| Open (segments 0 to 20) | Meadow, low hills (about 30 m) 190 m out | 35 each side | Broadleaf, 1 to 3 a side a segment; no rocks |
+| Closing (21 to 55) | Hills rise and close in, slopes steepen | Narrows smoothly | Trees thicken and turn to conifers; outcrops start |
+| Foothills (56 on) | Valley sides 120 m high, bare rock where steeper than 0.6 | 14 left, 24 right | 3 to 5 a side a segment, 85% conifers; outcrops |
+
+- Each row keeps its station gap at every weight (`splitGaps`), and the ground between two stations is a straight line, so `base()` equals the drawn rows exactly at any `s`. A band may name a `closed` end (`{ to: 35, closed: 14, kind: 'runoff' }`): `zoneAt`, `rideableLimit` and `gateReach` read the band end at their segment, so the run-off, the wall line, solid trunks and gates narrow with the ground. The foot of the left bank moves with the band end, half a metre past it: between two columns the triangles join two places of a moving knee, and the margin keeps that out of the run-off, so the drawn run-off stays within 0.10 of `base()`. The river bed (right, 25 to 40 past the edge) is the same at every weight: the water ribbon is fixed.
+- `roll` weights each station's share of a rolling ridge line (`wave`, amplitude 3 open to 16 closed): the run-off stations have none, so only the far slopes roll.
+- Limits held by `tests/unit/runoff-legs.test.js` at every weight: rows run outward and reach no further than 200 (half the tightest bend, 444 m at segments 84 to 93), no slope steeper than 1.2 across the road or along it, the run-off no steeper than 0.15, every side ending at least 30 m above the road, and the drawn run-off within 0.10 of the ground the bike rides.
+- Road height: 12 m through the open country, climbing about 16 m through the middle. From 14 segments before the leg's end it eases onto `cliffLake.elevation`, and from the end (segment 69) on it is that function, so the finish (segment 74), the 20 built segments past it and leg 2's own start (segment 70) are one road with no step. No step along the whole path exceeds 0.5.
+- Dressing: `dressing.forest.closed` holds the tree values at full weight (`coniferShare`, `perSegment`); `dressing.outcrops.perSegment` is the number of rocks a segment at full weight. Outcrops (`createOutcrops`, one instanced mesh named `outcrops`) stand past the rideable limit plus 4, out of the river band, with their centres under the drawn ground so the ground cuts each into a cap. They are not solid: no bike reaches one.
+- Backdrop: `dressing.backdrop: ['approach']` builds `createApproachRange`, one merged mesh named `approach-range`: peaks beside leg 2's road (the wall side 300 m out, the lake side 520 m) and a few at the head of the valley, straight on from the leg's end. Each stays clear of the road by its radius plus 120 (the head peaks clear of the road this leg draws). They stand on a base 80 m under the leg's lowest road, behind the valley sides. Fog alone leaves a far peak as a flat silhouette that still shows against the sky, so the material fades the range with view distance: whole within 800 m, gone at 1500 m (`userData.fade`), and a faded fragment is discarded. At 10% of the leg the nearest peak's foot is about 1060 m off (its centre 1400 m) and all but one peak are past 1500 m; at 95% the nearest foot is about 270 m off (centre 660 m).
 
 - The bike slows and loses grip in run-off, and crashes after 6 s off the road, in water, or on an obstacle. Trunks, rocks and the relocated roadworks plant are `environment.boulders` entries with `solid: true` and a `height`: they are tested while airborne too, by horizontal distance and height, and are never hopped.
 - Mountain-dawn has a river ribbon (`floor-river`, 3 m below the road, lateral 35 to 50 on the right). `Terrain.waterLevel()` gives the water height for a lake, sea or river.
+- A trunk is solid when it stands within the rideable limit of its own nearest segment (`plantRunoffTrees`), the segment the bike's zone test reads.
 - Roadworks plant stands at `-(roadWidth / 2 + 9)` (bulldozer) and `-(roadWidth / 2 + 6)` (barrier, truck) on run-off ground, not at -30 and -25 on a wall.
-- A gate (`environment.finishGate`, `environment.checkpoints`) reaches `Terrain.gateReach()` each side: the rideable limit plus 2 over run-off, the road's ledge beside a wall or fall. `Game.inGate(gate, position)` is the only gate test; there is no segment window.
+- A gate (`environment.finishGate`, `environment.checkpoints`) reaches `Terrain.gateReach()` each side at its own segment: the rideable limit plus 2 over run-off, the road's ledge beside a wall or fall. On mountain-dawn that is 47 each side at the first checkpoint and 26 (left) and 36 (right) at the finish. `Game.inGate(gate, position)` is the only gate test; there is no segment window.
 - A changed course has `trackVersion` 2 in `Terrain.LEGS`, so `TourSystem.boardId()` gives `mountain-dawn-v2`, `valley-run-v2` and `storm-valley-v2` and local best times use `Game.bestTimeKey()`. `tests/unit/runoff-legs.test.js` pins a digest of each leg's course: change a road height, band, run-off rate or tree layout and it fails until the version is bumped. Progression keeps the plain leg ids.
 - The menu preview camera takes its radius and height from `Terrain.LEGS[i].preview`.
+- Mountain-dawn's board stays `mountain-dawn-v2` through the closing valley: no v2 board has shipped. Its course digest hashes the closed stations, roll, wave, the weight at every segment and the closed tree values.
 
 ## Coast and ridge
 

@@ -834,6 +834,10 @@ class Environment {
       pathLength: this.roadPath.length,
     };
     const vertex = {};
+    // The row below in the same column, for the slope of ground that turns to rock
+    const previousRow = { d: 0, y: 0 };
+    const scree = new THREE.Color();
+    const screeRock = new THREE.Color(0x76726a);
 
     // Create dense vertex grid with multi-layer displacement
     for (let i = startIdx; i <= endIdx; i++) {
@@ -880,8 +884,16 @@ class Environment {
           if (columnSide.face === null && !columnSide.rock) {
             // Patchy ground: one seeded tint per vertex, from the same draw as rock grey
             const tint = 0.85 + ((greyBase - 0.6) / 0.25) * 0.3;
-            const grass = groundColor(columnSide);
-            colors.push(grass.r * tint, grass.g * tint, grass.b * tint);
+            let ground = groundColor(columnSide);
+            // Ground steeper than the side's rock slope shows bare rock
+            if (columnSide.rockSlope !== undefined && j > 0) {
+              const slope = Math.abs(vertex.y - previousRow.y) / Math.max(0.001, vertex.d - previousRow.d);
+              const bare = Math.min(1, Math.max(0, (slope - columnSide.rockSlope) / 0.3));
+              if (bare > 0) ground = scree.copy(ground).lerp(screeRock, bare * 0.85);
+            }
+            previousRow.d = vertex.d;
+            previousRow.y = vertex.y;
+            colors.push(ground.r * tint, ground.g * tint, ground.b * tint);
             uvs.push(0, 0);
             continue;
           }
@@ -1385,8 +1397,143 @@ class Environment {
       near: () => this.createNearHills(), // more detail
       majestic: () => this.createMajesticPeak(), // the dominant mountain
       endCourse: () => this.createEndCourseMountains(), // dramatic end mountains
+      approach: () => this.createApproachRange(), // the next leg's mountains, ahead
     };
     this.config.dressing.backdrop.forEach((key) => layers[key]());
+  }
+
+  // The mountains the road runs into after this leg: peaks either side of the
+  // next leg's road, set back from it, the far (left) side further back, and a
+  // few at the head of this leg's valley. At the start of the leg they are
+  // over a kilometre off and faded out; they come in as the rider nears. They
+  // stand on a base far below the road, behind the valley sides. One merged
+  // mesh, rock under snow, never culled.
+  createApproachRange() {
+    const path = this.roadPath;
+    const first = Math.max(0, this.startSegment);
+    const end = Math.min(this.endSegment, path.length - 1);
+    const last = Math.min(path.length - 1, end + 90);
+    let lowest = Infinity;
+    for (let i = first; i <= end; i++) lowest = Math.min(lowest, path[i].y);
+    const baseY = lowest - 80;
+    // Clear of the road from the start of this leg to well into the next (the
+    // head of the valley only of the road this leg draws: the next leg turns
+    // away from it)
+    const clear = (x, z, radius, to = last) => {
+      for (let i = first; i <= to; i++) {
+        if (Math.hypot(x - path[i].x, z - path[i].z) < radius + 120) return false;
+      }
+      return true;
+    };
+    const positions = [];
+    const colors = [];
+    const indices = [];
+    // Where each peak stands, for the fade and for tests
+    this.approachPeaks = [];
+    // A peak `lateral` metres out (positive right) and `ahead` metres along
+    // from a road point, `height` over the leg's lowest road
+    const place = (anchor, lateral, ahead, height, to, girth = 0.9) => {
+      const radius = height * (girth + this.rand() * 0.5);
+      const twist = this.rand() * Math.PI * 2;
+      const seed = this.rand() * 100;
+      const out = lateral + Math.sign(lateral) * radius * 0.5;
+      const x = anchor.x + Math.cos(anchor.heading) * out + Math.sin(anchor.heading) * ahead;
+      const z = anchor.z - Math.sin(anchor.heading) * out + Math.cos(anchor.heading) * ahead;
+      if (!clear(x, z, radius, to)) return;
+      this.approachPeaks.push({ x, z, apex: lowest + height, radius });
+      this.addApproachPeak({ x, z, height: height - baseY + lowest, radius, twist, seed, baseY }, positions, colors, indices);
+    };
+    // Beside the next leg's road: the wall side (right) close, the lake side further off
+    for (let a = end; a <= end + 84; a += 7) {
+      const anchor = path[Math.min(a, path.length - 1)];
+      for (const sign of [1, -1]) {
+        const height = 230 + this.rand() * 270;
+        const lateral = ((sign > 0 ? 300 : 520) + this.rand() * 360) * sign;
+        place(anchor, lateral, (this.rand() - 0.5) * 200, height);
+      }
+    }
+    // At the head of this leg's valley, straight on from its last stretch of
+    // road, where the rider looks between the valley sides
+    for (let n = 0; n < 6; n++) {
+      const height = 300 + this.rand() * 220;
+      const lateral = (this.rand() - 0.5) * 700;
+      place(path[end], lateral, 750 + n * 110 + this.rand() * 80, height, Math.min(path.length - 1, end + 20), 0.6);
+    }
+    if (indices.length === 0) return;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.95,
+      metalness: 0.0,
+      flatShading: true,
+      envMapIntensity: 0.3,
+      side: THREE.DoubleSide,
+      // Written to depth, so the peaks of the one mesh hide each other in
+      // any draw order; the height fog reads depth only to 900 m, where the
+      // range is already fading, and a peak faded out is discarded
+      transparent: true,
+    });
+    // Fog alone turns a far peak into a flat silhouette in the fog colour, which
+    // still stands out against the sky: fade the range out with distance
+    // instead, gone by `far` and whole within `near`
+    const fade = { near: 800, far: 1500 };
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.uFade = { value: new THREE.Vector2(fade.near, fade.far) };
+      shader.fragmentShader = `uniform vec2 uFade;\n${shader.fragmentShader}`.replace(
+        "#include <dithering_fragment>",
+        "#include <dithering_fragment>\n\tgl_FragColor.a *= 1.0 - smoothstep(uFade.x, uFade.y, length(vViewPosition));\n\tif (gl_FragColor.a < 0.01) discard;",
+      );
+    };
+    material.customProgramCacheKey = () => "approach-range-fade";
+    const range = new THREE.Mesh(geometry, material);
+    range.name = "approach-range";
+    range.userData.fade = fade;
+    // Behind every other transparent thing: drawn first of them
+    range.renderOrder = -1;
+    range.userData.skipCulling = true;
+    this.tagMeshes(range, "mountain");
+    this.scene.add(range);
+    this.registerGrounded(range, "approach range");
+  }
+
+  // One peak of the approach range: a cone with ridged, uneven flanks, rock
+  // darkening toward the foot and snow over the top of the taller ones.
+  // Colours are stored undecoded, as the other vertex-coloured peaks are.
+  addApproachPeak({ x, z, height, radius, twist, seed, baseY }, positions, colors, indices) {
+    const rings = 7;
+    const around = 12;
+    const offset = positions.length / 3;
+    const snowLine = height > 380 ? 0.68 : height > 300 ? 0.8 : 2;
+    for (let r = 0; r <= rings; r++) {
+      const v = r / rings;
+      for (let k = 0; k < around; k++) {
+        const angle = (k / around) * Math.PI * 2 + twist;
+        // Ridges run down the flanks; the foot spreads wide
+        const ridge = 1 + 0.22 * Math.sin(angle * 3 + seed) + 0.12 * Math.sin(angle * 7 + seed * 1.7) * (1 - v);
+        const spread = radius * (1 - v) * (1 + 0.35 * (1 - v) * (1 - v)) * ridge;
+        const lift = v < 1 ? height * v * (1 + 0.06 * Math.sin(angle * 5 + seed + r)) : height;
+        positions.push(x + Math.cos(angle) * spread, baseY + lift, z + Math.sin(angle) * spread);
+        if (v >= snowLine - 0.04 * Math.sin(angle * 4 + seed)) {
+          colors.push(0.9, 0.92, 0.95);
+        } else {
+          const rock = 0.3 + 0.22 * v;
+          colors.push(rock * 1.05, rock, rock * 0.95);
+        }
+      }
+    }
+    for (let r = 0; r < rings; r++) {
+      for (let k = 0; k < around; k++) {
+        const a = offset + r * around + k;
+        const b = offset + r * around + ((k + 1) % around);
+        const c = a + around;
+        const d = b + around;
+        indices.push(a, c, b, b, c, d);
+      }
+    }
   }
 
   createDistantMountainRange() {
@@ -3467,8 +3614,24 @@ class Environment {
 
     // A leg of bare rock (the gorge) has no forest at all
     if (!this.config.dressing.forest) return;
-    // Higher, colder legs are mostly conifers; the last leg is snowed in
-    const { coniferShare, snowy, layout } = this.config.dressing.forest;
+    // Higher, colder legs are mostly conifers; the last leg is snowed in. A leg
+    // whose valley closes in moves toward its `closed` values with the ground.
+    const { coniferShare, snowy, layout, closed } = this.config.dressing.forest;
+    // The conifer share at the segment being planted (set by layoutAt)
+    let share = coniferShare;
+    const layoutAt = (index) => {
+      if (!closed) return layout;
+      const w = Terrain.closingAt(this.terrain, index);
+      share = coniferShare + (closed.coniferShare - coniferShare) * w;
+      const [fewest, most] = layout.perSegment;
+      return {
+        ...layout,
+        perSegment: [
+          Math.round(fewest + (closed.perSegment[0] - fewest) * w),
+          Math.round(most + (closed.perSegment[1] - most) * w),
+        ],
+      };
+    };
 
     const placements = { conifer: [], broadleaf: [] };
     const matrix = new THREE.Matrix4();
@@ -3497,7 +3660,7 @@ class Environment {
       );
       if (snowy) tint.lerp(new THREE.Color(0xffffff), 0.55).multiplyScalar(1.5);
 
-      const kind = this.rand() < coniferShare ? "conifer" : "broadleaf";
+      const kind = this.rand() < share ? "conifer" : "broadleaf";
       placements[kind].push({ matrix: matrix.clone(), tint });
     };
 
@@ -3506,7 +3669,7 @@ class Environment {
       if (this.inSetPiece(index, 1)) continue;
       const point = this.roadPath[index];
       if (layout) {
-        this.plantRunoffTrees(index, point, layout, plant);
+        this.plantRunoffTrees(index, point, layoutAt(index), plant);
         continue;
       }
       // Trees per segment thin out with distance down the slope, on the side that drops
@@ -3539,6 +3702,7 @@ class Environment {
         return;
       }
       const mesh = new THREE.InstancedMesh(geometry, material, list.length);
+      mesh.name = `forest-${kind}`;
       list.forEach((placement, n) => {
         mesh.setMatrixAt(n, placement.matrix);
         mesh.setColorAt(n, placement.tint);
@@ -3557,12 +3721,73 @@ class Environment {
     build("broadleaf", this.createBroadleafGeometry());
   }
 
+  // Rock breaking through the ground where a valley closes in: none in open
+  // country, about `perSegment` a segment where it has closed. Each stands past
+  // the rideable limit, so no bike reaches one, and has its centre below the
+  // ground under it, so the rock shows as a cap the ground cuts and never
+  // stands clear of a slope. One draw call for the leg.
+  createOutcrops() {
+    const outcrops = this.config.dressing.outcrops;
+    if (!outcrops) return;
+    const startIdx = Math.max(0, this.startSegment);
+    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const halfRoad = this.roadWidth / 2;
+    // Never in the river (the trees keep out of the same band)
+    const exclude = (this.config.dressing.forest && this.config.dressing.forest.layout && this.config.dressing.forest.layout.exclude) || [];
+    const placements = [];
+    const position = new THREE.Vector3();
+    const quaternion = new THREE.Quaternion();
+    const euler = new THREE.Euler();
+    const scale = new THREE.Vector3();
+    for (let index = startIdx; index <= endIdx; index++) {
+      const w = Terrain.closingAt(this.terrain, index);
+      if (w <= 0) continue;
+      const count = Math.floor(outcrops.perSegment * w + this.rand());
+      const point = this.roadPath[index];
+      for (let n = 0; n < count; n++) {
+        const sign = this.rand() < 0.5 ? -1 : 1;
+        const lateral = Terrain.rideableLimit(this.terrain, index, sign, halfRoad) + 4 + this.rand() * 70;
+        const along = (this.rand() - 0.5) * 20;
+        const size = (1.2 + this.rand() * 2.4) * (0.6 + 0.6 * w);
+        euler.set(this.rand() * Math.PI, this.rand() * Math.PI, this.rand() * Math.PI);
+        scale.set(size * (1 + this.rand() * 0.6), size * (0.6 + this.rand() * 0.5), size * (1 + this.rand() * 0.6));
+        const shade = 0.65 + this.rand() * 0.35;
+        const reach = Math.max(scale.x, scale.z) * 1.3;
+        if (exclude.some((zone) => zone.sign === sign && lateral + reach >= zone.from && lateral - reach <= zone.to)) continue;
+        const x = point.x + sign * lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
+        const z = point.z - sign * lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
+        position.set(x, this.groundYAt(x, z) - scale.y * 0.5, z);
+        quaternion.setFromEuler(euler);
+        placements.push({ matrix: new THREE.Matrix4().compose(position, quaternion, scale), shade });
+      }
+    }
+    if (placements.length === 0) return;
+    const geometry = this.displaceVertices(new THREE.IcosahedronGeometry(1, 1), 0.28);
+    const material = new THREE.MeshStandardMaterial({ color: 0x67635c, roughness: 0.95, metalness: 0.0, flatShading: true, envMapIntensity: 0.2 });
+    const mesh = new THREE.InstancedMesh(geometry, material, placements.length);
+    const tint = new THREE.Color();
+    placements.forEach(({ matrix, shade }, n) => {
+      mesh.setMatrixAt(n, matrix);
+      mesh.setColorAt(n, tint.setScalar(shade));
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.instanceColor.needsUpdate = true;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.name = "outcrops";
+    // One mesh spans the leg: its own bounds say nothing about where the rocks are
+    mesh.frustumCulled = false;
+    mesh.userData.skipCulling = true;
+    this.scene.add(mesh);
+  }
+
   addEnvironmentalDetails() {
     // Rock formations and cliff details
     this.addRockFormations();
 
     // Forest on the valley slope below the road
     this.createForest();
+    this.createOutcrops();
 
     const startIdx = Math.max(0, this.startSegment);
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);

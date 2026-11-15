@@ -203,6 +203,101 @@ const Terrain = (() => {
     };
   }
 
+  // Loose ground that changes shape along the road: two station lists of the
+  // same length, `open` and `closed`, and a weight `closing(s)` (0 to 1, a pure
+  // function of the position along the road in segments) that takes each
+  // station from its open place and height to its closed ones. A band may name
+  // a `closed` end too, so the run-off narrows with the ground. `roll` weights
+  // each station's share of a rolling ridge line whose amplitude also closes.
+  // Each row keeps its station gap whatever the weight, and the ground between
+  // two stations is a straight line, so the drawn rows and `base` agree here as
+  // on any heightfield.
+  function closingSide({ open, closed, roll, closing, bands, runoff, wave, shade = 1, rockSlope }) {
+    const last = bands[bands.length - 1];
+    if (last.to !== undefined || (last.kind !== 'wall' && last.kind !== 'fall')) {
+      throw new Error('A side must end in an unbounded wall or fall band so its rideable limit is finite');
+    }
+    if (closed.length !== open.length || roll.length !== open.length) {
+      throw new Error('A closing side needs the same number of open, closed and roll stations');
+    }
+    const gaps = splitGaps(open.map(([d]) => d), closed.map(([d]) => d));
+    const station = (n, w) => [open[n][0] + (closed[n][0] - open[n][0]) * w, open[n][1] + (closed[n][1] - open[n][1]) * w];
+    // Height of the rolling ridge at a station weight of 1
+    const ridge = (s, w) => {
+      const amplitude = wave.amplitude[0] + (wave.amplitude[1] - wave.amplitude[0]) * w;
+      const phase = (2 * Math.PI * s) / wave.wavelength + wave.phase;
+      return amplitude * (0.7 * Math.sin(phase) + 0.3 * Math.sin(phase * 2.3 + 1.7));
+    };
+    // Height relative to the road at a distance past the road edge
+    const offsetAt = (dPast, s) => {
+      const w = closing(s);
+      const top = ridge(s, w);
+      let [d0, y0] = station(0, w);
+      if (dPast <= d0) return y0 + top * roll[0];
+      for (let n = 1; n < open.length; n++) {
+        const [d1, y1] = station(n, w);
+        if (dPast <= d1) {
+          const t = (dPast - d0) / (d1 - d0);
+          return y0 + (y1 - y0) * t + top * (roll[n - 1] + (roll[n] - roll[n - 1]) * t);
+        }
+        [d0, y0] = [d1, y1];
+      }
+      return y0 + top * roll[open.length - 1];
+    };
+    return {
+      flat: 0,
+      bands,
+      face: null,
+      runoff,
+      shade,
+      // Ground steeper than this is drawn as bare rock
+      ...(rockSlope !== undefined && { rockSlope }),
+      stations: open,
+      closedStations: closed,
+      roll,
+      wave,
+      closing,
+      interpolatesRoad: true,
+      base: (dPast, roadY, s) => roadY + offsetAt(dPast, s),
+      row(j, ctx, out) {
+        const w = closing(ctx.s);
+        // Row j lies in gap g, at part k of its `parts`
+        let n = 0;
+        let k = j;
+        while (n < gaps.length && k >= gaps[n]) k -= gaps[n++];
+        let dPast;
+        if (n === gaps.length) dPast = station(open.length - 1, w)[0];
+        else {
+          const from = station(n, w)[0];
+          dPast = from + ((station(n + 1, w)[0] - from) * k) / gaps[n];
+        }
+        out.d = ctx.halfRoad + dPast;
+        out.y = ctx.roadY + offsetAt(dPast, ctx.s);
+        out.rise = out.y - ctx.roadY;
+        out.displacement = 0;
+        return out;
+      }
+    };
+  }
+
+  // How many rows each station gap gets, so the stations of both shapes fall
+  // on rows: every gap gets one, and each further row goes to the gap whose
+  // parts are the longest in either shape
+  function splitGaps(openDistances, closedDistances) {
+    const gaps = openDistances.slice(1).map(() => 1);
+    const length = (n) => Math.max(openDistances[n + 1] - openDistances[n], closedDistances[n + 1] - closedDistances[n]);
+    for (let n = 0; n < gaps.length; n++) {
+      if (!(length(n) > 0)) throw new Error('Closing stations must run outward');
+    }
+    if (gaps.length > ROWS) throw new Error(`A closing side has at most ${ROWS + 1} stations`);
+    while (gaps.reduce((a, b) => a + b, 0) < ROWS) {
+      let widest = 0;
+      gaps.forEach((parts, n) => { if (length(n) / parts > length(widest) / gaps[widest]) widest = n; });
+      gaps[widest]++;
+    }
+    return gaps;
+  }
+
   // ROWS + 1 distances that include every given one, by splitting the widest
   // gap until there are enough
   function spreadRows(given) {
@@ -248,28 +343,63 @@ const Terrain = (() => {
   const RUNOFF = { drag: 0.35, grip: 0.5, floorSpeed: 6 };
   const RUNOFF_BANDS = (to) => [{ to, kind: 'runoff' }, { kind: 'wall' }];
 
-  // Open meadow: gentle slope away from the road for 35 m, then a low bank on
-  // the left and a river on the right, then the valley sides rising out of
-  // sight. Road height is rolling and descends over the leg.
+  const smoothstep = (a, b, x) => {
+    const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return t * t * (3 - 2 * t);
+  };
+
+  // The journey over to the mountains (leg 1, global segments 0 to 69, as in
+  // js/tours.js): open country for the first third, the valley closing in
+  // through the middle, foothills for the last fifth. One weight drives the
+  // ground, the run-off, the dressing and the road's climb, so they change
+  // together and smoothly: 0 up to 30% of the leg, 1 from 80%.
+  const VALLEY_LEG = { from: 0, to: 69 };
+  const valleyClosing = (s) => smoothstep(0.3, 0.8, (s - VALLEY_LEG.from) / (VALLEY_LEG.to - VALLEY_LEG.from));
+
+  // Meadow beside the road with a low bank at the run-off's edge (left) or the
+  // river (right), and low hills far off; closing, the run-off narrows to a
+  // verge and the valley sides rise to steep, rocky foothills 120 m high close
+  // to the road. The river keeps its bed at every weight: the water is a fixed
+  // ribbon from lateral 35 to 50.
   const valleyFloor = {
     id: 'valleyFloor',
     // The river is a ribbon 3 m below the road, lateral 35 to 50 on the right
     floor: { kind: 'river', below: 3.0, side: 1, from: 35, to: 50 },
+    closing: valleyClosing,
+    // Low and rolling through the open country, then climbing with the valley
+    // to meet the cliff road of leg 2: from 14 segments before the leg's end
+    // the height eases onto cliffLake's own, and is cliffLake's from the end
+    // on, so the hand-over has no step
     elevation: (i, start, end) => {
       const k = i - start;
-      const t = Math.min(1, Math.max(0, k / (end - start)));
-      return 30 - 12 * t + Math.sin(k * 0.11) * 2.2;
+      const t = k / (end - start);
+      const own = 12 + 16 * smoothstep(0.2, 0.95, t) + Math.sin(k * 0.11) * 1.6 * (1 - smoothstep(0.25, 0.55, t));
+      return own + (cliffLake.elevation(i) - own) * smoothstep(end - 14, end, i);
     },
-    left: heightfieldSide({
-      stations: [[0, 0], [35, -2.1], [41, 2.0], [100, 4.0], [180, 38]],
-      bands: RUNOFF_BANDS(35),
-      runoff: RUNOFF
+    left: closingSide({
+      // The bank's foot is half a metre past the run-off's end at every weight:
+      // it moves along the road, and between two columns the drawn triangles
+      // join two places of it, so it must stay clear of the run-off the bike
+      // reads to 0.10
+      open: [[0, 0], [14, -0.84], [35.5, -2.13], [41.5, 2.0], [70, 3.0], [100, 4.0], [140, 12], [175, 26], [190, 33]],
+      closed: [[0, 0], [6, -0.3], [14.5, -0.5], [19.5, 3.5], [35, 16], [60, 40], [100, 76], [150, 108], [190, 124]],
+      roll: [0, 0, 0, 0, 0.1, 0.3, 0.6, 0.85, 1],
+      closing: valleyClosing,
+      wave: { amplitude: [3, 16], wavelength: 9, phase: 0.4 },
+      bands: [{ to: 35, closed: 14, kind: 'runoff' }, { kind: 'wall' }],
+      runoff: RUNOFF,
+      rockSlope: 0.6
     }),
-    right: heightfieldSide({
+    right: closingSide({
       // Bank into the river bed (below the water plane from 37.5 to 48), then up and away
-      stations: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [60, -1.0], [100, 0], [180, 36]],
-      bands: RUNOFF_BANDS(35),
-      runoff: RUNOFF
+      open: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [60, -1.0], [100, 0], [140, 12], [190, 34]],
+      closed: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [52, 6], [90, 45], [135, 92], [190, 122]],
+      roll: [0, 0, 0, 0, 0, 0, 0, 0.1, 0.4, 0.75, 1],
+      closing: valleyClosing,
+      wave: { amplitude: [3, 16], wavelength: 11, phase: 2.1 },
+      bands: [{ to: 35, closed: 24, kind: 'runoff' }, { kind: 'wall' }],
+      runoff: RUNOFF,
+      rockSlope: 0.6
     })
   };
 
@@ -446,14 +576,19 @@ const Terrain = (() => {
     { id: 'mountain-dawn', profile: valleyFloor, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x4a7c4a, mountainColor: 0x6b5c42, fogDensity: 0.0015 },
       // Open country: sparse broadleaf clumps both sides, none in the river.
-      // No fixed peaks: they stand on the lake (y = -200) and the valley sides
-      // hide them.
+      // As the valley closes (Terrain.closingAt) the trees thicken and turn to
+      // conifers (`closed` holds the values at full weight), rock outcrops
+      // break through the slopes, and the range ahead (`approach`, the
+      // mountains of leg 2) comes nearer.
       dressing: {
         forest: {
           coniferShare: 0, snowy: false,
-          layout: { perSegment: [1, 3], offset: 6, reach: 104, exclude: [{ sign: 1, from: 33, to: 52 }] }
+          layout: { perSegment: [1, 3], offset: 6, reach: 104, exclude: [{ sign: 1, from: 33, to: 52 }] },
+          closed: { coniferShare: 0.85, perSegment: [3, 5] }
         },
-        rockfall: 0, backdrop: []
+        // Rocks per segment at full weight, set into the ground past the rideable limit
+        outcrops: { perSegment: 3 },
+        rockfall: 0, backdrop: ['approach']
       },
       // Where the menu preview camera stands: metres out from the mid-leg point, and above it
       preview: { radius: 30, height: 9 } },
@@ -922,10 +1057,11 @@ const Terrain = (() => {
 
     let start = halfRoad;
     for (const band of side.bands) {
-      if (band.to === undefined || reach <= halfRoad + band.to) {
+      const to = bandEnd(side, band, segIndex);
+      if (to === undefined || reach <= halfRoad + to) {
         return { kind: band.kind, side, sign, start };
       }
-      start = halfRoad + band.to;
+      start = halfRoad + to;
     }
     throw new Error(`Side of ${profile.id} has no outermost band`);
   }
@@ -934,11 +1070,25 @@ const Terrain = (() => {
   // without crashing or falling: the outer edge of the last shoulder or run-off
   // band. Always finite, because a side must end in a wall or a fall.
   function rideableLimit(profile, segIndex, sign, halfRoad) {
+    const side = sideAt(profile, sign, segIndex);
     let edge = 0;
-    for (const band of sideAt(profile, sign, segIndex).bands) {
-      if (band.to !== undefined && (band.kind === 'shoulder' || band.kind === 'runoff')) edge = band.to;
+    for (const band of side.bands) {
+      if (band.to !== undefined && (band.kind === 'shoulder' || band.kind === 'runoff')) edge = bandEnd(side, band, segIndex);
     }
     return halfRoad + edge;
+  }
+
+  // Where a band ends past the road edge at a position along the road: its
+  // own `to`, or on a closing side, that much of the way to its `closed` end
+  function bandEnd(side, band, s) {
+    if (band.closed === undefined) return band.to;
+    return band.to + (band.closed - band.to) * side.closing(s);
+  }
+
+  // How far a profile has closed in at a position along the road: 0 for a
+  // profile that keeps one shape. The dressing reads it with the ground.
+  function closingAt(profile, s) {
+    return profile.closing ? profile.closing(s) : 0;
   }
 
   // How far from the centre line a gate reaches on a side. A side with
@@ -1045,6 +1195,8 @@ const Terrain = (() => {
     cliffDropSide,
     cliffWallSide,
     heightfieldSide,
+    closingSide,
+    closingAt,
     rideableLimit,
     gateReach,
     waterLevel,
