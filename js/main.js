@@ -2230,18 +2230,30 @@ class Game {
                 v.yawAngle = 0;
                 v.updateMesh();
 
-                // Each material once, however many parts wear it: a modelled
-                // bike has few meshes on shared materials. Run again when the
-                // modelled bike takes over from the procedural one.
+                // Run again when the modelled bike takes over from the
+                // procedural one, so it works from each material's lit colour
+                // and gives the same result however often it runs.
                 const tier = this.riderTier(c.id);
-                const dimmed = new Set();
                 const shade = () => {
                     if (tier === 'dimmed') {
+                        const uses = new Map();
                         v.group.traverse(o => {
-                            if (!o.isMesh || !o.material || dimmed.has(o.material)) return;
-                            dimmed.add(o.material);
-                            if (o.material.color) o.material.color.multiplyScalar(0.22);
-                            if (o.material.emissiveIntensity !== undefined) o.material.emissiveIntensity = 0;
+                            if (o.isMesh && o.material) uses.set(o.material, (uses.get(o.material) || 0) + 1);
+                        });
+                        const palette = new Set(Object.values(v.palette || {}));
+                        uses.forEach((count, material) => {
+                            if (material.color) {
+                                if (!material.userData.lit) material.userData.lit = material.color.clone();
+                                // The procedural bike darkens a material once
+                                // for each part that wears it, so its shared
+                                // finishes go black and the one-off ones (the
+                                // helmet, the rims) stay readable. A modelled
+                                // bike has few parts: its palette finishes
+                                // take the dark end, the rest the light end.
+                                const factor = v.modelled ? (palette.has(material) ? 0.03 : 0.12) : Math.pow(0.22, count);
+                                material.color.copy(material.userData.lit).multiplyScalar(factor);
+                            }
+                            if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0;
                         });
                     } else if (tier === 'silhouette') {
                         v.group.traverse(o => {
