@@ -241,12 +241,16 @@ describe('raycast: the drawn wall and the ground the physics reads', () => {
         ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
         scene.updateMatrixWorld(true);
         // A fold sits exactly on these laterals. A lateral rebuilt from the heading is only good to about 1e-13,
-        // and a ray lands on either side of a fold within that, so the ray is cast 0.01 m outside it
+        // and a ray lands on either side of a fold within that, so the ray is cast 0.01 m outside it as well
         const outside = lateral + Math.sign(lateral) * 0.01;
         fractions.forEach(fraction => {
             const { hit, ground } = across(game, env, ribbons, segment, fraction, outside);
             expect(hit).not.toBeNull();
             expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
+            // And on the fold itself: whichever side the ray lands, the model is the surface it meets
+            const exact = across(game, env, ribbons, segment, fraction, lateral);
+            expect(exact.hit).not.toBeNull();
+            expect(Math.abs(exact.hit - exact.ground)).toBeLessThanOrEqual(5e-3);
         });
     }
 });
