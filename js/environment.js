@@ -5396,7 +5396,7 @@ class Environment {
 
     // Two rows of emissive bars under the crown, one pair at each ring. They
     // glow past the bloom threshold but are not lights: the scene keeps its seven.
-    const lampMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd9a0, emissiveIntensity: 3, roughness: 0.6 });
+    const lampMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd9a0, emissiveIntensity: 2.2, roughness: 0.6 });
     const lamps = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.12, 2.4), lampMaterial, (rings - 2) * 2);
     const matrix = new THREE.Matrix4();
     const turn = new THREE.Quaternion();
@@ -5445,16 +5445,16 @@ class Environment {
       }
     }
     const wallMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: true });
-    const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1208, emissive: 0xffc070, emissiveIntensity: 2.4, roughness: 0.5 });
+    const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1208, emissive: 0xffc070, emissiveIntensity: 2.0, roughness: 0.5 });
     this.addPieceMesh(group, this.mergeColoredGeometries(houses), wallMaterial, origin);
     this.addPieceMesh(group, this.mergeColoredGeometries(windows), windowMaterial, origin).castShadow = false;
 
     // Lamp posts, heads and pools: one pair every segment, instanced
     const count = (piece.to - piece.from + 1) * 2;
     const postMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.7, metalness: 0.4 });
-    const headMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd49a, emissiveIntensity: 3.2, roughness: 0.5 });
+    const headMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffd49a, emissiveIntensity: 2.6, roughness: 0.5 });
     const poolMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffc070, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false,
+      color: 0xffc070, transparent: true, opacity: 0.14, blending: THREE.AdditiveBlending, depthWrite: false,
       polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2,
     });
     const poolGeometry = new THREE.CircleGeometry(3.5, 16);

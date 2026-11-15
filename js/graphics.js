@@ -34,7 +34,10 @@ const SKY_PRESETS = {
     night: {
         zenith: 0x01030b, mid: 0x050b1c, glow: 0x9db4e0, glowStrength: 0.35,
         sunIntensity: 3.5, cloudLit: 0x1c2740, cloudShadow: 0x04060c, coverage: 0.3,
-        stars: 1.0, mountain: 0x070b16, saturation: 0.95, contrast: 1.08, tint: 0xe6eeff, bloom: 1.1,
+        // Lamps, lit windows and headlit paint are the only bright things at
+        // night, so the bloom takes only what is well over white, and less of it:
+        // a light reads as a light, not as a halo over the street
+        stars: 1.0, mountain: 0x070b16, saturation: 0.95, contrast: 1.08, tint: 0xe6eeff, bloom: 0.6, threshold: 1.8,
         moon: true
     }
 };
@@ -804,7 +807,8 @@ class Graphics {
             saturation: (weather.saturation !== undefined ? weather.saturation : 1) * preset.saturation,
             contrast: preset.contrast,
             tint: new THREE.Color().setHex(preset.tint),
-            bloom: preset.bloom
+            bloom: preset.bloom,
+            threshold: preset.threshold ?? 1.0
         };
 
         this.environmentDirty = true;
@@ -1095,6 +1099,7 @@ class Graphics {
         // Bloom: threshold, blur down a mip chain, then add each level back up
         const targets = this.bloomTargets;
         this.prefilterMaterial.uniforms.tSource.value = this.sceneTarget.texture;
+        this.prefilterMaterial.uniforms.uThreshold.value = this.grade.threshold;
         this.prefilterMaterial.uniforms.uTexel.value.set(1 / this.sceneTarget.width, 1 / this.sceneTarget.height);
         this.renderPass(this.prefilterMaterial, targets[0]);
 

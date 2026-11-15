@@ -892,7 +892,10 @@ class Game {
         // Bike headlight: one wide, soft-edged beam. It is switched off
         // entirely in daylight (see setTimeOfDay): a spot light costs every
         // lit fragment in the scene whether or not its beam shows.
-        this.headlight = new THREE.SpotLight(0xfff1d6, 0, 150, 0.52, 0.65, 1.1);
+        // It falls off with the square of its reach, so the road ahead is lit and
+        // a white house front 60 m away is not lit as brightly as the tarmac
+        // under the wheel (a near-flat falloff blew distant walls out into halos)
+        this.headlight = new THREE.SpotLight(0xfff1d6, 0, 120, 0.52, 0.65, 2);
         this.headlight.castShadow = false;
         this.headlight.visible = false;
         this.scene.add(this.headlight);
@@ -1000,9 +1003,9 @@ class Game {
         // Headlight only when it is dark enough to see the beam
         this.headlightStrength = config.headlight || 0;
         this.headlight.visible = this.headlightStrength > 0;
-        this.headlight.intensity = this.headlightStrength * 14;
+        this.headlight.intensity = this.headlightStrength * 10;
         this.headlightBeam.visible = this.headlight.visible;
-        this.headlightBeam.material.uniforms.uStrength.value = this.headlightStrength * 0.22;
+        this.headlightBeam.material.uniforms.uStrength.value = this.headlightStrength * 0.14;
 
         // Show notification (disabled - don't show popup at level start)
         // this.showTimeOfDayNotification(config.name);

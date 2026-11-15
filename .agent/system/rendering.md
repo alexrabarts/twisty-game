@@ -12,7 +12,7 @@ All rendering goes through `Graphics` in `js/graphics.js`. `main.js` never calls
 ## Frame
 
 1. The scene renders into a 4x MSAA half-float target. The renderer does no tone mapping.
-2. Bloom: threshold, five-level blur chain, additive upsample.
+2. Bloom: threshold, five-level blur chain, additive upsample. The threshold is 1.0, or the preset's `threshold` (night: 1.8, with bloom 0.6), so at night only lamp heads and the moon bloom; lit windows and headlit paint do not.
 3. Composite: radial speed blur, height fog, light shafts, bloom, ACES tone map, saturation, contrast, tint, vignette, sRGB encode, dither.
 
 `renderer.toneMappingExposure` is still the exposure control. `setTimeOfDay` sets it.
@@ -43,7 +43,7 @@ If the browser has no WebGL2 float render targets, `postEnabled` is false. The r
 
 `timeConfigs` in `main.js` holds the light values. They are tuned for linear lighting: the sky light (hemisphere top) is the zenith colour, not the horizon colour.
 
-`headlight` in a config switches on the one spot light and the visible beam cone. They are off in daylight because a spot light costs every lit fragment.
+`headlight` in a config switches on the one spot light and the visible beam cone. They are off in daylight because a spot light costs every lit fragment. The spot reaches 120 m with decay 2: a near-flat falloff lit a white house 60 m ahead as brightly as the road under the wheel, and the bloom turned it into a halo.
 
 ## Cost
 
