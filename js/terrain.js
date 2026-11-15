@@ -942,6 +942,33 @@ const Terrain = (() => {
     return { frame, vertices };
   }
 
+  // The vertices of a drawn column, kept per road (geo), profile and side:
+  // scenery reads the same few columns many times over (a rock's seat is
+  // checked at dozens of points), and each column costs 36 rows of
+  // displacement. A column is a pure function of its arguments, so a kept one
+  // is the one a fresh read would build; the store is dropped when the road
+  // it was built for changes length or start.
+  const drawnColumns = new WeakMap();
+  function drawnColumn(profile, sign, geo, startIdx, c) {
+    let byProfile = drawnColumns.get(geo);
+    if (!byProfile) {
+      byProfile = new WeakMap();
+      drawnColumns.set(geo, byProfile);
+    }
+    let kept = byProfile.get(profile);
+    if (!kept || kept.length !== geo.path.length || kept.startIdx !== startIdx) {
+      kept = { length: geo.path.length, startIdx, columns: new Map() };
+      byProfile.set(profile, kept);
+    }
+    const key = sign * (c + 1);
+    let vertices = kept.columns.get(key);
+    if (!vertices) {
+      vertices = columnVertices(profile, sign, geo, startIdx, c).vertices;
+      kept.columns.set(key, vertices);
+    }
+    return vertices;
+  }
+
   // Height of vertical line (x, z) on a triangle, or null when it misses.
   // The tolerance keeps a point on a shared edge inside both triangles.
   function triangleY(a, b, c, x, z) {
@@ -962,7 +989,8 @@ const Terrain = (() => {
   // not either column's, so neither the located lateral nor a column walk is
   // exact there. Returns null where no triangle covers the point (the ledge,
   // past the top row, outside the built range).
-  function meshY(profile, sign, geo, loc, x, z) {
+  // `hits`, when given, receives every triangle over the point as { y, a, b, c }.
+  function meshY(profile, sign, geo, loc, x, z, hits) {
     const startIdx = Math.max(0, geo.startSegment);
     const endIdx = Math.min(geo.path.length - 1, geo.endSegment + 20);
     const columns = (endIdx - startIdx + 1) * COLUMNS_PER_SEGMENT;
@@ -981,15 +1009,17 @@ const Terrain = (() => {
     for (let c = first; c < last; c++) {
       // Between line c and line c + 1; a point on a line reads both strips beside it
       if (ahead[c - first] < -1e-6 || ahead[c + 1 - first] > 1e-6) continue;
-      const left = columnVertices(profile, sign, geo, startIdx, c).vertices;
-      const right = columnVertices(profile, sign, geo, startIdx, c + 1).vertices;
+      const left = drawnColumn(profile, sign, geo, startIdx, c);
+      const right = drawnColumn(profile, sign, geo, startIdx, c + 1);
       for (let row = 0; row < ROWS; row++) {
         const bl = left[row], tl = left[row + 1], br = right[row], tr = right[row + 1];
         // The same diagonals as the ribbon's triangles
         const pair = (c + row) % 2 === 0 ? [[bl, br, tl], [br, tr, tl]] : [[bl, tr, tl], [bl, br, tr]];
         for (const [a, b, d] of pair) {
           const y = triangleY(a, b, d, x, z);
-          if (y !== null && (highest === null || y > highest)) highest = y;
+          if (y === null) continue;
+          if (highest === null || y > highest) highest = y;
+          if (hits) hits.push({ y, a, b, c: d });
         }
       }
     }
@@ -1057,6 +1087,99 @@ const Terrain = (() => {
     }
     // On the road or its ledges
     return roadY;
+  }
+
+  // Every drawn surface over the vertical line through (x, z), highest first,
+  // each with its unit normal turned up: [{ y, nx, ny, nz }]. A wall that
+  // leans out over the road folds, so a line can meet it more than once. The
+  // first (highest) has air above it, and from there down the line is in
+  // rock and in air by turns. Empty where no triangle covers the point (the
+  // road, a ledge, past the ribbon) and on cliffLake, whose golden recorded the
+  // column walk and never the triangles.
+  function crossings(profile, geo, x, z, from, to, loc = {}) {
+    locate(geo.path, x, z, from, to, loc);
+    if (profile.columnWalk) return [];
+    const hits = [];
+    meshY(profile, loc.lateral > 0 ? 1 : -1, geo, loc, x, z, hits);
+    hits.sort((p, q) => q.y - p.y);
+    const found = [];
+    for (const { y, a, b, c } of hits) {
+      // Two triangles that share the edge the line passes through are one crossing
+      if (found.length && Math.abs(found[found.length - 1].y - y) < 1e-6) continue;
+      const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+      const vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+      const nx = uy * vz - uz * vy;
+      const ny = uz * vx - ux * vz;
+      const nz = ux * vy - uy * vx;
+      const length = Math.hypot(nx, ny, nz) * (ny < 0 ? -1 : 1);
+      found.push(length === 0 ? { y, nx: 0, ny: 1, nz: 0 } : { y, nx: nx / length, ny: ny / length, nz: nz / length });
+    }
+    return found;
+  }
+
+  // How far (x, y, z) stands clear of the drawn ground under it: 0 when it
+  // is inside it (under the floor's water, under the road or a ledge, or with
+  // an odd number of drawn surfaces over it), else its height over the
+  // nearest drawn surface below it.
+  function clearance(profile, geo, x, y, z, from, to) {
+    if (profile.floor.y !== undefined && y <= profile.floor.y) return 0;
+    const loc = {};
+    const found = crossings(profile, geo, x, z, from, to, loc);
+    if (!found.length) return Math.max(0, y - heightAt(profile, geo, loc, true));
+    const over = found.filter((c) => c.y >= y).length;
+    if (over % 2 === 1) return 0;
+    // Under every fold of a wall that leans over the road: the road is under it
+    return over < found.length ? y - found[over].y : Math.max(0, y - interpolatedRoadY(geo, loc));
+  }
+
+  // The drawn surface scenery rests on at (x, z): { y, nx, ny, nz }, the
+  // normal turned up. Of the surfaces a vertical line meets with air above
+  // them (the first, third, ...), the one nearest the road's height: the
+  // foot of a wall rather than the top of a fold high up it, the lip of a
+  // drop rather than a pocket under it. Under the floor's water it is the
+  // water. Where no triangle covers the point (the road, a ledge) it is the
+  // exact ground height, level. cliffLake's normal comes from its heights a
+  // metre either way. `least` is the steepest of those surfaces (the least y
+  // of their normals): a point under a fold of a face is beside the face.
+  function surfaceAt(profile, geo, x, z, from, to, out = {}) {
+    const loc = {};
+    const found = crossings(profile, geo, x, z, from, to, loc);
+    out.nx = 0;
+    out.ny = 1;
+    out.nz = 0;
+    out.least = 1;
+    if (profile.columnWalk) {
+      out.y = heightAt(profile, geo, loc, true);
+      const step = 1;
+      const east = groundY(profile, geo, x + step, z, from, to, true) - groundY(profile, geo, x - step, z, from, to, true);
+      const north = groundY(profile, geo, x, z + step, from, to, true) - groundY(profile, geo, x, z - step, from, to, true);
+      const length = Math.hypot(east, 2 * step, north);
+      out.nx = -east / length;
+      out.ny = (2 * step) / length;
+      out.nz = -north / length;
+      out.least = out.ny;
+      return out;
+    }
+    if (!found.length) {
+      out.y = heightAt(profile, geo, loc, true);
+      return out;
+    }
+    const roadY = interpolatedRoadY(geo, loc);
+    let best = found[0];
+    out.least = found[0].ny;
+    for (let n = 2; n < found.length; n += 2) {
+      if (Math.abs(found[n].y - roadY) < Math.abs(best.y - roadY)) best = found[n];
+      out.least = Math.min(out.least, found[n].ny);
+    }
+    if (profile.floor.y !== undefined && best.y < profile.floor.y) {
+      out.y = profile.floor.y;
+      return out;
+    }
+    out.y = best.y;
+    out.nx = best.nx;
+    out.ny = best.ny;
+    out.nz = best.nz;
+    return out;
   }
 
   // `loc` receives the located point (index, roadY, lateral, along) so a
@@ -1226,6 +1349,9 @@ const Terrain = (() => {
     row,
     locate,
     heightAt,
-    groundY
+    groundY,
+    crossings,
+    clearance,
+    surfaceAt
   };
 })();
