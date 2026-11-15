@@ -3,7 +3,7 @@
 Notes for people and AI agents who work on this repo.
 
 - `system/` - how the game is built.
-  - [rendering.md](system/rendering.md) - colour management, sky, lighting and post-processing.
+  - [rendering.md](system/rendering.md) - colour management, sky, lighting, post-processing and the modelled bikes.
   - [world.md](system/world.md) - the terrain model and the rules for scenery placement.
   - [ui.md](system/ui.md) - the HUD, the design tokens and the touch controls.
 - `sop/` - procedures.

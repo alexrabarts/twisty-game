@@ -609,9 +609,11 @@ function installProbe(d6Sources, latSet) {
     // Milliseconds to render one frame (scene, post and a 1-pixel read-back
     // that waits for the GPU), at five points along the leg from the chase
     // view, after the leg's modelled scenery has loaded. The median of `count`
-    // frames per point, and of all of them.
+    // frames per point, and of all of them. The bike is the modelled one
+    // (js/bikemodels.js) unless --no-assets holds it back.
     P.frametime = async (legIndex, count = 15) => {
         const leg = game.tourSystem.legs[legIndex];
+        if (typeof BikeModels !== 'undefined') await BikeModels.preload();
         window.__reseed(1);
         twistyDev.start(leg.id);
         twistyDev.freeze();
@@ -638,7 +640,7 @@ function installProbe(d6Sources, latSet) {
             all.push(...times);
             return { segment, ms: round(median(times), 10) };
         });
-        return { ms: round(median(all), 10), points, dressed: !!assets };
+        return { ms: round(median(all), 10), points, dressed: !!assets, bike: game.vehicle.modelled ? 'modelled' : 'procedural' };
     };
 
     // Mean RGB per tile of the main canvas, from fixed poses

@@ -48,3 +48,15 @@ If the browser has no WebGL2 float render targets, `postEnabled` is false. The r
 ## Cost
 
 The game is fill-rate bound on high-DPI screens. `adaptResolution` lowers the pixel ratio below 52 fps. It ignores the first 4 s of a leg, when shaders compile.
+
+## Bikes and rider
+
+`Vehicle.createMesh` builds the procedural bike and rider, then calls `BikeModels.dress` (`js/bikemodels.js`). That swaps in the Blender-made model from `assets/bikes/` (built by `tools/blender/bike_*.py` and `rider.py`; see `tools/blender/README.md`).
+
+- **When.** The files start to load when the page opens. If they are in when a vehicle is built, the swap is immediate. If they arrive later, the swap happens then, but only if `update()` has not run for that vehicle. A bike that is on the road keeps its procedural model until the next `reset()`. A file that fails to load, or a model that lacks a part, leaves the procedural bike.
+- **Contract.** The swap sets the same fields on the vehicle (`frontWheel`, `rearWheel`, `frontDisc`, `rearDisc`, `leftFork`, `rightFork`, `handlebar`, `headlight`, `brakeLight`, `frame`, `fuelTank`, `rider`, `helmet`, `visor` and the limbs) on the same pivots. `frame.material` is still the palette's paint material, so the crash and wheelie tints work. `brakeLight` has its own material. `vehicle.modelled` is true after a swap, and `vehicle.onModel` is called.
+- **Rider.** The rider is a group of rigid segments, not a skinned mesh. `BikeModels` poses them once: the torso leans as `riderSpec.torsoLean` says, the hands go to the bike's `grip` mark and the feet to its `peg` mark. Elbows and knees are placed by the fixed lengths of the limbs. `updateMesh` moves and turns the rider group as before.
+- **Materials.** Every modelled mesh has baked occlusion in its vertex colours (normalised bytes, which `fixColorSpaces` leaves alone) and its material has `vertexColors` on. Do not put a palette material on a mesh without a `color` attribute after a swap: it draws black.
+- **Crew.** `AIMotorcycle` calls `BikeModels.crew`. The touring crew ride `crew.glb`, the sport bike at a fifth of the detail. All crew bikes share geometry and all finishes but the paint and the rider's kit.
+- **Rider select.** The dimmed tier works from each material's lit colour (`userData.lit`), so it can run again after a late swap. The procedural bike darkens a material once for each part that uses it, as before. A modelled bike has few parts, so its palette materials get 0.03 and its other materials get 0.12. Set the tier through `vehicle.onModel` if you add another.
+- **Off switch.** `node tools/terrain-check.mjs <probe> --no-assets` keeps the procedural bike and the procedural scenery, for a before and after measure.
