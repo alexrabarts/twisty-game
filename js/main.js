@@ -2230,22 +2230,30 @@ class Game {
                 v.yawAngle = 0;
                 v.updateMesh();
 
+                // Each material once, however many parts wear it: a modelled
+                // bike has few meshes on shared materials. Run again when the
+                // modelled bike takes over from the procedural one.
                 const tier = this.riderTier(c.id);
-                if (tier === 'dimmed') {
-                    v.group.traverse(o => {
-                        if (o.isMesh && o.material) {
+                const dimmed = new Set();
+                const shade = () => {
+                    if (tier === 'dimmed') {
+                        v.group.traverse(o => {
+                            if (!o.isMesh || !o.material || dimmed.has(o.material)) return;
+                            dimmed.add(o.material);
                             if (o.material.color) o.material.color.multiplyScalar(0.22);
                             if (o.material.emissiveIntensity !== undefined) o.material.emissiveIntensity = 0;
-                        }
-                    });
-                } else if (tier === 'silhouette') {
-                    v.group.traverse(o => {
-                        if (o.isMesh) {
-                            if (o.material && o.material.dispose) o.material.dispose();
-                            o.material = silhouetteMaterial;
-                        }
-                    });
-                }
+                        });
+                    } else if (tier === 'silhouette') {
+                        v.group.traverse(o => {
+                            if (o.isMesh && o.material !== silhouetteMaterial) {
+                                if (o.material && o.material.dispose) o.material.dispose();
+                                o.material = silhouetteMaterial;
+                            }
+                        });
+                    }
+                };
+                shade();
+                v.onModel = shade;
 
                 const platform = new THREE.Mesh(platformGeometry, platformMaterial);
                 platform.position.set(v.position.x, v.position.y - 0.06, v.position.z);

@@ -1342,6 +1342,10 @@ class AIMotorcycle {
         });
 
         this.scene.add(this.bikeGroup);
+
+        // The touring crew ride the modelled sport bike once its files are in
+        // (js/bikemodels.js); the parts built above stand until then
+        if (this.style === 'sport' && typeof BikeModels !== 'undefined') BikeModels.crew(this);
     }
     
     updatePosition() {

@@ -224,6 +224,11 @@ class Vehicle {
             this.character.id === 'tim' ? 0.08 : 0.16;
 
         this.scene.add(this.group);
+
+        // The Blender-made bike and rider take the place of the parts built
+        // above once their files are in; until then, and if a file fails,
+        // the procedural model is the bike
+        if (typeof BikeModels !== 'undefined') BikeModels.dress(this);
     }
 
     buildSportBike() {
@@ -480,7 +485,8 @@ class Vehicle {
     makeBikePalette(accentHex = 0xffffff) {
         const paintHex = parseInt(this.bikeColor);
         const darkShade = new THREE.Color(paintHex).multiplyScalar(0.3);
-        return {
+        // Kept for the modelled bike (js/bikemodels.js), which wears the same paint
+        this.palette = {
             paintHex,
             accentHex,
             paint: new THREE.MeshStandardMaterial({
@@ -540,6 +546,7 @@ class Vehicle {
                 color: 0xc42020, roughness: 0.4, metalness: 0.5
             })
         };
+        return this.palette;
     }
 
     // Creates a mesh with shadows on, places it, parents it and returns it.
@@ -881,6 +888,11 @@ class Vehicle {
         hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
         elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16
     } = {}) {
+        // The pose and colours, kept for the modelled rider (js/bikemodels.js)
+        this.riderSpec = {
+            y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent,
+            style, hand, foot, elbowOut, kneeOut, kneeForward
+        };
         const suitMaterial = new THREE.MeshStandardMaterial({
             color: suitColor, roughness: 0.85, metalness: 0.0
         });
@@ -2569,6 +2581,12 @@ class Vehicle {
         this.finished = false;
         // Do not blend the mesh from the old position to the new one
         this.prevRenderPos = null;
+        // A model that arrived mid-ride was held back so the bike would not
+        // change under the rider; a reset is where it can
+        if (this.modelWaiting) {
+            this.modelWaiting();
+            this.modelWaiting = null;
+        }
         
         const bikeColorHex = parseInt(this.bikeColor);
         this.frame.material.color.setHex(bikeColorHex);
