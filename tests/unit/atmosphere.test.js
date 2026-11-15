@@ -18,8 +18,8 @@ describe('leg atmosphere and render table', () => {
         });
     });
 
-    test('cull ceiling is 800 on valley-run, coastal-descent and winter-pass, else 600', () => {
-        const wide = ['valley-run', 'coastal-descent', 'winter-pass'];
+    test('cull ceiling is 800 on the open legs (mountain-dawn, coastal-descent, winter-pass), else 600', () => {
+        const wide = ['mountain-dawn', 'coastal-descent', 'winter-pass'];
         game.Terrain.LEGS.forEach(leg => {
             expect(leg.render.cullMax).toBe(wide.includes(leg.id) ? 800 : 600);
         });

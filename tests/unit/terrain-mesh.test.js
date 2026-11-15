@@ -121,7 +121,7 @@ describe('decals sit on the drawn face', () => {
         .flatMap(ribbon => ribbon.parent.children)
         .filter(object => FACE_DECALS.includes(object.userData.decal));
 
-    test.each([[0, 'mountain-dawn'], [2, 'coastal-descent'], [4, 'high-pass']])('%i (%s): every decal centre is within 0.75 of the face', (legIndex) => {
+    test.each([[1, 'valley-run'], [2, 'coastal-descent'], [3, 'foggy-gorge'], [4, 'high-pass']])('%i (%s): every decal centre is within 0.75 of the face', (legIndex) => {
         const { env, scene } = build(legIndex);
         scene.updateMatrixWorld(true);
         const ribbons = ribbonMeshes(env);
@@ -131,9 +131,11 @@ describe('decals sit on the drawn face', () => {
     }, 60000);
 
     test('the decal set is exactly the meshes tagged userData.decal, and the counts per side are unchanged', () => {
-        // Legs 1 and 5 are as the golden has them; the coast dresses its sea cliff only, not its beach
-        const counts = [[13, 7], [11, 8], [13, 7]];
-        [0, 4, 2].forEach((legIndex, n) => {
+        // Leg 5 is as the golden has it; the coast dresses its sea cliff only, not its beach; the
+        // mirrored cliff dresses its drop on the left and its wall on the right; the gorge dresses
+        // the face in force at each segment, none in its tunnels
+        const counts = [[11, 8], [13, 7], [10, 13], [10, 14]];
+        [4, 2, 1, 3].forEach((legIndex, n) => {
             const { env } = build(legIndex);
             const byTag = [];
             env.scene.traverse(object => {
@@ -145,7 +147,7 @@ describe('decals sit on the drawn face', () => {
     }, 60000);
 
     test('a mirrored profile puts decals above the road on the rising side and below on the dropping side', () => {
-        const { env, scene } = build(0, true);
+        const { env, scene } = build(1);
         scene.updateMatrixWorld(true);
         const ribbons = ribbonMeshes(env);
         faceDecals(env).forEach(decal => {

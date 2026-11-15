@@ -500,11 +500,12 @@ class Environment {
       const point = this.roadPath[index];
       if (index % 15 === 0 && !this.inSetPiece(index)) {
         // Much less frequent
-        // Left side cliff rocks (elevated side) - properly grounded
+        // Rocks on the mountain side (the left, unless the left is the drop) - properly grounded
+        const side = Terrain.clutterSignAt(this.terrain, index);
         const cliffX =
-          point.x - (18 + this.rand() * 8) * Math.cos(point.heading);
+          point.x + side * (18 + this.rand() * 8) * Math.cos(point.heading);
         const cliffZ =
-          point.z + (18 + this.rand() * 8) * Math.sin(point.heading);
+          point.z - side * (18 + this.rand() * 8) * Math.sin(point.heading);
         // Rest the rock cluster on the mountain face at this lateral offset
         // (the old point.y - 1 buried it inside the wall, or left it floating
         // when the wall dipped). Group center at ground = roughly half embedded.
@@ -753,7 +754,7 @@ class Environment {
       // Only the segments whose side is a rock face are dressed: a beach that
       // follows a sea cliff has no face to hang cracks and vines on
       const faces = Terrain.faceRange(this.terrain, sign, first, last);
-      if (faces) this.decorateRockFace(sign, side, group, rockMaterials, faces);
+      if (faces) this.decorateRockFace(sign, group, rockMaterials, faces);
 
       // Everything else a face builder added to its group dresses the face
       group.children.forEach((child) => {
@@ -1013,16 +1014,20 @@ class Environment {
   // Rock dressing of one face: embedded rocks, road debris, cracks, seepage,
   // vines and snow. Rocks sit on the terrain model; the rest hang off the
   // face by design.
-  decorateRockFace(sign, side, group, rockMaterials, faces) {
-    const height = side.face.height;
-    const isDropOff = side.face.kind === 'drop';
+  decorateRockFace(sign, group, rockMaterials, faces) {
     const startIdx = faces.from;
     const endIdx = faces.to;
+    // The face in force at a segment: a leg can change from a wall to a drop
+    // on one side (the gorge's cliff roads), and a span may have no face
+    const faceAt = (i) => Terrain.sideAt(this.terrain, sign, i);
 
     // Add MANY more boulders along the cliff base (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 3) {
       // A bridge, tunnel or village has no rock face to dress
       if (this.inSetPiece(i)) continue;
+      const side = faceAt(i);
+      if (!side.face) continue;
+      const isDropOff = side.face.kind === 'drop';
       // Much denser spacing
       const point = this.roadPath[i];
 
@@ -1148,11 +1153,13 @@ class Environment {
     // Create major vertical cracks (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 25) {
       if (this.inSetPiece(i)) continue;
+      const side = faceAt(i);
+      if (!side.face) continue;
       if (this.rand() > 0.5) {
         const point = this.roadPath[i];
 
         // Create crack geometry as thin box
-        const crackHeight = Math.abs(height) * (0.4 + this.rand() * 0.4);
+        const crackHeight = Math.abs(side.face.height) * (0.4 + this.rand() * 0.4);
         const crackWidth = 0.1 + this.rand() * 0.15;
         const crackDepth = 0.5 + this.rand() * 0.5;
 
@@ -1238,6 +1245,8 @@ class Environment {
     // Create water seepage patches (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 30) {
       if (this.inSetPiece(i)) continue;
+      const side = faceAt(i);
+      if (!side.face) continue;
       if (this.rand() > 0.5) {
         const point = this.roadPath[i];
 
@@ -1286,6 +1295,8 @@ class Environment {
     // Create hanging vines from cliff ledges (only in active segment range)
     for (let i = startIdx; i <= endIdx; i += 20) {
       if (this.inSetPiece(i)) continue;
+      const side = faceAt(i);
+      if (!side.face) continue;
       if (this.rand() > 0.6) {
         const point = this.roadPath[i];
 
@@ -1327,43 +1338,41 @@ class Environment {
       }
     }
 
-    // Add snow patches and rocky outcrops on upper mountain (if going up)
-    if (height > 20) {
-      // Snow patches on upper elevations
-      const snowMaterial = new THREE.MeshStandardMaterial({
-        color: 0xf0f0f0,
-        roughness: 0.7,
-        metalness: 0.0,
-      });
+    // Add snow patches on the upper part of a face that rises over 20 m
+    const snowMaterial = new THREE.MeshStandardMaterial({
+      color: 0xf0f0f0,
+      roughness: 0.7,
+      metalness: 0.0,
+    });
 
-      for (let i = startIdx; i <= endIdx; i += 8) {
-        if (this.inSetPiece(i)) continue;
-        if (this.rand() > 0.4 && height > 30 && side.face.snow !== false) {
-          const point = this.roadPath[i];
-          const snowGeometry = new THREE.PlaneGeometry(
-            3 + this.rand() * 4,
-            2 + this.rand() * 3,
-          );
-          const snow = new THREE.Mesh(snowGeometry, snowMaterial);
+    for (let i = startIdx; i <= endIdx; i += 8) {
+      if (this.inSetPiece(i)) continue;
+      const side = faceAt(i);
+      if (!side.face || side.face.height <= 20) continue;
+      if (this.rand() > 0.4 && side.face.height > 30 && side.face.snow !== false) {
+        const point = this.roadPath[i];
+        const snowGeometry = new THREE.PlaneGeometry(
+          3 + this.rand() * 4,
+          2 + this.rand() * 3,
+        );
+        const snow = new THREE.Mesh(snowGeometry, snowMaterial);
 
-          // Pin the patch to the upper 30% of the drawn face
-          const onFace = this.decalPoint(sign, side, i, 0.7 + this.rand() * 0.3);
-          snow.position.set(onFace.x, onFace.y, onFace.z);
+        // Pin the patch to the upper 30% of the drawn face
+        const onFace = this.decalPoint(sign, side, i, 0.7 + this.rand() * 0.3);
+        snow.position.set(onFace.x, onFace.y, onFace.z);
 
-          // Rotate to face outward and add some randomness
-          snow.rotation.y =
-            point.heading + (sign > 0 ? Math.PI / 2 : -Math.PI / 2);
-          snow.rotation.x = (this.rand() - 0.5) * 0.3;
-          snow.rotation.z = (this.rand() - 0.5) * 0.3;
+        // Rotate to face outward and add some randomness
+        snow.rotation.y =
+          point.heading + (sign > 0 ? Math.PI / 2 : -Math.PI / 2);
+        snow.rotation.x = (this.rand() - 0.5) * 0.3;
+        snow.rotation.z = (this.rand() - 0.5) * 0.3;
 
-          snow.receiveShadow = true;
-          snow.userData.allowFloating = true; // Wall decal on the cliff face
-          snow.userData.decal = "snow";
-          group.add(snow);
-        }
+        snow.receiveShadow = true;
+        snow.userData.allowFloating = true; // Wall decal on the cliff face
+        snow.userData.decal = "snow";
+        group.add(snow);
       }
     }
-
   }
 
   createLayeredMountains() {
@@ -3448,8 +3457,9 @@ class Environment {
     }
   }
 
-  // Scatter an instanced forest over the drop-off slope. Two draw calls for
-  // the whole leg, and every tree stands on the rendered rock face.
+  // Scatter an instanced forest over the drop-off slope (whichever side drops),
+  // or over run-off ground by the leg's layout. Two draw calls for the whole
+  // leg, and every tree stands on the rendered ground.
   createForest() {
     const startIdx = Math.max(0, this.startSegment);
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
@@ -3498,14 +3508,15 @@ class Environment {
         this.plantRunoffTrees(index, point, layout, plant);
         continue;
       }
-      // Trees per segment thin out with distance down the slope
+      // Trees per segment thin out with distance down the slope, on the side that drops
+      const slope = Terrain.fallSignAt(this.terrain, index) || 1;
       const count = 5 + Math.floor(this.rand() * 4);
       for (let t = 0; t < count; t++) {
         const band = this.rand();
         const lateral = this.roadWidth / 2 + 3.5 + band * band * 85;
         const along = (this.rand() - 0.5) * 20;
-        const x = point.x + lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
-        const z = point.z - lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
+        const x = point.x + slope * lateral * Math.cos(point.heading) + along * Math.sin(point.heading);
+        const z = point.z - slope * lateral * Math.sin(point.heading) + along * Math.cos(point.heading);
         const groundY = this.groundYAt(x, z);
         if (groundY < this.floorY + 15) continue; // At the waterline
         plant(x, z, groundY, lateral);
@@ -3555,7 +3566,7 @@ class Environment {
     const startIdx = Math.max(0, this.startSegment);
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
 
-    // Bushes along the mountain side only (only in active segment range)
+    // Bushes along the drop-side ledge only (only in active segment range)
     const bushGeometry = this.displaceVertices(new THREE.IcosahedronGeometry(1, 1), 0.2);
     const bushMaterials = [
       new THREE.MeshStandardMaterial({
@@ -3576,8 +3587,10 @@ class Environment {
       const point = this.roadPath[index];
       if (index % 6 === 0 && !this.inSetPiece(index)) {
         // Less frequent
-        // Bushes on the right-hand ledge lip (road height by construction)
-        const bushDistance = this.roadWidth / 2 + 1.0 + this.rand() * 0.8;
+        // Bushes on the ledge lip of the side that drops (road height by
+        // construction); on the wall side the lip is rock
+        const ledge = Terrain.fallSignAt(this.terrain, index) || 1;
+        const bushDistance = (this.roadWidth / 2 + 1.0 + this.rand() * 0.8) * ledge;
         const bushX = point.x + bushDistance * Math.cos(point.heading);
         const bushZ = point.z - bushDistance * Math.sin(point.heading);
 
@@ -3652,7 +3665,8 @@ class Environment {
     // and the active leg entirely.
     const startSignPoint =
       this.roadPath[Math.min(Math.max(0, this.startSegment), this.roadPath.length - 1)];
-    const startSignDistance = this.roadWidth / 2 + 1; // On the roadside ledge
+    // On the roadside ledge of the side that drops, clear of a wall
+    const startSignDistance = (this.roadWidth / 2 + 1) * (Terrain.fallSignAt(this.terrain, Math.max(0, this.startSegment)) || 1);
     const startSignX =
       startSignPoint.x + Math.cos(startSignPoint.heading) * startSignDistance;
     const startSignZ =
@@ -5122,7 +5136,7 @@ class Environment {
   // the span's ceiling; the hill's crest, 1.5 m above the ceiling, is where
   // the ribbon of the profile's hill sides ends.
   buildTunnel(piece, group, origin) {
-    const span = this.terrain.spans.find((candidate) => candidate.type === 'tunnel');
+    const span = this.terrain.spans.find((candidate) => candidate.type === 'tunnel' && candidate.from === piece.from);
     const halfWidth = this.roadWidth / 2 + 1;
     const crest = this.roadWidth / 2 + 2.5;
     const { ceiling } = span;
@@ -5177,7 +5191,8 @@ class Environment {
       new THREE.MeshStandardMaterial({ color, emissive, roughness: 0.95, metalness: 0.0, side: THREE.DoubleSide });
     // The lining takes a faint glow of the lamps along it, so it reads at night
     this.addPieceMesh(group, shell(lining), material(0x5b5a5e, 0x24242a), origin);
-    this.addPieceMesh(group, shell(cap), material(0x2c4727), origin);
+    // The cap is the hill's own ground: grass in the forest, rock in the gorge
+    this.addPieceMesh(group, shell(cap), material(span.cap ?? 0x2c4727), origin);
     this.addPieceMesh(group, shell(portals), material(0x6e6a63), origin);
 
     // Two rows of emissive bars under the crown, one pair at each ring. They

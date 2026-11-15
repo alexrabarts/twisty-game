@@ -2383,9 +2383,10 @@ class Game {
         this.previewRadius = preview.radius;
         this.previewHeight = preview.height;
         // A full circle would pass through whatever stands beside the road:
-        // the camera instead sways through an arc about the road's right-hand
-        // normal, at the radius and height the leg gives above.
-        this.previewBaseAngle = -mid.heading;
+        // the camera instead sways through an arc about the road's normal on
+        // the leg's open side (the right unless `side` is -1), at the radius
+        // and height the leg gives above.
+        this.previewBaseAngle = -mid.heading + (preview.side === -1 ? Math.PI : 0);
 
         this.graphics.fixColorSpaces();
 
@@ -2985,7 +2986,7 @@ class Game {
                 const distance = Math.sqrt(dx * dx + dz * dz);
 
                 // Within the 16 unit circle round the gate (a rider on the
-                // road triggers it exactly where it always did: the mountain-dawn
+                // road triggers it exactly where it always did: the high-pass
                 // board is not versioned), or anywhere across the gate's band,
                 // which reaches the rideable ground
                 if (distance < checkpoint.width || this.inGate(checkpoint, this.vehicle.position)) {

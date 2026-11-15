@@ -3,11 +3,11 @@
 import { buildEnvironment, loadGame } from '../helpers/load-game.js';
 
 const ROAD_WIDTHS = [20, 20, 20, 20, 16, 16, 16, 16];
-// Rockfall rate: the gorge (0.5) and the hairpin leg (0.25) are the only legs with walls
-// that shed rocks. The run-off legs have no wall to fall from, so they have none.
-const ROCKFALL = [0, 0, 0, 0.5, 0.25, 0, 0, 0];
-// Only the legs whose road changed carry a new track version
-const TRACK_VERSION = [1, 2, 2, 2, 1, 2, 2, 2];
+// Rockfall rate: the gorge (0.5), the mirrored cliff and the hairpin leg (0.25) are the
+// legs with walls that shed rocks. The run-off legs have no wall to fall from, so they have none.
+const ROCKFALL = [0, 0.25, 0, 0.5, 0.25, 0, 0, 0];
+// Every leg whose road or ground changed carries a new track version; high-pass alone keeps 1
+const TRACK_VERSION = [2, 2, 2, 2, 1, 2, 2, 2];
 // The grass, mountain and fog values the old tours.js variations gave each leg
 const LOOK = [
     [0x4a7c4a, 0x6b5c42, 0.0015],
@@ -86,7 +86,7 @@ describe('the world build reads the table', () => {
     });
 
     test('the floor plane sits at the profile floor, tagged as the floor part', () => {
-        const { env, scene } = buildEnvironment(game, 0);
+        const { env, scene } = buildEnvironment(game, 4);
         const floors = [];
         scene.traverse(object => {
             if (object.userData && object.userData.part === 'floor') floors.push(object);
@@ -97,11 +97,11 @@ describe('the world build reads the table', () => {
 
     test('a different floor height moves the plane and the waterline', () => {
         const probe = loadGame();
-        const entry = probe.Terrain.LEGS[0];
+        const entry = probe.Terrain.LEGS[4];
         const original = entry.floor;
         entry.floor = { kind: 'lake', y: -150 };
         try {
-            const { scene } = buildEnvironment(probe, 0);
+            const { scene } = buildEnvironment(probe, 4);
             const plane = [];
             scene.traverse(object => {
                 if (object.userData && object.userData.part === 'floor') plane.push(object.position.y);
@@ -126,9 +126,9 @@ describe('the world build reads the table', () => {
 
     test('an empty backdrop list builds no mountain layers', () => {
         const probe = loadGame();
-        const entry = probe.Terrain.LEGS[0];
+        const entry = probe.Terrain.LEGS[4];
         const original = entry.dressing.backdrop;
-        const count = () => buildEnvironment(probe, 0).scene.children.length;
+        const count = () => buildEnvironment(probe, 4).scene.children.length;
         const full = count();
         entry.dressing.backdrop = [];
         try {

@@ -1,7 +1,8 @@
-// Phase 6: the gorge (foggy-gorge) with its bridge, and the night forest
-// (night-ride) with its tunnel and village. Spans with a roof, the set-piece
-// list, the camera under the roof, rockfalls off both walls, and the bike at
-// the edges of each piece. Real modules on real three r150.
+// The gorge (foggy-gorge): canyon, tunnel, a cliff road with the wall on the
+// left, a second tunnel, and the cliff road with the wall on the right. The
+// night forest (night-ride) with its tunnel and village. Spans with a roof,
+// the set-piece list, the camera under the roof, rockfalls off the walls in
+// force, and the bike at the edges of each piece. Real modules on real three r150.
 import { buildEnvironment, gameMethods, loadGame, loadScript } from '../helpers/load-game.js';
 
 const DT = 1 / 60;
@@ -23,7 +24,7 @@ describe('canyon and night forest profiles (pure)', () => {
     const { Terrain } = game;
     const canyon = Terrain.profiles.canyon;
     const night = Terrain.profiles.forestNight;
-    const [bridge] = canyon.spans;
+    const [gorgeTunnel, cliffWallLeft, secondTunnel, cliffWallRight] = canyon.spans;
     const [tunnel, village] = night.spans;
     const ctxFor = (halfRoad, roadY, s) => ({ halfRoad, roadY, column: 0, index: Math.floor(s), s, pathLength: 744 });
 
@@ -51,9 +52,9 @@ describe('canyon and night forest profiles (pure)', () => {
     });
 
     test('the two profiles carry their set pieces as typed spans, on global segments', () => {
-        expect(Terrain.setPieces(canyon)).toEqual([{ type: 'bridge', from: 285, to: 292 }]);
+        expect(Terrain.setPieces(canyon)).toEqual([{ type: 'tunnel', from: 265, to: 271 }, { type: 'tunnel', from: 286, to: 293 }]);
         expect(Terrain.setPieces(night)).toEqual([{ type: 'tunnel', from: 514, to: 521 }, { type: 'village', from: 583, to: 590 }]);
-        ['cliffLake', 'valleyFloor', 'forest', 'coast', 'ridge'].forEach(name => {
+        ['cliffLake', 'cliffLakeMirrored', 'valleyFloor', 'forest', 'coast', 'ridge'].forEach(name => {
             expect(Terrain.setPieces(Terrain.profiles[name])).toEqual([]);
         });
         expect(Terrain.LEGS[6].profile).toBe(night);
@@ -64,11 +65,12 @@ describe('canyon and night forest profiles (pure)', () => {
     test('a span with a ceiling is a roof from `from` to the segment before `to`, and nothing else is', () => {
         expect([513, 514, 517, 521, 522].map(segment => Terrain.ceilingAt(night, segment))).toEqual([undefined, 7.5, 7.5, 7.5, undefined]);
         expect(Terrain.ceilingAt(night, 586)).toBeUndefined();
-        expect(Terrain.ceilingAt(canyon, 288)).toBeUndefined();
+        expect([264, 265, 268, 271, 272, 278, 285, 286, 290, 293, 294, 300].map(segment => Terrain.ceilingAt(canyon, segment)))
+            .toEqual([undefined, 7.5, 7.5, 7.5, undefined, undefined, undefined, 7.5, 7.5, 7.5, undefined, undefined]);
         expect(Terrain.ceilingAt(Terrain.profiles.cliffLake, 517)).toBeUndefined();
     });
 
-    test('edges: P21, the tunnel, the village and the bridge change what the side is, at the segment and nowhere else', () => {
+    test('edges: P21, the tunnels, the village and the cliff roads change what the side is, at the segment and nowhere else', () => {
         const zone = (profile, segment, lateral, halfRoad) => Terrain.zoneAt(profile, segment, lateral, halfRoad).kind;
         // Leg 7 (halfRoad 8): the tunnel wall stands 1 m past the road edge, the forest run-off 25 m
         expect([513, 514, 517, 521, 522].map(segment => zone(night, segment, 9.5, 8))).toEqual(['runoff', 'wall', 'wall', 'wall', 'runoff']);
@@ -77,29 +79,41 @@ describe('canyon and night forest profiles (pure)', () => {
         expect([582, 583, 586, 590, 591].map(segment => zone(night, segment, 10.9, 8))).toEqual(['runoff', 'runoff', 'runoff', 'runoff', 'runoff']);
         expect([582, 583, 586, 590, 591].map(segment => zone(night, segment, 11.5, 8))).toEqual(['runoff', 'wall', 'wall', 'wall', 'runoff']);
         expect([583, 590].map(segment => zone(night, segment, -11.5, 8))).toEqual(['wall', 'wall']);
-        // Leg 4 (halfRoad 10): the parapet stands 0.8 m past the edge, the gorge wall 1 m
-        expect([284, 285, 288, 292, 293].map(segment => zone(canyon, segment, 10.9, 10))).toEqual(['shoulder', 'wall', 'wall', 'wall', 'shoulder']);
-        expect([284, 288, 293].map(segment => zone(canyon, segment, -11.5, 10))).toEqual(['wall', 'wall', 'wall']);
+        // Leg 4 (halfRoad 10): canyon, tunnel, wall left and drop right, tunnel, drop left and wall right
+        const segments = [264, 265, 271, 272, 285, 286, 293, 294, 320];
+        expect(segments.map(segment => zone(canyon, segment, 11.5, 10))).toEqual(['wall', 'wall', 'wall', 'shoulder', 'shoulder', 'wall', 'wall', 'wall', 'wall']);
+        expect(segments.map(segment => zone(canyon, segment, 12.5, 10))).toEqual(['wall', 'wall', 'wall', 'fall', 'fall', 'wall', 'wall', 'wall', 'wall']);
+        expect(segments.map(segment => zone(canyon, segment, -11.5, 10))).toEqual(['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'shoulder', 'shoulder']);
+        expect(segments.map(segment => zone(canyon, segment, -12.5, 10))).toEqual(['wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'wall', 'fall', 'fall']);
     });
 
     test('rideable limit and gate reach follow the side in force at each piece', () => {
         expect([513, 517, 522].map(segment => Terrain.rideableLimit(night, segment, 1, 8))).toEqual([33, 9, 33]);
         expect([582, 586, 591].map(segment => Terrain.rideableLimit(night, segment, -1, 8))).toEqual([33, 11, 33]);
-        expect([284, 288, 293].map(segment => Terrain.rideableLimit(canyon, segment, 1, 10))).toEqual([11, 10.8, 11]);
+        expect([240, 268, 278, 290, 300].map(segment => Terrain.rideableLimit(canyon, segment, 1, 10))).toEqual([11, 11, 12, 11, 11]);
+        expect([240, 268, 278, 290, 300].map(segment => Terrain.rideableLimit(canyon, segment, -1, 10))).toEqual([11, 11, 11, 11, 12]);
         // Run-off ground reaches 2 further; a wall or hill keeps the ledge
         expect(Terrain.gateReach(night, 586, 1, 8)).toBe(13);
         expect(Terrain.gateReach(night, 517, 1, 8)).toBe(10);
-        expect(Terrain.gateReach(canyon, 288, 1, 10)).toBe(12);
+        expect(Terrain.gateReach(canyon, 278, 1, 10)).toBe(12);
+        expect(Terrain.gateReach(canyon, 300, -1, 10)).toBe(12);
     });
 
-    test('ground in a span: above the road beside the tunnel, a gorge beside the bridge, level pavement in the village', () => {
+    test('ground in a span: above the road beside a tunnel, a drop beside a cliff road, level pavement in the village', () => {
         const geo = { path: Array.from({ length: 700 }, (_, i) => ({ x: 0, z: i * 20 + 10, y: 40, heading: 0 })), roadWidth: 16, startSegment: 510, endSegment: 607 };
         const at = (profile, segment, lateral, width = 16) => Terrain.groundY(profile, { ...geo, roadWidth: width }, lateral, segment * 20 + 10, 0, 699, false) - 40;
         expect(at(night, 517, 12)).toBeCloseTo(9.55, 2);
         expect(at(night, 586, 10)).toBe(0);
         expect(at(night, 586, 12)).toBeGreaterThan(6);
-        expect(at(canyon, 288, 15, 20)).toBeCloseTo(-44, 6);
-        expect(at(canyon, 288, 20, 20)).toBeCloseTo(-62, 6);
+        // The gorge's tunnel: the rock climbs 9 m over the 1.5 m from the lining to the crest
+        expect(at(canyon, 268, 12, 20)).toBeCloseTo(6, 6);
+        // The cliff roads: 1.33 down per metre past the 2 m ledge on the drop, 1.6 up on the wall
+        expect(at(canyon, 278, 20, 20)).toBeCloseTo(-8 * 1.33, 6);
+        expect(at(canyon, 278, -20, 20)).toBeCloseTo(8 * 1.6, 6);
+        expect(at(canyon, 300, -20, 20)).toBeCloseTo(-8 * 1.33, 6);
+        expect(at(canyon, 300, 20, 20)).toBeCloseTo(8 * 1.6, 6);
+        // The drop ends at the gorge's lake
+        expect(at(canyon, 278, 120, 20) + 40).toBe(-28);
     });
 
     test('rows blend over one segment at each edge of a span, centred on the segment boundary', () => {
@@ -122,13 +136,43 @@ describe('canyon and night forest profiles (pure)', () => {
         expect(row(night, 550, 20)).toEqual(own(night.right, 550, 20));
     });
 
-    test('both walls of the gorge shed rocks; a cliff leg, one', () => {
-        expect(Terrain.wallSignsAt(canyon, 270)).toEqual([-1, 1]);
-        expect(Terrain.wallSignsAt(canyon, 288)).toEqual([-1, 1]);
+    test('the walls in force shed rocks: both in the canyon, one on each cliff road; a cliff leg, one', () => {
+        expect(Terrain.wallSignsAt(canyon, 250)).toEqual([-1, 1]);
+        expect(Terrain.wallSignsAt(canyon, 278)).toEqual([-1]);
+        expect(Terrain.wallSignsAt(canyon, 300)).toEqual([1]);
         expect(Terrain.wallSignsAt(Terrain.profiles.cliffLake, 270)).toEqual([-1]);
         expect(Terrain.wallSignsAt(Terrain.profiles.coast, 230)).toEqual([-1]);
         expect(Terrain.wallSignsAt(Terrain.profiles.forest, 100)).toEqual([-1, 1]);
         expect(Terrain.wallSign(canyon)).toBe(-1);
+        expect(Terrain.wallSignsAt(Terrain.profiles.cliffLakeMirrored, 100)).toEqual([1]);
+    });
+
+    test('the gorge spans: two tunnels of seven and eight segments, and cliff roads whose drop swaps sides', () => {
+        expect([gorgeTunnel.from, gorgeTunnel.to, secondTunnel.from, secondTunnel.to]).toEqual([265, 272, 286, 294]);
+        expect(cliffWallLeft).toMatchObject({ from: 272, to: 286 });
+        expect(cliffWallLeft.left).toBeUndefined();
+        expect(cliffWallLeft.right.face.kind).toBe('drop');
+        expect(cliffWallRight.from).toBe(294);
+        expect(cliffWallRight.to).toBeUndefined();
+        expect(cliffWallRight.right).toBeUndefined();
+        expect(cliffWallRight.left.face.kind).toBe('drop');
+        expect(Terrain.sideAt(canyon, -1, 278)).toBe(canyon.left);
+        expect(Terrain.sideAt(canyon, 1, 300)).toBe(canyon.right);
+        expect(canyon.floor).toEqual({ kind: 'lake', y: -28, restY: -27.5 });
+    });
+
+    test('rows blend from one span straight into the next: a tunnel hill into a drop', () => {
+        const row = (s, j) => Terrain.rowAt(canyon, 1, j, ctxFor(10, 30, s), {});
+        const own = (side, s, j) => Terrain.row(side, j, ctxFor(10, 30, s), {});
+        [0, 12, 35].forEach(j => {
+            expect(row(271, j)).toEqual(own(gorgeTunnel.right, 271, j));
+            expect(row(272, j)).toEqual(own(cliffWallLeft.right, 272, j));
+            const halfway = row(271.5, j);
+            const a = own(gorgeTunnel.right, 271.5, j);
+            const b = own(cliffWallLeft.right, 271.5, j);
+            expect(halfway.d).toBeCloseTo((a.d + b.d) / 2, 9);
+            expect(halfway.y).toBeCloseTo((a.y + b.y) / 2, 9);
+        });
     });
 
     test.each([
@@ -136,12 +180,12 @@ describe('canyon and night forest profiles (pure)', () => {
         ['forestNight', 8, 153]
     ])('%s: no row of any side or span reaches past half the tightest bend radius of its leg', (name, halfRoad, limit) => {
         const profile = Terrain.profiles[name];
-        const sides = [profile.left, profile.right, ...profile.spans.flatMap(span => [span.left, span.right])];
+        const sides = [profile.left, profile.right, ...profile.spans.flatMap(span => [span.left, span.right])].filter(Boolean);
         sides.forEach(side => expect(Terrain.outermost(side, ctxFor(halfRoad, 30, 7))).toBeLessThanOrEqual(limit));
     });
 
-    test('every side of a span ends in ground that rises well above the road, so no ribbon stops against the haze', () => {
-        [...tunnel ? [tunnel, village] : [], bridge].forEach(span => {
+    test('every side of a set piece ends in ground that rises well above the road, so no ribbon stops against the haze', () => {
+        [tunnel, village, gorgeTunnel, secondTunnel].forEach(span => {
             [span.left, span.right].forEach(side => expect(side.stations[side.stations.length - 1][1]).toBeGreaterThanOrEqual(30));
         });
     });
@@ -159,11 +203,13 @@ describe('canyon and night forest profiles (pure)', () => {
         expect(Terrain.elevation(night, 510, 510, 607)).not.toBeCloseTo(Terrain.elevation(Terrain.profiles.forest, 510, 414, 509), 1);
     });
 
-    test('heightAt is finite under a river floor that has no fixed height, walked or not', () => {
+    test('heightAt is finite everywhere on the gorge, walked or not', () => {
         const geo = { path: Array.from({ length: 700 }, (_, i) => ({ x: 0, z: i * 20 + 10, y: 40, heading: 0 })), roadWidth: 20, startSegment: 234, endSegment: 321 };
         for (let lateral = -120; lateral <= 120; lateral += 3) {
             [false, true].forEach(exact => {
-                expect(Number.isFinite(Terrain.groundY(canyon, geo, lateral, 270 * 20 + 10, 0, 699, exact))).toBe(true);
+                [250, 270, 280, 300].forEach(segment => {
+                    expect(Number.isFinite(Terrain.groundY(canyon, geo, lateral, segment * 20 + 10, 0, 699, exact))).toBe(true);
+                });
             });
         }
     });
@@ -220,7 +266,7 @@ describe('the gorge and the night forest built', () => {
     });
 
     test('P-W8: set pieces sit where planned, on straights, clear of checkpoints and roadworks', () => {
-        const expected = { [GORGE]: [['bridge', 285, 292]], [NIGHT]: [['tunnel', 514, 521], ['village', 583, 590]] };
+        const expected = { [GORGE]: [['tunnel', 265, 271], ['tunnel', 286, 293]], [NIGHT]: [['tunnel', 514, 521], ['village', 583, 590]] };
         for (const index of [0, 1, 2, 3, 4, 5, 6, 7]) {
             const { env } = leg(index);
             expect(env.setPieces.map(({ type, from, to }) => [type, from, to])).toEqual(expected[index] || []);
@@ -236,42 +282,82 @@ describe('the gorge and the night forest built', () => {
         }
     });
 
-    test('P-W9: the bridge crosses a gorge; the parapet stands at the wall', () => {
+    test('the cliff roads: the wall and the drop on the stated sides, each the surface a ray meets', () => {
         const { env, scene } = leg(GORGE);
         const ground = ribbons(scene);
         const roadY = segment => env.roadPath[segment].y;
+        // Segment 278: wall on the left, drop on the right; segment 305: the other way round
+        for (const [segment, wall] of [[278, -1], [305, 1]]) {
+            for (const lateral of [15, 25]) {
+                const [wx, wz] = world(env, segment, wall * lateral);
+                expect(env.groundYAt(wx, wz) - roadY(segment)).toBeGreaterThanOrEqual(4);
+                const [dx, dz] = world(env, segment, -wall * lateral);
+                expect(roadY(segment) - env.groundYAt(dx, dz)).toBeGreaterThanOrEqual(3);
+                [[wx, wz], [dx, dz]].forEach(([x, z]) => {
+                    expect(Math.abs(cast(ground, [x, 500, z], [0, -1, 0]).y - env.groundYAt(x, z))).toBeLessThanOrEqual(5e-3);
+                });
+            }
+        }
+        // In the canyon both sides rise
         for (const lateral of [-15, 15]) {
-            const [x, z] = world(env, 288, lateral);
-            const drop = roadY(288) - env.groundYAt(x, z);
-            expect(drop).toBeGreaterThanOrEqual(40);
-            expect(Math.abs(cast(ground, [x, 500, z], [0, -1, 0]).y - env.groundYAt(x, z))).toBeLessThan(0.75);
-            const [wx, wz] = world(env, 275, lateral);
-            expect(env.groundYAt(wx, wz) - roadY(275)).toBeGreaterThanOrEqual(10);
+            const [x, z] = world(env, 250, lateral);
+            expect(env.groundYAt(x, z) - roadY(250)).toBeGreaterThanOrEqual(4);
         }
-        const bridge = meshesOf(scene, object => object.parent.name === 'bridge');
-        for (const lateral of [-(10 + 0.8), 10 + 0.8]) {
-            const [x, z] = world(env, 288, lateral);
-            const hit = cast(bridge, [x, roadY(288) + 3, z], [0, -1, 0]);
-            expect(Math.abs(hit.distance - 1.9)).toBeLessThan(0.3);
-        }
-        expect(bridge.length).toBeLessThanOrEqual(3);
     });
 
-    test('the bridge has a river under it, 60 m below the road, and piers to its bed', () => {
+    test('the gorge\'s lake lies far under the cliff roads, and a fall ends on it', () => {
         const { env, scene } = leg(GORGE);
-        const river = meshesOf(scene, object => object.userData.part === 'floor');
-        expect(river).toHaveLength(1);
-        const [x, z] = world(env, 288, 0);
-        const hit = cast(river, [x, 500, z], [0, -1, 0]);
-        expect(hit.y).toBeCloseTo(env.roadPath[288].y - 60, 6);
-        const piers = meshesOf(scene, object => object.parent.name === 'bridge')[1];
-        piers.geometry.computeBoundingBox();
-        expect(piers.geometry.boundingBox.min.y + piers.position.y).toBeLessThan(env.roadPath[288].y - 60);
+        const lake = meshesOf(scene, object => object.userData.part === 'floor');
+        expect(lake).toHaveLength(1);
+        expect(lake[0].name).toBe('floor-lake');
+        expect(lake[0].position.y).toBe(-28);
+        const [x, z] = world(env, 278, 90);
+        expect(env.groundYAt(x, z)).toBe(-28);
+        expect(env.roadPath[278].y - -28).toBeGreaterThan(45);
+    });
+
+    test('the dressing follows the face in force: rocks and decals hang on the drop below the road and on the wall above it', () => {
+        const { env, scene } = leg(GORGE);
+        const nearest = (x, z) => {
+            let best = Infinity;
+            let found = env.startSegment;
+            for (let i = env.startSegment; i <= env.endSegment + 20; i++) {
+                const point = env.roadPath[i];
+                const d = (x - point.x) ** 2 + (z - point.z) ** 2;
+                if (d < best) { best = d; found = i; }
+            }
+            return found;
+        };
+        // A crack's branches are scattered about it and can sit under the road at a wall's foot
+        const decals = [];
+        scene.traverse(object => { if (object.userData.decal && object.userData.decal !== 'branch') decals.push(object); });
+        let onDrop = 0;
+        decals.forEach(decal => {
+            const segment = nearest(decal.position.x, decal.position.z);
+            const point = env.roadPath[segment];
+            const lateral = (decal.position.x - point.x) * Math.cos(point.heading) - (decal.position.z - point.z) * Math.sin(point.heading);
+            const drop = game.Terrain.sideAt(env.terrain, Math.sign(lateral), segment).face?.kind === 'drop';
+            if (drop) {
+                onDrop++;
+                expect(decal.position.y).toBeLessThan(point.y);
+            } else {
+                expect(decal.position.y).toBeGreaterThan(point.y);
+            }
+        });
+        expect(onDrop).toBeGreaterThan(0);
+        // Debris on the road comes off a wall only: never beside the drop
+        env.groundedObjects.filter(({ label }) => /^road debris rock/.test(label)).forEach(({ object }) => {
+            const segment = nearest(object.position.x, object.position.z);
+            const point = env.roadPath[segment];
+            const lateral = (object.position.x - point.x) * Math.cos(point.heading) - (object.position.z - point.z) * Math.sin(point.heading);
+            expect(game.Terrain.sideAt(env.terrain, Math.sign(lateral), segment).face?.kind).toBe('rise');
+        });
     });
 
     test('the gorge has no trees, no roadworks plant on the wall, no mountain backdrop, and both walls are dressed', () => {
         const { env, scene } = leg(GORGE);
-        const instanced = meshesOf(scene, object => object.isInstancedMesh);
+        // (the tunnels' lamp strips are instanced, and belong to their set piece)
+        const instanced = meshesOf(scene, object => object.isInstancedMesh && !object.parent.userData.setPiece);
         expect(instanced).toEqual([]);
         const labels = env.groundedObjects.map(({ label }) => label);
         expect(labels.filter(label => /construction bulldozer|construction barrier|work truck/.test(label))).toEqual([]);
@@ -280,14 +366,31 @@ describe('the gorge and the night forest built', () => {
         expect(labels.some(label => /shipping container/.test(label))).toBe(true);
         expect(labels.filter(label => /embedded cliff rock .*side -1\)$/.test(label)).length).toBeGreaterThan(10);
         expect(labels.filter(label => /embedded cliff rock .*side 1\)$/.test(label)).length).toBeGreaterThan(10);
-        // None inside the bridge range
-        const inBridge = labels.filter(label => {
+        // None inside either tunnel
+        const inTunnel = labels.filter(label => {
             const match = label.match(/segment (\d+)/);
-            return match && Number(match[1]) >= 285 && Number(match[1]) <= 292 && /rock|bush|post/.test(label);
+            const segment = match && Number(match[1]);
+            return match && ((segment >= 265 && segment <= 271) || (segment >= 286 && segment <= 293)) && /rock|bush|post/.test(label);
         });
-        expect(inBridge).toEqual([]);
+        expect(inTunnel).toEqual([]);
         expect(env.boulders.filter(b => b.solid)).toEqual([]);
         expect(scene.children.some(child => child.userData.type === 'mountain')).toBe(false);
+    });
+
+    test('the gorge tunnels each have a roof 7.5 m up, of rock, and the cliff road between them has none', () => {
+        const { env, scene } = leg(GORGE);
+        const tunnels = scene.children.filter(child => child.name === 'tunnel');
+        expect(tunnels).toHaveLength(2);
+        const roof = meshesOf(scene, object => object.parent.name === 'tunnel');
+        for (const segment of [268, 290]) {
+            const [x, z] = world(env, segment, 0);
+            const hit = cast(roof, [x, env.roadPath[segment].y + 0.5, z], [0, 1, 0]);
+            expect(Math.abs(hit.distance + 0.5 - 7.5)).toBeLessThan(0.6);
+        }
+        const [x, z] = world(env, 278, 0);
+        expect(cast(roof, [x, env.roadPath[278].y + 0.5, z], [0, 1, 0])).toBeNull();
+        // The cap over each tunnel is the gorge's rock, not the forest's grass
+        tunnels.forEach(group => expect(group.children[1].material.color.getHex()).toBe(0x5e5850));
     });
 
     test('P-W10: the tunnel has a roof 7.5 m up, and none outside it', () => {
@@ -407,7 +510,7 @@ describe('the gorge and the night forest built', () => {
     test('the drawn ribbon agrees with the ground at the edges of each span', () => {
         for (const [index, segments, laterals] of [
             [NIGHT, [513, 514, 517, 521, 522, 583, 586, 590, 591], [-20, -12, -9.5, 9.5, 12, 20]],
-            [GORGE, [284, 285, 288, 292, 293], [-30, -20, -15, 15, 20, 30]]
+            [GORGE, [264, 265, 268, 271, 272, 278, 285, 286, 290, 293, 294, 305], [-30, -20, -15, 15, 20, 30]]
         ]) {
             const { env, scene } = leg(index);
             const ground = ribbons(scene);
@@ -417,10 +520,8 @@ describe('the gorge and the night forest built', () => {
                     const [x, z] = world(env, segment, lateral);
                     const hit = cast(ground, [x, 500, z], [0, -1, 0]);
                     if (!hit) continue;
-                    const model = env.groundYAt(x, z);
-                    // A wall's overhang can hide a lower row under a higher one: the ray finds the top
-                    const gorgeWall = index === GORGE && Math.abs(lateral) <= 20 && !(segment >= 285 && segment <= 292);
-                    if (!gorgeWall) expect(Math.abs(hit.y - model)).toBeLessThan(0.15);
+                    // The model reads the drawn triangles: the highest a ray meets, folds and blends alike
+                    expect(Math.abs(hit.y - env.groundYAt(x, z))).toBeLessThanOrEqual(5e-3);
                 }
             }
         }
@@ -497,17 +598,28 @@ describe('the bike at the pieces', () => {
         expect(leftFront.crashTick).toBe(1);
     });
 
-    test('the bridge: a parapet at 0.8 m stops a bike that the open gorge wall would let ride to 1 m', () => {
-        const parapet = ride(place(GORGE, 288, 10.9, 25), 5);
-        expect(parapet.crashTick).toBe(1);
-        expect(parapet.history[1].falling).toBe(false);
-        expect(parapet.lines.some(line => line.startsWith('CRASHED! Hit the right wall at'))).toBe(true);
-        const open = ride(place(GORGE, 275, 10.9, 25), 5);
-        expect(open.crashTick).toBeNull();
-        const wall = ride(place(GORGE, 275, -11.5, 25), 5);
-        expect(wall.crashTick).toBe(1);
-        const onDeck = ride(place(GORGE, 288, 10.5, 25), 60);
-        expect(onDeck.crashTick).toBeNull();
+    test('the cliff roads: the drop side falls, the wall side crashes, the ledge is ridden, the tunnel lining crashes', () => {
+        // Segment 278: wall left, drop right; segment 305: the other way round
+        for (const [segment, wall, sideName] of [[278, -1, 'right'], [305, 1, 'left']]) {
+            const over = ride(place(GORGE, segment, -wall * 12.5, 25), 5);
+            // Over the lip within two ticks (the edge has half a metre of hysteresis)
+            expect(over.crashTick).toBeLessThanOrEqual(2);
+            expect(over.history[over.crashTick].falling).toBe(true);
+            expect(over.lines.some(line => line.startsWith(`CRASHED! Fell off the ${sideName} edge`))).toBe(true);
+            const into = ride(place(GORGE, segment, wall * 11.5, 25), 5);
+            expect(into.crashTick).toBeLessThanOrEqual(2);
+            expect(into.history[into.crashTick].falling).toBe(false);
+            // A metre onto the drop's 2 m ledge (half a metre of hysteresis would put 11.5 on the lip)
+            const ledge = ride(place(GORGE, segment, -wall * 11, 25), 5);
+            expect(ledge.crashTick).toBeNull();
+        }
+        for (const segment of [268, 290]) {
+            [11.5, -11.5].forEach(lateral => {
+                const lining = ride(place(GORGE, segment, lateral, 25), 5);
+                expect(lining.crashTick).toBe(1);
+                expect(lining.history[1].falling).toBe(false);
+            });
+        }
     });
 
     test('P18: a wall on the right crashes a bike at once, with no fall', () => {
@@ -518,18 +630,18 @@ describe('the bike at the pieces', () => {
         expect(vehicle.crashAngle).toBeCloseTo(Math.PI / 6, 9);
         expect(lines.some(line => line.startsWith('CRASHED! Hit the right wall at'))).toBe(true);
         expect(history[1].speed).toBeLessThanOrEqual(5);
-        // The bridge's parapet, a segment inside it, is the same wall
+        // The second tunnel's lining, at its first segment, is a wall too
         expect(ride(place(GORGE, 286, 11.5, 25), 5).crashTick).toBe(1);
     });
 
-    test('coasting on the road never crashes through the bridge, the tunnel or the village', () => {
-        [[GORGE, 280], [GORGE, 290], [NIGHT, 512], [NIGHT, 516], [NIGHT, 583]].forEach(([index, segment]) => {
+    test('coasting on the road never crashes through the gorge tunnels, its cliff roads, the night tunnel or the village', () => {
+        [[GORGE, 262], [GORGE, 268], [GORGE, 276], [GORGE, 290], [GORGE, 300], [NIGHT, 512], [NIGHT, 516], [NIGHT, 583]].forEach(([index, segment]) => {
             expect(ride(place(index, segment, 0, 25), 200).crashTick).toBeNull();
         });
     });
 });
 
-describe('rockfalls from both walls of the gorge (P-W12)', () => {
+describe('rockfalls from the walls of the gorge (P-W12)', () => {
     let game;
     let env;
     let scene;
@@ -588,8 +700,8 @@ describe('rockfalls from both walls of the gorge (P-W12)', () => {
         rockfalls.dispose();
     });
 
-    test('from segment 268: 2 to 4 rocks a fall, from both walls, each moving toward the road', () => {
-        const results = falls(268, 20);
+    test('from segment 240 (the canyon): 2 to 4 rocks a fall, from both walls, each moving toward the road', () => {
+        const results = falls(240, 20);
         const signs = new Set();
         results.forEach(({ rocks }) => {
             expect(rocks.length).toBeGreaterThanOrEqual(2);
@@ -604,18 +716,32 @@ describe('rockfalls from both walls of the gorge (P-W12)', () => {
         expect([...signs].sort()).toEqual([-1, 1]);
     });
 
-    test('a fall aimed at the bridge, or the segment beside it, adds no rock; and no rock starts in the bridge', () => {
-        [281, 283, 285, 287].forEach(start => {
-            falls(start, 20).forEach(({ rocks }) => expect(rocks).toEqual([]));
-        });
-        [268, 277, 279].forEach(start => {
+    test('a fall aimed at a tunnel, or the segment beside one, adds no rock; and no rock starts in a tunnel', () => {
+        const widened = target => (target >= 264 && target <= 272) || (target >= 285 && target <= 294);
+        // Every target 3 to 6 segments ahead of these lies in a widened tunnel
+        [261, 262, 266, 282, 284, 288].forEach(start => {
             falls(start, 20).forEach(({ target, rocks }) => {
-                // The widened range is 284 to 293: a fall aimed in it adds nothing, any other adds rocks
-                const beside = target >= 284 && target <= 293;
-                expect(rocks.length === 0).toBe(beside);
-                rocks.forEach(({ segment }) => expect(segment >= 285 && segment <= 292).toBe(false));
+                expect(widened(target)).toBe(true);
+                expect(rocks).toEqual([]);
             });
         });
+        [250, 256, 276, 278, 296].forEach(start => {
+            falls(start, 20).forEach(({ target, rocks }) => {
+                expect(rocks.length === 0).toBe(widened(target));
+                rocks.forEach(({ segment }) => expect((segment >= 265 && segment <= 271) || (segment >= 286 && segment <= 293)).toBe(false));
+            });
+        });
+    });
+
+    test('on a cliff road every rock comes off the wall, never out of the drop', () => {
+        for (const [start, wall] of [[274, -1], [300, 1]]) {
+            const rocks = falls(start, 20).flatMap(result => result.rocks);
+            expect(rocks.length).toBeGreaterThan(20);
+            rocks.forEach(({ lateral, toward }) => {
+                expect(Math.sign(lateral)).toBe(wall);
+                expect(Math.sign(toward)).toBe(-wall);
+            });
+        }
     });
 
     test('a leg with one wall draws no extra random number for the choice of wall', () => {
@@ -677,7 +803,7 @@ describe('rockfalls from both walls of the gorge (P-W12)', () => {
     }
 
     test('rocks off the gorge walls reach the road from each wall', () => {
-        const result = tumble(env, scene, 268, 60);
+        const result = tumble(env, scene, 240, 60);
         expect(result['-1'].total).toBeGreaterThan(20);
         expect(result[1].total).toBeGreaterThan(20);
         expect(result['-1'].reached / result['-1'].total).toBeGreaterThan(0.9);
@@ -695,7 +821,7 @@ describe('rockfalls from both walls of the gorge (P-W12)', () => {
         const restore = seedMath(seeded(5));
         try {
             const rockfalls = new game.RockfallSystem(scene, env);
-            rockfalls.triggerFall({ currentRoadSegment: 268 });
+            rockfalls.triggerFall({ currentRoadSegment: 240 });
             expect(rockfalls.rocks.length).toBeGreaterThan(0);
             for (let tick = 0; tick < 60 * 60; tick++) rockfalls.update(1 / 60, null);
             expect(rockfalls.rocks).toEqual([]);
@@ -723,7 +849,7 @@ describe('what the roadworks plant left behind on the cliff legs (P23, amended)'
         return entry;
     }
 
-    test.each([[0, 10], [4, 8]])('leg %i: hairpin barrier entries sit where their mesh does, clear of the road edge', (index, halfRoad) => {
+    test.each([[1, 10], [4, 8]])('leg %i: hairpin barrier entries sit where their mesh does, clear of the road edge', (index, halfRoad) => {
         const { env } = leg(index);
         const entries = env.roadworkObstacles.filter(o => o.type === 'hairpin_barrier');
         expect(entries.length).toBe(index === 4 ? 36 : 0);
@@ -738,7 +864,7 @@ describe('what the roadworks plant left behind on the cliff legs (P23, amended)'
         });
     });
 
-    test.each([[0, 10], [4, 8]])('leg %i: riding past where the bulldozer, barrier and work truck stood crashes on none of them', (index, halfRoad) => {
+    test.each([[1, 10], [4, 8]])('leg %i: riding past where the bulldozer, barrier and work truck stood crashes on none of them', (index, halfRoad) => {
         const { env, scene } = leg(index);
         const zones = env.roadworksZones;
         expect(zones.length).toBeGreaterThan(0);

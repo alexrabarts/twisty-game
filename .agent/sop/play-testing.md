@@ -7,7 +7,7 @@
 
 ```js
 const s = document.createElement('script'); s.src = 'tools/autopilot.js'; document.head.appendChild(s);
-twistyDev.start('valley-run');          // any leg id from js/tours.js
+twistyDev.start('mountain-dawn');       // any leg id from js/tours.js
 twistyDev.autopilot({ speed: 30, lane: -3 });
 ```
 
@@ -18,12 +18,13 @@ twistyDev.autopilot({ speed: 30, lane: -3 });
 
 Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without them.
 
-## Run-off, tunnel and bridge legs
+## Run-off, tunnel and cliff legs
 
-- Valley-run, storm-valley, coastal-descent, winter-pass, foggy-gorge and night-ride have loose ground beside the road, not a wall. A bike on it slows to a floor speed and has low grip. After 6 s off the road it crashes with `Off the road for 6.0 s`. The road resets that clock.
-- A lane past the road edge tests this: for example `twistyDev.autopilot({ speed: 25, lane: 14 })` on valley-run. The autopilot starts on the centre line and steers out, so the off-road clock only starts when the bike reaches the edge (about 2.3 s in): `vehicle.offRoadTime` is 0.5 to 0.75 at 3 s and 4.5 to 4.75 at 7 s, and the crash comes between 7 and 10 s. To time the clock from tick 0, put the bike out there first with `twistyDev.teleport(segment)` and a lateral of 14 (`node tools/terrain-check.mjs runoff --legs valley-run`): `offRoadTime` is 3.0 at 3 s and the bike crashes by 7 s with one `Off the road for 6.0 s` line. Step the game to read `vehicle.offRoadTime`.
-- Trees on run-off ground are solid: a trunk crashes the bike inside 1.6 m. Water (the valley-run river, the coast and gorge floors) crashes the bike at once.
-- Night-ride has a tunnel around segment 517. The camera stays under the roof, so check High View there. Foggy-gorge has a bridge across the gorge around segments 285 to 292.
+- Mountain-dawn, storm-valley, coastal-descent (its beach), winter-pass and night-ride have loose ground beside the road, not a wall. A bike on it slows to a floor speed and has low grip. After 6 s off the road it crashes with `Off the road for 6.0 s`. The road resets that clock.
+- A lane past the road edge tests this: for example `twistyDev.autopilot({ speed: 25, lane: 14 })` on mountain-dawn. The autopilot starts on the centre line and steers out, so the off-road clock only starts when the bike reaches the edge (about 2.3 s in): `vehicle.offRoadTime` is 0.5 to 0.75 at 3 s and 4.5 to 4.75 at 7 s, and the crash comes between 7 and 10 s. To time the clock from tick 0, put the bike out there first with `twistyDev.teleport(segment)` and a lateral of 14 (`node tools/terrain-check.mjs runoff`, which defaults to mountain-dawn): `offRoadTime` is 3.0 at 3 s and the bike crashes by 7 s with one `Off the road for 6.0 s` line. Step the game to read `vehicle.offRoadTime`.
+- Trees on run-off ground are solid: a trunk crashes the bike inside 1.6 m. Water (the mountain-dawn river, the coast's sea) crashes the bike at once.
+- Night-ride has a tunnel around segment 517. The camera stays under the roof, so check High View there. Foggy-gorge has two tunnels (segments 265 to 271 and 286 to 293); between them the wall is on the left and the drop on the right, after the second the other way round.
+- Valley-run is the cliff road with the wall on the right and the drop to the lake on the left; high-pass has the wall on the left.
 - `side > 0` in `twistyDev.view` is the right of the road, whatever ground is there.
 
 ## Browser proof harness

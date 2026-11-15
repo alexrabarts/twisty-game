@@ -1,21 +1,35 @@
 # World
 
-Every leg has a terrain profile: what lies on each side of the road (a wall, a fall, or run-off ground) and what lies under it. A side is described outward from the centre line, so the code never assumes which side is the valley. Positive lateral is the right of the road; which ground is there is the profile's choice. The cliff legs (mountain-dawn, high-pass, profile `cliffLake`) are one case: the left is a mountain wall and the right is the drop-off, so riders keep to the wall side and oncoming cars use the valley side. Valley-run and storm-valley are open ground with run-off on both sides (see "Run-off legs"). Coastal-descent and winter-pass have their own shapes (see "Coast and ridge").
+Every leg has a terrain profile: what lies on each side of the road (a wall, a fall, or run-off ground) and what lies under it. A side is described outward from the centre line, so the code never assumes which side is the valley. Positive lateral is the right of the road; which ground is there is the profile's choice.
+
+| Leg | Profile | Left | Right | Board |
+|---|---|---|---|---|
+| 1 mountain-dawn | `valleyFloor` | run-off meadow | run-off meadow, river | `mountain-dawn-v2` |
+| 2 valley-run | `cliffLakeMirrored` | drop to the lake | wall | `valley-run-v2` |
+| 3 coastal-descent | `coast` | wall | sea cliff, then beach | `coastal-descent-v2` |
+| 4 foggy-gorge | `canyon` | wall; drop after the second tunnel | wall; drop between the tunnels | `foggy-gorge-v2` |
+| 5 high-pass | `cliffLake` | wall | drop to the lake | `high-pass` |
+| 6 storm-valley | `forest` | run-off forest | run-off forest | `storm-valley-v2` |
+| 7 night-ride | `forestNight` | run-off forest | run-off forest | `night-ride-v2` |
+| 8 winter-pass | `ridge` | snowfield, drop | snowfield, drop | `winter-pass-v2` |
+
+High-pass is the one cliff leg bound to the frozen golden (see "Golden bindings").
 
 ## One terrain model
 
 `js/terrain.js` is the single source of the ground beside the road. It is pure: no THREE, no DOM, no `Math.random`. It loads before `vehicle.js` and `tours.js`; without it every `Environment` constructor throws `Terrain is not defined`, the menu preview included.
 
-A leg has a profile (`Terrain.forLeg(legIndex)`, held as `environment.terrain`). A profile has a `floor`, an `elevation(i)` for the road height and a `left` and a `right` side. Legs 1 and 5 use `cliffLake`: a wall on the left, a drop to the lake (y = -200) on the right. Valley-run uses `valleyFloor`, storm-valley uses `forest` (see "Run-off legs"), coastal-descent uses `coast` and winter-pass uses `ridge` (see "Coast and ridge"), foggy-gorge uses `canyon` and night-ride uses `forestNight` (see "Gorge and night forest"). Distance `d` on a side is always outward from the centre line, so a side does not know which way it faces.
+A leg has a profile (`Terrain.forLeg(legIndex)`, held as `environment.terrain`). A profile has a `floor`, an `elevation(i)` for the road height and a `left` and a `right` side. High-pass uses `cliffLake`: a wall on the left, a drop to the lake (y = -200) on the right. Valley-run uses `cliffLakeMirrored`: the same two sides swapped, so the drop is on the left and the wall on the right. Mountain-dawn uses `valleyFloor`, storm-valley uses `forest` (see "Run-off legs"), coastal-descent uses `coast` and winter-pass uses `ridge` (see "Coast and ridge"), foggy-gorge uses `canyon` and night-ride uses `forestNight` (see "Gorge and night forest"). Distance `d` on a side is always outward from the centre line, so a side does not know which way it faces.
 
 Three things must agree: the rendered ribbon, `Environment.groundYAt()` and the bike's ground height. All three read the profile: the vehicle and the rockfalls call `Terrain.groundY()` (the vehicle with `exact = false`, the rockfalls with `exact = true`) and clamp or settle on what it returns.
 
 - `Terrain.row(side, j, ctx, out)` gives one cross-section vertex. `Environment.buildTerrainRibbon(sign, side)` draws the mesh from it, one `this.rand()` per vertex.
 - `Environment.decorateRockFace(sign, side, group, rockMaterials)` adds rocks, cracks, seepage, vines and snow. It runs only for a side with a `face`. `side.face.rockSpread` says how far rocks spread outward per unit of random height.
 - `Terrain.groundY()` finds the nearest centre-line point and calls `Terrain.heightAt()`. An exact read (`exact = true`) is the drawn ribbon itself: every vertex of a ribbon column lies on that column's line, so the point falls in the strip between two column lines, and `meshY` reads the highest of that strip's triangles (float32-rounded, as the mesh stores them). On the road and a ledge an exact read is the road height interpolated along the segment. So scenery and rockfalls rest on what is drawn, on bends and between columns too, on rock, ground and span blends alike. The one exception is `cliffLake` (`columnWalk: true`): high-pass is bound to the frozen golden, which recorded the older read (walk the nearest vertex column with the lateral from the nearest centre-line point, which is up to 1 m off between points on a tight bend). A read with `exact = false` (the vehicle) uses each side's smooth `base()` slope.
-- Each side has `bands`: `to` is the distance past the road edge where a band ends, the last band runs outward. `Terrain.zoneAt()` names the zone (`road`, `shoulder`, `wall`, `fall` or `runoff`) and where it starts. The vehicle crashes into a `wall`, falls off a `fall`, and is dragged by `runoff`; rockfalls come off the first side that ends in a `wall`.
+- Each side has `bands`: `to` is the distance past the road edge where a band ends, the last band runs outward. `Terrain.zoneAt()` names the zone (`road`, `shoulder`, `wall`, `fall` or `runoff`) and where it starts. The vehicle crashes into a `wall`, falls off a `fall`, and is dragged by `runoff`; rockfalls come off the sides that end in a `wall` at their segment (`Terrain.wallSignsAt()`).
+- Dressing follows the side, not a fixed sign. `Terrain.fallSignAt()` is the side that drops (right first): the slope forest of the cliff legs, the roadside bushes and the start sign go there. `Terrain.clutterSignAt()` is where the roadside rock clusters go: the left, unless the left drops. `decorateRockFace()` reads the face in force at each segment, so a side that changes from a wall to a drop is dressed as each.
 - `Terrain.facePoint()` is the only way to find a point on a drawn face; the cliff decals (cracks, seepage, vines, snow) are placed with it and tagged `userData.decal`.
-- `cliffLake`: flat to `roadWidth / 2 + 2`; the right side then drops 1.33 per lateral unit; the left side is the drawn wall, up to +40 times its height multiplier.
+- `cliffLake`: flat to `roadWidth / 2 + 2`; the right side then drops 1.33 per lateral unit; the left side is the drawn wall, up to +40 times its height multiplier. `cliffLakeMirrored` is the same on the other sides. The menu preview camera of valley-run stands over the lake (`preview.side: -1`).
 
 If you change a shape, change it in `js/terrain.js` only. Never add randomness to the ribbon vertex positions: scenery would float again. A change to row maths moves every hash in `tests/golden/`; see `tests/README.md`.
 
@@ -25,13 +39,13 @@ The roadworks plant (bulldozer, barrier, work truck) is not built beside a wall:
 
 ## Run-off legs
 
-`valleyFloor` (leg 2) and `forest` (leg 6) are built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 35 (valley) or 25 (forest) past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.
+`valleyFloor` (leg 1, mountain-dawn) and `forest` (leg 6) are built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 35 (valley) or 25 (forest) past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.
 
 - The bike slows and loses grip in run-off, and crashes after 6 s off the road, in water, or on an obstacle. Trunks, rocks and the relocated roadworks plant are `environment.boulders` entries with `solid: true` and a `height`: they are tested while airborne too, by horizontal distance and height, and are never hopped.
-- Valley-run has a river ribbon (`floor-river`, 3 m below the road, lateral 35 to 50 on the right). `Terrain.waterLevel()` gives the water height for a lake, sea or river.
+- Mountain-dawn has a river ribbon (`floor-river`, 3 m below the road, lateral 35 to 50 on the right). `Terrain.waterLevel()` gives the water height for a lake, sea or river.
 - Roadworks plant stands at `-(roadWidth / 2 + 9)` (bulldozer) and `-(roadWidth / 2 + 6)` (barrier, truck) on run-off ground, not at -30 and -25 on a wall.
 - A gate (`environment.finishGate`, `environment.checkpoints`) reaches `Terrain.gateReach()` each side: the rideable limit plus 2 over run-off, the road's ledge beside a wall or fall. `Game.inGate(gate, position)` is the only gate test; there is no segment window.
-- A changed course has `trackVersion` 2 in `Terrain.LEGS`, so `TourSystem.boardId()` gives `valley-run-v2` and `storm-valley-v2` and local best times use `Game.bestTimeKey()`. `tests/unit/runoff-legs.test.js` pins a digest of each leg's course: change a road height, band, run-off rate or tree layout and it fails until the version is bumped. Progression keeps the plain leg ids.
+- A changed course has `trackVersion` 2 in `Terrain.LEGS`, so `TourSystem.boardId()` gives `mountain-dawn-v2`, `valley-run-v2` and `storm-valley-v2` and local best times use `Game.bestTimeKey()`. `tests/unit/runoff-legs.test.js` pins a digest of each leg's course: change a road height, band, run-off rate or tree layout and it fails until the version is bumped. Progression keeps the plain leg ids.
 - The menu preview camera takes its radius and height from `Terrain.LEGS[i].preview`.
 
 ## Coast and ridge
@@ -51,7 +65,17 @@ A bike at rest after a fall counts as landed (`hitGround`) when its ground speed
 
 ## Gorge and night forest
 
-`canyon` (foggy-gorge) is a wall on each side, 1 m past the road edge, 57 m high with its height swinging 18% along the road (so 46 to 67 m; `variation` and `snow: false` on the face). A river runs 60 m under the road (`floor-river`, lateral -25 to 25). No trees, no mountain backdrop, and no roadworks plant (a wall side builds none). Both walls shed rocks (rockfall rate 0.5); a fall picks the wall at its segment with one draw, and only when there are two walls to pick from, so a one-wall leg keeps its random stream.
+`canyon` (foggy-gorge, segments 234 to 321) runs in five sections:
+
+| Segments | Left | Right |
+|---|---|---|
+| 234 to 264 | wall | wall |
+| 265 to 271 | tunnel | tunnel |
+| 272 to 285 | wall | drop to the gorge lake |
+| 286 to 293 | tunnel | tunnel |
+| 294 on | drop to the gorge lake | wall |
+
+A wall is 1 m past the road edge, 57 m high with its height swinging 18% along the road (so 46 to 67 m; `variation` and `snow: false` on the face). A drop is the cliff legs' drop (`cliffDropSide`, a 2 m ledge then 1.33 down per metre) onto the gorge's lake (`floor-lake`, absolute y -28, a fall ends at -27.5). Both tunnels lie on straights and keep a segment clear of every checkpoint (263, 295) and of the roadworks (281 to 283). A tunnel's sides are rock (`tint`) climbing to the height of the walls, and its cap is rock (`span.cap`). Each change of side blends over one segment (`Terrain.rowAt()` blends from the side of one segment to the side of the next, span to span included). No trees, no mountain backdrop, and no roadworks plant (a wall or drop side builds none). Rocks fall at rate 0.5 from the walls in force at the target segment: both in the canyon (one draw picks the wall), the one wall on a cliff road, none in or beside a tunnel.
 
 `forestNight` (night-ride) is the forest of storm-valley with less roll, a climbing road and two spans, and no rockfalls. Its ground reaches 135 past the road edge, not 165, because the leg's tightest bend (307.7 m) allows no row past half its radius.
 
@@ -59,13 +83,18 @@ A span with a `type` is a set piece: `Terrain.setPieces(profile)` lists them as 
 
 | Piece | Leg | Segments | Terrain |
 |---|---|---|---|
-| Bridge | foggy-gorge | 285 to 292 | Parapet wall 0.8 m past the road edge (crash), 62 m drop to the river bed |
+| Tunnel | foggy-gorge | 265 to 271 | Wall 1 m past the edge, `ceiling` 7.5, rock over the road |
+| Tunnel | foggy-gorge | 286 to 293 | As above |
 | Tunnel | night-ride | 514 to 521 | Wall 1 m past the edge, `ceiling` 7.5, hill over the road |
 | Village | night-ride | 583 to 590 | Level pavement (run-off, so a rider is slowed, not crashed) to 3 m past the edge, then house fronts (wall) |
 
-`Environment.createSetPieces()` builds each as a group named for its type, with a few merged meshes standing at the piece's centre (culling reads a mesh origin): the bridge a deck with parapets and piers; the tunnel a lining, hill, two portals and an emissive lamp strip; the village houses, windows, lamp posts, lamp heads and light pools. No piece adds a light: the scene keeps its seven. `Game.tunnelRoofY()` gives the roof over the bike (a segment either side counts) and `updateCamera` keeps the camera 1 m under it. All three legs have a `preview` for the menu camera.
+`Environment.createSetPieces()` builds each as a group named for its type, with a few merged meshes standing at the piece's centre (culling reads a mesh origin): the tunnel a lining, hill cap, two portals and an emissive lamp strip (each tunnel reads its own span's `ceiling` and `cap`); the village houses, windows, lamp posts, lamp heads and light pools. No piece adds a light: the scene keeps its seven. `Game.tunnelRoofY()` gives the roof over the bike (a segment either side counts) and `updateCamera` keeps the camera 1 m under it. Both legs have a `preview` for the menu camera. (`buildBridge` stays in `environment.js` for a span of type `bridge`; no leg has one now.)
 
-Both legs have `trackVersion` 2: `foggy-gorge-v2` and `night-ride-v2`. After this only mountain-dawn and high-pass keep plain board ids.
+Both legs have `trackVersion` 2: `foggy-gorge-v2` and `night-ride-v2`. High-pass is the only leg with a plain board id.
+
+## Golden bindings
+
+`tests/golden/terrain-baseline.json` and `tests/golden/browser-baseline.json` bind high-pass only. The other seven legs are listed as `released` in `tests/golden/amendments.json` and `tools/terrain-check.mjs` compares them with nothing. High-pass is bound field by field: each field that moved by a declared delta (D6, the U3 plant, the U8 stripe children) carries its explicit expected value under `declared`, and the tool fails when the fresh value is not that value or when a declared path does not resolve. Its frames are recorded, not compared (`unbound`, ruling U18). Mountain-dawn was a bound cliff leg until it became the open valley; its bindings (stable fingerprint, randState, decal counts, ground grid, the D6 jest checks) moved to high-pass only.
 
 ## What is still in environment.js
 

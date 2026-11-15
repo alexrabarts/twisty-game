@@ -35,11 +35,20 @@ describe('vehicle on the shared terrain model', () => {
         game = loadGame(undefined, log);
     });
 
-    // One environment per leg; each test sets the profile it needs
+    // One environment per leg; each test sets the profile it needs. Leg 1 is
+    // open valley now: its cliffLake road (the heights these rides were
+    // measured on) is built by standing cliffLake in for it.
     function environment(legIndex) {
         if (!envs.has(legIndex)) {
-            const { env } = buildEnvironment(game, legIndex);
-            envs.set(legIndex, { env, profile: env.terrain });
+            const entry = game.Terrain.LEGS[legIndex];
+            const original = entry.profile;
+            if (legIndex === 0) entry.profile = game.Terrain.profiles.cliffLake;
+            try {
+                const { env } = buildEnvironment(game, legIndex);
+                envs.set(legIndex, { env, profile: env.terrain });
+            } finally {
+                entry.profile = original;
+            }
         }
         const entry = envs.get(legIndex);
         entry.env.terrain = entry.profile;
@@ -160,6 +169,22 @@ describe('vehicle on the shared terrain model', () => {
             const alongPerp = vehicle.velocity.x * Math.cos(heading) - vehicle.velocity.z * Math.sin(heading);
             expect(alongPerp).toBeLessThan(0);
             expect(lines.some(line => line.startsWith('CRASHED! Hit the right wall at'))).toBe(true);
+        });
+
+        test('valley-run, the mirrored cliff leg: the drop is on the left, the wall on the right', () => {
+            const env = environment(1);
+            expect(env.terrain).toBe(game.Terrain.profiles.cliffLakeMirrored);
+            const over = place(env, 100, -12.6, 25);
+            const fall = ride(over, 60);
+            expect(fall.crashTick).toBe(1);
+            expect(fall.history[1].falling).toBe(true);
+            expect(over.fallSide).toBe(-1);
+            expect(fall.lines).toContain('=== FALLING OFF LEFT EDGE ===');
+            expect(fall.history[60].y).toBeLessThan(env.roadPath[100].y - 3);
+            const wall = ride(place(env, 100, 11.5, 25), 1);
+            expect(wall.crashTick).toBe(1);
+            expect(wall.history[1].falling).toBe(false);
+            expect(wall.lines.some(line => line.startsWith('CRASHED! Hit the right wall at'))).toBe(true);
         });
 
         test('a wall clamps the bike to its face', () => {

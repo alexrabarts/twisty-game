@@ -231,6 +231,18 @@ const Terrain = (() => {
     right: cliffDropSide({ floorY: LAKE_Y, faceHeight: LAKE_Y, rockSpread: 25 })
   };
 
+  // The same cliff and lake seen the other way round: the drop to the lake on
+  // the left, the wall on the right. A side does not know which way it faces,
+  // so the sides are cliffLake's own; only the exact read differs (the drawn
+  // triangles, as on every leg not bound to the frozen golden).
+  const cliffLakeMirrored = {
+    id: 'cliffLakeMirrored',
+    floor: cliffLake.floor,
+    elevation: cliffLake.elevation,
+    left: cliffLake.right,
+    right: cliffLake.left
+  };
+
   const RUNOFF = { drag: 0.35, grip: 0.5, floorSpeed: 6 };
   const RUNOFF_BANDS = (to) => [{ to, kind: 'runoff' }, { kind: 'wall' }];
 
@@ -323,23 +335,32 @@ const Terrain = (() => {
     ]
   });
 
-  // A gorge: rock walls 45 to 70 m high close to the road on both sides, with
-  // a river far below that only the bridge shows. The walls are the cliff
-  // face of the mountain legs; the bridge replaces them with a parapet and a
-  // sheer drop to the river bed for its length.
-  const BRIDGE = { from: 285, to: 293 };
+  // A gorge: rock walls 46 to 67 m high close to the road on both sides, then
+  // a tunnel through the rock, a cliff road with the wall on the left and a
+  // drop to the gorge's lake on the right, a second tunnel, and the cliff
+  // road again with the wall and the drop swapped. Both tunnels lie on
+  // straights (260-271 and 280-293) and keep a segment clear of every
+  // checkpoint (263, 295) and of the roadworks (281-283); segments are global
+  // and `to` is exclusive. Each change of side blends over one segment, as every
+  // span edge does.
+  const GORGE_LAKE_Y = -28;
+  const GORGE_TUNNELS = [{ from: 265, to: 272 }, { from: 286, to: 294 }];
+  const GORGE_CLIFFS = [{ from: 272, to: 286 }, { from: 294 }];
   const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false, drawnFoot: true });
-  const gorgeSide = () =>
+  const gorgeDrop = () => cliffDropSide({ floorY: GORGE_LAKE_Y, faceHeight: -55, rockSpread: 25 });
+  // Rock over the tunnel: the lining at 1 m past the edge, the rock climbing to
+  // the roof's crest 2.5 m out, then on up to the height of the gorge walls.
+  // It reaches no further than 105 m: the leg's tightest bend is 266.7 m.
+  const gorgeHill = () =>
     heightfieldSide({
-      // Parapet at 0.8 m, then down past the river (60 m below the road) to its bed and back up the far wall
-      stations: [[0, 0], [0.8, 0], [1.6, -10], [3, -26], [5, -44], [10, -62], [40, -64], [80, -40], [115, 32]],
-      bands: [{ to: 0.8, kind: 'shoulder' }, { kind: 'wall' }],
+      stations: [[0, 0], [1, 0], [2.5, 9], [8, 12], [30, 30], [105, 57]],
+      bands: [{ to: 1, kind: 'shoulder' }, { kind: 'wall' }],
       tint: 0x6e6860
     });
   const canyon = {
     id: 'canyon',
-    // The river runs under the road, 60 m down
-    floor: { kind: 'river', below: 60, side: 1, from: -25, to: 25 },
+    // The gorge's lake, far under the road; only the cliff road sees it
+    floor: { kind: 'lake', y: GORGE_LAKE_Y, restY: GORGE_LAKE_Y + 0.5 },
     elevation: (i, start, end) => {
       const k = i - start;
       const t = Math.min(1, Math.max(0, k / (end - start)));
@@ -347,7 +368,12 @@ const Terrain = (() => {
     },
     left: gorgeWall(),
     right: gorgeWall(),
-    spans: [{ type: 'bridge', ...BRIDGE, left: gorgeSide(), right: gorgeSide() }]
+    spans: [
+      { type: 'tunnel', ...GORGE_TUNNELS[0], ceiling: 7.5, cap: 0x5e5850, left: gorgeHill(), right: gorgeHill() },
+      { ...GORGE_CLIFFS[0], right: gorgeDrop() },
+      { type: 'tunnel', ...GORGE_TUNNELS[1], ceiling: 7.5, cap: 0x5e5850, left: gorgeHill(), right: gorgeHill() },
+      { ...GORGE_CLIFFS[1], left: gorgeDrop() }
+    ]
   };
 
   // The sea road: a hill on the land side (left) and a drop to the sea on the
@@ -402,7 +428,7 @@ const Terrain = (() => {
     right: ridgeSide()
   };
 
-  const profiles = { cliffLake, valleyFloor, forest, forestNight, coast, canyon, ridge };
+  const profiles = { cliffLake, cliffLakeMirrored, valleyFloor, forest, forestNight, coast, canyon, ridge };
 
   // The per-leg table: the only source of per-leg world values. `profile` is
   // the shape of the ground beside the road; `floor` is defined once, on the
@@ -410,14 +436,13 @@ const Terrain = (() => {
   // reads; `dressing` holds what the world build scatters. Order is leg order.
   const BACKDROP = ['distant', 'mid', 'near', 'majestic', 'endCourse'];
   const LEGS = [
-    { id: 'mountain-dawn', profile: cliffLake, trackVersion: 1, roadWidth: 20,
+    // Changed legs carry trackVersion 2: a new road height or a new ground is a
+    // new course, so a new leaderboard and best-time key (TourSystem.boardId)
+    { id: 'mountain-dawn', profile: valleyFloor, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x4a7c4a, mountainColor: 0x6b5c42, fogDensity: 0.0015 },
-      dressing: { forest: { coniferShare: 0.75, snowy: false }, rockfall: 0, backdrop: BACKDROP } },
-    // Changed legs carry trackVersion 2: a new road height is a new course, so a
-    // new leaderboard and best-time key (TourSystem.boardId)
-    { id: 'valley-run', profile: valleyFloor, trackVersion: 2, roadWidth: 20,
-      look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
-      // Sparse broadleaf clumps both sides, none in the river; no fixed peaks
+      // Open country: sparse broadleaf clumps both sides, none in the river.
+      // No fixed peaks: they stand on the lake (y = -200) and the valley sides
+      // hide them.
       dressing: {
         forest: {
           coniferShare: 0, snowy: false,
@@ -427,11 +452,21 @@ const Terrain = (() => {
       },
       // Where the menu preview camera stands: metres out from the mid-leg point, and above it
       preview: { radius: 30, height: 9 } },
+    // The cliff road of the dawn leg seen the other way round: the wall on the
+    // right, the lake on the left. Rocks come off the wall, trees stand on the
+    // drop, and the menu camera looks back from over the lake (side -1).
+    { id: 'valley-run', profile: cliffLakeMirrored, trackVersion: 2, roadWidth: 20,
+      look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
+      // The twin peaks stand on a wall-side shelf 120 m over the lake: here they
+      // would float over the water, so this leg has the ranges that stand in it
+      dressing: { forest: { coniferShare: 0.75, snowy: false }, rockfall: 0.25, backdrop: ['distant', 'mid', 'near', 'endCourse'] },
+      preview: { radius: 30, height: 9, side: -1 } },
     { id: 'coastal-descent', profile: coast, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x6aac6a, mountainColor: 0x5a4c32, fogDensity: 0.001 },
       // The default forest is kept: it only stands where the cliff face is 15 m above the sea
       dressing: { forest: { coniferShare: 0.3, snowy: false }, rockfall: 0, backdrop: [] } },
-    // The gorge has no trees (rock to the road edge), and its two walls shed rocks
+    // The gorge has no trees (rock to the road edge); rocks come off whichever
+    // walls stand at a segment, never off a drop or out of a tunnel
     { id: 'foggy-gorge', profile: canyon, trackVersion: 2, roadWidth: 20,
       look: { grassColor: 0x5a9c5a, mountainColor: 0x7a6c52, fogDensity: 0.0008 },
       dressing: { forest: null, rockfall: 0.5, backdrop: [] },
@@ -475,8 +510,9 @@ const Terrain = (() => {
   // shadow box.
   const DEFAULT_RENDER = { ring: 1, cullMax: 600, shadowSpan: 120 };
   const ATMOSPHERE = {
-    'mountain-dawn': { atmosphere: { heightFog: { density: 0.0025, falloff: 0.05 }, shafts: 0.35 }, render: {} },
-    'valley-run': { atmosphere: { heightFog: { density: 0.004, falloff: 0.04 }, shafts: 0.35 }, render: { cullMax: 800 } },
+    // The open valley sees far; the cliff road keeps the cliff legs' reach
+    'mountain-dawn': { atmosphere: { heightFog: { density: 0.0025, falloff: 0.05 }, shafts: 0.35 }, render: { cullMax: 800 } },
+    'valley-run': { atmosphere: { heightFog: { density: 0.004, falloff: 0.04 }, shafts: 0.35 }, render: {} },
     'coastal-descent': { atmosphere: { heightFog: { density: 0.003, falloff: 0.04 }, shafts: 0 }, render: { ring: 0.35, cullMax: 800 } },
     'foggy-gorge': { atmosphere: { heightFog: { density: 0.004, falloff: 0.06 }, shafts: 0.35 }, render: { shadowSpan: 200 } },
     'high-pass': { atmosphere: { heightFog: { density: 0.003, falloff: 0.05 }, shafts: 0.35 }, render: {} },
@@ -558,27 +594,31 @@ const Terrain = (() => {
   const blendTo = {};
   function rowAt(profile, sign, j, ctx, out) {
     const key = sign < 0 ? 'left' : 'right';
-    const base = profile[key];
     const s = ctx.s ?? ctx.index;
-    for (const span of profile.spans || []) {
-      const inner = span[key];
-      if (!inner) continue;
-      // The edges are centred on the physics' boundary between two segments
-      // (half a segment before `from`, half a segment before `to`)
-      let weight;
-      if (s < span.from) weight = s - (span.from - 1);
-      else if (span.to === undefined || s <= span.to - 1) weight = 1;
-      else weight = span.to - s;
-      if (weight <= 0) continue;
-      if (weight >= 1) return inner.row(j, ctx, out);
-      base.row(j, ctx, blendFrom);
-      inner.row(j, ctx, blendTo);
-      for (const field of ['d', 'y', 'rise', 'displacement']) {
-        out[field] = blendFrom[field] + (blendTo[field] - blendFrom[field]) * weight;
-      }
-      return out;
+    if (!profile.spans) return profile[key].row(j, ctx, out);
+    // The side of segment k holds from the boundary half a segment before k;
+    // between two segments the rows blend from the earlier side to the later
+    const later = Math.ceil(s);
+    const after = sideAt(profile, sign, later);
+    if (later === s) return after.row(j, ctx, out);
+    const before = sideAt(profile, sign, later - 1);
+    if (before === after) return after.row(j, ctx, out);
+    let from = before;
+    let to = after;
+    let weight = s - (later - 1);
+    // Leaving a span for the profile's own side: weighed from the profile's
+    // side, as the ribbon was always drawn there
+    if (after === profile[key]) {
+      from = after;
+      to = before;
+      weight = later - s;
     }
-    return base.row(j, ctx, out);
+    from.row(j, ctx, blendFrom);
+    to.row(j, ctx, blendTo);
+    for (const field of ['d', 'y', 'rise', 'displacement']) {
+      out[field] = blendFrom[field] + (blendTo[field] - blendFrom[field]) * weight;
+    }
+    return out;
   }
 
   // The first and last segment in [from, to] whose side on `sign` carries a
@@ -626,12 +666,9 @@ const Terrain = (() => {
   // Whether the ribbon on a side is blending between two sides at a position
   // along the road (in segments): the one segment either side of a span edge
   function blendingAt(profile, key, s) {
-    for (const span of profile.spans || []) {
-      if (!span[key]) continue;
-      if (s > span.from - 1 && s < span.from) return true;
-      if (span.to !== undefined && s > span.to - 1 && s < span.to) return true;
-    }
-    return false;
+    if (!profile.spans || Number.isInteger(s)) return false;
+    const sign = key === 'left' ? -1 : 1;
+    return sideAt(profile, sign, Math.floor(s)) !== sideAt(profile, sign, Math.ceil(s));
   }
 
   // Height of the rendered face at distance d from the centre line, down one
@@ -937,6 +974,24 @@ const Terrain = (() => {
     });
   }
 
+  // The side at a segment that ends in a fall (right first), or 0 when
+  // neither does: where the drop-side dressing (forest, bushes, the start
+  // sign) goes. A mirrored cliff has its drop on the left.
+  function fallSignAt(profile, segIndex) {
+    for (const sign of [1, -1]) {
+      const { bands } = sideAt(profile, sign, segIndex);
+      if (bands[bands.length - 1].kind === 'fall') return sign;
+    }
+    return 0;
+  }
+
+  // The side the roadside rock clusters stand on: the left (the mountain side
+  // of the cliff legs, the run-off of the open legs), unless the left falls
+  function clutterSignAt(profile, segIndex) {
+    const { bands } = sideAt(profile, -1, segIndex);
+    return bands[bands.length - 1].kind === 'fall' ? 1 : -1;
+  }
+
   // Finite height where a fall ends: the reachable water's rest height, else
   // a fixed depth below the road. Nothing may fall without end.
   function restY(profile, side, roadY) {
@@ -976,6 +1031,8 @@ const Terrain = (() => {
     zoneAt,
     wallSign,
     wallSignsAt,
+    fallSignAt,
+    clutterSignAt,
     ceilingAt,
     setPieces,
     restY,

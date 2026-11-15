@@ -13,21 +13,41 @@ function straightRoad(length = 60, y = 10) {
 describe('Terrain module (pure)', () => {
     const Terrain = loadTerrain();
     const geo = { path: straightRoad(), roadWidth: 20, startSegment: 0, endSegment: 39 };
-    const groundAt = (lateral, exact = false) => Terrain.groundY(Terrain.forLeg(0), geo, lateral, 400, 0, geo.path.length - 1, exact);
+    const groundAt = (lateral, exact = false) => Terrain.groundY(Terrain.profiles.cliffLake, geo, lateral, 400, 0, geo.path.length - 1, exact);
 
-    test('leg table: only legs 1 and 5 are still cliffLake', () => {
+    test('leg table: leg 1 is open valley, leg 2 the mirrored cliff, and only leg 5 is still cliffLake', () => {
         expect(Terrain.LEG_PROFILES).toHaveLength(8);
         expect(Terrain.LEG_PROFILES.map(profile => profile.id)).toEqual([
-            'cliffLake', 'valleyFloor', 'coast', 'canyon', 'cliffLake', 'forest', 'forest', 'ridge'
+            'valleyFloor', 'cliffLakeMirrored', 'coast', 'canyon', 'cliffLake', 'forest', 'forest', 'ridge'
         ]);
+        expect(Terrain.LEG_PROFILES[0]).toBe(Terrain.profiles.valleyFloor);
+        expect(Terrain.LEG_PROFILES[1]).toBe(Terrain.profiles.cliffLakeMirrored);
         expect(Terrain.LEG_PROFILES[3]).toBe(Terrain.profiles.canyon);
         expect(Terrain.LEG_PROFILES[6]).toBe(Terrain.profiles.forestNight);
-        expect(Terrain.LEG_PROFILES.filter(profile => profile.id === 'cliffLake')).toHaveLength(2);
-        expect(Terrain.LEG_PROFILES[1]).toBe(Terrain.profiles.valleyFloor);
+        expect(Terrain.LEG_PROFILES.filter(profile => profile.id === 'cliffLake')).toHaveLength(1);
+        expect(Terrain.LEG_PROFILES[4]).toBe(Terrain.profiles.cliffLake);
         expect(Terrain.LEG_PROFILES[2]).toBe(Terrain.profiles.coast);
         expect(Terrain.LEG_PROFILES[5]).toBe(Terrain.profiles.forest);
         expect(Terrain.LEG_PROFILES[7]).toBe(Terrain.profiles.ridge);
-        expect(Terrain.forLeg(99)).toBe(Terrain.profiles.cliffLake);
+        expect(Terrain.forLeg(99)).toBe(Terrain.profiles.valleyFloor);
+    });
+
+    test('the mirrored cliff is cliffLake with its sides swapped, and reads the drawn triangles', () => {
+        const { cliffLake, cliffLakeMirrored } = Terrain.profiles;
+        expect(cliffLakeMirrored.left).toBe(cliffLake.right);
+        expect(cliffLakeMirrored.right).toBe(cliffLake.left);
+        expect(cliffLakeMirrored.floor).toBe(cliffLake.floor);
+        expect(cliffLakeMirrored.elevation).toBe(cliffLake.elevation);
+        // Only the frozen cliffLake keeps the column walk
+        expect(cliffLake.columnWalk).toBe(true);
+        expect(cliffLakeMirrored.columnWalk).toBeUndefined();
+        expect(Terrain.wallSign(cliffLakeMirrored)).toBe(1);
+        expect(Terrain.fallSignAt(cliffLakeMirrored, 100)).toBe(-1);
+        expect(Terrain.clutterSignAt(cliffLakeMirrored, 100)).toBe(1);
+        expect(Terrain.fallSignAt(cliffLake, 100)).toBe(1);
+        expect(Terrain.clutterSignAt(cliffLake, 100)).toBe(-1);
+        expect(Terrain.fallSignAt(Terrain.profiles.valleyFloor, 10)).toBe(0);
+        expect(Terrain.clutterSignAt(Terrain.profiles.valleyFloor, 10)).toBe(-1);
     });
 
     test('the road and its 2 m ledges sit at road height', () => {
@@ -45,14 +65,14 @@ describe('Terrain module (pure)', () => {
     });
 
     test('zones: the road, then each side\'s bands, with the edge where each band starts', () => {
-        const kindAt = lateral => Terrain.zoneAt(Terrain.forLeg(0), 5, lateral, 10).kind;
+        const kindAt = lateral => Terrain.zoneAt(Terrain.profiles.cliffLake, 5, lateral, 10).kind;
         expect([0, 5, 10, -10].map(kindAt)).toEqual(['road', 'road', 'road', 'road']);
         // Left: shoulder to 1 past the road edge, then a wall
         expect([-10.5, -11, -11.01, -30].map(kindAt)).toEqual(['shoulder', 'shoulder', 'wall', 'wall']);
         // Right: shoulder to 2 past the road edge, then a fall
         expect([10.5, 12, 12.01, 300].map(kindAt)).toEqual(['shoulder', 'shoulder', 'fall', 'fall']);
-        expect(Terrain.zoneAt(Terrain.forLeg(0), 5, -20, 10)).toMatchObject({ kind: 'wall', sign: -1, start: 11 });
-        expect(Terrain.zoneAt(Terrain.forLeg(0), 5, 20, 10)).toMatchObject({ kind: 'fall', sign: 1, start: 12 });
+        expect(Terrain.zoneAt(Terrain.profiles.cliffLake, 5, -20, 10)).toMatchObject({ kind: 'wall', sign: -1, start: 11 });
+        expect(Terrain.zoneAt(Terrain.profiles.cliffLake, 5, 20, 10)).toMatchObject({ kind: 'fall', sign: 1, start: 12 });
     });
 
     test('the side that ends in a wall is the one rocks come off', () => {
@@ -89,7 +109,7 @@ describe('Terrain module (pure)', () => {
     });
 
     test('an empty path answers with the floor', () => {
-        expect(Terrain.groundY(Terrain.forLeg(0), { path: [], roadWidth: 20 }, 0, 0, 0, -1, true)).toBe(-200);
+        expect(Terrain.groundY(Terrain.profiles.cliffLake, { path: [], roadWidth: 20 }, 0, 0, 0, -1, true)).toBe(-200);
     });
 
     test('a side hands rows out from its own description, whichever way it faces', () => {
@@ -128,8 +148,11 @@ describe('Environment reads the terrain profile', () => {
     };
     const firstVertex = mesh => Array.from(mesh.geometry.attributes.position.array.slice(0, 3)).map(v => Math.round(v * 1000) / 1000);
 
+    // Leg 1 is open valley now; the cliffLake values on leg 1's road are kept by building it with cliffLake
+    const cliffLeg = () => buildWith(game.Terrain.profiles.cliffLake);
+
     test('elevation: road height comes from the profile, unchanged', () => {
-        const { env } = buildEnvironment(game, 0);
+        const { env } = cliffLeg();
         expect(env.roadPath).toHaveLength(744);
         expect(env.roadPath[5].y).toBeCloseTo(32.543, 3);
         expect(env.roadPath[10].y).toBeCloseTo(33.9288, 4);
@@ -142,7 +165,7 @@ describe('Environment reads the terrain profile', () => {
     test('mirrored profile: heights and ribbon follow the profile, not the side sign', () => {
         const { left, right, ...rest } = game.Terrain.profiles.cliffLake;
         const mirrored = buildWith({ ...rest, left: right, right: left });
-        const normal = buildEnvironment(game, 0);
+        const normal = cliffLeg();
 
         expect(at(normal.env, 10, 20)).toBeCloseTo(22.7634, 4);
         expect(at(normal.env, 10, -20)).toBeCloseTo(64.676, 4);
@@ -167,7 +190,7 @@ describe('Environment reads the terrain profile', () => {
     });
 
     test('groundYAt reports the drawn face on both sides: the valley face and the mountain wall', () => {
-        const { env, scene } = buildEnvironment(game, 0);
+        const { env, scene } = cliffLeg();
         const ribbons = ribbonMeshes(env);
         ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
         scene.updateMatrixWorld(true);

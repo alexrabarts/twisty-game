@@ -1,6 +1,8 @@
-// Phase 4: the first legs with run-off ground (valley-run, storm-valley). The
+// The legs with open run-off ground: the valley (mountain-dawn, which took the
+// profile valley-run had in phase 4) and the forest (storm-valley). The
 // profiles, their drawn ribbons, the trees and roadworks plant that stand on
 // them, the gates that reach across them, the board ids, and the bike on them.
+// Valley-run is the mirrored cliff now, the walled leg these are set against.
 // Real modules on real three r150.
 import { jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
@@ -8,16 +10,18 @@ import { readFileSync } from 'node:fs';
 import { buildEnvironment, gameMethods, loadGame, loadScript, ribbonMeshes } from '../helpers/load-game.js';
 
 const DT = 1 / 60;
-const VALLEY = 1;
+const VALLEY = 0;
 const FOREST = 5;
-const DAWN = 0;
+const CLIFF = 1;
 
 // What each leg's course hashes to. A change to a road height, a band width, a
 // run-off rate or where trees stand changes lap times, so it must change this
-// value, and a changed value needs a new trackVersion (a new board). Legs 2, 3,
-// 4, 6, 7 and 8 are version 2; legs 1 and 5 are version 1 and must never move.
+// value, and a changed value needs a new trackVersion (a new board). Every leg
+// but high-pass is version 2; high-pass is version 1 and must never move. (Legs
+// 1, 2 and 4 changed again under version 2 on this branch: no version 2 board
+// had shipped to players yet.)
 const COURSE_DIGESTS = [
-    '3d45a50bb5fbede1', '846a661b635154fa', '1d8e018d4b1500c6', 'ae1a79fc32686238',
+    'c5bbfd9ceb5c34d0', '5b41d6a35ad33203', '1d8e018d4b1500c6', '88826e1280e63dbc',
     'b5649303e1d76374', '5abc36dddb5df4ec', '461f8fb9e4ed5ad6', 'cdd0b1b28f83f268'
 ];
 
@@ -121,7 +125,7 @@ describe('run-off profiles (pure)', () => {
             y.slice(1).forEach((value, n) => expect(Math.abs(value - y[n])).toBeLessThanOrEqual(0.5));
             expect(y.every(Number.isFinite)).toBe(true);
         });
-        expect(Terrain.elevation(Terrain.LEGS[VALLEY].profile, 70, 70, 149)).toBeCloseTo(30, 9);
+        expect(Terrain.elevation(Terrain.LEGS[VALLEY].profile, 0, 0, 69)).toBeCloseTo(30, 9);
         expect(Terrain.elevation(Terrain.LEGS[FOREST].profile, 414, 414, 509)).toBeCloseTo(34, 9);
     });
 
@@ -259,14 +263,15 @@ describe('the run-off legs built', () => {
                 const z = point.z - Math.sin(point.heading) * lateral * sign;
                 const hit = hitAt(x, z);
                 expect(hit).not.toBeNull();
-                expect(Math.abs(hit - at(env, segment, lateral * sign))).toBeLessThanOrEqual(0.10);
+                // An exact read is the drawn triangles themselves
+                expect(Math.abs(hit - at(env, segment, lateral * sign))).toBeLessThanOrEqual(5e-3);
                 checked++;
             }));
         });
         expect(checked).toBe(36);
     });
 
-    test('valley-run: a river 3 m below the road shows from lateral 37.5 to 48 on the right and nowhere else', () => {
+    test('mountain-dawn: a river 3 m below the road shows from lateral 37.5 to 48 on the right and nowhere else', () => {
         const { env, scene } = leg(VALLEY);
         const rivers = [];
         scene.traverse(object => { if (object.name === 'floor-river') rivers.push(object); });
@@ -293,7 +298,7 @@ describe('the run-off legs built', () => {
         });
     });
 
-    test('valley-run: meadow with sparse trees on both sides, none in the river, none nearer than 16', () => {
+    test('mountain-dawn: meadow with sparse trees on both sides, none in the river, none nearer than 16', () => {
         const { env, scene } = leg(VALLEY);
         const laterals = treeLaterals(env, scene);
         const left = laterals.filter(l => l < 0);
@@ -381,8 +386,8 @@ describe('the run-off legs built', () => {
         env.roadworkObstacles.forEach(o => expect(Math.abs(lateralOf(env, o.position.x, o.position.z))).toBeGreaterThan(5.5));
     });
 
-    test('mountain-dawn: nothing solid, the plant is not built up the wall, only the containers on the road are obstacles', () => {
-        const { env } = leg(DAWN);
+    test('valley-run (the mirrored cliff): nothing solid, no plant on the drop or up the wall, only the containers on the road are obstacles', () => {
+        const { env } = leg(CLIFF);
         expect(env.boulders.filter(b => b.solid)).toHaveLength(0);
         expect(env.roadworkObstacles.map(o => o.type).sort()).toEqual(['container', 'container']);
         expect(env.groundedObjects.filter(({ label }) => /construction bulldozer|construction barrier|work truck/.test(label))).toEqual([]);
@@ -425,7 +430,7 @@ describe('the run-off legs built', () => {
         });
 
         test('the finish is one gate record, and the loose finish fields are gone', () => {
-            [DAWN, VALLEY, FOREST].forEach(index => {
+            [CLIFF, VALLEY, FOREST].forEach(index => {
                 const { env } = leg(index);
                 expect(env.finishGate).toMatchObject({ kind: 'finish', segmentIndex: env.endSegment + 5 });
                 expect(env.finishLinePosition).toBeUndefined();
@@ -438,7 +443,7 @@ describe('the run-off legs built', () => {
         test('over run-off a gate reaches the rideable limit plus 2; beside a wall or fall only the ledge', () => {
             expect([leg(VALLEY).env.finishGate.left, leg(VALLEY).env.finishGate.right]).toEqual([47, 47]);
             expect([leg(FOREST).env.finishGate.left, leg(FOREST).env.finishGate.right]).toEqual([35, 35]);
-            expect([leg(DAWN).env.finishGate.left, leg(DAWN).env.finishGate.right]).toEqual([12, 12]);
+            expect([leg(CLIFF).env.finishGate.left, leg(CLIFF).env.finishGate.right]).toEqual([12, 12]);
             leg(VALLEY).env.checkpoints.forEach(cp => expect([cp.left, cp.right]).toEqual([47, 47]));
         });
 
@@ -461,7 +466,7 @@ describe('the run-off legs built', () => {
         });
 
         test('beside a wall or fall the gate is the road and its ledges, as it was', () => {
-            const { env } = leg(DAWN);
+            const { env } = leg(CLIFF);
             const finish = env.finishGate;
             expect(inGate(finish, onGate(finish, 0, 11.9))).toBe(true);
             expect(inGate(finish, onGate(finish, 0, -11.9))).toBe(true);
@@ -480,7 +485,7 @@ describe('the run-off legs built', () => {
         test('no gate has another stretch of road inside its band', () => {
             // The widest band is 47 each side; the nearest foreign road centre must be
             // further than that plus the 5 m band
-            [DAWN, VALLEY, FOREST].forEach(index => {
+            [CLIFF, VALLEY, FOREST].forEach(index => {
                 const { env } = leg(index);
                 [env.finishGate, ...env.checkpoints].forEach(gate => {
                     for (let i = 0; i < env.roadPath.length; i++) {
@@ -501,7 +506,7 @@ describe('the run-off legs built', () => {
             // Six gates, a post each side
             expect(posts(VALLEY)).toHaveLength(12);
             expect(posts(FOREST)).toHaveLength(12);
-            expect(posts(DAWN)).toHaveLength(0);
+            expect(posts(CLIFF)).toHaveLength(0);
         });
     });
 });
@@ -515,7 +520,7 @@ describe('board ids and best-time keys', () => {
     test('only the changed legs carry a version; progression keeps plain ids', () => {
         const legs = new game.TourSystem().legs;
         expect(legs.map(l => game.TourSystem.boardId(l))).toEqual([
-            'mountain-dawn', 'valley-run-v2', 'coastal-descent-v2', 'foggy-gorge-v2',
+            'mountain-dawn-v2', 'valley-run-v2', 'coastal-descent-v2', 'foggy-gorge-v2',
             'high-pass', 'storm-valley-v2', 'night-ride-v2', 'winter-pass-v2'
         ]);
         expect(legs.map(l => l.id)).toEqual([
@@ -535,7 +540,8 @@ describe('board ids and best-time keys', () => {
         const { bestTimeKey } = gameMethods(['bestTimeKey'], {}, { TourSystem: game.TourSystem });
         expect(bestTimeKey({ id: 'valley-run' })).toBe('motorcycleBestTime_valley-run-v2');
         expect(bestTimeKey('storm-valley')).toBe('motorcycleBestTime_storm-valley-v2');
-        expect(bestTimeKey({ id: 'mountain-dawn' })).toBe('motorcycleBestTime_mountain-dawn');
+        expect(bestTimeKey({ id: 'mountain-dawn' })).toBe('motorcycleBestTime_mountain-dawn-v2');
+        expect(bestTimeKey({ id: 'high-pass' })).toBe('motorcycleBestTime_high-pass');
     });
 
     test('no site in main.js builds a board id or best-time key from the plain leg id', () => {
@@ -553,10 +559,12 @@ describe('board ids and best-time keys', () => {
 
     test('the menu preview camera asks the leg how far out to stand', () => {
         const forest = game.Terrain.legConfig('storm-valley').preview;
-        const meadow = game.Terrain.legConfig('valley-run').preview;
+        const meadow = game.Terrain.legConfig('mountain-dawn').preview;
         expect(forest.radius).toBeLessThan(13);
         expect(meadow.radius).toBeGreaterThan(16);
-        expect(game.Terrain.legConfig('mountain-dawn').preview).toBeUndefined();
+        // The mirrored cliff looks back from over the lake, on the left
+        expect(game.Terrain.legConfig('valley-run').preview).toEqual({ radius: 30, height: 9, side: -1 });
+        expect(game.Terrain.legConfig('high-pass').preview).toBeUndefined();
     });
 });
 
@@ -572,7 +580,9 @@ describe('the bike on the run-off legs', () => {
         ({ env, scene } = buildEnvironment(game, VALLEY));
     });
 
-    const SEGMENT = 75;
+    // Five segments into the leg, on its first straight: the same place on the
+    // valley profile as segment 75 was when valley-run had it
+    const SEGMENT = 5;
     const CRASHES = /CRASHED|FALLING/;
 
     function place(segment, lateral, speed) {

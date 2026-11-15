@@ -2,8 +2,9 @@
 // work. Each leg is built through the real Environment constructor on real
 // three r150 and compared with tests/golden/terrain-baseline.json, which
 // tools/terrain-check.mjs record-jest captured from untouched source. The one
-// declared differences are the decals (D5) and, on the two cliff legs that are
-// still bound, the exact left wall (D6).
+// declared differences are the decals (D5) and, on high-pass, the one cliff leg
+// still bound, the exact left wall (D6). Mountain-dawn was bound too until it
+// became the open valley (trackVersion 2); its bindings moved to high-pass.
 import { readFileSync } from 'fs';
 import { D6_CLASSES, LATERALS, buildEnvironment, captureLeg, fingerprints, groundedRecords, loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
 
@@ -29,15 +30,15 @@ describe('terrain equivalence with the phase 0 golden', () => {
     });
 
     // valley-run and storm-valley changed profile and road height in phase 4,
-    // coastal-descent and winter-pass in phase 5, and foggy-gorge and night-ride
-    // in phase 6, so the golden no longer describes them; the two cliff legs are
-    // still bound by it (high-pass keeps its hairpins, its heights and its
-    // unversioned board)
-    const CHANGED = ['valley-run', 'storm-valley', 'coastal-descent', 'winter-pass', 'foggy-gorge', 'night-ride'];
+    // coastal-descent and winter-pass in phase 5, foggy-gorge and night-ride in
+    // phase 6, and mountain-dawn (now the open valley) in the follow-up, so the
+    // golden no longer describes them; high-pass is still bound by it (it keeps
+    // its hairpins, its heights and its unversioned board)
+    const CHANGED = ['mountain-dawn', 'valley-run', 'storm-valley', 'coastal-descent', 'winter-pass', 'foggy-gorge', 'night-ride'];
     const BOUND = LEG_IDS.map((id, index) => [id, index]).filter(([id]) => !CHANGED.includes(id));
 
-    test('exactly the six changed legs are released from the golden', () => {
-        expect(BOUND.map(([, index]) => index)).toEqual([0, 4]);
+    test('exactly the seven changed legs are released from the golden', () => {
+        expect(BOUND.map(([, index]) => index)).toEqual([4]);
     });
 
     test.each(CHANGED.map(id => [id, LEG_IDS.indexOf(id)]))('%s no longer builds to the golden', (id, index) => {
@@ -69,11 +70,7 @@ describe('terrain equivalence with the phase 0 golden', () => {
         expect(captured.fingerprints.noDecal.hash).not.toBe(record.fingerprints.noDecal.hash);
     }, 30000);
 
-    test('stable: nothing D6 does not touch has moved on the cliff legs', () => {
-        // Leg 1: the stable hash is the golden's
-        const dawn = captureLeg(game, 0);
-        expect(dawn.fingerprints.stable).toEqual(golden.legs[0].fingerprints.stable);
-
+    test('stable: nothing D6 does not touch has moved on high-pass', () => {
         // Leg 5: each of the 36 hairpin barriers carries three stripe meshes
         // (BoxGeometry 0.5 x 1.2 x 0.51). They were loose scene meshes in the
         // golden and are children of their barrier now, so they ride with it and
@@ -162,7 +159,7 @@ describe('terrain equivalence with the phase 0 golden', () => {
     test.each(BOUND)('%s: the ground grid is the golden\'s beside the road and the ledge, and the wall below it is what is drawn', (id, index) => {
         const captured = captureLeg(game, index);
         const grid = golden.legs[index].groundGrid;
-        const halfRoad = index === 0 ? 10 : 8;
+        const halfRoad = 8;
         let changed = 0;
         captured.groundGrid.forEach((row, r) => {
             row.slice(1).forEach((y, k) => {
@@ -180,32 +177,38 @@ describe('terrain equivalence with the phase 0 golden', () => {
             const point = env.roadPath[segment];
             return env.groundYAt(point.x + Math.cos(point.heading) * lateral, point.z - Math.sin(point.heading) * lateral);
         };
-        const dawn = buildEnvironment(game, 0).env;
-        expect(dawn.roadPath[10].y).toBeCloseTo(33.9288, 4);
-        // Beside the road, the ledge and the valley: the golden's values. On the wall (-13 and beyond) the
-        // drawn wall (declared delta D6); the golden's were 35.5288, 46.7288 and 73.9288 on the plain slope.
-        // Wall heights are capped at the wall's full height above the road.
-        const dawnGrid = { '-40': 91.928, '-20': 64.676, '-13': 43.4586, 13: 32.5331, 20: 22.7634, 34: 4.8271, 40: -2.4664, 80: -56.1025, 200: -200 };
-        Object.entries(dawnGrid).forEach(([lateral, y]) => expect(at(dawn, 10, Number(lateral))).toBeCloseTo(y, 4));
-
+        // High-pass: beside the road, the ledge and the valley the golden's values; on the wall the drawn wall (D6)
         const pass = buildEnvironment(game, 4).env;
         expect(pass.roadPath[332].y).toBeCloseTo(27.6484, 4);
         const passGrid = { '-9.5': 27.6484, '-11.5': 32.9343, '-20': 44.2557, 11.5: 25.5521, 20: 13.7306, 80: -64.6008 };
         Object.entries(passGrid).forEach(([lateral, y]) => expect(at(pass, 332, Number(lateral))).toBeCloseTo(y, 4));
     });
 
+    // A changed leg asserts what it now is, not only that it differs
+    test.each([
+        ['mountain-dawn', 0, 'valleyFloor', 'floor-river', ['runoff', 'wall'], ['runoff', 'wall']],
+        ['valley-run', 1, 'cliffLakeMirrored', 'floor-lake', ['shoulder', 'fall'], ['shoulder', 'wall']],
+        ['foggy-gorge', 3, 'canyon', 'floor-lake', ['shoulder', 'wall'], ['shoulder', 'wall']]
+    ])('%s is what the follow-up made it: profile, floor and band kinds', (id, index, profile, floor, left, right) => {
+        const { env, scene } = buildEnvironment(game, index);
+        expect(env.terrain.id).toBe(profile);
+        const floors = [];
+        scene.traverse(object => { if (object.userData && object.userData.part === 'floor') floors.push(object.name); });
+        expect(floors).toEqual([floor]);
+        expect(env.terrain.left.bands.map(band => band.kind)).toEqual(left);
+        expect(env.terrain.right.bands.map(band => band.kind)).toEqual(right);
+    }, 30000);
+
     test('a build is repeatable, so a changed hash is a changed world', () => {
-        const first = buildEnvironment(game, 0);
-        const second = buildEnvironment(game, 0);
+        const first = buildEnvironment(game, 4);
+        const second = buildEnvironment(game, 4);
         expect(fingerprints(second.env, second.scene)).toEqual(fingerprints(first.env, first.scene));
     });
 
     test('every fingerprint mode reacts to a change of terrain', () => {
-        const { env, scene } = buildEnvironment(game, 0);
+        const { env, scene } = buildEnvironment(game, 4);
         const clean = fingerprints(env, scene);
-        const ribbon = scene.children
-            .flatMap(child => [child, ...child.children])
-            .find(object => object.isMesh && object.geometry.attributes.color && object.geometry.attributes.position.count === 12960);
+        const [ribbon] = ribbonMeshes(env);
         ribbon.geometry.attributes.position.array[1] += 0.5;
         const moved = fingerprints(env, scene);
         Object.keys(clean).forEach(mode => expect(moved[mode].hash).not.toBe(clean[mode].hash));
