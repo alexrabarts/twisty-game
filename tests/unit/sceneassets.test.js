@@ -1,0 +1,175 @@
+// The modelled scenery of foggy-gorge (js/sceneassets.js, assets/gorge, built
+// by tools/blender): the committed files read as the reader expects, and
+// dressing a real gorge build swaps rocks, portals and the rock face's
+// texture without moving the ground, the physics or any solid obstacle.
+// Real modules on real three r150; fetch reads the files from disk.
+import { readFileSync, statSync } from 'node:fs';
+import { Blob } from 'node:buffer';
+import { TextDecoder } from 'node:util';
+import { canvasStub, legs, loadScript, realThree } from '../helpers/load-game.js';
+
+const root = new URL('../../', import.meta.url);
+const GORGE = 3;
+const BUDGET = { meshes: 800, triangles: 450000, instances: 1400, bytes: 3 * 1024 * 1024 };
+
+function loadWithAssets({ failing = [] } = {}) {
+    const THREE = realThree();
+    const files = ['terrain.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js'];
+    const source = files.map(loadScript).join('\n;\n');
+    const log = [];
+    const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };
+    const fetch = async url => {
+        if (failing.some(part => url.includes(part))) return { ok: false, status: 404 };
+        const bytes = readFileSync(new URL(url, root));
+        return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+    };
+    // No decoder in node: an image is only carried to a texture here
+    const createImageBitmap = async blob => ({ width: 1, height: 1, bytes: blob.size });
+    const factory = new Function(
+        'THREE', 'document', 'localStorage', 'console', 'fetch', 'createImageBitmap', 'Blob', 'TextDecoder', 'performance',
+        `${source}\nreturn { Environment, TourSystem, Terrain, SceneAssets };`
+    );
+    const game = factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, createImageBitmap, Blob, TextDecoder, performance);
+    return { THREE, log, ...game };
+}
+
+function build(game, legIndex) {
+    const leg = legs(game)[legIndex];
+    const scene = new game.THREE.Scene();
+    const env = new game.Environment(scene, leg.startSegment, leg.endSegment, legIndex);
+    scene.updateMatrixWorld(true);
+    return env;
+}
+
+// As the budget probe of tools/terrain-check.mjs counts them
+function counts(scene) {
+    let meshes = 0;
+    let triangles = 0;
+    let instances = 0;
+    scene.traverse(o => {
+        if (!o.isMesh) return;
+        meshes++;
+        const index = o.geometry.index;
+        triangles += ((index ? index.count : o.geometry.attributes.position.count) / 3) * (o.isInstancedMesh ? o.count : 1);
+        if (o.isInstancedMesh) instances += o.count;
+    });
+    return { meshes, triangles: Math.round(triangles), instances };
+}
+
+const tagged = (scene, kinds) => {
+    const found = [];
+    scene.traverse(o => { if (o.isMesh && o.userData.dressing && kinds.includes(o.userData.dressing.kind)) found.push(o); });
+    return found;
+};
+
+describe('foggy-gorge modelled scenery', () => {
+    const game = loadWithAssets();
+    const env = build(game, GORGE);
+    const rocks = tagged(env.scene, ['rock', 'debris']).length;
+    const portals = tagged(env.scene, ['portal']).length;
+    const boulders = JSON.stringify(env.boulders);
+    const ribbons = [];
+    env.scene.traverse(o => { if (o.isMesh && o.userData.part === 'ground' && o.material.map && o.material.vertexColors) ribbons.push(o); });
+    const ribbonPositions = ribbons.map(r => Float32Array.from(r.geometry.attributes.position.array));
+    const ground = env.roadPath.slice(env.startSegment, env.endSegment + 1).filter((_, i) => i % 5 === 0)
+        .flatMap(p => [-30, -12, 0, 12, 30].map(l => env.groundYAt(p.x + Math.cos(p.heading) * l, p.z - Math.sin(p.heading) * l)));
+    let result;
+
+    beforeAll(async () => {
+        result = await env.dressing;
+    });
+
+    test('the leg asks for its files, and they fit the download budget', () => {
+        const files = game.SceneAssets.files(GORGE);
+        expect(files).toHaveLength(4);
+        const total = files.reduce((sum, file) => sum + statSync(new URL(file, root)).size, 0);
+        expect(total).toBeLessThanOrEqual(BUDGET.bytes);
+        expect(result.bytes).toBe(total);
+    });
+
+    test('every tagged rock and portal is swapped, and the rock face retextured', () => {
+        expect(rocks).toBeGreaterThan(100);
+        expect(portals).toBe(2);
+        expect(result.rocks.rocks).toBe(rocks);
+        expect(result.portals.portals).toBe(4);
+        expect(result.rockFace.ribbons).toBe(2);
+        expect(tagged(env.scene, ['rock', 'debris', 'portal'])).toHaveLength(0);
+        ribbons.forEach(r => {
+            expect(r.material.normalMap).toBeTruthy();
+            expect(r.material.map.image.bytes).toBeGreaterThan(0);
+        });
+    });
+
+    test('nothing the bike or the ground model reads has moved', () => {
+        expect(JSON.stringify(env.boulders)).toBe(boulders);
+        ribbons.forEach((r, n) => expect(r.geometry.attributes.position.array).toEqual(ribbonPositions[n]));
+        const after = env.roadPath.slice(env.startSegment, env.endSegment + 1).filter((_, i) => i % 5 === 0)
+            .flatMap(p => [-30, -12, 0, 12, 30].map(l => env.groundYAt(p.x + Math.cos(p.heading) * l, p.z - Math.sin(p.heading) * l)));
+        expect(after).toEqual(ground);
+    });
+
+    test('no modelled rock floats', () => {
+        expect(result.violations.filter(v => v.kind === 'floating')).toEqual([]);
+        expect(game.log.some(line => line.includes('FLOATING'))).toBe(false);
+    });
+
+    test('the dressed leg stays within the per-leg budget', () => {
+        const after = counts(env.scene);
+        expect(after.meshes).toBeLessThanOrEqual(BUDGET.meshes);
+        expect(after.triangles).toBeLessThanOrEqual(BUDGET.triangles);
+        expect(after.instances).toBeLessThanOrEqual(BUDGET.instances);
+    });
+
+    test('each instanced group\'s bounds hold all its rocks, so culling never drops a visible one', () => {
+        const groups = [];
+        env.scene.traverse(o => { if (o.isInstancedMesh && o.userData.modelled === 'rocks') groups.push(o); });
+        expect(groups.length).toBe(result.rocks.meshes);
+        const m = new game.THREE.Matrix4();
+        const centre = new game.THREE.Vector3();
+        groups.forEach(group => {
+            const sphere = group.geometry.boundingSphere;
+            for (let i = 0; i < group.count; i++) {
+                group.getMatrixAt(i, m);
+                centre.setFromMatrixPosition(m);
+                expect(centre.distanceTo(sphere.center)).toBeLessThanOrEqual(sphere.radius);
+            }
+        });
+    });
+
+    test('a wing wall stands only where the side beyond the portal is a rock wall', () => {
+        const frames = [];
+        env.scene.traverse(o => { if (o.name === 'modelled-portals') frames.push(...o.children); });
+        expect(frames).toHaveLength(4);
+        // Tunnel 1: walls both sides at its entry, a drop on the right at its exit; tunnel 2: the reverse at its exit
+        expect(frames.map(frame => frame.children.length - 2)).toEqual([2, 1, 1, 1]);
+    });
+});
+
+describe('where the modelled scenery does not apply', () => {
+    test('a leg without assets is not dressed', () => {
+        const game = loadWithAssets();
+        expect(build(game, 4).dressing).toBeNull();
+    });
+
+    test('a file that fails leaves its part procedural and the others dressed', async () => {
+        const game = loadWithAssets({ failing: ['rocks.glb'] });
+        const env = build(game, GORGE);
+        const rocks = tagged(env.scene, ['rock', 'debris']).length;
+        const result = await env.dressing;
+        expect(result.rocks.error).toMatch(/404/);
+        expect(tagged(env.scene, ['rock', 'debris'])).toHaveLength(rocks);
+        expect(result.portals.portals).toBe(4);
+        expect(game.log.some(line => line.includes('kept its procedural meshes'))).toBe(true);
+    });
+
+    test('a leg torn down before its files arrive gets nothing added', async () => {
+        const game = loadWithAssets();
+        const env = build(game, GORGE);
+        const children = [...env.scene.children];
+        children.forEach(child => env.scene.remove(child));
+        const result = await env.dressing;
+        expect(result.rocks.rocks).toBe(0);
+        expect(result.portals.portals).toBe(0);
+        expect(env.scene.children).toHaveLength(0);
+    });
+});
