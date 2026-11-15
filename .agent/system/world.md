@@ -13,6 +13,8 @@ Every leg has a terrain profile: what lies on each side of the road (a wall, a f
 | 7 night-ride | `forestNight` | run-off forest | run-off forest | `night-ride-v2` |
 | 8 winter-pass | `ridge` | snowfield, drop | snowfield, drop | `winter-pass-v2` |
 
+Left and right in this table, and everywhere in the code, are the code's sides: positive lateral `(cos h, -sin h)`. A chase camera looks along the heading, so the code's right is on the left of the screen. On screen high-pass has its wall on the right and the lake on the left; valley-run (mirrored) has its wall on the left and the lake on the right. The vehicle's crash lines (`Hit the left wall`) use the code's sides too.
+
 High-pass is the one cliff leg bound to the frozen golden (see "Golden bindings").
 
 ## One terrain model
