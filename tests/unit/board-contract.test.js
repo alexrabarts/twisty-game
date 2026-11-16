@@ -42,7 +42,9 @@ describe('the server table and the game', () => {
     });
 
     test('every leg of the shared course has 5 gates, and the server expects 5', () => {
-        legs(game).forEach((leg, index) => {
+        const shared = legs(game).map((leg, index) => [leg, index]).filter(([leg]) => !game.Course.forLeg(leg.id));
+        expect(shared).toHaveLength(7);
+        shared.forEach(([leg, index]) => {
             const { env } = quiet(() => buildEnvironment(game, index));
             const boardId = game.TourSystem.boardId(leg);
             expect(boards.ruleFor(boardId).gates).toBe(env.checkpoints.length);

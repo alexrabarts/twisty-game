@@ -4,7 +4,7 @@ Every leg has a terrain profile: what lies on each side of the road (a wall, a f
 
 | Leg | Profile | Left | Right | Board |
 |---|---|---|---|---|
-| 1 mountain-dawn | `valleyFloor` | run-off meadow, closing to foothills | run-off meadow, river, closing to foothills | `mountain-dawn-v2` |
+| 1 mountain-dawn | a course of six parts (see "Long legs") | meadow, wood, valley, village, cliff wall, snow ridge | meadow and river, wood and bridge, valley, village, drop to the lake, snow ridge | `mountain-dawn-v3` |
 | 2 valley-run | `cliffLakeMirrored` | drop to the lake | wall | `valley-run-v2` |
 | 3 coastal-descent | `coast` | wall | sea cliff, then beach | `coastal-descent-v2` |
 | 4 foggy-gorge | `canyon` | wall; drop after the second tunnel | wall; drop between the tunnels | `foggy-gorge-v2` |
@@ -174,9 +174,38 @@ Grip: `Terrain.LEGS[i].grip` (default 1) is the road's own grip on a leg, and `W
 
 `js/terrain.js` holds the ground model and the profiles. `js/environment.js` still builds every mesh: the ribbon, road, walls, forest, set pieces, roadworks plant and gates. A new profile should add its builders next to the existing ones by profile, and keep ground, height and zone rules in `terrain.js`, so `environment.js` does not grow with each leg.
 
+## Long legs: courses, parts and sections
+
+A converted leg has an entry in `Course.LEGS` (js/course.js) and its own road: local segments `0..segments - 1` and a 30-segment straight tail. `Terrain.adopt` makes it the leg's table row (`trackVersion` + 1, so a new board). Every other leg still cuts its range from the shared course, byte for byte as before; the pins of `tests/unit/course-path.test.js`, `scene-pin.test.js`, `cones.test.js`, `traffic.test.js` and the `scene` probe hold the legs not yet converted. A conversion removes its own leg's pins.
+
+A course is a list of parts (`Terrain.partsProfile`): each part has its own ground (sides), floor, dressing, look, time of day, weather and one landmark. Neighbouring heightfield parts `morph` over 10 to 30 segments; other joins `cut` on a straight. `Terrain.validateCourse` holds the 12 rules.
+
+### Sections and the drawn window
+
+- A converted leg is built in sections of 25 segments (`SECTION`, `env.sections`); the last also builds the run-off. What is built once (`env.fixed`): the path, the plane floors, the start and finish, the gates, the roadworks, the hairpin signs, the set pieces, the landmarks and part scenery.
+- Range builders read their range from `buildRange()`: on a shared-course leg the whole leg as before, on a converted leg the current piece (a section's share of one part). While a step runs, `this.scene` is the step's group and `this.config` is the part's row (`partConfig`). Each step has its own seeded stream (`sectionSeed`), so a section is the same in any build order (`tests/unit/sections.test.js`).
+- Ribbons number their columns leg-wide and, on a converted leg, hash their vertex grey (`vertexHash`) and take the grass of the road position (`Terrain.lookAt`), so neighbouring sections share a seam column with equal position, colour and normal. The ground model reads no mesh, so a disposed section reads the same ground.
+- The window: one section behind the bike, its own, two ahead; the next one builds hidden. `env.update(segment, 4, lastGateSegment)` runs each frame (`Game.SECTION_BUDGET_MS`); a section first drawn appears one step a frame. Sections below `min(k - 1, last gate's section)` are disposed, so a restart finds its gate's section built (`ensureWindow(..., { sync: true })`).
+- At the leg start `Game.prewarmCourse` builds one sample section of every part, shows everything, compiles every shader and puts the samples away. Without it a part's first ground, water or weather compiled its shader mid-ride (up to 1.9 s on Apple M5).
+- A converted leg shares one rock texture and one water material (`sharedRockTexture`, `sharedWater`); its face rocks are icosahedra of detail 1, not 3; a part may set its slope forest (`dressing.forest.slope`) and the course its cone spacing (`cones.straightEvery`). These keep every window inside the budgets (800 meshes, 450000 triangles, 1400 instances, 1500 solid boulders, 12 MB).
+- Cones, cars and the crew follow the window (`Cones.createSectionCones`, `Traffic.followWindow`): a car spawns at the window's far end each `traffic.oncomingEvery` segments; rocks fall only in drawn sections of parts with a rate.
+
+### Leg 1, Mountain Dawn (700 segments, 14 km, `mountain-dawn-v3`)
+
+| Part | Segments | Ground | Light | Landmark |
+|---|---|---|---|---|
+| meadow | 0-120 | open valley, river right | dawn, ground mist | farmstead |
+| wood | 120-250 | broadleaf wood close to the road (morph) | dawn | stone bridge over a gully (`bridge` set piece, `assets/bridge/stone.glb`) |
+| valley | 250-400 | valley closing in (morph) | dawn | mountains rising ahead |
+| village | 400-470 | closed valley, village 418-425 | golden | the village (procedural: the modelled kit is 5.9 MB, over the window budget) |
+| lake | 470-620 | cliff road, wall left, drop to the lake right (cut) | golden, light shafts | twin snow peaks across the lake |
+| pass | 620-700 | snow ridge, crest 165 m at 660 (cut) | golden | summit cairn; pass peaks, snow poles, cairns, summit sign |
+
+Road height 12 to 166 m, largest step 0.57 m, gates every 50 segments and the last at 698 (finish line 704). The `bridge` span (`Terrain`'s `bridgeSide`) drops 8.6 m to the river bed beside a parapet that crashes 0.9 m past the road edge. Proofs: `tests/unit/course-mountain-dawn.test.js`, and `node tools/terrain-check.mjs course,window,stream,preview,finish --legs mountain-dawn` (`--fixture` runs them on the 150-segment test course; `course --mutate flat-parts` must fail).
+
 ## Only the active leg exists
 
-`roadPath` holds all 744 segments. Geometry is built for `startSegment` to `endSegment + 20` only. Anything placed or spawned outside that range hangs in empty space. Traffic uses `legSegmentRange()`; cones and checkpoints read `startSegment` / `endSegment`.
+`roadPath` holds all 744 segments on a shared-course leg (a converted leg: its own `segments + 30`). Geometry is built for `startSegment` to `endSegment + 20` only. Anything placed or spawned outside that range hangs in empty space. Traffic uses `legSegmentRange()`; cones and checkpoints read `startSegment` / `endSegment`.
 
 Offsets from the road must use the road's perpendicular: `(cos(heading), -sin(heading))`. A world-X offset is only correct where the road heads north.
 

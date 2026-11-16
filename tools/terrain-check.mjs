@@ -47,7 +47,6 @@ const LEG_BUDGET = { meshes: 800, triangles: 450000, instances: 1400 };
 // page with modelled assets (the `scene` probe). A converted leg's row is removed in
 // its own commit.
 const SCENE_PINS = {
-    'mountain-dawn': ['4c54735d9fd0efb3', 625, 657, 6, true],
     'valley-run': ['f542b41ad8fe87d2', 836, 639, 10, true],
     'coastal-descent': ['5ff10ec2ea619c7d', 747, 125, 8, true],
     'foggy-gorge': ['230562653b2ff748', 679, 167, 11, true],
@@ -72,7 +71,7 @@ const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
 // The shortcuts control builds its own road and reads no leg, so it runs once, filed under the first leg asked for
 // The long-leg probes need a converted leg: leg 1 (the fixture under --fixture) unless --legs names others
-const LONG_PROBES = ['course', 'window', 'stream', 'preview', 'finish'];
+const LONG_PROBES = ['course', 'window', 'stream', 'preview', 'finish', 'hudgates'];
 const probeLegIds = name => (LONG_PROBES.includes(name) && !option('legs') ? ['mountain-dawn'] : name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : (name === 'atmo' || name === 'atmoControl') && !option('legs') ? ['mountain-dawn'] : legIds);
 const jobs = Number(option('jobs') || 3);
 
@@ -356,7 +355,7 @@ function installProbe(d6Sources, latSet) {
             fingerprints: await P.fingerprints(env, scene),
             decalCounts: P.decals(env).map(list => list.length),
             counts: { meshes: hashes.length, triangles: Math.round(triangles), instances: instanceCount, grounded: env.groundedObjects.length, d6: env.groundedObjects.filter(g => d6.some(r => r.test(g.label))).length },
-            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, village: assets.village, ...(assets.trees && { trees: assets.trees }), floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
+            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, village: assets.village, ...(assets.bridge && { bridge: assets.bridge }), ...(assets.files && { files: assets.files }), ...(assets.trees && { trees: assets.trees }), floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
             buildMs: round(buildMs, 1)
         };
     };
@@ -672,8 +671,12 @@ function installProbe(d6Sources, latSet) {
         };
         const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
         const all = [];
-        const points = [0.1, 0.3, 0.5, 0.7, 0.9].map(f => {
-            const segment = Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment));
+        // A converted leg: each part's middle and each boundary between parts
+        const parts = game.environment.sections ? game.environment.terrain.parts : null;
+        const stations = parts
+            ? parts.flatMap((part, n) => [Math.floor((part.from + (n === parts.length - 1 ? leg.endSegment : part.to)) / 2), ...(n ? [part.from] : [])]).sort((a, b) => a - b)
+            : [0.1, 0.3, 0.5, 0.7, 0.9].map(f => Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment)));
+        const points = stations.map(segment => {
             twistyDev.teleport(segment);
             twistyDev.view(0, 3, 12, 40);
             for (let i = 0; i < 3; i++) frame();
@@ -681,7 +684,22 @@ function installProbe(d6Sources, latSet) {
             all.push(...times);
             return { segment, ms: round(median(times), 10) };
         });
-        return { ms: round(median(all), 10), points, dressed: !!assets, bike: game.vehicle.modelled ? 'modelled' : 'procedural' };
+        let moving = null;
+        if (parts) {
+            // 600 rendered frames ridden across the first boundary, the world built as it goes
+            const from = Math.max(0, parts[1].from - 12);
+            twistyDev.teleport(from);
+            twistyDev.autopilot({ speed: 30 });
+            game.vehicle.speed = 30;
+            game.cameraIntroActive = false;
+            const frames = [];
+            for (let n = 0; n < 600 && !game.vehicle.crashed; n++) {
+                twistyDev.step(1);
+                frames.push(frame());
+            }
+            moving = { from, to: Math.floor(game.vehicle.currentRoadSegment), frames: frames.length, worstMs: round(Math.max(...frames.slice(5)), 10), medianMs: round(median(frames), 10), crashed: game.vehicle.crashed };
+        }
+        return { ms: round(median(all), 10), points, moving, dressed: !!assets, bike: game.vehicle.modelled ? 'modelled' : 'procedural' };
     };
 
     // The whole scene of the page, with the leg's modelled dressing in place, as one
@@ -1072,7 +1090,7 @@ function installProbe(d6Sources, latSet) {
     const segmentOf = (env, x, z) => Terrain.locate(env.roadPath, x, z, 0, env.roadPath.length - 1, {}).index;
     const inSections = (sections, s) => sections.some(section => s >= section.from && s < section.to);
     // Bytes of every geometry the leg keeps: its own group and its built sections
-    const retainedBytes = env => {
+    const retainedBytes = (env, which = 'all') => {
         const seen = new Set();
         let total = 0;
         const add = o => {
@@ -1082,8 +1100,8 @@ function installProbe(d6Sources, latSet) {
             if (o.geometry.index) total += o.geometry.index.array.byteLength;
             if (o.isInstancedMesh) total += o.instanceMatrix.array.byteLength;
         };
-        env.fixed.traverse(add);
-        env.sections.forEach(section => section.group && section.group.traverse(add));
+        if (which !== 'sections') env.fixed.traverse(add);
+        if (which !== 'fixed') env.sections.forEach(section => section.group && section.group.traverse(add));
         return total;
     };
     const lastGateBefore = (env, s) => {
@@ -1123,13 +1141,15 @@ function installProbe(d6Sources, latSet) {
                 ...P.countDrawn(),
                 solidBoulders: env.boulders.filter(b => b.solid).length,
                 retainedMB: round(retainedBytes(env) / 1048576, 100),
+                sectionsMB: round(retainedBytes(env, 'sections') / 1048576, 100),
+                legMB: round(retainedBytes(env, 'fixed') / 1048576, 100),
                 cones: cones.length,
                 conesOutsideRetained: cones.filter(cone => !inSections(built, segmentOf(env, cone.position.x, cone.position.z))).length,
                 vehicles: game.traffic ? game.traffic.cars.length + game.traffic.motorcycles.filter(bike => bike.bikeGroup.visible).length : 0
             });
         }
         const peak = {};
-        ['meshes', 'triangles', 'instances', 'solidBoulders', 'retainedMB', 'conesOutsideRetained'].forEach(key => { peak[key] = Math.max(...windows.map(w => w[key])); });
+        ['meshes', 'triangles', 'instances', 'solidBoulders', 'retainedMB', 'sectionsMB', 'legMB', 'conesOutsideRetained'].forEach(key => { peak[key] = Math.max(...windows.map(w => w[key])); });
         return { windows, peak, sections: env.sections.length };
     };
 
@@ -1146,7 +1166,8 @@ function installProbe(d6Sources, latSet) {
         }
         if (!cones && game.cones) game.cones.checkCollision = () => {};
         game.showFinishScreen = () => {};
-        twistyDev.autopilot({ speed });
+        // Oncoming cars keep to lateral +3: with traffic the bike keeps to its own side
+        twistyDev.autopilot({ speed, lane: traffic ? -3.5 : 0 });
         const gl = game.graphics.renderer.getContext();
         const pixel = new Uint8Array(4);
         const render = () => {
@@ -1376,11 +1397,11 @@ function installProbe(d6Sources, latSet) {
             // B: buildings inside the part
             let B = 0;
             game.scene.traverse(o => {
-                if (!o.userData.building) return;
-                const at = new THREE.Vector3();
-                o.getWorldPosition(at);
-                const s = segmentOf(env, at.x, at.z);
-                if (s >= part.from && s < to) B += o.isInstancedMesh ? o.count : 1;
+                const count = o.userData.buildings || (o.userData.building ? (o.isInstancedMesh ? o.count : 1) : 0);
+                if (!count || !drawn(o)) return;
+                // A set piece group stands at the middle of its span
+                const s = o.userData.span ? Math.floor((o.userData.span.from + o.userData.span.to) / 2) : segmentOf(env, ...(() => { const at = new THREE.Vector3(); o.getWorldPosition(at); return [at.x, at.z]; })());
+                if (s >= part.from && s < to) B += count;
             });
             const H = round(path[Math.min(to, path.length - 1)].y - path[part.from].y, 10);
             // The landmark: its meshes, drawn, and where it stands against the road
@@ -1537,6 +1558,37 @@ const PROBES = {
     // A fresh page and no ride: the preview as the menu opens it
     preview: (page, i) => inPage(page, 'preview', i),
     finish: (page, i) => inPage(page, 'finish', i),
+    // PR8: the gate pips on a phone, 360 x 640, for 5 to 20 gates
+    async hudgates(page, i) {
+        await page.setViewport({ width: 360, height: 640, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        return page.evaluate(async legIndex => {
+            window.__reseed(1);
+            twistyDev.start(game.tourSystem.legs[legIndex].id);
+            twistyDev.freeze();
+            const out = {};
+            for (const total of [5, 14, 16, 20]) {
+                game.hud.setGates(7 > total ? total : 7, total);
+                await new Promise(r => requestAnimationFrame(() => setTimeout(r, 50)));
+                const pips = document.getElementById('hudGatePips');
+                const row = pips.getBoundingClientRect();
+                const panel = pips.parentElement.getBoundingClientRect();
+                const boxes = Array.from(pips.children).map(pip => pip.getBoundingClientRect());
+                out[total] = {
+                    pips: pips.children.length,
+                    on: pips.querySelectorAll('i.on').length,
+                    count: document.getElementById('hudGateCount').textContent,
+                    left: Math.round(row.left * 10) / 10,
+                    right: Math.round(row.right * 10) / 10,
+                    panelLeft: Math.round(panel.left * 10) / 10,
+                    panelRight: Math.round(panel.right * 10) / 10,
+                    rows: new Set(boxes.map(b => Math.round(b.top))).size,
+                    lastPipRight: Math.round(Math.max(...boxes.map(b => b.right)) * 10) / 10,
+                    pipWidth: Math.round(boxes[0].width * 10) / 10
+                };
+            }
+            return { viewport: [innerWidth, innerHeight], gates: out };
+        }, i);
+    },
     legs: (page, i) => inPage(page, 'legCheck', i, 60),
     snapshot: (page, i) => inPage(page, 'snapshot', i),
     raycast: (page, i) => inPage(page, 'raycast', i),
@@ -1783,6 +1835,14 @@ function finishChecks(report) {
         });
     }
     longLegChecks(report);
+    if (results.hudgates) {
+        Object.entries(results.hudgates).forEach(([id, r]) => {
+            Object.entries(r.gates).forEach(([total, g]) => {
+                const fits = g.pips === Number(total) && g.left >= 0 && g.right <= r.viewport[0] && g.lastPipRight <= r.viewport[0] && g.panelLeft >= 0 && g.panelRight <= r.viewport[0] && g.rows === 1;
+                if (!fits) failures.push(`${id}: ${total} gates on a ${r.viewport[0]} px phone: ${JSON.stringify(g)}`);
+            });
+        });
+    }
     if (results.surface) {
         // Hard expectations, and only these (U5): the road centre and the ledge edge. Every other
         // lateral is recorded as found; beyond the wall top groundYAt describes ground that is not drawn.
@@ -2019,7 +2079,7 @@ main();
 
 // A converted leg's asset load: nothing failed, nothing floats or is buried
 function checkAssets(id, assets, failures) {
-    ['rocks', 'portals', 'village', 'trees'].forEach(key => { if (assets[key] && assets[key].error) failures.push(`${id}: ${key} failed to load: ${assets[key].error}`); });
+    ['rocks', 'portals', 'village', 'bridge', 'trees'].forEach(key => { if (assets[key] && assets[key].error) failures.push(`${id}: ${key} failed to load: ${assets[key].error}`); });
     if (assets.trees && assets.trees.errors && assets.trees.errors.length) failures.push(`${id}: trees ${assets.trees.errors.join('; ')}`);
     if (assets.floating) failures.push(`${id}: ${assets.floating} modelled objects float`);
     if (assets.buried) failures.push(`${id}: ${assets.buried} modelled objects are buried`);

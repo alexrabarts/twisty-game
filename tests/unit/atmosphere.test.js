@@ -1,6 +1,7 @@
 // Phase 7: per-leg atmosphere and render settings, and the code that applies them.
 import { jest } from '@jest/globals';
-import { buildEnvironment, canvasStub, gameMethods, loadGame, loadScript, realThree } from '../helpers/load-game.js';
+import { buildEnvironment, canvasStub, gameMethods, loadSharedGame as loadGame, loadScript, realThree } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const game = loadGame();
 const THREE = realThree();

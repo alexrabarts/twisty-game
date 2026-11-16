@@ -1,7 +1,8 @@
 // The real js/terrain.js and the Environment that reads it, on real three
 // r150. Nothing here replicates a formula: heights come from the module and
 // the drawn ribbon.
-import { buildEnvironment, loadGame, loadScript, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+import { buildEnvironment, loadSharedGame as loadGame, loadScript, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const loadTerrain = () => new Function(`${loadScript('terrain.js')}\nreturn Terrain;`)();
 

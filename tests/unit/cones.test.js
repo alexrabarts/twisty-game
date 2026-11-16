@@ -328,7 +328,6 @@ describe('Cones System', () => {
 // leg that is still on the shared course.
 describe('Cones on the shared course (real class)', () => {
     const PINS = [
-        ['mountain-dawn', 6, '459f8ea081e44db6'],
         ['valley-run', 10, 'b11ea656095051ab'],
         ['coastal-descent', 8, '97a039ae0a44423b'],
         ['foggy-gorge', 11, 'ba8f5b062306f1d6'],
@@ -342,7 +341,7 @@ describe('Cones on the shared course (real class)', () => {
         game = loadGame();
     });
 
-    test.each(PINS.map((pin, index) => [...pin, index]))('%s keeps its cone count and positions', (id, count, digest, index) => {
+    test.each(PINS.map((pin) => [...pin, ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'].indexOf(pin[0])]))('%s keeps its cone count and positions', (id, count, digest, index) => {
         const quiet = console.log;
         console.log = () => {};
         let cones;

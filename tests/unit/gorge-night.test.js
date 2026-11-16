@@ -3,7 +3,8 @@
 // night forest (night-ride) with its tunnel and village. Spans with a roof,
 // the set-piece list, the camera under the roof, rockfalls off the walls in
 // force, and the bike at the edges of each piece. Real modules on real three r150.
-import { buildEnvironment, gameMethods, loadGame, loadScript } from '../helpers/load-game.js';
+import { buildEnvironment, gameMethods, loadSharedGame as loadGame, loadScript } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const DT = 1 / 60;
 const GORGE = 3;

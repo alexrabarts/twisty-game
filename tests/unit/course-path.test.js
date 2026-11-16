@@ -1,12 +1,12 @@
-// Every leg cuts its road from the one shared course. These pins hold the path
-// and the gate list of each leg, so a change to the course code (a long-leg
-// engine, a per-leg course) cannot move a leg that has not been converted.
+// Every leg not yet converted cuts its road from the one shared course. These
+// pins hold the path and the gate list of each such leg, so a change to the
+// course code (a long-leg engine, a per-leg course) cannot move one. A
+// converted leg's pin leaves in its own conversion (leg 1: course-mountain-dawn.test.js).
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { loadGame, buildEnvironment } from '../helpers/load-game.js';
 
 const PINS = [
-    ['mountain-dawn', 'dc56c329cc37e65c', [10, 23, 36, 49, 62]],
     ['valley-run', 'b801059ba3676184', [81, 96, 111, 126, 141]],
     ['coastal-descent', 'a82045dab2d1e447', [162, 177, 192, 207, 222]],
     ['foggy-gorge', '86c3226df4c4dc2c', [247, 263, 279, 295, 311]],
@@ -22,7 +22,7 @@ describe('the shared course, per leg', () => {
         game = loadGame();
     });
 
-    test.each(PINS.map((pin, index) => [...pin, index]))('%s keeps its path digest and gates', (id, digest, gates, index) => {
+    test.each(PINS.map((pin) => [...pin, ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'].indexOf(pin[0])]))('%s keeps its path digest and gates', (id, digest, gates, index) => {
         const quiet = console.log;
         console.log = () => {};
         let built;

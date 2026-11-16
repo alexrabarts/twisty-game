@@ -1130,7 +1130,8 @@ class Graphics {
         c.uProjInv.value.copy(camera.projectionMatrixInverse);
         c.uCamWorld.value.copy(camera.matrixWorld);
         if (scene.fog) c.uFogColor.value.copy(scene.fog.color);
-        c.uHeightFog.value.set(fog.density, atmosphere.baseY, fog.falloff);
+        // Shafts with no height fog (a part over a deep drop) leave the fog off
+        if (fog) c.uHeightFog.value.set(fog.density, atmosphere.baseY, fog.falloff);
 
         // The moon casts no shafts
         const preset = SKY_PRESETS[this.timeKey];

@@ -390,6 +390,36 @@ const SceneAssets = (() => {
     return { portals: count };
   }
 
+  // The stone bridge of a converted leg (tools/blender/bridge_stone.py): one
+  // node, bridge_span, modelled in the bridge's own frame (x across, y up from
+  // the deck, z along) for a road 20 m wide and a span `MODEL_LENGTH` long; it
+  // is stretched along the road to the span's own length. The water stays.
+  const BRIDGE = { node: "bridge_span", length: 60, halfWidth: 10.9 };
+  function dressBridge(env, model) {
+    const span = model.meshes.get(BRIDGE.node);
+    if (!span) throw new Error(`bridge.glb lacks ${BRIDGE.node}`);
+    const old = tagged(env, ["bridge"]);
+    if (!old.length || !old.every((mesh) => attached(mesh, env))) return { bridges: 0 };
+    let bridges = 0;
+    for (const group of new Set(old.map((mesh) => mesh.parent))) {
+      const plan = group.userData.bridge;
+      const frame = new THREE.Group();
+      frame.name = "modelled-bridge";
+      frame.scale.set(plan.inner / BRIDGE.halfWidth, 1, plan.length / BRIDGE.length);
+      span.forEach(({ geometry, material }) => {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.userData.modelled = "bridge";
+        frame.add(mesh);
+      });
+      group.add(frame);
+      old.filter((mesh) => mesh.parent === group).forEach(discard);
+      bridges++;
+    }
+    return { bridges };
+  }
+
   // The village's look. The models carry their colours in their vertices
   // (every board, stone and roof slab a face of its own shade, so nothing
   // tiles); the game adds what differs from house to house and what is lit.
@@ -887,8 +917,11 @@ const SceneAssets = (() => {
   function dress(env) {
     // The trees and bushes of any leg that has them (js/treemodels.js)
     const plants = typeof TreeModels !== "undefined" ? TreeModels.dress(env) : null;
-    if (!LEGS[env.legIndex] && !plants) return null;
-    const spec = LEGS[env.legIndex] || {};
+    // A converted leg names its files in its course (js/course.js, `assets`)
+    const course = typeof env.course === "function" ? env.course() : null;
+    const own = course && course.assets ? course.assets : null;
+    if (!LEGS[env.legIndex] && !own && !plants) return null;
+    const spec = { ...(LEGS[env.legIndex] || {}), ...(own || {}) };
     const started = performance.now();
     const part = (name, load, apply) => load().then((asset) => apply(asset)).catch((error) => {
       console.error(`SceneAssets: ${name} for leg ${env.legIndex} kept its procedural meshes:`, error);
@@ -900,22 +933,24 @@ const SceneAssets = (() => {
       portals: spec.portal ? part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)) : { portals: 0 },
       rockFace: spec.rockFace ? part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)) : { ribbons: 0 },
       village: spec.village ? part("village", () => Promise.all([loadModel(spec.village.houses), loadModel(spec.village.props)]), (models) => dressVillage(env, models)) : { houses: 0 },
+      bridge: spec.bridge ? part("bridge", () => loadModel(spec.bridge), (model) => dressBridge(env, model)) : { bridges: 0 },
     };
-    return Promise.all([...Object.values(parts), plants]).then(([rocks, portals, rockFace, village, trees]) => ({
+    return Promise.all([...Object.values(parts), plants]).then(([rocks, portals, rockFace, village, bridge, trees]) => ({
       rocks,
       portals,
       rockFace,
       village,
+      // A converted leg's own parts, and the files it asked for
+      ...(own && { bridge, files: [...files(env.legIndex, spec), ...(trees ? trees.files : [])] }),
       ...(trees && { trees }),
       violations: rocks.violations || [],
-      bytes: [...files(env.legIndex), ...(trees ? trees.files : [])].reduce((sum, url) => sum + (bytes.get(url) || 0), 0),
+      bytes: [...files(env.legIndex, spec), ...(trees ? trees.files : [])].reduce((sum, url) => sum + (bytes.get(url) || 0), 0),
       ms: Math.round(performance.now() - started),
     }));
   }
 
-  function files(legIndex) {
-    const spec = LEGS[legIndex];
-    return spec ? [spec.rocks, spec.portal, spec.rockFace?.map, spec.rockFace?.normalMap, spec.village?.houses, spec.village?.props].filter(Boolean) : [];
+  function files(legIndex, spec = LEGS[legIndex]) {
+    return spec ? [spec.rocks, spec.portal, spec.rockFace?.map, spec.rockFace?.normalMap, spec.village?.houses, spec.village?.props, spec.bridge].filter(Boolean) : [];
   }
 
   return { dress, files, loadModel, LEGS, VILLAGE };

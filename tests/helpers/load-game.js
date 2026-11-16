@@ -79,6 +79,15 @@ export function loadGame(THREE = realThree(), log = []) {
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink) };
 }
 
+// The game with every leg on the shared course, as before the long-leg
+// conversions: for tests whose subject is a shared-course leg that has since
+// been converted (leg 1). Course.release is the rollback of a conversion.
+export function loadSharedGame(THREE = realThree(), log = []) {
+    const game = loadGame(THREE, log);
+    Object.keys(game.Course.LEGS).forEach((id) => game.Course.release(id));
+    return game;
+}
+
 export function legs(game) {
     return new game.TourSystem().legs;
 }

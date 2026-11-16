@@ -338,7 +338,6 @@ describe('AI Motorcycle', () => {
 // crew then stands on its grid base and the oncoming car on the lowest start.
 describe('Traffic starts on the shared course (real class)', () => {
     const PINS = [
-        ['mountain-dawn', 42, [20, 17, 14, 11, 8]],
         ['valley-run', 117, [90, 87, 84, 81, 78]],
         ['coastal-descent', 199, [170, 167, 164, 161, 158]],
         ['foggy-gorge', 285, [254, 251, 248, 245, 242]],
@@ -352,7 +351,7 @@ describe('Traffic starts on the shared course (real class)', () => {
         game = loadGame();
     });
 
-    test.each(PINS.map((pin, index) => [...pin, index]))('%s keeps its car and crew start segments', (id, car, crew, index) => {
+    test.each(PINS.map((pin) => [...pin, ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'].indexOf(pin[0])]))('%s keeps its car and crew start segments', (id, car, crew, index) => {
         const quiet = console.log;
         const random = Math.random;
         console.log = () => {};

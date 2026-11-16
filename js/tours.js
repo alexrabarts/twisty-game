@@ -5,7 +5,7 @@ class TourSystem {
             {
                 id: 'mountain-dawn',
                 name: 'Mountain Dawn',
-                description: 'Gentle winding roads through misty mountain passes',
+                description: 'From the misty plain over a stone bridge and through a foothill village, up the lake cliffs to the first pass',
                 startSegment: 0,
                 endSegment: 69,
                 timeOfDay: 'dawn',

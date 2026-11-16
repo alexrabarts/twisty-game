@@ -13,10 +13,10 @@ const withFixture = () => {
 };
 
 describe('Course.boardTable()', () => {
-    test('is empty while no leg is converted, and every board is then the shared course', () => {
+    test('holds the converted legs only: leg 1 since its pilot, every other board on the shared course', () => {
         const game = loadGame();
-        expect(Object.keys(game.Course.LEGS)).toEqual([]);
-        expect(game.Course.boardTable()).toEqual({});
+        expect(Object.keys(game.Course.LEGS)).toEqual(['mountain-dawn']);
+        expect(game.Course.boardTable()).toEqual({ 'mountain-dawn-v3': { gates: 14, segments: 700 } });
     });
 
     test('has one row for each converted leg, under that leg\'s bumped board id', () => {

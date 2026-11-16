@@ -3,7 +3,8 @@
 // sunk into the face and takes its colour, on gentle ground it rests, and no bush roots in a face
 // steeper than a plant could hold. High-pass is bound to the frozen golden and
 // keeps its old placement, so it is not measured here.
-import { buildEnvironment, loadGame } from '../helpers/load-game.js';
+import { buildEnvironment, loadSharedGame as loadGame } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const FROZEN = 4;
 const LEGS = [0, 1, 2, 3, 5, 6, 7];

@@ -2,7 +2,8 @@
 // the game code that writes them. Real three, real WeatherSystem, Graphics and
 // Environment; the Game methods are cut out of js/main.js and bound to a rig.
 import { describe, test, expect, jest } from '@jest/globals';
-import { buildEnvironment, canvasStub, gameMethods, legs, loadGame, loadScript, realThree } from '../helpers/load-game.js';
+import { buildEnvironment, canvasStub, gameMethods, legs, loadSharedGame as loadGame, loadScript, realThree } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const THREE = realThree();
 const game = loadGame(THREE);

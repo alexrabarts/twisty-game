@@ -475,6 +475,19 @@ const Terrain = (() => {
       tint: 0x5c5851
     });
 
+  // A stone bridge over a river gully: the parapet stands 0.9 m past the road
+  // edge (a wall that crashes), the gully falls 8 m to the river bed beneath
+  // the deck and climbs out again 50 m on. The water is the bridge's own
+  // (Environment.buildBridge); the arches are drawn under the road.
+  const BRIDGE_BED = -8.6;
+  const bridgeSide = () =>
+    heightfieldSide({
+      stations: [[0, 0], [0.9, 0], [1.8, -7.4], [6, BRIDGE_BED], [50, BRIDGE_BED], [80, -4], [110, 6], [130, 18]],
+      bands: [{ to: 0.9, kind: 'shoulder' }, { kind: 'wall' }],
+      shade: 0.62,
+      rockSlope: 0.8
+    });
+
   const forestNight = forestProfile({
     elevation: (i, start, end) => {
       const k = i - start;
@@ -1447,8 +1460,8 @@ const Terrain = (() => {
   const DEFAULT_BLEND = 20;
 
   // The side pieces a set piece cuts into a part, by type
-  const SET_PIECE_SIDES = { tunnel: hillSide, village: streetSide };
-  const SET_PIECE_DEFAULTS = { tunnel: { ceiling: 7.5 }, village: {} };
+  const SET_PIECE_SIDES = { tunnel: hillSide, village: streetSide, bridge: bridgeSide };
+  const SET_PIECE_DEFAULTS = { tunnel: { ceiling: 7.5 }, village: {}, bridge: { bed: BRIDGE_BED } };
 
   // The segments over which part `index` mixes with the part before it: a window
   // centred on the join, `blend` long, whatever the kind of join. Null for the first part.
@@ -1682,7 +1695,7 @@ const Terrain = (() => {
     Object.entries(worst).forEach(([rule, { at }]) => at >= 0 && fail(rule, at));
 
     course.elevation.points.forEach(([at]) => {
-      if (pieces.some((piece) => (piece.type === 'tunnel' || piece.type === 'village') && at >= piece.from && at < piece.to)) fail('control', at);
+      if (pieces.some((piece) => (piece.type === 'tunnel' || piece.type === 'village' || piece.type === 'bridge') && at >= piece.from && at < piece.to)) fail('control', at);
     });
 
     // Neighbouring parts with different plane floors need a tunnel at the join
@@ -1739,7 +1752,11 @@ const Terrain = (() => {
       if (index < 0) throw new Error(`Cannot adopt a course for an unknown leg: ${id}`);
       const row = LEGS[index];
       if (row.course === course) return;
-      if (!row.course) row.baseTrackVersion = row.trackVersion;
+      if (!row.course) {
+        row.baseTrackVersion = row.trackVersion;
+        // What release() puts back: the row as the shared course had it
+        row.shared = { profile: row.profile, parts: row.parts, trackVersion: row.trackVersion, floor: row.floor, look: row.look, dressing: row.dressing, render: row.render, roadWidth: row.roadWidth, legProfile: LEG_PROFILES[index] };
+      }
       const profile = partsProfile(course);
       const first = course.parts[0];
       row.course = course;
@@ -1757,9 +1774,27 @@ const Terrain = (() => {
     return Object.keys(courses);
   }
 
+  // The rollback of a conversion: the leg's row as the shared course had it,
+  // its old board id with it. A leg never adopted is left as it is.
+  function release(id) {
+    const index = LEGS.findIndex((leg) => leg.id === id);
+    if (index < 0) throw new Error(`Cannot release an unknown leg: ${id}`);
+    const row = LEGS[index];
+    if (!row.course) return false;
+    const { legProfile, ...shared } = row.shared;
+    Object.assign(row, shared);
+    if (shared.parts === undefined) delete row.parts;
+    delete row.course;
+    delete row.shared;
+    delete row.baseTrackVersion;
+    LEG_PROFILES[index] = legProfile;
+    return true;
+  }
+
   return {
     ROWS,
     COLUMNS_PER_SEGMENT,
+    release,
     SEGMENT_LENGTH,
     profiles,
     LEGS,

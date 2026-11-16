@@ -2,6 +2,12 @@
 
 Where the code is: `js/main.js` (run flow), `js/leaderboard.js` (client), `functions/lib/` (server rules), `functions/courses.json` (server table). Setup and deploy: `LEADERBOARD_SETUP.md`.
 
+## The board table: one shape
+
+`functions/courses.json` is a copy of `Course.boardTable()` (js/course.js): one row per converted board, `{ "<board id>": { gates, segments } }`. After the leg 1 pilot it holds `mountain-dawn-v3: { gates: 14, segments: 700 }`. The server derives its limits from these two numbers (`functions/lib/boards.js`: the time floor from `segments * SEGMENT_M` at `FLOOR_SPEED`). Table boards are stored under `courseBoards/<id>`; the start-run handshake is protocol 2 with a signed finish-line time and the restart count; boards not in the table behave as before.
+
+The plan for long legs disagrees with itself here: its run-flow section speaks of `{ gates, lengthM }` rows and a `Terrain.LEGS[].long` field. Neither exists. The code above is the contract; follow it. `tests/unit/course-board-table.test.js` and `functions/test/courses.test.js` fail when the copy and the source differ.
+
 ## Restart from a save checkpoint
 
 - Every timing gate is a save checkpoint. `C` (or the crash card's "Checkpoint" button) puts the bike back on the last gate passed, on a rolling start at 15 m/s.

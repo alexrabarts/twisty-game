@@ -60,9 +60,159 @@ function vertexHash(column, row, sign) {
 // built, drawn, hidden and disposed (500 m)
 const SECTION = 25;
 
+// Scenery a part names besides its landmark (`scenery: [{ kind }]`)
+const SCENERY = {
+  // The snow peaks of a high pass along the part's own road (createPassPeaks)
+  passPeaks(group, entry, part) {
+    const saved = [this.startSegment, this.endSegment, this.scene];
+    this.startSegment = part.from;
+    this.endSegment = part.to - 20;
+    this.scene = group;
+    try {
+      this.createPassPeaks();
+    } finally {
+      [this.startSegment, this.endSegment, this.scene] = saved;
+    }
+  },
+};
+
 // Builders of the landmarks a course's parts name ({ kind, at, ... }),
-// called on the environment with the landmark's group: see createLandmarks
-const LANDMARKS = {};
+// called on the environment with the landmark's group: see createLandmarks.
+// A landmark is placed from its own part's road, with no rand() draw, so it
+// is the same whatever else the leg holds.
+const LANDMARKS = {
+  // The set piece standing at `at` (the bridge, the village) is the landmark
+  setPiece(group, landmark) {
+    const piece = this.fixed.children.find((child) => child.userData.span && landmark.at >= child.userData.span.from && landmark.at < child.userData.span.to);
+    // A course whose set piece is gone draws no landmark here: the course probe reports it
+    if (!piece) {
+      console.error(`No set piece at segment ${landmark.at} for its landmark`);
+      return;
+    }
+    group.add(piece);
+  },
+
+  // A farmstead set back from the road: house, barn and shed with pitched
+  // roofs on the ground beside segment `at`, `lateral` out (negative left)
+  farmstead(group, { at, lateral = -70 }) {
+    const point = this.roadPath[at];
+    const buildings = [
+      { along: 0, out: 0, width: 9, depth: 11, height: 5.6, wall: 0xd8ccb4, roof: 0x5a3a2c },
+      { along: 18, out: -6, width: 13, depth: 20, height: 6.5, wall: 0x8a5a3a, roof: 0x4a4a4e },
+      { along: -12, out: 8, width: 6, depth: 7, height: 3.2, wall: 0x9a8a72, roof: 0x5a3a2c },
+    ];
+    const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, flatShading: true });
+    buildings.forEach(({ along, out, width, depth, height, wall, roof }) => {
+      const x = point.x + Math.cos(point.heading) * (lateral + out) + Math.sin(point.heading) * along;
+      const z = point.z - Math.sin(point.heading) * (lateral + out) + Math.cos(point.heading) * along;
+      const ground = this.groundYAt(x, z);
+      const body = new THREE.BoxGeometry(width, height + 1.5, depth);
+      body.translate(0, (height + 1.5) / 2 - 1.5, 0);
+      // A pitched roof: a prism along the building's depth, eaves a little proud
+      const ridge = new THREE.BufferGeometry();
+      const w = width / 2 + 0.5;
+      const d = depth / 2 + 0.5;
+      const top = height + width * 0.35;
+      ridge.setAttribute("position", new THREE.Float32BufferAttribute([
+        -w, height, -d, w, height, -d, 0, top, -d, -w, height, d, w, height, d, 0, top, d,
+      ], 3));
+      ridge.setIndex([0, 2, 1, 3, 4, 5, 0, 3, 5, 0, 5, 2, 1, 2, 5, 1, 5, 4, 0, 1, 4, 0, 4, 3]);
+      const parts = [{ geometry: body, color: [wall, wall] }, { geometry: ridge.toNonIndexed(), color: [roof, roof] }];
+      const mesh = new THREE.Mesh(this.mergeColoredGeometries(parts), material);
+      mesh.position.set(x, ground, z);
+      mesh.rotation.y = point.heading;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.building = true;
+      group.add(mesh);
+    });
+  },
+
+  // Mountains standing up at the head of the valley, beside the road from
+  // `at` on: rock with snow on the taller ones, `count` peaks either side
+  range(group, { at, lateral = 380, count = 4, height = 260 }) {
+    const positions = [];
+    const colors = [];
+    const indices = [];
+    let low = Infinity;
+    for (let i = Math.max(0, at - 60); i <= at; i++) low = Math.min(low, this.roadPath[i].y);
+    const baseY = low - 60;
+    for (let n = 0; n < count * 2; n++) {
+      const sign = n % 2 === 0 ? -1 : 1;
+      const k = Math.floor(n / 2);
+      const anchor = this.roadPath[Math.min(this.roadPath.length - 1, at - 20 + k * 6)];
+      const seed = vertexHash(at, n, sign) * 100;
+      const peak = height + 160 * vertexHash(n, at, 3);
+      const out = sign * (lateral + 90 * vertexHash(at + n, 1, 1));
+      const ahead = 120 + k * 110;
+      const x = anchor.x + Math.cos(anchor.heading) * out + Math.sin(anchor.heading) * ahead;
+      const z = anchor.z - Math.sin(anchor.heading) * out + Math.cos(anchor.heading) * ahead;
+      this.addApproachPeak({ x, z, height: peak + low - baseY, radius: peak * 0.95, twist: seed, seed, baseY }, positions, colors, indices);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true, envMapIntensity: 0.3 }));
+    mesh.userData.skipCulling = true;
+    this.tagMeshes(mesh, "mountain");
+    group.add(mesh);
+  },
+
+  // Two snow-capped peaks across the water from segment `at`
+  twinPeaks(group, { at, side = 1, lateral = 430, height = 420 }) {
+    const point = this.roadPath[at];
+    const positions = [];
+    const colors = [];
+    const floor = Terrain.floorAt(this.terrain, at);
+    const baseY = (floor.y !== undefined ? floor.y : point.y - 120) - 10;
+    [[-140, height, 0.9], [150, height * 0.86, 0.8]].forEach(([along, tall, girth], n) => {
+      const out = side * (lateral + n * 60);
+      const x = point.x + Math.cos(point.heading) * out + Math.sin(point.heading) * along;
+      const z = point.z - Math.sin(point.heading) * out + Math.cos(point.heading) * along;
+      this.addPassPeak({ x, z, height: point.y + tall - baseY, radius: tall * girth, twist: n * 2.1 + 0.7, seed: 31 + n * 17, baseY, snow: true }, positions, colors);
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, flatShading: true, envMapIntensity: 0.3 }));
+    mesh.userData.skipCulling = true;
+    this.tagMeshes(mesh, "mountain");
+    group.add(mesh);
+  },
+
+  // A tall stone cairn with a prayer-flag pole on the summit snowfield
+  cairn(group, { at, side = -1 }) {
+    const point = this.roadPath[at];
+    const out = side * (this.roadWidth / 2 + 14);
+    const x = point.x + Math.cos(point.heading) * out;
+    const z = point.z - Math.sin(point.heading) * out;
+    const ground = this.groundYAt(x, z);
+    const stones = [];
+    [[2.4, 0.9], [2.0, 2.4], [1.6, 3.7], [1.15, 4.8], [0.7, 5.6]].forEach(([size, y], n) => {
+      const geometry = new THREE.IcosahedronGeometry(size, 0);
+      geometry.scale(1, 0.62, 1);
+      geometry.rotateY(n * 1.3);
+      geometry.translate(0, y, 0);
+      const shade = n % 2 ? 0x77736c : 0x8e8a82;
+      stones.push({ geometry, color: [shade, 0xa29e96] });
+    });
+    const pole = new THREE.CylinderGeometry(0.07, 0.09, 4.2, 6);
+    pole.translate(0, 8.1, 0);
+    stones.push({ geometry: pole, color: [0x4a3a2a, 0x4a3a2a] });
+    const flag = new THREE.BoxGeometry(0.04, 0.7, 1.3);
+    flag.translate(0, 9.6, 0.68);
+    stones.push({ geometry: flag, color: [0xc8382c, 0xd8483a] });
+    const mesh = new THREE.Mesh(this.mergeColoredGeometries(stones), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, flatShading: true }));
+    mesh.position.set(x, ground - 0.4, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+    this.addSolidCircle(x, ground, z, 2.6, 6, "summit cairn");
+  },
+};
 
 // The share of the scene fog's density the high pass's peaks take
 const PASS_PEAK_FOG = 0.5;
@@ -244,8 +394,37 @@ class Environment {
     }
     this.fixedDressing = this.dressGroup(this.fixed);
     this.ensureWindow(options.window ?? this.startSegment, { sync: true, preview: !!options.preview });
-    // What the probes and the menu wait on: the leg's own pieces and the window built now
-    this.dressing = Promise.all([this.fixedDressing, ...this.sections.map((section) => section.dressing).filter(Boolean)]).then((all) => all);
+    // What the probes and the menu wait on: the leg's own pieces and the window
+    // built now, as one report of the shape SceneAssets.dress gives a whole leg
+    this.dressing = Promise.all([this.fixedDressing, ...this.sections.map((section) => section.dressing).filter(Boolean)])
+      .then((reports) => Environment.mergeDressing(reports.filter(Boolean)));
+  }
+
+  // Several dressing reports (js/sceneassets.js) as one: counts add up,
+  // errors and files are joined, a part that swapped anything wins
+  static mergeDressing(reports) {
+    if (!reports.length) return null;
+    const out = { rocks: { rocks: 0 }, portals: { portals: 0 }, rockFace: { ribbons: 0 }, village: { houses: 0 }, bridge: { bridges: 0 }, violations: [], files: [], bytes: 0, ms: 0 };
+    const trees = { trees: 0, bushes: 0, meshes: 0, errors: [], files: [] };
+    let anyTrees = false;
+    reports.forEach((report) => {
+      ["rocks", "portals", "rockFace", "village", "bridge"].forEach((key) => {
+        const value = report[key];
+        if (value && (value.error || Object.values(value).some((n) => typeof n === "number" && n > 0))) out[key] = value;
+      });
+      if (report.trees) {
+        anyTrees = true;
+        ["trees", "bushes", "meshes"].forEach((key) => { trees[key] += report.trees[key] || 0; });
+        trees.errors.push(...(report.trees.errors || []));
+        trees.files.push(...(report.trees.files || []).filter((file) => !trees.files.includes(file)));
+      }
+      out.violations.push(...(report.violations || []));
+      out.files.push(...(report.files || []).filter((file) => !out.files.includes(file)));
+      out.bytes = Math.max(out.bytes, report.bytes || 0);
+      out.ms = Math.max(out.ms, report.ms || 0);
+    });
+    if (anyTrees) out.trees = trees;
+    return out;
   }
 
   // The leg's table row with one part's dressing and look: what a range
@@ -295,6 +474,13 @@ class Environment {
   // leg (js/course.js names the kind and the segment)
   createLandmarks(course) {
     course.parts.forEach((part) => {
+      // Scenery a part asks for beside its landmark (not counted as one)
+      (part.scenery || []).forEach((entry, n) => {
+        const group = new THREE.Group();
+        group.name = `scenery-${part.id}-${n}`;
+        SCENERY[entry.kind].call(this, group, entry, part);
+        this.scene.add(group);
+      });
       if (!part.landmark || !part.landmark.kind) return;
       const build = LANDMARKS[part.landmark.kind];
       if (!build) throw new Error(`Unknown landmark: ${part.landmark.kind}`);
@@ -2035,8 +2221,10 @@ class Environment {
           const clearance = distance - this.roadWidth / 2 + 0.4;
           const maxSize = Math.max(0.4, clearance / 1.5);
           const rockSize = Math.min(0.8 + this.rand() * 2.5, maxSize);
+          // A converted leg keeps a whole window resident: its rocks are
+          // detail 1 (80 faces, as the outcrops), not 3 (1280 faces, 120 KB each)
           const rockGeometry = this.displaceVertices(
-            new THREE.IcosahedronGeometry(rockSize, 3),
+            new THREE.IcosahedronGeometry(rockSize, this.piece ? 1 : 3),
             rockSize * 0.3,
           );
           const rock = new THREE.Mesh(rockGeometry);
@@ -3346,6 +3534,20 @@ class Environment {
     return group;
   }
 
+  // The water of a converted leg's rivers and bridge, made once for the leg
+  sharedWater() {
+    if (!this.waterMaterial) {
+      this.waterMaterial =
+        typeof createWaterMaterial === "function"
+          ? createWaterMaterial()
+          : new THREE.MeshStandardMaterial({ color: 0x10539e, roughness: 0.06, metalness: 0.55, envMapIntensity: 1.6 });
+      this.waterMaterial.side = THREE.DoubleSide;
+      this.waterMaterial.userData.shared = true;
+      ["map", "normalMap"].forEach((key) => this.waterMaterial[key] && (this.waterMaterial[key].userData.shared = true));
+    }
+    return this.waterMaterial;
+  }
+
   sharedRockTexture() {
     if (!this.rockTexture) {
       this.rockTexture = this.createRockTexture();
@@ -4378,8 +4580,11 @@ class Environment {
     geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
     geometry.setIndex(indices);
     geometry.computeVertexNormals();
-    const material =
-      typeof createWaterMaterial === "function"
+    // A converted leg draws one water for every section's river: making it
+    // (its normal maps) took 70 to 170 ms, too long for one frame's step
+    const material = this.sections
+      ? this.sharedWater()
+      : typeof createWaterMaterial === "function"
         ? createWaterMaterial()
         : new THREE.MeshStandardMaterial({ color: 0x10539e, roughness: 0.06, metalness: 0.55, envMapIntensity: 1.6 });
     material.side = THREE.DoubleSide;
@@ -4814,9 +5019,11 @@ class Environment {
         this.plantRunoffTrees(index, point, layoutAt(index), plant);
         continue;
       }
-      // Trees per segment thin out with distance down the slope, on the side that drops
+      // Trees per segment thin out with distance down the slope, on the side
+      // that drops; a course part may name its own count (`slope`, [fewest, most])
       const slope = Terrain.fallSignAt(this.terrain, index) || 1;
-      const count = 5 + Math.floor(this.rand() * 4);
+      const [fewestOnSlope, mostOnSlope] = this.config.dressing.forest.slope || [5, 8];
+      const count = fewestOnSlope + Math.floor(this.rand() * (mostOnSlope - fewestOnSlope + 1));
       for (let t = 0; t < count; t++) {
         const band = this.rand();
         const lateral = this.roadWidth / 2 + 3.5 + band * band * 85;
@@ -6684,13 +6891,14 @@ class Environment {
   // merged meshes and no lights of its own. The ground under and beside each
   // is the matching span of the profile (see Terrain.setPieces).
   createSetPieces() {
-    const builders = { tunnel: this.buildTunnel, village: this.buildVillage };
+    const builders = { tunnel: this.buildTunnel, village: this.buildVillage, bridge: this.buildBridge };
     for (const piece of this.setPieces) {
       const mid = this.roadPath[Math.floor((piece.from + piece.to) / 2)];
       const origin = new THREE.Vector3(mid.x, mid.y, mid.z);
       const group = new THREE.Group();
       group.name = piece.type;
       group.userData.setPiece = piece.type;
+      group.userData.span = { from: piece.from, to: piece.to };
       builders[piece.type].call(this, piece, group, origin);
       this.scene.add(group);
     }
@@ -6798,6 +7006,96 @@ class Environment {
   // House fronts either side with a few lit windows, and lamp posts on the
   // pavement. The light on the road is a pool of additive glow under each lamp
   // head: no light objects, because every light costs every lit fragment.
+  // A stone bridge over a river gully (the span's sides are Terrain's
+  // bridgeSide): two spandrel walls with a segmental arch, the arch barrel
+  // under the deck, parapets with coping, and the river under the arch. Built
+  // in the bridge's own frame (x across, y up from the road, z along), the
+  // group turned to the road's heading. The stone meshes are tagged for the
+  // modelled bridge (js/sceneassets.js, assets/bridge/stone.glb); the water stays.
+  buildBridge(piece, group, origin) {
+    const span = this.terrain.spans.find((candidate) => candidate.type === "bridge" && candidate.from === piece.from);
+    const bed = span ? span.bed : -8.6;
+    const mid = this.pointAtSegment((piece.from + piece.to) / 2);
+    group.position.set(mid.x, mid.y, mid.z);
+    group.rotation.y = mid.heading;
+    const halfRoad = this.roadWidth / 2;
+    // The parapet's inner face is the wall band's edge, 0.9 m past the road edge
+    const inner = halfRoad + 0.9;
+    const length = (piece.to - piece.from) * 20 + 12;
+    const width = Math.min(34, length - 14);
+    const spring = bed + 1.2;
+    const rise = Math.min(7, -1.2 - spring);
+    const radius = (width * width / 4 + rise * rise) / (2 * rise);
+    const centre = spring + rise - radius;
+    const sweep = Math.asin(width / 2 / radius);
+    const stone = new THREE.MeshStandardMaterial({ color: 0x9c9384, roughness: 0.95, metalness: 0, flatShading: true });
+    const ring = new THREE.MeshStandardMaterial({ color: 0x7f776b, roughness: 0.95, metalness: 0, flatShading: true, side: THREE.DoubleSide });
+    const tagged = (mesh) => {
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData.dressing = { kind: "bridge" };
+      group.add(mesh);
+      return mesh;
+    };
+    // The spandrel wall: the elevation of the bridge with the arch cut out of
+    // it, extruded through the wall's thickness
+    const outline = new THREE.Shape();
+    outline.moveTo(-length / 2, bed - 0.6);
+    outline.lineTo(-width / 2, bed - 0.6);
+    outline.lineTo(-width / 2, spring);
+    for (let k = 1; k <= 16; k++) {
+      const a = -sweep + (2 * sweep * k) / 16;
+      outline.lineTo(radius * Math.sin(a), centre + radius * Math.cos(a));
+    }
+    outline.lineTo(width / 2, bed - 0.6);
+    outline.lineTo(length / 2, bed - 0.6);
+    outline.lineTo(length / 2 - 1.5, 0.05);
+    outline.lineTo(-length / 2 + 1.5, 0.05);
+    outline.closePath();
+    for (const sign of [-1, 1]) {
+      const wall = new THREE.ExtrudeGeometry(outline, { depth: 0.9, bevelEnabled: false, curveSegments: 1 });
+      // Shape x runs along the road, its extrusion across it
+      wall.rotateY(-Math.PI / 2);
+      wall.translate(sign > 0 ? inner + 0.9 : -inner, 0, 0);
+      tagged(new THREE.Mesh(wall, stone)).name = "bridge-spandrel";
+      const parapet = new THREE.BoxGeometry(0.6, 1.05, length - 3);
+      parapet.translate(sign * (inner + 0.3), 0.52, 0);
+      tagged(new THREE.Mesh(parapet, stone)).name = "bridge-parapet";
+      const coping = new THREE.BoxGeometry(0.8, 0.16, length - 2.6);
+      coping.translate(sign * (inner + 0.3), 1.12, 0);
+      tagged(new THREE.Mesh(coping, ring)).name = "bridge-coping";
+    }
+    // The arch barrel: the underside of the deck between the two walls
+    const barrel = new THREE.BufferGeometry();
+    const vertices = [];
+    const indices = [];
+    for (let k = 0; k <= 16; k++) {
+      const a = -sweep + (2 * sweep * k) / 16;
+      const z = radius * Math.sin(a);
+      const y = centre + radius * Math.cos(a);
+      vertices.push(-inner - 0.9, y, z, inner + 0.9, y, z);
+      if (k > 0) {
+        const n = k * 2;
+        indices.push(n - 2, n - 1, n, n - 1, n + 1, n);
+      }
+    }
+    barrel.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+    barrel.setIndex(indices);
+    barrel.computeVertexNormals();
+    tagged(new THREE.Mesh(barrel, ring)).name = "bridge-barrel";
+    // The river under the arch, across the gully
+    const material = this.sharedWater();
+    // Across the gully floor only: its banks rise over the water 52 m out
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(112, width + 10), material);
+    water.rotation.x = -Math.PI / 2;
+    water.position.y = bed + 0.7;
+    water.name = "floor-river";
+    water.userData.part = "floor";
+    water.receiveShadow = true;
+    group.add(water);
+    group.userData.bridge = { length, width, inner, bed };
+  }
+
   buildVillage(piece, group, origin) {
     const halfRoad = this.roadWidth / 2;
     // The wall band starts 3 m past the road edge: the fronts stand on it
@@ -6833,6 +7131,8 @@ class Environment {
     // meshes are the ones they replace; the light pools stay.
     const lampLine = halfRoad + 1.2;
     group.userData.village = { plots, front, lampLine };
+    // One house to a plot, for the probe that counts buildings in a part
+    group.userData.buildings = plots.length;
     const replaced = (mesh) => {
       mesh.userData.dressing = { kind: 'village' };
       return mesh;

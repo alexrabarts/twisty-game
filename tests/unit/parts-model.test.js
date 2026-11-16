@@ -1,7 +1,8 @@
 // The parts model of js/terrain.js: elevation from control points, joins
 // between parts, the pure readers and the course validator.
 import { describe, test, expect, beforeEach } from '@jest/globals';
-import { loadGame, buildEnvironment } from '../helpers/load-game.js';
+import { loadSharedGame as loadGame, buildEnvironment } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 import { FIXTURE_LEG, fixtureCourse } from '../fixtures/course-fixture.js';
 
 describe('the parts model', () => {

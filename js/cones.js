@@ -16,7 +16,10 @@ class Cones {
     static placeRange(env, from, to) {
         const path = env.roadPath;
         const checkpoints = env.checkpoints || [];
-        const clearOfWorks = typeof env.course === 'function' && !!env.course();
+        const course = typeof env.course === 'function' ? env.course() : null;
+        const clearOfWorks = !!course;
+        // A converted leg may space its straight-road slalom wider (`cones.straightEvery`)
+        const straightEvery = (course && course.cones && course.cones.straightEvery) || 4;
         const blocked = index => (env.setPieces || []).some(piece => index >= piece.from - 1 && index <= piece.to + 1) ||
             (env.roadworksZones || []).some(zone => {
                 const reach = env.roadworksReach(zone.startSegment, zone.endSegment, zone.type);
@@ -42,8 +45,8 @@ class Cones {
             let side = 0;
             if (headingChange < 0.02) {
                 // Straight: slalom cones every 4 segments on alternating sides
-                if (index % 4 === 0) {
-                    side = (Math.floor(index / 4) % 2 === 0) ? 1 : -1;
+                if (index % straightEvery === 0) {
+                    side = (Math.floor(index / straightEvery) % 2 === 0) ? 1 : -1;
                 }
             } else if (index % 6 === 0) {
                 // Corner: one cone on the inside at the apex. Heading
