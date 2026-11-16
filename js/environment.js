@@ -6491,65 +6491,75 @@ class Environment {
     }
   }
 
+  // The road material's look under a weather, as plain values: rain leaves a
+  // film of water (slightly darker, glossy, mirror-like at the shallow angle
+  // the rider sees it from; near-black with high metalness had nothing bright
+  // to reflect and rendered as a void), snow packed ice. Fog and clear air
+  // leave the dry road the material was built with.
+  resolveRoadSurface(weatherType, intensity = 1.0) {
+    switch (weatherType) {
+      case "rain":
+        return {
+          roughness: 0.85 * (1 - intensity) + 0.2 * intensity,
+          metalness: 0.12 * intensity,
+          envMapIntensity: 0.3 + 1.9 * intensity,
+          color: 0xc8ccd2,
+        };
+      case "snow":
+        return {
+          roughness: 0.32, // Packed snow and ice
+          metalness: 0.08,
+          envMapIntensity: 1.2,
+          color: 0xdfe8f0, // Lighter, icy blue tint
+        };
+      default:
+        return {
+          roughness: 0.85,
+          metalness: 0.0,
+          envMapIntensity: 0.3,
+          // Don't override texture color - use white to show texture
+          color: this.roadMaterial && this.roadMaterial.map ? 0xffffff : 0x2a2a2a,
+        };
+    }
+  }
+
+  writeRoadSurface(values) {
+    const material = this.roadMaterial;
+    if (!material) return;
+    material.roughness = values.roughness;
+    material.metalness = values.metalness;
+    material.envMapIntensity = values.envMapIntensity;
+    material.color.setHex(values.color);
+  }
+
+  // The one-time look of a leg under a weather: the road surface, and the
+  // ground and mountain tint
   applyWeatherVisuals(weatherType, intensity = 1.0) {
     console.log(
       `Applying weather visuals: ${weatherType} (intensity: ${intensity})`,
     );
 
+    if (this.roadMaterial) {
+      this.writeRoadSurface(this.resolveRoadSurface(weatherType, intensity));
+      this.roadMaterial.needsUpdate = true;
+    }
+
     switch (weatherType) {
       case "rain":
-        // Wet road - darker, more reflective
-        if (this.roadMaterial) {
-          // A film of water: slightly darker, glossy, and mirror-like at
-          // the shallow angle the rider sees it from. (Near-black with high
-          // metalness had nothing bright to reflect and rendered as a void.)
-          this.roadMaterial.roughness =
-            0.85 * (1 - intensity) + 0.2 * intensity;
-          this.roadMaterial.metalness = 0.12 * intensity;
-          this.roadMaterial.envMapIntensity = 0.3 + 1.9 * intensity;
-          this.roadMaterial.color.setHex(0xc8ccd2);
-          this.roadMaterial.needsUpdate = true;
-        }
         // Darker grass and mountains
         this.updateTerrainColors(0x3a6a3a);
         this.updateMountainColors(0x5a4a32);
         break;
 
       case "snow":
-        // Icy road - very reflective
-        if (this.roadMaterial) {
-          this.roadMaterial.roughness = 0.32; // Packed snow and ice
-          this.roadMaterial.metalness = 0.08;
-          this.roadMaterial.envMapIntensity = 1.2;
-          this.roadMaterial.color.setHex(0xdfe8f0); // Lighter, icy blue tint
-          this.roadMaterial.needsUpdate = true;
-        }
         // Snow-covered terrain
         this.updateTerrainColors(0xeef2f6, false);
         this.updateMountainColors(0xd0d8e0); // Snowy mountains
         break;
 
-      case "fog":
-        // No visual changes to road/terrain for fog
-        // Fog is handled by WeatherSystem
-        break;
-
-      case "clear":
       default:
-        // Reset to normal appearance
-        if (this.roadMaterial) {
-          this.roadMaterial.roughness = 0.85;
-          this.roadMaterial.metalness = 0.0;
-          this.roadMaterial.envMapIntensity = 0.3;
-          // Don't override texture color - use white to show texture
-          if (this.roadMaterial.map) {
-            this.roadMaterial.color.setHex(0xffffff);
-          } else {
-            this.roadMaterial.color.setHex(0x2a2a2a); // Fallback if no texture
-          }
-          this.roadMaterial.needsUpdate = true;
-        }
-        // Terrain colors will be set by applyLandscapeConfig
+        // Fog changes nothing on the ground; clear air resets nothing here:
+        // terrain colors are set by applyLandscapeConfig
         break;
     }
   }

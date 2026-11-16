@@ -9,7 +9,7 @@
 //   node tools/terrain-check.mjs <probe> --update-baseline --legs id [--part ground,decals]
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
-// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate
+// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
 //   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
 // (`shortcuts` runs its own doubled-back control)
@@ -71,7 +71,7 @@ const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
 // The shortcuts control builds its own road and reads no leg, so it runs once, filed under the first leg asked for
-const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : legIds);
+const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : (name === 'atmo' || name === 'atmoControl') && !option('legs') ? ['mountain-dawn'] : legIds);
 const jobs = Number(option('jobs') || 3);
 
 const fail = (code, message) => {
@@ -780,6 +780,226 @@ function installProbe(d6Sources, latSet) {
         return { ride, preview };
     };
 
+    // Every value a surface of the game writes when it sets the look of the world: sky uniforms,
+    // grade, scene colours and fog, the six lights, exposure, headlight, the road material of `env`
+    // and the first terrain and mountain colours. Reads only fields that exist at 6fbc542, so the same
+    // dump runs in a base worktree. `env` may be null (the rider showcase has none).
+    P.dump = env => {
+        const hex = c => c.getHex();
+        const graphics = game.graphics;
+        const sky = {};
+        Object.keys(graphics.skyUniforms).forEach(key => {
+            const v = graphics.skyUniforms[key].value;
+            if (key === 'uTime' || key === 'tPanorama') return;
+            if (typeof v === 'number') sky[key] = v;
+            else if (v && v.isColor) sky[key] = hex(v);
+            else if (v && (v.isVector3 || v.isVector2)) sky[key] = v.toArray();
+        });
+        const light = l => ({ color: hex(l.color), intensity: l.intensity, ...(l.groundColor && { ground: hex(l.groundColor) }) });
+        let terrain = null, mountain = null;
+        game.scene.traverse(o => {
+            if (!o.isMesh) return;
+            if (terrain === null && o.userData.type === 'terrain') terrain = hex(o.material.color);
+            if (mountain === null && o.userData.type === 'mountain' && !o.geometry.attributes.color) mountain = hex(o.material.color);
+        });
+        const road = env && env.roadMaterial ? { roughness: env.roadMaterial.roughness, metalness: env.roadMaterial.metalness, envMapIntensity: env.roadMaterial.envMapIntensity, color: hex(env.roadMaterial.color) } : null;
+        const grade = graphics.grade ? { ...graphics.grade, tint: hex(graphics.grade.tint) } : null;
+        return {
+            sky,
+            timeKey: graphics.timeKey,
+            weatherType: graphics.weatherType,
+            ringStrength: graphics.ringStrength,
+            atmosphere: graphics.atmosphere ? JSON.parse(JSON.stringify(graphics.atmosphere)) : null,
+            grade,
+            background: hex(game.scene.background),
+            fogColor: hex(game.scene.fog.color),
+            fogDensity: game.scene.fog.density,
+            ambient: light(game.ambientLight),
+            hemisphere: light(game.hemisphereLight),
+            directional: light(game.directionalLight),
+            distant: light(game.distantLight),
+            fill: light(game.fillLight),
+            rim: light(game.rimLight),
+            baseSunIntensity: game.baseSunIntensity,
+            exposure: game.renderer.toneMappingExposure,
+            headlightStrength: game.headlightStrength,
+            headlightVisible: game.headlight.visible,
+            road,
+            terrain,
+            mountain,
+            physics: game.weatherSystem && env === game.environment ? game.weatherSystem.getPhysicsMultipliers() : null
+        };
+    };
+
+    // The wall clock varies the sun by +-6% in animate(); the dump reads its base value
+    const settle = (frames = 1) => {
+        for (let i = 0; i < frames; i++) twistyDev.step(1, { render: true });
+        game.directionalLight.intensity = game.baseSunIntensity !== undefined ? game.baseSunIntensity : 0.8;
+    };
+    const menuFrame = () => {
+        game.graphics.time = 0;
+        game.graphics.update(0, 0, 0);
+        game.graphics.render(game.scene, game.camera);
+    };
+
+    // The look that the menu preview, the rider showcase, a time override and a ride give, per leg
+    // (arms preview, previewAfterRide, showcase, timeOverride and ride of the plan's PR9 and PR23)
+    P.atmostate = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        const times = Object.fromEntries([leg.timeOfDay, 'golden', 'night'].map(key => [key, { sunIntensity: game.timeConfigs[key].sunIntensity, hemisphereIntensity: game.timeConfigs[key].hemisphereIntensity, fogColor: game.timeConfigs[key].fogColor, headlight: game.timeConfigs[key].headlight || 0 }]));
+        const out = { expectedFogDensity: Terrain.legConfig(legIndex).look.fogDensity, times, weather: leg.weather, weatherIntensity: leg.weatherIntensity };
+        window.__reseed(1);
+        game.startTrackPreview(legIndex);
+        menuFrame();
+        out.preview = P.dump(game.previewEnv);
+        if (leg.id === 'storm-valley') {
+            game.startRiderShowcase(CHARACTERS[0].id);
+            menuFrame();
+            out.showcase = P.dump(null);
+        }
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        game.showFinishScreen = () => {};
+        out.ride = [0, 0.25, 0.5, 0.75, 1].map(f => {
+            const segment = Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment));
+            twistyDev.teleport(segment);
+            settle();
+            return { segment, dump: P.dump(game.environment) };
+        });
+        game.returnToMenu();
+        window.__reseed(1);
+        game.startTrackPreview(legIndex);
+        menuFrame();
+        out.previewAfterRide = P.dump(game.previewEnv);
+        if (leg.id === 'storm-valley' || leg.id === 'night-ride') {
+            window.__reseed(1);
+            twistyDev.start(leg.id);
+            twistyDev.freeze();
+            game.rockfalls = null;
+            game.setTimeOfDay(leg.id === 'storm-valley' ? 'night' : 'golden');
+            settle();
+            const first = P.dump(game.environment);
+            settle(60);
+            out.timeOverride = { first, after60: P.dump(game.environment) };
+        }
+        return out;
+    };
+
+    // Draws from the global random stream: at leg start, 600 ticks into a ride, in the menu preview and
+    // in the rider showcase. `nextValue` is what the stream gives next after the start.
+    P.draws = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        const real = Math.random;
+        let count = 0;
+        Math.random = () => { count++; return real(); };
+        try {
+            window.__reseed(1);
+            count = 0;
+            twistyDev.start(leg.id);
+            const startDraws = count;
+            const nextValue = real();
+            window.__reseed(1);
+            twistyDev.start(leg.id);
+            twistyDev.freeze();
+            count = 0;
+            twistyDev.step(600);
+            const rideDraws = count;
+            window.__reseed(1);
+            count = 0;
+            game.startTrackPreview(legIndex);
+            const previewDraws = count;
+            window.__reseed(1);
+            count = 0;
+            game.startRiderShowcase(CHARACTERS[0].id);
+            return { startDraws, nextValue, rideDraws, previewDraws, showcaseDraws: count };
+        } finally {
+            Math.random = real;
+        }
+    };
+
+    // Rides across one part boundary with rendering on and reports what the blend does: the mean luminance
+    // of the sky band per frame, the environment bakes, whether the rain buffer is the one made at leg start,
+    // its draw range, and the grip along the way. `control` snaps at the boundary instead of blending.
+    // The track is synthetic: dawn in clear air to night in rain at the middle of the leg.
+    P.atmo = (legIndex, control = false) => {
+        const leg = game.tourSystem.legs[legIndex];
+        const config = Terrain.legConfig(legIndex);
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        game.traffic = null;
+        game.showFinishScreen = () => {};
+        const env = game.environment;
+        const mid = Math.round((leg.startSegment + leg.endSegment) / 2);
+        const part = (from, to, look) => ({ startSegment: from, endSegment: to, look: { fogDensity: config.look.fogDensity, heightFog: config.atmosphere.heightFog, shafts: 0, ring: 1, baseY: game.atmosphereTrack.parts[0].look.baseY, ...look } });
+        const track = AtmosphereTrack.build([
+            part(leg.startSegment, mid - 1, { timeOfDay: 'dawn', weather: 'clear', weatherIntensity: 0 }),
+            part(mid, leg.endSegment, { timeOfDay: 'night', weather: 'rain', weatherIntensity: 0.9, fogDensity: 0.003 })
+        ]);
+        game.weatherSystem.prepare(track.weatherTypes());
+        const rain = game.weatherSystem.systems.rain.points;
+        const buffer = rain.geometry.attributes.position;
+        game.atmosphereTrack = track;
+        const targets = { environment: env, weatherSystem: game.weatherSystem };
+        game.snapAtmosphere(track, leg.startSegment, targets);
+        if (control) {
+            let snapped = false;
+            game.applyAtmosphere = () => {
+                if (!snapped && game.vehicle.currentRoadSegment >= mid) {
+                    snapped = true;
+                    game.snapAtmosphere(track, mid + 10, targets);
+                }
+            };
+        }
+        twistyDev.teleport(mid - 14);
+        twistyDev.autopilot({ speed: 30 });
+        const canvas = game.graphics.renderer.domElement;
+        const read = document.createElement('canvas');
+        read.width = 32; read.height = 18;
+        const ctx = read.getContext('2d', { willReadFrequently: true });
+        const luminance = () => {
+            ctx.drawImage(canvas, 0, 0, 32, 18);
+            // The upper third is sky and far ranges, the part of the picture the blend moves
+            const d = ctx.getImageData(0, 0, 32, 6).data;
+            let sum = 0;
+            for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+            return sum / (d.length / 4);
+        };
+        const SETTLE = 40;
+        const frames = [];
+        const gripAt = [];
+        for (let tick = 0; tick < 2400 && game.vehicle.currentRoadSegment < mid + 14; tick++) {
+            twistyDev.step(1, { render: true });
+            game.vehicle.crashed = false;
+            const sample = track.sample(game.vehicle.currentRoadSegment);
+            frames.push({ segment: round(game.vehicle.currentRoadSegment, 10), t: round(sample.t, 1000), luminance: round(luminance(), 100) });
+            if (tick % 10 === 0) gripAt.push({ t: round(sample.t, 100), lateralFriction: round(game.weatherSystem.getPhysicsMultipliers().lateralFriction, 10000) });
+        }
+        const lum = frames.map(f => f.luminance);
+        const mean = list => list.reduce((a, b) => a + b, 0) / list.length;
+        const totalChange = Math.abs(mean(lum.slice(-10)) - mean(lum.slice(0, 10)));
+        // The first frames after the teleport settle the camera and are not the blend
+        const steps = lum.slice(1).map((v, i) => (i < SETTLE ? 0 : Math.abs(v - lum[i])));
+        const counts = rain.geometry.drawRange.count;
+        return {
+            control,
+            frames: frames.length,
+            totalChange: round(totalChange, 100),
+            maxFrameStep: round(Math.max(...steps), 100),
+            maxStepAt: frames[steps.indexOf(Math.max(...steps)) + 1],
+            around: frames.slice(steps.indexOf(Math.max(...steps)) - 3, steps.indexOf(Math.max(...steps)) + 6).map(f => [f.t, f.luminance]),
+            envBakes: game.graphics.stats.envBakes,
+            lastBakeFrame: game.graphics.stats.lastBakeFrame,
+            rainBufferSame: rain.geometry.attributes.position === buffer,
+            drawRange: counts,
+            gripAt,
+            lum: lum.filter((_, i) => i % 10 === 0)
+        };
+    };
+
     P.legCheck = (legIndex, ticks) => {
         const leg = game.tourSystem.legs[legIndex];
         const lines = [];
@@ -917,6 +1137,14 @@ const PROBES = {
     parts: (page, i) => inPage(page, 'parts', i),
     frames: (page, i) => inPage(page, 'frames', i),
     look: (page, i) => inPage(page, 'look', i),
+    atmostate: (page, i) => inPage(page, 'atmostate', i),
+    draws: (page, i) => inPage(page, 'draws', i),
+    // The synthetic two-part track and its control (a snap at the boundary), on a fresh page each
+    async atmo(page, i) {
+        if (!flag('synthetic')) throw new Error('no leg has parts yet: run atmo with --synthetic');
+        return inPage(page, 'atmo', i, false);
+    },
+    atmoControl: (page, i) => inPage(page, 'atmo', i, true),
     runoff: (page, i) => inPage(page, 'runoff', i),
     fog: (page, i) => inPage(page, 'fog', i),
     shortcuts: (page, i) => inPage(page, 'shortcuts', i),
@@ -1047,7 +1275,7 @@ async function main() {
         console.log(JSON.stringify(out, null, 1));
         return;
     }
-    if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate | record-jest | record-frozen | baseline-diff');
+    if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate atmostate draws atmo | record-jest | record-frozen | baseline-diff');
 
     const executablePath = chromePath();
     const gpu = flag('gpu');
@@ -1081,7 +1309,7 @@ async function main() {
         } else {
             // Writing to the mutable file re-runs every frozen section first, as the guard
             const guarded = flag('add') || flag('update-baseline') ? FROZEN_SECTIONS : [];
-            const sections = [...new Set([...guarded, ...probes.flatMap(name => (name === 'record-frozen' ? [...FROZEN_SECTIONS, 'pages'] : name === 'shortcuts' ? [name, 'shortcutsControl'] : [name]))])];
+            const sections = [...new Set([...guarded, ...probes.flatMap(name => (name === 'record-frozen' ? [...FROZEN_SECTIONS, 'pages'] : name === 'shortcuts' ? [name, 'shortcutsControl'] : name === 'atmo' ? [name, 'atmoControl'] : [name]))])];
             for (const name of sections) {
                 if (name === 'pages') {
                     report.results.pages = await withBrowser(browser => pagesProbe(browser, port));
@@ -1173,6 +1401,57 @@ function finishChecks(report) {
             if (placed[3].crashed || placed[3].offRoadTime < 2 || placed[3].offRoadTime > 3.2) failures.push(`${id}: placed at lateral 14, 3 s: crashed ${placed[3].crashed}, offRoadTime ${placed[3].offRoadTime}`);
             if (!placed[7].crashed || placed.offRoadLines !== 1) failures.push(`${id}: placed at lateral 14, 7 s: not crashed once for the clock (${placed.offRoadLines} lines)`);
             if (placed[10].speed >= 0.5) failures.push(`${id}: placed at lateral 14, 10 s: speed ${placed[10].speed}`);
+        });
+    }
+    if (results.atmostate) {
+        // The pinned values of the plan's PR23 arms; the dump is also compared whole against a base tree by hand
+        Object.entries(results.atmostate).forEach(([id, r]) => {
+            const fail = text => failures.push(`${id}: atmostate ${text}`);
+            const weather = r.weather || 'clear';
+            const own = r.times[Object.keys(r.times)[0]];
+            const sun = { rain: 0.25, snow: 0.25, fog: 0.6 }[weather] ?? 1;
+            const hemisphere = { rain: 1.35, snow: 1.35, fog: 1.15 }[weather] ?? 1;
+            const road = { rain: [0.85 * (1 - r.weatherIntensity) + 0.2 * r.weatherIntensity, 0.12 * r.weatherIntensity, 0.3 + 1.9 * r.weatherIntensity], snow: [0.32, 0.08, 1.2] }[weather] || [0.85, 0, 0.3];
+            [['preview', r.preview], ['previewAfterRide', r.previewAfterRide]].forEach(([name, dump]) => {
+                if (dump.weatherType !== weather) fail(`${name}.weatherType ${dump.weatherType}, want ${weather}`);
+                if (dump.directional.intensity / own.sunIntensity !== sun) fail(`${name} sun ratio ${dump.directional.intensity / own.sunIntensity}, want ${sun}`);
+                if (dump.hemisphere.intensity / own.hemisphereIntensity !== hemisphere) fail(`${name} hemisphere ratio ${dump.hemisphere.intensity / own.hemisphereIntensity}, want ${hemisphere}`);
+                if (JSON.stringify([dump.road.roughness, dump.road.metalness, dump.road.envMapIntensity]) !== JSON.stringify(road)) fail(`${name} road ${[dump.road.roughness, dump.road.metalness, dump.road.envMapIntensity]}, want ${road}`);
+                if (dump.fogDensity !== r.expectedFogDensity) fail(`${name} fog density ${dump.fogDensity}, want the leg's look ${r.expectedFogDensity}`);
+            });
+            if (id === 'mountain-dawn' && (r.preview.ringStrength !== 0.15 || r.preview.sky.uMountains !== 0.15)) fail(`preview ring ${r.preview.ringStrength}, want 0.15`);
+            if (r.showcase) {
+                const s = r.showcase;
+                const golden = r.times.golden;
+                const ok = s.timeKey === 'golden' && s.weatherType === 'clear' && s.ringStrength === 1 && s.sky.uMountains === 1 && s.atmosphere === null
+                    && s.fogDensity === 0.0018 && s.fogColor === golden.fogColor && s.directional.intensity === golden.sunIntensity && s.hemisphere.intensity === golden.hemisphereIntensity;
+                if (!ok) fail('showcase is not the clear golden look');
+            }
+            if (r.timeOverride) {
+                const night = id === 'storm-valley';
+                const key = night ? 'night' : 'golden';
+                const cfg = r.times[key];
+                [r.timeOverride.first, r.timeOverride.after60].forEach((dump, n) => {
+                    if (dump.timeKey !== key) fail(`timeOverride[${n}] timeKey ${dump.timeKey}`);
+                    if (dump.weatherType !== weather) fail(`timeOverride[${n}] lost the weather: ${dump.weatherType}`);
+                    if (dump.directional.intensity !== cfg.sunIntensity) fail(`timeOverride[${n}] sun ${dump.directional.intensity}, want ${cfg.sunIntensity}`);
+                    if (night && dump.sky.uMoon !== 1) fail(`timeOverride[${n}] uMoon ${dump.sky.uMoon}`);
+                    if (dump.headlightVisible !== cfg.headlight > 0) fail(`timeOverride[${n}] headlight ${dump.headlightVisible}`);
+                });
+                if (JSON.stringify(r.timeOverride.first) !== JSON.stringify(r.timeOverride.after60)) fail('timeOverride changed in 60 frames');
+            }
+        });
+    }
+    if (results.atmo) {
+        // PR10, PR12: the blend moves the picture without a cut; the particles are the buffer made at leg start
+        Object.entries(results.atmo).forEach(([id, r]) => {
+            const control = results.atmoControl && results.atmoControl[id];
+            if (!(r.totalChange >= 30)) failures.push(`${id}: atmo totalChange ${r.totalChange}, want >= 30`);
+            if (!(r.maxFrameStep <= 0.1 * r.totalChange)) failures.push(`${id}: atmo maxFrameStep ${r.maxFrameStep} over a tenth of ${r.totalChange}`);
+            if (control && !(control.maxFrameStep > 0.5 * control.totalChange)) failures.push(`${id}: atmo control did not cut (${control.maxFrameStep} of ${control.totalChange})`);
+            if (!r.rainBufferSame) failures.push(`${id}: atmo reallocated the rain buffer`);
+            const inside = r.gripAt.filter(point => point.t > 0.2 && point.t < 0.8);
+            if (!inside.length || inside.some(point => !(point.lateralFriction < 1 && point.lateralFriction > 0.73))) failures.push(`${id}: atmo grip inside the blend is not between clear and rain`);
         });
     }
     if (results.fog) {

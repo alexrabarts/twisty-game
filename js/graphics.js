@@ -580,7 +580,6 @@ class Graphics {
         this.time = 0;
         this.timeKey = 'golden';
         this.weatherType = 'clear';
-        this.weatherIntensity = 0;
         this.speedRatio = 0;
         this.flash = 0;
         this.sunDirection = new THREE.Vector3(0.5, 0.8, 0).normalize();
@@ -602,7 +601,18 @@ class Graphics {
         this.atmosphere = null;
         this.shaftsActive = false;
         this.ringStrength = 1;
-        this.ringRise = null;
+        // Sky values by time and weather, resolved once (see resolveSky)
+        this.skyCache = new Map();
+        // The sky values as the last write left them, before fog thickens them
+        this.skyBase = { fogBlend: 0, mountains: 0 };
+        // How much of the sky's weather is fog (0 to 1)
+        this.fogShare = 0;
+        // Frames drawn, and the environment bakes: a bake costs about one frame
+        this.frames = 0;
+        this.stats = { envBakes: 0, lastBakeFrame: 0 };
+        // Where in a blend (0 to 1) the sky was written, and where it was last baked
+        this.skyBlend = 0;
+        this.bakedBlend = 0;
         this.sunScreen = new THREE.Vector2();
         this.sunView = new THREE.Vector3();
 
@@ -723,28 +733,23 @@ class Graphics {
     }
 
     // Per-leg depth atmosphere (height fog, light shafts) and far-ring strength.
-    // `atmosphere` is a Terrain.LEGS entry's { heightFog, shafts }, `render` its
-    // { ring }, `baseY` the leg's lowest road height. Pass null to reset. The
-    // ring strength is read by applySky, so call this before setWeather. Height
-    // fog and shafts need the depth texture and stay off without it.
+    // `atmosphere` is a { heightFog, shafts }, `render` its { ring }, `baseY`
+    // the lowest road height of the part. Pass null to reset. The ring strength
+    // is read when the sky is written, so set this before the sky. Height fog
+    // and shafts need the depth texture and stay off without it.
     setAtmosphere(atmosphere, render, baseY = 0) {
-        this.ringStrength = render && render.ring !== undefined ? render.ring : 1;
-        // A leg the far ring rises over starts it at its first value (setRingProgress)
-        this.ringRise = render && render.ringRise ? render.ringRise : null;
-        if (this.ringRise) this.ringStrength = this.ringRise[0];
+        this.setRingStrength(render && render.ring !== undefined ? render.ring : 1);
         this.atmosphere = atmosphere && this.atmosphereSupported
             ? { heightFog: atmosphere.heightFog, shafts: atmosphere.shafts || 0, baseY }
             : null;
     }
 
-    // How far along the leg the rider is (0 to 1), on a leg whose far ring
-    // rises: the ring strength follows, under whatever the weather leaves of it
-    setRingProgress(progress) {
-        if (!this.ringRise) return;
-        const t = Math.min(1, Math.max(0, progress));
-        this.ringStrength = this.ringRise[0] + (this.ringRise[1] - this.ringRise[0]) * t;
-        const weather = SKY_WEATHER[this.weatherType] || {};
-        this.skyUniforms.uMountains.value = (1 - (weather.fogBlend || 0)) * this.ringStrength;
+    // The far ring's strength, under whatever the weather leaves of it
+    setRingStrength(value) {
+        if (value === this.ringStrength) return;
+        this.ringStrength = value;
+        this.skyBase.mountains = (1 - this.skyBase.fogBlend) * value;
+        this.skyUniforms.uMountains.value = this.skyBase.mountains;
     }
 
     setTimeOfDay(timeKey, config) {
@@ -753,9 +758,8 @@ class Graphics {
         this.applySky();
     }
 
-    setWeather(type, intensity = 1) {
+    setWeather(type) {
         this.weatherType = type || 'clear';
-        this.weatherIntensity = intensity;
         this.applySky();
     }
 
@@ -765,52 +769,138 @@ class Graphics {
         this.skyUniforms.uSunDir.value.copy(this.sunDirection);
     }
 
-    applySky() {
-        const preset = SKY_PRESETS[this.timeKey];
-        const weather = SKY_WEATHER[this.weatherType] || {};
-        const u = this.skyUniforms;
-        const pick = (key) => (weather[key] !== undefined ? weather[key] : preset[key]);
+    // The sky for a time and a weather as plain values, the same object every
+    // time for the same arguments. Nothing is written until writeSky.
+    resolveSky(timeKey, weatherType, config = this.timeConfig) {
+        const key = SKY_PRESETS[timeKey] ? timeKey : 'golden';
+        const cacheKey = `${key}|${weatherType}|${config ? key : ''}`;
+        const cached = this.skyCache.get(cacheKey);
+        if (cached && cached.config === config) return cached;
 
-        u.uZenith.value.setHex(pick('zenith'));
-        u.uMid.value.setHex(pick('mid'));
-        u.uGlowColor.value.setHex(preset.glow);
-        u.uCloudLit.value.setHex(pick('cloudLit'));
-        u.uCloudShadow.value.setHex(pick('cloudShadow'));
-        u.uMountain.value.setHex(preset.mountain);
-        u.uCoverage.value = pick('coverage');
-        u.uStars.value = pick('stars');
-        u.uMoon.value = preset.moon ? 1 : 0;
+        const preset = SKY_PRESETS[key];
+        const weather = SKY_WEATHER[weatherType] || {};
+        const pick = (name) => (weather[name] !== undefined ? weather[name] : preset[name]);
         const sunScale = weather.sunScale !== undefined ? weather.sunScale : 1;
-        u.uSunIntensity.value = preset.sunIntensity * sunScale;
-        u.uGlow.value = preset.glowStrength * (0.25 + 0.75 * sunScale);
-        u.uFogBlend.value = weather.fogBlend || 0;
-        u.uMountains.value = (1 - (weather.fogBlend || 0)) * this.ringStrength;
-
         // Overcast weather at night or dusk must not paint a daytime sky
-        if ((this.weatherType === 'rain' || this.weatherType === 'snow') &&
-            (this.timeKey === 'night' || this.timeKey === 'twilight')) {
-            const dim = this.timeKey === 'night' ? 0.08 : (this.weatherType === 'snow' ? 0.6 : 0.7);
-            u.uZenith.value.multiplyScalar(dim);
-            u.uMid.value.multiplyScalar(dim);
-            u.uCloudLit.value.multiplyScalar(dim);
-            u.uCloudShadow.value.multiplyScalar(dim);
+        let dim = 1;
+        if ((weatherType === 'rain' || weatherType === 'snow') && (key === 'night' || key === 'twilight')) {
+            dim = key === 'night' ? 0.08 : (weatherType === 'snow' ? 0.6 : 0.7);
         }
-
-        if (this.timeConfig) {
-            if (this.timeConfig.sunColor !== undefined) {
-                u.uSunColor.value.setHex(preset.moon ? 0xdfe8ff : this.timeConfig.sunColor);
-            }
-            this.setSunOffset(this.timeConfig.sunOffset);
-        }
-
-        this.grade = {
+        const values = {
+            timeKey: key,
+            weatherType,
+            config,
+            zenith: pick('zenith'),
+            mid: pick('mid'),
+            glow: preset.glow,
+            cloudLit: pick('cloudLit'),
+            cloudShadow: pick('cloudShadow'),
+            mountain: preset.mountain,
+            coverage: pick('coverage'),
+            stars: pick('stars'),
+            moon: preset.moon ? 1 : 0,
+            sunIntensity: preset.sunIntensity * sunScale,
+            glowStrength: preset.glowStrength * (0.25 + 0.75 * sunScale),
+            fogBlend: weather.fogBlend || 0,
+            fogShare: weatherType === 'fog' ? 1 : 0,
+            dim,
+            sunColor: config && config.sunColor !== undefined ? (preset.moon ? 0xdfe8ff : config.sunColor) : undefined,
+            sunOffset: config && config.sunOffset ? config.sunOffset : undefined,
             saturation: (weather.saturation !== undefined ? weather.saturation : 1) * preset.saturation,
             contrast: preset.contrast,
-            tint: new THREE.Color().setHex(preset.tint),
+            tint: preset.tint,
             bloom: preset.bloom,
             threshold: preset.threshold ?? 1.0
         };
+        this.skyCache.set(cacheKey, values);
+        return values;
+    }
 
+    // The sky between two resolved skies, `t` of the way to `b`. Colours and
+    // numbers blend; what has no middle (the moon, the names) switches at 0.5.
+    blendSky(a, b, t, out = this.skyBlendValues || (this.skyBlendValues = {})) {
+        const near = t < 0.5 ? a : b;
+        const number = (x, y) => x + (y - x) * t;
+        const colour = (x, y) => AtmosphereTrack.lerpHex(x, y, t);
+        out.timeKey = near.timeKey;
+        out.weatherType = near.weatherType;
+        out.config = near.config;
+        ['zenith', 'mid', 'glow', 'cloudLit', 'cloudShadow', 'mountain', 'tint'].forEach(name => { out[name] = colour(a[name], b[name]); });
+        ['coverage', 'stars', 'sunIntensity', 'glowStrength', 'fogBlend', 'fogShare', 'dim', 'saturation', 'contrast', 'bloom', 'threshold'].forEach(name => { out[name] = number(a[name], b[name]); });
+        out.moon = near.moon;
+        // The sun and the moon share one disc: it fades out, switches at 0.5, and fades in
+        if (a.moon !== b.moon) out.sunIntensity = near.sunIntensity * Math.abs(1 - 2 * t);
+        out.sunColor = a.sunColor !== undefined && b.sunColor !== undefined ? colour(a.sunColor, b.sunColor) : near.sunColor;
+        const oa = a.sunOffset;
+        const ob = b.sunOffset;
+        if (oa && ob) {
+            out.sunOffset = out.sunOffset || {};
+            out.sunOffset.x = number(oa.x, ob.x);
+            out.sunOffset.y = number(oa.y, ob.y);
+            out.sunOffset.z = number(oa.z || 0, ob.z || 0);
+        } else {
+            out.sunOffset = near.sunOffset;
+        }
+        return out;
+    }
+
+    // Write resolved sky values to the uniforms and the grade. Does not mark
+    // the environment for a bake: applySky snaps, requestRebake paces.
+    // `blend` is how far into a blend zone the values are, for the bake pacing.
+    writeSky(values, blend = 0) {
+        const u = this.skyUniforms;
+        this.timeKey = values.timeKey;
+        this.weatherType = values.weatherType;
+        if (values.config) this.timeConfig = values.config;
+        this.skyBlend = blend;
+
+        u.uZenith.value.setHex(values.zenith);
+        u.uMid.value.setHex(values.mid);
+        u.uGlowColor.value.setHex(values.glow);
+        u.uCloudLit.value.setHex(values.cloudLit);
+        u.uCloudShadow.value.setHex(values.cloudShadow);
+        u.uMountain.value.setHex(values.mountain);
+        u.uCoverage.value = values.coverage;
+        u.uStars.value = values.stars;
+        u.uMoon.value = values.moon;
+        u.uSunIntensity.value = values.sunIntensity;
+        u.uGlow.value = values.glowStrength;
+        u.uFogBlend.value = values.fogBlend;
+        this.skyBase.fogBlend = values.fogBlend;
+        this.skyBase.mountains = (1 - values.fogBlend) * this.ringStrength;
+        u.uMountains.value = this.skyBase.mountains;
+        this.fogShare = values.fogShare;
+
+        if (values.dim !== 1) {
+            u.uZenith.value.multiplyScalar(values.dim);
+            u.uMid.value.multiplyScalar(values.dim);
+            u.uCloudLit.value.multiplyScalar(values.dim);
+            u.uCloudShadow.value.multiplyScalar(values.dim);
+        }
+
+        if (values.sunColor !== undefined) u.uSunColor.value.setHex(values.sunColor);
+        if (values.sunOffset) this.setSunOffset(values.sunOffset);
+
+        const grade = this.grade || (this.grade = { tint: new THREE.Color() });
+        grade.saturation = values.saturation;
+        grade.contrast = values.contrast;
+        grade.tint.setHex(values.tint);
+        grade.bloom = values.bloom;
+        grade.threshold = values.threshold;
+    }
+
+    // Snap the sky to the current time and weather, and bake it
+    applySky() {
+        this.writeSky(this.resolveSky(this.timeKey, this.weatherType));
+        this.environmentDirty = true;
+    }
+
+    // Ask for a bake of the environment map while the sky blends. A bake
+    // costs about one frame, so it waits for 30 frames since the last one and
+    // for the blend to have moved 0.125.
+    requestRebake() {
+        if (this.frames - this.stats.lastBakeFrame < 30) return;
+        if (Math.abs(this.skyBlend - this.bakedBlend) < 0.125) return;
         this.environmentDirty = true;
     }
 
@@ -835,6 +925,9 @@ class Graphics {
         this.scene.environment = this.environmentTarget.texture;
         if (previous) previous.dispose();
         this.environmentDirty = false;
+        this.stats.envBakes++;
+        this.stats.lastBakeFrame = this.frames;
+        this.bakedBlend = this.skyBlend;
     }
 
     // Colour textures and vertex colours created by the game are authored in
@@ -988,6 +1081,7 @@ class Graphics {
     // speedRatio drives the edge blur; flash is a 0-1 lightning pulse
     update(deltaTime, speedRatio = 0, flash = 0) {
         this.time += deltaTime;
+        this.frames++;
         this.speedRatio = speedRatio;
         this.flash = flash;
         this.skyUniforms.uTime.value = this.time;
@@ -995,11 +1089,13 @@ class Graphics {
         // The horizon is whatever the fog currently is (weather retints it)
         if (this.scene.fog) {
             this.skyUniforms.uHorizon.value.copy(this.scene.fog.color);
-            // Thick fog hides the far ranges and the upper sky progressively
-            if (this.weatherType === 'fog' && this.scene.fog.density !== undefined) {
+            // Thick fog hides the far ranges and the upper sky progressively,
+            // by the share of the sky's weather that is fog
+            if (this.fogShare > 0 && this.scene.fog.density !== undefined) {
                 const thick = Math.min(1, this.scene.fog.density / 0.008);
-                this.skyUniforms.uFogBlend.value = 0.55 + 0.45 * thick;
-                this.skyUniforms.uMountains.value = (1 - thick) * this.ringStrength;
+                const toward = (base, target) => (this.fogShare >= 1 ? target : base + (target - base) * this.fogShare);
+                this.skyUniforms.uFogBlend.value = toward(this.skyBase.fogBlend, 0.55 + 0.45 * thick);
+                this.skyUniforms.uMountains.value = toward(this.skyBase.mountains, (1 - thick) * this.ringStrength);
             }
         }
 
