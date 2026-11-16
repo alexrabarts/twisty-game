@@ -4154,7 +4154,8 @@ class Environment {
 
   // Scatter an instanced forest over the drop-off slope (whichever side drops),
   // or over run-off ground by the leg's layout. Two draw calls for the whole
-  // leg, and every tree stands on the rendered ground.
+  // leg (six once the modelled shapes are in: three to a kind), and every tree
+  // stands on the rendered ground.
   createForest() {
     const startIdx = Math.max(0, this.startSegment);
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
@@ -4251,6 +4252,8 @@ class Environment {
       }
       const mesh = new THREE.InstancedMesh(geometry, material, list.length);
       mesh.name = `forest-${kind}`;
+      // The modelled trees (js/treemodels.js) take this mesh's place once they load
+      mesh.userData.plant = { kind, snowy: !!snowy };
       list.forEach((placement, n) => {
         mesh.setMatrixAt(n, placement.matrix);
         mesh.setColorAt(n, placement.tint);
@@ -4475,6 +4478,7 @@ class Environment {
     const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
 
     // Bushes along the drop-side ledge only (only in active segment range)
+    const snowy = !!(this.config.dressing.forest && this.config.dressing.forest.snowy);
     const bushGeometry = this.displaceVertices(new THREE.IcosahedronGeometry(1, 1), 0.2);
     const bushMaterials = [
       new THREE.MeshStandardMaterial({
@@ -4502,10 +4506,10 @@ class Environment {
         const bushX = point.x + bushDistance * Math.cos(point.heading);
         const bushZ = point.z - bushDistance * Math.sin(point.heading);
 
-        const leftBush = new THREE.Mesh(
-          bushGeometry,
-          bushMaterials[Math.floor(this.rand() * bushMaterials.length)],
-        );
+        const tone = Math.floor(this.rand() * bushMaterials.length);
+        const leftBush = new THREE.Mesh(bushGeometry, bushMaterials[tone]);
+        // The modelled bushes (js/treemodels.js) take this shape's place once they load
+        leftBush.userData.plant = { kind: "bush", tone, snowy };
         const bushScale = 0.7 + this.rand() * 0.7;
         // No plant roots in a face steeper than 40 degrees
         if (!this.gentleAt(bushX, bushZ, PLANT_NORMAL_Y)) continue;

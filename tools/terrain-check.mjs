@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime mutate
 // (`shortcuts` runs its own doubled-back control)
-// --no-assets keeps every leg's procedural dressing, the procedural bike and the procedural cars (js/sceneassets.js, js/bikemodels.js and js/carmodels.js swap nothing), for a before/after measure.
+// --no-assets keeps every leg's procedural dressing, trees and bushes, the procedural bike and the procedural cars (js/sceneassets.js, js/treemodels.js, js/bikemodels.js and js/carmodels.js swap nothing), for a before/after measure.
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
 // Exit: 0 ok, 1 failures, 2 no Chrome or no window.game, 3 --gpu without a hardware renderer.
 //
@@ -318,7 +318,7 @@ function installProbe(d6Sources, latSet) {
             fingerprints: await P.fingerprints(env, scene),
             decalCounts: P.decals(env).map(list => list.length),
             counts: { meshes: hashes.length, triangles: Math.round(triangles), instances: instanceCount, grounded: env.groundedObjects.length, d6: env.groundedObjects.filter(g => d6.some(r => r.test(g.label))).length },
-            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
+            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, ...(assets.trees && { trees: assets.trees }), floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
             buildMs: round(buildMs, 1)
         };
     };
@@ -1030,6 +1030,7 @@ function finishChecks(report) {
             Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${id}: ${r[key]} ${key}, over the budget of ${most} per leg`); });
             if (r.assets?.floating) failures.push(`${id}: ${r.assets.floating} modelled rocks float`);
             ['rocks', 'portals', 'rockFace'].forEach(part => { if (r.assets?.[part]?.error) failures.push(`${id}: modelled ${part} did not load: ${r.assets[part].error}`); });
+            (r.assets?.trees?.errors || []).forEach(error => failures.push(`${id}: modelled trees did not load: ${error}`));
         });
     }
     if (results.mutate) {

@@ -1,18 +1,18 @@
 # Blender asset pipeline
 
-Scripts that build the modelled scenery, the four bikes and the rider in `assets/` with Blender (5.3, headless). The game reads every file with the one reader in `js/sceneassets.js`. That file replaces the tagged procedural dressing of a leg once its files arrive; `js/bikemodels.js` does the same for a bike and its rider. Both keep the procedural meshes if a file fails. Only foggy-gorge (leg 4) has scenery assets so far.
+Scripts that build the modelled scenery, the trees, the four bikes and the rider in `assets/` with Blender (5.3, headless). The game reads every file with the one reader in `js/sceneassets.js`. That file replaces the tagged procedural dressing of a leg once its files arrive; `js/bikemodels.js` does the same for a bike and its rider, and `js/treemodels.js` for the trees and bushes. Each keeps the procedural meshes if a file fails. Only foggy-gorge (leg 4) has rocks and portals so far; every leg but high-pass has the trees.
 
 ## Rebuild
 
 From the repository root:
 
 ```sh
-for script in gorge_rocks gorge_portal rockface_detail bike_sport bike_adventure bike_scooter bike_dirt rider; do
+for script in gorge_rocks gorge_portal rockface_detail bike_sport bike_adventure bike_scooter bike_dirt rider tree_conifer tree_broadleaf tree_bush; do
   blender --background --factory-startup --python tools/blender/$script.py
 done
 ```
 
-Each script is deterministic (fixed seeds, fixed sources) and writes its output into `assets/gorge/`, `assets/bikes/`, or `assets/rockface/` for the rock face's detail, which is not one leg's. Poly Haven downloads are checked against the API's md5 and cached in `~/.cache/twisty-blender`; nothing downloaded is committed except the processed output.
+Each script is deterministic (fixed seeds, fixed sources) and writes its output into `assets/gorge/`, `assets/bikes/`, `assets/trees/`, or `assets/rockface/` for the rock face's detail, which is not one leg's. Poly Haven downloads are checked against the API's md5 and cached in `~/.cache/twisty-blender`; nothing downloaded is committed except the processed output.
 
 | Script | Output | What it makes |
 |---|---|---|
@@ -68,6 +68,30 @@ Rules for a change to a car:
 - A new body style needs an entry in `CARS` in `js/carmodels.js` and a rule in `kind()`. `kind()` must not call `Math.random`.
 - Set `TWISTY_PREVIEW=<directory>` to render the finished model from three sides after the export.
 
+## Trees and bushes
+
+| Script | Output | What it makes |
+|---|---|---|
+| `tree_conifer.py` | `trees/conifer.glb` | `conifer_spruce`, `conifer_fir`, `conifer_pine`, and each again under snow (`_snow`) for the winter leg. |
+| `tree_broadleaf.py` | `trees/broadleaf.glb` | `broadleaf_oak`, `broadleaf_beech`, `broadleaf_ash` (two crowns on a fork). |
+| `tree_bush.py` | `trees/bush.glb` | `bush_round`, `bush_low`, and each again under snow. |
+
+`tree_kit.py` is the modelling kit. A plant is one mesh with no texture: its colour is in the vertex colours (bark, the green from a dark underside to a light crown, snow) with the occlusion baked on top. A leaf or bark photo tiled over a thousand trees would show its repeat; the variety comes from the shapes and from the turn, the size and the tint the game gives each tree. A conifer is a trunk and a stack of boughs, each a skirt whose rim runs out to tips and back into notches. A broadleaf crown is lobes melted into one skin (voxel remesh), roughened and cut down to its triangles, so no triangle is spent inside it.
+
+`js/treemodels.js` swaps them in. `Environment.createForest` still builds the procedural forest, two instanced meshes tagged `userData.plant`; when a file arrives each instance moves, with its matrix and its tint unchanged, to the instanced mesh of the shape a hash of its position picks. A leg draws its trees in six calls (three shapes to a kind; three on the winter leg, which has conifers only), where the procedural forest took two. A roadside bush keeps its mesh and its seat and takes a modelled shape, turned by the same hash.
+
+Rules for a change to a plant:
+
+- The game sinks a tree's origin 0.6 m under the ground at any scale (0.55 to 1.55), so the ground cuts the model between y = 0.4 and y = 1.1. Keep a plain trunk through that range, about 0.4 to 0.5 in radius (the solid circle of a trunk is 0.6), and nothing else below y = 1.15.
+- Keep each tree at or under 220 triangles and each bush under 80 (`TREE_BUDGET`, `BUSH_BUDGET`). Storm-valley draws 1,173 trees: at 220 each they take 258,000 of the leg's 450,000 triangles. The scripts and `tests/unit/treemodels.test.js` fail above these.
+- A bush is modelled like the ball it replaces: centred on its origin, about a metre in radius, reaching 0.3 below it.
+- The vertex colours are the plant's own colours, written linear (16 bits a channel, as the exporter writes them). The game multiplies a tree by its instance tint and a bush by one of two tones (`BUSH_TONES`); the snow variants of a bush are not tinted.
+- A new shape needs its node name and its share in `SHAPES` in `js/treemodels.js`. A conifer needs its `_snow` twin.
+- Set `TWISTY_PREVIEW=<directory>` to render the plants of a file in a row after the export.
+- High-pass keeps the procedural trees (`KEPT` in `js/treemodels.js`): the frozen golden binds that leg's mesh count, triangle count and vertices.
+
+Check: `npm test` (`tests/unit/treemodels.test.js`) and `node tools/terrain-check.mjs budget`, which reports each leg's trees under `assets.trees`.
+
 ## Format
 
 Plain glTF binary with WebP textures (`EXT_texture_webp`), at most 1024 px. Not Draco or KTX2: in three r150 `GLTFLoader`, `DRACOLoader` and `KTX2Loader` exist only as ES modules that import `three` by bare name, which this script-tag page cannot resolve without an import map in `index.html` and a second copy of three. `js/sceneassets.js` reads the subset the exporter writes: one primitive per material, a node translation but no rotation or scale, and no interleaving. The bike files have no textures. `bike_kit.py` rewrites them after the export with the occlusion (`COLOR_0`) as bytes and the normals as signed bytes padded to four (`KHR_mesh_quantization`), which takes a third off each file. With about 1.5 MB for the leg, the geometry is a small share and a Draco decoder would cost more than it saves.
@@ -98,4 +122,4 @@ All textures are CC0 from [Poly Haven](https://polyhaven.com), fetched at 1k thr
 - [`rock_boulder_dry`](https://polyhaven.com/a/rock_boulder_dry) (Dimitrios Savva, Rico Cilliers): the rocks' surface and the portal's dressed stone
 - [`rough_block_wall`](https://polyhaven.com/a/rough_block_wall) (Rob Tuytel): the portal's masonry
 
-The geometry and the rock face's detail are generated by the scripts. The bikes and the rider use no downloaded source.
+The geometry and the rock face's detail are generated by the scripts. The bikes, the rider, the trees and the bushes use no downloaded source.

@@ -1,7 +1,8 @@
 // Modelled scenery for the legs that have it: rocks, tunnel portals and the
 // rock face's texture, built by the Blender scripts in tools/blender into
 // assets/. Environment calls SceneAssets.dress() at the end of every build.
-// The bikes and the rider (js/bikemodels.js) come through the same reader.
+// The bikes and the rider (js/bikemodels.js) and the trees and bushes
+// (js/treemodels.js) come through the same reader.
 // The leg starts with its procedural dressing; when the files arrive the
 // tagged procedural meshes (userData.dressing) are swapped for the models at
 // the same places and sizes. Nothing here touches the ground, the physics or
@@ -618,8 +619,10 @@ const SceneAssets = (() => {
   // Starts the downloads for a leg and swaps its dressing when they arrive.
   // Resolves to what was swapped, per part, and the leg's asset bytes.
   function dress(env) {
-    const spec = LEGS[env.legIndex];
-    if (!spec) return null;
+    // The trees and bushes of any leg that has them (js/treemodels.js)
+    const plants = typeof TreeModels !== "undefined" ? TreeModels.dress(env) : null;
+    if (!LEGS[env.legIndex] && !plants) return null;
+    const spec = LEGS[env.legIndex] || {};
     const started = performance.now();
     const part = (name, load, apply) => load().then((asset) => apply(asset)).catch((error) => {
       console.error(`SceneAssets: ${name} for leg ${env.legIndex} kept its procedural meshes:`, error);
@@ -631,12 +634,13 @@ const SceneAssets = (() => {
       portals: spec.portal ? part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)) : { portals: 0 },
       rockFace: spec.rockFace ? part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)) : { ribbons: 0 },
     };
-    return Promise.all(Object.values(parts)).then(([rocks, portals, rockFace]) => ({
+    return Promise.all([...Object.values(parts), plants]).then(([rocks, portals, rockFace, trees]) => ({
       rocks,
       portals,
       rockFace,
+      ...(trees && { trees }),
       violations: rocks.violations || [],
-      bytes: files(env.legIndex).reduce((sum, url) => sum + (bytes.get(url) || 0), 0),
+      bytes: [...files(env.legIndex), ...(trees ? trees.files : [])].reduce((sum, url) => sum + (bytes.get(url) || 0), 0),
       ms: Math.round(performance.now() - started),
     }));
   }
