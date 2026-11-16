@@ -178,9 +178,14 @@ const LANDMARKS = {
       const peak = height + 160 * vertexHash(n, at, 3);
       const out = sign * (lateral + 90 * vertexHash(at + n, 1, 1));
       const ahead = 120 + k * 110;
-      const x = anchor.x + Math.cos(anchor.heading) * out + Math.sin(anchor.heading) * ahead;
-      const z = anchor.z - Math.sin(anchor.heading) * out + Math.cos(anchor.heading) * ahead;
-      this.addApproachPeak({ x, z, height: peak + low - baseY, radius: peak * 0.95, twist: seed, seed, baseY }, positions, colors, indices);
+      const radius = peak * 0.95;
+      const spot = this.standPeakClear({
+        x: anchor.x + Math.cos(anchor.heading) * out + Math.sin(anchor.heading) * ahead,
+        z: anchor.z - Math.sin(anchor.heading) * out + Math.cos(anchor.heading) * ahead,
+        height: peak + low - baseY, baseY,
+      }, [Math.cos(anchor.heading) * sign, -Math.sin(anchor.heading) * sign], Environment.approachPeakReach(radius));
+      if (!spot) continue;
+      this.addApproachPeak({ x: spot.x, z: spot.z, height: peak + low - baseY, radius, twist: seed, seed, baseY }, positions, colors, indices);
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
@@ -202,9 +207,13 @@ const LANDMARKS = {
     const baseY = (floor.y !== undefined ? floor.y : point.y - 120) - 10;
     [[-140, height, 0.9], [150, height * 0.86, 0.8]].forEach(([along, tall, girth], n) => {
       const out = side * (lateral + n * 60);
-      const x = point.x + Math.cos(point.heading) * out + Math.sin(point.heading) * along;
-      const z = point.z - Math.sin(point.heading) * out + Math.cos(point.heading) * along;
-      this.addPassPeak({ x, z, height: point.y + tall - baseY, radius: tall * girth, twist: n * 2.1 + 0.7, seed: 31 + n * 17, baseY, snow: true }, positions, colors);
+      const spot = this.standPeakClear({
+        x: point.x + Math.cos(point.heading) * out + Math.sin(point.heading) * along,
+        z: point.z - Math.sin(point.heading) * out + Math.cos(point.heading) * along,
+        height: point.y + tall - baseY, baseY,
+      }, [Math.cos(point.heading) * side, -Math.sin(point.heading) * side], Environment.passPeakReach(tall * girth), { rings: 9 });
+      if (!spot) return;
+      this.addPassPeak({ x: spot.x, z: spot.z, height: point.y + tall - baseY, radius: tall * girth, twist: n * 2.1 + 0.7, seed: 31 + n * 17, baseY, snow: true }, positions, colors);
     });
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
@@ -2730,6 +2739,50 @@ class Environment {
     this.tagMeshes(range, "mountain");
     this.scene.add(range);
     this.registerGrounded(range, "approach range");
+  }
+
+  // The furthest an approach peak's flank spreads from its axis at height
+  // share v (addApproachPeak at its widest ridge)
+  static approachPeakReach(radius) {
+    return (v) => radius * (1 - v) * (1 + 0.35 * (1 - v) * (1 - v)) * 1.34;
+  }
+
+  // The same for a pass peak (addPassPeak)
+  static passPeakReach(radius) {
+    return (v) => radius * Math.pow(1 - v, 1.25) * (1 + 0.3 * (1 - v) * (1 - v)) * 1.34;
+  }
+
+  // Whether a peak rising `height` from `baseY` at (x, z) keeps off the
+  // leg's whole road: within `corridor` metres of either road edge its
+  // flanks stay `below` metres under the road. A face between two rings
+  // reaches no further out than its lower ring and no higher than its upper
+  // ring (`rise`: the most a ring is lifted over its share), so the test
+  // holds for the drawn faces, not only the vertices.
+  peakClearOfRoad({ x, z, height, baseY }, reach, { rings = 7, rise = 1.08, corridor = 40, below = 5 } = {}) {
+    const path = this.roadPath;
+    const half = this.roadWidth / 2;
+    for (let i = 0; i < path.length; i++) {
+      const out = Math.hypot(x - path[i].x, z - path[i].z) - half - corridor;
+      if (out <= 0) return false;
+      if (out > reach(0)) continue;
+      let ring = 0;
+      while (ring < rings && reach((ring + 1) / rings) >= out) ring++;
+      const top = baseY + height * Math.min(1, ((ring + 1) / rings) * rise);
+      if (top > path[i].y - below) return false;
+    }
+    return true;
+  }
+
+  // A landmark peak moved outward along `direction` (a unit vector on the
+  // ground) until it keeps off the road (peakClearOfRoad), in 30 m steps;
+  // null when 1.5 km is not enough
+  standPeakClear(peak, [dx, dz], reach, options) {
+    for (let step = 0; step <= 50; step++) {
+      const spot = { ...peak, x: peak.x + dx * step * 30, z: peak.z + dz * step * 30 };
+      if (this.peakClearOfRoad(spot, reach, options)) return spot;
+    }
+    console.error(`No place clear of the road for a peak near (${Math.round(peak.x)}, ${Math.round(peak.z)})`);
+    return null;
   }
 
   // One peak of the approach range: a cone with ridged, uneven flanks, rock

@@ -202,6 +202,8 @@ A course is a list of parts (`Terrain.partsProfile`): each part has its own grou
 | lake | 470-620 | cliff road, wall left, drop to the lake right (cut) | golden, light shafts | twin snow peaks across the lake |
 | pass | 620-700 | snow ridge, crest 165 m at 660 (cut) | golden | summit cairn; pass peaks, snow poles, cairns, summit sign |
 
+A landmark peak (the valley's `range`, the lake's `twinPeaks`) keeps off the leg's whole road, not only the road near its anchor: `Environment.standPeakClear` moves it outward in 30 m steps until `peakClearOfRoad` holds, which bounds each face by its rings (no further out than its lower ring, no higher than its upper one) and asks that within 40 m of either road edge the flanks stay 5 m under the road. Without it a range peak placed ahead of segment 383 stood across the road at segments 392 to 411, where the road bends into the valley head. `tests/unit/course-mountain-dawn.test.js` drops a vertical line through the road and 40 m either side at every segment and allows no mountain mesh there.
+
 Road height 12 to 166 m, largest step 0.57 m, gates every 50 segments and the last at 698 (finish line 704). The `bridge` span (`Terrain`'s `bridgeSide`) drops 8.6 m to the river bed beside a parapet that crashes 0.9 m past the road edge. Proofs: `tests/unit/course-mountain-dawn.test.js`, and `node tools/terrain-check.mjs course,window,stream,preview,finish --legs mountain-dawn` (`--fixture` runs them on the 150-segment test course; `course --mutate flat-parts` must fail).
 
 ## Only the active leg exists

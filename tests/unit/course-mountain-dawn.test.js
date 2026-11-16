@@ -159,6 +159,33 @@ describe('Mountain Dawn, as built', () => {
         expect(worst.off).toBeLessThanOrEqual(1.5);
     });
 
+    // A landmark peak once stood across the road at the head of the valley
+    // (segments 392 to 411): the road ran into a mountain's flank. A vertical
+    // line through the road and 40 m either side of its edges, at every
+    // segment, meets no mountain mesh (landmark or backdrop) less than 5 m
+    // under the road.
+    test('no mountain stands on or over the road, or within 40 m of its edges', () => {
+        const THREE = game.THREE;
+        env.scene.updateMatrixWorld(true);
+        const mountains = [];
+        env.scene.traverse((object) => { if (object.isMesh && object.userData.type === 'mountain') mountains.push(object); });
+        expect(mountains.length).toBeGreaterThanOrEqual(3);
+        const ray = new THREE.Raycaster();
+        const down = new THREE.Vector3(0, -1, 0);
+        const from = new THREE.Vector3();
+        const hits = [];
+        const reach = env.roadWidth / 2 + 40;
+        env.roadPath.forEach((point, i) => {
+            for (let lateral = -reach; lateral <= reach; lateral += 10) {
+                from.set(point.x + Math.cos(point.heading) * lateral, point.y + 3000, point.z - Math.sin(point.heading) * lateral);
+                ray.set(from, down);
+                const hit = ray.intersectObjects(mountains, false)[0];
+                if (hit && hit.point.y > point.y - 5) hits.push([i, lateral, hit.object.parent.name]);
+            }
+        });
+        expect(hits.slice(0, 5)).toEqual([]);
+    });
+
     test('every landmark is built, named for its part', () => {
         ['meadow', 'wood', 'valley', 'village', 'lake', 'pass'].forEach((id) => {
             const group = env.scene.getObjectByName(`landmark-${id}`);
