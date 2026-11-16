@@ -156,7 +156,7 @@ describe('the parts model', () => {
             expect(Terrain.lookAt(config, 75).fogDensity).toBeCloseTo(0.004, 9);
             expect(Terrain.lookAt(config, 50).fogDensity).toBeCloseTo((0.0015 + 0.004) / 2, 9);
             expect(Terrain.lookAt(config, 120).render.shadowSpan).toBe(200);
-            expect(Terrain.lookAt(config, 120)).toMatchObject({ timeOfDay: 'dusk', weather: 'rain', weatherIntensity: 0.5 });
+            expect(Terrain.lookAt(config, 120)).toMatchObject({ timeOfDay: 'twilight', weather: 'rain', weatherIntensity: 0.5 });
             expect(Terrain.lookAt(config, 20)).toMatchObject({ timeOfDay: 'dawn', weather: 'clear', weatherIntensity: 0 });
             const grass = Terrain.lookAt(config, 50).grassColor;
             expect((grass >> 8) & 255).toBeGreaterThan(0x5a);

@@ -87,13 +87,17 @@ class AtmosphereTrack {
         const path = environment.roadPath;
         const render = config.render || {};
         if (config.parts) {
-            return AtmosphereTrack.build(config.parts.map(part => ({
-                startSegment: part.startSegment,
-                endSegment: part.endSegment,
+            // A course part spans [from, to) in the leg's own numbering; a track part spans [start, end]
+            const spans = config.parts.map(part => ({ start: part.startSegment ?? part.from, end: part.endSegment ?? part.to - 1 }));
+            return AtmosphereTrack.build(config.parts.map((part, n) => ({
+                startSegment: spans[n].start,
+                endSegment: spans[n].end,
                 look: {
-                    timeOfDay: leg.timeOfDay,
+                    timeOfDay: part.timeOfDay || leg.timeOfDay,
+                    weather: part.weather,
+                    weatherIntensity: part.weatherIntensity,
                     fogDensity: config.look.fogDensity,
-                    baseY: AtmosphereTrack.lowestRoadHeight(path, part.startSegment, part.endSegment),
+                    baseY: AtmosphereTrack.lowestRoadHeight(path, spans[n].start, spans[n].end),
                     shadowSpan: render.shadowSpan,
                     ...part.look
                 }

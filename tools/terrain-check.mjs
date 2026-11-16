@@ -193,6 +193,13 @@ async function openGame(browser, port) {
             await page.addScriptTag({ url: '/js/sceneassets.js' });
             state.injected = true;
         }
+        // The 150-segment fixture course stands in for a converted leg until one ships (installed on leg 1)
+        if (flag('fixture')) {
+            const source = readFileSync(join(root, 'tests/fixtures/course-fixture.js'), 'utf8').replace(/^export /gm, '');
+            await page.evaluate(code => {
+                new Function(`${code}\nCourse.LEGS[FIXTURE_LEG] = fixtureCourse(Terrain); Terrain.adopt(Course.LEGS);\nconst leg = game.tourSystem.legs.find(row => row.id === FIXTURE_LEG); leg.startSegment = 0; leg.endSegment = Course.LEGS[FIXTURE_LEG].segments - 1;`)();
+            }, source);
+        }
         await page.evaluate(installProbe, D6_CLASSES.map(r => r.source), LATERALS);
         return page;
     }
@@ -1064,6 +1071,7 @@ const PROBES = {
             const leg = game.tourSystem.legs[i];
             return { id: leg.id, boardId: TourSystem.boardId(leg), row: Course.boardTable()[TourSystem.boardId(leg)] || null, last: i === game.tourSystem.legs.length - 1 };
         }, index);
+        // --fixture: leg 1 is the 3-gate fixture board; the default reply is an old server (no fields), --reply new states them
         const reply = { sessionId: 'probe-session', sessionToken: 'probe-token-not-a-secret' };
         if (info.row && option('reply') === 'new') Object.assign(reply, { protocol: 2, gates: info.row.gates });
         const calls = { reply };
@@ -1095,6 +1103,8 @@ const PROBES = {
             await service.recordQueue;
             return { finished: game.finished, crashed: game.vehicle.crashed, unsupported: service.unsupported };
         }).catch(error => ({ error: String(error) }));
+        // Counted before "next leg" starts the following leg's own session
+        const startRunCalls = (calls.startRun || []).length;
         let nameFormShown = false;
         let submitState = 'none';
         if (ridden.finished && !info.last) {
@@ -1116,7 +1126,7 @@ const PROBES = {
         const [submit] = calls.submitRun || [];
         return {
             finished: ridden.finished === true,
-            startRunCalls: (calls.startRun || []).length,
+            startRunCalls,
             submitCalls: (calls.submitRun || []).length,
             submitState,
             nameFormShown,

@@ -56,7 +56,7 @@ export function fixtureCourse(Terrain) {
                 id: 'lake', from: 100, to: 150, profile: cliff, join: 'cut', blend: 12,
                 look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
                 render: { cullMax: 800, shadowSpan: 200 },
-                timeOfDay: 'dusk', weather: 'rain', weatherIntensity: 0.5,
+                timeOfDay: 'twilight', weather: 'rain', weatherIntensity: 0.5,
                 dressing: { forest: { coniferShare: 0.9, snowy: false }, outcrops: { perSegment: 2 }, rockfall: 0.25, backdrop: [] },
                 landmark: { id: 'lake-pier', at: 125 }
             }

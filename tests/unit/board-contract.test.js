@@ -31,6 +31,16 @@ describe('the server table and the game', () => {
         expect(courses).toEqual(game.Course.boardTable());
     });
 
+    test('the server table has a row for every converted leg, so an emptied table cannot pass', () => {
+        const converted = Object.keys(game.Course.LEGS);
+        expect(Object.keys(courses)).toHaveLength(converted.length);
+        converted.forEach(id => {
+            const row = courses[game.TourSystem.boardId(id)];
+            expect(row).toBeDefined();
+            expect(row.gates).toBe(game.Course.LEGS[id].gates.length);
+        });
+    });
+
     test('every leg of the shared course has 5 gates, and the server expects 5', () => {
         legs(game).forEach((leg, index) => {
             const { env } = quiet(() => buildEnvironment(game, index));
@@ -62,6 +72,11 @@ describe('the server table and the game', () => {
             installed.Course.LEGS[FIXTURE_LEG] = fixtureCourse(installed.Terrain);
             installed.Terrain.adopt(installed.Course.LEGS);
             built = quiet(() => buildEnvironment(installed, 0));
+        });
+
+        test('a table that lacks the converted leg fails the same check as the file', () => {
+            expect(Object.keys(installed.Course.boardTable())).toHaveLength(Object.keys(installed.Course.LEGS).length);
+            expect({}).not.toEqual(installed.Course.boardTable());
         });
 
         test('boardTable() names the board id with the gate and segment counts', () => {
