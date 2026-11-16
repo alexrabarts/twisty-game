@@ -63,11 +63,11 @@ describe('RaceTiming splits', () => {
     });
 
     test('validSplits needs every gate, increasing and positive', () => {
-        expect(RaceTiming.validSplits(PB)).toBe(true);
-        expect(RaceTiming.validSplits(PB.slice(0, 4))).toBe(false);
-        expect(RaceTiming.validSplits([10000, 9000, 33000, 44000, 56000])).toBe(false);
-        expect(RaceTiming.validSplits([10000, undefined, 33000, 44000, 56000])).toBe(false);
-        expect(RaceTiming.validSplits('nope')).toBe(false);
+        expect(RaceTiming.validSplits(PB, 5)).toBe(true);
+        expect(RaceTiming.validSplits(PB.slice(0, 4), 5)).toBe(false);
+        expect(RaceTiming.validSplits([10000, 9000, 33000, 44000, 56000], 5)).toBe(false);
+        expect(RaceTiming.validSplits([10000, undefined, 33000, 44000, 56000], 5)).toBe(false);
+        expect(RaceTiming.validSplits('nope', 5)).toBe(false);
     });
 });
 
@@ -80,27 +80,27 @@ describe('RaceTiming personal-best split storage', () => {
 
     test('stores splits when a full run beats the best time', () => {
         const storage = memoryStorage();
-        expect(RaceTiming.saveSplitsIfBest(storage, key, PB, true)).toBe(true);
-        expect(RaceTiming.loadSplits(storage, key)).toEqual(PB);
+        expect(RaceTiming.saveSplitsIfBest(storage, key, PB, true, 5)).toBe(true);
+        expect(RaceTiming.loadSplits(storage, key, 5)).toEqual(PB);
     });
 
     test('never stores splits from a run that did not beat the best time', () => {
         const storage = memoryStorage({ [key]: JSON.stringify(PB) });
         const slower = PB.map(t => t + 500);
-        expect(RaceTiming.saveSplitsIfBest(storage, key, slower, false)).toBe(false);
-        expect(RaceTiming.loadSplits(storage, key)).toEqual(PB);
+        expect(RaceTiming.saveSplitsIfBest(storage, key, slower, false, 5)).toBe(false);
+        expect(RaceTiming.loadSplits(storage, key, 5)).toEqual(PB);
     });
 
     test('never stores an incomplete run, even a fast one', () => {
         const storage = memoryStorage();
-        expect(RaceTiming.saveSplitsIfBest(storage, key, [1000, 2000], true)).toBe(false);
+        expect(RaceTiming.saveSplitsIfBest(storage, key, [1000, 2000], true, 5)).toBe(false);
         expect(storage.data[key]).toBeUndefined();
     });
 
     test('corrupted or missing splits load as null', () => {
-        expect(RaceTiming.loadSplits(memoryStorage(), key)).toBeNull();
-        expect(RaceTiming.loadSplits(memoryStorage({ [key]: '{oops' }), key)).toBeNull();
-        expect(RaceTiming.loadSplits(memoryStorage({ [key]: '[1,2]' }), key)).toBeNull();
+        expect(RaceTiming.loadSplits(memoryStorage(), key, 5)).toBeNull();
+        expect(RaceTiming.loadSplits(memoryStorage({ [key]: '{oops' }), key, 5)).toBeNull();
+        expect(RaceTiming.loadSplits(memoryStorage({ [key]: '[1,2]' }), key, 5)).toBeNull();
     });
 });
 
@@ -111,10 +111,10 @@ describe('RaceTiming record and finish', () => {
             { rank: 2, playerName: 'ACE', totalTime: 50000, flagged: false },
             { rank: 3, playerName: 'BOB', totalTime: 52000, flagged: false, checkpointTimes: PB }
         ];
-        expect(RaceTiming.pickRecord(entries)).toEqual({ playerName: 'ACE', totalTime: 50000, checkpointTimes: null });
-        expect(RaceTiming.pickRecord([entries[2]]).checkpointTimes).toEqual(PB);
-        expect(RaceTiming.pickRecord([])).toBeNull();
-        expect(RaceTiming.pickRecord(undefined)).toBeNull();
+        expect(RaceTiming.pickRecord(entries, 5)).toEqual({ playerName: 'ACE', totalTime: 50000, checkpointTimes: null });
+        expect(RaceTiming.pickRecord([entries[2]], 5).checkpointTimes).toEqual(PB);
+        expect(RaceTiming.pickRecord([], 5)).toBeNull();
+        expect(RaceTiming.pickRecord(undefined, 5)).toBeNull();
     });
 
     test('finish headline: PB delta on the finish time, record delta on the board time', () => {
@@ -130,5 +130,31 @@ describe('RaceTiming record and finish', () => {
         expect(f.isBest).toBe(true);
         expect(f.pbDelta).toBeNull();
         expect(f.recordDelta).toBeNull();
+    });
+});
+
+describe('RaceTiming with a gate count of any size', () => {
+    const splits = count => Array.from({ length: count }, (_, i) => (i + 1) * 40000);
+
+    test('the helpers take the count from the caller and have no default', () => {
+        expect(RaceTiming.CHECKPOINTS).toBeUndefined();
+        expect(RaceTiming.validSplits(splits(14), 14)).toBe(true);
+        expect(RaceTiming.validSplits(splits(14), 5)).toBe(false);
+        expect(RaceTiming.validSplits(splits(5), 14)).toBe(false);
+        expect(RaceTiming.validSplits(splits(20), 20)).toBe(true);
+    });
+
+    test('best splits of 14 gates round-trip and are not read back as 5', () => {
+        const storage = memoryStorage();
+        const key = RaceTiming.splitsKey('mountain-dawn-v3');
+        expect(RaceTiming.saveSplitsIfBest(storage, key, splits(14), true, 14)).toBe(true);
+        expect(RaceTiming.loadSplits(storage, key, 14)).toEqual(splits(14));
+        expect(RaceTiming.loadSplits(storage, key, 5)).toBeNull();
+    });
+
+    test('a record keeps its splits only when the count matches', () => {
+        const entries = [{ playerName: 'ACE', totalTime: 560000, checkpointTimes: splits(14) }];
+        expect(RaceTiming.pickRecord(entries, 14).checkpointTimes).toEqual(splits(14));
+        expect(RaceTiming.pickRecord(entries, 5).checkpointTimes).toBeNull();
     });
 });

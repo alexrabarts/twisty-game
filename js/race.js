@@ -1,10 +1,10 @@
 // Race timing helpers: splits, deltas and the stored personal-best splits.
+// The gate count belongs to the leg (env.checkpoints.length), so every helper
+// that needs it takes it as an argument.
 // Pure functions (storage is passed in) so the rules can be tested without
 // the game. Time is the ranking factor; these feed the HUD timer, the
 // checkpoint split popup and the finish screen.
 const RaceTiming = {
-    CHECKPOINTS: 5, // Gates per leg - must match environment.js and functions/index.js
-
     // m:ss.cc - hundredths are enough to tell two close runs apart on screen
     formatTime(ms) {
         if (!Number.isFinite(ms) || ms < 0) return '-:--.--';
@@ -38,7 +38,7 @@ const RaceTiming = {
         return 'even';
     },
 
-    validSplits(splits, count = RaceTiming.CHECKPOINTS) {
+    validSplits(splits, count) {
         if (!Array.isArray(splits) || splits.length !== count) return false;
         for (let i = 0; i < count; i++) {
             if (!Number.isFinite(splits[i]) || splits[i] <= 0) return false;
@@ -53,7 +53,7 @@ const RaceTiming = {
         return `motorcycleBestSplits_${boardId}`;
     },
 
-    loadSplits(storage, key, count = RaceTiming.CHECKPOINTS) {
+    loadSplits(storage, key, count) {
         let raw = null;
         try {
             raw = storage.getItem(key);
@@ -73,7 +73,7 @@ const RaceTiming = {
 
     // Only a full run that beat the best time may replace the stored splits:
     // splits from a slower run would make the comparison lie
-    saveSplitsIfBest(storage, key, splits, beatBest, count = RaceTiming.CHECKPOINTS) {
+    saveSplitsIfBest(storage, key, splits, beatBest, count) {
         if (!beatBest || !RaceTiming.validSplits(splits, count)) return false;
         try {
             storage.setItem(key, JSON.stringify(splits.slice(0, count)));
@@ -86,7 +86,7 @@ const RaceTiming = {
 
     // The record to chase: the fastest entry not flagged as an anomaly.
     // checkpointTimes is null until the backend returns it.
-    pickRecord(entries, count = RaceTiming.CHECKPOINTS) {
+    pickRecord(entries, count) {
         if (!Array.isArray(entries)) return null;
         const usable = entries.filter(e => e && Number.isFinite(e.totalTime) && e.totalTime > 0);
         if (usable.length === 0) return null;

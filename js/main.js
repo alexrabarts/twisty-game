@@ -534,7 +534,7 @@ class Game {
     }
 
     gateTotal() {
-        return this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : RaceTiming.CHECKPOINTS;
+        return this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 0;
     }
 
     removeRunOverlays() {
@@ -1661,14 +1661,14 @@ class Game {
         const bestTimeKey = finishedLeg ? this.bestTimeKey(finishedLeg) : 'motorcycleBestTime';
         const previousBest = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
         const previousBestMs = previousBest < 999999 ? previousBest * 1000 : NaN;
-        const boardMs = this.checkpointTimes[RaceTiming.CHECKPOINTS - 1];
+        const boardMs = this.checkpointTimes[this.gateTotal() - 1];
         const result = RaceTiming.finish(this.finishTime, previousBestMs, boardMs, this.record);
         this.bestTime = previousBest;
         if (result.isBest) {
             this.bestTime = timeSeconds;
             localStorage.setItem(bestTimeKey, timeSeconds.toString());
             if (finishedLeg) {
-                RaceTiming.saveSplitsIfBest(localStorage, this.bestSplitsKey(finishedLeg), this.checkpointTimes, true);
+                RaceTiming.saveSplitsIfBest(localStorage, this.bestSplitsKey(finishedLeg), this.checkpointTimes, true, this.gateTotal());
             }
         }
 
@@ -2080,7 +2080,7 @@ class Game {
     // online record once it arrives. The start never waits on the network,
     // and a failed fetch only means no record comparison this run.
     loadSplitReferences(leg) {
-        this.bestSplits = RaceTiming.loadSplits(localStorage, this.bestSplitsKey(leg));
+        this.bestSplits = RaceTiming.loadSplits(localStorage, this.bestSplitsKey(leg), this.gateTotal());
         this.record = null;
         if (!this.leaderboardService) return;
         const board = TourSystem.boardId(leg);
@@ -2089,7 +2089,7 @@ class Game {
             // A leg change while the fetch was in flight makes this stale
             if (this.recordBoard !== board) return;
             if (result && result.success) {
-                this.record = RaceTiming.pickRecord(result.entries);
+                this.record = RaceTiming.pickRecord(result.entries, this.gateTotal());
             } else {
                 console.warn('Record unavailable for', board, result && result.error);
             }
@@ -2663,7 +2663,7 @@ class Game {
 
         // Show wheelie help when over halfway round the course
         if (!this.hasShownWheelieHelp && !this.vehicle.crashed && !this.finished) {
-            if (this.checkpointsPassed >= 3) { // Show after passing 3 checkpoints (over halfway)
+            if (this.checkpointsPassed >= Math.ceil(this.gateTotal() / 2)) { // Over halfway round the course
                 this.showWheelieHelpNotification();
                 this.hasShownWheelieHelp = true;
             }
@@ -3190,7 +3190,7 @@ class Game {
     }
 
     showCheckpointNotification(checkpointNum, points) {
-        const totalCheckpoints = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 10;
+        const totalCheckpoints = this.gateTotal();
         showCallout(`Checkpoint ${checkpointNum}/${totalCheckpoints} +${points}`, 'info', 1000);
     }
     
