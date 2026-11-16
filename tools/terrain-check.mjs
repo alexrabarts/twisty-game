@@ -317,7 +317,7 @@ function installProbe(d6Sources, latSet) {
             fingerprints: await P.fingerprints(env, scene),
             decalCounts: P.decals(env).map(list => list.length),
             counts: { meshes: hashes.length, triangles: Math.round(triangles), instances: instanceCount, grounded: env.groundedObjects.length, d6: env.groundedObjects.filter(g => d6.some(r => r.test(g.label))).length },
-            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
+            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, village: assets.village, floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
             buildMs: round(buildMs, 1)
         };
     };
@@ -1028,7 +1028,7 @@ function finishChecks(report) {
             if (!(r.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.solidBoulders} solid boulders, over the budget of ${SOLID_BOULDER_BUDGET} per leg`);
             Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${id}: ${r[key]} ${key}, over the budget of ${most} per leg`); });
             if (r.assets?.floating) failures.push(`${id}: ${r.assets.floating} modelled rocks float`);
-            ['rocks', 'portals', 'rockFace'].forEach(part => { if (r.assets?.[part]?.error) failures.push(`${id}: modelled ${part} did not load: ${r.assets[part].error}`); });
+            ['rocks', 'portals', 'rockFace', 'village'].forEach(part => { if (r.assets?.[part]?.error) failures.push(`${id}: modelled ${part} did not load: ${r.assets[part].error}`); });
         });
     }
     if (results.mutate) {
