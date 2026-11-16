@@ -10,6 +10,8 @@ const HudRules = {
     // The first frames of a leg compile shaders and can take seconds each
     START_CARD_DELAY_FRAMES: 3,
     SPLIT_MS: 3000,
+    // Above this many gates the pips shrink (css/ui.css, #hudGatePips[data-many])
+    MANY_GATES: 8,
     CALLOUT_LIMIT: 3,
     FPS_KEY: 'twistyShowFps',
 
@@ -142,6 +144,9 @@ class Hud {
             this.gateTotal = total;
             pips.textContent = '';
             for (let i = 0; i < total; i++) pips.appendChild(this.doc.createElement('i'));
+            // A long leg has 14 to 20 gates: smaller pips keep the row on a phone
+            if (total > HudRules.MANY_GATES) pips.dataset.many = '';
+            else delete pips.dataset.many;
         }
         if (pips) {
             Array.from(pips.children).forEach((pip, i) => pip.classList.toggle('on', i < passed));

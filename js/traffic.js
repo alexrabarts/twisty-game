@@ -271,6 +271,22 @@ class Traffic {
     }
     
 
+    // A checkpoint restart: a car within `radius` segments of the rider moves
+    // to the first free slot ahead, by a fixed rule with no random draw, so a
+    // restart never puts a car on the rider and never skips traffic further on
+    clearAround(segment, radius) {
+        const range = legSegmentRange(this.environment);
+        const taken = (slot, except) => this.cars.some(other => other !== except && Math.abs(other.currentSegment - slot) <= 2);
+        this.cars.forEach(car => {
+            if (Math.abs(car.currentSegment - segment) > radius) return;
+            let slot = segment + radius + 1;
+            while (taken(slot, car) && slot < range.end) slot++;
+            car.currentSegment = Math.min(slot, range.end);
+            car.segmentProgress = 0;
+            car.updatePosition();
+        });
+    }
+
     reset() {
         this.cars.forEach(car => car.remove());
         this.motorcycles.forEach(motorcycle => motorcycle.remove());

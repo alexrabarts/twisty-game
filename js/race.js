@@ -107,8 +107,9 @@ const RaceTiming = {
     },
 
     // The finish screen headline. finishMs is the finish-line time (what the
-    // personal best is kept in); boardMs is the last-gate time the online
-    // leaderboard ranks by, so the record gap compares like with like.
+    // personal best is kept in); boardMs is the time the online leaderboard
+    // ranks by (the last gate on the shared course, the finish line on a
+    // converted leg), so the record gap compares like with like.
     finish(finishMs, previousBestMs, boardMs, record) {
         const pbDelta = RaceTiming.delta(finishMs, previousBestMs);
         return {

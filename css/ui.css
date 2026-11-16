@@ -168,6 +168,15 @@ canvas {
     transition: background var(--dur) var(--ease-out), transform var(--dur) var(--ease-pop);
 }
 
+#hudGatePips[data-many] {
+    gap: 2px;
+}
+
+#hudGatePips[data-many] i {
+    width: calc(var(--fs-meta) * 0.4);
+    height: calc(var(--fs-meta) * 0.4);
+}
+
 .hud-gates i.on {
     background: var(--c-go);
     transform: scale(1.15);

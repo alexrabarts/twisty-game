@@ -11,6 +11,17 @@ class LeaderboardService {
         this.checkpointTimes = [];
         this.proofChain = [];
         this.deviceFingerprint = null;
+        // What the leg built and the server states must agree on before any
+        // time is sent. protocol 1 is a board on the shared course (5 gates,
+        // the last gate time ranks); protocol 2 is a converted leg (the
+        // finish-line time ranks, with its restart count).
+        this.protocol = 1;
+        this.gates = 5;
+        this.restarts = 0;
+        this.finishTime = null;
+        this.finishProof = null;
+        // The server cannot take this leg's runs: no name form, no submit
+        this.unsupported = false;
     }
 
     /**
@@ -75,9 +86,15 @@ class LeaderboardService {
     }
 
     /**
-     * Start a new run session
+     * Start a new run session.
+     * expected is what the leg built: { protocol, gates }. The session is
+     * kept only when the server states the same protocol and gate count; a
+     * reply without the fields is a server that knows no long boards
+     * (protocol 1, 5 gates). Otherwise the run is not submittable: nothing is
+     * sent, and the time stays on the device.
      */
-    async startRun(legId) {
+    async startRun(legId, expected = { protocol: 1, gates: 5 }) {
+        this.unsupported = false;
         try {
             const deviceFingerprint = await this.generateDeviceFingerprint();
 
@@ -86,11 +103,25 @@ class LeaderboardService {
                 deviceFingerprint
             });
 
+            const protocol = result.data.protocol ?? 1;
+            const gates = result.data.gates ?? 5;
+            if (protocol !== expected.protocol || gates !== expected.gates) {
+                this.cancelSession();
+                this.unsupported = true;
+                console.warn(`Online board for ${legId} is not open: server states protocol ${protocol} with ${gates} gates, the leg has protocol ${expected.protocol} with ${expected.gates}`);
+                return { error: 'not-submitted', message: 'The online board for this leg is not open yet' };
+            }
+
             this.sessionId = result.data.sessionId;
             this.sessionToken = result.data.sessionToken;
             this.currentLegId = legId;
+            this.protocol = protocol;
+            this.gates = gates;
             this.checkpointTimes = [];
             this.proofChain = [];
+            this.restarts = 0;
+            this.finishTime = null;
+            this.finishProof = null;
 
             console.log(`Leaderboard session started: ${this.sessionId}`);
             return true;
@@ -105,12 +136,9 @@ class LeaderboardService {
     }
 
     /**
-     * Generate HMAC proof for a checkpoint
+     * HMAC-SHA256 of data, keyed with the session token
      */
-    async generateProof(checkpointIndex, time, previousHash) {
-        // Build data string: legId:index:time:previousHash
-        const data = `${this.currentLegId}:${checkpointIndex}:${time}:${previousHash}`;
-
+    async sign(data) {
         // Key with the token string's UTF-8 bytes - the server validates with
         // Node's createHmac('sha256', sessionToken), which uses the hex STRING
         // as the key, not its decoded bytes. (Decoding to raw bytes here made
@@ -124,14 +152,19 @@ class LeaderboardService {
             ['sign']
         );
 
-        // Generate HMAC
         const encoder = new TextEncoder();
-        const dataBytes = encoder.encode(data);
-        const signature = await crypto.subtle.sign('HMAC', key, dataBytes);
+        const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
 
-        // Convert to hex string
         const hashArray = Array.from(new Uint8Array(signature));
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /**
+     * Generate HMAC proof for a checkpoint
+     */
+    async generateProof(checkpointIndex, time, previousHash) {
+        // Build data string: legId:index:time:previousHash
+        return this.sign(`${this.currentLegId}:${checkpointIndex}:${time}:${previousHash}`);
     }
 
     /**
@@ -165,18 +198,55 @@ class LeaderboardService {
     }
 
     /**
+     * A restart from a save checkpoint. The run stays valid: the 5 s penalty
+     * is already in every later signed time, and the count is signed with the
+     * finish. It is self-reported, which is safe because the server's floor
+     * rises with it, so a lower count never helps.
+     */
+    recordRestart() {
+        if (this.isActive()) this.restarts++;
+    }
+
+    /**
+     * Record the finish line time (protocol 2). It joins the same queue as
+     * the gates, so it signs after the last gate's proof whatever the timing.
+     */
+    recordFinish(time) {
+        this.recordQueue = (this.recordQueue || Promise.resolve()).then(async () => {
+            if (!this.sessionId || !this.sessionToken || this.protocol !== 2) return;
+            const previousHash = this.proofChain.length > 0 ? this.proofChain[this.proofChain.length - 1] : '';
+            this.finishProof = await this.sign(`${this.currentLegId}:F:${time}:${this.restarts}:${previousHash}`);
+            this.finishTime = time;
+            console.log(`Finish recorded: ${time}ms, ${this.restarts} restarts`);
+        });
+        return this.recordQueue;
+    }
+
+    /**
      * Submit completed run
      */
     async submitRun(playerName) {
+        if (this.unsupported) {
+            return { success: false, state: 'not-submitted' };
+        }
         if (!this.sessionId || !this.sessionToken) {
             console.error('No active leaderboard session');
             return { success: false, error: 'No active session' };
         }
 
-        const expectedCheckpoints = 5; // Gates per leg - must match functions/index.js
-        if (this.checkpointTimes.length !== expectedCheckpoints || this.proofChain.length !== expectedCheckpoints) {
+        // Proofs still being signed belong to this run
+        await this.recordQueue;
+
+        // The gate count is the one the server stated when the session started
+        if (this.checkpointTimes.length !== this.gates || this.proofChain.length !== this.gates) {
             console.error(`Incomplete run: ${this.checkpointTimes.length} checkpoints`);
             return { success: false, error: 'Incomplete run' };
+        }
+        if (this.protocol === 2) {
+            if (this.finishProof === null) {
+                console.error('Incomplete run: no finish time');
+                return { success: false, error: 'Incomplete run' };
+            }
         }
 
         // Validate player name
@@ -185,24 +255,26 @@ class LeaderboardService {
         }
 
         try {
-            const result = await this.functions.httpsCallable('submitRun')({
+            const payload = {
                 sessionId: this.sessionId,
                 playerName: playerName.toUpperCase(),
                 checkpointTimes: this.checkpointTimes,
                 proofChain: this.proofChain
-            });
+            };
+            if (this.protocol === 2) {
+                payload.finishTime = this.finishTime;
+                payload.finishProof = this.finishProof;
+                payload.restarts = this.restarts;
+            }
+            const result = await this.functions.httpsCallable('submitRun')(payload);
 
             console.log(`Run submitted successfully! Rank: ${result.data.rank}, Flagged: ${result.data.flagged}`);
 
-            // Clear session data
-            this.sessionId = null;
-            this.sessionToken = null;
-            this.currentLegId = null;
-            this.checkpointTimes = [];
-            this.proofChain = [];
+            this.clearSession();
 
             return {
                 success: true,
+                state: 'submitted',
                 rank: result.data.rank,
                 flagged: result.data.flagged,
                 entryId: result.data.entryId
@@ -255,11 +327,20 @@ class LeaderboardService {
      * Cancel current session
      */
     cancelSession() {
+        this.clearSession();
+        console.log('Leaderboard session cancelled');
+    }
+
+    clearSession() {
         this.sessionId = null;
         this.sessionToken = null;
         this.currentLegId = null;
         this.checkpointTimes = [];
         this.proofChain = [];
-        console.log('Leaderboard session cancelled');
+        this.protocol = 1;
+        this.gates = 5;
+        this.restarts = 0;
+        this.finishTime = null;
+        this.finishProof = null;
     }
 }

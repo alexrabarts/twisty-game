@@ -182,7 +182,10 @@ class Game {
         // Finish state
         this.finished = false;
         this.finishTime = 0;
-        this.startTime = performance.now();
+        this.startTime = this.now();
+        // A checkpoint restart adds 5 s to the clock; the count is signed with the finish
+        this.penaltyMs = 0;
+        this.restarts = 0;
 
         // Pause state
         this.paused = false;
@@ -349,7 +352,7 @@ class Game {
 
         // Start leaderboard session
         if (this.leaderboardService) {
-            this.leaderboardService.startRun(TourSystem.boardId(leg)).then(result => {
+            this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
                 if (result === true) {
                     console.log('Leaderboard session started for leg:', leg.id);
                 } else if (result.error) {
@@ -515,7 +518,9 @@ class Game {
         this.brakeHeldTime = 0;
         this.finished = false;
         this.paused = false;
-        this.startTime = performance.now();
+        this.startTime = this.now();
+        this.penaltyMs = 0;
+        this.restarts = 0;
         if (this.vehicle) {
             this.vehicle.finished = false;
         }
@@ -535,6 +540,29 @@ class Game {
 
     gateTotal() {
         return this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 0;
+    }
+
+    // The one clock of a run. Every read of race time goes through here so a
+    // probe can step it.
+    now() {
+        return performance.now();
+    }
+
+    // A converted leg has a row in the server's table of boards (js/course.js):
+    // protocol 2, the finish-line time ranks. Every other leg is protocol 1.
+    isTableBoard(leg) {
+        return Object.prototype.hasOwnProperty.call(Course.boardTable(), TourSystem.boardId(leg));
+    }
+
+    // What the built leg expects of the server before a time is sent
+    leaderboardExpectation(leg) {
+        return { protocol: this.isTableBoard(leg) ? 2 : 1, gates: this.gateTotal() };
+    }
+
+    // The time the online board ranks: the finish line on a converted leg,
+    // the last gate on the others
+    boardTimeMs(leg) {
+        return this.isTableBoard(leg) ? Math.round(this.finishTime) : this.checkpointTimes[this.gateTotal() - 1];
     }
 
     removeRunOverlays() {
@@ -1661,7 +1689,7 @@ class Game {
         const bestTimeKey = finishedLeg ? this.bestTimeKey(finishedLeg) : 'motorcycleBestTime';
         const previousBest = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
         const previousBestMs = previousBest < 999999 ? previousBest * 1000 : NaN;
-        const boardMs = this.checkpointTimes[this.gateTotal() - 1];
+        const boardMs = finishedLeg ? this.boardTimeMs(finishedLeg) : this.checkpointTimes[this.gateTotal() - 1];
         const result = RaceTiming.finish(this.finishTime, previousBestMs, boardMs, this.record);
         this.bestTime = previousBest;
         if (result.isBest) {
@@ -1684,12 +1712,21 @@ class Game {
                 : `<div class="finish-delta">${deltaSpan(result.pbDelta)} <small>vs your best ${RaceTiming.formatTime(previousBestMs)}</small></div>`;
         const escape = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
         let recordLine = '';
+        const tableBoard = finishedLeg ? this.isTableBoard(finishedLeg) : false;
         if (this.record && result.recordDelta !== null) {
-            // The board ranks the time to the last gate, so that is what is compared
-            recordLine = `<div class="finish-delta">${deltaSpan(result.recordDelta)} <small>vs record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>
-                <div class="finish-board">Leaderboard time (to the last gate) ${RaceTiming.formatTime(result.boardTime)}</div>`;
+            // The board ranks the time to the last gate on the shared course
+            // and the finish-line time on a converted leg, so that is what is compared
+            recordLine = `<div class="finish-delta">${deltaSpan(result.recordDelta)} <small>vs record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>`
+                + (tableBoard ? '' : `<div class="finish-board">Leaderboard time (to the last gate) ${RaceTiming.formatTime(result.boardTime)}</div>`);
         } else if (this.record) {
             recordLine = `<div class="finish-delta"><small>Record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>`;
+        }
+
+        if (this.restarts > 0) {
+            recordLine += `<div class="finish-board">${this.restarts} checkpoint ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>`;
+        }
+        if (this.leaderboardService && this.leaderboardService.unsupported) {
+            recordLine += '<div class="finish-board">Time saved on this device. Online board opens soon.</div>';
         }
 
         const unlockPanel = this.buildUnlockPanel(unlocks);
@@ -1907,15 +1944,21 @@ class Game {
         crashNotification.className = 'run-card crash-card';
         crashNotification.setAttribute('role', 'alertdialog');
         crashNotification.setAttribute('aria-label', 'Crashed');
-        const tip = this.lastCheckpointPosition
-            ? '<div class="crash-tip"><span class="kbd">C</span> back to the last checkpoint</div>'
+        // After a gate the primary action is the save checkpoint; R still restarts the leg
+        const hasCheckpoint = !!this.lastCheckpointPosition;
+        const tip = hasCheckpoint
+            ? `<div class="crash-tip"><span class="kbd">C</span> back to the last checkpoint, +${Game.RESTART_PENALTY_MS / 1000} s</div>`
+            : '';
+        const checkpointButton = hasCheckpoint
+            ? `<button id="checkpointCrashBtn" class="btn btn-primary"><u>C</u>heckpoint (+${Game.RESTART_PENALTY_MS / 1000} s)</button>`
             : '';
         crashNotification.innerHTML = `
             <div class="crash-title">CRASHED</div>
             <div class="crash-sub">${cause || 'Better luck next time!'}</div>
             ${tip}
             <div class="run-buttons">
-                <button id="restartCrashBtn" class="btn btn-primary"><u>R</u>estart</button>
+                ${checkpointButton}
+                <button id="restartCrashBtn" class="btn${hasCheckpoint ? '' : ' btn-primary'}"><u>R</u>estart</button>
                 <button id="menuCrashBtn" class="btn"><u>M</u>enu</button>
             </div>
         `;
@@ -1937,6 +1980,16 @@ class Game {
             }
             this.restartLeg();
         });
+
+        const checkpointBtn = document.getElementById('checkpointCrashBtn');
+        if (checkpointBtn) {
+            checkpointBtn.addEventListener('click', () => {
+                if (this.input) {
+                    this.input.setMenuActive(false);
+                }
+                this.restartFromCheckpoint();
+            });
+        }
 
         document.getElementById('menuCrashBtn').addEventListener('click', () => {
             // Disable R key when menu is closed
@@ -2148,10 +2201,12 @@ class Game {
                     const medal = `${rank}.`;
                     const time = LeaderboardService.formatTime(entry.totalTime);
                     const flag = entry.flagged ? ' ⚠' : '';
+                    // A restarted run shows its count beside the time
+                    const restarts = entry.restarts > 0 ? ` <small>${entry.restarts}R</small>` : '';
                     return `<tr>
                         <td class="lb-rank">${medal}</td>
                         <td class="lb-name">${String(entry.playerName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</td>
-                        <td class="lb-time">${time}${flag}</td>
+                        <td class="lb-time">${time}${restarts}${flag}</td>
                     </tr>`;
                 }).join('');
                 body.innerHTML = localBestHtml +
@@ -2177,7 +2232,7 @@ class Game {
         this.leaderboardService.cancelSession();
         const leg = this.tourSystem.getCurrentLeg();
         if (leg) {
-            this.leaderboardService.startRun(TourSystem.boardId(leg)).then(result => {
+            this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
                 if (result !== true && result.error) {
                     console.warn('Leaderboard session restart failed:', result.message);
                 }
@@ -2558,11 +2613,11 @@ class Game {
         if (this.input.checkPause()) {
             this.paused = !this.paused;
             if (this.paused) {
-                this.pauseStartedAt = performance.now();
+                this.pauseStartedAt = this.now();
                 this.soundManager.stopEngineSound();
             } else if (this.pauseStartedAt) {
                 // Time spent paused is not race time
-                this.startTime += performance.now() - this.pauseStartedAt;
+                this.startTime += this.now() - this.pauseStartedAt;
                 this.pauseStartedAt = 0;
             }
         }
@@ -2680,9 +2735,15 @@ class Game {
         // Check for finish line crossing
         if (!this.finished && !this.vehicle.crashed && this.environment.finishGate) {
             if (this.inGate(this.environment.finishGate, this.vehicle.position)) {
+                // Taken before `finished` is set: raceElapsed() returns the frozen time after
+                const finishTime = this.raceElapsed();
                 this.finished = true;
                 this.vehicle.finished = true; // Prevent crashes after finishing
-                this.finishTime = performance.now() - this.startTime;
+                this.finishTime = finishTime;
+                if (this.leaderboardService && this.leaderboardService.isActive() && this.leaderboardService.protocol === 2) {
+                    this.leaderboardService.recordFinish(Math.round(finishTime))
+                        .catch(error => console.error('Failed to record finish:', error));
+                }
                 this.showFinishScreen();
             }
         }
@@ -2966,7 +3027,7 @@ class Game {
                         console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
 
                         // Record checkpoint pass time
-                        const currentTime = Math.round(performance.now() - this.startTime);
+                        const currentTime = Math.round(this.raceElapsed());
                         this.checkpointTimes[checkpoint.index] = currentTime;
 
                         // Record in leaderboard service
@@ -3149,11 +3210,12 @@ class Game {
         }
     }
     
-    // Race time as shown: frozen at the finish and while paused
+    // Race time as shown: frozen at the finish and while paused. Includes the
+    // 5 s of every checkpoint restart, so every signed time holds the penalty.
     raceElapsed() {
         if (this.finished) return this.finishTime;
-        if (this.paused && this.pauseStartedAt) return this.pauseStartedAt - this.startTime;
-        return performance.now() - this.startTime;
+        if (this.paused && this.pauseStartedAt) return this.pauseStartedAt - this.startTime + this.penaltyMs;
+        return this.now() - this.startTime + this.penaltyMs;
     }
 
     updateScoreDisplay() {
@@ -3213,6 +3275,8 @@ class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
+    // Back to the last gate passed, on a rolling start. Costs 5 s and a
+    // little style; the run stays valid.
     restartFromCheckpoint() {
         // The run is over once the line is crossed; the finish banner owns
         // what happens next
@@ -3243,22 +3307,32 @@ class Game {
         // The crash banner belongs to the crash that was just undone
         this.removeRunOverlays();
 
-        // The clock keeps running (a restart must not produce a record time),
-        // but a teleported run can no longer be validated - drop the
-        // leaderboard session
-        if (this.leaderboardService && this.leaderboardService.isActive()) {
-            this.leaderboardService.cancelSession();
-        }
+        // The clock keeps running and the penalty is in every later signed
+        // time, so the run stays valid: a restart puts the rider back on a
+        // gate it already passed, it never moves it forward
+        this.penaltyMs += Game.RESTART_PENALTY_MS;
+        this.restarts++;
+        if (this.leaderboardService) this.leaderboardService.recordRestart();
 
-         // Reset cones
-         this.cones.reset();
+        // Knocked cones go back to their home positions; a rock must not wait
+        // on the gate; no car may be on top of the rider
+        this.cones.reset();
+        if (this.rockfalls) this.rockfalls.reset();
+        if (this.traffic) this.traffic.clearAround(this.vehicle.currentRoadSegment, Game.RESTART_CLEAR_SEGMENTS);
 
         // Show notification
-        showCallout(`Back to checkpoint -${penalty}`, 'warn', 2000);
+        showCallout(`Back to checkpoint +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
 
         console.log('Restarted from checkpoint with penalty');
     }
 }
+
+// A checkpoint restart costs this much on the clock. functions/lib/boards.js
+// holds the same number (LONG.penaltyMs); tests/unit/board-contract.test.js
+// fails when they differ.
+Game.RESTART_PENALTY_MS = 5000;
+// Cars within this many segments of the rider move ahead on a restart
+Game.RESTART_CLEAR_SEGMENTS = 6;
 
 // Short gameplay message in the HUD's call-out stack. tone: info, good, bad, warn or gold
 function showCallout(text, tone = 'info', durationMs = 1000) {

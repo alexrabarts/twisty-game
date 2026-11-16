@@ -206,6 +206,14 @@ class RockfallSystem {
         return Terrain.groundY(environment.terrain, environment.terrainGeometry, x, z, from, to, true);
     }
 
+    // A checkpoint restart: no live rock stays on the spawn point, and the
+    // next fall is a whole interval away
+    reset() {
+        this.rocks.forEach(rock => this.scene.remove(rock.mesh));
+        this.rocks = [];
+        this.nextFallIn = this.rollInterval();
+    }
+
     dispose() {
         this.rocks.forEach(rock => this.scene.remove(rock.mesh));
         this.rocks = [];

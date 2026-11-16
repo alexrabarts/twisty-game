@@ -9,7 +9,9 @@
 //   node tools/terrain-check.mjs <probe> --update-baseline --legs id [--part ground,decals]
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
-// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene mutate
+// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate
+// submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
+//   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
 // (`shortcuts` runs its own doubled-back control)
 // --no-assets keeps every leg's procedural dressing, trees and bushes, the procedural bike and the procedural cars (js/sceneassets.js, js/treemodels.js, js/bikemodels.js and js/carmodels.js swap nothing), for a before/after measure.
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
@@ -20,6 +22,7 @@
 //   tests/golden/terrain-baseline.json   frozen at phase 0a: the jest goldens
 //   tests/golden/parts-baseline.json     mutable per-leg `parts` and `surface`, guarded as below
 // Never let a page reach production: cloudfunctions.net, firebasedatabase.app and firebaseio.com are aborted.
+// The `submit` probe is the one exception in kind, not in effect: it answers the callable requests itself, so none leaves the machine.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -116,13 +119,26 @@ function startServer() {
 
 const state = { blocked: [], notFound: [], pageErrors: [], lastError: '', injected: false };
 
+// The `submit` probe answers the leaderboard callables itself. Never a request.continue():
+// nothing it handles reaches a network.
+const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
+function fulfilCallable(calls, request) {
+    if (request.method() === 'OPTIONS') return request.respond({ status: 204, headers: CORS });
+    const name = new URL(request.url()).pathname.split('/').pop();
+    (calls[name] ||= []).push(JSON.parse(request.postData() || '{}').data || {});
+    const result = name === 'startRun' ? calls.reply : name === 'submitRun' ? { rank: 1, flagged: false, entryId: 'probe' } : { entries: [] };
+    return request.respond({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ result }) });
+}
+
 async function openPage(browser, port, url = '/') {
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 540, deviceScaleFactor: 1 });
     await page.setRequestInterception(true);
     page.on('request', request => {
         const target = new URL(request.url());
-        if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
+        if (page.callables && target.hostname.endsWith('cloudfunctions.net')) {
+            fulfilCallable(page.callables, request);
+        } else if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
             state.blocked.push(request.url());
             request.abort();
         } else if (/jsdelivr\.net\/npm\/three@0\.150\.0\/build\/three\.min\.js/.test(request.url())) {
@@ -822,6 +838,78 @@ async function runPool(browser, port, ids, work) {
 const inPage = (page, name, ...args) => page.evaluate((n, a) => window.__probe[n](...a), name, args);
 
 const PROBES = {
+    // A whole leg ridden to the finish and the name form filled in, against a server answered locally
+    submit: async (page, index) => {
+        const info = await page.evaluate(i => {
+            const leg = game.tourSystem.legs[i];
+            return { id: leg.id, boardId: TourSystem.boardId(leg), row: Course.boardTable()[TourSystem.boardId(leg)] || null, last: i === game.tourSystem.legs.length - 1 };
+        }, index);
+        const reply = { sessionId: 'probe-session', sessionToken: 'probe-token-not-a-secret' };
+        if (info.row && option('reply') === 'new') Object.assign(reply, { protocol: 2, gates: info.row.gates });
+        const calls = { reply };
+        page.callables = calls;
+        const errors = [];
+        page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+        if (option('mutate') === 'ready-always') {
+            // The handshake always agrees with whatever the server said
+            await page.evaluate(expected => {
+                const service = game.leaderboardService;
+                const start = service.startRun.bind(service);
+                service.startRun = legId => start(legId, expected);
+            }, { protocol: reply.protocol ?? 1, gates: reply.gates ?? 5 });
+        }
+        await page.evaluate(i => { window.__legIndex = i; }, index);
+        const ridden = await page.evaluate(async () => {
+            const wait = async (done, ms) => {
+                for (let t = 0; t < ms / 50 && !done(); t++) await new Promise(r => setTimeout(r, 50));
+                return done();
+            };
+            window.__reseed(1);
+            twistyDev.start(game.tourSystem.legs[window.__legIndex].id);
+            twistyDev.freeze();
+            game.rockfalls = null;
+            const service = game.leaderboardService;
+            await wait(() => service.isActive() || service.unsupported, 5000);
+            twistyDev.autopilot({ speed: 20 });
+            for (let tick = 1; tick <= 9000 && !game.finished && !game.vehicle.crashed; tick++) twistyDev.step(1);
+            await service.recordQueue;
+            return { finished: game.finished, crashed: game.vehicle.crashed, unsupported: service.unsupported };
+        }).catch(error => ({ error: String(error) }));
+        let nameFormShown = false;
+        let submitState = 'none';
+        if (ridden.finished && !info.last) {
+            await page.evaluate(() => document.getElementById('nextLegBtn').click());
+            nameFormShown = await page.waitForFunction("document.getElementById('leaderboardEntryOverlay').classList.contains('active')", { polling: 100, timeout: 2000 }).then(() => true, () => false);
+            if (nameFormShown) {
+                await page.evaluate(() => {
+                    const input = document.getElementById('leaderboardNameInput');
+                    input.value = 'TEST';
+                    input.dispatchEvent(new Event('input'));
+                    document.getElementById('leaderboardSubmitBtn').click();
+                });
+                const done = await page.waitForFunction("document.getElementById('leaderboardResult').style.display === 'block' || document.getElementById('leaderboardError').style.display !== 'none'", { polling: 100, timeout: 5000 }).then(() => true, () => false);
+                submitState = done && await page.evaluate(() => document.getElementById('leaderboardResult').style.display === 'block') ? 'submitted' : 'failed';
+            } else if (ridden.unsupported) {
+                submitState = 'not-submitted';
+            }
+        }
+        const [submit] = calls.submitRun || [];
+        return {
+            finished: ridden.finished === true,
+            startRunCalls: (calls.startRun || []).length,
+            submitCalls: (calls.submitRun || []).length,
+            submitState,
+            nameFormShown,
+            payload: submit ? { gates: submit.checkpointTimes.length, proofs: submit.proofChain.length, finish: submit.finishTime !== undefined } : null,
+            consoleErrors: errors.filter(text => /Incomplete run|Failed to submit|No active/.test(text)).length,
+            expectedGates: info.row ? info.row.gates : 5,
+            tableBoard: !!info.row,
+            replyFields: Object.keys(reply).filter(key => key === 'protocol' || key === 'gates'),
+            forwarded: 0,
+            skipped: info.last ? 'the last leg has no name form' : undefined,
+            error: ridden.error
+        };
+    },
     legs: (page, i) => inPage(page, 'legCheck', i, 60),
     snapshot: (page, i) => inPage(page, 'snapshot', i),
     raycast: (page, i) => inPage(page, 'raycast', i),
@@ -1033,6 +1121,22 @@ function finishChecks(report) {
             if (!pin) return;
             const got = [r.digest, r.meshes, r.instances, r.cones, r.dressed];
             if (JSON.stringify(got) !== JSON.stringify(pin)) failures.push(`${id}: scene ${JSON.stringify(got)} differs from the pin ${JSON.stringify(pin)}`);
+        });
+    }
+    if (results.submit) {
+        Object.entries(results.submit).forEach(([id, r]) => {
+            if (r.skipped) return notes.push(`${id}: submit not run: ${r.skipped}`);
+            if (r.error) return failures.push(`${id}: submit probe error: ${r.error}`);
+            if (!r.finished) failures.push(`${id}: the autopilot did not finish the leg`);
+            // A board in the table is submitted only to a server that states its gate count
+            const accepted = !r.tableBoard || r.replyFields.length === 2;
+            const expectedCalls = accepted ? 1 : 0;
+            if (r.startRunCalls !== 1) failures.push(`${id}: startRunCalls: ${r.startRunCalls}, expected 1`);
+            if (r.submitCalls !== expectedCalls) failures.push(`${id}: submitCalls: ${r.submitCalls}, expected ${expectedCalls}`);
+            if (accepted && r.payload && (r.payload.gates !== r.expectedGates || r.payload.proofs !== r.expectedGates)) failures.push(`${id}: payload ${JSON.stringify(r.payload)}, expected ${r.expectedGates} times and proofs`);
+            if (accepted && r.submitState !== 'submitted') failures.push(`${id}: submitState ${r.submitState}, expected submitted`);
+            if (!accepted && (r.submitState !== 'not-submitted' || r.nameFormShown)) failures.push(`${id}: submitState ${r.submitState} with nameFormShown ${r.nameFormShown}, expected not-submitted and no form`);
+            if (r.consoleErrors) failures.push(`${id}: ${r.consoleErrors} console errors from the submit path`);
         });
     }
     if (results.surface) {
