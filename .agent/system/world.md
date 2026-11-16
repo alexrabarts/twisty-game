@@ -188,6 +188,7 @@ A course is a list of parts (`Terrain.partsProfile`): each part has its own grou
 - The window: one section behind the bike, its own, two ahead; the next one builds hidden. `env.update(segment, 4, lastGateSegment)` runs each frame (`Game.SECTION_BUDGET_MS`); a section first drawn appears one step a frame. Sections below `min(k - 1, last gate's section)` are disposed, so a restart finds its gate's section built (`ensureWindow(..., { sync: true })`).
 - At the leg start `Game.prewarmCourse` builds one sample section of every part, shows everything, compiles every shader and puts the samples away. Without it a part's first ground, water or weather compiled its shader mid-ride (up to 1.9 s on Apple M5).
 - A converted leg shares one rock texture and one water material (`sharedRockTexture`, `sharedWater`); its face rocks are icosahedra of detail 1, not 3; a part may set its slope forest (`dressing.forest.slope`) and the course its cone spacing (`cones.straightEvery`). These keep every window inside the budgets (800 meshes, 450000 triangles, 1400 instances, 1500 solid boulders, 12 MB).
+- A converted leg's roadworks plant follows the run-off rule of the part its zone stands in (`createRoadworks`), and its wall decals (cracks, seepage, vines, snow) lie on the drawn face (`layDecalsOnFace`); upright, as the shared course still places them, they stood off a wall that leans back.
 - Cones, cars and the crew follow the window (`Cones.createSectionCones`, `Traffic.followWindow`): a car spawns at the window's far end each `traffic.oncomingEvery` segments; rocks fall only in drawn sections of parts with a rate.
 
 ### Leg 1, Mountain Dawn (700 segments, 14 km, `mountain-dawn-v3`)
@@ -197,7 +198,7 @@ A course is a list of parts (`Terrain.partsProfile`): each part has its own grou
 | meadow | 0-120 | open valley, river right | dawn, ground mist | farmstead |
 | wood | 120-250 | broadleaf wood close to the road (morph) | dawn | stone bridge over a gully (`bridge` set piece, `assets/bridge/stone.glb`) |
 | valley | 250-400 | valley closing in (morph) | dawn | mountains rising ahead |
-| village | 400-470 | closed valley, village 418-425 | golden | the village (procedural: the modelled kit is 5.9 MB, over the window budget) |
+| village | 400-470 | closed valley, village 410-431 | golden | the village (procedural, with pitched tile roofs on a converted leg; the modelled kit is 5.9 MB, over the window budget) and a church spire behind it |
 | lake | 470-620 | cliff road, wall left, drop to the lake right (cut) | golden, light shafts | twin snow peaks across the lake |
 | pass | 620-700 | snow ridge, crest 165 m at 660 (cut) | golden | summit cairn; pass peaks, snow poles, cairns, summit sign |
 

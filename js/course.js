@@ -118,9 +118,11 @@ const Course = (() => {
           look: { grassColor: 0x6f8a48, mountainColor: 0x7a6a4a, fogDensity: 0.0011, heightFog: { density: 0.002, falloff: 0.05 }, shafts: 0.2, ring: 0.9 },
           render: { cullMax: 800 },
           timeOfDay: 'golden', weather: 'clear', weatherIntensity: 0,
-          setPieces: [{ type: 'village', at: 18, length: 8 }],
+          // 22 segments (440 m) of houses both sides, on the straight from 390 to 432
+          setPieces: [{ type: 'village', at: 10, length: 22 }],
           dressing: { forest: runoff([1, 2], 0.7), outcrops: { perSegment: 2, everywhere: true }, rockfall: 0, backdrop: [] },
           landmark: { kind: 'setPiece', at: 421 },
+          scenery: [{ kind: 'church', at: 424, side: -1 }],
           differs: ['B']
         },
         {

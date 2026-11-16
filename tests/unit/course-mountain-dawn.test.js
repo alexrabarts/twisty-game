@@ -94,7 +94,7 @@ describe('Mountain Dawn, as built', () => {
         const kind = (s) => game.Terrain.floorAt(env.terrain, s).kind;
         expect([60, 185, 325, 435, 545, 660].map(kind)).toEqual(['river', 'none', 'river', 'river', 'lake', 'lake']);
         // Set piece spans as Terrain.setPieces gives them: the last segment inclusive
-        expect(env.setPieces).toEqual([{ type: 'bridge', from: 180, to: 182 }, { type: 'village', from: 418, to: 425 }]);
+        expect(env.setPieces).toEqual([{ type: 'bridge', from: 180, to: 182 }, { type: 'village', from: 410, to: 431 }]);
         const look = (s) => game.Terrain.lookAt(env.config, s);
         expect([60, 185, 325, 435, 545, 660].map((s) => look(s).timeOfDay)).toEqual(['dawn', 'dawn', 'dawn', 'golden', 'golden', 'golden']);
         expect(new Set([60, 185, 325, 435, 545, 660].map((s) => look(s).grassColor)).size).toBe(6);
@@ -119,6 +119,46 @@ describe('Mountain Dawn, as built', () => {
         expect(built.validateAllTerrainClearance()).toEqual([]);
     });
 
+    test('roadworks plant stands only on run-off ground, near road height, never up a wall', () => {
+        const plant = env.groundedObjects.filter(({ label }) => /^(construction bulldozer|construction barrier|work truck)/.test(label));
+        const at = new game.THREE.Vector3();
+        plant.forEach(({ object, label }) => {
+            object.getWorldPosition(at);
+            const found = game.Terrain.locate(env.roadPath, at.x, at.z, 0, env.roadPath.length - 1, {});
+            const side = game.Terrain.sideAt(env.terrain, Math.sign(found.lateral) || 1, found.index);
+            expect([label, !!side.runoff]).toEqual([label, true]);
+            expect(Math.abs(at.y - env.roadPath[found.index].y)).toBeLessThan(3);
+        });
+        // The meadow-side zone has its plant; the lake road's zone (a wall on its left) has none
+        expect(plant.some(({ object }) => object.position.distanceTo(new game.THREE.Vector3(env.roadPath[230].x, object.position.y, env.roadPath[230].z)) < 120)).toBe(true);
+    });
+
+    test('wall decals lie on the drawn face: no crack, seepage, vine or snow patch stands 1.5 m off its plane', () => {
+        const point = new game.THREE.Vector3();
+        const centre = new game.THREE.Vector3();
+        const normal = new game.THREE.Vector3();
+        let decals = 0;
+        let worst = { off: 0 };
+        env.sections.forEach((section) => section.group.traverse((object) => {
+            if (!object.isMesh || !['crack', 'branch', 'seepage', 'vine', 'snow'].includes(object.userData.decal)) return;
+            decals++;
+            object.updateWorldMatrix(true, false);
+            object.getWorldPosition(centre);
+            // The face at the decal: its height there and its plane
+            const surface = env.surfaceAt(centre.x, centre.z);
+            normal.set(surface.nx, surface.ny, surface.nz).normalize();
+            const base = new game.THREE.Vector3(centre.x, surface.y, centre.z);
+            const position = object.geometry.attributes.position;
+            for (let v = 0; v < position.count; v++) {
+                point.fromBufferAttribute(position, v).applyMatrix4(object.matrixWorld);
+                const off = Math.abs(point.clone().sub(base).dot(normal));
+                if (off > worst.off) worst = { off, decal: object.userData.decal, centreAboveFace: centre.y - surface.y };
+            }
+        }));
+        expect(decals).toBeGreaterThan(20);
+        expect(worst.off).toBeLessThanOrEqual(1.5);
+    });
+
     test('every landmark is built, named for its part', () => {
         ['meadow', 'wood', 'valley', 'village', 'lake', 'pass'].forEach((id) => {
             const group = env.scene.getObjectByName(`landmark-${id}`);
@@ -140,7 +180,7 @@ describe('Mountain Dawn, as built', () => {
     });
 
     test('cones: the leg\'s count, between 3 and 8 a kilometre', () => {
-        expect(cones.cones).toHaveLength(84);
+        expect(cones.cones).toHaveLength(82);
         expect(cones.cones.length / 14).toBeGreaterThanOrEqual(3);
         expect(cones.cones.length / 14).toBeLessThanOrEqual(8);
     });

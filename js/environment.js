@@ -62,6 +62,39 @@ const SECTION = 25;
 
 // Scenery a part names besides its landmark (`scenery: [{ kind }]`)
 const SCENERY = {
+  // A stone church with a spire behind the houses of the village at `at`,
+  // `side` of the road, standing over the roofs
+  church(group, { at, side = -1, back = 34 }) {
+    const point = this.roadPath[at];
+    const out = side * (this.roadWidth / 2 + back);
+    const x = point.x + Math.cos(point.heading) * out;
+    const z = point.z - Math.sin(point.heading) * out;
+    const ground = this.groundYAt(x, z);
+    const parts = [];
+    const nave = new THREE.BoxGeometry(12, 11, 24);
+    nave.translate(0, 4.5, 0);
+    parts.push({ geometry: nave, color: [0xb8ab94, 0xcfc4ae] });
+    const roof = new THREE.BufferGeometry();
+    roof.setAttribute("position", new THREE.Float32BufferAttribute([-6.8, 10, -12.5, 6.8, 10, -12.5, 0, 16, -12.5, -6.8, 10, 12.5, 6.8, 10, 12.5, 0, 16, 12.5], 3));
+    roof.setIndex([0, 2, 1, 3, 4, 5, 0, 3, 5, 0, 5, 2, 1, 2, 5, 1, 5, 4]);
+    parts.push({ geometry: roof.toNonIndexed(), color: [0x5a3a2c, 0x6a4434] });
+    roof.dispose();
+    const tower = new THREE.BoxGeometry(6, 26, 6);
+    tower.translate(0, 11, -14);
+    parts.push({ geometry: tower, color: [0xa89c86, 0xc4b8a2] });
+    const spire = new THREE.ConeGeometry(4.6, 14, 4);
+    spire.rotateY(Math.PI / 4);
+    spire.translate(0, 31, -14);
+    parts.push({ geometry: spire, color: [0x44505a, 0x5a6670] });
+    const mesh = new THREE.Mesh(this.mergeColoredGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, flatShading: true }));
+    mesh.position.set(x, ground - 1, z);
+    mesh.rotation.y = point.heading;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.building = true;
+    group.add(mesh);
+  },
+
   // The snow peaks of a high pass along the part's own road (createPassPeaks)
   passPeaks(group, entry, part) {
     const saved = [this.startSegment, this.endSegment, this.scene];
@@ -2553,6 +2586,36 @@ class Environment {
         group.add(snow);
       }
     }
+    if (this.piece) this.layDecalsOnFace(group);
+  }
+
+  // A converted leg's wall decals lie on the drawn face: each is turned so its
+  // own up runs up the face's slope at its spot and its face is the face's,
+  // and is at most 6 m long, so it follows the face instead of bridging a
+  // fold. Placed upright, as the shared course still does, a crack up to 32 m
+  // tall stood out of a wall that leans back like a pole, and a seepage
+  // patch like a sign on it. No draw from the stream.
+  layDecalsOnFace(group) {
+    const up = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const along = new THREE.Vector3();
+    const basis = new THREE.Matrix4();
+    group.children.forEach((decal) => {
+      const kind = decal.userData.decal;
+      if (!["crack", "branch", "seepage", "vine", "snow"].includes(kind)) return;
+      const surface = this.surfaceAt(decal.position.x, decal.position.z);
+      decal.position.y = surface.y;
+      normal.set(surface.nx, surface.ny, surface.nz).normalize();
+      up.set(0, 1, 0).addScaledVector(normal, -normal.y);
+      if (up.lengthSq() < 1e-6) up.set(1, 0, 0);
+      up.normalize();
+      along.crossVectors(up, normal).normalize();
+      basis.makeBasis(along, up, normal);
+      decal.quaternion.setFromRotationMatrix(basis);
+      decal.geometry.computeBoundingBox();
+      const size = decal.geometry.boundingBox.max.y - decal.geometry.boundingBox.min.y;
+      if (size > 6) decal.scale.y = 6 / size;
+    });
   }
 
   createLayeredMountains() {
@@ -5587,9 +5650,17 @@ class Environment {
     // A converted leg names its zones: { at, type: 'major' | 'minor' }
     const course = this.course();
     if (course) {
+      // A zone's plant stands on the run-off of the part it is in: the leg's
+      // own rule (part 0's) put a lake-road bulldozer 22 m up the cliff wall
+      const leg = this.solidClutter;
       course.roadworks.forEach(({ at, type }) => {
         const start = this.roadworksStartClear(at, type === "major" ? 2 : 1, type, legStart, legEnd);
-        this.createConstructionZone(start, start + (type === "major" ? 2 : 1), type === "major", type);
+        this.solidClutter = !!Terrain.partAt(this.terrain, start).part.profile.left.runoff;
+        try {
+          this.createConstructionZone(start, start + (type === "major" ? 2 : 1), type === "major", type);
+        } finally {
+          this.solidClutter = leg;
+        }
       });
       return;
     }
@@ -6884,6 +6955,23 @@ class Environment {
     return geometry;
   }
 
+  // A pitched roof lying along the road at a road point: `width` across the
+  // road, `rise` from the eaves at `bottom` to the ridge, `length` along it
+  pieceRoof(point, lateral, bottom, width, rise, length, origin) {
+    const w = width / 2;
+    const l = length / 2;
+    const roof = new THREE.BufferGeometry();
+    roof.setAttribute("position", new THREE.Float32BufferAttribute([
+      -w, 0, -l, w, 0, -l, 0, rise, -l, -w, 0, l, w, 0, l, 0, rise, l,
+    ], 3));
+    roof.setIndex([0, 2, 1, 3, 4, 5, 0, 3, 5, 0, 5, 2, 1, 2, 5, 1, 5, 4, 0, 1, 4, 0, 4, 3]);
+    const flat = roof.toNonIndexed();
+    roof.dispose();
+    flat.rotateY(point.heading);
+    flat.translate(...this.piecePoint(point, lateral, bottom, origin));
+    return flat;
+  }
+
   // A mesh standing at the centre of its set piece. Culling measures the
   // distance to a mesh's origin, so a merged mesh left at the world origin
   // would be culled by where it is not.
@@ -7122,7 +7210,14 @@ class Environment {
         const wash = washes[Math.floor(this.rand() * washes.length)];
         plots.push({ segment: i, sign });
         houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), -0.5, depth, height + 0.5, 15.4, origin), color: [wash, wash] });
-        houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), height, depth + 0.8, 0.6, 16.2, origin), color: [0x4a3328, 0x4a3328] });
+        if (this.sections) {
+          // A converted leg's village has pitched tile roofs, the ridge along
+          // the street, in a few tile colours: it reads as a village, not a row of blocks
+          const tile = [0x8a4a32, 0x6e3a2a, 0x5a5650, 0x7a4a3a][Math.floor(this.rand() * 4)];
+          houses.push({ geometry: this.pieceRoof(point, sign * (front + depth / 2), height, depth + 1.2, 2.2 + this.rand() * 1.6, 15.8, origin), color: [tile, tile] });
+        } else {
+          houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), height, depth + 0.8, 0.6, 16.2, origin), color: [0x4a3328, 0x4a3328] });
+        }
         for (let floor = 0; floor < storeys; floor++) {
           for (const along of [-4.5, 0, 4.5]) {
             if (this.rand() < 0.35) continue;
