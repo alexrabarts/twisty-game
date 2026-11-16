@@ -8,6 +8,61 @@ class Cones {
         this.createCones();
     }
 
+    // The cone spots of segments from..to (inclusive), by the local segment
+    // index alone, so a range gives the same spots whenever it is placed: a
+    // straight gets a cone each 4 segments, a bend each 6, and gates are skipped
+    // by 3 segments. A converted leg also keeps its cones clear of set pieces and
+    // roadworks; a leg on the shared course places exactly as it always has.
+    static placeRange(env, from, to) {
+        const path = env.roadPath;
+        const checkpoints = env.checkpoints || [];
+        const clearOfWorks = typeof env.course === 'function' && !!env.course();
+        const blocked = index => (env.setPieces || []).some(piece => index >= piece.from - 1 && index <= piece.to + 1) ||
+            (env.roadworksZones || []).some(zone => {
+                const reach = env.roadworksReach(zone.startSegment, zone.endSegment, zone.type);
+                return index >= reach.from && index <= reach.to;
+            });
+        const spots = [];
+        // Just inside the edge line, so a cone can be clipped for points
+        // without leaving the road
+        const edgeOffset = (env.roadWidth || 16) / 2 - 0.8;
+
+        for (let index = from; index <= to; index++) {
+            const point = path[index];
+            // Check if this is a turning section by looking at heading change
+            const prevIndex = Math.max(0, index - 1);
+            const nextIndex = Math.min(index + 1, path.length - 1);
+            const signedHeadingChange = path[nextIndex].heading - path[prevIndex].heading;
+            const headingChange = Math.abs(signedHeadingChange);
+
+            // Keep clear of checkpoint gates to avoid double alerts
+            if (checkpoints.some(cp => Math.abs(index - cp.segmentIndex) < 3)) continue;
+            if (clearOfWorks && blocked(index)) continue;
+
+            let side = 0;
+            if (headingChange < 0.02) {
+                // Straight: slalom cones every 4 segments on alternating sides
+                if (index % 4 === 0) {
+                    side = (Math.floor(index / 4) % 2 === 0) ? 1 : -1;
+                }
+            } else if (index % 6 === 0) {
+                // Corner: one cone on the inside at the apex. Heading
+                // grows in a right turn, and right is the positive side.
+                side = signedHeadingChange > 0 ? 1 : -1;
+            }
+            if (side === 0) continue;
+
+            // Offset along the road's perpendicular (a world-X offset put
+            // cones in the lanes wherever the road was not heading north)
+            spots.push({
+                x: point.x + Math.cos(point.heading) * edgeOffset * side,
+                y: point.y || 0,
+                z: point.z - Math.sin(point.heading) * edgeOffset * side
+            });
+        }
+        return spots;
+    }
+
     createCones() {
         // Place cones strategically for slalom and corner markers
         const conePositions = [];
@@ -21,43 +76,7 @@ class Cones {
             // Only the active leg has a road to stand on
             const legStart = Math.max(0, env.startSegment || 0);
             const legEnd = Math.min(path.length - 1, env.endSegment !== undefined ? env.endSegment : path.length - 1);
-            const checkpoints = env.checkpoints || [];
-            // Just inside the edge line, so a cone can be clipped for points
-            // without leaving the road
-            const edgeOffset = (env.roadWidth || 16) / 2 - 0.8;
-
-            for (let index = legStart + 8; index <= legEnd - 3; index++) {
-                const point = path[index];
-                // Check if this is a turning section by looking at heading change
-                const prevIndex = Math.max(0, index - 1);
-                const nextIndex = Math.min(index + 1, path.length - 1);
-                const signedHeadingChange = path[nextIndex].heading - path[prevIndex].heading;
-                const headingChange = Math.abs(signedHeadingChange);
-
-                // Keep clear of checkpoint gates to avoid double alerts
-                if (checkpoints.some(cp => Math.abs(index - cp.segmentIndex) < 3)) continue;
-
-                let side = 0;
-                if (headingChange < 0.02) {
-                    // Straight: slalom cones every 4 segments on alternating sides
-                    if (index % 4 === 0) {
-                        side = (Math.floor(index / 4) % 2 === 0) ? 1 : -1;
-                    }
-                } else if (index % 6 === 0) {
-                    // Corner: one cone on the inside at the apex. Heading
-                    // grows in a right turn, and right is the positive side.
-                    side = signedHeadingChange > 0 ? 1 : -1;
-                }
-                if (side === 0) continue;
-
-                // Offset along the road's perpendicular (a world-X offset put
-                // cones in the lanes wherever the road was not heading north)
-                conePositions.push({
-                    x: point.x + Math.cos(point.heading) * edgeOffset * side,
-                    y: point.y || 0,
-                    z: point.z - Math.sin(point.heading) * edgeOffset * side
-                });
-            }
+            conePositions.push(...Cones.placeRange(env, legStart + 8, legEnd - 3));
         } else {
             // Fallback: simple straight line
             for (let i = 0; i < 20; i++) {

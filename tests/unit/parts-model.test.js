@@ -169,7 +169,7 @@ describe('the parts model', () => {
             expect(Terrain.dressingAt(config, 20)).toMatchObject({ coniferShare: 0, treesPerSegment: [1, 3], rockfall: 0 });
             expect(Terrain.dressingAt(config, 75)).toMatchObject({ coniferShare: 0.8, treesPerSegment: [4, 6], outcrops: 1 });
             expect(Terrain.dressingAt(config, 50).coniferShare).toBeCloseTo(0.4, 9);
-            expect(Terrain.dressingAt(config, 120)).toMatchObject({ coniferShare: 0, rockfall: 0.25, outcrops: 2 });
+            expect(Terrain.dressingAt(config, 120)).toMatchObject({ coniferShare: 0.9, rockfall: 0.25, outcrops: 2 });
         });
 
         test('on an unconverted leg each returns the leg\'s single value', () => {
@@ -267,7 +267,7 @@ describe('validateCourse', () => {
     const BREAKS = {
         coverage: (c) => { c.parts[1].from = 52; },
         landmark: (c) => { c.parts[2].landmark.at = 160; },
-        straight: (c) => { c.layout[3].turnRate = -0.06; c.roadworks = [{ at: 64, type: 'roadworks' }]; },
+        straight: (c) => { c.layout[3].turnRate = -0.06; c.roadworks = [{ at: 64, type: 'major' }]; },
         reach: (c) => { c.layout[3].turnRate = -0.2; },
         step: (c) => { c.elevation.points = [[0, 20], [40, 28], [100, 112], [150, 182]]; },
         curve: (c) => { c.elevation.points = [[0, 20], [40, 28], [60, 34], [64, 37], [68, 34], [100, 40], [150, 32]]; },

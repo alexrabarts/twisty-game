@@ -468,6 +468,15 @@ class Environment {
     const roadMaterial = new THREE.MeshStandardMaterial(roadMaterialProps);
     this.roadMaterial = roadMaterial; // Store for weather effects
 
+    // A converted leg has its own road. Every other leg cuts its range from the
+    // shared course below, exactly as it always has.
+    const course = this.course();
+    if (course) {
+      this.createLegRoad(course);
+      this.createContinuousRoad(roadMaterial);
+      return;
+    }
+
     const roadWidth = this.roadWidth; // Use instance road width (varies by leg difficulty)
     const segmentLength = 20; // Shorter segments for smoother curves
 
@@ -647,6 +656,39 @@ class Environment {
 
     console.log("Course created with", this.roadPath.length, "segments");
     console.log("Start position:", this.roadPath[0]);
+  }
+
+  // The course of this leg when it is converted (js/course.js), else null
+  course() {
+    return typeof Course !== "undefined" ? Course.forLeg(this.config.id) : null;
+  }
+
+  // The path of a converted leg: its layout, local segments 0 to segments - 1,
+  // then a straight tail of 30 segments so the run-off past the finish has road
+  // to stand on. Height is absolute (the course's own control points).
+  createLegRoad(course) {
+    const segmentLength = 20;
+    let x = 0;
+    let z = 0;
+    let heading = 0;
+    const sections = [...course.layout, { segments: course.segments + 30 - course.layout.reduce((sum, section) => sum + section.segments, 0), turnRate: 0 }];
+    let index = 0;
+    sections.forEach((section) => {
+      for (let i = 0; i < section.segments; i++) {
+        this.roadPath.push({
+          x: x + (segmentLength / 2) * Math.sin(heading),
+          z: z + (segmentLength / 2) * Math.cos(heading),
+          y: Terrain.elevation(this.terrain, index, this.startSegment, this.endSegment),
+          heading,
+        });
+        x += segmentLength * Math.sin(heading);
+        z += segmentLength * Math.cos(heading);
+        heading += section.turnRate;
+        index++;
+      }
+    });
+    // Nothing on a converted leg reads the shared course's pre-sharpening backdrop
+    this.backdropPath = this.roadPath;
   }
 
   createContinuousRoad(roadMaterial) {
@@ -4759,6 +4801,16 @@ class Environment {
     const legEnd = Math.min(this.endSegment, this.roadPath.length - 1);
     const legLength = legEnd - legStart;
 
+    // A converted leg names its zones: { at, type: 'major' | 'minor' }
+    const course = this.course();
+    if (course) {
+      course.roadworks.forEach(({ at, type }) => {
+        const start = this.roadworksStartClear(at, type === "major" ? 2 : 1, type, legStart, legEnd);
+        this.createConstructionZone(start, start + (type === "major" ? 2 : 1), type === "major", type);
+      });
+      return;
+    }
+
     const majorStart = legStart + Math.floor(legLength * 0.55);
     const minorStart = legStart + Math.floor(legLength * 0.85);
 
@@ -6262,6 +6314,8 @@ class Environment {
   // track put at most one checkpoint in any leg, so ordered checkpoint scoring
   // could never trigger. The roadworks read it before the gates are built.
   checkpointSegments() {
+    const course = this.course();
+    if (course) return course.gates.slice();
     const legStart = this.startSegment;
     const legEnd = Math.min(this.endSegment, this.roadPath.length - 1);
     const legLength = legEnd - legStart;

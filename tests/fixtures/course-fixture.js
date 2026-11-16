@@ -32,7 +32,7 @@ export function fixtureCourse(Terrain) {
         ],
         elevation: { points: [[0, 20], [40, 28], [100, 40], [150, 32]], roll: 0 },
         gates: [45, 95, 148],
-        roadworks: [{ at: 120, type: 'roadworks' }],
+        roadworks: [{ at: 120, type: 'major' }],
         traffic: { oncomingEvery: 50 },
         parts: [
             {
@@ -40,7 +40,7 @@ export function fixtureCourse(Terrain) {
                 look: { grassColor: 0x4a7c4a, mountainColor: 0x6b5c42, fogDensity: 0.0015 },
                 render: { cullMax: 800 },
                 timeOfDay: 'dawn', weather: 'clear',
-                dressing: { forest: { coniferShare: 0, layout: { perSegment: [1, 3] } }, outcrops: { perSegment: 0 }, rockfall: 0 },
+                dressing: { forest: { coniferShare: 0, snowy: false, layout: { perSegment: [1, 3], offset: 6, reach: 104, exclude: [{ sign: 1, from: 33, to: 52 }] } }, outcrops: { perSegment: 0 }, rockfall: 0, backdrop: [] },
                 landmark: { id: 'valley-bridge', at: 25 }
             },
             {
@@ -49,7 +49,7 @@ export function fixtureCourse(Terrain) {
                 render: { cullMax: 600 },
                 timeOfDay: 'golden', weather: 'clear',
                 setPieces: [{ type: 'tunnel', at: 20, length: 6 }],
-                dressing: { forest: { coniferShare: 0.8, layout: { perSegment: [4, 6] } }, outcrops: { perSegment: 1 }, rockfall: 0 },
+                dressing: { forest: { coniferShare: 0.8, snowy: false, layout: { perSegment: [4, 6], offset: 5, reach: 77, exclude: [] } }, outcrops: { perSegment: 1 }, rockfall: 0, backdrop: [] },
                 landmark: { id: 'forest-hut', at: 85 }
             },
             {
@@ -57,7 +57,7 @@ export function fixtureCourse(Terrain) {
                 look: { grassColor: 0x3a6c3a, mountainColor: 0x8b8b8b, fogDensity: 0.002 },
                 render: { cullMax: 800, shadowSpan: 200 },
                 timeOfDay: 'dusk', weather: 'rain', weatherIntensity: 0.5,
-                dressing: { forest: null, outcrops: { perSegment: 2 }, rockfall: 0.25 },
+                dressing: { forest: { coniferShare: 0.9, snowy: false }, outcrops: { perSegment: 2 }, rockfall: 0.25, backdrop: [] },
                 landmark: { id: 'lake-pier', at: 125 }
             }
         ]
