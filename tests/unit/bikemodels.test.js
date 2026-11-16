@@ -307,6 +307,24 @@ describe('a bike that is being ridden when its files arrive', () => {
     });
 });
 
+describe('a bike the rider select has blacked out before its files arrive', () => {
+    const game = load({ held: true });
+    const vehicle = ride(game, 'alex');
+
+    test('still takes the model, and tells the rider select so it can black that out too', async () => {
+        const flat = new game.THREE.MeshBasicMaterial({ color: 0x05070c });
+        vehicle.group.traverse(o => { if (o.isMesh) o.material = flat; });
+        let told = 0;
+        vehicle.onModel = () => { told++; };
+        game.release();
+        await game.BikeModels.preload();
+        await new Promise(done => setTimeout(done, 0));
+        expect(game.log).toEqual([]);
+        expect(vehicle.modelled).toBe(true);
+        expect(told).toBe(1);
+    });
+});
+
 describe.each([
     ['its own file', 'sport.glb'],
     ['the rider\'s file', 'rider.glb']

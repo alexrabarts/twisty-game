@@ -241,8 +241,12 @@ const BikeModels = (() => {
     built.frontWheel.rotation.copy(vehicle.frontWheel.rotation);
     built.rearDisc.rotation.copy(vehicle.rearDisc.rotation);
     built.frontDisc.rotation.copy(vehicle.frontDisc.rotation);
-    lens.emissive.copy(vehicle.brakeLight.material.emissive);
-    lens.emissiveIntensity = vehicle.brakeLight.material.emissiveIntensity;
+    // The rider select may have put a flat material on every part by now
+    const lit = vehicle.brakeLight.material;
+    if (lit.emissive) {
+      lens.emissive.copy(lit.emissive);
+      lens.emissiveIntensity = lit.emissiveIntensity;
+    }
 
     for (const child of before) {
       group.remove(child);
