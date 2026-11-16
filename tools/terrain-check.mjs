@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime mutate
 // (`shortcuts` runs its own doubled-back control)
-// --no-assets keeps every leg's procedural dressing and the procedural bike (js/sceneassets.js and js/bikemodels.js swap nothing), for a before/after measure.
+// --no-assets keeps every leg's procedural dressing, the procedural bike and the procedural cars (js/sceneassets.js, js/bikemodels.js and js/carmodels.js swap nothing), for a before/after measure.
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
 // Exit: 0 ok, 1 failures, 2 no Chrome or no window.game, 3 --gpu without a hardware renderer.
 //
@@ -158,6 +158,7 @@ async function openGame(browser, port) {
             await page.evaluate(() => {
                 if (typeof SceneAssets !== 'undefined') SceneAssets.dress = () => null;
                 if (typeof BikeModels !== 'undefined') BikeModels.dress = () => false;
+                if (typeof CarModels !== 'undefined') CarModels.dress = () => false;
             });
         } else if (await page.evaluate(() => typeof SceneAssets === 'undefined')) {
             await page.addScriptTag({ url: '/js/sceneassets.js' });
