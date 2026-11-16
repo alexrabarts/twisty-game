@@ -43,6 +43,31 @@ Rules for a change to a bike:
 - Set `TWISTY_PREVIEW=<directory>` to render the finished model from three sides after the export.
 - The limb lengths in `rider.py` (`LENGTHS`) and in `js/bikemodels.js` are one number in two places. Change both.
 
+## Traffic cars
+
+```sh
+for script in car_hatchback car_van; do
+  blender --background --factory-startup --python tools/blender/$script.py
+done
+```
+
+| Script | Output | What it makes |
+|---|---|---|
+| `car_hatchback.py` | `cars/hatchback.glb` | A five-door hatchback, 4.3 m long and 1.5 m high. Its roof is the material `paint_roof`, for the game's two-tone cars. 4704 triangles as drawn. |
+| `car_van.py` | `cars/van.glb` | A compact panel van, 4.34 m long and 1.87 m high, with glass at the cab only. 4756 triangles as drawn. |
+
+`car_kit.py` adds the car body to the bikes' kit. A body is one closed shell over cross-sections. Four lines of `(z, value)` knots define them: the silhouette (`TOP`), the line under the windows (`BELT`), the lower edge (`LO`) and the half-width in plan (`WIDTH`). The wheel arches are cut into the lower edge. A cross-section has eleven points up one side, and a place on the body is `(z, s)` with `s` the point's number. `Body.patch` lays a thin patch on the shell between two such places: the lamps, the shut lines and the grille are patches. A patch is hidden while the occlusion of the panel under it is baked.
+
+A car file has these nodes: `body`, `wheel` (one wheel, front left; the game draws it four times), `headlights`, `taillights` and the four indicators `indicator_fl`, `indicator_fr`, `indicator_rl`, `indicator_rr`. The rear indicators are the brake lamps too. The game gives `paint` and `paint_roof` each car's colours, lights `headlight` and `taillight`, and takes the other colours from the file (`js/carmodels.js`).
+
+Rules for a change to a car:
+
+- Model with the ground at y = 0 and the car's middle at z = 0. Keep the wheel at (0.76, 0.32, 1.35) with a tyre radius of 0.32: `Car` spins the wheels for that radius and puts the hubs there.
+- Keep the car inside 2.2 m of its middle at hub height, fore and aft: `Car.checkCollision` is a ball of that radius. `tests/unit/carmodels.test.js` checks the footprint against the procedural car.
+- Keep each car at or under 5000 triangles as drawn (the file counts one wheel, the game draws four) and 150 KB. The scripts fail above 4500 triangles in the file.
+- A new body style needs an entry in `CARS` in `js/carmodels.js` and a rule in `kind()`. `kind()` must not call `Math.random`.
+- Set `TWISTY_PREVIEW=<directory>` to render the finished model from three sides after the export.
+
 ## Format
 
 Plain glTF binary with WebP textures (`EXT_texture_webp`), at most 1024 px. Not Draco or KTX2: in three r150 `GLTFLoader`, `DRACOLoader` and `KTX2Loader` exist only as ES modules that import `three` by bare name, which this script-tag page cannot resolve without an import map in `index.html` and a second copy of three. `js/sceneassets.js` reads the subset the exporter writes: one primitive per material, a node translation but no rotation or scale, and no interleaving. The bike files have no textures. `bike_kit.py` rewrites them after the export with the occlusion (`COLOR_0`) as bytes and the normals as signed bytes padded to four (`KHR_mesh_quantization`), which takes a third off each file. With about 1.5 MB for the leg, the geometry is a small share and a Draco decoder would cost more than it saves.

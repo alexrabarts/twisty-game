@@ -356,6 +356,7 @@ class Car {
             const twoToneOptions = [0x1a1a1a, 0xf5f5f5, 0xc0c0c0];
             roofColor = twoToneOptions[Math.floor(Math.random() * twoToneOptions.length)];
         }
+        this.roofColor = roofColor;
 
         const bodyMaterial = new THREE.MeshStandardMaterial({
             color: this.color,
@@ -666,6 +667,10 @@ class Car {
         });
 
         this.scene.add(this.carGroup);
+
+        // The modelled car takes over once its file is in (js/carmodels.js);
+        // the parts built above stand until then
+        if (typeof CarModels !== 'undefined') CarModels.dress(this);
     }
     
     updatePosition() {
@@ -827,6 +832,14 @@ class Car {
             this.carGroup.visible = false;
 
             this.currentSegment = this.direction < 0 ? range.end : range.start;
+
+            // A model that arrived while the car was on the road goes on
+            // here, where the car is out of sight
+            if (this.modelWaiting) {
+                const swap = this.modelWaiting;
+                this.modelWaiting = null;
+                swap();
+            }
             
             // Make visible again after a brief delay to ensure smooth transition
             setTimeout(() => {
