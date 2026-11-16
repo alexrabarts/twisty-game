@@ -27,6 +27,10 @@ Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without
 - Valley-run is the cliff road with the wall on the right and the drop to the lake on the left; high-pass has the wall on the left.
 - `side > 0` in `twistyDev.view` is the right of the road, whatever ground is there.
 
+## The village by eye
+
+`node tools/village-shots.mjs <directory> <label> [--no-assets] [--gpu] [--times]` writes pictures of night-ride's village from six fixed views, at night and with daylight forced, and prints the village's meshes, triangles and frame time for each. `--no-assets` keeps the procedural village, for a before and after. `--times` prints the frame times only. It blocks the same hosts as the harness below.
+
 ## Browser proof harness
 
 `tools/terrain-check.mjs` serves the repo, drives the real page in Chrome and prints one JSON report. Set `TWISTY_CHROME` to a Chrome binary. Run `node tools/terrain-check.mjs <probe>[,<probe>] [--legs id,id] [--gpu]`.
