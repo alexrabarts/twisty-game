@@ -91,6 +91,15 @@ class TourSystem {
             }
         ];
 
+        // A converted leg has its own road, numbered from segment 0
+        this.legs.forEach(leg => {
+            const course = typeof Course !== 'undefined' ? Course.forLeg(leg.id) : null;
+            if (course) {
+                leg.startSegment = 0;
+                leg.endSegment = course.segments - 1;
+            }
+        });
+
         this.currentLeg = null;
 
         // Progression: legs unlock sequentially; riders unlock at completion

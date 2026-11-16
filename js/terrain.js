@@ -190,6 +190,8 @@ const Terrain = (() => {
       ...(lipDepth !== undefined && { lipDepth }),
       stations,
       undulation,
+      // Distances past the road edge where the drawn ground bends: a join of two sides puts a row on each
+      kinks: () => [...stations.map(([d]) => d), ...(undulation ? [undulation.ramp] : [])],
       // The nearest road point's height is a step function of position;
       // this side asks for the height interpolated along the segment
       interpolatesRoad: true,
@@ -259,6 +261,7 @@ const Terrain = (() => {
       roll,
       wave,
       closing,
+      kinks: (s) => open.map((_, n) => station(n, closing(s))[0]),
       interpolatesRoad: true,
       base: (dPast, roadY, s) => roadY + offsetAt(dPast, s),
       row(j, ctx, out) {
@@ -317,6 +320,14 @@ const Terrain = (() => {
 
   const LAKE_Y = -200;
 
+  // The cliff road's two sides: a rock wall on one, the drop to the lake on the
+  // other. `mirrored` puts the drop on the left; `snow: false` keeps snow off the wall.
+  function cliffSides({ mirrored = false, snow } = {}) {
+    const wall = cliffWallSide({ height: 40, rockSpread: 20, ...(snow === false && { snow }) });
+    const drop = cliffDropSide({ floorY: LAKE_Y, faceHeight: LAKE_Y, rockSpread: 25 });
+    return mirrored ? { left: drop, right: wall } : { left: wall, right: drop };
+  }
+
   const cliffLake = {
     id: 'cliffLake',
     // Exact reads walk the nearest vertex column, not the drawn triangles:
@@ -326,8 +337,7 @@ const Terrain = (() => {
     floor: { kind: 'lake', y: LAKE_Y, restY: LAKE_Y + 5 },
     // Road y for global segment i: gentle rolling terrain
     elevation: (i) => Math.sin(i * 0.04) * 8 + Math.cos(i * 0.025) * 6 + 25,
-    left: cliffWallSide({ height: 40, rockSpread: 20 }),
-    right: cliffDropSide({ floorY: LAKE_Y, faceHeight: LAKE_Y, rockSpread: 25 })
+    ...cliffSides()
   };
 
   // The same cliff and lake seen the other way round: the drop to the lake on
@@ -363,6 +373,38 @@ const Terrain = (() => {
   // verge and the valley sides rise to steep, rocky foothills 120 m high close
   // to the road. The river keeps its bed at every weight: the water is a fixed
   // ribbon from lateral 35 to 50.
+  // The two sides of the valley, as a function of how far it has closed
+  // (`closing(s)`, 0 to 1), so a part of a long leg can drive them with its own weight.
+  function valleyFloorSides(closing) {
+    return {
+      left: closingSide({
+        // The bank's foot is half a metre past the run-off's end at every weight:
+        // it moves along the road, and between two columns the drawn triangles
+        // join two places of it, so it must stay clear of the run-off the bike
+        // reads to 0.10
+        open: [[0, 0], [14, -0.84], [35.5, -2.13], [41.5, 2.0], [70, 3.0], [100, 4.0], [140, 12], [175, 26], [190, 33]],
+        closed: [[0, 0], [6, -0.3], [14.5, -0.5], [19.5, 3.5], [35, 16], [60, 40], [100, 76], [150, 108], [190, 124]],
+        roll: [0, 0, 0, 0, 0.1, 0.3, 0.6, 0.85, 1],
+        closing,
+        wave: { amplitude: [3, 16], wavelength: 9, phase: 0.4 },
+        bands: [{ to: 35, closed: 14, kind: 'runoff' }, { kind: 'wall' }],
+        runoff: RUNOFF,
+        rockSlope: 0.6
+      }),
+      right: closingSide({
+        // Bank into the river bed (below the water plane from 37.5 to 48), then up and away
+        open: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [60, -1.0], [100, 0], [140, 12], [190, 34]],
+        closed: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [52, 6], [90, 45], [135, 92], [190, 122]],
+        roll: [0, 0, 0, 0, 0, 0, 0, 0.1, 0.4, 0.75, 1],
+        closing,
+        wave: { amplitude: [3, 16], wavelength: 11, phase: 2.1 },
+        bands: [{ to: 35, closed: 24, kind: 'runoff' }, { kind: 'wall' }],
+        runoff: RUNOFF,
+        rockSlope: 0.6
+      })
+    };
+  }
+
   const valleyFloor = {
     id: 'valleyFloor',
     // The river is a ribbon 3 m below the road, lateral 35 to 50 on the right
@@ -378,31 +420,7 @@ const Terrain = (() => {
       const own = 12 + 16 * smoothstep(0.2, 0.95, t) + Math.sin(k * 0.11) * 1.6 * (1 - smoothstep(0.25, 0.55, t));
       return own + (cliffLake.elevation(i) - own) * smoothstep(end - 14, end, i);
     },
-    left: closingSide({
-      // The bank's foot is half a metre past the run-off's end at every weight:
-      // it moves along the road, and between two columns the drawn triangles
-      // join two places of it, so it must stay clear of the run-off the bike
-      // reads to 0.10
-      open: [[0, 0], [14, -0.84], [35.5, -2.13], [41.5, 2.0], [70, 3.0], [100, 4.0], [140, 12], [175, 26], [190, 33]],
-      closed: [[0, 0], [6, -0.3], [14.5, -0.5], [19.5, 3.5], [35, 16], [60, 40], [100, 76], [150, 108], [190, 124]],
-      roll: [0, 0, 0, 0, 0.1, 0.3, 0.6, 0.85, 1],
-      closing: valleyClosing,
-      wave: { amplitude: [3, 16], wavelength: 9, phase: 0.4 },
-      bands: [{ to: 35, closed: 14, kind: 'runoff' }, { kind: 'wall' }],
-      runoff: RUNOFF,
-      rockSlope: 0.6
-    }),
-    right: closingSide({
-      // Bank into the river bed (below the water plane from 37.5 to 48), then up and away
-      open: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [60, -1.0], [100, 0], [140, 12], [190, 34]],
-      closed: [[0, 0], [25, -1.5], [28, -3.1], [30, -4.0], [36, -4.0], [38, -3.1], [40, -2.0], [52, 6], [90, 45], [135, 92], [190, 122]],
-      roll: [0, 0, 0, 0, 0, 0, 0, 0.1, 0.4, 0.75, 1],
-      closing: valleyClosing,
-      wave: { amplitude: [3, 16], wavelength: 11, phase: 2.1 },
-      bands: [{ to: 35, closed: 24, kind: 'runoff' }, { kind: 'wall' }],
-      runoff: RUNOFF,
-      rockSlope: 0.6
-    })
+    ...valleyFloorSides(valleyClosing)
   };
 
   // Rolling forest floor, dark, undulating a few metres either side of the road.
@@ -485,6 +503,8 @@ const Terrain = (() => {
   const GORGE_CLIFFS = [{ from: 272, to: 286 }, { from: 294 }];
   const gorgeWall = () => cliffWallSide({ height: 57, rockSpread: 20, variation: 0.2, snow: false, drawnFoot: true });
   const gorgeDrop = () => cliffDropSide({ floorY: GORGE_LAKE_Y, faceHeight: -55, rockSpread: 25 });
+  // The canyon's pieces: the walls (both sides), the drop to the gorge's lake and the spur a tunnel cuts through
+  const canyonSides = () => ({ left: gorgeWall(), right: gorgeWall(), drop: gorgeDrop(), hill: gorgeHill() });
   // The rock spur each tunnel cuts through: the lining at 1 m past the edge,
   // the rock climbing to the roof's crest 2.5 m out and on up beside the walls,
   // then falling away into the gorge's lake, so seen from a cliff road it is a
@@ -522,7 +542,7 @@ const Terrain = (() => {
   // while the drop is tall, then (from BEACH_FROM) loose sand a bike can ride on.
   const SEA_Y = 0;
   const BEACH_FROM = 216;
-  const beach = heightfieldSide({
+  const coastBeach = () => heightfieldSide({
     // Sand sloping gently away from the road, then the shore falling into the sea
     stations: [[0, 0], [8, -0.8], [16, -2.0], [20, -2.8], [24, -4.5], [34, -10], [60, -26], [100, -46], [150, -70]],
     bands: [{ to: 20, kind: 'runoff' }, { kind: 'fall' }],
@@ -530,6 +550,13 @@ const Terrain = (() => {
     tint: 0xd2bf8a,
     lipDepth: 2
   });
+  // The sea road's pieces: the hill (left), the drop to the sea (right) and the beach that replaces it
+  const coastSides = () => ({
+    left: cliffWallSide({ height: 40, rockSpread: 20, drawnFoot: true }),
+    right: cliffDropSide({ floorY: SEA_Y, faceHeight: -60, rockSpread: 25, lipDepth: 2 }),
+    beach: coastBeach()
+  });
+  const coastPieces = coastSides();
   const coast = {
     id: 'coast',
     // Absolute sea level; a fall ends just above it
@@ -539,23 +566,23 @@ const Terrain = (() => {
       const t = Math.min(1, Math.max(0, (i - start) / (end - start)));
       return 6 + 52 * Math.pow(1 - t, 1.7);
     },
-    left: cliffWallSide({ height: 40, rockSpread: 20, drawnFoot: true }),
-    right: cliffDropSide({ floorY: SEA_Y, faceHeight: -60, rockSpread: 25, lipDepth: 2 }),
-    spans: [{ from: BEACH_FROM, right: beach }]
+    left: coastPieces.left,
+    right: coastPieces.right,
+    spans: [{ from: BEACH_FROM, right: coastPieces.beach }]
   };
 
   // An exposed ridge: a snowfield 6 m wide each side of the road, then a drop
   // of 40 m onto a shelf, with a frozen lake far below. The shelf, not the
   // lake, is where a bike that goes over comes to rest. The drop is too steep
   // to hold snow, so it shows as a band of bare rock under the snowfield.
-  const ridgeSide = () =>
+  const ridgeSide = (tint = 0xf4f6f8) =>
     heightfieldSide({
       stations: [[0, 0], [6, -0.4], [8, -4], [14, -22], [22, -40], [80, -40]],
       bands: [{ to: 6, kind: 'runoff' }, { kind: 'fall' }],
       runoff: RUNOFF,
       // Near white: the ground colours are stored undecoded, so a pale blue
       // tint rendered as a saturated blue band beside the road
-      tint: 0xf4f6f8,
+      tint,
       fallDepth: 40,
       rockSlope: 1.0
     });
@@ -571,6 +598,7 @@ const Terrain = (() => {
     left: ridgeSide(),
     right: ridgeSide()
   };
+  const ridgeSides = ({ tint } = {}) => ({ left: ridgeSide(tint), right: ridgeSide(tint) });
 
   const profiles = { cliffLake, cliffLakeMirrored, valleyFloor, forest, forestNight, coast, canyon, ridge };
 
@@ -1314,6 +1342,421 @@ const Terrain = (() => {
     return out;
   }
 
+  // ---------------------------------------------------------------------
+  // Parts: a long leg is a list of parts, each with its own ground, dressing,
+  // look and landmark. Everything below is a pure function of its arguments.
+
+  // Road height from absolute control points [[segment, y], ...], joined by a
+  // monotone cubic (Fritsch-Carlson, so no overshoot between two points), plus
+  // an optional slow roll of at most 2 m. It reads no leg start or end.
+  function elevationFrom(points, roll = 0) {
+    if (!Array.isArray(points) || points.length < 2) throw new Error('Elevation needs at least two control points');
+    if (roll > 2) throw new Error('The roll may not exceed 2 m');
+    for (let n = 1; n < points.length; n++) {
+      if (!(points[n][0] > points[n - 1][0])) throw new Error('Elevation control points must run forward');
+    }
+    const count = points.length;
+    const gaps = [];
+    const slopes = [];
+    for (let n = 0; n < count - 1; n++) {
+      gaps.push(points[n + 1][0] - points[n][0]);
+      slopes.push((points[n + 1][1] - points[n][1]) / gaps[n]);
+    }
+    const tangents = new Array(count);
+    tangents[0] = slopes[0];
+    tangents[count - 1] = slopes[count - 2];
+    for (let n = 1; n < count - 1; n++) {
+      tangents[n] = slopes[n - 1] * slopes[n] <= 0 ? 0 : (slopes[n - 1] + slopes[n]) / 2;
+    }
+    for (let n = 0; n < count - 1; n++) {
+      if (slopes[n] === 0) {
+        tangents[n] = 0;
+        tangents[n + 1] = 0;
+        continue;
+      }
+      const a = tangents[n] / slopes[n];
+      const b = tangents[n + 1] / slopes[n];
+      const size = a * a + b * b;
+      if (size > 9) {
+        const scale = 3 / Math.sqrt(size);
+        tangents[n] = scale * a * slopes[n];
+        tangents[n + 1] = scale * b * slopes[n];
+      }
+    }
+    const first = points[0][0];
+    const last = points[count - 1][0];
+    return (i) => {
+      const at = Math.min(last, Math.max(first, i));
+      let n = 0;
+      while (n < count - 2 && at > points[n + 1][0]) n++;
+      const t = (at - points[n][0]) / gaps[n];
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const y = (2 * t3 - 3 * t2 + 1) * points[n][1] + (t3 - 2 * t2 + t) * gaps[n] * tangents[n] +
+        (-2 * t3 + 3 * t2) * points[n + 1][1] + (t3 - t2) * gaps[n] * tangents[n + 1];
+      return roll ? y + Math.sin(i * 0.07) * roll : y;
+    };
+  }
+
+  // A join between two heightfield sides over `weight(s)` (0 to 1, the share of
+  // `b`). The ground is the mix of the two ground curves at each distance, so
+  // `row` and `base` are one curve. Its bends are the bends of both sides, and
+  // the rows stand on every one of them, so the drawn triangles keep within the
+  // row spacing of the curve as closingSide's do. `zone` is [from, to] in
+  // segments: the sides must hold their shape there (a closing side at one
+  // weight), and the band ends of both are read at its two ends.
+  function morphSide(a, b, weight, zone) {
+    const mixed = (x, y, w) => x + (y - x) * w;
+    if (a.flat !== 0 || b.flat !== 0 || a.face || b.face || !a.kinks || !b.kinks) throw new Error('A morph joins two heightfield sides');
+    if (a.bands.length !== b.bands.length) throw new Error('A morph needs the same bands on both sides');
+    const bands = a.bands.map((band, n) => {
+      const other = b.bands[n];
+      if (other.kind !== band.kind) throw new Error('A morph needs the same band kinds on both sides');
+      if (band.to === undefined) return band;
+      return { kind: band.kind, to: bandEnd(a, band, zone[0]), closed: bandEnd(b, other, zone[1]) };
+    });
+    const rowDistances = spreadRows([...a.kinks(zone[0]), ...b.kinks(zone[1])]);
+    const pick = (key) => b[key] ?? a[key];
+    return {
+      flat: 0,
+      bands,
+      face: null,
+      runoff: pick('runoff'),
+      shade: pick('shade'),
+      ...(pick('tint') !== undefined && { tint: pick('tint') }),
+      ...(pick('rockSlope') !== undefined && { rockSlope: pick('rockSlope') }),
+      ...(pick('fallDepth') !== undefined && { fallDepth: pick('fallDepth') }),
+      ...(pick('lipDepth') !== undefined && { lipDepth: pick('lipDepth') }),
+      closing: weight,
+      interpolatesRoad: true,
+      base(dPast, roadY, s) {
+        return mixed(a.base(dPast, roadY, s), b.base(dPast, roadY, s), weight(s));
+      },
+      row(j, ctx, out) {
+        const s = ctx.s ?? ctx.index;
+        out.d = ctx.halfRoad + rowDistances[j];
+        out.y = this.base(rowDistances[j], ctx.roadY, s);
+        out.rise = out.y - ctx.roadY;
+        out.displacement = 0;
+        return out;
+      }
+    };
+  }
+
+  const PLANE_FLOORS = ['lake', 'sea', 'ice'];
+  const DEFAULT_BLEND = 20;
+
+  // The side pieces a set piece cuts into a part, by type
+  const SET_PIECE_SIDES = { tunnel: hillSide, village: streetSide };
+  const SET_PIECE_DEFAULTS = { tunnel: { ceiling: 7.5 }, village: {} };
+
+  // The segments over which part `index` mixes with the part before it: a window
+  // centred on the join, `blend` long, whatever the kind of join. Null for the first part.
+  function joinZone(parts, index) {
+    if (index === 0) return null;
+    const blend = parts[index].blend ?? DEFAULT_BLEND;
+    const from = parts[index].from - Math.floor(blend / 2);
+    return [from, from + blend];
+  }
+
+  const isMorph = (part) => part.join === 'morph';
+
+  // The part at a position along the road (segments, continuous), where it is
+  // in it (t, 0 to 1) and, inside a join's window, how far it has mixed with the
+  // part before it. Past the last part the last part holds.
+  function partAt(profile, s) {
+    const { parts } = profile;
+    let index = parts.length - 1;
+    for (let n = 0; n < parts.length; n++) {
+      if (s < parts[n].to) {
+        index = n;
+        break;
+      }
+    }
+    const part = parts[index];
+    const t = Math.min(1, Math.max(0, (s - part.from) / (part.to - part.from)));
+    let mix = { from: index, to: index, weight: 0 };
+    // The window straddles the join: the part before it owns the first half, the part after the second
+    for (const n of [index, index + 1]) {
+      const zone = parts[n] && joinZone(parts, n);
+      if (zone && s >= zone[0] && s < zone[1]) {
+        mix = { from: n - 1, to: n, weight: smoothstep(zone[0], zone[1], s) };
+        break;
+      }
+    }
+    return { index, part, t, mix };
+  }
+
+  // The profile of a leg's table row, or of a profile, when it has parts
+  const partedProfile = (holder) => (holder.parts ? holder : holder.profile && holder.profile.parts ? holder.profile : null);
+
+  function floorAt(profile, s) {
+    if (!profile.parts) return profile.floor;
+    const { part } = partAt(profile, s);
+    return part.floor || part.profile.floor;
+  }
+
+  const mixNumber = (x, y, w) => x + (y - x) * w;
+  const mixColour = (x, y, w) => {
+    let out = 0;
+    for (const shift of [16, 8, 0]) {
+      const cx = (x >> shift) & 255;
+      const cy = (y >> shift) & 255;
+      out |= Math.round(cx + (cy - cx) * w) << shift;
+    }
+    return out;
+  };
+  const mixPair = (x, y, w) => [mixNumber(x[0], y[0], w), mixNumber(x[1], y[1], w)];
+
+  // The values of two parts at a position, mixed over the join between them
+  function mixedAt(profile, s, pick, mixers) {
+    const { mix } = partAt(profile, s);
+    const from = pick(profile.parts[mix.from]);
+    const to = pick(profile.parts[mix.to]);
+    const out = {};
+    for (const [key, mixer] of Object.entries(mixers)) {
+      if (from[key] === undefined || to[key] === undefined) {
+        out[key] = mix.weight < 0.5 ? from[key] : to[key];
+      } else {
+        out[key] = mixer(from[key], to[key], mix.weight);
+      }
+    }
+    return out;
+  }
+
+  // The look at a position: ground colours, fog density and the render reach,
+  // mixed over a join, plus the part's time of day and weather. On a leg with no
+  // parts it is the leg's one value.
+  function lookAt(config, s) {
+    const profile = partedProfile(config);
+    if (!profile) return { ...config.look, render: config.render };
+    const { part, mix } = partAt(profile, s);
+    const dominant = mix.weight < 0.5 ? profile.parts[mix.from] : part;
+    const look = mixedAt(profile, s, (p) => p.look || {}, { grassColor: mixColour, mountainColor: mixColour, fogDensity: mixNumber });
+    const render = mixedAt(profile, s, (p) => p.render || {}, { ring: mixNumber, cullMax: mixNumber, shadowSpan: mixNumber, ringRise: mixPair });
+    Object.keys(render).forEach((key) => render[key] === undefined && delete render[key]);
+    return {
+      ...look,
+      render,
+      timeOfDay: dominant.timeOfDay,
+      weather: dominant.weather ?? null,
+      weatherIntensity: dominant.weatherIntensity ?? 0
+    };
+  }
+
+  // The dressing numbers at a position, mixed over a join: conifer share, trees
+  // per segment [low, high], outcrops per segment and the rockfall rate.
+  function dressingAt(config, s) {
+    const numbers = (dressing = {}) => ({
+      coniferShare: dressing.forest ? dressing.forest.coniferShare : 0,
+      treesPerSegment: dressing.forest && dressing.forest.layout ? dressing.forest.layout.perSegment : [0, 0],
+      outcrops: dressing.outcrops ? dressing.outcrops.perSegment : 0,
+      rockfall: dressing.rockfall ?? 0
+    });
+    const profile = partedProfile(config);
+    if (!profile) return numbers(config.dressing);
+    return mixedAt(profile, s, (p) => numbers(p.dressing), { coniferShare: mixNumber, treesPerSegment: mixPair, outcrops: mixNumber, rockfall: mixNumber });
+  }
+
+  // The ground of a long leg: every part's sides become spans of one profile,
+  // so sideAt, rowAt, zoneAt, rideableLimit, gateReach, wallSignsAt, fallSignAt,
+  // ceilingAt, setPieces and faceRange work on it as they do on any profile.
+  // Spans are searched in order: set pieces first, then the morph windows, then
+  // the parts. The last part has no end, so the straight tail past the finish
+  // keeps its ground.
+  function partsProfile(course) {
+    const { parts } = course;
+    const spans = [];
+    parts.forEach((part) => {
+      (part.setPieces || []).forEach((piece) => {
+        const make = SET_PIECE_SIDES[piece.type];
+        if (!make) throw new Error(`Unknown set piece: ${piece.type}`);
+        const from = part.from + piece.at;
+        spans.push({
+          type: piece.type,
+          from,
+          to: from + piece.length,
+          ...SET_PIECE_DEFAULTS[piece.type],
+          ...(piece.ceiling !== undefined && { ceiling: piece.ceiling }),
+          left: make(),
+          right: make()
+        });
+      });
+    });
+    parts.forEach((part, index) => {
+      if (!isMorph(part)) return;
+      const before = parts[index - 1];
+      const zone = joinZone(parts, index);
+      const weight = (s) => smoothstep(zone[0], zone[1], s);
+      spans.push({
+        from: zone[0],
+        to: zone[1],
+        left: morphSide(before.profile.left, part.profile.left, weight, zone),
+        right: morphSide(before.profile.right, part.profile.right, weight, zone)
+      });
+    });
+    parts.forEach((part, index) => {
+      spans.push({ from: part.from, ...(index < parts.length - 1 && { to: part.to }), left: part.profile.left, right: part.profile.right });
+    });
+    const elevate = elevationFrom(course.elevation.points, course.elevation.roll);
+    return {
+      id: course.id,
+      floor: parts[0].floor || parts[0].profile.floor,
+      elevation: (i) => elevate(i),
+      left: parts[0].profile.left,
+      right: parts[0].profile.right,
+      parts,
+      spans
+    };
+  }
+
+  // The turn rate of each segment of a course layout ([{ segments, turnRate }]),
+  // then 0 for every segment past it
+  function turnRates(layout, count) {
+    const rates = new Array(count).fill(0);
+    let at = 0;
+    for (const { segments, turnRate } of layout) {
+      for (let k = 0; k < segments && at < count; k++) rates[at++] = turnRate;
+    }
+    return rates;
+  }
+
+  // The rules a course must meet, as a list of { rule, at }. An empty list is a
+  // valid course. `at` is the local segment (or part index) where a rule fails.
+  function validateCourse(course) {
+    const found = [];
+    const fail = (rule, at) => found.push({ rule, at });
+    const { parts, segments } = course;
+    const rates = turnRates(course.layout || [], segments + 30);
+    const straight = (from, to) => {
+      for (let i = from - 1; i <= to + 1; i++) if (Math.abs(rates[Math.max(0, i)] ?? 0) > 0.05) return false;
+      return true;
+    };
+    const pieces = parts.flatMap((part) => (part.setPieces || []).map((piece) => ({
+      type: piece.type,
+      from: part.from + piece.at,
+      to: part.from + piece.at + piece.length
+    })));
+
+    let expected = 0;
+    parts.forEach((part, n) => {
+      if (part.from !== expected || part.to <= part.from) fail('coverage', n);
+      expected = part.to;
+    });
+    if (expected !== segments) fail('coverage', parts.length);
+
+    parts.forEach((part, n) => {
+      const at = part.landmark && part.landmark.at;
+      if (!Number.isFinite(at) || at < part.from || at >= part.to) fail('landmark', n);
+    });
+
+    parts.forEach((part, n) => {
+      if (n > 0 && !isMorph(part) && !straight(part.from, part.from)) fail('straight', part.from);
+    });
+    pieces.forEach((piece) => { if (!straight(piece.from, piece.to - 1)) fail('straight', piece.from); });
+    (course.roadworks || []).forEach((work) => { if (!straight(work.at, work.at)) fail('straight', work.at); });
+    (course.gates || []).forEach((gate) => { if (!straight(gate, gate)) fail('straight', gate); });
+
+    // No row may reach past half the tightest bend radius of its part
+    const halfRoad = (course.roadWidth ?? 16) / 2;
+    parts.forEach((part, n) => {
+      let sharpest = 0;
+      const end = Math.min(rates.length, part.to + (n === parts.length - 1 ? 20 : 0));
+      for (let i = part.from; i < end; i++) sharpest = Math.max(sharpest, Math.abs(rates[i]));
+      if (!sharpest) return;
+      const ctx = { halfRoad, roadY: 30, column: 0, index: 7, s: part.from + 7, pathLength: segments + 30 };
+      const reach = Math.max(outermost(part.profile.left, ctx), outermost(part.profile.right, ctx));
+      if (reach > 20 / sharpest / 2) fail('reach', n);
+    });
+
+    const height = elevationFrom(course.elevation.points, course.elevation.roll);
+    // Each of these two rules reports its worst segment once, not every segment on a long bad stretch
+    let before = null;
+    const worst = { step: { size: 1.2, at: -1 }, curve: { size: 0.08, at: -1 } };
+    for (let i = 0; i < segments; i++) {
+      const step = height(i + 1) - height(i);
+      if (Math.abs(step) > worst.step.size) worst.step = { size: Math.abs(step), at: i };
+      if (before !== null && Math.abs(step - before) > worst.curve.size) worst.curve = { size: Math.abs(step - before), at: i };
+      before = step;
+    }
+    Object.entries(worst).forEach(([rule, { at }]) => at >= 0 && fail(rule, at));
+
+    course.elevation.points.forEach(([at]) => {
+      if (pieces.some((piece) => (piece.type === 'tunnel' || piece.type === 'village') && at >= piece.from && at < piece.to)) fail('control', at);
+    });
+
+    // Neighbouring parts with different plane floors need a tunnel at the join
+    parts.forEach((part, n) => {
+      if (n === 0) return;
+      const left = parts[n - 1].floor || parts[n - 1].profile.floor;
+      const right = part.floor || part.profile.floor;
+      if (!PLANE_FLOORS.includes(left.kind) || !PLANE_FLOORS.includes(right.kind) || left.kind === right.kind) return;
+      const hidden = pieces.some((piece) => piece.type === 'tunnel' && piece.from <= part.from && piece.to >= part.from);
+      if (!hidden) fail('floor', part.from);
+    });
+
+    // The start line stands at segment 5, the finish line at segments + 4
+    const gates = course.gates || [];
+    gates.forEach((gate, n) => {
+      const gap = gate - (n === 0 ? 5 : gates[n - 1]);
+      if (gap < 40 || gap > 60) fail('gap', gate);
+    });
+    const lastGate = gates[gates.length - 1];
+    if (lastGate === undefined || segments + 4 - lastGate > 8 || lastGate > segments + 4) fail('finish', segments);
+
+    if (segments % 25 !== 0) fail('multiple', segments);
+
+    parts.forEach((part, n) => {
+      if (n === 0 || !isMorph(part)) return;
+      const blend = part.blend ?? DEFAULT_BLEND;
+      const zone = joinZone(parts, n);
+      if (blend < 10 || blend > 30 || zone[0] < parts[n - 1].from || zone[1] > part.to) fail('blend', part.from);
+    });
+    return found;
+  }
+
+  // Drop kept columns for the road columns [fromColumn, toColumn] of a ground
+  // handle and profile. A later read computes the same column again.
+  function forgetColumns(geo, profile, fromColumn, toColumn) {
+    const byProfile = drawnColumns.get(geo);
+    const kept = byProfile && byProfile.get(profile);
+    if (!kept) return 0;
+    let dropped = 0;
+    for (let c = fromColumn; c <= toColumn; c++) {
+      for (const sign of [-1, 1]) {
+        if (kept.columns.delete(sign * (c + 1))) dropped++;
+      }
+    }
+    return dropped;
+  }
+
+  // Compose converted legs into the table rows everything reads: the leg's
+  // ground, its parts and a new board (trackVersion + 1). Idempotent: adopting
+  // the same course twice bumps the version once. An unknown id throws.
+  function adopt(courses) {
+    Object.entries(courses).forEach(([id, course]) => {
+      const index = LEGS.findIndex((leg) => leg.id === id);
+      if (index < 0) throw new Error(`Cannot adopt a course for an unknown leg: ${id}`);
+      const row = LEGS[index];
+      if (row.course === course) return;
+      if (!row.course) row.baseTrackVersion = row.trackVersion;
+      const profile = partsProfile(course);
+      const first = course.parts[0];
+      row.course = course;
+      row.profile = profile;
+      row.parts = course.parts;
+      row.trackVersion = row.baseTrackVersion + 1;
+      row.floor = profile.floor;
+      // The leg-start and menu-preview paths read these: they hold the first part's values
+      row.look = { ...row.look, ...first.look };
+      row.dressing = first.dressing || row.dressing;
+      row.render = Object.assign({}, DEFAULT_RENDER, first.render);
+      if (course.roadWidth) row.roadWidth = course.roadWidth;
+      LEG_PROFILES[index] = profile;
+    });
+    return Object.keys(courses);
+  }
+
   return {
     ROWS,
     COLUMNS_PER_SEGMENT,
@@ -1352,6 +1795,22 @@ const Terrain = (() => {
     groundY,
     crossings,
     clearance,
-    surfaceAt
+    surfaceAt,
+    elevationFrom,
+    morphSide,
+    partAt,
+    floorAt,
+    lookAt,
+    dressingAt,
+    partsProfile,
+    validateCourse,
+    forgetColumns,
+    adopt,
+    cliffSides,
+    coastSides,
+    canyonSides,
+    ridgeSides,
+    valleyFloorSides,
+    forestProfile
   };
 })();

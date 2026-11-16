@@ -77,6 +77,7 @@
         // Load game scripts
         const scripts = [
             'js/terrain.js',
+            'js/course.js',
             'js/vehicle.js',
             'js/environment.js',
             'js/cones.js',
@@ -90,6 +91,8 @@
         scripts.forEach(src => {
             const script = document.createElement('script');
             script.src = src;
+            // Course adopts into Terrain as it loads, so the order must hold
+            script.async = false;
             script.onload = () => {
                 loadedCount++;
                 console.log(`Loaded ${src}`);
