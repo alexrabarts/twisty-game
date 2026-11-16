@@ -504,11 +504,20 @@ class Environment {
     steps.push({ name: "road", piece: whole, run: () => this.createContinuousRoad(this.roadMaterial) });
     steps.push({ name: "dashes", piece: whole, run: () => this.createRoadMarkings("dashes") });
     const parts = this.terrain.parts;
+    // A piece is cut again at the section's middle: a ribbon over 25 segments
+    // took up to 18 ms, over a frame's budget, and its halves join as sections do
+    const middle = Math.floor((section.from + section.to) / 2);
+    const pieces = [];
     parts.forEach((part, n) => {
       const from = Math.max(section.from, part.from);
       const to = Math.min(section.to, n === parts.length - 1 ? section.to : part.to);
       if (from >= to) return;
-      const piece = { from, to, part: n };
+      if (from < middle && middle < to) pieces.push({ from, to: middle, part: n }, { from: middle, to, part: n });
+      else pieces.push({ from, to, part: n });
+    });
+    pieces.forEach((piece) => {
+      const n = piece.part;
+      const part = parts[n];
       const floor = part.floor || part.profile.floor;
       steps.push({ name: `strip:${part.id}`, piece, run: () => this.createRoadWalls("strip") });
       for (const sign of [-1, 1]) steps.push({ name: `ribbon${sign}:${part.id}`, piece, run: () => this.createRoadWalls(sign) });

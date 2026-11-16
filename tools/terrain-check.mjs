@@ -1507,7 +1507,10 @@ const PROBES = {
             const service = game.leaderboardService;
             await wait(() => service.isActive() || service.unsupported, 5000);
             twistyDev.autopilot({ speed: 20 });
-            for (let tick = 1; tick <= 9000 && !game.finished && !game.vehicle.crashed; tick++) twistyDev.step(1);
+            // A long leg needs more ticks than the 9000 of a short one
+            const leg = game.tourSystem.legs[window.__legIndex];
+            const cap = Math.max(9000, Math.ceil((leg.endSegment - leg.startSegment + 1) * 20 / 20 * 60 * 1.5));
+            for (let tick = 1; tick <= cap && !game.finished && !game.vehicle.crashed; tick++) twistyDev.step(1);
             await service.recordQueue;
             return { finished: game.finished, crashed: game.vehicle.crashed, unsupported: service.unsupported };
         }).catch(error => ({ error: String(error) }));
@@ -1560,7 +1563,8 @@ const PROBES = {
     finish: (page, i) => inPage(page, 'finish', i),
     // PR8: the gate pips on a phone, 360 x 640, for 5 to 20 gates
     async hudgates(page, i) {
-        await page.setViewport({ width: 360, height: 640, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        // A phone's width; isMobile would reload the page and lose the probe's scripts
+        await page.setViewport({ width: 360, height: 640, deviceScaleFactor: 2 });
         return page.evaluate(async legIndex => {
             window.__reseed(1);
             twistyDev.start(game.tourSystem.legs[legIndex].id);
@@ -1568,12 +1572,25 @@ const PROBES = {
             const out = {};
             for (const total of [5, 14, 16, 20]) {
                 game.hud.setGates(7 > total ? total : 7, total);
-                await new Promise(r => requestAnimationFrame(() => setTimeout(r, 50)));
+                // A frozen game has no animation frames: a timer lets the layout settle
+                await new Promise(r => setTimeout(r, 80));
                 const pips = document.getElementById('hudGatePips');
                 const row = pips.getBoundingClientRect();
                 const panel = pips.parentElement.getBoundingClientRect();
                 const boxes = Array.from(pips.children).map(pip => pip.getBoundingClientRect());
+                // The whole line the pips share: count, style score and combo, in the timer panel
+                const combo = document.getElementById('comboDisplay');
+                if (!combo.textContent) combo.textContent = 'COMBO x1';
+                const meta = document.querySelector('.hud-meta');
+                const timer = document.querySelector('.hud-timer');
+                const items = Array.from(meta.children).filter(el => el.getBoundingClientRect().width > 0).map(el => el.getBoundingClientRect());
+                const timerBox = timer.getBoundingClientRect();
                 out[total] = {
+                    timerLeft: Math.round(timerBox.left * 10) / 10,
+                    timerRight: Math.round(timerBox.right * 10) / 10,
+                    metaRows: new Set(items.map(b => Math.round(b.top))).size,
+                    metaRight: Math.round(Math.max(...items.map(b => b.right)) * 10) / 10,
+                    metaOverflow: meta.scrollWidth > meta.clientWidth + 1,
                     pips: pips.children.length,
                     on: pips.querySelectorAll('i.on').length,
                     count: document.getElementById('hudGateCount').textContent,
@@ -1838,7 +1855,9 @@ function finishChecks(report) {
     if (results.hudgates) {
         Object.entries(results.hudgates).forEach(([id, r]) => {
             Object.entries(r.gates).forEach(([total, g]) => {
-                const fits = g.pips === Number(total) && g.left >= 0 && g.right <= r.viewport[0] && g.lastPipRight <= r.viewport[0] && g.panelLeft >= 0 && g.panelRight <= r.viewport[0] && g.rows === 1;
+                const width = r.viewport[0];
+                const fits = g.pips === Number(total) && g.left >= 0 && g.right <= width && g.lastPipRight <= width && g.panelLeft >= 0 && g.panelRight <= width && g.rows === 1
+                    && g.timerLeft >= 0 && g.timerRight <= width && g.metaRight <= g.timerRight && !g.metaOverflow;
                 if (!fits) failures.push(`${id}: ${total} gates on a ${r.viewport[0]} px phone: ${JSON.stringify(g)}`);
             });
         });

@@ -1487,6 +1487,16 @@ body.in-menu .virtual-button-camera {
 
 /* Small screens */
 @media (max-width: 520px) {
+    /* A long leg's 14 to 20 gates on a phone: the timer panel is 180 px wide */
+    #hudGatePips[data-many] {
+        gap: 1px;
+    }
+
+    #hudGatePips[data-many] i {
+        width: calc(var(--fs-meta) * 0.3);
+        height: calc(var(--fs-meta) * 0.3);
+    }
+
     :root {
         --edge: 12px;
     }
