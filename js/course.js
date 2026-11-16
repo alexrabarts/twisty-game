@@ -68,10 +68,10 @@ const Course = (() => {
       cones: { straightEvery: 8 },
       // The menu shows the lake road with the twin peaks across the water
       preview: { segment: 540 },
-      // The modelled bridge (tools/blender/bridge_stone.py). Night-ride's
-      // modelled village is 149000 triangles and 5.9 MB, resident the whole
-      // leg: over the window's 12 MB, so this village stays procedural.
-      assets: { bridge: 'assets/bridge/stone.glb' },
+      // The modelled bridge (tools/blender/bridge_stone.py), and night-ride's
+      // modelled houses for the village and the farmstead, drawn as
+      // instances (merged, a village this long is 18 MB, over the window's 12)
+      assets: { bridge: 'assets/bridge/stone.glb', village: { houses: 'assets/village/houses.glb', props: 'assets/village/props.glb', instanced: true } },
       parts: [
         {
           id: 'meadow', from: 0, to: 120,

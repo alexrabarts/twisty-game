@@ -17,9 +17,9 @@ const BUDGET = { house: 9000, prop: 1200, bytes: 800 * 1024, meshes: 3, triangle
 const BLOOM = 1.8;
 const TAGS = ['body', 'wall', 'shutter', 'glass', 'lamp'];
 
-function load({ failing = [], assets = true } = {}) {
+function load({ failing = [], assets = true, course = false } = {}) {
     const THREE = realThree();
-    const files = ['terrain.js', 'vehicle.js', 'environment.js', 'tours.js', ...(assets ? ['sceneassets.js'] : [])];
+    const files = ['terrain.js', ...(course ? ['course.js'] : []), 'vehicle.js', 'environment.js', 'tours.js', ...(assets ? ['sceneassets.js'] : [])];
     const source = files.map(loadScript).join('\n;\n');
     const log = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };
@@ -36,10 +36,10 @@ function load({ failing = [], assets = true } = {}) {
     return { THREE, log, ...game };
 }
 
-function build(game) {
-    const leg = legs(game)[NIGHT];
+function build(game, index = NIGHT) {
+    const leg = legs(game)[index];
     const scene = new game.THREE.Scene();
-    const env = new game.Environment(scene, leg.startSegment, leg.endSegment, NIGHT);
+    const env = new game.Environment(scene, leg.startSegment, leg.endSegment, index);
     scene.updateMatrixWorld(true);
     return env;
 }
@@ -318,5 +318,123 @@ describe('a village file that fails', () => {
         const result = await env.dressing;
         expect(result.village.houses).toBe(0);
         expect(group.children).toHaveLength(5);
+    });
+});
+
+// Mountain Dawn (a converted leg, js/course.js) rides its 22-segment village
+// at golden hour. Merged, those houses would be about 18 MB of vertices: the
+// models are held once and drawn as instances, and the meadow's farmstead
+// takes the farm house and the barn.
+describe('mountain-dawn with the modelled houses, as instances', () => {
+    const DAWN = 0;
+    const game = load({ course: true });
+    const env = build(game, DAWN);
+    const piece = env => { let found = null; env.fixed.traverse(o => { if (o.userData.setPiece === 'village') found = o; }); return found; };
+    const farm = env => env.fixed.getObjectByName('landmark-meadow');
+    const plots = JSON.parse(JSON.stringify(piece(env).userData.village)).plots;
+    let result;
+
+    beforeAll(async () => {
+        result = await env.dressing;
+    });
+
+    test('every plot gets its house and lamp post, every gap its garden wall, and no procedural house is left', () => {
+        expect(plots).toHaveLength(44);
+        expect(result.village.error).toBeUndefined();
+        expect(result.village.houses).toBe(plots.length);
+        expect(result.village.lamps).toBe(plots.length);
+        expect(result.village.walls).toBeGreaterThanOrEqual(42);
+        expect(piece(env).children.filter(mesh => mesh.userData.dressing)).toHaveLength(0);
+        expect(result.files).toEqual(expect.arrayContaining(['assets/village/houses.glb', 'assets/village/props.glb']));
+    });
+
+    test('the houses are instanced: few meshes, each model held once, inside the window\'s budgets', () => {
+        const modelled = piece(env).children.filter(mesh => mesh.userData.modelled === 'village');
+        expect(modelled.length).toBe(result.village.meshes);
+        expect(modelled.length).toBeLessThanOrEqual(40);
+        modelled.forEach(mesh => expect(mesh.isInstancedMesh).toBe(true));
+        const drawn = modelled.reduce((sum, mesh) => sum + triangles(mesh.geometry) * mesh.count, 0);
+        expect(drawn).toBe(result.village.triangles);
+        expect(drawn).toBeLessThanOrEqual(260000);
+        const seen = new Set();
+        let bytes = 0;
+        modelled.forEach(mesh => {
+            if (seen.has(mesh.geometry)) return;
+            seen.add(mesh.geometry);
+            Object.values(mesh.geometry.attributes).forEach(a => { bytes += a.array.byteLength; });
+            bytes += mesh.geometry.index.array.byteLength;
+            bytes += mesh.instanceMatrix.array.byteLength + mesh.instanceColor.array.byteLength;
+        });
+        expect(bytes / 1048576).toBeLessThan(3);
+        // Decoded already: a float colour would be decoded again (js/graphics.js, fixColorSpaces)
+        modelled.forEach(mesh => {
+            expect(mesh.geometry.attributes.color.array).not.toBeInstanceOf(Float32Array);
+            expect(mesh.geometry.attributes.color.normalized).toBe(true);
+        });
+        // A mirrored house draws its back faces, an unmirrored one its front
+        modelled.forEach(mesh => {
+            const matrix = new game.THREE.Matrix4();
+            mesh.getMatrixAt(0, matrix);
+            expect(mesh.material.side).toBe(matrix.determinant() < 0 ? game.THREE.BackSide : game.THREE.FrontSide);
+        });
+    });
+
+    test('nothing stands over the road, and nothing but a lamp post stands on the pavement', () => {
+        const [span] = env.setPieces.filter(p => p.type === 'village');
+        const points = env.roadPath.slice(span.from - 1, span.to + 2);
+        const matrix = new game.THREE.Matrix4();
+        const point = new game.THREE.Vector3();
+        let least = Infinity;
+        let leastLow = Infinity;
+        piece(env).children.filter(mesh => mesh.userData.modelled === 'village').forEach(mesh => {
+            const { position } = mesh.geometry.attributes;
+            for (let n = 0; n < mesh.count; n++) {
+                mesh.getMatrixAt(n, matrix);
+                for (let i = 0; i < position.count; i += 3) {
+                    point.fromBufferAttribute(position, i).applyMatrix4(matrix).add(mesh.position);
+                    let best = null;
+                    for (const p of points) {
+                        const along = (point.x - p.x) * Math.sin(p.heading) + (point.z - p.z) * Math.cos(p.heading);
+                        if (!best || Math.abs(along) < Math.abs(best.along)) best = { along, p };
+                    }
+                    const lateral = (point.x - best.p.x) * Math.cos(best.p.heading) - (point.z - best.p.z) * Math.sin(best.p.heading);
+                    const past = Math.abs(lateral) - env.roadWidth / 2;
+                    least = Math.min(least, past);
+                    if (point.y - best.p.y <= 3.5) leastLow = Math.min(leastLow, past);
+                }
+            }
+        });
+        expect(least).toBeGreaterThan(0);
+        expect(leastLow).toBeGreaterThan(0.9);
+    });
+
+    test('the farmstead\'s house and barn are the farm and barn models; the shed stays a box', () => {
+        expect(result.farmstead).toEqual({ buildings: 2 });
+        const children = farm(env).children;
+        expect(children.filter(mesh => mesh.userData.dressing)).toHaveLength(0);
+        expect(children.filter(mesh => mesh.userData.modelled === 'farmstead').map(mesh => mesh.name).sort())
+            .toEqual(expect.arrayContaining(['modelled-house_barn', 'modelled-house_farm']));
+        expect(children.filter(mesh => mesh.userData.building && !mesh.userData.modelled)).toHaveLength(1);
+        children.filter(mesh => mesh.userData.modelled === 'farmstead').forEach(mesh => {
+            expect(Math.abs(mesh.position.y - env.groundYAt(mesh.position.x, mesh.position.z))).toBeLessThan(0.01);
+        });
+    });
+
+    test('the village is drawn only with the sections it stands in', () => {
+        expect(piece(env).visible).toBe(false);
+        env.ensureWindow(420, { sync: true });
+        expect(piece(env).visible).toBe(true);
+        env.ensureWindow(560, { sync: true });
+        expect(piece(env).visible).toBe(false);
+    });
+
+    test('without the houses file the procedural village and farmstead stay', async () => {
+        const failing = load({ course: true, failing: ['houses.glb'] });
+        const plain = build(failing, DAWN);
+        const report = await plain.dressing;
+        expect(report.village.error).toMatch(/HTTP 404/);
+        expect(report.farmstead.error).toMatch(/HTTP 404/);
+        expect(piece(plain).children.filter(mesh => mesh.userData.dressing)).toHaveLength(4);
+        expect(farm(plain).children.filter(mesh => mesh.userData.dressing)).toHaveLength(2);
     });
 });

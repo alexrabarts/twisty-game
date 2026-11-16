@@ -127,15 +127,17 @@ const LANDMARKS = {
 
   // A farmstead set back from the road: house, barn and shed with pitched
   // roofs on the ground beside segment `at`, `lateral` out (negative left)
+  // The house and the barn name the modelled house each becomes when the
+  // leg's village files load (js/sceneassets.js, dressFarmstead)
   farmstead(group, { at, lateral = -70 }) {
     const point = this.roadPath[at];
     const buildings = [
-      { along: 0, out: 0, width: 9, depth: 11, height: 5.6, wall: 0xd8ccb4, roof: 0x5a3a2c },
-      { along: 18, out: -6, width: 13, depth: 20, height: 6.5, wall: 0x8a5a3a, roof: 0x4a4a4e },
+      { along: 0, out: 0, width: 9, depth: 11, height: 5.6, wall: 0xd8ccb4, roof: 0x5a3a2c, model: "house_farm", accent: 0x3f6a3a },
+      { along: 18, out: -6, width: 13, depth: 20, height: 6.5, wall: 0x8a5a3a, roof: 0x4a4a4e, model: "house_barn", accent: 0x8a2e26 },
       { along: -12, out: 8, width: 6, depth: 7, height: 3.2, wall: 0x9a8a72, roof: 0x5a3a2c },
     ];
     const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, flatShading: true });
-    buildings.forEach(({ along, out, width, depth, height, wall, roof }) => {
+    buildings.forEach(({ along, out, width, depth, height, wall, roof, model, accent }) => {
       const x = point.x + Math.cos(point.heading) * (lateral + out) + Math.sin(point.heading) * along;
       const z = point.z - Math.sin(point.heading) * (lateral + out) + Math.cos(point.heading) * along;
       const ground = this.groundYAt(x, z);
@@ -157,6 +159,7 @@ const LANDMARKS = {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData.building = true;
+      if (model) mesh.userData.dressing = { kind: "farmstead", model, sign: Math.sign(lateral + out) || 1, heading: point.heading, wash: wall, accent };
       group.add(mesh);
     });
   },
@@ -434,6 +437,10 @@ class Environment {
     } finally {
       this.scene = scene;
     }
+    // Set pieces are drawn with the sections they stand in (moveWindow): the
+    // modelled village alone is about 230000 triangles
+    this.pieceGroups = [];
+    this.fixed.traverse((object) => { if (object.userData.setPiece) this.pieceGroups.push(object); });
     this.fixedDressing = this.dressGroup(this.fixed);
     this.ensureWindow(options.window ?? this.startSegment, { sync: true, preview: !!options.preview });
     // What the probes and the menu wait on: the leg's own pieces and the window
@@ -446,11 +453,11 @@ class Environment {
   // errors and files are joined, a part that swapped anything wins
   static mergeDressing(reports) {
     if (!reports.length) return null;
-    const out = { rocks: { rocks: 0 }, portals: { portals: 0 }, rockFace: { ribbons: 0 }, village: { houses: 0 }, bridge: { bridges: 0 }, violations: [], files: [], bytes: 0, ms: 0 };
+    const out = { rocks: { rocks: 0 }, portals: { portals: 0 }, rockFace: { ribbons: 0 }, village: { houses: 0 }, farmstead: { buildings: 0 }, bridge: { bridges: 0 }, violations: [], files: [], bytes: 0, ms: 0 };
     const trees = { trees: 0, bushes: 0, meshes: 0, errors: [], files: [] };
     let anyTrees = false;
     reports.forEach((report) => {
-      ["rocks", "portals", "rockFace", "village", "bridge"].forEach((key) => {
+      ["rocks", "portals", "rockFace", "village", "farmstead", "bridge"].forEach((key) => {
         const value = report[key];
         if (value && (value.error || Object.values(value).some((n) => typeof n === "number" && n > 0))) out[key] = value;
       });
@@ -699,6 +706,12 @@ class Environment {
       } else if (!show) {
         section.group.visible = false;
       }
+    });
+    // A set piece shows while any of its segments is in a drawn section
+    const low = (preview ? k : k - 1) * SECTION;
+    const high = (preview ? k + 2 : k + 3) * SECTION;
+    (this.pieceGroups || []).forEach((group) => {
+      group.visible = group.userData.span.from < high && group.userData.span.to >= low;
     });
     if (preview) return;
     for (const j of [k, k + 1, k + 2, k + 3, k - 1]) {
