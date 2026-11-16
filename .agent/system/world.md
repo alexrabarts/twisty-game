@@ -54,6 +54,19 @@ A rock, a rock cluster, an outcrop and a roadside bush are seated on the drawn r
 - A modelled rock (`js/sceneassets.js`) has its own shape. `Environment.holdRock()` sinks it further until the same measure passes, backs it out when none of it shows, and leaves it out when neither works. The gorge's modelled rocks keep their one tint (`rockTint`, the stone of the wall's detail: see `tools/blender/README.md`, "Rock face detail"), not the face colour at each seat.
 - High-pass (`columnWalk`) keeps the old placement: the frozen golden recorded each rock. Its rocks still stand half out of the wall, in the old grey and sand materials.
 
+## Trees and bushes
+
+`Environment.createForest` plants every tree from the seeded generator: a position, a turn, a size, a tint and a kind (conifer or broadleaf), in two instanced meshes named `forest-conifer` and `forest-broadleaf`. Those procedural meshes are what a leg starts with, what jest sees, and what stays if a file fails.
+
+`js/treemodels.js` then redraws them with the Blender-made shapes of `assets/trees/` (`tools/blender/tree_*.py`: see `tools/blender/README.md`, "Trees and bushes"). `SceneAssets.dress()` calls it, so `environment.dressing` resolves when the trees are in.
+
+- Placement does not change. Each instance keeps its matrix and its tint and moves to the instanced mesh of one of three shapes of its kind, picked by a hash of its position. The solid trunks in `environment.boulders` (radius 0.6) are not touched. `tests/unit/treemodels.test.js` holds this.
+- A leg draws its trees in six calls (three on winter-pass, conifers only), where the procedural forest takes two. Each shape is at most 220 triangles.
+- Winter-pass uses the `_snow` shapes. The snow is in the vertex colours.
+- A roadside bush (`addEnvironmentalDetails`) keeps its mesh, its seat and its scale. It takes one of two modelled shapes and a turn about its own centre from the same hash.
+- High-pass keeps its procedural trees and bushes (`TreeModels.KEPT`). The frozen golden binds its mesh count, its triangle count and each mesh's vertices (see "Golden bindings").
+- No other builder makes a tree. The cone trees of `createDetailedHill` are never built: nothing calls it. The menu preview builds an `Environment`, so it gets the same forest.
+
 ## Run-off legs
 
 `forest` (leg 6) is built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 25 past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.
