@@ -1366,6 +1366,8 @@ function finishChecks(report) {
             if (r.skipped) return notes.push(`${id}: submit not run: ${r.skipped}`);
             if (r.error) return failures.push(`${id}: submit probe error: ${r.error}`);
             if (!r.finished) failures.push(`${id}: the autopilot did not finish the leg`);
+            // A mutation on a leg that is not a table board has no guard to defeat; a green run would prove nothing
+            if (option('mutate') === 'ready-always' && !r.tableBoard) failures.push(`${id}: --mutate ready-always needs a table board; this leg has no guard to defeat`);
             // A board in the table is submitted only to a server that states its gate count
             const accepted = !r.tableBoard || r.replyFields.length === 2;
             const expectedCalls = accepted ? 1 : 0;
