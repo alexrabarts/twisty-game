@@ -48,6 +48,22 @@ const LAYOUT_BEFORE_SHARPENING = [
   { segments: 10, turnRate: 0 }, { segments: 8, turnRate: -0.065 }, { segments: 14, turnRate: 0 },
 ];
 
+// A number in [0, 1) from a vertex's place (column, row, side): the grey of a
+// converted leg's ribbon, the same whichever section builds the column
+function vertexHash(column, row, sign) {
+  let h = Math.imul(column + 1, 73856093) ^ Math.imul(row + 1, 19349663) ^ Math.imul(sign + 2, 83492791);
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+}
+
+// Segments of road in one section of a converted leg: the unit that is
+// built, drawn, hidden and disposed (500 m)
+const SECTION = 25;
+
+// Builders of the landmarks a course's parts name ({ kind, at, ... }),
+// called on the environment with the landmark's group: see createLandmarks
+const LANDMARKS = {};
+
 // The share of the scene fog's density the high pass's peaks take
 const PASS_PEAK_FOG = 0.5;
 
@@ -55,7 +71,10 @@ const PASS_PEAK_FOG = 0.5;
 const ROADWORKS_SET_PIECE_MARGIN = 1;
 
 class Environment {
-  constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0) {
+  // `options.window`: the segment whose drawn window a converted leg builds
+  // first (the menu preview's point); `options.preview`: build that section
+  // and the next only. A leg on the shared course ignores both.
+  constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0, options = {}) {
     this.scene = scene;
     this.roadPath = []; // Store the path for other uses (full track for physics/AI)
     this.startSegment = startSegment; // Start of visual geometry range
@@ -108,20 +127,13 @@ class Environment {
     this.randState = ((startSegment + 1) * 2654435761 ^ (legIndex + 1) * 40503) >>> 0;
 
     this.createRoad(); // Generates full roadPath, but only creates geometry for segment range
-    this.createFloor();
-    this.createRoadWalls(); // Vertical walls connecting road to terrain
-    this.createLayeredMountains(); // Add layered mountain scenery
-    this.createRoadMarkings();
-    this.addEnvironmentalDetails();
-    this.createRoadworks(); // Add construction zones
-    this.addHairpinWarnings(); // Add hairpin bend warnings
-    this.createCheckpoints(); // Add scoring checkpoints
-    this.createSetPieces(); // Bridge, tunnel and village
-    this.createPassMarkers(); // Snow poles, cairns and the summit marker of a high pass
-    // Modelled assets for a leg that has them (js/sceneassets.js) replace the
-    // tagged procedural dressing once they load; until then, or if they fail,
-    // the procedural meshes stay. Null where the script is not loaded (tests).
-    this.dressing = typeof SceneAssets !== "undefined" ? SceneAssets.dress(this) : null;
+    // A converted leg builds its once-per-leg pieces now and its scenery by
+    // section, as the rider nears it (see buildCourse)
+    if (this.course()) {
+      this.buildCourse(this.course(), options);
+    } else {
+      this.buildWholeLeg();
+    }
 
     // Validate terrain-road clearance (development-time check)
     const terrainErrors = this.validateAllTerrainClearance();
@@ -149,6 +161,416 @@ class Environment {
     } else {
       console.log("✅ Grounding validation passed - no floating objects detected");
     }
+  }
+
+  // A leg on the shared course: every builder once over the whole leg, in
+  // this order (the seeded stream of each leg depends on it)
+  buildWholeLeg() {
+    this.createFloor();
+    this.createRoadWalls(); // Vertical walls connecting road to terrain
+    this.createLayeredMountains(); // Add layered mountain scenery
+    this.createRoadMarkings();
+    this.addEnvironmentalDetails();
+    this.createRoadworks(); // Add construction zones
+    this.addHairpinWarnings(); // Add hairpin bend warnings
+    this.createCheckpoints(); // Add scoring checkpoints
+    this.createSetPieces(); // Bridge, tunnel and village
+    this.createPassMarkers(); // Snow poles, cairns and the summit marker of a high pass
+    // Modelled assets for a leg that has them (js/sceneassets.js) replace the
+    // tagged procedural dressing once they load; until then, or if they fail,
+    // the procedural meshes stay. Null where the script is not loaded (tests).
+    this.dressing = typeof SceneAssets !== "undefined" ? SceneAssets.dress(this) : null;
+  }
+
+  // A converted leg (js/course.js). The road path, the plane floors, the
+  // backdrop, the start and finish, the gates, the roadworks, the hairpin
+  // signs, the set pieces and the landmarks are built once, into one group.
+  // Everything else is built by section (SECTION segments of road): each
+  // section is a list of steps, each step with its own seeded stream, so a
+  // section is the same whatever order the sections are built in. The drawn
+  // window is the section behind the bike, its own and the two ahead; the
+  // one after those is built ahead, hidden. `update` builds steps within a
+  // time budget each frame.
+  buildCourse(course, options) {
+    const count = course.segments / SECTION;
+    this.sectionStats = { built: 0, disposed: 0, syncBuilds: 0, steps: 0, maxStepMs: 0, revealed: [] };
+    this.sectionListeners = [];
+    this.buildQueue = [];
+    this.revealQueue = [];
+    this.windowAt = -1;
+    this.keepSection = 0;
+    this.partConfigs = course.parts.map((part) => this.partConfig(part));
+    // The highest road point of the parts that carry a high pass's markers
+    this.passSummit = -1;
+    course.parts.forEach((part, n) => {
+      if (!(part.dressing && part.dressing.pass)) return;
+      for (let i = part.from; i < part.to; i++) {
+        if (this.passSummit < 0 || this.roadPath[i].y > this.roadPath[this.passSummit].y) this.passSummit = i;
+      }
+    });
+    this.sections = Array.from({ length: count }, (_, k) => ({
+      index: k,
+      from: k * SECTION,
+      // The last section also builds the run-off past the finish
+      to: k === count - 1 ? course.segments + 20 : (k + 1) * SECTION,
+      group: null,
+      state: "empty",
+      boulders: [],
+      obstacles: [],
+      ramps: [],
+      grounded: [],
+      cones: [],
+      cullable: null,
+    }));
+
+    const scene = this.scene;
+    this.fixed = new THREE.Group();
+    this.fixed.name = "leg";
+    scene.add(this.fixed);
+    this.scene = this.fixed;
+    try {
+      this.createCourseFloors(course);
+      this.createLayeredMountains();
+      this.createRoadMarkings("lines");
+      this.createRoadworks();
+      this.addHairpinWarnings();
+      this.createCheckpoints();
+      this.createSetPieces();
+      this.createLandmarks(course);
+    } finally {
+      this.scene = scene;
+    }
+    this.fixedDressing = this.dressGroup(this.fixed);
+    this.ensureWindow(options.window ?? this.startSegment, { sync: true, preview: !!options.preview });
+    // What the probes and the menu wait on: the leg's own pieces and the window built now
+    this.dressing = Promise.all([this.fixedDressing, ...this.sections.map((section) => section.dressing).filter(Boolean)]).then((all) => all);
+  }
+
+  // The leg's table row with one part's dressing and look: what a range
+  // builder reads (this.config) while it builds that part
+  partConfig(part) {
+    const config = Terrain.legConfig(this.legIndex);
+    return { ...config, dressing: part.dressing || config.dressing, look: { ...config.look, ...(part.look || {}) } };
+  }
+
+  // The modelled dressing of one group of this leg (js/sceneassets.js): the
+  // swaps see only that group, so a section is dressed once, as it is built
+  dressGroup(group) {
+    if (typeof SceneAssets === "undefined") return null;
+    return SceneAssets.dress(Object.create(this, { scene: { value: group } })) || null;
+  }
+
+  // One plane for each kind of plane floor the leg's parts have (lake, sea,
+  // ice), shown while a part over it is in the drawn window and kept under
+  // the bike's section; a river is built by section, with its part
+  createCourseFloors(course) {
+    this.floors = [];
+    const terrain = this.terrain;
+    const floorY = this.floorY;
+    course.parts.forEach((part, n) => {
+      const floor = part.floor || part.profile.floor;
+      if (!["lake", "sea", "ice"].includes(floor.kind)) return;
+      const same = this.floors.find((entry) => entry.floor.kind === floor.kind && entry.floor.y === floor.y);
+      if (same) {
+        same.parts.push(n);
+        return;
+      }
+      this.terrain = { ...terrain, floor };
+      this.floorY = floor.y;
+      try {
+        this.createFloor();
+      } finally {
+        this.terrain = terrain;
+        this.floorY = floorY;
+      }
+      const mesh = this.fixed.children[this.fixed.children.length - 1];
+      mesh.userData.skipCulling = true;
+      this.floors.push({ floor, mesh, parts: [n] });
+    });
+  }
+
+  // Meshes named landmark-<part id>: each part's own landmark, built with the
+  // leg (js/course.js names the kind and the segment)
+  createLandmarks(course) {
+    course.parts.forEach((part) => {
+      if (!part.landmark || !part.landmark.kind) return;
+      const build = LANDMARKS[part.landmark.kind];
+      if (!build) throw new Error(`Unknown landmark: ${part.landmark.kind}`);
+      const group = new THREE.Group();
+      group.name = `landmark-${part.id}`;
+      build.call(this, group, part.landmark, part);
+      this.scene.add(group);
+    });
+  }
+
+  sectionAt(segment) {
+    return Math.min(this.sections.length - 1, Math.max(0, Math.floor(segment / SECTION)));
+  }
+
+  // The steps of a section, in order. Pieces split it where a part ends, so a
+  // range builder sees one part's dressing and look; a piece's ground steps
+  // run before its dressing steps (the dressing reads the piece's ribbons).
+  sectionSteps(section) {
+    const steps = [];
+    const whole = { from: section.from, to: section.to };
+    steps.push({ name: "road", piece: whole, run: () => this.createContinuousRoad(this.roadMaterial) });
+    steps.push({ name: "dashes", piece: whole, run: () => this.createRoadMarkings("dashes") });
+    const parts = this.terrain.parts;
+    parts.forEach((part, n) => {
+      const from = Math.max(section.from, part.from);
+      const to = Math.min(section.to, n === parts.length - 1 ? section.to : part.to);
+      if (from >= to) return;
+      const piece = { from, to, part: n };
+      const floor = part.floor || part.profile.floor;
+      steps.push({ name: `walls:${part.id}`, piece, run: () => this.createRoadWalls() });
+      if (floor.kind === "river") steps.push({ name: `river:${part.id}`, piece, run: () => this.createRiver(floor) });
+      steps.push({ name: `rocks:${part.id}`, piece, run: () => this.addRockFormations() });
+      steps.push({ name: `forest:${part.id}`, piece, run: () => this.createForest() });
+      steps.push({ name: `outcrops:${part.id}`, piece, run: () => this.createOutcrops() });
+      steps.push({ name: `details:${part.id}`, piece, run: () => this.addRoadsideDetails() });
+      if (part.dressing && part.dressing.pass) steps.push({ name: `pass:${part.id}`, piece, run: () => this.createPassMarkers() });
+    });
+    // Cones and the like that other systems hang on a section (js/cones.js)
+    steps.push({ name: "listeners", piece: whole, run: () => this.sectionListeners.forEach((listener) => listener.built && listener.built(section, this.scene)) });
+    return steps;
+  }
+
+  // Seed of one step of one section: the same whatever was built before it
+  sectionSeed(k, step) {
+    let h = Math.imul(this.legIndex + 1, 0x9e3779b1) ^ Math.imul(k + 1, 0x85ebca6b) ^ Math.imul(step + 1, 0xc2b2ae35);
+    h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
+    return (h ^ (h >>> 15)) >>> 0;
+  }
+
+  // Runs step `n` of a section into its own group (a step's meshes appear
+  // together when the section is first drawn)
+  runSectionStep(section, n) {
+    const step = section.steps[n];
+    const group = new THREE.Group();
+    group.name = `step-${step.name}`;
+    group.visible = section.revealAll;
+    section.group.add(group);
+    const saved = { scene: this.scene, piece: this.piece, config: this.config, floorY: this.floorY, solidClutter: this.solidClutter, randState: this.randState, ribbons: this.ribbons, outcrops: this.outcrops };
+    const lists = { boulders: this.boulders.length, obstacles: this.roadworkObstacles.length, ramps: this.jumpRamps.length, grounded: this.groundedObjects.length };
+    this.scene = group;
+    this.piece = step.piece;
+    if (step.piece.part !== undefined) {
+      const part = this.terrain.parts[step.piece.part];
+      this.config = this.partConfigs[step.piece.part];
+      const floor = part.floor || part.profile.floor;
+      if (floor.y !== undefined) this.floorY = floor.y;
+      this.solidClutter = !!part.profile.left.runoff;
+    }
+    this.randState = this.sectionSeed(section.index, n);
+    // A piece's dressing reads the ribbons its walls step drew, whatever other section was built in between
+    this.ribbons = section.ribbons || {};
+    this.outcrops = section.outcrops || new Map();
+    const started = performance.now();
+    try {
+      step.run();
+      section.ribbons = this.ribbons;
+      section.outcrops = this.outcrops;
+    } finally {
+      Object.assign(this, saved);
+    }
+    const ms = performance.now() - started;
+    this.sectionStats.steps++;
+    this.sectionStats.maxStepMs = Math.max(this.sectionStats.maxStepMs, ms);
+    section.boulders.push(...this.boulders.slice(lists.boulders));
+    section.obstacles.push(...this.roadworkObstacles.slice(lists.obstacles));
+    section.ramps.push(...this.jumpRamps.slice(lists.ramps));
+    section.grounded.push(...this.groundedObjects.slice(lists.grounded));
+    return ms;
+  }
+
+  // Starts a section's build: its group and its step list
+  startSection(section) {
+    section.group = new THREE.Group();
+    section.group.name = `section-${section.index}`;
+    section.group.userData.section = section.index;
+    section.group.visible = false;
+    section.revealAll = false;
+    section.steps = this.sectionSteps(section);
+    section.next = 0;
+    section.state = "building";
+    this.scene.add(section.group);
+  }
+
+  finishSection(section) {
+    section.state = "built";
+    section.steps = section.steps.map((step) => ({ name: step.name }));
+    this.sectionStats.built++;
+    section.dressing = this.dressGroup(section.group);
+    this.sectionListeners.forEach((listener) => listener.ready && listener.ready(section));
+  }
+
+  // Builds a whole section now
+  buildSectionNow(section) {
+    if (section.state === "built") return;
+    if (section.state === "empty") this.startSection(section);
+    while (section.next < section.steps.length) this.runSectionStep(section, section.next++);
+    this.finishSection(section);
+  }
+
+  // The window around a segment, built at once: the leg start, a restart, the
+  // menu preview (only the point's section and the next)
+  ensureWindow(segment, { sync = true, preview = false } = {}) {
+    if (!this.sections) return;
+    // The preview draws the two sections nearest its point, which stands between them
+    const k = this.sectionAt(preview ? segment - Math.floor(SECTION / 2) : segment);
+    const wanted = preview ? [k, k + 1] : [k - 1, k, k + 1, k + 2];
+    wanted.filter((j) => j >= 0 && j < this.sections.length).forEach((j) => {
+      const section = this.sections[j];
+      if (sync) this.buildSectionNow(section);
+      section.revealAll = true;
+      section.group.children.forEach((child) => { child.visible = true; });
+    });
+    this.windowAt = -1;
+    this.moveWindow(k, { preview });
+  }
+
+  // The sections drawn when the bike is in section k
+  windowOf(k) {
+    return [k - 1, k, k + 1, k + 2].filter((j) => j >= 0 && j < this.sections.length);
+  }
+
+  // Shows the window around section k, hides the rest, queues the builds the
+  // window and the section after it still need, and disposes the sections the
+  // bike has left behind (none at or after the last passed gate's section,
+  // so a restart from that gate finds its ground built)
+  moveWindow(k, { preview = false } = {}) {
+    if (k === this.windowAt) return;
+    this.windowAt = k;
+    const shown = new Set(preview ? [k, k + 1] : this.windowOf(k));
+    this.sections.forEach((section) => {
+      if (!section.group) return;
+      const show = shown.has(section.index) && section.state === "built";
+      if (show && !section.group.visible) {
+        section.group.visible = true;
+        // A section drawn for the first time appears one step a frame
+        if (!section.revealAll) this.revealQueue.push(section);
+      } else if (!show) {
+        section.group.visible = false;
+      }
+    });
+    if (preview) return;
+    for (const j of [k, k + 1, k + 2, k + 3, k - 1]) {
+      const section = this.sections[j];
+      if (section && section.state !== "built" && !this.buildQueue.includes(section)) this.buildQueue.push(section);
+    }
+    const limit = Math.min(k - 1, this.keepSection);
+    this.sections.forEach((section) => {
+      if (section.index < limit && section.state !== "empty") this.disposeSection(section);
+    });
+    // The plane floors under the parts of the drawn window, centred on the bike's section
+    const centre = this.roadPath[Math.min(this.roadPath.length - 1, k * SECTION + Math.floor(SECTION / 2))];
+    (this.floors || []).forEach((entry) => {
+      const parts = this.terrain.parts;
+      const from = Math.max(0, k - 1) * SECTION;
+      const to = (k + 3) * SECTION;
+      entry.mesh.visible = entry.parts.some((n) => parts[n].from < to && (n === parts.length - 1 || parts[n].to > from));
+      entry.mesh.position.x = centre.x;
+      entry.mesh.position.z = centre.z;
+    });
+  }
+
+  // Per frame: the window follows the bike's segment; queued steps build
+  // within `budgetMs` (at least one); one step of a newly drawn section
+  // appears. `keepSegment` is the last passed gate's segment. Returns the
+  // number of steps built.
+  update(segment, budgetMs = 4, keepSegment = null) {
+    if (!this.sections) return 0;
+    if (keepSegment !== null && this.sectionAt(keepSegment) !== this.keepSection) {
+      this.keepSection = this.sectionAt(keepSegment);
+      this.windowAt = -1;
+    }
+    const k = this.sectionAt(segment);
+    // The bike outran the builder: its own section is built now
+    if (this.sections[k].state !== "built") {
+      this.buildSectionNow(this.sections[k]);
+      this.sectionStats.syncBuilds++;
+      this.windowAt = -1;
+    }
+    this.moveWindow(k);
+    this.revealStep();
+    const started = performance.now();
+    let ran = 0;
+    while (this.buildQueue.length && (ran === 0 || performance.now() - started < budgetMs)) {
+      const section = this.buildQueue[0];
+      if (section.state === "built") {
+        this.buildQueue.shift();
+        continue;
+      }
+      if (section.state === "empty") this.startSection(section);
+      this.runSectionStep(section, section.next++);
+      ran++;
+      if (section.next >= section.steps.length) {
+        this.buildQueue.shift();
+        this.finishSection(section);
+        // Built while inside the window: drawn from the next frame
+        this.windowAt = -1;
+        this.moveWindow(k);
+      }
+    }
+    return ran;
+  }
+
+  // One more step group of a section that is being drawn for the first time
+  revealStep() {
+    while (this.revealQueue.length) {
+      const section = this.revealQueue[0];
+      const hidden = section.group && section.group.visible ? section.group.children.find((child) => !child.visible) : null;
+      if (!hidden) {
+        this.revealQueue.shift();
+        section.revealAll = true;
+        continue;
+      }
+      hidden.visible = true;
+      this.sectionStats.revealed.push({ section: section.index, step: hidden.name });
+      if (!section.group.children.some((child) => !child.visible)) {
+        this.revealQueue.shift();
+        section.revealAll = true;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // Frees a section: its meshes, its own materials and textures, its share of
+  // the collision lists and the kept ground columns. A later read of its
+  // ground computes the same values again (Terrain.groundY reads no mesh).
+  disposeSection(section) {
+    this.sectionListeners.forEach((listener) => listener.disposed && listener.disposed(section));
+    if (section.group) {
+      section.group.traverse((object) => {
+        if (object.geometry && !object.geometry.userData.shared) object.geometry.dispose();
+        const materials = object.material ? [].concat(object.material) : [];
+        materials.forEach((material) => {
+          if (material.userData.shared || object.userData.modelled) return;
+          ["map", "normalMap"].forEach((key) => material[key] && !material[key].userData.shared && material[key].dispose());
+          material.dispose();
+        });
+      });
+      section.group.parent && section.group.parent.remove(section.group);
+    }
+    const drop = (list, gone) => {
+      const set = new Set(gone);
+      return list.filter((entry) => !set.has(entry));
+    };
+    this.boulders = drop(this.boulders, section.boulders);
+    this.roadworkObstacles = drop(this.roadworkObstacles, section.obstacles);
+    this.jumpRamps = drop(this.jumpRamps, section.ramps);
+    this.groundedObjects = drop(this.groundedObjects, section.grounded);
+    Terrain.forgetColumns(this.terrainGeometry, this.terrain, Math.max(0, section.from * Terrain.COLUMNS_PER_SEGMENT - 1), section.to * Terrain.COLUMNS_PER_SEGMENT + 1);
+    Object.assign(section, { group: null, state: "empty", steps: null, ribbons: null, outcrops: null, boulders: [], obstacles: [], ramps: [], grounded: [], cones: [], cullable: null, dressing: null });
+    this.buildQueue = this.buildQueue.filter((entry) => entry !== section);
+    this.revealQueue = this.revealQueue.filter((entry) => entry !== section);
+    this.sectionStats.disposed++;
+  }
+
+  // The sections whose meshes are drawn now
+  visibleSections() {
+    return (this.sections || []).filter((section) => section.group && section.group.visible);
   }
 
   // Terrain elevation model shared by every scenery placement site. Mirrors
@@ -252,7 +674,7 @@ class Environment {
     // Every sample lies within a few metres of the rock: the nearest road
     // point to it is within two segments of the rock's own
     const last = this.roadPath.length - 1;
-    const near = Terrain.locate(this.roadPath, matrix.elements[12], matrix.elements[14], 0, last, {}).index;
+    const near = Terrain.locate(this.roadPath, matrix.elements[12], matrix.elements[14], ...this.locateRange(), {}).index;
     const from = Math.max(0, near - 2);
     const to = Math.min(last, near + 2);
     const clear = (p) => Terrain.clearance(this.terrain, this.terrainGeometry, p.x, p.y, p.z, from, to);
@@ -276,7 +698,7 @@ class Environment {
   // drawn ground: one wholly under it is never seen
   rockShows(matrix, geometry) {
     const last = this.roadPath.length - 1;
-    const near = Terrain.locate(this.roadPath, matrix.elements[12], matrix.elements[14], 0, last, {}).index;
+    const near = Terrain.locate(this.roadPath, matrix.elements[12], matrix.elements[14], ...this.locateRange(), {}).index;
     const from = Math.max(0, near - 2);
     const to = Math.min(last, near + 2);
     const position = geometry.attributes.position;
@@ -407,6 +829,26 @@ class Environment {
     return violations;
   }
 
+  // The segments a range builder covers. A leg on the shared course builds
+  // from its start to 20 past its end in one go. A converted leg builds one
+  // piece of a section at a time (this.piece, `to` exclusive): a builder that
+  // places things per segment covers from..to - 1, and a strip whose quads join
+  // consecutive points (road, verge, river) also reaches `to`, the first point
+  // of the next piece, so the strips meet with no gap and no overlap.
+  buildRange(strip = false) {
+    if (this.piece) return [this.piece.from, strip ? this.piece.to : this.piece.to - 1];
+    return [Math.max(0, this.startSegment), Math.min(this.roadPath.length - 1, this.endSegment + 20)];
+  }
+
+  // Where a rock's nearest road point is searched: the whole road, or around
+  // the piece being built (a rock stands within a few segments of the piece
+  // that placed it), which keeps a section's build from searching 700 points
+  locateRange() {
+    const last = this.roadPath.length - 1;
+    if (!this.piece) return [0, last];
+    return [Math.max(0, this.piece.from - 8), Math.min(last, this.piece.to + 8)];
+  }
+
   // Mulberry32 - small, fast, deterministic
   rand() {
     this.randState = (this.randState + 0x6d2b79f5) >>> 0;
@@ -472,8 +914,9 @@ class Environment {
     // shared course below, exactly as it always has.
     const course = this.course();
     if (course) {
+      // The road surface is built by section, with the rest of the scenery
       this.createLegRoad(course);
-      this.createContinuousRoad(roadMaterial);
+      roadMaterial.userData.shared = true;
       return;
     }
 
@@ -700,8 +1143,7 @@ class Environment {
 
     // Only create geometry for the active segment range (lazy generation)
     // Extend by 20 segments to match decorative elements (trees, markings)
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange(true);
 
     console.log(
       `Creating road geometry for segments ${startIdx} to ${endIdx} (${endIdx - startIdx + 1} segments)`,
@@ -732,7 +1174,8 @@ class Environment {
       );
 
       // Add UV coordinates (use relative indexing so each leg starts at UV.v = 0)
-      uvs.push(0, (i - startIdx) * 0.1, 1, (i - startIdx) * 0.1);
+      const v = (i - Math.max(0, this.startSegment)) * 0.1;
+      uvs.push(0, v, 1, v);
     }
 
     // Create triangles connecting the vertices (optimized indexing)
@@ -806,8 +1249,7 @@ class Environment {
 
     // Occasional large rocks near the cliff base (only in active segment range)
     // Extend by 20 segments to match road geometry
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange();
 
     for (let index = startIdx; index <= endIdx; index++) {
       const point = this.roadPath[index];
@@ -1025,8 +1467,7 @@ class Environment {
       // enough to stop it flickering through at a distance
 
       // Only create geometry for the active segment range (lazy generation)
-      const startIdx = Math.max(0, this.startSegment);
-      const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+      const [startIdx, endIdx] = this.buildRange(true);
 
       for (let i = startIdx; i < endIdx; i++) {
         const point = this.roadPath[i];
@@ -1101,8 +1542,7 @@ class Environment {
     this.scene.add(groundStrip);
 
     // Left face first, then right: one group per side, ribbon then dressing
-    const first = Math.max(0, this.startSegment);
-    const last = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [first, last] = this.buildRange();
     for (const [sign, side] of [[-1, this.terrain.left], [1, this.terrain.right]]) {
       const group = new THREE.Group();
       const ribbon = this.buildTerrainRibbon(sign, side);
@@ -1132,14 +1572,14 @@ class Environment {
     // keeps the rock material and colours its ground columns by vertex.
     const isGround = Terrain.sidesOf(this.terrain, sign).every((candidate) => candidate.face === null);
     const groundColors = new Map();
-    const groundColor = (columnSide) => {
-      if (!groundColors.has(columnSide)) {
-        groundColors.set(
-          columnSide,
-          new THREE.Color(columnSide.tint ?? this.config.look.grassColor).multiplyScalar(columnSide.shade ?? 1),
-        );
+    const groundColor = (columnSide, grass = this.config.look.grassColor) => {
+      const key = this.piece ? `${grass}` : "";
+      if (!groundColors.has(columnSide)) groundColors.set(columnSide, new Map());
+      const kept = groundColors.get(columnSide);
+      if (!kept.has(key)) {
+        kept.set(key, new THREE.Color(columnSide.tint ?? grass).multiplyScalar(columnSide.shade ?? 1));
       }
-      return groundColors.get(columnSide);
+      return kept.get(key);
     };
 
     // Rock material with smooth shading for realistic weathered appearance
@@ -1178,9 +1618,24 @@ class Environment {
     const verticalSegments = Terrain.ROWS;
 
     // Only create geometry for the active segment range (lazy generation)
-    // Extend by 20 segments to match road geometry and decorative elements
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    // Extend by 20 segments to match road geometry and decorative elements.
+    // Columns are numbered from the leg's start, as Terrain reads the ground.
+    // A piece of a converted leg ends on the first column of the next piece
+    // (the seam column both build) and carries one more column each side
+    // while its normals are worked out, so both sides of a seam shade alike.
+    const [startIdx, endIdx] = this.buildRange(true);
+    const base = Math.max(0, this.startSegment);
+    const H = Terrain.COLUMNS_PER_SEGMENT;
+    const pad = [0, 0];
+    let firstColumn = startIdx * H;
+    let lastColumn = endIdx * H + H - 1;
+    if (this.piece) {
+      lastColumn = endIdx * H;
+      if (firstColumn > 0) pad[0] = 1;
+      if (lastColumn < (this.roadPath.length - 1) * H + H - 1) pad[1] = 1;
+      firstColumn -= pad[0];
+      lastColumn += pad[1];
+    }
 
     const rowContext = {
       halfRoad: this.roadWidth / 2,
@@ -1197,14 +1652,15 @@ class Environment {
     const screeRock = new THREE.Color(0x76726a);
 
     // Create dense vertex grid with multi-layer displacement
-    for (let i = startIdx; i <= endIdx; i++) {
+    for (let column = firstColumn; column <= lastColumn; column++) {
+      const i = Math.floor(column / H);
+      const h = column - i * H;
       const point = this.roadPath[i];
       const nextPoint =
         i < this.roadPath.length - 1 ? this.roadPath[i + 1] : point;
       const roadY = point.y || 0;
 
-      // Create horizontal subdivisions between road points
-      for (let h = 0; h < horizontalSubdivisions; h++) {
+      {
         const hProgress = h / horizontalSubdivisions;
 
         // Interpolate position along road
@@ -1215,7 +1671,7 @@ class Environment {
           point.heading + (nextPoint.heading - point.heading) * hProgress;
 
         // Use 0-based index for vertex calculations
-        const idx = (i - startIdx) * horizontalSubdivisions + h;
+        const idx = column - base * H;
         rowContext.roadY = interpY;
         rowContext.column = idx;
         rowContext.index = i;
@@ -1234,14 +1690,18 @@ class Environment {
 
           vertices.push(interpX + perpX, vertex.y, interpZ + perpZ);
 
-          // More realistic mountain rock colors with grey variations
-          const greyBase = 0.6 + this.rand() * 0.25; // 0.6 to 0.85
+          // More realistic mountain rock colors with grey variations. A
+          // converted leg hashes the vertex's place instead of drawing from the
+          // stream, so the seam column has one colour in both sections.
+          const greyBase = 0.6 + (this.piece ? vertexHash(column, j, sign) : this.rand()) * 0.25; // 0.6 to 0.85
 
           const columnSide = Terrain.sideAt(this.terrain, sign, i);
           if (columnSide.face === null && !columnSide.rock) {
             // Patchy ground: one seeded tint per vertex, from the same draw as rock grey
             const tint = 0.85 + ((greyBase - 0.6) / 0.25) * 0.3;
-            let ground = groundColor(columnSide);
+            // A converted leg's grass is the look of the road position, mixed
+            // over a join, so the colour of a column is the same whoever builds it
+            let ground = this.piece ? groundColor(columnSide, Terrain.lookAt(this.config, i + hProgress).grassColor) : groundColor(columnSide);
             // Ground steeper than the side's rock slope shows bare rock
             if (columnSide.rockSlope !== undefined && j > 0) {
               const slope = Math.abs(vertex.y - previousRow.y) / Math.max(0.001, vertex.d - previousRow.d);
@@ -1316,9 +1776,21 @@ class Environment {
 
     // Create triangles for the faceted wall
     const vertsPerColumn = verticalSegments + 1;
-    const columnsPerSegment = horizontalSubdivisions;
-    const segmentCount = endIdx - startIdx + 1;
-    const totalColumns = segmentCount * columnsPerSegment;
+    const totalColumns = lastColumn - firstColumn + 1;
+    // A converted leg winds by the leg-wide column, so a seam's triangles are the same from both sides
+    const parity = this.piece ? firstColumn : 0;
+    const triangles = (columns, offset, into) => {
+      for (let col = 0; col < columns - 1; col++) {
+        for (let row = 0; row < verticalSegments; row++) {
+          const bl = col * vertsPerColumn + row;
+          const br = (col + 1) * vertsPerColumn + row;
+          const tl = bl + 1;
+          const tr = br + 1;
+          if ((col + offset + row) % 2 === 0) into.push(bl, br, tl, br, tr, tl);
+          else into.push(bl, tr, tl, bl, br, tr);
+        }
+      }
+    };
 
     for (let col = 0; col < totalColumns - 1; col++) {
       for (let row = 0; row < verticalSegments; row++) {
@@ -1328,7 +1800,7 @@ class Environment {
         const tr = br + 1; // top right
 
         // Create two triangles with varied winding for natural facets
-        if ((col + row) % 2 === 0) {
+        if ((col + parity + row) % 2 === 0) {
           indices.push(bl, br, tl);
           indices.push(br, tr, tl);
         } else {
@@ -1352,8 +1824,28 @@ class Environment {
     // Don't compute vertex normals - let flat shading handle it
     geometry.computeVertexNormals();
 
+    // The padding columns only served the normals: the piece keeps from its
+    // first column to the seam column
+    let drawn = geometry;
+    if (pad[0] || pad[1]) {
+      const keep = totalColumns - pad[0] - pad[1];
+      const from = pad[0] * vertsPerColumn;
+      const to = from + keep * vertsPerColumn;
+      drawn = new THREE.BufferGeometry();
+      for (const [name, size] of [["position", 3], ["color", 3], ["uv", 2], ["normal", 3]]) {
+        drawn.setAttribute(name, new THREE.Float32BufferAttribute(geometry.attributes[name].array.slice(from * size, to * size), size));
+      }
+      const kept = [];
+      triangles(keep, firstColumn + pad[0], kept);
+      drawn.setIndex(kept);
+      geometry.dispose();
+    }
+
     // Main faceted cliff face
-    const mainCliff = new THREE.Mesh(geometry, cliffMaterial);
+    const mainCliff = new THREE.Mesh(drawn, cliffMaterial);
+    // The leg-wide column of its first vertex column, for faceColor
+    mainCliff.userData.firstColumn = firstColumn + pad[0];
+    mainCliff.userData.side = sign;
     mainCliff.receiveShadow = true;
     mainCliff.castShadow = true;
     mainCliff.userData.part = "ground";
@@ -1396,10 +1888,10 @@ class Environment {
   faceColor(ribbon, i, x, y, z) {
     const position = ribbon.geometry.attributes.position;
     const color = ribbon.geometry.attributes.color;
-    const perSegment = Terrain.COLUMNS_PER_SEGMENT * (Terrain.ROWS + 1);
-    const first = Math.max(0, this.startSegment);
-    const from = Math.max(0, (i - first - 1) * perSegment);
-    const to = Math.min(position.count, (i - first + 2) * perSegment);
+    const H = Terrain.COLUMNS_PER_SEGMENT;
+    const first = ribbon.userData.firstColumn;
+    const from = Math.max(0, ((i - 1) * H - first) * (Terrain.ROWS + 1));
+    const to = Math.min(position.count, ((i + 2) * H - first) * (Terrain.ROWS + 1));
     const nearest = [];
     for (let n = from; n < to; n++) {
       const gap = Math.hypot(position.getX(n) - x, position.getY(n) - y, position.getZ(n) - z);
@@ -3799,8 +4291,7 @@ class Environment {
   // one side, `below` metres under the road along the whole built range. The
   // ground dips beneath it, so the water shows only where the ground is lower.
   createRiver(floor) {
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange(true);
     const vertices = [];
     const uvs = [];
     const indices = [];
@@ -3839,7 +4330,9 @@ class Environment {
     this.scene.add(river);
   }
 
-  createRoadMarkings() {
+  // `part`: "all" on a leg on the shared course; a converted leg builds its
+  // "dashes" per section and its start and finish "lines" once
+  createRoadMarkings(part = "all") {
     // Yellow center line dashes
     const dashMaterial = new THREE.MeshStandardMaterial({
       color: 0xffff00,
@@ -3850,10 +4343,9 @@ class Environment {
     });
 
     // Place dashes along the road path (only in active segment range)
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange();
 
-    for (let index = startIdx; index <= endIdx; index++) {
+    for (let index = startIdx; index <= endIdx && part !== "lines"; index++) {
       const point = this.roadPath[index];
       if (index % 2 === 0) {
         // Every other segment
@@ -3869,7 +4361,7 @@ class Environment {
     }
 
     // Add start/finish line
-    if (this.roadPath.length > 0) {
+    if (part !== "dashes" && this.roadPath.length > 0) {
       const startGeometry = new THREE.PlaneGeometry(16, 2);
       const startMaterial = new THREE.MeshStandardMaterial({
         color: 0x00ff00,
@@ -4199,8 +4691,7 @@ class Environment {
   // leg (six once the modelled shapes are in: three to a kind), and every tree
   // stands on the rendered ground.
   createForest() {
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange();
 
     // A leg of bare rock (the gorge) has no forest at all
     if (!this.config.dressing.forest) return;
@@ -4322,8 +4813,7 @@ class Environment {
   createOutcrops() {
     const outcrops = this.config.dressing.outcrops;
     if (!outcrops) return;
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange();
     const halfRoad = this.roadWidth / 2;
     // Never in the river (the trees keep out of the same band)
     const exclude = (this.config.dressing.forest && this.config.dressing.forest.layout && this.config.dressing.forest.layout.exclude) || [];
@@ -4390,8 +4880,7 @@ class Environment {
   createPassMarkers() {
     const pass = this.config.dressing.pass;
     if (!pass) return;
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+    const [startIdx, endIdx] = this.buildRange();
     const halfRoad = this.roadWidth / 2;
     const inWorks = (index) => this.roadworksZones.some((zone) => index >= zone.startSegment - 1 && index <= zone.endSegment + 1);
     const at = (point, lateral) => {
@@ -4447,10 +4936,14 @@ class Environment {
     const up = new THREE.Vector3(0, 1, 0);
     const one = new THREE.Vector3(1, 1, 1);
     let side = 1;
-    for (let index = startIdx + Math.floor(pass.cairnEvery / 2); index <= endIdx; index += pass.cairnEvery) {
+    // A converted leg keeps its cairns on one leg-wide spacing whatever piece builds them
+    const firstCairn = this.piece
+      ? startIdx + ((((Math.floor(pass.cairnEvery / 2) - startIdx) % pass.cairnEvery) + pass.cairnEvery) % pass.cairnEvery)
+      : startIdx + Math.floor(pass.cairnEvery / 2);
+    for (let index = firstCairn; index <= endIdx; index += pass.cairnEvery) {
       if (inWorks(index)) continue;
       const point = this.roadPath[index];
-      side = -side;
+      side = this.piece ? (Math.floor(index / pass.cairnEvery) % 2 ? 1 : -1) : -side;
       const p = at(point, side * (halfRoad + pass.cairnLateral));
       turn.setFromAxisAngle(up, this.rand() * Math.PI * 2);
       cairnMatrices.push(new THREE.Matrix4().compose(new THREE.Vector3(p.x, p.y - 0.1, p.z), turn, one));
@@ -4472,10 +4965,17 @@ class Environment {
     // rider reads it, on the right-hand snowfield at the highest road point
     // short of the finish (the road climbs to the line; the gantry stands there)
     let summit = startIdx;
-    for (let index = startIdx; index <= Math.min(this.endSegment - 4, this.roadPath.length - 1); index++) {
-      if (this.roadPath[index].y > this.roadPath[summit].y) summit = index;
+    if (this.piece) {
+      // A converted leg's summit is the highest road point of its pass parts,
+      // found once for the leg; only the piece that holds it builds the marker
+      summit = this.passSummit;
+      if (!(summit >= startIdx && summit <= endIdx)) return;
+    } else {
+      for (let index = startIdx; index <= Math.min(this.endSegment - 4, this.roadPath.length - 1); index++) {
+        if (this.roadPath[index].y > this.roadPath[summit].y) summit = index;
+      }
+      while (inWorks(summit) && summit > startIdx) summit--;
     }
-    while (inWorks(summit) && summit > startIdx) summit--;
     const point = this.roadPath[summit];
     const metres = Math.round(2200 + point.y * 4);
     const p = at(point, halfRoad + pass.cairnLateral);
@@ -4486,7 +4986,7 @@ class Environment {
       post.position.set(along, 1.8 - 0.3, 0);
       marker.add(post);
     }
-    marker.add(this.createSignFace(`WINTER PASS ${metres.toLocaleString("en-GB")} m`, "#7a3b1d", "#f4ead8"));
+    marker.add(this.createSignFace(`${pass.name || "WINTER PASS"} ${metres.toLocaleString("en-GB")} m`, "#7a3b1d", "#f4ead8"));
     marker.position.set(p.x, p.y, p.z);
     // Local -Z (the face) toward the road: turned a quarter beyond the heading
     marker.rotation.y = point.heading + Math.PI / 2;
@@ -4515,9 +5015,12 @@ class Environment {
     // Forest on the valley slope below the road
     this.createForest();
     this.createOutcrops();
+    this.addRoadsideDetails();
+  }
 
-    const startIdx = Math.max(0, this.startSegment);
-    const endIdx = Math.min(this.roadPath.length - 1, this.endSegment + 20);
+  // Bushes, marker cones, the start sign and the road posts
+  addRoadsideDetails() {
+    const [startIdx, endIdx] = this.buildRange();
 
     // Bushes along the drop-side ledge only (only in active segment range)
     const snowy = !!(this.config.dressing.forest && this.config.dressing.forest.snowy);
@@ -4616,54 +5119,58 @@ class Environment {
       }
     }
 
-    // Start sign - beside the road at the start of the active leg. The old
-    // hardcoded world position (-5, 1, 10) ignored the road elevation (~31)
-    // and the active leg entirely.
-    const startSignPoint =
-      this.roadPath[Math.min(Math.max(0, this.startSegment), this.roadPath.length - 1)];
-    // On the roadside ledge of the side that drops, clear of a wall. The
-    // board faces along the road, 2 m across it; where that would reach into
-    // a wall (the gorge has one each side) it turns side-on to the road and
-    // the post stands on the shoulder
-    const startIndex = Math.max(0, this.startSegment);
-    const startSignSide = Terrain.fallSignAt(this.terrain, startIndex) || 1;
-    const startSignFacing = this.clearOfWall(startIndex, startSignSide, 1, 1);
-    const startSignPast = startSignFacing ?? this.clearOfWall(startIndex, startSignSide, 1, 0.1);
-    const startSignDistance = (this.roadWidth / 2 + startSignPast) * startSignSide;
-    const startSignX =
-      startSignPoint.x + Math.cos(startSignPoint.heading) * startSignDistance;
-    const startSignZ =
-      startSignPoint.z - Math.sin(startSignPoint.heading) * startSignDistance;
-    const startSignGroundY = this.groundYAt(startSignX, startSignZ);
+    // The start sign stands once: a converted leg builds it with the piece
+    // that holds the leg's start (it draws nothing from the stream)
+    if (!this.piece || (this.piece.from <= this.startSegment && this.startSegment < this.piece.to)) {
+      // Start sign - beside the road at the start of the active leg. The old
+      // hardcoded world position (-5, 1, 10) ignored the road elevation (~31)
+      // and the active leg entirely.
+      const startSignPoint =
+        this.roadPath[Math.min(Math.max(0, this.startSegment), this.roadPath.length - 1)];
+      // On the roadside ledge of the side that drops, clear of a wall. The
+      // board faces along the road, 2 m across it; where that would reach into
+      // a wall (the gorge has one each side) it turns side-on to the road and
+      // the post stands on the shoulder
+      const startIndex = Math.max(0, this.startSegment);
+      const startSignSide = Terrain.fallSignAt(this.terrain, startIndex) || 1;
+      const startSignFacing = this.clearOfWall(startIndex, startSignSide, 1, 1);
+      const startSignPast = startSignFacing ?? this.clearOfWall(startIndex, startSignSide, 1, 0.1);
+      const startSignDistance = (this.roadWidth / 2 + startSignPast) * startSignSide;
+      const startSignX =
+        startSignPoint.x + Math.cos(startSignPoint.heading) * startSignDistance;
+      const startSignZ =
+        startSignPoint.z - Math.sin(startSignPoint.heading) * startSignDistance;
+      const startSignGroundY = this.groundYAt(startSignX, startSignZ);
 
-    const signPostGeometry = new THREE.CylinderGeometry(0.05, 0.05, 2, 8);
-    const signPostMaterial = new THREE.MeshStandardMaterial({
-      color: 0x8b4513,
-      roughness: 0.9,
-      metalness: 0.0,
-    });
-    const signPost = new THREE.Mesh(signPostGeometry, signPostMaterial);
-    signPost.position.set(startSignX, startSignGroundY + 1, startSignZ);
-    signPost.castShadow = true;
-    signPost.receiveShadow = true;
-    this.scene.add(signPost);
-    this.registerGrounded(signPost, "start sign post");
+      const signPostGeometry = new THREE.CylinderGeometry(0.05, 0.05, 2, 8);
+      const signPostMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8b4513,
+        roughness: 0.9,
+        metalness: 0.0,
+      });
+      const signPost = new THREE.Mesh(signPostGeometry, signPostMaterial);
+      signPost.position.set(startSignX, startSignGroundY + 1, startSignZ);
+      signPost.castShadow = true;
+      signPost.receiveShadow = true;
+      this.scene.add(signPost);
+      this.registerGrounded(signPost, "start sign post");
 
-    const signGeometry = new THREE.PlaneGeometry(2, 1);
-    const signMaterial = new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      roughness: 0.8,
-      metalness: 0.0,
-    });
-    const sign = new THREE.Mesh(signGeometry, signMaterial);
-    sign.position.set(startSignX, startSignGroundY + 2, startSignZ);
-    sign.rotation.y = startSignPoint.heading + (startSignFacing === null ? -startSignSide * Math.PI / 2 : 0);
-    sign.castShadow = true;
-    sign.receiveShadow = true;
-    sign.userData.allowFloating = true; // Board mounted on the post
-    sign.userData.sign = true;
-    signPost.userData.sign = true;
-    this.scene.add(sign);
+      const signGeometry = new THREE.PlaneGeometry(2, 1);
+      const signMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.8,
+        metalness: 0.0,
+      });
+      const sign = new THREE.Mesh(signGeometry, signMaterial);
+      sign.position.set(startSignX, startSignGroundY + 2, startSignZ);
+      sign.rotation.y = startSignPoint.heading + (startSignFacing === null ? -startSignSide * Math.PI / 2 : 0);
+      sign.castShadow = true;
+      sign.receiveShadow = true;
+      sign.userData.allowFloating = true; // Board mounted on the post
+      sign.userData.sign = true;
+      signPost.userData.sign = true;
+      this.scene.add(sign);
+    }
 
     // Posts along the road - especially on curves
     const postGeometry = new THREE.CylinderGeometry(0.1, 0.1, 1.5);

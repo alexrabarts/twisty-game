@@ -165,6 +165,7 @@ class Game {
         this.lastCheckpointIndex = -1;
         this.checkpointTimes = [];
         this.lastCheckpointPosition = null;
+        this.lastCheckpointSegment = null;
         this.lastCheckpointHeading = 0;
         this.checkpointRestartPressed = false;
 
@@ -422,9 +423,15 @@ class Game {
     setupPerformanceCulling() {
         this.cullableMeshes = [];
         const playerGroup = this.vehicle ? this.vehicle.group : null;
+        const env = this.environment;
 
         this.scene.traverse(obj => {
             if (!obj.isMesh) return;
+
+            // A converted leg's sections are classified as each is built (classifySection)
+            for (let p = obj.parent; p; p = p.parent) {
+                if (p.userData && p.userData.section !== undefined) return;
+            }
 
             // The sky dome is a unit sphere at the origin drawn at infinity;
             // by its bounds it looks like a small prop far from the player
@@ -454,7 +461,29 @@ class Game {
         this.updateCullDistance();
         this.lastCullTime = 0;
 
+        if (env && env.sections) {
+            env.sections.forEach(section => section.state === 'built' && this.classifySection(section));
+            // Sections built later are classified when they are ready
+            env.sectionListeners = env.sectionListeners.filter(listener => listener.owner !== 'culling');
+            env.sectionListeners.push({ owner: 'culling', ready: section => this.classifySection(section) });
+        }
+
         console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);
+    }
+
+    // The cullable meshes of one section of a converted leg, by the rule of
+    // setupPerformanceCulling; updatePerformanceCulling walks the visible ones
+    classifySection(section) {
+        section.cullable = [];
+        section.group.traverse(obj => {
+            if (!obj.isMesh || obj.userData.skipCulling) return;
+            if (!obj.geometry.boundingSphere) obj.geometry.computeBoundingSphere();
+            if (!obj.geometry.boundingSphere) return;
+            const scale = Math.max(Math.abs(obj.scale.x), Math.abs(obj.scale.y), Math.abs(obj.scale.z)) || 1;
+            const radius = obj.geometry.boundingSphere.radius * scale;
+            if (radius < 1.2) obj.castShadow = false;
+            if (radius < 40) section.cullable.push(obj);
+        });
     }
 
     updatePerformanceCulling() {
@@ -468,11 +497,16 @@ class Game {
         const px = this.vehicle.position.x;
         const pz = this.vehicle.position.z;
 
-        for (const mesh of this.cullableMeshes) {
+        const cull = (mesh) => {
             const pos = mesh.getWorldPosition(this.tempVector);
             const dx = pos.x - px;
             const dz = pos.z - pz;
             mesh.visible = (dx * dx + dz * dz) < maxDistSq;
+        };
+        this.cullableMeshes.forEach(cull);
+        // A converted leg: only the sections in the drawn window
+        if (this.environment && this.environment.sections) {
+            this.environment.visibleSections().forEach(section => section.cullable && section.cullable.forEach(cull));
         }
     }
 
@@ -510,6 +544,7 @@ class Game {
         this.lastCheckpointIndex = -1;
         this.checkpointTimes = [];
         this.lastCheckpointPosition = null;
+        this.lastCheckpointSegment = null;
         this.lastCheckpointHeading = 0;
         this.speedStreakTime = 0;
         this.lastSpeedCheck = 0;
@@ -2532,14 +2567,17 @@ class Game {
 
         // Every leg previews in full - locked ones are gated in the UI only
         this.endTrackPreview();
-        this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
+        // A converted leg builds the two sections round its preview point only
+        const course = typeof Course !== 'undefined' ? Course.forLeg(leg.id) : null;
+        const coursePivot = course ? (course.preview && course.preview.segment !== undefined ? course.preview.segment : Math.floor(course.segments / 2)) : null;
+        this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex, course ? { window: coursePivot, preview: true } : {});
         this.previewEnv.applyLandscapeConfig(this.previewEnv.config.look);
 
         // The look of the part that holds the orbit pivot. The fog density is the
         // landscape's own, written above: the preview makes no weather system.
         const path = this.previewEnv.roadPath;
         const track = AtmosphereTrack.forLeg(leg, this.previewEnv.config, this.previewEnv);
-        const pivotSegment = Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
+        const pivotSegment = course ? coursePivot : Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
         this.snapAtmosphere(track, track.settledSegment(pivotSegment), { environment: this.previewEnv, weatherSystem: null });
 
         // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
@@ -2909,7 +2947,7 @@ class Game {
 
         // Update traffic
         if (this.traffic) {
-            const collision = this.traffic.update(deltaTime, this.vehicle.position);
+            const collision = this.traffic.update(deltaTime, this.vehicle.position, Math.floor(this.vehicle.currentRoadSegment || 0));
             // The roadworks leave one corridor for both directions, so a car
             // on its detour (which starts before the zone and ends after it)
             // cannot be avoided: no crash against it
@@ -3025,6 +3063,12 @@ class Game {
         // Animate knocked cones (slide/tumble)
         if (this.cones) {
             this.cones.update(rawDeltaTime);
+        }
+
+        // A converted leg builds the world ahead of the bike, a few
+        // milliseconds a frame, and keeps the section of the last passed gate
+        if (this.environment && this.environment.sections && this.vehicle) {
+            this.environment.update(Math.floor(this.vehicle.currentRoadSegment || 0), Game.SECTION_BUDGET_MS, this.lastCheckpointSegment);
         }
 
         // Distance-cull far scenery (throttled internally)
@@ -3165,6 +3209,7 @@ class Game {
                         // Store checkpoint position for restart
                         this.lastCheckpointPosition = checkpoint.position.clone();
                         this.lastCheckpointHeading = checkpoint.heading;
+                        this.lastCheckpointSegment = checkpoint.segmentIndex;
                         console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
 
                         // Record checkpoint pass time
@@ -3444,6 +3489,8 @@ class Game {
         this.vehicle.speed = 15; // Reset to moderate speed
         this.vehicle.findNearestRoadSegment();
         this.vehicle.updateMesh();
+        // A converted leg keeps the gate's section; the window round it is built now
+        if (this.environment && this.environment.sections) this.environment.ensureWindow(Math.floor(this.vehicle.currentRoadSegment), { sync: true });
 
         // The crash banner belongs to the crash that was just undone
         this.removeRunOverlays();
@@ -3483,6 +3530,8 @@ class Game {
 Game.RESTART_PENALTY_MS = 5000;
 // Cars within this many segments of the rider move ahead on a restart
 Game.RESTART_CLEAR_SEGMENTS = 6;
+// The most a frame spends building the sections ahead on a converted leg (one step at least)
+Game.SECTION_BUDGET_MS = 4;
 
 // Short gameplay message in the HUD's call-out stack. tone: info, good, bad, warn or gold
 function showCallout(text, tone = 'info', durationMs = 1000) {

@@ -64,6 +64,12 @@ class Cones {
     }
 
     createCones() {
+        // A converted leg places the cones of each section as it is built and
+        // drops them when it is disposed (js/environment.js, sectionListeners)
+        if (this.environment && this.environment.sections) {
+            this.createSectionCones();
+            return;
+        }
         // Place cones strategically for slalom and corner markers
         const conePositions = [];
         
@@ -87,13 +93,27 @@ class Cones {
             }
         }
         
-        // Create the cone meshes (geometry and materials shared across all cones)
-        const coneGeometry = new THREE.ConeGeometry(0.25, 0.8, 6);
-        const coneMaterial = new THREE.MeshStandardMaterial({ color: 0xff6600, roughness: 0.8, metalness: 0.0, emissive: 0x331100, emissiveIntensity: 0.1 });
-        const baseGeometry = new THREE.CylinderGeometry(0.35, 0.35, 0.05, 6);
-        const baseMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.0 });
-        
-        conePositions.forEach((pos, index) => {
+        this.makeCones(conePositions, this.scene, this.cones);
+
+        // Start and finish lines are drawn by Environment.createRoadMarkings()
+        // at the leg's real start and end
+    }
+    
+    // The cone meshes (geometry and materials shared across all cones) at
+    // `positions`, added to `into`; each cone is pushed to `list`
+    makeCones(positions, into, list) {
+        if (!this.parts) {
+            this.parts = {
+                coneGeometry: new THREE.ConeGeometry(0.25, 0.8, 6),
+                coneMaterial: new THREE.MeshStandardMaterial({ color: 0xff6600, roughness: 0.8, metalness: 0.0, emissive: 0x331100, emissiveIntensity: 0.1 }),
+                baseGeometry: new THREE.CylinderGeometry(0.35, 0.35, 0.05, 6),
+                baseMaterial: new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.9, metalness: 0.0 })
+            };
+            // A disposed section leaves the cones of the others alone
+            Object.values(this.parts).forEach(part => { part.userData.shared = true; });
+        }
+        const { coneGeometry, coneMaterial, baseGeometry, baseMaterial } = this.parts;
+        positions.forEach((pos) => {
             const roadY = pos.y || 0;
 
             const cone = new THREE.Mesh(coneGeometry, coneMaterial);
@@ -102,8 +122,8 @@ class Cones {
             cone.castShadow = true;
             cone.receiveShadow = true;
             cone.hit = false; // Track if cone has been hit
-            this.scene.add(cone);
-            this.cones.push(cone);
+            into.add(cone);
+            list.push(cone);
 
             // No per-cone point lights: every extra light in the forward
             // renderer raises per-fragment cost for the whole scene, and the
@@ -115,13 +135,40 @@ class Cones {
             base.position.set(pos.x, roadY + 0.025, pos.z);
             base.castShadow = true;
             base.receiveShadow = true;
-            this.scene.add(base);
+            into.add(base);
         });
-
-        // Start and finish lines are drawn by Environment.createRoadMarkings()
-        // at the leg's real start and end
     }
-    
+
+    // Cones by section on a converted leg: the leg's rule (8 segments after
+    // the start, 3 before the end) clipped to each section's own segments
+    createSectionCones() {
+        const env = this.environment;
+        const first = env.startSegment + 8;
+        const last = env.endSegment - 3;
+        const place = (section, into) => {
+            const from = Math.max(first, section.from);
+            const to = Math.min(last, section.to - 1);
+            const spots = from <= to ? Cones.placeRange(env, from, to) : [];
+            this.makeCones(spots, into, section.cones);
+            this.cones.push(...section.cones);
+        };
+        const drop = (section) => {
+            const gone = new Set(section.cones);
+            this.cones = this.cones.filter(cone => !gone.has(cone));
+            this.activeCones = this.activeCones.filter(state => !gone.has(state.cone));
+        };
+        env.sectionListeners = env.sectionListeners.filter(listener => listener.owner !== 'cones');
+        env.sectionListeners.push({ owner: 'cones', built: place, disposed: drop });
+        // The sections built with the environment, before these cones existed
+        env.sections.forEach(section => {
+            if (section.state !== 'built') return;
+            const group = new THREE.Group();
+            group.name = 'step-cones';
+            section.group.add(group);
+            place(section, group);
+        });
+    }
+
     checkCollision(vehiclePosition, vehicleVelocity = null, vehicleSpeed = 0) {
         const hitDistance = 2.0; // More generous hit distance
         const heightTolerance = 3; // More generous height tolerance
