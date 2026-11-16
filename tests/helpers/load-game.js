@@ -64,7 +64,7 @@ export function canvasStub() {
 // The game classes, built once per THREE and per file set. `log` receives the
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
 export function loadGame(THREE = realThree(), log = []) {
-    const files = ['terrain.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js'];
+    const files = ['terrain.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'atmosphere.js'];
     const source = files.map(loadScript).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
@@ -74,7 +74,7 @@ export function loadGame(THREE = realThree(), log = []) {
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console',
-        `${source}\nreturn { Environment, TourSystem, RockfallSystem, Vehicle, Terrain };`
+        `${source}\nreturn { Environment, TourSystem, RockfallSystem, Vehicle, Terrain, AtmosphereTrack };`
     );
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink) };
 }

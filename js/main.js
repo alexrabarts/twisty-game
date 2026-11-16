@@ -22,6 +22,8 @@ class Game {
 
         // Time-of-Day configurations
         this.timeOfDay = 'golden';  // Default
+        // Set by setTimeOfDay: the override stands until the next snapAtmosphere
+        this.atmosphereHold = false;
         this.timeConfigs = {
             golden: {
                 name: 'Golden Hour',
@@ -225,9 +227,6 @@ class Game {
         // Hide tour selector
         this.tourSystem.hideLegSelector();
 
-        // Set time of day for the leg
-        this.setTimeOfDay(leg.timeOfDay);
-
         // Resolve the selected rider before building anything that needs it
         this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
 
@@ -238,34 +237,30 @@ class Game {
             this.environment = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
             console.log('Environment created successfully');
 
-            // Apply landscape configuration for the leg
+            // The landscape's fog density is written first: the weather system reads it
             this.environment.applyLandscapeConfig(this.environment.config.look);
-            // Before setWeather below: the far-ring strength is read by applySky
-            const roadBaseY = this.lowestRoadHeight(this.environment, leg);
-            this.graphics.setAtmosphere(this.environment.config.atmosphere, this.environment.config.render, roadBaseY);
             this.applyShadowBox(this.environment.config.render);
 
-            // Initialize weather system
+            // The light, sky, fog and weather of the leg, from the track
+            this.atmosphereTrack = AtmosphereTrack.forLeg(leg, this.environment.config, this.environment);
             console.log('Initializing weather system...');
             if (typeof WeatherSystem !== 'undefined') {
-                this.weatherSystem = new WeatherSystem(this.scene, this.camera);
-                this.weatherSystem.baseY = roadBaseY;
+                if (this.weatherSystem) this.weatherSystem.dispose();
+                // A leg of several looks draws its weather from a seeded stream: the same
+                // for every rider, and apart from the stream that cones and traffic read
+                const random = this.atmosphereTrack.parts.length > 1
+                    ? AtmosphereTrack.seededRandom(TourSystem.boardId(leg))
+                    : Math.random;
+                this.weatherSystem = new WeatherSystem(this.scene, this.camera, random);
                 this.weatherSystem.surfaceGrip = this.environment.config.grip ?? 1;
-
-                // Apply weather from leg
-                const weatherType = leg.weather || 'clear';
-                const weatherIntensity = leg.weatherIntensity !== undefined ? leg.weatherIntensity : 1.0;
-                this.weatherSystem.setWeather(weatherType, weatherIntensity);
-
-                // Apply weather visuals to environment
-                this.environment.applyWeatherVisuals(weatherType, weatherIntensity);
-                this.graphics.setWeather(weatherType, weatherIntensity);
-                this.applyWeatherLighting(weatherType);
-
-                console.log(`Weather set to: ${weatherType} (intensity: ${weatherIntensity})`);
+                this.weatherSystem.prepare(this.atmosphereTrack.weatherTypes());
             } else {
                 console.warn('WeatherSystem class not found');
             }
+            this.snapAtmosphere(this.atmosphereTrack, leg.startSegment, {
+                environment: this.environment,
+                weatherSystem: this.weatherSystem || null
+            });
         } catch (error) {
             console.error('Failed to create environment:', error);
             throw error;
@@ -413,6 +408,14 @@ class Game {
     // casting (dashes, debris, cone bases...), and everything but the truly
     // large scenery gets distance-culled - fog hides the far course anyway,
     // but without culling every rock/tree/post still costs a draw call
+    // Cull at the distance where fog has fully swallowed the scenery. The fog
+    // changes along a leg of several looks, so this is read again as it does.
+    updateCullDistance() {
+        const fogDensity = this.scene.fog ? this.scene.fog.density : 0.0018;
+        const cullMax = this.environment && this.environment.config ? this.environment.config.render.cullMax : 600;
+        this.cullDistance = Math.min(cullMax, Math.max(250, 2.2 / fogDensity));
+    }
+
     setupPerformanceCulling() {
         this.cullableMeshes = [];
         const playerGroup = this.vehicle ? this.vehicle.group : null;
@@ -445,10 +448,7 @@ class Game {
             }
         });
 
-        // Cull at the distance where fog has fully swallowed the scenery
-        const fogDensity = this.scene.fog ? this.scene.fog.density : 0.0018;
-        const cullMax = this.environment && this.environment.config ? this.environment.config.render.cullMax : 600;
-        this.cullDistance = Math.min(cullMax, Math.max(250, 2.2 / fogDensity));
+        this.updateCullDistance();
         this.lastCullTime = 0;
 
         console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);
@@ -831,20 +831,9 @@ class Game {
         this.scene.fog = new THREE.FogExp2(0xc8dae8, 0.0018);
     }
 
-    // The lowest point of the leg's road: the base of the height fog, and the
-    // level above which the weather thins the fog
-    lowestRoadHeight(environment, leg) {
-        const path = environment.roadPath;
-        const last = Math.min(leg.endSegment, path.length - 1);
-        let lowest = Infinity;
-        for (let i = leg.startSegment; i <= last; i++) {
-            lowest = Math.min(lowest, path[i].y || 0);
-        }
-        return Number.isFinite(lowest) ? lowest : 0;
-    }
-
     // Size the sun's shadow box for the leg: wide canyon walls need more
     applyShadowBox(render) {
+        this.appliedShadowSpan = render.shadowSpan;
         const half = render.shadowSpan / 2;
         const shadow = this.directionalLight.shadow.camera;
         shadow.left = -half;
@@ -961,6 +950,9 @@ class Game {
         this.scene.add(this.headlightBeam);
     }
 
+    // A time of day, in clear air, and nothing else: the road, the particles, the
+    // height fog and the far ring stay as they are. The override holds until the
+    // next snapAtmosphere; applyAtmosphere leaves the time of day alone while it does.
     setTimeOfDay(timeKey) {
         const config = this.timeConfigs[timeKey];
         if (!config) {
@@ -968,76 +960,234 @@ class Game {
             return;
         }
 
-        this.timeOfDay = timeKey;
         console.log('Switching to:', config.name);
-
-        // Update scene colors
-        this.scene.background = new THREE.Color(config.skyColor);
-        this.scene.fog.color = new THREE.Color(config.fogColor);
-
-        // Update ambient light
-        this.ambientLight.color = new THREE.Color(config.ambientColor);
-        this.ambientLight.intensity = config.ambientIntensity;
-
-        // Update hemisphere light
-        this.hemisphereLight.color = new THREE.Color(config.hemisphereTop);
-        this.hemisphereLight.groundColor = new THREE.Color(config.hemisphereBottom);
-        this.hemisphereLight.intensity = config.hemisphereIntensity;
-
-        // Update directional light (sun/moon)
-        this.directionalLight.color = new THREE.Color(config.sunColor);
-        this.directionalLight.intensity = config.sunIntensity;
-        this.baseSunIntensity = config.sunIntensity;
-
-        // Shadowless companion of the sun: same colour, a quarter of its
-        // strength (it was a fixed white 0.2, also at night)
-        this.distantLight.color = new THREE.Color(config.sunColor);
-        this.distantLight.intensity = config.sunIntensity * 0.25;
-
-        // Sun direction: low at dawn/sunset for long dramatic shadows, high
-        // at midday-ish times. Used by the per-frame light-follow code.
-        this.sunOffset = config.sunOffset || { x: 50, y: 80 };
-
-        // Per-time exposure - darker nights/twilights, brighter days
-        if (this.renderer && config.exposure !== undefined) {
-            this.renderer.toneMappingExposure = config.exposure;
-        }
-
+        this.writeTime(this.resolveTime(timeKey, 'clear'));
         // Sky dome, far ranges and reflections follow the time of day
         this.graphics.setTimeOfDay(timeKey, config);
+        this.atmosphereHold = true;
+    }
 
-        // Update fill light
-        this.fillLight.color = new THREE.Color(config.fillColor);
-        this.fillLight.intensity = config.fillIntensity;
+    // The light of a time of day under a weather, as plain values, the same
+    // object every time for the same arguments. Under cloud the sun or moon is
+    // hidden: most of its light arrives scattered from the whole sky. (A
+    // full-strength hidden sun also put a hard white reflection on the wet road.)
+    resolveTime(timeKey, weatherType) {
+        const config = this.timeConfigs[timeKey];
+        const cache = this.timeCache || (this.timeCache = new Map());
+        const cacheKey = `${timeKey}|${weatherType}`;
+        if (cache.has(cacheKey)) return cache.get(cacheKey);
 
-        // Update rim light
-        this.rimLight.color = new THREE.Color(config.rimColor);
-        this.rimLight.intensity = config.rimIntensity;
+        const overcast = weatherType === 'rain' || weatherType === 'snow';
+        const hazy = weatherType === 'fog';
+        const direct = overcast ? 0.25 : hazy ? 0.6 : 1;
+        const headlight = config.headlight || 0;
+        const values = {
+            key: timeKey,
+            skyColor: config.skyColor,
+            fogColor: config.fogColor,
+            ambientColor: config.ambientColor,
+            ambientIntensity: config.ambientIntensity,
+            hemisphereTop: config.hemisphereTop,
+            hemisphereBottom: config.hemisphereBottom,
+            hemisphereIntensity: config.hemisphereIntensity * (overcast ? 1.35 : hazy ? 1.15 : 1),
+            sunColor: config.sunColor,
+            sunIntensity: config.sunIntensity * direct,
+            distantIntensity: config.sunIntensity * 0.25 * direct,
+            // Low at dawn/sunset for long dramatic shadows, high at midday-ish times
+            sunOffset: config.sunOffset || { x: 50, y: 80 },
+            // Per-time exposure - darker nights/twilights, brighter days
+            exposure: config.exposure,
+            fillColor: config.fillColor,
+            fillIntensity: config.fillIntensity,
+            rimColor: config.rimColor,
+            rimIntensity: config.rimIntensity,
+            // Headlight only when it is dark enough to see the beam
+            headlight
+        };
+        cache.set(cacheKey, values);
+        return values;
+    }
 
-        // Headlight only when it is dark enough to see the beam
-        this.headlightStrength = config.headlight || 0;
+    // The light between two resolved times, `t` of the way to `b`; reused `out`
+    blendTime(a, b, t, out = this.timeBlend || (this.timeBlend = { sunOffset: { x: 0, y: 0 } })) {
+        const number = (x, y) => x + (y - x) * t;
+        const colour = (x, y) => AtmosphereTrack.lerpHex(x, y, t);
+        out.key = t < 0.5 ? a.key : b.key;
+        ['skyColor', 'fogColor', 'ambientColor', 'hemisphereTop', 'hemisphereBottom', 'sunColor', 'fillColor', 'rimColor']
+            .forEach(name => { out[name] = colour(a[name], b[name]); });
+        ['ambientIntensity', 'hemisphereIntensity', 'sunIntensity', 'distantIntensity', 'fillIntensity', 'rimIntensity', 'headlight']
+            .forEach(name => { out[name] = number(a[name], b[name]); });
+        out.sunOffset.x = number(a.sunOffset.x, b.sunOffset.x);
+        out.sunOffset.y = number(a.sunOffset.y, b.sunOffset.y);
+        out.exposure = a.exposure !== undefined && b.exposure !== undefined ? number(a.exposure, b.exposure) : (t < 0.5 ? a.exposure : b.exposure);
+        return out;
+    }
+
+    // Write resolved light to the scene: colours into the existing objects
+    writeTime(values) {
+        this.timeOfDay = values.key;
+
+        this.scene.background.setHex(values.skyColor);
+        this.scene.fog.color.setHex(values.fogColor);
+
+        this.ambientLight.color.setHex(values.ambientColor);
+        this.ambientLight.intensity = values.ambientIntensity;
+
+        this.hemisphereLight.color.setHex(values.hemisphereTop);
+        this.hemisphereLight.groundColor.setHex(values.hemisphereBottom);
+        this.hemisphereLight.intensity = values.hemisphereIntensity;
+
+        // Sun or moon
+        this.directionalLight.color.setHex(values.sunColor);
+        this.directionalLight.intensity = values.sunIntensity;
+        this.baseSunIntensity = values.sunIntensity;
+
+        // Shadowless companion of the sun: same colour, a quarter of its strength
+        this.distantLight.color.setHex(values.sunColor);
+        this.distantLight.intensity = values.distantIntensity;
+
+        // Used by the per-frame light-follow code
+        this.sunOffset = values.sunOffset;
+
+        if (this.renderer && values.exposure !== undefined) {
+            this.renderer.toneMappingExposure = values.exposure;
+        }
+
+        this.fillLight.color.setHex(values.fillColor);
+        this.fillLight.intensity = values.fillIntensity;
+
+        this.rimLight.color.setHex(values.rimColor);
+        this.rimLight.intensity = values.rimIntensity;
+
+        this.headlightStrength = values.headlight;
         this.headlight.visible = this.headlightStrength > 0;
         this.headlight.intensity = this.headlightStrength * 10;
         this.headlightBeam.visible = this.headlight.visible;
         this.headlightBeam.material.uniforms.uStrength.value = this.headlightStrength * 0.14;
-
-        // Show notification (disabled - don't show popup at level start)
-        // this.showTimeOfDayNotification(config.name);
     }
 
-    // Under cloud the sun or moon is hidden: most of its light arrives
-    // scattered from the whole sky. Call after setTimeOfDay(), which restores
-    // the clear-sky values. (A full-strength hidden sun also put a hard white
-    // reflection on the wet road.)
-    applyWeatherLighting(weatherType) {
-        const overcast = weatherType === 'rain' || weatherType === 'snow';
-        const hazy = weatherType === 'fog';
-        const config = this.timeConfigs[this.timeOfDay];
-        const direct = overcast ? 0.25 : hazy ? 0.6 : 1;
-        this.baseSunIntensity = config.sunIntensity * direct;
-        this.directionalLight.intensity = this.baseSunIntensity;
-        this.distantLight.intensity = config.sunIntensity * 0.25 * direct;
-        this.hemisphereLight.intensity = config.hemisphereIntensity * (overcast ? 1.35 : hazy ? 1.15 : 1);
+    // Write the atmosphere at a segment all at once: no blending in time, a
+    // forced bake of the reflections. For a leg start, a restart, the menu
+    // preview and the rider showcase. `target` names what the snap may write
+    // beyond the light and sky: { environment, weatherSystem }, either of
+    // which may be null. With no weather system nothing is written to the
+    // particles or the scene fog density.
+    snapAtmosphere(track, segment, target = {}) {
+        this.atmosphereHold = false;
+        const sample = track.sample(segment, this.atmosphereSample || (this.atmosphereSample = {}));
+        this.writeAtmosphere(sample, target, true);
+        this.atmosphereWritten = { a: sample.a, t: sample.t };
+    }
+
+    // Once per rendered frame, before graphics.update. On a part, the far ring
+    // is the only thing that moves. Inside a blend zone the light, sky, road
+    // surface, particles and fog blend with the road position; the first frame
+    // after a zone writes the part's own values.
+    applyAtmosphere() {
+        const track = this.atmosphereTrack;
+        if (!track || !this.vehicle) return;
+        const scratch = this.atmosphereSample || (this.atmosphereSample = {});
+        const sample = track.sample(this.vehicle.currentRoadSegment || 0, scratch);
+        const written = this.atmosphereWritten;
+        const settled = sample.t === 0 && written && written.t === 0 && written.a === sample.a;
+
+        if (this.atmosphereHold || settled) {
+            // Only the ring depends on where the rider is within a part
+            this.graphics.setRingStrength(AtmosphereTrack.ringAt(sample.a.ring, sample.ua));
+            return;
+        }
+
+        // A blend moves with the bike, not in steps of one segment
+        track.sample(this.roadPosition(), scratch);
+        this.writeAtmosphere(sample, {
+            environment: this.environment,
+            weatherSystem: this.weatherSystem || null
+        }, false);
+        this.atmosphereWritten = { a: sample.a, t: sample.t };
+        this.applySectionLook(this.atmosphereLook);
+    }
+
+    // Where the bike is along the road, in fractional segments: the segment it
+    // is nearest to, and how far it has passed along the line to the next
+    roadPosition() {
+        const segment = this.vehicle.currentRoadSegment || 0;
+        const path = this.environment && this.environment.roadPath;
+        const at = this.vehicle.position;
+        if (!path || !at) return segment;
+        for (const start of [segment, segment - 1]) {
+            const from = path[start];
+            const to = path[start + 1];
+            if (!from || !to) continue;
+            const dx = to.x - from.x;
+            const dz = to.z - from.z;
+            const along = ((at.x - from.x) * dx + (at.z - from.z) * dz) / (dx * dx + dz * dz);
+            if (along >= 0 && along <= 1) return start + along;
+        }
+        return segment;
+    }
+
+    // The sample's look in the scene: the sky, light, fog, road surface and particles
+    writeAtmosphere(sample, target, snap) {
+        const { a, b, t } = sample;
+        const look = AtmosphereTrack.blendLook(sample, this.atmosphereLook || (this.atmosphereLook = {}));
+
+        // Ring strength and height fog first: the sky reads the ring
+        const atmosphere = look.heightFog || look.shafts > 0 ? { heightFog: look.heightFog, shafts: look.shafts } : null;
+        this.graphics.setAtmosphere(atmosphere, { ring: look.ring }, look.baseY);
+
+        // Time values, then the sky
+        const timeA = this.resolveTime(a.timeOfDay, a.weather);
+        const skyA = this.graphics.resolveSky(a.timeOfDay, a.weather, this.timeConfigs[a.timeOfDay]);
+        if (t === 0) {
+            this.writeTime(timeA);
+            this.graphics.writeSky(skyA, 0);
+        } else {
+            this.writeTime(this.blendTime(timeA, this.resolveTime(b.timeOfDay, b.weather), t));
+            this.graphics.writeSky(this.graphics.blendSky(skyA, this.graphics.resolveSky(b.timeOfDay, b.weather, this.timeConfigs[b.timeOfDay]), t), t);
+        }
+        // A snap, and the first write of a part's own look, bake at once; a blend is paced
+        if (snap || t === 0) this.graphics.environmentDirty = true;
+        else this.graphics.requestRebake();
+
+        const { environment, weatherSystem } = target;
+        if (environment) {
+            if (snap) {
+                // The one-time tint of ground and mountains, with the road surface
+                const near = t < 0.5 ? a : b;
+                environment.applyWeatherVisuals(near.weather, near.weatherIntensity);
+            }
+            if (t > 0) environment.writeRoadSurface(this.blendRoadSurface(environment, a, b, t));
+            else if (!snap) environment.writeRoadSurface(environment.resolveRoadSurface(a.weather, a.weatherIntensity));
+        }
+
+        if (weatherSystem) {
+            const mix = AtmosphereTrack.weatherMix(sample, this.weatherMix || (this.weatherMix = {}));
+            mix.fogDensity = look.fogDensity;
+            mix.baseY = look.baseY;
+            weatherSystem.setMix(mix);
+        }
+    }
+
+    // The road surface between the looks of two parts
+    blendRoadSurface(environment, a, b, t) {
+        const from = environment.resolveRoadSurface(a.weather, a.weatherIntensity);
+        const to = environment.resolveRoadSurface(b.weather, b.weatherIntensity);
+        const out = this.roadBlend || (this.roadBlend = {});
+        const number = (x, y) => x + (y - x) * t;
+        out.roughness = number(from.roughness, to.roughness);
+        out.metalness = number(from.metalness, to.metalness);
+        out.envMapIntensity = number(from.envMapIntensity, to.envMapIntensity);
+        out.color = AtmosphereTrack.lerpHex(from.color, to.color, t);
+        return out;
+    }
+
+    // What follows from the part the rider is in: the shadow box, and the
+    // distance at which the fog has swallowed the scenery
+    applySectionLook(look) {
+        if (look.shadowSpan !== undefined && look.shadowSpan !== this.appliedShadowSpan) {
+            this.applyShadowBox({ shadowSpan: look.shadowSpan });
+        }
+        this.updateCullDistance();
     }
 
     showTimeOfDayNotification(timeName) {
@@ -2209,9 +2359,9 @@ class Game {
         if (!this.showcaseBikes) {
             // Always present the riders in clear daylight, whatever leg was
             // ridden or previewed last
-            this.setTimeOfDay('golden');
-            this.graphics.setAtmosphere(null);
-            this.graphics.setWeather('clear', 0);
+            this.snapAtmosphere(AtmosphereTrack.oneLook({
+                timeOfDay: 'golden', weather: 'clear', weatherIntensity: 0, heightFog: null, shafts: 0, ring: 1
+            }), 0);
             this.scene.fog.color.setHex(this.timeConfigs.golden.fogColor);
             this.scene.fog.density = 0.0018;
             // Start on the bike instead of flying in from the last camera position
@@ -2327,25 +2477,19 @@ class Game {
 
         // Every leg previews in full - locked ones are gated in the UI only
         this.endTrackPreview();
-        this.setTimeOfDay(leg.timeOfDay);
         this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
         this.previewEnv.applyLandscapeConfig(this.previewEnv.config.look);
-        if (leg.weather && leg.weather !== 'clear') {
-            this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
-        }
-        this.graphics.setAtmosphere(
-            this.previewEnv.config.atmosphere,
-            this.previewEnv.config.render,
-            this.lowestRoadHeight(this.previewEnv, leg)
-        );
-        this.graphics.setWeather(leg.weather || 'clear', leg.weatherIntensity || 0);
-        this.applyWeatherLighting(leg.weather || 'clear');
+
+        // The look of the part that holds the orbit pivot. The fog density is the
+        // landscape's own, written above: the preview makes no weather system.
+        const path = this.previewEnv.roadPath;
+        const track = AtmosphereTrack.forLeg(leg, this.previewEnv.config, this.previewEnv);
+        const pivotSegment = Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
+        this.snapAtmosphere(track, track.settledSegment(pivotSegment), { environment: this.previewEnv, weatherSystem: null });
 
         // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
         // keeps the low-poly scenery reading well (wide aerials don't)
-        const path = this.previewEnv.roadPath;
-        const midIdx = Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
-        const mid = path[midIdx];
+        const mid = path[pivotSegment];
         this.previewCenter = new THREE.Vector3(mid.x, (mid.y || 0), mid.z);
         // How far out and how high the camera stands comes from the leg: a
         // leg with trees beside the road has no room for the default 30
@@ -2911,11 +3055,8 @@ class Game {
         this.rimLight.target.position.copy(renderPos);
         this.rimLight.target.updateMatrixWorld();
 
-        // The far ring of a leg that nears the mountains rises with the ride
-        const env = this.environment;
-        this.graphics.setRingProgress(
-            ((this.vehicle.currentRoadSegment || 0) - env.startSegment) / Math.max(1, env.endSegment - env.startSegment)
-        );
+        // The light, sky, fog and far ring follow the ride along the track
+        this.applyAtmosphere();
         this.graphics.update(
             rawDeltaTime,
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,

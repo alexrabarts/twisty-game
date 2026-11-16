@@ -3,21 +3,30 @@
  * Handles fog, rain, snow effects and physics modifications
  */
 class WeatherSystem {
-    constructor(scene, camera) {
+    // `random` is the source of every random number the weather draws. A leg
+    // on one look keeps the global stream, so cones, rockfalls and traffic read
+    // the same numbers as before; a leg with several looks passes a seeded one.
+    constructor(scene, camera, random = Math.random) {
         this.scene = scene;
         this.camera = camera;
+        this.random = random;
         this.weatherType = 'clear';
         this.weatherIntensity = 1.0;
-        this.particles = null;
-        this.particleSystem = null;
-        // The leg's lowest road height; main.js sets it at leg start
+        // How much of each weather is present, 0 to 1 (see setMix)
+        this.mix = { rain: 0, snow: 0, fog: 0 };
+        // Particle systems by weather, made once by prepare()
+        this.systems = {};
+        // The lowest road height of the part; setMix sets it
         this.baseY = 0;
         // The road's own grip on the leg (Terrain.LEGS[i].grip), under the
         // weather's: the tour's later legs have colder, dirtier tarmac
         this.surfaceGrip = 1;
+        // The clear-weather fog density; setMix replaces it with the sampled part's
         this.originalFogDensity = scene.fog ? scene.fog.density : 0.0008;
+        // 0 to 1: how far above baseY the bike is, for the fog that thins uphill
+        this.fogElevation = 0;
         this.lightningTimer = 0;
-        this.lightningInterval = 5 + Math.random() * 5; // 5-10 seconds
+        this.lightningInterval = 5 + this.random() * 5; // 5-10 seconds
 
         // Store base physics values (will be set by vehicle)
         this.basePhysics = {
@@ -27,68 +36,107 @@ class WeatherSystem {
         };
     }
 
-    setWeather(type, intensity = 1.0) {
-        console.log(`Setting weather: ${type} (intensity: ${intensity})`);
+    // Build the particle systems for these weathers once, for the whole leg.
+    // Nothing shows until setMix gives a weather a share.
+    prepare(types) {
+        this.dispose();
 
-        // Clear existing weather
-        this.clearWeather();
-
-        this.weatherType = type;
-        this.weatherIntensity = intensity;
-
-        // Reset lightning timer for new weather
+        // Reset lightning timer for the new leg
         this.lightningTimer = 0;
-        this.lightningInterval = 5 + Math.random() * 5; // 5-10 seconds
+        this.lightningInterval = 5 + this.random() * 5; // 5-10 seconds
 
-        switch(type) {
-            case 'fog':
-                this.setupFog();
-                break;
-            case 'rain':
-                this.setupRain();
-                break;
-            case 'snow':
-                this.setupSnow();
-                break;
-            case 'clear':
-            default:
-                // Already cleared
-                break;
-        }
+        types.forEach(type => {
+            if (type === 'rain') this.setupRain();
+            else if (type === 'snow') this.setupSnow();
+        });
     }
 
-    clearWeather() {
-        // Remove particles and free their GPU buffers (rain is 3000 particles)
-        if (this.particleSystem) {
-            this.scene.remove(this.particleSystem);
-            if (this.particleSystem.geometry) {
-                this.particleSystem.geometry.dispose();
-            }
-            if (this.particleSystem.material) {
-                if (this.particleSystem.material.map) {
-                    this.particleSystem.material.map.dispose();
-                }
-                this.particleSystem.material.dispose();
-            }
-            this.particleSystem = null;
+    // Set how much of each weather is present. Changes the draw range of the
+    // particles, the scene fog and the grip, and allocates nothing.
+    //   rain, snow, fog  shares, 0 to 1, summing to at most 1
+    //   intensity        the intensity of the weather that is present
+    //   fogDensity       the clear-weather fog density of the part
+    //   baseY            the part's lowest road height
+    setMix({ rain = 0, snow = 0, fog = 0, intensity = 1, fogDensity = this.originalFogDensity, baseY = this.baseY }) {
+        this.mix.rain = rain;
+        this.mix.snow = snow;
+        this.mix.fog = fog;
+        this.weatherIntensity = intensity;
+        this.baseY = baseY;
+        this.originalFogDensity = fogDensity;
+        this.weatherType = this.dominantType();
+
+        for (const type of Object.keys(this.systems)) {
+            const { points, count } = this.systems[type];
+            const share = this.mix[type];
+            points.visible = share > 0;
+            points.geometry.setDrawRange(0, Math.floor(count * share));
         }
 
-        // Reset fog to original
-        if (this.scene.fog) {
-            this.scene.fog.density = this.originalFogDensity;
-        }
-
-        this.weatherType = 'clear';
+        this.writeFogColor();
+        this.writeFogDensity();
     }
 
-    setupFog() {
-        // Dense fog - adjust scene fog
-        if (this.scene.fog) {
-            this.scene.fog.density = 0.003 * this.weatherIntensity;
-            this.scene.fog.color.setHex(0xb0c0d0); // Misty grey-blue
-        }
+    // The weather with the largest share; clear when no weather has more than the rest
+    dominantType() {
+        const { rain, snow, fog } = this.mix;
+        let best = 'clear';
+        let share = 1 - Math.min(1, rain + snow + fog);
+        [['rain', rain], ['snow', snow], ['fog', fog]].forEach(([type, value]) => {
+            if (value > share || (value === share && best === 'clear' && value > 0)) {
+                best = type;
+                share = value;
+            }
+        });
+        return best;
+    }
 
-        console.log('Fog weather enabled');
+    // Free the particles and their GPU buffers (rain is 3000 particles)
+    dispose() {
+        for (const type of Object.keys(this.systems)) {
+            const { points } = this.systems[type];
+            this.scene.remove(points);
+            if (points.geometry) points.geometry.dispose();
+            if (points.material) {
+                if (points.material.map) points.material.map.dispose();
+                points.material.dispose();
+            }
+        }
+        this.systems = {};
+    }
+
+    // Misty grey-blue, grey and white mist: the fog the weather tints toward
+    writeFogColor() {
+        const fog = this.scene.fog;
+        const { rain, snow, fog: mist } = this.mix;
+        const total = rain + snow + mist;
+        if (!fog || total <= 0) return;
+        const tints = [[rain, 0x707880], [snow, 0xe0e8f0], [mist, 0xb0c0d0]];
+        const strength = Math.min(1, total);
+        const single = tints.find(([share]) => share >= 1);
+        if (single) {
+            fog.color.setHex(single[1]);
+            return;
+        }
+        const channel = shift => Math.round(tints.reduce((sum, [share, hex]) => sum + share * ((hex >> shift) & 255), 0) / total);
+        this.tint = this.tint || new THREE.Color();
+        this.tint.setHex((channel(16) << 16) | (channel(8) << 8) | channel(0));
+        fog.color.lerp(this.tint, strength);
+    }
+
+    // The only writer of the scene fog density. The weather's density
+    // replaces the part's clear-weather density by the share of weather
+    // present: rain and snow at a fixed density, fog thinner as the bike climbs.
+    writeFogDensity() {
+        const fog = this.scene.fog;
+        if (!fog || fog.density === undefined) return;
+        const { rain, snow, fog: mist } = this.mix;
+        const strength = Math.min(1, rain + snow + mist);
+        const intensity = this.weatherIntensity;
+        const weather = 0.0015 * intensity * rain
+            + 0.002 * intensity * snow
+            + 0.003 * intensity * (1 - this.fogElevation * 0.5) * mist;
+        fog.density = this.originalFogDensity * (1 - strength) + weather;
     }
 
     setupRain() {
@@ -103,11 +151,11 @@ class WeatherSystem {
 
         for (let i = 0; i < rainCount; i++) {
             const i3 = i * 3;
-            positions[i3] = (Math.random() - 0.5) * 200; // X: -100 to 100 around camera
-            positions[i3 + 1] = Math.random() * 120 - 30; // Y: -30 to 90 relative to camera
-            positions[i3 + 2] = (Math.random() - 0.5) * 200; // Z: -100 to 100 around camera
+            positions[i3] = (this.random() - 0.5) * 200; // X: -100 to 100 around camera
+            positions[i3 + 1] = this.random() * 120 - 30; // Y: -30 to 90 relative to camera
+            positions[i3 + 2] = (this.random() - 0.5) * 200; // Z: -100 to 100 around camera
 
-            velocities[i] = -30 - Math.random() * 20; // Fast falling
+            velocities[i] = -30 - this.random() * 20; // Fast falling
         }
 
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -124,20 +172,9 @@ class WeatherSystem {
         });
         this.capPointSize(material, 90);
 
-        this.particleSystem = new THREE.Points(geometry, material);
-        this.particleSystem.frustumCulled = false; // Volume always surrounds the camera
-        if (this.camera) {
-            this.particleSystem.position.copy(this.camera.position);
-        }
-        this.scene.add(this.particleSystem);
+        this.addSystem('rain', geometry, material, rainCount);
 
-        // Adjust fog for stormy conditions
-        if (this.scene.fog) {
-            this.scene.fog.density = 0.0015 * this.weatherIntensity;
-            this.scene.fog.color.setHex(0x707880); // Grey fog
-        }
-
-        console.log('Rain weather enabled');
+        console.log('Rain weather prepared');
     }
 
     setupSnow() {
@@ -149,11 +186,11 @@ class WeatherSystem {
 
         for (let i = 0; i < snowCount; i++) {
             const i3 = i * 3;
-            positions[i3] = (Math.random() - 0.5) * 200;
-            positions[i3 + 1] = Math.random() * 120 - 30; // Relative to camera
-            positions[i3 + 2] = (Math.random() - 0.5) * 200;
+            positions[i3] = (this.random() - 0.5) * 200;
+            positions[i3 + 1] = this.random() * 120 - 30; // Relative to camera
+            positions[i3 + 2] = (this.random() - 0.5) * 200;
 
-            velocities[i] = -5 - Math.random() * 5; // Slower falling
+            velocities[i] = -5 - this.random() * 5; // Slower falling
         }
 
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -169,20 +206,22 @@ class WeatherSystem {
         });
         this.capPointSize(material, 22);
 
-        this.particleSystem = new THREE.Points(geometry, material);
-        this.particleSystem.frustumCulled = false; // Volume always surrounds the camera
+        this.addSystem('snow', geometry, material, snowCount);
+
+        console.log('Snow weather prepared');
+    }
+
+    // The points stay out of sight until setMix gives their weather a share
+    addSystem(type, geometry, material, count) {
+        const points = new THREE.Points(geometry, material);
+        points.frustumCulled = false; // Volume always surrounds the camera
+        points.visible = false;
+        geometry.setDrawRange(0, 0);
         if (this.camera) {
-            this.particleSystem.position.copy(this.camera.position);
+            points.position.copy(this.camera.position);
         }
-        this.scene.add(this.particleSystem);
-
-        // White mist fog
-        if (this.scene.fog) {
-            this.scene.fog.density = 0.002 * this.weatherIntensity;
-            this.scene.fog.color.setHex(0xe0e8f0);
-        }
-
-        console.log('Snow weather enabled');
+        this.scene.add(points);
+        this.systems[type] = { points, count, parked: false };
     }
 
     // Point sprites grow without limit as they near the camera: a drop
@@ -227,31 +266,47 @@ class WeatherSystem {
         // Lightning afterglow, read by the renderer for a screen flash
         this.flash = Math.max(0, (this.flash || 0) - deltaTime * 5);
 
-        if (!this.particleSystem) {
-            // Update fog dynamically based on position (for fog weather)
-            if (this.weatherType === 'fog' && vehiclePosition) {
-                this.updateFogDensity(vehiclePosition);
-            }
+        // Fog thins as the bike climbs out of the low ground
+        if (this.mix.fog > 0 && vehiclePosition) {
+            this.updateFogDensity(vehiclePosition);
+        }
+
+        for (const type of Object.keys(this.systems)) {
+            this.updateParticles(this.systems[type], this.mix[type], deltaTime, vehiclePosition);
+        }
+
+        // Lightning effect for rain
+        if (this.weatherType === 'rain' && this.systems.rain) {
+            this.updateLightning(deltaTime);
+        }
+    }
+
+    // Re-anchor the particle volume to the camera so precipitation surrounds
+    // the player along the whole course, not just near where it was first
+    // spawned. Particle local positions are compensated by the camera delta (so
+    // drops stay world-stationary) and wrapped at the volume edges to keep
+    // density uniform while moving. A weather with no share is left alone; when
+    // it returns its volume is placed on the camera, which it already fills.
+    updateParticles(system, share, deltaTime, vehiclePosition) {
+        const { points } = system;
+        if (share <= 0) {
+            system.parked = true;
             return;
         }
 
-        // Re-anchor the particle volume to the camera so precipitation
-        // surrounds the player along the whole course, not just near where it
-        // was first spawned. Particle local positions are compensated by the
-        // camera delta (so drops stay world-stationary) and wrapped at the
-        // volume edges to keep density uniform while moving.
         const anchor = this.camera ? this.camera.position : vehiclePosition;
         let shiftX = 0, shiftY = 0, shiftZ = 0;
-        if (anchor) {
-            shiftX = anchor.x - this.particleSystem.position.x;
-            shiftY = anchor.y - this.particleSystem.position.y;
-            shiftZ = anchor.z - this.particleSystem.position.z;
-            this.particleSystem.position.set(anchor.x, anchor.y, anchor.z);
+        if (anchor && !system.parked) {
+            shiftX = anchor.x - points.position.x;
+            shiftY = anchor.y - points.position.y;
+            shiftZ = anchor.z - points.position.z;
         }
+        if (anchor) points.position.set(anchor.x, anchor.y, anchor.z);
+        system.parked = false;
 
         const halfExtent = 100; // Volume is ±100 around the camera
-        const positions = this.particleSystem.geometry.attributes.position.array;
-        const velocities = this.particleSystem.geometry.attributes.velocity.array;
+        const positions = points.geometry.attributes.position.array;
+        const velocities = points.geometry.attributes.velocity.array;
 
         for (let i = 0; i < positions.length / 3; i++) {
             const i3 = i * 3;
@@ -269,30 +324,22 @@ class WeatherSystem {
 
             // Recycle particles that have fallen well below the camera
             if (positions[i3 + 1] < -40) {
-                positions[i3 + 1] = 60 + Math.random() * 30;
+                positions[i3 + 1] = 60 + this.random() * 30;
             } else if (positions[i3 + 1] > 120) {
                 // Pushed too high by a fast descent - bring back into the volume
-                positions[i3 + 1] = 60 + Math.random() * 30;
+                positions[i3 + 1] = 60 + this.random() * 30;
             }
         }
 
-        this.particleSystem.geometry.attributes.position.needsUpdate = true;
-
-        // Lightning effect for rain
-        if (this.weatherType === 'rain') {
-            this.updateLightning(deltaTime);
-        }
+        points.geometry.attributes.position.needsUpdate = true;
     }
 
     updateFogDensity(vehiclePosition) {
         // Fog is denser in valleys (lower elevation)
         if (!this.scene.fog || !vehiclePosition) return;
 
-        const elevationFactor = Math.max(0, Math.min(1, (vehiclePosition.y - this.baseY) / 50));
-
-        // Denser fog at low elevation, lighter at high elevation
-        const baseDensity = 0.003 * this.weatherIntensity;
-        this.scene.fog.density = baseDensity * (1 - elevationFactor * 0.5);
+        this.fogElevation = Math.max(0, Math.min(1, (vehiclePosition.y - this.baseY) / 50));
+        this.writeFogDensity();
     }
 
     updateLightning(deltaTime) {
@@ -302,7 +349,7 @@ class WeatherSystem {
             // Lightning flash!
             this.flash = 1;
             this.lightningTimer = 0;
-            this.lightningInterval = 5 + Math.random() * 10; // Next flash in 5-15 seconds
+            this.lightningInterval = 5 + this.random() * 10; // Next flash in 5-15 seconds
 
             // Brief ambient light increase
             if (this.scene.children) {
@@ -334,36 +381,33 @@ class WeatherSystem {
         };
     }
 
+    // Each weather scales the grip by its share: a full share gives its
+    // multipliers exactly, no share gives none, and a mix lies between
     weatherPhysics() {
-        switch(this.weatherType) {
-            case 'rain':
-                return {
-                    lateralFriction: 0.7 * this.weatherIntensity + (1 - this.weatherIntensity),
-                    brakeForce: 0.8 * this.weatherIntensity + (1 - this.weatherIntensity),
-                    acceleration: 0.9 * this.weatherIntensity + (1 - this.weatherIntensity)
-                };
-
-            case 'snow':
-                return {
-                    lateralFriction: 0.4 * this.weatherIntensity + (1 - this.weatherIntensity),
-                    brakeForce: 0.6 * this.weatherIntensity + (1 - this.weatherIntensity),
-                    acceleration: 0.7 * this.weatherIntensity + (1 - this.weatherIntensity)
-                };
-
-            case 'fog':
-            case 'clear':
-            default:
-                return {
-                    lateralFriction: 1.0,
-                    brakeForce: 1.0,
-                    acceleration: 1.0
-                };
-        }
+        const intensity = this.weatherIntensity;
+        const result = { lateralFriction: 1.0, brakeForce: 1.0, acceleration: 1.0 };
+        const apply = (share, lateral, brake, acceleration) => {
+            if (share <= 0) return;
+            const part = value => (share >= 1 ? value : 1 + (value - 1) * share);
+            result.lateralFriction *= part(lateral);
+            result.brakeForce *= part(brake);
+            result.acceleration *= part(acceleration);
+        };
+        apply(this.mix.rain,
+            0.7 * intensity + (1 - intensity),
+            0.8 * intensity + (1 - intensity),
+            0.9 * intensity + (1 - intensity));
+        apply(this.mix.snow,
+            0.4 * intensity + (1 - intensity),
+            0.6 * intensity + (1 - intensity),
+            0.7 * intensity + (1 - intensity));
+        // Fog and clear air leave the grip alone
+        return result;
     }
 
     isIcePatch(segmentIndex) {
-        // For snow weather, certain segments are icy (even lower grip)
-        if (this.weatherType !== 'snow') return false;
+        // Where snow lies over half the road, certain segments are icy (even lower grip)
+        if (this.mix.snow <= 0.5) return false;
 
         // Make every ~25th segment an ice patch (pseudo-random but consistent)
         const icePattern = [23, 47, 68, 91, 115, 142, 167, 193, 218, 241, 269, 287];
