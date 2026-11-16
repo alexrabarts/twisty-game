@@ -39,6 +39,10 @@ If the browser has no WebGL2 float render targets, `postEnabled` is false. The r
 - The same sky is baked with PMREM into `scene.environment` when the time of day or weather changes.
 - The sky mesh has `userData.isSky`. `setupPerformanceCulling` must skip it, and any mesh with `userData.skipCulling` (the instanced forest, the headlight beam).
 
+## Rock face
+
+On a leg with `rockFace` in `SceneAssets.LEGS` (foggy-gorge), the wall ribbon's material gets `onBeforeCompile` (`rockShader` in `js/sceneassets.js`): it replaces three's `map_fragment` and `normal_fragment_maps`. The vertex colours stay the look; a tiling detail map and normal map are read in shifting patches at a level distance and world height, so no part of a wall repeats and the beds stay level. `tools/blender/README.md` ("Rock face detail") has the rules and the cost.
+
 ## Lights
 
 `timeConfigs` in `main.js` holds the light values. They are tuned for linear lighting: the sky light (hemisphere top) is the zenith colour, not the horizon colour.

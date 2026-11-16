@@ -20,9 +20,12 @@ const SceneAssets = (() => {
       portal: "assets/gorge/portal.glb",
       // The tunnel opening the portal was modelled for (tools/blender/gorge_portal.py)
       opening: { halfWidth: 11, ceiling: 7.5 },
-      rockFace: { map: "assets/gorge/rockface_albedo.webp", normalMap: "assets/gorge/rockface_normal.webp", repeat: 2.4 },
-      // The baked rocks are lighter than the gorge's rock; this darkens them to it
-      rockTint: 0xa39a90,
+      // The face's detail (tools/blender/rockface_detail.py): `tile` is the
+      // side in metres one copy covers, `tint` the stone that the face's
+      // vertex colours shade. Any leg with a rock face can name the same files.
+      rockFace: { map: "assets/rockface/detail.webp", normalMap: "assets/rockface/normal.webp", tile: 12, tint: 0xcbb8a6 },
+      // The baked rocks are a light grey; this brings them to the face's stone
+      rockTint: 0xb9a592,
       cell: 400,
     },
   };
@@ -378,51 +381,205 @@ const SceneAssets = (() => {
   }
 
   // The ribbon's own UVs are the column along the road (u) and the height
-  // above the road (v), 16 m to a unit. A photo laid on those stretches
-  // wherever the surface runs further than they do: over a wall's lip, up a
-  // spur's slope, and across the end of a spur where one segment of columns
-  // spans its whole face. So v is measured along each column's surface, and u
-  // along each row's, relaxed back toward the column's own u (by RELAX a
-  // column) so the rows do not drift apart in shear after a spur. Ground
-  // columns (uv 0, 0 throughout, coloured by vertex) keep theirs.
-  const RELAX = 0.15;
-  function surfaceUVs(geometry) {
+  // above the road (v), 16 m to a unit. The shader below reads the detail by
+  // world height and a level distance, so the UVs become the two level
+  // distances a vertex has, in metres: u along the road's edge to its column,
+  // v out from that edge along its column. A wall runs with the road and takes
+  // u; a spur's flank and end face cross it, u barely changes over them, and
+  // they take v. Ground columns (uv 0, 0 throughout, coloured by vertex) keep
+  // theirs and are marked as no rock.
+  function faceUVs(geometry) {
     const rows = Terrain.ROWS + 1;
     const position = geometry.attributes.position;
     const uv = geometry.attributes.uv;
     const columns = position.count / rows;
-    const road = Array.from({ length: columns }, (_, column) => uv.getX(column * rows));
-    const ground = road.map((_, column) => {
+    const ground = Array.from({ length: columns }, (_, column) => {
       for (let j = 0; j < rows; j++) if (uv.getX(column * rows + j) !== 0 || uv.getY(column * rows + j) !== 0) return false;
       return true;
     });
-    const gap = (a, b) => Math.hypot(position.getX(b) - position.getX(a), position.getY(b) - position.getY(a), position.getZ(b) - position.getZ(a)) / 16;
+    const run = (a, b) => Math.hypot(position.getX(b) - position.getX(a), position.getZ(b) - position.getZ(a));
+    const rock = new Float32Array(position.count);
+    let along = 0;
     for (let column = 0; column < columns; column++) {
-      if (ground[column]) continue;
       const first = column * rows;
-      let v = 0;
+      if (column > 0) along += run(first - rows, first);
+      if (ground[column]) continue;
+      let out = 0;
       for (let j = 0; j < rows; j++) {
-        if (j > 0) v += gap(first + j - 1, first + j);
-        uv.setY(first + j, v);
-      }
-    }
-    for (let j = 0; j < rows; j++) {
-      let u = null;
-      for (let column = 0; column < columns; column++) {
-        if (ground[column]) {
-          u = null;
-          continue;
-        }
-        const at = column * rows + j;
-        u = u === null ? road[column] : u + gap(at - rows, at) - RELAX * (u - road[column - 1]);
-        uv.setX(at, u);
+        if (j > 0) out += run(first + j - 1, first + j);
+        uv.setXY(first + j, along, out);
+        rock[first + j] = 1;
       }
     }
     uv.needsUpdate = true;
+    geometry.setAttribute("rock", new THREE.BufferAttribute(rock, 1));
   }
 
-  // The rock face keeps its shape and vertex colours; its texture becomes a
-  // tileable photo-scanned rock with a normal map, laid along the surface
+  // The detail texture is not laid on the face as a wallpaper: a tile that
+  // comes round every few metres shows as a pattern down a whole canyon, and
+  // the further off the wall the plainer the pattern. The face's own vertex
+  // colours (strata bands, gullies, stains) stay the look at a distance, and
+  // the texture is detail on them near the camera:
+  // - the tile holds only grain and a few fractures, read at (a level
+  //   distance, world height) so its grain lies level on a leaning wall and
+  //   round a spur;
+  // - the face is cut into irregular patches by a noise that also climbs
+  //   steadily along and up the wall, each patch reading the tile at its own
+  //   shift, blended into the next (two reads of each map). A patch number
+  //   never comes back, so no stretch of wall is a copy of another;
+  // - the bedding planes are not in the tile but drawn from world height
+  //   (BED), so beds are of any thickness, level everywhere, and open and
+  //   close along the wall. A tile's beds came out as even courses, and with
+  //   its joints as a built wall;
+  // - all of it is faint from the saddle and plain only close up (FADE), so
+  //   the facets and the vertex colours stay what the wall is. The same tile
+  //   is read again several times larger (COARSE) and comes in with distance;
+  // - a near-level facet (a ledge, a spur's crown) is read in plan and takes
+  //   no bedding planes: height does not change across it.
+  const FADE = { from: 5, to: 45, far: 0.2 };
+  const COARSE = { scale: 0.23, strength: 0.5, from: 25, to: 140 };
+  // Bedding planes: one may lie in each `pitch` metres of height, and about a
+  // third do, so beds run from thin ledges to massive faces several metres thick
+  const BED = { pitch: 0.9, dark: 0.4, shadow: 0.18, lift: 0.06, relief: 0.5 };
+  // The share of a facet's normal that points up, from which it counts as level (26 degrees of slope)
+  const LEVEL = 0.9;
+  const ROCK_PARS = /* glsl */ `
+    uniform vec3 rockTint;
+    uniform float rockTile;
+    varying vec3 vRockAt;
+    varying float vRock;
+    vec3 rockBump;
+    float rockLedge;
+    vec2 rockUv;
+
+    float rockHash(vec2 p) {
+      vec3 q = fract(vec3(p.xyx) * 0.1031);
+      q += dot(q, q.yzx + 33.33);
+      return fract((q.x + q.y) * q.z);
+    }
+    float rockNoise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(rockHash(i), rockHash(i + vec2(1.0, 0.0)), f.x), mix(rockHash(i + vec2(0.0, 1.0)), rockHash(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    vec2 rockShift(float n) {
+      return vec2(rockHash(vec2(n, 17.0)), rockHash(vec2(n, 59.0)));
+    }
+    // Two places to read the tile for the point \`at\` (in tiles), one for the
+    // patch it is in and one for the next; returns how far it is into the next
+    float rockPatches(vec2 at, out vec2 a, out vec2 b) {
+      float n = rockNoise(at * 0.8 + 90.0) * 5.0 + dot(at, vec2(0.29, 0.21));
+      // The image's first row is its top: v runs down the wall
+      vec2 base = vec2(at.x, -at.y);
+      a = base + rockShift(floor(n + 0.5));
+      b = base + rockShift(floor(n));
+      float edge = fract(n);
+      return min(edge, 1.0 - edge) * 2.0;
+    }
+    // Where the two reads differ the blend is sharper, so a crack is not ghosted
+    float rockMix(float a, float b, float edge) {
+      return smoothstep(0.3, 0.7, edge - 0.4 * (a - b));
+    }
+    // three's perturbNormal2Arb, on the coordinates the detail is read at
+    vec3 rockPerturb(vec3 eye, vec3 N, vec3 mapN, float faceDirection) {
+      vec3 q0 = dFdx(eye);
+      vec3 q1 = dFdy(eye);
+      vec2 st0 = dFdx(rockUv);
+      vec2 st1 = dFdy(rockUv);
+      vec3 q1perp = cross(q1, N);
+      vec3 q0perp = cross(N, q0);
+      vec3 T = q1perp * st0.x + q0perp * st1.x;
+      vec3 B = q1perp * st0.y + q0perp * st1.y;
+      float det = max(dot(T, T), dot(B, B));
+      float scale = (det == 0.0) ? 0.0 : faceDirection * inversesqrt(det);
+      return normalize(T * (mapN.x * scale) + B * (mapN.y * scale) + N * mapN.z);
+    }
+  `;
+  const ROCK_MAP = /* glsl */ `
+    vec3 rockFacet = cross(dFdx(vRockAt), dFdy(vRockAt));
+    float rockLevel = step(${LEVEL}, abs(rockFacet.y) / max(length(rockFacet), 1e-6));
+    // Level metres (along the road, out from it) and world height. A facet
+    // takes whichever level distance changes faster over it, and height; a
+    // level facet takes both level distances, its plan.
+    float rockOut = step(length(vec2(dFdx(vUv.x), dFdy(vUv.x))), 0.8 * length(vec2(dFdx(vUv.y), dFdy(vUv.y))));
+    vec2 rockMetres = mix(vec2(mix(vUv.x, vUv.y, rockOut), vRockAt.y), vUv, rockLevel);
+    float rockBroad = rockNoise(rockMetres * vec2(0.021, 0.034));
+    float rockMid = rockNoise(rockMetres * vec2(0.09, 0.19) + 40.0);
+    rockUv = rockMetres / rockTile;
+    float rockRange = length(vViewPosition);
+
+    vec2 rockA;
+    vec2 rockB;
+    float rockEdge = rockPatches(rockUv, rockA, rockB);
+    float rockDetailA = texture2D(map, rockA).r;
+    float rockDetailB = texture2D(map, rockB).r;
+    float rockBlend = rockMix(rockDetailA, rockDetailB, rockEdge);
+    float rockClose = 1.0 - smoothstep(${FADE.from.toFixed(1)}, ${FADE.to.toFixed(1)}, rockRange);
+    float rockNear = mix(${FADE.far.toFixed(2)}, 1.0, rockClose) * vRock;
+    // The texture's neutral grey is 0.5 (tools/blender/rockface_detail.py)
+    float rockDetail = mix(1.0, mix(rockDetailA, rockDetailB, rockBlend) * 2.0, rockNear);
+    rockBump = mix(vec3(0.5, 0.5, 1.0), mix(texture2D(normalMap, rockA).xyz, texture2D(normalMap, rockB).xyz, rockBlend), rockNear);
+
+    // The same tile several times larger, coming in as the fine detail goes
+    vec2 rockC;
+    vec2 rockD;
+    float rockFarEdge = rockPatches(rockUv * ${COARSE.scale} + 7.0, rockC, rockD);
+    float rockCoarseC = texture2D(map, rockC).r;
+    float rockCoarseD = texture2D(map, rockD).r;
+    float rockCoarse = mix(rockCoarseC, rockCoarseD, rockMix(rockCoarseC, rockCoarseD, rockFarEdge)) * 2.0 - 1.0;
+    rockDetail *= 1.0 + rockCoarse * ${COARSE.strength} * smoothstep(${COARSE.from.toFixed(1)}, ${COARSE.to.toFixed(1)}, rockRange) * vRock;
+
+    // Bedding planes, from world height: the tile has none, so no two beds
+    // need be the same thickness. Each cell of height holds one plane at its
+    // own level, open along some stretches of the wall and closed along others.
+    float rockHeight = (rockMetres.y + (rockBroad - 0.5) * 2.5 + (rockMid - 0.5) * 0.6) / ${BED.pitch};
+    float rockCell = floor(rockHeight);
+    // Metres above the cell's plane
+    float rockPlane = (fract(rockHeight) - 0.15 - 0.7 * rockHash(vec2(rockCell, 3.0))) * ${BED.pitch};
+    float rockOpen = smoothstep(0.72, 0.9, rockHash(vec2(rockCell, 11.0)) * 0.55 + rockNoise(vec2(rockMetres.x * 0.045 + rockCell * 7.31, rockCell * 0.37)) * 0.75);
+    rockOpen *= (1.0 - rockLevel) * vRock * mix(0.45, 1.0, rockClose);
+    // Never thinner than a pixel, or a far wall would shimmer
+    float rockWidth = max(0.03, 1.2 * fwidth(rockMetres.y));
+    float rockCrack = 1.0 - smoothstep(0.0, rockWidth, abs(rockPlane));
+    // The bed above overhangs a little: a soft shadow under the plane
+    float rockShadow = step(rockPlane, 0.0) * (1.0 - smoothstep(0.0, 0.45, -rockPlane));
+    // and the bed above it a shade lighter at its foot
+    float rockLift = step(0.0, rockPlane) * (1.0 - smoothstep(0.0, 1.2, rockPlane));
+    rockDetail *= 1.0 - rockOpen * (${BED.dark} * rockCrack + ${BED.shadow} * rockShadow - ${BED.lift} * rockLift);
+    rockLedge = -sign(rockPlane) * rockOpen * rockClose * ${BED.relief} * (1.0 - smoothstep(0.0, 0.12, abs(rockPlane)));
+
+    // Broad bands a few metres deep, swelling and pinching along the wall
+    float rockBed = (rockMetres.y + (rockBroad - 0.5) * 3.0 + (rockMid - 0.5) * 0.8) / 3.4;
+    float rockBand = mix(rockHash(vec2(floor(rockBed), 7.0)), rockHash(vec2(floor(rockBed) + 1.0, 7.0)), smoothstep(0.3, 0.7, fract(rockBed)));
+    rockBand = mix(rockBand, 0.5, rockLevel);
+    vec3 rockStone = rockTint * mix(vec3(1.04, 1.0, 0.95), vec3(0.97, 1.0, 1.04), rockBroad) * (0.88 + 0.1 * rockMid + 0.14 * rockBand);
+    diffuseColor.rgb *= mix(vec3(1.0), rockStone, vRock) * rockDetail;
+  `;
+  const ROCK_NORMAL = /* glsl */ `
+    vec3 mapN = rockBump * 2.0 - 1.0;
+    mapN.xy *= normalScale;
+    mapN.y += rockLedge;
+    normal = rockPerturb(-vViewPosition, normal, mapN, faceDirection);
+  `;
+
+  function swap(source, chunk, code) {
+    if (!source.includes(chunk)) throw new Error(`rock face shader: no ${chunk} to replace`);
+    return source.replace(chunk, code);
+  }
+
+  function rockShader(shader, spec) {
+    shader.uniforms.rockTint = { value: new THREE.Color(spec.tint) };
+    shader.uniforms.rockTile = { value: spec.tile };
+    shader.vertexShader = swap(shader.vertexShader, "#include <common>", "#include <common>\nattribute float rock;\nvarying vec3 vRockAt;\nvarying float vRock;");
+    shader.vertexShader = swap(shader.vertexShader, "#include <project_vertex>", "#include <project_vertex>\nvRockAt = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvRock = rock;");
+    shader.fragmentShader = swap(shader.fragmentShader, "#include <normalmap_pars_fragment>", `#include <normalmap_pars_fragment>\n${ROCK_PARS}`);
+    shader.fragmentShader = swap(shader.fragmentShader, "#include <map_fragment>", ROCK_MAP);
+    shader.fragmentShader = swap(shader.fragmentShader, "#include <normal_fragment_maps>", ROCK_NORMAL);
+  }
+
+  // The rock face keeps its shape and vertex colours; the detail texture and
+  // its normal map are worked into them by the shader above
   function dressRockFace(env, [map, normalMap], spec) {
     const ribbons = [];
     env.scene.traverse((object) => {
@@ -432,22 +589,25 @@ const SceneAssets = (() => {
     const texture = (image, srgb) => {
       const out = new THREE.Texture(image);
       out.wrapS = out.wrapT = THREE.RepeatWrapping;
-      out.repeat.set(spec.repeat, spec.repeat);
+      // A decoded bitmap is never flipped on upload; an image element would be
+      out.flipY = false;
       out.anisotropy = 4;
       if (srgb) out.encoding = THREE.sRGBEncoding;
       out.needsUpdate = true;
       return out;
     };
     // One upload of each map for both sides
-    const colour = texture(map, true);
+    const detail = texture(map, true);
     const bumps = texture(normalMap, false);
     for (const ribbon of ribbons) {
       const material = ribbon.material;
       const old = material.map;
-      surfaceUVs(ribbon.geometry);
-      material.map = colour;
+      faceUVs(ribbon.geometry);
+      material.map = detail;
       material.normalMap = bumps;
-      material.normalScale.set(1.2, -1.2);
+      material.normalScale.set(spec.relief ?? 0.35, spec.relief ?? 0.35);
+      material.onBeforeCompile = (shader) => rockShader(shader, spec);
+      material.customProgramCacheKey = () => `rock-face-${spec.tile}-${spec.tint}`;
       material.userData.modelled = "rockFace";
       material.needsUpdate = true;
       old.dispose();
@@ -465,10 +625,11 @@ const SceneAssets = (() => {
       console.error(`SceneAssets: ${name} for leg ${env.legIndex} kept its procedural meshes:`, error);
       return { error: String(error.message || error) };
     });
+    // A leg names the parts it has; one it does not name is left as built
     const parts = {
-      rocks: part("rocks", () => loadModel(spec.rocks), (model) => dressRocks(env, model, spec)),
-      portals: part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)),
-      rockFace: part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)),
+      rocks: spec.rocks ? part("rocks", () => loadModel(spec.rocks), (model) => dressRocks(env, model, spec)) : { rocks: 0 },
+      portals: spec.portal ? part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)) : { portals: 0 },
+      rockFace: spec.rockFace ? part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)) : { ribbons: 0 },
     };
     return Promise.all(Object.values(parts)).then(([rocks, portals, rockFace]) => ({
       rocks,
@@ -482,7 +643,7 @@ const SceneAssets = (() => {
 
   function files(legIndex) {
     const spec = LEGS[legIndex];
-    return spec ? [spec.rocks, spec.portal, spec.rockFace.map, spec.rockFace.normalMap] : [];
+    return spec ? [spec.rocks, spec.portal, spec.rockFace?.map, spec.rockFace?.normalMap].filter(Boolean) : [];
   }
 
   return { dress, files, loadModel, LEGS };
