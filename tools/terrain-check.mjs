@@ -9,7 +9,7 @@
 //   node tools/terrain-check.mjs <probe> --update-baseline --legs id [--part ground,decals]
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
-// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime mutate
+// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene mutate
 // (`shortcuts` runs its own doubled-back control)
 // --no-assets keeps every leg's procedural dressing, trees and bushes, the procedural bike and the procedural cars (js/sceneassets.js, js/treemodels.js, js/bikemodels.js and js/carmodels.js swap nothing), for a before/after measure.
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
@@ -40,6 +40,19 @@ const BLOCKED_HOSTS = ['cloudfunctions.net', 'firebasedatabase.app', 'firebaseio
 const SOLID_BOULDER_BUDGET = 1500;
 // Per leg, counted as the budget probe counts them, with any modelled scenery (js/sceneassets.js) in place
 const LEG_BUDGET = { meshes: 800, triangles: 450000, instances: 1400 };
+// The whole-scene digest of each leg that is still on the shared course, in the real
+// page with modelled assets (the `scene` probe). A converted leg's row is removed in
+// its own commit.
+const SCENE_PINS = {
+    'mountain-dawn': ['4c54735d9fd0efb3', 625, 657, 6, true],
+    'valley-run': ['f542b41ad8fe87d2', 836, 639, 10, true],
+    'coastal-descent': ['5ff10ec2ea619c7d', 747, 125, 8, true],
+    'foggy-gorge': ['230562653b2ff748', 679, 167, 11, true],
+    'high-pass': ['87c5427b85e7af14', 1061, 723, 9, false],
+    'storm-valley': ['b748d8c76572fb44', 704, 1173, 13, true],
+    'night-ride': ['b40ac41dad1d0656', 700, 833, 11, true],
+    'winter-pass': ['ee6c0030fa0c2523', 692, 1249, 10, true]
+};
 const LATERALS = [-80, -40, -20, -12, 0, 12, 20, 40, 80];
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.webp': 'image/webp', '.glb': 'model/gltf-binary' };
 
@@ -644,6 +657,41 @@ function installProbe(d6Sources, latSet) {
         return { ms: round(median(all), 10), points, dressed: !!assets, bike: game.vehicle.modelled ? 'modelled' : 'procedural' };
     };
 
+    // The whole scene of the page, with the leg's modelled dressing in place, as one
+    // digest: FNV-1a over each mesh's world matrix (and its instance matrices),
+    // sorted, then SHA-256. Pins "an unconverted leg did not move" where node cannot
+    // see the modelled assets, the cones, the crew and the oncoming car.
+    P.scene = async legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        if (typeof BikeModels !== 'undefined') await BikeModels.preload();
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        const assets = game.environment.dressing ? await game.environment.dressing : null;
+        game.scene.updateMatrixWorld(true);
+        const fnv = (bytes, seed) => {
+            let hash = seed;
+            for (let i = 0; i < bytes.length; i++) hash = Math.imul(hash ^ bytes[i], 16777619) >>> 0;
+            return hash;
+        };
+        const lines = [];
+        let instances = 0;
+        game.scene.traverse(object => {
+            if (!object.isMesh) return;
+            let hash = fnv(new Uint8Array(new Float32Array(object.matrixWorld.elements).buffer), 2166136261);
+            if (object.isInstancedMesh) {
+                const used = object.instanceMatrix.array.subarray(0, object.count * 16);
+                hash = fnv(new Uint8Array(used.buffer, used.byteOffset, used.byteLength), hash);
+                instances += object.count;
+            }
+            lines.push(hash.toString(16).padStart(8, '0'));
+        });
+        lines.sort();
+        const bytes = new TextEncoder().encode(lines.join(''));
+        const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+        return { digest, meshes: lines.length, instances, cones: game.cones ? game.cones.cones.length : 0, dressed: !!assets };
+    };
+
     // Mean RGB per tile of the main canvas, from fixed poses
     P.frames = legIndex => {
         const leg = game.tourSystem.legs[legIndex];
@@ -810,6 +858,7 @@ const PROBES = {
         return { ...snap.counts, solidBoulders: snap.boulders.filter(b => b[4] === true).length, ...(snap.assets && { assets: snap.assets }), buildMs: snap.buildMs };
     },
     frametime: (page, i) => inPage(page, 'frametime', i),
+    scene: (page, i) => inPage(page, 'scene', i),
     async mutate(page, i) {
         const clean = (await inPage(page, 'snapshot', i)).fingerprints;
         const moved = await inPage(page, 'mutate', i, 0.5);
@@ -976,6 +1025,14 @@ function finishChecks(report) {
             if (!r.vehicle) failures.push(`${id}: no vehicle after start`);
             if (r.floatingObjects) failures.push(`${id}: FLOATING OBJECTS`);
             if (r.terrainRoadOverlap) failures.push(`${id}: TERRAIN-ROAD OVERLAP`);
+        });
+    }
+    if (results.scene) {
+        Object.entries(results.scene).forEach(([id, r]) => {
+            const pin = SCENE_PINS[id];
+            if (!pin) return;
+            const got = [r.digest, r.meshes, r.instances, r.cones, r.dressed];
+            if (JSON.stringify(got) !== JSON.stringify(pin)) failures.push(`${id}: scene ${JSON.stringify(got)} differs from the pin ${JSON.stringify(pin)}`);
         });
     }
     if (results.surface) {
