@@ -330,6 +330,9 @@ class Game {
         // frame (the periodic scan would show it washed out for a moment)
         this.graphics.fixColorSpaces();
 
+        // Every shader a converted leg will need, compiled with the bike in the scene
+        this.prewarmCourse();
+
         // Classify the freshly built scene for distance culling
         this.setupPerformanceCulling();
 
@@ -408,6 +411,32 @@ class Game {
         }
     }
 
+    // A converted leg draws new kinds of ground, water and dressing part by
+    // part. Every shader it will need is compiled now, at the leg start,
+    // from a sample of each part, not on the frame a part first comes into view.
+    prewarmCourse() {
+        const env = this.environment;
+        if (!env || !env.sections || !this.graphics || !this.graphics.renderer) return;
+        const putAway = env.warmSections();
+        // Weather particles, a hidden floor or a light switched on later down
+        // the road each change a program: everything is shown for one compile,
+        // and the scene as it stands is compiled too
+        const hidden = [];
+        try {
+            this.graphics.renderer.compile(this.scene, this.camera);
+            this.scene.traverse(object => {
+                if (!object.visible) {
+                    hidden.push(object);
+                    object.visible = true;
+                }
+            });
+            this.graphics.renderer.compile(this.scene, this.camera);
+        } finally {
+            hidden.forEach(object => { object.visible = false; });
+            putAway();
+        }
+    }
+
     // Classify scene meshes for performance: small clutter loses shadow
     // casting (dashes, debris, cone bases...), and everything but the truly
     // large scenery gets distance-culled - fog hides the far course anyway,
@@ -465,7 +494,11 @@ class Game {
             env.sections.forEach(section => section.state === 'built' && this.classifySection(section));
             // Sections built later are classified when they are ready
             env.sectionListeners = env.sectionListeners.filter(listener => listener.owner !== 'culling');
-            env.sectionListeners.push({ owner: 'culling', ready: section => this.classifySection(section) });
+            // A section built during the ride has its colours decoded before it is drawn
+            env.sectionListeners.push({ owner: 'culling', ready: section => {
+                this.graphics.fixColorSpaces(section.group);
+                this.classifySection(section);
+            } });
         }
 
         console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);

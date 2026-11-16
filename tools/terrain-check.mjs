@@ -71,7 +71,9 @@ const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
 // The shortcuts control builds its own road and reads no leg, so it runs once, filed under the first leg asked for
-const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : (name === 'atmo' || name === 'atmoControl') && !option('legs') ? ['mountain-dawn'] : legIds);
+// The long-leg probes need a converted leg: leg 1 (the fixture under --fixture) unless --legs names others
+const LONG_PROBES = ['course', 'window', 'stream', 'preview', 'finish'];
+const probeLegIds = name => (LONG_PROBES.includes(name) && !option('legs') ? ['mountain-dawn'] : name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : (name === 'atmo' || name === 'atmoControl') && !option('legs') ? ['mountain-dawn'] : legIds);
 const jobs = Number(option('jobs') || 3);
 
 const fail = (code, message) => {
@@ -633,7 +635,9 @@ function installProbe(d6Sources, latSet) {
         twistyDev.autopilot({ speed });
         const out = { speed, checkpointTicks: [], finishTick: null, crashTick: null, positions: [] };
         let seen = 0;
-        for (let tick = 1; tick <= 9000; tick++) {
+        // A long leg needs more ticks than the 9000 of a short one (which keep their cap)
+        const cap = Math.max(9000, Math.ceil((leg.endSegment - leg.startSegment + 1) * 20 / speed * 60 * 1.5));
+        for (let tick = 1; tick <= cap; tick++) {
             twistyDev.step(1);
             while (seen < game.checkpointsPassed) { out.checkpointTicks.push(tick); seen++; }
             if (tick % 60 === 0) out.positions.push([game.vehicle.position.x, game.vehicle.position.y, game.vehicle.position.z].map(n => round(n)));
@@ -1043,6 +1047,389 @@ function installProbe(d6Sources, latSet) {
             Environment.prototype.groundYAt = original;
         }
     };
+
+    // ---- Converted legs: sections, the drawn window, parts
+    // A mesh is drawn unless a group above it is hidden (a section outside
+    // the window, a step not yet revealed, a parked rider) or it is a hidden
+    // floor plane. A mesh's own visible flag is the distance cull: not counted out.
+    const drawn = object => {
+        if (object.userData.part === 'floor' && !object.visible) return false;
+        for (let n = object.parent; n; n = n.parent) if (!n.visible) return false;
+        return true;
+    };
+    P.countDrawn = () => {
+        let meshes = 0, triangles = 0, instances = 0;
+        game.scene.traverse(o => {
+            if (!o.isMesh || !drawn(o)) return;
+            const pos = o.geometry.attributes.position;
+            const index = o.geometry.index;
+            meshes++;
+            triangles += (index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+            if (o.isInstancedMesh) instances += o.count;
+        });
+        return { meshes, triangles: Math.round(triangles), instances };
+    };
+    const segmentOf = (env, x, z) => Terrain.locate(env.roadPath, x, z, 0, env.roadPath.length - 1, {}).index;
+    const inSections = (sections, s) => sections.some(section => s >= section.from && s < section.to);
+    // Bytes of every geometry the leg keeps: its own group and its built sections
+    const retainedBytes = env => {
+        const seen = new Set();
+        let total = 0;
+        const add = o => {
+            if (!o.isMesh || seen.has(o.geometry)) return;
+            seen.add(o.geometry);
+            Object.values(o.geometry.attributes).forEach(a => { total += a.array.byteLength; });
+            if (o.geometry.index) total += o.geometry.index.array.byteLength;
+            if (o.isInstancedMesh) total += o.instanceMatrix.array.byteLength;
+        };
+        env.fixed.traverse(add);
+        env.sections.forEach(section => section.group && section.group.traverse(add));
+        return total;
+    };
+    const lastGateBefore = (env, s) => {
+        const passed = env.checkpoints.filter(gate => gate.segmentIndex <= s);
+        return passed.length ? passed[passed.length - 1].segmentIndex : null;
+    };
+    const startConverted = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        const env = game.environment;
+        if (!env.sections) throw new Error(`${leg.id} is not a converted leg`);
+        return { leg, env };
+    };
+
+    // PW6: every window position of the leg, with modelled assets, cones, the
+    // crew and oncoming cars, counted as `budget` counts but only what is drawn
+    P.window = async legIndex => {
+        const { env } = startConverted(legIndex);
+        game.rockfalls = null;
+        const windows = [];
+        for (const section of env.sections) {
+            const s = Math.min(env.endSegment, section.from + Math.floor((section.to - section.from) / 2));
+            twistyDev.teleport(s);
+            env.update(s, 1e9, lastGateBefore(env, s));
+            if (game.traffic) game.traffic.update(0, game.vehicle.position, s);
+            await Promise.all(env.sections.map(entry => entry.dressing).filter(Boolean));
+            game.scene.updateMatrixWorld(true);
+            const built = env.sections.filter(entry => entry.state === 'built');
+            const cones = game.cones ? game.cones.cones : [];
+            windows.push({
+                section: section.index,
+                segment: s,
+                visible: env.visibleSections().map(entry => entry.index),
+                retained: built.map(entry => entry.index),
+                ...P.countDrawn(),
+                solidBoulders: env.boulders.filter(b => b.solid).length,
+                retainedMB: round(retainedBytes(env) / 1048576, 100),
+                cones: cones.length,
+                conesOutsideRetained: cones.filter(cone => !inSections(built, segmentOf(env, cone.position.x, cone.position.z))).length,
+                vehicles: game.traffic ? game.traffic.cars.length + game.traffic.motorcycles.filter(bike => bike.bikeGroup.visible).length : 0
+            });
+        }
+        const peak = {};
+        ['meshes', 'triangles', 'instances', 'solidBoulders', 'retainedMB', 'conesOutsideRetained'].forEach(key => { peak[key] = Math.max(...windows.map(w => w[key])); });
+        return { windows, peak, sections: env.sections.length };
+    };
+
+    // PW7, PW14: the whole leg ridden at a fixed step with the world built
+    // ahead of the bike. `gpu`: every frame rendered and one pixel read back.
+    P.stream = async (legIndex, { speed = 45, gpu = false, traffic = false, cones = false, rockfalls = false } = {}) => {
+        // The modelled bike is in before the leg starts, as in the frametime probe
+        if (typeof BikeModels !== 'undefined') await BikeModels.preload();
+        const { env } = startConverted(legIndex);
+        if (!rockfalls) game.rockfalls = null;
+        if (!traffic && game.traffic) {
+            game.traffic.reset();
+            game.traffic = null;
+        }
+        if (!cones && game.cones) game.cones.checkCollision = () => {};
+        game.showFinishScreen = () => {};
+        twistyDev.autopilot({ speed });
+        const gl = game.graphics.renderer.getContext();
+        const pixel = new Uint8Array(4);
+        const render = () => {
+            const t0 = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return performance.now() - t0;
+        };
+        const stats = env.sectionStats;
+        const syncAtStart = stats.syncBuilds;
+        const out = {
+            speed, finished: false, crashes: 0, airborneFrames: 0, framesOnUnbuiltGround: 0, maxVisibleSections: 0,
+            vehiclesDrawnOutsideVisible: 0, conesOutsideRetained: 0, rocksOutsideVisible: 0, vehiclesPastTail: 0, ticks: 0
+        };
+        const frames = [];
+        const firstVisible = {};
+        const cap = Math.ceil((env.endSegment + 1) * 20 / speed * 60 * 1.5);
+        let revealed = stats.revealed.length;
+        const tail = env.endSegment + 16;
+        for (let tick = 1; tick <= cap; tick++) {
+            const s = Math.floor(game.vehicle.currentRoadSegment || 0);
+            if (env.sections[env.sectionAt(s)].state !== 'built') out.framesOnUnbuiltGround++;
+            twistyDev.step(1);
+            out.ticks = tick;
+            if (game.vehicle.isJumping) out.airborneFrames++;
+            const visible = env.visibleSections();
+            out.maxVisibleSections = Math.max(out.maxVisibleSections, visible.length);
+            if (game.traffic) {
+                const shown = [...game.traffic.cars.filter(car => car.carGroup.visible), ...game.traffic.motorcycles.filter(bike => bike.bikeGroup.visible)];
+                out.vehiclesDrawnOutsideVisible += shown.filter(v => !inSections(visible, Math.floor(v.currentSegment))).length;
+                out.vehiclesPastTail += [...game.traffic.cars, ...game.traffic.motorcycles].filter(v => v.currentSegment > tail).length;
+            }
+            if (tick % 30 === 0 && game.cones) {
+                const built = env.sections.filter(entry => entry.state === 'built');
+                out.conesOutsideRetained += game.cones.cones.filter(cone => !inSections(built, segmentOf(env, cone.position.x, cone.position.z))).length;
+            }
+            if (game.rockfalls) out.rocksOutsideVisible += game.rockfalls.rocks.filter(rock => !inSections(visible, segmentOf(env, rock.mesh.position.x, rock.mesh.position.z))).length;
+            if (gpu) {
+                const bakes = game.graphics.stats.envBakes;
+                const programs = game.graphics.renderer.info.programs.length;
+                const ms = render();
+                const compiled = game.graphics.renderer.info.programs.slice(programs).map(p => p.name);
+                if (compiled.length) (out.compiledInRide ||= []).push({ tick, segment: s, ms: round(ms, 10), programs: compiled });
+                if (game.graphics.stats.envBakes !== bakes) (out.bakeFrames ||= []).push({ tick, segment: s, ms: round(ms, 10) });
+                frames.push(ms);
+                if (ms > 16 && tick > 30) (out.slowFrames ||= []).push({ tick, segment: s, ms: round(ms, 10), headlight: !!(game.vehicle.headlight && game.vehicle.headlight.visible), weather: game.weatherSystem ? game.weatherSystem.weatherType || null : null });
+                // The frame on which a section's first step became drawn
+                for (; revealed < stats.revealed.length; revealed++) {
+                    const { section } = stats.revealed[revealed];
+                    if (firstVisible[section] === undefined) firstVisible[section] = round(ms, 10);
+                }
+            }
+            if (game.vehicle.crashed) {
+                out.crashes++;
+                out.crashSegment = s;
+                break;
+            }
+            if (game.finished) {
+                out.finished = true;
+                break;
+            }
+        }
+        Object.assign(out, {
+            syncBuildsAfterStart: stats.syncBuilds - syncAtStart,
+            maxStepMs: round(stats.maxStepMs, 10),
+            slowestStep: stats.slowest,
+            stepMs: stats.stepMs,
+            sectionsBuilt: stats.built,
+            sectionsDisposed: stats.disposed,
+            sections: env.sections.length,
+            oncomingEncounters: game.traffic ? game.traffic.oncomingEncounters : null,
+            conesPlaced: game.cones ? game.cones.placedTotal || 0 : null,
+            km: round((env.endSegment + 1) * 20 / 1000, 10)
+        });
+        if (out.conesPlaced !== null) out.conesPerKm = round(out.conesPlaced / out.km, 100);
+        if (gpu) {
+            const settled = frames.slice(30);
+            out.meanFrameMs = round(settled.reduce((a, b) => a + b, 0) / Math.max(1, settled.length), 100);
+            out.maxFrameMs = round(Math.max(...settled), 10);
+            out.framesOver16ms = settled.filter(ms => ms > 16).length;
+            out.firstVisibleFrameMs = firstVisible;
+        }
+        return out;
+    };
+
+    // PW10: the menu preview of a leg, opened through the real menu call
+    P.preview = legIndex => {
+        game.startTrackPreview(legIndex);
+        const env = game.previewEnv;
+        game.scene.updateMatrixWorld(true);
+        return {
+            converted: !!env.sections,
+            sectionsBuilt: env.sections ? env.sections.filter(section => section.state === 'built').map(section => section.index) : null,
+            ...P.countDrawn()
+        };
+    };
+
+    // PW16: the leg ridden to the finish; the best time and splits read back
+    // through the game's own keys
+    P.finish = (legIndex, speed = 25) => {
+        const leg = game.tourSystem.legs[legIndex];
+        const id = leg.id;
+        window.__reseed(1);
+        twistyDev.start(id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        twistyDev.autopilot({ speed });
+        const cap = Math.ceil((leg.endSegment - leg.startSegment + 1) * 20 / speed * 60 * 1.5);
+        for (let tick = 1; tick <= cap && !game.finished && !game.vehicle.crashed; tick++) twistyDev.step(1);
+        const current = game.tourSystem.legs[legIndex];
+        const stored = localStorage.getItem(game.bestTimeKey(current));
+        const gates = game.environment.checkpoints.length;
+        const splits = RaceTiming.loadSplits(localStorage, game.bestSplitsKey(current), gates);
+        return {
+            finished: game.finished === true,
+            crashed: game.vehicle.crashed,
+            boardId: TourSystem.boardId(current),
+            gates,
+            bestTimeStored: stored !== null,
+            bestTimeMs: stored === null ? null : Math.round(parseFloat(stored) * 1000),
+            finishTimeMs: Math.round(game.finishTime),
+            lastGateMs: game.checkpointTimes[gates - 1],
+            splitsStored: splits ? splits.length : 0,
+            finishLine: game.environment.finishGate.segmentIndex,
+            lastGate: game.environment.checkpoints[gates - 1].segmentIndex
+        };
+    };
+
+    // PW4: the built facts of each part, measured from the scene at the part's
+    // middle: ground colour (G), trees per segment (T), side shape (S), floor
+    // (F), buildings (B), road height change (H), and the part's landmark
+    P.course = async (legIndex, { gpu = false } = {}) => {
+        const { env } = startConverted(legIndex);
+        game.rockfalls = null;
+        if (game.traffic) {
+            game.traffic.reset();
+            game.traffic = null;
+        }
+        const parts = env.terrain.parts;
+        const path = env.roadPath;
+        const ray = new THREE.Raycaster();
+        const lateralOf = (s, x, z) => {
+            const p = path[s];
+            return (x - p.x) * Math.cos(p.heading) - (z - p.z) * Math.sin(p.heading);
+        };
+        const ground = () => {
+            const list = [];
+            game.scene.traverse(o => { if (o.isMesh && o.userData.part === 'ground' && o.userData.type !== 'terrain' && drawn(o)) list.push(o); });
+            return list;
+        };
+        const solid = () => {
+            const list = [];
+            game.scene.traverse(o => { if (o.isMesh && drawn(o) && !o.userData.isSky && o.userData.part !== 'floor') list.push(o); });
+            return list;
+        };
+        const out = [];
+        for (const [n, part] of parts.entries()) {
+            const to = n === parts.length - 1 ? env.endSegment + 1 : part.to;
+            const mid = Math.floor((part.from + to) / 2);
+            twistyDev.teleport(mid);
+            env.update(mid, 1e9, null);
+            await Promise.all(env.sections.map(entry => entry.dressing).filter(Boolean));
+            if (game.atmosphereTrack) game.snapAtmosphere(game.atmosphereTrack, mid, { environment: env, weatherSystem: game.weatherSystem || null });
+            game.scene.updateMatrixWorld(true);
+            const from = mid - 10;
+            const end = mid + 10;
+            // G: mean vertex colour of the drawn ribbons between lateral 10 and 40
+            const sum = [0, 0, 0];
+            let count = 0;
+            game.scene.traverse(o => {
+                if (!o.isMesh || o.userData.firstColumn === undefined || !drawn(o)) return;
+                const pos = o.geometry.attributes.position;
+                const col = o.geometry.attributes.color;
+                const rows = Terrain.ROWS + 1;
+                for (let v = 0; v < pos.count; v++) {
+                    const s = Math.floor((o.userData.firstColumn + Math.floor(v / rows)) / Terrain.COLUMNS_PER_SEGMENT);
+                    if (s < from || s >= end) continue;
+                    const d = Math.abs(lateralOf(s, pos.getX(v), pos.getZ(v)));
+                    if (d < 10 || d > 40) continue;
+                    sum[0] += col.getX(v); sum[1] += col.getY(v); sum[2] += col.getZ(v);
+                    count++;
+                }
+            });
+            const G = sum.map(v => round(v / Math.max(1, count) * 255, 10));
+            // T: tree instances per segment (procedural or modelled forest meshes)
+            let trees = 0;
+            const m = new THREE.Matrix4();
+            game.scene.traverse(o => {
+                if (!o.isInstancedMesh || !/^forest-/.test(o.name) || !drawn(o)) return;
+                for (let i = 0; i < o.count; i++) {
+                    o.getMatrixAt(i, m);
+                    const s = Terrain.locate(path, m.elements[12], m.elements[14], Math.max(0, from - 8), Math.min(path.length - 1, end + 8), {}).index;
+                    if (s >= from && s < end) trees++;
+                }
+            });
+            const T = round(trees / 20, 100);
+            // S: the ground at lateral 40 against the road, each side; roofed when a ray up hits within 8 m
+            const meshes = ground();
+            const all = solid();
+            const p = path[mid];
+            const S = [-1, 1].map(sign => {
+                ray.set(new THREE.Vector3(p.x, p.y + 1.5, p.z), new THREE.Vector3(0, 1, 0));
+                ray.far = 8;
+                if (ray.intersectObjects(all, true).length) return 'roofed';
+                ray.far = Infinity;
+                const x = p.x + Math.cos(p.heading) * 40 * sign;
+                const z = p.z - Math.sin(p.heading) * 40 * sign;
+                ray.set(new THREE.Vector3(x, 3000, z), new THREE.Vector3(0, -1, 0));
+                const hit = ray.intersectObjects(meshes, false)[0];
+                const rise = hit ? hit.point.y - p.y : -Infinity;
+                return rise > 3 ? 'up' : rise < -3 ? 'down' : 'level';
+            });
+            // F: the plane floor drawn under the part, or a river mesh in it
+            let F = 'none';
+            (env.floors || []).forEach(entry => { if (entry.mesh.visible && entry.parts.includes(n)) F = entry.floor.kind; });
+            if (F === 'none') {
+                game.scene.traverse(o => {
+                    if (o.isMesh && o.name === 'floor-river' && drawn(o)) {
+                        const a = o.geometry.attributes.position;
+                        for (let v = 0; v < a.count; v += 2) {
+                            const s = Terrain.locate(path, a.getX(v), a.getZ(v), Math.max(0, from - 30), Math.min(path.length - 1, end + 30), {}).index;
+                            if (s >= from && s < end) { F = 'river'; break; }
+                        }
+                    }
+                });
+            }
+            // B: buildings inside the part
+            let B = 0;
+            game.scene.traverse(o => {
+                if (!o.userData.building) return;
+                const at = new THREE.Vector3();
+                o.getWorldPosition(at);
+                const s = segmentOf(env, at.x, at.z);
+                if (s >= part.from && s < to) B += o.isInstancedMesh ? o.count : 1;
+            });
+            const H = round(path[Math.min(to, path.length - 1)].y - path[part.from].y, 10);
+            // The landmark: its meshes, drawn, and where it stands against the road
+            const group = game.scene.getObjectByName(`landmark-${part.id}`);
+            let landmark = null;
+            if (group) {
+                let triangles = 0;
+                group.traverse(o => {
+                    if (!o.isMesh) return;
+                    const index = o.geometry.index;
+                    triangles += (index ? index.count : o.geometry.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+                });
+                let shown = true;
+                for (let node = group; node; node = node.parent) if (!node.visible) shown = false;
+                const box = new THREE.Box3().setFromObject(group);
+                const centre = box.getCenter(new THREE.Vector3());
+                const s = segmentOf(env, centre.x, centre.z);
+                const road = path[s];
+                landmark = { triangles: Math.round(triangles), visible: shown, segment: s, inside: s >= part.from && s < to, metres: round(Math.hypot(centre.x - road.x, centre.z - road.z), 10) };
+            }
+            const row = { id: part.id, from: part.from, to, mid, differs: part.differs || [], G, T, S, F, B, H, landmark };
+            if (gpu) {
+                twistyDev.view(0, 3, 12, 40);
+                game.graphics.render(game.scene, game.camera);
+                const canvas = game.graphics.renderer.domElement;
+                const probe = document.createElement('canvas');
+                probe.width = 48; probe.height = 27;
+                const c2 = probe.getContext('2d');
+                c2.drawImage(canvas, 0, 0, 48, 27);
+                const data = c2.getImageData(0, 0, 48, 27).data;
+                const rgb = [0, 0, 0];
+                for (let i = 0; i < data.length; i += 4) { rgb[0] += data[i]; rgb[1] += data[i + 1]; rgb[2] += data[i + 2]; }
+                row.frameRGB = rgb.map(v => round(v / (data.length / 4), 10));
+                row.look = { timeOfDay: part.timeOfDay, weather: part.weather || 'clear', fog: (part.look || {}).fogDensity };
+            }
+            out.push(row);
+        }
+        return { parts: out };
+    };
+
+    // PW4(c): every part takes part 0's ground, dressing and look
+    P.flattenParts = legIndex => {
+        const id = game.tourSystem.legs[legIndex].id;
+        const course = Course.LEGS[id];
+        const first = course.parts[0];
+        Course.LEGS[id] = { ...course, parts: course.parts.map(part => ({ ...part, profile: first.profile, dressing: first.dressing, look: first.look, floor: first.floor, render: first.render, timeOfDay: first.timeOfDay, weather: first.weather, setPieces: [] })) };
+        Terrain.adopt(Course.LEGS);
+        return true;
+    };
 }
 
 // ---------------------------------------------------------------- probes
@@ -1140,6 +1527,16 @@ const PROBES = {
             error: ridden.error
         };
     },
+    // Converted legs (or the --fixture course on leg 1): parts, window, stream, preview, finish
+    async course(page, i) {
+        if (option('mutate') === 'flat-parts') await inPage(page, 'flattenParts', i);
+        return inPage(page, 'course', i, { gpu: flag('gpu') });
+    },
+    window: (page, i) => inPage(page, 'window', i),
+    stream: (page, i) => inPage(page, 'stream', i, { speed: Number(option('speed') || 45), gpu: flag('gpu'), traffic: flag('traffic'), cones: flag('cones'), rockfalls: flag('rockfalls') }),
+    // A fresh page and no ride: the preview as the menu opens it
+    preview: (page, i) => inPage(page, 'preview', i),
+    finish: (page, i) => inPage(page, 'finish', i),
     legs: (page, i) => inPage(page, 'legCheck', i, 60),
     snapshot: (page, i) => inPage(page, 'snapshot', i),
     raycast: (page, i) => inPage(page, 'raycast', i),
@@ -1179,6 +1576,12 @@ const PROBES = {
         return last;
     },
     async budget(page, i) {
+        // A converted leg is counted per drawn window, with the leg's modelled assets: the peak is what is drawn at once
+        if (await page.evaluate(n => !!Course.forLeg(game.tourSystem.legs[n].id), i)) {
+            const window = await inPage(page, 'window', i);
+            const snap = await inPage(page, 'snapshot', i, true);
+            return { windowed: true, peak: window.peak, windows: window.windows.length, ...(snap.assets && { assets: snap.assets }), buildMs: snap.buildMs };
+        }
         const snap = await inPage(page, 'snapshot', i, true);
         // Solid boulders are collision work on every tick, so they count against the budget with the meshes
         return { ...snap.counts, solidBoulders: snap.boulders.filter(b => b[4] === true).length, ...(snap.assets && { assets: snap.assets }), buildMs: snap.buildMs };
@@ -1379,6 +1782,7 @@ function finishChecks(report) {
             if (r.consoleErrors) failures.push(`${id}: ${r.consoleErrors} console errors from the submit path`);
         });
     }
+    longLegChecks(report);
     if (results.surface) {
         // Hard expectations, and only these (U5): the road centre and the ledge edge. Every other
         // lateral is recorded as found; beyond the wall top groundYAt describes ground that is not drawn.
@@ -1478,6 +1882,12 @@ function finishChecks(report) {
     }
     if (results.budget) {
         Object.entries(results.budget).forEach(([id, r]) => {
+            if (r.windowed) {
+                if (!(r.peak.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.peak.solidBoulders} solid boulders in a window, over ${SOLID_BOULDER_BUDGET}`);
+                Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r.peak[key] <= most)) failures.push(`${id}: peak window ${r.peak[key]} ${key}, over ${most}`); });
+                if (r.assets) checkAssets(id, r.assets, failures);
+                return;
+            }
             if (!(r.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.solidBoulders} solid boulders, over the budget of ${SOLID_BOULDER_BUDGET} per leg`);
             Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${id}: ${r[key]} ${key}, over the budget of ${most} per leg`); });
             if (r.assets?.floating) failures.push(`${id}: ${r.assets.floating} modelled rocks float`);
@@ -1606,3 +2016,86 @@ function writeBaselines(report, fresh, frozen) {
 }
 
 main();
+
+// A converted leg's asset load: nothing failed, nothing floats or is buried
+function checkAssets(id, assets, failures) {
+    ['rocks', 'portals', 'village', 'trees'].forEach(key => { if (assets[key] && assets[key].error) failures.push(`${id}: ${key} failed to load: ${assets[key].error}`); });
+    if (assets.trees && assets.trees.errors && assets.trees.errors.length) failures.push(`${id}: trees ${assets.trees.errors.join('; ')}`);
+    if (assets.floating) failures.push(`${id}: ${assets.floating} modelled objects float`);
+    if (assets.buried) failures.push(`${id}: ${assets.buried} modelled objects are buried`);
+}
+
+// The expectations of the long-leg probes (plan, World section 7)
+function longLegChecks(report) {
+    const { results, failures } = report;
+    const fail = text => failures.push(text);
+    if (results.course) {
+        Object.entries(results.course).forEach(([id, r]) => {
+            const parts = r.parts;
+            parts.forEach((part, n) => {
+                const mark = part.landmark;
+                if (!mark) return fail(`${id}: part ${part.id} has no landmark-${part.id}`);
+                if (!(mark.triangles > 0) || !mark.visible || !mark.inside || !(mark.metres <= 600)) fail(`${id}: landmark of ${part.id} ${JSON.stringify(mark)}`);
+                if (n === 0) return;
+                const before = parts[n - 1];
+                const ratio = (a, b) => (Math.min(a, b) === 0 ? Math.max(a, b) >= 1 : Math.max(a, b) / Math.min(a, b) >= 2);
+                const tests = {
+                    G: () => before.G.some((v, c) => Math.abs(v - part.G[c]) >= 20),
+                    T: () => ratio(before.T, part.T),
+                    S: () => before.S.some((v, c) => v !== part.S[c]),
+                    F: () => before.F !== part.F,
+                    B: () => Math.min(before.B, part.B) === 0 && Math.max(before.B, part.B) >= 6,
+                    H: () => Math.sign(before.H) !== Math.sign(part.H) && Math.abs(before.H) >= 30 && Math.abs(part.H) >= 30
+                };
+                const missed = part.differs.filter(code => !tests[code]());
+                if (missed.length) fail(`${id}: ${before.id} to ${part.id} does not differ by ${missed.join(', ')}`);
+                if (flag('gpu') && part.look && before.look && JSON.stringify(part.look) !== JSON.stringify(before.look) && before.frameRGB) {
+                    const change = Math.max(...before.frameRGB.map((v, c) => Math.abs(v - part.frameRGB[c])));
+                    if (change < 12) fail(`${id}: ${before.id} to ${part.id} frame colour changes by ${change}, under 12`);
+                }
+            });
+        });
+    }
+    if (results.window) {
+        Object.entries(results.window).forEach(([id, r]) => {
+            r.windows.forEach(w => {
+                Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(w[key] <= most)) fail(`${id}: window ${w.section} ${w[key]} ${key}, over ${most}`); });
+                if (!(w.solidBoulders <= SOLID_BOULDER_BUDGET)) fail(`${id}: window ${w.section} ${w.solidBoulders} solid boulders`);
+                if (!(w.retainedMB <= 12)) fail(`${id}: window ${w.section} retains ${w.retainedMB} MB`);
+                if (w.conesOutsideRetained) fail(`${id}: window ${w.section} has ${w.conesOutsideRetained} cones outside retained sections`);
+            });
+        });
+    }
+    if (results.stream) {
+        Object.entries(results.stream).forEach(([id, r]) => {
+            const want = { finished: true, crashes: 0, airborneFrames: 0, syncBuildsAfterStart: 0, framesOnUnbuiltGround: 0, maxVisibleSections: 4, sectionsBuilt: r.sections, sectionsDisposed: r.sections - 2 };
+            if (flag('traffic') || flag('cones') || flag('rockfalls')) Object.assign(want, { vehiclesDrawnOutsideVisible: 0, conesOutsideRetained: 0, rocksOutsideVisible: 0, vehiclesPastTail: 0 });
+            Object.entries(want).forEach(([key, value]) => { if (r[key] !== value) fail(`${id}: stream ${key}: ${r[key]}, expected ${value}`); });
+            if (!(r.maxStepMs <= 16)) fail(`${id}: stream maxStepMs ${r.maxStepMs}, over 16`);
+            // The fixture is 3 km of mostly straight road: its cone rate is not a leg's
+            if (flag('cones') && !flag('fixture') && !(r.conesPerKm >= 3 && r.conesPerKm <= 8)) fail(`${id}: stream conesPerKm ${r.conesPerKm}`);
+            if (flag('gpu')) {
+                if (!/ANGLE Metal Renderer: Apple M5/.test(report.renderer)) fail(`${id}: renderer ${report.renderer}`);
+                if (r.framesOver16ms) fail(`${id}: stream framesOver16ms ${r.framesOver16ms}`);
+                if (!(r.meanFrameMs <= 8)) fail(`${id}: stream meanFrameMs ${r.meanFrameMs}`);
+                Object.entries(r.firstVisibleFrameMs).forEach(([k, ms]) => { if (!(ms <= 16.7)) fail(`${id}: section ${k} first drawn in ${ms} ms`); });
+            }
+        });
+    }
+    if (results.preview) {
+        Object.entries(results.preview).forEach(([id, r]) => {
+            if (!r.converted) return;
+            if (r.sectionsBuilt.length !== 2) fail(`${id}: preview built sections ${JSON.stringify(r.sectionsBuilt)}, expected 2`);
+            Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) fail(`${id}: preview ${r[key]} ${key}`); });
+            if (!(r.triangles <= 191322)) fail(`${id}: preview ${r.triangles} triangles, over today's whole leg 1 (191322)`);
+        });
+    }
+    if (results.finish) {
+        Object.entries(results.finish).forEach(([id, r]) => {
+            if (!r.finished || !r.bestTimeStored) fail(`${id}: finish ${JSON.stringify(r)}`);
+            // The board time of a table board is the finish-line time (protocol 2)
+            if (r.bestTimeMs !== r.finishTimeMs) fail(`${id}: stored best ${r.bestTimeMs} is not the finish time ${r.finishTimeMs}`);
+            if (r.splitsStored !== r.gates) fail(`${id}: ${r.splitsStored} splits stored for ${r.gates} gates`);
+        });
+    }
+}

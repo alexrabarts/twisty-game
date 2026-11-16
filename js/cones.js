@@ -149,6 +149,9 @@ class Cones {
             const from = Math.max(first, section.from);
             const to = Math.min(last, section.to - 1);
             const spots = from <= to ? Cones.placeRange(env, from, to) : [];
+            // Per section, so a section built twice (the shader warm-up, a restart) counts once
+            (this.placedBySection ||= {})[section.index] = spots.length;
+            this.placedTotal = Object.values(this.placedBySection).reduce((sum, n) => sum + n, 0);
             this.makeCones(spots, into, section.cones);
             this.cones.push(...section.cones);
         };

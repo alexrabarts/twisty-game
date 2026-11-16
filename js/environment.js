@@ -193,7 +193,9 @@ class Environment {
   // time budget each frame.
   buildCourse(course, options) {
     const count = course.segments / SECTION;
-    this.sectionStats = { built: 0, disposed: 0, syncBuilds: 0, steps: 0, maxStepMs: 0, revealed: [] };
+    // maxStepMs: the longest step built during a ride (update); a build at the
+    // leg start or a restart is done at once and not counted there
+    this.sectionStats = { built: 0, disposed: 0, syncBuilds: 0, steps: 0, maxStepMs: 0, slowest: null, stepMs: {}, revealed: [] };
     this.sectionListeners = [];
     this.buildQueue = [];
     this.revealQueue = [];
@@ -322,7 +324,9 @@ class Environment {
       if (from >= to) return;
       const piece = { from, to, part: n };
       const floor = part.floor || part.profile.floor;
-      steps.push({ name: `walls:${part.id}`, piece, run: () => this.createRoadWalls() });
+      steps.push({ name: `strip:${part.id}`, piece, run: () => this.createRoadWalls("strip") });
+      for (const sign of [-1, 1]) steps.push({ name: `ribbon${sign}:${part.id}`, piece, run: () => this.createRoadWalls(sign) });
+      for (const sign of [-1, 1]) steps.push({ name: `face${sign}:${part.id}`, piece, run: () => this.createRoadWalls(`face${sign}`) });
       if (floor.kind === "river") steps.push({ name: `river:${part.id}`, piece, run: () => this.createRiver(floor) });
       steps.push({ name: `rocks:${part.id}`, piece, run: () => this.addRockFormations() });
       steps.push({ name: `forest:${part.id}`, piece, run: () => this.createForest() });
@@ -374,8 +378,14 @@ class Environment {
       Object.assign(this, saved);
     }
     const ms = performance.now() - started;
-    this.sectionStats.steps++;
-    this.sectionStats.maxStepMs = Math.max(this.sectionStats.maxStepMs, ms);
+    const stats = this.sectionStats;
+    stats.steps++;
+    const kind = step.name.split(":")[0];
+    stats.stepMs[kind] = Math.max(stats.stepMs[kind] || 0, Math.round(ms * 10) / 10);
+    if (this.streaming && ms > stats.maxStepMs) {
+      stats.maxStepMs = ms;
+      stats.slowest = `${step.name} of section ${section.index}`;
+    }
     section.boulders.push(...this.boulders.slice(lists.boulders));
     section.obstacles.push(...this.roadworkObstacles.slice(lists.obstacles));
     section.ramps.push(...this.jumpRamps.slice(lists.ramps));
@@ -502,7 +512,12 @@ class Environment {
         continue;
       }
       if (section.state === "empty") this.startSection(section);
-      this.runSectionStep(section, section.next++);
+      this.streaming = true;
+      try {
+        this.runSectionStep(section, section.next++);
+      } finally {
+        this.streaming = false;
+      }
       ran++;
       if (section.next >= section.steps.length) {
         this.buildQueue.shift();
@@ -536,17 +551,44 @@ class Environment {
     return false;
   }
 
+  // Sections that show what the leg draws past the start window: the middle
+  // of each part not yet built, drawn at once with the plane floors, so the
+  // game can compile every shader the leg will need before the ride
+  // (Game.prewarmCourse). A program first compiled mid-ride cost 100 ms to
+  // 1.9 s on a hardware GPU. Returns a function that puts them away again;
+  // their materials are kept, so the compiled programs stay.
+  warmSections() {
+    const parts = this.terrain.parts;
+    const picked = [...new Set(parts.map((part, n) => this.sectionAt(Math.floor((part.from + (n === parts.length - 1 ? this.endSegment : part.to)) / 2))))]
+      .map((k) => this.sections[k])
+      .filter((section) => section.state === "empty");
+    const floors = (this.floors || []).map((entry) => [entry.mesh, entry.mesh.visible]);
+    picked.forEach((section) => {
+      this.buildSectionNow(section);
+      section.group.visible = true;
+      section.group.children.forEach((child) => { child.visible = true; });
+    });
+    floors.forEach(([mesh]) => { mesh.visible = true; });
+    return () => {
+      floors.forEach(([mesh, visible]) => { mesh.visible = visible; });
+      picked.forEach((section) => this.disposeSection(section, { keepMaterials: true }));
+      // Not counted as built or disposed by the ride
+      this.sectionStats.built -= picked.length;
+      this.sectionStats.disposed -= picked.length;
+    };
+  }
+
   // Frees a section: its meshes, its own materials and textures, its share of
   // the collision lists and the kept ground columns. A later read of its
   // ground computes the same values again (Terrain.groundY reads no mesh).
-  disposeSection(section) {
+  disposeSection(section, { keepMaterials = false } = {}) {
     this.sectionListeners.forEach((listener) => listener.disposed && listener.disposed(section));
     if (section.group) {
       section.group.traverse((object) => {
         if (object.geometry && !object.geometry.userData.shared) object.geometry.dispose();
         const materials = object.material ? [].concat(object.material) : [];
         materials.forEach((material) => {
-          if (material.userData.shared || object.userData.modelled) return;
+          if (keepMaterials || material.userData.shared || object.userData.modelled) return;
           ["map", "normalMap"].forEach((key) => material[key] && !material[key].userData.shared && material[key].dispose());
           material.dispose();
         });
@@ -1381,11 +1423,16 @@ class Environment {
     // Rock face walls removed - now handled by faceted cliff walls in createRoadWalls()
   }
 
-  createRoadWalls() {
+  // `only`: a converted leg builds a piece's walls in steps: "strip", then
+  // each side's ribbon (-1, 1), then each side's face dressing ("face-1",
+  // "face1"), so no one step takes long. Without it, all of them at once.
+  createRoadWalls(only = null) {
     // The drawn ribbon of each side (-1, 1), for the colour of its face
-    this.ribbons = {};
-    // The material of the rocks of each ribbon's face (outcropLook)
-    this.outcrops = new Map();
+    if (only === null || only === "strip") {
+      this.ribbons = {};
+      // The material of the rocks of each ribbon's face (outcropLook)
+      this.outcrops = new Map();
+    }
     // Rock materials for boulders - very dark, no green
     const rockMaterials = [
       new THREE.MeshStandardMaterial({
@@ -1538,20 +1585,24 @@ class Environment {
     };
 
     // Add single full-width ground strip
-    const groundStrip = createFullWidthStrip();
-    this.scene.add(groundStrip);
+    if (only === null || only === "strip") {
+      const groundStrip = createFullWidthStrip();
+      this.scene.add(groundStrip);
+    }
+    if (only === "strip") return;
 
     // Left face first, then right: one group per side, ribbon then dressing
     const [first, last] = this.buildRange();
     for (const [sign, side] of [[-1, this.terrain.left], [1, this.terrain.right]]) {
+      if (only !== null && only !== sign && only !== `face${sign}`) continue;
       const group = new THREE.Group();
-      const ribbon = this.buildTerrainRibbon(sign, side);
+      const ribbon = only === `face${sign}` ? this.ribbons[sign] : this.buildTerrainRibbon(sign, side);
       this.ribbons[sign] = ribbon;
-      group.add(ribbon);
+      if (only !== `face${sign}`) group.add(ribbon);
       // Only the segments whose side is a rock face are dressed: a beach that
       // follows a sea cliff has no face to hang cracks and vines on
       const faces = Terrain.faceRange(this.terrain, sign, first, last);
-      if (faces) this.decorateRockFace(sign, group, rockMaterials, faces, ribbon);
+      if (faces && only !== sign) this.decorateRockFace(sign, group, rockMaterials, faces, ribbon);
 
       // Everything else a face builder added to its group dresses the face
       group.children.forEach((child) => {
@@ -1593,7 +1644,8 @@ class Environment {
           envMapIntensity: 0.3,
         })
       : new THREE.MeshStandardMaterial({
-          map: this.createRockTexture(),
+          // A converted leg draws one rock texture for all its sections
+          map: this.piece ? this.sharedRockTexture() : this.createRockTexture(),
           color: 0xffffff,
           vertexColors: true,
           roughness: 0.92,
@@ -3292,6 +3344,14 @@ class Environment {
     }
 
     return group;
+  }
+
+  sharedRockTexture() {
+    if (!this.rockTexture) {
+      this.rockTexture = this.createRockTexture();
+      this.rockTexture.userData.shared = true;
+    }
+    return this.rockTexture;
   }
 
   createRockTexture() {
