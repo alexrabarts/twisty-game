@@ -6186,6 +6186,7 @@ class Environment {
     const depth = 9;
     const houses = [];
     const windows = [];
+    const plots = [];
     const washes = [0xb9a58a, 0xa88f7a, 0xc8b8a0, 0x9a8a7c];
     for (let i = piece.from; i <= piece.to; i++) {
       const point = this.roadPath[i];
@@ -6193,6 +6194,7 @@ class Environment {
         const storeys = 2 + Math.floor(this.rand() * 2);
         const height = 3.4 * storeys + 0.6;
         const wash = washes[Math.floor(this.rand() * washes.length)];
+        plots.push({ segment: i, sign });
         houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), -0.5, depth, height + 0.5, 15.4, origin), color: [wash, wash] });
         houses.push({ geometry: this.pieceBox(point, sign * (front + depth / 2), height, depth + 0.8, 0.6, 16.2, origin), color: [0x4a3328, 0x4a3328] });
         for (let floor = 0; floor < storeys; floor++) {
@@ -6206,8 +6208,18 @@ class Environment {
     }
     const wallMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0.0, flatShading: true });
     const windowMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1208, emissive: 0xffc070, emissiveIntensity: 2.0, roughness: 0.5 });
-    this.addPieceMesh(group, this.mergeColoredGeometries(houses), wallMaterial, origin);
-    this.addPieceMesh(group, this.mergeColoredGeometries(windows), windowMaterial, origin).castShadow = false;
+    // What modelled houses, garden walls and lamp posts need to stand in for
+    // these (js/sceneassets.js): each plot's segment and side, the line the
+    // fronts stand on and the line of the lamp posts. The tagged
+    // meshes are the ones they replace; the light pools stay.
+    const lampLine = halfRoad + 1.2;
+    group.userData.village = { plots, front, lampLine };
+    const replaced = (mesh) => {
+      mesh.userData.dressing = { kind: 'village' };
+      return mesh;
+    };
+    replaced(this.addPieceMesh(group, this.mergeColoredGeometries(houses), wallMaterial, origin));
+    replaced(this.addPieceMesh(group, this.mergeColoredGeometries(windows), windowMaterial, origin)).castShadow = false;
 
     // Lamp posts, heads and pools: one pair every segment, instanced
     const count = (piece.to - piece.from + 1) * 2;
@@ -6227,14 +6239,16 @@ class Environment {
     for (let i = piece.from; i <= piece.to; i++) {
       const point = this.roadPath[i];
       for (const sign of [-1, 1]) {
-        posts.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * (halfRoad + 1.2), 2.5, origin)));
-        heads.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * (halfRoad + 1.2), 5.1, origin)));
+        posts.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * lampLine, 2.5, origin)));
+        heads.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * lampLine, 5.1, origin)));
         pools.setMatrixAt(n, matrix.makeTranslation(...this.piecePoint(point, sign * (halfRoad - 1.5), 0.06, origin)));
         n++;
       }
     }
     posts.castShadow = true;
     pools.renderOrder = 1;
+    replaced(posts);
+    replaced(heads);
     [posts, heads, pools].forEach((mesh) => {
       mesh.instanceMatrix.needsUpdate = true;
       mesh.position.copy(origin);

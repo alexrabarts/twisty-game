@@ -80,7 +80,7 @@ def apply_modifiers(obj):
         bpy.ops.object.modifier_apply(modifier=modifier.name)
 
 
-def export_glb(path, objects, quality=82, colours=False, texcoords=True):
+def export_glb(path, objects, quality=82, colours=False, texcoords=True, normals=True):
     """Export `objects` as glTF binary with WebP textures and no extras; `colours` adds each mesh's active vertex colours."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
     select_only(objects)
@@ -91,7 +91,7 @@ def export_glb(path, objects, quality=82, colours=False, texcoords=True):
         export_image_format="WEBP",
         export_image_quality=quality,
         export_texcoords=texcoords,
-        export_normals=True,
+        export_normals=normals,
         export_tangents=False,
         export_materials="EXPORT",
         export_vertex_color="ACTIVE" if colours else "NONE",

@@ -12,7 +12,7 @@ All rendering goes through `Graphics` in `js/graphics.js`. `main.js` never calls
 ## Frame
 
 1. The scene renders into a 4x MSAA half-float target. The renderer does no tone mapping.
-2. Bloom: threshold, five-level blur chain, additive upsample. The threshold is 1.0, or the preset's `threshold` (night: 1.8, with bloom 0.6), so at night only lamp heads and the moon bloom; lit windows and headlit paint do not.
+2. Bloom: threshold, five-level blur chain, additive upsample. The threshold is 1.0, or the preset's `threshold` (night: 1.8, with bloom 0.6), so at night only lamp heads, the moon and the middle of a lit window of the modelled village bloom (the window by little: its glass is 1.9 to 2.3); headlit paint does not.
 3. Composite: radial speed blur, height fog, light shafts, bloom, ACES tone map, saturation, contrast, tint, vignette, sRGB encode, dither.
 
 `renderer.toneMappingExposure` is still the exposure control. `setTimeOfDay` sets it.

@@ -29,6 +29,10 @@ const SceneAssets = (() => {
       rockTint: 0xb9a592,
       cell: 400,
     },
+    6: {
+      // Night-ride's village (tools/blender/village_houses.py, village_props.py)
+      village: { houses: "assets/village/houses.glb", props: "assets/village/props.glb" },
+    },
   };
 
   // Downloads are shared by every build of a leg (menu preview, ride, restart)
@@ -78,7 +82,7 @@ const SceneAssets = (() => {
   // -> Vector3 }, one mesh entry per primitive (per material), in the shape
   // the Blender exporter writes: one node per mesh, no interleaving. A node
   // may carry a translation (its place: a part's pivot, or a bare named
-  // point), never a rotation or a scale. Vertex colours (COLOR_0) are read as
+  // point) and one scale for all its axes, never a rotation. Vertex colours (COLOR_0) are read as
   // the baked occlusion they hold and switch the material to use them.
   async function parseGlb(buffer, url) {
     const view = new DataView(buffer);
@@ -162,12 +166,17 @@ const SceneAssets = (() => {
     const meshes = new Map();
     const places = new Map();
     for (const node of json.nodes || []) {
-      if (node.rotation || node.scale || node.matrix) throw new Error(`${url}: node ${node.name} is turned or scaled, which is not read`);
+      // One scale for all three axes is the unit of positions stored as whole
+      // numbers (tools/blender/bike_kit.py, pack_colours); it is worked into them here
+      const unit = node.scale ? node.scale[0] : 1;
+      const even = !node.scale || (unit > 0 && node.scale[1] === unit && node.scale[2] === unit);
+      if (node.rotation || node.matrix || !even) throw new Error(`${url}: node ${node.name} is turned or unevenly scaled, which is not read`);
       places.set(node.name, new THREE.Vector3().fromArray(node.translation || [0, 0, 0]));
       if (node.mesh === undefined) continue;
       meshes.set(node.name, json.meshes[node.mesh].primitives.map((primitive) => {
         const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute("position", accessor(primitive.attributes.POSITION));
+        const stored = accessor(primitive.attributes.POSITION);
+        geometry.setAttribute("position", node.scale ? new THREE.BufferAttribute(Float32Array.from(stored.array, (value) => value * unit), 3) : stored);
         if (primitive.attributes.NORMAL !== undefined) geometry.setAttribute("normal", accessor(primitive.attributes.NORMAL));
         if (primitive.attributes.TEXCOORD_0 !== undefined) {
           geometry.setAttribute("uv", accessor(primitive.attributes.TEXCOORD_0));
@@ -379,6 +388,263 @@ const SceneAssets = (() => {
       discard(portal);
     }
     return { portals: count };
+  }
+
+  // The village's look. The models carry their colours in their vertices
+  // (every board, stone and roof slab a face of its own shade, so nothing
+  // tiles); the game adds what differs from house to house and what is lit.
+  const VILLAGE = {
+    // Limewash over the plaster, and paint on the shutters
+    washes: [0xe4d8c2, 0xd8c4a2, 0xece6d8, 0xd6b898, 0xe0ccb8, 0xccd2c0],
+    accents: [0x3f6a3a, 0x8a2e26, 0x3d5478, 0x7a6438, 0x355f58],
+    // A window is lit or dark for the night. Lit glass and lamp glass are
+    // brighter than the night's bloom threshold (js/graphics.js, 1.8), by
+    // little: a window reads as lit, and has no halo over the street. These
+    // are the shader's own values, not sRGB, and far from white: the tone
+    // map takes a bright colour most of the way to white.
+    lit: 0.6,
+    glass: [[1.0, 0.27, 0.045], [1.0, 0.27, 0.045], [1.0, 0.36, 0.08], [1.0, 0.19, 0.025], [1.0, 0.22, 0.03]],
+    glassGain: 2.4,
+    dark: [0.006, 0.008, 0.012],
+    lampGain: 2.7,
+    // The most a vertex of the shining mesh can hold: its colours are stored as shares of this
+    shine: 4,
+    // Lamplight on the walls. There is no light in it: each vertex takes
+    // what the lamps near it would give, and the material glows by that much.
+    glow: 0xffb469,
+    glowStrength: 1.6,
+    lampReach: 6.5,
+    lanternReach: 2.2,
+    // Metres of garden wall one section is modelled for, and the order the sections come in
+    section: 3,
+    walls: ["wall_pier", "wall_plain", "wall_gate", "wall_plain", "wall_pier", "wall_trough", "wall_plain"],
+  };
+
+  // An sRGB value as the shader's linear one, and an sRGB hex as linear r, g, b
+  const decode = (v) => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  const decodeHex = (hex) => ({ r: decode(((hex >> 16) & 255) / 255), g: decode(((hex >> 8) & 255) / 255), b: decode((hex & 255) / 255) });
+
+  // A number in 0..1 from two whole numbers, the same on every build
+  function chance(a, b) {
+    let h = Math.imul(a + 0x9e3779b9, 0x85ebca6b) ^ Math.imul(b + 0x7f4a7c15, 0xc2b2ae35);
+    h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+    h = Math.imul(h ^ (h >>> 12), 0x297a2d39);
+    return ((h ^ (h >>> 15)) >>> 0) / 4294967296;
+  }
+
+  // The village's houses, garden walls and lamp posts in place of the
+  // procedural ones, at the same plots. Everything opaque is one mesh and
+  // everything that shines another, both standing at the set piece's centre
+  // as the meshes they replace did (culling reads a mesh's origin). The
+  // light pools on the road stay as built.
+  function dressVillage(env, [houses, props]) {
+    const old = tagged(env, ["village"]);
+    if (!old.length || !old.every((mesh) => attached(mesh, env))) return { houses: 0 };
+    const variants = [...houses.meshes.keys()].filter((name) => name.startsWith("house_")).sort();
+    const post = props.meshes.get("lamp_post");
+    if (!variants.length || !post || !VILLAGE.walls.every((name) => props.meshes.has(name))) throw new Error("the village files lack a house, a wall section or the lamp post");
+    const started = performance.now();
+    const count = { houses: 0, walls: 0, lamps: 0, lit: 0, meshes: 0, triangles: 0 };
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const group of new Set(old.map((mesh) => mesh.parent))) {
+      const plan = group.userData.village;
+      const origin = old.find((mesh) => mesh.parent === group).position.clone();
+      const solid = { position: [], color: [], index: [] };
+      const shine = { position: [], color: [], index: [] };
+      const lights = [];
+      const point = new THREE.Vector3();
+      const turn = new THREE.Quaternion();
+
+      // One model into the two meshes, placed by `matrix`. `seed` settles
+      // which of its windows are lit; `wash`, `accent` and `shade` tint it.
+      const add = (parts, matrix, { seed = 0, wash = null, accent = null, shade = 1 } = {}) => {
+        const mirrored = matrix.determinant() < 0;
+        for (const { geometry, material } of parts) {
+          const position = geometry.attributes.position;
+          const color = geometry.attributes.color;
+          const kind = material.name;
+          const lamp = kind === "lamp";
+          const tint = kind === "wall" ? wash : kind === "shutter" ? accent : null;
+          const colour = (i, c) => color.array[i * color.itemSize + c] / 255;
+          // The files' colours are sRGB (tools/blender/village_kit.py); the shader's are linear
+          const linear = (i, c) => decode(colour(i, c));
+          // Every corner of a window's glass carries the window's number
+          const windows = new Map();
+          const window = (i) => {
+            const number = Math.round(colour(i, 0) * 255);
+            if (!windows.has(number)) {
+              const lit = chance(seed, number) < VILLAGE.lit;
+              windows.set(number, { lit, glass: VILLAGE.glass[Math.floor(chance(number, seed) * VILLAGE.glass.length)], level: 0.84 + 0.2 * chance(seed + 7, number) });
+              if (lit) count.lit++;
+            }
+            return windows.get(number);
+          };
+          // A vertex goes into a mesh once, however many triangles share it.
+          // Colours are stored as 16-bit shares of 1 (see `build` below).
+          const share = (value) => Math.round(Math.min(1, value) * 65535);
+          const into = (target, fourth) => {
+            const placed = new Int32Array(position.count).fill(-1);
+            return (i, r, g, b) => {
+              if (placed[i] < 0) {
+                point.fromBufferAttribute(position, i).applyMatrix4(matrix);
+                placed[i] = target.position.length / 3;
+                target.position.push(point.x, point.y, point.z);
+                target.color.push(share(r), share(g), share(b), fourth);
+              }
+              return placed[i];
+            };
+          };
+          // The walls' fourth share is their lamplight, worked out once they are all in
+          const toSolid = into(solid, 0);
+          const toShine = into(shine, 65535);
+          const cluster = [];
+          const index = geometry.index.array;
+          for (let t = 0; t < index.length; t += 3) {
+            const corners = mirrored ? [index[t], index[t + 2], index[t + 1]] : [index[t], index[t + 1], index[t + 2]];
+            const pane = kind === "glass" ? window(corners[0]) : null;
+            for (const i of corners) {
+              if (lamp) {
+                const k = VILLAGE.lampGain / VILLAGE.shine;
+                shine.index.push(toShine(i, colour(i, 0) * k, colour(i, 1) * k, colour(i, 2) * k));
+                cluster.push(i);
+              } else if (pane && pane.lit) {
+                const k = colour(i, 1) * pane.level * VILLAGE.glassGain / VILLAGE.shine;
+                shine.index.push(toShine(i, pane.glass[0] * k, pane.glass[1] * k, pane.glass[2] * k));
+              } else if (pane) {
+                const k = 0.5 + 0.5 * colour(i, 1);
+                solid.index.push(toSolid(i, VILLAGE.dark[0] * k, VILLAGE.dark[1] * k, VILLAGE.dark[2] * k));
+              } else {
+                solid.index.push(toSolid(i, linear(i, 0) * shade * (tint ? tint.r : 1), linear(i, 1) * shade * (tint ? tint.g : 1), linear(i, 2) * shade * (tint ? tint.b : 1)));
+              }
+            }
+          }
+          // A house's own lanterns light the wall beside them: one light for each knot of lamp glass
+          const knots = [];
+          for (const i of new Set(cluster)) {
+            point.fromBufferAttribute(position, i).applyMatrix4(matrix);
+            const knot = knots.find((k) => k.at.distanceTo(point) < 0.9);
+            if (knot) {
+              knot.sum.add(point);
+              knot.n++;
+            } else {
+              knots.push({ at: point.clone(), sum: point.clone(), n: 1 });
+            }
+          }
+          knots.forEach((k) => lights.push({ at: k.sum.divideScalar(k.n), reach: VILLAGE.lanternReach }));
+        }
+      };
+      // The frame of a plot on one side of the road at `at` (a road point, or
+      // a place between two): x along the house fronts, z away from the road
+      const frame = (at, sign, lateral, stretch = 1, flip = false) => {
+        turn.setFromAxisAngle(up, at.heading + sign * Math.PI / 2);
+        return new THREE.Matrix4().compose(new THREE.Vector3(...env.piecePoint(at, sign * lateral, 0, origin)), turn, new THREE.Vector3(flip ? -stretch : stretch, 1, 1));
+      };
+
+      const sides = { [-1]: [], [1]: [] };
+      plan.plots.forEach((plot) => {
+        const row = sides[plot.sign];
+        // No two neighbours and no two houses facing each other are the same
+        const name = variants[(row.length + (plot.sign > 0 ? Math.ceil(variants.length / 2) : 0)) % variants.length];
+        const at = env.roadPath[plot.segment];
+        const flip = chance(plot.segment, plot.sign + 5) < 0.5;
+        add(houses.meshes.get(name), frame(at, plot.sign, plan.front, 1, flip), {
+          seed: plot.segment * 2 + (plot.sign > 0 ? 1 : 0),
+          wash: decodeHex(VILLAGE.washes[Math.floor(chance(plot.segment, plot.sign + 11) * VILLAGE.washes.length)]),
+          accent: decodeHex(VILLAGE.accents[Math.floor(chance(plot.segment, plot.sign + 23) * VILLAGE.accents.length)]),
+        });
+        row.push({ at, half: houses.places.get(`${name}:right`).x });
+        add(post, frame(at, plot.sign, plan.lampLine));
+        lights.push({ at: props.places.get("lamp_post:light").clone().applyMatrix4(frame(at, plot.sign, plan.lampLine)), reach: VILLAGE.lampReach });
+        count.houses++;
+        count.lamps++;
+      });
+      // Garden wall from each house to the next on its side, in whole sections
+      const length = props.places.get("wall_plain:end").x;
+      for (const sign of [-1, 1]) {
+        sides[sign].forEach((house, n) => {
+          const next = sides[sign][n + 1];
+          if (!next) return;
+          const along = (p, d) => ({ x: p.x + Math.sin(p.heading) * d, y: p.y, z: p.z + Math.cos(p.heading) * d, heading: p.heading });
+          const from = along(house.at, house.half);
+          const to = along(next.at, -next.half);
+          const gap = Math.hypot(to.x - from.x, to.z - from.z);
+          if (gap < 0.5) return;
+          const sections = Math.max(1, Math.round(gap / length));
+          for (let k = 0; k < sections; k++) {
+            // A section's own x runs along the road on the left and against it on the right
+            const t = (sign < 0 ? k : sections - k) / sections;
+            const at = { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t, z: from.z + (to.z - from.z) * t, heading: house.at.heading };
+            const name = VILLAGE.walls[(n * 3 + k + (sign > 0 ? 4 : 0)) % VILLAGE.walls.length];
+            add(props.meshes.get(name), frame(at, sign, plan.front, gap / (sections * length)), { shade: 0.9 + 0.16 * chance(n * 16 + k, sign + 3) });
+            count.walls++;
+          }
+        });
+      }
+
+      const build = ({ position, color, index }) => {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(position, 3));
+        // Not floats: the game takes a float colour for sRGB and decodes it
+        // (js/graphics.js, fixColorSpaces), and these are decoded already
+        geometry.setAttribute("color", new THREE.BufferAttribute(new Uint16Array(color), 4, true));
+        geometry.setIndex(index);
+        geometry.computeBoundingSphere();
+        geometry.computeBoundingBox();
+        return geometry;
+      };
+      const walls = build(solid);
+      // Every face is flat and shares no corner with the next, so these are the faces' own normals
+      walls.computeVertexNormals();
+      lamplight(walls, lights);
+      const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0.0, emissive: VILLAGE.glow, emissiveIntensity: VILLAGE.glowStrength });
+      material.onBeforeCompile = (shader) => {
+        shader.fragmentShader = swap(shader.fragmentShader, "#include <emissivemap_fragment>", "#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= vColor.rgb * vColor.a;");
+      };
+      const body = new THREE.Mesh(walls, material);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      const glass = new THREE.Mesh(build(shine), new THREE.MeshBasicMaterial({ vertexColors: true, color: new THREE.Color().setScalar(VILLAGE.shine) }));
+      for (const mesh of [body, glass]) {
+        mesh.position.copy(origin);
+        mesh.name = "modelled-village";
+        mesh.userData.modelled = "village";
+        group.add(mesh);
+        count.meshes++;
+        count.triangles += mesh.geometry.index.count / 3;
+      }
+      old.filter((mesh) => mesh.parent === group).forEach((mesh) => {
+        discard(mesh);
+        mesh.material.dispose();
+      });
+    }
+    // The merge runs on the main thread, once a build
+    count.ms = Math.round(performance.now() - started);
+    return count;
+  }
+
+  // How much lamplight each vertex of the village takes, into the alpha of
+  // its colour: what faces a lamp and is near it takes most. A lamp's `reach`
+  // is the distance at which its light has fallen to a quarter.
+  function lamplight(geometry, lights) {
+    const position = geometry.attributes.position.array;
+    const normal = geometry.attributes.normal.array;
+    const color = geometry.attributes.color.array;
+    for (let i = 0; i < position.length; i += 3) {
+      let sum = 0;
+      for (const { at, reach } of lights) {
+        const x = at.x - position[i];
+        const y = at.y - position[i + 1];
+        const z = at.z - position[i + 2];
+        const square = x * x + y * y + z * z;
+        if (square > reach * reach * 16) continue;
+        const distance = Math.max(Math.sqrt(square), 1e-3);
+        // Wrapped a little round the edge, as light off the road and the other walls would be
+        const facing = Math.max(0, ((x * normal[i] + y * normal[i + 1] + z * normal[i + 2]) / distance + 0.25) / 1.25);
+        const near = square / (reach * reach);
+        sum += facing / ((1 + near) * (1 + near));
+      }
+      color[(i / 3) * 4 + 3] = Math.round(Math.min(1, sum) * 65535);
+    }
   }
 
   // The ribbon's own UVs are the column along the road (u) and the height
@@ -633,11 +899,13 @@ const SceneAssets = (() => {
       rocks: spec.rocks ? part("rocks", () => loadModel(spec.rocks), (model) => dressRocks(env, model, spec)) : { rocks: 0 },
       portals: spec.portal ? part("portals", () => loadModel(spec.portal), (model) => dressPortals(env, model, spec.opening)) : { portals: 0 },
       rockFace: spec.rockFace ? part("rock face", () => Promise.all([loadImage(spec.rockFace.map), loadImage(spec.rockFace.normalMap)]), (images) => dressRockFace(env, images, spec.rockFace)) : { ribbons: 0 },
+      village: spec.village ? part("village", () => Promise.all([loadModel(spec.village.houses), loadModel(spec.village.props)]), (models) => dressVillage(env, models)) : { houses: 0 },
     };
-    return Promise.all([...Object.values(parts), plants]).then(([rocks, portals, rockFace, trees]) => ({
+    return Promise.all([...Object.values(parts), plants]).then(([rocks, portals, rockFace, village, trees]) => ({
       rocks,
       portals,
       rockFace,
+      village,
       ...(trees && { trees }),
       violations: rocks.violations || [],
       bytes: [...files(env.legIndex), ...(trees ? trees.files : [])].reduce((sum, url) => sum + (bytes.get(url) || 0), 0),
@@ -647,8 +915,8 @@ const SceneAssets = (() => {
 
   function files(legIndex) {
     const spec = LEGS[legIndex];
-    return spec ? [spec.rocks, spec.portal, spec.rockFace?.map, spec.rockFace?.normalMap].filter(Boolean) : [];
+    return spec ? [spec.rocks, spec.portal, spec.rockFace?.map, spec.rockFace?.normalMap, spec.village?.houses, spec.village?.props].filter(Boolean) : [];
   }
 
-  return { dress, files, loadModel, LEGS };
+  return { dress, files, loadModel, LEGS, VILLAGE };
 })();

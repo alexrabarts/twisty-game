@@ -1,18 +1,18 @@
 # Blender asset pipeline
 
-Scripts that build the modelled scenery, the trees, the four bikes and the rider in `assets/` with Blender (5.3, headless). The game reads every file with the one reader in `js/sceneassets.js`. That file replaces the tagged procedural dressing of a leg once its files arrive; `js/bikemodels.js` does the same for a bike and its rider, and `js/treemodels.js` for the trees and bushes. Each keeps the procedural meshes if a file fails. Only foggy-gorge (leg 4) has rocks and portals so far; every leg but high-pass has the trees.
+Scripts that build the modelled scenery, the trees, the traffic cars, the four bikes and the rider in `assets/` with Blender (5.3, headless). The game reads every file with the one reader in `js/sceneassets.js`. That file replaces the tagged procedural dressing of a leg once its files arrive; `js/bikemodels.js` does the same for a bike and its rider, `js/carmodels.js` for a traffic car, and `js/treemodels.js` for the trees and bushes. Each keeps the procedural meshes if a file fails. Foggy-gorge (leg 4) has rocks, portals and a rock face; night-ride (leg 7) has its village; every leg but high-pass has the trees.
 
 ## Rebuild
 
 From the repository root:
 
 ```sh
-for script in gorge_rocks gorge_portal rockface_detail bike_sport bike_adventure bike_scooter bike_dirt rider tree_conifer tree_broadleaf tree_bush; do
+for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bike_sport bike_adventure bike_scooter bike_dirt rider car_hatchback car_van tree_conifer tree_broadleaf tree_bush; do
   blender --background --factory-startup --python tools/blender/$script.py
 done
 ```
 
-Each script is deterministic (fixed seeds, fixed sources) and writes its output into `assets/gorge/`, `assets/bikes/`, `assets/trees/`, or `assets/rockface/` for the rock face's detail, which is not one leg's. Poly Haven downloads are checked against the API's md5 and cached in `~/.cache/twisty-blender`; nothing downloaded is committed except the processed output.
+Each script is deterministic (fixed seeds, fixed sources) and writes its output into `assets/gorge/`, `assets/village/`, `assets/bikes/`, `assets/cars/`, `assets/trees/`, or `assets/rockface/` for the rock face's detail, which is not one leg's. Poly Haven downloads are checked against the API's md5 and cached in `~/.cache/twisty-blender`; nothing downloaded is committed except the processed output.
 
 | Script | Output | What it makes |
 |---|---|---|
@@ -92,9 +92,25 @@ Rules for a change to a plant:
 
 Check: `npm test` (`tests/unit/treemodels.test.js`) and `node tools/terrain-check.mjs budget`, which reports each leg's trees under `assets.trees`.
 
+## Village
+
+| Script | Output | What it makes |
+|---|---|---|
+| `village_houses.py` | `village/houses.glb` | Five houses, each one node, 3800 to 4800 triangles: `house_chalet` (log floors and two balconies under a low gable), `house_farm` (eaves to the street, a gabled bay over the door), `house_inn` (three storeys, dressed corners, a sign), `house_barn` (stone below, boards above, a wagon door, a woodpile) and `house_cottage` (a steep gable, a balcony). |
+| `village_props.py` | `village/props.glb` | `lamp_post` (a lantern on an arm), and four 3 m sections of the garden wall: `wall_plain`, `wall_pier`, `wall_gate` (a cellar door under an arch) and `wall_trough` (the water trough). |
+
+`village_kit.py` is the modelling kit. A shape is written in a plot's own axes: x along the road, y up, z away from the road, the house front on z = 0 and the pavement on y = 0. The front plane is the line a rider crashes on (`roadWidth / 2 + 3`), so nothing at walking height stands more than a step in front of it.
+
+- **No texture.** A model is flat faces, each with its own colour: every board, log, stone and roof slab is one face of its own shade, with a darker foot. The earlier attempt at scenery with a tiling photo showed its repeat everywhere. Blender bakes ambient occlusion into the vertex colours.
+- **Tags.** A face's tag becomes its material's name, and the game reads the name, not the material: `body` (colours as written), `wall` (plaster, tinted with the house's wash), `shutter` (tinted with the house's accent), `glass` (red is the window's number in its house, green how bright that corner is when lit) and `lamp` (always lit). So the game, not the file, settles which windows are lit and what colour a house is.
+- **Points.** `<house>:left` and `<house>:right` are the ends of a house's front, `<wall>:end` the end of a wall section, `lamp_post:light` where the lantern's light is. The game lays garden wall from one house's end to the next and bakes the lamplight from the lanterns.
+- **Size.** The ground behind the fronts climbs 7 m at once (`streetSide` in `js/terrain.js`). A house must stand above that to show a roof, and a wall section must be over 7 m high to cover the bank. A house is at most 9000 triangles and a prop 1200, and both files together at most 800 KB (712 KB now); the scripts and `tests/unit/villagemodels.test.js` fail above these.
+- **Colour space.** The colours are sRGB in the file, as the game writes its own, and `js/sceneassets.js` decodes them. glTF's rule for `COLOR_0` is linear; a byte of linear colour has too few steps in dark timber.
+- Set `TWISTY_PREVIEW=<directory>` to render each model after the export. Look at the result in the game with `node tools/village-shots.mjs` (`.agent/sop/play-testing.md`).
+
 ## Format
 
-Plain glTF binary with WebP textures (`EXT_texture_webp`), at most 1024 px. Not Draco or KTX2: in three r150 `GLTFLoader`, `DRACOLoader` and `KTX2Loader` exist only as ES modules that import `three` by bare name, which this script-tag page cannot resolve without an import map in `index.html` and a second copy of three. `js/sceneassets.js` reads the subset the exporter writes: one primitive per material, a node translation but no rotation or scale, and no interleaving. The bike files have no textures. `bike_kit.py` rewrites them after the export with the occlusion (`COLOR_0`) as bytes and the normals as signed bytes padded to four (`KHR_mesh_quantization`), which takes a third off each file. With about 1.5 MB for the leg, the geometry is a small share and a Draco decoder would cost more than it saves.
+Plain glTF binary with WebP textures (`EXT_texture_webp`), at most 1024 px. Not Draco or KTX2: in three r150 `GLTFLoader`, `DRACOLoader` and `KTX2Loader` exist only as ES modules that import `three` by bare name, which this script-tag page cannot resolve without an import map in `index.html` and a second copy of three. `js/sceneassets.js` reads the subset the exporter writes: one primitive per material, a node translation, one scale for all three axes on a mesh node, but no rotation, and no interleaving. The bike files have no textures. `bike_kit.py` rewrites them after the export with the occlusion (`COLOR_0`) as bytes and the normals as signed bytes padded to four (`KHR_mesh_quantization`), which takes a third off each file. The village files carry no normals (every face is flat, and the game works them out) and their positions are whole millimetres in signed shorts, with the millimetre as the node's scale, which took `houses.glb` from 818 KB to 649 KB. With about 1.5 MB for the leg, the geometry is a small share and a Draco decoder would cost more than it saves.
 
 ## Rock face detail
 
@@ -122,4 +138,4 @@ All textures are CC0 from [Poly Haven](https://polyhaven.com), fetched at 1k thr
 - [`rock_boulder_dry`](https://polyhaven.com/a/rock_boulder_dry) (Dimitrios Savva, Rico Cilliers): the rocks' surface and the portal's dressed stone
 - [`rough_block_wall`](https://polyhaven.com/a/rough_block_wall) (Rob Tuytel): the portal's masonry
 
-The geometry and the rock face's detail are generated by the scripts. The bikes, the rider, the trees and the bushes use no downloaded source.
+The geometry and the rock face's detail are generated by the scripts. The bikes, the rider, the cars, the trees, the bushes and the village use no downloaded source.

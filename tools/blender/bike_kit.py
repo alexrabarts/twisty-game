@@ -530,7 +530,10 @@ class Kit:
 # shorts; a byte each is all they need, and it takes a third off the file.
 # Rewrites it with COLOR_0 as normalised unsigned bytes and NORMAL as
 # normalised signed bytes (KHR_mesh_quantization), each padded to four.
-def pack_colours(path):
+# With `unit` (metres), POSITION becomes whole units in signed shorts padded
+# to eight bytes, and each mesh node takes the unit as its scale: a model
+# within 32 m of its origin, to a millimetre, in two thirds of the bytes.
+def pack_colours(path, unit=None):
     data = open(path, "rb").read()
     length = struct.unpack_from("<I", data, 12)[0]
     doc = json.loads(data[20:20 + length])
@@ -540,6 +543,7 @@ def pack_colours(path):
     formats = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}
     colours = {p["attributes"]["COLOR_0"] for m in doc["meshes"] for p in m["primitives"] if "COLOR_0" in p["attributes"]}
     normals = {p["attributes"]["NORMAL"] for m in doc["meshes"] for p in m["primitives"] if "NORMAL" in p["attributes"]}
+    positions = {p["attributes"]["POSITION"] for m in doc["meshes"] for p in m["primitives"]} if unit else set()
     chunks = []
     offset = 0
 
@@ -568,6 +572,15 @@ def pack_colours(path):
             accessor.pop("min", None)
             accessor.pop("max", None)
             blob = bytes(out)
+        elif index in positions:
+            whole = [round(v / unit) for v in values]
+            if max(abs(v) for v in whole) > 32767:
+                raise SystemExit(f"{path}: a position is further from the origin than {32767 * unit} m")
+            out = bytearray()
+            for i in range(accessor["count"]):
+                out += struct.pack("<3hxx", *whole[i * 3:i * 3 + 3])
+            accessor.update(componentType=5122, min=[min(whole[c::3]) for c in range(3)], max=[max(whole[c::3]) for c in range(3)])
+            blob = bytes(out)
         elif index in normals and accessor["componentType"] == 5126:
             out = bytearray()
             for i in range(accessor["count"]):
@@ -579,6 +592,8 @@ def pack_colours(path):
         fresh.append(add(blob))
         if index in normals and accessor["componentType"] == 5120:
             fresh[-1]["byteStride"] = 4
+        if index in positions:
+            fresh[-1]["byteStride"] = 8
         accessor["bufferView"] = len(fresh) - 1
         accessor.pop("byteOffset", None)
     for image in doc.get("images", []):
@@ -599,7 +614,11 @@ def pack_colours(path):
         return value
 
     doc = trim(doc)
-    if normals:
+    if unit:
+        for node in doc["nodes"]:
+            if "mesh" in node:
+                node["scale"] = [unit] * 3
+    if normals or positions:
         for key in ("extensionsUsed", "extensionsRequired"):
             doc[key] = sorted(set(doc.get(key, [])) | {"KHR_mesh_quantization"})
     doc["buffers"] = [{"byteLength": offset}]
