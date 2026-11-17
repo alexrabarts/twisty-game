@@ -67,6 +67,21 @@ describe('the Tremola slice', () => {
         expect(env.resolveRoadSurface()).toEqual({});
     });
 
+    // The window's mesh count must not grow with what a chunk holds: every resident side chunk is at most three meshes
+    // (its stub ribbons, its far ribbons, its works), however many roads are in it
+    test('a side chunk is a few meshes, however many roads it holds', () => {
+        const chunks = [...env.sideMeshes.values()];
+        expect(chunks.length).toBeGreaterThan(5);
+        const counts = chunks.map(group => {
+            let meshes = 0, roads = 0;
+            group.traverse(o => { if (o.isMesh) meshes++; if (o.name === 'world-road-side' || o.name === 'world-road-stub') roads++; });
+            return { meshes, roads };
+        });
+        expect(counts.filter(c => c.meshes > 3)).toEqual([]);
+        // Some chunks hold many roads: the count is not just small chunks
+        expect(Math.max(...counts.map(c => c.roads))).toBeGreaterThan(5);
+    });
+
     test('the stage has its 12 gates in order and a finish at the end of the ride', () => {
         expect(env.checkpoints).toHaveLength(12);
         env.checkpoints.forEach((cp, i) => {

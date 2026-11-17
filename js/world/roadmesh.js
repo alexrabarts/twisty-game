@@ -633,6 +633,51 @@ class RoadMesh {
         return group;
     }
 
+    // The ribbon meshes under `group` (named 'road-side', the side roads of a chunk) merged into one mesh per material,
+    // added to `group`, the old ones freed: a chunk costs the window one mesh per kind of ribbon, however many roads
+    // it holds. The roads' own groups stay, with their userData. Returns the meshes it made
+    static mergeRibbons(group) {
+        const byMaterial = new Map();
+        group.traverse(o => { if (o.isMesh && o.name === 'road-side') (byMaterial.get(o.material) || byMaterial.set(o.material, []).get(o.material)).push(o); });
+        const made = [];
+        for (const [material, meshes] of byMaterial) {
+            if (meshes.length < 2) continue;
+            const geometry = RoadMesh.mergeGeometries(meshes.map(m => m.geometry));
+            meshes.forEach(m => { m.parent.remove(m); m.geometry.dispose(); });
+            const mesh = RoadMesh.mesh(geometry, 'road-side', material);
+            group.add(mesh);
+            made.push(mesh);
+        }
+        return made;
+    }
+
+    // Geometries with the same attributes as one: indexed if any is (the others get an index of their own vertices)
+    static mergeGeometries(list) {
+        const names = Object.keys(list[0].attributes);
+        const out = new THREE.BufferGeometry();
+        const count = list.reduce((n, g) => n + g.attributes.position.count, 0);
+        for (const name of names) {
+            const size = list[0].attributes[name].itemSize;
+            const array = new Float32Array(count * size);
+            let at = 0;
+            for (const g of list) { array.set(g.attributes[name].array, at); at += g.attributes[name].array.length; }
+            out.setAttribute(name, new THREE.BufferAttribute(array, size));
+        }
+        if (list.some(g => g.index)) {
+            const index = [];
+            let base = 0;
+            for (const g of list) {
+                if (g.index) for (let i = 0; i < g.index.count; i++) index.push(g.index.getX(i) + base);
+                else for (let i = 0; i < g.attributes.position.count; i++) index.push(i + base);
+                base += g.attributes.position.count;
+            }
+            out.setIndex(index);
+        }
+        Object.assign(out.userData, list[0].userData);
+        out.computeBoundingSphere();
+        return out;
+    }
+
     // The road-closed barrier, one unit wide: two posts and two striped boards
     static barrierGeometry() {
         const out = { positions: [], shades: [] };

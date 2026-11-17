@@ -2150,6 +2150,8 @@ const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-jun
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
 const WORLD_RESIDENT_TILES = 60;
+// The share of the mesh cap the window keeps free (world-budget reports each place's margin)
+const WORLD_MESH_MARGIN = 0.15;
 const WORLD_BIKE_TILE_M = 900;
 
 async function openWorld(browser, port, id, seed = 1, data = option('worldData')) {
@@ -2716,7 +2718,7 @@ const WORLD = {
     // The drawn window against the budgets, every `--every` metres of ride; the resident ride and tile counts too
     'world-window': async page => {
         const every = Number(option('every') || 1000);
-        const rows = await page.evaluate(async (step, bikeTileM, countSource, placeSource) => {
+        const rows = await page.evaluate(async (step, bikeTileM, countSource, placeSource, meshCap) => {
             const countScene = new Function(`return (${countSource})`)();
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const route = game.environment.route;
@@ -2727,11 +2729,12 @@ const WORLD = {
                 const near = [...env.streamer.refs.keys()].length;
                 const m = env.tileMeshes;
                 const bike = [...env.streamer.tilesNear(p.x, p.z, bikeTileM)];
-                out.push({ s: Math.round(s), ...countScene(), tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+                const counted = countScene();
+                out.push({ s: Math.round(s), ...counted, meshMargin: meshCap - counted.meshes, tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
             }
             return out;
-        }, every, WORLD_BIKE_TILE_M, countScene.toString(), placeAt.toString());
-        return { every, rows };
+        }, every, WORLD_BIKE_TILE_M, countScene.toString(), placeAt.toString(), LEG_BUDGET.meshes);
+        return { every, rows, leastMeshMargin: Math.min(...rows.map(r => r.meshMargin)) };
     },
     'world-budget': page => WORLD['world-window'](page),
     // Milliseconds to render one frame of the world (scene, post and a 1-pixel read-back that waits for the GPU) from the
@@ -3992,6 +3995,8 @@ function worldChecks(report) {
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
+        // Content grows: the window keeps WORLD_MESH_MARGIN of the mesh cap free everywhere
+        if (r.meshes > LEG_BUDGET.meshes * (1 - WORLD_MESH_MARGIN)) failures.push(`world at s ${r.s}: ${r.meshes} meshes leave ${LEG_BUDGET.meshes - r.meshes} of the cap of ${LEG_BUDGET.meshes} free, want ${LEG_BUDGET.meshes * WORLD_MESH_MARGIN} or more`);
         if (r.tiles > WORLD_RESIDENT_TILES) failures.push(`world at s ${r.s}: ${r.tiles} resident tiles, over ${WORLD_RESIDENT_TILES}`);
         if (r.bikeTilesMissing) failures.push(`world at s ${r.s}: ${r.bikeTilesMissing} tiles within ${WORLD_BIKE_TILE_M} m are not drawn`);
         if (r.maxStepMs > 4 * 2) failures.push(`world at s ${r.s}: a build step took ${r.maxStepMs} ms`);

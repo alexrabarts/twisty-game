@@ -602,6 +602,8 @@ class WorldEnvironment {
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
         // a tile under them arrives
         triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures);
+        // The chunk's ribbons as one mesh per material: a mesh a road overran the window's mesh budget
+        RoadMesh.mergeRibbons(group);
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`side:${k}`);
         group.userData.triangles = triangles;
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
