@@ -11,9 +11,14 @@
 //
 // The ride's near ribbon (RoadMesh LOD0) reads them in nearMaterial(): its UV is metres across the road (positive to
 // the right) and metres along it, so markings, wheel tracks, patches and cracks are drawn from the road's own
-// coordinates and follow every bend smoothly. Fine detail fades with distance (mipmaps, anisotropic filtering, box-
-// filtered lines and a weaker normal far off) so the road does not shimmer. LOD1 keeps a flat colour (farMaterial),
-// the mean of the textures, so the change of level is not seen.
+// coordinates and follow every bend smoothly. The textures themselves keep their size across the road in a bend: the
+// asphalt's grain is laid on the ground plane (it has no direction), and each 1.6 m arc of setts takes its own metres
+// along the road, those of its middle (settAlong), so the inside of a hairpin is not squashed; neighbouring arcs then
+// meet out of step at the joint between them, as arcs laid round a bend do. Fine detail fades by the size of the
+// patch of texture a pixel covers, measured both ways and allowing for the anisotropic filter (footprint), not by
+// distance alone: the sett pattern, its normal and its roughness go to their means before the joints can beat against
+// the pixels, and the normal map weakens where the road is seen edge-on. LOD1 keeps a flat colour (farMaterial), the
+// mean of the textures, so the change of level is not seen.
 //
 // Markings follow the Swiss rules (SSV, SR 741.21, Art. 72 to 74; VSS SN 640 850a, as applied in canton Lucerne's
 // Richtlinie Markierung 653.201): every longitudinal line is white (yellow is for bus and cycle lanes, parking and
@@ -52,6 +57,37 @@ class RoadSurface {
     static get ASPHALT_M() { return 1.5; }
     static get SETTS_M() { return 1.6; }
     static get PERIOD_M() { return 72; }
+    // The setts' arcs: one tile wide, rising 0.3 m at the middle
+    static get SETT_RISE_M() { return 0.3; }
+    static get SETT_RADIUS_M() { const c = RoadSurface.SETTS_M, r = RoadSurface.SETT_RISE_M; return (c * c / 4 + r * r) / (2 * r); }
+
+    // How many taps along a pixel's long axis the fade counts on from the anisotropic filter: half of what it is set to,
+    // as the filter is an approximation and the lit relief aliases sooner than the colour
+    static get FOOTPRINT_TAPS() { return RoadSurface.ANISOTROPY / 2; }
+
+    // The metres along the road the setts are laid by at `lat` metres across: those of the middle of the 1.6 m arc that
+    // holds `lat`, which is `along` (the centre's metres) less the arc's offset times the heading (`turn`, radians).
+    // A column `o` across is 1 - o * curvature as long as the centre, so the arc keeps the setts' size through a bend
+    static settAlong(along, turn, lat) {
+        const S = RoadSurface.SETTS_M;
+        return along - (Math.floor(lat / S) + 0.5) * S * turn;
+    }
+
+    // Which copy of the tile (counted along the road) the sett at `t` metres along (settAlong) and `lat` across belongs
+    // to: that of its row's arc, which rises `sag` toward the arc's ends, so a sett cut by the tile's edge is one sett.
+    // The shader tones each sett again by it
+    static settCopy(t, lat) {
+        const S = RoadSurface.SETTS_M, R = RoadSurface.SETT_RADIUS_M;
+        const u = (lat / S - Math.floor(lat / S) - 0.5) * S;
+        return Math.floor((t + R - Math.sqrt(R * R - u * u)) / S);
+    }
+
+    // The metres of texture a pixel covers once filtered, from its two screen-space gradients (metres a pixel each
+    // way): the short axis, or the long one over the anisotropic filter's taps when that is more
+    static footprint(gx, gy) {
+        const a = Math.hypot(gx[0], gx[1]), b = Math.hypot(gy[0], gy[1]);
+        return Math.max(Math.min(a, b), Math.max(a, b) / RoadSurface.FOOTPRINT_TAPS);
+    }
     static get SIZE() { return 512; }
 
     // Metres of verge drawn past the carriageway edge: gravel, then grass that thins out over the ground
@@ -177,7 +213,7 @@ class RoadSurface {
         }
         const height = new Float32Array(n * n);
         const albedo = new Uint8Array(n * n * 4);
-        let sum = [0, 0, 0];
+        let sum = [0, 0, 0], roughSum = 0;
         for (let y = 0; y < n; y++) {
             for (let x = 0; x < n; x++) {
                 const ci = Math.floor(x / step), cj = Math.floor(y / step);
@@ -217,10 +253,11 @@ class RoadSurface {
                 albedo[o + 2] = Math.round(b * 255);
                 albedo[o + 3] = Math.round(rough * 255);
                 sum[0] += r; sum[1] += g; sum[2] += b;
+                roughSum += albedo[o + 3] / 255;
             }
         }
         const normal = RoadSurface.normals(height, n, 0.9, height.map(h => h / 0.85));
-        return { albedo, normal, mean: sum.map(v => v / (n * n)), size: n };
+        return { albedo, normal, mean: sum.map(v => v / (n * n)), rough: roughSum / (n * n), size: n };
     }
 
     // Granite setts in segmental arcs: {albedo (sRGB, roughness in A), normal (RGB, a number per sett in A), mean}
@@ -228,13 +265,13 @@ class RoadSurface {
         const tile = RoadSurface.SETTS_M;
         const px = tile / n;
         // One arc a tile wide; a row of setts every 10 cm along the road (16 to the tile); 12 mm joints
-        const chord = tile, rise = 0.3, pitch = 0.1, joint = 0.012;
-        const radius = (chord * chord / 4 + rise * rise) / (2 * rise);
+        const chord = tile, pitch = 0.1, joint = 0.012;
+        const radius = RoadSurface.SETT_RADIUS_M;
         const height = new Float32Array(n * n);
         const ids = new Float32Array(n * n);
         const albedo = new Uint8Array(n * n * 4);
         const rows = Math.round(tile / pitch);
-        let sum = [0, 0, 0];
+        let sum = [0, 0, 0], roughSum = 0;
         for (let y = 0; y < n; y++) {
             for (let x = 0; x < n; x++) {
                 const u = x * px - chord / 2;
@@ -288,10 +325,11 @@ class RoadSurface {
                 albedo[o + 2] = Math.round(Math.min(1, b) * 255);
                 albedo[o + 3] = Math.round(rough * 255);
                 sum[0] += r; sum[1] += g; sum[2] += b;
+                roughSum += albedo[o + 3] / 255;
             }
         }
         const normal = RoadSurface.normals(height, n, 3.0, ids);
-        return { albedo, normal, mean: sum.map(v => v / (n * n)), size: n };
+        return { albedo, normal, mean: sum.map(v => v / (n * n)), rough: roughSum / (n * n), size: n };
     }
 
     // A repeating, mipmapped, anisotropically filtered texture of `data` (RGBA bytes)
@@ -316,8 +354,8 @@ class RoadSurface {
         if (!RoadSurface.made) {
             const a = RoadSurface.asphalt(), s = RoadSurface.setts();
             RoadSurface.made = {
-                asphalt: { map: RoadSurface.texture(a.albedo, a.size, true, 'road-asphalt'), normal: RoadSurface.texture(a.normal, a.size, false, 'road-asphalt-normal'), mean: a.mean },
-                setts: { map: RoadSurface.texture(s.albedo, s.size, true, 'road-setts'), normal: RoadSurface.texture(s.normal, s.size, false, 'road-setts-normal'), mean: s.mean },
+                asphalt: { map: RoadSurface.texture(a.albedo, a.size, true, 'road-asphalt'), normal: RoadSurface.texture(a.normal, a.size, false, 'road-asphalt-normal'), mean: a.mean, rough: a.rough },
+                setts: { map: RoadSurface.texture(s.albedo, s.size, true, 'road-setts'), normal: RoadSurface.texture(s.normal, s.size, false, 'road-setts-normal'), mean: s.mean, rough: s.rough },
                 // GPU bytes: four RGBA8 textures with their mip chains (a third more)
                 bytes: Math.round((a.size * a.size + s.size * s.size) * 4 * 2 * 4 / 3)
             };
@@ -360,7 +398,9 @@ class RoadSurface {
             roadGrass: { value: linear(grass) },
             roadGravel: { value: linear([0.40, 0.38, 0.34]) },
             roadAsphaltMean: { value: linear(t.asphalt.mean) },
-            roadSettMean: { value: linear(t.setts.mean) }
+            roadSettMean: { value: linear(t.setts.mean) },
+            roadAsphaltRough: { value: t.asphalt.rough },
+            roadSettRough: { value: t.setts.rough }
         };
         material.userData.roadUniforms = uniforms;
         material.onBeforeCompile = (shader, renderer) => {
@@ -368,7 +408,7 @@ class RoadSurface {
             Object.assign(shader.uniforms, uniforms);
             RoadSurface.shader(shader);
         };
-        material.customProgramCacheKey = () => 'world-road-near-1';
+        material.customProgramCacheKey = () => 'world-road-near-2';
         RoadSurface.near = material;
         return material;
     }
@@ -385,13 +425,19 @@ class RoadSurface {
 attribute vec4 road;
 attribute vec4 edge;
 attribute float roadBase;
+attribute vec3 roadArc;
+attribute vec2 roadPlane;
 varying vec4 vRoad;
 varying vec4 vEdge;
-varying float vRoadBase;`);
+varying float vRoadBase;
+varying vec3 vRoadArc;
+varying vec2 vRoadPlane;`);
         shader.vertexShader = RoadSurface.swap(shader.vertexShader, '#include <uv_vertex>', `#include <uv_vertex>
 vRoad = road;
 vEdge = edge;
-vRoadBase = roadBase;`);
+vRoadBase = roadBase;
+vRoadArc = roadArc;
+vRoadPlane = roadPlane;`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <common>', `#include <common>
 uniform sampler2D roadSettMap;
 uniform sampler2D roadSettNormal;
@@ -400,9 +446,18 @@ uniform vec3 roadGrass;
 uniform vec3 roadGravel;
 uniform vec3 roadAsphaltMean;
 uniform vec3 roadSettMean;
+uniform float roadAsphaltRough;
+uniform float roadSettRough;
 varying vec4 vRoad;
 varying vec4 vEdge;
 varying float vRoadBase;
+varying vec3 vRoadArc;
+varying vec2 vRoadPlane;
+// RoadSurface.footprint: metres of texture a pixel covers once the anisotropic filter has done what it can
+float roadFootprint(vec2 gx, vec2 gy) {
+    float a = length(gx), b = length(gy);
+    return max(min(a, b), max(a, b) / ${f(RoadSurface.FOOTPRINT_TAPS)});
+}
 // Share of [x - fw/2, x + fw/2] inside a line of width w centred on c: a box filter, so a line far off fades to its
 // mean cover instead of flickering
 float roadLine(float x, float c, float w, float fw) {
@@ -417,14 +472,20 @@ float roadDash(float x, float d, float p, float fw) {
 }`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <map_fragment>', `
 float roadLat = vUv.x;
-float roadAlong = vUv.y;
+// Metres along the centre and the heading, divided out of their projective form (RoadMesh: q is the column's share of
+// the centre's length), so a line across the road stays straight across a trapezoid quad in a bend
+float roadAlong = vRoadArc.x / vRoadArc.z;
+float roadTurn = vRoadArc.y / vRoadArc.z;
 // Metres along the ride from its start, for noise only (the UV restarts every ${RoadSurface.PERIOD_M} m)
 float roadS = roadAlong + vRoadBase * ${f(RoadSurface.PERIOD_M)};
 float roadHalf = vRoad.x;
 float roadSide = roadLat < 0.0 ? -1.0 : 1.0;
 float roadDist = length(vViewPosition);
-vec2 roadDx = dFdx(vUv);
-vec2 roadDy = dFdy(vUv);
+vec2 roadDx = vec2(dFdx(roadLat), dFdx(roadAlong));
+vec2 roadDy = vec2(dFdy(roadLat), dFdy(roadAlong));
+vec2 roadDTurn = vec2(dFdx(roadTurn), dFdy(roadTurn));
+// Taken here, outside the branches below: a derivative inside a branch the pixels of one quad may not all take is undefined
+vec2 gxA = dFdx(vRoadPlane), gyA = dFdy(vRoadPlane);
 float roadFwLat = abs(roadDx.x) + abs(roadDy.x);
 float roadFwAlong = abs(roadDx.y) + abs(roadDy.y);
 // Detail that fades with distance: the normal, the cracks' relief
@@ -433,28 +494,45 @@ float roadNear = 1.0 - smoothstep(18.0, 140.0, roadDist);
 vec4 roadA;
 vec4 roadN;
 float roadSett = step(0.5, vRoad.y);
+float roadFine;
 if (roadSett > 0.5) {
-    vec2 uvS = vUv / ${f(RoadSurface.SETTS_M)};
-    roadA = textureGrad(roadSettMap, uvS, roadDx / ${f(RoadSurface.SETTS_M)}, roadDy / ${f(RoadSurface.SETTS_M)});
-    roadN = textureGrad(roadSettNormal, uvS, roadDx / ${f(RoadSurface.SETTS_M)}, roadDy / ${f(RoadSurface.SETTS_M)});
-    // Each sett toned again in each copy of the tile, so no two copies match
-    float again = landHash(vec2(roadN.a * 251.0, dot(floor(uvS), vec2(17.0, 3.0)) + vRoadBase * 45.0));
-    roadA.rgb *= mix(1.0, 0.86 + 0.28 * again, step(0.004, roadN.a));
-    // Where a pixel covers more than a third of a sett the joints would beat against the pixels (moire): the mean
-    float settFade = smoothstep(0.02, 0.07, min(roadFwLat, roadFwAlong));
-    roadA.rgb = mix(roadA.rgb, roadSettMean * (0.95 + 0.1 * again), settFade * 0.85);
-    roadN.xyz = mix(roadN.xyz, vec3(0.5, 0.5, 1.0), settFade);
+    // Each 1.6 m arc takes the metres along of its own middle (RoadSurface.settAlong), so the setts keep their size on
+    // the inside of a bend; the gradients follow it, without the step at the joint between two arcs
+    float settBand = floor(roadLat / ${f(RoadSurface.SETTS_M)});
+    float settMid = (settBand + 0.5) * ${f(RoadSurface.SETTS_M)};
+    float settT = roadAlong - settMid * roadTurn;
+    vec2 uvS = vec2(roadLat, settT) / ${f(RoadSurface.SETTS_M)};
+    vec2 gxS = vec2(roadDx.x, roadDx.y - settMid * roadDTurn.x);
+    vec2 gyS = vec2(roadDy.x, roadDy.y - settMid * roadDTurn.y);
+    roadA = textureGrad(roadSettMap, uvS, gxS / ${f(RoadSurface.SETTS_M)}, gyS / ${f(RoadSurface.SETTS_M)});
+    roadN = textureGrad(roadSettNormal, uvS, gxS / ${f(RoadSurface.SETTS_M)}, gyS / ${f(RoadSurface.SETTS_M)});
+    // Each sett toned again in each copy of the tile, so no two copies match. The copy is that of the sett's own row
+    // (the arc through it, up to the tile's edge), not the pixel's, so a sett across the tile's edge keeps one tone
+    float settU = (fract(uvS.x) - 0.5) * ${f(RoadSurface.SETTS_M)};
+    float settSag = ${f(RoadSurface.SETT_RADIUS_M)} - sqrt(${f(RoadSurface.SETT_RADIUS_M * RoadSurface.SETT_RADIUS_M)} - settU * settU);
+    float settCopy = floor((settT + settSag) / ${f(RoadSurface.SETTS_M)}) + vRoadBase * ${f(RoadSurface.PERIOD_M / RoadSurface.SETTS_M)};
+    float again = landHash(vec2(roadN.a * 251.0, settBand * 17.0 + settCopy * 3.0));
+    // By the patch a pixel covers: the relief goes flat first (its light aliases soonest), then once a pixel spans
+    // about half a sett the colour and roughness are the means, before the joints can beat against the pixels (moire)
+    roadFine = roadFootprint(gxS, gyS);
+    float settFade = smoothstep(0.02, 0.06, roadFine);
+    roadA.rgb *= mix(1.0, 0.86 + 0.28 * again, step(0.004, roadN.a) * (1.0 - settFade));
+    roadA = mix(roadA, vec4(roadSettMean, roadSettRough), settFade);
+    roadN.xyz = mix(roadN.xyz, vec3(0.5, 0.5, 1.0), smoothstep(0.006, 0.03, roadFine));
 } else {
-    vec2 uvA = vUv / ${f(RoadSurface.ASPHALT_M)};
-    // A second, larger copy (72 m / 13) breaks the 1.5 m repeat; it only modulates the first
-    vec2 uvB = vec2(-vUv.x, vUv.y) / ${f(RoadSurface.PERIOD_M / 13)} + vec2(0.37, 0.0);
-    roadA = textureGrad(map, uvA, roadDx / ${f(RoadSurface.ASPHALT_M)}, roadDy / ${f(RoadSurface.ASPHALT_M)});
-    roadN = textureGrad(normalMap, uvA, roadDx / ${f(RoadSurface.ASPHALT_M)}, roadDy / ${f(RoadSurface.ASPHALT_M)});
-    vec4 roadB = textureGrad(map, uvB, roadDx / ${f(RoadSurface.PERIOD_M / 13)}, roadDy / ${f(RoadSurface.PERIOD_M / 13)});
+    // The grain has no direction: it is laid on the ground plane, so it keeps its size round any bend
+    vec2 uvA = vRoadPlane / ${f(RoadSurface.ASPHALT_M)};
+    // A second, larger copy (72 m / 13), turned square to the first, breaks the 1.5 m repeat; it only modulates the first
+    vec2 uvB = vec2(-vRoadPlane.y, vRoadPlane.x) / ${f(RoadSurface.PERIOD_M / 13)} + vec2(0.37, 0.0);
+    roadA = textureGrad(map, uvA, gxA / ${f(RoadSurface.ASPHALT_M)}, gyA / ${f(RoadSurface.ASPHALT_M)});
+    roadN = textureGrad(normalMap, uvA, gxA / ${f(RoadSurface.ASPHALT_M)}, gyA / ${f(RoadSurface.ASPHALT_M)});
+    vec4 roadB = textureGrad(map, uvB, vec2(-gxA.y, gxA.x) / ${f(RoadSurface.PERIOD_M / 13)}, vec2(-gyA.y, gyA.x) / ${f(RoadSurface.PERIOD_M / 13)});
     roadA.rgb *= mix(1.0, roadB.g / max(roadAsphaltMean.g, 0.01), 0.35);
     // The aggregate is read only close to: past about 8 mm a pixel it is the mean, and its relief goes sooner
-    float grainFade = smoothstep(0.004, 0.016, min(roadFwLat, roadFwAlong));
+    roadFine = roadFootprint(gxA, gyA);
+    float grainFade = smoothstep(0.004, 0.016, roadFine);
     roadA.rgb = mix(roadA.rgb, roadAsphaltMean * (roadB.g / max(roadAsphaltMean.g, 0.01) * 0.35 + 0.65), grainFade * 0.7);
+    roadA.a = mix(roadA.a, roadAsphaltRough, grainFade);
     roadN.xyz = mix(roadN.xyz, vec3(0.5, 0.5, 1.0), max(grainFade, smoothstep(4.0, 30.0, roadDist)));
 }
 vec3 roadAlbedo = roadA.rgb;
@@ -464,7 +542,8 @@ float roadRough = roadA.a;
 float roadBroad = landNoise(vec2(roadS * 0.021, roadLat * 0.09 + 3.0)) * 0.6 + landNoise(vLandPos.xz * 0.11) * 0.4;
 roadAlbedo *= (0.82 + 0.22 * roadBroad) * mix(0.92, 0.95, roadSett);
 
-// Wheel tracks, two to a lane: polished smoother, darker on asphalt
+// Wheel tracks, two to a lane: polished smoother, darker on asphalt. Their polish shows only where the road faces the eye:
+// seen edge-on its sheen is the sky's reflection near full strength (Fresnel) and draws bright stripes along the road
 float roadLane = roadSide * roadHalf * 0.5;
 float roadWobble = (landNoise(vec2(roadS * 0.05, roadSide * 5.0)) - 0.5) * 0.5;
 float roadTrack = 0.0;
@@ -475,7 +554,7 @@ for (int k = 0; k < 2; k++) {
 }
 roadTrack = min(1.0, roadTrack) * step(abs(roadLat), roadHalf);
 roadAlbedo *= 1.0 - roadTrack * mix(0.12, -0.03, roadSett);
-roadRough -= roadTrack * 0.2;
+roadRough -= roadTrack * 0.2 * smoothstep(0.12, 0.5, abs(dot(normalize(vNormal), normalize(vViewPosition))));
 
 // Repairs on asphalt: a patch of newer surface in some 24 m cells, and sealed cracks
 float roadCell = floor(roadAlong / 24.0) + vRoadBase * 3.0;
@@ -521,7 +600,8 @@ if (roadSett < 0.5) {
     float lineC = roadSide * (roadHalf - ${f(m.edge.insetM)});
     float uneven = (landNoise(vec2(roadS * 3.0, roadSide * 9.0)) - 0.5) * 0.02;
     float across = roadLine(roadLat + uneven, lineC, ${f(m.lineWidthM)}, roadFwLat);
-    float edgeLine = edgeKind > 1.5 ? across * roadDash(roadS, ${f(m.mouth.dashM)}, ${f(m.mouth.dashM + m.mouth.gapM)}, roadFwAlong) : edgeKind > 0.5 ? across : 0.0;
+    // A broken edge line is spaced along the edge itself (its metres are 1 - lineC * curvature of the centre's)
+    float edgeLine = edgeKind > 1.5 ? across * roadDash(roadS - lineC * roadTurn, ${f(m.mouth.dashM)}, ${f(m.mouth.dashM + m.mouth.gapM)}, roadFwAlong) : edgeKind > 0.5 ? across : 0.0;
     float centreKind = floor(vRoad.z + 0.5);
     float centreAcross = roadLine(roadLat + uneven, 0.0, ${f(m.lineWidthM)}, roadFwLat);
     float centre = centreKind > 2.5 ? centreAcross
@@ -560,7 +640,9 @@ diffuseColor.a *= roadAlpha;
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <roughnessmap_fragment>', `float roughnessFactor = clamp(roadRough, 0.2, 1.0);`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <normal_fragment_maps>', `
 vec3 mapN = roadN.xyz * 2.0 - 1.0;
-mapN.xy *= normalScale * mix(0.25, 1.0, roadNear) * (1.0 - roadPaintCover * 0.6) * (1.0 - roadVerge * 0.5);
+// Seen edge-on, the relief's light is all in the pixels' few last rows and flickers: it weakens as the road turns away
+float roadFacing = smoothstep(0.03, 0.3, abs(dot(normal, normalize(vViewPosition))));
+mapN.xy *= normalScale * mix(0.25, 1.0, roadNear) * roadFacing * (1.0 - roadPaintCover * 0.6) * (1.0 - roadVerge * 0.5);
 normal = perturbNormal2Arb(-vViewPosition, normal, mapN, faceDirection);`);
     }
 }

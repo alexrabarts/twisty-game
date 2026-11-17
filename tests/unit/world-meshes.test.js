@@ -34,7 +34,7 @@ describe('RoadMesh', () => {
         expect(clamped).toBe(0);
         expect(finite(geometry)).toBe(true);
         const count = geometry.attributes.position.count;
-        for (const name of ['uv', 'road', 'edge', 'roadBase']) expect(geometry.attributes[name].count).toBe(count);
+        for (const name of ['uv', 'roadArc', 'roadPlane', 'road', 'edge', 'roadBase']) expect(geometry.attributes[name].count).toBe(count);
         // UV: metres across (verge, edge, edge, verge) and metres along
         const uv = geometry.attributes.uv.array;
         expect(Array.from(uv.slice(0, 14)).map(v => Math.round(v * 100) / 100)).toEqual([-5 - RoadSurface.VERGE_M, 0, -5, 0, -2.5, 0, 0, 0, 2.5, 0, 5, 0, 5 + RoadSurface.VERGE_M, 0]);
@@ -54,6 +54,144 @@ describe('RoadMesh', () => {
             const copies = RoadSurface.PERIOD_M / period;
             expect(Math.abs(copies - Math.round(copies))).toBeLessThan(1e-9);
         }
+    });
+
+    // A ribbon's vertex k * 7 + j read back as the shader reads it: metres across, metres along the centre and the
+    // heading (divided out of their projective form), the ground-plane coordinates and the position
+    const vertexOf = (geometry, i) => {
+        const a = geometry.attributes;
+        const q = a.roadArc.array[i * 3 + 2];
+        return {
+            lat: a.uv.array[i * 2], along: a.roadArc.array[i * 3] / q, turn: a.roadArc.array[i * 3 + 1] / q, q,
+            base: a.roadBase.array[i], plane: [a.roadPlane.array[i * 2], a.roadPlane.array[i * 2 + 1]],
+            x: a.position.array[i * 3], z: a.position.array[i * 3 + 2], road: Array.from(a.road.array.slice(i * 4, i * 4 + 4)), edge: Array.from(a.edge.array.slice(i * 4, i * 4 + 4))
+        };
+    };
+
+    test('the textures keep their size across the road in a 10 m hairpin: the inside is not squashed', () => {
+        const rows = bend(10, Math.PI);
+        for (const surface of ['setts', 'asphalt']) {
+            const { geometry, clamped } = RoadMesh.ribbon(rows.map(r => ({ ...r, bits: surface === 'setts' ? 8 : 0 })), 0);
+            expect(clamped).toBe(0);
+            // Metres of texture per metre of ground along each column (both edges and the quarter lines), row to row
+            const density = {};
+            for (const j of [1, 2, 4, 5]) {
+                density[j] = [];
+                for (let k = 0; k + 1 < rows.length; k++) {
+                    const a = vertexOf(geometry, k * 7 + j), b = vertexOf(geometry, (k + 1) * 7 + j);
+                    const ground = Math.hypot(b.x - a.x, b.z - a.z);
+                    const texture = surface === 'setts'
+                        ? Math.abs(RoadSurface.settAlong(b.along, b.turn, b.lat) - RoadSurface.settAlong(a.along, a.turn, a.lat))
+                        : Math.hypot(b.plane[0] - a.plane[0], b.plane[1] - a.plane[1]);
+                    density[j].push(texture / ground);
+                }
+            }
+            const all = Object.values(density).flat();
+            // The centre's metres along would give 2.0 on the inside edge (5 m radius) and 0.67 on the outside (15 m)
+            if (surface === 'setts') {
+                for (const d of all) expect(Math.abs(Math.log(d))).toBeLessThan(Math.log(1.2));
+                expect(Math.max(...all) / Math.min(...all)).toBeLessThan(1.25);
+            } else {
+                for (const d of all) expect(d).toBeCloseTo(1, 3);
+            }
+        }
+    });
+
+    test('a line across the road stays straight across a quad in a bend: the along and the heading are projective', () => {
+        const radius = 10;
+        const rows = bend(radius, Math.PI);
+        const { geometry } = RoadMesh.ribbon(rows, 0);
+        const curve = RoadMesh.curvature(rows);
+        // q is each column's share of the centre's length: 1 - offset * curvature, the inside shorter
+        const k = 4;
+        expect(vertexOf(geometry, k * 7 + 3).q).toBeCloseTo(1, 6);
+        expect(vertexOf(geometry, k * 7 + 5).q).toBeCloseTo(1 - 5 * curve[k], 5);
+        expect(vertexOf(geometry, k * 7 + 1).q).toBeCloseTo(1 + 5 * curve[k], 5);
+        // Ground points inside the quad between rows k and k + 1 and the inside quarter line and edge (2.5 to 5 m), on
+        // radial lines of the bend: each lies a share f of the way from row k to row k + 1, so the centre's metres there
+        // are row k's plus f of the step. Read them as the GPU interpolates a triangle, projectively and affinely
+        const a = [k * 7 + 4, k * 7 + 5, (k + 1) * 7 + 4, (k + 1) * 7 + 5].map(i => vertexOf(geometry, i));
+        const triangles = [[a[0], a[1], a[2]], [a[1], a[3], a[2]]];
+        const angle = i => rows[i].heading;
+        let worstProjective = 0, worstAffine = 0;
+        for (const f of [0.2, 0.5, 0.8]) {
+            for (const offset of [2.8, 3.75, 4.7]) {
+                const t = angle(k) + (angle(k + 1) - angle(k)) * f;
+                const px = radius - (radius - offset) * Math.cos(t), pz = (radius - offset) * Math.sin(t);
+                const truth = a[0].along + (a[2].along - a[0].along) * f;
+                for (const [p, q, r] of triangles) {
+                    const det = (q.x - p.x) * (r.z - p.z) - (r.x - p.x) * (q.z - p.z);
+                    const u = ((px - p.x) * (r.z - p.z) - (r.x - p.x) * (pz - p.z)) / det;
+                    const v = ((q.x - p.x) * (pz - p.z) - (px - p.x) * (q.z - p.z)) / det;
+                    const w = 1 - u - v;
+                    if (u < -1e-9 || v < -1e-9 || w < -1e-9) continue;
+                    const projective = (w * p.along * p.q + u * q.along * q.q + v * r.along * r.q) / (w * p.q + u * q.q + v * r.q);
+                    const affine = w * p.along + u * q.along + v * r.along;
+                    worstProjective = Math.max(worstProjective, Math.abs(projective - truth));
+                    worstAffine = Math.max(worstAffine, Math.abs(affine - truth));
+                }
+            }
+        }
+        // Projective: a few centimetres (the chords stand for arcs); affine kinks the line by decimetres
+        expect(worstProjective).toBeLessThan(0.05);
+        expect(worstAffine).toBeGreaterThan(worstProjective * 3);
+    });
+
+    test('markings, setts and grain line up across a section joint in a hairpin', () => {
+        // 40 m straight, a 10 m hairpin, 40 m straight; rows 4 m apart from s = 1000, with the ride's markings
+        const rows = [];
+        let x = 0, z = 0, heading = 0;
+        for (let i = 0; i < 40; i++) {
+            const s = 1000 + i * 4;
+            rows.push(row(x, z, heading, { s, cls: '8m Strasse' }));
+            const turn = s >= 1040 && s < 1040 + 10 * Math.PI ? 4 / 10 : 0;
+            heading += turn / 2;
+            x += 4 * Math.sin(heading);
+            z += 4 * Math.cos(heading);
+            heading += turn / 2;
+        }
+        const styles = RoadSurface.styles(rows);
+        const styled = rows.map((r, i) => ({ ...r, ...styles[i] }));
+        expect(styled.some(r => r.centre !== RoadSurface.CENTRE.none)).toBe(true);
+        // Two sections that share row 14, in the bend, as the environment builds them (one row past each end)
+        const m = 14;
+        const A = RoadMesh.ribbon(styled.slice(0, m + 1), 0).geometry;
+        const B = RoadMesh.ribbon(styled.slice(m), 0).geometry;
+        const P = RoadSurface.PERIOD_M, S = RoadSurface.SETTS_M;
+        const mod = (v, p) => ((v % p) + p) % p;
+        const circular = (a, b, p) => Math.min(Math.abs(mod(a, p) - mod(b, p)), p - Math.abs(mod(a, p) - mod(b, p)));
+        const dashSum = (v, d, p) => Math.floor(v / p) * d + Math.min(mod(v, p), d);
+        const marks = RoadSurface.MARKINGS;
+        let differentBase = false;
+        for (let j = 0; j < 7; j++) {
+            const a = vertexOf(A, m * 7 + j), b = vertexOf(B, j);
+            if (a.base !== b.base) differentBase = true;
+            expect(Math.hypot(a.x - b.x, a.z - b.z)).toBeLessThan(1e-6);
+            expect(a.lat).toBeCloseTo(b.lat, 6);
+            expect(a.road).toEqual(b.road);
+            expect(a.edge).toEqual(b.edge);
+            const sA = a.along + a.base * P, sB = b.along + b.base * P;
+            expect(Math.abs(sA - sB)).toBeLessThan(1e-3);
+            expect(Math.abs(a.turn - b.turn)).toBeLessThan(1e-5);
+            // The centre's dashes and an edge's mouth dashes (spaced along the edge) read the same on both sides
+            for (const [d, g] of [[marks.broken.dashM, marks.broken.gapM], [marks.warning.dashM, marks.warning.gapM]]) {
+                expect(Math.abs(dashSum(sA, d, d + g) - dashSum(sB, d, d + g))).toBeLessThan(1e-3);
+            }
+            const lineC = 5 - marks.edge.insetM;
+            expect(Math.abs(dashSum(sA - lineC * a.turn, 0.5, 1) - dashSum(sB - lineC * b.turn, 0.5, 1))).toBeLessThan(1e-3);
+            // The setts: the same place in the tile and the same copy of it (each sett toned the same)
+            const tA = RoadSurface.settAlong(a.along, a.turn, a.lat), tB = RoadSurface.settAlong(b.along, b.turn, b.lat);
+            expect(circular(tA, tB, S)).toBeLessThan(1e-3);
+            expect(RoadSurface.settCopy(tA, a.lat) + a.base * (P / S)).toBe(RoadSurface.settCopy(tB, b.lat) + b.base * (P / S));
+            // The grain: the same place in both of its tiles
+            for (const period of [RoadSurface.ASPHALT_M, P / 13]) {
+                for (const c of [0, 1]) expect(circular(a.plane[c], b.plane[c], period)).toBeLessThan(1e-3);
+            }
+        }
+        expect(differentBase).toBe(true);
+        // Along the centre line the metres run on through the joint at the rows' spacing: no step in the dashes
+        const before = vertexOf(A, (m - 1) * 7 + 3), after = vertexOf(B, 7 + 3);
+        expect((after.along + after.base * P) - (before.along + before.base * P)).toBeCloseTo(8, 3);
     });
 
     test('LOD1 is one strip of the textures\' mean colour and far fewer triangles', () => {
@@ -537,6 +675,60 @@ describe('RoadSurface', () => {
         expect(t.asphalt.mean[1]).toBeGreaterThan(0.25);
         expect(t.asphalt.mean[1]).toBeLessThan(0.4);
         expect(t.bytes).toBeLessThan(6 * 1024 * 1024);
+    });
+
+    test('both textures tile with no seam, and a sett cut by the tile\'s edge is toned as one sett', () => {
+        const t = RoadSurface.textures();
+        const n = RoadSurface.SIZE;
+        for (const surface of [t.asphalt, t.setts]) {
+            const d = surface.map.image.data;
+            const at = (x, y) => (((y + n) % n) * n + ((x + n) % n)) * 4;
+            const step = (dx, dy, x0, y0) => {
+                let sum = 0, count = 0;
+                for (let k = 0; k < n; k++) {
+                    const x = dx ? x0 : k, y = dy ? y0 : k;
+                    for (let c = 0; c < 3; c++) sum += Math.abs(d[at(x + dx, y + dy) + c] - d[at(x, y) + c]);
+                    count++;
+                }
+                return sum / count;
+            };
+            // Across the wrap (last column to the first, last row to the first) the texture changes no more than
+            // between any two neighbouring columns or rows inside it; the box-filtered mips then tile too
+            let inside = 0;
+            for (let x = 1; x < n - 2; x += 37) inside = Math.max(inside, step(1, 0, x, 0), step(0, 1, 0, x));
+            expect(step(1, 0, n - 1, 0)).toBeLessThanOrEqual(inside * 1.2);
+            expect(step(0, 1, 0, n - 1)).toBeLessThanOrEqual(inside * 1.2);
+        }
+        // A sett on the tile's last row continues on the next copy's first: it keeps its copy, so the shader tones
+        // the two halves alike (the pixel's own copy would split it)
+        const s = RoadSurface.setts(), px = RoadSurface.SETTS_M / n, S = RoadSurface.SETTS_M;
+        let split = 0;
+        for (let x = 0; x < n; x++) {
+            const last = s.normal[((n - 1) * n + x) * 4 + 3], first = s.normal[x * 4 + 3];
+            if (last === 0 || last !== first) continue;
+            const lat = x * px;
+            expect(RoadSurface.settCopy((n - 1) * px, lat)).toBe(RoadSurface.settCopy(S, lat));
+            if (Math.floor(((n - 1) * px) / S) !== Math.floor(S / S)) split++;
+        }
+        expect(split).toBeGreaterThan(n / 4);
+    });
+
+    test('fine detail fades by the patch of texture a pixel covers, both ways, allowing for the anisotropic filter', () => {
+        // Looking straight down: 1 cm a pixel each way
+        expect(RoadSurface.footprint([0.01, 0], [0, 0.01])).toBeCloseTo(0.01, 6);
+        // Edge-on: 1 cm across and 1.2 m along a pixel is no sharper than the long axis over the filter's taps
+        expect(RoadSurface.footprint([0.01, 0], [0, 1.2])).toBeCloseTo(1.2 / RoadSurface.FOOTPRINT_TAPS, 6);
+        expect(RoadSurface.footprint([0.01, 0], [0, 1.2])).toBeGreaterThan(0.06);
+        const material = RoadSurface.nearMaterial();
+        const lib = THREE.ShaderLib.physical;
+        const shader = { uniforms: THREE.UniformsUtils.clone(lib.uniforms), vertexShader: lib.vertexShader, fragmentShader: lib.fragmentShader };
+        material.onBeforeCompile(shader, null);
+        // The fades read the footprint, not the smaller of the two widths (which stays small edge-on)
+        expect(shader.fragmentShader).toContain('roadFine = roadFootprint(gxS, gyS)');
+        expect(shader.fragmentShader).toContain('roadFine = roadFootprint(gxA, gyA)');
+        expect(shader.fragmentShader).not.toMatch(/min\(roadFwLat, roadFwAlong\)/);
+        expect(shader.uniforms.roadSettRough.value).toBeGreaterThan(0.5);
+        expect(shader.uniforms.roadSettRough.value).toBeLessThan(1);
     });
 
     test('the near material reads both surfaces and compiles its shader chunks', () => {

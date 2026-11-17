@@ -4,7 +4,12 @@
 //   LOD0 (within 400 m): a row every sample (4 m), six strips (verge, four across the carriageway, verge) in RoadSurface's near
 //                        material: the UV is metres across and along the road, and the attributes carry the row's half
 //                        width, surface, centre line, edge lines and side-road mouths (RoadSurface.styles), so the
-//                        textures, markings and the verge are drawn in the shader and follow the curve
+//                        textures, markings and the verge are drawn in the shader and follow the curve. In a bend a
+//                        quad is a trapezoid (its inside column is shorter): `roadArc` carries the metres along and
+//                        the heading times q = 1 - offset * curvature, the column's share of the centre's length, so
+//                        the shader interpolates them projectively and a line across the road stays straight across
+//                        the quad instead of kinking at its diagonal. `roadPlane` is the vertex's ground position from
+//                        an origin on a PERIOD_M grid, for the asphalt's grain
 //   LOD1 (400 m to 1.5 km): a row every 16 m, or sooner in a bend, one strip of flat colour (the textures' mean)
 //   hairpins:            the inside edge of a bend is held inside the bend's
 //                        radius, so the ribbon never folds over itself where
@@ -87,6 +92,12 @@ class RoadMesh {
         return { offsets: offsets.map(o => (Math.sign(o) === inner && Math.abs(o) > limit ? inner * limit : o)), clamped: true };
     }
 
+    // A column's length between two rows as a share of the centre's: 1 - offset * curvature (the inside of a bend
+    // is shorter), never below a tenth (the inside edge is held at INNER_SHARE of the radius)
+    static columnShare(offset, curve) {
+        return Math.max(0.1, 1 - offset * curve);
+    }
+
     static place(row, offset) {
         return { x: row.x + offset * Math.cos(row.heading), z: row.z - offset * Math.sin(row.heading) };
     }
@@ -105,8 +116,19 @@ class RoadMesh {
         const base = rows.length ? Math.floor(along[0] / period) : 0;
         const n = rows.length;
         const W = 7;
+        // The heading without its 2 pi steps (the ride's is already continuous; a side road's may not be)
+        const turn = [];
+        rows.forEach((row, i) => {
+            if (i === 0) { turn.push(row.heading); return; }
+            let step = row.heading - rows[i - 1].heading;
+            step -= Math.round(step / (2 * Math.PI)) * 2 * Math.PI;
+            turn.push(turn[i - 1] + step);
+        });
+        const origin = rows.length ? [Math.floor(rows[0].x / period) * period, Math.floor(rows[0].z / period) * period] : [0, 0];
         const positions = new Float32Array(n * W * 3);
         const uvs = new Float32Array(n * W * 2);
+        const arc = new Float32Array(n * W * 3);
+        const plane = new Float32Array(n * W * 2);
         const road = new Float32Array(n * W * 4);
         const edge = new Float32Array(n * W * 4);
         let clamped = 0;
@@ -123,6 +145,9 @@ class RoadMesh {
                 const at = k * W + j;
                 positions.set([p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z], at * 3);
                 uvs.set([offset, v], at * 2);
+                const q = RoadMesh.columnShare(offset, curve[k]);
+                arc.set([v * q, turn[k] * q, q], at * 3);
+                plane.set([p.x - origin[0], p.z - origin[1]], at * 2);
                 road.set([h, (row.bits & 8) !== 0 ? 1 : 0, row.centre ?? C.none, bridge || tunnel ? 1 : 0], at * 4);
                 edge.set([row.left ?? 0, row.right ?? 0, row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
             });
@@ -137,6 +162,8 @@ class RoadMesh {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        geometry.setAttribute('roadArc', new THREE.BufferAttribute(arc, 3));
+        geometry.setAttribute('roadPlane', new THREE.BufferAttribute(plane, 2));
         geometry.setAttribute('road', new THREE.BufferAttribute(road, 4));
         geometry.setAttribute('edge', new THREE.BufferAttribute(edge, 4));
         geometry.setAttribute('roadBase', new THREE.BufferAttribute(new Float32Array(n * W).fill(base), 1));
