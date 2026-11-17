@@ -15,6 +15,7 @@ twistyDev.autopilot({ speed: 30, lane: -3 });
 - `lane: -3` is the riders' lane. `lane: 1` meets the roadworks ramp and the oncoming car.
 - `twistyDev.view(side, up, back, ahead)` pauses the game and looks at the bike from beside the road. Use it to check scenery.
 - `twistyDev.teleport(segment)` moves the bike.
+- `twistyDev.viewPose({ x, z, eyeHeight, bearing, pitch, roll, vfov })` (world mode only) freezes the ride and draws the game from a camera pose, with the bike and the traffic hidden. The photo match uses it: see `.agent/sop/photo-match.md`.
 
 Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without them.
 
