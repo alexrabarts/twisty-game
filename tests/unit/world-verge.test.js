@@ -39,6 +39,9 @@ const WORLDS = {
     wall: () => world({ zone: x => (road(x) ? Z.road : Math.abs(x) <= 8 ? Z.bench : x >= 16 ? Z.wall : Z.terrain), shape: x => (x >= 16 ? 108 : 100) }),
     // On the right a drop 16 m out where the land falls 10 m, past a bench
     drop: () => world({ zone: x => (road(x) ? Z.road : Math.abs(x) <= 8 ? Z.bench : x >= 16 ? Z.drop : Z.terrain), shape: x => (x >= 16 ? 90 : 100) }),
+    // On the right the road's edge on a retaining wall: a drop just past the verge where the land falls 10 m
+    // (stacked hairpin legs), so the wall and its parapet are drawn there (WorldEnvironment.edgeFoot)
+    retaining: () => world({ zone: x => (road(x) ? Z.road : x >= 7 ? Z.drop : Z.terrain), shape: x => (x >= 7 ? 90 : 100) }),
     // A wall and a drop in the zone layer on flat land: the face of another strand read at the nearest node
     flatWall: () => world({ zone: x => (road(x) ? Z.road : x >= 8 ? Z.wall : x <= -8 ? Z.drop : Z.terrain), shape: x => (x <= -8 ? 99 : 100) })
 };
@@ -176,6 +179,15 @@ describe('real obstacles still crash', () => {
         const out = ride(place(game.Vehicle, WORLDS.drop(), { speed: 25, angle: 20 }), { seconds: 4 });
         expect(out.crashed).toBe(true);
         expect(out.falling).toBe(true);
+    });
+
+    test('the parapet of a retaining wall is solid: a bounce back toward the road, not a fall', () => {
+        const vehicle = place(game.Vehicle, WORLDS.retaining(), { speed: 25, angle: 20 });
+        const out = ride(vehicle, { seconds: 4 });
+        expect(out.crashed).toBe(true);
+        expect(out.falling).toBe(false);
+        expect(vehicle.position.x).toBeLessThanOrEqual(5 + game.RoadSurface.VERGE_M - game.RoadMesh.PARAPET_W_M + 0.01);
+        expect(vehicle.position.y).toBeGreaterThan(99);
     });
 
     test('a barrier is solid wherever it stands', () => {

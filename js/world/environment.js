@@ -34,7 +34,7 @@ class WorldEnvironment {
     static get SIDE_UNDER_M() { return 0.01; }
     static get SIDE_KERB_M() { return 0.5; }
     static get SIDE_PASS_M() { return 2; }
-    // The edge works (edgeFoot): metres under a road edge that another road must lie for the edge to be a deck over it;
+    // The edge works (edgeFoot): metres under a road edge that another road must lie for the edge to stand on a wall down to it;
     // how far out the importer's zone is read for a retaining wall; how far under the edge the drawn land may lie
     // before an apron runs down to it (the land is drawn SINK_M under the road); the apron where no tile is resident
     static get DECK_UNDER_M() { return 1.5; }
@@ -445,23 +445,27 @@ class WorldEnvironment {
         return out;
     }
 
-    // What a road's edge point (x, y, z), facing out along (ox, oz), stands on (RoadMesh.edgeWorks): a deck where a
-    // lower road (another leg of the ride, or a side road, more than DECK_UNDER_M below) runs under it; a retaining wall
-    // where the importer gave the land beyond it to a lower road (a `drop` node: two legs too close for a slope), or
+    // What a road's edge point (x, y, z), facing out along (ox, oz), stands on (RoadMesh.edgeWorks): a retaining wall
+    // down to a lower road (another leg of the ride, or a side road, more than DECK_UNDER_M below) whose band it lies
+    // over; a retaining wall where the importer gave the land beyond it to a lower road (a `drop` node: two legs too close for a slope), or
     // where an apron at the batter would run onto a lower road; an apron where the land at some level of detail a tile
     // may be drawn at (its 8, 16 and 32 m triangles, as TerrainMesh.vertexY draws them) lies lower than the edge, out
     // at the batter to where it meets the land drawn near;
-    // else null, the land meets the edge. Without the tile, an apron of APRON_M. `aprons: false` gives walls and decks only.
+    // else null, the land meets the edge. Without the tile, an apron of APRON_M. `aprons: false` gives walls only.
     edgeFoot(missing = null, { aprons = true } = {}) {
         const n = WorldData.TILE_N, m = WorldData.TILE_M;
         const near = {};
+        // The height of the highest road more than DECK_UNDER_M under the edge whose band (carriageway and verge) the
+        // edge point lies over, or null
         const lowerRoad = (x, z, y) => {
+            let best = null;
             for (const i of this.route.cellSegments(x, z) || []) {
                 this.route.nearestSegment(x, z, i, i, near);
-                if (near.distance <= near.width / 2 + RoadSurface.VERGE_M && near.y < y - WorldEnvironment.DECK_UNDER_M) return true;
+                if (near.distance <= near.width / 2 + RoadSurface.VERGE_M && near.y < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, near.y);
             }
             const side = this.ground.sideRoadY(x, z);
-            return side !== null && side < y - WorldEnvironment.DECK_UNDER_M;
+            if (side !== null && side < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, side);
+            return best;
         };
         const landLow = (x, z) => {
             const tx = Math.floor(x / m), tz = Math.floor(z / m);
@@ -500,7 +504,10 @@ class WorldEnvironment {
             return [grid[at], grid[at + 1], grid[at + 2]];
         };
         return (x, y, z, ox, oz) => {
-            if (lowerRoad(x, z, y)) return { kind: 'deck' };
+            // Over a lower road's band (stacked hairpin legs whose verges meet): the retaining wall stands down to that
+            // road, as the real ones do. Never a deck: a road over a road off a bridge is not a structure the map has
+            const under = lowerRoad(x, z, y);
+            if (under !== null) return { kind: 'wall', y: under };
             const at = WorldEnvironment.FOOT_PROBE_M;
             const zone = this.ground.tileZone(x + ox * at, z + oz * at);
             if (zone === WorldData.ZONE.drop || zone === WorldData.ZONE.wall) {
@@ -520,7 +527,7 @@ class WorldEnvironment {
                 const land = landNear(x + ox * o, z + oz * o);
                 if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
             }
-            if (lowerRoad(x + ox * run, z + oz * run, y)) return { kind: 'wall', y: low };
+            if (lowerRoad(x + ox * run, z + oz * run, y) !== null) return { kind: 'wall', y: low };
             return { kind: 'apron', y: y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2, color: landColor(x + ox * 2, z + oz * 2) };
         };
     }
@@ -570,7 +577,7 @@ class WorldEnvironment {
             group.add(side);
             triangles += side.userData.triangles;
         });
-        // The edge works of every side road here, one mesh: its retaining walls and decks (a side road is seen from afar
+        // The edge works of every side road here, one mesh: its retaining walls (a side road is seen from afar
         // at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when a tile
         // under them arrives
         triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }));

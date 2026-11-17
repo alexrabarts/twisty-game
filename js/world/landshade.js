@@ -13,6 +13,8 @@
 //                       the scene fog stays for weather (a fog look, rain, snow)
 //   curvature           far meshes drop d^2 (1 - k) / 2R under the camera's horizon, as the real land does
 //   detail              world-space value noise on the albedo near the camera, so open ground is not flat paint
+//   stone               dry-stone courses in world space on a retaining wall (RoadMesh.stoneMaterial): rows of
+//                       granite blocks of mixed length and tone with dark joints, fading to their mean far off
 //   shade               the sky's fill light is held back, so the side of a valley away from the sun is dark
 class LandShade {
     static get PALETTE() {
@@ -140,18 +142,18 @@ class LandShade {
     }
 
     // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles
-    static patch(material, { curvature = false, detail = false } = {}) {
+    static patch(material, { curvature = false, detail = false, stone = false } = {}) {
         if (material.userData.landShade) return material;
         material.userData.landShade = true;
         const shared = LandShade.uniforms;
         material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, shared);
             shader.vertexShader = shader.vertexShader
-                .replace('#include <common>', `#include <common>\nuniform float uDrop;\nvarying vec3 vLandPos;`)
+                .replace('#include <common>', `#include <common>\nuniform float uDrop;\nvarying vec3 vLandPos;${stone ? '\nvarying vec3 vLandNormal;' : ''}`)
                 .replace('#include <begin_vertex>', curvature
                     ? `#include <begin_vertex>\n{ vec3 eye = -(transpose(mat3(viewMatrix)) * viewMatrix[3].xyz); vec2 d = (modelMatrix * vec4(transformed, 1.0)).xz - eye.xz; transformed.y -= dot(d, d) * uDrop; }`
                     : '#include <begin_vertex>')
-                .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
+                .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${stone ? '\nvLandNormal = mat3(modelMatrix) * objectNormal;' : ''}`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
 uniform vec3 uAerialColor;
@@ -160,6 +162,7 @@ uniform float uAerialMax;
 uniform float uIndirect;
 uniform float uDetail;
 varying vec3 vLandPos;
+${stone ? 'varying vec3 vLandNormal;' : ''}
 float landHash(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float landNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -175,6 +178,26 @@ float landNoise(vec2 p) {
     float broad = landNoise(vLandPos.xz * 0.006);
     float near = 1.0 - smoothstep(120.0, 1400.0, dist);
     diffuseColor.rgb *= mix(1.0, 0.5 + 1.0 * fine, near * uDetail) * (0.86 + 0.28 * broad) * (1.0 + (tuft - 0.5) * 0.5 * uDetail);
+}` : stone ? `#include <color_fragment>
+{
+    // Rough-coursed granite: courses about 0.34 m that wander up and down, blocks 0.4 to 1.2 m long, each course
+    // offset, each block its own tone and a warm or cool cast, the joints soft and recessed. Along the face's own
+    // horizontal, so a wall reads the same at any heading
+    vec3 n = normalize(vLandNormal);
+    vec2 t = normalize(vec2(-n.z, n.x) + vec2(1e-4, 0.0));
+    float u = dot(vLandPos.xz, t);
+    float v = vLandPos.y / 0.34 + 0.35 * (landNoise(vec2(u * 0.7, vLandPos.y * 0.4)) - 0.5);
+    float row = floor(v);
+    float len = 0.4 + 0.8 * landHash(vec2(row, 7.0));
+    float w = u / len + landHash(vec2(row, 3.0));
+    float col = floor(w);
+    vec2 f = vec2(fract(w), fract(v));
+    float joint = min(min(f.x, 1.0 - f.x) * len, min(f.y, 1.0 - f.y) * 0.34);
+    float h = landHash(vec2(col, row)), tint = landHash(vec2(row, col + 11.0)) - 0.5;
+    float tone = 0.74 + 0.4 * h + 0.3 * (landNoise(vec2(u, vLandPos.y) * 4.0) - 0.5);
+    vec3 face = vec3(tone * (1.0 + 0.10 * tint), tone, tone * (1.0 - 0.10 * tint)) * mix(0.55, 1.0, smoothstep(0.008, 0.06, joint));
+    float far = smoothstep(40.0, 160.0, length(vViewPosition));
+    diffuseColor.rgb *= mix(face, vec3(0.86), far);
 }` : '#include <color_fragment>')
                 .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\nreflectedLight.indirectDiffuse *= uIndirect;`)
                 .replace('#include <fog_fragment>', `{
@@ -184,7 +207,7 @@ float landNoise(vec2 p) {
 }
 #include <fog_fragment>`);
         };
-        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}`;
+        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}`;
         material.customProgramCacheKey = () => key;
         material.needsUpdate = true;
         return material;

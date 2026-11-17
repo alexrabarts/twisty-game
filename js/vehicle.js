@@ -3625,9 +3625,12 @@ class Vehicle {
     // A world zone as the bike meets it. A wall or a drop from the tile's zone layer is solid only where the land
     // at loc shows it (WorldPhysics wallRiseM, dropDepthM against the road height roadY); elsewhere it is run-off.
     // The layer is an 8 m grid read at the nearest node, so a face between stacked strands reaches up to 4 m
-    // toward the road, onto flat verge. Barriers, tunnel and gallery rock and bridge parapets stay solid.
+    // toward the road, onto flat verge. Barriers, tunnel and gallery rock, bridge parapets and the parapets of
+    // retaining walls stay solid.
     worldZone(zone, loc, roadY = loc.roadY) {
         if (zone.kind !== 'wall' && zone.kind !== 'fall') return zone;
+        // A retaining wall's parapet (WorldGround.zoneAt) stands where it is drawn, whatever the land beyond it
+        if (zone.parapet) return zone;
         const world = this.worldPhysics;
         const ground = this.environment.ground;
         const route = this.environment.route;

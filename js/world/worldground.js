@@ -185,7 +185,10 @@ class WorldGround extends Ground {
         const side = this.sideRoadY(at.x, at.z);
         if (side !== null) return side;
         const land = this.landY(at.x, at.z, loc.roadY);
-        return this.bridgeOrDrop(loc, half) ? land : Math.max(land, this.earthworkY(loc, half, reach));
+        if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach));
+        // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
+        // parapet stands on the last PARAPET_W_M of the verge)
+        return !(loc.flags && loc.flags.bridge) && reach < half + RoadSurface.VERGE_M - RoadMesh.PARAPET_W_M ? loc.roadY : land;
     }
 
     // The fill RoadMesh draws beside the road (edgeWorks' apron): the verge at the road's height, then a slope at the
@@ -208,6 +211,17 @@ class WorldGround extends Ground {
         const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchDrop || (this.scratchDrop = {}));
         const zone = this.tileZone(out.x, out.z);
         return zone === WorldData.ZONE.drop || zone === WorldData.ZONE.wall;
+    }
+
+    // The road's edge on loc's side stands on a retaining wall with a parapet: a drop node just past the verge (the
+    // upper road's wall, WorldEnvironment.edgeFoot) where the land lies RoadMesh.PARAPET_DROP_M or more under the road
+    onRetainingWall(loc, half) {
+        const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
+        const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchWall || (this.scratchWall = {}));
+        if (this.tileZone(out.x, out.z) !== WorldData.ZONE.drop) return false;
+        const land = this.tileHeight(out.x, out.z);
+        const roadY = Number.isFinite(loc.roadY) ? loc.roadY : point.y;
+        return land !== null && roadY - land >= RoadMesh.PARAPET_DROP_M;
     }
 
     // (x, z) of a located point; the point itself when it carries one
@@ -233,6 +247,13 @@ class WorldGround extends Ground {
         }
         // A bridge has its parapet at the edge of the deck: past it there is no ground to ride or fall to
         if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + WorldGround.PARAPET_M };
+        // Where the road's edge stands on a retaining wall (the importer's drop node just past the verge, where RoadMesh
+        // draws the wall and its parapet instead of the fill): the verge is drawn at the road's height up to the
+        // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall
+        if (this.onRetainingWall(loc, halfRoad)) {
+            const parapet = halfRoad + RoadSurface.VERGE_M - RoadMesh.PARAPET_W_M;
+            return reach > parapet ? { kind: 'wall', side: this.wallSide, sign, start: parapet, parapet: true } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
+        }
         const kind = this.kindAt(at.x, at.z);
         // Where the zone began: step back toward the road while the kind holds
         let start = reach;

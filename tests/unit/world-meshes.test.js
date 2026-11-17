@@ -6,7 +6,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { fakeData, allTiles, samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData } = game;
+const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData, WorldPhysics } = game;
 
 const finite = geometry => Array.from(geometry.attributes.position.array).every(Number.isFinite);
 const row = (x, z, heading, over = {}) => ({ x, y: 100, z, heading, width: 10, bits: 0, ...over });
@@ -288,19 +288,25 @@ describe('RoadMesh', () => {
         expect(apron.wall.positions).toHaveLength(0);
         expect(Math.min(...ys(apron.apron))).toBeCloseTo(edgeY - 3, 4);
         expect(Math.max(...xs(apron.apron))).toBeCloseTo(edgeX + (3 - RoadMesh.APRON_UNDER_M) / RoadMesh.BATTER, 3);
-        // A wall drops to its foot and carries a parapet over the edge
+        // A retaining wall is stone: it drops to its foot and carries a stone parapet over the edge
         const wall = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 6 }));
         expect(wall.apron.positions).toHaveLength(0);
-        expect(Math.min(...ys(wall.wall))).toBeCloseTo(edgeY - 6, 4);
-        expect(Math.max(...ys(wall.wall))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
+        expect(wall.wall.positions).toHaveLength(0);
+        expect(Math.min(...ys(wall.stone))).toBeCloseTo(edgeY - 6, 4);
+        expect(Math.max(...ys(wall.stone))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
+        // A step lower than PARAPET_DROP_M has no parapet (the physics rides off it, as WorldPhysics.dropDepthM says)
+        const step = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 1.5 }));
+        expect(Math.max(...ys(step.stone))).toBeCloseTo(edgeY, 4);
+        expect(RoadMesh.PARAPET_DROP_M).toBe(WorldPhysics.dropDepthM);
         // A deck hangs DECK_M with a soffit under the road
         const deck = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'deck' }));
         expect(Math.min(...ys(deck.wall))).toBeCloseTo(edgeY - RoadMesh.DECK_M, 4);
-        expect(deck.wall.positions.length).toBeGreaterThan(wall.wall.positions.length);
+        expect(deck.stone.positions).toHaveLength(0);
+        expect(deck.wall.positions.length).toBeGreaterThan(wall.stone.positions.length);
         expect(RoadMesh.edgeWorks(near.sides, () => null).apron.positions).toHaveLength(0);
         const roofed = RoadMesh.ribbon(rows.map(r => ({ ...r, bits: 2 })), 0);
         const none = RoadMesh.edgeWorks(roofed.sides, () => ({ kind: 'wall', y: 0 }));
-        expect(none.wall.positions.length + none.apron.positions.length).toBe(0);
+        expect(none.wall.positions.length + none.apron.positions.length + none.stone.positions.length).toBe(0);
         const group = RoadMesh.section(rows, 0, { foot: () => ({ kind: 'apron', y: edgeY - 2 }) });
         expect(group.children.map(c => c.name)).toEqual(['road-ribbon', 'road-works']);
     });
@@ -625,8 +631,10 @@ describe('FarLand', () => {
 
     test('far meshes drop with the curvature of the Earth in their shader, the tiles do not', () => {
         expect(LandShade.DROP_PER_M2 * 40000 * 40000).toBeCloseTo(109, 0);
-        expect(Horizon.material().customProgramCacheKey()).toBe('land-11');
-        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-01');
+        expect(Horizon.material().customProgramCacheKey()).toBe('land-110');
+        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-010');
+        // Retaining walls: the land's lighting and the stone courses, flat (no curvature, no ground noise)
+        expect(RoadMesh.stoneMaterial().customProgramCacheKey()).toBe('land-001');
     });
 });
 

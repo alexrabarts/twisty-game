@@ -2381,8 +2381,8 @@ async function floatingWalk(placeSource, every, tol, upM) {
                             raycaster.set(new THREE.Vector3(q.x, roadY + 0.3, q.z), down);
                             raycaster.far = 2;
                             const road = raycaster.intersectObjects([...roads, ...skirts], false)[0];
-                            // A retaining wall's parapet is not ground: the physics there is the importer's drop
-                            if (road && road.object.name === 'road-works' && road.face.materialIndex === 1) continue;
+                            // A retaining wall or its parapet (works group 1 or 2) is not ground: the physics there is the wall
+                            if (road && road.object.name === 'road-works' && road.face.materialIndex >= 1) continue;
                             const drawn = road ? Math.max(near.y, road.point.y) : near.y;
                             physics.push({ s: Math.round(p.s), side: side > 0 ? 'right' : 'left', offset: r2(o), deltaM: r2(ground - drawn) });
                         }
@@ -2638,7 +2638,7 @@ const WORLD = {
         // A retaining wall, deck or parapet of the edge works is a structure, not ground (the physics treats it so)
         const hitY = (x, z, groups, from = 4000) => {
             raycaster.set(new THREE.Vector3(x, from, z), down);
-            const hit = raycaster.intersectObjects(groups, true).find(h => !(h.object.name === 'road-works' && h.face.materialIndex === 1));
+            const hit = raycaster.intersectObjects(groups, true).find(h => !(h.object.name === 'road-works' && h.face.materialIndex >= 1));
             return hit ? hit.point.y : null;
         };
         const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
