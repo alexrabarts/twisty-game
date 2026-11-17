@@ -13,6 +13,7 @@
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
 //   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-hud world-shots
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
+//   world-hud rides the two-stage fixture tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
 //   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
@@ -2146,8 +2147,7 @@ const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|
 const WORLD_RESIDENT_TILES = 60;
 const WORLD_BIKE_TILE_M = 900;
 
-async function openWorld(browser, port, id, seed = 1) {
-    const data = option('worldData');
+async function openWorld(browser, port, id, seed = 1, data = option('worldData')) {
     for (let attempt = 0; attempt < 3; attempt++) {
         const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`, seed);
         try {
@@ -2540,16 +2540,9 @@ const WORLD = {
         const cam = game.camera;
         twistyDev.freeze();
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 12);
-        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
-        const a = {}, b = {};
         const turnAround = s => {
             let total = 0;
-            route.sample(s - 40, a);
-            for (let d = -36; d <= 40; d += 4) {
-                route.sample(s + d, b);
-                total += wrap(b.heading - a.heading);
-                route.sample(s + d, a);
-            }
+            for (let d = -36; d <= 40; d += 4) total += route.headingChange(s + d - 4, s + d);
             return Math.abs(total) * 180 / Math.PI;
         };
         const starts = [2900, 3900, 4400, 5000, 7400, 8000];
@@ -2691,6 +2684,9 @@ const WORLD = {
     }
 };
 
+// The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
+const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
+
 // The seeds world-finish rides: --seeds N rides N seeds from --seed (default 1); --seed S alone rides S once.
 // Neither: WORLD_FINISH_SEEDS seeds from 1, so one lucky draw of the traffic cannot pass the probe.
 const WORLD_FINISH_SEEDS = 5;
@@ -2728,7 +2724,11 @@ async function worldMain() {
                 continue;
             }
             state.requests = [];
-            const page = await openWorld(browser, port, id);
+            // The stage HUD needs a ride of two stages or more; the shipped data holds one, so without --worldData
+            // it rides the two-stage fixture
+            const page = name === 'world-hud' && !option('worldData')
+                ? await openWorld(browser, port, 'all', 1, WORLD_HUD_DATA)
+                : await openWorld(browser, port, id);
             report.results[name] = await WORLD[name](page, port);
             if (name === 'world-net') report.results[name].offHost = state.requests.filter(url => !isAllowedRequest(url, port));
             await page.close();
