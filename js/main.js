@@ -213,12 +213,97 @@ class Game {
             }
         });
 
+        // `?world=<stage|all>` rides the streamed world; every other page shows the legs
+        const worldId = typeof WorldEnvironment !== 'undefined' ? WorldEnvironment.requested(window.location.search) : null;
+        if (worldId) {
+            this.startWorld(worldId);
+            return;
+        }
+
         // Show tour selector and wait for leg selection
         console.log('Showing tour selector...');
         this.tourSystem.createLegSelector(document.body, (leg) => {
             console.log('Leg selected:', leg.name);
             this.initializeGameWithLeg(leg);
         });
+    }
+
+    // Loads the world's ride layer, then builds the game round it (WorldEnvironment.load)
+    async startWorld(id) {
+        this.endMenuShowcase();
+        this.removeRunOverlays();
+        const note = document.createElement('div');
+        note.id = 'world-loading';
+        note.textContent = 'Loading the road...';
+        note.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:600 20px system-ui,sans-serif;z-index:30;pointer-events:none';
+        document.body.appendChild(note);
+        try {
+            const environment = await WorldEnvironment.load(this.scene, { id, search: window.location.search });
+            await this.initializeGameWithWorld(environment);
+        } catch (error) {
+            console.error('Failed to load the world:', error);
+            note.textContent = `The world could not load: ${error.message}`;
+            note.style.color = '#ff8a7a';
+            return;
+        }
+        note.remove();
+    }
+
+    // The game on a world: no cones, rockfalls or traffic are built (W4 puts traffic on the route),
+    // and the atmosphere track is the leg engine's, so the page's own sky and light stand.
+    async initializeGameWithWorld(environment) {
+        this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
+        this.environment = environment;
+        this.environment.applyLandscapeConfig(this.environment.config.look);
+        this.applyShadowBox(this.environment.config.render);
+        this.atmosphereTrack = null;
+        this.cones = null;
+        this.rockfalls = null;
+        this.traffic = null;
+        this.particles = new ParticleSystem(this.scene);
+        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter);
+        this.vehicle.environment = this.environment;
+        if (this.weatherSystem) this.vehicle.setWeatherSystem(this.weatherSystem);
+
+        const start = this.environment.startPosition();
+        this.vehicle.position.set(start.x, start.y, start.z);
+        this.vehicle.yawAngle = start.heading;
+        this.vehicle.findNearestRoadSegment();
+        // The ground under the first frame is here before the bike is
+        await this.environment.streamer.settle(start, this.environment.startS);
+
+        const normalCameraOffset = this.baseCameraOffset.clone();
+        normalCameraOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
+        const normalCameraPos = this.vehicle.position.clone().add(normalCameraOffset);
+        this.camera.position.copy(normalCameraPos);
+        this.cameraIntroStartPos.copy(normalCameraPos);
+        this.cameraIntroEndPos.copy(normalCameraPos);
+        this.currentCameraPos.copy(normalCameraPos);
+
+        this.environment.guide.onRestart = () => this.restartFromCheckpoint();
+        this.resetRunState();
+        this.armWorldStart();
+        this.graphics.fixColorSpaces();
+        this.setupPerformanceCulling();
+        this.accumulatedTime = 0;
+        if (this.clock) this.clock.getDelta();
+        this.lastTime = performance.now();
+        this.frameCount = 0;
+        this.adaptGraceUntil = performance.now() + 4000;
+        this.animationFrameId = requestAnimationFrame(() => this.animate());
+    }
+
+    // Until a gate is passed, a restart puts the rider back on the start
+    armWorldStart() {
+        const start = this.environment.startPosition();
+        this.lastCheckpointPosition = new THREE.Vector3(start.x, start.y, start.z);
+        this.lastCheckpointHeading = start.heading;
+    }
+
+    // What the guide reads each frame; the projection is the vehicle's own, from its wall check
+    worldGuideState(dt) {
+        const vehicle = this.vehicle;
+        return { projection: vehicle.projection, speed: vehicle.speed, yaw: vehicle.yawAngle, dt, position: vehicle.position };
     }
 
     initializeGameWithLeg(leg) {
@@ -599,7 +684,8 @@ class Game {
         if (this.hud) {
             const leg = this.tourSystem && this.tourSystem.getCurrentLeg();
             const index = leg ? this.tourSystem.getCurrentLegIndex() : -1;
-            this.hud.startRun(leg ? `Leg ${index + 1} · ${leg.name}` : '');
+            const world = this.environment && this.environment.isWorld;
+            this.hud.startRun(world ? 'Andermatt world' : leg ? `Leg ${index + 1} · ${leg.name}` : '');
             this.hud.setGates(0, this.gateTotal());
         }
         this.hideSplit();
@@ -650,7 +736,7 @@ class Game {
 
         this.vehicle.reset();
         if (this.environment.route && this.environment.route.unitCount > 0) {
-            const startPos = this.tourSystem.getStartingPosition(this.environment.route);
+            const startPos = this.environment.isWorld ? this.environment.startPosition() : this.tourSystem.getStartingPosition(this.environment.route);
             this.vehicle.position.set(startPos.x, startPos.y, startPos.z);
             this.vehicle.yawAngle = startPos.heading;
             // Re-sync segment tracking with the teleported position so the
@@ -658,11 +744,15 @@ class Game {
             this.vehicle.findNearestRoadSegment();
             this.vehicle.updateMesh();
         }
-        this.cones.reset();
+        if (this.cones) this.cones.reset();
         if (this.traffic && this.traffic.reset) {
             this.traffic.reset();
         }
         this.resetRunState();
+        if (this.environment.isWorld) {
+            this.armWorldStart();
+            this.environment.guide.reset();
+        }
         this.restartLeaderboardSession();
 
         const dashboard = document.querySelector('.dashboard');
@@ -698,6 +788,11 @@ class Game {
         // Stop sounds
         if (this.soundManager) {
             this.soundManager.stopEngineSound();
+        }
+
+        // A world owns DOM beside the scene (the guide and its map) and the streamer's buffers
+        if (this.environment && this.environment.isWorld) {
+            this.environment.dispose();
         }
 
         // Clear scene objects (keep camera and lights)
@@ -1862,7 +1957,35 @@ class Game {
         zone.textContent = `WHEELIE ${degrees}°`;
     }
 
+    // The end of a world stage: the time and the restarts, and R to ride it again. Boards, unlocks and the
+    // next stage belong to the run flow of the world, not to this page.
+    showWorldFinish() {
+        const banner = document.createElement('div');
+        banner.id = 'finishBanner';
+        banner.className = 'finish-banner';
+        const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} checkpoint ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
+        banner.innerHTML = `
+            <div class="finish-main">
+                <div class="finish-title">STAGE COMPLETE</div>
+                <div class="finish-time-label">YOUR TIME</div>
+                <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
+                <div class="finish-deltas">${restarts}</div>
+                <div class="finish-meta">${this.vehicle.getDistanceTraveled().toFixed(0)} m</div>
+                <div class="finish-buttons"><button id="restartLegBtn" class="finish-btn primary"><u>R</u>ESTART</button></div>
+            </div>`;
+        if (this.hud) this.hud.clearTransient();
+        document.body.classList.add('run-over');
+        document.body.appendChild(banner);
+        if (this.input) this.input.setMenuActive(true);
+        const again = document.getElementById('restartLegBtn');
+        if (again) again.addEventListener('click', () => this.restartLeg());
+    }
+
     showFinishScreen() {
+        if (this.environment && this.environment.isWorld) {
+            this.showWorldFinish();
+            return;
+        }
         // Calculate final score with finish bonus
         const distance = this.vehicle.getDistanceTraveled();
         const timeSeconds = this.finishTime / 1000;
@@ -3078,7 +3201,7 @@ class Game {
         }
 
         // Check cone collisions
-        if (!this.vehicle.crashed) {
+        if (!this.vehicle.crashed && this.cones) {
             this.cones.checkCollision(this.vehicle.position, this.vehicle.velocity, this.vehicle.speed);
         }
 
@@ -3113,6 +3236,10 @@ class Game {
         // milliseconds a frame, and keeps the section of the last passed gate
         if (this.environment && this.environment.sections && this.vehicle) {
             this.environment.update(Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)), Game.SECTION_BUDGET_MS, this.lastCheckpointSegment);
+        }
+        // A world streams by place round the bike, and guides the rider
+        if (this.environment && this.environment.isWorld && this.vehicle) {
+            this.environment.update(this.vehicle.position, this.vehicle.routeS || 0, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS);
         }
 
         // Distance-cull far scenery (throttled internally)
@@ -3535,6 +3662,8 @@ class Game {
         this.vehicle.updateMesh();
         // A converted leg keeps the gate's section; the window round it is built now
         if (this.environment && this.environment.sections) this.environment.ensureWindow(Math.floor(this.environment.route.toUnits(this.vehicle.routeS)), { sync: true });
+        // A world holds the ground under the gate; the ground reads a far-grid height until the tiles arrive
+        if (this.environment && this.environment.isWorld) this.environment.place(this.vehicle.routeS);
 
         // The crash banner belongs to the crash that was just undone
         this.removeRunOverlays();
@@ -3548,8 +3677,9 @@ class Game {
 
         // Knocked cones go back to their home positions; a rock must not wait
         // on the gate; no car may be on top of the rider
-        this.cones.reset();
+        if (this.cones) this.cones.reset();
         if (this.rockfalls) this.rockfalls.reset();
+        if (this.environment.isWorld) this.environment.guide.reset();
         if (this.traffic) this.traffic.clearAround(this.environment.route.toUnits(this.vehicle.routeS), Game.RESTART_CLEAR_SEGMENTS);
 
         // A restart can jump back across an atmosphere zone; snap the light,

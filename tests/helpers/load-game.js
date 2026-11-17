@@ -5,7 +5,8 @@
 // three and the browser globals are passed to the scripts as function
 // parameters, so tests/setup.js's global THREE mock is neither used nor
 // replaced: there is nothing to restore after a test file.
-import { createHash } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
+import { TextDecoder as NodeTextDecoder } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -70,7 +71,7 @@ export function loadWorldPhysics() {
 // The game classes, built once per THREE and per file set. `log` receives the
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
 export function loadGame(THREE = realThree(), log = []) {
-    const files = ['terrain.js', 'course.js', 'race.js', 'world/physics.js', 'world/route.js', 'world/legroute.js', 'world/ground.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
+    const files = ['terrain.js', 'course.js', 'race.js', 'world/physics.js', 'world/route.js', 'world/legroute.js', 'world/ground.js', 'world/data.js', 'world/graph.js', 'world/worldroute.js', 'world/worldground.js', 'world/streamer.js', 'world/roadmesh.js', 'world/terrainmesh.js', 'world/horizon.js', 'world/scenery.js', 'world/guide.js', 'world/environment.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
     const source = files.map(loadScript).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
@@ -79,10 +80,10 @@ export function loadGame(THREE = realThree(), log = []) {
     };
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
-        'THREE', 'document', 'localStorage', 'console',
-        `${source}\nreturn { WorldPhysics, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround };`
+        'THREE', 'document', 'localStorage', 'console', 'TextDecoder', 'crypto',
+        `${source}\nreturn { WorldPhysics, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, TerrainMesh, Horizon, Scenery, WorldGuide, WorldEnvironment };`
     );
-    return { THREE, log, ...factory(THREE, canvasStub(), storage, sink) };
+    return { THREE, log, ...factory(THREE, canvasStub(), storage, sink, NodeTextDecoder, webcrypto) };
 }
 
 // The game with every leg on the shared course, as before the long-leg

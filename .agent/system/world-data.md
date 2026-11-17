@@ -119,3 +119,18 @@ All little-endian. `world/manifest.json` holds the indexes, `world/ride.json` th
 - `SHA256SUMS`: `shasum -a 256 -c` form, every other file. `manifest.dataHash` is the sha256 of the sorted `hash  path` lines of every file except `manifest.json` and `SHA256SUMS` (the manifest cannot hold its own hash).
 - Local metres: x = E - 2 688 000, z = -(N - 1 165 000), y = height. Origin in `manifest.origin`.
 - Size budget: `world/` 28 MB or less, any file 256 KB or less except `far.bin` (2 MB or less), the Tremola slice 3.5 MB or less (`verify.mjs size`). No `.gpkg`, `.tif`, `.tiff` or `.zip` is committed.
+
+## Runtime (js/world/, W3)
+
+`?world=<stage|all>` (`tremola` is the only stage until W5) starts the game on a streamed world in place of the legs. `?worldData=<path>` reads the data from another folder, for tests only: the path must be relative and under `world/` or `tests/fixtures/world/` (no scheme, `//`, `..` or backslash), and a world read from anywhere else, or whose `manifest.json` is not the one `world/SHA256SUMS` lists, is not trusted: `environment.submitAllowed` is false and no board may take its times.
+
+| Module | What it does |
+|---|---|
+| `data.js` | Fetch and decode. The ride layer (manifest, ride, graph tables, the ride's edge chunks) loads before the first frame. Tiles, cover and side chunks load on demand into LRU maps. `dipRoadSides` holds the land beside the carved road under the road, and a carved node of a stacked leg under the leg below it. |
+| `graph.js`, `worldroute.js` | The graph in memory and the route contract over the ride. Units of the legacy consumers are samples, not 20 m segments. `project` is the continuity search (60 m window, 64 m hash for the cold lookup). |
+| `worldground.js` | Ground: road band = route height; tunnel = route height; side road = its own samples; elsewhere the tile on the same triangles the mesh draws, then `far.bin`, then the route. The zone is the tile's zone layer; an active barrier box is `wall`. |
+| `streamer.js` | Tiles are reference counted by the bike (900 m) and by the ride window (600 m of [s-1 km, s+3 km]); disposed 3 s after the count is 0. Road sections and side chunks are resident by window or by place. Builds go through a 4 ms queue, nearest first. |
+| `roadmesh.js`, `terrainmesh.js`, `horizon.js`, `scenery.js` | The meshes. Carved ground is drawn 0.12 m under the physics height so the ribbon wins. The horizon is drawn 8 m low under the tiles. Trees and houses are instanced and capped by triangles (200 000) as well as by count. |
+| `environment.js`, `guide.js` | `WorldEnvironment` is what `Game.environment` holds; `WorldGuide` is the minimap, the turn prompt and the off-route rule. |
+
+Probes: `node tools/terrain-check.mjs world-window,world-budget,world-ground,world-junction,world-wrongway,world-credit,world-net,world-finish --world tremola` (see the header of `tools/terrain-check.mjs`).
