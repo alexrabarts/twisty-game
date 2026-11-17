@@ -20,9 +20,17 @@ class WorldGround extends Ground {
     // Metres of bench beside the road band that the importer carves flat
     static get BENCH_M() { return 2; }
 
-    // Metres a barrier box reaches along the road, and beyond the road edge across it
-    static get BARRIER_DEPTH_M() { return 1.2; }
+    // Metres a barrier box reaches along the road, and beyond the road edge across it. The box is what RoadMesh draws
+    // (placeBarriers spans barrierHalf each side), so the bike stops at the barrier it sees: the drawn barrier is a
+    // fence of a few centimetres, and the box reaches half a metre along the road either side of it (1.2 m stopped the
+    // bike over a metre short of the fence), enough that a bike under 60 m/s cannot step through it in one frame
+    static get BARRIER_DEPTH_M() { return 0.5; }
     static get BARRIER_MARGIN_M() { return 1.5; }
+
+    // Metres from a barrier's centre to each end of it, drawn and solid: the side road's half width and the margin
+    static barrierHalf(width) {
+        return Math.max(3, width / 2 + WorldGround.BARRIER_MARGIN_M);
+    }
 
     // Metres past the road edge that a bridge parapet stands (RoadMesh draws it there)
     static get PARAPET_M() { return 0.35; }
@@ -48,7 +56,7 @@ class WorldGround extends Ground {
 
     // The barrier boxes in force: [{x, z, heading, width}]
     setBarriers(list) {
-        this.barriers = list.map(b => ({ x: b.x, z: b.z, sin: Math.sin(b.heading), cos: Math.cos(b.heading), half: Math.max(3, b.width / 2 + WorldGround.BARRIER_MARGIN_M) }));
+        this.barriers = list.map(b => ({ x: b.x, z: b.z, sin: Math.sin(b.heading), cos: Math.cos(b.heading), half: WorldGround.barrierHalf(b.width) }));
     }
 
     // Side roads in residence: [{x, z, y, width}] typed arrays per edge. They give the height and the road zone inside their band.

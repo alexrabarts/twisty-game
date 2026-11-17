@@ -64,7 +64,7 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
                 placed.add(key);
                 rotation.setFromAxisAngle(up, b.heading);
                 const y = (Number.isFinite(b.y) ? b.y : env.ground.landY(b.x, b.z, 0)) - 0.1;
-                matrix.compose(new THREE.Vector3(b.x, y, b.z), rotation, new THREE.Vector3(Math.max(4, b.width + 1), 1, 1));
+                matrix.compose(new THREE.Vector3(b.x, y, b.z), rotation, new THREE.Vector3(2 * game.WorldGround.barrierHalf(b.width), 1, 1));
                 const chain = sideRoadOf(env.data, b.edgeId, b.node);
                 things.push({ type: 'barrier', name: `barrier:${b.junctionId}:${b.edgeId}`, edgeId: b.edgeId, chain, junctionId: b.junctionId, ...footprint(THREE, box.boundingBox, matrix), x: b.x, z: b.z });
             }

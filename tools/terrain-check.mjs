@@ -13,6 +13,7 @@
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
 //   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
+//   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
@@ -39,6 +40,7 @@ import { extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
+import { fairnessWindow } from '../tests/helpers/world-fairness.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
@@ -3917,6 +3919,79 @@ WORLD['world-clearance'] = async (page) => {
     return result;
 };
 
+// Physics can only kill the rider where the rider can see why (tests/helpers/world-fairness.js, run in the page on
+// the meshes it draws): the whole ride every metre across the drawn road and verge, then the world pilot through
+// every hairpin at 5 and 7 m/s on the centre line and 2.5 m either side, counting crashes and restarts. --every sets the window streamed in at a time.
+WORLD_PROBES.push('world-fairness');
+WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, placeSource, hairpinSource, every) => {
+    const fairness = new Function(`return (${fairSource})`)();
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment;
+    const route = env.route;
+    const v = game.vehicle;
+    twistyDev.freeze();
+    const sweep = { points: 0, widthCount: 0, solidCount: 0, runoffCount: 0, worstWidthM: 0, width: [], solid: [], runoff: [] };
+    const parts = { THREE, RoadSurface, TerrainMesh };
+    for (let s = env.startS; s < env.endS; s += every) {
+        const mid = Math.min(env.endS, s + every / 2);
+        const p = route.sample(mid, {});
+        env.update(p, mid, null, Infinity);
+        await env.streamer.settle(p, mid);
+        env.updateBarriers(mid);
+        const r = fairness(parts, env, v, { s0: s, s1: Math.min(env.endS, s + every - 1e-6), stepM: 1, acrossM: 0.25 });
+        for (const k of ['points', 'widthCount', 'solidCount', 'runoffCount']) sweep[k] += r[k];
+        sweep.worstWidthM = Math.max(sweep.worstWidthM, r.worstWidthM);
+        for (const k of ['width', 'solid', 'runoff']) sweep[k].push(...r[k].slice(0, 5));
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    // The rides: from 90 m before each hairpin's middle to 70 m after it, the pilot holding `cruise`
+    const crashes = [], restarts = [];
+    const log = console.log;
+    console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) crashes.push({ s: Math.round(v.projection.s ?? v.routeS), line: args.join(' ') }); log.apply(console, args); };
+    const restart = game.restartFromCheckpoint.bind(game);
+    game.restartFromCheckpoint = (reason) => { restarts.push({ s: Math.round(v.projection.s ?? v.routeS), reason }); return restart(reason); };
+    game.worldLinger = false;
+    const hairpins = new Function(`return (${hairpinSource})`)()(route);
+    let rides = 0;
+    try {
+        // The centre line and either side of it: off the centre, a sample's step in the old projection was a restart
+        for (const [cruise, lane] of [[5, 0], [7, 0], [5, -2.5], [7, 2.5]]) {
+            for (const h of hairpins) {
+                await placeAt(Math.max(env.startS, h - 90));
+                v.speed = cruise;
+                twistyDev.autopilot({ speed: cruise, lane });
+                const before = crashes.length + restarts.length;
+                let ticks = 0;
+                while (!v.crashed && crashes.length + restarts.length === before && (v.projection.s ?? v.routeS) < h + 70 && ticks < 60 * 90) {
+                    twistyDev.step(1);
+                    ticks++;
+                    if (ticks % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                rides++;
+                const last = crashes[crashes.length - 1] || restarts[restarts.length - 1];
+                if (crashes.length + restarts.length > before) last.ride = { hairpin: Math.round(h), cruise, lane };
+                if (v.crashed) { v.reset(); }
+            }
+        }
+    } finally {
+        console.log = log;
+        game.restartFromCheckpoint = restart;
+    }
+    return { every, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts };
+}, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100));
+
+function fairnessChecks(results, failures) {
+    const fair = results['world-fairness'];
+    if (!fair) return;
+    if (!(fair.points > 500000)) failures.push(`world-fairness: only ${fair.points} points of the drawn road read`);
+    if (fair.widthCount) failures.push(`world-fairness: ${fair.widthCount} points where the physics band is over 0.1 m off the drawn ribbon (worst ${fair.worstWidthM} m): ${JSON.stringify(fair.width.slice(0, 10))}`);
+    if (fair.solidCount) failures.push(`world-fairness: ${fair.solidCount} wall or fall points on the drawn road with nothing drawn within 0.5 m: ${JSON.stringify(fair.solid.slice(0, 10))}`);
+    if (fair.runoffCount) failures.push(`world-fairness: ${fair.runoffCount} run-off points on the drawn carriageway: ${JSON.stringify(fair.runoff.slice(0, 10))}`);
+    if (!(fair.hairpins >= 20 && fair.rides === fair.hairpins * 4)) failures.push(`world-fairness: ${fair.rides} rides over ${fair.hairpins} hairpins`);
+    if (fair.crashes.length) failures.push(`world-fairness: ${fair.crashes.length} crashes in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.crashes.slice(0, 10))}`);
+    if (fair.restarts.length) failures.push(`world-fairness: ${fair.restarts.length} restarts in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.restarts.slice(0, 10))}`);
+}
+
 function clearanceChecks(results, failures) {
     const clear = results['world-clearance'];
     if (!clear) return;
@@ -4000,6 +4075,7 @@ function isAllowedRequest(url, port) {
 function worldChecks(report) {
     const { results, failures } = report;
     clearanceChecks(results, failures);
+    fairnessChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

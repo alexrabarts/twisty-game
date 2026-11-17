@@ -326,9 +326,12 @@ describe('smoothness', () => {
         expect(run.rate).toBeLessThan(0.5);
     });
 
-    test('planted: read off the polyline and not low-passed, the same ride steps several times over', () => {
+    // The target lean no longer steps off the polyline either: the projection is in the ribbon's frame
+    // (WorldRoute.nearestSegment), so the progress and lateral it reads have no step at a sample. The low-pass still
+    // carries the push
+    test('planted: read off the polyline and not low-passed, the push steps several times over', () => {
         const run = steps(polyline(hairpin(12, 4)), { ...WorldPhysics, assistSmoothing: 1e-9 });
-        expect(run.target).toBeGreaterThan(2);
+        expect(run.target).toBeLessThan(2);
         expect(run.rate).toBeGreaterThan(1.5);
     });
 

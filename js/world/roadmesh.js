@@ -714,7 +714,8 @@ class RoadMesh {
         for (let i = 0; i < count; i++) {
             const p = poses[i];
             rotation.setFromAxisAngle(up, p.heading);
-            scale.set(Math.max(4, p.width + 1), 1, 1);
+            // As wide as the box the physics stops the bike at (WorldGround.barrierHalf): what is solid is drawn
+            scale.set(2 * WorldGround.barrierHalf(p.width), 1, 1);
             position.set(p.x, p.y, p.z);
             matrix.compose(position, rotation, scale);
             mesh.setMatrixAt(i, matrix);

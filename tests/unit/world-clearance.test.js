@@ -94,7 +94,7 @@ describe('the barriers close side roads and never the ride', () => {
         for (const junction of env.graph.junctions) {
             for (const pass of junction.passes) {
                 for (const b of env.graph.barriersFor(pass.sIn, 1, env.scenery.roads).filter(x => x.junctionId === junction.id)) {
-                    const half = Math.max(3, b.width / 2 + WorldGround.BARRIER_MARGIN_M), depth = WorldGround.BARRIER_DEPTH_M;
+                    const half = WorldGround.barrierHalf(b.width), depth = WorldGround.BARRIER_DEPTH_M;
                     const f = [Math.sin(b.heading), Math.cos(b.heading)], l = [Math.cos(b.heading), -Math.sin(b.heading)];
                     const poly = [[-depth, -half], [depth, -half], [depth, half], [-depth, half]].map(([a, c]) => [b.x + a * f[0] + c * l[0], b.z + a * f[1] + c * l[1]]);
                     const near = clearanceOf(bands, poly, -Infinity, Infinity, g => g.kind === 'side');
