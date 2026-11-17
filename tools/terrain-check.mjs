@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-hud world-shots
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-hud world-shots world-hairpin-shots world-buildings
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   world-hud rides the two-stage fixture tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
@@ -30,9 +30,9 @@
 // Never let a page reach production: cloudfunctions.net, firebasedatabase.app and firebaseio.com are aborted.
 // The `submit` probe is the one exception in kind, not in effect: it answers the callable requests itself, so none leaves the machine.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
@@ -2140,7 +2140,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-hud', 'world-shots'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2204,6 +2204,38 @@ async function placeAt(s) {
 // The world pilot of tools/autopilot.js: pure pursuit, and a speed that takes each bend inside the lean cap. Installed in the page.
 function pilotWorld(game, cruise) {
     twistyDev.autopilot({ speed: cruise });
+}
+
+// The model files the game can load, found on disk so a file added later is checked too
+function modelFiles(dir = join(root, 'assets')) {
+    return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return modelFiles(full);
+        return entry.name.toLowerCase().endsWith('.glb') ? [relative(root, full).split(sep).join('/')] : [];
+    }).sort();
+}
+
+// Least share of the half screen the bike keeps from each edge on every frame of world-frustum
+const FRUSTUM_MARGIN = 0.1;
+
+// The ride's hairpins: s at the middle of each turn of 150 degrees or more inside 80 m, summed in 4 m steps
+function worldHairpins(route) {
+    const turnAt = s => {
+        let total = 0;
+        for (let d = -40; d < 40; d += 4) total += route.headingChange(s + d, s + d + 4);
+        return Math.abs(total);
+    };
+    const out = [];
+    let run = null;
+    for (let s = 40; s < route.length - 40; s += 4) {
+        const turn = turnAt(s);
+        if (turn >= 150 * Math.PI / 180) {
+            if (!run || s - run.last > 8) { run = { from: s, last: s, best: s, turn }; out.push(run); }
+            run.last = s;
+            if (turn > run.turn) { run.turn = turn; run.best = s; }
+        }
+    }
+    return out.map(r => r.best);
 }
 
 const WORLD = {
@@ -2578,6 +2610,200 @@ const WORLD = {
         const sum = key => runs.reduce((p, r) => p + r[key], 0);
         return { runs, frames: sum('frames'), boomUnderGround: sum('boomUnderGround'), hairpinFrames: sum('hairpinFrames'), inFrustum: sum('inFrustum'), share: sum('hairpinFrames') ? Math.round(sum('inFrustum') / sum('hairpinFrames') * 1000) / 1000 : null };
     }, placeAt.toString(), pilotWorld.toString()),
+    // The bike in view through every hairpin: the chase camera rides the whole ride behind the world pilot, and on
+    // every frame the bike (0.9 m over its origin) must project inside the screen with FRUSTUM_MARGIN of it left on
+    // each side, in front of the camera. Reports each hairpin's least margin; a hairpin is a turn of 150 degrees or
+    // more inside 80 m (tools/world/verify.mjs findHairpins).
+    'world-frustum': async (page) => page.evaluate(async (placeSource, pilotSource, hairpinSource, cruise, margin) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+        const env = game.environment;
+        const v = game.vehicle;
+        const route = env.route;
+        const cam = game.camera;
+        twistyDev.freeze();
+        game.cameraMode = 2;
+        const start = Math.max(20, hairpins[0] - 400);
+        await placeAt(start);
+        game.worldCamera.reset(v.yawAngle);
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+        const point = new THREE.Vector3();
+        const per = hairpins.map(s => ({ s: Math.round(s), frames: 0, out: 0, least: Infinity }));
+        let frames = 0, out = 0, least = Infinity, ticks = 0, worstAt = null;
+        const end = Math.min(route.length - 30, hairpins[hairpins.length - 1] + 200);
+        while (v.routeS < end && !v.crashed && !game.finished && ticks < 60 * 60 * 30) {
+            twistyDev.step(1);
+            ticks++;
+            if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+            if (ticks < 30) continue;
+            cam.updateProjectionMatrix();
+            cam.updateMatrixWorld(true);
+            point.set(v.position.x, v.position.y + 0.9, v.position.z).project(cam);
+            const inFront = point.z > -1 && point.z < 1;
+            const room = inFront ? 1 - Math.max(Math.abs(point.x), Math.abs(point.y)) : -1;
+            frames++;
+            if (room < least) { least = room; worstAt = Math.round(v.routeS); }
+            if (room < margin) out++;
+            const s = v.projection.s ?? v.routeS;
+            for (const h of per) {
+                if (Math.abs(s - h.s) > 60) continue;
+                h.frames++;
+                h.least = Math.min(h.least, room);
+                if (room < margin) h.out++;
+            }
+        }
+        per.forEach(h => { h.least = Math.round(h.least * 1000) / 1000; });
+        return { margin, cruise, start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, frames, out, least: Math.round(least * 1000) / 1000, worstAt, hairpins: per };
+    }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('speed') || 20), FRUSTUM_MARGIN),
+    // Every model file (assets/**/*.glb, globbed here) through the page's own SceneAssets.loadModel: each mesh part
+    // must carry a unit normal at every vertex, colours the shader reads as linear, and sane material values
+    'world-models': async page => page.evaluate(async files => {
+        const rows = [];
+        for (const file of files) {
+            const row = { file, meshes: 0, parts: 0, noNormals: 0, badNormals: 0, colour: new Set(), srgbConverted: 0, metalness: [Infinity, -Infinity], roughness: [Infinity, -Infinity], error: null };
+            try {
+                const model = await SceneAssets.loadModel(file);
+                for (const parts of model.meshes.values()) {
+                    row.meshes++;
+                    for (const { geometry, material } of parts) {
+                        row.parts++;
+                        const normal = geometry.attributes.normal;
+                        if (!normal) { row.noNormals++; continue; }
+                        for (let i = 0; i < normal.count; i++) {
+                            const length = Math.hypot(normal.getX(i), normal.getY(i), normal.getZ(i));
+                            if (!(Math.abs(length - 1) <= 0.02)) row.badNormals++;
+                        }
+                        const color = geometry.attributes.color;
+                        row.colour.add(color ? `${color.array.constructor.name}x${color.itemSize}` : 'none');
+                        if (geometry.userData.srgb) row.srgbConverted++;
+                        row.metalness = [Math.min(row.metalness[0], material.metalness), Math.max(row.metalness[1], material.metalness)];
+                        row.roughness = [Math.min(row.roughness[0], material.roughness), Math.max(row.roughness[1], material.roughness)];
+                    }
+                }
+            } catch (error) {
+                row.error = String(error.message || error);
+            }
+            row.colour = [...row.colour].join(',');
+            rows.push(row);
+        }
+        return { rows };
+    }, modelFiles()),
+    // GPU pictures of the first three hairpins as the rider sees them: ridden into from 80 m before the apex behind
+    // the world pilot, one picture as the bike turns in and one at the apex. Needs --out <dir>.
+    'world-hairpin-shots': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'shot';
+        const apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).slice(0, 3).map(Math.round), worldHairpins.toString());
+        const files = [];
+        for (let k = 0; k < apexes.length; k++) {
+            const rooms = await page.evaluate(async (placeSource, pilotSource, apex) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const v = game.vehicle;
+                game.cameraMode = 2;
+                await placeAt(apex - 140);
+                game.worldCamera.reset(v.yawAngle);
+                new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
+                let ticks = 0;
+                while (v.routeS < apex - 25 && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, placeAt.toString(), pilotWorld.toString(), apexes[k]);
+            const turnIn = join(out, `${tag}-hairpin-${k + 1}-turn-in.png`);
+            await page.screenshot({ path: turnIn });
+            const apexRoom = await page.evaluate(async (apex) => {
+                const v = game.vehicle;
+                let ticks = 0;
+                while (v.routeS < apex && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, apexes[k]);
+            const atApex = join(out, `${tag}-hairpin-${k + 1}-apex.png`);
+            await page.screenshot({ path: atApex });
+            files.push({ apex: apexes[k], turnIn: { file: turnIn, ...rooms }, atApex: { file: atApex, ...apexRoom } });
+        }
+        // The start, with the village round it
+        const startView = await page.evaluate(async (placeSource) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            game.cameraMode = 2;
+            await placeAt(10);
+            game.worldCamera.reset(game.vehicle.yawAngle);
+            game.vehicle.speed = 0;
+            twistyDev.autopilot({ speed: 0 });
+            // The chase camera eases in from wherever the last picture left it, a kilometre back: long enough to arrive
+            for (let i = 0; i < 300; i++) twistyDev.step(1);
+            game.environment.streamer.pump(Infinity);
+            twistyDev.step(1, { render: true });
+            const v = game.vehicle.position, c = game.camera.position, l = game.currentLookTarget;
+            return { camera: [c.x - v.x, c.y - v.y, c.z - v.z].map(n => Math.round(n * 10) / 10), look: [l.x - v.x, l.y - v.y, l.z - v.z].map(n => Math.round(n * 10) / 10), pull: game.worldCamera.pull, fraction: game.worldCamera.fraction, speed: game.vehicle.speed, s: game.vehicle.routeS };
+        }, placeAt.toString());
+        files.push({ startView });
+        const startFile = join(out, `${tag}-start.png`);
+        await page.screenshot({ path: startFile });
+        files.push({ start: startFile });
+        return { files };
+    },
+    // Every drawn building against the road bands: each instance's model box, by its matrix, as an oriented
+    // rectangle on the ground, against the ride's band (route.project) and every side edge in residence (the
+    // ground's side segments). Rides the window along the ride every --every metres. None may stand on a band.
+    'world-buildings': async (page) => page.evaluate(async (placeSource, every) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const route = env.route;
+        const ground = env.ground;
+        const matrix = new THREE.Matrix4();
+        const corner = new THREE.Vector3();
+        const sample = {};
+        const seen = new Set();
+        const hits = [];
+        let checked = 0, least = Infinity;
+        // Distance from (x, z) past the edge of the nearest road band: negative over a band
+        const pastBand = (x, z) => {
+            let best = Infinity;
+            for (let s = 0; s < route.length; s += 2) {
+                route.sample(s, sample);
+                const d = Math.hypot(sample.x - x, sample.z - z);
+                if (d < 60) best = Math.min(best, d - sample.width / 2);
+                else s += Math.max(0, d - 62);
+            }
+            for (const g of ground.sideSegments) {
+                const dx = g.x1 - g.x0, dz = g.z1 - g.z0, run = dx * dx + dz * dz;
+                const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - g.x0) * dx + (z - g.z0) * dz) / run));
+                best = Math.min(best, Math.hypot(g.x0 + dx * t - x, g.z0 + dz * t - z) - (g.w0 + (g.w1 - g.w0) * t) / 2);
+            }
+            return best;
+        };
+        for (let s = 20; s < route.length; s += every) {
+            await placeAt(s);
+            env.streamer.pump(Infinity);
+            game.scene.traverse(o => {
+                if (!o.isInstancedMesh || !o.name.startsWith('houses:')) return;
+                o.geometry.computeBoundingBox();
+                const box = o.geometry.boundingBox;
+                for (let i = 0; i < o.count; i++) {
+                    o.getMatrixAt(i, matrix);
+                    const key = matrix.elements.map(e => e.toFixed(2)).join(',');
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    checked++;
+                    // The footprint's edges, every metre
+                    let worst = Infinity;
+                    const c = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]].map(([x, z]) => corner.set(x, 0, z).applyMatrix4(matrix).clone());
+                    for (let e = 0; e < 4; e++) {
+                        const a = c[e], b = c[(e + 1) % 4];
+                        const n = Math.max(1, Math.ceil(a.distanceTo(b)));
+                        for (let k = 0; k <= n; k++) worst = Math.min(worst, pastBand(a.x + (b.x - a.x) * k / n, a.z + (b.z - a.z) * k / n));
+                    }
+                    least = Math.min(least, worst);
+                    if (worst < 0) hits.push({ name: o.name, x: Math.round(c[0].x), z: Math.round(c[0].z), pastBandM: Math.round(worst * 100) / 100 });
+                }
+            });
+        }
+        return { checked, least: Math.round(least * 100) / 100, hits: hits.slice(0, 20), onBand: hits.length };
+    }, placeAt.toString(), Number(option('every') || 600)),
     // A cut across stacked road: the bike is put on a leg of the ladder far ahead in s but close in space. It restarts
     // after cutConfirmMs, once. A flicker of a few frames and back restarts nothing.
     'world-cut': async page => page.evaluate(async (placeSource, pilotSource) => {
@@ -2849,6 +3075,29 @@ function worldChecks(report) {
         if (camera.boomUnderGround) failures.push(`world-camera: the boom went under the ground on ${camera.boomUnderGround} of ${camera.frames} frames`);
         if (!(camera.hairpinFrames > 0) || !(camera.share >= 0.95)) failures.push(`world-camera: the road 30 m ahead is in view on ${camera.share} of ${camera.hairpinFrames} hairpin frames, want 0.95 or more: ${JSON.stringify(camera.runs)}`);
         camera.runs.forEach(r => { if (r.crashed) failures.push(`world-camera: the ride from s ${r.start} crashed`); });
+    }
+    const frustum = results['world-frustum'];
+    if (frustum) {
+        if (frustum.crashed) failures.push(`world-frustum: the ride crashed at s ${frustum.reached}`);
+        if (frustum.reached < frustum.end) failures.push(`world-frustum: the ride stopped at s ${frustum.reached}, before ${frustum.end}`);
+        if (frustum.hairpins.length < 20) failures.push(`world-frustum: ${frustum.hairpins.length} hairpins found, want 20 or more`);
+        if (frustum.out) failures.push(`world-frustum: the bike was within ${frustum.margin} of the screen edge or out of view on ${frustum.out} of ${frustum.frames} frames (worst ${frustum.least} at s ${frustum.worstAt})`);
+        frustum.hairpins.forEach(h => { if (!(h.frames > 0)) failures.push(`world-frustum: no frames at the hairpin at s ${h.s}`); });
+    }
+    const models = results['world-models'];
+    if (models) {
+        if (models.rows.length < 16) failures.push(`world-models: ${models.rows.length} model files found`);
+        models.rows.forEach(r => {
+            if (r.error) failures.push(`world-models: ${r.file} did not load: ${r.error}`);
+            if (r.noNormals || r.badNormals) failures.push(`world-models: ${r.file} has ${r.noNormals} parts with no normals and ${r.badNormals} bad normals`);
+            if (/Float32/.test(r.colour)) failures.push(`world-models: ${r.file} has float colours`);
+            if (r.metalness[0] < 0 || r.metalness[1] > 1 || r.roughness[0] < 0 || r.roughness[1] > 1) failures.push(`world-models: ${r.file} has metalness ${r.metalness} roughness ${r.roughness}`);
+        });
+    }
+    const placedHouses = results['world-buildings'];
+    if (placedHouses) {
+        if (!(placedHouses.checked > 0)) failures.push('world-buildings: no building was drawn');
+        if (placedHouses.onBand) failures.push(`world-buildings: ${placedHouses.onBand} drawn buildings stand on a road band: ${JSON.stringify(placedHouses.hits)}`);
     }
     const shots = results['world-shots'];
     if (shots) {
