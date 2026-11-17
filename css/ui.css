@@ -1367,7 +1367,7 @@ body.in-menu .virtual-button-camera {
 .leaderboard-name-input {
     display: block;
     box-sizing: border-box;
-    width: 200px;
+    width: 250px;
     margin: 0 auto var(--sp-5);
     padding: 10px;
     border-radius: var(--r-md);

@@ -5,6 +5,9 @@
 const crypto = require('crypto');
 const boards = require('./boards');
 
+const NAME_MIN = 1;
+const NAME_MAX = 5;
+
 function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, HttpsError, table = boards.courses }) {
     const rule = boardId => boards.ruleFor(boardId, table);
     const path = boardId => boards.storePath(boardId, table);
@@ -145,7 +148,8 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
 
         console.log(`Session created: ${sessionRef.key} for leg ${legId}`);
 
-        const reply = { sessionId: sessionRef.key, sessionToken };
+        // The server owns the name limit; a client that gets no nameMax keeps exactly 4
+        const reply = { sessionId: sessionRef.key, sessionToken, nameMax: NAME_MAX };
         if (boards.isTable(legId, table)) {
             reply.protocol = r.protocol;
             reply.gates = r.gates;
@@ -159,8 +163,13 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
         if (!sessionId || typeof sessionId !== 'string') {
             throw new HttpsError('invalid-argument', 'Invalid session ID');
         }
-        if (!playerName || typeof playerName !== 'string' || playerName.length !== 4) {
-            throw new HttpsError('invalid-argument', 'Player name must be exactly 4 characters');
+        const name = typeof playerName === 'string' ? playerName.normalize('NFC').trim() : '';
+        if (name.length < NAME_MIN || name.length > NAME_MAX) {
+            throw new HttpsError('invalid-argument', `Player name must be ${NAME_MIN} to ${NAME_MAX} characters`);
+        }
+        // Control and format characters (zero-width, bidi) would make a name invisible or flip its display
+        if (/\p{C}/u.test(name)) {
+            throw new HttpsError('invalid-argument', 'Player name must not contain control characters');
         }
 
         const sessionRef = db.ref(`sessions/${sessionId}`);
@@ -213,7 +222,7 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
         const boardPath = path(session.legId);
         const entryRef = db.ref(boardPath).push();
         await entryRef.set({
-            playerName: playerName.toUpperCase(),
+            playerName: name.toUpperCase(),
             totalTime,
             checkpointTimes,
             ...extra,

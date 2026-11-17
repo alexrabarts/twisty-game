@@ -104,7 +104,7 @@ describe('legacy: boards that are not in the table', () => {
 
     test('startRun keeps its reply and its 15 minute session', async () => {
         const reply = await start(OLD_ID);
-        expect(Object.keys(reply).sort()).toEqual(['sessionId', 'sessionToken']);
+        expect(Object.keys(reply).sort()).toEqual(['nameMax', 'sessionId', 'sessionToken']);
         const [session] = Object.values(db.read('sessions'));
         expect(session.expiresAt - session.startTime).toBe(900000);
         expect(session.gates).toBeUndefined();
@@ -163,6 +163,32 @@ describe('gate count', () => {
         await handlers.submitRun({ sessionId: reply.sessionId, playerName: 'ALEX', ...run });
         const [entry] = Object.values(db.read('leaderboards/high-pass-v2'));
         expect(entry.totalTime).toBe(50000);
+    });
+});
+
+describe('player names', () => {
+    const submitNamed = name => submitLong({ playerName: name });
+    const storedNames = () => Object.values(db.read(`courseBoards/${LONG_ID}`) || {}).map(e => e.playerName);
+
+    test('startRun states nameMax for a table board and for a legacy board', async () => {
+        expect((await start(LONG_ID)).nameMax).toBe(5);
+        expect((await start(OLD_ID)).nameMax).toBe(5);
+    });
+
+    test.each([['A', 'A'], ['ALEX', 'ALEX'], ['alexr', 'ALEXR'], [' al ', 'AL']])('name %j is accepted and stored as %j', async (name, stored) => {
+        await submitNamed(name);
+        expect(storedNames()).toEqual([stored]);
+    });
+
+    test.each([[''], ['   '], ['ABCDEF'], [' ABCDEF '], [42], [null], ['\u200b'], ['\u202eABC'], ['A\u0007']])('name %j is rejected with invalid-argument', async name => {
+        await rejects(submitNamed(name), 'invalid-argument', 'Player name');
+        expect(storedNames()).toEqual([]);
+    });
+
+    test('a name is counted after Unicode normalisation', async () => {
+        // 'E' + combining acute is 2 code units; NFC makes it 1, so 5 of them fit
+        await submitNamed('E\u0301E\u0301E\u0301E\u0301E\u0301');
+        expect(storedNames()).toEqual(['\u00c9\u00c9\u00c9\u00c9\u00c9']);
     });
 });
 
