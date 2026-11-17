@@ -1,0 +1,195 @@
+{
+ "comment": "D1 figure-of-8 waypoints in LV95 (EPSG:2056). Hand-placed from WGS84, then moved onto the swissTLM3D through road: pass summits use the TLM Strassenpass points, the two Tremola points sit on the old Via Tremola (4m Strasse, Verbindungsstrasse), which the shortest path would otherwise leave for the modern Durchgangsstrasse. inspect.mjs snaps each one to the nearest TLM_STRASSE vertex (through roads preferred). boundary=true marks a stage boundary; boundary=false is a via point that keeps the shortest path on the intended road. The last Gletsch is the FINISH. Airolo, Ulrichen, Oberwald and Guttannen sit on the junction where the ride leaves the village road, so the shortest path never runs into a spur and back.",
+ "waypoints": [
+  {
+   "id": 0,
+   "name": "Altdorf",
+   "e": 2691908,
+   "n": 1192837,
+   "boundary": true
+  },
+  {
+   "id": 1,
+   "name": "Amsteg",
+   "e": 2693893,
+   "n": 1181056,
+   "boundary": true
+  },
+  {
+   "id": 2,
+   "name": "Wassen",
+   "e": 2688654,
+   "n": 1173097,
+   "boundary": true
+  },
+  {
+   "id": 3,
+   "name": "Schöllenen",
+   "e": 2688065,
+   "n": 1167031,
+   "boundary": true
+  },
+  {
+   "id": 4,
+   "name": "Andermatt",
+   "e": 2688447,
+   "n": 1165379,
+   "boundary": true
+  },
+  {
+   "id": 5,
+   "name": "Hospental",
+   "e": 2686785,
+   "n": 1163787,
+   "boundary": true
+  },
+  {
+   "id": 6,
+   "name": "Gotthard",
+   "e": 2686073,
+   "n": 1157063,
+   "boundary": true
+  },
+  {
+   "id": 7,
+   "name": "Tremola upper",
+   "e": 2686852,
+   "n": 1155293,
+   "boundary": false
+  },
+  {
+   "id": 8,
+   "name": "Tremola lower",
+   "e": 2687658,
+   "n": 1154241,
+   "boundary": false
+  },
+  {
+   "id": 9,
+   "name": "Airolo",
+   "e": 2689410,
+   "n": 1153817,
+   "boundary": true
+  },
+  {
+   "id": 10,
+   "name": "Bedretto",
+   "e": 2682692,
+   "n": 1151122,
+   "boundary": false
+  },
+  {
+   "id": 11,
+   "name": "Nufenen",
+   "e": 2673017,
+   "n": 1147806,
+   "boundary": true
+  },
+  {
+   "id": 12,
+   "name": "Ulrichen",
+   "e": 2666797,
+   "n": 1150885,
+   "boundary": true
+  },
+  {
+   "id": 13,
+   "name": "Oberwald",
+   "e": 2669819,
+   "n": 1154088,
+   "boundary": false
+  },
+  {
+   "id": 14,
+   "name": "Gletsch",
+   "e": 2670922,
+   "n": 1157131,
+   "boundary": true
+  },
+  {
+   "id": 15,
+   "name": "Furka",
+   "e": 2674851,
+   "n": 1158387,
+   "boundary": true
+  },
+  {
+   "id": 16,
+   "name": "Realp",
+   "e": 2681466,
+   "n": 1161291,
+   "boundary": true
+  },
+  {
+   "id": 17,
+   "name": "Hospental",
+   "e": 2686785,
+   "n": 1163787,
+   "boundary": true
+  },
+  {
+   "id": 18,
+   "name": "Andermatt",
+   "e": 2688447,
+   "n": 1165379,
+   "boundary": true
+  },
+  {
+   "id": 19,
+   "name": "Schöllenen",
+   "e": 2688065,
+   "n": 1167031,
+   "boundary": true
+  },
+  {
+   "id": 20,
+   "name": "Wassen",
+   "e": 2688654,
+   "n": 1173097,
+   "boundary": true
+  },
+  {
+   "id": 21,
+   "name": "Susten",
+   "e": 2677396,
+   "n": 1176068,
+   "boundary": true
+  },
+  {
+   "id": 22,
+   "name": "Gadmen",
+   "e": 2670111,
+   "n": 1176721,
+   "boundary": false
+  },
+  {
+   "id": 23,
+   "name": "Innertkirchen",
+   "e": 2660517,
+   "n": 1173081,
+   "boundary": true
+  },
+  {
+   "id": 24,
+   "name": "Guttannen",
+   "e": 2665035,
+   "n": 1167502,
+   "boundary": false
+  },
+  {
+   "id": 25,
+   "name": "Grimsel",
+   "e": 2668937,
+   "n": 1157087,
+   "boundary": true
+  },
+  {
+   "id": 26,
+   "name": "Gletsch",
+   "e": 2670922,
+   "n": 1157131,
+   "boundary": true,
+   "finish": true
+  }
+ ]
+}
