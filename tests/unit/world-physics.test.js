@@ -112,6 +112,81 @@ describe('full lock (P30)', () => {
     });
 });
 
+// Calm at speed: the play-test found the world bike twitchy at speed. Held steering at 20, 30 and 45 m/s must
+// reach a lean, lean as fast and turn as fast as the legacy bike does, or slower, give or take STEP_MARGIN; under
+// leanCalmSpeed (the hairpins) the lean is the plain critically damped one, and full lock still settles there.
+describe('step response at speed', () => {
+    const STEP_MARGIN = 1.1;
+    const TEN = 10 * Math.PI / 180;
+
+    function step(vehicle, speed, input) {
+        const out = { reach: null, peakRate: 0, lean: null, yawRate: null, turn: null };
+        const start = vehicle.yawAngle;
+        let previous = start;
+        for (let tick = 1; tick <= 120 && !vehicle.crashed; tick++) {
+            vehicle.speed = speed;
+            vehicle.update(DT, input, 0, 0);
+            const rate = Math.abs(vehicle.yawAngle - previous) / DT;
+            previous = vehicle.yawAngle;
+            out.peakRate = Math.max(out.peakRate, Math.abs(vehicle.leanVelocity));
+            if (out.reach === null && Math.abs(vehicle.leanAngle) >= TEN) out.reach = tick * DT;
+            if (tick === 30) { out.lean = Math.abs(vehicle.leanAngle); out.yawRate = rate; }
+            if (tick === 60) out.turn = Math.abs(vehicle.yawAngle - start);
+        }
+        return out;
+    }
+
+    const legacyVehicle = () => {
+        const vehicle = new game.Vehicle(new THREE.Scene());
+        vehicle.environment = { physics: null };
+        return vehicle;
+    };
+
+    for (const speed of [20, 30, 45]) {
+        for (const input of [0.3, 0.6, 1]) {
+            test(`at ${speed} m/s, input ${input}, the world bike is no quicker than the legacy bike`, () => {
+                const legacy = step(legacyVehicle(), speed, input);
+                const world = step(worldVehicle(), speed, input);
+                expect(world.reach).not.toBeNull();
+                expect(world.reach * STEP_MARGIN).toBeGreaterThanOrEqual(legacy.reach);
+                expect(world.peakRate).toBeLessThanOrEqual(legacy.peakRate * STEP_MARGIN);
+                // The legacy bike falls over at full lock at 20 m/s before these instants; then only its lean-in counts
+                if (legacy.lean !== null) {
+                    expect(world.lean).toBeLessThanOrEqual(legacy.lean * STEP_MARGIN);
+                    expect(world.yawRate).toBeLessThanOrEqual(legacy.yawRate * STEP_MARGIN);
+                }
+                if (legacy.turn !== null) expect(world.turn).toBeLessThanOrEqual(legacy.turn * STEP_MARGIN);
+            });
+        }
+    }
+
+    test('under leanCalmSpeed the lean is the plain critically damped one', () => {
+        for (const speed of [6, 10, WorldPhysics.leanCalmSpeed]) {
+            const vehicle = worldVehicle();
+            const omega = WorldPhysics.leanOmega;
+            const target = Math.atan(Math.min(speed * speed / (G * WorldPhysics.radiusFloor), Math.tan(WorldPhysics.leanCapDeg * Math.PI / 180)));
+            let lean = 0, velocity = 0;
+            for (let tick = 0; tick < 30; tick++) {
+                vehicle.speed = speed;
+                vehicle.update(DT, 1, 0, 0);
+                velocity += (omega * omega * (target - lean) - 2 * omega * velocity) * DT;
+                lean += velocity * DT;
+            }
+            expect(Math.abs(vehicle.leanAngle)).toBeCloseTo(lean, 3);
+        }
+    });
+
+    test('at speed full lock still settles at the same lean, later, with no overshoot', () => {
+        for (const speed of [20, 30, 45]) {
+            const vehicle = worldVehicle();
+            const run = hold(vehicle, speed, 1, 6);
+            expect(run.crashTick).toBeNull();
+            expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(WorldPhysics.leanCapDeg, 1);
+            expect(run.peak / Math.abs(vehicle.leanAngle)).toBeLessThanOrEqual(1.02);
+        }
+    });
+});
+
 // The legs ride on the legacy body, bit for bit (P31). The reference is the
 // vehicle.js of a9e8add read from git, so the proof does not rest on a fixture.
 describe('legacy equivalence (P31)', () => {

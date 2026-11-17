@@ -8,6 +8,12 @@ const WorldPhysics = Object.freeze({
     radiusFloor: 5,        // m, tightest radius the bike turns (R_MIN - width/2)
     rMin: 10,              // m, centreline fillet radius the importer builds
     leanOmega: 7,          // rad/s, natural frequency of the critically damped lean
+    // Above this speed (m/s) the lean's natural frequency falls as leanCalmSpeed / speed, as the legacy bike's
+    // steering torque does (its speedFactor): full lock still settles at the same lean, but at 30 or 45 m/s it
+    // gets there no quicker than the legacy bike (tests/unit/world-physics.test.js, the step-response table).
+    // Only the way into a lean is calmed: picking the bike up stays at leanOmega. Hairpins are ridden under it,
+    // so their response is the plain leanOmega.
+    leanCalmSpeed: 12,
 
     // Slope and low speed
     slopeGravity: 1.0,     // share of the route grade that acts on the bike

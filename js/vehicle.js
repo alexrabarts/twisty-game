@@ -2450,7 +2450,10 @@ class Vehicle {
             : 1 / world.radiusFloor;
         const targetLean = -Math.sign(u) * Math.atan(v2 * Math.abs(u) * maxCurvature / g);
 
-        const omega = world.leanOmega * ((this.character.physics && this.character.physics.steeringForce) || 1);
+        // Calmed at speed only on the way into a lean: picking the bike up, or taking less lean when the grip falls, stays prompt
+        const leaningIn = Math.abs(targetLean) > Math.abs(this.leanAngle) && targetLean * this.leanAngle >= 0;
+        const calm = leaningIn && v > world.leanCalmSpeed ? world.leanCalmSpeed / v : 1;
+        const omega = world.leanOmega * calm * ((this.character.physics && this.character.physics.steeringForce) || 1);
         this.leanVelocity += (omega * omega * (targetLean - this.leanAngle) - 2 * omega * this.leanVelocity) * deltaTime;
         this.leanAngle += this.leanVelocity * deltaTime;
 
