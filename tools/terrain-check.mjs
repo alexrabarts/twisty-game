@@ -2249,7 +2249,8 @@ function worldHairpins(route) {
 // bare grey face, a dark band under the upper edge), 3600 the Autostrasse on its wall above the ride, 7800 and 7900 the sett hairpins whose legs overlapped and whose land
 // stood over the road, 7990 the underside of the next switchback seen from below, 9500 and 10900 two more stacked
 // switchbacks. --views s,s,... picks others.
-const FLOATING_VIEWS = [100, 1300, 3600, 7800, 7900, 7990, 9500, 10900];
+// 3257 and 4657: a pair of thin dark lines ran down the middle of the road (the longitudinal joint drawn on both sides).
+const FLOATING_VIEWS = [100, 1300, 3257, 3600, 4657, 7800, 7900, 7990, 9500, 10900];
 // Tolerances of world-floating: the drawn land may lie this far under a drawn road edge, and no land stands over the
 // road surface within UP_M over it
 const FLOAT_TOL_M = 0.3;
@@ -2548,7 +2549,86 @@ async function floatingView(placeSource, pilotSource, s) {
             }
         }
     }
-    return { s: Math.round(v.routeS), crashed: v.crashed, seam: { profiles, seams: seams.length, worst: seams.slice(0, 6) } };
+    const lane = window.laneLines(game, s);
+    return { s: Math.round(v.routeS), crashed: v.crashed, seam: { profiles, seams: seams.length, worst: seams.slice(0, 6) }, lane };
+}
+
+// A thin dark line along the carriageway (a seam, a joint or a patch outline that reads as a tyre mark), in the page:
+// the roads alone in their own materials (the bike hidden) drawn by a camera where the chase camera rides, 6 m behind
+// s and 2.8 m up, looking 12 m ahead, at 1280 x 720 (seen from straight above the same lines did not show: they read
+// at a rider's grazing angle). Then the road from 3 m behind s to 20 m ahead is read across every 10 cm of road every
+// centimetre between the verges. A dip is a run at most 3 px wide more than 25% darker than the median of the 0.6 m
+// round it. A line is a chain of dips, each within 3 cm across of one on the row before (a gap of two rows allowed),
+// 3 m long or more. Returns {rows, dips, lines}.
+function laneLines(game, s0) {
+    const env = game.environment, route = env.route, renderer = game.graphics.renderer;
+    const at0 = route.sample(s0, {});
+    const fx = Math.sin(at0.heading), fz = Math.cos(at0.heading);
+    const W = 1280, H = 720;
+    const cam = new THREE.PerspectiveCamera(game.camera.fov, W / H, 0.1, 2000);
+    cam.position.set(at0.x - fx * 6, at0.y + 2.8, at0.z - fz * 6);
+    cam.lookAt(at0.x + fx * 12, at0.y, at0.z + fz * 12);
+    cam.updateMatrixWorld(true);
+    const target = new THREE.WebGLRenderTarget(W, H);
+    const hidden = [];
+    const hide = o => { if (o.visible) { hidden.push(o); o.visible = false; } };
+    game.scene.children.forEach(c => { if (c !== env.group && !c.isLight) hide(c); });
+    env.group.children.forEach(c => { if (c !== env.roadGroup && c !== env.sideGroup) hide(c); });
+    const fog = game.scene.fog;
+    game.scene.fog = null;
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const pixels = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+    renderer.setRenderTarget(null);
+    hidden.forEach(o => { o.visible = true; });
+    game.scene.fog = fog;
+    target.dispose();
+    const size = W;
+    const q = new THREE.Vector3();
+    const lum = (x, y, z) => {
+        q.set(x, y, z).project(cam);
+        if (q.z > 1 || q.z < -1) return null;
+        const px = Math.round((q.x + 1) / 2 * (W - 1)), py = Math.round((q.y + 1) / 2 * (H - 1));
+        if (px < 0 || py < 0 || px >= W || py >= H) return null;
+        const i = (py * W + px) * 4;
+        return pixels[i + 3] ? { l: 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2], px, py } : null;
+    };
+    const rows = [];
+    for (let d = -3; d <= 20; d += 0.1) {
+        const p = route.sample(s0 + d, {});
+        if (p.flags.bridge || p.flags.tunnel || p.flags.gallery || p.flags.cobbles) { rows.push([]); continue; }
+        const h = p.width / 2 - 0.3, at = [];
+        let last = -1;
+        for (let o = -h; o <= h; o += 0.01) {
+            const hit = lum(p.x + o * Math.cos(p.heading), p.y + RoadMesh.LIFT_M, p.z - o * Math.sin(p.heading));
+            if (!hit || hit.py * W + hit.px === last) continue;
+            last = hit.py * W + hit.px;
+            at.push({ o, l: hit.l, px: hit.px });
+        }
+        const found = [];
+        for (let k = 0; k < at.length; k++) {
+            const round = [];
+            for (let j = 0; j < at.length; j++) if (Math.abs(at[j].o - at[k].o) <= 0.3) round.push(at[j].l);
+            round.sort((a, b) => a - b);
+            const median = round[Math.floor(round.length / 2)];
+            if (!(at[k].l < 0.75 * median)) continue;
+            let j = k;
+            while (j + 1 < at.length && at[j + 1].l < 0.75 * median) j++;
+            if (Math.abs(at[j].px - at[k].px) + 1 <= 3) found.push((at[k].o + at[j].o) / 2);
+            k = j;
+        }
+        rows.push(found);
+    }
+    const chains = [];
+    rows.forEach((found, r) => {
+        for (const o of found) {
+            const chain = chains.find(c => r - c.last <= 3 && r > c.last && Math.abs(c.o - o) <= 0.03);
+            if (chain) { chain.last = r; chain.o = o; chain.n++; } else chains.push({ first: r, last: r, o, n: 1 });
+        }
+    });
+    const lines = chains.filter(c => (c.last - c.first) * 0.1 >= 3).map(c => ({ at: Math.round(c.o * 100) / 100, fromM: Math.round(c.first) / 10 - 3, toM: Math.round(c.last) / 10 - 3 }));
+    return { rows: rows.filter(r => r).length, dips: rows.reduce((n, r) => n + r.length, 0), lines };
 }
 
 function floatingCount() {
@@ -2606,6 +2686,7 @@ const WORLD = {
         const tag = option('tag') || 'floating';
         const views = [];
         for (const s of (option('views') ? option('views').split(',').map(Number) : FLOATING_VIEWS)) {
+            await page.evaluate(`window.laneLines = ${laneLines.toString()}`);
             const at = await page.evaluate(floatingView, placeAt.toString(), pilotWorld.toString(), s);
             let file = null;
             if (out) {
@@ -4044,6 +4125,7 @@ function worldChecks(report) {
         floating.views.forEach(v => {
             if (v.crashed) failures.push(`world-floating: the ride into the view at s ${v.want} crashed`);
             if (v.underside) failures.push(`world-floating: the view at s ${v.want} shows ${v.underside} pixels of a road's underside`);
+            if (v.lane && v.lane.lines.length) failures.push(`world-floating: the view at s ${v.want} has ${v.lane.lines.length} thin dark lines along the road (${JSON.stringify(v.lane.lines)} m across, rows of ${v.lane.rows})`);
             if (v.seam && v.seam.profiles && v.seam.seams / v.seam.profiles > FLOAT_SEAM_SHARE) failures.push(`world-floating: the view at s ${v.want} has a dark seam beside the road on ${v.seam.seams} of ${v.seam.profiles} profiles: ${JSON.stringify(v.seam.worst)}`);
         });
     }

@@ -734,8 +734,12 @@ if (roadSett < 0.5) {
     float crackAt = mod(roadAlong, 8.0) - 1.0 - landHash(vec2(crackCell, 22.0)) * 6.0 - 0.3 * (landNoise(vec2(roadLat * 1.1, crackCell)) - 0.5) - 0.07 * (landNoise(vec2(roadLat * 7.0, crackCell + 3.0)) - 0.5);
     float crackSpan = smoothstep(0.0, 0.3, roadLat - crackFrom) * smoothstep(0.0, 0.3, crackFrom + crackLen - roadLat);
     float crack = roadLine(crackAt, 0.0, 0.012 + 0.012 * crackPick, roadFwAlong) * step(crackPick, 0.3) * crackSpan * step(abs(roadLat), roadHalf - 0.1);
-    float jointAt = 0.12 * roadSide + (landNoise(vec2(roadS * 0.4, 1.0)) - 0.5) * 0.18;
-    crack = max(crack, roadLine(roadLat, jointAt, 0.025, roadFwLat) * smoothstep(0.55, 0.62, landNoise(vec2(roadS * 0.012, 4.0))));
+    // The longitudinal joint is one line where the two paving lanes met, a little off the centre to one side for the
+    // whole stretch (it was mirrored by the side, and drew a pair of dark lines down the road), sealed and worn: a
+    // tone, not a crack
+    float jointAt = (landHash(vec2(floor(roadS / 240.0), 5.0)) > 0.5 ? 0.12 : -0.12) + (landNoise(vec2(roadS * 0.4, 1.0)) - 0.5) * 0.18;
+    float joint = roadLine(roadLat, jointAt, 0.03, roadFwLat) * smoothstep(0.55, 0.62, landNoise(vec2(roadS * 0.012, 4.0))) * (0.5 + 0.5 * landNoise(vec2(roadS * 2.1, 9.0)));
+    roadAlbedo *= 1.0 - 0.18 * joint;
     roadAlbedo = mix(roadAlbedo, vec3(0.025), crack * 0.85);
     roadRough -= crack * 0.45;
 }
