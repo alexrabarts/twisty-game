@@ -199,10 +199,19 @@ describe('Hud', () => {
         expect('many' in pips.dataset).toBe(false);
     });
 
-    test('a stage with more gates than MAX_PIPS shows the count and no more pips than fit', () => {
+    test('a stage with more gates than MAX_PIPS shows the count and no pips', () => {
         hud.setGates(3, HudRules.MAX_PIPS + 6);
-        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(HudRules.MAX_PIPS);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(0);
         expect(document.getElementById('hudGateCount').textContent).toBe(`3/${HudRules.MAX_PIPS + 6}`);
+    });
+
+    test('a stage of exactly MAX_PIPS gates still shows every pip, and a new stage starts the pips again', () => {
+        hud.setGates(5, HudRules.MAX_PIPS);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(HudRules.MAX_PIPS);
+        hud.setGates(0, 3);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(3);
+        expect(document.querySelectorAll('#hudGatePips i.on')).toHaveLength(0);
+        expect(document.getElementById('hudGateCount').textContent).toBe('0/3');
     });
 
     test('a world ride shows its stage line, its progress and a mark for each station; only a change writes', () => {

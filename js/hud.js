@@ -175,7 +175,7 @@ class Hud {
             this.gateTotal = total;
             pips.textContent = '';
             // A stage with more gates than fit shows the count alone
-            for (let i = 0; i < Math.min(total, HudRules.MAX_PIPS); i++) pips.appendChild(this.doc.createElement('i'));
+            if (total <= HudRules.MAX_PIPS) for (let i = 0; i < total; i++) pips.appendChild(this.doc.createElement('i'));
             // A long leg has 14 to 20 gates: smaller pips keep the row on a phone
             if (total > HudRules.MANY_GATES) pips.dataset.many = '';
             else delete pips.dataset.many;

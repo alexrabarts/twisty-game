@@ -12,6 +12,45 @@ const DT = 1 / 60;
 // One frame of the projection the run reads
 const frame = (s, extra = {}) => ({ s, lateral: 0, width: 10, speed: 15, dt: DT, forwardDot: 1, ...extra });
 
+describe('WorldRun stages', () => {
+    const route = new WorldRoute(samplesOf(straight(700)), {
+        stages: [{ id: 'a', name: 'A', from: 0, to: 300 }, { id: 'b', name: 'B', from: 300, to: 600 }]
+    });
+    const stations = [
+        { s: 0, stage: 'a', kind: 'start' }, { s: 100, stage: 'a', kind: 'gate' }, { s: 300, stage: 'a', kind: 'boundary' },
+        { s: 400, stage: 'b', kind: 'gate' }, { s: 500, stage: 'b', kind: 'gate' }, { s: 600, stage: 'b', kind: 'end' }
+    ];
+
+    test('a boundary ends one stage and starts the next; only the last station ends the ride', () => {
+        const run = new WorldRun(route, stations, WorldPhysics);
+        expect([run.stageIndex, run.stageCount]).toEqual([0, 2]);
+        expect(run.stageGates(0)).toEqual({ total: 1, passed: 0 });
+        expect(run.stageGates(1)).toEqual({ total: 2, passed: 0 });
+        for (let s = 0; s <= 300.5; s += 0.2) {
+            const r = run.update(frame(s));
+            if (r.station >= 0) run.onStation(r.station, Math.round(s * 100));
+        }
+        expect(run.stationIndex).toBe(2);
+        expect(run.stageGates(0)).toEqual({ total: 1, passed: 1 });
+        run.onStageFinish(0, 30000);
+        expect([run.stageIndex, run.stageStartMs, run.stageTimes[0]]).toEqual([1, 30000, 30000]);
+        expect(run.finished).toBe(false);
+        run.noteRestart();
+        expect(run.stageRestarts).toEqual([0, 1]);
+        expect(run.stageGates(1)).toEqual({ total: 2, passed: 0 });
+    });
+
+    test('begin puts the stage state back, and a ride that starts inside a stage starts in it', () => {
+        const run = new WorldRun(route, stations, WorldPhysics);
+        run.onStageFinish(0, 5000);
+        run.noteRestart();
+        run.begin(0);
+        expect([run.stageIndex, run.stageStartMs, run.stageTimes, run.stageRestarts]).toEqual([0, 0, [], [0, 0]]);
+        run.begin(350);
+        expect(run.stageIndex).toBe(1);
+    });
+});
+
 describe('WorldRun stations', () => {
     const route = new WorldRoute(samplesOf(straight(400)), {});
     const stations = [{ s: 0 }, { s: 100 }, { s: 200 }, { s: 300 }];

@@ -253,7 +253,7 @@ class Game {
         const note = document.createElement('div');
         note.id = 'world-loading';
         note.textContent = 'Loading the road...';
-        note.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font:600 20px system-ui,sans-serif;z-index:30;pointer-events:none';
+        note.className = 'world-loading';
         document.body.appendChild(note);
         try {
             const environment = await WorldEnvironment.load(this.scene, { id, search: window.location.search });
@@ -743,6 +743,8 @@ class Game {
             const world = this.environment && this.environment.isWorld;
             this.hud.startRun(world ? `Stage 1 · ${this.worldStageName()}` : leg ? `Leg ${index + 1} · ${leg.name}` : '');
             this.hud.setGates(0, this.gateTotal());
+            this.shownWorldStage = null;
+            this.shownWorldGates = null;
             if (world) this.showWorldStage();
         }
         this.hideSplit();
@@ -785,6 +787,42 @@ class Game {
         if (this.input) {
             this.input.setMenuActive(false);
         }
+    }
+
+    // A world ride is one long run. A full restart or Menu asks before it throws the ride away; `proceed` runs
+    // on yes, and Cancel leaves the ride, its clock and the sessions as they were. A finished ride has
+    // nothing to lose, so it goes straight on. Returns true when it asked.
+    confirmWorldLeave(text, proceed) {
+        if (!this.environment || !this.environment.isWorld || this.finished) {
+            proceed();
+            return false;
+        }
+        if (document.getElementById('worldConfirm')) return true;
+        const box = document.createElement('div');
+        box.id = 'worldConfirm';
+        box.className = 'world-confirm';
+        box.setAttribute('role', 'alertdialog');
+        const message = document.createElement('p');
+        message.textContent = text;
+        const yes = document.createElement('button');
+        yes.id = 'worldConfirmYes';
+        yes.className = 'finish-btn primary';
+        yes.textContent = 'YES';
+        const no = document.createElement('button');
+        no.id = 'worldConfirmNo';
+        no.className = 'finish-btn secondary';
+        no.textContent = 'CANCEL';
+        box.append(message, yes, no);
+        yes.addEventListener('click', () => { box.remove(); proceed(); });
+        no.addEventListener('click', () => box.remove());
+        document.body.appendChild(box);
+        return true;
+    }
+
+    worldRestartAsk() {
+        return this.environment.stage
+            ? 'Restart the stage from its start? Your ride so far is lost.'
+            : 'Restart the tour from Altdorf? Your ride so far is lost.';
     }
 
     // Put the bike back on the start line of the current leg
@@ -885,6 +923,13 @@ class Game {
     // instead of the track screen
     returnToMenu(options = {}) {
         console.log('Returning to menu...');
+
+        // A world has no leg menu: it goes back to the page without ?world. It starts no session, so there is
+        // none to cancel
+        if (this.environment && this.environment.isWorld) {
+            window.location.assign(window.location.pathname);
+            return;
+        }
 
         // Remove finish banner if exists
         const finishBanner = document.getElementById('finishBanner');
@@ -2017,8 +2062,24 @@ class Game {
     updateWorldHud() {
         const { from, to } = this.worldStageSpan();
         const s = this.vehicle.projection.s ?? this.vehicle.routeS ?? 0;
-        const line = HudRules.stageLine(1, 1, this.worldStageName(), this.raceElapsed());
-        this.hud.setStage(line, HudRules.stageShare(s, from, to), HudRules.kmText(s, this.environment.route.length));
+        const run = this.worldRun;
+        const k = run.stageIndex;
+        const stage = this.environment.route.stages[k];
+        const name = stage ? stage.name.split(',')[0] : this.worldStageName();
+        const line = HudRules.stageLine(k + 1, run.stageCount, name, this.raceElapsed() - run.stageStartMs);
+        // The bar and the pips follow the stage being ridden: a new stage starts them again
+        const span = stage ? { from: stage.from, to: stage.to } : { from, to };
+        const gates = run.stageGates(k);
+        if (this.shownWorldStage !== k) {
+            this.shownWorldStage = k;
+            this.shownWorldGates = null;
+            this.hud.showStage(this.environment.stationGates.filter(station => station.s >= span.from - 0.01 && station.s <= span.to + 0.01).map(station => HudRules.stageShare(station.s, span.from, span.to)));
+        }
+        if (this.shownWorldGates !== gates.passed) {
+            this.shownWorldGates = gates.passed;
+            this.hud.setGates(gates.passed, gates.total);
+        }
+        this.hud.setStage(line, HudRules.stageShare(s, span.from, span.to), HudRules.kmText(s, this.environment.route.length));
     }
 
     updateWheelieIndicator() {
@@ -2412,12 +2473,16 @@ class Game {
 
         // Add event listeners to buttons
         document.getElementById('restartCrashBtn').addEventListener('click', () => {
-            crashNotification.remove();
-            // Disable R key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-            this.restartLeg();
+            const go = () => {
+                crashNotification.remove();
+                // Disable R key when menu is closed
+                if (this.input) {
+                    this.input.setMenuActive(false);
+                }
+                this.restartLeg();
+            };
+            if (this.environment.isWorld) this.confirmWorldLeave(this.worldRestartAsk(), go);
+            else go();
         });
 
         const checkpointBtn = document.getElementById('checkpointCrashBtn');
@@ -2426,16 +2491,20 @@ class Game {
                 if (this.input) {
                     this.input.setMenuActive(false);
                 }
-                this.restartFromCheckpoint();
+                this.restartFromCheckpoint('crash');
             });
         }
 
         document.getElementById('menuCrashBtn').addEventListener('click', () => {
-            // Disable R key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-            this.returnToMenu();
+            const go = () => {
+                // Disable R key when menu is closed
+                if (this.input) {
+                    this.input.setMenuActive(false);
+                }
+                this.returnToMenu();
+            };
+            if (this.environment.isWorld) this.confirmWorldLeave(Game.WORLD_MENU_ASK, go);
+            else go();
         });
 
         console.log('Crash notification displayed');
@@ -2677,6 +2746,9 @@ class Game {
     restartLeaderboardSession() {
         if (!this.leaderboardService) return;
         this.leaderboardService.cancelSession();
+        // A world starts no session until its boards exist (R6): a restart there only cancels, and a leg that
+        // was played earlier in the same page life must not give it a board
+        if (this.environment && this.environment.isWorld) return;
         const leg = this.tourSystem.getCurrentLeg();
         if (leg) {
             this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
@@ -3082,33 +3154,38 @@ class Game {
 
         // Handle one-shot input actions once per frame (not per physics step)
 
-        // Check for menu return
+        // Check for menu return. A world ride asks first and goes on until the answer is yes.
         if (this.input.checkMenuReturn()) {
-            // Remove finish banner if it exists
-            const finishBanner = document.getElementById('finishBanner');
-            if (finishBanner) {
-                finishBanner.remove();
-            }
+            if (this.environment.isWorld && !this.finished) {
+                this.confirmWorldLeave(Game.WORLD_MENU_ASK, () => this.returnToMenu());
+            } else {
+                // Remove finish banner if it exists
+                const finishBanner = document.getElementById('finishBanner');
+                if (finishBanner) {
+                    finishBanner.remove();
+                }
 
-            // Remove crash notification if it exists
-            const crashNotification = document.getElementById('crashNotification');
-            if (crashNotification) {
-                crashNotification.remove();
-            }
+                // Remove crash notification if it exists
+                const crashNotification = document.getElementById('crashNotification');
+                if (crashNotification) {
+                    crashNotification.remove();
+                }
 
-            // Disable menu keys when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
+                // Disable menu keys when menu is closed
+                if (this.input) {
+                    this.input.setMenuActive(false);
+                }
 
-            this.returnToMenu();
-            // Leg state was torn down and this loop cancelled - stop this frame
-            return;
+                this.returnToMenu();
+                // Leg state was torn down and this loop cancelled - stop this frame
+                return;
+            }
         }
 
         // Check for reset
         if (this.input.checkReset()) {
-            this.restartLeg();
+            if (this.environment.isWorld) this.confirmWorldLeave(this.worldRestartAsk(), () => this.restartLeg());
+            else this.restartLeg();
         }
 
         // Next leg (N key): only offered by the finish banner of a non-final
@@ -3575,10 +3652,18 @@ class Game {
         }
         if (result.station < 0) return;
         const stations = this.environment.stationGates;
+        const at = Math.round(this.raceElapsed());
+        this.worldRun.onStation(result.station, at);
         if (result.station === stations.length - 1) {
             this.finishRun();
-        } else {
-            this.passCheckpoint(this.environment.checkpoints[result.station - 1]);
+            return;
+        }
+        this.passCheckpoint(this.environment.checkpoints[result.station - 1]);
+        // A stage boundary ends one stage and starts the next; the ride itself ends at the last station only
+        if (stations[result.station].kind === 'boundary') {
+            const k = this.worldRun.stageIndex;
+            this.worldRun.onStageFinish(k, at);
+            showCallout(`Stage ${k + 1} finished  ${HudRules.stageClock(this.worldRun.stageTimes[k])}`, 'good', 2500);
         }
     }
 
@@ -3729,7 +3814,8 @@ class Game {
         if (split.recordDelta !== null) deltas.push(delta(split.recordDelta, 'REC'));
         if (deltas.length === 0) deltas.push('<span class="delta-none">FIRST SPLIT<small>SET A BEST</small></span>');
         this.lastSplit = split;
-        if (this.hud) this.hud.setGates(Math.min(total, index + 1), total);
+        // A world counts the gates of the stage being ridden (updateWorldHud)
+        if (this.hud && !(this.environment && this.environment.isWorld)) this.hud.setGates(Math.min(total, index + 1), total);
         const shown = this.hud && this.hud.showSplit(`
             <div class="split-gate">CHECKPOINT ${index + 1}/${total}</div>
             <div class="split-time">${RaceTiming.formatTime(elapsed)}</div>
@@ -3794,6 +3880,7 @@ class Game {
         if (this.leaderboardService) this.leaderboardService.recordRestart();
 
         environment.guide.reset();
+        worldRun.noteRestart();
         worldRun.restartAt(s);
         this.worldCamera.reset(point.heading);
         if (this.traffic) this.traffic.clearAround(route.toUnits(s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / route.unitM));
@@ -3806,7 +3893,7 @@ class Game {
 
     // Back to the last gate passed, on a rolling start. Costs 5 s and a
     // little style; the run stays valid.
-    // `reason` is why: 'key' (also the crash button), 'off-route', 'wrong-way' or 'resume'. Every reason
+    // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'wrong-way' or 'resume'. Every reason
     // costs the same 5 s. A world answers it in restartAtStation.
     restartFromCheckpoint(reason = 'key') {
         // The run is over once the line is crossed; the finish banner owns
@@ -3840,8 +3927,6 @@ class Game {
         this.vehicle.updateMesh();
         // A converted leg keeps the gate's section; the window round it is built now
         if (this.environment && this.environment.sections) this.environment.ensureWindow(Math.floor(this.environment.route.toUnits(this.vehicle.routeS)), { sync: true });
-        // A world holds the ground under the gate; the ground reads a far-grid height until the tiles arrive
-        if (this.environment && this.environment.isWorld) this.environment.place(this.vehicle.routeS);
 
         // The crash banner belongs to the crash that was just undone
         this.removeRunOverlays();
@@ -3857,7 +3942,6 @@ class Game {
         // on the gate; no car may be on top of the rider
         if (this.cones) this.cones.reset();
         if (this.rockfalls) this.rockfalls.reset();
-        if (this.environment.isWorld) this.environment.guide.reset();
         if (this.traffic) this.traffic.clearAround(this.environment.route.toUnits(this.vehicle.routeS), Game.RESTART_CLEAR_SEGMENTS);
 
         // A restart can jump back across an atmosphere zone; snap the light,
@@ -3876,9 +3960,13 @@ class Game {
     }
 }
 
+// What leaving a world ride for the menu asks
+Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
+
 // What a world restart tells the rider, by reason
 Game.WORLD_RESTART_TEXT = {
     key: 'Back to checkpoint',
+    crash: 'Crashed, back to checkpoint',
     'off-route': 'Off route, back to checkpoint',
     'wrong-way': 'Wrong way, back to checkpoint',
     resume: 'Back to checkpoint'

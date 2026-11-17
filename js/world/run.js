@@ -6,6 +6,9 @@
 //     its s, the bike faces along the route and sits within the road band.
 //     Only the next station is looked at, so a stacked hairpin can never
 //     credit a gate that belongs to another leg of the ladder.
+//   - stage state. A ride holds one or more stages; a 'boundary' station ends one stage and starts the next
+//     (onStageFinish). The ride itself ends only at the last station. The tour and stage leaderboard
+//     sessions are R6 and are not here.
 //   - the cut rule (Decision 16). `lastS` is a high-water mark of accepted
 //     progress. Progress may grow only as fast as the bike can move along the
 //     road. A forward jump that is not explained by speed and holds for
@@ -30,6 +33,7 @@ class WorldRun {
         this.physics = physics;
         this.here = {};
         this.there = {};
+        this.stages = route.stages || [];
         this.begin(stations.length ? stations[0].s : 0);
     }
 
@@ -43,7 +47,48 @@ class WorldRun {
     // A ride starts: no station passed, progress starts at s
     begin(s) {
         this.stationIndex = 0;
+        this.stageIndex = this.stageOf(s);
+        this.stageStartMs = 0;
+        this.stageTimes = [];
+        this.stationTimes = [];
+        this.stageRestarts = this.stages.map(() => 0);
         this.reset(s);
+    }
+
+    // The index of the stage that holds s; 0 when the route lists none
+    stageOf(s) {
+        let index = 0;
+        for (let i = 0; i < this.stages.length; i++) if (s >= this.stages[i].from - 0.01) index = i;
+        return index;
+    }
+
+    get stageCount() { return Math.max(1, this.stages.length); }
+
+    // Stage k is finished at `ms` on the ride clock: its time is kept, the next stage starts
+    onStageFinish(k, ms) {
+        this.stageTimes[k] = ms - this.stageStartMs;
+        this.stageStartMs = ms;
+        this.stageIndex = Math.min(k + 1, this.stageCount - 1);
+    }
+
+    // The station at index i was passed at `ms` on the ride clock
+    onStation(i, ms) {
+        this.stationTimes[i] = ms;
+    }
+
+    // A restart in the stage being ridden
+    noteRestart() {
+        this.stageRestarts[this.stageIndex] = (this.stageRestarts[this.stageIndex] || 0) + 1;
+    }
+
+    // The gates of stage k as station indexes, and how many of them the ride has passed
+    stageGates(k) {
+        const name = this.stages[k] ? this.stages[k].id : null;
+        const gates = [];
+        this.stations.forEach((station, i) => {
+            if (station.kind === 'gate' && (!name || station.stage === name)) gates.push(i);
+        });
+        return { total: gates.length, passed: gates.filter(i => i <= this.stationIndex).length };
     }
 
     get finished() { return this.stationIndex >= this.stations.length - 1; }
@@ -118,7 +163,7 @@ class WorldRun {
         const curvature = Math.min(1 / physics.radiusFloor, tightest);
         if (curvature < 1e-4) return physics.restartSpeedMax;
         // Grip on cobbles is the worst the road offers
-        const lean = Math.tan(Math.atan(Math.tan(physics.leanCapDeg * Math.PI / 180) * physics.cobbleGrip));
+        const lean = Math.tan(physics.leanCapDeg * Math.PI / 180) * physics.cobbleGrip;
         const safe = Math.sqrt(9.81 * lean / curvature);
         return Math.min(physics.restartSpeedMax, WorldRun.RESTART_SAFE_SHARE * safe);
     }

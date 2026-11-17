@@ -218,3 +218,58 @@ describe('what a restart does to the leg', () => {
         draw.mockRestore();
     });
 });
+
+describe('a world ride is not thrown away in one key press', () => {
+    const worldGame = () => {
+        const game = fakeGame();
+        game.environment = { isWorld: true, stage: null };
+        return game;
+    };
+    afterEach(() => { document.body.innerHTML = ''; });
+
+    test('a full restart asks first, and Cancel leaves the ride as it was', () => {
+        const game = worldGame();
+        const go = jest.fn();
+        expect(game.confirmWorldLeave(game.worldRestartAsk(), go)).toBe(true);
+        expect(document.getElementById('worldConfirm').textContent).toContain('Restart the tour from Altdorf?');
+        expect(go).not.toHaveBeenCalled();
+        document.getElementById('worldConfirmNo').click();
+        expect(document.getElementById('worldConfirm')).toBeNull();
+        expect(go).not.toHaveBeenCalled();
+        expect([game.restarts, game.penaltyMs, game.leaderboardService.cancelSession.mock.calls.length]).toEqual([0, 0, 0]);
+    });
+
+    test('Yes goes on, a second press while it is open asks nothing more, a finished ride goes straight on', () => {
+        const game = worldGame();
+        const go = jest.fn();
+        game.confirmWorldLeave('ask', go);
+        game.confirmWorldLeave('ask', go);
+        expect(document.querySelectorAll('#worldConfirm')).toHaveLength(1);
+        document.getElementById('worldConfirmYes').click();
+        expect(go).toHaveBeenCalledTimes(1);
+        game.finished = true;
+        expect(game.confirmWorldLeave('ask', go)).toBe(false);
+        expect(go).toHaveBeenCalledTimes(2);
+        expect(document.getElementById('worldConfirm')).toBeNull();
+    });
+
+    test('a world restart starts no leaderboard session, even after a leg was played in the page life', () => {
+        const game = worldGame();
+        game.leaderboardService.startRun = jest.fn();
+        game.tourSystem = { getCurrentLeg: () => ({ id: 'long' }) };
+        game.restartLeaderboardSession();
+        expect(game.leaderboardService.cancelSession).toHaveBeenCalledTimes(1);
+        expect(game.leaderboardService.startRun).not.toHaveBeenCalled();
+    });
+
+    test('the crash button restarts with the reason crash, and it has its own words', () => {
+        const game = worldGame();
+        game.restartAtStation = jest.fn();
+        game.restartFromCheckpoint('crash');
+        expect(game.restartAtStation).toHaveBeenCalledWith('crash');
+        expect(Game.WORLD_RESTART_TEXT.crash).toBeTruthy();
+        expect(Game.WORLD_RESTART_TEXT.crash).not.toBe(Game.WORLD_RESTART_TEXT.key);
+        const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
+        expect(source).toMatch(/this\.restartFromCheckpoint\('crash'\)/);
+    });
+});
