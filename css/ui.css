@@ -473,6 +473,42 @@ canvas {
     display: none;
 }
 
+/* The hairpin advice under the turn prompt: a chevron and the speed for the next tight bend, red when over it */
+.world-advice {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: rgba(10, 14, 18, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    font-variant-numeric: tabular-nums;
+}
+
+.world-advice[hidden] {
+    display: none;
+}
+
+.world-advice svg {
+    width: 18px;
+    height: 18px;
+    color: var(--c-warn);
+}
+
+.world-advice.fast {
+    color: var(--c-bad);
+    border-color: var(--c-bad);
+}
+
+.world-advice.fast svg {
+    color: var(--c-bad);
+}
+
+/* The chevron is drawn for a right-hand bend */
+.world-advice.left svg {
+    transform: scaleX(-1);
+}
+
 /* Speed: a compact gauge in the bottom-right corner */
 .hud-speed {
     position: absolute;

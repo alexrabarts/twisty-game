@@ -2,6 +2,9 @@
 //   - a minimap in a HUD corner: the ride, the side roads in residence, the bike;
 //     north up, MAP_SPAN_M across
 //   - a turn prompt for the next junction within PROMPT_M ("Keep left, 300 m")
+//   - the hairpin advice beside the prompt: the speed for the next tight bend within ADVICE_M
+//     (WorldAssist.advice), red when the rider is over it by ADVICE_FAST; hidden with the assist off.
+//     The H key cycles the assist level (off, low, normal), said in a callout
 //   - the off-route rule: more than Route.OFF_ROUTE_M from the ride line, or riding
 //     against the route at over REVERSE_SPEED for REVERSE_WARN_S, shows "Wrong way";
 //     RESTART_AFTER_S later (still wrong) it calls `onRestart`, the same path as the
@@ -16,6 +19,10 @@ class WorldGuide {
     static get RESTART_AFTER_S() { return 10; }
     static get MAP_SIZE() { return 150; }
     static get MAP_REFRESH_MS() { return 100; }
+    static get ADVICE_M() { return 150; }
+    static get ADVICE_FAST() { return 1.1; }
+    // m/s to the HUD's mph
+    static get MPH() { return 2.237; }
 
     constructor(environment) {
         this.environment = environment;
@@ -24,6 +31,7 @@ class WorldGuide {
         this.onWarning = null;
         this.reset();
         this.promptText = '';
+        this.advice = null;
         this.warning = null;
         this.mapAt = 0;
         this.build();
@@ -77,10 +85,26 @@ class WorldGuide {
         return `${verb}, ${metres} m${next.name ? ` · ${next.name}` : ''}`;
     }
 
+    // The hairpin advice at s for a bike at `speed` (m/s): {mph, fast, distance, left} or null (none near, or the assist off)
+    adviceAt(s, speed, level = WorldAssist.level()) {
+        const physics = this.environment.physics;
+        if (!physics || !Number.isFinite(s) || WorldAssist.share(physics, level) <= 0) return null;
+        const advice = WorldAssist.advice(this.route, physics, s, WorldGuide.ADVICE_M);
+        if (!advice) return null;
+        return {
+            mph: Math.round(advice.speed * WorldGuide.MPH),
+            fast: speed > advice.speed * WorldGuide.ADVICE_FAST,
+            distance: advice.bend.distance,
+            // The way the bend turns: a positive heading change is to the right (WorldRoute.junctionsAhead)
+            left: advice.bend.sign < 0
+        };
+    }
+
     // One frame: the rule, the prompt and (a few times a second) the map
     update(state) {
         const fired = this.step(state);
         this.promptText = this.promptAt(state.projection.s);
+        this.advice = this.adviceAt(state.projection.s, state.speed);
         this.warning = this.cause ? 'Wrong way' : null;
         // The warning is said once when it starts, in the callout stack at the centre of the screen
         if (this.warning !== this.warned) {
@@ -101,7 +125,21 @@ class WorldGuide {
         this.canvas.width = this.canvas.height = WorldGuide.MAP_SIZE;
         this.prompt = document.createElement('div');
         this.prompt.className = 'world-prompt';
-        box.append(this.canvas, this.prompt);
+        // The hairpin advice: a hairpin chevron and the speed for it
+        this.adviceBox = document.createElement('div');
+        this.adviceBox.className = 'world-advice';
+        this.adviceBox.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 20V9a5 5 0 0 1 10 0v6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M13.5 12.5L17 16l3.5-3.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span></span>';
+        this.adviceText = this.adviceBox.querySelector('span');
+        this.adviceBox.hidden = true;
+        box.append(this.canvas, this.prompt, this.adviceBox);
+        // H cycles the hairpin assist
+        this.onKey = (event) => {
+            if (event.code !== 'KeyH' || event.repeat) return;
+            const level = WorldAssist.cycle();
+            document.querySelectorAll('[data-assist="cycle"]').forEach(button => button.refresh && button.refresh());
+            if (typeof showCallout === 'function') showCallout(`Hairpin assist: ${level}`, 'info', 1500);
+        };
+        document.addEventListener('keydown', this.onKey);
         document.body.appendChild(box);
         document.body.classList.add('world-ride');
         this.box = box;
@@ -110,6 +148,14 @@ class WorldGuide {
     render(state) {
         if (!this.box) return;
         this.prompt.textContent = this.promptText;
+        const advice = this.advice;
+        this.adviceBox.hidden = !advice;
+        if (advice) {
+            const text = `${advice.mph} mph`;
+            if (this.adviceText.textContent !== text) this.adviceText.textContent = text;
+            this.adviceBox.classList.toggle('fast', advice.fast);
+            this.adviceBox.classList.toggle('left', advice.left);
+        }
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         if (state && now - this.mapAt >= WorldGuide.MAP_REFRESH_MS) {
             this.mapAt = now;
@@ -163,6 +209,8 @@ class WorldGuide {
     }
 
     dispose() {
+        if (this.onKey && typeof document !== 'undefined') document.removeEventListener('keydown', this.onKey);
+        this.onKey = null;
         if (this.box && this.box.parentNode) this.box.parentNode.removeChild(this.box);
         if (typeof document !== 'undefined' && document.body) document.body.classList.remove('world-ride');
         this.box = null;

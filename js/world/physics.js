@@ -30,6 +30,27 @@ const WorldPhysics = Object.freeze({
 
     cobbleGrip: 0.85,      // surface grip on a route sample flagged cobbles
 
+    // Hairpin assist (WorldAssist in js/world/run.js). The level (off, low, normal) scales every assist by
+    // assistLevels; each assist has one tuning value, and the rest only says where a bend counts as tight.
+    assistLevels: Object.freeze({ off: 0, low: 0.5, normal: 1 }),
+    assistTightR: 25,      // m, a bend this tight or tighter gets the whole assist
+    assistGentleR: 60,     // m, a bend this open or more gets none; in between it fades
+    assistSpanM: 8,        // m, the span the bend's radius is read over (a 10 m fillet reads as 10 m)
+    // 1. Speed advice: the entry speed that takes the bend at this lean, well under the cap. With no throttle and
+    //    well over it, the engine brakes the bike to it at up to adviceBrake (never more than the brake can)
+    adviceLeanDeg: 35,
+    adviceBrake: 4,        // m/s^2 at level normal
+    // 2. Line capture: steering into a tight bend at a turn radius within lineCapture of the line's radius, the
+    //    lean is pulled onto the line (the road's radius at the bike's offset, inside the lane) with weight
+    //    lineStrength, the rest staying the rider's own torque steering. Outside the window it does nothing
+    lineCapture: 0.25,
+    lineStrength: 0.8,
+    // 3. Recovery: running wide toward the outside of a tight bend, the bike is pulled back to the road edge at
+    //    recoveryPull, at most recoveryBudgetM per bend and only within recoveryReachM of the edge (no wall-ride)
+    recoveryPull: 1.5,     // m/s at level normal
+    recoveryBudgetM: 3,
+    recoveryReachM: 4,
+
     // Used by the run layer (R3) and the restart (R3), kept here with the rest
     restartSpeedMax: 15,
     progressSlack: 1.1,

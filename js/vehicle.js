@@ -166,6 +166,8 @@ class Vehicle {
         this.lowsideTimerMs = 0; // Time the demand has been over the lowside limit
         this.footDown = false; // Stopped with the brake held, no fall
         this.worldSurfaceGrip = 1; // Route surface grip (cobbles) under the bike
+        this.assistLevel = null; // Hairpin assist level (off, low, normal); null reads WorldAssist.level()
+        this.resetHairpinAssist();
 
         // Road boundary state tracking for hysteresis
         this.wasNearEdge = false; // Prevents oscillating between edge states
@@ -2419,6 +2421,7 @@ class Vehicle {
             this.speed -= this.worldGrade * 9.81 * world.slopeGravity * deltaTime;
         }
         this.speed -= 0.002 * this.speed * this.speed * deltaTime;
+        this.adviceBraking(deltaTime, throttleInput, brakeInput, weatherMultipliers);
 
         // Low speed never drops the bike: it creeps up to creepSpeed on its own,
         // and with the brake held at a crawl it stops with a foot down
@@ -2467,6 +2470,7 @@ class Vehicle {
             ? world.leanLimitGain * (leanLimit - outward)
             : world.limitReturn * Math.abs(u) * (leanLimit - outward);
         if (side * rate > room) rate = side * room;
+        rate = this.lineCapture(rate, u, leanLimit);
         this.leanVelocity += (rate - this.leanVelocity) * (1 - Math.exp(-deltaTime / world.leanRateLag));
 
         // Let go and the bike stands itself up. This acts on the lean directly, not through the lagged rate, so
@@ -2478,6 +2482,7 @@ class Vehicle {
         const tanLean = Math.tan(Math.abs(this.leanAngle));
         const curvature = v2 > 1e-6 ? Math.min(1 / world.radiusFloor, g * tanLean / v2) : 0;
         this.yawAngle -= v * curvature * Math.sign(this.leanAngle) * deltaTime;
+        this.recoveryPull(deltaTime);
 
         this.lastDemand = v2 * curvature / g;
         if (this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
@@ -2490,6 +2495,118 @@ class Vehicle {
         } else {
             this.lowsideTimerMs = 0;
         }
+    }
+
+    // The hairpin assist's state: no line captured, the whole recovery budget left
+    resetHairpinAssist() {
+        this.lineCaptured = false;
+        this.recoveryLeft = null; // metres of recovery pull left in this bend; null is the whole budget
+        this.hairpinAdvice = null;
+    }
+
+    // The share of the hairpin assist in force (0 off, 1 normal); 0 on a leg or a route with no curvature
+    assistShare() {
+        const world = this.worldPhysics;
+        const route = this.environment && this.environment.route;
+        if (!world || !route || typeof route.curvatureAt !== 'function' || typeof WorldAssist === 'undefined') return 0;
+        return WorldAssist.share(world, this.assistLevel || WorldAssist.level());
+    }
+
+    // 1. Speed advice: well over the advised speed of the next tight bend, with no throttle, and near enough
+    // that the bike must slow now to make it, the engine brakes at up to adviceBrake. It never brakes past the
+    // advised speed, never harder than the rider's own full brake, and never with the throttle held.
+    adviceBraking(deltaTime, throttleInput, brakeInput, multipliers) {
+        const world = this.worldPhysics;
+        const share = this.assistShare();
+        this.hairpinAdvice = null;
+        if (share <= 0 || this.crashed) return;
+        const v = this.speed;
+        const s = Number.isFinite(this.projection.s) ? this.projection.s : this.routeS;
+        const look = Math.max(40, v * v / (2 * world.adviceBrake * share) + v * 1.5);
+        const advice = WorldAssist.advice(this.environment.route, world, s, look, multipliers.lateralFriction);
+        this.hairpinAdvice = advice;
+        if (!advice || throttleInput > 0 || v <= advice.speed * 1.1) return;
+        const decel = world.adviceBrake * share;
+        // Brake only once the bike would no longer make the advised speed at the bend with this braking
+        if ((v * v - advice.speed * advice.speed) / (2 * decel) < advice.bend.distance - v * 0.5) return;
+        const most = this.brakeForce * multipliers.brakeForce;
+        const extra = Math.min(decel, most) - most * Math.max(0, brakeInput);
+        if (extra > 0) this.speed = Math.max(advice.speed, this.speed - extra * deltaTime);
+    }
+
+    // The road's signed curvature at the bike over assistSpanM, read `ahead` metres on; 0 with no projection
+    roadCurvature(ahead = 0) {
+        const p = this.projection;
+        if (!p || !(p.index >= 0) || !Number.isFinite(p.s)) return 0;
+        return WorldAssist.curvature(this.environment.route, this.worldPhysics, p.s + ahead);
+    }
+
+    // 2. Line capture: steering into a tight bend at a turn radius within lineCapture of the line's (the road's
+    // radius at the bike's offset, the offset kept within LINE_BAND_M of the centre), the lean rate is blended toward the lean of
+    // that line with weight lineStrength x the fade of the bend x |input|. The rest is the rider's own torque.
+    // It does nothing with no input, with the input out of the bend, on a gentle bend, or far off the line;
+    // once captured it holds while the radius stays within twice the window.
+    lineCapture(rate, u, leanLimit) {
+        const share = this.assistShare();
+        if (share <= 0 || u === 0) return this.releaseLine(rate);
+        const world = this.worldPhysics;
+        const v = this.speed;
+        const k = this.roadCurvature(v * 0.2);
+        const sign = Math.sign(k);
+        const fade = WorldAssist.fade(world, 1 / Math.abs(k));
+        if (fade <= 0 || Math.sign(u) !== sign || v < 1) return this.releaseLine(rate);
+        const p = this.projection;
+        // The line keeps to the rider's band of the road, clear of the traffic lanes either side
+        const room = Math.max(0, Math.min(p.width / 2 - 1.5, WorldAssist.LINE_BAND_M));
+        const inner = Math.max(-room, Math.min(room, p.lateral * sign));
+        const lineRadius = Math.max(world.radiusFloor, 1 / Math.abs(k) - inner);
+        // The bike's own radius now: a lean into the bend turns it at v^2 / (g tan lean)
+        const into = -this.leanAngle * sign;
+        const radius = into > 1e-3 ? v * v / (9.81 * Math.tan(into)) : Infinity;
+        const capture = world.lineCapture * (this.lineCaptured ? 2 : 1);
+        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture;
+        if (!this.lineCaptured) return rate;
+        // The arc runs along the road: a heading turned past the road's (or short of it) is brought back over
+        // about a second of riding, so an early or late turn-in ends on the arc rather than parallel to it
+        const ahead = Math.atan2(Math.sin(this.yawAngle - p.heading), Math.cos(this.yawAngle - p.heading)) * sign;
+        const reach = Math.max(8, v);
+        const want = Math.max(0, Math.min(1 / world.radiusFloor, 1 / lineRadius - 2 * Math.sin(ahead) / reach));
+        const lineLean = -sign * Math.min(leanLimit, Math.atan(v * v * want / 9.81));
+        const weight = Math.min(1, world.lineStrength * share * fade * Math.abs(u));
+        return rate * (1 - weight) + weight * WorldAssist.LINE_GAIN * (lineLean - this.leanAngle);
+    }
+
+    releaseLine(rate) {
+        this.lineCaptured = false;
+        return rate;
+    }
+
+    // 3. Recovery: past the road edge on the outside of a tight bend (or just out of one), the bike is pulled back
+    // toward the edge at recoveryPull. Only within recoveryReachM of the edge, facing along the road, and at most
+    // recoveryBudgetM per bend, so it cannot hold a bike against a wall; the budget refills back on the road
+    // with no tight bend under the bike.
+    recoveryPull(deltaTime) {
+        const share = this.assistShare();
+        const p = this.projection;
+        if (share <= 0 || this.crashed || !p || !(p.index >= 0) || !Number.isFinite(p.lateral)) return;
+        const world = this.worldPhysics;
+        if (this.recoveryLeft === null) this.recoveryLeft = world.recoveryBudgetM;
+        const here = this.roadCurvature(0), behind = this.roadCurvature(-world.assistSpanM);
+        const k = Math.abs(here) >= Math.abs(behind) ? here : behind;
+        const fade = WorldAssist.fade(world, 1 / Math.abs(k));
+        const half = p.width / 2;
+        if (fade <= 0) {
+            if (Math.abs(p.lateral) <= half) this.recoveryLeft = world.recoveryBudgetM;
+            return;
+        }
+        const sign = Math.sign(k);
+        const out = -p.lateral * sign - half;
+        if (out <= 0 || out > world.recoveryReachM || this.recoveryLeft <= 0) return;
+        if (Math.cos(this.yawAngle - p.heading) <= 0) return;
+        const shift = Math.min(world.recoveryPull * share * fade * deltaTime, out, this.recoveryLeft);
+        this.recoveryLeft -= shift;
+        this.position.x += sign * shift * Math.cos(p.heading);
+        this.position.z -= sign * shift * Math.sin(p.heading);
     }
 
     updateMesh() {
@@ -2703,6 +2820,7 @@ class Vehicle {
         this.lastDemand = 0;
         this.lowsideTimerMs = 0;
         this.footDown = false;
+        this.resetHairpinAssist();
         this.wasNearEdge = false;
         this.fallingOffCliff = false;
         this.fallSide = 0; // -1 left, +1 right: the side the bike went over

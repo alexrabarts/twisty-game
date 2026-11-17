@@ -95,6 +95,8 @@ const WorldCredits = {
         go.textContent = 'Resume (P)';
         go.addEventListener('click', (event) => { event.stopPropagation(); resume(); });
         panel.append(title, go, WorldCredits.button('btn', environment));
+        // The hairpin assist level (js/world/run.js WorldAssist)
+        if (typeof WorldAssist !== 'undefined') panel.appendChild(WorldAssist.pauseButton());
         document.body.appendChild(panel);
         return panel;
     },
