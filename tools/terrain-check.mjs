@@ -11,7 +11,9 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-hud world-shots world-hairpin-shots world-buildings
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots
+//   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
+//   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   world-hud rides the two-stage fixture tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
@@ -2140,7 +2142,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2260,6 +2262,69 @@ const WORLD = {
         return { every, rows };
     },
     'world-budget': page => WORLD['world-window'](page),
+    // Milliseconds to render one frame of the world (scene, post and a 1-pixel read-back that waits for the GPU) from the
+    // chase view at five points of the ride, after the window round each has settled. The median of `count` frames per
+    // point, the median of all of them and the worst frame. Read with --gpu: a software renderer measures nothing useful.
+    'world-frametime': async page => page.evaluate(async (placeSource, count) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const route = game.environment.route;
+        const gl = game.graphics.renderer.getContext();
+        const pixel = new Uint8Array(4);
+        const frame = () => {
+            const t0 = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return performance.now() - t0;
+        };
+        const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+        const round = n => Math.round(n * 100) / 100;
+        const all = [];
+        const points = [];
+        for (const f of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+            const s = Math.round(f * route.length);
+            await placeAt(s);
+            game.cameraMode = 2;
+            game.worldCamera.reset(game.vehicle.yawAngle);
+            twistyDev.autopilot({ speed: 0 });
+            for (let i = 0; i < 240; i++) twistyDev.step(1);
+            game.environment.streamer.pump(Infinity);
+            for (let i = 0; i < 5; i++) frame();
+            const times = Array.from({ length: count }, frame);
+            all.push(...times);
+            points.push({ s, ms: round(median(times)), worst: round(Math.max(...times)) });
+        }
+        return { points, medianMs: round(median(all)), worstMs: round(Math.max(...all)), worstPointMs: Math.max(...points.map(p => p.ms)), renderer: gl.getParameter(gl.RENDERER) };
+    }, placeAt.toString(), Number(option('frames') || 30)),
+    // GPU pictures of the riding view: the chase camera at five points of the ride, ridden into for 140 m so the
+    // camera has its riding place. `--out <dir>` names the folder, `--tag` the file prefix.
+    'world-ride-shots': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'ride';
+        const length = await page.evaluate(() => game.environment.route.length);
+        const files = [];
+        for (const f of [0.05, 0.25, 0.45, 0.65, 0.85]) {
+            const s = Math.round(f * length);
+            const at = await page.evaluate(async (placeSource, pilotSource, s) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const v = game.vehicle;
+                game.cameraMode = 2;
+                await placeAt(Math.max(10, s - 140));
+                game.worldCamera.reset(v.yawAngle);
+                new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+                let ticks = 0;
+                while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, placeAt.toString(), pilotWorld.toString(), s);
+            const file = join(out, `${tag}-s${s}.png`);
+            await page.screenshot({ path: file });
+            files.push({ file, ...at });
+        }
+        return { files };
+    },
     // The physics ground against the drawn ground: a ray down onto the drawn world meshes
     'world-ground': async page => page.evaluate(async (placeSource, want) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
