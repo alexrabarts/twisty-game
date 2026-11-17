@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
@@ -2144,7 +2144,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2751,6 +2751,128 @@ const WORLD = {
         per.forEach(h => { h.least = Math.round(h.least * 1000) / 1000; });
         return { margin, cruise, start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, frames, out, least: Math.round(least * 1000) / 1000, worstAt, hairpins: per };
     }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('speed') || 20), FRUSTUM_MARGIN),
+    // The chase camera's smoothness through every hairpin: the world-frustum ride, with the camera's shake held at
+    // zero (it is meant to be rough), recording each frame's camera position, look target, boom length over the
+    // ground, height over the bike, FOV and view yaw. Reports, over the frames within 60 m of a hairpin, the largest
+    // frame-to-frame step and second difference of each. --dump <file> writes every frame. --apex <s> rides only
+    // the hairpin nearest s.
+    'world-camera-smooth': async (page) => {
+        const result = await page.evaluate(async (placeSource, pilotSource, hairpinSource, cruise, onlyApex) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            let hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+            if (onlyApex) hairpins = [hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a))];
+            const v = game.vehicle;
+            const route = game.environment.route;
+            const cam = game.camera;
+            twistyDev.freeze();
+            game.cameraMode = 2;
+            const start = Math.max(20, hairpins[0] - (onlyApex ? 160 : 400));
+            await placeAt(start);
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+            // The shake is random on purpose: hold it at zero so what is measured is the camera's own motion
+            const update = game.updateCamera.bind(game);
+            game.updateCamera = (...args) => {
+                const random = Math.random;
+                Math.random = () => 0.5;
+                try { return update(...args); } finally { Math.random = random; }
+            };
+            const dir = new THREE.Vector3();
+            const rows = [];
+            let ticks = 0;
+            const end = Math.min(route.length - 30, hairpins[hairpins.length - 1] + (onlyApex ? 100 : 200));
+            try {
+                while (v.routeS < end && !v.crashed && !game.finished && ticks < 60 * 60 * 30) {
+                    twistyDev.step(1);
+                    ticks++;
+                    if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                    if (ticks < 30) continue;
+                    cam.getWorldDirection(dir);
+                    const c = cam.position, l = game.currentLookTarget, b = v.position;
+                    const wc = game.worldCamera;
+                    rows.push([v.projection.s ?? v.routeS, c.x, c.y, c.z, l.x, l.y, l.z, cam.fov, Math.hypot(c.x - b.x, c.z - b.z), c.y - b.y, Math.atan2(dir.x, dir.z), b.x, b.y, b.z, wc.pull ?? 0, wc.fraction ?? 1, v.speed, Math.asin(Math.max(-1, Math.min(1, dir.y))), wc.keep ?? 0]);
+                }
+            } finally {
+                game.updateCamera = update;
+            }
+            return { hairpins: hairpins.map(Math.round), crashed: v.crashed, reached: Math.round(v.routeS), end: Math.round(end), rows };
+        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('speed') || 20), Number(option('apex') || 0));
+        const dump = option('dump');
+        if (dump) writeJson(dump, result);
+        const { rows, hairpins } = result;
+        const near = rows.map(r => hairpins.some(h => Math.abs(r[0] - h) <= 60));
+        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+        // Each signal as [frame -> number[]]; the step and second difference are vector norms (angles wrapped)
+        const signals = {
+            position: r => [r[1], r[2], r[3]],
+            look: r => [r[4], r[5], r[6]],
+            distance: r => [r[8]],
+            height: r => [r[9]],
+            fov: r => [r[7]],
+            yaw: r => [r[10]],
+            pitch: r => [r[17]]
+        };
+        const stats = {};
+        for (const [name, get] of Object.entries(signals)) {
+            let step = 0, jerk = 0, stepAt = null, jerkAt = null;
+            for (let i = 2; i < rows.length; i++) {
+                if (!near[i] || !near[i - 1] || !near[i - 2]) continue;
+                const a = get(rows[i - 2]), b = get(rows[i - 1]), c = get(rows[i]);
+                const d1 = b.map((x, k) => (name === 'yaw' ? wrap(c[k] - x) : c[k] - x));
+                const d0 = a.map((x, k) => (name === 'yaw' ? wrap(b[k] - x) : b[k] - x));
+                const s = Math.hypot(...d1);
+                const j = Math.hypot(...d1.map((x, k) => x - d0[k]));
+                if (s > step) { step = s; stepAt = Math.round(rows[i][0]); }
+                if (j > jerk) { jerk = j; jerkAt = Math.round(rows[i][0]); }
+            }
+            const round = n => Math.round(n * 10000) / 10000;
+            stats[name] = { step: round(step), stepAt, jerk: round(jerk), jerkAt };
+        }
+        return { hairpins: hairpins.length, frames: rows.length, hairpinFrames: near.filter(Boolean).length, crashed: result.crashed, reached: result.reached, end: result.end, stats };
+    },
+    // A GPU frame sequence through one hairpin: the world pilot rides in from 140 m before the apex nearest --apex
+    // (default the first), then `--count` pictures (default 8), one every `--every` frames (default 4), from
+    // --from metres before the apex (default 20). The shake is held at zero. Needs --out <dir>; --tag names the files.
+    'world-camera-frames': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'frame';
+        const count = Number(option('count') || 8), every = Number(option('every') || 4), from = Number(option('from') || 20);
+        const apex = await page.evaluate(async (placeSource, pilotSource, hairpinSource, onlyApex, from) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+            const apex = onlyApex ? hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a)) : hairpins[0];
+            const v = game.vehicle;
+            game.cameraMode = 2;
+            await placeAt(apex - 140);
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
+            const update = game.updateCamera.bind(game);
+            game.updateCamera = (...args) => {
+                const random = Math.random;
+                Math.random = () => 0.5;
+                try { return update(...args); } finally { Math.random = random; }
+            };
+            let ticks = 0;
+            while (v.routeS < apex - from && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+            return Math.round(apex);
+        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('apex') || 0), from);
+        const files = [];
+        for (let k = 0; k < count; k++) {
+            const at = await page.evaluate((every) => {
+                if (every > 1) twistyDev.step(every - 1);
+                twistyDev.step(1, { render: true });
+                const c = game.camera.position, l = game.currentLookTarget;
+                return { s: Math.round(game.vehicle.routeS * 10) / 10, camera: [c.x, c.y, c.z].map(n => Math.round(n * 100) / 100), look: [l.x, l.y, l.z].map(n => Math.round(n * 100) / 100) };
+            }, every);
+            const file = join(out, `${tag}-${String(k + 1).padStart(2, '0')}.png`);
+            await page.screenshot({ path: file });
+            files.push({ file, ...at });
+        }
+        return { apex, files };
+    },
     // The hairpin assist (WorldAssist) on every hairpin of the ride, at each level, with a simple scripted rider
     // (not the pilot): the pilot rides the 40 m up to the bend at the bend's advised speed; from max(3, 0.4 v) m
     // before the bend to 10 m after it the rider steers full into the bend while the curvature that far ahead is
@@ -3288,6 +3410,18 @@ function worldChecks(report) {
         if (frustum.hairpins.length < 20) failures.push(`world-frustum: ${frustum.hairpins.length} hairpins found, want 20 or more`);
         if (frustum.out) failures.push(`world-frustum: the bike was within ${frustum.margin} of the screen edge or out of view on ${frustum.out} of ${frustum.frames} frames (worst ${frustum.least} at s ${frustum.worstAt})`);
         frustum.hairpins.forEach(h => { if (!(h.frames > 0)) failures.push(`world-frustum: no frames at the hairpin at s ${h.s}`); });
+    }
+    // The chase camera through the hairpins: the second difference a frame of its position (m), its look target (m)
+    // and its view yaw (rad). The camera before its springs went to 11.5, 11.0 and 0.19 where the boom met the land,
+    // and to 0.13, 1.0 and 0.015 elsewhere.
+    const smooth = results['world-camera-smooth'];
+    if (smooth) {
+        if (smooth.crashed) failures.push(`world-camera-smooth: the ride crashed at s ${smooth.reached}`);
+        const most = { position: 0.03, look: 0.3, yaw: 0.006 };
+        Object.entries(most).forEach(([key, limit]) => {
+            const got = smooth.stats[key];
+            if (!(got.jerk <= limit)) failures.push(`world-camera-smooth: the ${key} moved by a second difference of ${got.jerk} in one frame at s ${got.jerkAt}, want ${limit} or less`);
+        });
     }
     const assist = results['world-hairpin-assist'];
     if (assist) {
