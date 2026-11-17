@@ -13,6 +13,7 @@
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
 //   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-hud world-shots
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
+//   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
 //   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
 //   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
@@ -135,7 +136,7 @@ function fulfilCallable(calls, request) {
     return request.respond({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ result }) });
 }
 
-async function openPage(browser, port, url = '/') {
+async function openPage(browser, port, url = '/', seed = 1) {
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 540, deviceScaleFactor: 1 });
     await page.setRequestInterception(true);
@@ -159,9 +160,9 @@ async function openPage(browser, port, url = '/') {
     });
     page.on('console', message => { if (message.type() === 'error') state.lastError = message.text().slice(0, 200); });
     page.on('pageerror', error => state.pageErrors.push(`${url}: ${error.message}`));
-    // One seeded generator, reset before each leg starts
-    await page.evaluateOnNewDocument(() => {
-        let seed = 1;
+    // One seeded generator, reset before each leg starts; `seed` is where a page starts it
+    await page.evaluateOnNewDocument((first) => {
+        let seed = first;
         window.__reseed = value => { seed = value; };
         Math.random = () => {
             seed = (seed + 0x6d2b79f5) | 0;
@@ -169,7 +170,7 @@ async function openPage(browser, port, url = '/') {
             t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         };
-    });
+    }, seed);
     await page.goto(`http://127.0.0.1:${port}${url}`, { waitUntil: 'load', timeout: 120000 });
     return page;
 }
@@ -2145,10 +2146,10 @@ const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|
 const WORLD_RESIDENT_TILES = 60;
 const WORLD_BIKE_TILE_M = 900;
 
-async function openWorld(browser, port, id) {
+async function openWorld(browser, port, id, seed = 1) {
     const data = option('worldData');
     for (let attempt = 0; attempt < 3; attempt++) {
-        const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`);
+        const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`, seed);
         try {
             // The vehicle is made before the first window settles; the ride state comes after it, so wait for that
             await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 120000 });
@@ -2690,6 +2691,16 @@ const WORLD = {
     }
 };
 
+// The seeds world-finish rides: --seeds N rides N seeds from --seed (default 1); --seed S alone rides S once.
+// Neither: WORLD_FINISH_SEEDS seeds from 1, so one lucky draw of the traffic cannot pass the probe.
+const WORLD_FINISH_SEEDS = 5;
+function finishSeeds() {
+    const first = option('seed') !== undefined ? Number(option('seed')) : 1;
+    const count = option('seeds') !== undefined ? Number(option('seeds')) : option('seed') !== undefined ? 1 : WORLD_FINISH_SEEDS;
+    if (!Number.isInteger(first) || !Number.isInteger(count) || count < 1) fail(2, `--seed and --seeds take whole numbers, --seeds at least 1 (got ${option('seed')}, ${option('seeds')})`);
+    return Array.from({ length: count }, (_, i) => first + i);
+}
+
 async function worldMain() {
     const executablePath = chromePath();
     const gpu = flag('gpu');
@@ -2703,6 +2714,19 @@ async function worldMain() {
     try {
         for (const name of probes) {
             if (!WORLD[name]) { report.failures.push(`unknown probe ${name}`); continue; }
+            if (name === 'world-finish') {
+                // One ride per seed, each on a fresh page whose Math.random starts at that seed (traffic, the crew)
+                const rides = [];
+                for (const seed of finishSeeds()) {
+                    state.requests = [];
+                    const page = await openWorld(browser, port, id, seed);
+                    rides.push({ seed, ...(await WORLD[name](page, port)) });
+                    await page.close();
+                    state.requests = null;
+                }
+                report.results[name] = { seeds: rides.map(r => r.seed), finished: rides.filter(r => r.finished && !r.crashed).length, rides };
+                continue;
+            }
             state.requests = [];
             const page = await openWorld(browser, port, id);
             report.results[name] = await WORLD[name](page, port);
@@ -2774,16 +2798,20 @@ function worldChecks(report) {
         if (net.offHost.length) failures.push(`world-net: requests outside the allowed set: ${net.offHost.join(', ')}`);
         if (report.blocked.length) failures.push(`world-net: ${report.blocked.length} attempts at production hosts: ${report.blocked.join(', ')}`);
     }
-    const finish = results['world-finish'];
-    if (finish) {
-        const { rows, ...rest } = finish;
-        if (!finish.finished || finish.crashed || finish.gates !== finish.gateTotal || finish.restarts || finish.maxLateral > 5) failures.push(`world-finish: ${JSON.stringify(rest)}`);
-        if (!finish.traffic || !finish.traffic.bikes || finish.cones || finish.rockfalls) failures.push(`world-finish: traffic must ride and cones and rockfalls must be off: ${JSON.stringify({ traffic: finish.traffic, cones: finish.cones, rockfalls: finish.rockfalls })}`);
-        rows.forEach(r => {
-            Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world-finish at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
-            if (r.tiles > WORLD_RESIDENT_TILES) failures.push(`world-finish at s ${r.s}: ${r.tiles} resident tiles, over ${WORLD_RESIDENT_TILES}`);
-            if (r.maxStepMs > 4 * 2) failures.push(`world-finish at s ${r.s}: a build step took ${r.maxStepMs} ms`);
-        });
+    const finishes = results['world-finish'];
+    if (finishes) {
+        if (finishes.finished !== finishes.seeds.length) failures.push(`world-finish: ${finishes.finished} of ${finishes.seeds.length} seeded rides finished, want all`);
+        for (const finish of finishes.rides) {
+            const { rows, seed, ...rest } = finish;
+            const at = `world-finish seed ${seed}`;
+            if (!finish.finished || finish.crashed || finish.gates !== finish.gateTotal || finish.restarts || finish.maxLateral > 5) failures.push(`${at}: ${JSON.stringify(rest)}`);
+            if (!finish.traffic || !finish.traffic.bikes || finish.cones || finish.rockfalls) failures.push(`${at}: traffic must ride and cones and rockfalls must be off: ${JSON.stringify({ traffic: finish.traffic, cones: finish.cones, rockfalls: finish.rockfalls })}`);
+            rows.forEach(r => {
+                Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${at} at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
+                if (r.tiles > WORLD_RESIDENT_TILES) failures.push(`${at} at s ${r.s}: ${r.tiles} resident tiles, over ${WORLD_RESIDENT_TILES}`);
+                if (r.maxStepMs > 4 * 2) failures.push(`${at} at s ${r.s}: a build step took ${r.maxStepMs} ms`);
+            });
+        }
     }
     const restart = results['world-restart'];
     if (restart) {
