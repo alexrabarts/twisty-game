@@ -3026,10 +3026,14 @@ const WORLD = {
         let nextRow = 0;
         let maxLateral = 0;
         const limit = 60 * 60 * 40;
+        // The HUD's text, read every second of the ride: no number in it may be "Infinity", "NaN" or "∞"
+        const badHud = [];
+        const hudText = () => (document.getElementById('hud') || document.body).innerText;
         while (!game.finished && !v.crashed && ticks < limit) {
             twistyDev.step(1);
             ticks++;
             maxLateral = Math.max(maxLateral, Math.abs(v.projection.lateral));
+            if (ticks % 60 === 0 && badHud.length < 5) { const t = hudText(); if (/Infinity|NaN|\u221e/.test(t)) badHud.push({ s: Math.round(v.routeS), text: t.replace(/\s+/g, ' ').slice(0, 160) }); }
             // Tile and cover fetches are asynchronous: a ride stepped with no pause would outrun them
             if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
             if (v.routeS >= nextRow) {
@@ -3040,7 +3044,11 @@ const WORLD = {
         }
         console.log = log;
         const traffic = game.traffic ? { cars: game.traffic.cars.length, bikes: game.traffic.motorcycles.length } : null;
-        return { finished: game.finished, crashed: v.crashed, crash: crashes[0] || null, lowside: v.lowsideTimerMs, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, maxLateral: Math.round(maxLateral * 10) / 10, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts, penaltyMs: game.penaltyMs, traffic, cones: !!game.cones, rockfalls: !!game.rockfalls, rows };
+        // The finish box's distance against the stage's length
+        const meta = document.querySelector('#finishBanner .finish-meta');
+        const shownM = meta ? Number(meta.textContent.replace(/[^0-9.]/g, '')) : null;
+        const stageM = env.stage ? env.stage.length || env.stage.to - env.stage.from : env.route.length;
+        return { badHud, shownM, stageM: Math.round(stageM), finished: game.finished, crashed: v.crashed, crash: crashes[0] || null, lowside: v.lowsideTimerMs, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, maxLateral: Math.round(maxLateral * 10) / 10, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts, penaltyMs: game.penaltyMs, traffic, cones: !!game.cones, rockfalls: !!game.rockfalls, rows };
     }, pilotWorld.toString(), Number(option('speed') || 20), countScene.toString(), Number(option('every') || 1000)),
     // A restart from a key press: the bike is put on the last station, +5 s, a rolling start, and the ride goes on
     // to the next station. An excursion that the guide ends costs one penalty, not two.
@@ -4046,6 +4054,8 @@ function worldChecks(report) {
             const { rows, seed, ...rest } = finish;
             const at = `world-finish seed ${seed}`;
             if (!finish.finished || finish.crashed || finish.gates !== finish.gateTotal || finish.restarts || finish.maxLateral > 5) failures.push(`${at}: ${JSON.stringify(rest)}`);
+            if (finish.badHud && finish.badHud.length) failures.push(`${at}: the HUD showed a number that is not one: ${JSON.stringify(finish.badHud)}`);
+            if (finish.finished && !finish.restarts && !(Math.abs(finish.shownM - finish.stageM) <= 0.02 * finish.stageM)) failures.push(`${at}: the finish box shows ${finish.shownM} m for a stage of ${finish.stageM} m`);
             if (!finish.traffic || !finish.traffic.bikes || finish.cones || finish.rockfalls) failures.push(`${at}: traffic must ride and cones and rockfalls must be off: ${JSON.stringify({ traffic: finish.traffic, cones: finish.cones, rockfalls: finish.rockfalls })}`);
             rows.forEach(r => {
                 Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${at} at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

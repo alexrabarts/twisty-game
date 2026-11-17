@@ -37,6 +37,29 @@ const HudRules = {
         return matches('(pointer: coarse)') || (matches('(any-pointer: coarse)') && !matches('(any-pointer: fine)'));
     },
 
+    // Every number the HUD and the run's boxes show goes through here: a value that is not a finite number (a
+    // division by a section of no time, a lost reading) shows as a dash, never as "Infinity", "NaN" or "∞"
+    number(value, { digits = 0, sign = false } = {}) {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return '\u2014';
+        const text = value.toLocaleString('en-GB', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+        return sign && value > 0 ? `+${text}` : text;
+    },
+
+    // The fastest average a section is credited at (km/h): two gates passed in one tick after a put-down, or a
+    // section of no time, is no proof of speed
+    SECTION_KMH_MAX: 250,
+
+    // Style points for passing a checkpoint: 100, plus 1.5 for each km/h the section's average speed is over 60,
+    // times the combo multiplier. A section of no time or no length earns the 100 alone
+    checkpointPoints(distanceM, sectionS, multiplier = 1) {
+        let base = 100;
+        if (Number.isFinite(distanceM) && Number.isFinite(sectionS) && distanceM > 0 && sectionS > 0) {
+            const kmh = Math.min(HudRules.SECTION_KMH_MAX, (distanceM / sectionS) * 3.6);
+            base += Math.floor(Math.max(0, kmh - 60) * 1.5);
+        }
+        return Math.round(base * (Number.isFinite(multiplier) ? multiplier : 1));
+    },
+
     // m:ss.t for a stage clock in milliseconds
     stageClock(ms) {
         const tenths = Math.max(0, Math.floor(ms / 100));
@@ -143,7 +166,7 @@ class Hud {
     setScore(score) {
         if (this.shown.score === score) return;
         this.shown.score = score;
-        this.setText(this.el.score, score.toLocaleString());
+        this.setText(this.el.score, HudRules.number(score));
     }
 
     setCombo(combo) {

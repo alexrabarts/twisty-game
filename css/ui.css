@@ -683,10 +683,16 @@ body.touch.world-ride #hudStageKm {
 }
 
 /* The loading note of a world (js/main.js startWorld) */
+/* While a world loads there is no ride: no HUD over the loading screen */
+body.world-loading-on .hud {
+    visibility: hidden;
+}
+
 .world-loading {
     position: fixed;
     inset: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     color: #fff;

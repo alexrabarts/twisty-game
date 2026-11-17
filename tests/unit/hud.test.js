@@ -31,6 +31,29 @@ const fakeWindow = (search = '', matches = {}) => ({
 });
 
 describe('HudRules', () => {
+    // No HUD number is ever "Infinity", "NaN" or "∞": one formatter for all of them, and the inputs that went
+    // non-finite (a section of no time after a put-down) are guarded where they are made
+    test('every shown number goes through one formatter that refuses what is not a finite number', () => {
+        for (const bad of [Infinity, -Infinity, NaN, undefined, null, '12']) expect(HudRules.number(bad)).toBe('\u2014');
+        expect(HudRules.number(13187.4)).toBe('13,187');
+        expect(HudRules.number(1636, { sign: true })).toBe('+1,636');
+        expect(HudRules.number(-3, { sign: true })).toBe('-3');
+        expect(HudRules.number(41.25, { digits: 1 })).toBe('41.3');
+        // A section of no time, no length or a few milliseconds earns finite points, the speed bonus capped
+        expect(HudRules.checkpointPoints(800, 0, 2)).toBe(200);
+        expect(HudRules.checkpointPoints(Infinity, 30, 1)).toBe(100);
+        expect(HudRules.checkpointPoints(800, 0.001, 1)).toBe(100 + Math.floor((HudRules.SECTION_KMH_MAX - 60) * 1.5));
+        expect(HudRules.checkpointPoints(1000, 36, 1.5)).toBe(Math.round((100 + 60) * 1.5));
+        for (const [d, t, m] of [[800, 0, 1], [0, 0, 1], [800, -1, 5], [NaN, 2, 1], [800, 2, NaN]]) expect(Number.isFinite(HudRules.checkpointPoints(d, t, m))).toBe(true);
+        // The pages that write numbers into the HUD and the run's boxes do it through HudRules.number only
+        for (const file of ['main.js', 'hud.js']) {
+            const src = read(file);
+            const raw = [...src.matchAll(/\.toLocaleString\(/g)].length - (file === 'hud.js' ? 1 : 0);
+            expect({ file, raw }).toEqual({ file, raw: 0 });
+            expect({ file, pointsRaw: /\+\$\{points\}/.test(src) }).toEqual({ file, pointsRaw: false });
+        }
+    });
+
     test('the hint shows at the start and is gone after HINT_MS', () => {
         expect(HudRules.hintVisible(0, NaN)).toBe(true);
         expect(HudRules.hintVisible(HudRules.HINT_MS - 1, NaN)).toBe(true);

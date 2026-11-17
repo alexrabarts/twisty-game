@@ -256,6 +256,8 @@ class Game {
         note.textContent = 'Loading the road...';
         note.className = 'world-loading';
         document.body.appendChild(note);
+        // No HUD over the loading screen: its clock, gates and keys are a ride's, and there is none yet
+        document.body.classList.add('world-loading-on');
         // The data credit stands on the loading screen, and in Credits from the menus (js/world/credits.js)
         if (typeof WorldCredits !== 'undefined') {
             const credit = document.createElement('div');
@@ -273,6 +275,7 @@ class Game {
             return;
         }
         note.remove();
+        document.body.classList.remove('world-loading-on');
     }
 
     // The game on a world: no cones or rockfalls are built (they are leg systems), traffic rides the
@@ -2199,6 +2202,15 @@ class Game {
         zone.textContent = `WHEELIE ${degrees}°`;
     }
 
+    // Metres of the route ridden this stage: the run's accepted progress from the stage's start (the bike's own
+    // odometer sums every tick's movement, sway and bounce with it, and read 24,649 m on a 13,187 m stage)
+    worldRouteDistance() {
+        const env = this.environment;
+        const from = env.stage ? env.stage.from : 0;
+        const at = this.worldRun && Number.isFinite(this.worldRun.lastS) ? this.worldRun.lastS : env.endS;
+        return Math.max(0, Math.min(env.endS, at) - from);
+    }
+
     // The end of a world stage: the time and the restarts, and R to ride it again. Boards, unlocks and the
     // next stage belong to the run flow of the world, not to this page.
     showWorldFinish() {
@@ -2212,7 +2224,7 @@ class Game {
                 <div class="finish-time-label">YOUR TIME</div>
                 <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
                 <div class="finish-deltas">${restarts}</div>
-                <div class="finish-meta">${this.vehicle.getDistanceTraveled().toFixed(0)} m</div>
+                <div class="finish-meta">${HudRules.number(this.worldRouteDistance())} m</div>
                 <div class="finish-buttons"><button id="restartLegBtn" class="finish-btn primary"><u>R</u>ESTART</button></div>
             </div>`;
         if (this.hud) this.hud.clearTransient();
@@ -2337,9 +2349,9 @@ class Game {
                 </div>
                 <div class="finish-meta">
                     <span style="color: ${positionColor};">${finalPosition}${positionSuffix}</span> of ${totalRacers} racers
-                    · ${distance.toFixed(0)} m · ${averageSpeed.toFixed(1)} mph avg
+                    · ${HudRules.number(distance)} m · ${HudRules.number(averageSpeed, { digits: 1 })} mph avg
                 </div>
-                <div class="finish-style">Style bonus <strong>${totalScore.toLocaleString()}</strong> pts</div>
+                <div class="finish-style">Style bonus <strong>${HudRules.number(totalScore)}</strong> pts</div>
             </div>
             <div class="finish-side">
                 ${unlockPanel}
@@ -3694,32 +3706,15 @@ class Game {
                 .catch(error => console.error('Failed to record checkpoint:', error));
         }
 
-        // Calculate speed-based points
+        // Speed-based points over the section since the last gate (HudRules.checkpointPoints: a section of no time
+        // earns the base alone), times the combo multiplier
         let sectionTime = 0;
-        let basePoints = 100; // Base points per checkpoint
-
+        let distance = 0;
         if (checkpoint.index > 0 && this.checkpointTimes[checkpoint.index - 1]) {
-            // Calculate time for this section
-            sectionTime = (currentTime - this.checkpointTimes[checkpoint.index - 1]) / 1000; // Convert to seconds
-
-            // Calculate actual distance between checkpoints
-            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
-            const distance = checkpoint.position.distanceTo(prevCheckpoint.position);
-            const averageSpeed = distance / sectionTime; // m/s
-            const speedKmh = averageSpeed * 3.6; // km/h
-
-            // Award points based on speed (faster = more points)
-            // Base speed threshold: 60 km/h gives base points, faster gives bonus
-            const speedBonus = Math.max(0, speedKmh - 60) * 1.5; // 1.5 points per km/h over 60
-            basePoints += Math.floor(speedBonus);
-        } else if (checkpoint.index === 0) {
-            // First checkpoint gets base points
-            basePoints = 100;
+            sectionTime = (currentTime - this.checkpointTimes[checkpoint.index - 1]) / 1000;
+            distance = checkpoint.position.distanceTo(this.environment.checkpoints[checkpoint.index - 1].position);
         }
-
-        // Apply combo multiplier
-        // (the multiplier steps in halves: keep the award whole)
-        const points = Math.round(basePoints * this.comboMultiplier);
+        const points = HudRules.checkpointPoints(distance, sectionTime, this.comboMultiplier);
         this.addScore(points);
         
         // Increase combo
@@ -3736,12 +3731,9 @@ class Game {
 
         // Log speed info for first checkpoint or sections
         if (checkpoint.index === 0) {
-            console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points`);
+            console.log(`Checkpoint ${checkpoint.index + 1} passed! ${HudRules.number(points, { sign: true })} points`);
         } else {
-            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
-            const dist = checkpoint.position.distanceTo(prevCheckpoint.position);
-            const speedKmh = ((dist / sectionTime) * 3.6).toFixed(1);
-            console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points (${speedKmh} km/h)`);
+            console.log(`Checkpoint ${checkpoint.index + 1} passed! ${HudRules.number(points, { sign: true })} points (${HudRules.number(sectionTime > 0 ? (distance / sectionTime) * 3.6 : NaN, { digits: 1 })} km/h)`);
         }
     }
     
@@ -3907,6 +3899,11 @@ class Game {
     }
     
     addScore(points) {
+        // A score that is not a number can never come back: refuse the award, not the score
+        if (!Number.isFinite(points)) {
+            console.warn(`addScore: ${points} points refused`);
+            return;
+        }
         this.score += Math.round(points);
         this.updateScoreDisplay();
         
@@ -3951,7 +3948,7 @@ class Game {
             <div class="split-gate">CHECKPOINT ${index + 1}/${total}</div>
             <div class="split-time">${RaceTiming.formatTime(elapsed)}</div>
             <div class="split-deltas">${deltas.join('')}</div>
-            <div class="split-style">+${points} style</div>`);
+            <div class="split-style">${HudRules.number(points, { sign: true })} style</div>`);
         if (!shown) this.showCheckpointNotification(index + 1, points);
     }
 
@@ -3961,7 +3958,7 @@ class Game {
 
     showCheckpointNotification(checkpointNum, points) {
         const totalCheckpoints = this.gateTotal();
-        showCallout(`Checkpoint ${checkpointNum}/${totalCheckpoints} +${points}`, 'info', 1000);
+        showCallout(`Checkpoint ${checkpointNum}/${totalCheckpoints} ${HudRules.number(points, { sign: true })}`, 'info', 1000);
     }
     
     showJumpBonus(text) {
@@ -3974,7 +3971,7 @@ class Game {
     }
 
     showConeHitNotification(points) {
-        showCallout(`Cone hit +${points}`, 'warn', 1000);
+        showCallout(`Cone hit ${HudRules.number(points, { sign: true })}`, 'warn', 1000);
     }
     
     onWindowResize() {
