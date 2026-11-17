@@ -47,6 +47,56 @@ describe('asking for a world', () => {
     });
 });
 
+// The edge works of the stacked hairpins (the audit's flat beige wedges and walls ending in the air, km 3.9 to 10.1):
+// no apron triangle larger than 20 m^2, no apron vertex over another road's carriageway, and the foot of every retaining
+// wall at or under the land drawn beside it (within 0.5 m)
+describe('the edge works of the stacked hairpins', () => {
+    let env;
+    beforeAll(async () => {
+        ({ env } = await load('', 'tremola'));
+    }, 60000);
+
+    test.each([3939, 8031, 8106, 9500, 9607, 10129])('at s %d', async (s) => {
+        const p = env.route.sample(s, {});
+        env.update(p, s, null, Infinity);
+        await env.streamer.settle(p, s);
+        const near = {};
+        let biggest = 0, overBand = 0, hanging = 0, aprons = 0, walls = 0;
+        const v = [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()];
+        for (const group of env.roadMeshes.values()) {
+            group.traverse(o => {
+                if (o.name !== 'road-works') return;
+                const pos = o.geometry.attributes.position.array;
+                for (const g of o.geometry.groups) {
+                    for (let t = g.start / 3; t < (g.start + g.count) / 3; t++) {
+                        for (let k = 0; k < 3; k++) v[k].fromArray(pos, (t * 3 + k) * 3);
+                        if (g.materialIndex === 0) {
+                            aprons++;
+                            biggest = Math.max(biggest, new THREE.Triangle(v[0], v[1], v[2]).getArea());
+                            for (const q of v) {
+                                for (const i of env.route.cellSegments(q.x, q.z) || []) {
+                                    env.route.nearestSegment(q.x, q.z, i, i, near);
+                                    if (near.distance <= near.width / 2 - 0.1 && near.y < q.y - 0.3) { overBand++; break; }
+                                }
+                            }
+                        } else if (g.materialIndex === 2) {
+                            // A wall face: vertical, its foot more than 1 m under its top
+                            const top = Math.max(v[0].y, v[1].y, v[2].y), foot = v.reduce((a, b) => (b.y < a.y ? b : a));
+                            const n = new THREE.Triangle(v[0], v[1], v[2]).getNormal(new THREE.Vector3());
+                            if (Math.abs(n.y) > 0.1 || top - foot.y < 1) continue;
+                            walls++;
+                            const land = env.ground.tileHeight(foot.x, foot.z);
+                            if (land !== null && foot.y > land + 0.5) hanging++;
+                        }
+                    }
+                }
+            });
+        }
+        expect(aprons + walls).toBeGreaterThan(0);
+        expect({ s, biggestOver20: biggest > 20 ? Math.round(biggest) : 0, overBand, hanging }).toEqual({ s, biggestOver20: 0, overBand: 0, hanging: 0 });
+    }, 60000);
+});
+
 describe('the Tremola slice', () => {
     let env, scene, bike;
     beforeAll(async () => {

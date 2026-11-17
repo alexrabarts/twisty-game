@@ -489,6 +489,14 @@ class WorldEnvironment {
             }
             return low;
         };
+        // Whether (x, z) lies in a road's band: the ride's carriageway and verge, or a side road's
+        const inBand = (x, z) => {
+            for (const i of this.route.cellSegments(x, z) || []) {
+                this.route.nearestSegment(x, z, i, i, near);
+                if (near.distance <= near.width / 2 + RoadSurface.VERGE_M) return true;
+            }
+            return this.ground.sideRoadY(x, z) !== null;
+        };
         // The land as drawn at LOD0 at (x, z), or null
         const landNear = (x, z) => {
             const tx = Math.floor(x / m), tz = Math.floor(z / m);
@@ -532,15 +540,23 @@ class WorldEnvironment {
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
             // The apron runs out at the batter until it meets the land drawn near (8 m triangles), never on over a
-            // valley beyond: where the land falls away steeper than the batter it would hang in the air
+            // valley beyond (where the land falls away steeper than the batter it would hang in the air), and never
+            // into another road's band (the other leg of a hairpin, a side road): it stops at the band's edge, and
+            // where that road lies lower the edge is a wall down to it
             let run = 0;
             for (let o = 0.5; o <= WorldEnvironment.APRON_RUN_M; o += 0.5) {
+                const px = x + ox * o, pz = z + oz * o;
+                if (inBand(px, pz)) {
+                    if (lowerRoad(px, pz, y) !== null) return { kind: 'wall', y: low };
+                    break;
+                }
                 run = o;
-                const land = landNear(x + ox * o, z + oz * o);
+                const land = landNear(px, pz);
                 if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
             }
             if (lowerRoad(x + ox * run, z + oz * run, y) !== null) return { kind: 'wall', y: low };
-            return { kind: 'apron', y: y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2, color: landColor(x + ox * 2, z + oz * 2) };
+            // Coloured as the land at its top and at its foot (RoadMesh.edgeWorks blends them), not one sample
+            return { kind: 'apron', y: y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
         };
     }
 

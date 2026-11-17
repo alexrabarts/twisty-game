@@ -54,7 +54,11 @@ class RoadMesh {
     static get DECK_M() { return 0.9; }
     // Metres the apron lies under the ribbon (under the verge and at the verge's edge), so the ribbon draws over it
     static get APRON_UNDER_M() { return 0.06; }
+    // The longest an apron strip runs along the edge (a far ribbon's rows are up to 16 m apart)
+    static get APRON_STRIP_M() { return 2; }
     static get PARAPET_W_M() { return 0.3; }
+    // How far a retaining wall's end returns under the road
+    static get WALL_RETURN_M() { return 0.6; }
     static get PARAPET_H_M() { return 0.8; }
     // A retaining wall carries its parapet only where it drops this far (WorldPhysics.dropDepthM: the physics makes
     // a drop solid from the same depth, so what is drawn and what is solid agree); a lower step is ridden off
@@ -302,8 +306,15 @@ class RoadMesh {
     }
 
     // Quads and boxes into position and colour lists
+    // `color` is one colour, or four (one for each corner a, b, c, d)
     static quad(out, a, b, c, d, color) {
-        for (const p of [a, b, c, a, c, d]) { out.positions.push(p[0], p[1], p[2]); out.shades.push(color[0], color[1], color[2]); }
+        const each = Array.isArray(color[0]) ? color : null;
+        const corners = [0, 1, 2, 0, 2, 3];
+        [a, b, c, a, c, d].forEach((p, i) => {
+            const k = each ? each[corners[i]] : color;
+            out.positions.push(p[0], p[1], p[2]);
+            out.shades.push(k[0], k[1], k[2]);
+        });
     }
 
     static box(out, cx, cy, cz, sx, sy, sz, heading, color) {
@@ -418,6 +429,12 @@ class RoadMesh {
             const mx = (pa[0] + pb[0]) / 2 - (o[0] * w) / 2, mz = (pa[2] + pb[2]) / 2 - (o[1] * w) / 2;
             RoadMesh.box(out, mx, (pa[1] + pb[1]) / 2 + h / 2, mz, w, h, run + 0.02, heading, color);
         };
+        // The kind each segment takes on each side (null for none), so a wall knows where its run ends
+        const kindOf = (k, key) => {
+            const ea = ends[k], eb = ends[k + 1];
+            if (!ea || !eb || (!ea[key] && !eb[key])) return null;
+            return [ea[key], eb[key]].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
+        };
         for (let k = 0; k + 1 < sides.length; k++) {
             const ea = ends[k], eb = ends[k + 1];
             if (!ea || !eb) continue;
@@ -425,27 +442,52 @@ class RoadMesh {
             for (const key of ['l', 'r']) {
                 const fa = ea[key], fb = eb[key];
                 if (!fa && !fb) continue;
-                const kind = [fa, fb].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
+                const kind = kindOf(k, key);
                 const pa = sides[k][key], pb = sides[k + 1][key];
                 const o = (fa || fb).out;
                 const low = (f, p) => (f ? f.y : p[1] - 0.05);
                 if (kind === 'apron') {
-                    // Coloured as the land it lies on (linear, WorldEnvironment.edgeFoot), so no seam shows where it meets it
-                    const color = (fa && fa.color) || (fb && fb.color) || RoadMesh.APRON_LINEAR;
+                    // Coloured as the land it lies on (linear, WorldEnvironment.edgeFoot): at its top as the land by
+                    // the edge, at its foot as the land there, so no seam shows where it meets it and a long apron is
+                    // never one flat colour
+                    const fallback = (fa && fa.color) || (fb && fb.color) || RoadMesh.APRON_LINEAR;
+                    const footColor = f => (f && f.color) || fallback;
+                    const topColor = f => (f && (f.top || f.color)) || fallback;
                     const under = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]];
                     // Under the verge the land at the road's height: the verge thins out over the ground, and over a
                     // hollow it showed the dark under the ribbon as a seam
                     const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
-                    if (ca && cb) RoadMesh.quad(apron, under(ca), under(cb), under(pb), under(pa), color);
-                    // Then from the verge's edge out and down at the batter to the land's height
+                    if (ca && cb) RoadMesh.quad(apron, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
+                    // Then from the verge's edge out and down at the batter to the land's height, in strips no longer
+                    // than APRON_STRIP_M along the edge, so no apron triangle grows into a large flat face
                     const foot = (f, p) => { const y = low(f, p), run = Math.max(0, p[1] - RoadMesh.APRON_UNDER_M - y) / RoadMesh.BATTER; return [p[0] + o[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + o[1] * run]; };
-                    RoadMesh.quad(apron, under(pa), under(pb), foot(fb, pb), foot(fa, pa), color);
+                    const ta = under(pa), tb = under(pb), fA = foot(fa, pa), fB = foot(fb, pb);
+                    const strips = Math.max(1, Math.ceil(Math.hypot(tb[0] - ta[0], tb[2] - ta[2]) / RoadMesh.APRON_STRIP_M));
+                    const lerp = (u, v, t) => u.map((c, i) => c + (v[i] - c) * t);
+                    for (let n = 0; n < strips; n++) {
+                        const t0 = n / strips, t1 = (n + 1) / strips;
+                        RoadMesh.quad(apron, lerp(ta, tb, t0), lerp(ta, tb, t1), lerp(fA, fB, t1), lerp(fA, fB, t0),
+                            [lerp(topColor(fa), topColor(fb), t0), lerp(topColor(fa), topColor(fb), t1), lerp(footColor(fa), footColor(fb), t1), lerp(footColor(fa), footColor(fb), t0)]);
+                    }
                     continue;
                 }
-                const depth = (f, p) => (kind === 'deck' ? p[1] - RoadMesh.DECK_M : Math.min(low(f, p), p[1] - RoadMesh.DECK_M));
+                // A wall's end with no wall foot of its own takes the run's: it reaches the land (buried in it where
+                // the land meets the edge) and never ends hanging over the drop
+                const runFoot = Math.min(...[fa, fb].filter(f => f && f.kind === kind).map(f => f.y));
+                const depth = (f, p) => (kind === 'deck' ? p[1] - RoadMesh.DECK_M : Math.min(f && f.kind === kind ? f.y : runFoot, p[1] - RoadMesh.DECK_M));
                 // The wall's face follows the road's grade at the top and the land (or the lower road) at the foot
                 const out = kind === 'deck' ? wall : stone;
                 RoadMesh.quad(out, pa, pb, [pb[0], depth(fb, pb), pb[2]], [pa[0], depth(fa, pa), pa[2]], kind === 'deck' ? colors.deck : colors.stone);
+                // Each end of a retaining wall's run returns under the road (WALL_RETURN_M), a solid end down to its foot
+                // and not a sheet seen edge-on
+                if (kind === 'wall') {
+                    const cap = (p, d) => {
+                        const q = [p[0] - o[0] * RoadMesh.WALL_RETURN_M, p[1], p[2] - o[1] * RoadMesh.WALL_RETURN_M];
+                        RoadMesh.quad(stone, p, q, [q[0], d, q[2]], [p[0], d, p[2]], colors.stone);
+                    };
+                    if (kindOf(k - 1, key) !== 'wall') cap(pa, depth(fa, pa));
+                    if (kindOf(k + 1, key) !== 'wall') cap(pb, depth(fb, pb));
+                }
                 if (kind === 'deck' || Math.max(pa[1] - depth(fa, pa), pb[1] - depth(fb, pb)) >= RoadMesh.PARAPET_DROP_M) parapet(out, pa, pb, o, kind === 'deck' ? colors.concrete : colors.stone);
                 if (kind === 'deck') soffit = true;
             }
