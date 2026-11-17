@@ -2405,7 +2405,8 @@ const WORLD = {
                 await placeAt(Math.max(0, pass.sIn - 200));
                 const active = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => b.edgeId).sort((a, b) => a - b);
                 const expected = pass.barriers.map(b => b.edgeId).sort((a, b) => a - b);
-                const walls = pass.barriers.map(b => env.ground.zoneAt({ x: b.x, z: b.z, index: 0, lateral: 100 }, 5).kind);
+                // Where each barrier was placed (moved off the ride and the other roads: WorldGraph.barrierPose)
+                const walls = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => env.ground.zoneAt({ x: b.x, z: b.z, index: 0, lateral: 100 }, 5).kind);
                 passes.push({ sIn: pass.sIn, expected, active, walls, outClosed: expected.includes(pass.outEdge), mesh: env.barrierMesh.count });
             }
             if (passes.length) out.push({ id: junction.id, name: junction.name, passes });

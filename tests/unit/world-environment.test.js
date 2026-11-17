@@ -129,7 +129,8 @@ describe('the Tremola slice', () => {
         expect(active).toEqual(pass.barriers.map(b => b.edgeId).sort((a, b) => a - b));
         expect(active).not.toContain(pass.outEdge);
         expect(env.barrierMesh.count).toBe(env.activeBarriers.length);
-        for (const b of pass.barriers) {
+        // Where each barrier was placed (moved off the ride and the other roads: WorldGraph.barrierPose) is a wall
+        for (const b of env.activeBarriers.filter(x => x.junctionId === junction.id)) {
             const loc = { x: b.x, z: b.z, index: 0, lateral: 100 };
             expect(env.ground.zoneAt(loc, 5).kind).toBe('wall');
         }

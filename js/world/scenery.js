@@ -1,3 +1,115 @@
+// RoadClearance: where the roads of a world are, for whatever is placed beside them. The road bands are the ride's
+// samples (from the route) and every side edge's samples (from the chunks in residence), each with its own drawn width
+// plus the verge (RoadSurface.VERGE_M), in a 16 m hash. A side edge is added the first time its chunks are here and
+// kept after they go: the data never changes. No THREE.
+class RoadClearance {
+    static get HASH_M() { return 16; }
+
+    constructor(route, data) {
+        this.route = route;
+        this.data = data;
+        this.segments = [];
+        this.hash = new Map();
+        this.indexed = new Set();
+        this.chunksSeen = -1;
+        const verge = RoadClearance.verge();
+        const points = route.points;
+        for (let i = 0; i + 1 < points.length; i++) {
+            const a = points[i], b = points[i + 1];
+            this.add({ edgeId: null, x0: a.x, z0: a.z, x1: b.x, z1: b.z, h0: a.width / 2 + verge, h1: b.width / 2 + verge });
+        }
+    }
+
+    static verge() { return typeof RoadSurface !== 'undefined' ? RoadSurface.VERGE_M : 1.1; }
+
+    add(segment) {
+        const ref = this.segments.length;
+        this.segments.push(segment);
+        const cell = RoadClearance.HASH_M;
+        const reach = Math.max(segment.h0, segment.h1);
+        for (let cx = Math.floor((Math.min(segment.x0, segment.x1) - reach) / cell); cx <= Math.floor((Math.max(segment.x0, segment.x1) + reach) / cell); cx++) {
+            for (let cz = Math.floor((Math.min(segment.z0, segment.z1) - reach) / cell); cz <= Math.floor((Math.max(segment.z0, segment.z1) + reach) / cell); cz++) {
+                const key = cx * 65536 + cz;
+                let list = this.hash.get(key);
+                if (!list) this.hash.set(key, (list = []));
+                list.push(ref);
+            }
+        }
+    }
+
+    // Adds the side edges whose chunks have arrived since the last call
+    sync() {
+        const data = this.data;
+        if (!data || !data.edges || !data.chunks || data.chunks.size === this.chunksSeen) return;
+        this.chunksSeen = data.chunks.size;
+        const verge = RoadClearance.verge();
+        for (const edge of data.edges) {
+            if (edge.onRide || this.indexed.has(edge.id)) continue;
+            let resident = true;
+            for (let k = data.chunkOf(edge.first); k <= data.chunkOf(edge.first + edge.count - 1); k++) if (!data.chunks.has(k)) { resident = false; break; }
+            if (!resident) continue;
+            const e = data.edgeSamples(edge.id);
+            if (!e) continue;
+            this.indexed.add(edge.id);
+            for (let i = 0; i + 1 < e.x.length; i++) this.add({ edgeId: edge.id, x0: e.x[i], z0: e.z[i], x1: e.x[i + 1], z1: e.z[i + 1], h0: e.width[i] / 2 + verge, h1: e.width[i + 1] / 2 + verge });
+        }
+    }
+
+    // Metres from (x, z) past the edge of the nearest road band (negative inside one), looked for within `reach`
+    // metres; `reach` when there is none that near. `skip(edgeId)` leaves side edges out; `sidesOnly` leaves the ride out.
+    clearance(x, z, reach = 20, skip = null, sidesOnly = false) {
+        this.sync();
+        const cell = RoadClearance.HASH_M;
+        let best = reach;
+        const seen = new Set();
+        for (let cx = Math.floor((x - reach) / cell); cx <= Math.floor((x + reach) / cell); cx++) {
+            for (let cz = Math.floor((z - reach) / cell); cz <= Math.floor((z + reach) / cell); cz++) {
+                const list = this.hash.get(cx * 65536 + cz);
+                if (!list) continue;
+                for (const ref of list) {
+                    if (seen.has(ref)) continue;
+                    seen.add(ref);
+                    const g = this.segments[ref];
+                    if (g.edgeId === null ? sidesOnly : skip && skip(g.edgeId)) continue;
+                    const dx = g.x1 - g.x0, dz = g.z1 - g.z0;
+                    const run = dx * dx + dz * dz;
+                    const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - g.x0) * dx + (z - g.z0) * dz) / run));
+                    const past = Math.hypot(g.x0 + dx * t - x, g.z0 + dz * t - z) - (g.h0 + (g.h1 - g.h0) * t);
+                    if (past < best) best = past;
+                }
+            }
+        }
+        return best;
+    }
+
+    // clearance() of the side roads alone, the ride left out
+    clearanceOfSides(x, z, reach = 20) {
+        return this.clearance(x, z, reach, null, true);
+    }
+
+    // Whether a thing of plan radius `radius` at (x, z) keeps `margin` metres clear of every road band
+    clearOfRoad(x, z, radius, margin = 0, skip = null) {
+        return this.clearance(x, z, radius + margin + 1, skip) >= radius + margin;
+    }
+
+    // Whether a rectangle (centre x, z; `along` metres along `heading` and `across` metres across it) keeps `margin`
+    // clear of every band: its outline is tested every `step` metres
+    clearOfRoadBox(x, z, heading, along, across, margin = 0, skip = null, step = 1) {
+        const fx = Math.sin(heading), fz = Math.cos(heading), lx = Math.cos(heading), lz = -Math.sin(heading);
+        const a = along / 2, c = across / 2;
+        const corners = [[-a, -c], [a, -c], [a, c], [-a, c]];
+        for (let k = 0; k < 4; k++) {
+            const [p0, q0] = corners[k], [p1, q1] = corners[(k + 1) % 4];
+            const n = Math.max(1, Math.ceil(Math.hypot(p1 - p0, q1 - q0) / step));
+            for (let i = 0; i < n; i++) {
+                const p = p0 + (p1 - p0) * i / n, q = q0 + (q1 - q0) * i / n;
+                if (!this.clearOfRoad(x + p * fx + q * lx, z + p * fz + q * lz, 0, margin, skip)) return false;
+            }
+        }
+        return this.clearOfRoad(x, z, 0, margin, skip);
+    }
+}
+
 // Scenery: what stands on the land of a world, all instanced, none of it random.
 //   trees       from the land cover classes (forest, open forest, grass), with the
 //               modelled shapes of js/treemodels.js's files when they are loaded
@@ -5,7 +117,10 @@
 //   landmarks   the boxes of landmarks.json beside the road
 //   signposts   a yellow pass signpost at each ride junction (D7 b)
 // Placement uses a stable integer hash of the cell, so the same tile is the same
-// every time. Counts are capped against the window budget of 1 400 instances,
+// every time. Nothing is placed in a road: every footprint keeps CLEAR_M of every road band
+// (RoadClearance: the ride and every side road, each sample's own width plus the verge), and a
+// tile's scenery waits for the side roads round it (WorldEnvironment.buildScenery).
+// Counts are capped against the window budget of 1 400 instances,
 // nearest first (tiles are built nearest first): TREE_CAP trees, BUILDING_CAP
 // instances of house parts, and a few dozen signposts and barriers.
 class Scenery {
@@ -22,6 +137,15 @@ class Scenery {
     static get TREES_PER_TILE() { return 350; }
     // Metres of open ground a tree keeps from the road, the bench and any other road
     static get ROAD_CLEAR_M() { return 6; }
+    // Metres past the edge of every road band (its drawn width and the verge, RoadClearance) that the plan footprint
+    // of each kind keeps clear: a tree's crown or a boulder, a house, a signpost's board, a landmark
+    static get CLEAR_M() { return { tree: 2, boulder: 2, house: 0, signpost: 1.5, landmark: 3 }; }
+    // A signpost's board is 1.5 m wide: its plan radius
+    static get SIGN_RADIUS_M() { return 0.8; }
+    // Metres before a junction a signpost may stand, nearest the junction first
+    static get SIGN_BEFORE_M() { return [15, 20, 25, 30, 12, 35, 40]; }
+    // Metres along the ride a gate frame may be drawn from its gate, to keep its posts off a side road
+    static get GATE_SHIFT_M() { return 15; }
     static get BUILDING_REACH_M() { return 450; }
     // Scale a modelled house is drawn at, at most and at least (the models are about 16 m by 11 m)
     static get HOUSE_SCALE_MAX() { return 1.2; }
@@ -66,6 +190,28 @@ class Scenery {
         this.houseTriangles = 0;
         this.triangles = 0;
         this.fallback = null;
+        // The road bands everything here keeps clear of (null for a ground with no route: nothing to keep clear of)
+        this.roads = ground && ground.route && ground.route.points ? new RoadClearance(ground.route, data) : null;
+    }
+
+    // Whether a thing of plan radius `radius` at (x, z) keeps `margin` clear of every road band
+    clearOfRoad(x, z, radius, margin = 0) {
+        return !this.roads || this.roads.clearOfRoad(x, z, radius, margin);
+    }
+
+    // The radius in plan of a set of parts about its origin, whichever way it is turned (measured once)
+    static planRadius(shape) {
+        if (shape.planRadius === undefined) {
+            let x = 0, z = 0;
+            for (const part of shape.parts) {
+                part.geometry.computeBoundingBox();
+                const box = part.geometry.boundingBox;
+                x = Math.max(x, Math.abs(box.min.x), Math.abs(box.max.x));
+                z = Math.max(z, Math.abs(box.min.z), Math.abs(box.max.z));
+            }
+            shape.planRadius = Math.hypot(x, z);
+        }
+        return shape.planRadius;
     }
 
     // Plain shapes for when no model is loaded: a cone, a ball on a trunk's height, a low blob
@@ -92,14 +238,16 @@ class Scenery {
 
     shapesOf(kind) { return this.set().trees.filter(s => s.kind === kind); }
 
-    // Whether open ground at (x, z) is clear of road, bench and wall, and dry
-    clear(x, z) {
+    // Whether open ground at (x, z) is clear of road, bench and wall, and dry, and a thing of plan radius `radius`
+    // there keeps `margin` clear of every road band (the zone layer is 8 m nodes and knows only the side roads drawn
+    // so far; the bands are every sample's own width)
+    clear(x, z, radius = 0, margin = 0) {
         const g = this.ground;
         const around = Scenery.ROAD_CLEAR_M;
         for (const [dx, dz] of [[0, 0], [around, 0], [-around, 0], [0, around], [0, -around]]) {
             if (g.kindAt(x + dx, z + dz) !== 'runoff' || g.tileZone(x + dx, z + dz) === WorldData.ZONE.water) return false;
         }
-        return true;
+        return this.clearOfRoad(x, z, radius, margin);
     }
 
     // Tree sites of a tile: [{x, y, z, shape, scale, turn}] in cell order, capped
@@ -117,14 +265,17 @@ class Scenery {
                 if (Scenery.hash(ix, iz, 1) >= chance) continue;
                 const x = tile.tx * WorldData.TILE_M + (ci + Scenery.hash(ix, iz, 2)) * cell;
                 const z = tile.tz * WorldData.TILE_M + (cj + Scenery.hash(ix, iz, 3)) * cell;
-                if (!this.clear(x, z)) continue;
                 const y = this.ground.tileHeight(x, z);
                 if (y === null || y > 2300) continue;
                 const roll = Scenery.hash(ix, iz, 4);
                 const kind = cls === 5 ? 'bush' : y > 1750 || roll < 0.6 ? (cls === 2 && roll < 0.2 ? 'bush' : 'conifer') : 'broadleaf';
                 const shapes = this.shapesOf(kind);
                 if (!shapes.length) continue;
-                sites.push({ x, y, z, shape: shapes[Math.floor(Scenery.hash(ix, iz, 5) * shapes.length)], scale: 0.8 + 0.6 * Scenery.hash(ix, iz, 6), turn: Scenery.hash(ix, iz, 7) * Math.PI * 2 });
+                const shape = shapes[Math.floor(Scenery.hash(ix, iz, 5) * shapes.length)];
+                const scale = 0.8 + 0.6 * Scenery.hash(ix, iz, 6);
+                // The whole crown keeps clear of every road band, not only the trunk
+                if (!this.clear(x, z, Scenery.planRadius(shape) * scale, Scenery.CLEAR_M.tree)) continue;
+                sites.push({ x, y, z, shape, scale, turn: Scenery.hash(ix, iz, 7) * Math.PI * 2 });
                 if (sites.length >= Scenery.TREES_PER_TILE) return sites;
             }
         }
@@ -146,10 +297,12 @@ class Scenery {
                 if (Scenery.hash(ix, iz, 31) >= chance) continue;
                 const x = tile.tx * WorldData.TILE_M + (ci + Scenery.hash(ix, iz, 32)) * cell;
                 const z = tile.tz * WorldData.TILE_M + (cj + Scenery.hash(ix, iz, 33)) * cell;
-                if (!this.clear(x, z)) continue;
+                const size = 0.8 + 2.2 * Scenery.hash(ix, iz, 34) ** 2;
+                // A boulder is drawn 1.3 by 1 times its size in plan (buildTile)
+                if (!this.clear(x, z, size * Math.hypot(1.3, 1), Scenery.CLEAR_M.boulder)) continue;
                 const y = this.ground.tileHeight(x, z);
                 if (y === null) continue;
-                sites.push({ x, y: y - 0.3, z, size: 0.8 + 2.2 * Scenery.hash(ix, iz, 34) ** 2, turn: Scenery.hash(ix, iz, 35) * Math.PI * 2 });
+                sites.push({ x, y: y - 0.3, z, size, turn: Scenery.hash(ix, iz, 35) * Math.PI * 2 });
             }
         }
         return sites;
@@ -201,6 +354,8 @@ class Scenery {
         for (const b of nearest) {
             if (Math.hypot(b.x - bike.x, b.z - bike.z) > Scenery.BUILDING_REACH_M) continue;
             if (this.ground.kindAt(b.x, b.z) !== 'runoff') continue;
+            // The mapped footprint (b.w across its heading, b.d along it) stays off every road band
+            if (this.roads && !this.roads.clearOfRoadBox(b.x, b.z, b.heading, b.d, b.w, Scenery.CLEAR_M.house)) continue;
             const pose = this.housePose(b, homes[Math.floor(Scenery.hash(Math.round(b.x), Math.round(b.z), 8) * homes.length)]);
             const home = pose.home;
             const cost = Scenery.trianglesOf(home.parts);
@@ -316,6 +471,69 @@ class Scenery {
         this.perTile.delete(key);
     }
 
+    // The chunks of the side roads round the junctions and the landmarks, which the fixtures are placed clear of:
+    // WorldEnvironment.load has them before it builds the signposts and the landmarks
+    static fixtureChunks(data) {
+        const wanted = new Set();
+        for (const j of data.junctions || []) for (const k of data.chunksNear(data.nodes.x[j.node], data.nodes.z[j.node], 120)) wanted.add(k);
+        for (const l of (data.manifest && data.manifest.landmarks) || []) if (Number.isFinite(l.x)) for (const k of data.chunksNear(l.x, l.z, 250)) wanted.add(k);
+        return [...wanted];
+    }
+
+    // Where the yellow pass signposts stand: one for each pass of the ride through a junction, SIGN_BEFORE_M before
+    // it, on the rider's right (else the left) past the verge, the board keeping CLEAR_M.signpost of every road band.
+    // [{x, y, z, heading, junctionId}], heading the way the rider arrives. A pass with no clear place gets none.
+    signpostPoses(junctions, route) {
+        const poses = [];
+        const p = {};
+        const radius = Scenery.SIGN_RADIUS_M, margin = Scenery.CLEAR_M.signpost;
+        for (const junction of junctions) {
+            for (const pass of junction.passes) {
+                if (pass.inEdge === null || pass.inEdge === undefined) continue;
+                let found = null;
+                for (const before of Scenery.SIGN_BEFORE_M) {
+                    if (pass.sIn - before < 0) continue;
+                    route.sample(pass.sIn - before, p);
+                    const out = p.width / 2 + RoadClearance.verge() + radius + margin + 0.2;
+                    // A positive lateral is to the rider's right (a heading turns right as it grows: WorldGraph.turnOf)
+                    for (const side of [1, -1]) {
+                        for (const extra of [0, 1.5, 3]) {
+                            const o = side * (out + extra);
+                            const x = p.x + o * Math.cos(p.heading), z = p.z - o * Math.sin(p.heading);
+                            if (this.clearOfRoad(x, z, radius, margin)) { found = { x, y: p.y, z, heading: p.heading, junctionId: junction.id }; break; }
+                        }
+                        if (found) break;
+                    }
+                    if (found) break;
+                }
+                if (found) poses.push(found);
+            }
+        }
+        return poses;
+    }
+
+    // Where a gate frame is drawn for a gate at ride distance s: s itself, or the nearest s within GATE_SHIFT_M (ahead
+    // first) where both posts (`out(sample)` metres either side of the centre line) stand clear of every side road; the
+    // ride's own band reaches them by design (they stand on its verge). The timing line stays at s; only the frame moves.
+    gateS(s, out, route) {
+        if (!this.roads) return s;
+        const p = {};
+        const clearAt = (at) => {
+            route.sample(at, p);
+            const o = out(p);
+            for (const side of [-1, 1]) {
+                const x = p.x + side * o * Math.cos(p.heading), z = p.z - side * o * Math.sin(p.heading);
+                if (this.roads.clearanceOfSides(x, z, 3) < 0.3) return false;
+            }
+            return true;
+        };
+        if (clearAt(s)) return s;
+        for (let d = 1; d <= Scenery.GATE_SHIFT_M; d++) {
+            for (const at of [s + d, s - d]) if (at >= 0 && at <= route.length && clearAt(at)) return at;
+        }
+        return s;
+    }
+
     // The yellow pass signposts, one instanced mesh: [{x, y, z, heading}] where heading is the way the rider arrives
     signposts(poses) {
         const out = { positions: [], shades: [] };
@@ -340,15 +558,39 @@ class Scenery {
         return mesh;
     }
 
+    // Where a landmark's box stands: beside the ride at its s (the left first, as it always stood), moved out and along
+    // until the whole box, turned any way, keeps CLEAR_M.landmark of every road band; null when nowhere near is clear
+    landmarkPlace(l, route) {
+        const radius = Math.hypot(l.size[0], l.size[2]) / 2;
+        const margin = Scenery.CLEAR_M.landmark;
+        const sample = {};
+        for (const along of [0, -20, 20, -40, 40, -60, 60]) {
+            route.sample(Math.max(0, Math.min(route.length, l.s + along)), sample);
+            const base = sample.width / 2 + RoadClearance.verge() + radius + margin;
+            for (let extra = 0; extra <= 60; extra += 4) {
+                for (const side of [-1, 1]) {
+                    const out = side * (base + extra);
+                    const x = sample.x + out * Math.cos(sample.heading), z = sample.z - out * Math.sin(sample.heading);
+                    if (this.clearOfRoad(x, z, radius, margin)) return { x, z, y: sample.y, heading: sample.heading };
+                }
+            }
+        }
+        return null;
+    }
+
     // The boxes of landmarks.json, set beside the road they were snapped to: [{name, asset, size, x, y, z, heading}]
     landmarks(list, route) {
         const group = new THREE.Group();
         group.name = 'world-landmarks';
         for (const l of list) {
             if (l.asset !== 'box' || !l.size) continue;
-            const sample = route.sample(l.s, {});
-            const out = sample.width / 2 + l.size[2] / 2 + 8;
-            const x = sample.x - out * Math.cos(sample.heading), z = sample.z + out * Math.sin(sample.heading);
+            const place = this.landmarkPlace(l, route);
+            if (!place) {
+                console.warn(`world landmark ${l.name}: no place clear of the roads near s ${l.s}; left out`);
+                continue;
+            }
+            const sample = { y: place.y, heading: place.heading };
+            const x = place.x, z = place.z;
             const ground = this.ground.tileHeight(x, z);
             const mesh = new THREE.Mesh(new THREE.BoxGeometry(l.size[0], l.size[1], l.size[2]), new THREE.MeshLambertMaterial({ color: 0x9d9486 }));
             mesh.position.set(x, (ground === null ? sample.y : Math.min(ground, sample.y)) + l.size[1] / 2 - 0.5, z);

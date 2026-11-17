@@ -50,6 +50,8 @@ class WorldEnvironment {
         if (resolved.error) throw new Error(resolved.error);
         const data = new WorldData({ base: resolved.base, overridden: resolved.overridden, fetchFn, digest });
         await data.load();
+        // The side roads round the junctions and landmarks, which the signposts and landmarks keep clear of
+        await data.ensureChunks(Scenery.fixtureChunks(data)).catch(error => console.warn(`world fixture chunks: ${error.message}`));
         const stage = id === 'all' ? null : data.manifest.stages.find(s => s.id === id);
         if (id !== 'all' && !stage) throw new Error(`unknown world "${id}"; known: all, ${data.manifest.stages.map(s => s.id).join(', ')}`);
         const loaded = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadModels(SceneAssets.loadModel) : (models || null);
@@ -182,8 +184,10 @@ class WorldEnvironment {
         const out = { positions: [], shades: [] };
         const post = [0.55, 0.55, 0.58];
         for (const st of this.stationGates || []) {
-            const p = this.route.sample(st.s, {});
-            const half = p.width / 2 + 1.2;
+            // The frame stands off any side road its posts would be in (Scenery.gateS); the timing line stays at st.s
+            const postOut = q => q.width / 2 + 1.2;
+            const p = this.route.sample(this.scenery.gateS(st.s, postOut, this.route), {});
+            const half = postOut(p);
             const color = st.kind === 'start' || st.kind === 'finish' ? [0.92, 0.92, 0.92] : [0.95, 0.75, 0.10];
             for (const sign of [-1, 1]) RoadMesh.box(out, p.x + sign * half * Math.cos(p.heading), p.y + 2.6, p.z - sign * half * Math.sin(p.heading), 0.3, 5.2, 0.3, p.heading, post);
             RoadMesh.box(out, p.x, p.y + 5.3, p.z, half * 2 + 0.6, 0.8, 0.3, p.heading, color);
@@ -192,17 +196,8 @@ class WorldEnvironment {
             this.gateMesh = RoadMesh.mesh(RoadMesh.geometry(out.positions, out.shades), 'world-gates');
             this.group.add(this.gateMesh);
         }
-        const poses = [];
-        for (const junction of this.graph.junctions) {
-            for (const pass of junction.passes) {
-                if (pass.inEdge === null || pass.inEdge === undefined) continue;
-                const incoming = junction.incident.find(i => i.edgeId === pass.inEdge);
-                if (!incoming) continue;
-                const arrival = incoming.heading + Math.PI;
-                const node = { x: this.data.nodes.x[junction.node], z: this.data.nodes.z[junction.node], y: this.data.nodes.y[junction.node] };
-                poses.push({ x: node.x + 7 * Math.cos(arrival), y: node.y, z: node.z - 7 * Math.sin(arrival), heading: arrival });
-            }
-        }
+        // Beside the ride before each junction, clear of every road (Scenery.signpostPoses)
+        const poses = this.scenery.signpostPoses(this.graph.junctions, this.route);
         if (poses.length) {
             this.signMesh = this.scenery.signposts(poses);
             this.group.add(this.signMesh);
@@ -243,6 +238,26 @@ class WorldEnvironment {
         if (!tile) return;
         const [tx, tz] = key.split(',').map(Number);
         const m = WorldData.TILE_M;
+        // The side roads on and round the tile first: what stands on it keeps clear of them (Scenery.clear). A tile that
+        // waits for them holds back every farther tile too, so the caps still go nearest first (Scenery.buildTile)
+        const chunks = this.data.chunksNear((tx + 0.5) * m, (tz + 0.5) * m, m * 0.75);
+        if (!this.sceneryWaiting) this.sceneryWaiting = new Map();
+        if (chunks.some(k => !this.data.chunks.has(k))) {
+            if (!this.sceneryWaiting.has(key)) {
+                this.sceneryWaiting.set(key, true);
+                this.data.ensureChunks(chunks).catch(error => console.warn(`world scenery ${key}: ${error.message}`)).finally(() => {
+                    this.sceneryWaiting.delete(key);
+                    for (const held of [...(this.sceneryHeld || [])].concat(key)) this.requeueScenery(held);
+                    this.sceneryHeld = new Set();
+                });
+            }
+            return;
+        }
+        const far = this.streamer.tileDistance(key, this.lastBike);
+        if ([...this.sceneryWaiting.keys()].some(k => this.streamer.tileDistance(k, this.lastBike) < far)) {
+            (this.sceneryHeld = this.sceneryHeld || new Set()).add(key);
+            return;
+        }
         const houses = (this.data.buildings || []).filter(b => b.x >= tx * m && b.x < (tx + 1) * m && b.z >= tz * m && b.z < (tz + 1) * m);
         const group = this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike);
         if (group) {
@@ -250,6 +265,15 @@ class WorldEnvironment {
             this.sceneryGroup.add(group);
             this.onMeshBuilt(group);
         }
+    }
+
+    // Queues a tile's scenery step again (after it waited for side roads, or for a nearer tile that did)
+    requeueScenery(key) {
+        if (!this.streamer.tiles.has(key)) return;
+        this.streamer.enqueue(`scenery:${key}`, this.streamer.tileDistance(key, this.lastBike) + 0.5, () => {
+            const current = this.streamer.tiles.get(key);
+            if (current) this.buildScenery(key, current.lod);
+        });
     }
 
     disposeTile(key) {
@@ -455,13 +479,16 @@ class WorldEnvironment {
         const step = Math.floor(progressS / WorldEnvironment.BARRIER_STEP_M);
         if (step === this.barrierStep) return;
         this.barrierStep = step;
-        const list = this.graph.barriersFor(progressS);
-        const key = list.map(b => `${b.junctionId}:${b.edgeId}`).join('|');
+        // Each barrier on its own side road, clear of the ride and every other road (WorldGraph.barrierPose)
+        const list = this.graph.barriersFor(progressS, 1000, this.scenery.roads);
+        // The pose is part of the key: a barrier's place is measured once its side road is here (WorldGraph.barrierPose)
+        const key = list.map(b => `${b.junctionId}:${b.edgeId}:${Math.round(b.x)}:${Math.round(b.z)}`).join('|');
         if (key === this.barrierKey) return;
         this.barrierKey = key;
         this.activeBarriers = list;
         this.ground.setBarriers(list);
-        RoadMesh.placeBarriers(this.barrierMesh, list.map(b => ({ x: b.x, y: (this.ground.landY(b.x, b.z, 0)) - 0.1, z: b.z, heading: b.heading, width: b.width })));
+        // On the side road's own surface where that is known: the tile under it need not be here yet
+        RoadMesh.placeBarriers(this.barrierMesh, list.map(b => ({ x: b.x, y: (Number.isFinite(b.y) ? b.y : this.ground.landY(b.x, b.z, 0)) - 0.1, z: b.z, heading: b.heading, width: b.width })));
     }
 
     // Streams the world round the bike and builds what the 4 ms budget allows.
