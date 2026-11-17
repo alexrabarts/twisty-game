@@ -154,6 +154,14 @@ class Vehicle {
         this.currentRoadSegment = 0; // Index of current road segment we're following
         this.segmentProgress = 0; // Progress along current segment (0-1)
 
+        // World riding state (only used when the environment carries physics)
+        this.routeS = 0; // Metres along the route, set from the one projection
+        this.worldGrade = 0; // Route grade under the bike (rise over run)
+        this.lastDemand = 0; // Grip demand of the last world tick (v^2 * kappa / g)
+        this.lowsideTimerMs = 0; // Time the demand has been over the lowside limit
+        this.footDown = false; // Stopped with the brake held, no fall
+        this.worldSurfaceGrip = 1; // Route surface grip (cobbles) under the bike
+
         // Road boundary state tracking for hysteresis
         this.wasNearEdge = false; // Prevents oscillating between edge states
 
@@ -1889,7 +1897,7 @@ class Vehicle {
         }
         
         // Check for low-speed fall (but not while jumping)
-        if (!this.isJumping && this.speed < this.minSpeed) {
+        if (!this.worldPhysics && !this.isJumping && this.speed < this.minSpeed) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5; // Fall to the side
             this.frame.material.color.setHex(0xff6600); // Orange for low-speed fall
@@ -2004,7 +2012,7 @@ class Vehicle {
         this.updatePhysics(deltaTime, steeringInput);
         
         // Check for crash from excessive lean
-        if (Math.abs(this.leanAngle) > this.maxLeanAngle) {
+        if (!this.worldPhysics && Math.abs(this.leanAngle) > this.maxLeanAngle) {
             this.crashed = true;
             this.crashAngle = this.leanAngle;
             this.frame.material.color.setHex(0xff0000); // Red for high-speed crash
@@ -2049,6 +2057,7 @@ class Vehicle {
     }
 
     updateSpeed(deltaTime, throttleInput, brakeInput) {
+        if (this.worldPhysics) return this.updateWorldSpeed(deltaTime, throttleInput, brakeInput);
         // Calculate road gradient effect
         let gradientForce = 0;
         // (not in the air: position.y is then above the road and reads as a
@@ -2270,6 +2279,7 @@ class Vehicle {
     }
 
     updatePhysics(deltaTime, steeringInput) {
+        if (this.worldPhysics) return this.updateWorldPhysics(deltaTime, steeringInput);
         // Get weather physics multipliers
         const weatherMultipliers = this.physicsMultipliers();
 
@@ -2354,6 +2364,106 @@ class Vehicle {
             this.yawAngle -= angularVel * Math.sign(this.leanAngle) * deltaTime;
         }
         
+    }
+
+    // The world physics parameters, or null on a leg. They come from the
+    // environment, so a leg (physics: null) never reaches the world branches.
+    get worldPhysics() {
+        return (this.environment && this.environment.physics) || null;
+    }
+
+    // Reads what the route says under the bike: the grade for gravity and the
+    // cobbles for grip. The surface grip goes to the weather system so its
+    // multipliers scale braking and lateral grip together.
+    syncWorldSurface() {
+        const world = this.worldPhysics;
+        const route = this.environment.route;
+        const sample = route ? route.sample(this.routeS) : null;
+        this.worldGrade = sample && Number.isFinite(sample.grade) ? sample.grade : 0;
+        this.worldSurfaceGrip = sample && sample.flags && sample.flags.cobbles ? world.cobbleGrip : 1;
+        if (this.weatherSystem) this.weatherSystem.surfaceGrip = this.worldSurfaceGrip;
+    }
+
+    // physicsMultipliers with the world's surface grip applied when there is
+    // no weather system to apply it
+    worldMultipliers() {
+        const multipliers = this.physicsMultipliers();
+        if (this.weatherSystem) return multipliers;
+        return {
+            ...multipliers,
+            lateralFriction: multipliers.lateralFriction * this.worldSurfaceGrip,
+            brakeForce: multipliers.brakeForce * this.worldSurfaceGrip
+        };
+    }
+
+    updateWorldSpeed(deltaTime, throttleInput, brakeInput) {
+        const world = this.worldPhysics;
+        this.syncWorldSurface();
+        const weatherMultipliers = this.worldMultipliers();
+
+        if (throttleInput > 0) {
+            const wheeliePenalty = this.isWheelie ? 0.3 : 1.0;
+            this.speed += this.acceleration * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
+        }
+        if (brakeInput > 0) {
+            this.speed -= this.brakeForce * brakeInput * deltaTime * weatherMultipliers.brakeForce;
+        }
+
+        // The route grade acts at full strength, so a descent speeds the bike up
+        if (!this.isJumping) {
+            this.speed -= this.worldGrade * 9.81 * world.slopeGravity * deltaTime;
+        }
+        this.speed -= 0.002 * this.speed * this.speed * deltaTime;
+
+        // Low speed never drops the bike: it creeps up to creepSpeed on its own,
+        // and with the brake held at a crawl it stops with a foot down
+        if (throttleInput <= 0 && brakeInput <= 0 && this.speed < world.creepSpeed) {
+            this.speed = Math.min(world.creepSpeed, this.speed + world.creepAccel * deltaTime);
+        }
+        this.footDown = brakeInput > 0 && this.speed < world.footDownSpeed;
+        if (this.footDown) this.speed = 0;
+
+        this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
+    }
+
+    // Steering sets a target curvature and the lean follows the lean that
+    // curvature needs, as a critically damped second-order system. Full lock
+    // settles at the cap instead of overshooting into a crash. The bike
+    // lowsides only when the grip it asks for is more than the road has.
+    updateWorldPhysics(deltaTime, steeringInput) {
+        const world = this.worldPhysics;
+        const g = 9.81;
+        const u = Math.max(-1, Math.min(1, steeringInput));
+        const v = this.speed;
+        const v2 = v * v;
+        this.steeringAngle = steeringInput * 0.3;
+
+        const grip = Math.max(0.01, this.worldMultipliers().lateralFriction);
+        const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip);
+        const maxCurvature = v2 > 1e-6
+            ? Math.min(1 / world.radiusFloor, g * Math.tan(capEff) / v2)
+            : 1 / world.radiusFloor;
+        const targetLean = -Math.sign(u) * Math.atan(v2 * Math.abs(u) * maxCurvature / g);
+
+        const omega = world.leanOmega * ((this.character.physics && this.character.physics.steeringForce) || 1);
+        this.leanVelocity += (omega * omega * (targetLean - this.leanAngle) - 2 * omega * this.leanVelocity) * deltaTime;
+        this.leanAngle += this.leanVelocity * deltaTime;
+
+        const tanLean = Math.tan(Math.abs(this.leanAngle));
+        const curvature = v2 > 1e-6 ? Math.min(1 / world.radiusFloor, g * tanLean / v2) : 0;
+        this.yawAngle -= v * curvature * Math.sign(this.leanAngle) * deltaTime;
+
+        this.lastDemand = v2 * curvature / g;
+        if (this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
+            this.lowsideTimerMs += deltaTime * 1000;
+            if (this.lowsideTimerMs >= world.lowsideMs) {
+                this.crashed = true;
+                this.crashAngle = this.leanAngle || 0.5;
+                this.frame.material.color.setHex(0xff0000);
+            }
+        } else {
+            this.lowsideTimerMs = 0;
+        }
     }
 
     updateMesh() {
@@ -2464,7 +2574,8 @@ class Vehicle {
             );
         } else {
             // Normal lean
-            this.group.rotation.x = 0; // Reset pitch
+            // The world pitches the bike to the road; a leg stays level
+            this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) : 0;
             this.group.rotation.z = this.leanAngle;
             this.rider.rotation.z = this.leanAngle * 0.2; // Rider leans subtly
 
@@ -2562,6 +2673,10 @@ class Vehicle {
         this.wheelieLastInputTime = 0;
         this.currentRoadSegment = 0;
         this.segmentProgress = 0;
+        this.worldGrade = 0;
+        this.lastDemand = 0;
+        this.lowsideTimerMs = 0;
+        this.footDown = false;
         this.wasNearEdge = false;
         this.fallingOffCliff = false;
         this.fallSide = 0; // -1 left, +1 right: the side the bike went over

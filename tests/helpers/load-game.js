@@ -61,10 +61,16 @@ export function canvasStub() {
     return document;
 }
 
+// The world physics parameters on their own, as the importer and the floor
+// tool read them (no THREE, no DOM)
+export function loadWorldPhysics() {
+    return new Function(`${loadScript('world/physics.js')}\nreturn WorldPhysics;`)();
+}
+
 // The game classes, built once per THREE and per file set. `log` receives the
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
 export function loadGame(THREE = realThree(), log = []) {
-    const files = ['terrain.js', 'course.js', 'race.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
+    const files = ['terrain.js', 'course.js', 'race.js', 'world/physics.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
     const source = files.map(loadScript).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
@@ -74,7 +80,7 @@ export function loadGame(THREE = realThree(), log = []) {
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console',
-        `${source}\nreturn { Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack };`
+        `${source}\nreturn { WorldPhysics, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack };`
     );
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink) };
 }
