@@ -13,6 +13,9 @@ class WorldRoute extends PolylineRoute {
     // Metres across a cell of the cold-lookup hash
     static get HASH_M() { return 64; }
 
+    // Metres from a segment's chord within which nearestSegment frames a point in the drawn ribbon (beyond, the chord)
+    static get FRAME_REACH_M() { return 40; }
+
     // Metres of road over the road at a tunnel or gallery
     static get ROOF_M() { return 6.5; }
 
@@ -327,10 +330,21 @@ class WorldRoute extends PolylineRoute {
         return this.nearestSegment(x, z, 0, this.points.length - 2, out);
     }
 
+    // Where (x, z) lies on the ride, in the frame the ribbon is drawn in (RoadMesh.nearRibbon): each row puts its
+    // columns at p + offset * n along its own normal n, and a quad between rows a and b is bilinear, so the drawn
+    // point at (t, offset) is P(t) + offset * N(t) with P and N the linear blends of the rows' points and normals.
+    // Solving x = P(t) + l * N(t) gives the drawn column `lateral` = l and the progress at t: the road band
+    // |lateral| <= width / 2 is the drawn carriageway to the centimetre, and s runs on without a step across a
+    // sample. The chord's nearest point (the old frame) puts the band up to a fifth of a metre off the drawn edge
+    // in a held hairpin and makes s jump by 2 l tan(turn / 2) at each sample on the inside of a bend: 2 m a sample
+    // at the inner edge of a 6 m hairpin sampled every 4 m, which the cut rule read as a cut across stacked road.
+    // A point no segment of the range frames (past the ends, or beyond the fold on the inside of a bend) takes the
+    // chord's nearest point as before.
     nearestSegment(x, z, from, to, out) {
         let best = Infinity;
         let bestIndex = from;
         let bestT = 0;
+        let frameD2 = Infinity, frameIndex = -1, frameT = 0, frameL = 0;
         for (let i = from; i <= to; i++) {
             const a = this.points[i];
             const b = this.points[i + 1];
@@ -346,7 +360,27 @@ class WorldRoute extends PolylineRoute {
                 bestIndex = i;
                 bestT = t;
             }
+            // Only a segment near the chord's best can frame the point: the frame is the chord's up to the turn
+            if (d2 > WorldRoute.FRAME_REACH_M * WorldRoute.FRAME_REACH_M) continue;
+            const hit = WorldRoute.frame(a, b, x - a.x, z - a.z);
+            if (!hit) continue;
+            const fx = a.x + dx * hit.t - x, fz = a.z + dz * hit.t - z;
+            const f2 = fx * fx + fz * fz;
+            if (f2 < frameD2) {
+                frameD2 = f2;
+                frameIndex = i;
+                frameT = hit.t;
+                frameL = hit.l;
+            }
         }
+        // The frame's centre point is never much further than the chord's nearest point: a frame from a segment well
+        // beyond it (past the route's ends, or another leg) is not the drawn road here
+        const framed = frameIndex >= 0 && Math.sqrt(frameD2) <= Math.sqrt(best) * 1.25 + 0.5;
+        if (framed) {
+            bestIndex = frameIndex;
+            bestT = frameT;
+        }
+        const bestL = frameL;
         const a = this.points[bestIndex];
         const b = this.points[bestIndex + 1];
         const heading = a.heading + (b.heading - a.heading) * bestT;
@@ -358,8 +392,47 @@ class WorldRoute extends PolylineRoute {
         out.heading = heading;
         out.width = a.width + (b.width - a.width) * bestT;
         out.s = this.sArray[bestIndex] + (this.sArray[bestIndex + 1] - this.sArray[bestIndex]) * bestT;
-        out.lateral = (x - out.x) * Math.cos(heading) - (z - out.z) * Math.sin(heading);
-        out.distance = Math.sqrt(best);
+        out.lateral = framed ? bestL : (x - out.x) * Math.cos(heading) - (z - out.z) * Math.sin(heading);
+        out.distance = framed ? Math.abs(bestL) : Math.sqrt(best);
         return out;
+    }
+
+    // The ribbon frame of the segment a-b at (wx, wz) = (x, z) - a: {t, l} with t in [0, 1] and (x, z) = P(t) +
+    // l N(t), or null when the segment's quad strip does not hold the point. The cross product of (w - t d) and
+    // N(t) = n_a + t (n_b - n_a) is a quadratic in t; of its roots in [0, 1] the one nearest the centre is the
+    // drawn one (a second root lies past the fold on the inside of the bend)
+    static frame(a, b, wx, wz) {
+        const dx = b.x - a.x, dz = b.z - a.z;
+        const nax = Math.cos(a.heading), naz = -Math.sin(a.heading);
+        const ex = Math.cos(b.heading) - nax, ez = -Math.sin(b.heading) - naz;
+        const cross = (ux, uz, vx, vz) => ux * vz - uz * vx;
+        const A = -cross(dx, dz, ex, ez);
+        const B = cross(wx, wz, ex, ez) - cross(dx, dz, nax, naz);
+        const C = cross(wx, wz, nax, naz);
+        const eps = 1e-9;
+        let r0 = NaN, r1 = NaN;
+        if (Math.abs(A) < 1e-12) {
+            if (Math.abs(B) < 1e-12) return null;
+            r0 = -C / B;
+        } else {
+            const disc = B * B - 4 * A * C;
+            if (disc < 0) return null;
+            const root = Math.sqrt(disc);
+            // The stable pair: no cancellation when B is large against A (a nearly straight segment)
+            const q = -0.5 * (B + (B >= 0 ? root : -root));
+            r0 = q / A;
+            r1 = q !== 0 ? C / q : NaN;
+        }
+        let found = null;
+        for (const t of [r0, r1]) {
+            if (!(t >= -eps && t <= 1 + eps)) continue;
+            const u = Math.max(0, Math.min(1, t));
+            const nx = nax + u * ex, nz = naz + u * ez;
+            const n2 = nx * nx + nz * nz;
+            if (n2 < 1e-9) continue;
+            const l = ((wx - u * dx) * nx + (wz - u * dz) * nz) / n2;
+            if (!found || Math.abs(l) < Math.abs(found.l)) found = { t: u, l };
+        }
+        return found;
     }
 }

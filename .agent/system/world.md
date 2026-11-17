@@ -217,6 +217,10 @@ Shared code never reads `roadPath` or the vehicle's `currentRoadSegment`: it ask
 
 Offsets from the road must use the road's perpendicular: `(cos(heading), -sin(heading))`. A world-X offset is only correct where the road heads north.
 
+## Physics only kills where the rider can see why
+
+A world ride may crash or restart the rider only at something drawn. `WorldRoute.nearestSegment` projects in the ribbon's own frame (each row's columns along its own normal, bilinear between rows), so the physics band is the drawn carriageway and `s` has no step across a sample; the chord's frame put the band up to 0.47 m off the drawn edge and made `s` jump on the inside of the held 6 m hairpins, which the cut rule read as a cut across the ladder ("Off route, back to checkpoint" at km 7.9 with nothing hit). The cut rule accepts any forward step up to `cutFloorM`. A barrier is solid exactly where it is drawn (`WorldGround.barrierHalf`, `BARRIER_DEPTH_M`). `tests/unit/world-fairness.test.js` and the GPU probe `world-fairness` (both on `tests/helpers/world-fairness.js`) read the whole slice every metre across the drawn road and verge: a physics band off the drawn one by over 0.1 m, a wall or fall on the drawn road with nothing drawn within 0.5 m, or run-off on the carriageway fails, and careful riders take every hairpin at 5 and 7 m/s with no crash or restart.
+
 ## Determinism
 
 Scenery uses `Environment.rand()` (seeded per leg). The menu preview and the ride must build the same world. Do not use `Math.random()` in `environment.js`.

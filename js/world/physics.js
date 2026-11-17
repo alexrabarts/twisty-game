@@ -125,5 +125,10 @@ const WorldPhysics = Object.freeze({
     // Most progress a run of unaccepted frames may bank, so circling on the lower leg of a ladder
     // cannot buy the jump to the upper one. It stays under half the smallest gap between stacked legs
     // (an honest projection stuck backward for more than about maxBankM / (2.2 v), 1.2 s at 15 m/s, restarts)
-    maxBankM: 40
+    maxBankM: 40,
+    // A forward step of up to cutFloorM is honest progress whatever the speed. The speed-made allowance (progressSlack)
+    // gains on the bike by a tenth of its speed, 0.5 m/s at 5 m/s, so at hairpin speed a step of 15 cm in the
+    // projection held for cutConfirmMs restarted the rider as a cut. Stacked legs lie over 2 x maxBankM apart in s,
+    // so no cut across them is anywhere near this short
+    cutFloorM: 3
 });

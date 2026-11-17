@@ -114,7 +114,7 @@ class WorldRun {
         const inner = frame.lateral * Math.sign(kappa);
         const shorter = Math.max(physics.progressFloorFrac, 1 - Math.abs(kappa) * inner);
         const growth = physics.progressSlack * frame.speed * frame.dt / shorter;
-        const allowance = Math.min(physics.maxBankM, this.allowAccum + growth) + physics.progressEpsM;
+        const allowance = Math.max(physics.cutFloorM || 0, Math.min(physics.maxBankM, this.allowAccum + growth) + physics.progressEpsM);
         const gap = frame.s - this.lastS;
 
         if (gap >= -allowance && gap <= allowance) {

@@ -395,7 +395,9 @@ describe('RoadMesh', () => {
         const matrix = new THREE.Matrix4();
         mesh.getMatrixAt(0, matrix);
         expect(new THREE.Vector3().setFromMatrixPosition(matrix).toArray()).toEqual([10, 5, 20]);
-        expect(new THREE.Vector3().setFromMatrixScale(matrix).x).toBe(7);
+        // As wide as the box the physics stops the bike in (WorldGround.barrierHalf)
+        expect(new THREE.Vector3().setFromMatrixScale(matrix).x).toBe(2 * WorldGround.barrierHalf(6));
+        expect(2 * WorldGround.barrierHalf(6)).toBe(9);
         // Heading 0: the barrier's width runs along +x, across a road that runs along +z
         const across = new THREE.Vector3(1, 0, 0).applyMatrix4(matrix.clone().setPosition(0, 0, 0)).normalize();
         expect(across.x).toBeCloseTo(1, 6);

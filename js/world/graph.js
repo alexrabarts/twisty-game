@@ -155,7 +155,7 @@ class WorldGraph {
         const others = id => chain.has(id);
         const sides = () => true;
         const ground = typeof WorldGround !== 'undefined' ? WorldGround : null;
-        const across = ground ? Math.max(3, width / 2 + ground.BARRIER_MARGIN_M) : width / 2 + 1.5;
+        const across = ground ? ground.barrierHalf(width) : width / 2 + 1.5;
         const along = ground ? ground.BARRIER_DEPTH_M : 1.2;
         // The least clearance of the box's points from the bands `skip` leaves in
         const clearOf = (x, z, heading, skip) => {
