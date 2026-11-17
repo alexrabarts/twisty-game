@@ -185,8 +185,9 @@ class LandShade {
         if (graphics && !graphics.postEnabled) u.uAerialColor.value.convertLinearToSRGB();
     }
 
-    // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles
-    static patch(material, { curvature = false, detail = false, stone = false } = {}) {
+    // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles,
+    // `floor` scales the sky's floor (a structure's underside sees the light the land and the sky throw back)
+    static patch(material, { curvature = false, detail = false, stone = false, floor = 1 } = {}) {
         if (material.userData.landShade) return material;
         const S = LandShade.STONE;
         const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
@@ -261,7 +262,7 @@ reflectedLight.indirectDiffuse *= uIndirect;
 // facing up, 0.6 of it facing down) and never crushes to black
 {
     float up = dot(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));
-    reflectedLight.indirectDiffuse = max(reflectedLight.indirectDiffuse, diffuseColor.rgb * uLandFloor * (0.8 + 0.2 * up));
+    reflectedLight.indirectDiffuse = max(reflectedLight.indirectDiffuse, diffuseColor.rgb * uLandFloor * ${f(floor)} * (0.8 + 0.2 * up));
 }`)
                 .replace('#include <fog_fragment>', `{
     float dist = length(vViewPosition);
@@ -270,7 +271,7 @@ reflectedLight.indirectDiffuse *= uIndirect;
 }
 #include <fog_fragment>`);
         };
-        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}`;
+        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}-${floor}`;
         material.customProgramCacheKey = () => key;
         material.needsUpdate = true;
         return material;

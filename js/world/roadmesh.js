@@ -110,7 +110,9 @@ class RoadMesh {
     // Structures are flat-lit vertex colour: one material for every tunnel, bridge, gate and stub structure
     static material() {
         if (!RoadMesh.sharedMaterial) {
-            RoadMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+            // A deck's soffit and a tube's roof are seen from under, away from the sun: lit by the floor, three times
+            // the land's, so an underside overhead reads as shaded concrete and not as a black slab across the sky
+            RoadMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { floor: 3 });
         }
         return RoadMesh.sharedMaterial;
     }
