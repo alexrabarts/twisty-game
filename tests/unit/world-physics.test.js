@@ -648,11 +648,11 @@ describe('low-speed turn', () => {
         return settledRadius(speed, run.yaws);
     }
 
-    test('the tuning: blend speed 6-8 m/s, lock radius 2.5-3 m, both under the old floor', () => {
+    test('the tuning: blend speed 6-8 m/s, lock radius 1.4-2 m (walking-pace U-turns), both under the old floor', () => {
         expect(BLEND).toBeGreaterThanOrEqual(6);
         expect(BLEND).toBeLessThanOrEqual(8);
-        expect(LOCK).toBeGreaterThanOrEqual(2.5);
-        expect(LOCK).toBeLessThanOrEqual(3);
+        expect(LOCK).toBeGreaterThanOrEqual(1.4);
+        expect(LOCK).toBeLessThanOrEqual(2);
         expect(LOCK).toBeLessThan(WorldPhysics.radiusFloor);
     });
 
@@ -669,7 +669,8 @@ describe('low-speed turn', () => {
             const radius = lockRadiusAt(speed);
             if (last !== null) {
                 expect(radius).toBeGreaterThanOrEqual(last - 1e-6);
-                expect(radius - last).toBeLessThan(0.25);
+                // a quarter-m/s step may move the radius by at most an eighth of the range from lock to floor
+                expect(radius - last).toBeLessThan((WorldPhysics.radiusFloor - LOCK) / 8);
             }
             last = radius;
         }
@@ -682,7 +683,8 @@ describe('low-speed turn', () => {
             return deg(Math.abs(vehicle.leanAngle));
         });
         for (let i = 1; i < leans.length; i++) expect(leans[i]).toBeLessThan(leans[i - 1]);
-        expect(leans[3]).toBeLessThan(3);
+        // at 1 m/s on a lock radius the lean is atan(v^2 / (g r)), a few degrees at most
+        expect(leans[3]).toBeLessThan(deg(Math.atan(1 / (9.81 * LOCK))) + 0.5);
     });
 
     test('no step in the yaw rate across the blend speed', () => {

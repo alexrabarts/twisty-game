@@ -22,7 +22,7 @@ const WorldPhysics = Object.freeze({
     // handlebar's v tan(handlebar) / wheelbase, and the floor radius drops from radiusFloor to lockRadius with it.
     // The lean limit is the lean of that floor, so the bike stands up as it slows. Above turnBlendSpeed: no change
     turnBlendSpeed: 7,     // m/s
-    lockRadius: 2.8,       // m, the turn at full lock (the handlebar lock is atan(wheelbase / lockRadius))
+    lockRadius: 1.6,       // m, the turn at full lock (the handlebar lock is atan(wheelbase / lockRadius)); tight for walking-pace U-turns
     handlebarLag: 0.1,     // s, how far the handlebar lags the steering
 
     // Slope and low speed
