@@ -239,8 +239,10 @@ const BikeModels = (() => {
     seated.rider.rotation.copy(vehicle.rider.rotation);
     built.rearWheel.rotation.copy(vehicle.rearWheel.rotation);
     built.frontWheel.rotation.copy(vehicle.frontWheel.rotation);
-    built.rearDisc.rotation.copy(vehicle.rearDisc.rotation);
-    built.frontDisc.rotation.copy(vehicle.frontDisc.rotation);
+    // Only the spin: the procedural disc is a cylinder stood on its side by a
+    // quarter turn about z, which would lay the modelled disc flat
+    built.rearDisc.rotation.x = vehicle.rearDisc.rotation.x;
+    built.frontDisc.rotation.x = vehicle.frontDisc.rotation.x;
     // The rider select may have put a flat material on every part by now
     const lit = vehicle.brakeLight.material;
     if (lit.emissive) {

@@ -34,7 +34,8 @@ def build(low=False):
     k.begin("wheel_front", FRONT)
     k.wheel(FRONT, 0.28, 0.12, 0.2, style="alloy", spokes=5)
     k.begin("disc_rear", (0.09, 0.3, -0.7))
-    k.disc((0.085, 0.3, -0.7), 0.11)
+    # Inboard of the swingarm, whose inner face is at x 0.08
+    k.disc((0.072, 0.3, -0.7), 0.11)
     k.begin("disc_front", (0.09, 0.3, 0.7))
     k.disc((0.072, 0.3, 0.7), 0.15)
     k.disc((-0.072, 0.3, 0.7), 0.15)
@@ -155,7 +156,7 @@ def build(low=False):
     parts.swingarm(k, pivot=(0.42, -0.14), axle=(0.3, -0.7), x=0.1, size=(0.04, 0.085), brace=True)
     parts.shock(k, (0, 0.62, -0.2), (0, 0.38, -0.34), 0.034)
     parts.chain(k, x=-0.1, front=(0.4, -0.06, 0.045), rear=(0.3, -0.7, 0.105))
-    parts.caliper(k, (0.085, 0.3, -0.7), 0.11, math.radians(200), "caliper")
+    parts.caliper(k, (0.072, 0.3, -0.7), 0.11, math.radians(200), "caliper")
     k.guard((0.3, -0.7), 0.325, 0.2, math.radians(48), math.radians(128), "carbon", crown=0.035, nu=8)
 
     # Front mudguard hugging the tyre
