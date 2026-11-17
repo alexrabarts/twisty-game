@@ -406,7 +406,7 @@ describe('Cloud Functions', () => {
             }
         });
 
-        test('should include rank, playerName, totalTime, and flagged', async () => {
+        test('should include rank, playerName, totalTime, checkpointTimes, and flagged', async () => {
             const data = {
                 legId: 'mountain-dawn',
                 limit: 10
@@ -420,6 +420,7 @@ describe('Cloud Functions', () => {
                 expect(entry).toHaveProperty('rank');
                 expect(entry).toHaveProperty('playerName');
                 expect(entry).toHaveProperty('totalTime');
+                expect(entry).toHaveProperty('checkpointTimes');
                 expect(entry).toHaveProperty('flagged');
             }
         });

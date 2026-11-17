@@ -1,8 +1,26 @@
+// Round sprite with a soft falloff, shared by every particle effect
+function makeSoftParticleTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+    gradient.addColorStop(0.35, 'rgba(255, 255, 255, 0.55)');
+    gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(canvas);
+}
+
 class ParticleSystem {
     constructor(scene) {
         this.scene = scene;
         this.particleGroups = [];
         this.maxGroups = 100; // Bound concurrent emissions (each group is a draw call)
+        // Untextured points render as hard squares
+        this.softTexture = makeSoftParticleTexture();
     }
 
     trackGroup(particles) {
@@ -19,6 +37,12 @@ class ParticleSystem {
 
     createTireSmoke(position, velocity, intensity = 1.0) {
         const particleCount = Math.floor(3 * intensity); // Reduced from 5
+        if (particleCount === 0) return;
+        // This is called every rendered frame while braking; one puff every
+        // 50 ms looks the same and does not allocate a draw call per frame
+        const now = performance.now();
+        if (now - (this.lastSmokeAt || 0) < 50) return;
+        this.lastSmokeAt = now;
         const geometry = new THREE.BufferGeometry();
         const positions = [];
         const velocities = [];
@@ -50,11 +74,12 @@ class ParticleSystem {
         geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
 
         const material = new THREE.PointsMaterial({
-            color: 0xcccccc,
-            size: 0.3, // Reduced from 0.5
+            color: 0xd8d8d8,
+            map: this.softTexture,
+            size: 0.9,
             transparent: true,
-            opacity: 0.4, // Reduced from 0.6
-            blending: THREE.AdditiveBlending,
+            opacity: 0.35,
+            blending: THREE.NormalBlending,
             depthWrite: false
         });
 
@@ -103,7 +128,8 @@ class ParticleSystem {
 
         const material = new THREE.PointsMaterial({
             color: 0x8b7355,
-            size: 0.7,
+            map: this.softTexture,
+            size: 1.3,
             transparent: true,
             opacity: 0.7,
             blending: THREE.NormalBlending,
@@ -162,8 +188,11 @@ class ParticleSystem {
         geometry.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
 
         const material = new THREE.PointsMaterial({
-            color: 0xffaa00,
-            size: 0.3,
+            // Brighter than white after tone mapping, so the bloom pass
+            // makes sparks glow
+            color: new THREE.Color(6.0, 2.6, 0.5),
+            map: this.softTexture,
+            size: 0.28,
             transparent: true,
             opacity: 1.0,
             blending: THREE.AdditiveBlending,
@@ -210,7 +239,8 @@ class ParticleSystem {
 
         const material = new THREE.PointsMaterial({
             color: 0x333333, // Dark oily smoke color
-            size: 0.15, // Much smaller
+            map: this.softTexture,
+            size: 0.4,
             transparent: true,
             opacity: 0.15, // More transparent
             blending: THREE.NormalBlending,
@@ -228,6 +258,7 @@ class ParticleSystem {
 
     update(deltaTime) {
         const toRemove = [];
+        const frames = deltaTime * 60;
 
         this.particleGroups.forEach((particleGroup, index) => {
             particleGroup.userData.age += deltaTime;
@@ -248,18 +279,20 @@ class ParticleSystem {
                 positions.setZ(i, positions.getZ(i) + vz * deltaTime);
 
                 // Apply drag/gravity
+                // Drag factors are per 60 Hz frame; scale the exponent so the
+                // effect lasts as long on a 120 Hz display
                 if (particleGroup.userData.type === 'smoke') {
                     velocities.setY(i, vy + 0.5 * deltaTime); // Float up
-                    velocities.setX(i, vx * 0.98); // Slow down
-                    velocities.setZ(i, vz * 0.98);
+                    velocities.setX(i, vx * Math.pow(0.98, frames)); // Slow down
+                    velocities.setZ(i, vz * Math.pow(0.98, frames));
                 } else if (particleGroup.userData.type === 'dust') {
                     velocities.setY(i, vy - 9.8 * deltaTime); // Gravity
-                    velocities.setX(i, vx * 0.95);
-                    velocities.setZ(i, vz * 0.95);
+                    velocities.setX(i, vx * Math.pow(0.95, frames));
+                    velocities.setZ(i, vz * Math.pow(0.95, frames));
                 } else if (particleGroup.userData.type === 'sparks') {
                     velocities.setY(i, vy - 20 * deltaTime); // Heavy gravity
-                    velocities.setX(i, vx * 0.92);
-                    velocities.setZ(i, vz * 0.92);
+                    velocities.setX(i, vx * Math.pow(0.92, frames));
+                    velocities.setZ(i, vz * Math.pow(0.92, frames));
                 }
             }
 

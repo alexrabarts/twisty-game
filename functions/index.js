@@ -310,6 +310,8 @@ exports.getLeaderboard = functions.https.onCall(async (data, context) => {
             rank: index + 1,
             playerName: entry.playerName,
             totalTime: entry.totalTime,
+            // Lets the client show the rider's gap to the record at each gate
+            checkpointTimes: Array.isArray(entry.checkpointTimes) ? entry.checkpointTimes : null,
             flagged: entry.flagged || false
         }));
 

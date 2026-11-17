@@ -9,7 +9,6 @@ class TourSystem {
                 startSegment: 0,
                 endSegment: 69,
                 timeOfDay: 'dawn',
-                landscapeVariation: 'mountain',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -21,7 +20,6 @@ class TourSystem {
                 startSegment: 70,
                 endSegment: 149,
                 timeOfDay: 'golden',
-                landscapeVariation: 'valley',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -33,7 +31,6 @@ class TourSystem {
                 startSegment: 150,
                 endSegment: 233,
                 timeOfDay: 'twilight',
-                landscapeVariation: 'coastal',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -45,7 +42,6 @@ class TourSystem {
                 startSegment: 234,
                 endSegment: 321,
                 timeOfDay: 'golden', // Morning light, but foggy
-                landscapeVariation: 'valley',
                 weather: 'fog',
                 weatherIntensity: 4.0
             },
@@ -57,7 +53,6 @@ class TourSystem {
                 startSegment: 322,
                 endSegment: 413,
                 timeOfDay: 'sunset',
-                landscapeVariation: 'alpine',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -69,7 +64,6 @@ class TourSystem {
                 startSegment: 414,
                 endSegment: 509,
                 timeOfDay: 'twilight', // Dark stormy afternoon
-                landscapeVariation: 'valley',
                 weather: 'rain',
                 weatherIntensity: 0.9
             },
@@ -81,7 +75,6 @@ class TourSystem {
                 startSegment: 510,
                 endSegment: 607,
                 timeOfDay: 'night',
-                landscapeVariation: 'mixed',
                 weather: 'clear',
                 weatherIntensity: 0
             },
@@ -93,7 +86,6 @@ class TourSystem {
                 startSegment: 608,
                 endSegment: 703,
                 timeOfDay: 'twilight', // Overcast winter day
-                landscapeVariation: 'alpine',
                 weather: 'snow',
                 weatherIntensity: 1.0
             }
@@ -109,6 +101,8 @@ class TourSystem {
             savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');
         } catch (e) { /* corrupted - start fresh */ }
         this.completedLegs = Array.isArray(savedProgress.completedLegs) ? savedProgress.completedLegs : [];
+        // Riders unlocked this session and not yet looked at: badged NEW
+        this.freshRiders = new Set();
 
         // Rider selection (persisted; must be unlocked). CHARACTERS is
         // defined in vehicle.js, loaded before this file.
@@ -118,6 +112,16 @@ class TourSystem {
              CHARACTERS.some(c => c.id === savedCharacter) &&
              this.isCharacterUnlocked(savedCharacter))
                 ? savedCharacter : 'tim';
+    }
+
+    // The id the leaderboard and the local best time are keyed by. A leg whose
+    // course changed carries a track version above 1 and so gets a board of its
+    // own; version 1 keeps the plain leg id and its history. Takes a leg or an
+    // id; an unknown id throws, so a typo cannot read another leg's board.
+    static boardId(leg) {
+        const id = typeof leg === 'string' ? leg : leg.id;
+        const { trackVersion } = Terrain.legConfig(id);
+        return trackVersion === 1 ? id : `${id}-v${trackVersion}`;
     }
 
     riderDisplayOrder() {
@@ -154,10 +158,11 @@ class TourSystem {
         return this.completedLegs.length >= required;
     }
 
-    // Records a completed leg; returns names of anything newly unlocked so
-    // the finish screen can announce it
+    // Records a completed leg; returns what it newly unlocked so the finish
+    // screen can announce it: names (newLegs, newCharacters) and the records
+    // themselves (legs, characters) for pictures, colours and ids
     markLegCompleted(legId) {
-        if (this.isLegCompleted(legId)) return { newLegs: [], newCharacters: [] };
+        if (this.isLegCompleted(legId)) return { newLegs: [], newCharacters: [], legs: [], characters: [] };
 
         const charactersBefore = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
             .filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
@@ -166,14 +171,47 @@ class TourSystem {
         this.completedLegs.push(legId);
         localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: this.completedLegs }));
 
-        const newCharacters = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
-            .filter(c => this.isCharacterUnlocked(c.id) && !charactersBefore.includes(c.id))
-            .map(c => c.name);
-        const newLegs = [];
+        const characters = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
+            .filter(c => this.isCharacterUnlocked(c.id) && !charactersBefore.includes(c.id));
+        const legs = [];
         if (legIndex >= 0 && legIndex + 1 < this.legs.length && !this.isLegCompleted(this.legs[legIndex + 1].id)) {
-            newLegs.push(this.legs[legIndex + 1].name);
+            legs.push(this.legs[legIndex + 1]);
         }
-        return { newLegs, newCharacters };
+        characters.forEach(c => this.freshRiders.add(c.id));
+        return {
+            newLegs: legs.map(l => l.name),
+            newCharacters: characters.map(c => c.name),
+            legs,
+            characters
+        };
+    }
+
+    // The next rider still locked and how many more completed legs it needs
+    nextCharacterUnlock() {
+        const next = this.riderDisplayOrder().find(c => !this.isCharacterUnlocked(c.id));
+        if (!next) return null;
+        const required = this.characterUnlocks[next.id] || 0;
+        return { character: next, required, remaining: Math.max(0, required - this.completedLegs.length) };
+    }
+
+    unlockProgressText() {
+        const next = this.nextCharacterUnlock();
+        if (!next) return '';
+        const legs = next.remaining === 1 ? 'leg' : 'legs';
+        return `${next.remaining} more ${legs} to unlock ${next.character.name}'s ${next.character.bikeLabel}`;
+    }
+
+    // What the finish screen offers first. A new rider sends the player back
+    // to the rider screen to try it; otherwise the tour carries on.
+    static finishFlow(unlocks, isLastLeg) {
+        const riders = unlocks && Array.isArray(unlocks.characters) ? unlocks.characters.map(c => c.id) : [];
+        let primary = isLastLeg ? 'restart-tour' : 'next-leg';
+        if (riders.length > 0) primary = 'choose-rider';
+        return { primary, riders };
+    }
+
+    isRiderFresh(characterId) {
+        return this.freshRiders.has(characterId);
     }
 
     getSelectedCharacter() {
@@ -290,80 +328,6 @@ class TourSystem {
         return roadPath[startSegment];
     }
 
-    getCheckpointPositions(roadPath) {
-        if (!this.currentLeg) {
-            console.warn('No leg selected, using full track for checkpoints');
-            return this.generateCheckpoints(roadPath, 0, roadPath.length - 1);
-        }
-
-        return this.generateCheckpoints(
-            roadPath,
-            this.currentLeg.startSegment,
-            this.currentLeg.endSegment
-        );
-    }
-
-    generateCheckpoints(roadPath, startSegment, endSegment) {
-        const checkpoints = [];
-        const segmentRange = endSegment - startSegment;
-        const checkpointInterval = Math.floor(segmentRange / 10); // 10 checkpoints per leg
-
-        for (let i = 1; i <= 10; i++) {
-            const segmentIndex = startSegment + (checkpointInterval * i);
-            if (segmentIndex < roadPath.length) {
-                checkpoints.push(roadPath[segmentIndex]);
-            }
-        }
-
-        return checkpoints;
-    }
-
-    getLandscapeConfig() {
-        if (!this.currentLeg) {
-            return { variation: 'mountain' };
-        }
-
-        const configs = {
-            mountain: {
-                grassColor: 0x4a7c4a,
-                mountainColor: 0x6b5c42,
-                fogDensity: 0.0015,
-                treeTypes: ['pine', 'spruce'],
-                rockFrequency: 0.3
-            },
-            valley: {
-                grassColor: 0x5a9c5a,
-                mountainColor: 0x7a6c52,
-                fogDensity: 0.0008,
-                treeTypes: ['oak', 'pine'],
-                rockFrequency: 0.15
-            },
-            alpine: {
-                grassColor: 0x3a6c3a,
-                mountainColor: 0x8b8b8b,
-                fogDensity: 0.002,
-                treeTypes: ['pine'],
-                rockFrequency: 0.5
-            },
-            coastal: {
-                grassColor: 0x6aac6a,
-                mountainColor: 0x5a4c32,
-                fogDensity: 0.001,
-                treeTypes: ['palm', 'oak'],
-                rockFrequency: 0.2
-            },
-            mixed: {
-                grassColor: 0x4a8c4a,
-                mountainColor: 0x6a5c42,
-                fogDensity: 0.0012,
-                treeTypes: ['pine', 'oak'],
-                rockFrequency: 0.25
-            }
-        };
-
-        return configs[this.currentLeg.landscapeVariation] || configs.mountain;
-    }
-
     createLegSelector(container, onLegSelected) {
         // Rebuildable: lock states change as the player progresses
         this.onLegSelected = onLegSelected || this.onLegSelected;
@@ -373,6 +337,7 @@ class TourSystem {
             document.removeEventListener('keydown', this.keyboardHandler);
         }
 
+        const icon = name => (typeof UiIcons !== 'undefined' ? UiIcons.svg(name) : '');
         const selectorHTML = `
             <div class="tour-selector-overlay showcase-mode">
                 <div class="tour-selector-panel showcase-panel">
@@ -387,14 +352,14 @@ class TourSystem {
                             <div class="showcase-info" id="riderInfoCard"></div>
                             <button class="carousel-arrow" id="riderNextBtn">›</button>
                         </div>
-                        <div style="text-align: center; margin-top: 14px;">
+                        <div class="showcase-actions">
                             <button id="riderContinueBtn" class="showcase-continue">CONTINUE →</button>
                         </div>
                     </div>
 
                     <!-- Screen 2: track carousel -->
                     <div class="track-select-screen" style="display: none;">
-                        <div class="showcase-label" style="display: flex; align-items: center; justify-content: center; gap: 16px;">
+                        <div class="showcase-label">
                             <button id="backToRidersBtn" class="carousel-back">← RIDER</button>
                             <span>CHOOSE YOUR LEG</span>
                         </div>
@@ -404,9 +369,9 @@ class TourSystem {
                             <div class="showcase-info" id="legInfoCard"></div>
                             <button class="carousel-arrow" id="legNextBtn">›</button>
                         </div>
-                        <div style="text-align: center; margin-top: 14px;">
+                        <div class="showcase-actions">
                             <button id="legStartBtn" class="showcase-continue">START</button>
-                            <button id="legLeaderboardBtn" class="showcase-secondary">🏆 BEST TIMES</button>
+                            <button id="legLeaderboardBtn" class="showcase-secondary">${icon('trophy')} BEST TIMES</button>
                         </div>
                     </div>
                 </div>
@@ -427,28 +392,33 @@ class TourSystem {
             const c = riderOrder[this.riderFocusIndex];
             const tier = this.riderTierFor(c.id);
             const statBar = (value) =>
-                `<span class="stat-on">${'■'.repeat(value)}</span><span class="stat-off">${'■'.repeat(5 - value)}</span>`;
+                `<span class="stat-bar" aria-label="${value} of 5">${Array.from({ length: 5 }, (_, i) => `<i${i < value ? ' class="on"' : ''}></i>`).join('')}</span>`;
             const card = document.getElementById('riderInfoCard');
+            card.classList.remove('fresh');
             if (tier === 'silhouette') {
                 card.innerHTML = `
-                    <div class="showcase-name">🔒 ???</div>
+                    <div class="showcase-name">${icon('lock')} ???</div>
                     <div class="showcase-sub">LOCKED</div>`;
             } else if (tier === 'dimmed') {
                 const required = this.characterUnlocks[c.id] || 0;
+                const remaining = Math.max(0, required - this.completedLegs.length);
                 card.innerHTML = `
-                    <div class="showcase-name">🔒 ${c.name}</div>
+                    <div class="showcase-name">${icon('lock')} ${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
-                    <div class="showcase-hint">Complete ${required} leg${required === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required})</div>`;
+                    <div class="showcase-hint">${remaining} more leg${remaining === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required} completed)</div>`;
             } else {
+                const fresh = this.isRiderFresh(c.id);
+                card.classList.toggle('fresh', fresh);
                 card.innerHTML = `
+                    ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
                     <div class="showcase-name">${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
                     <div class="showcase-stats">
-                        <div>Speed&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
-                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
-                        <div>Handling ${statBar(c.stats.handling)}</div>
-                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
-                        <div>Comfort&nbsp; ${statBar(c.stats.comfort)}</div>
+                        <span>SPEED</span>${statBar(c.stats.speed)}
+                        <span>ACCEL</span>${statBar(c.stats.accel)}
+                        <span>HANDLING</span>${statBar(c.stats.handling)}
+                        <span>JUMP</span>${statBar(c.stats.jump)}
+                        <span>COMFORT</span>${statBar(c.stats.comfort)}
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
@@ -463,13 +433,18 @@ class TourSystem {
             const card = document.getElementById('legInfoCard');
             if (tier !== 'lit') {
                 card.innerHTML = `
-                    <div class="showcase-name">🔒 LEG ${index + 1}: ${leg.name}</div>
+                    <div class="showcase-name">${icon('lock')} Leg ${index + 1}: ${leg.name}</div>
                     <div class="showcase-sub">${leg.description}</div>
                     <div class="showcase-hint">Complete Leg ${index} to unlock</div>`;
             } else {
                 card.innerHTML = `
-                    <div class="showcase-name">LEG ${index + 1}: ${leg.name} ${completed ? '<span style="color:#2ecc71;font-size:13px;">✔ COMPLETED</span>' : ''}</div>
-                    <div class="showcase-sub">${leg.description}</div>`;
+                    <div class="showcase-name">Leg ${index + 1}: ${leg.name}</div>
+                    <div class="showcase-sub">${leg.description}</div>
+                    ${completed ? `<div class="showcase-done">${icon('check')} COMPLETED</div>` : ''}`;
+            }
+            const progress = this.unlockProgressText();
+            if (progress) {
+                card.insertAdjacentHTML('beforeend', `<div class="showcase-progress">${icon('unlock')} ${progress}</div>`);
             }
             document.getElementById('legStartBtn').disabled = tier !== 'lit';
             document.getElementById('legLeaderboardBtn').style.visibility = tier === 'lit' ? 'visible' : 'hidden';
@@ -479,12 +454,12 @@ class TourSystem {
 
         const showTrackScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'none';
-            document.querySelector('.track-select-screen').style.display = 'block';
+            document.querySelector('.track-select-screen').style.display = 'flex';
             this.menuScreen = 'track';
             renderLegCard();
         };
         const showRiderScreen = () => {
-            document.querySelector('.character-select-screen').style.display = 'block';
+            document.querySelector('.character-select-screen').style.display = 'flex';
             document.querySelector('.track-select-screen').style.display = 'none';
             this.menuScreen = 'rider';
             if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
@@ -512,6 +487,8 @@ class TourSystem {
             const c = riderOrder[this.riderFocusIndex];
             if (!this.isCharacterUnlocked(c.id)) return;
             this.selectCharacter(c.id);
+            // Once chosen past, nothing is new any more
+            this.freshRiders.clear();
             showTrackScreen();
         });
 
@@ -534,6 +511,8 @@ class TourSystem {
         // Keyboard navigation
         this.keyboardHandler = (e) => {
             if (!this.legSelectorActive) return;
+            // The best-times viewer sits on top of the menu
+            if (document.getElementById('leaderboardViewer')) return;
 
             const isLeft = e.code === 'ArrowLeft' || e.code === 'KeyA';
             const isRight = e.code === 'ArrowRight' || e.code === 'KeyD';
@@ -590,6 +569,15 @@ class TourSystem {
         if (this.keyboardHandler) {
             document.removeEventListener('keydown', this.keyboardHandler);
         }
+    }
+
+    // After a bike unlocks: open the rider screen on the new bike
+    showRiderSelector(focusId) {
+        this.createLegSelector(document.body, this.onLegSelected);
+        const order = this.riderDisplayOrder();
+        const index = order.findIndex(c => c.id === focusId);
+        if (index >= 0) this.riderFocusIndex = index;
+        if (this.showRiderScreen) this.showRiderScreen();
     }
 
     showLegSelector() {

@@ -1,0 +1,293 @@
+// Rock dressing reads the profile's face description, not the side sign.
+import { buildEnvironment, decalMeshes, groundedRecords, loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+
+describe('embedded rock spread reads side.face.rockSpread', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    const cliffLake = () => game.Terrain.profiles.cliffLake;
+    const withSpread = (profile, leftSpread, rightSpread) => ({
+        ...profile,
+        left: { ...profile.left, face: { ...profile.left.face, rockSpread: leftSpread } },
+        right: { ...profile.right, face: { ...profile.right.face, rockSpread: rightSpread } }
+    });
+
+    // Distance past the road edge of each embedded rock, by side
+    function spreads(profile) {
+        const original = game.Terrain.LEGS[0].profile;
+        game.Terrain.LEGS[0].profile = profile;
+        let built;
+        try {
+            built = buildEnvironment(game, 0);
+        } finally {
+            game.Terrain.LEGS[0].profile = original;
+        }
+        const { env } = built;
+        const bySide = { '-1': [], 1: [] };
+        groundedRecords(env).forEach(({ label, position }) => {
+            const match = /^embedded cliff rock \(segment (\d+), side (-?1)\)$/.exec(label);
+            if (!match) return;
+            const point = env.roadPath[Number(match[1])];
+            const lateral = (position[0] - point.x) * Math.cos(point.heading) - (position[2] - point.z) * Math.sin(point.heading);
+            bySide[match[2]].push(Math.abs(lateral) - env.roadWidth / 2);
+        });
+        return { env, bySide };
+    }
+    const range = list => ({ n: list.length, min: Math.min(...list), max: Math.max(...list) });
+
+    test('cliffLake keeps its measured spread on both sides', () => {
+        const { bySide } = spreads(cliffLake());
+        const left = range(bySide['-1']);
+        const right = range(bySide[1]);
+        expect(left.n).toBe(59);
+        expect(left.min).toBeCloseTo(1.045, 2);
+        expect(left.max).toBeCloseTo(7.854, 2);
+        expect(bySide['-1'].filter(s => s > 3.5)).toHaveLength(41);
+        expect(right.n).toBe(52);
+        expect(right.min).toBeCloseTo(1.787, 2);
+        expect(right.max).toBeCloseTo(8.741, 2);
+        expect(bySide[1].filter(s => s > 3.5)).toHaveLength(37);
+    });
+
+    test('a side with no spread keeps its rocks within 3.5 of the road edge; the other side still spreads', () => {
+        const flatLeft = spreads(withSpread(cliffLake(), 0, 25));
+        expect(Math.max(...flatLeft.bySide['-1'])).toBeLessThanOrEqual(3.5 + 1e-9);
+        expect(Math.max(...flatLeft.bySide[1])).toBeGreaterThan(3.5);
+
+        const flatRight = spreads(withSpread(cliffLake(), 20, 0));
+        expect(Math.max(...flatRight.bySide[1])).toBeLessThanOrEqual(3.5 + 1e-9);
+        expect(Math.max(...flatRight.bySide['-1'])).toBeGreaterThan(3.5);
+
+        // The spread changes sizes and positions, never the number of draws
+        const cliff = spreads(cliffLake());
+        expect(flatLeft.env.randState).toBe(cliff.env.randState);
+        expect(flatRight.env.randState).toBe(cliff.env.randState);
+    });
+
+    test('swapping the faces swaps the spread with them', () => {
+        const { left, right, ...rest } = cliffLake();
+        const { bySide } = spreads({ ...rest, left: right, right: left });
+        expect(bySide['-1'].some(s => s > 3.5)).toBe(true);
+        expect(bySide[1].some(s => s > 3.5)).toBe(true);
+    });
+});
+
+describe('decals sit on the drawn face', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    const FACE_DECALS = ['crack', 'seepage', 'vine', 'snow'];
+
+    function build(legIndex, swap = false) {
+        const original = game.Terrain.LEGS[legIndex].profile;
+        if (swap) {
+            const { left, right, ...rest } = original;
+            game.Terrain.LEGS[legIndex].profile = { ...rest, left: right, right: left };
+        }
+        try {
+            return buildEnvironment(game, legIndex);
+        } finally {
+            game.Terrain.LEGS[legIndex].profile = original;
+        }
+    }
+
+    // Smallest distance from the decal centre to the ribbon along +perp, -perp, up
+    // and down. A decal sits exactly on a column of vertices, so the first and
+    // last column are mesh edges, which a ray misses; each ray also starts 1 cm
+    // either side along the road.
+    function faceDistance(env, ribbons, decal) {
+        const { THREE } = game;
+        let nearest = env.roadPath[0];
+        let best = Infinity;
+        env.roadPath.forEach(point => {
+            const d = (point.x - decal.position.x) ** 2 + (point.z - decal.position.z) ** 2;
+            if (d < best) { best = d; nearest = point; }
+        });
+        const perp = new THREE.Vector3(Math.cos(nearest.heading), 0, -Math.sin(nearest.heading));
+        const along = new THREE.Vector3(Math.sin(nearest.heading), 0, Math.cos(nearest.heading));
+        const directions = [perp, perp.clone().negate(), new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0)];
+        const origins = [0.01, -0.01].map(shift => decal.position.clone().addScaledVector(along, shift));
+        return Math.min(...origins.flatMap(origin => directions.map(direction => {
+            const hit = new THREE.Raycaster(origin, direction).intersectObjects(ribbons, false)[0];
+            return hit ? hit.distance : Infinity;
+        })));
+    }
+
+    const faceDecals = env => ribbonMeshes(env)
+        .flatMap(ribbon => ribbon.parent.children)
+        .filter(object => FACE_DECALS.includes(object.userData.decal));
+
+    test.each([[1, 'valley-run'], [2, 'coastal-descent'], [3, 'foggy-gorge'], [4, 'high-pass']])('%i (%s): every decal centre is within 0.75 of the face', (legIndex) => {
+        const { env, scene } = build(legIndex);
+        scene.updateMatrixWorld(true);
+        const ribbons = ribbonMeshes(env);
+        const decals = faceDecals(env);
+        expect(decals.length).toBeGreaterThan(0);
+        decals.forEach(decal => expect(faceDistance(env, ribbons, decal)).toBeLessThanOrEqual(0.75));
+    }, 60000);
+
+    test('the decal set is exactly the meshes tagged userData.decal, and the counts per side are unchanged', () => {
+        // Leg 5 is as the golden has it; the coast dresses its sea cliff only, not its beach; the
+        // mirrored cliff dresses its drop on the left and its wall on the right; the gorge dresses
+        // the face in force at each segment, none in its tunnels
+        const counts = [[11, 8], [13, 7], [10, 13], [10, 14]];
+        [4, 2, 1, 3].forEach((legIndex, n) => {
+            const { env } = build(legIndex);
+            const byTag = [];
+            env.scene.traverse(object => {
+                if (object.userData && object.userData.decal) byTag.push(object);
+            });
+            expect(new Set(byTag)).toEqual(new Set(decalMeshes(env).flat()));
+            expect(decalMeshes(env).map(list => list.length)).toEqual(counts[n]);
+        });
+    }, 60000);
+
+    test('a mirrored profile puts decals above the road on the rising side and below on the dropping side', () => {
+        const { env, scene } = build(1);
+        scene.updateMatrixWorld(true);
+        const ribbons = ribbonMeshes(env);
+        faceDecals(env).forEach(decal => {
+            let nearest = env.roadPath[0];
+            let best = Infinity;
+            env.roadPath.forEach(point => {
+                const d = (point.x - decal.position.x) ** 2 + (point.z - decal.position.z) ** 2;
+                if (d < best) { best = d; nearest = point; }
+            });
+            const lateral = (decal.position.x - nearest.x) * Math.cos(nearest.heading) - (decal.position.z - nearest.z) * Math.sin(nearest.heading);
+            if (lateral > 0) expect(decal.position.y).toBeGreaterThanOrEqual(nearest.y);
+            else expect(decal.position.y).toBeLessThanOrEqual(nearest.y);
+            expect(faceDistance(env, ribbons, decal)).toBeLessThanOrEqual(0.75);
+        });
+    }, 60000);
+});
+
+describe('the ground the bike rides is the wall it sees', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    // A canyon and a sea-road hill rise from the ribbon's own first row, 1.4 m
+    // past the road edge. The ground model must start the wall there too, or a
+    // bike a metre into the wall rides inside it.
+    test.each([
+        [3, 'foggy-gorge', [239, 249, 259]],
+        [2, 'coastal-descent', [175, 185, 195, 225]]
+    ])('leg %i (%s): groundYAt agrees with a ray down the drawn wall at +-12 m', (legIndex, name, segments) => {
+        const { env, scene } = buildEnvironment(game, legIndex);
+        scene.updateMatrixWorld(true);
+        const ribbons = ribbonMeshes(env);
+        let checked = 0;
+        segments.forEach(index => {
+            const point = env.roadPath[index];
+            [-12, 12].forEach(lateral => {
+                const x = point.x + Math.cos(point.heading) * lateral;
+                const z = point.z - Math.sin(point.heading) * lateral;
+                const hit = rayDown(game.THREE, ribbons, x, z);
+                if (hit === null) return;
+                checked++;
+                expect(Math.abs(hit - env.groundYAt(x, z))).toBeLessThanOrEqual(0.75);
+            });
+        });
+        expect(checked).toBeGreaterThan(0);
+    }, 60000);
+});
+
+describe('raycast: the drawn wall and the ground the physics reads', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    // A folded wall puts a fold of its rows exactly at a lateral now and then; a
+    // ray finds the highest fold there, and so must the ground model
+    test.each([
+        [3, 'foggy-gorge', 270, 20],
+        [3, 'foggy-gorge', 270, -20],
+        [4, 'high-pass', 402, -34]
+    ])('leg %i (%s) seg %i, lateral %i: the highest fold of the wall, at every column', (legIndex, name, segment, lateral) => {
+        expectFoldMatches(legIndex, segment, lateral, [0, 0.25, 0.5, 0.75]);
+    }, 60000);
+
+    // Coastal-descent seg 186 is a tight bend. The ground model once took the
+    // lateral from the nearest centre-line point's heading and walked the
+    // nearest vertex column, so between two columns it read a neighbouring
+    // fold (a 1.56 m miss at fraction 0). It now reads the drawn triangles of
+    // the strip the point lies in, so the bound holds at every fraction, and
+    // at the very point that missed.
+    test('leg 3 (coastal-descent) seg 186, lateral -20: the highest fold of the wall, at every column', () => {
+        expectFoldMatches(2, 186, -20, [0, 0.25, 0.5, 0.75]);
+    }, 60000);
+
+    test('leg 3 (coastal-descent) seg 186, lateral -20 exactly: the model is the drawn surface a ray meets', () => {
+        const { env, scene } = buildEnvironment(game, 2);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        [0, 0.25, 0.5, 0.75].forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, 186, fraction, -20);
+            expect(hit).not.toBeNull();
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
+        });
+    }, 60000);
+
+    function expectFoldMatches(legIndex, segment, lateral, fractions) {
+        const { env, scene } = buildEnvironment(game, legIndex);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        // A fold sits exactly on these laterals. A lateral rebuilt from the heading is only good to about 1e-13,
+        // and a ray lands on either side of a fold within that, so the ray is cast 0.01 m outside it as well
+        const outside = lateral + Math.sign(lateral) * 0.01;
+        fractions.forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, segment, fraction, outside);
+            expect(hit).not.toBeNull();
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
+            // And on the fold itself: whichever side the ray lands, the model is the surface it meets
+            const exact = across(game, env, ribbons, segment, fraction, lateral);
+            expect(exact.hit).not.toBeNull();
+            expect(Math.abs(exact.hit - exact.ground)).toBeLessThanOrEqual(5e-3);
+        });
+    }
+});
+
+function across(game, env, ribbons, segment, fraction, lateral) {
+    const a = env.roadPath[segment];
+    const b = env.roadPath[segment + 1];
+    const heading = a.heading + (b.heading - a.heading) * fraction;
+    const x = a.x + (b.x - a.x) * fraction + Math.cos(heading) * lateral;
+    const z = a.z + (b.z - a.z) * fraction - Math.sin(heading) * lateral;
+    return { hit: rayDown(game.THREE, ribbons, x, z), ground: env.groundYAt(x, z) };
+}
+
+describe('span blend: the ground model blends rows at a span edge as the ribbon does', () => {
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    // The tunnel on leg 7 (segments 514 to 521) and the second gorge tunnel on leg 4 (286 to 293)
+    test.each([
+        [6, 'night-ride tunnel', [512, 513, 514, 520, 521, 522], 8],
+        [3, 'foggy-gorge tunnel', [285, 286, 293, 294], 10]
+    ])('leg %i (%s): ray and groundYAt agree at the edges, columns 0 to 0.75', (legIndex, name, segments, halfRoad) => {
+        const { env, scene } = buildEnvironment(game, legIndex);
+        const ribbons = ribbonMeshes(env);
+        ribbons.forEach(mesh => { mesh.material.side = game.THREE.DoubleSide; });
+        scene.updateMatrixWorld(true);
+        let checked = 0;
+        segments.forEach(segment => [-20, -12, -10, 10, 12, 20].forEach(lateral => [0, 0.25, 0.5, 0.75].forEach(fraction => {
+            const { hit, ground } = across(game, env, ribbons, segment, fraction, lateral);
+            // Nothing is drawn on the road itself
+            if (hit === null) return;
+            checked++;
+            // The model reads the drawn triangles, so the plan's 5e-3 holds at the road edge too
+            expect(Math.abs(hit - ground)).toBeLessThanOrEqual(5e-3);
+        })));
+        expect(checked).toBeGreaterThan(60);
+    }, 60000);
+});
