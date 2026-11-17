@@ -153,3 +153,49 @@ class LegRoute extends Route {
     // A leg has no side roads
     offRoute() { return false; }
 }
+
+// The Ground contract over the terrain model of a leg (js/terrain.js), with the argument lists the game
+// always used. Retired with the legs.
+class LegGround extends Ground {
+    constructor(environment) {
+        super();
+        this.environment = environment;
+    }
+
+    groundY(x, z, hint, exact = false, loc = {}) {
+        const { terrain, terrainGeometry } = this.environment;
+        return Terrain.groundY(terrain, terrainGeometry, x, z, hint.start, hint.end, exact, loc);
+    }
+
+    heightAt(loc, exact = false) {
+        const { terrain, terrainGeometry } = this.environment;
+        return Terrain.heightAt(terrain, terrainGeometry, loc, exact);
+    }
+
+    zoneAt(loc, halfRoad) {
+        return Terrain.zoneAt(this.environment.terrain, loc.index, loc.lateral, halfRoad);
+    }
+
+    restY(loc) {
+        const terrain = this.environment.terrain;
+        const side = Terrain.sideAt(terrain, loc.lateral < 0 ? -1 : 1, loc.index);
+        return Terrain.restY(terrain, side, loc.roadY);
+    }
+
+    sideAt(loc, sign) {
+        return Terrain.sideAt(this.environment.terrain, sign, loc.index);
+    }
+
+    waterLevel(loc) {
+        return Terrain.waterLevel(this.environment.terrain, loc.roadY);
+    }
+
+    locate(x, z, hint, out = {}) {
+        Terrain.locate(this.environment.roadPath, x, z, hint.start, hint.end, out);
+        return out;
+    }
+
+    halfRoad() {
+        return this.environment.roadWidth / 2;
+    }
+}

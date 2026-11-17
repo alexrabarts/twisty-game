@@ -24,7 +24,7 @@ const BUSHES = ['bush_round', 'bush_low', 'bush_round_snow', 'bush_low_snow'];
 
 function load({ failing = [] } = {}) {
     const THREE = realThree();
-    const source = ['terrain.js', 'world/route.js', 'world/legroute.js', 'world/ground.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js', 'treemodels.js'].map(loadScript).join('\n;\n');
+    const source = ['terrain.js', 'world/route.js', 'world/legroute.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js', 'treemodels.js'].map(loadScript).join('\n;\n');
     const log = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };
     const fetch = async url => {
@@ -300,7 +300,7 @@ describe('where the models are not used', () => {
 
     test('without the script a leg is built as before', () => {
         const THREE = realThree();
-        const source = ['terrain.js', 'world/route.js', 'world/legroute.js', 'world/ground.js', 'vehicle.js', 'environment.js', 'tours.js'].map(loadScript).join('\n;\n');
+        const source = ['terrain.js', 'world/route.js', 'world/legroute.js', 'vehicle.js', 'environment.js', 'tours.js'].map(loadScript).join('\n;\n');
         const factory = new Function('THREE', 'document', 'localStorage', 'console', `${source}\nreturn { Environment, TourSystem, Terrain };`);
         const game = { THREE, ...factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, { log() {}, warn() {}, error() {} }) };
         const env = build(game, STORM);

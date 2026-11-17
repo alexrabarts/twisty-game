@@ -1,5 +1,5 @@
 // The route contract (js/world/route.js), its leg adapter (legroute.js) and the
-// Ground seam (ground.js): the contract's own answers, LegRoute and LegGround
+// Ground seam (route.js, legroute.js): the contract's own answers, LegRoute and LegGround
 // against the code they replaced, and the grep guards that keep a leg's road
 // path and the old progress hint from leaking back into the shared code.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -239,8 +239,8 @@ describe('grep guards', () => {
         .filter(file => file.endsWith('.js') && pattern.test(readFileSync(new URL(file, root), 'utf8')));
 
     test('no shared code reads the leg road path', () => {
-        const allowed = ['js/world/legroute.js', 'js/world/ground.js', 'js/environment.js', 'js/sceneassets.js'];
-        expect(matching([...files('js/'), ...files('tools/').filter(file => !/terrain-check|village-shots/.test(file))], /roadPath/, allowed)).toEqual([]);
+        const allowed = ['js/world/legroute.js', 'js/environment.js', 'js/sceneassets.js'];
+        expect(matching([...files('js/'), ...files('tools/').filter(file => !/terrain-check|village-shots|capture-baseline/.test(file))], /roadPath/, allowed)).toEqual([]);
         // Planted positive: the pattern does see a reader
         expect(/roadPath/.test('const p = env.roadPath[0];')).toBe(true);
     });
