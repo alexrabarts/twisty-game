@@ -11,7 +11,8 @@ const WorldPhysics = Object.freeze({
     // steering with the lag leanRateLag, so a press leans the bike by the same amount whatever it was doing.
     leanRate: 1.15,        // rad/s at full steering, up to steerSpeed: a 0.3 s key press is about 16 degrees
     leanRateLag: 0.04,     // s, how far the lean rate lags the steering (no lean momentum to fall over with)
-    steerSpeed: 20,        // m/s, above it the rate falls as steerSpeed / speed (the legacy speedFactor, floor 0.3)
+    steerSpeed: 20,        // m/s, above it the rate falls as (steerSpeed / speed) ^ steerFalloff, floor 0.3
+    steerFalloff: 0.7,     // 1 is the legacy speedFactor; it felt sluggish at speed with no lean momentum to help it
     pickUpBoost: 1.5,      // steering against the lean picks the bike up this much quicker (as the legacy bike)
     selfRighting: 3.5,     // 1/s, with the key released the bike stands up at this rate (the exit of a hairpin)
     leanLimitGain: 8,      // 1/s, the soft limit: the lean rate is at most this times the room under the limit

@@ -2453,7 +2453,7 @@ class Vehicle {
         const leanLimit = Math.min(capEff, Math.atan(v2 / (g * world.radiusFloor)));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
-        const speedFactor = v > world.steerSpeed ? Math.max(0.3, world.steerSpeed / v) : 1;
+        const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
         const character = (this.character.physics && this.character.physics.steeringForce) || 1;
         let rate = -u * world.leanRate * speedFactor * character;
         if (u !== 0 && Math.sign(u) === Math.sign(lean)) rate *= world.pickUpBoost;
