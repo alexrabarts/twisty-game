@@ -2196,8 +2196,9 @@ async function placeAt(s) {
     return p;
 }
 
-// Slows the autopilot for the bend ahead: the bike turns at its lean cap (50 degrees), so a corner of radius R
-// is ridden at about sqrt(g tan(50) R) and no faster; it brakes at 6 m/s^2 to get there. Installed in the page.
+// Slows the autopilot for the bend ahead: the bike turns at its lean cap (50 degrees, 0.85 of the grip on the
+// cobbles), so a corner of radius R is ridden at about 0.75 sqrt(g R) and no faster; it brakes at 5 m/s^2 to get
+// there. Installed in the page.
 function pilotWorld(game, cruise) {
     const route = game.environment.route;
     const probe = {};
@@ -2211,8 +2212,8 @@ function pilotWorld(game, cruise) {
     const target = s => {
         let allowed = cruise;
         for (let d = 0; d <= 70; d += 6) {
-            const corner = Math.min(cruise, 0.8 * Math.sqrt(9.81 * 1.19 * bend(s + d)));
-            allowed = Math.min(allowed, Math.sqrt(corner * corner + 12 * d));
+            const corner = Math.min(cruise, 0.75 * Math.sqrt(9.81 * bend(s + d)));
+            allowed = Math.min(allowed, Math.sqrt(corner * corner + 10 * d));
         }
         return Math.max(allowed, 6);
     };
