@@ -8,7 +8,8 @@ The W0 data gate for the Andermatt world. The tools are in `tools/world/`. The v
 |---|---|
 | `cache.mjs` | Resolves the cache (`$TWISTY_WORLD_CACHE`, else `~/Library/Caches/twisty-world`) and refuses a path inside the repo, also through a symlink. `node tools/world/cache.mjs tlm` downloads the 4 795 840 706 byte zip with HTTP Range resume, checks the content-length, then unzips with `unzip` (macOS `ditto` fails on this archive). `node tools/world/cache.mjs alti3d <west> <south> <east> <north>` (WGS84) walks the swissALTI3D STAC items, follows `rel=next`, keeps the newest year of each tile, and downloads the 2 m COG tiles into `alti3d/2m/`. |
 | `gpkg.mjs` | GeoPackage reader on `node:sqlite`. It parses the GPKG header and WKB (Point to MultiPolygon, 2D, Z, ZM, both byte orders) and queries a bbox through the `rtree_<table>_<geom>` index. A table without an R-tree throws. |
-| `inspect.mjs` | Prints the gate report as JSON. Exit code 4 when a waypoint pair has no connecting road. |
+| `inspect.mjs` | Prints the gate report as JSON. `--stages <ids\|all>` scopes it to those stages (default `all`, the whole route), so its `corridorEdges` are the count `verify.mjs graph --stages <ids>` compares with. In `connectivity`, `gap` is `false` for a connected pair (`gapM` holds the size of a gap); a junction `name` is the waypoint it sits at (`roads` lists the roads that meet there). Exit code 4 when a waypoint pair has no connecting road. |
+| `stages.mjs` | The stages of the ride from `route.json` (`stageDefs`, `scopedRoute`). |
 | `route.json` | The D1 waypoints in LV95, with `boundary` for the stage boundaries. |
 
 The raw data never enters the repo: `.gitignore` holds `*.gpkg`, `*.tif`, `*.tiff` and `*.gpkg.zip`.
@@ -43,7 +44,7 @@ All 26 consecutive waypoint pairs are connected. The ride is **228.5 km**. D1 es
 
 Altdorf to Amsteg 13.1 km, Amsteg to Wassen 12.3, Wassen to Schöllenen 7.9, Schöllenen to Andermatt 2.0, Andermatt to Hospental 2.5, Hospental to Gotthard 8.9, Gotthard to Airolo 13.2 (via Tremola upper 4.9, Tremola lower 2.2, Airolo 6.1), Airolo to Bedretto 8.5, Bedretto to Nufenen 14.7, Nufenen to Ulrichen 13.9, Ulrichen to Oberwald 5.1, Oberwald to Gletsch 7.2, Gletsch to Furka 9.3, Furka to Realp 12.1, Realp to Hospental 6.0, Hospental to Andermatt 2.5, Andermatt to Schöllenen 2.0, Schöllenen to Wassen 7.9, Wassen to Susten 17.8, Susten to Gadmen 15.7, Gadmen to Innertkirchen 12.4, Innertkirchen to Guttannen 8.6, Guttannen to Grimsel 17.8, Grimsel to Gletsch 7.1.
 
-Every pair has `gap: 0`. The shortest path weights the road class, prefers `Durchgangsstrasse`, and charges 25 times for a motorway, so it follows the pass roads. Three waypoints snap more than 50 m from the hand-placed point (Altdorf 56 m, Hospental 61 m, Gletsch 38 m): they snap to the through road, which is the intent.
+Every pair has `gap: false` (`gapM: 0`). The shortest path weights the road class, prefers `Durchgangsstrasse`, and charges 25 times for a motorway, so it follows the pass roads. Three waypoints snap more than 50 m from the hand-placed point (Altdorf 56 m, Hospental 61 m, Gletsch 38 m): they snap to the through road, which is the intent.
 
 ### Junctions
 
@@ -134,3 +135,17 @@ All little-endian. `world/manifest.json` holds the indexes, `world/ride.json` th
 | `environment.js`, `guide.js` | `WorldEnvironment` is what `Game.environment` holds; `WorldGuide` is the minimap, the turn prompt and the off-route rule. |
 
 Probes: `node tools/terrain-check.mjs world-window,world-budget,world-ground,world-junction,world-wrongway,world-credit,world-net,world-finish --world tremola` (see the header of `tools/terrain-check.mjs`).
+
+## Checks added after review (`node tools/world/verify.mjs <check> --stages tremola`)
+
+- **`crests` (P39).** The lift-off speed sqrt(g / kappa) at each convex sample of the ride, kappa over a +-4 m window of the profile. The world has no airborne state, so the smallest must be 35 m/s or more. The importer eases a crest sharper than 36 m/s over the ride as one line (`limitRideCrests` in `profile.mjs`; the sharpest crest of the slice sat at the join of two edges, s 12 578). The slice's smallest is 35.9 m/s. The check reports the 5 lowest crests.
+- **`stations` (P36).** Spacing, stage boundaries as stations, the placement rule re-run on the decoded ride, no gate within 80 m of a junction or a structure (a failure), and every gate whose smallest radius within 50 m is under 60 m listed in `tightBend` (reported, not a failure: station 11 at s 11 434.3 has 20.9 m, the best place in its window).
+- **`graph` (P22).** The graph holds every source edge in the corridor: 588 for the Tremola slice, the number `inspect.mjs --stages tremola` gives, less 2 stubs under 1 m the importer drops (587 edges in the files). `corridorEdges` of `inspect.mjs` for `--stages all` (5 445) is the whole ride's corridor, not the slice's.
+
+## Review decisions
+
+- `js/world/gates.js` (instanced station banners within 1.5 km, streamed through the queue) is **deferred to W5**. Until then `WorldEnvironment.buildFixtures` draws the frame of every station of the stage once (14 for the slice), which is cheap at this size. It needs an obligation when W5 starts: the banners of a full ride must not be resident beyond 1.5 km.
+- The proof artefacts that exist as probes are `world-camera` and `world-hud` (new), `world-restart`, `world-cut`, `world-finish`, `world-budget`. Folded: the run-session cases live in `tests/unit/restart.test.js` and `tests/unit/world-run.test.js`, the stage cases in `world-run.test.js`. Not built, still owed before W5: `world-stream`, `world-atmo`, `world-physics`, `world-looks.test.js`, `world-floors.test.js`, `leg-payload-contract.test.js`.
+- The `roadPath` grep gate (W-P6c) allowlists `js/world/legroute.js`, `js/environment.js`, `js/sceneassets.js`, `tools/terrain-check.mjs`, `tools/village-shots.mjs` and now `tools/world/capture-baseline.mjs`, which reads `roadPath` of the a9e8add tree on purpose.
+- `functions/world-courses.json` is not read by the server until the world boards (R6). The world records no board time before then: `restartLeaderboardSession` only cancels in a world, and `finishRun` skips the board.
+- The committed `world/**/*.bin` files are binary on purpose (Pages-hosted, 1.3 MB).

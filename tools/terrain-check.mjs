@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-shots
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-hud world-shots
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
@@ -2138,7 +2138,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-shots'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-hud', 'world-shots'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2444,6 +2444,45 @@ const WORLD = {
         for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
         return { station: 3, stationS: station.s, before, after, next, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
+    // The HUD of a ride that holds more than one stage (P48): put the bike in stage 2 of the mini world
+    // (--worldData tests/fixtures/world/mini, --world all), at 1280x720 and at 390x844 as a touch device. The stage line,
+    // the pips of the stage and a box that overlaps no other.
+    'world-hud': async page => {
+        const read = () => page.evaluate(async (placeSource) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const env = game.environment;
+            const stage = env.route.stages[1];
+            if (!stage) return { error: 'the world has no second stage' };
+            await placeAt(stage.from + 300);
+            // Put down mid-ride, the stations behind the bike count as passed
+            const run = game.worldRun;
+            run.stationIndex = env.stationGates.filter(st => st.s <= stage.from + 300).length - 1;
+            run.stageIndex = run.stageOf(stage.from + 300);
+            twistyDev.freeze();
+            for (let i = 0; i < 20; i++) twistyDev.step(1);
+            const box = el => { if (!el) return null; const r = el.getBoundingClientRect(); return r.width && r.height ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null; };
+            const boxes = { timer: box(document.querySelector('.hud-timer')), minimap: box(document.querySelector('.world-guide')), speed: box(document.querySelector('.hud-speed')) };
+            const names = Object.keys(boxes).filter(k => boxes[k]);
+            const overlaps = [];
+            for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+                const a = boxes[names[i]], b = boxes[names[j]];
+                if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) overlaps.push([names[i], names[j]]);
+            }
+            const gates = game.worldRun.stageGates(1);
+            const hud = game.hud;
+            hud.setGates(0, 30);
+            const many = { pips: document.querySelectorAll('#hudGatePips i').length, count: document.getElementById('hudGateCount').textContent };
+            hud.setGates(0, gates.total);
+            return { pips: document.querySelectorAll('#hudGatePips i').length, gateTotal: gates.total, count: document.getElementById('hudGateCount').textContent, meta: document.getElementById('hudStageName').textContent, many, overlaps, stageIndex: game.worldRun.stageIndex };
+        }, placeAt.toString());
+        const out = {};
+        await page.setViewport({ width: 1280, height: 720 });
+        out.desktop = await read();
+        await page.setViewport({ width: 390, height: 844 });
+        await page.evaluate(() => document.body.classList.add('touch'));
+        out.touch = await read();
+        return out;
+    },
     // The chase camera on hairpins (P38): the autopilot rides 12 m/s from several starts. Each frame, 4 points of the
     // boom from the head to the camera are tested against the ground, and the road 30 m ahead is projected to the
     // screen. A hairpin frame is a heading change of more than 115 degrees across +-40 m of road.
@@ -2714,6 +2753,17 @@ function worldChecks(report) {
             if (cut.control.restarts || cut.control.crashed) failures.push(`world-cut control: ${JSON.stringify(cut.control)}`);
             if (cut.flicker.restarts) failures.push(`world-cut: a flicker restarted the ride: ${JSON.stringify(cut.flicker)}`);
             if (cut.cut.restarts !== 1 || cut.cut.penaltyMs !== 5000 || !(cut.cut.ms >= cut.cutConfirmMs - 20 && cut.cut.ms <= cut.cutConfirmMs + 120) || cut.cut.backAtS > cut.cut.lowerS + 100 || cut.cut.lowerS - cut.cut.backAtS > 2100) failures.push(`world-cut: ${JSON.stringify(cut.cut)}, want one restart after about ${cut.cutConfirmMs} ms`);
+        }
+    }
+    const hud = results['world-hud'];
+    if (hud) {
+        for (const view of ['desktop', 'touch']) {
+            const h = hud[view];
+            if (h.error) { failures.push(`world-hud ${view}: ${h.error}`); continue; }
+            if (!/^Stage 2\/\d+ · /.test(h.meta)) failures.push(`world-hud ${view}: the stage line reads ${JSON.stringify(h.meta)}, want Stage 2/<n>`);
+            if (h.pips !== h.gateTotal || h.count !== `0/${h.gateTotal}`) failures.push(`world-hud ${view}: ${h.pips} pips and ${h.count} for a stage of ${h.gateTotal} gates`);
+            if (h.many.pips !== 0 || h.many.count !== '0/30') failures.push(`world-hud ${view}: 30 gates must show the count and no pips: ${JSON.stringify(h.many)}`);
+            if (h.overlaps.length) failures.push(`world-hud ${view}: boxes overlap: ${JSON.stringify(h.overlaps)}`);
         }
     }
     const camera = results['world-camera'];

@@ -107,8 +107,8 @@ firebase init emulators
 # Start emulators
 firebase emulators:start
 
-# In js/firebase-config.js, the code will automatically
-# use emulators when running on localhost
+# In js/firebase-config.js, the code uses the emulators only when the
+# page URL has ?emulator
 ```
 
 ## Step 10: Run Tests
@@ -129,7 +129,7 @@ cd functions && npm test
 `functions/courses.json` is the server's copy of `Course.boardTable()` (js/course.js):
 one row per converted leg, `{ "<board id>": { "gates": 14, "segments": 700 } }`.
 `tests/unit/board-contract.test.js` fails when the copy and the game differ.
-It is empty until the first leg is converted.
+It holds one row per converted leg (today `mountain-dawn-v3`).
 
 | | Board not in the table | Board in the table |
 |---|---|---|

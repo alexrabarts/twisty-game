@@ -39,6 +39,8 @@ class WorldRun {
 
     // Spawn, restart and resume: progress starts again from s
     reset(s) {
+        // A restart or a put-down lands in the stage that holds s
+        this.stageIndex = this.stageOf(s);
         this.lastS = s;
         this.allowAccum = 0;
         this.pendingCutMs = 0;
