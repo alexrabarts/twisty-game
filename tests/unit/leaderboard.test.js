@@ -11,7 +11,7 @@ import { TextEncoder } from 'util';
 // js/leaderboard.js is a classic browser script (no exports); evaluate it and
 // expose the class so the real implementation is under test.
 const leaderboardSource = readFileSync(new URL('../../js/leaderboard.js', import.meta.url), 'utf8');
-(0, eval)(`${leaderboardSource}\nglobalThis.LeaderboardService = LeaderboardService;`);
+(0, eval)(`${leaderboardSource}\nglobalThis.LeaderboardService = LeaderboardService; globalThis.RunSession = RunSession;`);
 
 // jsdom does not provide crypto.subtle or TextEncoder; use Node's implementations
 if (!globalThis.crypto?.subtle) {
@@ -417,9 +417,22 @@ describe('LeaderboardService', () => {
                 expect(calls.submitRun).toHaveLength(0);
             });
 
-            test.each([[0], [-1], [17], [4.5], ['5'], [null]])('a nameMax of %j is ignored and the rule stays exactly 4', async stated => {
+            test.each([[0], [-1], [4.5], ['5'], [null], [Infinity]])('a nameMax of %j is ignored and the rule stays exactly 4', async stated => {
                 const { rule } = await submitName({ nameMax: stated }, 'ALEX');
                 expect(rule).toEqual({ min: 4, max: 4 });
+            });
+
+            test.each([[17], [24], [64]])('a nameMax of %j is the server\'s rule and is taken as stated', async stated => {
+                const { rule, result } = await submitName({ nameMax: stated }, 'A'.repeat(stated));
+                expect(rule).toEqual({ min: 1, max: stated });
+                expect(result.success).toBe(true);
+            });
+
+            test('a saved session holds only a nameMax the server could have stated', () => {
+                const saved = { boardId: 'b', checkpointTimes: [], checkpointIndices: [], proofChain: [] };
+                expect(RunSession.fromJSON({ ...saved, nameMax: 20 }, null, null).nameMax).toBe(20);
+                expect(RunSession.fromJSON({ ...saved, nameMax: '9' }, null, null).nameMax).toBeNull();
+                expect(RunSession.fromJSON({ ...saved }, null, null).nameMax).toBeNull();
             });
 
             test('the stated limit is forgotten with the session', async () => {

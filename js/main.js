@@ -2583,7 +2583,8 @@ class Game {
         const letters = rule.min === rule.max ? `${rule.max} letters` : `${rule.min}-${rule.max} letters`;
         entryForm.querySelector('.leaderboard-entry-subtitle').textContent = `Enter your name (${letters})`;
         nameInput.maxLength = rule.max;
-        nameInput.placeholder = '_'.repeat(rule.max);
+        // The rule itself is the server's; only the placeholder is held to what the 250 px box can show
+        nameInput.placeholder = '_'.repeat(Math.min(rule.max, Game.NAME_PLACEHOLDER_MAX));
 
         // Reset to entry form
         entryForm.style.display = 'block';
@@ -4036,6 +4037,8 @@ Game.WORLD_RESTART_TEXT = {
 Game.RESTART_PENALTY_MS = 5000;
 // Cars within this many segments of the rider move ahead on a restart
 Game.RESTART_CLEAR_SEGMENTS = 6;
+// Underscores the name box shows at most: it is 250 px wide, and a placeholder longer than this only spills past it
+Game.NAME_PLACEHOLDER_MAX = 8;
 // The most a frame spends building the sections ahead on a converted leg (one step at least)
 Game.SECTION_BUDGET_MS = 4;
 

@@ -71,8 +71,7 @@ class RunSession {
             this.sessionToken = result.data.sessionToken;
             this.protocol = protocol;
             this.gates = gates;
-            const stated = result.data.nameMax;
-            this.nameMax = Number.isInteger(stated) && stated >= 1 && stated <= 16 ? stated : null;
+            this.nameMax = RunSession.statedNameMax(result.data.nameMax);
             this.starting = false;
 
             // Gates recorded while the reply was in flight sign now, in order
@@ -325,6 +324,12 @@ class RunSession {
         };
     }
 
+    // The server owns the name rule, so its nameMax is taken as stated. Anything that is not a positive
+    // integer is no statement at all and leaves the old rule of exactly 4 letters.
+    static statedNameMax(value) {
+        return Number.isSafeInteger(value) && value >= 1 ? value : null;
+    }
+
     static fromJSON(data, functions, getFingerprint) {
         const session = new RunSession(functions, getFingerprint);
         session.currentLegId = data.boardId;
@@ -332,7 +337,7 @@ class RunSession {
         session.sessionToken = data.sessionToken;
         session.protocol = data.protocol;
         session.gates = data.gates;
-        session.nameMax = data.nameMax;
+        session.nameMax = RunSession.statedNameMax(data.nameMax);
         session.checkpointTimes = [...data.checkpointTimes];
         session.checkpointIndices = [...data.checkpointIndices];
         session.proofChain = [...data.proofChain];
