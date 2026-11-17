@@ -199,6 +199,63 @@ const BIKE_MODELS = {
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, keepFileColours: true }));
 
 class Vehicle {
+    // The layer a mesh the camera is inside is moved to: the camera draws layer 0 only
+    static get HIDDEN_LAYER() { return 31; }
+
+    // Every mesh under `root` (the bike and rider) that holds `point` inside its surface, or has its surface within
+    // `margin` of it, is drawn on no layer the camera sees; every other one goes back to what it was. A camera inside
+    // a mesh draws its inside as a dark shell across the view (the rider's own helmet in Helmet Cam). `point` null
+    // puts every mesh back. Layers, not `visible`, so a level of detail switching its levels cannot show a hidden part
+    // again. Returns how many meshes are hidden
+    static hideAround(root, point, margin = 0.1) {
+        let hidden = 0;
+        const local = Vehicle.hideScratch || (Vehicle.hideScratch = { p: new THREE.Vector3(), m: new THREE.Matrix4(), box: new THREE.Box3() });
+        root.updateMatrixWorld(true);
+        root.traverse(o => {
+            if (!o.isMesh || !o.geometry) return;
+            let inside = false;
+            if (point) {
+                if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+                local.m.copy(o.matrixWorld).invert();
+                local.p.copy(point).applyMatrix4(local.m);
+                const scale = o.matrixWorld.getMaxScaleOnAxis() || 1;
+                inside = local.box.copy(o.geometry.boundingBox).expandByScalar(margin / scale).containsPoint(local.p) && Vehicle.encloses(o, local.p, margin / scale);
+            }
+            if (inside) {
+                if (o.userData.layersBeforeHide === undefined) o.userData.layersBeforeHide = o.layers.mask;
+                o.layers.set(Vehicle.HIDDEN_LAYER);
+                hidden++;
+            } else if (o.userData.layersBeforeHide !== undefined) {
+                o.layers.mask = o.userData.layersBeforeHide;
+                delete o.userData.layersBeforeHide;
+            }
+        });
+        return hidden;
+    }
+
+    // Whether the mesh's own surface holds the local point `p` (a ray up from it crosses the surface an odd number of
+    // times) or comes within `margin` of it. Kept per mesh for a point on a 2 cm grid: a camera pinned to the rider
+    // hardly moves against it
+    static encloses(mesh, p, margin) {
+        const key = `${Math.round(p.x * 50)},${Math.round(p.y * 50)},${Math.round(p.z * 50)},${mesh.geometry.uuid}`;
+        if (mesh.userData.enclosesKey === key) return mesh.userData.encloses;
+        const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
+        const count = index ? index.count : pos.count;
+        const tri = new THREE.Triangle(), hit = new THREE.Vector3();
+        const ray = new THREE.Ray(p.clone(), new THREE.Vector3(0, 1, 0));
+        let up = 0, near = false;
+        for (let t = 0; t < count && !near; t += 3) {
+            tri.a.fromBufferAttribute(pos, index ? index.getX(t) : t);
+            tri.b.fromBufferAttribute(pos, index ? index.getX(t + 1) : t + 1);
+            tri.c.fromBufferAttribute(pos, index ? index.getX(t + 2) : t + 2);
+            if (ray.intersectTriangle(tri.a, tri.b, tri.c, false, hit)) up++;
+            if (margin > 0 && tri.closestPointToPoint(p, hit).distanceTo(p) < margin) near = true;
+        }
+        mesh.userData.enclosesKey = key;
+        mesh.userData.encloses = near || up % 2 === 1;
+        return mesh.userData.encloses;
+    }
+
     constructor(scene, onWheelieScore = null, character = null, bikeId = null, options = {}) {
         this.scene = scene;
         // { model: false } builds the procedural bike only; the caller dresses

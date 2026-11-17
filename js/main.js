@@ -3626,6 +3626,9 @@ class Game {
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,
             this.weatherSystem ? (this.weatherSystem.flash || 0) * 0.35 : 0
         );
+        // In a first-person view nothing of the rider the camera is inside is drawn (Vehicle.hideAround)
+        const firstPerson = ['helmet', 'onboard'].includes(this.cameraModes[this.cameraMode].type);
+        Vehicle.hideAround(this.vehicle.rider || this.vehicle.group, firstPerson ? this.camera.position : null, this.camera.near);
         this.graphics.render(this.scene, this.camera);
     }
 
