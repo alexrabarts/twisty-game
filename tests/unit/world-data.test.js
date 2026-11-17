@@ -159,7 +159,7 @@ describe('trust: only the shipped, unmodified world submits', () => {
         const edited = async (url) => {
             const response = await fetchFn(url);
             if (url !== 'world/manifest.json') return response;
-            const text = Buffer.from(await response.arrayBuffer()).toString().replace('"© swisstopo"', '"© someone"');
+            const text = Buffer.from(await response.arrayBuffer()).toString().replace('"credit":"© swisstopo', '"credit":"© someone');
             return { ok: true, status: 200, arrayBuffer: async () => exact(text) };
         };
         expect((await new WorldData({ fetchFn: edited, digest }).load()).trusted).toBe(false);

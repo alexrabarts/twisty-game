@@ -21,6 +21,8 @@ import { stageFloors } from './floors.mjs';
 import { Dem, wgs84Bbox } from './dem.mjs';
 import { NODE_FLAG, writeWorld, writeCourses } from './encode.mjs';
 import { syntheticSource } from './synthetic.mjs';
+import { buildFarLand, horizonSinks, COPERNICUS_NOTICE } from './farland.mjs';
+import { TILE_N } from './bench.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -38,7 +40,9 @@ const CREDIT = '© swisstopo';
 export function classWidth(cls) {
   const m = /^(\d+)m/.exec(cls);
   if (m) return Math.max(3, Number(m[1]));
-  if (/autobahn|autostrasse/i.test(cls)) return 12;
+  // swissTLM3D draws each carriageway of a motorway as its own line: two lanes and a shoulder, not the whole road
+  if (/autobahn/i.test(cls)) return 9;
+  if (/autostrasse/i.test(cls)) return 9;
   if (/platz|raststaette/i.test(cls)) return 10;
   return 5;
 }
@@ -80,6 +84,10 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
       this.sources.alti3d = [...new Set([...dem.files.values()].map(f => f.year))].sort();
     },
     coverPolys: box => coverPolysFromRows(gpkg.query('tlm_bb_bodenbedeckung', lvBox(box)), ([e, n]) => [e - e0, -(n - n0)]),
+    // The mountains beyond far.bin (farland.mjs), or null when the cache has no 50 m heights
+    farLand(far, log) {
+      return buildFarLand(far, { cacheDir, origin: ORIGIN, log, polysIn: box => coverPolysFromRows(gpkg.query('tlm_bb_bodenbedeckung', lvBox(box)), ([e, n]) => [e - e0, -(n - n0)]) });
+    },
     buildings(samples) {
       const box = [Math.min(...samples.x) - 250, Math.min(...samples.z) - 250, Math.max(...samples.x) + 250, Math.max(...samples.z) + 250];
       return buildingsFromRows(gpkg.query('tlm_bauten_gebaeude_footprint', lvBox(box)), ([e, n]) => [e - e0, -(n - n0)], samples);
@@ -257,6 +265,11 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
     for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) { const h = demAt(x0 + i * FAR_CELL_M, z0 + j * FAR_CELL_M); data[j * nx + i] = Number.isNaN(h) ? NO_DATA : Math.round(h); }
     return { x0, z0, nx, nz, cell: FAR_CELL_M, data };
   })();
+  const farLand = source.farLand ? await source.farLand(far, log) : null;
+  if (farLand) farLand.sink0 = horizonSinks(far, tiles, { tileM: TILE_M, tileN: TILE_N, cellM: TILE_M / (TILE_N - 1) });
+  // Copernicus GLO-30 may be redistributed adapted, with its notice (licence Art. 6; .agent/system/world-data.md)
+  const credit = farLand && farLand.copernicus ? `${source.credit} · Copernicus WorldDEM-30 © DLR e.V., © Airbus` : source.credit;
+  const notice = farLand && farLand.copernicus ? COPERNICUS_NOTICE : null;
 
   const placedBuildings = clearOfRoads(source.buildings(samples), edges);
   const buildings = placedBuildings.buildings;
@@ -274,8 +287,8 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   landmarks.sort((a, b) => a.s - b.s);
 
   return {
-    origin: source.origin, credit: source.credit, sources: source.sources, spacingM: 4, stationSpacingM, keptRoadClasses: source.keptRoadClasses ?? [...new Set(edges.map(e => e.cls))].sort(),
-    nodes, edges, ride, junctions, stages, stations, tiles, cover, far, buildings, landmarks, structures: structureRuns(samples),
+    origin: source.origin, credit, notice, sources: farLand ? { ...source.sources, far: farLand.copernicus ? ['alti3d', 'copernicus-glo30'] : ['alti3d'] } : source.sources, spacingM: 4, stationSpacingM, keptRoadClasses: source.keptRoadClasses ?? [...new Set(edges.map(e => e.cls))].sort(),
+    nodes, edges, ride, junctions, stages, stations, tiles, cover, far, farLand, buildings, landmarks, structures: structureRuns(samples),
     samples, stats: { ...stats, corridor, tilesMissingHeight: missing, droppedStations: placed.dropped, maxStationGapM: placed.maxGapM, snaps: g.snaps }
   };
 }

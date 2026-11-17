@@ -6,6 +6,7 @@ The W0 data gate for the Andermatt world. The tools are in `tools/world/`. The v
 
 | File | Job |
 |---|---|
+| `cache.mjs` (far) | `node tools/world/cache.mjs alti3d-far <west> <south> <east> <north>` reads only the 4 m overview of each swissALTI3D COG in the box (HTTP ranges, about 300 KB a tile, not the 1.2 MB file), pools it to 50 m (mean and max) and keeps `alti3d/far50/<E>-<N>.bin` (3.2 KB). The Tremola box (8.0591 46.1788 9.1172 46.9089, +-40 km round the slice) is 6 195 tiles, 24 MB, about 3 minutes. |
 | `cache.mjs` | Resolves the cache (`$TWISTY_WORLD_CACHE`, else `~/Library/Caches/twisty-world`) and refuses a path inside the repo, also through a symlink. `node tools/world/cache.mjs tlm` downloads the 4 795 840 706 byte zip with HTTP Range resume, checks the content-length, then unzips with `unzip` (macOS `ditto` fails on this archive). `node tools/world/cache.mjs alti3d <west> <south> <east> <north>` (WGS84) walks the swissALTI3D STAC items, follows `rel=next`, keeps the newest year of each tile, and downloads the 2 m COG tiles into `alti3d/2m/`. |
 | `gpkg.mjs` | GeoPackage reader on `node:sqlite`. It parses the GPKG header and WKB (Point to MultiPolygon, 2D, Z, ZM, both byte orders) and queries a bbox through the `rtree_<table>_<geom>` index. A table without an R-tree throws. |
 | `inspect.mjs` | Prints the gate report as JSON. `--stages <ids\|all>` scopes it to those stages (default `all`, the whole route), so its `corridorEdges` are the count `verify.mjs graph --stages <ids>` compares with. In `connectivity`, `gap` is `false` for a connected pair (`gapM` holds the size of a gap); a junction `name` is the waypoint it sits at (`roads` lists the roads that meet there). Exit code 4 when a waypoint pair has no connecting road. |
@@ -100,9 +101,35 @@ The slice rides **uphill from Airolo to the Gotthard summit** (route.json `slice
 - **Nodes move.** A node that the ride uses moves onto the resampled ride line (by a metre or two). Side edges that end there follow it.
 - **An edge that the ride uses twice** (Schöllenen, Andermatt-Hospental, W5) keeps the samples of its first use. The second use is the same samples read the other way, so the bend across its joins is not smoothed for that use.
 - **Cobbles.** TLM gives every road `Hart`, so the cobbled Via Tremola is marked by hand in `structures.json` (4 km of the slice).
-- **`far.bin`** covers the corridor tiles plus 1.5 km, not the 15 km of the plan: the cache holds 2 m tiles only for the slice. W5 extends it.
+- **`far.bin`** covers the corridor tiles plus 1.5 km. The land beyond it, out to 40 km, is the far land (below).
 - **Landmarks** sit at the pass waypoints until the models are placed. Only the Gotthard Hospiz is in the slice.
 - **Station spacing** is 1 000 m for the real ride and 500 m for the mini fixture.
+
+## The far land (realism round 1)
+
+The photo match (round 1) found the game's skyline 4 to 8 degrees under the real one: the real skyline stands 9 to 13 km away (up to 49 km), and the world stopped at far.bin. `tools/world/farland.mjs` builds two more levels round far.bin, centred on it:
+
+| Level | Cell | Reach | Vertices | File |
+|---|---|---|---|---|
+| 1 | 250 m | +-16 km | 129 x 129 | `far/l1.bin`, 99 862 B |
+| 2 | 800 m | +-40 km | 101 x 101 | `far/l2.bin`, 61 222 B |
+
+- **Heights.** swissALTI3D pooled to 50 m (`alti3d/far50`), Copernicus GLO-30 where swissALTI3D has no data (Italy, south and west). A vertex is the mean of its window raised halfway to the window's highest point: a plain mean shaves the peaks off the skyline.
+- **Cover.** The shares of forest (open forest counts half), rock and scree, and glacier in each vertex's window, from swissTLM3D land cover rasterised at 50 m over the whole box, and the share swissTLM3D covers at all (0 outside Switzerland, where the runtime colours by height). `far/cover0.bin` holds the same shares for each far.bin vertex.
+- **Horizon sinks.** `far/sink0.bin`: the metres each far.bin vertex is drawn under its height. The 100 m grid is bilinear and in a gully stood up to 64 m above the tiles (10% of tile vertices were over the old fixed 8 m), so it showed through them. Under the tiles each cell is sunk by the most it stands above the tile vertices in it, plus 3 m; elsewhere 8 m.
+- **Size.** The far files are 199 KB; `world/` is 1.52 MB in 241 files (1.33 MB before), every file under 256 KB.
+- **Runtime.** `FarLand` (js/world/horizon.js) leaves out each cell wholly inside the level within it and sinks the vertices inside that box (40 m, then 160 m), so a cell across the edge runs under the finer land: no seam and no two surfaces at one depth. The camera's far plane is 60 km in a world (`WorldEnvironment.FAR_PLANE_M`): depth steps go as d^2 / near and hardly change with the far plane. The far meshes drop d^2 (1 - 0.13) / 2R in the vertex shader (109 m at 40 km), as the photo match's real skyline does. The far land adds about 50 000 triangles; `Scenery.TRIANGLE_CAP` went from 200 000 to 140 000 to keep the window under 450 000.
+
+### Copernicus GLO-30: licence
+
+Checked 2026-11-17 against the licence text, "Licence for the use of the Copernicus WorldDEM-30" (the COP-DEM-GLO-30-F Global 30m Full, Free & Open instance), https://documentation.dataspace.copernicus.eu/APIs/SentinelHub/Data/DEM/resources/license/License-COPDEM-30.pdf:
+
+- Art. 4 grants, free of charge, worldwide and without limit in time: reproduction, distribution, communication to the general public, and adaptation, modification and combination with other data.
+- Art. 6 (b): adapted or modified data carry the notice "produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved".
+- Art. 6 (c): a distribution adds "The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30".
+- Art. 6 (d): no impression of endorsement.
+
+So the derived far land may ship. `manifest.notice` holds both sentences, and the credit the game shows while a world rides (`manifest.credit`) names Copernicus WorldDEM-30, DLR and Airbus. The importer adds them only when a Copernicus height is used.
 
 ## Binary format
 
@@ -116,6 +143,8 @@ All little-endian. `world/manifest.json` holds the indexes, `world/ride.json` th
 - `height/h-<tx>_<tz>.bin` (negative index written `m<n>`): Float32 base, 65 x 65 Int16 (0.1 m over the base), 65 x 65 Uint8 zone (0 terrain, 1 road, 2 bench, 3 wall, 4 drop, 5 water). 12 679 B.
 - `cover/c-<tx>_<tz>.bin`: 32 x 32 Uint8 (1 forest, 2 open forest, 3 rock, 4 scree, 5 grass, 6 glacier, 7 water, 8 settlement). 1 KB.
 - `far.bin`: Int32 x0 mm, z0 mm, Uint16 nx, nz, cell (m), 2 B spare, then Int16 metres, -32768 for no data.
+- `far/l<k>.bin`: far.bin's 16 B header, Int16 metres, then 4 Uint8 per vertex (forest, rock, ice, known shares, 0 to 255). `manifest.farLevels` lists them.
+- `far/cover0.bin`: 4 Uint8 shares per far.bin vertex. `far/sink0.bin`: Uint8 metres per far.bin vertex.
 - `buildings.bin`: 16 B each: x, z Int32 mm, w, d Uint16 (0.1 m), heading Int16 (1e-4 rad), h Uint8 (0.5 m), kind Uint8 (1 house, 2 chapel, 3 shed, 4 wall).
 - `SHA256SUMS`: `shasum -a 256 -c` form, every other file. `manifest.dataHash` is the sha256 of the sorted `hash  path` lines of every file except `manifest.json` and `SHA256SUMS` (the manifest cannot hold its own hash).
 - Local metres: x = E - 2 688 000, z = -(N - 1 165 000), y = height. Origin in `manifest.origin`.
@@ -131,7 +160,8 @@ All little-endian. `world/manifest.json` holds the indexes, `world/ride.json` th
 | `graph.js`, `worldroute.js` | The graph in memory and the route contract over the ride. Units of the legacy consumers are samples, not 20 m segments. `project` is the continuity search (60 m window, 64 m hash for the cold lookup). |
 | `worldground.js` | Ground: road band = route height; tunnel = route height; side road = its own samples; elsewhere the tile on the same triangles the mesh draws, then `far.bin`, then the route. The zone is the tile's zone layer; an active barrier box is `wall`. |
 | `streamer.js` | Tiles are reference counted by the bike (900 m) and by the ride window (600 m of [s-1 km, s+3 km]); disposed 3 s after the count is 0. Road sections and side chunks are resident by window or by place. Builds go through a 4 ms queue, nearest first. |
-| `roadmesh.js`, `terrainmesh.js`, `horizon.js`, `scenery.js` | The meshes. Carved ground is drawn 0.12 m under the physics height so the ribbon wins. The horizon is drawn 8 m low under the tiles. Trees and houses are instanced and capped by triangles (200 000) as well as by count. |
+| `landshade.js` | The land's palette (sRGB, measured against the photos) and the material patch every land and road material takes: aerial perspective toward a cool grey-blue (`1 - exp(-d / 25 km)`, at most 0.8) before the scene fog, the curvature drop on far meshes, world-space detail noise near the camera, and the sky's fill held to 0.8 so the shade side of a valley is dark. Distances come from `vViewPosition`: three r150 does not upload `cameraPosition` to a Lambert material. |
+| `roadmesh.js`, `terrainmesh.js`, `horizon.js`, `scenery.js` | The meshes. Carved ground is drawn 0.12 m under the physics height so the ribbon wins. The horizon is drawn under the tiles by its per-vertex sink (`far/sink0.bin`, 8 m where no tile stands). Trees, houses and boulders are instanced and capped by triangles (140 000) as well as by count. Forest beyond LOD0 is crown clumps (five-sided, canopy normals) in the tile's own geometry. A tile is coloured by cover class, slope, facing and height; a carved road or bench cell is a worn verge. `WorldEnvironment.onMeshBuilt` decodes each new mesh's colours at once (the periodic scan runs every 1.5 s, and a tile drawn before it was pale lime). |
 | `environment.js`, `guide.js` | `WorldEnvironment` is what `Game.environment` holds; `WorldGuide` is the minimap, the turn prompt and the off-route rule. |
 
 Probes: `node tools/terrain-check.mjs world-window,world-budget,world-ground,world-junction,world-wrongway,world-credit,world-net,world-finish --world tremola` (see the header of `tools/terrain-check.mjs`).

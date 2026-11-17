@@ -131,9 +131,71 @@ export async function ensureAlti3d(bboxWgs84, cacheDir = resolveCacheDir(), log 
   return tiles.map(t => path.join(dir, t.name));
 }
 
+// The far land needs swissALTI3D at about 50 m, out to tens of kilometres. A 2 m tile is about 1.2 MB, so the whole
+// box would be gigabytes; each COG carries a 4 m overview, and only that is read (HTTP ranges), pooled to 50 m and
+// kept. Per 1 km tile `far50/<E>-<N>.bin`: 20 x 20 Float32 mean, then 20 x 20 Float32 max, rows north to south.
+// NaN where the tile has no data.
+export const FAR_POOL_M = 50;
+export const FAR_POOL_N = 1000 / FAR_POOL_M;
+
+export function poolOverview(data, w, h, noData) {
+  const n = FAR_POOL_N;
+  const mean = new Float32Array(n * n).fill(NaN), max = new Float32Array(n * n).fill(NaN);
+  const sum = new Float64Array(n * n), count = new Uint32Array(n * n);
+  for (let r = 0; r < h; r++) {
+    const pr = Math.min(n - 1, Math.floor((r * n) / h));
+    for (let c = 0; c < w; c++) {
+      const v = data[r * w + c];
+      if (v === noData || !(v > -500)) continue;
+      const k = pr * n + Math.min(n - 1, Math.floor((c * n) / w));
+      sum[k] += v;
+      count[k]++;
+      if (!(max[k] >= v)) max[k] = v;
+    }
+  }
+  for (let k = 0; k < n * n; k++) if (count[k]) mean[k] = sum[k] / count[k];
+  return { mean, max };
+}
+
+export async function ensureAlti3dFar(bboxWgs84, cacheDir = resolveCacheDir(), log = console.error, { concurrency = 12 } = {}) {
+  const dir = path.join(cacheDir, 'alti3d', 'far50');
+  fs.mkdirSync(dir, { recursive: true });
+  const tiles = (await listAlti3dTiles(bboxWgs84)).filter(t => !fs.existsSync(path.join(dir, `${t.key}.bin`)));
+  log(`alti3d far: ${tiles.length} tiles to read`);
+  const { fromUrl } = await import('geotiff');
+  let next = 0, done = 0;
+  const work = async () => {
+    while (next < tiles.length) {
+      const t = tiles[next++];
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const tiff = await fromUrl(t.href, { allowFullFile: false });
+          const count = await tiff.getImageCount();
+          const image = await tiff.getImage(count > 1 ? 1 : 0);
+          const data = await image.readRasters({ interleave: true });
+          const { mean, max } = poolOverview(data, image.getWidth(), image.getHeight(), image.getGDALNoData());
+          const out = Buffer.alloc(mean.byteLength * 2);
+          Buffer.from(mean.buffer).copy(out, 0);
+          Buffer.from(max.buffer).copy(out, mean.byteLength);
+          fs.writeFileSync(path.join(dir, `${t.key}.bin.part`), out);
+          fs.renameSync(path.join(dir, `${t.key}.bin.part`), path.join(dir, `${t.key}.bin`));
+          break;
+        } catch (error) {
+          if (attempt >= 4) throw new Error(`${t.href}: ${error.message}`);
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+        }
+      }
+      if (++done % 200 === 0) log(`alti3d far: ${done}/${tiles.length}`);
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, work));
+  return dir;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === 'tlm') console.log(await ensureTlm());
   else if (cmd === 'alti3d' && args.length === 4) console.log((await ensureAlti3d(args.map(Number))).join('\n'));
-  else { console.error('usage: cache.mjs tlm | alti3d <west> <south> <east> <north>'); process.exit(2); }
+  else if (cmd === 'alti3d-far' && args.length === 4) console.log(await ensureAlti3dFar(args.map(Number)));
+  else { console.error('usage: cache.mjs tlm | alti3d <west> <south> <east> <north> | alti3d-far <west> <south> <east> <north>'); process.exit(2); }
 }

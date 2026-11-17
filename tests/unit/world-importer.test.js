@@ -23,6 +23,7 @@ import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.
 import { orientedBox, clearOfRoads, roadBands, boxesOverlap, ROAD_CLEAR_M, NUDGE_MAX_M } from '../../tools/world/buildings.mjs';
 import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, LIMITS } from '../../tools/world/verify.mjs';
 import { wgs84ToLv95, lv95ToWgs84 } from '../../tools/world/dem.mjs';
+import { rasterizeCoverGrid, buildLevel, levelBoxes, horizonSinks, LEVELS } from '../../tools/world/farland.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const MINI = path.join(REPO, 'tests', 'fixtures', 'world', 'mini');
@@ -619,7 +620,10 @@ describe('the committed Tremola slice (world/)', () => {
         expect(s.y[0]).toBeLessThan(LIMITS.startY[1]);
         expect(s.y.at(-1)).toBeGreaterThan(LIMITS.summitY[0]);
         expect(s.y.at(-1)).toBeLessThan(LIMITS.summitY[1]);
-        expect(decoded.manifest.credit).toBe('© swisstopo');
+        // swisstopo for the land, and the Copernicus notice for the far land outside Switzerland (licence Art. 6)
+        expect(decoded.manifest.credit).toBe('© swisstopo · Copernicus WorldDEM-30 © DLR e.V., © Airbus');
+        expect(decoded.manifest.notice).toMatch(/^produced using Copernicus WorldDEM-30 © DLR e\.V\. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved\./);
+        expect(decoded.manifest.notice).toMatch(/do not incur any liability for any use of the Copernicus WorldDEM-30\.$/);
     });
 });
 
@@ -641,7 +645,7 @@ describe('the command line and the helpers', () => {
     test('class widths: the class width on side roads, never under 3 m', () => {
         expect(classWidth('6m Strasse')).toBe(6);
         expect(classWidth('1m Weg')).toBe(3);
-        expect(classWidth('Autobahn')).toBe(12);
+        expect(classWidth('Autobahn')).toBe(9);
     });
 
     test('LV95 and WGS84 convert both ways to a few metres', () => {
@@ -653,5 +657,74 @@ describe('the command line and the helpers', () => {
 
     test('the synthetic terrain is smooth', () => {
         expect(Math.abs(syntheticDem(0, 0) - syntheticDem(1, 0))).toBeLessThan(0.5);
+    });
+});
+
+describe('farland.mjs: the land out to 40 km', () => {
+    test('the cover grid fills polygons by scanline, a hole stays open, and rock paints over forest', () => {
+        const grid = { x0: 0, z0: 0, nx: 20, nz: 20, cell: 50, cls: new Uint8Array(400).fill(255), rank: new Int8Array(400).fill(-1) };
+        const square = (a, b) => [[a, a], [b, a], [b, b], [a, b], [a, a]];
+        rasterizeCoverGrid([{ cls: COVER.forest, rings: [square(0, 1000), square(400, 600)] }, { cls: COVER.rock, rings: [square(0, 200)] }], grid);
+        expect(grid.cls[10 * 20 + 10]).toBe(255);
+        expect(grid.cls[15 * 20 + 15]).toBe(COVER.forest);
+        expect(grid.cls[1 * 20 + 1]).toBe(COVER.rock);
+        // Order does not matter: forest after rock still leaves rock
+        const again = { ...grid, cls: new Uint8Array(400).fill(255), rank: new Int8Array(400).fill(-1) };
+        rasterizeCoverGrid([{ cls: COVER.rock, rings: [square(0, 200)] }, { cls: COVER.forest, rings: [square(0, 1000)] }], again);
+        expect(again.cls[1 * 20 + 1]).toBe(COVER.rock);
+    });
+
+    test('a level vertex is its window mean raised halfway to the window top, with its cover shares', () => {
+        // A 250 m window over 50 m cells: one cell 100 m higher than the rest
+        const peak = (e, n) => e > 1040 && e < 1060 && n > 990 && n < 1010;
+        const heightCell = (e, n) => ({ mean: peak(e, n) ? 1100 : 1000, max: peak(e, n) ? 1150 : 1000, alti: true });
+        const cover = { x0: 0, z0: -500, nx: 100, nz: 100, cell: 50, cls: new Uint8Array(10000).fill(COVER.forest) };
+        const level = buildLevel({ x0: 1000, z0: 0, nx: 1, nz: 1, cell: 250 }, { heightCell, cover, origin: { e0: 0, n0: 1000 } });
+        expect(level.heights[0]).toBe(Math.round(1004 + 0.5 * (1150 - 1004)));
+        expect([...level.shares]).toEqual([255, 0, 0, 255]);
+    });
+
+    test('outside Switzerland (no swissALTI3D, no polygon) the cover is unknown, not grass', () => {
+        const heightCell = () => ({ mean: 1500, max: 1500, alti: false });
+        const cover = { x0: 0, z0: 0, nx: 10, nz: 10, cell: 50, cls: new Uint8Array(100).fill(255) };
+        const level = buildLevel({ x0: 100, z0: 100, nx: 1, nz: 1, cell: 100 }, { heightCell, cover, origin: { e0: 0, n0: 0 } });
+        expect(level.shares[3]).toBe(0);
+        expect(level.copernicus).toBeGreaterThan(0);
+    });
+
+    test('the levels are centred on far.bin and the outer one reaches 40 km', () => {
+        const far = { x0: -4600, z0: 5100, nx: 88, nz: 88, cell: 100 };
+        const [inner, outer] = levelBoxes(far);
+        expect(inner.cell).toBe(LEVELS[0].cellM);
+        const middle = far.x0 + ((far.nx - 1) * far.cell) / 2;
+        expect(outer.x0).toBeLessThanOrEqual(middle - LEVELS[1].reachM);
+        expect(outer.x0 + (outer.nx - 1) * outer.cell).toBeGreaterThanOrEqual(middle + LEVELS[1].reachM - outer.cell);
+    });
+
+    test('the horizon is sunk under each tile cell by the most it stands above the tile, and 8 m elsewhere', () => {
+        // A far grid with a ridge vertex the tile does not have: the bilinear surface stands over the tile's gully
+        const data = new Int16Array(25).fill(1000);
+        data[2 * 5 + 2] = 1040;
+        const far = { x0: 0, z0: 0, nx: 5, nz: 5, cell: 100, data };
+        const heights = new Float32Array(TILE_N * TILE_N).fill(1000);
+        const sinks = horizonSinks(far, new Map([['0,0', { heights }]]), { tileM: TILE_M, tileN: TILE_N, cellM: CELL_M });
+        // The tile's nearest vertex to the ridge is 4 m off it, where the surface is about 37 m over the tile
+        expect(sinks[2 * 5 + 2]).toBeGreaterThanOrEqual(39);
+        expect(sinks[2 * 5 + 2]).toBeLessThanOrEqual(43);
+        expect(sinks[0]).toBe(8);
+    });
+
+    test('the far levels round trip through the files', async () => {
+        const world = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        const level = { x0: -1000, z0: -1000, nx: 3, nz: 2, cell: 1000, heights: new Int16Array([1, 2, 3, 4, 5, -32768]), shares: new Uint8Array(24).map((_, i) => i) };
+        const files = encodeFiles({ ...world, farLand: { levels: [level], cover0: new Uint8Array(world.far.nx * world.far.nz * 4), sink0: new Uint8Array(world.far.nx * world.far.nz).fill(8), copernicus: false } });
+        const dir = tmp();
+        for (const [p, b] of files) { fs.mkdirSync(path.dirname(path.join(dir, p)), { recursive: true }); fs.writeFileSync(path.join(dir, p), b); }
+        const decoded = decodeWorld(dir);
+        expect(decoded.farLevels).toHaveLength(1);
+        expect([...decoded.farLevels[0].heights]).toEqual([...level.heights]);
+        expect([...decoded.farLevels[0].shares]).toEqual([...level.shares]);
+        expect(decoded.manifest.farLevels[0]).toMatchObject({ file: 'far/l1.bin', cell: 1000, nx: 3, nz: 2 });
+        expect(files.has('far/sink0.bin')).toBe(true);
     });
 });

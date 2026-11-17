@@ -10,6 +10,10 @@
 //   height/h-<tx>_<tz>.bin   512 m tile at 8 m: Float32 base, 65 x 65 Int16 (0.1 m over base), 65 x 65 Uint8 zone
 //   cover/c-<tx>_<tz>.bin    32 x 32 Uint8 land cover classes at 16 m
 //   far.bin                  header (x0 mm, z0 mm Int32, nx, nz, cell Uint16, 2 B spare) then Int16 metres, -32768 = no data
+//   far/l<k>.bin             far land level k (tools/world/farland.mjs): far.bin's header, Int16 metres, then 4 Uint8 per
+//                            vertex (forest, rock, ice, known shares, 0 to 255)
+//   far/cover0.bin           the same 4 shares for each far.bin vertex
+//   far/sink0.bin            Uint8 metres each far.bin vertex is drawn under its height (farland.mjs horizonSinks)
 //   buildings.bin            16 B each: x z Int32 mm, w d Uint16 (0.1 m), heading Int16 (1e-4 rad), h Uint8 (0.5 m), kind Uint8
 //   SHA256SUMS               sha256 of every other file, `shasum -a 256 -c` format
 //
@@ -115,6 +119,19 @@ function encodeHeightTile(t) {
   return buf;
 }
 
+function encodeFarLevel(level) {
+  const n = level.nx * level.nz;
+  const buf = Buffer.alloc(16 + n * 2 + level.shares.length);
+  buf.writeInt32LE(mm(level.x0), 0);
+  buf.writeInt32LE(mm(level.z0), 4);
+  buf.writeUInt16LE(level.nx, 8);
+  buf.writeUInt16LE(level.nz, 10);
+  buf.writeUInt16LE(level.cell, 12);
+  for (let i = 0; i < n; i++) buf.writeInt16LE(level.heights[i], 16 + i * 2);
+  Buffer.from(level.shares).copy(buf, 16 + n * 2);
+  return buf;
+}
+
 function encodeFar(far) {
   const buf = Buffer.alloc(16 + far.nx * far.nz * 2);
   buf.writeInt32LE(mm(far.x0), 0);
@@ -167,12 +184,18 @@ export function encodeFiles(world) {
   const coverTiles = [...world.cover].map(([key, g]) => [key.split(',').map(Number), g]).sort((a, b) => a[0][0] - b[0][0] || a[0][1] - b[0][1]);
   for (const [[tx, tz], g] of coverTiles) files.set(coverFile(tx, tz), Buffer.from(g));
   files.set('far.bin', encodeFar(world.far));
+  if (world.farLand) {
+    world.farLand.levels.forEach((level, k) => files.set(`far/l${k + 1}.bin`, encodeFarLevel(level)));
+    files.set('far/cover0.bin', Buffer.from(world.farLand.cover0));
+    if (world.farLand.sink0) files.set('far/sink0.bin', Buffer.from(world.farLand.sink0));
+  }
   files.set('buildings.bin', encodeBuildings(world.buildings));
 
   const dataHash = sha(Buffer.from([...files].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([p, b]) => `${sha(b)}  ${p}\n`).join('')));
   const manifest = {
     format: FORMAT_VERSION,
     credit: world.credit,
+    ...(world.notice ? { notice: world.notice } : {}),
     sources: world.sources,
     origin: world.origin,
     spacingM: world.spacingM,
@@ -186,6 +209,7 @@ export function encodeFiles(world) {
     junctions: world.junctions.map(j => ({ id: j.id, node: j.node, name: j.name, passes: j.passes.map(p => r2(p.sIn)) })),
     structures: world.structures,
     landmarks: world.landmarks,
+    ...(world.farLand ? { farLevels: world.farLand.levels.map((l, k) => ({ file: `far/l${k + 1}.bin`, cell: l.cell, nx: l.nx, nz: l.nz })) } : {}),
     counts: { nodes: world.nodes.length, edges: world.edges.length, samples: chunks.reduce((p, c) => p + c.count, 0), buildings: world.buildings.length },
     dataHash
   };
@@ -200,7 +224,7 @@ export function sumsOf(files) {
 // Writes the files under outDir (which is emptied of the world's own subfolders first) and SHA256SUMS last.
 export function writeWorld(world, outDir) {
   const files = encodeFiles(world);
-  for (const sub of ['graph', 'height', 'cover']) fs.rmSync(path.join(outDir, sub), { recursive: true, force: true });
+  for (const sub of ['graph', 'height', 'cover', 'far']) fs.rmSync(path.join(outDir, sub), { recursive: true, force: true });
   for (const f of ['manifest.json', 'ride.json', 'far.bin', 'buildings.bin', 'SHA256SUMS']) fs.rmSync(path.join(outDir, f), { force: true });
   for (const [p, buf] of files) {
     fs.mkdirSync(path.dirname(path.join(outDir, p)), { recursive: true });
@@ -285,11 +309,18 @@ export function decodeWorld(dir) {
   const fb = read('far.bin');
   const far = { x0: fb.readInt32LE(0) / 1000, z0: fb.readInt32LE(4) / 1000, nx: fb.readUInt16LE(8), nz: fb.readUInt16LE(10), cell: fb.readUInt16LE(12), data: new Int16Array(fb.length / 2 - 8) };
   for (let i = 0; i < far.data.length; i++) far.data[i] = fb.readInt16LE(16 + i * 2);
+  const farLevels = (manifest.farLevels || []).map(l => {
+    const b = read(l.file);
+    const n = b.readUInt16LE(8) * b.readUInt16LE(10);
+    const heights = new Int16Array(n);
+    for (let i = 0; i < n; i++) heights[i] = b.readInt16LE(16 + i * 2);
+    return { x0: b.readInt32LE(0) / 1000, z0: b.readInt32LE(4) / 1000, nx: b.readUInt16LE(8), nz: b.readUInt16LE(10), cell: b.readUInt16LE(12), heights, shares: new Uint8Array(b.subarray(16 + n * 2)) };
+  });
   const bb = read('buildings.bin');
   const buildings = [];
   for (let i = 0; i < bb.length / BUILDING_BYTES; i++) {
     const o = i * BUILDING_BYTES;
     buildings.push({ x: bb.readInt32LE(o) / 1000, z: bb.readInt32LE(o + 4) / 1000, w: bb.readUInt16LE(o + 8) / 10, d: bb.readUInt16LE(o + 10) / 10, heading: bb.readInt16LE(o + 12) / 1e4, h: bb[o + 14] / 2, kind: bb[o + 15] });
   }
-  return { manifest, nodes, edges, ride: JSON.parse(read('ride.json')), junctions: JSON.parse(read('graph/junctions.json')), tiles, cover, far, buildings };
+  return { manifest, nodes, edges, ride: JSON.parse(read('ride.json')), junctions: JSON.parse(read('graph/junctions.json')), tiles, cover, far, farLevels, buildings };
 }
