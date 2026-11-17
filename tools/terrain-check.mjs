@@ -2255,8 +2255,11 @@ function worldHairpins(route) {
 // switchbacks. --views s,s,... picks others.
 // 3257 and 4657: a pair of thin dark lines ran down the middle of the road (the longitudinal joint drawn on both sides).
 // 258, 1081, 6756 and 6930: land turned from the sun drew near black (LAND_BLACK_SHARE).
-const FLOATING_VIEWS = [100, 258, 1081, 1300, 3257, 3600, 4657, 6756, 6930, 7800, 7900, 7990, 9500, 10900];
-// The share of a view's land pixels that may be near black (luminance under 10 of 255)
+// 1731, 5133, 6458, 6505 and 6533: the Gotthard road's bridges over the ride drew as black slabs (the structures'
+// near-black share, the same limit as the land's).
+const FLOATING_VIEWS = [100, 258, 1081, 1300, 1731, 3257, 3600, 4657, 5133, 6458, 6505, 6533, 6756, 6930, 7800, 7900, 7990, 9500, 10900];
+// The share of a view's land pixels that may be near black (luminance under 10 of 255), and of its structures' (under
+// 32: floatingCount's STRUCTURE_DARK)
 const LAND_BLACK_SHARE = 0.005;
 // Tolerances of world-floating: the drawn land may lie this far under a drawn road edge, and no land stands over the
 // road surface within UP_M over it
@@ -2640,13 +2643,13 @@ function laneLines(game, s0) {
     return { rows: rows.filter(r => r).length, dips: rows.reduce((n, r) => n + r.length, 0), lines };
 }
 
-function floatingCount() {
+function floatingCount(STRUCTURE_DARK = 32) {
     const env = game.environment;
     const renderer = game.graphics.renderer;
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     const target = new THREE.WebGLRenderTarget(size.x, size.y);
     const flat = c => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide, fog: false });
-    const land = flat(0x0000ff), other = flat(0x000000), structure = flat(0x808080);
+    const land = flat(0x0000ff), other = flat(0x000000), structure = flat(0xffff00);
     const ribbon = new THREE.ShaderMaterial({
         side: THREE.DoubleSide,
         vertexShader: 'varying vec3 vWorld; varying vec3 vN; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }',
@@ -2680,19 +2683,25 @@ function floatingCount() {
     game.scene.background = background;
     game.scene.fog = fog;
     target.dispose();
-    let underside = 0, top = 0, landPx = 0, black = 0;
+    let underside = 0, top = 0, landPx = 0, black = 0, structurePx = 0, structureBlack = 0;
     const frame = window.floatFrame && window.floatFrame.w === size.x && window.floatFrame.h === size.y ? window.floatFrame : null;
     for (let i = 0; i < pixels.length; i += 4) {
         if (pixels[i] > 200 && pixels[i + 1] < 50) underside++;
         else if (pixels[i + 1] > 200 && pixels[i] < 50) top++;
-        else if (frame && pixels[i + 2] > 200 && pixels[i] < 50 && pixels[i + 1] < 50) {
+        else if (frame && pixels[i] > 200 && pixels[i + 1] > 200 && pixels[i + 2] < 50) {
+            // A structure (a deck, its soffit, a pier, a wall, a tube) near black in the frame as drawn: concrete and
+            // stone in shade stay over STRUCTURE_DARK (a soffit at 23 read as a black slab across the sky)
+            const p = i / 4, x = p % size.x, y = size.y - 1 - Math.floor(p / size.x), at = (y * size.x + x) * 4;
+            structurePx++;
+            if (0.2126 * frame.image[at] + 0.7152 * frame.image[at + 1] + 0.0722 * frame.image[at + 2] < STRUCTURE_DARK) structureBlack++;
+        } else if (frame && pixels[i + 2] > 200 && pixels[i] < 50 && pixels[i + 1] < 50) {
             // Land (a tile or the far land): near black in the frame as drawn (the target's rows run bottom up)
             const p = i / 4, x = p % size.x, y = size.y - 1 - Math.floor(p / size.x), at = (y * size.x + x) * 4;
             landPx++;
             if (0.2126 * frame.image[at] + 0.7152 * frame.image[at + 1] + 0.0722 * frame.image[at + 2] < 10) black++;
         }
     }
-    return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0 };
+    return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0, structure: structurePx, blackStructure: structurePx ? Math.round((structureBlack / structurePx) * 10000) / 10000 : 0 };
 }
 
 const WORLD = {
@@ -4231,6 +4240,7 @@ function worldChecks(report) {
         floating.views.forEach(v => {
             if (v.crashed) failures.push(`world-floating: the ride into the view at s ${v.want} crashed`);
             if (v.underside) failures.push(`world-floating: the view at s ${v.want} shows ${v.underside} pixels of a road's underside`);
+            if (v.blackStructure > LAND_BLACK_SHARE) failures.push(`world-floating: the view at s ${v.want} has ${(v.blackStructure * 100).toFixed(2)}% of its structures (${v.structure} px) near black (over ${LAND_BLACK_SHARE * 100}%)`);
             if (v.blackLand > LAND_BLACK_SHARE) failures.push(`world-floating: the view at s ${v.want} has ${(v.blackLand * 100).toFixed(2)}% of its land near black (over ${LAND_BLACK_SHARE * 100}%)`);
             if (v.lane && v.lane.lines.length) failures.push(`world-floating: the view at s ${v.want} has ${v.lane.lines.length} thin dark lines along the road (${JSON.stringify(v.lane.lines)} m across, rows of ${v.lane.rows})`);
             if (v.seam && v.seam.profiles && v.seam.seams / v.seam.profiles > FLOAT_SEAM_SHARE) failures.push(`world-floating: the view at s ${v.want} has a dark seam beside the road on ${v.seam.seams} of ${v.seam.profiles} profiles: ${JSON.stringify(v.seam.worst)}`);
