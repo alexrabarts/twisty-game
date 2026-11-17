@@ -21,6 +21,7 @@ class WorldGuide {
         this.environment = environment;
         this.route = environment.route;
         this.onRestart = null;
+        this.onWarning = null;
         this.reset();
         this.promptText = '';
         this.warning = null;
@@ -35,6 +36,7 @@ class WorldGuide {
         this.warnedS = null;
         this.cause = null;
         this.warning = null;
+        this.warned = null;
         this.render();
     }
 
@@ -80,24 +82,28 @@ class WorldGuide {
         const fired = this.step(state);
         this.promptText = this.promptAt(state.projection.s);
         this.warning = this.cause ? 'Wrong way' : null;
+        // The warning is said once when it starts, in the callout stack at the centre of the screen
+        if (this.warning !== this.warned) {
+            this.warned = this.warning;
+            if (this.warning && this.onWarning) this.onWarning(this.warning);
+        }
         this.render(state);
         return fired;
     }
 
     build() {
         if (typeof document === 'undefined' || !document.body) return;
+        // The corner is the stylesheet's (css/ui.css .world-guide): top right, top left on a touch device
         const box = document.createElement('div');
         box.id = 'world-guide';
-        box.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:20;pointer-events:none;font:600 14px system-ui,sans-serif;color:#fff;text-shadow:0 1px 3px #000';
-        this.prompt = document.createElement('div');
-        this.prompt.style.cssText = 'margin-bottom:6px;min-height:18px';
-        this.alert = document.createElement('div');
-        this.alert.style.cssText = 'margin-bottom:6px;color:#ff6b4a;font-size:18px;min-height:22px';
+        box.className = 'world-guide';
         this.canvas = document.createElement('canvas');
         this.canvas.width = this.canvas.height = WorldGuide.MAP_SIZE;
-        this.canvas.style.cssText = 'display:block;border-radius:8px;background:rgba(10,14,18,.55);border:1px solid rgba(255,255,255,.25)';
-        box.append(this.alert, this.prompt, this.canvas);
+        this.prompt = document.createElement('div');
+        this.prompt.className = 'world-prompt';
+        box.append(this.canvas, this.prompt);
         document.body.appendChild(box);
+        document.body.classList.add('world-ride');
         this.box = box;
         // The licence credit shows while a world rides (index.html holds the element)
         this.credit = document.getElementById('world-credit');
@@ -110,7 +116,6 @@ class WorldGuide {
     render(state) {
         if (!this.box) return;
         this.prompt.textContent = this.promptText;
-        this.alert.textContent = this.warning || '';
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         if (state && now - this.mapAt >= WorldGuide.MAP_REFRESH_MS) {
             this.mapAt = now;
@@ -165,6 +170,7 @@ class WorldGuide {
 
     dispose() {
         if (this.box && this.box.parentNode) this.box.parentNode.removeChild(this.box);
+        if (typeof document !== 'undefined' && document.body) document.body.classList.remove('world-ride');
         if (this.credit) this.credit.style.display = 'none';
         this.box = null;
     }

@@ -20,6 +20,11 @@
                     <span class="hud-style"><span id="scoreLabel">STYLE</span> <span id="score">0</span></span>
                     <span id="comboDisplay" class="hud-combo"></span>
                 </div>
+                <!-- A world ride only: the stage, how far through it, and the distance along the ride (js/hud.js showStage) -->
+                <div id="hudStage" class="hud-stage" hidden>
+                    <div class="hud-stage-line"><span id="hudStageName"></span><span id="hudStageKm"></span></div>
+                    <div class="hud-stage-bar" aria-hidden="true"><i id="hudStageFill"></i><span id="hudStageMarks"></span></div>
+                </div>
             </div>
             <div id="startCard" class="start-card" aria-live="polite">
                 <div id="startLeg" class="start-leg panel"></div>
@@ -145,6 +150,9 @@
     <script src="js/world/horizon.js"></script>
     <script src="js/world/scenery.js"></script>
     <script src="js/world/guide.js"></script>
+    <script src="js/world/run.js"></script>
+    <script src="js/world/camera.js"></script>
+    <script src="js/world/looks.js"></script>
     <script src="js/world/environment.js"></script>
     <script src="js/vehicle.js"></script>
     <script src="js/environment.js"></script>
@@ -157,6 +165,6 @@
     <script src="js/traffic.js"></script>
     <script src="js/main.js"></script>
     <!-- The licence credit of the swisstopo data: shown only while a world rides (js/world/guide.js) -->
-    <div id="world-credit" style="display:none;position:fixed;right:10px;bottom:6px;z-index:20;font:12px system-ui,sans-serif;color:#fff;opacity:.85;text-shadow:0 1px 2px #000;pointer-events:none">© swisstopo</div>
+    <div id="world-credit" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:6px;z-index:20;font:11px system-ui,sans-serif;color:#fff;opacity:.85;text-shadow:0 1px 2px #000;pointer-events:none">© swisstopo</div>
 </body>
 </html>

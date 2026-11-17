@@ -20,6 +20,7 @@ const markup = `
     <div id="splitPopup"></div>
     <div id="callouts"></div>
     <div id="hudHint"></div>
+    <div id="hudStage" hidden><span id="hudStageName"></span><span id="hudStageKm"></span><i id="hudStageFill"></i><span id="hudStageMarks"></span></div>
     <div id="fps" hidden>FPS 0</div>`;
 
 // A window whose media queries answer from `matches`
@@ -61,6 +62,17 @@ describe('HudRules', () => {
         expect(HudRules.isTouch(fakeWindow('', { '(any-pointer: coarse)': true, '(any-pointer: fine)': true }))).toBe(false);
         expect(HudRules.isTouch(fakeWindow('', { '(pointer: fine)': true }))).toBe(false);
         expect(HudRules.isTouch({})).toBe(false);
+    });
+
+    test('the stage clock, line, share and distance read as the world HUD shows them', () => {
+        expect(HudRules.stageClock(192400)).toBe('3:12.4');
+        expect(HudRules.stageClock(-5)).toBe('0:00.0');
+        expect(HudRules.stageLine(8, 14, 'Tremola', 192400)).toBe('Stage 8/14 · Tremola  3:12.4');
+        expect(HudRules.stageShare(150, 100, 300)).toBe(0.25);
+        expect(HudRules.stageShare(50, 100, 300)).toBe(0);
+        expect(HudRules.stageShare(900, 100, 300)).toBe(1);
+        expect(HudRules.stageShare(5, 10, 10)).toBe(0);
+        expect(HudRules.kmText(3200, 13300)).toBe('km 3.2 / 13.3');
     });
 
     test('the speed gauge fills with speed and clamps at both ends', () => {
@@ -185,6 +197,27 @@ describe('Hud', () => {
         expect('many' in pips.dataset).toBe(true);
         hud.setGates(0, 5);
         expect('many' in pips.dataset).toBe(false);
+    });
+
+    test('a stage with more gates than MAX_PIPS shows the count and no more pips than fit', () => {
+        hud.setGates(3, HudRules.MAX_PIPS + 6);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(HudRules.MAX_PIPS);
+        expect(document.getElementById('hudGateCount').textContent).toBe(`3/${HudRules.MAX_PIPS + 6}`);
+    });
+
+    test('a world ride shows its stage line, its progress and a mark for each station; only a change writes', () => {
+        const box = document.getElementById('hudStage');
+        expect(box.hidden).toBe(true);
+        hud.showStage([0.25, 0.5]);
+        expect(box.hidden).toBe(false);
+        expect(document.querySelectorAll('#hudStageMarks i')).toHaveLength(2);
+        expect(document.querySelector('#hudStageMarks i').style.left).toBe('25.00%');
+        hud.setStage('Stage 1/1 · Tremola  0:03.2', 0.4567, 'km 1.2 / 13.3');
+        expect(document.getElementById('hudStageName').textContent).toBe('Stage 1/1 · Tremola  0:03.2');
+        expect(document.getElementById('hudStageFill').style.width).toBe('45.7%');
+        expect(document.getElementById('hudStageKm').textContent).toBe('km 1.2 / 13.3');
+        hud.hideStage();
+        expect(box.hidden).toBe(true);
     });
 
     test('the many-gates pips are smaller and closer in css/ui.css', () => {

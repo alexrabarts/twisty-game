@@ -16,6 +16,8 @@ class Traffic {
         this.motorcycles = [];
         this.maxCars = 1;
         this.maxMotorcycles = 5;  // The Touring Crew: Steve, Alex, Shane, Tim, Guy
+        // A world's hairpins hold the crew to what a bend allows; a leg leaves them at full speed
+        this.speedScale = environment.trafficSpeedScale || 1;
         this.carSpacing = 250;
         this.motorcycleSpacing = 150;
 
@@ -41,7 +43,7 @@ class Traffic {
             const startSegment = range.start + Math.floor((0.5 + Math.random() * 0.5) * (range.end - range.start));
             const car = new Car(this.scene, this.environment, {
                 direction: -1,
-                speed: 15 + Math.random() * 10,
+                speed: (15 + Math.random() * 10) * this.speedScale,
                 startSegment: startSegment,
                 lane: 'right',
                 color: this.getRandomCarColor()
@@ -111,7 +113,7 @@ class Traffic {
 
             const motorcycle = new AIMotorcycle(this.scene, this.environment, {
                 direction: 1,
-                speed: riderConfig.baseSpeed,
+                speed: riderConfig.baseSpeed * this.speedScale,
                 startSegment: startSegment,
                 lane: 'left',
                 color: riderConfig.bikeColor,
@@ -822,7 +824,7 @@ class Car {
         }
         
         // Move along the road
-        const segmentLength = 20;
+        const segmentLength = this.environment.route.unitM;
         
         // Store previous speed for brake light logic
         if (!this.previousSpeed) this.previousSpeed = this.currentSpeed;
@@ -1455,7 +1457,7 @@ class AIMotorcycle {
     
     update(deltaTime, playerPosition, allBikes, allCars) {
         this.currentDeltaTime = deltaTime;
-        const segmentLength = 20;
+        const segmentLength = this.environment.route.unitM;
         const distanceToMove = this.currentSpeed * deltaTime;
         const segmentsToMove = distanceToMove / segmentLength;
         

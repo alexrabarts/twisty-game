@@ -26,5 +26,9 @@ const WorldPhysics = Object.freeze({
     progressSlack: 1.1,
     progressFloorFrac: 0.25,
     progressEpsM: 0.1,
-    cutConfirmMs: 250
+    cutConfirmMs: 250,
+    // Most progress a run of unaccepted frames may bank, so circling on the lower leg of a ladder
+    // cannot buy the jump to the upper one. It stays under half the smallest gap between stacked legs
+    // (an honest projection stuck backward for more than about maxBankM / (2.2 v), 1.2 s at 15 m/s, restarts)
+    maxBankM: 40
 });
