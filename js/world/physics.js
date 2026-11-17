@@ -31,7 +31,20 @@ const WorldPhysics = Object.freeze({
     creepAccel: 6,         // m/s^2, how fast it creeps
     footDownSpeed: 1,      // m/s, under this with the brake held the bike stops
 
-    // Lowside: grip demand above margin * tan(capEff) for lowsideMs
+    // Drive (Vehicle.worldDrive, updateWorldSpeed). The legs keep a constant pull (the bike's acceleration, 15 m/s^2
+    // x the character) at once on a key press: 0-100 km/h in 1.75 s. The world opens the throttle over
+    // throttleRiseS and gives the engine a curve: the traction limit (acceleration x driveShare) from launchSpeed up
+    // to powerSpeed, then constant power (falling as powerSpeed / v), with the air drag covered so the top speed
+    // holds. 0-100 km/h takes about 3.9 s, 100-150 km/h about 3.3 s (flat, sport bike)
+    throttleRiseS: 0.5,    // s, closed to fully open
+    throttleFallS: 0.15,   // s, fully open to closed
+    driveShare: 0.6,       // of the bike's acceleration: the traction limit, 9 m/s^2 on the sport bike
+    powerSpeed: 15,        // m/s (54 km/h), where the pull starts to fall with speed
+    launchShare: 0.5,      // of the limit at a standstill
+    launchSpeed: 6,        // m/s, the whole limit from here
+    aeroDrag: 0.002,       // 1/m, the air drag (x v^2), as the legs
+
+    // Lowside: grip demand above margin * tan(capEff) for lowsideMs, on the road and bench (not on run-off)
     lowsideMargin: 1.15,
     lowsideMs: 200,
 
@@ -51,6 +64,20 @@ const WorldPhysics = Object.freeze({
     // Share of the brake on run-off (grass, verge). The legs' run-off grip (0.5) halves the brake there; the
     // world keeps the run-off grip for the lean and the throttle, and lets the rider brake hard to recover
     runoffBrakeGrip: 0.9,
+
+    // Run-off and verge (Vehicle.checkWallCollision, worldZone). Leaving the road at speed slows the bike and takes
+    // grip from it; it does not crash it. The legs keep the ledge rule (5% of the speed a frame on the bench, about
+    // 100 m/s^2 at 35 m/s), the run-off grip 0.5 for the lean and a lowside on it, and the 6 s off-road limit.
+    benchDrag: 0.1,        // 1/s on the carved bench (the gravel verge): 3.5 m/s^2 at 35 m/s. Run-off keeps its own drag
+    runoffGrip: 0.7,       // the lean's grip on run-off: a cap of about 40 degrees, and lean over it bleeds off, not a lowside
+    runoffBumpM: 0.03,     // m, the bike's height bobs this much on run-off at runoffBumpSpeed and over (the mesh only)
+    runoffBumpSpeed: 25,   // m/s
+    offRoadLimitS: 10,     // s off the road before the run-off crashes the bike
+    // A wall or drop in the tile's zone layer (a face between stacked strands, on the 8 m grid) is solid only where
+    // the land at the bike shows it: wallRiseM above the road, or dropDepthM below it. Elsewhere it is run-off.
+    // Barriers, tunnel and gallery rock, and bridge parapets are always solid.
+    wallRiseM: 1,
+    dropDepthM: 2.5,
 
     // Hairpin assist (WorldAssist in js/world/run.js). The level (off, low, normal) scales every assist by
     // assistLevels; each assist has one tuning value, and the rest only says where a bend counts as tight.

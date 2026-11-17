@@ -56,13 +56,14 @@ const advised = radius => Math.sqrt(G * radius * Math.tan(WorldPhysics.adviceLea
 // while the bend is under the bike, released after; the speed held at `speed`. Records the run through the bend.
 function ride(world, level, { speed = advised(world.radius), lead = 4, input = 1, physics = WorldPhysics } = {}) {
     const vehicle = bikeOn(world, level, 40, 0, physics);
-    const out = { inside: 0, outside: 0, crashed: false, leans: [] };
+    const out = { inside: 0, outside: 0, crashed: false, leans: [], places: [] };
     for (let tick = 0; tick < 60 * 20; tick++) {
         const s = vehicle.projection.s;
         const into = world.route.curvatureAt(s + lead, 4) > 1 / 30 || world.route.curvatureAt(s, 4) > 1 / 30;
         vehicle.speed = speed;
         vehicle.update(DT, into ? input : 0, 0, 0);
         out.leans.push(vehicle.leanAngle);
+        out.places.push(vehicle.position.x * 1e6 + vehicle.position.z);
         if (vehicle.crashed) { out.crashed = true; break; }
         const p = vehicle.projection;
         if (p.s > STRAIGHT - 15 && p.s < world.bendEnd + 15) {
@@ -162,7 +163,10 @@ describe('line capture', () => {
         for (const input of [0, -1, -0.4]) {
             const off = ride(world, 'off', { input, lead: 4, physics: NO_EDGE });
             const normal = ride(world, 'normal', { input, lead: 4, physics: NO_EDGE });
-            const n = Math.min(off.leans.length, normal.leans.length);
+            // Compared while the two bikes stand in the same place: the recovery pull (a move, not a lean) can set the
+            // normal bike back toward the road edge, and from there the ground under it (bench, run-off) differs
+            const moved = normal.places.findIndex((p, i) => i < off.places.length && p !== off.places[i]);
+            const n = Math.min(off.leans.length, normal.leans.length, moved < 0 ? Infinity : moved);
             expect(n).toBeGreaterThan(300);
             for (let i = 0; i < n; i++) expect(normal.leans[i]).toBe(off.leans[i]);
         }

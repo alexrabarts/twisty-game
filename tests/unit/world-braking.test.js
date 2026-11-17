@@ -208,7 +208,9 @@ describe('engine braking', () => {
     });
 
     test('the throttle held turns it off', () => {
-        expect(coast(onPlane(game.Vehicle), 20, 1, 0.2)).toBe(coast(onPlane(Before), 20, 1, 0.2));
+        // Against the same bike with no engine braking: the drive curve and the throttle rise (world-drive.test.js) are
+        // not the engine braking's to change
+        expect(coast(onPlane(game.Vehicle), 20, 1, 0.2)).toBe(coast(onPlane(game.Vehicle, { physics: NO_ENGINE }), 20, 1, 0.2));
     });
 
     test('a long 10% descent with the throttle closed settles near 13 m/s instead of running away', () => {

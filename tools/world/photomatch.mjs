@@ -116,7 +116,7 @@ export async function openGame(worldId) {
   const { default: puppeteer } = await import('puppeteer');
   const server = await startServer();
   const port = server.address().port;
-  const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath: chrome, headless: false, args: ['--no-sandbox'] });
+  const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath: chrome, headless: 'new', args: ['--no-sandbox'] });
   const page = await browser.newPage();
   const blocked = [];
   await page.setViewport({ width: 960, height: 540, deviceScaleFactor: 1 });

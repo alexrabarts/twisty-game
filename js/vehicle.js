@@ -163,6 +163,7 @@ class Vehicle {
 
         // World riding state (only used when the environment carries physics)
         this.worldGrade = 0; // Route grade under the bike (rise over run)
+        this.worldThrottle = 0; // The world's throttle opening, 0 to 1 (it follows the input over throttleRiseS)
         this.lastDemand = 0; // Grip demand of the last world tick (v^2 * kappa / g)
         this.lowsideTimerMs = 0; // Time the demand has been over the lowside limit
         this.footDown = false; // Stopped with the brake held, no fall
@@ -2005,8 +2006,9 @@ class Vehicle {
                 this.position.y = surfaceY;
                 this.velocity.y = Math.max(0, this.velocity.y); // Prevent downward velocity
 
-                // If not already crashed, crash it now
-                if (!this.crashed) {
+                // If not already crashed, crash it now. The world only lifts the bike: its land steps up beside
+                // the road (a bank, an 8 m tile cell) faster than the height follows, and a wall is a zone
+                if (!this.crashed && !this.worldPhysics) {
                     this.crashed = true;
                     this.crashAngle = this.leanAngle || 0.5;
                     this.frame.material.color.setHex(0x8b4513); // Brown for ground collision
@@ -2427,9 +2429,18 @@ class Vehicle {
         this.syncWorldSurface();
         const weatherMultipliers = this.worldMultipliers();
 
+        // The twist grip opens over throttleRiseS and shuts over throttleFallS, so a key press does not give
+        // full drive on the first frame
+        const want = Math.max(0, Math.min(1, throttleInput));
+        const step = deltaTime / (want > this.worldThrottle ? world.throttleRiseS : world.throttleFallS);
+        this.worldThrottle = want > this.worldThrottle
+            ? Math.min(want, this.worldThrottle + step)
+            : Math.max(want, this.worldThrottle - step);
+        throttleInput = this.worldThrottle;
+
         if (throttleInput > 0) {
             const wheeliePenalty = this.isWheelie ? 0.3 : 1.0;
-            this.speed += this.acceleration * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
+            this.speed += this.worldDrive(this.speed) * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
         }
         if (brakeInput > 0) {
             this.speed -= this.worldBrakeDecel(weatherMultipliers) * Math.min(1, brakeInput) * deltaTime;
@@ -2445,7 +2456,7 @@ class Vehicle {
         if (!this.isJumping) {
             this.speed -= this.worldGrade * 9.81 * world.slopeGravity * deltaTime;
         }
-        this.speed -= 0.002 * this.speed * this.speed * deltaTime;
+        this.speed -= world.aeroDrag * this.speed * this.speed * deltaTime;
         this.adviceBraking(deltaTime, throttleInput, brakeInput, weatherMultipliers, engine);
 
         // Low speed never drops the bike: it creeps up to creepSpeed on its own,
@@ -2457,6 +2468,20 @@ class Vehicle {
         if (this.footDown) this.speed = 0;
 
         this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
+    }
+
+    // The engine's drive at full throttle on the flat (m/s^2) at speed v. Over the air drag it gives the traction
+    // limit (the bike's acceleration x driveShare, so a character keeps its ratio) up to powerSpeed, then constant
+    // power, the limit x powerSpeed / v, so the pull falls toward top speed. From a stop the limit starts at
+    // launchShare of itself and reaches all of it at launchSpeed (a smoothstep), so the bike does not lurch away.
+    // The drag is covered, so the top speed (maxSpeed) is the same as before.
+    worldDrive(v) {
+        const world = this.worldPhysics;
+        const speed = Math.max(0, v);
+        const x = Math.min(1, speed / world.launchSpeed);
+        const launch = world.launchShare + (1 - world.launchShare) * x * x * (3 - 2 * x);
+        const limit = this.acceleration * world.driveShare;
+        return world.aeroDrag * speed * speed + limit * Math.min(launch, speed > world.powerSpeed ? world.powerSpeed / speed : 1);
     }
 
     // Steering is a torque, as on the legs: holding the key builds lean,
@@ -2503,9 +2528,11 @@ class Vehicle {
         // lowsides unless the rider lets go
         const side = Math.sign(rate) || Math.sign(lean);
         const outward = side * lean;
+        // On run-off the lean over the limit bleeds off at leanLimitGain whatever the steering: the bike runs wide
+        // on the grass instead of lowsiding (the lowside below does not read run-off)
         const room = outward <= leanLimit
             ? world.leanLimitGain * (leanLimit - outward)
-            : world.limitReturn * Math.abs(u) * (leanLimit - outward);
+            : (this.runoff ? world.leanLimitGain : world.limitReturn * Math.abs(u)) * (leanLimit - outward);
         if (side * rate > room) rate = side * room;
         // The hairpin assist: the line capture, or away from a captured line the edge assist, as one change to the
         // lean rate, low-passed over assistSmoothing so it never steps from one frame to the next
@@ -2551,7 +2578,7 @@ class Vehicle {
         this.recoveryPull(deltaTime);
 
         this.lastDemand = v2 * curvature / g;
-        if (this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
+        if (!this.runoff && this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
             this.lowsideTimerMs += deltaTime * 1000;
             if (this.lowsideTimerMs >= world.lowsideMs) {
                 this.crashed = true;
@@ -2785,6 +2812,12 @@ class Vehicle {
 
     updateMesh() {
         this.group.position.copy(this.position);
+        // The world's run-off is bumpy: the drawn bike bobs, more with speed (the physics height is untouched)
+        const world = this.worldPhysics;
+        if (world && this.runoff && !this.crashed && world.runoffBumpM > 0) {
+            const d = this.distanceTraveled;
+            this.group.position.y += world.runoffBumpM * Math.min(1, this.speed / world.runoffBumpSpeed) * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
+        }
         this.group.rotation.y = this.yawAngle;
         this.meshNeedsBaseCapture = true;
 
@@ -2992,6 +3025,7 @@ class Vehicle {
         this.setRouteIndex(0);
         this.segmentProgress = 0;
         this.worldGrade = 0;
+        this.worldThrottle = 0;
         this.lastDemand = 0;
         this.lowsideTimerMs = 0;
         this.footDown = false;
@@ -3072,7 +3106,8 @@ class Vehicle {
         const loc = this.locateNear(x, z, radius);
         if (!loc) return this.position.y;
         const ground = this.environment.ground;
-        const zone = ground.zoneAt(loc, ground.halfRoad(loc));
+        let zone = ground.zoneAt(loc, ground.halfRoad(loc));
+        if (this.worldPhysics) zone = this.worldZone(zone, loc);
         if (zone.kind !== 'runoff') return loc.roadY;
         return ground.heightAt(loc, false);
     }
@@ -3282,21 +3317,27 @@ class Vehicle {
         // true lateral and ignore it.
         const hysteresisBuffer = 0.5;
         const bias = this.wasNearEdge ? hysteresisBuffer : 0;
+        const world = this.worldPhysics;
         located.lateral = perpDistance;
-        const zone = ground.zoneAt(located, halfRoadWidth);
+        let zone = ground.zoneAt(located, halfRoadWidth);
+        if (world) zone = this.worldZone(zone, located, projection.y);
         located.lateral = perpDistance + sign * bias;
-        const edgeZone = ground.zoneAt(located, halfRoadWidth);
+        let edgeZone = ground.zoneAt(located, halfRoadWidth);
+        if (world) edgeZone = this.worldZone(edgeZone, located, projection.y);
         const reach = Math.abs(perpDistance) + bias;
 
         // Update hysteresis state
         this.wasNearEdge = reach > halfRoadWidth;
 
-        // On the ledge (slow down but don't crash). Run-off has its own drag.
-        if (reach > halfRoadWidth && reach < halfRoadWidth + zone.side.flat && edgeZone.kind !== 'runoff') {
+        if (world) {
+            // The world's verge: the bench drags the bike a little, run-off has its own drag
+            if (zone.kind === 'shoulder' && !this.crashed) this.speed -= world.benchDrag * this.speed * deltaTime;
+        } else if (reach > halfRoadWidth && reach < halfRoadWidth + zone.side.flat && edgeZone.kind !== 'runoff') {
+            // On the ledge (slow down but don't crash). Run-off has its own drag.
             this.speed *= 0.95; // Gradual speed reduction
         }
 
-        this.runoff = zone.kind === 'runoff' ? zone.side.runoff : null;
+        this.runoff = zone.kind === 'runoff' ? (world ? this.worldRunoff(zone.side.runoff) : zone.side.runoff) : null;
         if (this.runoff) this.checkRunoff(deltaTime, zone);
         // The road resets the clock; a shoulder in between neither adds nor clears it
         if (zone.kind === 'road') this.offRoadTime = 0;
@@ -3359,7 +3400,8 @@ class Vehicle {
     checkRunoff(deltaTime, zone) {
         if (this.crashed) return;
 
-        const { drag, floorSpeed } = zone.side.runoff;
+        const { drag, floorSpeed } = this.runoff;
+        const limit = this.worldPhysics ? this.worldPhysics.offRoadLimitS : this.maxOffRoadTime;
         // Drag only ever slows the bike: one that enters below the floor keeps its speed
         const floor = Math.min(this.speed, floorSpeed);
         this.speed = Math.max(this.speed - drag * this.speed * deltaTime, floor);
@@ -3375,12 +3417,55 @@ class Vehicle {
             this.crashAngle = this.leanAngle || 0.5;
             this.frame.material.color.setHex(0x1e5a8a); // Blue for water
             console.log('CRASHED! Rode into the water at', (this.speed * 2.237).toFixed(1) + ' mph');
-        } else if (this.offRoadTime >= this.maxOffRoadTime) {
+        } else if (this.offRoadTime >= limit) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5;
             this.frame.material.color.setHex(0xff6600); // Orange, as for the low-speed fall
-            console.log('CRASHED! Off the road for', this.maxOffRoadTime.toFixed(1), 's');
+            console.log('CRASHED! Off the road for', limit.toFixed(1), 's');
         }
+    }
+
+    // The world's run-off settings: the zone's drag and floor, with the world's lean grip (runoffGrip)
+    worldRunoff(runoff) {
+        const source = runoff || WorldGround.RUNOFF;
+        if (this.worldRunoffSource !== source || !this.worldRunoffCache || this.worldRunoffCache.grip !== this.worldPhysics.runoffGrip) {
+            this.worldRunoffSource = source;
+            this.worldRunoffCache = Object.freeze({ ...source, grip: this.worldPhysics.runoffGrip });
+        }
+        return this.worldRunoffCache;
+    }
+
+    // A world zone as the bike meets it. A wall or a drop from the tile's zone layer is solid only where the land
+    // at loc shows it (WorldPhysics wallRiseM, dropDepthM against the road height roadY); elsewhere it is run-off.
+    // The layer is an 8 m grid read at the nearest node, so a face between stacked strands reaches up to 4 m
+    // toward the road, onto flat verge. Barriers, tunnel and gallery rock and bridge parapets stay solid.
+    worldZone(zone, loc, roadY = loc.roadY) {
+        if (zone.kind !== 'wall' && zone.kind !== 'fall') return zone;
+        const world = this.worldPhysics;
+        const ground = this.environment.ground;
+        const route = this.environment.route;
+        if (typeof ground.heightAt !== 'function' || typeof ground.position !== 'function' || !Number.isFinite(roadY)) return zone;
+        const point = route.points && route.points[Math.max(0, Math.min(route.points.length - 1, loc.index))];
+        const flags = point && point.flags;
+        if (flags && (flags.tunnel || flags.gallery || flags.bridge)) return zone;
+        const scratch = this.worldZoneLoc || (this.worldZoneLoc = {});
+        scratch.index = loc.index;
+        scratch.lateral = loc.lateral;
+        scratch.roadY = roadY;
+        scratch.width = undefined;
+        scratch.flags = flags;
+        const at = ground.position(loc);
+        scratch.x = at.x;
+        scratch.z = at.z;
+        if (ground.barriers && ground.barriers.length && ground.inBarrier(at.x, at.z)) return zone;
+        const land = ground.heightAt(scratch);
+        if (zone.kind === 'wall' ? land - roadY >= world.wallRiseM : roadY - land >= world.dropDepthM) return zone;
+        const soft = this.worldSoftZone || (this.worldSoftZone = {});
+        soft.kind = 'runoff';
+        soft.side = ground.openSide || { flat: 0, runoff: WorldGround.RUNOFF, lipDepth: 8 };
+        soft.sign = zone.sign;
+        soft.start = zone.start;
+        return soft;
     }
 
     // A solid obstacle: hit when the bike is within `radius + 1.0` of it on

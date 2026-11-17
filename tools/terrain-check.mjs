@@ -1801,7 +1801,7 @@ async function main() {
     const server = await startServer();
     const port = server.address().port;
     const args = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
-    const launch = () => puppeteer.launch({ protocolTimeout: 900000, executablePath, headless: gpu ? false : 'new', args: ['--no-sandbox', ...args] });
+    const launch = () => puppeteer.launch({ protocolTimeout: 900000, executablePath, headless: 'new', args: ['--no-sandbox', ...args] });
     // A fresh browser for each probe: a long run of game pages can exhaust one Chrome
     const withBrowser = async work => {
         const browser = await launch();
@@ -3250,7 +3250,7 @@ async function worldMain() {
     const server = await startServer();
     const port = server.address().port;
     const args = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
-    const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath, headless: gpu ? false : 'new', args: ['--no-sandbox', ...args] });
+    const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath, headless: 'new', args: ['--no-sandbox', ...args] });
     const id = option('world') || 'tremola';
     const report = { chrome: executablePath, mode: gpu ? 'gpu' : 'headless', world: id, blocked: state.blocked, notFound: state.notFound, pageErrors: state.pageErrors, results: {}, failures: [], notes: [] };
     let exit = 0;
