@@ -126,6 +126,11 @@ class WorldRoute extends PolylineRoute {
         return out;
     }
 
+    // Traffic keeps to the outer part of each half of the road, 4.2 m off the centre on a 10 m road. The rider's line
+    // wanders by up to about 2 m round a hairpin, and a car is hit within 2.2 m, so a lane in the middle of the half
+    // (2.5 m) was hit on a bend; at 4.2 m the closest the two lines get is about 2.5 m.
+    laneOffset(s) { return this.sample(s, this.ruleScratch).width * 0.42; }
+
     // Traffic keeps to the middle of each half of the road; roadworks leave it the space beside
     detourOffsets(s) {
         const width = this.sample(s, this.ruleScratch).width;

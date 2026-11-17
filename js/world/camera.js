@@ -17,6 +17,17 @@ class WorldCamera {
     static get LOOK_BASE_M() { return 8; }
     static get LOOK_PER_MS() { return 0.6; }
 
+    // On a hairpin the look target moves out to the road LOOK_BEND_M ahead, so that the road round the bend stays
+    // on the screen. How far the road turns over the next BEND_SPAN_M decides how far it moves: nothing under
+    // BEND_FROM rad, all of it from BEND_TO rad.
+    static get LOOK_BEND_M() { return 30; }
+    static get BEND_SPAN_M() { return 50; }
+    static get BEND_FROM() { return 0.35; }
+    static get BEND_TO() { return 1.0; }
+
+    // Share of the way the camera's look target moves to the wanted one each frame at 60 Hz
+    static get LOOK_FOLLOW() { return 0.6; }
+
     // Points the boom is tested at, from the head to the wanted position
     static get MARCH_POINTS() { return 4; }
 
@@ -62,9 +73,18 @@ class WorldCamera {
         return this.yaw;
     }
 
+    // 0 to 1: how much of a hairpin lies ahead of s
+    bendShare(s) {
+        const back = this.route.sample(Math.max(0, s - 5), this.sampled).heading;
+        const ahead = this.route.sample(s + WorldCamera.BEND_SPAN_M - 5, this.look).heading;
+        const turn = Math.abs(WorldCamera.wrap(ahead - back));
+        return Math.max(0, Math.min(1, (turn - WorldCamera.BEND_FROM) / (WorldCamera.BEND_TO - WorldCamera.BEND_FROM)));
+    }
+
     // The point the camera looks at: {x, y, z} on the route ahead, `lift` metres above it
     lookTarget(s, speed, lift) {
-        const point = this.route.sample(s + WorldCamera.LOOK_BASE_M + WorldCamera.LOOK_PER_MS * speed, this.sampled);
+        const usual = WorldCamera.LOOK_BASE_M + WorldCamera.LOOK_PER_MS * speed;
+        const point = this.route.sample(s + usual + (Math.max(usual, WorldCamera.LOOK_BEND_M) - usual) * this.bendShare(s), this.sampled);
         this.look.x = point.x;
         this.look.y = point.y + lift;
         this.look.z = point.z;

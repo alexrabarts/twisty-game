@@ -9,6 +9,7 @@
 //   route, ground, roadWidth, physics, config            implemented
 //   checkpoints, finishGate                              the stage's gates, from the stations
 //   startSegment, endSegment, trafficSpeedScale          the span traffic keeps to, and how fast it goes
+//   oncomingLane                                          the lane of the oncoming car
 //   terrain, terrainGeometry, sections, setPieces,
 //   roadworksZones, roadworkObstacles, jumpRamps,
 //   boulders                                             null / empty: no cones, rockfalls or roadworks are built
@@ -72,6 +73,8 @@ class WorldEnvironment {
         this.boulders = [];
         // Traffic holds to this share of its leg speed: the crew cannot take a hairpin at 50 m/s
         this.trafficSpeedScale = 0.4;
+        // Right-hand traffic: the rider keeps to the route's right lane, so the oncoming car keeps to its left
+        this.oncomingLane = 'left';
         this.config = { id: stage ? stage.id : 'world', look: { fogDensity: 0.0008 }, render: { shadowSpan: 120, cullMax: 6000 }, grip: 1 };
 
         this.group = new THREE.Group();

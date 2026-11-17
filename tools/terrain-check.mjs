@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-shots
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-shots
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
@@ -2138,7 +2138,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-shots'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-shots'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2444,6 +2444,62 @@ const WORLD = {
         for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
         return { station: 3, stationS: station.s, before, after, next, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
+    // The chase camera on hairpins (P38): the autopilot rides 12 m/s from several starts. Each frame, 4 points of the
+    // boom from the head to the camera are tested against the ground, and the road 30 m ahead is projected to the
+    // screen. A hairpin frame is a heading change of more than 115 degrees across +-40 m of road.
+    'world-camera': async (page) => page.evaluate(async (placeSource, pilotSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const v = game.vehicle;
+        const route = env.route;
+        const cam = game.camera;
+        twistyDev.freeze();
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 12);
+        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+        const a = {}, b = {};
+        const turnAround = s => {
+            let total = 0;
+            route.sample(s - 40, a);
+            for (let d = -36; d <= 40; d += 4) {
+                route.sample(s + d, b);
+                total += wrap(b.heading - a.heading);
+                route.sample(s + d, a);
+            }
+            return Math.abs(total) * 180 / Math.PI;
+        };
+        const starts = [2900, 3900, 4400, 5000, 7400, 8000];
+        const runs = [];
+        const aim = new THREE.Vector3();
+        for (const start of starts) {
+            await placeAt(start);
+            v.speed = 12;
+            let frames = 0, under = 0, hairpin = 0, inView = 0, worst = Infinity, crashed = false;
+            for (let tick = 0; tick < 120 + 1380; tick++) {
+                twistyDev.step(1);
+                if (v.crashed) { crashed = true; break; }
+                if (tick < 120) continue;
+                frames++;
+                const index = Math.floor(route.toUnits(v.routeS));
+                const head = { x: v.position.x, y: v.position.y + 1.2, z: v.position.z };
+                for (let k = 1; k <= 4; k++) {
+                    const x = head.x + (cam.position.x - head.x) * k / 4, y = head.y + (cam.position.y - head.y) * k / 4, z = head.z + (cam.position.z - head.z) * k / 4;
+                    const clear = y - game.worldCamera.landY(x, z, index);
+                    worst = Math.min(worst, clear);
+                    if (clear < 0) { under++; break; }
+                }
+                if (turnAround(v.projection.s) > 115) {
+                    hairpin++;
+                    cam.updateMatrixWorld(true);
+                    const p = route.sample(v.projection.s + 30, {});
+                    aim.set(p.x, p.y, p.z).project(cam);
+                    if (Math.abs(aim.x) <= 1 && Math.abs(aim.y) <= 1 && aim.z < 1) inView++;
+                }
+            }
+            runs.push({ start, frames, boomUnderGround: under, worstClearance: Math.round(worst * 100) / 100, hairpinFrames: hairpin, inFrustum: inView, crashed });
+        }
+        const sum = key => runs.reduce((p, r) => p + r[key], 0);
+        return { runs, frames: sum('frames'), boomUnderGround: sum('boomUnderGround'), hairpinFrames: sum('hairpinFrames'), inFrustum: sum('inFrustum'), share: sum('hairpinFrames') ? Math.round(sum('inFrustum') / sum('hairpinFrames') * 1000) / 1000 : null };
+    }, placeAt.toString(), pilotWorld.toString()),
     // A cut across stacked road: the bike is put on a leg of the ladder far ahead in s but close in space. It restarts
     // after cutConfirmMs, once. A flicker of a few frames and back restarts nothing.
     'world-cut': async page => page.evaluate(async (placeSource, pilotSource) => {
@@ -2659,6 +2715,12 @@ function worldChecks(report) {
             if (cut.flicker.restarts) failures.push(`world-cut: a flicker restarted the ride: ${JSON.stringify(cut.flicker)}`);
             if (cut.cut.restarts !== 1 || cut.cut.penaltyMs !== 5000 || !(cut.cut.ms >= cut.cutConfirmMs - 20 && cut.cut.ms <= cut.cutConfirmMs + 120) || cut.cut.backAtS > cut.cut.lowerS + 100 || cut.cut.lowerS - cut.cut.backAtS > 2100) failures.push(`world-cut: ${JSON.stringify(cut.cut)}, want one restart after about ${cut.cutConfirmMs} ms`);
         }
+    }
+    const camera = results['world-camera'];
+    if (camera) {
+        if (camera.boomUnderGround) failures.push(`world-camera: the boom went under the ground on ${camera.boomUnderGround} of ${camera.frames} frames`);
+        if (!(camera.hairpinFrames > 0) || !(camera.share >= 0.95)) failures.push(`world-camera: the road 30 m ahead is in view on ${camera.share} of ${camera.hairpinFrames} hairpin frames, want 0.95 or more: ${JSON.stringify(camera.runs)}`);
+        camera.runs.forEach(r => { if (r.crashed) failures.push(`world-camera: the ride from s ${r.start} crashed`); });
     }
     const shots = results['world-shots'];
     if (shots) {

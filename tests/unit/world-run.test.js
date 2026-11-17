@@ -194,6 +194,21 @@ describe('WorldCamera', () => {
         expect(look.y).toBeCloseTo(102, 6);
     });
 
+    test('on a hairpin the look target moves out to the road 30 m ahead; on a straight it does not', () => {
+        // A half circle of 15 m radius, then a straight leg back
+        const points = [];
+        const R = 15;
+        for (let a = 0; a <= Math.PI + 1e-9; a += 4 / R) points.push({ x: R - R * Math.cos(a), y: 100, z: R * Math.sin(a), heading: a, width: 10 });
+        for (let z = 0; z >= -200; z -= 4) points.push({ x: 2 * R, y: 100, z, heading: Math.PI, width: 10 });
+        const bend = new WorldRoute(samplesOf(points), {});
+        const camera = new WorldCamera(bend, flatGround(0));
+        expect(camera.bendShare(0)).toBeGreaterThan(0.9);
+        expect(new WorldCamera(road, flatGround(0)).bendShare(100)).toBe(0);
+        const at = bend.sample(30, {});
+        const look = camera.lookTarget(0, 10, 0);
+        expect(Math.hypot(look.x - at.x, look.z - at.z)).toBeLessThan(1e-6);
+    });
+
     test('the boom yaw follows the route and turns at no more than 120 degrees a second', () => {
         const bends = new WorldRoute(samplesOf(ladder()), {});
         const camera = new WorldCamera(bends, flatGround(0));

@@ -45,7 +45,8 @@ class Traffic {
                 direction: -1,
                 speed: (15 + Math.random() * 10) * this.speedScale,
                 startSegment: startSegment,
-                lane: 'right',
+                // Right-hand traffic: a world's oncoming car keeps to the rider's left; a leg keeps its own lanes
+                lane: this.environment.oncomingLane || 'right',
                 color: this.getRandomCarColor()
             });
             this.cars.push(car);

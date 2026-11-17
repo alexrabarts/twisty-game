@@ -1826,8 +1826,13 @@ class Game {
             this.tempVector.applyEuler(vehicleRotation);
 
             const lookTarget = vehiclePos.clone().add(this.tempVector);
+            if (this.environment.isWorld) {
+                // A world looks along the road ahead, which turns before the bike does
+                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, 0.5);
+                lookTarget.set(ahead.x, ahead.y, ahead.z);
+            }
 
-            this.currentLookTarget.lerp(lookTarget, adjLerp(0.3)); // Fast response for onboard
+            this.currentLookTarget.lerp(lookTarget, adjLerp(this.environment.isWorld ? WorldCamera.LOOK_FOLLOW : 0.3)); // Fast response for onboard
             
             // Onboard camera banking - calculate BEFORE lookAt with custom up vector
             // Onboard view banks WITH the bike - aggressive tilt for immersive feel
@@ -1922,7 +1927,8 @@ class Game {
                 this.tempUpVector.applyEuler(vehicleRotation);
                 lookTarget.add(this.tempUpVector);
             }
-            this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
+            // A world's target sweeps round a hairpin as fast as the road does, so it is followed closely
+            this.currentLookTarget.lerp(lookTarget, adjLerp(this.environment.isWorld ? WorldCamera.LOOK_FOLLOW : Math.min(this.cameraLerpFactor * 1.5, 1)));
             
             // Camera banking BEFORE lookAt - subtle lean feedback
             const bankFactor = currentMode.type === 'high' ? 0.15 : 0.25; // High view more subtle
