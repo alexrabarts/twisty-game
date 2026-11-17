@@ -198,6 +198,13 @@ class WorldRoute extends PolylineRoute {
     }
 
     // Segments in the hash cells within `rings` cells of (x, z)
+    // The ride segments listed in the hash cell that holds (x, z), or undefined: every segment whose road band reaches
+    // into the cell is in it. The route's own array, so read it and never change it; no allocation, for per-vertex use.
+    cellSegments(x, z) {
+        const cell = WorldRoute.HASH_M;
+        return this.hash.get(Math.floor(x / cell) * 65536 + Math.floor(z / cell));
+    }
+
     hashCandidates(x, z, rings) {
         const cell = WorldRoute.HASH_M;
         const cx = Math.floor(x / cell), cz = Math.floor(z / cell);

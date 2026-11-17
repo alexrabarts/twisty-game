@@ -67,7 +67,7 @@ class RoadMesh {
     }
 
     // The ribbon of a run of rows: {mesh, triangles, clamped} (clamped: rows whose inside edge was held).
-    // `holdY(x, y, z)`, when given, may lower each vertex (a side road under the ride, RoadMesh.sideRoad).
+    // `holdY(x, y, z, row)`, when given, may lower each vertex of `row` (a side road under the ride, RoadMesh.sideRoad).
     static ribbon(rows, lod = 0, holdY = null) {
         const colors = RoadMesh.COLORS;
         const kept = lod === 0 ? rows : RoadMesh.decimate(rows);
@@ -75,7 +75,7 @@ class RoadMesh {
         const positions = [];
         const shades = [];
         let clamped = 0;
-        const push = (x, y, z, c) => { positions.push(x, holdY ? holdY(x, y, z) : y, z); shades.push(c[0], c[1], c[2]); };
+        const push = (x, y, z, c, row) => { positions.push(x, holdY ? holdY(x, y, z, row) : y, z); shades.push(c[0], c[1], c[2]); };
         const place = (row, offset) => ({ x: row.x + offset * Math.cos(row.heading), z: row.z - offset * Math.sin(row.heading) });
 
         // Lateral offsets of a row and the colour of the strip that starts at each
@@ -112,8 +112,8 @@ class RoadMesh {
                 const pb0 = place(b.row, b.offsets[s]), pb1 = place(b.row, b.offsets[s + 1]);
                 const c = a.strips[s];
                 const ya = a.row.y + lift, yb = b.row.y + lift;
-                push(pa0.x, ya, pa0.z, c); push(pa1.x, ya, pa1.z, c); push(pb0.x, yb, pb0.z, c);
-                push(pa1.x, ya, pa1.z, c); push(pb1.x, yb, pb1.z, c); push(pb0.x, yb, pb0.z, c);
+                push(pa0.x, ya, pa0.z, c, a.row); push(pa1.x, ya, pa1.z, c, a.row); push(pb0.x, yb, pb0.z, c, b.row);
+                push(pa1.x, ya, pa1.z, c, a.row); push(pb1.x, yb, pb1.z, c, b.row); push(pb0.x, yb, pb0.z, c, b.row);
             }
         }
         return { geometry: RoadMesh.geometry(positions, shades), triangles: positions.length / 9, clamped };

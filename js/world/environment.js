@@ -284,7 +284,9 @@ class WorldEnvironment {
         // at about this height is the one under it, as WorldGround.locate finds it
         let surface = null;
         let nearest = Infinity;
-        for (const i of route.hashCandidates(x, z, 0)) {
+        const list = route.cellSegments(x, z);
+        if (!list) return null;
+        for (const i of list) {
             route.nearestSegment(x, z, i, i, near);
             if (near.distance < nearest && near.distance <= near.width / 2 + WorldEnvironment.SIDE_KERB_M && Math.abs(y - near.y) <= WorldEnvironment.SIDE_PASS_M) {
                 nearest = near.distance;
@@ -337,9 +339,11 @@ class WorldEnvironment {
         return out;
     }
 
-    // Per-vertex hold of a side ribbon: a vertex inside the band goes under the ride surface (RoadMesh.sideRoad holdY)
+    // Per-vertex hold of a side ribbon: a vertex inside the band goes under the ride surface (RoadMesh.sideRoad holdY).
+    // Only the rows holdSide held or put in (`keep`) can reach into the band, so the rest are not looked at.
     sideHold() {
-        return (x, y, z) => {
+        return (x, y, z, row) => {
+            if (!row.keep) return y;
             const low = this.rideSurfaceAt(x, z, y);
             return low === null ? y : Math.min(y, low - WorldEnvironment.SIDE_UNDER_M);
         };
