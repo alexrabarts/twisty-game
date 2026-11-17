@@ -14,7 +14,7 @@ import { buildWorld, classWidth, stageDefs } from '../../tools/world/import.mjs'
 import { syntheticSource, syntheticDem } from '../../tools/world/synthetic.mjs';
 import { resampleEdge, resampleLine, R_MIN, nearestOnPolyline, polylineLengths, circumradius } from '../../tools/world/resample.mjs';
 import { buildCorridorGraph, GraphGapError } from '../../tools/world/graph.mjs';
-import { createBencher, ZONE, TILE_N, TILE_M, CELL_M } from '../../tools/world/bench.mjs';
+import { createBencher, ZONE, TILE_N, TILE_M, CELL_M, BATTER, VERGE_M } from '../../tools/world/bench.mjs';
 import { savitzkyGolay, FLAG } from '../../tools/world/profile.mjs';
 import { rideSamples, placeStations } from '../../tools/world/stations.mjs';
 import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/world/floors.mjs';
@@ -330,7 +330,7 @@ describe('bench.mjs', () => {
         const n = 40;
         return {
             x: Float64Array.from({ length: n }, () => x0), z: Float64Array.from({ length: n }, (_, i) => i * 4), y: Float64Array.from({ length: n }, () => y),
-            width: new Float32Array(n).fill(10), flags: new Uint8Array(n), spacing: 4, heights
+            heading: new Float64Array(n), width: new Float32Array(n).fill(10), flags: new Uint8Array(n), spacing: 4, heights
         };
     };
     const flat = () => 1000;
@@ -341,18 +341,45 @@ describe('bench.mjs', () => {
         expect(b.ground(6, 80).zone).toBe(ZONE.bench); // within width/2 + 2
         const slope = b.ground(10, 80);
         expect(slope.zone).toBe(ZONE.terrain);
-        expect(slope.y - 1000).toBeGreaterThan(5); // still near the road height, never more than 1:1
-        expect(Math.abs(slope.y - 1010)).toBeLessThanOrEqual(10 - 7 + 1e-9);
+        // Past the strip (5 m and the verge) the fill falls at the batter toward the ground, no flatter, no steeper
+        expect(slope.y).toBeCloseTo(1010 - (10 - 5 - VERGE_M) * BATTER, 6);
+        // Beyond the earthwork the land is the ground
         expect(b.ground(60, 80).y).toBe(1000);
     });
 
-    test('where two legs cannot be joined at 1:1, the ground nearer the lower leg is a wall and nearer the upper a drop', () => {
+    test('a node of a triangle that reaches into the drawn strip takes the road height inside the strip, the fill past it', () => {
+        const b = createBencher({ edges: [edge(4, 1010)], demAt: flat });
+        // The strip reaches 5 + VERGE_M + 0.5 m either side of x = 4: nodes at x 0 and 8 lie in it
+        for (const gi of [0, 1]) expect(b.node(gi, 10).y).toBeCloseTo(1010, 6);
+        // x -8 and 16 only share a triangle with it: the fill at the batter from the verge's edge, not a shelf
+        for (const gi of [-1, 2]) {
+            const past = Math.abs(gi * CELL_M - 4) - 5 - VERGE_M;
+            expect(b.claimsAt(gi, 10).length).toBeGreaterThan(0);
+            // (raised a little where every point of its triangles keeps room under the road)
+            expect(b.node(gi, 10).y).toBeGreaterThanOrEqual(1010 - past * BATTER - 1e-6);
+            expect(b.node(gi, 10).y).toBeLessThanOrEqual(1010 - past * BATTER + 0.25);
+        }
+        // Where the ground stands higher (a cut) the claimed node keeps the road's height, never more
+        const cut = createBencher({ edges: [edge(4, 1010)], demAt: () => 1030 });
+        expect(cut.node(-1, 10).y).toBeCloseTo(1010, 6);
+        expect(cut.node(-2, 10).y).toBeCloseTo(1010 + (20 - 5 - VERGE_M) * BATTER, 6);
+    });
+
+    test('a node two strips claim keeps the lower road: no land stands over a road, the upper edge is a drop beyond its strip', () => {
+        const b = createBencher({ edges: [edge(0, 1000), edge(14, 1008)], demAt: flat });
+        // x = 8 lies in a triangle of both strips
+        expect(b.node(1, 10).y).toBeCloseTo(1000, 6);
+        expect(b.node(1, 10).zone).toBe(ZONE.bench);
+        expect(b.claimsAt(1, 10).map(c => Math.round(c.y))).toEqual(expect.arrayContaining([1000, 1008]));
+    });
+
+    test('where two legs cannot be joined at the batter, the ground nearer the lower leg is a wall and nearer the upper a drop', () => {
         const b = createBencher({ edges: [edge(0, 1000), edge(22, 1015)], demAt: flat });
         expect(b.ground(9, 80).zone).toBe(ZONE.wall);
         expect(b.ground(13, 80).zone).toBe(ZONE.drop);
-        expect(b.ground(11, 80).y).toBeGreaterThan(1000);
+        expect(b.ground(11, 80).y).toBeGreaterThanOrEqual(1000);
         expect(b.ground(11, 80).y).toBeLessThan(1015);
-        // The same two legs 20 m closer in height can be joined at 1:1: no wall, no drop.
+        // The same two legs 9 m closer in height can be joined at the batter: no wall, no drop.
         const gentle = createBencher({ edges: [edge(0, 1000), edge(22, 1006)], demAt: flat });
         expect([9, 11, 13].map(x => gentle.ground(x, 80).zone)).toEqual([ZONE.terrain, ZONE.terrain, ZONE.terrain]);
     });

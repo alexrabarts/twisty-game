@@ -23,11 +23,13 @@ import { NODE_FLAG, writeWorld, writeCourses } from './encode.mjs';
 import { syntheticSource } from './synthetic.mjs';
 import { buildFarLand, horizonSinks, COPERNICUS_NOTICE } from './farland.mjs';
 import { TILE_N } from './bench.mjs';
+import { RIDE_WIDTH_M, classWidth, narrowRide } from './widths.mjs';
+
+export { RIDE_WIDTH_M, classWidth };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const ORIGIN = { e0: 2688000, n0: 1165000 };
-export const RIDE_WIDTH_M = 10;
 const TILE_REACH_M = 600;
 const FAR_CELL_M = 100;
 const FAR_MARGIN_M = 1500;
@@ -35,17 +37,6 @@ const LANDMARK_SNAP_M = 150;
 const MIN_STRUCTURE_M = 20;
 const NO_DATA = -32768;
 const CREDIT = '© swisstopo';
-
-// The width a stored side road gets: its class width. The ride is always RIDE_WIDTH_M (D2).
-export function classWidth(cls) {
-  const m = /^(\d+)m/.exec(cls);
-  if (m) return Math.max(3, Number(m[1]));
-  // swissTLM3D draws each carriageway of a motorway as its own line: two lanes and a shoulder, not the whole road
-  if (/autobahn/i.test(cls)) return 9;
-  if (/autostrasse/i.test(cls)) return 9;
-  if (/platz|raststaette/i.test(cls)) return 10;
-  return 5;
-}
 
 export { stageDefs };
 
@@ -217,6 +208,12 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   }
   reconcileNodes(edges, g.nodes);
   stats.crestMoveM = limitRideCrests(edges, ride, g.nodes);
+  // Where another piece of road comes within the drawn band, the ride narrows toward its mapped width (widths.mjs)
+  const narrow = narrowRide(edges, ride);
+  stats.narrowestRideM = narrow.narrowest.widthM;
+  stats.narrowestRideS = narrow.narrowest.s;
+  stats.narrowedSamples = narrow.narrowed;
+  log(`widths: ${narrow.narrowed} ride samples narrowed, the narrowest ${narrow.narrowest.widthM} m at s ${narrow.narrowest.s}`);
   const gaps = edges.filter(e => e.onRide).flatMap(e => demGaps(e, demAt));
   const dem = summariseGaps(gaps);
   Object.assign(stats, { demOverM: dem.over, demSamples: dem.count, demP99M: dem.p99, demMaxM: dem.max });

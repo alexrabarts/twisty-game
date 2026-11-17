@@ -3,10 +3,10 @@
     "kind": "stage",
     "gates": 3,
     "metres": 2003,
-    "floorMs": 24123,
+    "floorMs": 24124,
     "gateFloorsMs": [
       5467,
-      5438,
+      5439,
       7751,
       5467
     ]
@@ -39,9 +39,9 @@
     "kind": "tour",
     "gates": 2,
     "metres": 5995,
-    "floorMs": 71876,
+    "floorMs": 71877,
     "gateFloorsMs": [
-      24123,
+      24124,
       25423,
       22330
     ]

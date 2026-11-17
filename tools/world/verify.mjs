@@ -1,7 +1,7 @@
-// Checks of the committed world data (P3, P4, P5, P17, P22 and the stacked-leg gate).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|all> --stages <ids|all>
+// Checks of the committed world data (P3, P4, P5, P17, P22, the stacked-leg gate and floating roads).
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|floating|overlap|dem|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
-// fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
+// dem reads the DEM from the cache; fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,11 +13,12 @@ import { buildReport } from './inspect.mjs';
 import { GeoPackage } from './gpkg.mjs';
 import { findGpkg } from './cache.mjs';
 import { scopedRoute } from './stages.mjs';
-import { TILE_M, CELL_M, TILE_N, ZONE } from './bench.mjs';
+import { TILE_M, CELL_M, TILE_N, ZONE, VERGE_M, JOIN_M, BATTER, EARTHWORK_M, segmentIndex, stripHalf } from './bench.mjs';
 import { buildWorld, loadTlmSource, stageDefs } from './import.mjs';
 import { syntheticSource } from './synthetic.mjs';
 import { ROAD_CLEAR_M, roadBands } from './buildings.mjs';
 import { resolveCacheDir } from './cache.mjs';
+import { sampleGrid, bandHalf, minRideWidth, RIDE_WIDTH_M, END_JOIN_M, JUNCTION_M } from './widths.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -294,6 +295,279 @@ export function checkBuildings(decoded, { clear = ROAD_CLEAR_M, slackM = 0.02 } 
   return check('buildings', problems.length === 0, { buildings: decoded.buildings.length, clearM: clear, leastGapM: Math.round(least * 100) / 100, near: near.slice(0, 10), problems });
 }
 
+// Floating roads: the ground must meet every drawn road edge. For every ride and side-edge sample away from a
+// structure (a bridge stands above the ground on purpose; a tunnel or gallery has its own walls), the height grid is
+// read on the tile's drawn triangles at the carriageway edge, half way across the verge, at the verge's outer edge
+// and just past it, on both sides. The ground may lie at most `below` under the road surface there and at most
+// `above` over it. Two exceptions, both counted:
+//   joined  a probe where another road at about its own height (JOIN_M) owns the ground: inside that road's drawn
+//           strip, or within a triangle of it at a junction (the edges' ends meet). The bench gives the ride its own
+//           carriageway and verge there, and the lower road the rest; the side road is held under the ride inside
+//           the ride's band at runtime (WorldEnvironment holdSide)
+//   walled  a probe beside a lower strand (another edge, or the same edge 16 m or more further along: the other side
+//           of a hairpin) within wallReachM of its band, where the drawn triangles span both roads: the bench gives a
+//           node that both strips claim to the lower road (no land over any road), so the ground under the upper edge
+//           drops to that road's height and its fill and no further, and the runtime draws the face as a retaining wall (RoadMesh
+//           skirt)
+// The batter: on each side of every sample the land over the first batterReachM past the verge (1 m steps) may rise
+// or fall no steeper than batterMax (the importer builds 1:1.5, BATTER; up to 1:1 where the ground needs it, plus the
+// 8 m triangles' slack). A steeper side between two strands at two heights is a retaining
+// wall (the upper road's: the runtime draws it with a parapet on top): counted as `walls` and listed as runs of the
+// ride's s. Any other is `steep`.
+// Across the carriageway (nine laterals, edge to edge) the ground must not stand more than `inside` over the road
+// surface: the stored heights are rounded to 0.1 m, and the terrain is drawn TerrainMesh.SINK_M under them, so the
+// drawn land is under the drawn road. A probe inside another road's strip at about its height is `joined`.
+// From the carriageway's edge out the land may lie up to one 8 m triangle's fall at BATTER under the road
+// (`apron`): the importer builds the least fill that meets the ground, not a shelf, and RoadMesh draws the fill from
+// the verge's edge down to the land (world-floating checks that it closes).
+// The worst gaps are listed with the ride's s (or the side edge and sample) and the side.
+export const FLOATING = Object.freeze({ below: 0.3, above: 0.1, inside: 0.05, bendRadiusM: 20, batterReachM: 4, batterMax: 1.1, structureM: 8, wallReachM: 48 });
+
+export function tileHeightAt(tiles, x, z) {
+  const tx = Math.floor(x / TILE_M), tz = Math.floor(z / TILE_M);
+  const t = tiles.get(`${tx},${tz}`);
+  if (!t) return null;
+  const fx = (x - tx * TILE_M) / CELL_M, fz = (z - tz * TILE_M) / CELL_M;
+  const i = Math.max(0, Math.min(TILE_N - 2, Math.floor(fx))), j = Math.max(0, Math.min(TILE_N - 2, Math.floor(fz)));
+  const u = fx - i, v = fz - j;
+  const h = t.heights;
+  const h00 = h[j * TILE_N + i], h10 = h[j * TILE_N + i + 1], h01 = h[(j + 1) * TILE_N + i], h11 = h[(j + 1) * TILE_N + i + 1];
+  // The diagonal TerrainMesh and WorldGround split each cell on (01-10)
+  return u + v <= 1 ? h00 + u * (h10 - h00) + v * (h01 - h00) : h11 + (1 - u) * (h01 - h11) + (1 - v) * (h10 - h11);
+}
+
+// The ride's wall samples as runs of s (side by side), and the side edges' as counts per edge
+function wallRuns(walls) {
+  const ride = walls.filter(w => w.s !== undefined).sort((p, q) => p.s - q.s);
+  const runs = [];
+  for (const w of ride) {
+    const last = runs[runs.length - 1];
+    if (last && w.s - last.s1 <= 12) { last.s1 = w.s; last.samples++; if (!last.sides.includes(w.side)) last.sides.push(w.side); } else runs.push({ s0: w.s, s1: w.s, samples: 1, sides: [w.side] });
+  }
+  const side = {};
+  for (const w of walls) if (w.edge !== undefined) side[w.edge] = (side[w.edge] || 0) + 1;
+  return { ride: runs, sideEdges: side };
+}
+
+export function checkFloating(world, { limits = FLOATING, ride = world.ride?.path ?? null, worst = 12 } = {}) {
+  const { edges, tiles } = world;
+  const index = segmentIndex(edges, limits.wallReachM);
+  const rideS = new Map();
+  if (ride) {
+    let s = 0;
+    for (const use of ride) {
+      const e = edges[use.edgeId];
+      if (!rideS.has(use.edgeId)) rideS.set(use.edgeId, { s0: s, dir: use.dir, n: e.x.length });
+      s += e.length ?? 0;
+    }
+  }
+  // A probe is `joined` where another road at about its height owns the ground: inside that road's drawn strip, or
+  // anywhere in a junction (the two edges' ends meet within END_JOIN_M and the probe's sample is within JUNCTION_M of
+  // that end) where the ground of that road reaches (its strip and one triangle beyond)
+  const ends = e => [[e.x[0], e.z[0]], [e.x[e.x.length - 1], e.z[e.z.length - 1]]];
+  const meet = (e, i, f) => ends(e).some(p => ends(f).some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) <= END_JOIN_M && Math.hypot(e.x[i] - p[0], e.z[i] - p[1]) <= JUNCTION_M));
+  // The ride is one road across its edges: two points of it are one piece of road within 2 cells of s
+  const spacing = e => (e.length && e.x.length > 1 ? e.length / (e.x.length - 1) : 4);
+  const rideAlong = (id, arc) => { const r = rideS.get(id); return r ? r.s0 + (r.dir === 1 ? arc : (r.n - 1) * spacing(edges[id]) - arc) : null; };
+  const sameRoad = (id, i, c) => {
+    if (c.edge === id) return Math.abs(c.arc - i * spacing(edges[id])) <= 2 * CELL_M;
+    const a = rideAlong(id, i * spacing(edges[id])), b = rideAlong(c.edge, c.arc);
+    return a !== null && b !== null && Math.abs(a - b) <= 2 * CELL_M;
+  };
+  const joined = (id, i, c) => !sameRoad(id, i, c) && c.edge !== id && Math.abs(c.y - edges[id].y[i]) <= JOIN_M
+    && (c.d <= stripHalf(c.w) || (c.d <= stripHalf(c.w) + CELL_M * Math.SQRT2 && meet(edges[id], i, edges[c.edge])));
+  // In a hairpin (a radius under limits.bendRadiusM within three samples) the road's height turns with it inside one triangle, and the bench
+  // lowers the land until it stands over no point of the road: the edge may then lie the grade over one triangle's
+  // width over the land (`bend`, drawn closed by the RoadMesh skirt)
+  const radiusAt = (e, i) => {
+    const a = Math.max(0, i - 2), b = Math.min(e.x.length - 1, i + 2);
+    if (b - a < 2) return Infinity;
+    const ax = e.x[a], az = e.z[a], bx = e.x[i], bz = e.z[i], cx = e.x[b], cz = e.z[b];
+    const cross = Math.abs((bx - ax) * (cz - az) - (bz - az) * (cx - ax));
+    return cross < 1e-9 ? Infinity : (Math.hypot(bx - ax, bz - az) * Math.hypot(cx - bx, cz - bz) * Math.hypot(cx - ax, cz - az)) / (2 * cross);
+  };
+  const bendSlack = (e, i) => {
+    let radius = Infinity;
+    for (let k = Math.max(0, i - 3); k <= Math.min(e.x.length - 1, i + 3); k++) radius = Math.min(radius, radiusAt(e, k));
+    if (radius >= limits.bendRadiusM) return 0;
+    const a = Math.max(0, i - 3), b = Math.min(e.x.length - 1, i + 3);
+    let run = 0;
+    for (let k = a; k < b; k++) run += Math.hypot(e.x[k + 1] - e.x[k], e.z[k + 1] - e.z[k]);
+    return limits.below + (Math.abs(e.y[b] - e.y[a]) / Math.max(run, 1)) * CELL_M * Math.SQRT2;
+  };
+  const gaps = [];
+  const counts = { probes: 0, inside: 0, batter: 0, structures: 0, joined: 0, walled: 0, walls: 0, steep: 0, bend: 0, apron: 0, below: 0, above: 0, overRoad: 0, missing: 0 };
+  let worstBelow = 0, worstAbove = 0, worstOver = 0, worstSteep = 0;
+  const over = [], steep = [], walls = [], bends = [];
+  edges.forEach((e, id) => {
+    const n = e.x.length;
+    const roofed = new Uint8Array(n);
+    const reach = Math.ceil(limits.structureM / (e.spacing ?? 4));
+    for (let i = 0; i < n; i++) if (e.flags[i] & ROOFED) for (let k = Math.max(0, i - reach); k <= Math.min(n - 1, i + reach); k++) roofed[k] = 1;
+    const arcOf = i => i * (e.length && n > 1 ? e.length / (n - 1) : 4);
+    for (let i = 0; i < n; i++) {
+      if (roofed[i]) { counts.structures++; continue; }
+      const half = e.width[i] / 2;
+      const cos = Math.cos(e.heading[i]), sin = Math.sin(e.heading[i]);
+      // Inside the carriageway the ground is never over the road surface (the heights are stored to 0.1 m)
+      for (const f of [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]) {
+        const x = e.x[i] + f * half * cos, z = e.z[i] - f * half * sin;
+        const ground = tileHeightAt(tiles, x, z);
+        counts.inside++;
+        if (ground === null || ground - e.y[i] <= limits.inside) continue;
+        const others = index.near(x, z);
+        if (others.some(c => joined(id, i, c))) { counts.joined++; continue; }
+        counts.overRoad++;
+        worstOver = Math.max(worstOver, ground - e.y[i]);
+        const r = rideS.get(id);
+        const at = r ? { s: Math.round(r.s0 + (r.dir === 1 ? arcOf(i) : arcOf(r.n - 1 - i))) } : { edge: id, cls: e.cls, sample: i };
+        over.push({ ...at, lateralM: Math.round(f * half * 100) / 100, overM: Math.round((ground - e.y[i]) * 100) / 100, x: Math.round(x), z: Math.round(z) });
+      }
+      // The batter: the land over the first BATTER_REACH_M past the verge rises or falls no steeper than BATTER,
+      // unless a lower strand beside it makes it a retaining wall (`walls`)
+      for (const side of [-1, 1]) {
+        let steepest = 0, at = null;
+        let last = tileHeightAt(tiles, e.x[i] + side * (half + VERGE_M) * cos, e.z[i] - side * (half + VERGE_M) * sin);
+        for (let o = 1; o <= limits.batterReachM && last !== null; o++) {
+          const x = e.x[i] + side * (half + VERGE_M + o) * cos, z = e.z[i] - side * (half + VERGE_M + o) * sin;
+          const g = tileHeightAt(tiles, x, z);
+          if (g === null) break;
+          if (Math.abs(g - last) > steepest) { steepest = Math.abs(g - last); at = { x, z, g }; }
+          last = g;
+        }
+        counts.batter++;
+        if (steepest <= limits.batterMax) continue;
+        const near = index.near(at.x, at.z);
+        if (near.some(c => joined(id, i, c))) { counts.joined++; continue; }
+        const r = rideS.get(id);
+        const where = r ? { s: Math.round(r.s0 + (r.dir === 1 ? arcOf(i) : arcOf(r.n - 1 - i))) } : { edge: id, cls: e.cls, sample: i };
+        const stacked = near.filter(c => !sameRoad(id, i, c) && (c.low < e.y[i] - limits.below || c.y > e.y[i] + limits.below));
+        if (stacked.length) { counts.walls++; walls.push({ ...where, side: side > 0 ? 'right' : 'left', slope: Math.round(steepest * 100) / 100 }); continue; }
+        counts.steep++;
+        worstSteep = Math.max(worstSteep, steepest);
+        steep.push({ ...where, side: side > 0 ? 'right' : 'left', slope: Math.round(steepest * 100) / 100, x: Math.round(at.x), z: Math.round(at.z) });
+      }
+      for (const side of [-1, 1]) {
+        for (const o of [half, half + VERGE_M / 2, half + VERGE_M, half + VERGE_M + 0.25]) {
+          const x = e.x[i] + side * o * cos, z = e.z[i] - side * o * sin;
+          const ground = tileHeightAt(tiles, x, z);
+          counts.probes++;
+          if (ground === null) { counts.missing++; continue; }
+          const gap = e.y[i] - ground;
+          if (gap <= limits.below && gap >= -limits.above) continue;
+          const others = index.near(x, z).filter(c => !sameRoad(id, i, c));
+          if (others.some(c => joined(id, i, c))) { counts.joined++; continue; }
+          const lower = others.filter(c => c.low < e.y[i] - limits.below);
+          const r0 = rideS.get(id);
+          const here = r0 ? { s: Math.round(r0.s0 + (r0.dir === 1 ? arcOf(i) : arcOf(r0.n - 1 - i))), side: side > 0 ? 'right' : 'left' } : null;
+          if (gap > 0 && gap <= bendSlack(e, i)) { counts.bend++; if (here) bends.push(here); continue; }
+          // On the fill side the 8 m triangles reach from the strip down the embankment: the land under the verge may
+          // lie up to one triangle's fall at the batter under it; the verge covers it from above and RoadMesh draws
+          // the fill from the verge's edge
+          if (gap > 0 && gap <= limits.below + BATTER * CELL_M * Math.SQRT2) { counts.apron++; continue; }
+          if (gap > 0 && lower.length && ground >= Math.min(...lower.map(c => c.low)) - limits.below - BATTER * CELL_M * Math.SQRT2) { counts.walled++; if (here) walls.push(here); continue; }
+          if (gap > 0) { counts.below++; worstBelow = Math.max(worstBelow, gap); } else { counts.above++; worstAbove = Math.max(worstAbove, -gap); }
+          const r = rideS.get(id);
+          const at = r ? { s: Math.round(r.s0 + (r.dir === 1 ? arcOf(i) : arcOf(r.n - 1 - i))) } : { edge: id, cls: e.cls, sample: i };
+          gaps.push({ ...at, side: side > 0 ? 'right' : 'left', offsetM: Math.round(o * 100) / 100, gapM: Math.round(gap * 100) / 100, x: Math.round(x), z: Math.round(z) });
+        }
+      }
+    }
+  });
+  gaps.sort((p, q) => Math.abs(q.gapM) - Math.abs(p.gapM));
+  const problems = [];
+  if (counts.below) problems.push(`${counts.below} edge probes have the ground more than ${limits.below} m under the road (worst ${worstBelow.toFixed(2)} m)`);
+  if (counts.above) problems.push(`${counts.above} edge probes have the ground more than ${limits.above} m over the road (worst ${worstAbove.toFixed(2)} m)`);
+  if (counts.overRoad) problems.push(`${counts.overRoad} probes across the carriageway have the ground more than ${limits.inside} m over the road (worst ${worstOver.toFixed(2)} m)`);
+  if (counts.steep) problems.push(`${counts.steep} road sides have land steeper than ${limits.batterMax} within ${limits.batterReachM} m of the verge and no lower road beside them (worst ${worstSteep.toFixed(2)})`);
+  if (counts.missing) problems.push(`${counts.missing} edge probes fall outside every height tile`);
+  steep.sort((p, q) => q.slope - p.slope);
+  over.sort((p, q) => q.overM - p.overM);
+  return check('floating', problems.length === 0, { ...counts, worstBelowM: Math.round(worstBelow * 100) / 100, worstAboveM: Math.round(worstAbove * 100) / 100, worstOverRoadM: Math.round(worstOver * 100) / 100, worstSteep: Math.round(worstSteep * 100) / 100, worst: gaps.slice(0, worst), overRoad: over.slice(0, worst), steep: steep.slice(0, worst), walls: wallRuns(walls), bends: wallRuns(bends).ride, problems });
+}
+
+// Road bands never overlap outside a junction (widths.mjs has the rules: the ride's band is width/2 + VERGE_M, a side
+// edge's width/2; one piece of road, a junction and a structure are not overlaps). An overlap where the ride sample is
+// already at its narrowest (minRideWidth) cannot be undone by the width: two legs stacked closer than two narrow
+// bands, at two heights. Those are listed as `stacked` and pass when the two roads are more than JOIN_M apart in
+// height (the runtime draws the upper one's edge as a wall or a deck side). At about one height a side road beside the
+// narrowest ride is `merged`: the runtime holds it under the ride's surface inside the ride's band (WorldEnvironment
+// holdSide), so the two read as one surface. Two ride samples at one height fail, as does every overlap where the ride
+// could have been narrower. Side roads are drawn at their class width, which the importer
+// never narrows: their overlaps with each other are counted (`sideSide`) and not failed. The width never steps more
+// than OVERLAP.stepM from one sample to the next; the narrowest ride width and where it is are reported.
+export const OVERLAP = Object.freeze({ stepM: 0.5 });
+
+export function checkOverlap(world, { worst = 12 } = {}) {
+  const { edges } = world;
+  const grid = sampleGrid(edges, world.ride?.path ?? []);
+  const found = [], stacked = [];
+  let sideSide = 0, merged = 0, steps = 0, worstStep = 0;
+  let narrow = { widthM: Infinity, s: null };
+  edges.forEach((e, id) => {
+    for (let i = 0; i < e.x.length; i++) {
+      if (i > 0) {
+        const step = Math.abs(e.width[i] - e.width[i - 1]);
+        worstStep = Math.max(worstStep, step);
+        if (step > OVERLAP.stepM) steps++;
+      }
+      const sa = grid.along(id, i);
+      if (e.onRide && sa !== null && e.width[i] < narrow.widthM) narrow = { widthM: Math.round(e.width[i] * 10) / 10, s: Math.round(sa) };
+      if (e.flags[i] & ROOFED) continue;
+      const ha = bandHalf(e.width[i], e.onRide);
+      for (const o of grid.others(id, i, ha + bandHalf(RIDE_WIDTH_M, true))) {
+        if (o.edge < id || (o.edge === id && o.sample <= i)) continue;
+        const f = edges[o.edge];
+        const hb = bandHalf(f.width[o.sample], f.onRide);
+        if (o.d >= ha + hb) continue;
+        if (!e.onRide && !f.onRide) { sideSide++; continue; }
+        const sb = grid.along(o.edge, o.sample);
+        const dy = f.y[o.sample] - e.y[i];
+        const atMin = (g, k) => !g.onRide || g.width[k] <= minRideWidth(g.cls) + 0.05;
+        const row = { a: e.onRide ? `ride s ${Math.round(sa)}` : `edge ${id}`, b: f.onRide ? `ride s ${Math.round(sb)}` : `edge ${o.edge}`, widthA: e.width[i], widthB: f.width[o.sample], apartM: Math.round(o.d * 100) / 100, overlapM: Math.round((ha + hb - o.d) * 100) / 100, dy: Math.round(dy * 10) / 10, x: Math.round(e.x[i]), z: Math.round(e.z[i]) };
+        if (atMin(e, i) && atMin(f, o.sample) && Math.abs(dy) > JOIN_M) stacked.push(row);
+        else if (atMin(e, i) && atMin(f, o.sample) && e.onRide !== f.onRide) merged++;
+        else found.push(row);
+      }
+    }
+  });
+  found.sort((p, q) => q.overlapM - p.overlapM);
+  stacked.sort((p, q) => q.overlapM - p.overlapM);
+  const problems = [];
+  if (found.length) problems.push(`${found.length} pairs of samples have overlapping road bands outside a junction that the width could avoid or that lie at one height (worst ${found[0].overlapM} m)`);
+  if (steps) problems.push(`${steps} width steps over ${OVERLAP.stepM} m between samples (worst ${worstStep.toFixed(2)} m)`);
+  return check('overlap', problems.length === 0, { pairs: found.length, stackedPairs: stacked.length, merged, sideSide, worstStepM: Math.round(worstStep * 100) / 100, narrowestRide: narrow, worst: found.slice(0, worst), stacked: stacked.slice(0, worst), problems });
+}
+
+// The land against the DEM: every node of every height tile further than EARTHWORK_M past the drawn strip of every
+// road stands within OFF_DEM.limitM of the DEM (no shelf, no hollow away from the roads); nodes nearer are the
+// earthwork and are only summarised. Water and the land round structures are left out (a bridge's piers, a
+// tunnel's portal). `demAt(x, z)` is the source's DEM in local metres.
+export const OFF_DEM = Object.freeze({ limitM: 1.5 });
+export function checkDem(decoded, demAt) {
+  const index = segmentIndex(decoded.edges, EARTHWORK_M + VERGE_M + 4);
+  const roofed = segmentIndex(decoded.edges.map(e => ({ ...e, flags: e.flags.map(f => (f & ROOFED ? 0 : ROOFED)) })), 40);
+  const far = { n: 0, sum: 0, max: 0, over: 0, worst: [] }, near = { n: 0, sum: 0, max: 0 };
+  for (const [key, t] of decoded.tiles) {
+    const [tx, tz] = key.split(',').map(Number);
+    for (let j = 0; j < TILE_N; j++) for (let i = 0; i < TILE_N; i++) {
+      const x = tx * TILE_M + i * CELL_M, z = tz * TILE_M + j * CELL_M;
+      const dem = demAt(x, z);
+      if (Number.isNaN(dem) || t.zones[j * TILE_N + i] === ZONE.water) continue;
+      const off = t.heights[j * TILE_N + i] - dem;
+      const inside = index.near(x, z).some(c => c.d <= c.w / 2 + VERGE_M + EARTHWORK_M);
+      if (inside) { near.n++; near.sum += Math.abs(off); near.max = Math.max(near.max, Math.abs(off)); continue; }
+      if (roofed.near(x, z).length) continue;
+      far.n++; far.sum += Math.abs(off); far.max = Math.max(far.max, Math.abs(off));
+      if (Math.abs(off) > OFF_DEM.limitM) { far.over++; if (far.worst.length < 400) far.worst.push({ x, z, offM: Math.round(off * 100) / 100 }); }
+    }
+  }
+  far.worst.sort((p, q) => Math.abs(q.offM) - Math.abs(p.offM));
+  const r2 = v => Math.round(v * 100) / 100;
+  const problems = far.over ? [`${far.over} of ${far.n} nodes away from the roads stand more than ${OFF_DEM.limitM} m off the DEM (worst ${r2(far.max)} m)`] : [];
+  return check('dem', problems.length === 0, { away: { nodes: far.n, meanM: r2(far.sum / Math.max(1, far.n)), maxM: r2(far.max), over: far.over, worst: far.worst.slice(0, 12) }, earthwork: { nodes: near.n, meanM: r2(near.sum / Math.max(1, near.n)), maxM: r2(near.max) }, problems });
+}
+
 async function sourceFor(opt) {
   if (opt.synthetic) return { source: syntheticSource(), spacing: 500 };
   const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
@@ -314,9 +588,16 @@ export async function main(argv) {
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'floating', 'overlap', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
+  let demAt = null;
+  if (wanted.includes('dem')) {
+    const { source } = await sourceFor(opt);
+    const xs = [...decoded.tiles.keys()].map(k => k.split(',').map(Number));
+    await source.prepare([Math.min(...xs.map(t => t[0])) * TILE_M, Math.min(...xs.map(t => t[1])) * TILE_M, (Math.max(...xs.map(t => t[0])) + 1) * TILE_M, (Math.max(...xs.map(t => t[1])) + 1) * TILE_M]);
+    demAt = source.demAt;
+  }
   if (wanted.some(c => ['fidelity', 'elevation', 'graph'].includes(c))) {
     const { source, spacing } = await sourceFor(opt);
     built = await buildWorld(source, { stationSpacingM: spacing });
@@ -325,7 +606,7 @@ export async function main(argv) {
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), dem: () => checkDem(decoded, demAt),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {

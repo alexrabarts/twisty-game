@@ -1,6 +1,7 @@
 // Ride junctions (D7 c). For each graph node of degree 3 or more that the ride uses, the incident edges with their
 // headings and, for each pass of the ride through it, the edge in and the edge out. Every other incident edge gets a
-// stub: its first STUB_M from the node, ending in a barrier pose. The barrier set therefore differs per pass at a
+// stub: its first STUB_M from the node (on along the road through nodes of degree 2, short of the next junction),
+// ending in a barrier pose. The barrier set therefore differs per pass at a
 // junction used twice.
 export const STUB_M = 60;
 
@@ -16,6 +17,27 @@ function along(edge, dir, dist) {
     z: edge.z[p] + (edge.z[q] - edge.z[p]) * t,
     heading: Math.atan2(edge.x[q] - edge.x[p], edge.z[q] - edge.z[p])
   };
+}
+
+// Metres a barrier stands short of the next junction where a side road ends there before STUB_M
+export const SHORT_M = 8;
+
+// The barrier pose `dist` metres from the node along a side road: on through nodes of degree 2 onto the edge the road
+// continues as, and short of the next junction (SHORT_M before it, or half way along an edge shorter than that). A
+// dead end stops at its end.
+function alongRoad(edge, dir, dist, incident, degree) {
+  let e = edge, d = dir, left = dist;
+  for (let hops = 0; hops < 64; hops++) {
+    const length = e.spacing * (e.x.length - 1);
+    if (left <= length) return along(e, d, left);
+    const far = d === 1 ? e.b : e.a;
+    if (degree[far] === 2) {
+      const next = incident[far].find(i => i.edge !== e);
+      if (next) { left -= length; e = next.edge; d = next.dir; continue; }
+    }
+    return along(e, d, degree[far] >= 3 ? (length > SHORT_M ? length - SHORT_M : length / 2) : length);
+  }
+  return along(e, d, e.spacing * (e.x.length - 1));
 }
 
 // Heading leaving the node along an edge.
@@ -56,7 +78,7 @@ export function buildJunctions({ nodes, edges, ride, degree, waypoints = [] }) {
         barriers: inc
           .filter(({ edge }) => edge.id !== p.inEdge && edge.id !== p.outEdge)
           .map(({ edge, dir }) => {
-            const b = along(edge, dir, STUB_M);
+            const b = alongRoad(edge, dir, STUB_M, incident, degree);
             return { edgeId: edge.id, x: Math.round(b.x * 1000) / 1000, z: Math.round(b.z * 1000) / 1000, heading: Math.round(b.heading * 1e4) / 1e4 };
           })
       }))
