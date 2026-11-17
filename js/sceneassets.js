@@ -188,12 +188,44 @@ const SceneAssets = (() => {
           materials[primitive.material].vertexColors = true;
         }
         if (primitive.indices !== undefined) geometry.setIndex(accessor(primitive.indices));
+        if (!geometry.attributes.normal) kitSurface(geometry, materials[primitive.material].name);
         geometry.computeBoundingSphere();
         geometry.computeBoundingBox();
         return { geometry, material: materials[primitive.material] };
       }));
     }
     return { meshes, places };
+  }
+
+  // A file from the village kit (tools/blender/village_kit.py: houses, props,
+  // the stone bridge) carries no normals, because every face is flat, and
+  // sRGB colours. Every model leaves here lit and in the shader's colour
+  // space, whoever draws it: the faces' own normals are worked out, and the
+  // colours become linear 16-bit shares (a float colour would be decoded again,
+  // js/graphics.js fixColorSpaces), window glass dark by day. The stored sRGB
+  // bytes stay on userData.srgb for the night village, which reads each
+  // window's number and lights it.
+  function kitSurface(geometry, kind) {
+    // Faces of a kit model share no corner across a crease, so these are their own normals
+    geometry.computeVertexNormals();
+    // A corner only a zero-area face uses (lamp_post has 8) gets no direction from it; it draws nothing, but
+    // a zero normal is NaN once the shader normalises it
+    const normal = geometry.attributes.normal;
+    for (let i = 0; i < normal.count; i++) {
+      if (Math.hypot(normal.getX(i), normal.getY(i), normal.getZ(i)) < 0.5) normal.setXYZ(i, 0, 1, 0);
+    }
+    const stored = geometry.attributes.color;
+    if (!stored) return;
+    const scale = stored.array instanceof Uint16Array ? 65535 : stored.array instanceof Uint8Array ? 255 : 1;
+    const colour = (i, c) => stored.array[i * stored.itemSize + c] / scale;
+    const linear = new Uint16Array(stored.count * 3);
+    for (let i = 0; i < stored.count; i++) {
+      // Glass carries its window's number in red and its shading in green
+      const rgb = kind === "glass" ? DAY_GLASS.map((v) => v * (0.6 + 0.4 * colour(i, 1))) : [0, 1, 2].map((c) => decode(colour(i, c)));
+      for (let c = 0; c < 3; c++) linear[i * 3 + c] = Math.round(Math.min(1, rgb[c]) * 65535);
+    }
+    geometry.userData.srgb = stored;
+    geometry.setAttribute("color", new THREE.BufferAttribute(linear, 3, true));
   }
 
   const models = new Map();
@@ -558,7 +590,7 @@ const SceneAssets = (() => {
         const mirrored = matrix.determinant() < 0;
         for (const { geometry, material } of parts) {
           const position = geometry.attributes.position;
-          const color = geometry.attributes.color;
+          const color = geometry.userData.srgb || geometry.attributes.color;
           const kind = material.name;
           const lamp = kind === "lamp";
           const tint = kind === "wall" ? wash : kind === "shutter" ? accent : null;
@@ -714,9 +746,8 @@ const SceneAssets = (() => {
     return count;
   }
 
-  // The daylight geometry of one tint kind of a model: linear colours as
-  // 16-bit shares (a float colour would be decoded again, js/graphics.js
-  // fixColorSpaces), window glass dark, the faces' own normals. Kept per
+  // The daylight geometry of one tint kind of a model: the linear colours
+  // and dark glass kitSurface gave it at load, the faces' own normals. Kept per
   // model, so every build and every instance shares it.
   const daylight = new WeakMap();
   const TINTS = { wall: "wash", shutter: "accent" };
@@ -732,15 +763,13 @@ const SceneAssets = (() => {
       const position = [];
       const color = [];
       const index = [];
-      list.forEach(({ geometry, kind }) => {
+      list.forEach(({ geometry }) => {
         const base = position.length / 3;
+        // Linear already, glass dark (kitSurface, at load)
         const source = geometry.attributes.color;
-        const colour = (i, c) => source.array[i * source.itemSize + c] / 255;
         for (let i = 0; i < geometry.attributes.position.count; i++) {
           position.push(geometry.attributes.position.getX(i), geometry.attributes.position.getY(i), geometry.attributes.position.getZ(i));
-          // Glass carries its window's number in red and its shading in green
-          const rgb = kind === "glass" ? DAY_GLASS.map((v) => v * (0.6 + 0.4 * colour(i, 1))) : [0, 1, 2].map((c) => decode(colour(i, c)));
-          color.push(...rgb.map((v) => Math.round(Math.min(1, v) * 65535)));
+          for (let c = 0; c < 3; c++) color.push(source.array[i * source.itemSize + c]);
         }
         geometry.index.array.forEach((i) => index.push(base + i));
       });
