@@ -3710,6 +3710,8 @@ class Game {
         const at = Math.round(this.raceElapsed());
         this.worldRun.onStation(result.station, at);
         if (result.station === stations.length - 1) {
+            // The last station ends the last stage as well as the ride, so every stage has its time
+            this.worldRun.onStageFinish(this.worldRun.stageIndex, at);
             this.finishRun();
             return;
         }

@@ -1,6 +1,7 @@
 // The riding half of a world (R2-R5): the run state and the cut rule (WorldRun), the chase camera
 // (WorldCamera), the stage look table and the atmosphere track along a ride (AtmosphereTrack.forWorld).
-import { describe, test, expect } from '@jest/globals';
+import { describe, test, expect, jest } from '@jest/globals';
+import { readFileSync } from 'node:fs';
 import { loadGame, loadScript } from '../helpers/load-game.js';
 import { ladder } from '../fixtures/world/stacked-ladder.js';
 import { samplesOf, straight } from '../helpers/world-synthetic.js';
@@ -48,6 +49,43 @@ describe('WorldRun stages', () => {
         expect([run.stageIndex, run.stageStartMs, run.stageTimes, run.stageRestarts]).toEqual([0, 0, [], [0, 0]]);
         run.begin(350);
         expect(run.stageIndex).toBe(1);
+    });
+});
+
+describe('the game over a ride of stages', () => {
+    // Game's own updateWorldRun, run against a plain object with the real WorldRun
+    const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
+    const classSource = source.slice(0, source.indexOf('Game.RESTART_CLEAR_SEGMENTS = 6;') + 'Game.RESTART_CLEAR_SEGMENTS = 6;'.length);
+    const Game = new Function('showCallout', 'HudRules', 'WorldRun', `${classSource}\nreturn Game;`)(() => {}, { stageClock: ms => String(ms) }, WorldRun);
+    const route = new WorldRoute(samplesOf(straight(700)), {
+        stages: [{ id: 'a', name: 'A', from: 0, to: 300 }, { id: 'b', name: 'B', from: 300, to: 600 }]
+    });
+    const stations = [
+        { s: 0, stage: 'a', kind: 'start' }, { s: 100, stage: 'a', kind: 'gate' }, { s: 300, stage: 'a', kind: 'boundary' },
+        { s: 400, stage: 'b', kind: 'gate' }, { s: 500, stage: 'b', kind: 'gate' }, { s: 600, stage: 'b', kind: 'end' }
+    ];
+
+    test('the finish ends the last stage too: one stage time per stage, and they add up to the ride', () => {
+        let clock = 0;
+        const game = Object.assign(Object.create(Game.prototype), {
+            vehicle: { projection: { index: 0, s: 0, lateral: 0, width: 10, heading: 0 }, speed: 15, yawAngle: 0 },
+            worldRun: new WorldRun(route, stations, WorldPhysics),
+            environment: { stationGates: stations, checkpoints: stations.slice(1, -1).map((st, i) => ({ index: i, s: st.s })) },
+            raceElapsed: () => clock,
+            passCheckpoint: jest.fn(),
+            restartFromCheckpoint: jest.fn(),
+            finishRun: jest.fn()
+        });
+        for (let s = 0; s <= 601 && !game.finishRun.mock.calls.length; s += 0.2) {
+            clock = Math.round(s * 100);
+            game.vehicle.projection.s = s;
+            game.updateWorldRun(DT);
+        }
+        const run = game.worldRun;
+        expect(game.finishRun).toHaveBeenCalledTimes(1);
+        expect(run.stageTimes.length).toBe(run.stageCount);
+        run.stageTimes.forEach(ms => expect(ms).toBeGreaterThan(0));
+        expect(run.stageTimes.reduce((a, b) => a + b, 0)).toBe(run.stationTimes[stations.length - 1]);
     });
 });
 
