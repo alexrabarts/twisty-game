@@ -478,7 +478,10 @@ const GFX_COMPOSITE = `
         // Grade in display-referred space
         float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color = mix(vec3(luma), color, uSaturation);
-        color = (color - 0.5) * uContrast + 0.5;
+        // Contrast as a power about mid grey (0.18 linear): the old (c - 0.5) * k + 0.5 in linear light sent every
+        // value under 0.5 - 0.5 / k to zero (under sRGB 37 at k 1.04), so shaded land, dark forest and tyres crushed to
+        // black. A power never goes below zero and keeps the order of the darks
+        color = 0.18 * pow(max(color, vec3(0.0)) / 0.18, vec3(uContrast));
         color *= uTint;
 
         float vig = smoothstep(0.35, 0.95, radius);

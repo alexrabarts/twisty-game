@@ -16,7 +16,8 @@
 //   stone               dry-stone courses in world space on a retaining wall (RoadMesh.stoneMaterial): courses of
 //                       uneven height, granite blocks 0.3 to 0.6 m of mixed length and tone with thin joints and
 //                       broad stains, fading to their mean far off (LandShade.STONE)
-//   shade               the sky's fill light is held back, so the side of a valley away from the sun is dark
+//   shade               the sky's fill light is held back, so the side of a valley away from the sun is dark, but
+//                       never below the sky's floor (FLOOR of the albedo): no land face crushes to black
 class LandShade {
     static get PALETTE() {
         if (!LandShade.palette) {
@@ -119,6 +120,7 @@ class LandShade {
                 uAerialMax: { value: LandShade.AERIAL_MAX },
                 uDrop: { value: LandShade.DROP_PER_M2 },
                 uIndirect: { value: LandShade.INDIRECT },
+                uLandFloor: { value: LandShade.FLOOR },
                 uDetail: { value: 1 }
             };
         }
@@ -168,6 +170,9 @@ class LandShade {
 
     // The share of the sky's fill light the land keeps
     static get INDIRECT() { return 0.8; }
+    // The least share of its albedo a land face keeps as sky light, however it faces the sun (the near-black share of
+    // world-floating's views, LAND_BLACK_SHARE, holds it)
+    static get FLOOR() { return 0.25; }
 
     // The aerial colour: the blue of distant ridges in the photos (far land, 3 km and more, about sRGB 80, 103, 128),
     // a little of the sky's horizon in it, so a weather look still tints it (linear)
@@ -201,6 +206,7 @@ uniform vec3 uAerialColor;
 uniform float uAerialReach;
 uniform float uAerialMax;
 uniform float uIndirect;
+uniform float uLandFloor;
 uniform float uDetail;
 varying vec3 vLandPos;
 ${stone ? 'varying vec3 vLandNormal;' : ''}
@@ -249,7 +255,14 @@ float landNoise(vec2 p) {
     float far = smoothstep(30.0, 140.0, length(vViewPosition));
     diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)), far);
 }` : '#include <color_fragment>')
-                .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\nreflectedLight.indirectDiffuse *= uIndirect;`)
+                .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
+reflectedLight.indirectDiffuse *= uIndirect;
+// The sky's floor: a face turned from the sun still sees the sky, so it keeps uLandFloor of its albedo (all of it
+// facing up, 0.6 of it facing down) and never crushes to black
+{
+    float up = dot(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));
+    reflectedLight.indirectDiffuse = max(reflectedLight.indirectDiffuse, diffuseColor.rgb * uLandFloor * (0.8 + 0.2 * up));
+}`)
                 .replace('#include <fog_fragment>', `{
     float dist = length(vViewPosition);
     float aerial = uAerialMax * (1.0 - exp(-dist / uAerialReach));

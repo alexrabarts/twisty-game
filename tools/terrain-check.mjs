@@ -2250,7 +2250,10 @@ function worldHairpins(route) {
 // stood over the road, 7990 the underside of the next switchback seen from below, 9500 and 10900 two more stacked
 // switchbacks. --views s,s,... picks others.
 // 3257 and 4657: a pair of thin dark lines ran down the middle of the road (the longitudinal joint drawn on both sides).
-const FLOATING_VIEWS = [100, 1300, 3257, 3600, 4657, 7800, 7900, 7990, 9500, 10900];
+// 258, 1081, 6756 and 6930: land turned from the sun drew near black (LAND_BLACK_SHARE).
+const FLOATING_VIEWS = [100, 258, 1081, 1300, 3257, 3600, 4657, 6756, 6930, 7800, 7900, 7990, 9500, 10900];
+// The share of a view's land pixels that may be near black (luminance under 10 of 255)
+const LAND_BLACK_SHARE = 0.005;
 // Tolerances of world-floating: the drawn land may lie this far under a drawn road edge, and no land stands over the
 // road surface within UP_M over it
 const FLOAT_TOL_M = 0.3;
@@ -2520,6 +2523,8 @@ async function floatingView(placeSource, pilotSource, s) {
     const ctx = copy.getContext('2d', { willReadFrequently: true });
     ctx.drawImage(canvas, 0, 0);
     const image = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    // The frame as drawn, for floatingCount's share of near-black land
+    window.floatFrame = { image, w: copy.width, h: copy.height };
     const lum = (x, y, z) => {
         const q = new THREE.Vector3(x, y, z).project(game.camera);
         if (q.z > 1 || Math.abs(q.x) > 0.98 || Math.abs(q.y) > 0.98) return null;
@@ -2645,7 +2650,10 @@ function floatingCount() {
     });
     const saved = new Map();
     const hidden = [];
-    game.scene.children.forEach(c => { if (c !== env.group && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    // The bike stays, drawn as `other`: it hides the land behind it in the frame as drawn too
+    const bike = game.vehicle && game.vehicle.group;
+    game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    if (bike) bike.traverse(o => { if (o.isMesh) { saved.set(o, o.material); o.material = other; } });
     const inside = (o, group) => { for (let n = o; n; n = n.parent) if (n === group) return true; return false; };
     env.group.traverse(o => {
         if (!o.isMesh) return;
@@ -2668,12 +2676,19 @@ function floatingCount() {
     game.scene.background = background;
     game.scene.fog = fog;
     target.dispose();
-    let underside = 0, top = 0;
+    let underside = 0, top = 0, landPx = 0, black = 0;
+    const frame = window.floatFrame && window.floatFrame.w === size.x && window.floatFrame.h === size.y ? window.floatFrame : null;
     for (let i = 0; i < pixels.length; i += 4) {
         if (pixels[i] > 200 && pixels[i + 1] < 50) underside++;
         else if (pixels[i + 1] > 200 && pixels[i] < 50) top++;
+        else if (frame && pixels[i + 2] > 200 && pixels[i] < 50 && pixels[i + 1] < 50) {
+            // Land (a tile or the far land): near black in the frame as drawn (the target's rows run bottom up)
+            const p = i / 4, x = p % size.x, y = size.y - 1 - Math.floor(p / size.x), at = (y * size.x + x) * 4;
+            landPx++;
+            if (0.2126 * frame.image[at] + 0.7152 * frame.image[at + 1] + 0.0722 * frame.image[at + 2] < 10) black++;
+        }
     }
-    return { underside, top, pixels: size.x * size.y };
+    return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0 };
 }
 
 const WORLD = {
@@ -4125,6 +4140,7 @@ function worldChecks(report) {
         floating.views.forEach(v => {
             if (v.crashed) failures.push(`world-floating: the ride into the view at s ${v.want} crashed`);
             if (v.underside) failures.push(`world-floating: the view at s ${v.want} shows ${v.underside} pixels of a road's underside`);
+            if (v.blackLand > LAND_BLACK_SHARE) failures.push(`world-floating: the view at s ${v.want} has ${(v.blackLand * 100).toFixed(2)}% of its land near black (over ${LAND_BLACK_SHARE * 100}%)`);
             if (v.lane && v.lane.lines.length) failures.push(`world-floating: the view at s ${v.want} has ${v.lane.lines.length} thin dark lines along the road (${JSON.stringify(v.lane.lines)} m across, rows of ${v.lane.rows})`);
             if (v.seam && v.seam.profiles && v.seam.seams / v.seam.profiles > FLOAT_SEAM_SHARE) failures.push(`world-floating: the view at s ${v.want} has a dark seam beside the road on ${v.seam.seams} of ${v.seam.profiles} profiles: ${JSON.stringify(v.seam.worst)}`);
         });
