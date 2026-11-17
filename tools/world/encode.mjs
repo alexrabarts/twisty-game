@@ -210,7 +210,8 @@ export function writeWorld(world, outDir) {
   return files;
 }
 
-// The stage and tour board rows for functions/world-courses.json (read by the server, so the server holds its own copy).
+// The stage and tour board rows for functions/world-courses.json. Nothing in functions/ reads that file yet: it is
+// wired in with the world leaderboards (R6), and until then the server has no row for a world board.
 export function courseRows(world, versions = {}) {
   const rows = {};
   const ver = id => versions[id] ?? 1;

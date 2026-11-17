@@ -180,7 +180,7 @@ describe('player names', () => {
         expect(storedNames()).toEqual([stored]);
     });
 
-    test.each([[''], ['   '], ['ABCDEF'], [' ABCDEF '], [42], [null], ['\u200b'], ['\u202eABC'], ['A\u0007']])('name %j is rejected with invalid-argument', async name => {
+    test.each([[''], ['   '], ['ABCDEF'], [' ABCDEF '], [42], [null], ['ßßßßß'], ['\u200b'], ['\u202eABC'], ['A\u0007']])('name %j is rejected with invalid-argument', async name => {
         await rejects(submitNamed(name), 'invalid-argument', 'Player name');
         expect(storedNames()).toEqual([]);
     });

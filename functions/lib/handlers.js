@@ -163,7 +163,8 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
         if (!sessionId || typeof sessionId !== 'string') {
             throw new HttpsError('invalid-argument', 'Invalid session ID');
         }
-        const name = typeof playerName === 'string' ? playerName.normalize('NFC').trim() : '';
+        const name = typeof playerName === 'string' ? playerName.normalize('NFC').trim().toUpperCase() : '';
+        // Case mapping can grow a name ('ß' becomes 'SS'), so the length is checked on the name that is stored
         if (name.length < NAME_MIN || name.length > NAME_MAX) {
             throw new HttpsError('invalid-argument', `Player name must be ${NAME_MIN} to ${NAME_MAX} characters`);
         }
@@ -222,7 +223,7 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
         const boardPath = path(session.legId);
         const entryRef = db.ref(boardPath).push();
         await entryRef.set({
-            playerName: name.toUpperCase(),
+            playerName: name,
             totalTime,
             checkpointTimes,
             ...extra,

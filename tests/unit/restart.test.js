@@ -272,4 +272,14 @@ describe('a world ride is not thrown away in one key press', () => {
         const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
         expect(source).toMatch(/this\.restartFromCheckpoint\('crash'\)/);
     });
+
+    test('a world finish records nothing on a board, even with a leg session still active', () => {
+        const game = worldGame();
+        game.leaderboardService = { isActive: () => true, protocol: 2, recordFinish: jest.fn(() => Promise.resolve()) };
+        game.vehicle.finished = false;
+        game.showFinishScreen = jest.fn();
+        game.finishRun();
+        expect(game.leaderboardService.recordFinish).not.toHaveBeenCalled();
+        expect(game.finished).toBe(true);
+    });
 });

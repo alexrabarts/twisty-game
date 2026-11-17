@@ -3625,7 +3625,9 @@ class Game {
         this.finished = true;
         this.vehicle.finished = true; // Prevent crashes after finishing
         this.finishTime = finishTime;
-        if (this.leaderboardService && this.leaderboardService.isActive() && this.leaderboardService.protocol === 2) {
+        // A world posts to no board until R6: a session left over from a leg must not take a world time
+        const world = this.environment && this.environment.isWorld;
+        if (!world && this.leaderboardService && this.leaderboardService.isActive() && this.leaderboardService.protocol === 2) {
             this.leaderboardService.recordFinish(Math.round(finishTime))
                 .catch(error => console.error('Failed to record finish:', error));
         }
