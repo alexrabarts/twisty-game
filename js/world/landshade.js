@@ -271,7 +271,7 @@ reflectedLight.indirectDiffuse *= uIndirect;
 }
 #include <fog_fragment>`);
         };
-        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}-${floor}`;
+        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${floor === 1 ? '' : `-${floor}`}`;
         material.customProgramCacheKey = () => key;
         material.needsUpdate = true;
         return material;
