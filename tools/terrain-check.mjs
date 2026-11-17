@@ -2788,6 +2788,13 @@ const WORLD = {
         };
         input.getSteeringInput = () => {
             if (!riding()) return pilot.steer();
+            if (rider.aim) {
+                // The aiming rider: full lock toward a point on the centreline 5 m on, straight once it lines up
+                const at = route.sample((v.projection.s ?? v.routeS) + 5, {});
+                const off = Math.atan2(at.x - v.position.x, at.z - v.position.z) - v.yawAngle;
+                const bearing = Math.atan2(Math.sin(off), Math.cos(off));
+                return Math.abs(bearing) > 0.05 ? Math.sign(bearing) : 0;
+            }
             const ahead = k((v.projection.s ?? v.routeS) + lead());
             return Math.abs(ahead) > tight ? Math.sign(ahead) : 0;
         };
@@ -2796,22 +2803,31 @@ const WORLD = {
         input.getBrakeInput = () => (riding() ? (v.speed > rider.target * 1.15 ? 1 : 0) : pilot.brake());
         input.getWheelieInput = () => 0;
         const levels = {};
-        for (const level of ['off', 'low', 'normal']) {
+        // The three levels at the advised speed, then the slow riders at about 4 m/s: one holds full lock while the
+        // bend is under the bike, the other aims full lock at the road 5 m on and straightens once lined up
+        const runs = [['off', 'off', 0], ['low', 'low', 0], ['normal', 'normal', 0], ['slow-off', 'off', 4], ['slow-normal', 'normal', 4],
+            ['aim-off', 'off', 4, true], ['aim-normal', 'normal', 4, true]];
+        for (const [name, level, slow, aim] of runs) {
             const rows = [];
             for (const bend of bends) {
                 v.reset();
                 v.assistLevel = level;
                 await placeAt(bend.from - 40);
                 v.resetHairpinAssist();
-                rider = { target: bend.advised, from: bend.from, to: bend.to };
-                v.speed = bend.advised;
+                rider = { target: slow || bend.advised, from: bend.from, to: bend.to, aim: !!aim };
+                v.speed = rider.target;
                 const sign = Math.sign(k(bend.apex));
-                const row = { apex: bend.apex, crashed: false, wide: 0, cut: 0, trace: traceApex ? [] : undefined };
+                const row = { apex: bend.apex, crashed: false, wide: 0, cut: 0, step: 0, trace: traceApex ? [] : undefined };
+                let lastAssist = null;
                 for (let tick = 0; tick < 60 * 40 && !v.crashed; tick++) {
                     twistyDev.step(1);
                     const p = v.projection;
                     if (p.s > bend.to + 20) break;
                     if (p.s < bend.from - lead()) continue;
+                    // The assist's share of the lean rate this frame (rad/s), and its largest frame-to-frame step
+                    const assistRate = Number.isFinite(v.assistLeanRate) ? v.assistLeanRate : 0;
+                    if (lastAssist !== null) row.step = Math.max(row.step, Math.abs(assistRate - lastAssist));
+                    lastAssist = assistRate;
                     const outside = -p.lateral * sign - p.width / 2;
                     const inside = p.lateral * sign - p.width / 2;
                     row.wide = Math.max(row.wide, outside);
@@ -2824,13 +2840,15 @@ const WORLD = {
                 if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.frame.material.color.getHexString(), radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
                 row.wide = Math.round(row.wide * 100) / 100;
                 row.cut = Math.round(row.cut * 100) / 100;
+                row.step = Math.round(row.step * 1000) / 1000;
                 rows.push(row);
             }
-            levels[level] = {
+            levels[name] = {
                 hairpins: rows.length,
                 crashes: rows.filter(r => r.crashed).length,
                 runWide: rows.filter(r => r.wide > 0.5).length,
                 cut: rows.filter(r => r.cut > 0.5).length,
+                maxAssistStep: rows.reduce((m, r) => Math.max(m, r.step), 0),
                 bad: rows.filter(r => r.crashed || r.wide > 0.5 || r.cut > 0.5 || r.trace)
             };
         }
