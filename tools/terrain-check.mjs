@@ -2219,7 +2219,7 @@ const WORLD = {
                 const near = [...env.streamer.refs.keys()].length;
                 const m = env.tileMeshes;
                 const bike = [...env.streamer.tilesNear(p.x, p.z, bikeTileM)];
-                out.push({ s: Math.round(s), ...countScene(), tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+                out.push({ s: Math.round(s), ...countScene(), tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
             }
             return out;
         }, every, WORLD_BIKE_TILE_M, countScene.toString(), placeAt.toString());
@@ -2401,10 +2401,12 @@ const WORLD = {
             twistyDev.step(1);
             ticks++;
             maxLateral = Math.max(maxLateral, Math.abs(v.projection.lateral));
+            // Tile and cover fetches are asynchronous: a ride stepped with no pause would outrun them
+            if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
             if (v.routeS >= nextRow) {
                 nextRow += every;
                 env.streamer.pump(Infinity);
-                rows.push({ s: Math.round(v.routeS), ...countScene(), tiles: env.tileMeshes.size, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+                rows.push({ s: Math.round(v.routeS), ...countScene(), tiles: env.tileMeshes.size, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
             }
         }
         console.log = log;

@@ -425,6 +425,31 @@ describe('WorldStreamer', () => {
         expect(clock()).toBe(9);
     });
 
+    test('the first frame, built with no budget, is not counted in the streaming step times', async () => {
+        const { streamer, tick } = streamerOn();
+        streamer.enqueue('tile:cold', 0, () => tick(9));
+        await streamer.settle(route.points[0], 0);
+        expect(streamer.stats.maxStepMs).toBe(0);
+        streamer.enqueue('road:1', 0, () => tick(2));
+        streamer.pump(4);
+        expect(streamer.stats.maxStepMs).toBe(2);
+        expect(streamer.stats.maxStepByKind).toEqual({ road: 2 });
+    });
+
+    test('disposal is timed on the clock the streamer is given, so a ride stepped faster than real time still lets go', () => {
+        let frames = 0;
+        const hooks = { gone: [], buildTile() {}, disposeTile(key) { this.gone.push(key); }, buildRoad() {}, disposeRoad() {}, buildSide() {}, disposeSide() {} };
+        const data = fakeData({ tiles, resident: true });
+        data.manifest.tiles.height = tiles;
+        const streamer = new WorldStreamer({ data, route, hooks, now: () => 0, clock: () => frames * (1000 / 60) });
+        streamer.update(route.points[0], 0);
+        streamer.pump(Infinity);
+        const far = route.points[Math.floor(route.points.length / 2)];
+        streamer.update(far, route.sArray[Math.floor(route.points.length / 2)]);
+        for (frames = 1; frames <= 200; frames++) streamer.update(far, route.sArray[Math.floor(route.points.length / 2)]);
+        expect(hooks.gone.length).toBeGreaterThan(0);
+    });
+
     test('the queue builds nearest first and does not queue a task twice', () => {
         const { streamer } = streamerOn();
         const order = [];

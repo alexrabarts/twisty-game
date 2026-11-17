@@ -14,6 +14,12 @@ class TerrainMesh {
 
     // Land cover classes (tools/world/landcover.mjs COVER)
     static get COVER_COLORS() {
+        // Made once: this is read for every vertex of every tile
+        if (!TerrainMesh.coverColors) TerrainMesh.coverColors = TerrainMesh.makeCoverColors();
+        return TerrainMesh.coverColors;
+    }
+
+    static makeCoverColors() {
         return [
             [0.42, 0.52, 0.28], // none
             [0.17, 0.30, 0.17], // forest
@@ -27,9 +33,9 @@ class TerrainMesh {
         ];
     }
 
-    static get BARE() { return [0.36, 0.31, 0.26]; }
-    static get ROCK() { return [0.50, 0.48, 0.45]; }
-    static get SNOW() { return [0.92, 0.94, 0.96]; }
+    static get BARE() { return TerrainMesh.sharedBARE || (TerrainMesh.sharedBARE = [0.36, 0.31, 0.26]); }
+    static get ROCK() { return TerrainMesh.sharedROCK || (TerrainMesh.sharedROCK = [0.50, 0.48, 0.45]); }
+    static get SNOW() { return TerrainMesh.sharedSNOW || (TerrainMesh.sharedSNOW = [0.92, 0.94, 0.96]); }
 
     static material() {
         if (!TerrainMesh.sharedMaterial) TerrainMesh.sharedMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
@@ -76,9 +82,14 @@ class TerrainMesh {
         const vertexCount = side * side + side * 4;
         const positions = new Float32Array(vertexCount * 3);
         const shades = new Float32Array(vertexCount * 3);
+        // No array is made per vertex: a tile has 4 000 and the garbage collector's pause lands in a build step
         const put = (v, x, y, z, c) => {
             positions[v * 3] = x; positions[v * 3 + 1] = y; positions[v * 3 + 2] = z;
             shades[v * 3] = c[0]; shades[v * 3 + 1] = c[1]; shades[v * 3 + 2] = c[2];
+        };
+        const copy = (to, from) => {
+            positions[to * 3] = positions[from * 3]; positions[to * 3 + 1] = positions[from * 3 + 1] - skirt; positions[to * 3 + 2] = positions[from * 3 + 2];
+            shades[to * 3] = shades[from * 3]; shades[to * 3 + 1] = shades[from * 3 + 1]; shades[to * 3 + 2] = shades[from * 3 + 2];
         };
         for (let b = 0; b < side; b++) {
             for (let a = 0; a < side; a++) {
@@ -109,7 +120,7 @@ class TerrainMesh {
             const first = side * side + e * side;
             for (let k = 0; k < side; k++) {
                 const from = edge(k);
-                put(first + k, positions[from * 3], positions[from * 3 + 1] - skirt, positions[from * 3 + 2], [shades[from * 3], shades[from * 3 + 1], shades[from * 3 + 2]]);
+                copy(first + k, from);
             }
             for (let k = 0; k + 1 < side; k++) {
                 const a = edge(k), b = edge(k + 1), c = first + k, d = first + k + 1;

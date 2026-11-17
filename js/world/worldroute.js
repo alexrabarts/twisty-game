@@ -131,7 +131,7 @@ class WorldRoute extends PolylineRoute {
     // (2.5 m) was hit on a bend; at 4.2 m the closest the two lines get is about 2.5 m.
     laneOffset(s) { return this.sample(s, this.ruleScratch).width * 0.42; }
 
-    // Traffic keeps to the middle of each half of the road; roadworks leave it the space beside
+    // The two lanes traffic uses while roadworks take the rest of the road: where each stays, as an offset from the centre
     detourOffsets(s) {
         const width = this.sample(s, this.ruleScratch).width;
         return { left: -width * 0.22, right: width * 0.45 };

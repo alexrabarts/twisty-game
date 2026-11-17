@@ -30,11 +30,14 @@ class WorldStreamer {
     // The same for a terrain tile: LOD0 at 8 m, LOD1 at 16 m, LOD2 at 32 m
     static get TILE_LOD_M() { return [700, 2000]; }
 
-    constructor({ data, route, hooks, now = null }) {
+    constructor({ data, route, hooks, now = null, clock = null }) {
         this.data = data;
         this.route = route;
         this.hooks = hooks;
         this.now = now || (typeof performance !== 'undefined' ? () => performance.now() : () => Date.now());
+        // What the 3 s of DISPOSE_AFTER_MS is measured on. The wall clock by default; a game that steps faster
+        // than real time (a test ride, a replay) passes a clock that moves with its frames.
+        this.clock = clock || this.now;
         this.refs = new Map();
         this.owners = new Map();
         this.tiles = new Map();
@@ -45,7 +48,7 @@ class WorldStreamer {
         this.loading = new Set();
         this.sections = this.planSections();
         this.rideKey = null;
-        this.stats = { maxStepMs: 0, frameBuildMs: 0, maxFrameBuildMs: 0, builds: 0, disposes: 0 };
+        this.stats = { maxStepMs: 0, maxStepByKind: {}, frameBuildMs: 0, maxFrameBuildMs: 0, builds: 0, disposes: 0 };
         data.holds = key => (this.refs.get(key) || 0) > 0;
     }
 
@@ -123,7 +126,7 @@ class WorldStreamer {
 
     // Called every frame with the bike's position and its ride progress s
     update(bike, s) {
-        const time = this.now();
+        const time = this.clock();
         this.bike = bike;
         // The ride window moves in 32 m steps; the bike's own tiles are cheap and follow it every frame
         const rideStep = Math.floor(s / 32);
@@ -281,13 +284,24 @@ class WorldStreamer {
             this.queued.delete(task.id);
             const stepStart = this.now();
             task.run();
-            this.stats.maxStepMs = Math.max(this.stats.maxStepMs, this.now() - stepStart);
+            const stepMs = this.now() - stepStart;
+            const kind = task.id.slice(0, task.id.indexOf(':'));
+            this.stats.maxStepMs = Math.max(this.stats.maxStepMs, stepMs);
+            this.stats.maxStepByKind[kind] = Math.max(this.stats.maxStepByKind[kind] || 0, stepMs);
             steps++;
             if (this.now() - frameStart >= budgetMs) break;
         }
         this.stats.frameBuildMs = this.now() - frameStart;
         this.stats.maxFrameBuildMs = Math.max(this.stats.maxFrameBuildMs, this.stats.frameBuildMs);
         return steps;
+    }
+
+    // The first frame builds with no budget, on cold code, behind a loading screen; its steps are not streamed frames
+    resetStepStats() {
+        this.stats.maxStepMs = 0;
+        this.stats.maxStepByKind = {};
+        this.stats.maxFrameBuildMs = 0;
+        this.stats.frameBuildMs = 0;
     }
 
     // Holds the tiles round (x, z) and resolves when their data is here: a
@@ -305,14 +319,18 @@ class WorldStreamer {
         this.setOwner('placing', new Set());
     }
 
-    // Drains the queue and the loads, for tests and for a first frame that must be complete
+    // Drains the queue and the loads, for tests and for a first frame that must be complete.
+    // Its steps are not counted in the streaming stats.
     async settle(bike, s, maxRounds = 200) {
         for (let round = 0; round < maxRounds; round++) {
             this.update(bike, s);
             while (this.queue.length) this.pump(Infinity);
             if (!this.loading.size && !this.queue.length) {
                 this.update(bike, s);
-                if (!this.queue.length) return round;
+                if (!this.queue.length) {
+                    this.resetStepStats();
+                    return round;
+                }
             }
             await new Promise(resolve => setTimeout(resolve, 0));
         }
