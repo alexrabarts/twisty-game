@@ -630,3 +630,149 @@ describe('route without samples', () => {
         expect(vehicle.footDown).toBe(false);
     });
 });
+
+// The low-speed turn: under turnBlendSpeed the yaw rate blends toward the handlebar's v tan(handlebar) / wheelbase
+// and the floor radius drops to lockRadius. The creep is off here (creepSpeed 0) so the speed held is the speed ridden.
+describe('low-speed turn', () => {
+    const still = { ...WorldPhysics, creepSpeed: 0 };
+    const BLEND = WorldPhysics.turnBlendSpeed;
+    const LOCK = WorldPhysics.lockRadius;
+
+    function lockRadiusAt(speed, physics = still) {
+        const vehicle = worldVehicle({ physics });
+        const run = hold(vehicle, speed, 1, 4);
+        expect(run.crashTick).toBeNull();
+        return settledRadius(speed, run.yaws);
+    }
+
+    test('the tuning: blend speed 6-8 m/s, lock radius 2.5-3 m, both under the old floor', () => {
+        expect(BLEND).toBeGreaterThanOrEqual(6);
+        expect(BLEND).toBeLessThanOrEqual(8);
+        expect(LOCK).toBeGreaterThanOrEqual(2.5);
+        expect(LOCK).toBeLessThanOrEqual(3);
+        expect(LOCK).toBeLessThan(WorldPhysics.radiusFloor);
+    });
+
+    test('full lock turns close to the lock radius at 2 m/s and the radius grows smoothly with speed', () => {
+        const r2 = lockRadiusAt(2), r4 = lockRadiusAt(4), r6 = lockRadiusAt(6);
+        expect(r2).toBeLessThanOrEqual(LOCK * 1.1);
+        expect(r2).toBeGreaterThanOrEqual(LOCK * 0.98);
+        expect(r4).toBeGreaterThan(r2);
+        expect(r6).toBeGreaterThan(r4);
+        expect(r6).toBeLessThanOrEqual(WorldPhysics.radiusFloor + 0.01);
+        // Smoothly: over a fine sweep the radius never falls with speed and never jumps
+        let last = null;
+        for (let speed = 0.5; speed <= BLEND; speed += 0.25) {
+            const radius = lockRadiusAt(speed);
+            if (last !== null) {
+                expect(radius).toBeGreaterThanOrEqual(last - 1e-6);
+                expect(radius - last).toBeLessThan(0.25);
+            }
+            last = radius;
+        }
+    });
+
+    test('the bike stands up as it slows: the full-lock lean shrinks toward upright', () => {
+        const leans = [6, 4, 2, 1].map(speed => {
+            const vehicle = worldVehicle({ physics: still });
+            hold(vehicle, speed, 1, 3);
+            return deg(Math.abs(vehicle.leanAngle));
+        });
+        for (let i = 1; i < leans.length; i++) expect(leans[i]).toBeLessThan(leans[i - 1]);
+        expect(leans[3]).toBeLessThan(3);
+    });
+
+    test('no step in the yaw rate across the blend speed', () => {
+        // The settled full-lock yaw rate either side of the blend speed
+        const rate = speed => speed / lockRadiusAt(speed);
+        expect(Math.abs(rate(BLEND - 0.01) - rate(BLEND + 0.01))).toBeLessThan(0.01);
+        // Slowing through it at full lock: the yaw rate moves by no more than a smooth ramp does in one frame
+        const vehicle = worldVehicle({ physics: still });
+        hold(vehicle, BLEND + 1.5, 1, 3);
+        let lastYaw = vehicle.yawAngle, lastRate = null, worst = 0;
+        for (let speed = BLEND + 1.5; speed >= BLEND - 1.5; speed -= 1.5 * DT) {
+            vehicle.speed = speed;
+            vehicle.update(DT, 1, 0, 0);
+            const yawRate = (vehicle.yawAngle - lastYaw) / DT;
+            if (lastRate !== null) worst = Math.max(worst, Math.abs(yawRate - lastRate));
+            lastRate = yawRate;
+            lastYaw = vehicle.yawAngle;
+        }
+        expect(vehicle.crashed).toBe(false);
+        expect(worst).toBeLessThan(0.01);
+    });
+
+    test('the yaw rate is 0 at speed 0: no turning on the spot', () => {
+        const vehicle = worldVehicle({ physics: still });
+        hold(vehicle, 0, 1, 1);
+        expect(Math.abs(vehicle.handlebarAngle)).toBeGreaterThan(0.3);
+        const before = vehicle.yawAngle;
+        hold(vehicle, 0, 1, 2);
+        expect(vehicle.yawAngle).toBe(before);
+        expect(vehicle.crashed).toBe(false);
+    });
+
+    test('slowing to a stop at full lock, and creeping off at full lock, never falls or crashes', () => {
+        const vehicle = worldVehicle();
+        vehicle.speed = 10;
+        for (let tick = 0; tick < 600; tick++) vehicle.update(DT, 1, 0, 0.4);
+        expect(vehicle.crashed).toBe(false);
+        expect(vehicle.speed).toBe(0);
+        for (let tick = 0; tick < 600; tick++) vehicle.update(DT, 1, 0, 0);
+        expect(vehicle.crashed).toBe(false);
+        expect(vehicle.speed).toBeCloseTo(WorldPhysics.creepSpeed, 1);
+        // At creep speed and full lock the bike circles near the lock radius, barely leaned
+        expect(deg(Math.abs(vehicle.leanAngle))).toBeLessThan(25);
+        for (const speed of [0.5, 1, 2, 3, 4, 5, 6, 7]) expect(hold(worldVehicle(), speed, -1, 4).crashTick).toBeNull();
+    });
+
+    // Above the blend speed the world branch is the one of 0389aba (before the low-speed turn), tick for tick. The
+    // speed held is the speed before the tick's drag, so the lowest checked is a touch over the blend speed
+    describe('above the blend speed, bit for bit', () => {
+        const base = execFileSync('git', ['show', '0389aba:js/vehicle.js'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+        const Reference = new Function('THREE', 'document', 'console', `${base}\nreturn Vehicle;`)(
+            realThree(), canvasStub(), { log() {}, warn() {}, error() {} }
+        );
+
+        function trace(VehicleClass, speed, inputs) {
+            const vehicle = worldVehicle({}, VehicleClass);
+            const out = [];
+            for (const input of inputs) {
+                vehicle.speed = speed;
+                vehicle.update(DT, input, 0, 0);
+                out.push([vehicle.leanAngle, vehicle.leanVelocity, vehicle.yawAngle, vehicle.lastDemand, vehicle.crashed]);
+            }
+            return out;
+        }
+
+        function inputs() {
+            let seed = 777;
+            const random = () => {
+                seed = (seed * 1664525 + 1013904223) >>> 0;
+                return seed / 4294967296;
+            };
+            const out = [Array.from({ length: 300 }, (_, i) => (i > 10 ? 1 : 0)), Array.from({ length: 300 }, (_, i) => (i % 60 < 18 ? -1 : 0))];
+            let value = 0;
+            out.push(Array.from({ length: 400 }, () => (value = Math.max(-1, Math.min(1, value + (random() - 0.5) * 0.4)))));
+            return out;
+        }
+
+        function same(speed) {
+            for (const list of inputs()) {
+                const a = trace(Reference, speed, list), b = trace(game.Vehicle, speed, list);
+                for (let tick = 0; tick < a.length; tick++) {
+                    for (let k = 0; k < a[tick].length; k++) if (!Object.is(a[tick][k], b[tick][k])) return false;
+                }
+            }
+            return true;
+        }
+
+        for (const speed of [BLEND + 0.05, 8, 10, 15, 20, 30, 45]) {
+            test(`${speed} m/s matches 0389aba at every tick`, () => expect(same(speed)).toBe(true));
+        }
+
+        test('planted: under the blend speed the turn differs, so the comparison can fail', () => {
+            expect(same(4)).toBe(false);
+        });
+    });
+});

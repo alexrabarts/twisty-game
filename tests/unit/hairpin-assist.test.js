@@ -3,7 +3,7 @@
 // straight back. The ground beside the road is open run-off, so leaving the road shows as a lateral past the edge.
 import { describe, test, expect } from '@jest/globals';
 import { loadGame, loadScript } from '../helpers/load-game.js';
-import { samplesOf, fakeData, allTiles } from '../helpers/world-synthetic.js';
+import { samplesOf, fakeData, allTiles, straight } from '../helpers/world-synthetic.js';
 
 const DT = 1 / 60;
 const G = 9.81;
@@ -26,15 +26,18 @@ function hairpinPoints(radius, step = 2) {
     return points;
 }
 
-function hairpin(radius) {
-    const route = new WorldRoute(samplesOf(hairpinPoints(radius)), {});
+function hairpin(radius, step = 2) {
+    const route = new WorldRoute(samplesOf(hairpinPoints(radius, step)), {});
     const ground = new WorldGround(route, fakeData({ tiles: allTiles(-1, 0, -1, 0), zone: () => 0 }));
     return { route, ground, radius, bendEnd: STRAIGHT + Math.PI * radius };
 }
 
-function bikeOn(world, level, s = 40, lean = 0) {
+// The physics with the edge assist off, for the tests that isolate the line capture
+const NO_EDGE = Object.freeze({ ...WorldPhysics, edgeLeanRate: 0 });
+
+function bikeOn(world, level, s = 40, lean = 0, physics = WorldPhysics) {
     const vehicle = new Vehicle(new THREE.Scene());
-    vehicle.environment = { physics: WorldPhysics, route: world.route, ground: world.ground };
+    vehicle.environment = { physics, route: world.route, ground: world.ground };
     vehicle.assistLevel = level;
     const p = world.route.sample(s, {});
     vehicle.position.set(p.x, p.y, p.z);
@@ -49,8 +52,8 @@ const advised = radius => Math.sqrt(G * radius * Math.tan(WorldPhysics.adviceLea
 
 // The scripted rider: full steering into the bend once the curvature `lead` metres ahead passes 1/30 m, held
 // while the bend is under the bike, released after; the speed held at `speed`. Records the run through the bend.
-function ride(world, level, { speed = advised(world.radius), lead = 4, input = 1 } = {}) {
-    const vehicle = bikeOn(world, level);
+function ride(world, level, { speed = advised(world.radius), lead = 4, input = 1, physics = WorldPhysics } = {}) {
+    const vehicle = bikeOn(world, level, 40, 0, physics);
     const out = { inside: 0, outside: 0, crashed: false, leans: [] };
     for (let tick = 0; tick < 60 * 20; tick++) {
         const s = vehicle.projection.s;
@@ -148,8 +151,8 @@ describe('line capture', () => {
     test('it adds no lean with no input or with the input out of the bend', () => {
         const world = hairpin(12);
         for (const input of [0, -1, -0.4]) {
-            const off = ride(world, 'off', { input, lead: 4 });
-            const normal = ride(world, 'normal', { input, lead: 4 });
+            const off = ride(world, 'off', { input, lead: 4, physics: NO_EDGE });
+            const normal = ride(world, 'normal', { input, lead: 4, physics: NO_EDGE });
             const n = Math.min(off.leans.length, normal.leans.length);
             expect(n).toBeGreaterThan(300);
             for (let i = 0; i < n; i++) expect(normal.leans[i]).toBe(off.leans[i]);
@@ -207,8 +210,8 @@ describe('line capture', () => {
         expect(WorldAssist.fade(WorldPhysics, 200)).toBe(0);
         expect(WorldAssist.fade(WorldPhysics, WorldPhysics.assistTightR)).toBe(1);
         const world = hairpin(80);
-        const off = ride(world, 'off', { speed: 20, lead: 6 });
-        const normal = ride(world, 'normal', { speed: 20, lead: 6 });
+        const off = ride(world, 'off', { speed: 20, lead: 6, physics: NO_EDGE });
+        const normal = ride(world, 'normal', { speed: 20, lead: 6, physics: NO_EDGE });
         expect(normal.leans).toEqual(off.leans);
     });
 });
@@ -263,6 +266,188 @@ describe('recovery', () => {
         }
         expect(vehicle.recoveryLeft).toBeCloseTo(0, 9);
         expect(pulled).toBeLessThanOrEqual(WorldPhysics.recoveryBudgetM * 1.5);
+    });
+});
+
+// The road data is a polyline of samples about 4 m apart. The assist reads its curvature and its frame from the
+// route's smooth profile and centreline (WorldRoute.smoothCurvatureAt, smoothFrame) and reaches the lean rate
+// low-passed over assistSmoothing, so the target lean and the push it gives do not step from sample to sample
+describe('smoothness', () => {
+    // A 12 m hairpin sampled every 4 m, the scripted rider at the advised speed with the assist at normal: the
+    // largest frame-to-frame step of the line's target lean (over frames captured both times) and of the
+    // assist's share of the lean rate
+    function steps(world, physics = WorldPhysics) {
+        const vehicle = bikeOn(world, 'normal', 40, 0, physics);
+        const speed = advised(world.radius);
+        let lastTarget = null, lastRate = 0, target = 0, rate = 0, captured = 0;
+        for (let tick = 0; tick < 60 * 20; tick++) {
+            const s = vehicle.projection.s;
+            const into = world.route.curvatureAt(s + 4, 4) > 1 / 30 || world.route.curvatureAt(s, 4) > 1 / 30;
+            vehicle.lineLeanTarget = null;
+            vehicle.speed = speed;
+            vehicle.update(DT, into ? 1 : 0, 0, 0);
+            const now = vehicle.lineCaptured ? vehicle.lineLeanTarget : null;
+            if (now !== null) captured++;
+            if (now !== null && lastTarget !== null) target = Math.max(target, Math.abs(now - lastTarget));
+            lastTarget = now;
+            rate = Math.max(rate, Math.abs(vehicle.assistLeanRate - lastRate));
+            lastRate = vehicle.assistLeanRate;
+            if (vehicle.projection.s > world.bendEnd + 20) break;
+        }
+        return { target: target * 180 / Math.PI, rate, captured, crashed: vehicle.crashed };
+    }
+
+    // The same route with the smooth profile and centreline hidden, read as the polyline
+    function polyline(world) {
+        const route = Object.create(world.route);
+        route.smoothCurvatureAt = undefined;
+        route.smoothFrame = undefined;
+        return { ...world, route };
+    }
+
+    test('through a 4 m sampled 12 m hairpin the target lean steps under 1 degree a frame and the push under 0.5 rad/s', () => {
+        const run = steps(hairpin(12, 4));
+        expect(run.crashed).toBe(false);
+        expect(run.captured).toBeGreaterThan(60);
+        expect(run.target).toBeLessThan(1);
+        expect(run.rate).toBeLessThan(0.5);
+    });
+
+    test('planted: read off the polyline and not low-passed, the same ride steps several times over', () => {
+        const run = steps(polyline(hairpin(12, 4)), { ...WorldPhysics, assistSmoothing: 1e-9 });
+        expect(run.target).toBeGreaterThan(2);
+        expect(run.rate).toBeGreaterThan(1.5);
+    });
+
+    test('the smooth curvature has no steps and agrees with the polyline on the arc', () => {
+        const world = hairpin(12, 4);
+        let last = WorldAssist.curvature(world.route, WorldPhysics, 0), worst = 0;
+        for (let s = 0.05; s < world.route.length; s += 0.05) {
+            const k = WorldAssist.curvature(world.route, WorldPhysics, s);
+            worst = Math.max(worst, Math.abs(k - last));
+            last = k;
+        }
+        expect(worst).toBeLessThan(0.002);
+        expect(world.route.smoothCurvatureAt(STRAIGHT + Math.PI * 6, WorldPhysics.assistSpanM)).toBeCloseTo(1 / 12, 2);
+    });
+
+    test('the smooth frame is continuous where the polyline frame jumps', () => {
+        const world = hairpin(12, 4);
+        // Along the inside of the arc, 1.5 m in from the centreline
+        let last = null, worstS = 0, worstLateral = 0;
+        for (let a = 0.05; a < Math.PI - 0.05; a += 0.002) {
+            const x = 12 - 10.5 * Math.cos(a), z = STRAIGHT + 10.5 * Math.sin(a);
+            const frame = world.route.smoothFrame(x, z, world.route.project(x, z, null, {}).s, {});
+            if (last) {
+                worstS = Math.max(worstS, Math.abs(frame.s - last.s));
+                worstLateral = Math.max(worstLateral, Math.abs(frame.lateral - last.lateral));
+            }
+            last = { ...frame };
+            expect(Math.abs(frame.lateral - 1.5)).toBeLessThan(0.05);
+        }
+        expect(worstS).toBeLessThan(0.05);
+        expect(worstLateral).toBeLessThan(0.01);
+    });
+});
+
+// 4. The edge assist, on a straight 10 m road with open run-off either side
+describe('edge assist', () => {
+    function straightWorld(flags = 0) {
+        const route = new WorldRoute(samplesOf(straight(800), { flags }), {});
+        const ground = new WorldGround(route, fakeData({ tiles: allTiles(-1, 0, -1, 1), zone: () => 0 }));
+        return { route, ground };
+    }
+
+    // A bike at `lateral` heading `angle` (radians) toward +lateral at 20 m/s; `input(tick, vehicle)` steers
+    function drift(level, { lateral = 3, angle = 0.07, seconds = 4, input = () => 0, physics = WorldPhysics, flags = 0 } = {}) {
+        const world = straightWorld(flags);
+        const vehicle = new Vehicle(new THREE.Scene());
+        vehicle.environment = { physics, route: world.route, ground: world.ground };
+        vehicle.assistLevel = level;
+        vehicle.position.set(lateral, 100, 40);
+        vehicle.yawAngle = angle;
+        vehicle.findNearestRoadSegment();
+        const out = { most: -Infinity, laterals: [], leans: [], shares: [], vehicle };
+        for (let tick = 0; tick < seconds * 60 && !vehicle.crashed; tick++) {
+            vehicle.speed = 20;
+            vehicle.update(DT, input(tick, vehicle), 0, 0);
+            out.laterals.push(vehicle.projection.lateral);
+            out.leans.push(vehicle.leanAngle);
+            out.shares.push(vehicle.edgeShare);
+            out.most = Math.max(out.most, vehicle.projection.lateral);
+        }
+        return out;
+    }
+
+    test('a bike drifting off the edge of a straight at 20 m/s with no input is nudged back; with the assist off it leaves', () => {
+        const off = drift('off');
+        const normal = drift('normal');
+        expect(off.most).toBeGreaterThan(WIDTH / 2 + 3);
+        // At most a hand's width over the edge, and back on the road heading along it or back toward it
+        expect(normal.most).toBeLessThan(WIDTH / 2 + 0.1);
+        expect(normal.laterals[normal.laterals.length - 1]).toBeLessThan(WIDTH / 2);
+        expect(Math.sin(normal.vehicle.yawAngle)).toBeLessThanOrEqual(0.01);
+        // low gives less, but still some
+        const low = drift('low');
+        expect(low.most).toBeGreaterThan(normal.most);
+        expect(low.most).toBeLessThan(off.most);
+    });
+
+    test('nothing in the middle of the road, nor heading back toward it', () => {
+        const middle = drift('normal', { lateral: 0, angle: 0.03, seconds: 1 });
+        expect(middle.shares.every(x => x === 0)).toBe(true);
+        const back = drift('normal', { lateral: 4.5, angle: -0.05, seconds: 1 });
+        expect(back.shares.every(x => x === 0)).toBe(true);
+    });
+
+    test('steering back toward the road gets no extra help', () => {
+        const steer = (tick, vehicle) => (vehicle.projection.lateral > 0 ? -0.5 : 0);
+        const off = drift('off', { lateral: 4, input: steer, seconds: 3 });
+        const normal = drift('normal', { lateral: 4, input: steer, seconds: 3 });
+        let checked = 0;
+        for (let i = 0; i < off.laterals.length && off.laterals[i] > 0; i++) {
+            expect(normal.leans[i]).toBe(off.leans[i]);
+            checked++;
+        }
+        expect(checked).toBeGreaterThan(30);
+    });
+
+    test('it is no rail: steered on toward the edge, it fades out over edgeBudgetS and the bike leaves the road', () => {
+        const toward = () => 0.25;
+        const off = drift('off', { lateral: 3, angle: 0, input: toward, seconds: 6 });
+        const normal = drift('normal', { lateral: 3, angle: 0, input: toward, seconds: 6 });
+        expect(off.most).toBeGreaterThan(WIDTH / 2);
+        expect(normal.most).toBeGreaterThan(WIDTH / 2);
+        // It acted, then stopped acting within the budget of continuous use
+        const acting = normal.shares.map(x => x > 0);
+        const first = acting.indexOf(true);
+        expect(first).toBeGreaterThanOrEqual(0);
+        const lastActing = acting.lastIndexOf(true);
+        expect((lastActing - first) * DT).toBeLessThanOrEqual(WorldPhysics.edgeBudgetS + 0.05);
+        expect(normal.vehicle.edgeUsedS).toBeGreaterThanOrEqual(WorldPhysics.edgeBudgetS);
+        // The budget refills once the bike is back in the middle half of the road
+        const vehicle = normal.vehicle;
+        vehicle.crashed = false;
+        vehicle.position.set(0, 100, 300);
+        vehicle.yawAngle = 0;
+        vehicle.leanAngle = 0;
+        vehicle.leanVelocity = 0;
+        vehicle.findNearestRoadSegment();
+        vehicle.speed = 20;
+        vehicle.update(DT, 0, 0, 0);
+        expect(vehicle.edgeUsedS).toBe(0);
+    });
+
+    test('it is off in a tunnel, where the wall response has the edge', () => {
+        const tunnel = drift('normal', { flags: WorldRoute.FLAG.tunnel, seconds: 2 });
+        expect(tunnel.shares.every(x => x === 0)).toBe(true);
+    });
+
+    test('past the edge of a straight, the recovery pull brings the bike back to the edge', () => {
+        const off = drift('off', { lateral: WIDTH / 2 + 1.5, angle: 0, seconds: 1.5 });
+        const normal = drift('normal', { lateral: WIDTH / 2 + 1.5, angle: 0, seconds: 1.5 });
+        expect(normal.laterals[normal.laterals.length - 1]).toBeLessThan(off.laterals[off.laterals.length - 1] - 1);
+        expect(Math.min(...normal.laterals)).toBeGreaterThanOrEqual(WIDTH / 2 - 0.25);
     });
 });
 

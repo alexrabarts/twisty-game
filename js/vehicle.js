@@ -101,6 +101,7 @@ class Vehicle {
         this.leanAngle = 0; // radians (positive = right lean)
         this.leanVelocity = 0;
         this.steeringAngle = 0;
+        this.handlebarAngle = 0; // radians, the world bike's handlebar angle (the low-speed turn), positive with positive input
         this.yawAngle = 0;
         this.crashed = false;
         this.crashAngle = 0;
@@ -2442,6 +2443,13 @@ class Vehicle {
     // at the most lean that turns the bike: the grip cap, or at low speed
     // the lean of the floor radius. The bike lowsides only when the grip
     // it asks for is more than the road has.
+    //
+    // Under turnBlendSpeed the bike also turns on its handlebar, as a real
+    // bike does at walking pace: the yaw rate blends toward v tan(handlebar) /
+    // wheelbase, the floor radius drops toward lockRadius, and the lean limit
+    // (the lean of the floor radius) shrinks toward upright as the speed falls.
+    // The blend is 0 at turnBlendSpeed with no slope, so the yaw rate has no
+    // step there, and above it this method is the lean model alone, unchanged.
     updateWorldPhysics(deltaTime, steeringInput) {
         const world = this.worldPhysics;
         const g = 9.81;
@@ -2451,9 +2459,14 @@ class Vehicle {
         const lean = this.leanAngle;
         this.steeringAngle = steeringInput * 0.3;
 
+        const handlebarShare = this.lowSpeedShare(v);
+        const radiusFloor = handlebarShare > 0
+            ? world.lockRadius + (world.radiusFloor - world.lockRadius) * (1 - handlebarShare)
+            : world.radiusFloor;
+
         const grip = Math.max(0.01, this.worldMultipliers().lateralFriction);
         const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip);
-        const leanLimit = Math.min(capEff, Math.atan(v2 / (g * world.radiusFloor)));
+        const leanLimit = Math.min(capEff, Math.atan(v2 / (g * radiusFloor)));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
@@ -2470,8 +2483,29 @@ class Vehicle {
             ? world.leanLimitGain * (leanLimit - outward)
             : world.limitReturn * Math.abs(u) * (leanLimit - outward);
         if (side * rate > room) rate = side * room;
-        rate = this.lineCapture(rate, u, leanLimit);
+        // The hairpin assist: the line capture, or away from a captured line the edge assist, as one change to the
+        // lean rate, low-passed over assistSmoothing so it never steps from one frame to the next
+        const assist = this.lineCapture(rate, u, leanLimit, handlebarShare, radiusFloor) - rate
+            + (this.lineCaptured ? 0 : this.edgeAssistRate(u, deltaTime));
+        if (assist !== 0 || this.assistLeanRate !== 0) {
+            this.assistLeanRate += (assist - this.assistLeanRate) * (1 - Math.exp(-deltaTime / world.assistSmoothing));
+            if (assist === 0 && Math.abs(this.assistLeanRate) < 1e-6) this.assistLeanRate = 0;
+            rate += this.assistLeanRate;
+        }
         this.leanVelocity += (rate - this.leanVelocity) * (1 - Math.exp(-deltaTime / world.leanRateLag));
+
+        // The handlebar follows the steering within handlebarLag, up to the lock that turns the bike at lockRadius.
+        // A captured line steers it too, by the line's weight, toward the handlebar of the line's curvature
+        const lock = Math.atan(this.wheelbase / world.lockRadius);
+        let bar = u * lock;
+        if (this.lineCaptured && this.lineWeight > 0) {
+            bar += (Math.max(-lock, Math.min(lock, Math.atan(this.wheelbase * this.lineWant))) - bar) * this.lineWeight;
+        } else if (handlebarShare > 0 && this.edgeShare > 0) {
+            // At low speed the lean turns the bike little, so the edge assist turns the handlebar back off the edge
+            bar += (-this.edgeSide * lock * 0.5 - bar) * this.edgeShare;
+        }
+        this.handlebarAngle += (bar - this.handlebarAngle) * (1 - Math.exp(-deltaTime / world.handlebarLag));
+        if (handlebarShare > 0) this.steeringAngle += (this.handlebarAngle - this.steeringAngle) * handlebarShare;
 
         // Let go and the bike stands itself up. This acts on the lean directly, not through the lagged rate, so
         // the next press starts from rest and moves the bike as far as the last one did
@@ -2480,8 +2514,16 @@ class Vehicle {
         this.leanAngle += (this.leanVelocity + righting) * deltaTime;
 
         const tanLean = Math.tan(Math.abs(this.leanAngle));
-        const curvature = v2 > 1e-6 ? Math.min(1 / world.radiusFloor, g * tanLean / v2) : 0;
-        this.yawAngle -= v * curvature * Math.sign(this.leanAngle) * deltaTime;
+        let curvature = v2 > 1e-6 ? Math.min(1 / radiusFloor, g * tanLean / v2) : 0;
+        if (handlebarShare > 0) {
+            // Signed toward +yaw: the lean turns the bike away from its sign, the handlebar toward its own
+            const turn = (1 - handlebarShare) * -curvature * Math.sign(this.leanAngle)
+                + handlebarShare * Math.tan(this.handlebarAngle) / this.wheelbase;
+            this.yawAngle += v * turn * deltaTime;
+            curvature = Math.abs(turn);
+        } else {
+            this.yawAngle -= v * curvature * Math.sign(this.leanAngle) * deltaTime;
+        }
         this.recoveryPull(deltaTime);
 
         this.lastDemand = v2 * curvature / g;
@@ -2497,9 +2539,24 @@ class Vehicle {
         }
     }
 
+    // The share of the yaw rate the handlebar gives at speed v: 1 at rest, 0 at turnBlendSpeed and above, with no
+    // slope at either end (a smoothstep), so the blend adds no step to the yaw rate
+    lowSpeedShare(v) {
+        const blend = this.worldPhysics.turnBlendSpeed;
+        if (!(blend > 0) || v >= blend) return 0;
+        const x = 1 - Math.max(0, v) / blend;
+        return x * x * (3 - 2 * x);
+    }
+
     // The hairpin assist's state: no line captured, the whole recovery budget left
     resetHairpinAssist() {
         this.lineCaptured = false;
+        this.lineWeight = 0;
+        this.lineWant = 0;
+        this.assistLeanRate = 0; // rad/s, the assist's low-passed share of the lean rate
+        this.edgeUsedS = 0; // seconds the edge assist has acted since the bike was last near the road centre
+        this.edgeShare = 0; // the edge assist's strength this frame, 0 to 1
+        this.edgeSide = 0;
         this.recoveryLeft = null; // metres of recovery pull left in this bend; null is the whole budget
         this.hairpinAdvice = null;
     }
@@ -2538,15 +2595,34 @@ class Vehicle {
     roadCurvature(ahead = 0) {
         const p = this.projection;
         if (!p || !(p.index >= 0) || !Number.isFinite(p.s)) return 0;
-        return WorldAssist.curvature(this.environment.route, this.worldPhysics, p.s + ahead);
+        return WorldAssist.curvature(this.environment.route, this.worldPhysics, this.roadFrame().s + ahead);
+    }
+
+    // The bike's road frame for the assist {s, heading, lateral, width}: on the route's smooth centreline when it
+    // has one (WorldRoute.smoothFrame), so the frame does not jump where the polyline turns; else the projection
+    roadFrame() {
+        const p = this.projection;
+        const route = this.environment && this.environment.route;
+        if (!this.frameScratch) this.frameScratch = {};
+        const frame = this.frameScratch;
+        if (frame.x === this.position.x && frame.z === this.position.z && frame.from === p.s) return frame;
+        if (route && typeof route.smoothFrame === 'function') route.smoothFrame(this.position.x, this.position.z, p.s, frame);
+        else { frame.s = p.s; frame.heading = p.heading; frame.lateral = p.lateral; }
+        frame.width = p.width;
+        frame.x = this.position.x;
+        frame.z = this.position.z;
+        frame.from = p.s;
+        return frame;
     }
 
     // 2. Line capture: steering into a tight bend at a turn radius within lineCapture of the line's (the road's
     // radius at the bike's offset, the offset kept within LINE_BAND_M of the centre), the lean rate is blended toward the lean of
     // that line with weight lineStrength x the fade of the bend x |input|. The rest is the rider's own torque.
     // It does nothing with no input, with the input out of the bend, on a gentle bend, or far off the line;
-    // once captured it holds while the radius stays within twice the window.
-    lineCapture(rate, u, leanLimit) {
+    // once captured it holds while the radius stays within twice the window. Under turnBlendSpeed the bike's
+    // radius is the blend of the lean and the handlebar, and the handlebar is steered onto the line as well
+    // (lineWant, lineWeight; updateWorldPhysics).
+    lineCapture(rate, u, leanLimit, handlebarShare = 0, radiusFloor = this.worldPhysics.radiusFloor) {
         const share = this.assistShare();
         if (share <= 0 || u === 0) return this.releaseLine(rate);
         const world = this.worldPhysics;
@@ -2555,36 +2631,101 @@ class Vehicle {
         const sign = Math.sign(k);
         const fade = WorldAssist.fade(world, 1 / Math.abs(k));
         if (fade <= 0 || Math.sign(u) !== sign || v < 1) return this.releaseLine(rate);
-        const p = this.projection;
+        const p = this.roadFrame();
         // The line keeps to the rider's band of the road, clear of the traffic lanes either side
         const room = Math.max(0, Math.min(p.width / 2 - 1.5, WorldAssist.LINE_BAND_M));
         const inner = Math.max(-room, Math.min(room, p.lateral * sign));
-        const lineRadius = Math.max(world.radiusFloor, 1 / Math.abs(k) - inner);
-        // The bike's own radius now: a lean into the bend turns it at v^2 / (g tan lean)
+        const lineRadius = Math.max(radiusFloor, 1 / Math.abs(k) - inner);
+        // The bike's own radius now: a lean into the bend turns it at v^2 / (g tan lean), blended at low speed
+        // with the handlebar's wheelbase / tan(handlebar)
         const into = -this.leanAngle * sign;
-        const radius = into > 1e-3 ? v * v / (9.81 * Math.tan(into)) : Infinity;
+        let radius = into > 1e-3 ? v * v / (9.81 * Math.tan(into)) : Infinity;
+        if (handlebarShare > 0) {
+            const leanCurvature = Math.min(1 / radiusFloor, into > 1e-3 ? 9.81 * Math.tan(into) / (v * v) : 0);
+            const curvature = (1 - handlebarShare) * leanCurvature + handlebarShare * Math.tan(this.handlebarAngle * sign) / this.wheelbase;
+            radius = curvature > 1e-6 ? 1 / curvature : Infinity;
+        }
         const capture = world.lineCapture * (this.lineCaptured ? 2 : 1);
-        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture;
-        if (!this.lineCaptured) return rate;
+        // Under turnBlendSpeed a turn tighter than the line is captured too: the handlebar can turn the bike far
+        // tighter than any hairpin, and a rider holding the lock would otherwise circle on the spot
+        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture || (handlebarShare > 0 && radius < lineRadius);
+        if (!this.lineCaptured) return this.releaseLine(rate);
         // The arc runs along the road: a heading turned past the road's (or short of it) is brought back over
         // about a second of riding, so an early or late turn-in ends on the arc rather than parallel to it
         const ahead = Math.atan2(Math.sin(this.yawAngle - p.heading), Math.cos(this.yawAngle - p.heading)) * sign;
         const reach = Math.max(8, v);
-        const want = Math.max(0, Math.min(1 / world.radiusFloor, 1 / lineRadius - 2 * Math.sin(ahead) / reach));
+        const want = Math.max(0, Math.min(1 / radiusFloor, 1 / lineRadius - 2 * Math.sin(ahead) / reach));
         const lineLean = -sign * Math.min(leanLimit, Math.atan(v * v * want / 9.81));
+        this.lineLeanTarget = lineLean; // read by the smoothness tests
         const weight = Math.min(1, world.lineStrength * share * fade * Math.abs(u));
+        this.lineWant = sign * want;
+        // The handlebar is steered onto the line whole at full input (the rider's share of a lock that turns the bike
+        // at under 3 m would still cut every hairpin)
+        this.lineWeight = handlebarShare > 0 ? Math.min(1, share * fade * Math.abs(u)) : 0;
         return rate * (1 - weight) + weight * WorldAssist.LINE_GAIN * (lineLean - this.leanAngle);
     }
 
     releaseLine(rate) {
         this.lineCaptured = false;
+        this.lineWeight = 0;
         return rate;
+    }
+
+    // 4. Edge assist: anywhere on the ride, a bike within edgeZoneM of either road edge (or past it, within
+    // recoveryReachM) whose heading points further off the road gets a lean-rate nudge back toward the road's
+    // direction, scaled by how close it is to the edge (full from half the zone out) and how sharply it heads off. It does nothing while the
+    // rider steers back toward the road, in a tunnel or gallery, or near a junction barrier (the wall response
+    // has those), and it fades out over edgeBudgetS of use, so it cannot hold a bike against the edge like a
+    // rail; the budget refills once the bike is back in the middle half of the road. Returns the rate (rad/s).
+    edgeAssistRate(u, deltaTime) {
+        this.edgeShare = 0;
+        const share = this.assistShare();
+        const world = this.worldPhysics;
+        const p = this.projection;
+        if (share <= 0 || !(world.edgeLeanRate > 0) || this.crashed || !p || !(p.index >= 0) || !Number.isFinite(p.lateral)) return 0;
+        const frame = this.roadFrame();
+        const half = p.width / 2;
+        const lateral = frame.lateral;
+        if (Math.abs(lateral) <= half * 0.5) this.edgeUsedS = 0;
+        const gap = half - Math.abs(lateral);
+        if (gap > world.edgeZoneM || gap < -world.recoveryReachM || this.speed < 1) return 0;
+        const side = Math.sign(lateral) || 1;
+        const turn = this.yawAngle - frame.heading;
+        const off = Math.sin(turn) * side;
+        if (Math.cos(turn) <= 0 || off <= 0) return 0;
+        if (u !== 0 && Math.sign(u) === -side) return 0;
+        if (this.edgeBlocked(frame.s)) return 0;
+        const budget = Math.max(0, 1 - this.edgeUsedS / world.edgeBudgetS);
+        this.edgeUsedS += deltaTime;
+        if (budget <= 0) return 0;
+        const close = Math.min(1, 2 * (world.edgeZoneM - gap) / world.edgeZoneM); // full from half the zone out
+        const sharp = Math.min(1, off / Math.sin(world.edgeAngleDeg * Math.PI / 180));
+        this.edgeShare = share * close * sharp * budget;
+        this.edgeSide = side;
+        return side * world.edgeLeanRate * this.edgeShare;
+    }
+
+    // In a tunnel or gallery, or within edgeBarrierM of a junction barrier: the wall response handles the edge
+    edgeBlocked(s) {
+        const route = this.environment.route;
+        const sample = route.sample(s, this.edgeScratch || (this.edgeScratch = {}));
+        if (sample.flags && (sample.flags.tunnel || sample.flags.gallery)) return true;
+        const ground = this.environment.ground;
+        const reach = this.worldPhysics.edgeBarrierM;
+        if (ground && ground.barriers) {
+            for (const b of ground.barriers) {
+                const dx = this.position.x - b.x, dz = this.position.z - b.z;
+                if (dx * dx + dz * dz < (reach + b.half) * (reach + b.half)) return true;
+            }
+        }
+        return false;
     }
 
     // 3. Recovery: past the road edge on the outside of a tight bend (or just out of one), the bike is pulled back
     // toward the edge at recoveryPull. Only within recoveryReachM of the edge, facing along the road, and at most
-    // recoveryBudgetM per bend, so it cannot hold a bike against a wall; the budget refills back on the road
-    // with no tight bend under the bike.
+    // recoveryBudgetM per bend, so it cannot hold a bike against a wall. Away from tight bends the same pull acts
+    // past either edge (the edge assist's positional half), except where edgeBlocked; there the budget refills
+    // only in the middle half of the road, so a bike riding the edge cannot be pulled back again and again.
     recoveryPull(deltaTime) {
         const share = this.assistShare();
         const p = this.projection;
@@ -2596,7 +2737,15 @@ class Vehicle {
         const fade = WorldAssist.fade(world, 1 / Math.abs(k));
         const half = p.width / 2;
         if (fade <= 0) {
-            if (Math.abs(p.lateral) <= half) this.recoveryLeft = world.recoveryBudgetM;
+            if (Math.abs(p.lateral) <= half * 0.5) this.recoveryLeft = world.recoveryBudgetM;
+            const out = Math.abs(p.lateral) - half;
+            if (out <= 0 || out > world.recoveryReachM || this.recoveryLeft <= 0) return;
+            if (Math.cos(this.yawAngle - p.heading) <= 0 || this.edgeBlocked(p.s)) return;
+            const back = -Math.sign(p.lateral);
+            const shift = Math.min(world.recoveryPull * share * deltaTime, out, this.recoveryLeft);
+            this.recoveryLeft -= shift;
+            this.position.x += back * shift * Math.cos(p.heading);
+            this.position.z -= back * shift * Math.sin(p.heading);
             return;
         }
         const sign = Math.sign(k);
@@ -2795,6 +2944,7 @@ class Vehicle {
         this.speed = 20;
         this.yawAngle = 0;
         this.steeringAngle = 0;
+        this.handlebarAngle = 0;
         this.leanAngle = 0;
         this.leanVelocity = 0;
         this.crashed = false;

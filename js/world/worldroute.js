@@ -128,6 +128,68 @@ class WorldRoute extends PolylineRoute {
     // The signed heading change per metre over the `span` metres after s
     curvatureAt(s, span) { return this.headingChange(s, s + span) / span; }
 
+    // A smooth curvature profile for the hairpin assist: the signed curvature over a `span` centred on each
+    // sample, then a [1 2 1] pass along the ride, built once per span and interpolated linearly between the
+    // samples, so it has no steps where the 4 m polyline turns from one segment to the next
+    smoothCurvatureAt(s, span) {
+        if (!this.smoothCurvature || this.smoothCurvature.span !== span) {
+            const count = this.points.length;
+            const raw = new Float64Array(count), values = new Float64Array(count);
+            for (let i = 0; i < count; i++) raw[i] = this.headingChange(this.sArray[i] - span / 2, this.sArray[i] + span / 2) / span;
+            for (let i = 0; i < count; i++) values[i] = (raw[Math.max(0, i - 1)] + 2 * raw[i] + raw[Math.min(count - 1, i + 1)]) / 4;
+            this.smoothCurvature = { span, values };
+        }
+        const values = this.smoothCurvature.values;
+        const last = this.points.length - 1;
+        if (last < 1) return 0;
+        const clamped = Math.max(0, Math.min(this.length, s));
+        const i = Math.min(last - 1, this.indexAt(clamped));
+        const run = this.sArray[i + 1] - this.sArray[i];
+        const t = run > 0 ? (clamped - this.sArray[i]) / run : 0;
+        return values[i] + (values[i + 1] - values[i]) * t;
+    }
+
+    // The road frame at (x, z) on a smooth centreline: a cubic through the samples with each sample's heading
+    // as its tangent, so the frame has no kinks at the samples. From the projection's s (which jumps a little
+    // on the inside of a turn, where the nearest polyline segment changes) a few Newton steps find the point
+    // whose tangent is square to the bike. Fills out {s, heading, lateral} and returns it.
+    smoothFrame(x, z, s0, out = {}) {
+        const last = this.points.length - 1;
+        let s = Math.max(0, Math.min(this.length, s0));
+        for (let step = 0; step < 4 && last >= 1; step++) {
+            this.curveAt(s, out);
+            const along = (x - out.px) * Math.sin(out.heading) + (z - out.pz) * Math.cos(out.heading);
+            const next = Math.max(0, Math.min(this.length, s + along));
+            if (Math.abs(next - s) < 1e-4) break;
+            s = next;
+        }
+        if (last >= 1) this.curveAt(s, out);
+        else { out.px = x; out.pz = z; out.heading = 0; }
+        out.s = s;
+        out.lateral = (x - out.px) * Math.cos(out.heading) - (z - out.pz) * Math.sin(out.heading);
+        return out;
+    }
+
+    // The cubic Hermite centreline at s: {px, pz, heading}
+    curveAt(s, out) {
+        const last = this.points.length - 1;
+        const i = Math.min(last - 1, this.indexAt(Math.max(0, Math.min(this.length, s))));
+        const a = this.points[i], b = this.points[i + 1];
+        const run = this.sArray[i + 1] - this.sArray[i];
+        const t = run > 0 ? Math.max(0, Math.min(1, (s - this.sArray[i]) / run)) : 0;
+        const tax = Math.sin(a.heading) * run, taz = Math.cos(a.heading) * run;
+        const tbx = Math.sin(b.heading) * run, tbz = Math.cos(b.heading) * run;
+        const t2 = t * t, t3 = t2 * t;
+        const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+        out.px = h00 * a.x + h10 * tax + h01 * b.x + h11 * tbx;
+        out.pz = h00 * a.z + h10 * taz + h01 * b.z + h11 * tbz;
+        const d00 = 6 * t2 - 6 * t, d10 = 3 * t2 - 4 * t + 1, d01 = -6 * t2 + 6 * t, d11 = 3 * t2 - 2 * t;
+        const dx = d00 * a.x + d10 * tax + d01 * b.x + d11 * tbx;
+        const dz = d00 * a.z + d10 * taz + d01 * b.z + d11 * tbz;
+        out.heading = dx === 0 && dz === 0 ? a.heading : Math.atan2(dx, dz);
+        return out;
+    }
+
     // Runs of the ride that carry `kind` (tunnel, bridge, gallery or cobbles): [{s0, s1}]
     ranges(kind) {
         const bit = WorldRoute.FLAG[kind];

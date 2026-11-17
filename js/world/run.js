@@ -263,9 +263,11 @@ class WorldAssist {
         return Math.sqrt(9.81 * r * Math.tan(physics.adviceLeanDeg * Math.PI / 180) * grip);
     }
 
-    // The road's signed curvature over assistSpanM from s (positive toward +lateral)
+    // The road's signed curvature over assistSpanM from s (positive toward +lateral). On a route with the smooth
+    // profile (WorldRoute.smoothCurvatureAt) it is that profile centred on the same span, so it has no steps
     static curvature(route, physics, s) {
-        return route.curvatureAt(s, physics.assistSpanM);
+        const span = physics.assistSpanM;
+        return typeof route.smoothCurvatureAt === 'function' ? route.smoothCurvatureAt(s + span / 2, span) : route.curvatureAt(s, span);
     }
 
     // The next tight bend (radius assistTightR or less) that starts within `look` metres of s:

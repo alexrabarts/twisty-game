@@ -18,6 +18,13 @@ const WorldPhysics = Object.freeze({
     leanLimitGain: 8,      // 1/s, the soft limit: the lean rate is at most this times the room under the limit
     limitReturn: 3,        // 1/s, past the limit with steering held, the lean comes back at this times the excess
 
+    // Low-speed turn: under turnBlendSpeed the yaw rate blends (a smoothstep, 1 at rest) from the lean model to the
+    // handlebar's v tan(handlebar) / wheelbase, and the floor radius drops from radiusFloor to lockRadius with it.
+    // The lean limit is the lean of that floor, so the bike stands up as it slows. Above turnBlendSpeed: no change
+    turnBlendSpeed: 7,     // m/s
+    lockRadius: 2.8,       // m, the turn at full lock (the handlebar lock is atan(wheelbase / lockRadius))
+    handlebarLag: 0.1,     // s, how far the handlebar lags the steering
+
     // Slope and low speed
     slopeGravity: 1.0,     // share of the route grade that acts on the bike
     creepSpeed: 4,         // m/s, the bike creeps up to this with no throttle
@@ -50,6 +57,18 @@ const WorldPhysics = Object.freeze({
     recoveryPull: 1.5,     // m/s at level normal
     recoveryBudgetM: 3,
     recoveryReachM: 4,
+    // 4. Edge assist, anywhere on the ride: within edgeZoneM of a road edge (or past it, within recoveryReachM) and
+    //    heading further off, a lean-rate nudge back toward the road's direction, full at the edge and at a heading
+    //    edgeAngleDeg or more off the road. None while the rider steers back, in a tunnel or gallery, or within
+    //    edgeBarrierM of a junction barrier; it fades out over edgeBudgetS of use (refilled in the middle half of
+    //    the road). Past the edge away from tight bends, the recovery pull above acts too
+    edgeLeanRate: 1.5,     // rad/s at level normal
+    edgeZoneM: 1,
+    edgeAngleDeg: 5,
+    edgeBudgetS: 1.5,
+    edgeBarrierM: 12,
+    // The line capture and the edge assist reach the lean rate as one contribution, low-passed over this
+    assistSmoothing: 0.1,  // s
 
     // Used by the run layer (R3) and the restart (R3), kept here with the rest
     restartSpeedMax: 15,
