@@ -12,7 +12,10 @@ class Scenery {
     static get TREE_CAP() { return 1000; }
     static get BUILDING_CAP() { return 300; }
     // Triangles the trees and houses may add up to in a window (the window budget is 450 000 in all)
-    static get TRIANGLE_CAP() { return 200000; }
+    // (200 000 until the far land took about 50 000 of the window: js/world/horizon.js FarLand)
+    static get TRIANGLE_CAP() { return 140000; }
+    // Boulders on rock and scree, nearest first (20 triangles each)
+    static get BOULDER_CAP() { return 160; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
     static get HOUSE_TRIANGLES() { return 80000; }
     static get SIGN_CAP() { return 40; }
@@ -128,6 +131,40 @@ class Scenery {
         return sites;
     }
 
+    // Boulder sites of a tile: [{x, y, z, size, turn}] on rock and scree cells clear of the roads
+    boulderSites(tile, cover) {
+        const sites = [];
+        if (!cover) return sites;
+        const n = WorldData.COVER_N;
+        const cell = WorldData.TILE_M / n;
+        for (let cj = 0; cj < n; cj++) {
+            for (let ci = 0; ci < n; ci++) {
+                const cls = cover[cj * n + ci];
+                const chance = cls === 4 ? 0.14 : cls === 3 ? 0.06 : 0;
+                if (!chance) continue;
+                const ix = tile.tx * n + ci, iz = tile.tz * n + cj;
+                if (Scenery.hash(ix, iz, 31) >= chance) continue;
+                const x = tile.tx * WorldData.TILE_M + (ci + Scenery.hash(ix, iz, 32)) * cell;
+                const z = tile.tz * WorldData.TILE_M + (cj + Scenery.hash(ix, iz, 33)) * cell;
+                if (!this.clear(x, z)) continue;
+                const y = this.ground.tileHeight(x, z);
+                if (y === null) continue;
+                sites.push({ x, y: y - 0.3, z, size: 0.8 + 2.2 * Scenery.hash(ix, iz, 34) ** 2, turn: Scenery.hash(ix, iz, 35) * Math.PI * 2 });
+            }
+        }
+        return sites;
+    }
+
+    // A boulder: a flattened, flat-shaded icosahedron in grey granite
+    static boulderPart() {
+        if (!Scenery.boulder) {
+            const geometry = new THREE.IcosahedronGeometry(1, 0);
+            geometry.translate(0, 0.45, 0);
+            Scenery.boulder = { geometry, material: new THREE.MeshLambertMaterial({ color: 0x8a857c, flatShading: true }) };
+        }
+        return Scenery.boulder;
+    }
+
     static trianglesOf(parts) {
         return parts.reduce((sum, part) => sum + (part.geometry.index ? part.geometry.index.count : part.geometry.attributes.position.count) / 3, 0);
     }
@@ -211,7 +248,23 @@ class Scenery {
         held.trees = taken.length;
         held.treeTriangles = spent;
 
+        // Boulders on the rock and scree cells, as many as the cap leaves
+        const stones = this.boulderSites(tile, cover).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Scenery.BOULDER_CAP - (this.boulderCount || 0)));
+        if (stones.length) {
+            const matrices = stones.map((b) => {
+                rotation.setFromAxisAngle(up, b.turn);
+                position.set(b.x, b.y, b.z);
+                scale.set(b.size * 1.3, b.size * 0.8, b.size);
+                return new THREE.Matrix4().compose(position, rotation, scale);
+            });
+            this.instanced([Scenery.boulderPart()], matrices, 'boulders', group);
+        }
+        held.boulders = stones.length;
+        held.boulderTriangles = stones.length * 20;
+
         if (!group.children.length) return null;
+        this.boulderCount = (this.boulderCount || 0) + held.boulders;
+        this.triangles += held.boulderTriangles;
         this.treeCount += held.trees;
         this.houseInstances += held.house;
         this.houseTriangles += held.houseTriangles;
@@ -258,7 +311,8 @@ class Scenery {
         this.treeCount -= held.trees;
         this.houseInstances -= held.house;
         this.houseTriangles -= held.houseTriangles;
-        this.triangles -= held.treeTriangles + held.houseTriangles;
+        this.triangles -= held.treeTriangles + held.houseTriangles + (held.boulderTriangles || 0);
+        this.boulderCount = (this.boulderCount || 0) - (held.boulders || 0);
         this.perTile.delete(key);
     }
 
