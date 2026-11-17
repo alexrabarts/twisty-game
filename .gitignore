@@ -12,3 +12,9 @@ build/
 .vscode/
 *.sublime-*
 __pycache__/
+
+# world data: raw swisstopo downloads never enter the repo
+*.gpkg
+*.tif
+*.tiff
+*.gpkg.zip
