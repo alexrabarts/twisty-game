@@ -19,7 +19,8 @@
 class RoadMesh {
     static get COLORS() {
         return {
-            asphalt: [0.20, 0.20, 0.21], cobbles: [0.43, 0.40, 0.35], kerb: [0.55, 0.54, 0.52],
+            // Worn alpine asphalt and the pale granite setts of the Via Tremola, as they read in daylight
+            asphalt: [0.28, 0.28, 0.29], cobbles: [0.45, 0.43, 0.40], kerb: [0.52, 0.51, 0.49], sideAsphalt: [0.37, 0.37, 0.37],
             edgeLine: [0.85, 0.85, 0.82], centreLine: [0.86, 0.72, 0.18], concrete: [0.50, 0.50, 0.48],
             tunnel: [0.32, 0.31, 0.30], deck: [0.38, 0.37, 0.36], barrierRed: [0.78, 0.12, 0.10], barrierWhite: [0.92, 0.92, 0.90]
         };
@@ -34,7 +35,7 @@ class RoadMesh {
     // A rider sees a flat-lit road: the surface material is shared by every road mesh
     static material() {
         if (!RoadMesh.sharedMaterial) {
-            RoadMesh.sharedMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+            RoadMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
         }
         return RoadMesh.sharedMaterial;
     }
@@ -68,7 +69,7 @@ class RoadMesh {
 
     // The ribbon of a run of rows: {mesh, triangles, clamped} (clamped: rows whose inside edge was held).
     // `holdY(x, y, z, row)`, when given, may lower each vertex of `row` (a side road under the ride, RoadMesh.sideRoad).
-    static ribbon(rows, lod = 0, holdY = null) {
+    static ribbon(rows, lod = 0, holdY = null, side = false) {
         const colors = RoadMesh.COLORS;
         const kept = lod === 0 ? rows : RoadMesh.decimate(rows);
         const curve = RoadMesh.curvature(kept);
@@ -89,7 +90,8 @@ class RoadMesh {
                 strips = [colors.kerb, road, cobbles ? road : colors.edgeLine, road, cobbles ? road : colors.centreLine, road, cobbles ? road : colors.edgeLine, road, colors.kerb];
             } else {
                 offsets = [-h, h];
-                strips = [road];
+                // A side road is seen from far off and from above: worn grey, not the ride's fresh black
+                strips = [cobbles ? road : side ? colors.sideAsphalt : road];
             }
             // The inside of a bend: right offsets when the road turns right
             const radius = Math.abs(curve[k]) > 1e-6 ? 1 / Math.abs(curve[k]) : Infinity;
@@ -251,7 +253,7 @@ class RoadMesh {
     static sideRoad(rows, stub, holdY = null) {
         const group = new THREE.Group();
         group.name = stub ? 'world-road-stub' : 'world-road-side';
-        const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1, holdY);
+        const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1, holdY, true);
         group.add(RoadMesh.mesh(ribbon.geometry, 'road-side'));
         group.userData.triangles = ribbon.triangles;
         return group;
