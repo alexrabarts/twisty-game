@@ -43,6 +43,24 @@ class Game {
                 exposure: 1.0,
                 sunOffset: { x: 60, y: 90, z: 45 }
             },
+            day: {
+                name: 'Day',
+                skyColor: 0xa9cdee,
+                fogColor: 0xc6dcee,
+                ambientColor: 0x383838,
+                ambientIntensity: 0.42,
+                hemisphereTop: 0x9cc4e4,
+                hemisphereBottom: 0x4e4a3c,
+                hemisphereIntensity: 0.8,
+                sunColor: 0xfffaf0,
+                sunIntensity: 0.95,
+                fillColor: 0xe9f3ff,
+                fillIntensity: 0.24,
+                rimColor: 0xffffff,
+                rimIntensity: 0.22,
+                exposure: 1.0,
+                sunOffset: { x: 40, y: 100, z: 30 }
+            },
             sunset: {
                 name: 'Sunset',
                 skyColor: 0xff8866,
@@ -249,18 +267,24 @@ class Game {
         note.remove();
     }
 
-    // The game on a world: no cones, rockfalls or traffic are built (W4 puts traffic on the route),
-    // and the atmosphere track is the leg engine's, so the page's own sky and light stand.
+    // The game on a world: no cones or rockfalls are built (they are leg systems), traffic rides the
+    // route, and the atmosphere track runs along the whole ride in 100 m units (R5).
     async initializeGameWithWorld(environment) {
         this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
         this.environment = environment;
         this.environment.applyLandscapeConfig(this.environment.config.look);
         this.applyShadowBox(this.environment.config.render);
-        this.atmosphereTrack = null;
         this.cones = null;
         this.rockfalls = null;
-        this.traffic = null;
         this.particles = new ParticleSystem(this.scene);
+
+        this.atmosphereTrack = AtmosphereTrack.forWorld(environment.route.stages, environment.route, WorldLooks);
+        if (typeof WeatherSystem !== 'undefined') {
+            if (this.weatherSystem) this.weatherSystem.dispose();
+            this.weatherSystem = new WeatherSystem(this.scene, this.camera, AtmosphereTrack.seededRandom(`world-${environment.config.id}`));
+            this.weatherSystem.prepare(this.atmosphereTrack.weatherTypes());
+        }
+
         this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter);
         this.vehicle.environment = this.environment;
         if (this.weatherSystem) this.vehicle.setWeatherSystem(this.weatherSystem);
@@ -272,6 +296,16 @@ class Game {
         // The ground under the first frame is here before the bike is
         await this.environment.streamer.settle(start, this.environment.startS);
 
+        this.traffic = new Traffic(this.scene, this.environment, this.selectedCharacter ? this.selectedCharacter.name : null);
+        this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(this.environment.startS), {
+            environment: this.environment,
+            weatherSystem: this.weatherSystem || null
+        });
+
+        this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
+        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground);
+        this.worldCamera.reset(start.heading);
+
         const normalCameraOffset = this.baseCameraOffset.clone();
         normalCameraOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
         const normalCameraPos = this.vehicle.position.clone().add(normalCameraOffset);
@@ -280,7 +314,8 @@ class Game {
         this.cameraIntroEndPos.copy(normalCameraPos);
         this.currentCameraPos.copy(normalCameraPos);
 
-        this.environment.guide.onRestart = () => this.restartFromCheckpoint();
+        this.environment.guide.onRestart = (reason) => this.restartFromCheckpoint(reason);
+        this.environment.guide.onWarning = (text) => showCallout(text, 'bad', 2500);
         this.resetRunState();
         this.armWorldStart();
         this.graphics.fixColorSpaces();
@@ -293,11 +328,32 @@ class Game {
         this.animationFrameId = requestAnimationFrame(() => this.animate());
     }
 
+    // The stage the HUD shows and the stations on its bar, as shares of the stage
+    showWorldStage() {
+        const { environment, hud } = this;
+        const { from, to } = this.worldStageSpan();
+        hud.showStage(environment.stationGates.map(station => HudRules.stageShare(station.s, from, to)));
+    }
+
+    // "Tremola" for the stage "Tremola, Airolo to the Gotthard summit"
+    worldStageName() {
+        const stage = this.environment.stage;
+        return stage ? stage.name.split(',')[0] : 'Andermatt';
+    }
+
+    // The span of the stage being ridden: the selected stage, or the whole ride
+    worldStageSpan() {
+        const stage = this.environment.stage;
+        return stage ? { from: stage.from, to: stage.to } : { from: 0, to: this.environment.route.length };
+    }
+
     // Until a gate is passed, a restart puts the rider back on the start
     armWorldStart() {
         const start = this.environment.startPosition();
         this.lastCheckpointPosition = new THREE.Vector3(start.x, start.y, start.z);
         this.lastCheckpointHeading = start.heading;
+        this.worldRun.begin(this.environment.startS);
+        this.worldCamera.reset(start.heading);
     }
 
     // What the guide reads each frame; the projection is the vehicle's own, from its wall check
@@ -685,8 +741,9 @@ class Game {
             const leg = this.tourSystem && this.tourSystem.getCurrentLeg();
             const index = leg ? this.tourSystem.getCurrentLegIndex() : -1;
             const world = this.environment && this.environment.isWorld;
-            this.hud.startRun(world ? 'Andermatt world' : leg ? `Leg ${index + 1} · ${leg.name}` : '');
+            this.hud.startRun(world ? `Stage 1 · ${this.worldStageName()}` : leg ? `Leg ${index + 1} · ${leg.name}` : '');
             this.hud.setGates(0, this.gateTotal());
+            if (world) this.showWorldStage();
         }
         this.hideSplit();
         this.updateScoreDisplay();
@@ -1279,7 +1336,7 @@ class Game {
         if (!track || !this.vehicle) return;
         const scratch = this.atmosphereSample || (this.atmosphereSample = {});
         const route = this.environment.route;
-        const sample = track.sample(route.toUnits(this.vehicle.routeS || 0), scratch);
+        const sample = track.sample(this.environment.isWorld ? this.vehicle.routeS / AtmosphereTrack.WORLD_UNIT_M : route.toUnits(this.vehicle.routeS || 0), scratch);
         const written = this.atmosphereWritten;
         const settled = sample.t === 0 && written && written.t === 0 && written.a === sample.a;
 
@@ -1299,10 +1356,16 @@ class Game {
         this.applySectionLook(this.atmosphereLook);
     }
 
+    // Where progress s sits on the atmosphere track: route units on a leg, 100 m units in a world
+    atmosphereUnit(s) {
+        return this.environment.isWorld ? s / AtmosphereTrack.WORLD_UNIT_M : this.environment.route.toUnits(s);
+    }
+
     // Where the bike is along the road, in fractional segments: the segment it
     // is nearest to, and how far it has passed along the line to the next
     roadPosition() {
         const route = this.environment && this.environment.route;
+        if (this.environment.isWorld) return this.atmosphereUnit(this.vehicle.projection.s ?? this.vehicle.routeS ?? 0);
         const at = this.vehicle.position;
         const segment = route ? route.toUnits(this.vehicle.routeS || 0) : 0;
         if (!route || !at) return segment;
@@ -1633,8 +1696,8 @@ class Game {
             // Dynamic camera offset based on lean angle for better mountain road feel
             const leanInfluence = this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2); // More influence in high view
             
-            // Combine lateral lag with lean influence
-            this.cameraOffset.x = this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
+            // Combine lateral lag with lean influence; a world's boom turns by the route, so it has neither
+            this.cameraOffset.x = this.environment.isWorld ? this.baseCameraOffset.x : this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
             
             // Adjust height based on speed for dramatic effect
             const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
@@ -1647,7 +1710,14 @@ class Game {
 
         // Calculate camera position relative to vehicle
         const offset = this.cameraOffset.clone();
-        offset.applyEuler(vehicleRotation);
+        const world = this.environment.isWorld && currentMode.type !== 'onboard';
+        if (world) {
+            // The boom follows the route behind the bike, not the bike's yaw, and the land shortens it
+            const boomYaw = this.worldCamera.followYaw(this.vehicle.projection.s ?? this.vehicle.routeS, deltaTime);
+            offset.applyEuler(new THREE.Euler(0, boomYaw, 0));
+        } else {
+            offset.applyEuler(vehicleRotation);
+        }
         const cameraPos = vehiclePos.clone().add(offset);
 
         // Smooth camera movement with lag - adaptive based on speed and conditions
@@ -1677,6 +1747,7 @@ class Game {
         }
 
         this.camera.position.copy(this.currentCameraPos);
+        if (world) this.worldBoom(vehiclePos, this.camera.position, deltaTime);
 
         // Additional camera shake at high speeds (outside onboard mode)
         if (currentMode.type !== 'onboard') {
@@ -1795,11 +1866,17 @@ class Game {
             const lookTarget = vehiclePos.clone().add(this.tempVector);
             lookTarget.y += currentMode.type === 'high' ? 2 : 1; // Look higher in high view
             
-            // Add lean-based lateral offset for corner viewing (less in high view)
-            const leanLateralOffset = -this.vehicle.leanAngle * (currentMode.type === 'high' ? 2 : 4);
-            this.tempUpVector.set(leanLateralOffset, 0, 0);
-            this.tempUpVector.applyEuler(vehicleRotation);
-            lookTarget.add(this.tempUpVector);
+            if (this.environment.isWorld) {
+                // A world looks along the road ahead, which turns before the bike does
+                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, currentMode.type === 'high' ? 2 : 1);
+                lookTarget.set(ahead.x, ahead.y, ahead.z);
+            } else {
+                // Add lean-based lateral offset for corner viewing (less in high view)
+                const leanLateralOffset = -this.vehicle.leanAngle * (currentMode.type === 'high' ? 2 : 4);
+                this.tempUpVector.set(leanLateralOffset, 0, 0);
+                this.tempUpVector.applyEuler(vehicleRotation);
+                lookTarget.add(this.tempUpVector);
+            }
             this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
             
             // Camera banking BEFORE lookAt - subtle lean feedback
@@ -1842,6 +1919,16 @@ class Game {
         this.updateShadowCamera();
     }
     
+    // The boom from the bike's head to the wanted camera position, shortened by the land in the way
+    worldBoom(vehiclePos, want, deltaTime) {
+        const head = this.worldHead || (this.worldHead = { x: 0, y: 0, z: 0 });
+        head.x = vehiclePos.x;
+        head.y = vehiclePos.y + WorldCamera.HEAD_M;
+        head.z = vehiclePos.z;
+        const placed = this.worldCamera.place(head, want, this.vehicle.projection.index, deltaTime, this.worldPlaced || (this.worldPlaced = {}));
+        return want.set(placed.x, placed.y, placed.z);
+    }
+
     updateShadowCamera() {
         // Make the directional lights' shadow cameras follow the player,
         // preserving the time-of-day sun direction (low sun = long shadows)
@@ -1889,6 +1976,7 @@ class Game {
         if (this.hud) {
             this.hud.setSpeed(this.vehicle.getSpeed(), this.vehicle.maxSpeed * 2.237);
             this.hud.update(this.raceElapsed(), this.firstInputAt);
+            if (this.environment.isWorld) this.updateWorldHud();
         }
 
         // Peripheral motion blur ramps in above ~45% of max speed
@@ -1925,6 +2013,14 @@ class Game {
     }
     
     
+    // The stage line, its bar and the ride distance: from the one projection of the frame
+    updateWorldHud() {
+        const { from, to } = this.worldStageSpan();
+        const s = this.vehicle.projection.s ?? this.vehicle.routeS ?? 0;
+        const line = HudRules.stageLine(1, 1, this.worldStageName(), this.raceElapsed());
+        this.hud.setStage(line, HudRules.stageShare(s, from, to), HudRules.kmText(s, this.environment.route.length));
+    }
+
     updateWheelieIndicator() {
         if (!this.wheelieElements) {
             this.wheelieElements = {
@@ -3074,26 +3170,16 @@ class Game {
 
         // Check for checkpoint passes and jump scoring
         if (!this.vehicle.crashed && !this.finished) {
+            if (this.environment.isWorld) this.updateWorldRun(deltaTime);
             this.checkCheckpoints();
             this.checkJumpScoring();
             this.checkSpeedStreak(deltaTime);
             this.checkNearMisses();
         }
 
-        // Check for finish line crossing
-        if (!this.finished && !this.vehicle.crashed && this.environment.finishGate) {
-            if (this.inGate(this.environment.finishGate, this.vehicle.position)) {
-                // Taken before `finished` is set: raceElapsed() returns the frozen time after
-                const finishTime = this.raceElapsed();
-                this.finished = true;
-                this.vehicle.finished = true; // Prevent crashes after finishing
-                this.finishTime = finishTime;
-                if (this.leaderboardService && this.leaderboardService.isActive() && this.leaderboardService.protocol === 2) {
-                    this.leaderboardService.recordFinish(Math.round(finishTime))
-                        .catch(error => console.error('Failed to record finish:', error));
-                }
-                this.showFinishScreen();
-            }
+        // Check for finish line crossing (a world's last station is the finish: WorldRun)
+        if (!this.finished && !this.vehicle.crashed && this.environment.finishGate && !this.environment.isWorld) {
+            if (this.inGate(this.environment.finishGate, this.vehicle.position)) this.finishRun();
         }
 
         // Check if vehicle is in roadworks zone
@@ -3239,7 +3325,8 @@ class Game {
         }
         // A world streams by place round the bike, and guides the rider
         if (this.environment && this.environment.isWorld && this.vehicle) {
-            this.environment.update(this.vehicle.position, this.vehicle.routeS || 0, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS);
+            // The barrier set follows accepted progress, so a flicker of the projection cannot swap it at a junction used twice
+            this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS);
         }
 
         // Distance-cull far scenery (throttled internally)
@@ -3356,6 +3443,8 @@ class Game {
 
     checkCheckpoints() {
         if (!this.environment || !this.environment.checkpoints) return;
+        // A world passes its stations by progress along the route (WorldRun), never by position
+        if (this.environment.isWorld) return;
         
         for (let checkpoint of this.environment.checkpoints) {
             if (!checkpoint.passed) {
@@ -3372,82 +3461,127 @@ class Game {
                     const totalCheckpoints = this.environment.checkpoints.length;
                     if (checkpoint.index === this.lastCheckpointIndex + 1 ||
                         (this.lastCheckpointIndex === totalCheckpoints - 1 && checkpoint.index === 0)) {
-                        
-                        checkpoint.passed = true;
-                        this.lastCheckpointIndex = checkpoint.index;
-                        this.checkpointsPassed++;
-
-                        // Store checkpoint position for restart
-                        this.lastCheckpointPosition = checkpoint.position.clone();
-                        this.lastCheckpointHeading = checkpoint.heading;
-                        this.lastCheckpointSegment = checkpoint.segmentIndex;
-                        console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
-
-                        // Record checkpoint pass time
-                        const currentTime = Math.round(this.raceElapsed());
-                        this.checkpointTimes[checkpoint.index] = currentTime;
-
-                        // Record in leaderboard service
-                        if (this.leaderboardService && this.leaderboardService.isActive()) {
-                            this.leaderboardService.recordCheckpoint(checkpoint.index, currentTime)
-                                .catch(error => console.error('Failed to record checkpoint:', error));
-                        }
-
-                        // Calculate speed-based points
-                        let sectionTime = 0;
-                        let basePoints = 100; // Base points per checkpoint
-
-                        if (checkpoint.index > 0 && this.checkpointTimes[checkpoint.index - 1]) {
-                            // Calculate time for this section
-                            sectionTime = (currentTime - this.checkpointTimes[checkpoint.index - 1]) / 1000; // Convert to seconds
-
-                            // Calculate actual distance between checkpoints
-                            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
-                            const distance = checkpoint.position.distanceTo(prevCheckpoint.position);
-                            const averageSpeed = distance / sectionTime; // m/s
-                            const speedKmh = averageSpeed * 3.6; // km/h
-
-                            // Award points based on speed (faster = more points)
-                            // Base speed threshold: 60 km/h gives base points, faster gives bonus
-                            const speedBonus = Math.max(0, speedKmh - 60) * 1.5; // 1.5 points per km/h over 60
-                            basePoints += Math.floor(speedBonus);
-                        } else if (checkpoint.index === 0) {
-                            // First checkpoint gets base points
-                            basePoints = 100;
-                        }
-
-                        // Apply combo multiplier
-                        // (the multiplier steps in halves: keep the award whole)
-                        const points = Math.round(basePoints * this.comboMultiplier);
-                        this.addScore(points);
-                        
-                        // Increase combo
-                        this.combo++;
-                        if (this.combo >= 3) {
-                            this.comboMultiplier = Math.min(this.combo / 2, 5); // Max 5x multiplier
-                        }
-                        
-                        // Show checkpoint notification
-                        this.showSplit(checkpoint.index, currentTime, points);
-
-                        // Play checkpoint sound
-                        this.soundManager.playCheckpointSound();
-
-                        // Log speed info for first checkpoint or sections
-                        if (checkpoint.index === 0) {
-                            console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points`);
-                        } else {
-                            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
-                            const dist = checkpoint.position.distanceTo(prevCheckpoint.position);
-                            const speedKmh = ((dist / sectionTime) * 3.6).toFixed(1);
-                            console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points (${speedKmh} km/h)`);
-                        }
+                        this.passCheckpoint(checkpoint);
                     }
                 }
             }
         }
     }
+
+    // A gate passed in order: the restart point, the split, the points and the board record
+    passCheckpoint(checkpoint) {
+        checkpoint.passed = true;
+        this.lastCheckpointIndex = checkpoint.index;
+        this.checkpointsPassed++;
+
+        // Store checkpoint position for restart
+        this.lastCheckpointPosition = checkpoint.position.clone();
+        this.lastCheckpointHeading = checkpoint.heading;
+        this.lastCheckpointSegment = checkpoint.segmentIndex;
+        console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
+
+        // Record checkpoint pass time
+        const currentTime = Math.round(this.raceElapsed());
+        this.checkpointTimes[checkpoint.index] = currentTime;
+
+        // Record in leaderboard service
+        if (this.leaderboardService && this.leaderboardService.isActive()) {
+            this.leaderboardService.recordCheckpoint(checkpoint.index, currentTime)
+                .catch(error => console.error('Failed to record checkpoint:', error));
+        }
+
+        // Calculate speed-based points
+        let sectionTime = 0;
+        let basePoints = 100; // Base points per checkpoint
+
+        if (checkpoint.index > 0 && this.checkpointTimes[checkpoint.index - 1]) {
+            // Calculate time for this section
+            sectionTime = (currentTime - this.checkpointTimes[checkpoint.index - 1]) / 1000; // Convert to seconds
+
+            // Calculate actual distance between checkpoints
+            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
+            const distance = checkpoint.position.distanceTo(prevCheckpoint.position);
+            const averageSpeed = distance / sectionTime; // m/s
+            const speedKmh = averageSpeed * 3.6; // km/h
+
+            // Award points based on speed (faster = more points)
+            // Base speed threshold: 60 km/h gives base points, faster gives bonus
+            const speedBonus = Math.max(0, speedKmh - 60) * 1.5; // 1.5 points per km/h over 60
+            basePoints += Math.floor(speedBonus);
+        } else if (checkpoint.index === 0) {
+            // First checkpoint gets base points
+            basePoints = 100;
+        }
+
+        // Apply combo multiplier
+        // (the multiplier steps in halves: keep the award whole)
+        const points = Math.round(basePoints * this.comboMultiplier);
+        this.addScore(points);
+        
+        // Increase combo
+        this.combo++;
+        if (this.combo >= 3) {
+            this.comboMultiplier = Math.min(this.combo / 2, 5); // Max 5x multiplier
+        }
+        
+        // Show checkpoint notification
+        this.showSplit(checkpoint.index, currentTime, points);
+
+        // Play checkpoint sound
+        this.soundManager.playCheckpointSound();
+
+        // Log speed info for first checkpoint or sections
+        if (checkpoint.index === 0) {
+            console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points`);
+        } else {
+            const prevCheckpoint = this.environment.checkpoints[checkpoint.index - 1];
+            const dist = checkpoint.position.distanceTo(prevCheckpoint.position);
+            const speedKmh = ((dist / sectionTime) * 3.6).toFixed(1);
+            console.log(`Checkpoint ${checkpoint.index + 1} passed! +${points} points (${speedKmh} km/h)`);
+        }
+    }
     
+    // The line is crossed: the time is frozen, recorded and shown
+    finishRun() {
+        // Taken before `finished` is set: raceElapsed() returns the frozen time after
+        const finishTime = this.raceElapsed();
+        this.finished = true;
+        this.vehicle.finished = true; // Prevent crashes after finishing
+        this.finishTime = finishTime;
+        if (this.leaderboardService && this.leaderboardService.isActive() && this.leaderboardService.protocol === 2) {
+            this.leaderboardService.recordFinish(Math.round(finishTime))
+                .catch(error => console.error('Failed to record finish:', error));
+        }
+        this.showFinishScreen();
+    }
+
+    // One frame of a world ride: the stations in order, the finish, and the cut rule, all from the
+    // vehicle's own projection of the frame
+    updateWorldRun(dt) {
+        const vehicle = this.vehicle;
+        const projection = vehicle.projection;
+        if (!(projection.index >= 0)) return;
+        const result = this.worldRun.update({
+            s: projection.s,
+            lateral: projection.lateral,
+            width: projection.width,
+            speed: vehicle.speed,
+            dt,
+            forwardDot: Math.cos(vehicle.yawAngle - projection.heading)
+        });
+        if (result.cut) {
+            this.restartFromCheckpoint('off-route');
+            return;
+        }
+        if (result.station < 0) return;
+        const stations = this.environment.stationGates;
+        if (result.station === stations.length - 1) {
+            this.finishRun();
+        } else {
+            this.passCheckpoint(this.environment.checkpoints[result.station - 1]);
+        }
+    }
+
     checkSpeedStreak(deltaTime) {
         if (this.vehicle.speed >= this.highSpeedThreshold) {
             this.speedStreakTime += deltaTime;
@@ -3632,12 +3766,56 @@ class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
+    // The one restart of a world, for every reason: back to the last station passed (the start line before the
+    // first), rolling away at a speed the next bend allows. The run stays valid; the 5 s and the restart are
+    // counted once, and the guide's timers and the cut rule start again, so one excursion costs one penalty.
+    restartAtStation(reason) {
+        const { environment, vehicle, worldRun } = this;
+        const route = environment.route;
+        const s = worldRun.stationIndex === 0 ? environment.startS : worldRun.lastStation.s;
+        const point = route.sample(s, {});
+
+        this.addScore(-Math.min(500, this.score));
+
+        const distanceSoFar = vehicle.distanceTraveled;
+        vehicle.reset();
+        vehicle.distanceTraveled = distanceSoFar;
+        vehicle.position.set(point.x, point.y, point.z);
+        vehicle.yawAngle = point.heading;
+        vehicle.speed = worldRun.restartSpeed(s);
+        vehicle.findNearestRoadSegment();
+        vehicle.updateMesh();
+        // The ground under the station is held until the data is there; until then it reads the far grid
+        environment.place(s);
+
+        this.removeRunOverlays();
+        this.penaltyMs += Game.RESTART_PENALTY_MS;
+        this.restarts++;
+        if (this.leaderboardService) this.leaderboardService.recordRestart();
+
+        environment.guide.reset();
+        worldRun.restartAt(s);
+        this.worldCamera.reset(point.heading);
+        if (this.traffic) this.traffic.clearAround(route.toUnits(s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / route.unitM));
+        this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(s), {
+            environment,
+            weatherSystem: this.weatherSystem
+        });
+        showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
+    }
+
     // Back to the last gate passed, on a rolling start. Costs 5 s and a
     // little style; the run stays valid.
-    restartFromCheckpoint() {
+    // `reason` is why: 'key' (also the crash button), 'off-route', 'wrong-way' or 'resume'. Every reason
+    // costs the same 5 s. A world answers it in restartAtStation.
+    restartFromCheckpoint(reason = 'key') {
         // The run is over once the line is crossed; the finish banner owns
         // what happens next
         if (this.finished) return;
+        if (this.environment && this.environment.isWorld) {
+            this.restartAtStation(reason);
+            return;
+        }
         if (!this.lastCheckpointPosition) {
             console.log('No checkpoint position available for restart');
             return;
@@ -3697,6 +3875,14 @@ class Game {
         console.log('Restarted from checkpoint with penalty');
     }
 }
+
+// What a world restart tells the rider, by reason
+Game.WORLD_RESTART_TEXT = {
+    key: 'Back to checkpoint',
+    'off-route': 'Off route, back to checkpoint',
+    'wrong-way': 'Wrong way, back to checkpoint',
+    resume: 'Back to checkpoint'
+};
 
 // A checkpoint restart costs this much on the clock. functions/lib/boards.js
 // holds the same number (LONG.penaltyMs); tests/unit/board-contract.test.js

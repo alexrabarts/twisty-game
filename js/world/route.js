@@ -118,6 +118,27 @@ class PolylineRoute extends Route {
         return out;
     }
 
+    // The road `t` of the way from sample `segment` to the next, with the run (dx, dz) and the heading
+    // change between them: what traffic faces and leans by. Indices past either end clamp to the last segment.
+    sampleAt(segment, t, out = {}) {
+        const last = this.points.length - 1;
+        const index = Math.max(0, Math.min(last - 1, Math.floor(segment)));
+        const from = this.points[index];
+        const to = this.points[index + 1] || from;
+        out.x = from.x + (to.x - from.x) * t;
+        out.y = from.y + (to.y - from.y) * t;
+        out.z = from.z + (to.z - from.z) * t;
+        let turn = to.heading - from.heading;
+        if (turn > Math.PI) turn -= 2 * Math.PI;
+        if (turn < -Math.PI) turn += 2 * Math.PI;
+        out.heading = from.heading + turn * t;
+        out.width = from.width + (to.width - from.width) * t;
+        out.dx = to.x - from.x;
+        out.dz = to.z - from.z;
+        out.turn = turn;
+        return out;
+    }
+
     heightRange(s0, s1) {
         const first = Math.ceil(s0 / this.spacingM);
         const last = Math.min(this.points.length - 1, Math.floor(s1 / this.spacingM));

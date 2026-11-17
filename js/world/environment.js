@@ -8,6 +8,7 @@
 // is not constructed, so nothing here is "switched off"):
 //   route, ground, roadWidth, physics, config            implemented
 //   checkpoints, finishGate                              the stage's gates, from the stations
+//   startSegment, endSegment, trafficSpeedScale          the span traffic keeps to, and how fast it goes
 //   terrain, terrainGeometry, sections, setPieces,
 //   roadworksZones, roadworkObstacles, jumpRamps,
 //   boulders                                             null / empty: no cones, rockfalls or roadworks are built
@@ -69,6 +70,8 @@ class WorldEnvironment {
         this.roadworkObstacles = [];
         this.jumpRamps = [];
         this.boulders = [];
+        // Traffic holds to this share of its leg speed: the crew cannot take a hairpin at 50 m/s
+        this.trafficSpeedScale = 0.4;
         this.config = { id: stage ? stage.id : 'world', look: { fogDensity: 0.0008 }, render: { shadowSpan: 120, cullMax: 6000 }, grip: 1 };
 
         this.group = new THREE.Group();
@@ -111,6 +114,11 @@ class WorldEnvironment {
     get startS() { return (this.stage ? this.stage.from : 0) + WorldEnvironment.START_M; }
 
     get endS() { return this.stage ? this.stage.to : this.route.length; }
+
+    // The stage's span in route units, as traffic keeps its cars inside it
+    get startSegment() { return Math.floor(this.route.toUnits(this.stage ? this.stage.from : 0)); }
+
+    get endSegment() { return Math.floor(this.route.toUnits(this.endS)); }
 
     // Where the rider starts: {x, y, z, heading}
     startPosition() {

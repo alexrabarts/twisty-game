@@ -18,6 +18,9 @@
 // A blend zone is this many segments (300 m) wide, centred on a part boundary
 const ATMOSPHERE_BLEND_SEGMENTS = 15;
 
+// Metres in one unit of a world's track
+const WORLD_ATMOSPHERE_UNIT = 100;
+
 const ATMOSPHERE_LOOK_DEFAULTS = {
     timeOfDay: 'golden',
     fogDensity: 0.0018,
@@ -116,6 +119,31 @@ class AtmosphereTrack {
                 shadowSpan: render.shadowSpan
             }
         }]);
+    }
+
+    // Metres in one unit of a world's track
+    static get WORLD_UNIT_M() { return WORLD_ATMOSPHERE_UNIT; }
+
+    // One track for the whole ride of a world, in units of WORLD_ATMOSPHERE_UNIT metres, so a blend zone
+    // is 1.5 km of road. Each stage takes the parts of `looks[stage.id]` (or `looks.default`); a part
+    // spans `from` to `to`, shares of the stage's length. A part's baseY is the lowest road under it.
+    static forWorld(stages, route, looks) {
+        const unit = WORLD_ATMOSPHERE_UNIT;
+        const parts = [];
+        stages.forEach((stage) => {
+            const spec = looks[stage.id] || looks.default;
+            const length = stage.to - stage.from;
+            spec.forEach((part) => {
+                const s0 = stage.from + part.from * length;
+                const s1 = stage.from + part.to * length;
+                parts.push({
+                    startSegment: s0 / unit,
+                    endSegment: s1 / unit,
+                    look: { baseY: route.heightRange(s0, s1).min, ...part.look }
+                });
+            });
+        });
+        return AtmosphereTrack.build(parts);
     }
 
     // A one-part track from a literal look (the rider showcase)

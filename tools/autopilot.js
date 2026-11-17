@@ -17,6 +17,11 @@ window.twistyDev = {
         const ap = Object.assign({ speed: 25, lookahead: 2, yawGain: 1.6, kp: 4, kd: 1.2, lane: 0, on: true }, options);
         const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
         const input = game.input;
+        if (game.environment && game.environment.isWorld) {
+            this.worldPilot(game, ap, input);
+            this.ap = ap;
+            return ap;
+        }
         input.getSteeringInput = () => {
             const v = game.vehicle;
             const env = game.environment;
@@ -37,6 +42,57 @@ window.twistyDev = {
         input.getWheelieInput = () => 0;
         this.ap = ap;
         return ap;
+    },
+
+    // The world's pilot: pure pursuit on a look-ahead that grows with speed, and a speed that takes each
+    // bend at `apFactor` of the speed its curvature allows (the lean cap, the grip under the wheels), braking
+    // for it in advance. The bike turns by curvature, so the steering is the curvature wanted over the most
+    // the lean can give at this speed.
+    worldPilot(game, ap, input) {
+        const g = 9.81;
+        const route = game.environment.route;
+        const world = game.environment.physics;
+        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+        ap.apFactor = ap.apFactor || 0.85;
+        ap.brake = ap.brake || 6;
+        const here = {}, there = {}, aim = {};
+        const grip = (s) => {
+            route.sample(s, here);
+            const v = game.vehicle;
+            const base = v.worldMultipliers().lateralFriction / (v.worldSurfaceGrip || 1);
+            return base * (here.flags && here.flags.cobbles ? world.cobbleGrip : 1);
+        };
+        const capTan = (s) => Math.tan(Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip(s)));
+        const curvature = (s) => {
+            route.sample(s, here);
+            route.sample(s + 6, there);
+            return Math.abs(wrap(there.heading - here.heading)) / 6;
+        };
+        const target = (s) => {
+            let allowed = ap.speed;
+            for (let d = 0; d <= 120; d += 6) {
+                const k = Math.min(curvature(s + d), 1 / world.radiusFloor);
+                if (k < 1e-4) continue;
+                const corner = Math.min(ap.speed, ap.apFactor * Math.sqrt(g * capTan(s + d) / k));
+                allowed = Math.min(allowed, Math.sqrt(corner * corner + 2 * ap.brake * d));
+            }
+            return Math.max(allowed, 5);
+        };
+        input.getSteeringInput = () => {
+            const v = game.vehicle;
+            if (!ap.on || !v) return 0;
+            const reach = Math.max(7, Math.min(30, 4 + 0.7 * v.speed));
+            const t = route.sample((v.routeS || 0) + reach, aim);
+            const tx = t.x + Math.cos(t.heading) * ap.lane;
+            const tz = t.z - Math.sin(t.heading) * ap.lane;
+            const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
+            const wanted = 2 * Math.sin(err) / reach;
+            const most = Math.min(1 / world.radiusFloor, g * capTan(v.routeS || 0) / Math.max(1, v.speed * v.speed));
+            return Math.max(-1, Math.min(1, wanted / most));
+        };
+        input.getThrottleInput = () => (ap.on && game.vehicle && game.vehicle.speed < target(game.vehicle.routeS || 0) ? 1 : 0);
+        input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > target(game.vehicle.routeS || 0) + 1 ? 1 : 0);
+        input.getWheelieInput = () => 0;
     },
 
     // Freeze the game and look at the bike from a point beside the road.
@@ -124,6 +180,8 @@ window.twistyDev = {
         v.leanAngle = 0;
         v.leanVelocity = 0;
         v.findNearestRoadSegment();
+        // A world takes the new place as the start of its progress, as a resume does
+        if (game.worldRun) game.worldRun.reset(route.fromUnits(segment));
         // A converted leg draws the window round the bike's new place at once
         if (game.environment.sections) game.environment.ensureWindow(segment, { sync: true });
     }

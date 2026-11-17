@@ -13,6 +13,8 @@ const HudRules = {
     // Above this many gates the pips shrink (css/ui.css, #hudGatePips[data-many])
     MANY_GATES: 8,
     CALLOUT_LIMIT: 3,
+    // Above this many gates a row of pips cannot fit: the row shows the count only
+    MAX_PIPS: 20,
     FPS_KEY: 'twistyShowFps',
 
     hintVisible(elapsed, firstInputAt) {
@@ -33,6 +35,30 @@ const HudRules = {
         if (!win || typeof win.matchMedia !== 'function') return false;
         const matches = query => win.matchMedia(query).matches;
         return matches('(pointer: coarse)') || (matches('(any-pointer: coarse)') && !matches('(any-pointer: fine)'));
+    },
+
+    // m:ss.t for a stage clock in milliseconds
+    stageClock(ms) {
+        const tenths = Math.max(0, Math.floor(ms / 100));
+        const minutes = Math.floor(tenths / 600);
+        const rest = tenths - minutes * 600;
+        const seconds = Math.floor(rest / 10);
+        return `${minutes}:${String(seconds).padStart(2, '0')}.${rest % 10}`;
+    },
+
+    // "Stage 8/14 · Tremola  3:12.4"
+    stageLine(index, count, name, ms) {
+        return `Stage ${index}/${count} · ${name}  ${HudRules.stageClock(ms)}`;
+    },
+
+    // The share of a stage ridden, 0 to 1
+    stageShare(s, from, to) {
+        return to > from ? Math.min(1, Math.max(0, (s - from) / (to - from))) : 0;
+    },
+
+    // "km 3.2 / 13.3": the distance along the whole ride
+    kmText(s, length) {
+        return `km ${(Math.max(0, s) / 1000).toFixed(1)} / ${(length / 1000).toFixed(1)}`;
     },
 
     // -1 stopped, 0 too slow, 1 slow, 2 at pace
@@ -67,7 +93,12 @@ class Hud {
             hint: byId('hudHint'),
             fps: byId('fps'),
             start: byId('startCard'),
-            startLeg: byId('startLeg')
+            startLeg: byId('startLeg'),
+            stage: byId('hudStage'),
+            stageName: byId('hudStageName'),
+            stageKm: byId('hudStageKm'),
+            stageFill: byId('hudStageFill'),
+            stageMarks: byId('hudStageMarks')
         };
         this.shown = {};
         this.hintShown = true;
@@ -143,7 +174,8 @@ class Hud {
         if (pips && total !== this.gateTotal) {
             this.gateTotal = total;
             pips.textContent = '';
-            for (let i = 0; i < total; i++) pips.appendChild(this.doc.createElement('i'));
+            // A stage with more gates than fit shows the count alone
+            for (let i = 0; i < Math.min(total, HudRules.MAX_PIPS); i++) pips.appendChild(this.doc.createElement('i'));
             // A long leg has 14 to 20 gates: smaller pips keep the row on a phone
             if (total > HudRules.MANY_GATES) pips.dataset.many = '';
             else delete pips.dataset.many;
@@ -152,6 +184,46 @@ class Hud {
             Array.from(pips.children).forEach((pip, i) => pip.classList.toggle('on', i < passed));
         }
         this.setText(this.el.gateCount, `${passed}/${total}`);
+    }
+
+    // The stage meta of a world ride under the clock: the stage line, a progress bar with a mark for each
+    // station, and the distance along the ride. Leg pages never show it. `marks` are shares of the stage.
+    showStage(marks) {
+        const box = this.el.stage;
+        if (!box) return;
+        box.hidden = false;
+        this.shown.stageLine = null;
+        this.shown.stageShare = null;
+        const holder = this.el.stageMarks;
+        if (holder) {
+            holder.textContent = '';
+            marks.forEach((share) => {
+                const mark = this.doc.createElement('i');
+                mark.style.left = `${(share * 100).toFixed(2)}%`;
+                holder.appendChild(mark);
+            });
+        }
+    }
+
+    hideStage() {
+        if (this.el.stage) this.el.stage.hidden = true;
+    }
+
+    // Once per frame in a world: only a changed value touches the DOM
+    setStage(line, share, km) {
+        if (this.shown.stageLine !== line) {
+            this.shown.stageLine = line;
+            this.setText(this.el.stageName, line);
+        }
+        const rounded = Math.round(share * 1000) / 10;
+        if (this.shown.stageShare !== rounded) {
+            this.shown.stageShare = rounded;
+            if (this.el.stageFill) this.el.stageFill.style.width = `${rounded}%`;
+        }
+        if (this.shown.stageKm !== km) {
+            this.shown.stageKm = km;
+            this.setText(this.el.stageKm, km);
+        }
     }
 
     // A new run: the hint back on, nothing left over from the last run. The

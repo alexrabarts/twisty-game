@@ -16,6 +16,12 @@ const SKY_PRESETS = {
         sunIntensity: 22, cloudLit: 0xffe2cc, cloudShadow: 0x8d6f8c, coverage: 0.46,
         stars: 0.0, mountain: 0x6b5873, saturation: 1.08, contrast: 1.04, tint: 0xfff4ea, bloom: 0.75
     },
+    // High sun, a clean blue sky: the world's valley and pass stages (R5). A new key, so no leg look changes
+    day: {
+        zenith: 0x2468c0, mid: 0x7ab6ee, glow: 0xffffff, glowStrength: 0.5,
+        sunIntensity: 34, cloudLit: 0xffffff, cloudShadow: 0x9aa8c0, coverage: 0.36,
+        stars: 0.0, mountain: 0x62789a, saturation: 1.08, contrast: 1.04, tint: 0xffffff, bloom: 0.5
+    },
     golden: {
         zenith: 0x1a4fa8, mid: 0x4f97e0, glow: 0xfff1d0, glowStrength: 0.8,
         sunIntensity: 30, cloudLit: 0xffffff, cloudShadow: 0x8496b3, coverage: 0.42,
