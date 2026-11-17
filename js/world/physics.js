@@ -7,13 +7,15 @@ const WorldPhysics = Object.freeze({
     leanCapDeg: 50,        // the lean at grip 1.0; grip lowers it (capEff)
     radiusFloor: 5,        // m, tightest radius the bike turns (R_MIN - width/2)
     rMin: 10,              // m, centreline fillet radius the importer builds
-    leanOmega: 7,          // rad/s, natural frequency of the critically damped lean
-    // Above this speed (m/s) the lean's natural frequency falls as leanCalmSpeed / speed, as the legacy bike's
-    // steering torque does (its speedFactor): full lock still settles at the same lean, but at 30 or 45 m/s it
-    // gets there no quicker than the legacy bike (tests/unit/world-physics.test.js, the step-response table).
-    // Only the way into a lean is calmed: picking the bike up stays at leanOmega. Hairpins are ridden under it,
-    // so their response is the plain leanOmega.
-    leanCalmSpeed: 12,
+    // Steering (Vehicle.updateWorldPhysics). A held key leans the bike at leanRate; the lean rate follows the
+    // steering with the lag leanRateLag, so a press leans the bike by the same amount whatever it was doing.
+    leanRate: 1.15,        // rad/s at full steering, up to steerSpeed: a 0.3 s key press is about 16 degrees
+    leanRateLag: 0.04,     // s, how far the lean rate lags the steering (no lean momentum to fall over with)
+    steerSpeed: 20,        // m/s, above it the rate falls as steerSpeed / speed (the legacy speedFactor, floor 0.3)
+    pickUpBoost: 1.5,      // steering against the lean picks the bike up this much quicker (as the legacy bike)
+    selfRighting: 3.5,     // 1/s, with the key released the bike stands up at this rate (the exit of a hairpin)
+    leanLimitGain: 8,      // 1/s, the soft limit: the lean rate is at most this times the room under the limit
+    limitReturn: 3,        // 1/s, past the limit with steering held, the lean comes back at this times the excess
 
     // Slope and low speed
     slopeGravity: 1.0,     // share of the route grade that acts on the bike

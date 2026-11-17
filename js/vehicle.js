@@ -2431,31 +2431,49 @@ class Vehicle {
         this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
     }
 
-    // Steering sets a target curvature and the lean follows the lean that
-    // curvature needs, as a critically damped second-order system. Full lock
-    // settles at the cap instead of overshooting into a crash. The bike
-    // lowsides only when the grip it asks for is more than the road has.
+    // Steering is a torque, as on the legs: holding the key builds lean,
+    // a tap gives a small correction, and every press moves the bike by
+    // the same amount whatever it is already doing. Unlike the legs, the
+    // lean has no momentum to fall over with (the lean rate follows the
+    // steering within leanRateLag), and a soft limit settles held steering
+    // at the most lean that turns the bike: the grip cap, or at low speed
+    // the lean of the floor radius. The bike lowsides only when the grip
+    // it asks for is more than the road has.
     updateWorldPhysics(deltaTime, steeringInput) {
         const world = this.worldPhysics;
         const g = 9.81;
         const u = Math.max(-1, Math.min(1, steeringInput));
         const v = this.speed;
         const v2 = v * v;
+        const lean = this.leanAngle;
         this.steeringAngle = steeringInput * 0.3;
 
         const grip = Math.max(0.01, this.worldMultipliers().lateralFriction);
         const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip);
-        const maxCurvature = v2 > 1e-6
-            ? Math.min(1 / world.radiusFloor, g * Math.tan(capEff) / v2)
-            : 1 / world.radiusFloor;
-        const targetLean = -Math.sign(u) * Math.atan(v2 * Math.abs(u) * maxCurvature / g);
+        const leanLimit = Math.min(capEff, Math.atan(v2 / (g * world.radiusFloor)));
 
-        // Calmed at speed only on the way into a lean: picking the bike up, or taking less lean when the grip falls, stays prompt
-        const leaningIn = Math.abs(targetLean) > Math.abs(this.leanAngle) && targetLean * this.leanAngle >= 0;
-        const calm = leaningIn && v > world.leanCalmSpeed ? world.leanCalmSpeed / v : 1;
-        const omega = world.leanOmega * calm * ((this.character.physics && this.character.physics.steeringForce) || 1);
-        this.leanVelocity += (omega * omega * (targetLean - this.leanAngle) - 2 * omega * this.leanVelocity) * deltaTime;
-        this.leanAngle += this.leanVelocity * deltaTime;
+        // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
+        const speedFactor = v > world.steerSpeed ? Math.max(0.3, world.steerSpeed / v) : 1;
+        const character = (this.character.physics && this.character.physics.steeringForce) || 1;
+        let rate = -u * world.leanRate * speedFactor * character;
+        if (u !== 0 && Math.sign(u) === Math.sign(lean)) rate *= world.pickUpBoost;
+
+        // The soft limit: an outward rate shrinks to the room left under the limit. Past the limit (the grip
+        // fell) steering held into the lean gives it back only at limitReturn, so a big enough grip loss still
+        // lowsides unless the rider lets go
+        const side = Math.sign(rate) || Math.sign(lean);
+        const outward = side * lean;
+        const room = outward <= leanLimit
+            ? world.leanLimitGain * (leanLimit - outward)
+            : world.limitReturn * Math.abs(u) * (leanLimit - outward);
+        if (side * rate > room) rate = side * room;
+        this.leanVelocity += (rate - this.leanVelocity) * (1 - Math.exp(-deltaTime / world.leanRateLag));
+
+        // Let go and the bike stands itself up. This acts on the lean directly, not through the lagged rate, so
+        // the next press starts from rest and moves the bike as far as the last one did
+        const released = 1 - Math.abs(u);
+        const righting = -released * released * world.selfRighting * lean;
+        this.leanAngle += (this.leanVelocity + righting) * deltaTime;
 
         const tanLean = Math.tan(Math.abs(this.leanAngle));
         const curvature = v2 > 1e-6 ? Math.min(1 / world.radiusFloor, g * tanLean / v2) : 0;

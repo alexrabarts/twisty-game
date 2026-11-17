@@ -46,8 +46,8 @@ window.twistyDev = {
 
     // The world's pilot: pure pursuit on a look-ahead that grows with speed, and a speed that takes each
     // bend at `apFactor` of the speed its curvature allows (the lean cap, the grip under the wheels), braking
-    // for it in advance. The bike turns by curvature, so the steering is the curvature wanted over the most
-    // the lean can give at this speed.
+    // for it in advance. The curvature wanted, capped at the most the lean can give at this speed, gives a lean,
+    // and the steering (a torque on the lean, as a keyboard rider's) holds the bike at it.
     worldPilot(game, ap, input) {
         const g = 9.81;
         const route = game.environment.route;
@@ -55,6 +55,7 @@ window.twistyDev = {
         const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
         ap.apFactor = ap.apFactor || 0.85;
         ap.brake = ap.brake || 6;
+        ap.worldKp = ap.worldKp || 8;
         const here = {}, aim = {};
         const grip = (s) => {
             route.sample(s, here);
@@ -82,9 +83,12 @@ window.twistyDev = {
             const tx = t.x + Math.cos(t.heading) * ap.lane;
             const tz = t.z - Math.sin(t.heading) * ap.lane;
             const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
-            const wanted = 2 * Math.sin(err) / reach;
             const most = Math.min(1 / world.radiusFloor, g * capTan(v.routeS || 0) / Math.max(1, v.speed * v.speed));
-            return Math.max(-1, Math.min(1, wanted / most));
+            const wanted = Math.max(-most, Math.min(most, 2 * Math.sin(err) / reach));
+            // Steering is a torque on the lean, so steer the lean to the one that turns at that curvature
+            // (a positive input leans the bike negative and turns it to a larger yaw)
+            const lean = -Math.sign(wanted) * Math.atan(v.speed * v.speed * Math.abs(wanted) / g);
+            return Math.max(-1, Math.min(1, (v.leanAngle - lean) * ap.worldKp));
         };
         input.getThrottleInput = () => (ap.on && game.vehicle && game.vehicle.speed < target(game.vehicle.routeS || 0) ? 1 : 0);
         input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > target(game.vehicle.routeS || 0) + 1 ? 1 : 0);

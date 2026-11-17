@@ -113,8 +113,9 @@ describe('full lock (P30)', () => {
 });
 
 // Calm at speed: the play-test found the world bike twitchy at speed. Held steering at 20, 30 and 45 m/s must
-// reach a lean, lean as fast and turn as fast as the legacy bike does, or slower, give or take STEP_MARGIN; under
-// leanCalmSpeed (the hairpins) the lean is the plain critically damped one, and full lock still settles there.
+// reach a lean, lean as fast and turn as fast as the legacy bike does, or slower, give or take STEP_MARGIN, and
+// full lock still settles at the cap. The pins are the same ones the lean-target controller met: the steering
+// torque falls with speed as the legacy speedFactor does, and the lean has no momentum, so it is slower still.
 describe('step response at speed', () => {
     const STEP_MARGIN = 1.1;
     const TEN = 10 * Math.PI / 180;
@@ -147,8 +148,10 @@ describe('step response at speed', () => {
             test(`at ${speed} m/s, input ${input}, the world bike is no quicker than the legacy bike`, () => {
                 const legacy = step(legacyVehicle(), speed, input);
                 const world = step(worldVehicle(), speed, input);
-                expect(world.reach).not.toBeNull();
-                expect(world.reach * STEP_MARGIN).toBeGreaterThanOrEqual(legacy.reach);
+                // A part input settles at a part lean (the bike stands itself up against it), so at 0.3 it may never
+                // reach 10 degrees: that is slower than the legacy bike, which is what this pins
+                if (input === 1) expect(world.reach).not.toBeNull();
+                if (world.reach !== null) expect(world.reach * STEP_MARGIN).toBeGreaterThanOrEqual(legacy.reach);
                 expect(world.peakRate).toBeLessThanOrEqual(legacy.peakRate * STEP_MARGIN);
                 // The legacy bike falls over at full lock at 20 m/s before these instants; then only its lean-in counts
                 if (legacy.lean !== null) {
@@ -160,22 +163,6 @@ describe('step response at speed', () => {
         }
     }
 
-    test('under leanCalmSpeed the lean is the plain critically damped one', () => {
-        for (const speed of [6, 10, WorldPhysics.leanCalmSpeed]) {
-            const vehicle = worldVehicle();
-            const omega = WorldPhysics.leanOmega;
-            const target = Math.atan(Math.min(speed * speed / (G * WorldPhysics.radiusFloor), Math.tan(WorldPhysics.leanCapDeg * Math.PI / 180)));
-            let lean = 0, velocity = 0;
-            for (let tick = 0; tick < 30; tick++) {
-                vehicle.speed = speed;
-                vehicle.update(DT, 1, 0, 0);
-                velocity += (omega * omega * (target - lean) - 2 * omega * velocity) * DT;
-                lean += velocity * DT;
-            }
-            expect(Math.abs(vehicle.leanAngle)).toBeCloseTo(lean, 3);
-        }
-    });
-
     test('at speed full lock still settles at the same lean, later, with no overshoot', () => {
         for (const speed of [20, 30, 45]) {
             const vehicle = worldVehicle();
@@ -184,6 +171,91 @@ describe('step response at speed', () => {
             expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(WorldPhysics.leanCapDeg, 1);
             expect(run.peak / Math.abs(vehicle.leanAngle)).toBeLessThanOrEqual(1.02);
         }
+    });
+});
+
+// Keyboard presses, as js/input.js makes them: a key gives a target of +-1 and the input moves 0.4 of the way
+// there each 60 Hz tick. The play-test found the lean-target controller tipped the bike far over on the first
+// press and moved it too little on the next one (every press asked for full lean, so a press moved the bike by a
+// share of the gap left to it). A press is now a steering torque: it moves the bike by the same amount every time,
+// a tap less than a long press, and a held key settles under the cap.
+describe('keyboard presses', () => {
+    const SPEEDS = [12, 20, 30, 45];
+
+    // `steps` is a list of [key, seconds]; returns the lean change over each step, in degrees, and the peak lean
+    function keys(vehicle, speed, steps) {
+        let input = 0;
+        let peak = 0;
+        const changes = [];
+        for (const [key, seconds] of steps) {
+            const from = vehicle.leanAngle;
+            for (let tick = 0; tick < Math.round(seconds / DT); tick++) {
+                input += (key - input) * (1 - Math.pow(1 - 0.4, DT * 60));
+                vehicle.speed = speed;
+                vehicle.update(DT, input, 0, 0);
+                peak = Math.max(peak, Math.abs(vehicle.leanAngle));
+            }
+            changes.push(deg(Math.abs(vehicle.leanAngle - from)));
+        }
+        return { changes, peak: deg(peak), crashed: vehicle.crashed };
+    }
+
+    for (const speed of SPEEDS) {
+        test(`(a) the second 0.3 s press moves the bike as far as the first, within 15%, at ${speed} m/s`, () => {
+            const run = keys(worldVehicle(), speed, [[1, 0.3], [0, 0.4], [1, 0.3]]);
+            const [first, , second] = run.changes;
+            expect(first).toBeGreaterThan(3);
+            expect(Math.abs(second - first) / first).toBeLessThanOrEqual(0.15);
+        });
+
+        test(`(a) three 0.15 s taps move the bike alike, within 15%, at ${speed} m/s`, () => {
+            const run = keys(worldVehicle(), speed, [[1, 0.15], [0, 0.3], [1, 0.15], [0, 0.3], [1, 0.15]]);
+            const [first, , second, , third] = run.changes;
+            expect(Math.abs(second - first) / first).toBeLessThanOrEqual(0.15);
+            expect(Math.abs(third - first) / first).toBeLessThanOrEqual(0.15);
+        });
+
+        test(`(b) a 0.15 s tap leans the bike less than half as far as a 0.6 s press at ${speed} m/s`, () => {
+            const tap = keys(worldVehicle(), speed, [[1, 0.15]]).changes[0];
+            const press = keys(worldVehicle(), speed, [[1, 0.6]]).changes[0];
+            expect(tap).toBeGreaterThan(1);
+            expect(tap).toBeLessThan(press / 2);
+        });
+    }
+
+    test('planted: the lean-target controller fails (a), so the check can fail', () => {
+        // A lean target: every press asks for full lean, and the lean closes a share of the gap to it
+        const Target = class extends game.Vehicle {
+            updateWorldPhysics(dt, u) {
+                const target = -u * WorldPhysics.leanCapDeg * Math.PI / 180;
+                const omega = 7;
+                this.leanVelocity += (omega * omega * (target - this.leanAngle) - 2 * omega * this.leanVelocity) * dt;
+                this.leanAngle += this.leanVelocity * dt;
+            }
+        };
+        const vehicle = worldVehicle({}, Target);
+        const [first, , second] = keys(vehicle, 12, [[1, 0.3], [0, 0.4], [1, 0.3]]).changes;
+        expect(Math.abs(second - first) / first).toBeGreaterThan(0.15);
+    });
+
+    for (const speed of [4, 6, 8, 10, 12, 16, 20, 25]) {
+        test(`(c) a held key settles under the cap without a lowside at ${speed} m/s`, () => {
+            const run = keys(worldVehicle(), speed, [[1, 4]]);
+            expect(run.crashed).toBe(false);
+            expect(run.peak).toBeLessThanOrEqual(WorldPhysics.leanCapDeg + 0.1);
+            // Settled: the last second moved the lean by less than a tenth of a degree
+            const vehicle = worldVehicle();
+            keys(vehicle, speed, [[1, 3]]);
+            const before = vehicle.leanAngle;
+            keys(vehicle, speed, [[1, 1]]);
+            expect(deg(Math.abs(vehicle.leanAngle - before))).toBeLessThan(0.1);
+        });
+    }
+
+    test('letting go stands the bike up', () => {
+        const vehicle = worldVehicle();
+        keys(vehicle, 12, [[1, 0.6], [0, 1.5]]);
+        expect(deg(Math.abs(vehicle.leanAngle))).toBeLessThan(1);
     });
 });
 
@@ -265,18 +337,16 @@ describe('legacy equivalence (P31)', () => {
 });
 
 describe('hairpin (P32)', () => {
-    const R = 10;
-
-    // Entry along +z to z = 0, a half circle to the right centred at (R, 0),
+    // Entry along +z to z = 0, a half circle of radius R to the right centred at (R, 0),
     // exit along -z at x = 2R
-    function lateral(position) {
+    function lateral(position, R) {
         if (position.z < 0 && position.x < R) return Math.abs(position.x);
         if (position.z < 0) return Math.abs(position.x - 2 * R);
         return Math.abs(Math.hypot(position.x - R, position.z) - R);
     }
 
     // Binary input through the keyboard smoothing, speed held by brake and throttle
-    function ride(vehicle, { releaseBefore = 0.3, target = 10.5 } = {}) {
+    function ride(vehicle, { releaseBefore = 0.3, target = 10.5, radius = WorldPhysics.rMin } = {}) {
         vehicle.position.set(0, 0, -40);
         vehicle.speed = target;
         let smoothed = 0;
@@ -290,7 +360,7 @@ describe('hairpin (P32)', () => {
             const throttle = vehicle.speed < target - 0.2 ? 1 : 0;
             vehicle.update(DT, smoothed, throttle, brake);
             if (vehicle.crashed) return { crashed: true, worst };
-            worst = Math.max(worst, lateral(vehicle.position));
+            worst = Math.max(worst, lateral(vehicle.position, radius));
             if (released && vehicle.position.z < -30) break;
         }
         return { crashed: false, worst, yaw: vehicle.yawAngle };
@@ -305,6 +375,16 @@ describe('hairpin (P32)', () => {
             expect(Math.abs(deg(result.yaw - Math.PI))).toBeLessThanOrEqual(10);
         });
     }
+
+    // 12 m on the centreline at 10.8 m/s, the most the R_MIN fillet allows on its centreline at the lean cap
+    test('the keyboard rider makes a 12 m hairpin at the fillet speed', () => {
+        const speed = Math.sqrt(G * WorldPhysics.rMin * Math.tan(WorldPhysics.leanCapDeg * Math.PI / 180));
+        expect(speed).toBeCloseTo(10.8, 1);
+        const result = ride(worldVehicle(), { target: speed, radius: 12 });
+        expect(result.crashed).toBe(false);
+        expect(result.worst).toBeLessThanOrEqual(5);
+        expect(Math.abs(deg(result.yaw - Math.PI))).toBeLessThanOrEqual(10);
+    });
 
     test('the legacy physics crashes on the same ride', () => {
         const vehicle = new game.Vehicle(new THREE.Scene());
@@ -404,39 +484,36 @@ describe('slope (P34)', () => {
 describe('grip (P35)', () => {
     const CAP = WorldPhysics.leanCapDeg * Math.PI / 180;
 
-    // The lowside law run on its own: the same lean controller at a held
-    // speed, then the first tick over the limit plus the time it must hold
-    function expectedCrashTick(speed, newGrip, releaseAtStep) {
-        const capNew = Math.atan(Math.tan(CAP) * newGrip);
-        const omega = WorldPhysics.leanOmega;
-        let lean = CAP;
-        let velocity = 0;
+    // The lowside law read off the ride itself: the first tick at which the demand the vehicle reports
+    // (lastDemand) has stayed over margin * tan(capEff) for lowsideMs. The lean dynamics decide the demand; the
+    // law decides the crash, so this holds whatever controller leans the bike
+    function lawTick(demands, newGrip) {
+        const limit = WorldPhysics.lowsideMargin * Math.tan(Math.atan(Math.tan(CAP) * newGrip));
         let timerMs = 0;
-        for (let tick = 0; tick < 600; tick++) {
-            const needed = Math.atan(Math.min(speed * speed / (G * WorldPhysics.radiusFloor), Math.tan(capNew)));
-            const target = releaseAtStep ? 0 : needed;
-            velocity += (omega * omega * (target - lean) - 2 * omega * velocity) * DT;
-            lean += velocity * DT;
-            const demand = Math.min(speed * speed / (G * WorldPhysics.radiusFloor), Math.tan(Math.abs(lean)));
-            if (demand > WorldPhysics.lowsideMargin * Math.tan(capNew)) {
-                timerMs += DT * 1000;
-                if (timerMs >= WorldPhysics.lowsideMs) return tick;
-            } else {
-                timerMs = 0;
-            }
+        for (let tick = 0; tick < demands.length; tick++) {
+            timerMs = demands[tick] > limit ? timerMs + DT * 1000 : 0;
+            if (timerMs >= WorldPhysics.lowsideMs) return tick;
         }
         return null;
     }
 
-    // Settled at the 50 degree cap on full lock, then the grip steps down
-    function stepGrip(speed, newGrip, { release = false, physics = WorldPhysics } = {}) {
+    // Settled at the 50 degree cap on full lock, then the grip steps down. Returns the crash tick after the
+    // step and the tick the law gives for the demand recorded on the way
+    function stepGrip(speed, newGrip, { release = false, physics = WorldPhysics, withLaw = false } = {}) {
         const grip = { value: 1 };
         const vehicle = grippy(worldVehicle({ physics }), grip);
         hold(vehicle, speed, 1, 2);
         expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(50, 0);
         grip.value = newGrip;
-        const run = hold(vehicle, speed, release ? 0 : 1, 4);
-        return run.crashTick;
+        const demands = [];
+        let crashTick = null;
+        for (let tick = 0; tick < 240 && crashTick === null; tick++) {
+            vehicle.speed = speed;
+            vehicle.update(DT, release ? 0 : 1, 0, 0);
+            demands.push(vehicle.lastDemand);
+            if (vehicle.crashed) crashTick = tick;
+        }
+        return withLaw ? { tick: crashTick, law: lawTick(demands, newGrip) } : crashTick;
     }
 
     test('(a) grip 0.85 at full lock settles at atan(tan 50 * 0.85) without a crash', () => {
@@ -455,12 +532,11 @@ describe('grip (P35)', () => {
 
         test(`(c) a step to grip 0.75 or 0.60 with full lock held crashes on the law's tick at ${speed} m/s`, () => {
             for (const newGrip of [0.75, 0.60]) {
-                const expected = expectedCrashTick(speed, newGrip, false);
-                expect(expected).not.toBeNull();
-                const tick = stepGrip(speed, newGrip);
-                expect(tick).not.toBeNull();
-                expect(Math.abs(tick - expected)).toBeLessThanOrEqual(1);
-                if (speed === 12 && newGrip === 0.60) expect(tick * DT * 1000).toBeGreaterThan(190);
+                const { tick, law } = stepGrip(speed, newGrip, { withLaw: true });
+                expect(law).not.toBeNull();
+                expect(tick).toBe(law);
+                // Not at once: the demand has to stay over the limit for lowsideMs
+                expect((tick + 1) * DT * 1000).toBeGreaterThanOrEqual(WorldPhysics.lowsideMs);
             }
         });
     }
@@ -470,11 +546,9 @@ describe('grip (P35)', () => {
     });
 
     test('(e) a step to 0.30 crashes even with the input released', () => {
-        const expected = expectedCrashTick(12, 0.30, true);
-        expect(expected).not.toBeNull();
-        const tick = stepGrip(12, 0.30, { release: true });
-        expect(tick).not.toBeNull();
-        expect(Math.abs(tick - expected)).toBeLessThanOrEqual(1);
+        const { tick, law } = stepGrip(12, 0.30, { release: true, withLaw: true });
+        expect(law).not.toBeNull();
+        expect(tick).toBe(law);
     });
 
     test('planted: a dead lowside rule fails case (c)', () => {
