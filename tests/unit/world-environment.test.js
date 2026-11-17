@@ -160,6 +160,20 @@ describe('the Tremola slice', () => {
         expect(env.streamer.refs.size).toBeGreaterThan(0);
     });
 
+    test('the disposal clock runs on simulated time, the same at 120 Hz, 30 fps and with no step at all', () => {
+        const p = env.route.sample(env.startS, {});
+        const clock = () => env.streamer.clock();
+        let before = clock();
+        for (let i = 0; i < 120; i++) env.update(p, env.startS, null, 4, 1 / 120);
+        expect(clock() - before).toBeCloseTo(1000, 6);
+        before = clock();
+        for (let i = 0; i < 30; i++) env.update(p, env.startS, null, 4, 1 / 30);
+        expect(clock() - before).toBeCloseTo(1000, 6);
+        before = clock();
+        env.update(p, env.startS, null, 4);
+        expect(clock()).toBe(before);
+    });
+
     test('disposing leaves nothing of the world in the scene', () => {
         env.dispose();
         expect(scene.children).not.toContain(env.group);

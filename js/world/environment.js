@@ -87,7 +87,8 @@ class WorldEnvironment {
         scene.add(this.group);
 
         this.tileMeshes = new Map();
-        this.streamFrames = 0;
+        // Simulated milliseconds since the world loaded: what the streamer's 3 s of disposal grace is measured on
+        this.streamClockMs = 0;
         this.roadMeshes = new Map();
         this.sideMeshes = new Map();
         this.sideEdges = new Map();
@@ -102,8 +103,9 @@ class WorldEnvironment {
         this.buildFixtures();
         this.streamer = new WorldStreamer({
             data, route: this.route,
-            // 3 s of 60 Hz frames, so a ride stepped faster than real time still lets go of what it has left behind
-            clock: () => this.streamFrames * (1000 / 60),
+            // Simulated time, not frames and not the wall clock: the 3 s of grace is 3 s of riding at any frame rate,
+            // and a ride stepped faster than real time still lets go of what it has left behind
+            clock: () => this.streamClockMs,
             hooks: {
                 buildTile: (key, lod) => this.buildTile(key, lod),
                 buildScenery: (key, lod) => this.buildScenery(key, lod),
@@ -322,10 +324,11 @@ class WorldEnvironment {
     }
 
     // Streams the world round the bike and builds what the 4 ms budget allows.
-    // position: {x, z}; s: the ride progress; state: what the guide reads, see WorldGuide.update
-    update(position, s, state = null, budgetMs = WorldStreamer.BUDGET_MS) {
+    // position: {x, z}; s: the ride progress; state: what the guide reads, see WorldGuide.update;
+    // dtSec: the simulated time since the last update (0 for a call that is not a step of the ride)
+    update(position, s, state = null, budgetMs = WorldStreamer.BUDGET_MS, dtSec = 0) {
         this.lastBike = position;
-        this.streamFrames++;
+        if (Number.isFinite(dtSec) && dtSec > 0) this.streamClockMs += dtSec * 1000;
         this.updateBarriers(s);
         this.streamer.update(position, s);
         if (this.placed) {

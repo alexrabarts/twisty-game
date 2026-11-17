@@ -3229,8 +3229,11 @@ class Game {
 
         // Run physics in fixed timesteps - ensures consistent movement
         // regardless of variable frame timing
+        // The simulated time this frame steps, which the world's streamer measures its disposal grace on
+        let simulatedThisFrame = 0;
         while (this.accumulatedTime >= this.fixedTimeStep) {
             const deltaTime = this.fixedTimeStep; // Always 16.67ms
+            simulatedThisFrame += deltaTime;
 
         // Check for crash (before updating vehicle)
         const wasCrashed = this.vehicle.crashed;
@@ -3409,7 +3412,7 @@ class Game {
         // A world streams by place round the bike, and guides the rider
         if (this.environment && this.environment.isWorld && this.vehicle) {
             // The barrier set follows accepted progress, so a flicker of the projection cannot swap it at a junction used twice
-            this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS);
+            this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
         }
 
         // Distance-cull far scenery (throttled internally)
