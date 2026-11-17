@@ -22,6 +22,10 @@ class WorldEnvironment {
     // Half-width of the gate band, beyond the road edge
     static get GATE_REACH_M() { return 6; }
 
+    // The camera's far plane in a world: past the far land's 40 km reach. Depth steps hardly change with the far plane
+    // (they go as d^2 / near), so this costs the near ground nothing
+    static get FAR_PLANE_M() { return 60000; }
+
     // Metres the rider starts along the ride, so the road's cut end is behind the camera
     static get START_M() { return 20; }
 
@@ -49,7 +53,7 @@ class WorldEnvironment {
         const stage = id === 'all' ? null : data.manifest.stages.find(s => s.id === id);
         if (id !== 'all' && !stage) throw new Error(`unknown world "${id}"; known: all, ${data.manifest.stages.map(s => s.id).join(', ')}`);
         const loaded = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadModels(SceneAssets.loadModel) : (models || null);
-        await Promise.all([data.ensureFar().catch(() => null), data.ensureBuildings().catch(() => null)]);
+        await Promise.all([data.ensureFar().catch(() => null), data.ensureBuildings().catch(() => null), data.ensureFarLand().catch((error) => { console.warn(`world far land unavailable (${error.message}); the horizon ends at far.bin`); return null; })]);
         return new WorldEnvironment(scene, data, { stage, models: loaded });
     }
 
@@ -81,7 +85,7 @@ class WorldEnvironment {
         this.trafficSpeedScale = 0.4;
         // Right-hand traffic: the rider keeps to the route's right lane, so the oncoming car keeps to its left
         this.oncomingLane = 'left';
-        this.config = { id: stage ? stage.id : 'world', look: { fogDensity: 0.0008 }, render: { shadowSpan: 120, cullMax: 6000 }, grip: 1 };
+        this.config = { id: stage ? stage.id : 'world', look: { fogDensity: WorldLooks.clearFog }, render: { shadowSpan: 120, cullMax: 6000 }, grip: 1 };
 
         this.group = new THREE.Group();
         this.group.name = 'world';
@@ -125,6 +129,10 @@ class WorldEnvironment {
         this.guide = new WorldGuide(this);
     }
 
+    // Called with each mesh or group a build step adds. The game sets it to decode the vertex colours at once
+    // (Graphics.fixColorSpaces): its own scan runs every 1.5 s, and a tile drawn before it is pale.
+    onMeshBuilt() {}
+
     get startS() { return (this.stage ? this.stage.from : 0) + WorldEnvironment.START_M; }
 
     get endS() { return this.stage ? this.stage.to : this.route.length; }
@@ -160,10 +168,16 @@ class WorldEnvironment {
     // The things built once: the horizon, the gate frames, the signposts and the landmarks
     buildFixtures() {
         if (this.data.far) {
-            const horizon = Horizon.build(this.data.far);
+            const horizon = Horizon.build(this.data.far, this.data.farCover, this.data.farSink);
             this.horizon = horizon.mesh;
             this.triangleCount += horizon.triangles;
             this.group.add(this.horizon);
+            // The mountains out to 40 km: the camera's far plane reaches them (WorldEnvironment.FAR_PLANE_M)
+            this.farLand = FarLand.build(this.data.farLevels || [], this.data.far).map(({ mesh, triangles }) => {
+                this.triangleCount += triangles;
+                this.group.add(mesh);
+                return mesh;
+            });
         }
         const out = { positions: [], shades: [] };
         const post = [0.55, 0.55, 0.58];
@@ -213,6 +227,7 @@ class WorldEnvironment {
         });
         built.mesh.userData.skipCulling = true;
         this.tileGroup.add(built.mesh);
+        this.onMeshBuilt(built.mesh);
         this.tileMeshes.set(key, built);
         this.triangleCount += built.triangles;
     }
@@ -233,6 +248,7 @@ class WorldEnvironment {
         if (group) {
             group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
             this.sceneryGroup.add(group);
+            this.onMeshBuilt(group);
         }
     }
 
@@ -256,6 +272,7 @@ class WorldEnvironment {
         const group = RoadMesh.section(this.rowsOf(section.from, Math.min(this.route.points.length - 1, section.to + 1)), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M });
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
         this.roadGroup.add(group);
+        this.onMeshBuilt(group);
         this.roadMeshes.set(section.index, group);
         this.triangleCount += group.userData.triangles;
     }
@@ -383,6 +400,7 @@ class WorldEnvironment {
         group.userData.triangles = triangles;
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
         this.sideGroup.add(group);
+        this.onMeshBuilt(group);
         this.sideMeshes.set(k, group);
         this.sideEdges.set(k, edgesHere);
         this.triangleCount += triangles;

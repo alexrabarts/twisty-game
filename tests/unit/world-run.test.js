@@ -350,9 +350,18 @@ describe('the stage looks and the atmosphere along a ride', () => {
         const track = AtmosphereTrack.forWorld(stages, route, WorldLooks);
         const sample = track.sample(5, {});
         expect(sample.a.timeOfDay).toBe('day');
-        const summit = track.sample(90, {});
-        expect(summit.a.weather).toBe('fog');
         expect(AtmosphereTrack.WORLD_UNIT_M).toBe(100);
+    });
+
+    test('a world rides in clear air by default, the far land is real terrain, and cloud is a look to ask for', () => {
+        const clear = AtmosphereTrack.forWorld(stages, route, WorldLooks);
+        expect(clear.sample(90, {}).a.weather).toBe('clear');
+        expect(clear.sample(90, {}).a.fogDensity).toBeLessThanOrEqual(0.0008 / 10);
+        expect(clear.sample(5, {}).a.ring).toBe(0);
+        const cloud = AtmosphereTrack.forWorld(stages, route, WorldLooks.pick('?world=tremola&worldLook=cloud'));
+        expect(cloud.sample(5, {}).a.weather).toBe('clear');
+        expect(cloud.sample(90, {}).a.weather).toBe('fog');
+        expect(WorldLooks.pick('?worldLook=nothing')).toBe(WorldLooks);
     });
 
     test('baseY of a part is the lowest road under it', () => {
@@ -361,7 +370,7 @@ describe('the stage looks and the atmosphere along a ride', () => {
     });
 
     test('no part with a hairpin has rain or snow', () => {
-        Object.values(WorldLooks).flat().forEach((part) => {
+        [WorldLooks, ...Object.values(WorldLooks.variants)].flatMap(table => Object.values(table).flat()).forEach((part) => {
             expect(['rain', 'snow', 'storm']).not.toContain(part.look.weather);
         });
     });

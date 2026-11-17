@@ -6,7 +6,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { fakeData, allTiles, samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { THREE, RoadMesh, TerrainMesh, Horizon, Scenery, WorldGround, WorldRoute, WorldData } = game;
+const { THREE, RoadMesh, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData } = game;
 
 const finite = geometry => Array.from(geometry.attributes.position.array).every(Number.isFinite);
 const row = (x, z, heading, over = {}) => ({ x, y: 100, z, heading, width: 10, bits: 0, ...over });
@@ -166,15 +166,61 @@ describe('TerrainMesh', () => {
         expect(y(10 * N + 12)).toBe(1000);
     });
 
-    test('land cover picks the colour, rock and snow take over with height', () => {
+    test('land cover picks the colour; steep ground is rock, and snow lies only high up and facing north', () => {
         const cover = new Uint8Array(32 * 32).fill(1);
-        const forest = TerrainMesh.colorAt(tile(), cover, 4, 4, 1200);
-        expect(forest).toEqual(TerrainMesh.COVER_COLORS[1]);
-        const high = TerrainMesh.colorAt(tile(), cover, 4, 4, 2900);
-        expect(high[2]).toBeGreaterThan(0.85);
+        expect(TerrainMesh.colorAt(tile(), cover, 4, 4, 1200)).toEqual(TerrainMesh.COVER_COLORS[1]);
         const t = tile();
         t.zones[4 * N + 4] = 5;
         expect(TerrainMesh.colorAt(t, cover, 4, 4, 1200)).toEqual(TerrainMesh.COVER_COLORS[7]);
+        const grass = new Uint8Array(32 * 32).fill(5);
+        // A 60 degree slope of grass is rock
+        const steep = TerrainMesh.colorAt(tile(), grass, 4, 4, 1500, 0.5, 0, 100, 100);
+        expect([LandShade.PALETTE.rock, LandShade.PALETTE.scree]).toContainEqual(steep);
+        // High ground facing north in late summer carries snow somewhere; facing south it carries none
+        const brightest = north => Math.max(...Array.from({ length: 40 }, (_, k) => TerrainMesh.colorAt(tile(), grass, 4, 4, 3100, 0.1, north, k * 37, k * 53)[2]));
+        expect(brightest(1)).toBeGreaterThan(0.85);
+        expect(brightest(-1)).toBeLessThan(0.6);
+    });
+
+    test('a carved cell is a worn verge, not a bare band: the road shows more ground than the bench', () => {
+        const grass = new Uint8Array(32 * 32).fill(5);
+        const t = tile();
+        t.zones[4 * N + 4] = WorldData.ZONE.road;
+        t.zones[4 * N + 6] = WorldData.ZONE.bench;
+        const road = TerrainMesh.colorAt(t, grass, 4, 4, 1200, 0, 0, 10, 10);
+        const bench = TerrainMesh.colorAt(t, grass, 6, 4, 1200, 0, 0, 10, 10);
+        const open = TerrainMesh.colorAt(tile(), grass, 6, 4, 1200, 0, 0, 10, 10);
+        const toBare = c => Math.hypot(...c.map((v, k) => v - TerrainMesh.BARE[k]));
+        expect(toBare(road)).toBeLessThan(toBare(bench));
+        expect(toBare(bench)).toBeLessThan(toBare(open));
+    });
+
+    test('forest at LOD1 carries crown clumps in the tile\'s own geometry; none at LOD0, LOD2 or on open ground', () => {
+        const forest = new Uint8Array(32 * 32).fill(1);
+        const base = TerrainMesh.triangles(1);
+        const near = TerrainMesh.build(tile(), forest, 0);
+        expect(near.triangles).toBe(TerrainMesh.triangles(0));
+        const mid = TerrainMesh.build(tile(), forest, 1);
+        const clumps = TerrainMesh.clumps(tile(), forest, 1);
+        expect(clumps.length).toBeGreaterThan(250);
+        expect(mid.triangles).toBe(base + clumps.length * TerrainMesh.CLUMP_SIDES);
+        expect(finite(mid.mesh.geometry)).toBe(true);
+        expect(TerrainMesh.clumps(tile(), new Uint8Array(32 * 32).fill(5), 1)).toHaveLength(0);
+        // The same clumps every time, and none beyond 2 km
+        expect(TerrainMesh.clumps(tile(), forest, 1)).toEqual(clumps);
+        expect(TerrainMesh.clumps(tile(), forest, 2)).toHaveLength(0);
+    });
+
+    test('a tile\'s colours are made once, linear, and kept across LOD changes', () => {
+        const forest = new Uint8Array(32 * 32).fill(1);
+        const t = tile();
+        const first = TerrainMesh.colours(t, forest);
+        expect(TerrainMesh.colours(t, forest)).toBe(first);
+        const { mesh } = TerrainMesh.build(t, forest, 2);
+        expect(mesh.geometry.userData.linearColors).toBe(true);
+        expect(first[0]).toBeCloseTo(TerrainMesh.toLinear(TerrainMesh.COVER_COLORS[1][0]), 3);
+        // A new cover is new colours
+        expect(TerrainMesh.colours(t, new Uint8Array(32 * 32).fill(5))).not.toBe(first);
     });
 });
 
@@ -192,6 +238,21 @@ describe('Horizon', () => {
         const grid = far(11, 11);
         grid.data[5 * 11 + 5] = -32768;
         expect(Horizon.build(grid).triangles).toBe(100 * 2 - 4 * 2);
+    });
+
+    test('each vertex is sunk by its own metres when the importer gives them (far/sink0.bin)', () => {
+        const sinks = new Uint8Array(11 * 11).fill(8);
+        sinks[5 * 11 + 5] = 40;
+        const { mesh } = Horizon.build(far(11, 11), null, sinks);
+        const y = mesh.geometry.attributes.position.array;
+        expect(y[(5 * 11 + 5) * 3 + 1]).toBe(1500 - 40);
+        expect(y[1]).toBe(1500 - 8);
+    });
+
+    test('cover shares colour the far land: forest is darker than open grass at the same height', () => {
+        const cover = n => new Uint8Array(11 * 11 * 4).map((_, i) => (i % 4 === 0 ? n : i % 4 === 3 ? 255 : 0));
+        const mean = mesh => { const c = mesh.geometry.attributes.color.array; let s = 0; for (const v of c) s += v; return s / c.length; };
+        expect(mean(Horizon.build(far(11, 11), cover(255)).mesh)).toBeLessThan(mean(Horizon.build(far(11, 11), cover(0)).mesh) * 0.7);
     });
 
     test('a large grid is thinned to the triangle budget', () => {
@@ -338,5 +399,34 @@ describe('Scenery', () => {
         // The road is along x = 0 here: the box clears its half width, the road's half width and a margin
         expect(Math.abs(mesh.position.x)).toBeGreaterThanOrEqual(5 + 7 + 8 - 1e-6);
         expect(mesh.name).toBe('landmark:Hospiz');
+    });
+});
+
+describe('FarLand', () => {
+    const level = (x0, z0, n, cell, h = 1500) => ({ x0, z0, nx: n, nz: n, cell, heights: new Int16Array(n * n).fill(h), shares: new Uint8Array(n * n * 4) });
+    const inner = { x0: 0, z0: 0, nx: 11, nz: 11, cell: 100, data: new Int16Array(121).fill(1500) };
+
+    test('a level leaves out the cells inside the level within it and sinks its vertices there, so no seam opens', () => {
+        // A 250 m level over -1000..1500: the cells wholly inside 0..1000 are left out
+        const [built] = FarLand.build([level(-1000, -1000, 11, 250)], inner);
+        const kept = 10 * 10 - 4 * 4;
+        expect(built.triangles).toBe(kept * 2);
+        const y = built.mesh.geometry.attributes.position.array;
+        // Vertex (6, 6) is (500, 500): inside the inner box, sunk; vertex (0, 0) is outside, at its height
+        expect(y[(6 * 11 + 6) * 3 + 1]).toBe(1500 - FarLand.SINK_M[0]);
+        expect(y[1]).toBe(1500);
+    });
+
+    test('the second level is cut by the first, not by far.bin', () => {
+        const levels = [level(-1000, -1000, 11, 250), level(-10000, -10000, 11, 2000)];
+        const [, outer] = FarLand.build(levels, inner);
+        // The first level spans -1000..1500: only the 2 km cells wholly inside it would go, and none is
+        expect(outer.triangles).toBe(10 * 10 * 2);
+    });
+
+    test('far meshes drop with the curvature of the Earth in their shader, the tiles do not', () => {
+        expect(LandShade.DROP_PER_M2 * 40000 * 40000).toBeCloseTo(109, 0);
+        expect(Horizon.material().customProgramCacheKey()).toBe('land-11');
+        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-01');
     });
 });

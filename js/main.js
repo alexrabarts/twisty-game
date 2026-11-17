@@ -272,13 +272,17 @@ class Game {
     async initializeGameWithWorld(environment) {
         this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
         this.environment = environment;
+        this.environment.onMeshBuilt = root => this.graphics.fixColorSpaces(root);
         this.environment.applyLandscapeConfig(this.environment.config.look);
         this.applyShadowBox(this.environment.config.render);
         this.cones = null;
         this.rockfalls = null;
         this.particles = new ParticleSystem(this.scene);
+        // The far land stands up to 40 km away (FarLand); a leg keeps its 5 km
+        this.camera.far = WorldEnvironment.FAR_PLANE_M;
+        this.camera.updateProjectionMatrix();
 
-        this.atmosphereTrack = AtmosphereTrack.forWorld(environment.route.stages, environment.route, WorldLooks);
+        this.atmosphereTrack = AtmosphereTrack.forWorld(environment.route.stages, environment.route, WorldLooks.pick(window.location.search));
         if (typeof WeatherSystem !== 'undefined') {
             if (this.weatherSystem) this.weatherSystem.dispose();
             this.weatherSystem = new WeatherSystem(this.scene, this.camera, AtmosphereTrack.seededRandom(`world-${environment.config.id}`));
@@ -938,6 +942,8 @@ class Game {
         // A world owns DOM beside the scene (the guide and its map) and the streamer's buffers
         if (this.environment && this.environment.isWorld) {
             this.environment.dispose();
+            this.camera.far = 5000;
+            this.camera.updateProjectionMatrix();
         }
 
         // Clear scene objects (keep camera and lights)
@@ -3562,6 +3568,8 @@ class Game {
 
         // The light, sky, fog and far ring follow the ride along the track
         this.applyAtmosphere();
+        // A world's distant land takes the colour of this frame's air (js/world/landshade.js)
+        if (this.environment.isWorld) LandShade.update(this.scene, this.graphics);
         this.graphics.update(
             rawDeltaTime,
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,

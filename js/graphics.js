@@ -955,7 +955,8 @@ class Graphics {
                 }
             }
             const geometry = obj.geometry;
-            if (geometry && geometry.attributes && geometry.attributes.color && !this.seenGeometries.has(geometry)) {
+            // A geometry built with linear colours (a world terrain tile) says so and is left alone
+            if (geometry && geometry.attributes && geometry.attributes.color && !geometry.userData.linearColors && !this.seenGeometries.has(geometry)) {
                 this.seenGeometries.add(geometry);
                 const attribute = geometry.attributes.color;
                 const array = attribute.array;

@@ -327,6 +327,24 @@ class WorldData {
         return this.far;
     }
 
+    // The far land beyond far.bin (manifest.farLevels, tools/world/farland.mjs) and the cover shares of far.bin's own
+    // vertices; an empty list for data with none
+    async ensureFarLand() {
+        if (this.farLevels) return this.farLevels;
+        const levels = this.manifest.farLevels || [];
+        this.farLevels = await Promise.all(levels.map(async (entry) => {
+            const buffer = await this.fetchBuffer(entry.file);
+            const view = new DataView(buffer);
+            const nx = view.getUint16(8, true), nz = view.getUint16(10, true);
+            const heights = new Int16Array(nx * nz);
+            for (let i = 0; i < heights.length; i++) heights[i] = view.getInt16(16 + i * 2, true);
+            return { x0: view.getInt32(0, true) / 1000, z0: view.getInt32(4, true) / 1000, nx, nz, cell: view.getUint16(12, true), heights, shares: new Uint8Array(buffer, 16 + nx * nz * 2, nx * nz * 4) };
+        }));
+        this.farCover = levels.length ? new Uint8Array(await this.fetchBuffer('far/cover0.bin')) : null;
+        this.farSink = levels.length ? new Uint8Array(await this.fetchBuffer('far/sink0.bin')) : null;
+        return this.farLevels;
+    }
+
     async ensureBuildings() {
         if (this.buildings) return this.buildings;
         const view = new DataView(await this.fetchBuffer('buildings.bin'));
