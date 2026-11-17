@@ -75,6 +75,13 @@ describe('world parameters (P41 binding)', () => {
         expect(Object.isFrozen(world)).toBe(true);
     });
 
+    test('rHairpin, the stacked hairpin radius, lies between radiusFloor and rMin, and its inner edge on the narrowest ride clears full lock', () => {
+        const world = loadWorldPhysics();
+        expect(world.rHairpin).toBeGreaterThanOrEqual(world.radiusFloor);
+        expect(world.rHairpin).toBeLessThan(world.rMin);
+        expect(world.rHairpin - 7 / 2).toBeGreaterThan(world.lockRadius);
+    });
+
     test('the file the importer loads and the one the game loads agree', () => {
         expect(loadWorldPhysics()).toEqual(WorldPhysics);
     });

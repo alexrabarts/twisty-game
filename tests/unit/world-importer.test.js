@@ -11,8 +11,9 @@ import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { buildWorld, classWidth, stageDefs } from '../../tools/world/import.mjs';
+import { narrowRide, MIN_RIDE_WIDTH_M, RIDE_WIDTH_M } from '../../tools/world/widths.mjs';
 import { syntheticSource, syntheticDem } from '../../tools/world/synthetic.mjs';
-import { resampleEdge, resampleLine, R_MIN, nearestOnPolyline, polylineLengths, circumradius } from '../../tools/world/resample.mjs';
+import { resampleEdge, resampleLine, R_MIN, R_HAIRPIN, nearestOnPolyline, polylineLengths, circumradius } from '../../tools/world/resample.mjs';
 import { buildCorridorGraph, GraphGapError } from '../../tools/world/graph.mjs';
 import { createBencher, ZONE, TILE_N, TILE_M, CELL_M, BATTER, VERGE_M } from '../../tools/world/bench.mjs';
 import { savitzkyGolay, FLAG } from '../../tools/world/profile.mjs';
@@ -41,7 +42,67 @@ const semicircle = (radius, legM = 100, step = 3) => {
     return pts;
 };
 
+// A ladder of hairpins: `n` legs `legM` long and `apart` metres apart, joined by semicircles of radius apart / 2,
+// alternately at the top and the bottom (the Tremola's stacked switchbacks)
+const ladder = (apart, n = 4, legM = 80, step = 3) => {
+    const pts = [];
+    const r = apart / 2;
+    for (let k = 0; k < n; k++) {
+        const x = k * apart, up = k % 2 === 0;
+        for (let d = 0; d < legM; d += 8) pts.push([x, up ? d : legM - d]);
+        if (k === n - 1) { pts.push([x, up ? legM : 0]); break; }
+        const m = Math.ceil((Math.PI * r) / step);
+        for (let i = 0; i <= m; i++) {
+            const a = (Math.PI * i) / m;
+            pts.push([x + r - r * Math.cos(a), up ? legM + r * Math.sin(a) : -r * Math.sin(a)]);
+        }
+    }
+    return pts;
+};
+
+// The least distance from each point of a polyline to the line more than `same` metres from it along the line
+const legGap = (xs, zs, same = 60) => {
+    const cum = [0];
+    for (let i = 1; i < xs.length; i++) cum.push(cum[i - 1] + Math.hypot(xs[i] - xs[i - 1], zs[i] - zs[i - 1]));
+    let least = Infinity;
+    for (let i = 0; i < xs.length; i++) for (let j = 0; j < xs.length; j++) if (Math.abs(cum[i] - cum[j]) > same) least = Math.min(least, Math.hypot(xs[i] - xs[j], zs[i] - zs[j]));
+    return least;
+};
+
 describe('resample.mjs', () => {
+    test('stacked hairpins 11 m apart: an R_MIN arc pushed the legs to 3 m apart; held to R_HAIRPIN they stay as mapped', () => {
+        const pts = ladder(11);
+        const mapped = legGap(pts.map(p => p[0]), pts.map(p => p[1]));
+        // R_MIN everywhere (no hold): the legs come far nearer than the map has them
+        const plain = resampleLine(pts, [], { rHairpin: R_MIN });
+        expect(legGap(plain.segments[0].x, plain.segments[0].z)).toBeLessThan(mapped - 3);
+        expect(plain.squeezed.length).toBeGreaterThan(0);
+        const r = resampleLine(pts);
+        const seg = r.segments[0];
+        expect(r.hairpins.length).toBeGreaterThan(0);
+        expect(r.squeezed).toEqual([]);
+        expect(legGap(seg.x, seg.z)).toBeGreaterThanOrEqual(mapped - 1.5);
+        expect(seg.minRadius).toBeGreaterThanOrEqual(R_HAIRPIN * 0.995);
+        expect(seg.minRadius).toBeLessThan(R_MIN);
+    });
+
+    test('stacked hairpins 25 m apart keep their R_MIN fillets: no hairpin is held', () => {
+        const r = resampleLine(ladder(25));
+        expect(r.hairpins).toEqual([]);
+        expect(r.squeezed).toEqual([]);
+        expect(r.segments[0].minRadius).toBeGreaterThanOrEqual(R_MIN * 0.995);
+    });
+
+    test('a held hairpin narrows the ride to the minimum, so its inner edge is not a point on the bend', () => {
+        const seg = resampleLine(ladder(11)).segments[0];
+        const e = { x: seg.x, z: seg.z, width: new Float32Array(seg.x.length).fill(RIDE_WIDTH_M), flags: new Uint8Array(seg.x.length), cls: '4m Strasse', onRide: true, length: seg.length };
+        narrowRide([e], [{ edgeId: 0, dir: 1 }]);
+        for (let i = 1; i + 1 < seg.x.length; i++) {
+            const r = circumradius(seg.x[i - 1], seg.z[i - 1], seg.x[i], seg.z[i], seg.x[i + 1], seg.z[i + 1]);
+            if (r < R_MIN * 0.95) expect(e.width[i]).toBeCloseTo(MIN_RIDE_WIDTH_M, 5);
+        }
+    });
+
     test('a hairpin tighter than R_MIN comes out at R_MIN or wider, and still turns the full 180 degrees', () => {
         const r = resampleEdge(semicircle(5));
         expect(r.minRadius).toBeGreaterThanOrEqual(R_MIN * 0.995);
@@ -601,7 +662,7 @@ describe('the committed Tremola slice (world/)', () => {
         expect(['a/b.gpkg', 'c.tif', 'd.zip'].filter(f => /\.(gpkg|tif|tiff|zip)$/i.test(f))).toHaveLength(3);
     });
 
-    test('has 20 or more real hairpins, none tighter than R_MIN (P4)', () => {
+    test('has 20 or more real hairpins, none tighter than R_MIN outside a held stacked hairpin, none under R_HAIRPIN (P4)', () => {
         const r = checkHairpins(decoded);
         expect(r.details.problems).toEqual([]);
         expect(r.details.hairpins).toBeGreaterThanOrEqual(20);
@@ -633,7 +694,7 @@ describe('the committed Tremola slice (world/)', () => {
     test('the stations are where the placement rule puts them, and a tight bend is listed, not hidden (P36)', () => {
         const r = checkStations(decoded);
         expect(r.details.problems).toEqual([]);
-        expect(r.details.tightBend.map(b => b.s)).toEqual([11434.3]);
+        expect(r.details.tightBend.map(b => b.s)).toEqual([10284.6, 11366.6]);
     });
 
     test('the stacked gate fails when the cap on banked allowance is raised past half the closest pair', () => {

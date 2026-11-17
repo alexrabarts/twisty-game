@@ -6,6 +6,13 @@
 // turn rate is capped at 1/R_MIN. Where the mapped bend is gentler than that, the rider rides the line as mapped.
 // Where it is tighter, the rider takes a R_MIN arc and then comes back onto the line (the legs of a hairpin end up
 // further apart, the way a wider turn needs). The cap is a hard limit, so no radius below R_MIN can come out.
+//
+// Stacked hairpins: on a ladder of hairpins whose legs are mapped about 10 m apart, a R_MIN arc cannot turn between
+// two legs. It runs wide on the exit and carries the next leg onto the one beyond it (the Tremola had legs 2.8 m
+// apart where the map has them 11 m apart). So after each ride the legs are compared with the map: where a leg comes
+// nearer another leg than the map has them (within LEG_CARE_M), the tightened bends next to it are held to
+// R_HAIRPIN instead, and the line is ridden again. R_HAIRPIN is the tightest the bike turns at speed, so the
+// hairpin stays inside its real footprint and the bike can still ride its centreline.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,23 +20,42 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const SPACING_M = 4;
 const FALLBACK_R_MIN = 10;
+const FALLBACK_R_HAIRPIN = 6;
+
+function readPhysics(name, fallback, repoRoot) {
+  const file = path.join(repoRoot, 'js', 'world', 'physics.js');
+  if (!fs.existsSync(file)) return fallback;
+  // The key itself (`name: 10`), not a comment that names it
+  const m = new RegExp(`\\b${name}\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)`).exec(fs.readFileSync(file, 'utf8'));
+  return m ? Number(m[1]) : fallback;
+}
 
 // The fillet radius is the radius the physics can ride: js/world/physics.js owns it once that file exists
 // (P41 binds the two). Until then the plan's value stands.
-export function readRMin(repoRoot = REPO_ROOT) {
-  const file = path.join(repoRoot, 'js', 'world', 'physics.js');
-  if (!fs.existsSync(file)) return FALLBACK_R_MIN;
-  const m = /\brMin\b[^0-9\n]*([0-9]+(?:\.[0-9]+)?)/.exec(fs.readFileSync(file, 'utf8'));
-  return m ? Number(m[1]) : FALLBACK_R_MIN;
-}
+export function readRMin(repoRoot = REPO_ROOT) { return readPhysics('rMin', FALLBACK_R_MIN, repoRoot); }
+// The radius a stacked hairpin is held to where a R_MIN arc would push its legs together (physics.js rHairpin)
+export function readRHairpin(repoRoot = REPO_ROOT) { return readPhysics('rHairpin', FALLBACK_R_HAIRPIN, repoRoot); }
 
 export const R_MIN = readRMin();
+export const R_HAIRPIN = readRHairpin();
 
 const STEP_M = 1;
 const CARROT_M = 10;
+// In a held hairpin the carrot is nearer: at 10 m it cut the inside of a 6 m bend and drew the legs 2 m together
+const CARROT_HAIRPIN_M = 5;
 const END_BLEND_M = 25;
 const FILLET_GAP_M = 1;
 const EXPLAIN_M = 80;
+// Stacked legs. Two points of the line count as one leg when they are within LEG_SAME_M of each other along it. A
+// leg nearer another than LEG_CARE_M is compared with the map; it is squeezed when it is more than LEG_TOL_M nearer
+// than the map has the two. A tightened bend within BLAME_M (mapped arc) of a squeezed point is held to R_HAIRPIN
+// over LOOSE_HALF_M either side of it. At most SQUEEZE_ROUNDS rides.
+const LEG_SAME_M = 60;
+const LEG_CARE_M = 15; // two 10 m roads' drawn strips (ribbon, verge, 0.5 m) meet at 13.2 m apart
+const LEG_TOL_M = 1.5; // as verify.mjs fidelityM: a line within 1.5 m of the map is the mapped line
+const BLAME_M = 50;
+const LOOSE_HALF_M = 20;
+const SQUEEZE_ROUNDS = 8;
 
 export function polylineLengths(pts) {
   const cum = new Float64Array(pts.length);
@@ -83,7 +109,7 @@ function headingBetween(ax, az, bx, bz) { return Math.atan2(bx - ax, bz - az); }
 // point search: beside a stacked hairpin the nearest mapped point can be on the next leg.
 const MAX_REF_STEP_M = 3;
 
-function ride(src, srcCum, ds, kMax) {
+function ride(src, srcCum, ds, capAt, carrotAt = () => CARROT_M) {
   const total = srcCum[srcCum.length - 1];
   const tangent = arc => {
     const [ax, az] = pointAtArc(src, srcCum, Math.max(0, arc - 1));
@@ -102,11 +128,12 @@ function ride(src, srcCum, ds, kMax) {
       arc = Math.max(0, Math.min(total, arc + Math.max(-MAX_REF_STEP_M, Math.min(MAX_REF_STEP_M, along))));
     }
     if (arc >= total - ds) break;
-    const [cx, cz] = pointAtArc(src, srcCum, Math.min(total, arc + CARROT_M));
+    const [cx, cz] = pointAtArc(src, srcCum, Math.min(total, arc + carrotAt(arc)));
     const dx = cx - x, dz = cz - z;
     const run2 = dx * dx + dz * dz;
     const ahead = dx * Math.sin(th) + dz * Math.cos(th);
     const side = dx * Math.cos(th) - dz * Math.sin(th);
+    const kMax = capAt(arc);
     const want = run2 < 1e-9 ? 0 : ahead < 0 ? Math.sign(side || 1) * 2 * kMax : (2 * side) / run2;
     const k = Math.max(-kMax, Math.min(kMax, want));
     if (Math.abs(want) > kMax) capped.push(arc);
@@ -139,26 +166,43 @@ function ride(src, srcCum, ds, kMax) {
 //   fillets   [{ s0, s1, sagM, explained }] arc spans on the mapped line where the line leaves the mapped one by
 //             more than a metre, sagM the largest gap inside the span
 //   cuts      [{ x, z }] where each split fell on the new line
-export function resampleLine(pts, splits = [], { rMin = R_MIN, spacing = SPACING_M } = {}) {
+//   hairpins  [{ s0, s1 }] mapped-line spans held to rHairpin (stacked hairpins), and
+//   squeezed  the legs still nearer each other than the map has them: [{ a, b, rideM, mappedM }] (mapped arcs)
+export function resampleLine(pts, splits = [], { rMin = R_MIN, rHairpin = R_HAIRPIN, spacing = SPACING_M } = {}) {
   const srcCum = polylineLengths(pts);
   const srcLen = srcCum[srcCum.length - 1];
   if (!(srcLen > 0)) throw new Error('resampleLine: a line of zero length');
   const ds = srcLen / Math.max(2, Math.ceil(srcLen / STEP_M));
-  let kMax = 1 / (rMin * 1.01);
-  let result = null, lineCum = null;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    result = ride(pts, srcCum, ds, kMax);
-    lineCum = polylineLengths(result.line);
-    const whole = sampleRange(result.line, lineCum, 0, lineCum[lineCum.length - 1], spacing);
-    const worst = minRadius(whole.x, whole.z);
-    if (worst >= rMin || !Number.isFinite(worst)) break;
-    kMax *= worst / rMin / 1.005;
+  // Mapped-line spans [a0, a1] held to rHairpin, not rMin
+  const loose = [];
+  const inLoose = arc => loose.some(([a0, a1]) => arc >= a0 && arc <= a1);
+  const mappedSep = legSeparation(densify(pts, srcCum, 2));
+  let result = null, lineCum = null, squeezed = [];
+  for (let round = 0; round < SQUEEZE_ROUNDS; round++) {
+    let scale = 1;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      result = ride(pts, srcCum, ds, arc => scale / ((inLoose(arc) ? rHairpin : rMin) * 1.01), arc => (inLoose(arc) ? CARROT_HAIRPIN_M : CARROT_M));
+      lineCum = polylineLengths(result.line);
+      const whole = sampleRange(result.line, lineCum, 0, lineCum[lineCum.length - 1], spacing);
+      // The worst share of its own floor (rHairpin in a held span, else rMin) any sample's radius reaches
+      const ref = Float64Array.from(whole.x, (_, i) => refOf(result, lineCum, u0Of(whole, i)));
+      let worst = Infinity;
+      for (let i = 1; i + 1 < whole.x.length; i++) {
+        const r = circumradius(whole.x[i - 1], whole.z[i - 1], whole.x[i], whole.z[i], whole.x[i + 1], whole.z[i + 1]);
+        worst = Math.min(worst, r / (inLoose(ref[i]) ? rHairpin : rMin));
+      }
+      if (worst >= 1 || !Number.isFinite(worst)) break;
+      scale *= worst / 1.005;
+    }
+    squeezed = squeezedLegs(result, lineCum, mappedSep, spacing);
+    if (!squeezed.length || rHairpin >= rMin) break;
+    const blamed = result.capped.filter(c => !inLoose(c) && squeezed.some(q => Math.abs(c - q.a) <= BLAME_M || Math.abs(c - q.b) <= BLAME_M));
+    if (!blamed.length) break;
+    for (const c of blamed) loose.push([c - LOOSE_HALF_M, c + LOOSE_HALF_M]);
+    mergeSpans(loose);
   }
   const lineLen = lineCum[lineCum.length - 1];
-  const refAt = u => {
-    const at = pointAtArc(result.line, lineCum, u);
-    return result.ref[at[2]] + (result.ref[Math.min(at[2] + 1, result.ref.length - 1)] - result.ref[at[2]]) * at[3];
-  };
+  const refAt = u => refOf(result, lineCum, u);
   // The new line's arc length where each split falls: the first step whose reference arc has reached it.
   const lineArcs = [0];
   for (const b of splits) {
@@ -172,6 +216,7 @@ export function resampleLine(pts, splits = [], { rMin = R_MIN, spacing = SPACING
   const segments = [];
   for (let k = 0; k + 1 < lineArcs.length; k++) {
     const seg = sampleRange(result.line, lineCum, lineArcs[k], Math.max(lineArcs[k + 1], lineArcs[k] + 1e-6), spacing);
+    delete seg.u0;
     seg.srcS = Float64Array.from({ length: seg.x.length }, (_, i) => refAt(lineArcs[k] + i * seg.spacing));
     seg.length = 0;
     for (let i = 1; i < seg.x.length; i++) seg.length += Math.hypot(seg.x[i] - seg.x[i - 1], seg.z[i] - seg.z[i - 1]);
@@ -194,6 +239,8 @@ export function resampleLine(pts, splits = [], { rMin = R_MIN, spacing = SPACING
   return {
     segments,
     cuts: lineArcs.slice(1, -1).map(u => { const [x, z] = pointAtArc(result.line, lineCum, u); return { x, z }; }),
+    hairpins: loose.map(([a0, a1]) => ({ s0: r1(Math.max(0, a0)), s1: r1(Math.min(srcLen, a1)) })),
+    squeezed,
     fillets: fillets.map(f => ({ s0: r1(f.s0), s1: r1(f.s1), sagM: Math.round(f.sag * 100) / 100, explained: result.capped.some(c => c >= f.s0 - EXPLAIN_M && c <= f.s1 + EXPLAIN_M) }))
   };
 }
@@ -202,6 +249,79 @@ export function resampleLine(pts, splits = [], { rMin = R_MIN, spacing = SPACING
 export function resampleEdge(pts, opts) {
   const r = resampleLine(pts, [], opts);
   return { ...r.segments[0], fillets: r.fillets };
+}
+
+// The mapped-line arc the rider was at, at arc u of its 1 m line
+function refOf(result, lineCum, u) {
+  const at = pointAtArc(result.line, lineCum, u);
+  return result.ref[at[2]] + (result.ref[Math.min(at[2] + 1, result.ref.length - 1)] - result.ref[at[2]]) * at[3];
+}
+const u0Of = (samples, i) => samples.u0 + i * samples.spacing;
+
+// Points every `step` metres along a polyline: { x, z, arc }
+function densify(pts, cum, step) {
+  const n = Math.max(1, Math.ceil(cum[cum.length - 1] / step));
+  const x = new Float64Array(n + 1), z = new Float64Array(n + 1), arc = new Float64Array(n + 1);
+  for (let k = 0; k <= n; k++) { arc[k] = (cum[cum.length - 1] * k) / n; [x[k], z[k]] = pointAtArc(pts, cum, arc[k]); }
+  return { x, z, arc };
+}
+
+// For each point { x, z, arc }, the distance to the nearest point of another leg (more than LEG_SAME_M away along
+// the line), and that point's arc; LEG_CARE_M and Infinity where no other leg is that near. A grid of LEG_CARE_M cells.
+function legSeparation(p) {
+  const grid = new Map();
+  const key = (i, j) => `${i},${j}`;
+  for (let k = 0; k < p.x.length; k++) {
+    const g = key(Math.floor(p.x[k] / LEG_CARE_M), Math.floor(p.z[k] / LEG_CARE_M));
+    (grid.get(g) ?? grid.set(g, []).get(g)).push(k);
+  }
+  const dist = new Float64Array(p.x.length).fill(LEG_CARE_M), other = new Float64Array(p.x.length).fill(Infinity);
+  for (let k = 0; k < p.x.length; k++) {
+    const ci = Math.floor(p.x[k] / LEG_CARE_M), cj = Math.floor(p.z[k] / LEG_CARE_M);
+    for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) {
+      for (const m of grid.get(key(ci + a, cj + b)) ?? []) {
+        if (Math.abs(p.arc[m] - p.arc[k]) <= LEG_SAME_M) continue;
+        const d = Math.hypot(p.x[m] - p.x[k], p.z[m] - p.z[k]);
+        if (d < dist[k]) { dist[k] = d; other[k] = p.arc[m]; }
+      }
+    }
+  }
+  return { ...p, dist, other };
+}
+
+// The mapped separation at mapped arc a (the densified map's nearest point)
+function mappedAt(sep, a) {
+  const step = sep.arc.length > 1 ? sep.arc[1] - sep.arc[0] : 1;
+  return sep.dist[Math.max(0, Math.min(sep.dist.length - 1, Math.round(a / step)))];
+}
+
+// The ridden legs nearer each other than the map has them: one entry per run of squeezed samples, at its nearest
+// point: { a, b } the mapped arcs of the two legs there, rideM the ridden and mappedM the mapped separation.
+function squeezedLegs(result, lineCum, mappedSep, spacing) {
+  const whole = sampleRange(result.line, lineCum, 0, lineCum[lineCum.length - 1], spacing);
+  const ref = Float64Array.from(whole.x, (_, i) => refOf(result, lineCum, u0Of(whole, i)));
+  const arc = Float64Array.from(whole.x, (_, i) => u0Of(whole, i));
+  const ridden = legSeparation({ x: whole.x, z: whole.z, arc });
+  const out = [];
+  let open = null;
+  for (let i = 0; i < whole.x.length; i++) {
+    const mapped = mappedAt(mappedSep, ref[i]);
+    const squeeze = ridden.dist[i] < mapped - LEG_TOL_M;
+    if (squeeze) {
+      const row = { a: ref[i], b: refOf(result, lineCum, ridden.other[i]), rideM: ridden.dist[i], mappedM: mapped, i };
+      if (open && i - open.i1 <= 2) { open.i1 = i; if (row.rideM < open.row.rideM) open.row = row; } else { if (open) out.push(open.row); open = { i1: i, row }; }
+    }
+  }
+  if (open) out.push(open.row);
+  const r2 = v => Math.round(v * 100) / 100;
+  return out.map(q => ({ a: Math.round(q.a * 10) / 10, b: Math.round(q.b * 10) / 10, rideM: r2(q.rideM), mappedM: r2(q.mappedM) }));
+}
+
+function mergeSpans(spans) {
+  spans.sort((p, q) => p[0] - q[0]);
+  for (let k = spans.length - 1; k > 0; k--) {
+    if (spans[k][0] <= spans[k - 1][1]) { spans[k - 1][1] = Math.max(spans[k - 1][1], spans[k][1]); spans.splice(k, 1); }
+  }
 }
 
 // Samples evenly spaced between arc lengths u0 and u1 of the 1 m line, at most `spacing` apart. The heading is the
@@ -219,5 +339,5 @@ function sampleRange(line, cum, u0, u1, spacing) {
     const [bx, bz] = pointAtArc(line, cum, u + probe);
     heading[j] = headingBetween(ax, az, bx, bz);
   }
-  return { x, z, heading, spacing: step };
+  return { x, z, heading, spacing: step, u0 };
 }

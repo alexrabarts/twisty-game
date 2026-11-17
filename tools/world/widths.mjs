@@ -9,8 +9,13 @@
 // of a bend), and a junction when they lie on two edges whose ends meet (within END_JOIN_M) and both lie within
 // JUNCTION_M of that end. Structures (bridges over, tunnels and galleries under) are left out: their bands may cross
 // another road at another height. verify.mjs `overlap` checks the result with the same rules.
+//
+// A bend tighter than R_MIN (a stacked hairpin, held to R_HAIRPIN by resample.mjs) narrows too, so its inner edge
+// keeps INNER_EDGE_M (R_MIN less half the full ride: the inner edge of an R_MIN bend) where the minimum allows: at
+// R_HAIRPIN 6 m the ride is 7 m there, its inner edge 2.5 m from the bend's centre and not a point on it.
 import { FLAG } from './profile.mjs';
 import { VERGE_M } from './bench.mjs';
+import { R_MIN, circumradius } from './resample.mjs';
 
 export const RIDE_WIDTH_M = 10;
 export const MIN_RIDE_WIDTH_M = 7;
@@ -18,6 +23,8 @@ export const TAPER = 0.1;
 export const OVERLAP_MARGIN_M = 0.5;
 export const SAME_ARC_M = (Math.PI / 2) * (RIDE_WIDTH_M + 2 * VERGE_M) + 2;
 export const JUNCTION_M = 40;
+export const INNER_EDGE_M = R_MIN - RIDE_WIDTH_M / 2;
+const HELD_BEND = 0.95;
 export const END_JOIN_M = 8;
 const STRUCTURE = FLAG.tunnel | FLAG.bridge | FLAG.gallery;
 const CELL = 16;
@@ -104,6 +111,12 @@ export function narrowRide(edges, ride) {
     const e = edges[row.id];
     if (e.flags[row.i] & STRUCTURE) return RIDE_WIDTH_M;
     let cap = RIDE_WIDTH_M;
+    // A held bend: its radius over the sample and its neighbours, the inner edge kept INNER_EDGE_M from its centre.
+    // An R_MIN fillet reads a few centimetres either side of R_MIN on the 4 m samples, and keeps the full width
+    for (let k = Math.max(1, row.i - 1); k <= Math.min(e.x.length - 2, row.i + 1); k++) {
+      const r = circumradius(e.x[k - 1], e.z[k - 1], e.x[k], e.z[k], e.x[k + 1], e.z[k + 1]);
+      if (r < HELD_BEND * R_MIN) cap = Math.min(cap, 2 * (r - INNER_EDGE_M));
+    }
     for (const o of grid.others(row.id, row.i, reach)) {
       const f = edges[o.edge];
       // The band this sample may take: half the gap to another ride sample (both narrow), the gap less the side road's band

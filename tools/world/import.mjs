@@ -131,6 +131,7 @@ function resampleRide(edges, ride, nodes) {
   });
   const r = resampleLine(line, bounds.slice(0, -1));
   const done = new Set();
+  const legs = { heldHairpins: r.hairpins.length, squeezed: r.squeezed };
   const moved = new Set();
   ride.forEach((use, k) => {
     const e = edges[use.edgeId];
@@ -163,6 +164,7 @@ function resampleRide(edges, ride, nodes) {
     if (e.onRide) continue;
     for (const [end, node] of [[0, e.a], [e.srcPts.length - 1, e.b]]) if (moved.has(node)) { e.srcPts[end][0] = nodes[node].x; e.srcPts[end][1] = nodes[node].z; }
   }
+  return legs;
 }
 
 export async function buildWorld(source, { stationSpacingM = 1000, log = () => {} } = {}) {
@@ -177,7 +179,9 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
 
   const stats = { fillets: 0, minRadiusM: Infinity, demOverM: 0, demP99M: 0, demSamples: 0 };
   for (const e of edges) { e.srcCum = polylineLengths(e.srcPts); e.width = null; }
-  resampleRide(edges, ride, g.nodes);
+  const legs = resampleRide(edges, ride, g.nodes);
+  Object.assign(stats, legs);
+  log(`legs: ${legs.heldHairpins} stacked hairpins held to R_HAIRPIN, ${legs.squeezed.length} legs nearer each other than mapped`);
   for (const e of edges) {
     if (!e.onRide) {
       const r = resampleEdge(e.srcPts);

@@ -7,6 +7,10 @@ const WorldPhysics = Object.freeze({
     leanCapDeg: 50,        // the lean at grip 1.0; grip lowers it (capEff)
     radiusFloor: 5,        // m, tightest radius the bike turns (R_MIN - width/2)
     rMin: 10,              // m, centreline fillet radius the importer builds
+    // m, the radius a stacked hairpin is held to instead (tools/world/resample.mjs): where a rMin arc would push a
+    // ladder's legs together, nearer than the map has them. At least radiusFloor, so the bike turns its centreline at
+    // speed, and its inner edge at the narrowest ride (7 m) stays outside the full-lock circle (lockRadius)
+    rHairpin: 6,
     // Steering (Vehicle.updateWorldPhysics). A held key leans the bike at leanRate; the lean rate follows the
     // steering with the lag leanRateLag, so a press leans the bike by the same amount whatever it was doing.
     leanRate: 1.15,        // rad/s at full steering, up to steerSpeed: a 0.3 s key press is about 16 degrees

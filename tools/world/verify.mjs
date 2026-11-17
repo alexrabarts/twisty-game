@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeWorld } from './encode.mjs';
-import { R_MIN, nearestOnPolyline, polylineLengths } from './resample.mjs';
+import { R_MIN, R_HAIRPIN, nearestOnPolyline, polylineLengths } from './resample.mjs';
 import { rideSamples, placeStations } from './stations.mjs';
 import { ROOFED, CREST_MIN_MPS, verticalCurvature } from './profile.mjs';
 import { buildReport } from './inspect.mjs';
@@ -35,7 +35,8 @@ const check = (name, ok, details) => ({ name, ok, details });
 export function readMaxBankM(repoRoot = REPO_ROOT) {
   const file = path.join(repoRoot, 'js', 'world', 'physics.js');
   if (!fs.existsSync(file)) return 40;
-  const m = /\bmaxBankM\b[^0-9\n]*([0-9]+(?:\.[0-9]+)?)/.exec(fs.readFileSync(file, 'utf8'));
+  // The key itself (`maxBankM: 40`): the comment above it names maxBankM next to a 2.2 and was read as the value
+  const m = /\bmaxBankM\s*:\s*([0-9]+(?:\.[0-9]+)?)/.exec(fs.readFileSync(file, 'utf8'));
   return m ? Number(m[1]) : 40;
 }
 
@@ -66,8 +67,10 @@ export function checkFidelity(decoded, built) {
   }
   const ratio = Math.abs(ridden - source) / source;
   if (worstOutside > LIMITS.fidelityM) problems.push(`${worstOutside.toFixed(2)} m from the mapped line outside a fillet (limit ${LIMITS.fidelityM})`);
+  // No two legs of the ride nearer each other than the map has them (resample.mjs holds stacked hairpins to R_HAIRPIN)
+  for (const q of built.stats.squeezed ?? []) problems.push(`legs at mapped ${q.a} and ${q.b} m ride ${q.rideM} m apart, mapped ${q.mappedM} m`);
   if (ratio > LIMITS.lengthRatio) problems.push(`ride length ${ridden.toFixed(0)} m against ${source.toFixed(0)} m mapped (${(ratio * 100).toFixed(2)}%, limit ${LIMITS.lengthRatio * 100}%)`);
-  return check('fidelity', problems.length === 0, { worstOutsideFilletM: Math.round(worstOutside * 100) / 100, lengthRatioPct: Math.round(ratio * 1e4) / 100, fillets, problems });
+  return check('fidelity', problems.length === 0, { worstOutsideFilletM: Math.round(worstOutside * 100) / 100, lengthRatioPct: Math.round(ratio * 1e4) / 100, heldHairpins: built.stats.heldHairpins ?? 0, squeezedLegs: (built.stats.squeezed ?? []).length, fillets, problems });
 }
 
 // Hairpins: a heading change of 150 degrees or more within 80 m of s.
@@ -104,8 +107,14 @@ export function checkHairpins(decoded) {
   const problems = [];
   if (hairpins.length < LIMITS.hairpinMin) problems.push(`${hairpins.length} hairpins (need ${LIMITS.hairpinMin})`);
   if (tight < LIMITS.tightHairpinMin) problems.push(`${tight} hairpins at ${LIMITS.tightHairpinRadiusM} m or less (need ${LIMITS.tightHairpinMin})`);
-  if (minRadius < R_MIN * LIMITS.radiusTolerance) problems.push(`tightest centreline radius ${minRadius.toFixed(2)} m, below R_MIN ${R_MIN}`);
-  return check('hairpins', problems.length === 0, { hairpins: hairpins.length, tight, minRadiusM: Math.round(minRadius * 100) / 100, rMin: R_MIN, problems });
+  // Under R_MIN only inside a hairpin (a stacked one, held to R_HAIRPIN by resample.mjs), and never under R_HAIRPIN
+  if (minRadius < R_HAIRPIN * LIMITS.radiusTolerance) problems.push(`tightest centreline radius ${minRadius.toFixed(2)} m, below R_HAIRPIN ${R_HAIRPIN}`);
+  const inHairpin = s => hairpins.some(h => s >= h.s0 - 8 && s <= h.s1 + 8);
+  for (let i = 0; i < samples.s.length; i++) {
+    if (samples.radius[i] < R_MIN * LIMITS.radiusTolerance && !inHairpin(samples.s[i])) { problems.push(`centreline radius ${samples.radius[i].toFixed(2)} m at s ${Math.round(samples.s[i])}, below R_MIN ${R_MIN} outside a hairpin`); break; }
+  }
+  const held = hairpins.filter(h => h.minRadiusM < R_MIN * LIMITS.radiusTolerance).length;
+  return check('hairpins', problems.length === 0, { hairpins: hairpins.length, tight, held, minRadiusM: Math.round(minRadius * 100) / 100, rMin: R_MIN, rHairpin: R_HAIRPIN, problems });
 }
 
 export function checkElevation(decoded, built, { slice = null } = {}) {
