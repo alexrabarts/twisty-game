@@ -136,10 +136,12 @@ class WorldRun {
         return result;
     }
 
-    // The next station is passed once accepted progress is beyond it, the bike faces along the road and is on it
+    // The next station is passed once accepted progress is beyond it, the bike faces along the road and is on it.
+    // The finish sits at the route's end: its stored s (rounded to 0.1 m) can lie a centimetre past the last sample,
+    // where no projection reaches, so a station is never further than the route's own length
     passStation(frame) {
         const next = this.nextStation;
-        if (!next || this.lastS < next.s || frame.forwardDot <= 0) return -1;
+        if (!next || this.lastS < Math.min(next.s, this.route.length) || frame.forwardDot <= 0) return -1;
         if (Math.abs(frame.lateral) > frame.width / 2 + WorldRun.STATION_REACH_M) return -1;
         this.stationIndex++;
         return this.stationIndex;

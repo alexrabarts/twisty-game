@@ -41,6 +41,19 @@ describe('WorldRun stages', () => {
         expect(run.stageGates(1)).toEqual({ total: 2, passed: 0 });
     });
 
+    test('the finish is passed at the route end even when its stored s lies a centimetre past the last sample', () => {
+        const short = new WorldRoute(samplesOf(straight(600)), { stages: [{ id: 'a', name: 'A', from: 0, to: 600 }] });
+        const end = short.length + 0.01;
+        const run = new WorldRun(short, [{ s: 0, stage: 'a', kind: 'start' }, { s: end, stage: 'a', kind: 'end' }], WorldPhysics);
+        let passed = -1;
+        for (let s = 0; s <= short.length && passed < 0; s = Math.min(short.length, s + 0.2)) {
+            passed = run.update(frame(s)).station;
+            if (s === short.length) break;
+        }
+        expect(passed).toBe(1);
+        expect(run.finished).toBe(true);
+    });
+
     test('begin puts the stage state back, and a ride that starts inside a stage starts in it', () => {
         const run = new WorldRun(route, stations, WorldPhysics);
         run.onStageFinish(0, 5000);
