@@ -253,6 +253,60 @@ describe('a world ride is not thrown away in one key press', () => {
         expect(document.getElementById('worldConfirm')).toBeNull();
     });
 
+    const press = code => document.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true }));
+
+    test('the race is paused while the box is open: the clock stops, and Cancel gives the paused time back', () => {
+        const game = worldGame();
+        game.advance(30000);
+        game.confirmWorldLeave(game.worldRestartAsk(), jest.fn());
+        expect(game.paused).toBe(true);
+        game.advance(20000);
+        expect(game.raceElapsed()).toBe(30000);
+        document.getElementById('worldConfirmNo').click();
+        expect(game.paused).toBe(false);
+        game.advance(1000);
+        expect(game.raceElapsed()).toBe(31000);
+    });
+
+    test('a pause the rider took stays theirs when the box closes', () => {
+        const game = worldGame();
+        game.pauseRace();
+        game.confirmWorldLeave('ask', jest.fn());
+        document.getElementById('worldConfirmNo').click();
+        expect(game.paused).toBe(true);
+    });
+
+    test('Enter answers YES and Escape answers CANCEL, and neither reaches the page once the box is gone', () => {
+        const game = worldGame();
+        const go = jest.fn();
+        game.confirmWorldLeave('ask', go);
+        press('Escape');
+        expect(document.getElementById('worldConfirm')).toBeNull();
+        expect(go).not.toHaveBeenCalled();
+        game.confirmWorldLeave('ask', go);
+        press('Enter');
+        expect(document.getElementById('worldConfirm')).toBeNull();
+        expect(go).toHaveBeenCalledTimes(1);
+        press('Enter');
+        expect(go).toHaveBeenCalledTimes(1);
+        expect(game.paused).toBe(false);
+    });
+
+    test('any restart closes the box and resumes the race, and a key pressed while it was open does not fire later', () => {
+        const game = worldGame();
+        game.restartAtStation = jest.fn();
+        game.input = { clearActions: jest.fn() };
+        const go = jest.fn();
+        game.confirmWorldLeave(game.worldRestartAsk(), go);
+        game.restartFromCheckpoint('off-route');
+        expect(document.getElementById('worldConfirm')).toBeNull();
+        expect(game.paused).toBe(false);
+        expect(game.input.clearActions).toHaveBeenCalled();
+        expect(game.restartAtStation).toHaveBeenCalledWith('off-route');
+        press('Enter');
+        expect(go).not.toHaveBeenCalled();
+    });
+
     test('a world restart starts no leaderboard session, even after a leg was played in the page life', () => {
         const game = worldGame();
         game.leaderboardService.startRun = jest.fn();

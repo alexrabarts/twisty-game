@@ -711,6 +711,7 @@ class Game {
     // R key) goes through here so none of them can leave a stale checkpoint,
     // combo or timer behind.
     resetRunState() {
+        this.closeWorldConfirm();
         this.score = 0;
         this.combo = 0;
         this.comboMultiplier = 1;
@@ -792,12 +793,14 @@ class Game {
     // A world ride is one long run. A full restart or Menu asks before it throws the ride away; `proceed` runs
     // on yes, and Cancel leaves the ride, its clock and the sessions as they were. A finished ride has
     // nothing to lose, so it goes straight on. Returns true when it asked.
+    // The race is paused while the box is open, so the answer is about the ride as it stood when it asked:
+    // a late YES cannot throw away a ride that went on. Enter answers YES and Escape answers CANCEL.
     confirmWorldLeave(text, proceed) {
         if (!this.environment || !this.environment.isWorld || this.finished) {
             proceed();
             return false;
         }
-        if (document.getElementById('worldConfirm')) return true;
+        if (this.worldConfirm) return true;
         const box = document.createElement('div');
         box.id = 'worldConfirm';
         box.className = 'world-confirm';
@@ -813,10 +816,56 @@ class Game {
         no.className = 'finish-btn secondary';
         no.textContent = 'CANCEL';
         box.append(message, yes, no);
-        yes.addEventListener('click', () => { box.remove(); proceed(); });
-        no.addEventListener('click', () => box.remove());
+        const answer = (go) => {
+            this.closeWorldConfirm();
+            if (go) proceed();
+        };
+        const onKey = (event) => {
+            if (event.code !== 'Enter' && event.code !== 'NumpadEnter' && event.code !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            if (!event.repeat) answer(event.code !== 'Escape');
+        };
+        yes.addEventListener('click', () => answer(true));
+        no.addEventListener('click', () => answer(false));
+        // Capture phase, so the answer key reaches no other handler of the page
+        document.addEventListener('keydown', onKey, true);
+        // A pause the rider already took stays theirs; the box resumes only the pause it took
+        const ownsPause = !this.paused;
+        if (ownsPause) this.pauseRace();
+        this.worldConfirm = { box, onKey, ownsPause };
         document.body.appendChild(box);
         return true;
+    }
+
+    // Takes the confirm box down and gives back the pause it took. Every restart calls it, so no box
+    // outlives the ride it asked about. Keys pressed while it held the race are dropped, not replayed.
+    closeWorldConfirm() {
+        const open = this.worldConfirm;
+        if (!open) return;
+        this.worldConfirm = null;
+        open.box.remove();
+        document.removeEventListener('keydown', open.onKey, true);
+        if (this.input && this.input.clearActions) this.input.clearActions();
+        if (open.ownsPause) this.resumeRace();
+    }
+
+    // The race clock stops while paused: raceElapsed reads pauseStartedAt, and resume moves the start on
+    pauseRace() {
+        if (this.paused) return;
+        this.paused = true;
+        this.pauseStartedAt = this.now();
+        if (this.soundManager) this.soundManager.stopEngineSound();
+    }
+
+    resumeRace() {
+        if (!this.paused) return;
+        this.paused = false;
+        if (this.pauseStartedAt) {
+            // Time spent paused is not race time
+            this.startTime += this.now() - this.pauseStartedAt;
+            this.pauseStartedAt = 0;
+        }
     }
 
     worldRestartAsk() {
@@ -827,6 +876,7 @@ class Game {
 
     // Put the bike back on the start line of the current leg
     restartLeg() {
+        this.closeWorldConfirm();
         this.removeRunOverlays();
 
         this.vehicle.reset();
@@ -3132,16 +3182,10 @@ class Game {
         this.accumulatedTime = Math.min(this.accumulatedTime, this.maxAccumulatedTime); // Prevent spiral of death
 
         // Check for pause toggle
-        if (this.input.checkPause()) {
-            this.paused = !this.paused;
-            if (this.paused) {
-                this.pauseStartedAt = this.now();
-                this.soundManager.stopEngineSound();
-            } else if (this.pauseStartedAt) {
-                // Time spent paused is not race time
-                this.startTime += this.now() - this.pauseStartedAt;
-                this.pauseStartedAt = 0;
-            }
+        // The confirm box owns the pause while it is open: only its answer resumes the ride
+        if (this.input.checkPause() && !this.worldConfirm) {
+            if (this.paused) this.resumeRace();
+            else this.pauseRace();
         }
 
         // Skip all game logic if paused, but continue rendering
@@ -3907,6 +3951,7 @@ class Game {
     // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'wrong-way' or 'resume'. Every reason
     // costs the same 5 s. A world answers it in restartAtStation.
     restartFromCheckpoint(reason = 'key') {
+        this.closeWorldConfirm();
         // The run is over once the line is crossed; the finish banner owns
         // what happens next
         if (this.finished) return;

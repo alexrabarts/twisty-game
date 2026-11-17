@@ -119,6 +119,13 @@ class InputHandler {
     // A lost keyup (Alt-Tab while holding a key) would leave it held forever
     releaseAllKeys() {
         this.keys = {};
+        this.clearActions();
+        this.updateInputs();
+    }
+
+    // Drops the one-shot presses not yet read, and leaves held keys (steering, throttle) alone. A box that
+    // held the game calls it, so a key pressed while it was open does not fire once the game goes on.
+    clearActions() {
         this.resetPressed = false;
         this.menuReturnPressed = false;
         this.nextLegPressed = false;
@@ -126,7 +133,6 @@ class InputHandler {
         this.checkpointRestartPressed = false;
         this.cameraSwitchPressed = false;
         this.pausePressed = false;
-        this.updateInputs();
     }
 
     updateInputs() {

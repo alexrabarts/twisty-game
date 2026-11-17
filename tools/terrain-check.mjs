@@ -2432,6 +2432,27 @@ const WORLD = {
         const after = { s: v.projection.s, speed: v.speed, restarts: game.restarts, penaltyMs: game.penaltyMs, elapsedJump: game.raceElapsed() - before.elapsed, passed: game.checkpointsPassed, lastS: game.worldRun.lastS };
         ride(() => game.checkpointsPassed >= 4);
         const next = { passed: game.checkpointsPassed, restarts: game.restarts, crashed: v.crashed };
+        // The restart-the-ride box holds the race: real animate() frames run no physics and stop the clock, Escape
+        // answers CANCEL and the ride goes on, Enter answers YES. twistyDev.step unpauses each frame, so call animate itself.
+        const frames = n => {
+            const render = game.graphics.render;
+            game.graphics.render = () => {};
+            try { for (let i = 0; i < n; i++) { game.accumulatedTime = 0; game.animate(); } } finally { game.graphics.render = render; }
+        };
+        const key = code => document.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true }));
+        let proceeded = 0;
+        game.confirmWorldLeave(game.worldRestartAsk(), () => { proceeded++; });
+        const held0 = { ticks: twistyDev.ticks, s: v.routeS, elapsed: game.raceElapsed() };
+        frames(60);
+        const confirm = { held: { ticks: twistyDev.ticks - held0.ticks, moved: v.routeS - held0.s, clock: game.raceElapsed() - held0.elapsed, open: !!document.getElementById('worldConfirm') } };
+        key('Escape');
+        confirm.cancelled = { open: !!document.getElementById('worldConfirm'), paused: game.paused, proceeded };
+        const after0 = twistyDev.ticks;
+        frames(30);
+        confirm.cancelled.ticks = twistyDev.ticks - after0;
+        game.confirmWorldLeave(game.worldRestartAsk(), () => { proceeded++; });
+        key('Enter');
+        confirm.entered = { open: !!document.getElementById('worldConfirm'), paused: game.paused, proceeded };
         // One excursion: 60 m off the road for longer than the guide waits
         const p = route.sample(v.routeS + 40, {});
         const at = { x: p.x + 60 * Math.cos(p.heading), z: p.z - 60 * Math.sin(p.heading) };
@@ -2444,7 +2465,7 @@ const WORLD = {
         for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) twistyDev.step(1);
         v.update = base;
         for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
-        return { station: 3, stationS: station.s, before, after, next, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
+        return { station: 3, stationS: station.s, before, after, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
     // The HUD of a ride that holds more than one stage (P48): put the bike in stage 2 of the mini world
     // (--worldData tests/fixtures/world/mini, --world all), at 1280x720 and at 390x844 as a touch device. The stage line,
@@ -2743,7 +2764,11 @@ function worldChecks(report) {
     }
     const restart = results['world-restart'];
     if (restart) {
-        const { before, after, next, excursion, stationS } = restart;
+        const { before, after, next, confirm, excursion, stationS } = restart;
+        const { held, cancelled, entered } = confirm;
+        if (held.ticks !== 0 || held.moved !== 0 || held.clock !== 0 || !held.open) failures.push(`world-restart: the ride went on while the restart box was open: ${JSON.stringify(held)}`);
+        if (cancelled.open || cancelled.paused || cancelled.proceeded !== 0 || cancelled.ticks !== 30) failures.push(`world-restart: Escape must cancel and give the ride back: ${JSON.stringify(cancelled)}`);
+        if (entered.open || entered.paused || entered.proceeded !== 1) failures.push(`world-restart: Enter must answer yes: ${JSON.stringify(entered)}`);
         if (!(Math.abs(after.s - stationS) <= 6) || after.restarts !== 1 || after.penaltyMs !== 5000 || !(after.elapsedJump >= 5000 && after.elapsedJump < 5100) || !(after.speed <= 15) || after.passed !== before.passed) failures.push(`world-restart: ${JSON.stringify({ stationS, before, after })}`);
         if (next.passed !== 4 || next.restarts !== 1 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
         if (excursion.restarts !== 1 || excursion.penaltyMs !== 10000 || excursion.guideCause !== null || excursion.pendingCutMs !== 0) failures.push(`world-restart: an excursion must cost one penalty: ${JSON.stringify(excursion)}`);
