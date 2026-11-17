@@ -1808,7 +1808,11 @@ class Game {
         const world = this.environment.isWorld && currentMode.type !== 'onboard';
         if (world) {
             // The boom follows the route behind the bike, not the bike's yaw, and the land shortens it
-            const boomYaw = this.worldCamera.followYaw(this.vehicle.projection.s ?? this.vehicle.routeS, deltaTime);
+            // In a hairpin it also pulls back and up, and turns faster (WorldCamera.updatePull)
+            const routeS = this.vehicle.projection.s ?? this.vehicle.routeS;
+            this.worldCamera.updatePull(routeS, deltaTime);
+            this.worldCamera.pullOffset(offset);
+            const boomYaw = this.worldCamera.followYaw(routeS, deltaTime);
             offset.applyEuler(new THREE.Euler(0, boomYaw, 0));
         } else {
             offset.applyEuler(vehicleRotation);
@@ -1832,6 +1836,7 @@ class Game {
             // Slightly faster at high speeds for more responsiveness
             lerpFactor *= 1.15;
         }
+        if (world) lerpFactor = this.worldCamera.follow(lerpFactor);
         
         this.currentCameraPos.lerp(cameraPos, adjLerp(lerpFactor));
         
@@ -1979,6 +1984,12 @@ class Game {
             }
             // A world's target sweeps round a hairpin as fast as the road does, so it is followed closely
             this.currentLookTarget.lerp(lookTarget, adjLerp(this.environment.isWorld ? WorldCamera.LOOK_FOLLOW : Math.min(this.cameraLerpFactor * 1.5, 1)));
+            if (this.environment.isWorld) {
+                // The road ahead round a hairpin can pull the view off the bike: the target gives way until the bike is well inside it
+                const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
+                bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
+                this.worldCamera.keepInView(this.camera, this.currentLookTarget, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
+            }
             
             // Camera banking BEFORE lookAt - subtle lean feedback
             const bankFactor = currentMode.type === 'high' ? 0.15 : 0.25; // High view more subtle

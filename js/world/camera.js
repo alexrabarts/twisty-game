@@ -6,9 +6,31 @@
 //   - the look target is on the route ahead, not along the bike's heading
 //   - the boom turns by a smoothed yaw that follows the route behind the bike
 //   - the boom shortens at once when the land is in the way and grows back slowly
+//   - in a hairpin the boom pulls back and up, turns faster and follows closer, and the look target gives way to
+//     the bike, so the bike never leaves the screen (tools/terrain-check.mjs world-frustum)
 class WorldCamera {
-    // Radians a second the boom yaw may turn: 120 degrees
+    // Radians a second the boom yaw may turn: 120 degrees, and 300 degrees in a full hairpin
     static get YAW_RATE() { return 2 * Math.PI / 3; }
+    static get YAW_RATE_BEND() { return 5 * Math.PI / 3; }
+
+    // The hairpin pull: how much of a hairpin is round the bike, 0 to 1, from the road's turn over the PULL_SPAN_M
+    // metres that start PULL_BEHIND_M behind it: nothing under PULL_FROM rad, all of it from PULL_TO rad. It rises
+    // at PULL_IN a second and falls at PULL_OUT a second, so the camera eases back in on the straight after.
+    static get PULL_BEHIND_M() { return 15; }
+    static get PULL_SPAN_M() { return 75; }
+    static get PULL_FROM() { return 0.5; }
+    static get PULL_TO() { return 1.8; }
+    static get PULL_IN() { return 2.5; }
+    static get PULL_OUT() { return 0.5; }
+
+    // At full pull the boom is PULL_BACK longer and RAISE_M higher, and the camera keeps up with the boom at
+    // FOLLOW_BEND a frame (at 60 Hz) at least, where the chase modes' own lag is 0.08 to 0.10
+    static get PULL_BACK() { return 0.5; }
+    static get RAISE_M() { return 3; }
+    static get FOLLOW_BEND() { return 0.3; }
+
+    // The look target gives way to the bike until the bike projects within KEEP_IN of the screen's middle (1 is the edge), clear of the HUD in the corners
+    static get KEEP_IN() { return 0.55; }
 
     // Metres behind the bike on the route that the boom yaw follows
     static get FOLLOW_BEHIND_M() { return 4; }
@@ -53,12 +75,15 @@ class WorldCamera {
         this.look = {};
         this.land = {};
         this.hint = { start: 0, end: 0 };
+        this.pull = 0;
+        this.probe = null;
     }
 
     // Camera yaw and boom start again at the bike, for the first frame and after a restart
     reset(yaw) {
         this.yaw = yaw;
         this.fraction = 1;
+        this.pull = 0;
     }
 
     static wrap(angle) {
@@ -68,9 +93,67 @@ class WorldCamera {
     // The smoothed boom yaw: follows the route heading `FOLLOW_BEHIND_M` behind the bike at no more than YAW_RATE
     followYaw(s, dt) {
         const target = this.route.sample(Math.max(0, s - WorldCamera.FOLLOW_BEHIND_M), this.sampled).heading;
-        const step = WorldCamera.YAW_RATE * dt;
+        const step = (WorldCamera.YAW_RATE + (WorldCamera.YAW_RATE_BEND - WorldCamera.YAW_RATE) * this.pull) * dt;
         this.yaw += Math.max(-step, Math.min(step, WorldCamera.wrap(target - this.yaw)));
         return this.yaw;
+    }
+
+    // The road's turn round s, in radians, summed in 5 m steps so a turn past 180 degrees still counts in full
+    turnAround(s) {
+        let total = 0;
+        const from = Math.max(0, s - WorldCamera.PULL_BEHIND_M);
+        for (let d = 0; d < WorldCamera.PULL_SPAN_M; d += 5) total += this.route.headingChange(from + d, from + d + 5);
+        return Math.abs(total);
+    }
+
+    // The smoothed hairpin pull at s, 0 to 1
+    updatePull(s, dt) {
+        const want = Math.max(0, Math.min(1, (this.turnAround(s) - WorldCamera.PULL_FROM) / (WorldCamera.PULL_TO - WorldCamera.PULL_FROM)));
+        const step = want > this.pull ? WorldCamera.PULL_IN * dt : WorldCamera.PULL_OUT * dt;
+        this.pull += Math.max(-step, Math.min(step, want - this.pull));
+        return this.pull;
+    }
+
+    // The chase offset {x, y, z} (behind is -z) pulled back and raised by the hairpin pull, in place
+    pullOffset(offset) {
+        offset.z *= 1 + WorldCamera.PULL_BACK * this.pull;
+        offset.y += WorldCamera.RAISE_M * this.pull;
+        return offset;
+    }
+
+    // The share of the way the camera moves to its boom position each frame at 60 Hz: the mode's own, or closer in a hairpin
+    follow(lerp) {
+        return Math.max(lerp, WorldCamera.FOLLOW_BEND * this.pull);
+    }
+
+    // Moves `look` ({x, y, z}, in place) toward `bike` until a camera at `camera` (a THREE camera: position, up,
+    // fov, aspect) looking at it sees the bike within KEEP_IN of the middle. `probe` is a scratch camera.
+    keepInView(camera, look, bike, probe) {
+        const seen = (t, out) => {
+            probe.position.copy(camera.position);
+            probe.up.copy(camera.up);
+            probe.fov = camera.fov;
+            probe.aspect = camera.aspect;
+            probe.near = camera.near;
+            probe.far = camera.far;
+            probe.updateProjectionMatrix();
+            probe.lookAt(look.x + (bike.x - look.x) * t, look.y + (bike.y - look.y) * t, look.z + (bike.z - look.z) * t);
+            probe.updateMatrixWorld(true);
+            out.set(bike.x, bike.y, bike.z).project(probe);
+            return out.z > -1 && out.z < 1 && Math.max(Math.abs(out.x), Math.abs(out.y)) <= WorldCamera.KEEP_IN;
+        };
+        const at = this.ndc || (this.ndc = new probe.position.constructor());
+        if (seen(0, at)) return 0;
+        // The bike itself is in the middle at t = 1; the least t that keeps it within KEEP_IN, found by halving
+        let low = 0, high = 1;
+        for (let i = 0; i < 10; i++) {
+            const mid = (low + high) / 2;
+            if (seen(mid, at)) high = mid; else low = mid;
+        }
+        look.x += (bike.x - look.x) * high;
+        look.y += (bike.y - look.y) * high;
+        look.z += (bike.z - look.z) * high;
+        return high;
     }
 
     // 0 to 1: how much of a hairpin lies ahead of s

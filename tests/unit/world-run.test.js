@@ -275,6 +275,65 @@ describe('WorldCamera', () => {
         expect(open.fraction).toBe(1);
     });
 
+    // A half circle of 15 m radius after 200 m of straight, then a straight leg back
+    const hairpinRoute = () => {
+        const R = 15;
+        const points = [];
+        for (let z = -200; z < 0; z += 4) points.push({ x: 0, y: 100, z, heading: 0, width: 10 });
+        for (let a = 0; a <= Math.PI + 1e-9; a += 4 / R) points.push({ x: R - R * Math.cos(a), y: 100, z: R * Math.sin(a), heading: a, width: 10 });
+        for (let z = 0; z >= -200; z -= 4) points.push({ x: 2 * R, y: 100, z, heading: Math.PI, width: 10 });
+        return new WorldRoute(samplesOf(points), {});
+    };
+
+    test('in a hairpin the boom pulls back and up and turns faster; on the straight after it eases back in', () => {
+        const route = hairpinRoute();
+        const camera = new WorldCamera(route, flatGround(0));
+        camera.reset(0);
+        expect(camera.updatePull(60, DT)).toBe(0);
+        // The pull rises at PULL_IN a second, to all of it in the bend
+        for (let i = 0; i < 60; i++) camera.updatePull(200, DT);
+        expect(camera.pull).toBe(1);
+        const offset = camera.pullOffset({ x: 0, y: 3, z: -6 });
+        expect(offset.z).toBeCloseTo(-6 * (1 + WorldCamera.PULL_BACK), 9);
+        expect(offset.y).toBeCloseTo(3 + WorldCamera.RAISE_M, 9);
+        expect(camera.follow(0.1)).toBe(WorldCamera.FOLLOW_BEND);
+        const before = camera.yaw;
+        camera.followYaw(240, 0.05);
+        expect(Math.abs(camera.yaw - before)).toBeCloseTo(WorldCamera.YAW_RATE_BEND * 0.05, 9);
+        // On the leg back it falls at PULL_OUT a second, not at once
+        camera.updatePull(route.length - 60, 0.5);
+        expect(camera.pull).toBeCloseTo(1 - WorldCamera.PULL_OUT * 0.5, 9);
+        for (let i = 0; i < 300; i++) camera.updatePull(route.length - 60, DT);
+        expect(camera.pull).toBe(0);
+        expect(camera.follow(0.1)).toBe(0.1);
+    });
+
+    test('the look target gives way to the bike until the bike is well inside the view', () => {
+        const THREE = game.THREE;
+        const camera = new WorldCamera(road, flatGround(0));
+        const view = new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 1000);
+        view.position.set(0, 3, -6);
+        const bike = new THREE.Vector3(0, 0.9, 0);
+        const probe = new THREE.PerspectiveCamera();
+        const inView = look => {
+            view.lookAt(look);
+            view.updateMatrixWorld(true);
+            return bike.clone().project(view);
+        };
+        // A target far to the side, as the road round a hairpin is: the bike would be off the screen
+        const look = new THREE.Vector3(40, 0, 0);
+        expect(Math.abs(inView(look).x)).toBeGreaterThan(1);
+        const moved = camera.keepInView(view, look, bike, probe);
+        expect(moved).toBeGreaterThan(0);
+        const seen = inView(look);
+        expect(Math.max(Math.abs(seen.x), Math.abs(seen.y))).toBeLessThanOrEqual(WorldCamera.KEEP_IN + 1e-3);
+        expect(Math.max(Math.abs(seen.x), Math.abs(seen.y))).toBeGreaterThan(WorldCamera.KEEP_IN - 0.01);
+        // A target that already shows the bike is left alone
+        const ahead = new THREE.Vector3(0, 1, 20);
+        expect(camera.keepInView(view, ahead, bike, probe)).toBe(0);
+        expect(ahead.toArray()).toEqual([0, 1, 20]);
+    });
+
     test('the camera never sits under the land', () => {
         const camera = new WorldCamera(road, flatGround(110));
         const out = {};
