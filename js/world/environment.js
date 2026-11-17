@@ -451,8 +451,8 @@ class WorldEnvironment {
     // where an apron at the batter would run onto a lower road; an apron where the land at some level of detail a tile
     // may be drawn at (its 8, 16 and 32 m triangles, as TerrainMesh.vertexY draws them) lies lower than the edge, out
     // at the batter to where it meets the land drawn near;
-    // else null, the land meets the edge. Without the tile, an apron of APRON_M.
-    edgeFoot(missing = null) {
+    // else null, the land meets the edge. Without the tile, an apron of APRON_M. `aprons: false` gives walls and decks only.
+    edgeFoot(missing = null, { aprons = true } = {}) {
         const n = WorldData.TILE_N, m = WorldData.TILE_M;
         const near = {};
         const lowerRoad = (x, z, y) => {
@@ -508,6 +508,7 @@ class WorldEnvironment {
                 const low = landLow(x + ox * at, z + oz * at);
                 return low !== null && low < y - WorldEnvironment.MEET_M ? { kind: 'wall', y: low } : null;
             }
+            if (!aprons) return null;
             const low = landLow(x + ox * 0.1, z + oz * 0.1);
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
@@ -569,8 +570,10 @@ class WorldEnvironment {
             group.add(side);
             triangles += side.userData.triangles;
         });
-        // The edge works of every side road here, one mesh; built again when a tile under them arrives
-        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing));
+        // The edge works of every side road here, one mesh: its retaining walls and decks (a side road is seen from afar
+        // at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when a tile
+        // under them arrives
+        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }));
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`side:${k}`);
         group.userData.triangles = triangles;
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });

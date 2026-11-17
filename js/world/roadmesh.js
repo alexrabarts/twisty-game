@@ -419,15 +419,17 @@ class RoadMesh {
     // The edge works of a ribbon as one mesh, added to `group` ('road-works': the apron in the land's material, the
     // walls, decks and parapets in the structures'): the triangles they cost
     // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
-    static addEdgeWorks(group, sides, foot) {
+    // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
+    static addEdgeWorks(group, sides, foot, extra = []) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
         const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] } };
         for (const run of runs) {
             const part = RoadMesh.edgeWorks(run, foot);
             for (const key of ['apron', 'wall']) { works[key].positions.push(...part[key].positions); works[key].shades.push(...part[key].shades); }
         }
+        if (!works.apron.positions.length && !works.wall.positions.length) return 0;
+        for (const part of extra) { works.wall.positions.push(...part.positions); works.wall.shades.push(...part.shades); }
         const apron = works.apron.positions.length / 3, wall = works.wall.positions.length / 3;
-        if (!apron && !wall) return 0;
         // Every apron triangle faces up: a double-sided material flips the normal of a face seen from its back, and an
         // apron lit from underneath drew as a black line along the verge
         const ap = works.apron.positions, ash = works.apron.shades;
@@ -487,16 +489,21 @@ class RoadMesh {
         const ribbon = RoadMesh.ribbon(rows, lod);
         group.add(RoadMesh.ribbonMesh(ribbon, 'road-ribbon'));
         let triangles = ribbon.triangles;
-        triangles += RoadMesh.addEdgeWorks(group, ribbon.sides, foot);
-        const add = (parts, name) => {
-            const mesh = RoadMesh.structureMesh(parts, name);
-            if (mesh) {
-                group.add(mesh);
-                triangles += parts.positions.length / 9;
+        const structures = [];
+        for (const [from, to] of RoadMesh.runs(rows, 1 | 4)) if (to > from) structures.push([RoadMesh.tunnel(rows, from, to, roof), 'tunnel']);
+        for (const [from, to] of RoadMesh.runs(rows, 2)) if (to > from) structures.push([RoadMesh.bridge(rows, from, to, groundAt), 'bridge']);
+        // With edge works the tunnels and bridges join their mesh (same material: the window counts meshes)
+        const works = RoadMesh.addEdgeWorks(group, ribbon.sides, foot, structures.map(([parts]) => parts));
+        if (works) triangles += works;
+        else {
+            for (const [parts, name] of structures) {
+                const mesh = RoadMesh.structureMesh(parts, name);
+                if (mesh) {
+                    group.add(mesh);
+                    triangles += parts.positions.length / 9;
+                }
             }
-        };
-        for (const [from, to] of RoadMesh.runs(rows, 1 | 4)) if (to > from) add(RoadMesh.tunnel(rows, from, to, roof), 'tunnel');
-        for (const [from, to] of RoadMesh.runs(rows, 2)) if (to > from) add(RoadMesh.bridge(rows, from, to, groundAt), 'bridge');
+        }
         group.userData.triangles = triangles;
         group.userData.clamped = ribbon.clamped;
         return group;
