@@ -1,0 +1,6 @@
+{
+  "comment": "Hand-made overrides for what swissTLM3D does not say. Every TLM road surface is 'Hart', so the cobbled Via Tremola is marked here: ride samples of the listed road classes inside an LV95 box [minE, minN, maxE, maxN] get the cobbles flag.",
+  "cobbles": [
+    { "name": "Via Tremola", "lv95Box": [2686400, 1154950, 2687300, 1156100], "classes": ["4m Strasse"] }
+  ]
+}

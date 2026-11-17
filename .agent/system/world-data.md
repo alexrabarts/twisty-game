@@ -74,13 +74,48 @@ The kept corridor is 646 km. At 4 m and 16 B per sample the edge samples are 2.6
 
 GitHub Pages builds `main` with the legacy Jekyll builder (checked at plan time). `.nojekyll` at the repo root stops the Jekyll build from filtering about 1 500 binary files. **Not verified:** how Pages serves a `.bin` (content-type, gzip, status). P-H1 checks it on the live site after the first merge that puts `world/` on `main`. World mode stays behind `?world=` until then.
 
+## W2: the importer (Tremola slice)
+
+`node tools/world/import.mjs --stages tremola` reads the cache and writes `world/` and `functions/world-courses.json`. `--synthetic` writes the mini fixture to `tests/fixtures/world/mini` (3 stages of 2 km, station spacing 500 m, a 20 degree kink at R = 20 m, a 180 degree hairpin at R = 10 m, a stacked pair of hairpins with legs 25 m apart, a tunnel and a four-way junction). The same cache gives the same bytes: no clock, no random, sorted iteration, and no search (the floors are closed-form). `--cache` inside the repo is refused.
+
+| File | Job |
+|---|---|
+| `import.mjs` | The pipeline and the command line. `loadTlmSource` is the real source, `synthetic.mjs` the made-up one. Both give `buildWorld` the same shape. |
+| `graph.mjs` | The corridor graph: every kept road within 1 km of the ride, and the ride as `[{edgeId, dir}]`. A gap stops the import (exit 4). A side road is cut to the corridor. |
+| `resample.mjs` | The ride is resampled as one line and cut at the graph nodes (a bend that runs across a node is not broken by it). A pure-pursuit rider follows the mapped line at 1 m steps with the turn rate capped at 1/R_MIN. `R_MIN` is 10 m, read from `js/world/physics.js` (`rMin`) once that file exists. |
+| `profile.mjs`, `dem.mjs` | Height from the TLM Z, smoothed over 40 m (Savitzky-Golay), node heights reconciled over 20 m, then checked against the 2 m DEM. |
+| `bench.mjs` | 512 m tiles at 8 m with the road bench carved for every stored edge, `wall` and `drop` between stacked legs that 1:1 cannot join. |
+| `junctions.mjs` | Passes, stubs (60 m) and barrier poses, one set per pass. |
+| `landcover.mjs`, `buildings.mjs`, `landmarks.json`, `structures.json` | Cover at 16 m, oriented boxes, hand-placed landmarks, hand-marked cobbles. |
+| `stations.mjs`, `floors.mjs` | The station rule (R3) and the per-link time floors. The floor is 0.9 times the time of an ideal rider on the inner edge of each bend at top speed, held only by the lean angle (closed-form, no search, so there is nothing to hang or to differ between runs). |
+| `encode.mjs` | The format below, `SHA256SUMS`, `functions/world-courses.json`. `decodeWorld` reads it back. |
+| `verify.mjs` | `fidelity`, `hairpins`, `elevation`, `size`, `graph`, `stacked`, `stations`, or `all`. |
+
+### Tremola slice, as committed
+
+The slice rides **uphill from Airolo to the Gotthard summit** (route.json `slices.tremola`, waypoints 9, 8, 7, 6), the opposite way to D1, because that is how it is played for the play-test (P5: start 1 180 m, summit 2 107 m). It is 13.9 km with 13 gates and 32 hairpins, none tighter than R = 10.04 m. DEM deviation outside structures is 0.49 m at p99. The data is 1.33 MB in 237 files.
+
+- **Fillets widen hairpins.** Where the mapped bend is tighter than R_MIN the ride takes an R_MIN arc and rejoins the mapped line. The fillet spans are the places where the ride sits more than 1 m from the map; `verify.mjs fidelity` lists them and fails on a span with no tightened bend near it. Outside them the ride is within 1.2 m of the map. The ride is 0.6% longer than the mapped line.
+- **Nodes move.** A node that the ride uses moves onto the resampled ride line (by a metre or two). Side edges that end there follow it.
+- **An edge that the ride uses twice** (Schöllenen, Andermatt-Hospental, W5) keeps the samples of its first use. The second use is the same samples read the other way, so the bend across its joins is not smoothed for that use.
+- **Cobbles.** TLM gives every road `Hart`, so the cobbled Via Tremola is marked by hand in `structures.json` (4 km of the slice).
+- **`far.bin`** covers the corridor tiles plus 1.5 km, not the 15 km of the plan: the cache holds 2 m tiles only for the slice. W5 extends it.
+- **Landmarks** sit at the pass waypoints until the models are placed. Only the Gotthard Hospiz is in the slice.
+- **Station spacing** is 1 000 m for the real ride and 500 m for the mini fixture.
+
 ## Binary format
 
-This is the format of W2, with the two changes that the plan review made.
+All little-endian. `world/manifest.json` holds the indexes, `world/ride.json` the ride path, stages and stations.
 
-- `world/manifest.json`: format version, source release ids, origin E0 and N0, the credit `© swisstopo`, kept road classes, stage table, stations, tile index, edge chunk index, junction index, structures, landmarks.
-- `world/graph/nodes.bin` (16 B per node), `world/graph/edges.bin`, `world/graph/e-<k>.bin` (edge samples, 16 B per 4 m sample: x, z, y Int32 mm, heading Int16, width Uint8 at 0.1 m, flags Uint8), `world/graph/junctions.json`.
-- **Change: an edge chunk is bounded by spatial extent (at most 512 m of samples), not by bytes.** 256 KB of 16 B samples is about 65 km of road, and that would make residency all-or-nothing. The chunk index stores each chunk's bbox.
-- **Change: the ride layer (`ride.json` and the ride's edge samples, about 0.9 MB) loads whole before GO.** Only side edges, tiles, cover and meshes stream.
-- `world/height/h-<tx>_<tz>.bin` (512 m tiles at 8 m, 65x65 Int16 plus a Uint8 zone layer), `world/cover/c-<tx>_<tz>.bin`, `world/far.bin`, `world/buildings.bin`.
-- Size budget: `world/` 28 MB or less, any file 256 KB or less except `far.bin`, the Tremola slice 3.5 MB or less. No `.gpkg`, `.tif`, `.tiff` or `.zip` is committed.
+- `graph/nodes.bin`: 16 B per node, id = record index: x, z, y Int32 mm, degree Uint8, flags Uint8 (1 junction, 2 on ride, 4 used twice), 2 B spare.
+- `graph/edges.bin`: 24 B per edge: id, from, to, length (mm), first sample (global index) Uint32, sample count Uint16, road class Uint8 (index into `manifest.roadClasses`), flags Uint8 (1 on ride).
+- `graph/e-<k>.bin`: edge samples, 16 B each: x, z, y Int32 mm, heading Int16 (1e-4 rad, 0 = +z, `atan2(dx, dz)`), width Uint8 (0.1 m), flags Uint8 (1 tunnel, 2 bridge, 4 gallery, 8 cobbles).
+- **An edge chunk is bounded by spatial extent, not by bytes.** A chunk is a run of the global sample sequence (edges in id order) of at most 256 samples whose bounding box is at most 640 m across. The manifest lists each chunk's `file`, `first`, `count` and `bbox`. An edge can span several chunks.
+- **The ride layer loads whole before GO.** `ride.json` plus the chunks of the ride's edges (about 55 000 samples, 0.9 MB for the whole ride). Only side edges, tiles, cover and meshes stream.
+- `height/h-<tx>_<tz>.bin` (negative index written `m<n>`): Float32 base, 65 x 65 Int16 (0.1 m over the base), 65 x 65 Uint8 zone (0 terrain, 1 road, 2 bench, 3 wall, 4 drop, 5 water). 12 679 B.
+- `cover/c-<tx>_<tz>.bin`: 32 x 32 Uint8 (1 forest, 2 open forest, 3 rock, 4 scree, 5 grass, 6 glacier, 7 water, 8 settlement). 1 KB.
+- `far.bin`: Int32 x0 mm, z0 mm, Uint16 nx, nz, cell (m), 2 B spare, then Int16 metres, -32768 for no data.
+- `buildings.bin`: 16 B each: x, z Int32 mm, w, d Uint16 (0.1 m), heading Int16 (1e-4 rad), h Uint8 (0.5 m), kind Uint8 (1 house, 2 chapel, 3 shed, 4 wall).
+- `SHA256SUMS`: `shasum -a 256 -c` form, every other file. `manifest.dataHash` is the sha256 of the sorted `hash  path` lines of every file except `manifest.json` and `SHA256SUMS` (the manifest cannot hold its own hash).
+- Local metres: x = E - 2 688 000, z = -(N - 1 165 000), y = height. Origin in `manifest.origin`.
+- Size budget: `world/` 28 MB or less, any file 256 KB or less except `far.bin` (2 MB or less), the Tremola slice 3.5 MB or less (`verify.mjs size`). No `.gpkg`, `.tif`, `.tiff` or `.zip` is committed.
