@@ -1,8 +1,8 @@
 // swissALTI3D reader: 2 m COG tiles from the cache, sampled bilinearly in LV95.
-// geotiff is a devDependency: the importer runs on Node and never in the page.
+// geotiff is a devDependency: the importer runs on Node and never in the page. It loads on the first tile read, so
+// the coordinate maths here works without it.
 import fs from 'node:fs';
 import path from 'node:path';
-import { fromFile } from 'geotiff';
 
 // swisstopo's approximate formulas (about 1 m), used only to ask the STAC API for tiles.
 export function lv95ToWgs84(e, n) {
@@ -52,6 +52,7 @@ export class Dem {
     if (this.tiles.has(key)) return true;
     const f = this.files.get(key);
     if (!f) return false;
+    const { fromFile } = await import('geotiff');
     const image = await (await fromFile(f.file)).getImage();
     const [minE, , maxE, maxN] = image.getBoundingBox();
     const w = image.getWidth(), h = image.getHeight();
