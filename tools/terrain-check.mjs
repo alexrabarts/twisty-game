@@ -10,6 +10,9 @@
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
+// World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish
+//   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
 //   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
 // (`shortcuts` runs its own doubled-back control)
@@ -137,6 +140,7 @@ async function openPage(browser, port, url = '/') {
     await page.setRequestInterception(true);
     page.on('request', request => {
         const target = new URL(request.url());
+        if (state.requests) state.requests.push(request.url());
         if (page.callables && target.hostname.endsWith('cloudfunctions.net')) {
             fulfilCallable(page.callables, request);
         } else if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
@@ -1782,6 +1786,7 @@ async function main() {
         console.log(JSON.stringify(out, null, 1));
         return;
     }
+    if (probes.some(name => WORLD_PROBES.includes(name))) return worldMain();
     if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate atmostate draws atmo | record-jest | record-frozen | baseline-diff');
 
     const executablePath = chromePath();
@@ -2127,6 +2132,377 @@ function writeBaselines(report, fresh, frozen) {
         writeJson(PARTS, stored);
         report.notes.push(`wrote ${PARTS}`);
     }
+}
+
+// ---------------------------------------------------------------- world probes
+// The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
+// like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish'];
+// Hosts the page may reach besides itself: the script CDNs and the font host of index.html
+const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
+const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
+const WORLD_RESIDENT_TILES = 60;
+const WORLD_BIKE_TILE_M = 900;
+
+async function openWorld(browser, port, id) {
+    const data = option('worldData');
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`);
+        try {
+            await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle', { timeout: 120000 });
+        } catch {
+            await page.close();
+            continue;
+        }
+        await page.evaluate(() => { window.game.adaptResolution = () => {}; });
+        await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+        return page;
+    }
+    return fail(2, `the world page did not start: ${state.pageErrors.join(' | ')} ${state.lastError}`);
+}
+
+// What the budget probe counts: every mesh drawn in the scene, and the instances in them
+function countScene() {
+    let meshes = 0, triangles = 0, instances = 0;
+    game.scene.traverse(o => {
+        if (!o.isMesh) return;
+        for (let n = o.parent; n; n = n.parent) if (!n.visible) return;
+        const pos = o.geometry.attributes.position;
+        const index = o.geometry.index;
+        meshes++;
+        triangles += (index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+        if (o.isInstancedMesh) instances += o.count;
+    });
+    return { meshes, triangles: Math.round(triangles), instances };
+}
+
+// Put the bike on the ride at s, build the ground round it and wait for the queue to drain
+async function placeAt(s) {
+    const env = game.environment;
+    const route = env.route;
+    const p = route.sample(s, {});
+    const v = game.vehicle;
+    v.position.set(p.x, p.y, p.z);
+    v.yawAngle = p.heading;
+    v.leanAngle = 0;
+    v.leanVelocity = 0;
+    v.speed = 0;
+    v.findNearestRoadSegment();
+    env.update(p, s, null, Infinity);
+    await env.streamer.settle(p, s);
+    // What the new place no longer holds goes after the streamer's 3 s of grace
+    if (game.worldLinger !== false) await new Promise(resolve => setTimeout(resolve, 3200));
+    await env.streamer.settle(p, s);
+    return p;
+}
+
+// Slows the autopilot for the bend ahead: the bike turns at its lean cap (50 degrees), so a corner of radius R
+// is ridden at about sqrt(g tan(50) R) and no faster; it brakes at 6 m/s^2 to get there. Installed in the page.
+function pilotWorld(game, cruise) {
+    const route = game.environment.route;
+    const probe = {};
+    const next = {};
+    const bend = s => {
+        route.sample(s, probe);
+        route.sample(s + 8, next);
+        const turn = Math.abs(Math.atan2(Math.sin(next.heading - probe.heading), Math.cos(next.heading - probe.heading)));
+        return turn > 1e-4 ? Math.max(8, 8 / turn) : Infinity;
+    };
+    const target = s => {
+        let allowed = cruise;
+        for (let d = 0; d <= 70; d += 6) {
+            const corner = Math.min(cruise, 0.8 * Math.sqrt(9.81 * 1.19 * bend(s + d)));
+            allowed = Math.min(allowed, Math.sqrt(corner * corner + 12 * d));
+        }
+        return Math.max(allowed, 6);
+    };
+    twistyDev.autopilot({ speed: cruise, lookahead: 2 });
+    const input = game.input;
+    input.getThrottleInput = () => (game.vehicle.speed < target(game.vehicle.routeS) ? 1 : 0);
+    input.getBrakeInput = () => (game.vehicle.speed > target(game.vehicle.routeS) + 1.5 ? 1 : 0);
+}
+
+const WORLD = {
+    // The drawn window against the budgets, every `--every` metres of ride; the resident ride and tile counts too
+    'world-window': async page => {
+        const every = Number(option('every') || 1000);
+        const rows = await page.evaluate(async (step, bikeTileM, countSource, placeSource) => {
+            const countScene = new Function(`return (${countSource})`)();
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const route = game.environment.route;
+            const out = [];
+            for (let s = 0; s <= route.length; s += step) {
+                const p = await placeAt(s);
+                const env = game.environment;
+                const near = [...env.streamer.refs.keys()].length;
+                const m = env.tileMeshes;
+                const bike = [...env.streamer.tilesNear(p.x, p.z, bikeTileM)];
+                out.push({ s: Math.round(s), ...countScene(), tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+            }
+            return out;
+        }, every, WORLD_BIKE_TILE_M, countScene.toString(), placeAt.toString());
+        return { every, rows };
+    },
+    'world-budget': page => WORLD['world-window'](page),
+    // The physics ground against the drawn ground: a ray down onto the drawn world meshes
+    'world-ground': async page => page.evaluate(async (placeSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const route = env.route;
+        const road = [], land = [];
+        const raycaster = new THREE.Raycaster();
+        const down = new THREE.Vector3(0, -1, 0);
+        const hitY = (x, z) => {
+            raycaster.set(new THREE.Vector3(x, 4000, z), down);
+            const hit = raycaster.intersectObjects([env.tileGroup, env.roadGroup, env.sideGroup], true)[0];
+            return hit ? hit.point.y : null;
+        };
+        const stations = 12;
+        for (let k = 0; k < stations; k++) {
+            const s = (route.length * (k + 0.5)) / stations;
+            const p = await placeAt(s);
+            const w = p.width;
+            for (let i = 0; i < 20; i++) {
+                const a = ((i * 0.618) % 1) * 2 - 1;
+                const lateral = Math.sign(a || 1) * (0.4 + Math.abs(a) * (w / 2 - 1.4));
+                const along = (i - 10) * 7;
+                const q = route.sample(s + along, {});
+                const x = q.x + lateral * Math.cos(q.heading), z = q.z - lateral * Math.sin(q.heading);
+                const loc = {};
+                const ground = env.ground.groundY(x, z, { start: route.toUnits(s + along) - 12, end: route.toUnits(s + along) + 12 }, true, loc);
+                const hit = hitY(x, z);
+                // A structure's deck or roof is not the carved road: the DEM may stand level with a short bridge (tunnels and bridges are P15's)
+                if (hit !== null && Math.abs(loc.lateral) < w / 2 && !q.flags.bridge && !q.flags.tunnel && !q.flags.gallery) road.push(Math.abs(hit - ground));
+            }
+            for (let i = 0; i < 20; i++) {
+                const d = 20 + ((i * 0.377) % 1) * 280;
+                const a = (i * 2.399) + k;
+                const x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d;
+                const loc = {};
+                const q = route.project(x, z, null, {});
+                const ground = env.ground.groundY(x, z, { start: q.index - 12, end: q.index + 12 }, true, loc);
+                const hit = hitY(x, z);
+                if (hit !== null && Math.abs(loc.lateral) > w / 2 + 6) land.push(Math.abs(hit - ground));
+            }
+        }
+        const sorted = list => list.slice().sort((a, b) => a - b);
+        const q = (list, f) => (list.length ? sorted(list)[Math.min(list.length - 1, Math.floor(list.length * f))] : null);
+        return { road: { n: road.length, max: Math.max(...road), p99: q(road, 0.99) }, land: { n: land.length, max: Math.max(...land), p99: q(land, 0.99) } };
+    }, placeAt.toString()),
+    // Every pass of every ride junction: its barrier set stands, the open pair has none
+    'world-junction': async page => page.evaluate(async (placeSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const out = [];
+        for (const junction of env.graph.junctions) {
+            const passes = [];
+            for (const pass of junction.passes) {
+                if (pass.inEdge === null) continue;
+                await placeAt(Math.max(0, pass.sIn - 200));
+                const active = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => b.edgeId).sort((a, b) => a - b);
+                const expected = pass.barriers.map(b => b.edgeId).sort((a, b) => a - b);
+                const walls = pass.barriers.map(b => env.ground.zoneAt({ x: b.x, z: b.z, index: 0, lateral: 100 }, 5).kind);
+                passes.push({ sIn: pass.sIn, expected, active, walls, outClosed: expected.includes(pass.outEdge), mesh: env.barrierMesh.count });
+            }
+            if (passes.length) out.push({ id: junction.id, name: junction.name, passes });
+        }
+        return out;
+    }, placeAt.toString()),
+    // Off the ride line, backwards, and the ordinary ride between (the control)
+    'world-wrongway': async page => page.evaluate(async (placeSource, pilotSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const guide = env.guide;
+        const v = game.vehicle;
+        twistyDev.freeze();
+        let clock = 0;
+        const step = guide.step.bind(guide);
+        guide.step = state => { clock += state.dt; return step(state); };
+        const seen = () => ({ warnedAt: null, restartAt: null });
+        const run = async (name, s, hold, seconds) => {
+            const t = seen();
+            await placeAt(s);
+            const restarts = game.restarts;
+            clock = 0;
+            const base = v.update.bind(v);
+            const pin = { x: v.position.x, y: v.position.y, z: v.position.z };
+            v.update = (...args) => {
+                base(...args);
+                if (game.restarts === restarts) hold(pin);
+            };
+            for (let tick = 0; tick < seconds * 60; tick++) {
+                twistyDev.step(1);
+                if (t.warnedAt === null && guide.warning) t.warnedAt = clock;
+                if (t.restartAt === null && game.restarts > restarts) { t.restartAt = clock; break; }
+            }
+            v.update = base;
+            return { name, warnedAt: t.warnedAt, restartAt: t.restartAt, restarts: game.restarts - restarts };
+        };
+        const route = env.route;
+        const results = [];
+        // A place 50 m beside the ride with no other road within 45 m: the nearest ride point is then 50 m away
+        let site = null;
+        for (let s = 800; s < route.length && !site; s += 100) {
+            const p = route.sample(s, {});
+            for (const side of [1, -1]) {
+                const x = p.x + side * 50 * Math.cos(p.heading), z = p.z - side * 50 * Math.sin(p.heading);
+                if (route.project(x, z, null, {}).distance >= 49) { site = { s, side }; break; }
+            }
+        }
+        if (!site) return [{ name: 'off-route-50m', error: 'no place on the ride has 45 m of clear ground beside it' }];
+        results.push(await run('off-route-50m', site.s, pin => {
+            const p = route.sample(site.s, {});
+            v.position.set(p.x + site.side * 50 * Math.cos(p.heading), pin.y, p.z - site.side * 50 * Math.sin(p.heading));
+            v.speed = 0; v.crashed = false; v.offRoadTime = 0;
+        }, 14));
+        results[0].site = site.s;
+        guide.reset();
+        results.push(await run('backwards-10ms', 3000, () => {
+            const p = route.sample(3000, {});
+            v.position.set(p.x, p.y, p.z);
+            v.yawAngle = p.heading + Math.PI; v.speed = 10; v.crashed = false;
+        }, 20));
+        guide.reset();
+        game.restartLeg();
+        const pilot = new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`);
+        pilot(game, 20);
+        const crashes = [];
+        const log = console.log;
+        console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) crashes.push(String(args[0]) + ' ' + args.slice(1).join(' ')); log(...args); };
+        const restarts = game.restarts;
+        let warned = false;
+        for (let tick = 0; tick < 60 * 400 && v.routeS < env.startS + 2000; tick++) {
+            twistyDev.step(1);
+            if (guide.warning) warned = true;
+            if (v.crashed) break;
+        }
+        console.log = log;
+        results.push({ name: 'ride-2km', metres: Math.round(v.routeS - env.startS), crashed: v.crashed, crash: crashes[0] || null, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, warned, restarts: game.restarts - restarts });
+        return results;
+    }, placeAt.toString(), pilotWorld.toString()),
+    'world-credit': async (page, port) => {
+        const world = await page.evaluate(() => {
+            const el = document.getElementById('world-credit');
+            const box = el ? el.getBoundingClientRect() : { width: 0, height: 0 };
+            return { text: el ? el.textContent : null, width: box.width, height: box.height, opacity: el ? Number(getComputedStyle(el).opacity) : 0, inViewport: el ? box.right <= innerWidth && box.bottom <= innerHeight && box.left >= 0 : false };
+        });
+        const leg = await openPage(page.browser(), port, '/');
+        const onLeg = await leg.evaluate(() => {
+            const el = document.getElementById('world-credit');
+            const box = el ? el.getBoundingClientRect() : { width: 0, height: 0 };
+            return { width: box.width, height: box.height };
+        });
+        await leg.close();
+        return { world, onLeg };
+    },
+    // Every request the world page made, from load to a few seconds of riding
+    'world-net': async page => {
+        await page.evaluate(async () => { twistyDev.autopilot({ speed: 20 }); twistyDev.step(180); });
+        return { requests: [...new Set(state.requests)].length, list: [...new Set(state.requests)] };
+    },
+    // The autopilot rides the stage to the finish gate
+    'world-finish': async page => page.evaluate(async (pilotSource, cruise) => {
+        const env = game.environment;
+        const v = game.vehicle;
+        twistyDev.freeze();
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+        let ticks = 0;
+        const passed = [];
+        const limit = 60 * 60 * 40;
+        while (!game.finished && !v.crashed && ticks < limit) {
+            twistyDev.step(1);
+            ticks++;
+            if (game.checkpointsPassed !== passed.length) passed.push(Math.round(v.routeS));
+        }
+        return { finished: game.finished, crashed: v.crashed, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts };
+    }, pilotWorld.toString(), Number(option('speed') || 24))
+};
+
+async function worldMain() {
+    const executablePath = chromePath();
+    const gpu = flag('gpu');
+    const server = await startServer();
+    const port = server.address().port;
+    const args = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+    const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath, headless: gpu ? false : 'new', args: ['--no-sandbox', ...args] });
+    const id = option('world') || 'tremola';
+    const report = { chrome: executablePath, mode: gpu ? 'gpu' : 'headless', world: id, blocked: state.blocked, notFound: state.notFound, pageErrors: state.pageErrors, results: {}, failures: [], notes: [] };
+    let exit = 0;
+    try {
+        for (const name of probes) {
+            if (!WORLD[name]) { report.failures.push(`unknown probe ${name}`); continue; }
+            state.requests = [];
+            const page = await openWorld(browser, port, id);
+            report.results[name] = await WORLD[name](page, port);
+            if (name === 'world-net') report.results[name].offHost = state.requests.filter(url => !isAllowedRequest(url, port));
+            await page.close();
+            state.requests = null;
+        }
+        worldChecks(report);
+    } catch (error) {
+        report.failures.push(String(error.stack || error));
+        exit = 2;
+    } finally {
+        await browser.close();
+        server.close();
+    }
+    if (state.pageErrors.length) report.failures.push(...state.pageErrors.map(e => `page error: ${e}`));
+    const missing = state.notFound.filter(u => !u.endsWith('/favicon.ico'));
+    if (missing.length) report.failures.push(...missing.map(u => `404: ${u}`));
+    report.failures.length && (exit = exit || 1);
+    console.log(JSON.stringify(report, null, 1));
+    process.exit(exit);
+}
+
+function isAllowedRequest(url, port) {
+    if (url.startsWith('data:') || url.startsWith('blob:')) return true;
+    const target = new URL(url);
+    if (target.host === `127.0.0.1:${port}`) return ALLOWED_PATHS.test(target.pathname);
+    return ALLOWED_HOSTS.some(host => target.hostname === host);
+}
+
+function worldChecks(report) {
+    const { results, failures } = report;
+    const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
+    rows.forEach(r => {
+        Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
+        if (r.tiles > WORLD_RESIDENT_TILES) failures.push(`world at s ${r.s}: ${r.tiles} resident tiles, over ${WORLD_RESIDENT_TILES}`);
+        if (r.bikeTilesMissing) failures.push(`world at s ${r.s}: ${r.bikeTilesMissing} tiles within ${WORLD_BIKE_TILE_M} m are not drawn`);
+        if (r.maxStepMs > 4 * 2) failures.push(`world at s ${r.s}: a build step took ${r.maxStepMs} ms`);
+    });
+    const ground = results['world-ground'];
+    if (ground) {
+        if (!(ground.road.n >= 100) || ground.road.max > 0.05) failures.push(`world-ground: road band ${JSON.stringify(ground.road)}, want |delta| <= 0.05`);
+        if (!(ground.land.n >= 100) || ground.land.p99 > 0.35) failures.push(`world-ground: land ${JSON.stringify(ground.land)}, want p99 <= 0.35`);
+    }
+    (results['world-junction'] || []).forEach(j => j.passes.forEach(p => {
+        if (JSON.stringify(p.active) !== JSON.stringify(p.expected)) failures.push(`world-junction ${j.id} at ${p.sIn}: barriers ${JSON.stringify(p.active)}, want ${JSON.stringify(p.expected)}`);
+        if (p.walls.some(kind => kind !== 'wall')) failures.push(`world-junction ${j.id} at ${p.sIn}: a barrier does not give wall (${p.walls})`);
+        if (p.outClosed) failures.push(`world-junction ${j.id} at ${p.sIn}: the road out is closed`);
+    }));
+    const wrong = results['world-wrongway'];
+    if (wrong) {
+        const [off, back, ride] = wrong;
+        if (off.error) failures.push(`world-wrongway: ${off.error}`);
+        else {
+            if (!(off.warnedAt !== null && off.warnedAt <= 1) || !(Math.abs(off.restartAt - off.warnedAt - 10) <= 0.5)) failures.push(`world-wrongway off route: ${JSON.stringify(off)}, want the warning within 1 s and the restart 10 s later`);
+            if (!(Math.abs(back.warnedAt - 5) <= 0.5) || !(Math.abs(back.restartAt - back.warnedAt - 10) <= 0.5)) failures.push(`world-wrongway backwards: ${JSON.stringify(back)}, want the warning at 5 s and the restart 10 s later`);
+            if (ride.warned || ride.restarts || ride.crashed || ride.metres < 1900) failures.push(`world-wrongway control: ${JSON.stringify(ride)}, want neither a warning nor a restart over 2 km`);
+        }
+    }
+    const credit = results['world-credit'];
+    if (credit) {
+        const w = credit.world;
+        if (!(w.text || '').includes('© swisstopo') || !(w.width > 0 && w.height > 0) || !(w.opacity > 0.5) || !w.inViewport) failures.push(`world-credit: ${JSON.stringify(w)}`);
+        if (credit.onLeg.width > 0 || credit.onLeg.height > 0) failures.push(`world-credit: the credit shows on a leg: ${JSON.stringify(credit.onLeg)}`);
+    }
+    const net = results['world-net'];
+    if (net) {
+        if (net.offHost.length) failures.push(`world-net: requests outside the allowed set: ${net.offHost.join(', ')}`);
+        if (report.blocked.length) failures.push(`world-net: ${report.blocked.length} attempts at production hosts: ${report.blocked.join(', ')}`);
+    }
+    const finish = results['world-finish'];
+    if (finish && (!finish.finished || finish.crashed || finish.gates !== finish.gateTotal)) failures.push(`world-finish: ${JSON.stringify(finish)}`);
 }
 
 main();
