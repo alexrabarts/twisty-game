@@ -1,18 +1,21 @@
-// Playable characters. Each entry defines the rider, their bike model variant
-// (built by Vehicle.createMesh) and stat multipliers applied to the baseline
+// Playable characters. Each entry defines the rider, the bikes they own
+// (BIKE_MODELS: the first is the one they ride unless the player picks
+// another on the rider select) and stat multipliers applied to the baseline
 // Vehicle physics. stats are the 1-5 star ratings shown in the selection UI;
-// physics are the multipliers actually applied to the handling model.
-// `bikes` lists the kinds of bike the rider owns (Vehicle.BIKES), the first
-// being the one they ride; bikeLabel and bikeColor describe that one. `kit`,
-// when given, is the rider's own gear over the bike's default rider colours
-// (Vehicle.buildVariantRider's options).
+// physics are the multipliers actually applied to the handling model, and
+// they are the character on their first bike: another bike scales them by
+// its class against that one (Vehicle.physicsOf). bikeLabel and bikeColor
+// describe the first bike. `kit`, when given, is the rider's own gear over
+// the bike's default rider colours (Vehicle.buildVariantRider's options).
 const CHARACTERS = [
     {
         id: 'steve',
         name: 'Steve',
-        bikeLabel: 'Super Sports',
-        bikeColor: '0xcc1111', // Red race plastics
-        bikes: ['sport'],
+        bikeLabel: 'Retro sports triple',
+        bikeColor: '0x021b74', // Deep blue tank, gold wheels
+        bikes: ['bike08_xsr900', 'bike13_panigale'],
+        // His race leathers and helmet whatever he rides
+        kit: { suitColor: 0x16161c, suitAccent: 0xcc1111, helmetColor: 0xf0f0f2, helmetAccent: 0xcc1111 },
         stats: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
         physics: {
             comfortShake: 1.25,     // Race-firm - you feel everything
@@ -28,9 +31,11 @@ const CHARACTERS = [
     {
         id: 'alex',
         name: 'Alex',
-        bikeLabel: 'Adventure',
-        bikeColor: '0xc9a227', // Sandy gold
-        bikes: ['adventure'],
+        bikeLabel: 'Naked triple',
+        bikeColor: '0x020202', // Matt black, red pinstripes
+        bikes: ['bike02_speed_triple', 'bike10_tiger900'],
+        // Grey textile with sandy panels, a cream helmet
+        kit: { suitColor: 0x2f3640, suitAccent: 0xc9a227, helmetColor: 0xe8e6dd, helmetAccent: 0x2f3640 },
         stats: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
         physics: {
             comfortShake: 0.55,     // Long-travel suspension soaks it up
@@ -46,9 +51,11 @@ const CHARACTERS = [
     {
         id: 'tim',
         name: 'Tim',
-        bikeLabel: 'Maxi Scooter',
-        bikeColor: '0x8d96a8', // Executive silver-grey
-        bikes: ['scooter'],
+        bikeLabel: 'Maxi scooter',
+        bikeColor: '0x0a0b0d', // Dark grey, bronze trim
+        bikes: ['bike14_tmax'],
+        // A grey commuter jacket with silver piping
+        kit: { suitColor: 0x3a3f4a, suitAccent: 0xd6d8dc, helmetColor: 0xe8e8ea, helmetAccent: 0x9aa0a8 },
         stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
@@ -64,9 +71,11 @@ const CHARACTERS = [
     {
         id: 'shane',
         name: 'Shane',
-        bikeLabel: 'Dirt Bike',
-        bikeColor: '0xff6600', // KTM orange
-        bikes: ['dirt'],
+        bikeLabel: 'Light naked single',
+        bikeColor: '0x010101', // Black, white shrouds, orange frame
+        bikes: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990'],
+        // Black with orange, an orange helmet
+        kit: { suitColor: 0x1e2026, suitAccent: 0xff6600, helmetColor: 0xff6600, helmetAccent: 0xeceff1 },
         stats: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
         physics: {
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
@@ -82,9 +91,9 @@ const CHARACTERS = [
     {
         id: 'lucy',
         name: 'Lucy',
-        bikeLabel: 'Naked Middleweight',
-        bikeColor: '0x16181c', // Gloss black, lime-green trim
-        bikes: ['naked'],
+        bikeLabel: 'Naked middleweight',
+        bikeColor: '0x010101', // Black, lime-green trim
+        bikes: ['bike01_z650', 'bike07_mt09'],
         kit: {
             suitColor: 0x111215, suitAccent: 0x5c5f66,     // Black leather jacket, grey panels
             helmetColor: 0xf2f2f0, helmetAccent: 0x121214, // White helmet, black and copper streaks
@@ -107,20 +116,110 @@ const CHARACTERS = [
             wheeliePop: 1.15,      // Lifts the front easily on the torque
             wheelieThrottle: 1.05
         }
+    },
+    {
+        id: 'guy',
+        name: 'Guy',
+        bikeLabel: 'Retro scrambler',
+        bikeColor: '0x750102', // Red tank, black side panels
+        bikes: ['bike04_scrambler', 'bike05_g310gs', 'bike06_z750', 'bike07_mt09_black', 'bike12_tracer9gt'],
+        // Dark textile touring kit: charcoal jacket with grey shoulder
+        // panels, black trousers, brown boots, a matt black helmet, and his
+        // scarf, which he wears only on the scrambler
+        kit: {
+            suitColor: 0x2a2d31, suitAccent: 0x50565e,
+            helmetColor: 0x1a1b1d, helmetAccent: 0x6d737a, helmetTrim: 0x2c2e31,
+            gloveColor: 0x161617,
+            pantsColor: 0x1d1f22, pantsAccent: 0x3a3e44,
+            bootColor: 0x3d2b1f, bootAccent: 0x1a1412,
+            scarfColor: 0x8a2b2b, scarfBikes: ['bike04_scrambler']
+        },
+        // A mid-size all-rounder: middling pace, easy to place, comfortable
+        // over a long day
+        stats: { speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 },
+        physics: {
+            comfortShake: 0.7,
+            maxSpeed: 0.92,        // 62.6 m/s
+            acceleration: 1.02,    // 15.3 m/s²
+            brakeForce: 1.0,       // 20 m/s²
+            steeringForce: 1.08,   // 10.26
+            jumpPower: 1.05,
+            wheeliePop: 1.0,
+            wheelieThrottle: 1.0
+        }
     }
 ];
 
+// Physics multipliers of each class of bike. A character's own physics are
+// them on their first bike; another bike scales them by its class against
+// that bike's (Vehicle.physicsOf), so a character on their first bike rides
+// exactly as before. `light` marks a small-capacity bike of its class.
+const BIKE_CLASSES = {
+    supersport: { maxSpeed: 1.1, acceleration: 1.1, steeringForce: 1.0, brakeForce: 1.05, comfortShake: 1.25 },
+    naked: { maxSpeed: 0.95, acceleration: 1.08, steeringForce: 1.12, brakeForce: 1.0, comfortShake: 0.8 },
+    retro: { maxSpeed: 0.9, acceleration: 1.0, steeringForce: 1.06, brakeForce: 0.95, comfortShake: 0.75 },
+    adventure: { maxSpeed: 1.0, acceleration: 1.0, steeringForce: 1.1, brakeForce: 1.05, comfortShake: 0.55 },
+    tourer: { maxSpeed: 1.02, acceleration: 1.02, steeringForce: 1.04, brakeForce: 1.05, comfortShake: 0.6 },
+    scooter: { maxSpeed: 0.75, acceleration: 0.8, steeringForce: 1.1, brakeForce: 1.0, comfortShake: 0.3 }
+};
+const LIGHT_BIKE = { maxSpeed: 0.85, acceleration: 0.9, steeringForce: 1.06, brakeForce: 0.95, comfortShake: 1.1 };
+// The range a scaled multiplier is held to, so a rider on a bike far from
+// their first (Steve's superbike against his retro triple) stays within
+// what the handling model was tuned over
+const BIKE_LIMITS = { maxSpeed: [0.7, 1.2], acceleration: [0.75, 1.25], steeringForce: [0.9, 1.25], brakeForce: [0.9, 1.15], comfortShake: [0.25, 1.4] };
+
+// The detailed bikes (tools/blender/bikes, assets/bikes/detail). `kind` is
+// the procedural bike (Vehicle.BIKES) that stands in while the file loads
+// or if it fails; `name` and `year` are what the rider select shows; `paint`
+// is the file's own paint colour, which the crash and wheelie tints work
+// from. `mirror`: the file was written with +x on the rider's right, which
+// three.js draws on the rider's left, so the loader mirrors it (the scripts
+// of tools/blender/bikes/_kit_D.py and _kit_E.py mirror on export instead).
+// `rearBrake` is the side the real bike carries its rear disc, `drive` its
+// final drive; a chain is on the left on all of them. `seat` stands in for
+// a file without a seat mark, `pose` sets the rider's lean and riding style,
+// `luggage` shows the file's luggage node. Every one keeps its file's colours.
+const BIKE_MODELS = {
+    bike01_z650: { kind: 'naked', cls: 'naked', name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
+    bike02_speed_triple: { kind: 'naked', cls: 'naked', name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
+    bike03_duke390: { kind: 'naked', cls: 'naked', light: true, name: 'Light naked single', year: 2016, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.2 } },
+    bike04_scrambler: { kind: 'naked', cls: 'retro', name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
+    bike05_g310gs: { kind: 'adventure', cls: 'adventure', light: true, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
+    bike06_z750: { kind: 'naked', cls: 'naked', name: 'Naked four, gloss black', year: 2010, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.818, -0.2], pose: { torsoLean: 0.24 } },
+    bike07_mt09: { kind: 'naked', cls: 'naked', name: 'Naked triple, dark grey', year: 2021, paint: 0x08090b, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
+    bike07_mt09_black: { kind: 'naked', cls: 'naked', name: 'Naked triple, blacked out', year: 2021, paint: 0x020202, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
+    bike08_xsr900: { kind: 'sport', cls: 'retro', name: 'Retro sports triple', year: 2023, paint: 0x021b74, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
+    bike09_duke890: { kind: 'naked', cls: 'naked', name: 'Naked twin, white and orange', year: 2020, paint: 0xcfcfc9, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
+    bike10_tiger900: { kind: 'adventure', cls: 'adventure', name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
+    bike11_duke990: { kind: 'naked', cls: 'naked', name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
+    bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
+    bike13_panigale: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike14_tmax: { kind: 'scooter', cls: 'scooter', name: 'Maxi scooter, dark grey', year: 2022, paint: 0x0a0b0d, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.04, style: 'commuter' } }
+};
+Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, keepFileColours: true }));
+
 class Vehicle {
-    constructor(scene, onWheelieScore = null, character = null) {
+    constructor(scene, onWheelieScore = null, character = null, bikeId = null, options = {}) {
         this.scene = scene;
+        // { model: false } builds the procedural bike only; the caller dresses
+        // it when it is shown (the rider select, which fetches only the bike
+        // in view)
+        this.options = options;
         this.onWheelieScore = onWheelieScore;
 
         // Character selection drives the bike model variant and stat
         // multipliers. Default to Steve so existing callers keep the
         // original sport bike behaviour.
         this.character = character || CHARACTERS[0];
-        // The kind of bike this vehicle is (Vehicle.BIKES)
-        this.bike = Vehicle.bikeOf(this.character);
+        // The bike this vehicle is (a BIKE_MODELS id, or a kind of
+        // Vehicle.BIKES), and the kind that is built while its file loads
+        this.model = Vehicle.modelOf(this.character, bikeId);
+        this.bike = Vehicle.kindOf(this.model);
+        // Where the wheels turn and how big they are, [y, z, radius] in the
+        // bike's axes: the procedural bike's, until a modelled bike brings
+        // its own (BikeModels). Only the drawing reads them; the handling
+        // keeps its one wheelbase.
+        this.axles = { rear: [0.3, -0.7, 0.3], front: [0.3, 0.7, 0.3] };
         
         // Physical properties
         this.position = new THREE.Vector3(0, 0, 0); // Will be adjusted to road height after environment loads
@@ -218,8 +317,9 @@ class Vehicle {
         this.leanDamping = 0.016; // Natural damping - slightly less for more agility
         this.maxLeanAngle = Math.PI / 2.7; // ~67 degrees before crash - slightly more forgiving
 
-        // Apply per-character stat multipliers to the baseline physics
-        const charPhysics = this.character.physics || {};
+        // Apply per-character stat multipliers to the baseline physics,
+        // scaled for a bike other than the character's first
+        const charPhysics = Vehicle.physicsOf(this.character, this.model);
         this.maxSpeed *= charPhysics.maxSpeed || 1;
         this.acceleration *= charPhysics.acceleration || 1;
         this.brakeForce *= charPhysics.brakeForce || 1;
@@ -231,7 +331,8 @@ class Vehicle {
 
         // Bodywork paint colour comes from the character (string form so the
         // existing parseInt(this.bikeColor) call sites keep working)
-        this.bikeColor = this.character.bikeColor || '0x1a4db3';
+        const detail = BIKE_MODELS[this.model];
+        this.bikeColor = detail ? `0x${detail.paint.toString(16).padStart(6, '0')}` : (this.character.bikeColor || '0x1a4db3');
         const baseColorHex = parseInt(this.bikeColor);
         this.baseColorRGB = {
             r: ((baseColorHex >> 16) & 255) / 255,
@@ -256,6 +357,7 @@ class Vehicle {
         // animated), handlebar, leftFork/rightFork, ground contact at y=0.
         const kind = Vehicle.BIKES[this.bike];
         this[kind.build]();
+        Vehicle.mirrorParts(this.group, this.rider);
 
         // Base rider transform for the jump stand-up animation
         this.riderBasePos = this.rider.position.clone();
@@ -268,7 +370,7 @@ class Vehicle {
         // The Blender-made bike and rider take the place of the parts built
         // above once their files are in; until then, and if a file fails,
         // the procedural model is the bike
-        if (typeof BikeModels !== 'undefined') BikeModels.dress(this);
+        if (typeof BikeModels !== 'undefined' && this.options.model !== false) BikeModels.dress(this);
     }
 
     buildSportBike() {
@@ -936,13 +1038,16 @@ class Vehicle {
             bootColor = gloveColor, bootAccent = suitAccent, backpackColor = null,
             style = 'road',
             hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
-            elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16
+            elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16,
+            scarfColor = null, scarfBikes = []
         } = { ...options, ...this.character.kit };
+        // A scarf is worn only on the bikes the kit names
+        const scarf = scarfColor !== null && scarfBikes.includes(this.model) ? scarfColor : null;
         // The pose and colours, kept for the modelled rider (js/bikemodels.js)
         this.riderSpec = {
             y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent,
             helmetTrim, helmetStyle, gloveColor, pantsColor, pantsAccent, bootColor, bootAccent, backpackColor,
-            style, hand, foot, elbowOut, kneeOut, kneeForward
+            style, hand, foot, elbowOut, kneeOut, kneeForward, scarf
         };
         const suitMaterial = new THREE.MeshStandardMaterial({
             color: suitColor, roughness: 0.85, metalness: 0.0
@@ -1018,6 +1123,8 @@ class Vehicle {
             pack.castShadow = true;
             this.rider.add(pack);
         }
+
+        if (scarf !== null) this.rider.add(Vehicle.buildScarf(scarf, torsoLean, 0.21));
 
         // ---- Helmet: shell, visor, vents, accent stripe ----
         const headY = dY * 0.31, headZ = dZ * 0.31;
@@ -3024,14 +3131,17 @@ class Vehicle {
             this.rider.rotation.x = this.riderBaseRotX - stand * 0.4;
         }
         
-        // Rotate wheels and discs based on speed
+        // Rotate wheels and discs based on speed: the rear by its own radius,
+        // the front by as much more as it is smaller
         if (!this.wheelRotation) this.wheelRotation = 0;
-        const rotationSpeed = this.speed / 0.3; // rad/s = v / r, wheel radius 0.3
+        const rear = this.axles.rear[2], front = this.axles.front[2];
+        const rotationSpeed = this.speed / rear; // rad/s = v / r
         this.wheelRotation += rotationSpeed * (this.currentDeltaTime || 1/60);
+        const frontRotation = front === rear ? this.wheelRotation : this.wheelRotation * rear / front;
         this.rearWheel.rotation.x = this.wheelRotation;
-        this.frontWheel.rotation.x = this.wheelRotation;
+        this.frontWheel.rotation.x = frontRotation;
         this.rearDisc.rotation.x = this.wheelRotation;
-        this.frontDisc.rotation.x = this.wheelRotation;
+        this.frontDisc.rotation.x = frontRotation;
         
         if (this.crashed) {
             if (this.fallingOffCliff && !this.hitGround && this.tumbleSpeed > 0) {
@@ -3062,7 +3172,7 @@ class Vehicle {
             this.rider.rotation.z = this.leanAngle * 0.1;
         } else if (this.isWheelie) {
             // Wheelie animation - pivot around center of rear wheel
-            // Rear wheel center is at (0, 0.3, -0.7) in local space
+            // Rear wheel centre is at this.axles.rear in local space
             // Bike origin is at CG height (0.6m) above ground
             
             // Apply the rotation first
@@ -3080,8 +3190,8 @@ class Vehicle {
             
             // Original vector from origin to pivot point (rear wheel center)
             const pivotX = 0;
-            const pivotY = 0.3; // Rear axle height: the model origin is on the ground, not at the CG
-            const pivotZ = -0.7; // rear wheel is 0.7m behind center
+            const pivotY = this.axles.rear[0]; // Rear axle height: the model origin is on the ground, not at the CG
+            const pivotZ = this.axles.rear[1]; // and how far behind the centre
             
             // After rotation, this vector becomes:
             const rotatedY = pivotY * cosTheta - pivotZ * sinTheta;
@@ -3814,8 +3924,93 @@ Vehicle.BIKES = {
     naked: { build: 'buildNakedBike', stand: 0.16 }
 };
 
-// The bike a character rides: the first they own
+// Mirrors a bike built with +x on the rider's right, as the procedural
+// builders and the first Blender scripts write it, so that its right is on
+// the rider's right in three.js, where the chase camera looking up +z sees +x
+// on its left. Each part (each child of `group` but the rider, who is the
+// same both sides and whose lean must not flip) moves across and is turned
+// and scaled about its own pivot as its mirror image; the pose Vehicle
+// animates (spin about x, steer about y) is not mirrored.
+Vehicle.mirrorParts = (group, rider) => {
+    for (const part of group.children) {
+        if (part === rider) continue;
+        part.position.x = -part.position.x;
+        part.rotation.y = -part.rotation.y;
+        part.rotation.z = -part.rotation.z;
+        part.scale.x = -part.scale.x;
+    }
+};
+
+// A scarf round the rider's neck, `neck` up the torso from its centre: a
+// thick loop under the helmet and two ends streaming back off the shoulders
+Vehicle.buildScarf = (colour, lean, neck) => {
+    const material = new THREE.MeshStandardMaterial({ name: 'scarf', color: colour, roughness: 0.95, metalness: 0 });
+    const up = new THREE.Vector3(0, Math.cos(lean), Math.sin(lean));
+    const back = new THREE.Vector3(0, Math.sin(lean), -Math.cos(lean));
+    const scarf = new THREE.Group();
+    scarf.name = 'scarf';
+    const loop = new THREE.Mesh(new THREE.TorusGeometry(0.088, 0.04, 8, 16), material);
+    loop.position.copy(up).multiplyScalar(neck);
+    loop.rotation.x = lean - Math.PI / 2;
+    loop.scale.set(1.12, 1, 0.85);
+    scarf.add(loop);
+    // Each end leaves the back of the loop and droops as it trails
+    [[-0.045, 0.26, 0.22], [0.035, 0.2, -0.16]].forEach(([x, length, twist]) => {
+        const end = new THREE.Mesh(new THREE.BoxGeometry(0.075, 0.014, length), material);
+        end.position.copy(up).multiplyScalar(neck - 0.03 - length * 0.18).addScaledVector(back, 0.1 + length * 0.45).setX(x);
+        end.rotation.set(lean + 0.38, twist, twist * 0.6);
+        scarf.add(end);
+    });
+    scarf.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    return scarf;
+};
+
+const knownBike = (id) => !!(BIKE_MODELS[id] || Vehicle.BIKES[id]);
+
+// The bike a character rides by default: the first they own
 Vehicle.bikeOf = (character) => {
-    const kind = character && Array.isArray(character.bikes) ? character.bikes[0] : null;
-    return Vehicle.BIKES[kind] ? kind : 'sport';
+    const first = character && Array.isArray(character.bikes) ? character.bikes[0] : null;
+    return knownBike(first) ? first : 'sport';
+};
+
+// The bike a vehicle is: `bikeId` when the character owns it, else their first
+Vehicle.modelOf = (character, bikeId) => {
+    const owned = character && Array.isArray(character.bikes) ? character.bikes : [];
+    return bikeId && knownBike(bikeId) && owned.includes(bikeId) ? bikeId : Vehicle.bikeOf(character);
+};
+
+// The procedural kind (Vehicle.BIKES) a bike is built as
+Vehicle.kindOf = (id) => (BIKE_MODELS[id] ? BIKE_MODELS[id].kind : (Vehicle.BIKES[id] ? id : 'sport'));
+
+// The class physics of a bike: a detailed bike's class, scaled for a light
+// one; a procedural kind has none of its own
+Vehicle.classOf = (id) => {
+    const bike = BIKE_MODELS[id];
+    if (!bike) return null;
+    const base = BIKE_CLASSES[bike.cls];
+    if (!bike.light) return base;
+    return Object.fromEntries(Object.entries(base).map(([key, value]) => [key, value * LIGHT_BIKE[key]]));
+};
+
+// The physics multipliers of a character on a bike. The character's own are
+// them on their first bike, so that bike takes them unchanged; another bike
+// scales each one by its class against the first bike's.
+Vehicle.physicsOf = (character, id) => {
+    const physics = { ...(character && character.physics) };
+    const first = Vehicle.bikeOf(character);
+    const from = Vehicle.classOf(first);
+    const to = Vehicle.classOf(id);
+    if (id === first || !from || !to) return physics;
+    for (const key of Object.keys(to)) {
+        const base = physics[key] !== undefined ? physics[key] : 1;
+        const [low, high] = BIKE_LIMITS[key];
+        physics[key] = Math.min(high, Math.max(low, base * to[key] / from[key]));
+    }
+    return physics;
+};
+
+// The rider-select text of a bike: its descriptive name and year
+Vehicle.bikeTitle = (id) => {
+    const bike = BIKE_MODELS[id];
+    return bike ? `${bike.name} (${bike.year})` : id;
 };

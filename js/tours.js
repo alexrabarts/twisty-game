@@ -104,7 +104,7 @@ class TourSystem {
 
         // Progression: legs unlock sequentially; riders unlock at completion
         // milestones. Everyone starts on Tim's scooter and works up.
-        this.characterUnlocks = { tim: 0, shane: 2, lucy: 3, alex: 4, steve: 6 };
+        this.characterUnlocks = { tim: 0, shane: 2, lucy: 3, guy: 4, alex: 5, steve: 6 };
         let savedProgress = {};
         try {
             savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');
@@ -121,6 +121,42 @@ class TourSystem {
              CHARACTERS.some(c => c.id === savedCharacter) &&
              this.isCharacterUnlocked(savedCharacter))
                 ? savedCharacter : 'tim';
+        // Each rider's chosen bike, by character id (the rider select's
+        // picker); a rider with none saved rides their first
+        this.selectedBikes = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('twistyBikes') || '{}');
+            if (saved && typeof saved === 'object') this.selectedBikes = saved;
+        } catch (e) {
+            console.warn('TourSystem: the saved bike choices could not be read; every rider starts on their first bike:', e);
+        }
+    }
+
+    // The bike a rider rides: the one chosen for them if they own it, else their first
+    getSelectedBike(characterId) {
+        if (typeof CHARACTERS === 'undefined') return null;
+        const character = CHARACTERS.find(c => c.id === characterId);
+        if (!character || !Array.isArray(character.bikes) || !character.bikes.length) return null;
+        const chosen = this.selectedBikes[characterId];
+        return character.bikes.includes(chosen) ? chosen : character.bikes[0];
+    }
+
+    // Chooses a bike for a rider and remembers it
+    selectBike(characterId, bikeId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || !character.bikes.includes(bikeId)) return;
+        this.selectedBikes[characterId] = bikeId;
+        try {
+            localStorage.setItem('twistyBikes', JSON.stringify(this.selectedBikes));
+        } catch (e) {
+            console.warn('TourSystem: the bike choice could not be saved:', e);
+        }
+    }
+
+    // The rider select's text for a bike: its descriptive name and year
+    static bikeTitle(bikeId) {
+        const bike = typeof BIKE_MODELS !== 'undefined' ? BIKE_MODELS[bikeId] : null;
+        return bike ? `${bike.name} (${bike.year})` : bikeId;
     }
 
     // The id the leaderboard and the local best time are keyed by. A leg whose
@@ -420,10 +456,19 @@ class TourSystem {
             } else {
                 const fresh = this.isRiderFresh(c.id);
                 card.classList.toggle('fresh', fresh);
+                const bikes = Array.isArray(c.bikes) ? c.bikes : [];
+                const bike = this.getSelectedBike(c.id);
+                const at = Math.max(0, bikes.indexOf(bike));
+                const picker = bikes.length > 1 ? `
+                    <div class="bike-picker" role="group" aria-label="Bike">
+                        <button class="bike-arrow" id="bikePrevBtn" aria-label="Previous bike">‹</button>
+                        <div class="bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}<span class="bike-count">${at + 1} / ${bikes.length}</span></div>
+                        <button class="bike-arrow" id="bikeNextBtn" aria-label="Next bike">›</button>
+                    </div>` : `<div class="showcase-sub bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}</div>`;
                 card.innerHTML = `
                     ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
                     <div class="showcase-name">${c.name}</div>
-                    <div class="showcase-sub">${c.bikeLabel}</div>
+                    ${picker}
                     <div class="showcase-stats">
                         <span>SPEED</span>${statBar(c.stats.speed)}
                         <span>ACCEL</span>${statBar(c.stats.accel)}
@@ -433,8 +478,24 @@ class TourSystem {
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
+            const prev = document.getElementById('bikePrevBtn');
+            const next = document.getElementById('bikeNextBtn');
+            if (prev) prev.addEventListener('click', () => moveBikeFocus(-1));
+            if (next) next.addEventListener('click', () => moveBikeFocus(1));
             if (this.onRiderShowcase) this.onRiderShowcase(c.id);
         };
+
+        // Cycles the focused rider's bikes (wrapping round), remembers the
+        // choice and puts that bike on the stage
+        const moveBikeFocus = (delta) => {
+            const c = riderOrder[this.riderFocusIndex];
+            if (this.riderTierFor(c.id) !== 'lit' || !Array.isArray(c.bikes) || c.bikes.length < 2) return;
+            const at = c.bikes.indexOf(this.getSelectedBike(c.id));
+            this.selectBike(c.id, c.bikes[(at + delta + c.bikes.length) % c.bikes.length]);
+            renderRiderCard();
+            if (this.onBikeShowcase) this.onBikeShowcase(c.id);
+        };
+        this.moveBikeFocus = moveBikeFocus;
 
         const renderLegCard = () => {
             const index = this.legFocusIndex;
@@ -527,11 +588,15 @@ class TourSystem {
 
             const isLeft = e.code === 'ArrowLeft' || e.code === 'KeyA';
             const isRight = e.code === 'ArrowRight' || e.code === 'KeyD';
+            const isUp = e.code === 'ArrowUp' || e.code === 'KeyW';
+            const isDown = e.code === 'ArrowDown' || e.code === 'KeyS';
             const isConfirm = e.code === 'Enter' || e.code === 'Space';
 
             if (this.menuScreen === 'rider') {
                 if (isLeft) { e.preventDefault(); moveRiderFocus(-1); }
                 else if (isRight) { e.preventDefault(); moveRiderFocus(1); }
+                else if (isUp) { e.preventDefault(); moveBikeFocus(-1); }
+                else if (isDown) { e.preventDefault(); moveBikeFocus(1); }
                 else if (isConfirm) {
                     e.preventDefault();
                     document.getElementById('riderContinueBtn').click();

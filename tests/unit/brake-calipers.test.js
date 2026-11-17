@@ -66,19 +66,37 @@ export function grip(caliper, disc) {
     };
 }
 
-// Where each bike carries its calipers, in degrees round the axle
+// Where each bike carries its calipers, in degrees round the axle. The
+// detailed bikes (assets/bikes/detail) are read at their near level, lod0:
+// each carries them where the real bike does, from the photos.
 const BIKES = {
-    dirt: { rear: [260, 305], front: [195, 215] },
-    sport: { rear: [185, 215], front: [195, 215] },
-    adventure: { rear: [185, 215], front: [195, 215] },
-    scooter: { rear: [145, 175], front: [195, 215] },
-    naked: { rear: [185, 215], front: [195, 215] },
+    'bikes/dirt': { rear: [260, 305], front: [195, 215] },
+    'bikes/sport': { rear: [185, 215], front: [195, 215] },
+    'bikes/adventure': { rear: [185, 215], front: [195, 215] },
+    'bikes/scooter': { rear: [145, 175], front: [195, 215] },
+    'bikes/naked': { rear: [185, 215], front: [195, 215] },
+    'bikes/detail/bike01_z650': { rear: [195, 215], front: [195, 210] },
+    'bikes/detail/bike02_speed_triple': { rear: [195, 215], front: [150, 170] },
+    'bikes/detail/bike03_duke390': { rear: [195, 215], front: [155, 175] },
+    'bikes/detail/bike04_scrambler': { rear: [235, 245], front: [195, 210] },
+    'bikes/detail/bike05_g310gs': { rear: [225, 235], front: [200, 210] },
+    'bikes/detail/bike06_z750': { rear: [140, 152], front: [200, 210] },
+    'bikes/detail/bike07_mt09': { rear: [190, 205], front: [195, 210] },
+    'bikes/detail/bike07_mt09_black': { rear: [190, 205], front: [195, 210] },
+    'bikes/detail/bike08_xsr900': { rear: [190, 205], front: [195, 210] },
+    'bikes/detail/bike09_duke890': { rear: [190, 205], front: [195, 210] },
+    'bikes/detail/bike10_tiger900': { rear: [200, 210], front: [200, 210] },
+    'bikes/detail/bike11_duke990': { rear: [200, 210], front: [200, 210] },
+    'bikes/detail/bike12_tracer9gt': { rear: [200, 210], front: [200, 210] },
+    'bikes/detail/bike13_panigale': { rear: [240, 262], front: [200, 215] },
+    'bikes/detail/bike14_tmax': { rear: [145, 170], front: [200, 210] },
 };
 
-describe.each(Object.entries(BIKES))('assets/bikes/%s.glb brake calipers', (bike, where) => {
+describe.each(Object.entries(BIKES))('assets/%s.glb brake calipers', (bike, where) => {
     let model;
     beforeAll(async () => {
-        model = await loadAssets().SceneAssets.loadModel(`assets/bikes/${bike}.glb`);
+        const file = await loadAssets().SceneAssets.loadModel(`assets/${bike}.glb`);
+        model = file.groups.get('lod0') || file;
     });
 
     function expectGrips(caliper, disc, [from, to]) {
@@ -134,3 +152,4 @@ describe('the check itself', () => {
         expect(grip(box(290).map(([x, y, z]) => [x + 0.06, y, z]), disc).straddles).toBe(false);
     });
 });
+

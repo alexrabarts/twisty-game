@@ -1444,6 +1444,47 @@ body.in-menu .virtual-button-camera {
     color: var(--c-text-dim);
 }
 
+.bike-picker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+    margin-top: 6px;
+}
+
+.bike-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-sm);
+    line-height: 1.35;
+    color: var(--c-text);
+}
+
+.bike-count {
+    display: block;
+    font-size: var(--fs-xs);
+    letter-spacing: 0.08em;
+    color: var(--c-text-dim);
+}
+
+.bike-arrow {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid var(--panel-border);
+    background: var(--panel-bg-strong);
+    color: var(--c-text);
+    font: 600 22px / 1 var(--font-ui);
+    cursor: pointer;
+}
+
+.bike-arrow:hover,
+.bike-arrow:focus-visible {
+    border-color: var(--c-accent);
+}
+
 .showcase-hint {
     margin-top: var(--sp-2);
     font-size: var(--fs-sm);

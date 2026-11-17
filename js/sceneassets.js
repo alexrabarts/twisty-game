@@ -165,15 +165,28 @@ const SceneAssets = (() => {
     });
     const meshes = new Map();
     const places = new Map();
-    for (const node of json.nodes || []) {
+    // A node with children (a detailed bike's `lod0` and `lod1`) is a group of
+    // its own: its children's meshes and places, read by name. The flat maps
+    // above hold every node too, where a name met twice keeps the last.
+    const groups = new Map();
+    const owner = new Map();
+    (json.nodes || []).forEach((node) => {
+      if (!node.children) return;
+      groups.set(node.name, { meshes: new Map(), places: new Map(), at: new THREE.Vector3().fromArray(node.translation || [0, 0, 0]) });
+      for (const child of node.children) owner.set(child, groups.get(node.name));
+    });
+    (json.nodes || []).forEach((node, index) => {
       // One scale for all three axes is the unit of positions stored as whole
       // numbers (tools/blender/bike_kit.py, pack_colours); it is worked into them here
       const unit = node.scale ? node.scale[0] : 1;
       const even = !node.scale || (unit > 0 && node.scale[1] === unit && node.scale[2] === unit);
       if (node.rotation || node.matrix || !even) throw new Error(`${url}: node ${node.name} is turned or unevenly scaled, which is not read`);
-      places.set(node.name, new THREE.Vector3().fromArray(node.translation || [0, 0, 0]));
-      if (node.mesh === undefined) continue;
-      meshes.set(node.name, json.meshes[node.mesh].primitives.map((primitive) => {
+      const place = new THREE.Vector3().fromArray(node.translation || [0, 0, 0]);
+      places.set(node.name, place);
+      const group = owner.get(index);
+      if (group) group.places.set(node.name, place.clone().add(group.at));
+      if (node.mesh === undefined) return;
+      const parts = json.meshes[node.mesh].primitives.map((primitive) => {
         const geometry = new THREE.BufferGeometry();
         const stored = accessor(primitive.attributes.POSITION);
         geometry.setAttribute("position", node.scale ? new THREE.BufferAttribute(Float32Array.from(stored.array, (value) => value * unit), 3) : stored);
@@ -192,9 +205,11 @@ const SceneAssets = (() => {
         geometry.computeBoundingSphere();
         geometry.computeBoundingBox();
         return { geometry, material: materials[primitive.material] };
-      }));
-    }
-    return { meshes, places };
+      });
+      meshes.set(node.name, parts);
+      if (group) group.meshes.set(node.name, parts);
+    });
+    return { meshes, places, groups };
   }
 
   // A file from the village kit (tools/blender/village_kit.py: houses, props,

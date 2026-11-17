@@ -4,14 +4,16 @@
  * a leg-only unlock keeps the normal next-leg flow.
  */
 
+import { jest } from '@jest/globals';
 import { readFileSync } from 'fs';
 
 const read = name => readFileSync(new URL(`../../js/${name}`, import.meta.url), 'utf8');
 
-// CHARACTERS lives at the top of vehicle.js; take just that declaration
+// CHARACTERS and the bike catalogue live at the top of vehicle.js; take just those declarations
 const vehicleSource = read('vehicle.js');
-const charactersSource = vehicleSource.slice(0, vehicleSource.indexOf('];', vehicleSource.indexOf('const CHARACTERS')) + 2);
-(0, eval)(`${charactersSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS;`);
+const end = 'keepFileColours: true }));';
+const charactersSource = vehicleSource.slice(0, vehicleSource.indexOf(end) + end.length);
+(0, eval)(`${charactersSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS;`);
 
 describe('unlock detection', () => {
     let tour;
@@ -58,9 +60,9 @@ describe('unlock detection', () => {
     });
 
     test('progress names the next bike and the legs still needed', () => {
-        expect(tour.unlockProgressText()).toBe("2 more legs to unlock Shane's Dirt Bike");
+        expect(tour.unlockProgressText()).toBe("2 more legs to unlock Shane's Light naked single");
         tour.markLegCompleted('mountain-dawn');
-        expect(tour.unlockProgressText()).toBe("1 more leg to unlock Shane's Dirt Bike");
+        expect(tour.unlockProgressText()).toBe("1 more leg to unlock Shane's Light naked single");
     });
 
     test('the rider screen opens on the new bike, badged NEW, ready to choose', () => {
@@ -86,5 +88,73 @@ describe('unlock detection', () => {
         tour.markLegCompleted('mountain-dawn');
         tour.showLegSelector();
         expect(document.getElementById('legInfoCard').textContent).toContain('1 more leg to unlock Shane');
+    });
+});
+
+describe('the riders\' unlock order', () => {
+    test('Guy unlocks after Lucy and before Alex', () => {
+        localStorage.clear();
+        const tour = new TourSystem();
+        expect(tour.riderDisplayOrder().map(c => c.id)).toEqual(['tim', 'shane', 'lucy', 'guy', 'alex', 'steve']);
+        expect(tour.characterUnlocks.guy).toBeGreaterThan(tour.characterUnlocks.lucy);
+    });
+});
+
+describe('the bike picker', () => {
+    let tour;
+    const done = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley'];
+
+    beforeEach(() => {
+        localStorage.clear();
+        document.body.innerHTML = '';
+        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: done }));
+        tour = new TourSystem();
+    });
+
+    afterEach(() => {
+        if (tour.keyboardHandler) document.removeEventListener('keydown', tour.keyboardHandler);
+    });
+
+    test('each rider starts on their first bike', () => {
+        CHARACTERS.forEach(c => expect(tour.getSelectedBike(c.id)).toBe(c.bikes[0]));
+        expect(tour.getSelectedBike('tim')).toBe('bike14_tmax');
+    });
+
+    test('cycles the focused rider\'s bikes, shows each one and remembers the choice per rider', () => {
+        const shown = [];
+        tour.onBikeShowcase = id => shown.push([id, tour.getSelectedBike(id)]);
+        tour.showRiderSelector('guy');
+        const card = () => document.getElementById('riderInfoCard');
+        expect(card().textContent).toContain('Retro scrambler twin (2017)');
+        expect(card().textContent).toContain('1 / 5');
+        document.getElementById('bikeNextBtn').click();
+        expect(tour.getSelectedBike('guy')).toBe('bike05_g310gs');
+        expect(card().textContent).toContain('Small adventure single (2018)');
+        document.getElementById('bikePrevBtn').click();
+        document.getElementById('bikePrevBtn').click();
+        expect(tour.getSelectedBike('guy')).toBe('bike12_tracer9gt');
+        expect(shown).toEqual([['guy', 'bike05_g310gs'], ['guy', 'bike04_scrambler'], ['guy', 'bike12_tracer9gt']]);
+        // Kept for the next visit, and for Guy only
+        expect(new TourSystem().getSelectedBike('guy')).toBe('bike12_tracer9gt');
+        expect(new TourSystem().getSelectedBike('lucy')).toBe('bike01_z650');
+        // The keyboard cycles it too
+        document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowDown' }));
+        expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
+    });
+
+    test('shows a rider with one bike without arrows, and names no maker', () => {
+        tour.showRiderSelector('tim');
+        expect(document.getElementById('bikeNextBtn')).toBeNull();
+        expect(document.getElementById('bikeName').textContent).toBe('Maxi scooter, dark grey (2022)');
+    });
+
+    test('ignores a saved bike the rider does not own, and a store it cannot read', () => {
+        localStorage.setItem('twistyBikes', JSON.stringify({ guy: 'bike13_panigale' }));
+        expect(new TourSystem().getSelectedBike('guy')).toBe('bike04_scrambler');
+        localStorage.setItem('twistyBikes', '{not json');
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(new TourSystem().getSelectedBike('guy')).toBe('bike04_scrambler');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved bike choices could not be read'), expect.anything());
+        warn.mockRestore();
     });
 });

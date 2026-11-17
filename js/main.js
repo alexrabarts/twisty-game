@@ -147,6 +147,7 @@ class Game {
         this.tourSystem.onViewLeaderboard = (legId) => this.showLeaderboardViewer(legId);
         this.tourSystem.onRiderShowcase = (id) => this.showcaseBikes ? this.focusRiderShowcase(id) : this.startRiderShowcase(id);
         this.tourSystem.onRiderShowcaseStart = (id) => this.startRiderShowcase(id);
+        this.tourSystem.onBikeShowcase = (id) => this.changeShowcaseBike(id);
         this.tourSystem.onTrackShowcase = (legIndex) => this.startTrackPreview(legIndex);
         this.tourSystem.riderTier = (id) => this.riderTier(id);
 
@@ -296,7 +297,7 @@ class Game {
             this.weatherSystem.prepare(this.atmosphereTrack.weatherTypes());
         }
 
-        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter);
+        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike());
         this.vehicle.environment = this.environment;
         if (this.weatherSystem) this.vehicle.setWeatherSystem(this.weatherSystem);
 
@@ -441,7 +442,7 @@ class Game {
         this.particles = new ParticleSystem(this.scene);
 
         console.log('Creating vehicle...');
-        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter);
+        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike());
         this.vehicle.environment = this.environment; // Pass environment reference for elevation
 
         // Connect weather system to vehicle
@@ -2882,57 +2883,15 @@ class Game {
 
             this.showcaseBikes = {};
             this.showcaseExtras = [];
+            this.showcaseSilhouette = silhouetteMaterial;
             this.riderDisplayOrder().forEach((c, i) => {
-                const v = new Vehicle(this.scene, null, c);
-                // Stage far below the world so previews never collide with track geometry
-                v.position.set(i * 14, -400, 0);
-                v.yawAngle = 0;
-                v.updateMesh();
-
-                // Run again when the modelled bike takes over from the
-                // procedural one, so it works from each material's lit colour
-                // and gives the same result however often it runs.
-                const tier = this.riderTier(c.id);
-                const shade = () => {
-                    if (tier === 'dimmed') {
-                        const uses = new Map();
-                        v.group.traverse(o => {
-                            if (o.isMesh && o.material) uses.set(o.material, (uses.get(o.material) || 0) + 1);
-                        });
-                        const palette = new Set(Object.values(v.palette || {}));
-                        uses.forEach((count, material) => {
-                            if (material.color) {
-                                if (!material.userData.lit) material.userData.lit = material.color.clone();
-                                // The procedural bike darkens a material once
-                                // for each part that wears it, so its shared
-                                // finishes go black and the one-off ones (the
-                                // helmet, the rims) stay readable. A modelled
-                                // bike has few parts: its palette finishes
-                                // take the dark end, the rest the light end.
-                                const factor = v.modelled ? (palette.has(material) ? 0.03 : 0.12) : Math.pow(0.22, count);
-                                material.color.copy(material.userData.lit).multiplyScalar(factor);
-                            }
-                            if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0;
-                        });
-                    } else if (tier === 'silhouette') {
-                        v.group.traverse(o => {
-                            if (o.isMesh && o.material !== silhouetteMaterial) {
-                                if (o.material && o.material.dispose) o.material.dispose();
-                                o.material = silhouetteMaterial;
-                            }
-                        });
-                    }
-                };
-                shade();
-                v.onModel = shade;
-
+                const v = this.buildShowcaseBike(c, i * 14);
                 const platform = new THREE.Mesh(platformGeometry, platformMaterial);
                 platform.position.set(v.position.x, v.position.y - 0.06, v.position.z);
                 platform.receiveShadow = true;
                 this.scene.add(platform);
                 this.showcaseExtras.push(platform);
 
-                this.showcaseBikes[c.id] = v;
             });
 
             // Showroom floor: glossy, fading out to the horizon haze so the
@@ -2969,13 +2928,94 @@ class Game {
         this.graphics.fixColorSpaces();
 
         this.showcaseMode = 'rider';
-        this.showcaseFocusId = focusId;
+        this.focusRiderShowcase(focusId);
         this.showcaseOrbitAngle = this.showcaseOrbitAngle || 0;
         this.startMenuShowcaseLoop();
     }
 
     focusRiderShowcase(focusId) {
         this.showcaseFocusId = focusId;
+        // Only the bike in view is fetched: the others keep their procedural
+        // stand-in until they are focused (BikeModels.dress fetches once),
+        // and a locked rider's silhouette never needs the file
+        const v = this.showcaseBikes && this.showcaseBikes[focusId];
+        if (v && !v.modelled && !v.dressing && this.riderTier(focusId) !== 'silhouette' && typeof BikeModels !== 'undefined') {
+            v.dressing = true;
+            BikeModels.dress(v);
+        }
+    }
+
+    // The bike the selected rider rides: their pick on the rider select
+    selectedBike() {
+        if (!this.selectedCharacter || !this.tourSystem.getSelectedBike) return null;
+        return this.tourSystem.getSelectedBike(this.selectedCharacter.id);
+    }
+
+    // One character's bike on the rider-select stage at `x`: their chosen
+    // bike, built procedural only (focusRiderShowcase dresses it), shaded by
+    // the rider's unlock tier
+    buildShowcaseBike(c, x) {
+        const bikeId = this.tourSystem.getSelectedBike ? this.tourSystem.getSelectedBike(c.id) : null;
+        const v = new Vehicle(this.scene, null, c, bikeId, { model: false });
+        // Stage far below the world so previews never collide with track geometry
+        v.position.set(x, -400, 0);
+        v.yawAngle = 0;
+        v.updateMesh();
+
+        // Run again when the modelled bike takes over from the
+        // procedural one, so it works from each material's lit colour
+        // and gives the same result however often it runs.
+        const tier = this.riderTier(c.id);
+        const silhouetteMaterial = this.showcaseSilhouette;
+        const shade = () => {
+            if (tier === 'dimmed') {
+                const uses = new Map();
+                v.group.traverse(o => {
+                    if (o.isMesh && o.material) uses.set(o.material, (uses.get(o.material) || 0) + 1);
+                });
+                const palette = new Set(Object.values(v.palette || {}));
+                uses.forEach((count, material) => {
+                    if (material.color) {
+                        if (!material.userData.lit) material.userData.lit = material.color.clone();
+                        // The procedural bike darkens a material once
+                        // for each part that wears it, so its shared
+                        // finishes go black and the one-off ones (the
+                        // helmet, the rims) stay readable. A modelled
+                        // bike has few parts: its palette finishes
+                        // take the dark end, the rest the light end.
+                        const factor = v.modelled ? (palette.has(material) ? 0.03 : 0.12) : Math.pow(0.22, count);
+                        material.color.copy(material.userData.lit).multiplyScalar(factor);
+                    }
+                    if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0;
+                });
+            } else if (tier === 'silhouette') {
+                v.group.traverse(o => {
+                    if (o.isMesh && o.material !== silhouetteMaterial) {
+                        if (o.material && o.material.dispose) o.material.dispose();
+                        o.material = silhouetteMaterial;
+                    }
+                });
+            }
+        };
+        shade();
+        v.onModel = shade;
+        this.showcaseBikes[c.id] = v;
+        return v;
+    }
+
+    // The rider select's bike picker moved: that character's stage bike
+    // becomes the bike now chosen
+    changeShowcaseBike(characterId) {
+        const old = this.showcaseBikes && this.showcaseBikes[characterId];
+        if (!old) return;
+        const c = CHARACTERS.find(character => character.id === characterId);
+        this.scene.remove(old.group);
+        old.onModel = null;
+        old.group.traverse(o => {
+            if (o.isMesh && o.material && o.material !== this.showcaseSilhouette && o.material.dispose) o.material.dispose();
+        });
+        this.buildShowcaseBike(c, old.position.x);
+        if (this.showcaseFocusId === characterId) this.focusRiderShowcase(characterId);
     }
 
     startTrackPreview(legIndex) {

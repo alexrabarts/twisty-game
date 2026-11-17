@@ -5,17 +5,19 @@
 // spin), is centred on the axle, is a believable size, clears the swingarm,
 // the forks, the frame and the wheel, and its caliper straddles it.
 //
-// Sizes: the bikes are modelled a little under life size (the dirt bike's
-// 18-inch rear rim is 0.40 m across), so a 200-320 mm disc is a radius of
-// 0.10-0.16 m here.
+// Sizes: the procedural kinds are modelled a little under life size (the
+// dirt bike's 18-inch rear rim is 0.40 m across), the detailed bikes at life
+// size, so a 200-340 mm disc is a radius of 0.10-0.17 m (the scrambler's
+// front disc is 330 mm). Each bike's axles are its own (vehicle.axles).
 import { readFileSync } from 'node:fs';
 import { Blob } from 'node:buffer';
 import { TextDecoder } from 'node:util';
 import { canvasStub, loadScript, realThree } from '../helpers/load-game.js';
 
 const root = new URL('../../', import.meta.url);
-const RADIUS = [0.1, 0.16];
+const RADIUS = [0.1, 0.17];
 const AXLE = { disc_rear: [0.3, -0.7], disc_front: [0.3, 0.7] };
+const WHEEL = { disc_rear: 'rear', disc_front: 'front' };
 const NODE = { disc_rear: 'rearDisc', disc_front: 'frontDisc' };
 
 function load() {
@@ -28,7 +30,7 @@ function load() {
     };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'fetch', 'Blob', 'TextDecoder', 'performance',
-        `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels };`
+        `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels, BIKE_MODELS };`
     );
     return { THREE, ...factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance) };
 }
@@ -94,10 +96,15 @@ export function cuts(a, b, c, disc, depth = 0) {
     return cuts(a, ab, ca, disc, depth + 1) || cuts(ab, b, bc, disc, depth + 1) || cuts(ca, bc, c, disc, depth + 1) || cuts(ab, bc, ca, disc, depth + 1);
 }
 
-// Every mesh under `object` with the material name the model file gave it
+// Every mesh under `object` with the material name the model file gave it,
+// in the level of detail drawn near the camera (a THREE.LOD's first level)
 function meshes(object, names) {
     const found = [];
-    object.traverse(o => { if (o.isMesh) found.push({ mesh: o, name: names.get(o.geometry) }); });
+    const visit = o => {
+        if (o.isMesh) found.push({ mesh: o, name: names.get(o.geometry) });
+        (o.isLOD ? [o.levels[0].object] : o.children).forEach(visit);
+    };
+    visit(object);
     return found;
 }
 
@@ -124,16 +131,20 @@ function triangles(mesh, visit) {
 }
 
 const game = load();
-const bikes = Object.entries(game.BikeModels.BIKES).map(([id, file]) => [file.replace(/.*\//, ''), id, file]);
+// Every detailed bike and every procedural kind's file, ridden by Steve
+const bikes = [...Object.keys(game.BIKE_MODELS), ...Object.keys(game.BikeModels.MODELS)].map(id => [game.BikeModels.entry(id).file.replace(/.*\//, ''), id, game.BikeModels.entry(id).file]);
 
 describe.each(bikes)('%s brake discs in the game', (label, id, file) => {
     let vehicle, names;
+    const axle = node => vehicle.axles[WHEEL[node]].slice(0, 2);
     beforeAll(async () => {
-        await game.BikeModels.preload();
-        vehicle = new game.Vehicle(new game.THREE.Scene(), null, game.CHARACTERS.find(c => c.id === id));
+        await game.BikeModels.preload([id]);
+        const rider = { ...game.CHARACTERS[0], bikes: [id] };
+        vehicle = new game.Vehicle(new game.THREE.Scene(), null, rider, id);
         const model = await game.SceneAssets.loadModel(file);
         names = new Map();
-        for (const primitives of model.meshes.values()) for (const { geometry, material } of primitives) names.set(geometry, material.name);
+        const levels = model.groups.size ? [...model.groups.values()] : [model];
+        for (const level of levels) for (const primitives of level.meshes.values()) for (const { geometry, material } of primitives) names.set(geometry, material.name);
     });
 
     // The bike at rest at the origin, its wheels spun to `turn`
@@ -151,7 +162,7 @@ describe.each(bikes)('%s brake discs in the game', (label, id, file) => {
     // Each disc of a node, split by side for a twin-disc bike
     function discs(node) {
         const list = meshes(vehicle[NODE[node]], names).flatMap(({ mesh }) => points(mesh));
-        return [-1, 1].map(side => list.filter(p => Math.sign(p[0]) === side)).filter(side => side.length > 20).map(side => stance(side, AXLE[node]));
+        return [-1, 1].map(side => list.filter(p => Math.sign(p[0]) === side)).filter(side => side.length > 20).map(side => stance(side, axle(node)));
     }
 
     test('swaps in the modelled discs', () => {
@@ -184,10 +195,10 @@ describe.each(bikes)('%s brake discs in the game', (label, id, file) => {
             others.push(...meshes(child, names));
         });
         for (const stood of discs(node)) {
-            const disc = { ...stood, axle: AXLE[node], inner: stood.radius * 0.5, x: [stood.x[0] - 0.001, stood.x[1] + 0.001] };
+            const disc = { ...stood, axle: axle(node), inner: stood.radius * 0.5, x: [stood.x[0] - 0.001, stood.x[1] + 0.001] };
             // The caliper on this disc's side and its end of the bike
             const callers = others.filter(({ name }) => name === 'caliper').map(({ mesh }) => points(mesh))
-                .map(list => list.filter(p => Math.sign(p[0]) === Math.sign(stood.mid[0]) && Math.abs(p[2] - AXLE[node][1]) < stood.radius * 1.3))
+                .map(list => list.filter(p => Math.sign(p[0]) === Math.sign(stood.mid[0]) && Math.abs(p[2] - axle(node)[1]) < stood.radius * 1.3))
                 .filter(list => list.length);
             expect(callers.length).toBeGreaterThan(0);
             for (const list of callers) {

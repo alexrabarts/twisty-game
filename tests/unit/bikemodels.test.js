@@ -3,6 +3,8 @@
 // vehicle's procedural model for the modelled one keeps every named part on
 // its pivot, the bike's dimensions, the character's colours and the parts
 // Vehicle.updateMesh animates. A file that fails leaves the procedural bike.
+// The detailed bikes (assets/bikes/detail) sit on their own axles, keep their
+// own colours, seat the rider from their own marks and load only when shown.
 // Real modules on real three r150; fetch reads the files from disk.
 import { readFileSync, statSync } from 'node:fs';
 import { Blob } from 'node:buffer';
@@ -10,11 +12,15 @@ import { TextDecoder } from 'node:util';
 import { canvasStub, loadScript, realThree } from '../helpers/load-game.js';
 
 const root = new URL('../../', import.meta.url);
-// The menu downloads every bike, so the download grows with the roster: the
-// shared files (rider, crew) have a budget of their own, and the bikes one
-// that is a fixed share per bike on top of each file's own limit
-const BUDGET = { bike: 12000, rider: 5000, crew: 2600, file: 400 * 1024, shared: 256 * 1024, perBike: 360 * 1024 };
-const IDS = ['steve', 'alex', 'tim', 'shane', 'lucy'];
+// A bike file's size and each level's triangles; the shared rider and crew
+// files have budgets of their own. The menu fetches no bike until one is
+// shown, then the rider and that one bike.
+const BUDGET = { file: 1.2 * 1024 * 1024, near: 40000, far: 10000, rider: 5000, crew: 2600, shared: 256 * 1024, menu: 1.5 * 1024 * 1024 };
+// The procedural kinds, each ridden as the character who rode it, in that
+// character's old paint
+const KINDS = { steve: ['sport', '0xcc1111'], alex: ['adventure', '0xc9a227'], tim: ['scooter', '0x8d96a8'], shane: ['dirt', '0xff6600'], lucy: ['naked', '0x16181c'] };
+const IDS = Object.keys(KINDS);
+const KIND_IDS = Object.values(KINDS).map(([kind]) => kind);
 const PIVOTS = ['rearWheel', 'frontWheel', 'rearDisc', 'frontDisc', 'leftFork', 'rightFork', 'handlebar', 'brakeLight', 'headlight', 'rider'];
 
 function load({ failing = [], held = false } = {}) {
@@ -32,18 +38,29 @@ function load({ failing = [], held = false } = {}) {
     };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'fetch', 'Blob', 'TextDecoder', 'performance',
-        `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels, AIMotorcycle };`
+        `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels, AIMotorcycle, BIKE_MODELS };`
     );
-    const game = factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance);
-    return { THREE, log, release, ...game };
+    const fetched = [];
+    const game = factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, async url => { fetched.push(url); return fetch(url); }, Blob, TextDecoder, performance);
+    return { THREE, log, release, fetched, ...game };
 }
 
-const character = (game, id) => game.CHARACTERS.find(c => c.id === id);
+// The character `id` on the procedural kind they used to ride, in its old paint
+const character = (game, id) => {
+    const c = game.CHARACTERS.find(c => c.id === id);
+    return KINDS[id] ? { ...c, bikes: [KINDS[id][0]], bikeColor: KINDS[id][1] } : c;
+};
 
 function ride(game, id) {
     const scene = new game.THREE.Scene();
     const vehicle = new game.Vehicle(scene, null, character(game, id));
     return vehicle;
+}
+
+// The character who owns a detailed bike, on it
+function rideBike(game, bike, options) {
+    const owner = game.CHARACTERS.find(c => c.bikes.includes(bike));
+    return new game.Vehicle(new game.THREE.Scene(), null, owner, bike, options);
 }
 
 // What the rest of the game reads off a bike: where its parts pivot, how big
@@ -69,11 +86,20 @@ function measure(game, vehicle) {
     };
 }
 
-function triangles(object) {
+// The triangles drawn of `object`, at level `level` of each THREE.LOD in it
+function triangles(object, level = 0) {
     let count = 0;
-    object.traverse(o => {
+    const visit = o => {
         if (o.isMesh) count += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
-    });
+        (o.isLOD ? [o.levels[Math.min(level, o.levels.length - 1)].object] : o.children).forEach(visit);
+    };
+    visit(object);
+    return count;
+}
+
+function levelTriangles(level) {
+    let count = 0;
+    for (const primitives of level.meshes.values()) for (const { geometry } of primitives) count += (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
     return count;
 }
 
@@ -86,14 +112,42 @@ const named = (object, name) => {
 describe('the bike and rider files', () => {
     const game = load();
     const shared = [game.BikeModels.RIDER, game.BikeModels.CREW];
-    const bikes = Object.values(game.BikeModels.MODELS);
+    const bikes = [...Object.values(game.BikeModels.MODELS), ...Object.values(game.BIKE_MODELS).map(bike => bike.file)];
     const size = file => statSync(new URL(file, root)).size;
     const sum = list => list.reduce((a, b) => a + b, 0);
 
-    test('each file, the shared files and the bikes fit the download budget', () => {
-        [...shared, ...bikes].forEach(file => expect(size(file)).toBeLessThanOrEqual(BUDGET.file));
+    test('each bike file and the shared files fit the download budget', () => {
+        bikes.forEach(file => expect(size(file)).toBeLessThanOrEqual(BUDGET.file));
         expect(sum(shared.map(size))).toBeLessThanOrEqual(BUDGET.shared);
-        expect(sum(bikes.map(size))).toBeLessThanOrEqual(BUDGET.perBike * bikes.length);
+    });
+
+    test('each detailed bike has a near and a far level of the same parts, within their triangle budgets', async () => {
+        for (const bike of Object.values(game.BIKE_MODELS)) {
+            const model = await game.SceneAssets.loadModel(bike.file);
+            const near = model.groups.get('lod0');
+            const far = model.groups.get('lod1');
+            expect(near).toBeTruthy();
+            expect(far).toBeTruthy();
+            expect([...far.meshes.keys()].sort()).toEqual([...near.meshes.keys()].sort());
+            ['grip', 'peg'].forEach(mark => expect(near.places.has(mark)).toBe(true));
+            expect(near.places.has('seat') || Array.isArray(bike.seat)).toBe(true);
+            expect(levelTriangles(near)).toBeLessThanOrEqual(BUDGET.near);
+            expect(levelTriangles(far)).toBeLessThanOrEqual(BUDGET.far);
+        }
+    });
+
+    test('the reader takes each named group whatever order the file lists them in', async () => {
+        // The Tiger lists lod0 first, the rest lod1 first
+        for (const file of [game.BIKE_MODELS.bike10_tiger900.file, game.BIKE_MODELS.bike01_z650.file]) {
+            const model = await game.SceneAssets.loadModel(file);
+            const json = JSON.parse(new TextDecoder().decode(readFileSync(new URL(file, root)).subarray(20, 20 + readFileSync(new URL(file, root)).readUInt32LE(12))));
+            const children = name => json.nodes.find(n => n.name === name).children.map(i => json.nodes[i]);
+            for (const name of ['lod0', 'lod1']) {
+                const body = children(name).find(n => n.name === 'body');
+                const [geometry] = model.groups.get(name).meshes.get('body');
+                expect(geometry.geometry.attributes.position.count).toBe(json.accessors[json.meshes[body.mesh].primitives[0].attributes.POSITION].count);
+            }
+        }
     });
 
     test('the reader takes their byte normals, vertex colours, pivots and marks', async () => {
@@ -123,15 +177,35 @@ describe('the bike and rider files', () => {
         }
     });
 
-    test('each bike and the seated rider are within their triangle budgets', async () => {
-        await game.BikeModels.preload();
+    test('each procedural kind and the seated rider are within their triangle budgets', async () => {
+        await game.BikeModels.preload(Object.keys(game.BikeModels.MODELS));
         for (const id of IDS) {
             const vehicle = ride(game, id);
             expect(vehicle.modelled).toBe(true);
             const rider = triangles(vehicle.rider);
             expect(rider).toBeLessThanOrEqual(BUDGET.rider);
-            expect(triangles(vehicle.group) - rider).toBeLessThanOrEqual(BUDGET.bike);
+            expect(triangles(vehicle.group) - rider).toBeLessThanOrEqual(BUDGET.near);
         }
+    });
+});
+
+describe('the menu', () => {
+    test('fetches no bike until one is shown, then only the rider and that bike', async () => {
+        const game = load();
+        // The rider select's stage: every rider's bike, procedural until shown
+        const stage = game.CHARACTERS.map(c => new game.Vehicle(new game.THREE.Scene(), null, c, null, { model: false }));
+        await new Promise(done => setTimeout(done, 0));
+        expect(game.fetched).toEqual([]);
+        expect(stage.every(v => !v.modelled && v.group.children.length > 40)).toBe(true);
+
+        // Focusing Tim shows his bike: the procedural stand-in until it is in
+        const tim = stage.find(v => v.character.id === 'tim');
+        expect(await game.BikeModels.dress(tim)).toBe(true);
+        expect(tim.modelled).toBe(true);
+        expect([...new Set(game.fetched)].sort()).toEqual([game.BikeModels.RIDER, game.BIKE_MODELS.bike14_tmax.file].sort());
+        const bytes = [...new Set(game.fetched)].reduce((total, file) => total + statSync(new URL(file, root)).size, 0);
+        expect(bytes).toBeLessThanOrEqual(BUDGET.menu);
+        expect(stage.filter(v => v.modelled)).toEqual([tim]);
     });
 });
 
@@ -146,7 +220,7 @@ describe.each(IDS)('swapping the model of %s', id => {
 
     beforeAll(async () => {
         game.release();
-        await game.BikeModels.preload();
+        await game.BikeModels.preload(KIND_IDS);
         await new Promise(done => setTimeout(done, 0));
         modelled = measure(game, vehicle);
     });
@@ -272,10 +346,157 @@ describe.each(IDS)('swapping the model of %s', id => {
     });
 });
 
+describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
+    const game = load();
+    let vehicle, file, near;
+
+    beforeAll(async () => {
+        await game.BikeModels.preload([id]);
+        vehicle = rideBike(game, id);
+        vehicle.group.position.set(0, 0, 0);
+        vehicle.group.rotation.set(0, 0, 0);
+        vehicle.group.updateMatrixWorld(true);
+        file = await game.SceneAssets.loadModel(game.BIKE_MODELS[id].file);
+        near = file.groups.get('lod0');
+    });
+
+    const box = object => new game.THREE.Box3().setFromObject(object);
+    const world = object => object.getWorldPosition(new game.THREE.Vector3());
+
+    test('is modelled, with no error, its parts in a near and a far level', () => {
+        expect(vehicle.modelled).toBe(true);
+        expect(vehicle.model).toBe(id);
+        expect(game.log).toEqual([]);
+        for (const name of ['rearWheel', 'frontWheel', 'rearDisc', 'frontDisc', 'leftFork', 'rightFork', 'handlebar']) {
+            expect(vehicle[name].isLOD).toBe(true);
+            expect(vehicle[name].levels.map(level => level.distance)).toEqual([0, game.BikeModels.FAR]);
+            expect(vehicle[name].parent).toBe(vehicle.group);
+        }
+        expect(triangles(vehicle.group, 0) - triangles(vehicle.rider)).toBeLessThanOrEqual(BUDGET.near);
+        expect(triangles(vehicle.group, 1) - triangles(vehicle.rider)).toBeLessThanOrEqual(BUDGET.far);
+    });
+
+    test('turns its wheels on its own axles, each pivot in the middle of its tyre, the tyres on the ground', () => {
+        for (const [end, node] of [['rear', 'rearWheel'], ['front', 'frontWheel']]) {
+            const [y, z, radius] = vehicle.axles[end];
+            expect(vehicle[node].position.toArray()).toEqual([expect.closeTo(0, 6), expect.closeTo(y, 6), expect.closeTo(z, 6)]);
+            const tyre = box(vehicle[node].levels[0].object);
+            expect((tyre.min.y + tyre.max.y) / 2).toBeCloseTo(y, 3);
+            expect((tyre.min.z + tyre.max.z) / 2).toBeCloseTo(z, 3);
+            expect(tyre.min.y).toBeCloseTo(0, 2);
+            expect(radius).toBeCloseTo(y, 2);
+            expect(radius).toBeGreaterThan(0.25);
+            expect(radius).toBeLessThan(0.36);
+            expect(Math.abs(z)).toBeGreaterThan(0.65);
+        }
+        // Nothing of the bike under the ground
+        expect(box(vehicle.group).min.y).toBeGreaterThan(-0.005);
+        // Each disc turns about its wheel's axle
+        expect(vehicle.rearDisc.position.y).toBeCloseTo(vehicle.axles.rear[0], 3);
+        expect(vehicle.rearDisc.position.z).toBeCloseTo(vehicle.axles.rear[1], 3);
+        expect(vehicle.frontDisc.position.y).toBeCloseTo(vehicle.axles.front[0], 3);
+        expect(vehicle.frontDisc.position.z).toBeCloseTo(vehicle.axles.front[1], 3);
+    });
+
+    test('spins each wheel by its own radius and wheelies about its own rear axle', () => {
+        vehicle.wheelRotation = 0;
+        vehicle.speed = 30;
+        vehicle.currentDeltaTime = 1 / 60;
+        vehicle.updateMesh();
+        const [, , rear] = vehicle.axles.rear;
+        const [, , front] = vehicle.axles.front;
+        expect(vehicle.rearWheel.rotation.x).toBeCloseTo(30 / 60 / rear, 6);
+        expect(vehicle.frontWheel.rotation.x).toBeCloseTo(30 / 60 / front, 6);
+        expect(vehicle.frontDisc.rotation.x).toBe(vehicle.frontWheel.rotation.x);
+
+        vehicle.isWheelie = true;
+        vehicle.wheelieAngle = 0.5;
+        vehicle.yawAngle = 0;
+        vehicle.position.set(0, 0, 0);
+        vehicle.updateMesh();
+        vehicle.group.updateMatrixWorld(true);
+        const axle = vehicle.rearWheel.getWorldPosition(new game.THREE.Vector3());
+        expect(axle.y).toBeCloseTo(vehicle.axles.rear[0], 3);
+        expect(axle.z).toBeCloseTo(vehicle.axles.rear[1], 3);
+        vehicle.isWheelie = false;
+        vehicle.wheelieAngle = 0;
+        vehicle.speed = 0;
+        vehicle.updateMesh();
+        vehicle.group.position.set(0, 0, 0);
+        vehicle.group.rotation.set(0, 0, 0);
+        vehicle.group.updateMatrixWorld(true);
+    });
+
+    test('seats the rider from its own marks: hands on the grips, feet on the pegs, hips on the seat', () => {
+        const grip = near.places.get('grip');
+        const peg = near.places.get('peg');
+        const seat = near.places.get('seat');
+        const top = seat ? seat.y : game.BIKE_MODELS[id].seat[0];
+        const gloves = named(vehicle.rider, 'glove').map(world);
+        const boots = named(vehicle.rider, 'boot').map(world);
+        expect(gloves.length).toBe(2);
+        gloves.forEach(glove => {
+            expect(Math.abs(Math.abs(glove.x) - Math.abs(grip.x))).toBeLessThan(0.01);
+            expect(glove.y).toBeCloseTo(grip.y, 2);
+            expect(glove.z).toBeCloseTo(grip.z, 2);
+        });
+        boots.forEach(boot => {
+            expect(Math.abs(Math.abs(boot.x) - Math.abs(peg.x))).toBeLessThan(0.01);
+            expect(boot.y - peg.y).toBeGreaterThan(0.02);
+            expect(boot.y - peg.y).toBeLessThan(0.08);
+        });
+        // The hip (where the thighs start, 0.17 down the torso from its
+        // centre) rests on the seat's top, over the seat
+        const spec = vehicle.riderSpec;
+        const hip = vehicle.rider.position.clone().add(new game.THREE.Vector3(0, -Math.cos(spec.torsoLean), -Math.sin(spec.torsoLean)).multiplyScalar(0.17));
+        expect(hip.y - top).toBeGreaterThan(0.05);
+        expect(hip.y - top).toBeLessThan(0.2);
+        expect(Math.abs(hip.z - (seat ? seat.z : game.BIKE_MODELS[id].seat[1]))).toBeLessThan(0.05);
+        named(vehicle.rider, 'thigh').forEach(part => {
+            // A limb runs along its +y from its first joint to its second
+            const end = part.position.clone().add(vehicle.rider.position).sub(new game.THREE.Vector3(0, part.scale.y * game.BikeModels.LENGTHS.thigh / 2, 0).applyQuaternion(part.quaternion));
+            expect(end.distanceTo(hip.clone().setX(end.x))).toBeLessThan(0.02);
+        });
+        expect(vehicle.rider.position.toArray()).toEqual(vehicle.riderBasePos.toArray());
+        ['upper_arm', 'forearm', 'thigh', 'shin'].forEach(name => {
+            named(vehicle.rider, name).forEach(part => {
+                expect(part.scale.y).toBeGreaterThan(0.8);
+                expect(part.scale.y).toBeLessThan(1.3);
+            });
+        });
+    });
+
+    test('keeps its file\'s colours, its paint taking the crash tint and coming back on a reset', () => {
+        const paint = game.BIKE_MODELS[id].paint;
+        expect(vehicle.frame.material.name).toBe('paint');
+        expect(vehicle.frame.material.color.getHex()).toBe(paint);
+        expect(parseInt(vehicle.bikeColor)).toBe(paint);
+        const source = new Map();
+        for (const primitives of near.meshes.values()) for (const { material } of primitives) source.set(material.name, material.color.getHex());
+        const drawn = [vehicle.rearWheel, vehicle.frontWheel, vehicle.handlebar, vehicle.leftFork];
+        drawn.forEach(part => part.traverse(o => {
+            if (o.isMesh) expect(o.material.color.getHex()).toBe(source.get(o.material.name));
+        }));
+        vehicle.frame.material.color.setHex(0xff0000);
+        vehicle.reset();
+        expect(vehicle.frame.material.color.getHex()).toBe(paint);
+        // Two of one bike share geometry and keep their own paint
+        const other = rideBike(game, id);
+        expect(other.frame.geometry).toBe(vehicle.frame.geometry);
+        expect(other.frame.material).not.toBe(vehicle.frame.material);
+    });
+
+    test('shows its luggage only if its entry does', () => {
+        const has = near.meshes.has('luggage');
+        expect(!!vehicle.luggage).toBe(has);
+        if (has) expect(vehicle.luggage.visible).toBe(!!game.BIKE_MODELS[id].luggage);
+    });
+});
+
 describe('when the files are already in', () => {
     const game = load();
 
-    beforeAll(() => game.BikeModels.preload());
+    beforeAll(() => game.BikeModels.preload(KIND_IDS));
 
     test('a new vehicle is modelled as it is built', () => {
         const vehicle = ride(game, 'steve');
@@ -302,7 +523,7 @@ describe('a bike that is being ridden when its files arrive', () => {
         vehicle.prevRenderPos = vehicle.position.clone();
         const frame = vehicle.frame;
         game.release();
-        await game.BikeModels.preload();
+        await game.BikeModels.preload(KIND_IDS);
         await new Promise(done => setTimeout(done, 0));
         expect(vehicle.modelled).toBeFalsy();
         expect(vehicle.frame).toBe(frame);
@@ -323,7 +544,7 @@ describe('a bike the rider select has blacked out before its files arrive', () =
         let told = 0;
         vehicle.onModel = () => { told++; };
         game.release();
-        await game.BikeModels.preload();
+        await game.BikeModels.preload(KIND_IDS);
         await new Promise(done => setTimeout(done, 0));
         expect(game.log).toEqual([]);
         expect(vehicle.modelled).toBe(true);
@@ -341,7 +562,7 @@ describe.each([
     const parts = vehicle.group.children.slice();
 
     test('keeps its procedural model, whole and working', async () => {
-        await game.BikeModels.preload();
+        await game.BikeModels.preload(KIND_IDS);
         expect(await game.BikeModels.dress(vehicle)).toBe(false);
         expect(vehicle.modelled).toBeFalsy();
         expect(vehicle.group.children).toEqual(parts);
@@ -358,8 +579,8 @@ describe('a bike file that lacks a part', () => {
     const game = load();
 
     test('is refused before anything of the procedural bike is removed', async () => {
-        await game.BikeModels.preload();
-        const model = await game.SceneAssets.loadModel(game.BikeModels.BIKES.steve);
+        await game.BikeModels.preload(KIND_IDS);
+        const model = await game.SceneAssets.loadModel(game.BikeModels.MODELS.sport);
         const fork = model.meshes.get('fork_right');
         model.meshes.delete('fork_right');
         const vehicle = ride(game, 'steve');
@@ -376,7 +597,7 @@ describe('a touring-crew rider', () => {
     const options = { color: 0x0000ff, style: 'sport', riderName: 'Guy', helmetColor: 0xffffff, suitColor: 0x4a4a4a };
     const crew = () => new game.AIMotorcycle(new game.THREE.Scene(), null, options);
 
-    beforeAll(() => game.BikeModels.preload());
+    beforeAll(() => game.BikeModels.preload(KIND_IDS));
 
     test('rides the low-detail bike in its own colours, on geometry the crew shares', () => {
         const a = crew();
@@ -415,7 +636,7 @@ describe('a touring-crew rider', () => {
 
     test('keeps the procedural bike when the files fail', async () => {
         const broken = load({ failing: ['crew.glb'] });
-        await broken.BikeModels.preload();
+        await broken.BikeModels.preload(KIND_IDS);
         const bike = new broken.AIMotorcycle(new broken.THREE.Scene(), null, options);
         const parts = bike.bikeGroup.children.slice();
         expect(await broken.BikeModels.crew(bike)).toBe(false);

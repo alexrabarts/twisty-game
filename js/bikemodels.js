@@ -1,16 +1,23 @@
-// The Blender-made bikes and rider (tools/blender/bike_*.py and rider.py,
-// built into assets/bikes) in place of the parts Vehicle builds from
-// primitives. Vehicle.createMesh builds its procedural model first and then
-// calls BikeModels.dress(): with the files already in, the swap is immediate;
-// otherwise it happens when they arrive, or at the next reset if the bike is
-// being ridden by then. A file that fails leaves the procedural model.
+// The Blender-made bikes and rider (tools/blender/bike_*.py, rider.py and
+// tools/blender/bikes, built into assets/bikes and assets/bikes/detail) in
+// place of the parts Vehicle builds from primitives. Vehicle.createMesh
+// builds its procedural model first, which stands in while the file loads,
+// and then calls BikeModels.dress(): with the files already in, the swap is
+// immediate; otherwise it happens when they arrive, or at the next reset if
+// the bike is being ridden by then. A file that fails leaves the procedural
+// model. Only the files of a bike that is shown are fetched: nothing loads
+// with the menu, and the rider select fetches the bike it shows.
 //
-// The swap keeps Vehicle's contract: the same named parts on the same pivots
-// (wheels, discs, forks, bar, lights, rider and limbs), the same paint
-// material on this.frame for the crash and wheelie tints, and the rider posed
-// from the same numbers. Physics, handling and the camera read none of it.
+// The swap keeps Vehicle's contract: the same named parts (wheels, discs,
+// forks, bar, lights, rider and limbs), the same paint material on
+// this.frame for the crash and wheelie tints, and the rider seated from the
+// bike's own grip, peg and seat marks. A detailed bike brings its own axles
+// (vehicle.axles), which the wheel spin and the wheelie pivot read, its own
+// colours and its own luggage. Physics, handling and the camera read none of it.
 const BikeModels = (() => {
-  // The file of each kind of bike (Vehicle.BIKES)
+  // The file of each procedural kind of bike (Vehicle.BIKES). These were
+  // written with +x on the rider's right, so they are mirrored like the
+  // procedural bike (Vehicle.mirrorParts).
   const MODELS = {
     sport: "assets/bikes/sport.glb",
     adventure: "assets/bikes/adventure.glb",
@@ -18,8 +25,9 @@ const BikeModels = (() => {
     dirt: "assets/bikes/dirt.glb",
     naked: "assets/bikes/naked.glb",
   };
-  // The file each character's bike is read from, by character id
-  const BIKES = Object.fromEntries(CHARACTERS.map((character) => [character.id, MODELS[Vehicle.bikeOf(character)]]));
+  const KINDS = Object.fromEntries(Object.entries(MODELS).map(([id, file]) => [id, { id, file, mirror: true }]));
+  // The file each character's first bike is read from, by character id
+  const BIKES = Object.fromEntries(CHARACTERS.map((character) => [character.id, entry(Vehicle.bikeOf(character)).file]));
   const RIDER = "assets/bikes/rider.glb";
   // The sport bike at a fifth of the detail, for the touring crew (js/traffic.js)
   const CREW = "assets/bikes/crew.glb";
@@ -29,44 +37,154 @@ const BikeModels = (() => {
   const LENGTHS = { upper_arm: 0.31, forearm: 0.3, thigh: 0.42, shin: 0.42 };
   // Glow of the lit materials, which the reader does not take from the file
   const GLOW = { signal: [0x9a5500, 0.4], reflector: [0x550000, 0.5] };
+  // A detailed bike's own colour on these, and the lighting of the palette's
+  // material of that name (the lit lens, the see-through screen, the dash)
+  const LIT = ["headlight", "glass", "dash"];
+  // Beyond this many metres from the camera a detailed bike draws its lod1
+  const FAR = 30;
+  // Where the hip sits over a seat mark (the top of the seat): the pelvis
+  // and the seat's padding under it
+  const HIP = 0.12;
 
-  // Parsed files, once they are in
+  // What is known of a bike, by BIKE_MODELS id or kind
+  function entry(id) {
+    return BIKE_MODELS[id] || KINDS[id] || KINDS.sport;
+  }
+
+  // Parsed files, once they are in and made ready (prepare)
   const arrived = new Map();
 
   function load(url) {
     return SceneAssets.loadModel(url).then((model) => {
-      arrived.set(url, model);
-      return model;
+      if (!arrived.has(url)) arrived.set(url, url === RIDER ? model : prepare(model, url));
+      return arrived.get(url);
     });
   }
 
   function file(vehicle) {
-    return MODELS[vehicle.bike] || MODELS.sport;
+    return entry(vehicle.model || vehicle.bike).file;
   }
 
-  // Starts every download, so a ride or the rider select finds them in
-  function preload() {
-    return Promise.all([RIDER, CREW, ...Object.values(MODELS)].map((url) => load(url).catch((error) => {
+  // Starts the downloads a ride needs: the rider, the crew's bike and each
+  // character's first bike, or the bikes named. The menu calls none of it.
+  function preload(ids = CHARACTERS.map((character) => Vehicle.bikeOf(character))) {
+    const urls = new Set([RIDER, CREW, ...ids.map((id) => entry(id).file)]);
+    return Promise.all([...urls].map((url) => load(url).catch((error) => {
       console.error(`BikeModels: ${url} did not load; its bike keeps the procedural model:`, error);
       return null;
     })));
   }
 
+  // A bike file as its levels of detail ([lod0, lod1], or the file alone
+  // when it has no groups), each { meshes, places }, done once per file and
+  // in place: mirrored where its entry says so, and each wheel's pivot moved
+  // onto its axle (the middle of its tyre), where a file put it elsewhere
+  function prepare(model, url) {
+    const known = [...Object.values(BIKE_MODELS), ...Object.values(KINDS), { file: CREW, mirror: true }].find((bike) => bike.file === url);
+    const levels = model.groups && model.groups.has("lod0") ? ["lod0", "lod1"].filter((name) => model.groups.has(name)).map((name) => model.groups.get(name)) : [model];
+    for (const level of levels) {
+      if (known && known.mirror) mirror(level);
+      for (const name of ["wheel_rear", "wheel_front"]) centre(level, name);
+    }
+    return { levels, url };
+  }
+
+  // A level's geometry and places mirrored across x, its triangles turned
+  // back to face outward
+  function mirror(level) {
+    const done = new Set();
+    for (const primitives of level.meshes.values()) {
+      for (const { geometry } of primitives) {
+        if (done.has(geometry)) continue;
+        done.add(geometry);
+        const position = geometry.attributes.position;
+        for (let i = 0; i < position.count; i++) position.setX(i, -position.getX(i));
+        const normal = geometry.attributes.normal;
+        if (normal) {
+          const array = normal.array;
+          const limit = array instanceof Int8Array ? 127 : array instanceof Int16Array ? 32767 : Infinity;
+          for (let i = 0; i < normal.count; i++) array[i * normal.itemSize] = Math.min(limit, -array[i * normal.itemSize]);
+        }
+        const index = geometry.index;
+        if (index) {
+          for (let i = 0; i < index.count; i += 3) {
+            const b = index.getX(i + 1);
+            index.setX(i + 1, index.getX(i + 2));
+            index.setX(i + 2, b);
+          }
+        } else {
+          for (const attribute of Object.values(geometry.attributes)) {
+            const size = attribute.itemSize;
+            const array = attribute.array;
+            for (let i = 0; i < attribute.count; i += 3) {
+              for (let c = 0; c < size; c++) {
+                const t = array[(i + 1) * size + c];
+                array[(i + 1) * size + c] = array[(i + 2) * size + c];
+                array[(i + 2) * size + c] = t;
+              }
+            }
+          }
+        }
+        position.needsUpdate = true;
+        geometry.computeBoundingBox();
+        geometry.computeBoundingSphere();
+      }
+    }
+    for (const place of level.places.values()) place.x = -place.x;
+  }
+
+  // The wheel's pivot onto the middle of its tyre, its geometry moved the other way
+  function centre(level, name) {
+    const primitives = level.meshes.get(name);
+    if (!primitives) return;
+    const place = level.places.get(name);
+    const box = new THREE.Box3();
+    for (const { geometry } of primitives) box.union(geometry.boundingBox);
+    const mid = box.getCenter(new THREE.Vector3());
+    if (Math.abs(mid.y) < 1e-4 && Math.abs(mid.z) < 1e-4) return;
+    for (const { geometry } of primitives) {
+      geometry.translate(0, -mid.y, -mid.z);
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+    }
+    place.y += mid.y;
+    place.z += mid.z;
+  }
+
+  // A wheel's axle and radius, [y, z, radius], from the drawn level
+  function axle(level, name) {
+    const box = new THREE.Box3();
+    for (const { geometry } of level.meshes.get(name)) box.union(geometry.boundingBox);
+    const place = level.places.get(name);
+    return [place.y, place.z, (box.max.y - box.min.y) / 2];
+  }
+
   const camel = (name) => name.replace(/_(.)/g, (match, letter) => letter.toUpperCase());
 
-  // One material per name for one bike. The character's paint, its dark shade
-  // and its accent are the palette's own (so Vehicle's tints still reach
-  // them); the palette's other finishes are used where a name matches, and
-  // anything else is the file's colour.
-  function finishes(vehicle) {
+  // One material per name for one bike. On a procedural kind's file the
+  // character's paint, its dark shade and its accent are the palette's own
+  // (so Vehicle's tints still reach them); the palette's other finishes are
+  // used where a name matches, and anything else is the file's colour. A
+  // detailed bike keeps every colour of its file, in materials of its own
+  // (its paint is the one the tints reach), lit as the palette lights the
+  // headlight, the screen and the dash.
+  function finishes(vehicle, keep) {
     const palette = vehicle.palette;
     const made = new Map();
     return (source) => {
       const name = source.name;
       if (!made.has(name)) {
-        let material = name === "seat" ? palette.leather : palette[camel(name)];
+        let material = keep ? null : name === "seat" ? palette.leather : palette[camel(name)];
         if (!material || !material.isMaterial) {
           material = source.clone();
+          const lit = keep && LIT.includes(name) ? palette[name] : null;
+          if (lit) {
+            material.emissive.copy(lit.emissive);
+            material.emissiveIntensity = lit.emissiveIntensity;
+            material.transparent = lit.transparent;
+            material.opacity = lit.opacity;
+            material.side = lit.side;
+          }
           if (GLOW[name]) {
             material.emissive.setHex(GLOW[name][0]);
             material.emissiveIntensity = GLOW[name][1];
@@ -81,10 +199,10 @@ const BikeModels = (() => {
     };
   }
 
-  // A node of a model as one object at the node's place: the mesh itself
+  // A node of one level as one object at the node's place: the mesh itself
   // when it has one material, a group of meshes when it has several
-  function part(model, name, finish, parent) {
-    const primitives = model.meshes.get(name);
+  function node(level, name, finish) {
+    const primitives = level.meshes.get(name);
     if (!primitives) throw new Error(`model lacks the part ${name}`);
     const meshes = primitives.map(({ geometry, material }) => {
       const mesh = new THREE.Mesh(geometry, finish(material));
@@ -94,7 +212,28 @@ const BikeModels = (() => {
     });
     const object = meshes.length === 1 ? meshes[0] : new THREE.Group().add(...meshes);
     object.name = name;
-    object.position.copy(model.places.get(name));
+    object.position.copy(level.places.get(name));
+    return object;
+  }
+
+  // A part of a bike file in `parent`: its first level alone, or every level
+  // under one THREE.LOD (which the renderer switches by the distance to the
+  // camera) at the first level's place. `single` keeps the first level
+  // alone, for a part whose material Vehicle reads off it (the brake lens).
+  function part(model, name, finish, parent, single = false) {
+    const levels = model.levels || [model];
+    const near = node(levels[0], name, finish);
+    let object = near;
+    if (!single && levels.length > 1 && levels[1].meshes.has(name)) {
+      object = new THREE.LOD();
+      object.name = name;
+      object.position.copy(near.position);
+      near.position.set(0, 0, 0);
+      const far = node(levels[1], name, finish);
+      far.position.sub(object.position);
+      object.addLevel(near, 0);
+      object.addLevel(far, FAR);
+    }
     parent.add(object);
     return object;
   }
@@ -146,6 +285,7 @@ const BikeModels = (() => {
   // model's own marks). Elbows and knees fall where limbs of a fixed length
   // put them, rather than midway, so an arm or a leg is not shrunk to fit.
   function seat(spec, bike, model) {
+    const level = bike.levels ? bike.levels[0] : bike;
     const colour = (hex, roughness, metalness, extra) => new THREE.MeshStandardMaterial({ color: hex, roughness, metalness, vertexColors: true, ...extra });
     // Gear a spec leaves out takes the colour that part had before it was
     // a material of its own (Vehicle.buildVariantRider)
@@ -186,13 +326,14 @@ const BikeModels = (() => {
     if (spec.style === "mx" || spec.style === "adv") part(model, "peak", finish, head);
 
     const base = new THREE.Vector3(0, spec.y, spec.z);
-    const grip = bike.places.get("grip");
-    const peg = bike.places.get("peg");
+    const grip = level.places.get("grip");
+    const peg = level.places.get("peg");
     if (!grip || !peg) throw new Error("bike lacks its grip or peg mark");
     const limbs = {};
     for (const side of [-1, 1]) {
       const shoulder = up.clone().multiplyScalar(0.165).setX(side * 0.172);
-      const hand = new THREE.Vector3(side * grip.x, grip.y, grip.z).sub(base);
+      // A mirrored file has its marks on the other side: either side will do
+      const hand = new THREE.Vector3(side * Math.abs(grip.x), grip.y, grip.z).sub(base);
       const elbow = joint(shoulder, hand, LENGTHS.upper_arm, LENGTHS.forearm, new THREE.Vector3(side * (0.5 + spec.elbowOut * 4), -0.7, -0.3));
       const bend = elbow.clone().sub(shoulder.clone().add(hand).multiplyScalar(0.5)).normalize();
       const upper = limb(model, "upper_arm", finish, rider, shoulder, elbow, bend);
@@ -201,7 +342,7 @@ const BikeModels = (() => {
       glove.position.copy(hand);
 
       // The boot stands on the peg; the shin comes down into its ankle
-      const sole = new THREE.Vector3(side * peg.x, peg.y + 0.05, peg.z).sub(base);
+      const sole = new THREE.Vector3(side * Math.abs(peg.x), peg.y + 0.05, peg.z).sub(base);
       const ankle = sole.clone().add(new THREE.Vector3(0, 0.062, -0.022));
       const hip = up.clone().multiplyScalar(-0.17).setX(side * 0.09);
       const knee = joint(hip, ankle, LENGTHS.thigh, LENGTHS.shin, new THREE.Vector3(side * (0.06 + spec.kneeOut * 2), 0.3, 1));
@@ -214,7 +355,38 @@ const BikeModels = (() => {
 
       limbs[side] = { upper, lower, thigh };
     }
+    if (spec.scarf != null) {
+      const scarf = Vehicle.buildScarf(spec.scarf, lean, 0.27);
+      scarf.traverse((o) => {
+        if (!o.isMesh) return;
+        // Unshaded occlusion, as the rider's own parts carry baked
+        const count = o.geometry.attributes.position.count;
+        o.geometry.setAttribute("color", new THREE.BufferAttribute(new Uint8Array(count * 3).fill(255), 3, true));
+        o.material.vertexColors = true;
+      });
+      rider.add(scarf);
+    }
     return { rider, helmet, visor: meshOf(helmet, wear.visor), limbs };
+  }
+
+  // A detailed bike's rider: the character's spec in the bike's own pose,
+  // the hip set on the seat (the file's seat mark, or the entry's), the
+  // hands and feet on its grips and pegs as for every bike
+  function pose(vehicle, bike) {
+    const known = BIKE_MODELS[vehicle.model];
+    if (!known) return vehicle.riderSpec;
+    const spec = { ...vehicle.riderSpec, ...known.pose };
+    const level = bike.levels[0];
+    const mark = level.places.get("seat");
+    const [top, back] = mark ? [mark.y, mark.z] : known.seat;
+    if (top === undefined) throw new Error(`${vehicle.model} has no seat mark and no seat in its entry`);
+    const lean = spec.torsoLean;
+    spec.y = top + HIP + Math.cos(lean) * 0.17;
+    spec.z = back + Math.sin(lean) * 0.17;
+    const base = new THREE.Vector3(0, spec.y, spec.z);
+    spec.hand = level.places.get("grip").clone().sub(base).toArray();
+    spec.foot = level.places.get("peg").clone().sub(base).toArray();
+    return spec;
   }
 
   // Puts the modelled bike and rider in the vehicle's group in place of
@@ -222,9 +394,12 @@ const BikeModels = (() => {
   function swap(vehicle, bike, riderModel) {
     const group = vehicle.group;
     const palette = vehicle.palette;
+    const known = entry(vehicle.model || vehicle.bike);
+    const keep = !!known.keepFileColours;
+    const level = bike.levels[0];
     const before = [...group.children];
     const kept = new Set(Object.values(palette).filter((value) => value && value.isMaterial));
-    const finish = finishes(vehicle);
+    const finish = finishes(vehicle, keep);
 
     // Built whole before anything is removed: a model that lacks a part
     // throws here and the procedural bike stays as it was
@@ -240,16 +415,29 @@ const BikeModels = (() => {
       handlebar: part(bike, "handlebar", finish, fresh),
     };
     // The dirt bike carries no headlight, modelled or procedural
-    if (bike.meshes.has("headlight")) built.headlight = part(bike, "headlight", finish, fresh);
+    if (level.meshes.has("headlight")) built.headlight = part(bike, "headlight", finish, fresh);
+    // Luggage is drawn on the bikes whose entry shows it, and can be hidden
+    if (level.meshes.has("luggage")) {
+      built.luggage = part(bike, "luggage", finish, fresh);
+      built.luggage.visible = !!known.luggage;
+    }
     // The lens Vehicle.updateMesh lights under braking, on a material of its own
     const lens = new THREE.MeshStandardMaterial({ color: 0xc40b0b, emissive: 0x000000, emissiveIntensity: 0, roughness: 0.15, metalness: 0.2, vertexColors: true });
-    built.brakeLight = part(bike, "brake_light", () => lens, fresh);
-    const frame = meshOf(body, palette.paint);
+    built.brakeLight = part(bike, "brake_light", () => lens, fresh, true);
+    const painted = level.meshes.get("body").find((primitive) => primitive.material.name === "paint");
+    const paint = keep ? painted && finish(painted.material) : palette.paint;
+    const frame = paint && meshOf(body, paint);
     if (!frame) throw new Error("bike body has no painted part");
-    const seated = seat(vehicle.riderSpec, bike, riderModel);
+    const spec = pose(vehicle, bike);
+    const seated = seat(spec, bike, riderModel);
+    // A detailed bike turns on its own axles; a procedural kind's file was
+    // made to the procedural bike's
+    const axles = BIKE_MODELS[vehicle.model] ? { rear: axle(level, "wheel_rear"), front: axle(level, "wheel_front") } : vehicle.axles;
 
-    // The new parts carry on from where the old ones were in their motion
-    seated.rider.position.copy(vehicle.rider.position);
+    // The new parts carry on from where the old ones were in their motion;
+    // a detailed bike's rider sits where its own seat puts him
+    const base = new THREE.Vector3(0, spec.y, spec.z);
+    seated.rider.position.copy(vehicle.rider.position).add(base).sub(vehicle.riderBasePos || base);
     seated.rider.rotation.copy(vehicle.rider.rotation);
     built.rearWheel.rotation.copy(vehicle.rearWheel.rotation);
     built.frontWheel.rotation.copy(vehicle.frontWheel.rotation);
@@ -274,9 +462,19 @@ const BikeModels = (() => {
     }
     group.add(...fresh.children, seated.rider);
 
+    if (keep) {
+      // The file's paint is the bike's colour from here on: the tints work
+      // from it and a reset restores it
+      palette.paint = paint;
+      vehicle.bikeColor = `0x${paint.color.getHexString()}`;
+      vehicle.baseColorRGB = { r: paint.color.r, g: paint.color.g, b: paint.color.b };
+    }
+    if (vehicle.riderBasePos) vehicle.riderBasePos.copy(base);
     Object.assign(vehicle, built, {
       frame,
       fuelTank: frame,
+      axles,
+      riderSpec: spec,
       rider: seated.rider,
       helmet: seated.helmet,
       visor: seated.visor,
@@ -391,8 +589,5 @@ const BikeModels = (() => {
     });
   }
 
-  return { dress, crew, preload, file, MODELS, BIKES, RIDER, CREW, LENGTHS };
+  return { dress, crew, preload, file, entry, MODELS, BIKES, RIDER, CREW, LENGTHS, FAR };
 })();
-
-// In the page the downloads start with the menu; a test loads what it needs
-if (typeof window !== "undefined" && typeof fetch === "function") BikeModels.preload();
