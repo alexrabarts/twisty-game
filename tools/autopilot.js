@@ -55,7 +55,7 @@ window.twistyDev = {
         const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
         ap.apFactor = ap.apFactor || 0.85;
         ap.brake = ap.brake || 6;
-        const here = {}, there = {}, aim = {};
+        const here = {}, aim = {};
         const grip = (s) => {
             route.sample(s, here);
             const v = game.vehicle;
@@ -63,11 +63,7 @@ window.twistyDev = {
             return base * (here.flags && here.flags.cobbles ? world.cobbleGrip : 1);
         };
         const capTan = (s) => Math.tan(Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip(s)));
-        const curvature = (s) => {
-            route.sample(s, here);
-            route.sample(s + 6, there);
-            return Math.abs(wrap(there.heading - here.heading)) / 6;
-        };
+        const curvature = (s) => Math.abs(route.curvatureAt(s, 6));
         const target = (s) => {
             let allowed = ap.speed;
             for (let d = 0; d <= 120; d += 6) {

@@ -75,9 +75,7 @@ class WorldCamera {
 
     // 0 to 1: how much of a hairpin lies ahead of s
     bendShare(s) {
-        const back = this.route.sample(Math.max(0, s - 5), this.sampled).heading;
-        const ahead = this.route.sample(s + WorldCamera.BEND_SPAN_M - 5, this.look).heading;
-        const turn = Math.abs(WorldCamera.wrap(ahead - back));
+        const turn = Math.abs(this.route.headingChange(Math.max(0, s - 5), s + WorldCamera.BEND_SPAN_M - 5));
         return Math.max(0, Math.min(1, (turn - WorldCamera.BEND_FROM) / (WorldCamera.BEND_TO - WorldCamera.BEND_FROM)));
     }
 

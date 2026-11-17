@@ -47,6 +47,8 @@ class WorldRoute extends PolylineRoute {
         this.graph = graph;
         this.buildHash();
         this.ruleScratch = {};
+        this.turnFrom = {};
+        this.turnTo = {};
     }
 
     get length() { return this.points.length ? this.sArray[this.points.length - 1] : 0; }
@@ -113,6 +115,18 @@ class WorldRoute extends PolylineRoute {
         const point = this.points[Math.min(this.points.length - 1, this.indexAt(Math.max(0, Math.min(this.length, s))))];
         return point && (point.bits & (WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery)) ? WorldRoute.ROOF_M : undefined;
     }
+
+    // The signed heading change from s0 to s1 (positive toward +lateral), wrapped to [-pi, pi]: the one sampler of
+    // "how far the road turns ahead" that the cut rule, the camera and the test pilot all read
+    headingChange(s0, s1) {
+        let turn = this.sample(s1, this.turnTo).heading - this.sample(s0, this.turnFrom).heading;
+        while (turn > Math.PI) turn -= 2 * Math.PI;
+        while (turn < -Math.PI) turn += 2 * Math.PI;
+        return turn;
+    }
+
+    // The signed heading change per metre over the `span` metres after s
+    curvatureAt(s, span) { return this.headingChange(s, s + span) / span; }
 
     // Runs of the ride that carry `kind` (tunnel, bridge, gallery or cobbles): [{s0, s1}]
     ranges(kind) {

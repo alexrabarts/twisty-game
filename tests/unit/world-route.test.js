@@ -272,3 +272,31 @@ describe('world traffic lanes', () => {
         expect(Route.CAR_HALF_WIDTH * 2).toBe(1.62);
     });
 });
+
+describe('how far the road turns ahead', () => {
+    // A circle of radius 50 m, three quarters round, with the heading unwrapped past pi as the importer leaves it
+    const R = 50;
+    const points = [];
+    for (let a = 0; a <= 1.5 * Math.PI + 1e-9; a += 4 / R) points.push({ x: R * (1 - Math.cos(a)), y: 0, z: R * Math.sin(a), heading: a, width: 10 });
+    const route = new WorldRoute(samplesOf(points), {});
+
+    test('the heading change is signed, wrapped to [-pi, pi], and curvature is its share per metre', () => {
+        // Each sample turns 4 / R from the one before; read the change between samples, at their own s
+        const at = i => route.sArray[i];
+        const quarter = Math.round((Math.PI / 2) / (4 / R)), past = Math.round((1.25 * Math.PI) / (4 / R));
+        expect(route.headingChange(at(0), at(quarter))).toBeCloseTo(quarter * 4 / R, 9);
+        expect(route.headingChange(at(quarter), at(0))).toBeCloseTo(-quarter * 4 / R, 9);
+        expect(route.headingChange(at(0), at(past))).toBeCloseTo(past * 4 / R - 2 * Math.PI, 9);
+        expect(past * 4 / R).toBeGreaterThan(Math.PI);
+        expect(route.curvatureAt(at(3), at(4) - at(3))).toBeCloseTo(4 / R / (at(4) - at(3)), 9);
+    });
+
+    test('the cut rule, the camera and the test pilot read the one sampler and keep no copy of it', () => {
+        const copy = /\.heading\s*-\s*[\w.]+\.heading|wrap\(\s*\w+\s*-\s*\w+\s*\)/;
+        for (const file of ['js/world/run.js', 'js/world/camera.js', 'tools/autopilot.js']) {
+            const text = readFileSync(new URL(file, root), 'utf8');
+            expect([file, copy.test(text)]).toEqual([file, false]);
+            expect([file, /\.(headingChange|curvatureAt)\(/.test(text)]).toEqual([file, true]);
+        }
+    });
+});

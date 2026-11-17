@@ -20,6 +20,9 @@ class WorldRun {
     // Metres past the road edge that still count as on the road for a station
     static get STATION_REACH_M() { return 8; }
 
+    // Metres the cut rule and the restart speed measure the road's curvature over
+    static get CURVATURE_SPAN_M() { return 4; }
+
     // Metres of road ahead the restart speed is chosen for
     static get RESTART_LOOK_M() { return 100; }
 
@@ -31,8 +34,6 @@ class WorldRun {
         this.route = route;
         this.stations = stations;
         this.physics = physics;
-        this.here = {};
-        this.there = {};
         this.stages = route.stages || [];
         this.begin(stations.length ? stations[0].s : 0);
     }
@@ -100,15 +101,7 @@ class WorldRun {
     get nextStation() { return this.stations[this.stationIndex + 1] || null; }
 
     // The signed heading change per metre at s (positive toward +lateral)
-    curvatureAt(s) {
-        const span = 4;
-        this.route.sample(s, this.here);
-        this.route.sample(s + span, this.there);
-        let turn = this.there.heading - this.here.heading;
-        if (turn > Math.PI) turn -= 2 * Math.PI;
-        if (turn < -Math.PI) turn += 2 * Math.PI;
-        return turn / span;
-    }
+    curvatureAt(s) { return this.route.curvatureAt(s, WorldRun.CURVATURE_SPAN_M); }
 
     // One frame. `frame`: {s, lateral, width, speed, dt, forwardDot} from the one projection of the frame.
     // Returns {cut, station}: `cut` when a forward jump has held for cutConfirmMs, `station` the index of
