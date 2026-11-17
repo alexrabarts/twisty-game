@@ -428,6 +428,43 @@ describe('mountain-dawn with the modelled houses, as instances', () => {
         expect(piece(env).visible).toBe(false);
     });
 
+    // The bridge file carries no normals (the village kit's way): drawn as
+    // loaded, every face is lit black. Its outer faces must face away from
+    // the road, the parapets' inner faces toward it and the coping up, and
+    // its colours be decoded as the houses' are.
+    test('the modelled bridge\'s stone faces out, so the sun and the sky light it', async () => {
+        expect(result.bridge.error).toBeUndefined();
+        expect(result.bridge.bridges).toBe(1);
+        const bridge = env.fixed.getObjectByName('modelled-bridge');
+        const meshes = bridge.children.filter(o => o.isMesh);
+        expect(meshes.length).toBeGreaterThan(0);
+        const model = await game.SceneAssets.loadModel('assets/bridge/stone.glb');
+        const raw = model.meshes.get('bridge_span')[0].geometry.attributes.color;
+        const decode = v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+        const counts = { outer: 0, inner: 0, top: 0 };
+        for (const mesh of meshes) {
+            const { position, normal, color } = mesh.geometry.attributes;
+            expect(normal).toBeDefined();
+            expect(normal.count).toBe(position.count);
+            expect(mesh.material.metalness).toBe(0);
+            expect(mesh.material.side).toBe(game.THREE.FrontSide);
+            for (let i = 0; i < position.count; i++) {
+                const x = position.getX(i), y = position.getY(i);
+                const nx = normal.getX(i), ny = normal.getY(i), nz = normal.getZ(i);
+                expect(Math.hypot(nx, ny, nz)).toBeCloseTo(1, 3);
+                // Model frame (tools/blender/bridge_stone.py): outer face 11.6, inner 10.9, coping over 1.17
+                if (Math.abs(x) > 11.65 && Math.abs(nx) > 0.9) { expect(Math.sign(nx)).toBe(Math.sign(x)); counts.outer++; }
+                if (Math.abs(x) < 10.95 && Math.abs(x) > 10.7 && y > 0.1 && y < 0.95 && Math.abs(nx) > 0.9) { expect(Math.sign(nx)).toBe(-Math.sign(x)); counts.inner++; }
+                if (y > 1.17 && Math.abs(ny) > 0.9) { expect(ny).toBeGreaterThan(0); counts.top++; }
+            }
+            // The first vertex's colour, decoded from the file's sRGB byte
+            expect(color.getX(0)).toBeCloseTo(decode(raw.array[0] / 255), 3);
+        }
+        expect(counts.outer).toBeGreaterThan(100);
+        expect(counts.inner).toBeGreaterThan(100);
+        expect(counts.top).toBeGreaterThan(100);
+    });
+
     test('without the houses file the procedural village and farmstead stay', async () => {
         const failing = load({ course: true, failing: ['houses.glb'] });
         const plain = build(failing, DAWN);

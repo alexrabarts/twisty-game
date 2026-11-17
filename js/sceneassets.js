@@ -394,6 +394,9 @@ const SceneAssets = (() => {
   // node, bridge_span, modelled in the bridge's own frame (x across, y up from
   // the deck, z along) for a road 20 m wide and a span `MODEL_LENGTH` long; it
   // is stretched along the road to the span's own length. The water stays.
+  // The file is the village kit's (tools/blender/village_kit.py): no normals
+  // and sRGB colours, so it is drawn from the houses' daylight geometry. Its
+  // own geometry has no normal, which lights every face black.
   const BRIDGE = { node: "bridge_span", length: 60, halfWidth: 10.9 };
   function dressBridge(env, model) {
     const span = model.meshes.get(BRIDGE.node);
@@ -406,8 +409,9 @@ const SceneAssets = (() => {
       const frame = new THREE.Group();
       frame.name = "modelled-bridge";
       frame.scale.set(plan.inner / BRIDGE.halfWidth, 1, plan.length / BRIDGE.length);
-      span.forEach(({ geometry, material }) => {
-        const mesh = new THREE.Mesh(geometry, material);
+      // The stretch is positive on every axis, so the faces keep their winding
+      daylightParts(span).forEach(({ geometry }) => {
+        const mesh = new THREE.Mesh(geometry, dayMaterial(THREE.FrontSide));
         mesh.castShadow = true;
         mesh.receiveShadow = true;
         mesh.userData.modelled = "bridge";
@@ -755,6 +759,7 @@ const SceneAssets = (() => {
   // `origin`, one per model, tint kind and handedness. Instance colours carry
   // the wash, the paint or the shade.
   const DAY_MATERIALS = {};
+  const dayMaterial = (side) => DAY_MATERIALS[side] || (DAY_MATERIALS[side] = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, side }));
   function instanceModels(items, origin) {
     const groups = new Map();
     items.forEach((item) => {
@@ -767,9 +772,8 @@ const SceneAssets = (() => {
     const colour = new THREE.Color();
     for (const { parts, mirrored, items: placed } of groups.values()) {
       const side = mirrored ? THREE.BackSide : THREE.FrontSide;
-      if (!DAY_MATERIALS[side]) DAY_MATERIALS[side] = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, side });
       for (const { tint, geometry } of daylightParts(parts)) {
-        const mesh = new THREE.InstancedMesh(geometry, DAY_MATERIALS[side], placed.length);
+        const mesh = new THREE.InstancedMesh(geometry, dayMaterial(side), placed.length);
         placed.forEach((item, n) => {
           mesh.setMatrixAt(n, item.matrix);
           const shade = item.tint.shade ?? 1;
