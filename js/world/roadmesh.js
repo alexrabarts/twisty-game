@@ -40,7 +40,7 @@ class RoadMesh {
     }
 
     // Rows kept for a lower level of detail: one every `minM` metres of road, or sooner
-    // where the heading has turned `maxTurn` radians since the last kept row
+    // where the heading has turned `maxTurn` radians since the last kept row; a row marked `keep` always stays
     static decimate(rows, minM = 16, maxTurn = 0.18) {
         if (rows.length < 3) return rows;
         const out = [rows[0]];
@@ -48,7 +48,7 @@ class RoadMesh {
         let last = rows[0];
         for (let i = 1; i < rows.length; i++) {
             run += Math.hypot(rows[i].x - rows[i - 1].x, rows[i].z - rows[i - 1].z);
-            if (i === rows.length - 1 || run >= minM || Math.abs(rows[i].heading - last.heading) >= maxTurn) {
+            if (i === rows.length - 1 || rows[i].keep || run >= minM || Math.abs(rows[i].heading - last.heading) >= maxTurn) {
                 out.push(rows[i]);
                 last = rows[i];
                 run = 0;
@@ -66,15 +66,16 @@ class RoadMesh {
         });
     }
 
-    // The ribbon of a run of rows: {mesh, triangles, clamped} (clamped: rows whose inside edge was held)
-    static ribbon(rows, lod = 0) {
+    // The ribbon of a run of rows: {mesh, triangles, clamped} (clamped: rows whose inside edge was held).
+    // `holdY(x, y, z)`, when given, may lower each vertex (a side road under the ride, RoadMesh.sideRoad).
+    static ribbon(rows, lod = 0, holdY = null) {
         const colors = RoadMesh.COLORS;
         const kept = lod === 0 ? rows : RoadMesh.decimate(rows);
         const curve = RoadMesh.curvature(kept);
         const positions = [];
         const shades = [];
         let clamped = 0;
-        const push = (x, y, z, c) => { positions.push(x, y, z); shades.push(c[0], c[1], c[2]); };
+        const push = (x, y, z, c) => { positions.push(x, holdY ? holdY(x, y, z) : y, z); shades.push(c[0], c[1], c[2]); };
         const place = (row, offset) => ({ x: row.x + offset * Math.cos(row.heading), z: row.z - offset * Math.sin(row.heading) });
 
         // Lateral offsets of a row and the colour of the strip that starts at each
@@ -245,11 +246,12 @@ class RoadMesh {
         return group;
     }
 
-    // A side road beyond the junction: the stub at LOD0 when `stub`, else the LOD1 ribbon
-    static sideRoad(rows, stub) {
+    // A side road beyond the junction: the stub at LOD0 when `stub`, else the LOD1 ribbon. `holdY` keeps it under
+    // the ride where it crosses the ride's road band (WorldEnvironment.sideHold)
+    static sideRoad(rows, stub, holdY = null) {
         const group = new THREE.Group();
         group.name = stub ? 'world-road-stub' : 'world-road-side';
-        const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1);
+        const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1, holdY);
         group.add(RoadMesh.mesh(ribbon.geometry, 'road-side'));
         group.userData.triangles = ribbon.triangles;
         return group;

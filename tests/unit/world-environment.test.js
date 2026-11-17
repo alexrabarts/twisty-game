@@ -7,7 +7,7 @@ import { diskFetch } from '../helpers/world-fetch.js';
 import { samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { THREE, WorldEnvironment, WorldGuide, WorldRoute, WorldPhysics, WorldStreamer } = game;
+const { THREE, WorldEnvironment, WorldGuide, WorldRoute, WorldPhysics, WorldStreamer, RoadMesh, TerrainMesh, WorldData } = game;
 const LEG_BUDGET = { meshes: 800, triangles: 450000, instances: 1400 };
 
 async function load(search = '', id = 'tremola') {
@@ -177,6 +177,68 @@ describe('the Tremola slice', () => {
     test('disposing leaves nothing of the world in the scene', () => {
         env.dispose();
         expect(scene.children).not.toContain(env.group);
+    });
+});
+
+describe('a side road at a junction stays under the ride', () => {
+    // The ride climbs along +z at 10%, 10 m wide; a side road leaves it at z = 200 heading +x, level at the height
+    // of the junction node plus 0.15 m, as an imported side road can be
+    const ride = new WorldRoute(samplesOf(straight(400, { y: 0 }).map(p => ({ ...p, y: p.z * 0.1 }))), {});
+    const env = Object.assign(Object.create(WorldEnvironment.prototype), { route: ride });
+    const sideRows = Array.from({ length: 6 }, (_, i) => ({ x: i * 16, y: 20.15, z: 200, heading: Math.PI / 2, width: 6, bits: 0 }));
+    const rideY = z => z * 0.1;
+    const raycaster = new THREE.Raycaster();
+    const drawnY = (group, x, z) => {
+        raycaster.set(new THREE.Vector3(x, 100, z), new THREE.Vector3(0, -1, 0));
+        const hit = raycaster.intersectObject(group, true)[0];
+        return hit ? hit.point.y : null;
+    };
+    // Points inside the ride's band that the side road covers
+    const band = [];
+    for (let x = -4.5; x <= 4.5; x += 0.5) for (let z = 197.5; z <= 202.5; z += 0.5) band.push([x, z]);
+
+    test.each([[true], [false]])('nowhere in the ride band is the side road (stub %s) above the ride surface', (stub) => {
+        const group = RoadMesh.sideRoad(env.holdSide(sideRows), stub, env.sideHold());
+        group.updateMatrixWorld(true);
+        let covered = 0;
+        for (const [x, z] of band) {
+            const y = drawnY(group, x, z);
+            if (y === null) continue;
+            covered++;
+            expect([x, z, y <= rideY(z)]).toEqual([x, z, true]);
+        }
+        expect(covered).toBeGreaterThan(20);
+        // Outside the band it climbs back to its own height
+        expect(drawnY(group, 40, 201.5)).toBeCloseTo(20.15 + RoadMesh.LIFT_M, 4);
+    });
+
+    test('the side road is untouched where it is clear of the ride, and a road over the ride keeps its height', () => {
+        const far = sideRows.map(r => ({ ...r, x: r.x + 100 }));
+        expect(env.holdSide(far)).toBe(far);
+        const over = sideRows.map(r => ({ ...r, y: 30 }));
+        expect(env.holdSide(over)).toBe(over);
+    });
+
+    test('a level of detail keeps the rows the hold put in', () => {
+        const rows = env.holdSide(sideRows);
+        const kept = rows.filter(r => r.keep);
+        expect(kept.length).toBeGreaterThan(1);
+        const decimated = RoadMesh.decimate(rows);
+        for (const r of kept) expect(decimated).toContain(r);
+    });
+
+    test('a carved terrain vertex in the ride band is drawn under the ride surface', () => {
+        const N = WorldData.TILE_N;
+        // A tile at the origin carved as road everywhere, standing 0.3 m over the ride
+        const tile = { key: '0,0', tx: 0, tz: 0, heights: new Float32Array(N * N).map((_, k) => Math.floor(k / N) * WorldData.CELL_M * 0.1 + 0.3), zones: new Uint8Array(N * N).fill(WorldData.ZONE.road) };
+        const hold = (x, y, z) => { const low = env.rideSurfaceAt(x, z, y); return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M); };
+        const held = TerrainMesh.build(tile, null, 0, hold).mesh.geometry.attributes.position.array;
+        const plain = TerrainMesh.build(tile, null, 0).mesh.geometry.attributes.position.array;
+        const at = (array, i, j) => array[(j * N + i) * 3 + 1];
+        // Vertex (0, 25) is on the ride's centre line at z = 200; (3, 25) is 24 m off it
+        expect(at(plain, 0, 25)).toBeGreaterThan(rideY(200));
+        expect(at(held, 0, 25)).toBeCloseTo(rideY(200) - TerrainMesh.SINK_M, 4);
+        expect(at(held, 3, 25)).toBe(at(plain, 3, 25));
     });
 });
 

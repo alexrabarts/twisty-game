@@ -25,6 +25,12 @@ class WorldEnvironment {
     // Metres the rider starts along the ride, so the road's cut end is behind the camera
     static get START_M() { return 20; }
 
+    // A side road inside the ride's band: how far under the ride surface it is held, how far past the road edge
+    // (the ride ribbon's kerb) that reaches, and the height apart beyond which it is a road over or under the ride
+    static get SIDE_UNDER_M() { return 0.01; }
+    static get SIDE_KERB_M() { return 0.5; }
+    static get SIDE_PASS_M() { return 2; }
+
     // The ride progress the barrier set is chosen by is rounded to this many metres
     static get BARRIER_STEP_M() { return 20; }
 
@@ -200,7 +206,11 @@ class WorldEnvironment {
             old.mesh.geometry.dispose();
             this.triangleCount -= old.triangles;
         }
-        const built = TerrainMesh.build(tile, cover, lod);
+        // A carved cell inside the ride's band can hold a side road's height (a junction); drawn, it stays under the ride
+        const built = TerrainMesh.build(tile, cover, lod, (x, y, z) => {
+            const low = this.rideSurfaceAt(x, z, y);
+            return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
+        });
         built.mesh.userData.skipCulling = true;
         this.tileGroup.add(built.mesh);
         this.tileMeshes.set(key, built);
@@ -259,6 +269,82 @@ class WorldEnvironment {
         this.roadMeshes.delete(section.index);
     }
 
+    // Inside the ride's road band the ground is the ride's surface (WorldGround.heightAt). A side road that crosses
+    // the band at its own height stands proud of it where the ride climbs or leans. holdSide keeps it under the ride
+    // there: every row whose cross-section reaches into the band is lowered SIDE_UNDER_M under the ride surface, and a
+    // row is put where the side road leaves the band at that height too, so the side road climbs back to its own
+    // height only outside the band. A road more than SIDE_PASS_M above or below the ride is a road over or under it,
+    // and keeps its height.
+    //
+    // rideSurfaceAt: the ride surface under (x, z) when that is in the ride's band at about height y, or null
+    rideSurfaceAt(x, z, y) {
+        const route = this.route;
+        const near = this.sideNear || (this.sideNear = {});
+        // A point in the band lies in the hash cell of its own ride segment (WorldRoute.buildHash). The nearest segment
+        // at about this height is the one under it, as WorldGround.locate finds it
+        let surface = null;
+        let nearest = Infinity;
+        for (const i of route.hashCandidates(x, z, 0)) {
+            route.nearestSegment(x, z, i, i, near);
+            if (near.distance < nearest && near.distance <= near.width / 2 + WorldEnvironment.SIDE_KERB_M && Math.abs(y - near.y) <= WorldEnvironment.SIDE_PASS_M) {
+                nearest = near.distance;
+                surface = near.y;
+            }
+        }
+        return surface;
+    }
+
+    // The lowest ride surface under a side row's centre and kerbs, or null where the row is clear of the band
+    rideUnderRow(row) {
+        const reach = row.width / 2 + WorldEnvironment.SIDE_KERB_M;
+        const cos = Math.cos(row.heading), sin = Math.sin(row.heading);
+        let low = null;
+        for (const o of [-reach, 0, reach]) {
+            const y = this.rideSurfaceAt(row.x + o * cos, row.z - o * sin, row.y);
+            if (y !== null) low = low === null ? y : Math.min(low, y);
+        }
+        return low;
+    }
+
+    // Side rows held under the ride (see rideSurfaceAt); held and inserted rows carry `keep`, so no level of detail drops them
+    holdSide(rows) {
+        const under = rows.map(row => this.rideUnderRow(row));
+        if (under.every(y => y === null)) return rows;
+        const lerp = (a, b, t) => {
+            let turn = b.heading - a.heading;
+            while (turn > Math.PI) turn -= 2 * Math.PI;
+            while (turn < -Math.PI) turn += 2 * Math.PI;
+            return { ...a, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, heading: a.heading + turn * t, width: a.width + (b.width - a.width) * t };
+        };
+        const held = (row, low) => ({ ...row, y: Math.min(row.y, low - WorldEnvironment.SIDE_UNDER_M), keep: true });
+        // The first row from `held` toward `clear` whose cross-section is clear of the band, at the held height
+        const exit = (heldRow, clearRow, low) => {
+            let inside = 0, outside = 1;
+            for (let k = 0; k < 12; k++) {
+                const mid = (inside + outside) / 2;
+                if (this.rideUnderRow(lerp(heldRow, clearRow, mid)) === null) outside = mid;
+                else inside = mid;
+            }
+            return held(lerp(heldRow, clearRow, outside), low);
+        };
+        const out = [];
+        for (let i = 0; i < rows.length; i++) {
+            const prev = i > 0 ? under[i - 1] : null;
+            if (under[i] === null && prev !== null) out.push(exit(rows[i - 1], rows[i], prev));
+            if (under[i] !== null && i > 0 && prev === null) out.push(exit(rows[i], rows[i - 1], under[i]));
+            out.push(under[i] === null ? rows[i] : held(rows[i], under[i]));
+        }
+        return out;
+    }
+
+    // Per-vertex hold of a side ribbon: a vertex inside the band goes under the ride surface (RoadMesh.sideRoad holdY)
+    sideHold() {
+        return (x, y, z) => {
+            const low = this.rideSurfaceAt(x, z, y);
+            return low === null ? y : Math.min(y, low - WorldEnvironment.SIDE_UNDER_M);
+        };
+    }
+
     // The side roads whose first sample is in chunk k: stubs at LOD0 beside a barrier, the rest at LOD1
     buildSide(k) {
         const group = new THREE.Group();
@@ -269,6 +355,7 @@ class WorldEnvironment {
             for (const pass of junction.passes) for (const b of pass.barriers) barrierEdges.set(b.edgeId, junction.node);
         }
         let triangles = 0;
+        const hold = this.sideHold();
         this.data.edges.forEach((edge) => {
             if (edge.onRide || this.data.chunkOf(edge.first) !== k) return;
             const samples = this.graph.samples(edge.id);
@@ -280,12 +367,12 @@ class WorldEnvironment {
             if (node !== undefined) {
                 const stub = this.graph.stub(edge.id, node);
                 if (stub && stub.length > 1) {
-                    const stubGroup = RoadMesh.sideRoad(stub.map(p => ({ ...p, bits: p.flags })), true);
+                    const stubGroup = RoadMesh.sideRoad(this.holdSide(stub.map(p => ({ ...p, bits: p.flags }))), true, hold);
                     group.add(stubGroup);
                     triangles += stubGroup.userData.triangles;
                 }
             }
-            const side = RoadMesh.sideRoad(rows, false);
+            const side = RoadMesh.sideRoad(this.holdSide(rows), false, hold);
             group.add(side);
             triangles += side.userData.triangles;
         });

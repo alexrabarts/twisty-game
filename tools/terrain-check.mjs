@@ -2150,7 +2150,8 @@ async function openWorld(browser, port, id) {
     for (let attempt = 0; attempt < 3; attempt++) {
         const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`);
         try {
-            await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle', { timeout: 120000 });
+            // The vehicle is made before the first window settles; the ride state comes after it, so wait for that
+            await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 120000 });
         } catch {
             await page.close();
             continue;
@@ -2227,50 +2228,71 @@ const WORLD = {
     },
     'world-budget': page => WORLD['world-window'](page),
     // The physics ground against the drawn ground: a ray down onto the drawn world meshes
-    'world-ground': async page => page.evaluate(async (placeSource) => {
+    'world-ground': async page => page.evaluate(async (placeSource, want) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment;
         const route = env.route;
-        const road = [], land = [];
+        // road: |drawn - physics| in the road band; land: the same within 300 m off the road;
+        // above: how far the drawn land stands over the road surface at each road point (P8: never)
+        const road = [], land = [], above = [];
         const raycaster = new THREE.Raycaster();
         const down = new THREE.Vector3(0, -1, 0);
-        const hitY = (x, z) => {
-            raycaster.set(new THREE.Vector3(x, 4000, z), down);
-            const hit = raycaster.intersectObjects([env.tileGroup, env.roadGroup, env.sideGroup], true)[0];
+        // `from`: the height the ray starts at. A road point casts from 3 m over the physics ground, the ground under the
+        // rider, so a road that passes over the ride (a side road on its own bridge) is not read as the ride's surface
+        const hitY = (x, z, groups, from = 4000) => {
+            raycaster.set(new THREE.Vector3(x, from, z), down);
+            const hit = raycaster.intersectObjects(groups, true)[0];
             return hit ? hit.point.y : null;
         };
+        const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
         const stations = 12;
+        // Each station takes its share of what is still wanted, so the totals reach `want` unless candidates run out
+        const quota = (list, k) => Math.ceil((want - list.length) / (stations - k));
         for (let k = 0; k < stations; k++) {
             const s = (route.length * (k + 0.5)) / stations;
             const p = await placeAt(s);
             const w = p.width;
-            for (let i = 0; i < 20; i++) {
+            const roadWanted = road.length + quota(road, k);
+            for (let i = 0; i < 400 && road.length < roadWanted; i++) {
                 const a = ((i * 0.618) % 1) * 2 - 1;
                 const lateral = Math.sign(a || 1) * (0.4 + Math.abs(a) * (w / 2 - 1.4));
-                const along = (i - 10) * 7;
+                const along = ((i * 0.381966) % 1) * 160 - 80;
                 const q = route.sample(s + along, {});
                 const x = q.x + lateral * Math.cos(q.heading), z = q.z - lateral * Math.sin(q.heading);
                 const loc = {};
                 const ground = env.ground.groundY(x, z, { start: route.toUnits(s + along) - 12, end: route.toUnits(s + along) + 12 }, true, loc);
-                const hit = hitY(x, z);
                 // A structure's deck or roof is not the carved road: the DEM may stand level with a short bridge (tunnels and bridges are P15's)
-                if (hit !== null && Math.abs(loc.lateral) < w / 2 && !q.flags.bridge && !q.flags.tunnel && !q.flags.gallery) road.push(Math.abs(hit - ground));
+                if (!(Math.abs(loc.lateral) < w / 2) || q.flags.bridge || q.flags.tunnel || q.flags.gallery) continue;
+                const hit = hitY(x, z, drawn, ground + 3);
+                if (hit === null) continue;
+                road.push(Math.abs(hit - ground));
+                const tile = hitY(x, z, [env.tileGroup], ground + 3);
+                above.push(tile === null ? -Infinity : tile - ground);
             }
-            for (let i = 0; i < 20; i++) {
+            const landWanted = land.length + quota(land, k);
+            for (let i = 0; i < 400 && land.length < landWanted; i++) {
                 const d = 20 + ((i * 0.377) % 1) * 280;
                 const a = (i * 2.399) + k;
                 const x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d;
                 const loc = {};
                 const q = route.project(x, z, null, {});
                 const ground = env.ground.groundY(x, z, { start: q.index - 12, end: q.index + 12 }, true, loc);
-                const hit = hitY(x, z);
-                if (hit !== null && Math.abs(loc.lateral) > w / 2 + 6) land.push(Math.abs(hit - ground));
+                if (!(Math.abs(loc.lateral) > w / 2 + 6)) continue;
+                const hit = hitY(x, z, drawn);
+                if (hit !== null) land.push(Math.abs(hit - ground));
             }
         }
         const sorted = list => list.slice().sort((a, b) => a - b);
         const q = (list, f) => (list.length ? sorted(list)[Math.min(list.length - 1, Math.floor(list.length * f))] : null);
-        return { road: { n: road.length, max: Math.max(...road), p99: q(road, 0.99) }, land: { n: land.length, max: Math.max(...land), p99: q(land, 0.99) } };
-    }, placeAt.toString()),
+        const r3 = v => Math.round(v * 1000) / 1000;
+        return {
+            want,
+            road: { n: road.length, max: r3(Math.max(...road)), p99: r3(q(road, 0.99)) },
+            land: { n: land.length, max: r3(Math.max(...land)), p99: r3(q(land, 0.99)) },
+            // The highest the drawn land stands over the road surface at a road point (negative: below it)
+            aboveRoad: { n: above.length, over: above.filter(d => d > 0).length, max: r3(Math.max(...above)) }
+        };
+    }, placeAt.toString(), Number(option('points') || 500)),
     // Every pass of every ride junction: its barrier set stands, the open pair has none
     'world-junction': async page => page.evaluate(async (placeSource) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
@@ -2722,8 +2744,9 @@ function worldChecks(report) {
     });
     const ground = results['world-ground'];
     if (ground) {
-        if (!(ground.road.n >= 100) || ground.road.max > 0.05) failures.push(`world-ground: road band ${JSON.stringify(ground.road)}, want |delta| <= 0.05`);
-        if (!(ground.land.n >= 100) || ground.land.p99 > 0.35) failures.push(`world-ground: land ${JSON.stringify(ground.land)}, want p99 <= 0.35`);
+        if (!(ground.road.n >= ground.want) || ground.road.max > 0.05) failures.push(`world-ground: road band ${JSON.stringify(ground.road)}, want ${ground.want} points with |delta| <= 0.05`);
+        if (!(ground.land.n >= ground.want) || ground.land.p99 > 0.35) failures.push(`world-ground: land ${JSON.stringify(ground.land)}, want ${ground.want} points with p99 <= 0.35`);
+        if (ground.aboveRoad.n !== ground.road.n || ground.aboveRoad.over) failures.push(`world-ground: the drawn land stands above the road surface at ${ground.aboveRoad.over} of ${ground.aboveRoad.n} road points (up to ${ground.aboveRoad.max} m), want none`);
     }
     (results['world-junction'] || []).forEach(j => j.passes.forEach(p => {
         if (JSON.stringify(p.active) !== JSON.stringify(p.expected)) failures.push(`world-junction ${j.id} at ${p.sIn}: barriers ${JSON.stringify(p.active)}, want ${JSON.stringify(p.expected)}`);

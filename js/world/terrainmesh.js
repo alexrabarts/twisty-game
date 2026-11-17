@@ -71,8 +71,9 @@ class TerrainMesh {
         return c;
     }
 
-    // The mesh of tile (tx, tz): {mesh, triangles}. `cover` may be null (grass everywhere).
-    static build(tile, cover, lod) {
+    // The mesh of tile (tx, tz): {mesh, triangles}. `cover` may be null (grass everywhere). `holdY(x, y, z)`, when
+    // given, may lower a carved vertex further (under the ride's road, WorldEnvironment.buildTile).
+    static build(tile, cover, lod, holdY = null) {
         const n = WorldData.TILE_N;
         const stride = 1 << lod;
         const cells = (n - 1) / stride;
@@ -97,7 +98,10 @@ class TerrainMesh {
                 const y = tile.heights[j * n + i];
                 const zone = tile.zones[j * n + i];
                 const carved = zone === WorldData.ZONE.road || zone === WorldData.ZONE.bench;
-                put(b * side + a, baseX + i * WorldData.CELL_M, carved ? y - TerrainMesh.SINK_M : y, baseZ + j * WorldData.CELL_M, TerrainMesh.colorAt(tile, cover, i, j, y));
+                const x = baseX + i * WorldData.CELL_M, z = baseZ + j * WorldData.CELL_M;
+                let drawnY = carved ? y - TerrainMesh.SINK_M : y;
+                if (carved && holdY) drawnY = holdY(x, drawnY, z);
+                put(b * side + a, x, drawnY, z, TerrainMesh.colorAt(tile, cover, i, j, y));
             }
         }
         const indices = new Uint32Array(cells * cells * 6 + 4 * cells * 6);
