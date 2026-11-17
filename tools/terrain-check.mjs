@@ -3232,6 +3232,213 @@ const WORLD = {
     }
 };
 
+// world-clearance: nothing drawn stands in a road. The slice is walked every --every metres (default 300); at each
+// place the drawn road bands round the bike (the ride within half a step either side, and every side road drawn) are
+// cast down on across their full drawn width, every CLEAR_STEP_M along and across, from HEADROOM_M over the surface to
+// just under it, against every scenery mesh: trees, boulders, houses, landmarks, signposts, barriers and the gate
+// frames, instanced or not. Where a mesh's box reaches into a cell, the cell is cast on again every CLEAR_FINE_M, so a
+// pole or a board a few centimetres thick is not missed between rays. A hit is a failure, except a barrier over the
+// side road it closes (it is there to close it, never on the ride); a station banner spans the ride above HEADROOM_M,
+// so no ray reaches it. --out <dir> saves a view of the worst offenders.
+//   node tools/terrain-check.mjs world-clearance --world tremola --gpu [--every 300] [--out <dir> --tag T --shots N]
+const CLEAR_HEADROOM_M = 4.5;
+const CLEAR_STEP_M = 0.5;
+const CLEAR_FINE_M = 0.04;
+WORLD_PROBES.push('world-clearance');
+
+async function clearanceWalk(placeSource, every, headroom, step, fine) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment;
+    const route = env.route;
+    const raycaster = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const origin = new THREE.Vector3();
+    const probe = new THREE.Mesh();
+    const matrix = new THREE.Matrix4();
+    const box = new THREE.Box3();
+    const typeOf = (o) => {
+        const n = o.name || '';
+        if (n.startsWith('trees:')) return 'tree';
+        if (n === 'boulders') return 'boulder';
+        if (n.startsWith('houses:')) return 'house';
+        if (n.startsWith('landmark:')) return 'landmark';
+        if (n === 'world-signposts') return 'signpost';
+        if (n === 'world-barriers') return 'barrier';
+        if (n === 'world-gates') return 'gate';
+        return null;
+    };
+    // The barrier instances, in the order placeBarriers set them (env.activeBarriers), with the side roads each closes
+    const closes = (b) => {
+        const out = new Set();
+        let edge = env.data.edges[b.edgeId], from = b.node, run = 0;
+        while (edge && !edge.onRide && !out.has(edge.id) && run < 80) {
+            out.add(edge.id);
+            run += edge.length;
+            const far = edge.a === from ? edge.b : edge.a;
+            if (env.data.nodes.degree[far] !== 2) break;
+            from = far;
+            const last = edge.id;
+            edge = env.data.edges.find(e => e.id !== last && (e.a === far || e.b === far));
+        }
+        return out;
+    };
+    const hits = new Map();
+    const seenSide = new Set();
+    let rays = 0, instancesSeen = 0, places = 0;
+    for (let s0 = Math.min(every / 2, route.length / 2); s0 < route.length; s0 += every) {
+        await placeAt(s0);
+        env.streamer.pump(Infinity);
+        places++;
+        env.group.updateMatrixWorld(true);
+        // Every drawn instance as a bounding sphere in a 16 m plan hash, so a ray tests only what is over it
+        const things = [];
+        const hash = new Map();
+        env.group.traverse((o) => {
+            if (!o.isMesh) return;
+            for (let n = o; n; n = n.parent) if (!n.visible) return;
+            const type = typeOf(o);
+            if (!type) return;
+            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+            // The gate frames are one mesh over the whole stage: a box round each gate instead of the mesh's own
+            if (type === 'gate') {
+                for (const st of env.stationGates || []) {
+                    const p = route.sample(st.s, {});
+                    const r = p.width / 2 + 3;
+                    const thing = { mesh: o, type, index: 0, world: o.matrixWorld.clone(), x: p.x, z: p.z, x0: p.x - r, x1: p.x + r, z0: p.z - r, z1: p.z + r, y0: p.y - 1, y1: p.y + 7, barrier: null };
+                    const ref = things.length;
+                    things.push(thing);
+                    for (let cx = Math.floor(thing.x0 / 16); cx <= Math.floor(thing.x1 / 16); cx++) {
+                        for (let cz = Math.floor(thing.z0 / 16); cz <= Math.floor(thing.z1 / 16); cz++) {
+                            const key = cx * 65536 + cz;
+                            if (!hash.has(key)) hash.set(key, []);
+                            hash.get(key).push(ref);
+                        }
+                    }
+                }
+                return;
+            }
+            const count = o.isInstancedMesh ? o.count : 1;
+            for (let i = 0; i < count; i++) {
+                const world = new THREE.Matrix4();
+                if (o.isInstancedMesh) { o.getMatrixAt(i, matrix); world.multiplyMatrices(o.matrixWorld, matrix); } else world.copy(o.matrixWorld);
+                box.copy(o.geometry.boundingBox).applyMatrix4(world);
+                const thing = { mesh: o, type, index: i, world, x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2, x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, y0: box.min.y, y1: box.max.y, barrier: type === 'barrier' ? env.activeBarriers[i] : null };
+                const ref = things.length;
+                things.push(thing);
+                for (let cx = Math.floor(thing.x0 / 16); cx <= Math.floor(thing.x1 / 16); cx++) {
+                    for (let cz = Math.floor(thing.z0 / 16); cz <= Math.floor(thing.z1 / 16); cz++) {
+                        const key = cx * 65536 + cz;
+                        if (!hash.has(key)) hash.set(key, []);
+                        hash.get(key).push(ref);
+                    }
+                }
+            }
+        });
+        instancesSeen += things.length;
+        // The road cell `step` square round (x, z), at road surface y: every thing whose box reaches into the cell and
+        // into the headroom over it is cast on, downward from `headroom` over the surface to just under it, every `fine`
+        const cast = (x, z, y, road) => {
+            rays++;
+            const list = hash.get(Math.floor(x / 16) * 65536 + Math.floor(z / 16));
+            if (!list) return;
+            const h = step / 2;
+            for (const ref of list) {
+                const t = things[ref];
+                if (t.x1 < x - h || t.x0 > x + h || t.z1 < z - h || t.z0 > z + h || t.y0 > y + headroom || t.y1 < y - 0.3) continue;
+                if (t.type === 'barrier' && road.edgeId !== null && t.barrier && closes(t.barrier).has(road.edgeId)) continue;
+                probe.geometry = t.mesh.geometry;
+                probe.material = t.mesh.material;
+                probe.matrixWorld.copy(t.world);
+                const found = [];
+                for (let fx = Math.max(x - h, t.x0); fx <= Math.min(x + h, t.x1) && !found.length; fx += fine) {
+                    for (let fz = Math.max(z - h, t.z0); fz <= Math.min(z + h, t.z1) && !found.length; fz += fine) {
+                        origin.set(fx, y + headroom, fz);
+                        raycaster.set(origin, down);
+                        raycaster.far = headroom + 0.3;
+                        probe.raycast(raycaster, found);
+                        rays++;
+                    }
+                }
+                if (!found.length) continue;
+                const over = headroom - found[0].distance;
+                const key = `${t.type}:${t.mesh.name}:${t.index}:${Math.round(t.x)},${Math.round(t.z)}`;
+                const held = hits.get(key);
+                const row = { type: t.type, name: t.mesh.name, x: Math.round(t.x * 10) / 10, z: Math.round(t.z * 10) / 10, road: road.edgeId === null ? 'ride' : 'side', edgeId: road.edgeId, s: road.s === null ? null : Math.round(road.s), overRoadM: Math.round(over * 100) / 100, hits: 1 };
+                if (held) held.hits++;
+                else hits.set(key, row);
+            }
+        };
+        // The ride: half a step either side of the place, every `step` along and across its drawn width
+        const sample = {};
+        for (let s = Math.max(0, s0 - every / 2); s < Math.min(route.length, s0 + every / 2); s += step) {
+            route.sample(s, sample);
+            const half = sample.width / 2;
+            for (let o = -half; o <= half + 1e-9; o += step) cast(sample.x + o * Math.cos(sample.heading), sample.z - o * Math.sin(sample.heading), sample.y, { edgeId: null, s });
+        }
+        // The side roads drawn from here (their chunk's ribbons are built), each once
+        for (const edge of env.data.edges) {
+            if (edge.onRide || seenSide.has(edge.id) || !env.sideMeshes.has(env.data.chunkOf(edge.first))) continue;
+            const e = env.graph.samples(edge.id);
+            if (!e) continue;
+            seenSide.add(edge.id);
+            for (let i = 0; i + 1 < e.x.length; i++) {
+                const len = Math.hypot(e.x[i + 1] - e.x[i], e.z[i + 1] - e.z[i]) || 1;
+                const fx = (e.x[i + 1] - e.x[i]) / len, fz = (e.z[i + 1] - e.z[i]) / len;
+                for (let a = 0; a < len; a += step) {
+                    const t = a / len;
+                    const x = e.x[i] + (e.x[i + 1] - e.x[i]) * t, z = e.z[i] + (e.z[i + 1] - e.z[i]) * t, y = e.y[i] + (e.y[i + 1] - e.y[i]) * t;
+                    const half = (e.width[i] + (e.width[i + 1] - e.width[i]) * t) / 2;
+                    for (let o = -half; o <= half + 1e-9; o += step) cast(x + o * fz, z - o * fx, y, { edgeId: edge.id, s: null });
+                }
+            }
+        }
+    }
+    const rows = [...hits.values()].sort((p, q) => q.hits - p.hits);
+    const byType = {};
+    for (const r of rows) byType[r.type] = (byType[r.type] || 0) + 1;
+    return { places, rays, instancesSeen, headroomM: headroom, stepM: step, offenders: rows.length, byType, hits: rows.slice(0, 60) };
+}
+
+WORLD['world-clearance'] = async (page) => {
+    const result = await page.evaluate(clearanceWalk, placeAt.toString(), Number(option('every') || 300), CLEAR_HEADROOM_M, CLEAR_STEP_M, CLEAR_FINE_M);
+    const out = option('out');
+    if (out && result.hits.length) {
+        mkdirSync(out, { recursive: true });
+        result.files = [];
+        const tag = option('tag') || 'clearance';
+        // A still view of each of the worst offenders from the ride 25 m before it, 3 m up, the HUD left out
+        const worst = result.hits.slice().sort((p, q) => q.hits - p.hits).slice(0, Number(option('shots') || 4));
+        for (const [k, hit] of worst.entries()) {
+            const s = await page.evaluate(async (placeSource, h) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const env = game.environment;
+                const at = h.s !== null ? h.s : env.route.project(h.x, h.z, null, {}).s;
+                await placeAt(Math.max(5, at - 25));
+                env.streamer.pump(Infinity);
+                const eye = env.route.sample(Math.max(0, at - 25), {});
+                const target = env.route.sample(at, {});
+                game.camera.position.set(eye.x, eye.y + 3, eye.z);
+                game.camera.lookAt(h.x, target.y + 1.2, h.z);
+                game.camera.updateMatrixWorld(true);
+                game.graphics.renderer.render(game.scene, game.camera);
+                return Math.round(at);
+            }, placeAt.toString(), hit);
+            const canvas = await page.evaluateHandle(() => game.graphics.renderer.domElement);
+            const file = join(out, `${tag}-${k + 1}-${hit.type}-s${s}.png`);
+            await canvas.screenshot({ path: file });
+            result.files.push(file);
+        }
+    }
+    return result;
+};
+
+function clearanceChecks(results, failures) {
+    const clear = results['world-clearance'];
+    if (!clear) return;
+    if (!(clear.rays > 0 && clear.instancesSeen > 0)) failures.push(`world-clearance: nothing was cast (${clear.rays} rays over ${clear.instancesSeen} drawn things)`);
+    if (clear.offenders) failures.push(`world-clearance: ${clear.offenders} drawn things stand in a road within ${clear.headroomM} m over it (${JSON.stringify(clear.byType)}): ${JSON.stringify(clear.hits.slice(0, 20))}`);
+}
+
 // The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
 const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
 
@@ -3307,6 +3514,7 @@ function isAllowedRequest(url, port) {
 
 function worldChecks(report) {
     const { results, failures } = report;
+    clearanceChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

@@ -81,7 +81,7 @@ export function loadGame(THREE = realThree(), log = []) {
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'TextDecoder', 'crypto',
-        `${source}\nreturn { WorldPhysics, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGuide, WorldRun, WorldCamera, WorldLooks, WorldEnvironment };`
+        `${source}\nreturn { WorldPhysics, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, RoadClearance, Scenery, WorldGuide, WorldRun, WorldCamera, WorldLooks, WorldEnvironment };`
     );
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink, NodeTextDecoder, webcrypto) };
 }
