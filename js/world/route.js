@@ -24,6 +24,9 @@ class Route {
     // |lateral| beyond this many metres is off the route
     static get OFF_ROUTE_M() { return 40; }
 
+    // Half the width of a traffic car's body (js/traffic.js builds it 2 x this wide); a lane keeps the car inside the road
+    static get CAR_HALF_WIDTH() { return 0.81; }
+
     // Metres per progress unit of the legacy consumers
     get unitM() { return 1; }
 

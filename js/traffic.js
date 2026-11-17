@@ -402,7 +402,7 @@ class Car {
         bodyShape.lineTo(2.0, sillY);
 
         const bodyExtrude = {
-            depth: 1.62,
+            depth: Route.CAR_HALF_WIDTH * 2, // the width the world's lanes keep inside the road (WorldRoute.laneOffset)
             bevelEnabled: true,
             bevelThickness: 0.09,
             bevelSize: 0.05,

@@ -16,6 +16,9 @@ class WorldRoute extends PolylineRoute {
     // Metres of road over the road at a tunnel or gallery
     static get ROOF_M() { return 6.5; }
 
+    // The road a traffic car's body keeps clear of on its outer side, in metres
+    static get LANE_EDGE_MARGIN_M() { return 0.2; }
+
     // Flag bits of a sample (tools/world/profile.mjs FLAG)
     static get FLAG() { return { tunnel: 1, bridge: 2, gallery: 4, cobbles: 8 }; }
 
@@ -126,10 +129,15 @@ class WorldRoute extends PolylineRoute {
         return out;
     }
 
-    // Traffic keeps to the outer part of each half of the road, 4.2 m off the centre on a 10 m road. The rider's line
-    // wanders by up to about 2 m round a hairpin, and a car is hit within 2.2 m, so a lane in the middle of the half
-    // (2.5 m) was hit on a bend; at 4.2 m the closest the two lines get is about 2.5 m.
-    laneOffset(s) { return this.sample(s, this.ruleScratch).width * 0.42; }
+    // Traffic keeps to the outer part of each half of the road. The rider's line wanders by up to about 2 m round a
+    // hairpin, and a car is hit within 2.2 m, so a lane in the middle of the half (2.5 m on a 10 m road) was hit on a
+    // bend. The lane goes out to 0.42 of the width, but never so far that the car's body comes within
+    // LANE_EDGE_MARGIN_M of the road's edge: on a 10 m road that is 3.99 m off the centre, and every road narrower
+    // than about 12.6 m is held by the edge rather than by the 0.42.
+    laneOffset(s) {
+        const width = this.sample(s, this.ruleScratch).width;
+        return Math.max(0, Math.min(width * 0.42, width / 2 - Route.CAR_HALF_WIDTH - WorldRoute.LANE_EDGE_MARGIN_M));
+    }
 
     // The two lanes traffic uses while roadworks take the rest of the road: where each stays, as an offset from the centre
     detourOffsets(s) {

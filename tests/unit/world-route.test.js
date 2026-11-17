@@ -5,9 +5,10 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { loadGame, buildEnvironment, legs } from '../helpers/load-game.js';
 import { ladder } from '../fixtures/world/stacked-ladder.js';
+import { samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { Route, PolylineRoute, LegRoute, Ground, LegGround, Terrain } = game;
+const { Route, PolylineRoute, LegRoute, Ground, LegGround, Terrain, WorldRoute } = game;
 const root = new URL('../../', import.meta.url);
 
 describe('the route contract', () => {
@@ -253,5 +254,21 @@ describe('grep guards', () => {
     test('Terrain is called only through the ground by the vehicle, traffic, cones, rockfalls and main', () => {
         const calls = /Terrain\.(groundY|zoneAt|heightAt|surfaceAt|locate|sideAt|restY|waterLevel|ceilingAt)\(/;
         expect(matching(['js/vehicle.js', 'js/traffic.js', 'js/cones.js', 'js/rockfalls.js', 'js/main.js', 'js/atmosphere.js', 'js/tours.js'], calls, [])).toEqual([]);
+    });
+});
+
+describe('world traffic lanes', () => {
+    test.each([4, 6, 8, 10, 12, 14, 20])('on a %s m road the car stays 0.2 m inside the edge, out at 0.42 of the width where that fits', (width) => {
+        const route = new WorldRoute(samplesOf(straight(200, { width })), {});
+        const lane = route.laneOffset(50);
+        expect(lane).toBeGreaterThanOrEqual(0);
+        expect(lane + Route.CAR_HALF_WIDTH).toBeLessThanOrEqual(width / 2 - WorldRoute.LANE_EDGE_MARGIN_M + 1e-6);
+        expect(lane).toBeCloseTo(Math.min(width * 0.42, width / 2 - Route.CAR_HALF_WIDTH - WorldRoute.LANE_EDGE_MARGIN_M), 5);
+    });
+
+    test('the car traffic builds is the width the lanes allow for', () => {
+        const source = readFileSync(new URL('js/traffic.js', root), 'utf8');
+        expect(source).toMatch(/depth: Route\.CAR_HALF_WIDTH \* 2/);
+        expect(Route.CAR_HALF_WIDTH * 2).toBe(1.62);
     });
 });
