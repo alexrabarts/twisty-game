@@ -2393,15 +2393,33 @@ class Vehicle {
     }
 
     // physicsMultipliers with the world's surface grip applied when there is
-    // no weather system to apply it
+    // no weather system to apply it. On run-off the brake keeps runoffBrakeGrip
+    // of itself instead of the run-off grip, which still scales the lean and
+    // the throttle.
     worldMultipliers() {
         const multipliers = this.physicsMultipliers();
-        if (this.weatherSystem) return multipliers;
-        return {
-            ...multipliers,
-            lateralFriction: multipliers.lateralFriction * this.worldSurfaceGrip,
-            brakeForce: multipliers.brakeForce * this.worldSurfaceGrip
-        };
+        let { lateralFriction, brakeForce } = multipliers;
+        if (this.runoff) {
+            const weather = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers().brakeForce : 1;
+            brakeForce = weather * this.worldPhysics.runoffBrakeGrip;
+        }
+        if (!this.weatherSystem) {
+            lateralFriction *= this.worldSurfaceGrip;
+            brakeForce *= this.worldSurfaceGrip;
+        }
+        return { ...multipliers, lateralFriction, brakeForce };
+    }
+
+    // The deceleration of the world's full brake (m/s^2): the bike's brake times brakeGain and the surface,
+    // less what the lean takes of the grip. The lean's share of the cap is used as on a friction circle, and the
+    // brake keeps sqrt(1 - share^2) of itself, never less than trailBrakeFloor
+    worldBrakeDecel(multipliers) {
+        const world = this.worldPhysics;
+        const grip = Math.max(0.01, multipliers.lateralFriction);
+        const tanCap = Math.tan(world.leanCapDeg * Math.PI / 180) * grip;
+        const used = Math.min(1, Math.tan(Math.min(Math.abs(this.leanAngle), 1.5)) / tanCap);
+        const share = world.trailBrakeFloor + (1 - world.trailBrakeFloor) * Math.sqrt(1 - used * used);
+        return this.brakeForce * world.brakeGain * multipliers.brakeForce * share;
     }
 
     updateWorldSpeed(deltaTime, throttleInput, brakeInput) {
@@ -2414,7 +2432,13 @@ class Vehicle {
             this.speed += this.acceleration * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
         }
         if (brakeInput > 0) {
-            this.speed -= this.brakeForce * brakeInput * deltaTime * weatherMultipliers.brakeForce;
+            this.speed -= this.worldBrakeDecel(weatherMultipliers) * Math.min(1, brakeInput) * deltaTime;
+        }
+        // Engine braking with the throttle closed, down to creepSpeed (the creep below is the engine at idle)
+        let engine = 0;
+        if (throttleInput <= 0 && this.speed > world.creepSpeed && !this.isJumping) {
+            engine = Math.min(world.engineBrakeMax, world.engineBrake * this.speed);
+            this.speed = Math.max(world.creepSpeed, this.speed - engine * deltaTime);
         }
 
         // The route grade acts at full strength, so a descent speeds the bike up
@@ -2422,7 +2446,7 @@ class Vehicle {
             this.speed -= this.worldGrade * 9.81 * world.slopeGravity * deltaTime;
         }
         this.speed -= 0.002 * this.speed * this.speed * deltaTime;
-        this.adviceBraking(deltaTime, throttleInput, brakeInput, weatherMultipliers);
+        this.adviceBraking(deltaTime, throttleInput, brakeInput, weatherMultipliers, engine);
 
         // Low speed never drops the bike: it creeps up to creepSpeed on its own,
         // and with the brake held at a crawl it stops with a foot down
@@ -2572,7 +2596,7 @@ class Vehicle {
     // 1. Speed advice: well over the advised speed of the next tight bend, with no throttle, and near enough
     // that the bike must slow now to make it, the engine brakes at up to adviceBrake. It never brakes past the
     // advised speed, never harder than the rider's own full brake, and never with the throttle held.
-    adviceBraking(deltaTime, throttleInput, brakeInput, multipliers) {
+    adviceBraking(deltaTime, throttleInput, brakeInput, multipliers, engine = 0) {
         const world = this.worldPhysics;
         const share = this.assistShare();
         this.hairpinAdvice = null;
@@ -2586,8 +2610,9 @@ class Vehicle {
         const decel = world.adviceBrake * share;
         // Brake only once the bike would no longer make the advised speed at the bend with this braking
         if ((v * v - advice.speed * advice.speed) / (2 * decel) < advice.bend.distance - v * 0.5) return;
-        const most = this.brakeForce * multipliers.brakeForce;
-        const extra = Math.min(decel, most) - most * Math.max(0, brakeInput);
+        // The engine braking already applied counts toward the advice, so the two together slow at adviceBrake
+        const most = this.worldBrakeDecel(multipliers);
+        const extra = Math.min(decel, most) - most * Math.max(0, brakeInput) - engine;
         if (extra > 0) this.speed = Math.max(advice.speed, this.speed - extra * deltaTime);
     }
 

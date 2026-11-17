@@ -34,6 +34,8 @@ function hairpin(radius, step = 2) {
 
 // The physics with the edge assist off, for the tests that isolate the line capture
 const NO_EDGE = Object.freeze({ ...WorldPhysics, edgeLeanRate: 0 });
+// The physics with the throttle-closed engine braking off, for the tests that isolate the speed advice
+const NO_ENGINE_BRAKE = Object.freeze({ ...WorldPhysics, engineBrake: 0 });
 
 function bikeOn(world, level, s = 40, lean = 0, physics = WorldPhysics) {
     const vehicle = new Vehicle(new THREE.Scene());
@@ -99,8 +101,9 @@ describe('speed advice', () => {
     test('with no throttle and well over the advice the engine brakes toward it, never past it and not with throttle', () => {
         const world = hairpin(12);
         const target = advised(12);
-        const run = (level, throttle) => {
-            const vehicle = bikeOn(world, level, 20);
+        // With the engine braking off, so the assist's own share shows; the ride with it is checked below
+        const run = (level, throttle, physics = NO_ENGINE_BRAKE) => {
+            const vehicle = bikeOn(world, level, 20, 0, physics);
             vehicle.speed = 20;
             let least = Infinity;
             while (vehicle.projection.s < STRAIGHT - 2) {
@@ -119,17 +122,23 @@ describe('speed advice', () => {
         expect(low.speed).toBeLessThan(off.speed);
         // Throttle held: the assist leaves the speed alone
         expect(run('normal', 0.3).speed).toBeCloseTo(run('off', 0.3).speed, 9);
+        // With the engine braking on, the two together still slow the bike to the advice and not past it
+        const engined = run('normal', 0, WorldPhysics);
+        expect(engined.speed).toBeLessThanOrEqual(target * 1.1 + 0.5);
+        expect(engined.least).toBeGreaterThanOrEqual(target - 0.3);
+        expect(engined.speed).toBeLessThan(run('off', 0, WorldPhysics).speed);
     });
 
     test('the advice braking is never harder than the rider\'s own full brake', () => {
         const world = hairpin(12);
-        const vehicle = bikeOn(world, 'normal', 90);
+        const vehicle = bikeOn(world, 'normal', 90, 0, NO_ENGINE_BRAKE);
         vehicle.speed = 25;
-        vehicle.brakeForce = 1; // a weak brake: the assist may not beat it
+        vehicle.brakeForce = 1; // a weak brake: the assist may not beat it (the world's full brake is x brakeGain)
         const before = vehicle.speed;
         vehicle.update(DT, 0, 0, 0);
         const drag = 0.002 * before * before * DT;
-        expect(before - vehicle.speed).toBeLessThanOrEqual(1 * DT + drag + 1e-9);
+        expect(before - vehicle.speed).toBeGreaterThan(drag);
+        expect(before - vehicle.speed).toBeLessThanOrEqual(WorldPhysics.brakeGain * DT + drag + 1e-9);
     });
 });
 

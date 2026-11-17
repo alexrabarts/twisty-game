@@ -37,6 +37,21 @@ const WorldPhysics = Object.freeze({
 
     cobbleGrip: 0.85,      // surface grip on a route sample flagged cobbles
 
+    // Braking (Vehicle.updateWorldSpeed). The legs keep the bike's own brake (brakeForce, 20 m/s^2 x the
+    // character); the world multiplies it by brakeGain, so the rider can scrub speed to turn in or to recover.
+    // The brake shares the grip with the lean, as a friction circle: the lean's share of the cap is used, and
+    // the brake keeps sqrt(1 - share^2) of itself, never under trailBrakeFloor (at the cap). It never crashes
+    // the bike: braking changes only the speed, and the lowside reads the lean.
+    brakeGain: 1.4,
+    trailBrakeFloor: 0.45,
+    // Engine braking with the throttle closed: engineBrake x the speed, at most engineBrakeMax, and never
+    // below creepSpeed. A long descent with the throttle closed settles near 13 m/s at 10%
+    engineBrake: 0.06,     // 1/s
+    engineBrakeMax: 2.5,   // m/s^2
+    // Share of the brake on run-off (grass, verge). The legs' run-off grip (0.5) halves the brake there; the
+    // world keeps the run-off grip for the lean and the throttle, and lets the rider brake hard to recover
+    runoffBrakeGrip: 0.9,
+
     // Hairpin assist (WorldAssist in js/world/run.js). The level (off, low, normal) scales every assist by
     // assistLevels; each assist has one tuning value, and the rest only says where a bend counts as tight.
     assistLevels: Object.freeze({ off: 0, low: 0.5, normal: 1 }),

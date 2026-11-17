@@ -12,6 +12,9 @@ const game = loadGame();
 const THREE = game.THREE;
 const WorldPhysics = game.WorldPhysics;
 const WeatherSystem = new Function(`${loadScript('weather.js')}\nreturn WeatherSystem;`)();
+// The world physics with the throttle-closed engine braking off: the tests that pin the grade or the steering
+// alone, which ride with the throttle closed, use it so the engine braking does not move the speed under them
+const NO_ENGINE = Object.freeze({ ...WorldPhysics, engineBrake: 0 });
 
 // A flat or sloped plane. `flags` and `grade` are what route.sample returns.
 // The route has no road units (unitCount 0, project finds nothing), so the
@@ -447,9 +450,9 @@ describe('slope (P34)', () => {
         return vehicle.speed;
     }
 
-    test('200 m down 12% from 15 m/s ends at 20.6 m/s in the world', () => {
-        expect(coast(worldVehicle({ grade: -0.12 }))).toBeCloseTo(20.6, 0);
-        expect(Math.abs(coast(worldVehicle({ grade: -0.12 })) - 20.6)).toBeLessThanOrEqual(0.3);
+    test('200 m down 12% from 15 m/s ends at 20.6 m/s in the world (no engine braking)', () => {
+        expect(coast(worldVehicle({ grade: -0.12, physics: NO_ENGINE }))).toBeCloseTo(20.6, 0);
+        expect(Math.abs(coast(worldVehicle({ grade: -0.12, physics: NO_ENGINE })) - 20.6)).toBeLessThanOrEqual(0.3);
     });
 
     test('the legacy vehicle on the same stub ends at 14.1 m/s', () => {
@@ -734,8 +737,9 @@ describe('low-speed turn', () => {
             realThree(), canvasStub(), { log() {}, warn() {}, error() {} }
         );
 
+        // With the engine braking off: it changes the speed within the tick, and this pins the steering
         function trace(VehicleClass, speed, inputs) {
-            const vehicle = worldVehicle({}, VehicleClass);
+            const vehicle = worldVehicle({ physics: NO_ENGINE }, VehicleClass);
             const out = [];
             for (const input of inputs) {
                 vehicle.speed = speed;
