@@ -111,6 +111,81 @@ window.twistyDev = {
         game.camera.lookAt(v.x + fx * ahead, v.y, v.z + fz * ahead);
     },
 
+    // World only: draw the game from a camera pose, for the photo match (tools/world/photomatch.mjs).
+    // x, y, z in local metres (or eyeHeight in place of y: metres above the drawn ground, read once the ground
+    // round the place has streamed in); bearing in degrees from north (90 east); pitch > 0 looks up; roll > 0 turns the
+    // picture clockwise; vfov is the vertical field of view in degrees. The ride is frozen, the bike stands on
+    // the route at the point nearest the camera (so the world streams round it) and is hidden with the traffic.
+    // With { mask: true } it also draws the sky white and everything else black, and returns the first row of
+    // ground in each column (the canvas height where a column is all sky), top down, at the canvas size.
+    async viewPose({ x, y, z, eyeHeight, bearing, pitch = 0, roll = 0, vfov = 60, mask = false } = {}) {
+        const game = window.game;
+        const env = game.environment;
+        if (!env || !env.isWorld) throw new Error('viewPose: world mode only');
+        this.freeze();
+        const route = env.route;
+        const s = route.project(x, z, null).s;
+        const p = route.sample(s, {});
+        const v = game.vehicle;
+        v.position.set(p.x, p.y, p.z);
+        v.yawAngle = p.heading;
+        v.leanAngle = 0;
+        v.leanVelocity = 0;
+        v.speed = 0;
+        v.findNearestRoadSegment();
+        game.worldRun.reset(s);
+        env.update(p, s, null, Infinity);
+        await env.streamer.settle(p, s);
+        // A few ticks so the light, sky and fog take this place's look
+        this.step(3, { render: true });
+        env.streamer.pump(Infinity);
+        const traffic = game.traffic || {};
+        const hidden = [v.group, ...(traffic.cars || []).map(c => c.carGroup), ...(traffic.motorcycles || []).map(m => m.bikeGroup)].filter(Boolean);
+        hidden.forEach(o => { o.visible = false; });
+        const groundY = env.ground.groundY(x, z, null);
+        if (y === undefined) y = groundY + eyeHeight;
+        const camera = game.camera;
+        const renderer = game.graphics.renderer;
+        const size = renderer.getSize(new THREE.Vector2());
+        const rad = Math.PI / 180;
+        camera.position.set(x, y, z);
+        camera.rotation.order = 'YXZ';
+        camera.rotation.set(pitch * rad, -bearing * rad, roll * rad);
+        camera.fov = vfov;
+        camera.aspect = size.x / size.y;
+        camera.updateProjectionMatrix();
+        camera.updateMatrixWorld(true);
+        let rows = null;
+        if (mask) {
+            const scene = game.scene;
+            const saved = { background: scene.background, fog: scene.fog, override: scene.overrideMaterial, sky: game.graphics.skyMesh ? game.graphics.skyMesh.visible : null };
+            if (game.graphics.skyMesh) game.graphics.skyMesh.visible = false;
+            scene.background = new THREE.Color(1, 1, 1);
+            scene.fog = null;
+            scene.overrideMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+            renderer.setRenderTarget(null);
+            renderer.render(scene, camera);
+            const gl = renderer.getContext();
+            const w = gl.drawingBufferWidth, h = gl.drawingBufferHeight;
+            const pixels = new Uint8Array(w * h * 4);
+            gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+            rows = [];
+            for (let col = 0; col < w; col++) {
+                let row = 0;
+                // readPixels is bottom up: row r from the top is h - 1 - r
+                while (row < h && pixels[((h - 1 - row) * w + col) * 4] > 127) row++;
+                rows.push(row);
+            }
+            scene.overrideMaterial.dispose();
+            scene.background = saved.background;
+            scene.fog = saved.fog;
+            scene.overrideMaterial = saved.override;
+            if (game.graphics.skyMesh) game.graphics.skyMesh.visible = saved.sky;
+        }
+        game.graphics.render(game.scene, camera);
+        return { s, rows, groundY, y, size: { width: size.x, height: size.y } };
+    },
+
     // Stop the live animation loop so frames only happen when step() runs.
     // Call it in the same synchronous turn as start(): any frame in between
     // would advance the ride by wall-clock time and make runs differ.
