@@ -117,13 +117,13 @@ describe('the cut slope beside the road is held below the road', () => {
         expect(heights[30 * N + 30]).toBe(110);
     });
 
-    test('two roads whose carved nodes touch: the upper one is held to the lower, one road\'s grade is not', () => {
+    test('carved nodes are never moved, whatever their neighbours: the importer resolves stacked legs', () => {
         const { heights, zones } = grid(110, [[10, 10, 100], [11, 10, 100.9], [12, 10, 101.8], [13, 10, 110]]);
         WorldData.dipRoadSides(heights, zones);
-        // A grade of 0.9 m a cell is one road: kept. A node 8 m of height over its neighbour is the other leg: held
+        // A node 8 m of height over its carved neighbour is the other leg's strip: it keeps its road's height
         expect(heights[10 * N + 11]).toBeCloseTo(100.9, 4);
         expect(heights[10 * N + 12]).toBeCloseTo(101.8, 4);
-        expect(heights[10 * N + 13]).toBeCloseTo(101.8 - WorldData.DIP_M, 4);
+        expect(heights[10 * N + 13]).toBeCloseTo(110, 4);
     });
 
     test('a node already below the road stays where it is, and the rule reads the imported heights', () => {

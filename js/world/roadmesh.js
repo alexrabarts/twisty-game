@@ -19,6 +19,14 @@
 //   bridges:             a deck, parapets and piers
 //   side roads:          a 60 m stub that ends in a road-closed barrier, and
 //                        LOD1 ribbons beyond it (D7 c)
+//   edges:               the importer's land meets each drawn edge (the verge's outer edge at LOD0, the carriageway's
+//                        beyond) with an embankment or a cut no steeper than BATTER. Where the land drawn at a coarser
+//                        level of detail lies lower, an apron (land-coloured, at the batter) runs from the edge down to
+//                        it; where two legs of a switchback lie too close for a slope (the importer's `drop` nodes), a
+//                        masonry retaining wall drops from the edge with a parapet on top; where the edge overhangs a
+//                        lower road, a deck side, a soffit and a parapet. Never a bare vertical face of land. Not on
+//                        bridges, in tunnels or galleries, which have their own. The side roads of a chunk share
+//                        one mesh of works (one each overran the window's mesh budget)
 // Rows are `{x, y, z, heading, width, bits}`, and may carry `s` (metres along the ride), `cls` (the swissTLM3D road
 // class) and the styles RoadSurface.styles gives (`centre`, `left`, `right`) with `mouthL` and `mouthR`; `bits`
 // carries the route flags. A heading turns right as it grows, and a lateral offset is positive to the right.
@@ -28,7 +36,7 @@ class RoadMesh {
         const mean = RoadSurface.means();
         return {
             asphalt: mean.asphalt, cobbles: mean.setts, sideAsphalt: [0.37, 0.37, 0.37], concrete: [0.50, 0.50, 0.48],
-            tunnel: [0.32, 0.31, 0.30], deck: [0.38, 0.37, 0.36], barrierRed: [0.78, 0.12, 0.10], barrierWhite: [0.92, 0.92, 0.90]
+            tunnel: [0.32, 0.31, 0.30], deck: [0.38, 0.37, 0.36], wall: [0.66, 0.63, 0.57], apron: [0.30, 0.33, 0.20], barrierRed: [0.78, 0.12, 0.10], barrierWhite: [0.92, 0.92, 0.90]
         };
     }
 
@@ -37,6 +45,27 @@ class RoadMesh {
 
     // The inside of a bend is held to this share of its radius
     static get INNER_SHARE() { return 0.9; }
+
+    // The edge works (RoadMesh.edgeWorks): the apron's batter (rise over run, the importer's BATTER), the most an apron
+    // or a wall drops, the depth of a deck side, and the parapet on a wall or deck (width, height)
+    static get BATTER() { return 1 / 1.5; }
+    static get DROP_MAX_M() { return 60; }
+    static get DECK_M() { return 0.9; }
+    // Metres the apron lies under the ribbon (under the verge and at the verge's edge), so the ribbon draws over it
+    static get APRON_UNDER_M() { return 0.06; }
+    static get PARAPET_W_M() { return 0.3; }
+    static get PARAPET_H_M() { return 0.8; }
+
+    // The apron's colour where no land colour is known: the land's grass, linear
+    static get APRON_LINEAR() { return RoadMesh.COLORS.apron.map(v => Math.pow(v, 2.2)); }
+
+    // The apron is land: lit as the land is, and pushed back in depth so the land wins where the two lie together
+    static apronMaterial() {
+        if (!RoadMesh.sharedApron) {
+            RoadMesh.sharedApron = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 }), { detail: true });
+        }
+        return RoadMesh.sharedApron;
+    }
 
     // Verge drawn past the edge on a bridge (inside the deck's overhang) and in a tunnel (up to the wall)
     static get BRIDGE_VERGE_M() { return 0.4; }
@@ -132,6 +161,7 @@ class RoadMesh {
         const road = new Float32Array(n * W * 4);
         const edge = new Float32Array(n * W * 4);
         let clamped = 0;
+        const sides = [];
         styled.forEach((row, k) => {
             const h = row.width / 2;
             const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
@@ -151,6 +181,9 @@ class RoadMesh {
                 road.set([h, (row.bits & 8) !== 0 ? 1 : 0, row.centre ?? C.none, bridge || tunnel ? 1 : 0], at * 4);
                 edge.set([row.left ?? 0, row.right ?? 0, row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
             });
+            const l = k * W * 3, r = (k * W + W - 1) * 3;
+            const at = c => [positions[c], positions[c + 1], positions[c + 2]];
+            sides.push({ bits: row.bits, l: at(l), r: at(r), lc: at(l + 3), rc: at(r - 3) });
         });
         const index = [];
         for (let k = 0; k + 1 < n; k++) {
@@ -171,7 +204,7 @@ class RoadMesh {
         geometry.computeVertexNormals();
         geometry.computeBoundingSphere();
         geometry.userData.near = true;
-        return { geometry, triangles: index.length / 3, clamped, near: true };
+        return { geometry, triangles: index.length / 3, clamped, near: true, sides };
     }
 
     // LOD1: one flat-coloured strip, rows decimated
@@ -191,6 +224,11 @@ class RoadMesh {
             const c = (row.bits & 8) !== 0 ? colors.cobbles : side ? colors.sideAsphalt : colors.asphalt;
             return { offsets: held.offsets, c, row };
         });
+        const sides = laid.map(({ offsets, row }) => {
+            const y = row.y + RoadMesh.LIFT_M;
+            const at = o => { const p = RoadMesh.place(row, o); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
+            return { bits: row.bits, l: at(offsets[0]), r: at(offsets[1]) };
+        });
         for (let k = 0; k + 1 < laid.length; k++) {
             const a = laid[k], b = laid[k + 1];
             const pa0 = RoadMesh.place(a.row, a.offsets[0]), pa1 = RoadMesh.place(a.row, a.offsets[1]);
@@ -199,7 +237,7 @@ class RoadMesh {
             push(pa0.x, ya, pa0.z, a.c, a.row); push(pa1.x, ya, pa1.z, a.c, a.row); push(pb0.x, yb, pb0.z, a.c, b.row);
             push(pa1.x, ya, pa1.z, a.c, a.row); push(pb1.x, yb, pb1.z, a.c, b.row); push(pb0.x, yb, pb0.z, a.c, b.row);
         }
-        return { geometry: RoadMesh.geometry(positions, shades), triangles: positions.length / 9, clamped, near: false };
+        return { geometry: RoadMesh.geometry(positions, shades), triangles: positions.length / 9, clamped, near: false, sides };
     }
 
     static geometry(positions, shades) {
@@ -291,7 +329,8 @@ class RoadMesh {
             const mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2, my = (a.y + b.y) / 2;
             const heading = Math.atan2(b.x - a.x, b.z - a.z);
             const half = (a.width + b.width) / 4;
-            RoadMesh.box(out, mx, my - 0.5, mz, half * 2 + 1.2, 0.9, run + 0.05, heading, colors.deck);
+            // The deck box is level: held under the lower of the segment's two ends, so on a grade its top never shows through the road
+            RoadMesh.box(out, mx, my - 0.5 - Math.abs(b.y - a.y) / 2, mz, half * 2 + 1.2, 0.9, run + 0.05, heading, colors.deck);
             for (const sign of [-1, 1]) {
                 const o = sign * (half + 0.35);
                 RoadMesh.box(out, mx + o * Math.cos(heading), my + 0.55, mz - o * Math.sin(heading), 0.3, 1.1, run + 0.05, heading, colors.concrete);
@@ -307,6 +346,134 @@ class RoadMesh {
         return out;
     }
 
+    // What hangs from each drawn edge of a ribbon. `sides` are its rows' edge points ({bits, l, r}, ribbon.sides);
+    // `foot(x, y, z, ox, oz)` (WorldEnvironment.edgeFoot) says what the edge point (x, y, z), facing out along (ox, oz),
+    // stands on: null (the land meets it), {kind: 'apron', y} (land lower down: a slope at BATTER to y),
+    // {kind: 'wall', y} (a retaining wall down to y) or {kind: 'deck'} (a lower road under the edge). A segment takes
+    // the stronger kind of its two ends (deck, wall, apron). Rows with a structure bit take none.
+    // Returns {apron, wall}: position and colour lists, the wall's holding the walls, decks, soffits and parapets.
+    static edgeWorks(sides, foot = null) {
+        const apron = { positions: [], shades: [] }, wall = { positions: [], shades: [] };
+        const colors = RoadMesh.COLORS;
+        const rank = { apron: 1, wall: 2, deck: 3 };
+        const ends = sides.map(side => {
+            if (side.bits & 7) return null;
+            const dx = side.l[0] - side.r[0], dz = side.l[2] - side.r[2];
+            const len = Math.hypot(dx, dz) || 1;
+            const out = { l: [dx / len, dz / len], r: [-dx / len, -dz / len] };
+            const read = key => {
+                const p = side[key];
+                const f = foot ? foot(p[0], p[1], p[2], out[key][0], out[key][1]) : null;
+                if (!f) return null;
+                const y = Number.isFinite(f.y) ? Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.y)) : p[1] - RoadMesh.DECK_M;
+                return { kind: f.kind, y, out: out[key], color: f.color || null };
+            };
+            return { l: read('l'), r: read('r') };
+        });
+        const parapet = (pa, pb, o) => {
+            const run = Math.hypot(pb[0] - pa[0], pb[2] - pa[2]);
+            if (run < 1e-3) return;
+            const heading = Math.atan2(pb[0] - pa[0], pb[2] - pa[2]);
+            const w = RoadMesh.PARAPET_W_M, h = RoadMesh.PARAPET_H_M;
+            const mx = (pa[0] + pb[0]) / 2 - (o[0] * w) / 2, mz = (pa[2] + pb[2]) / 2 - (o[1] * w) / 2;
+            RoadMesh.box(wall, mx, (pa[1] + pb[1]) / 2 + h / 2, mz, w, h, run + 0.02, heading, colors.concrete);
+        };
+        for (let k = 0; k + 1 < sides.length; k++) {
+            const ea = ends[k], eb = ends[k + 1];
+            if (!ea || !eb) continue;
+            let soffit = false;
+            for (const key of ['l', 'r']) {
+                const fa = ea[key], fb = eb[key];
+                if (!fa && !fb) continue;
+                const kind = [fa, fb].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
+                const pa = sides[k][key], pb = sides[k + 1][key];
+                const o = (fa || fb).out;
+                const low = (f, p) => (f ? f.y : p[1] - 0.05);
+                if (kind === 'apron') {
+                    // Coloured as the land it lies on (linear, WorldEnvironment.edgeFoot), so no seam shows where it meets it
+                    const color = (fa && fa.color) || (fb && fb.color) || RoadMesh.APRON_LINEAR;
+                    const under = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]];
+                    // Under the verge the land at the road's height: the verge thins out over the ground, and over a
+                    // hollow it showed the dark under the ribbon as a seam
+                    const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
+                    if (ca && cb) RoadMesh.quad(apron, under(ca), under(cb), under(pb), under(pa), color);
+                    // Then from the verge's edge out and down at the batter to the land's height
+                    const foot = (f, p) => { const y = low(f, p), run = Math.max(0, p[1] - RoadMesh.APRON_UNDER_M - y) / RoadMesh.BATTER; return [p[0] + o[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + o[1] * run]; };
+                    RoadMesh.quad(apron, under(pa), under(pb), foot(fb, pb), foot(fa, pa), color);
+                    continue;
+                }
+                const depth = (f, p) => (kind === 'deck' ? p[1] - RoadMesh.DECK_M : Math.min(low(f, p), p[1] - RoadMesh.DECK_M));
+                RoadMesh.quad(wall, pa, pb, [pb[0], depth(fb, pb), pb[2]], [pa[0], depth(fa, pa), pa[2]], kind === 'deck' ? colors.deck : colors.wall);
+                parapet(pa, pb, o);
+                if (kind === 'deck') soffit = true;
+            }
+            // Under an overhanging edge: the soffit, from one edge to the other at the deck's depth
+            if (soffit) {
+                const under = p => [p[0], p[1] - RoadMesh.DECK_M, p[2]];
+                RoadMesh.quad(wall, under(sides[k].l), under(sides[k + 1].l), under(sides[k + 1].r), under(sides[k].r), colors.deck);
+            }
+        }
+        return { apron, wall };
+    }
+
+    // The edge works of a ribbon as one mesh, added to `group` ('road-works': the apron in the land's material, the
+    // walls, decks and parapets in the structures'): the triangles they cost
+    // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
+    static addEdgeWorks(group, sides, foot) {
+        const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
+        const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] } };
+        for (const run of runs) {
+            const part = RoadMesh.edgeWorks(run, foot);
+            for (const key of ['apron', 'wall']) { works[key].positions.push(...part[key].positions); works[key].shades.push(...part[key].shades); }
+        }
+        const apron = works.apron.positions.length / 3, wall = works.wall.positions.length / 3;
+        if (!apron && !wall) return 0;
+        // Every apron triangle faces up: a double-sided material flips the normal of a face seen from its back, and an
+        // apron lit from underneath drew as a black line along the verge
+        const ap = works.apron.positions, ash = works.apron.shades;
+        for (let t = 0; t < ap.length; t += 9) {
+            const ux = ap[t + 3] - ap[t], uz = ap[t + 5] - ap[t + 2], vx = ap[t + 6] - ap[t], vz = ap[t + 8] - ap[t + 2];
+            if (uz * vx - ux * vz >= 0) continue;
+            for (let k = 0; k < 3; k++) {
+                [ap[t + 3 + k], ap[t + 6 + k]] = [ap[t + 6 + k], ap[t + 3 + k]];
+                [ash[t + 3 + k], ash[t + 6 + k]] = [ash[t + 6 + k], ash[t + 3 + k]];
+            }
+        }
+        // One colour space for the mesh: the apron's are the land's (linear), the walls' are made linear here
+        const shades = works.apron.shades.concat(works.wall.shades.map(v => Math.pow(v, 2.2)));
+        const geometry = RoadMesh.geometry(works.apron.positions.concat(works.wall.positions), shades);
+        geometry.userData.linearColors = true;
+        geometry.addGroup(0, apron, 0);
+        geometry.addGroup(apron, wall, 1);
+        // A wall is lit flat across each quad: its two triangles share the quad's normal, so no crease shows. The apron
+        // is lit as the land round it is (straight up): lit as a slope it read as a dark seam along the verge
+        RoadMesh.flatNormals(geometry, apron / 3);
+        const normal = geometry.attributes.normal.array;
+        for (let v = 0; v < apron; v++) { normal[v * 3] = 0; normal[v * 3 + 1] = 1; normal[v * 3 + 2] = 0; }
+        const mesh = RoadMesh.mesh(geometry, 'road-works', [RoadMesh.apronMaterial(), RoadMesh.material()]);
+        mesh.userData.world = 'works';
+        group.add(mesh);
+        return (apron + wall) / 3;
+    }
+
+    // From triangle `first` on, each pair of triangles (a quad of RoadMesh.quad) takes the mean of their face normals
+    static flatNormals(geometry, first = 0) {
+        const pos = geometry.attributes.position.array;
+        const normal = geometry.attributes.normal.array;
+        const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3(), m = new THREE.Vector3();
+        const face = (t, out) => {
+            a.fromArray(pos, t * 9); b.fromArray(pos, t * 9 + 3); c.fromArray(pos, t * 9 + 6);
+            return out.subVectors(c, b).cross(a.clone().sub(b)).normalize();
+        };
+        for (let t = first; t + 1 < pos.length / 9; t += 2) {
+            face(t, n);
+            face(t + 1, m);
+            n.add(m).normalize();
+            for (let v = 0; v < 6; v++) n.toArray(normal, (t * 3 + v) * 3);
+        }
+        geometry.attributes.normal.needsUpdate = true;
+    }
+
     static structureMesh(parts, name) {
         if (!parts.positions.length) return null;
         return RoadMesh.mesh(RoadMesh.geometry(parts.positions, parts.shades), name);
@@ -314,12 +481,13 @@ class RoadMesh {
 
     // One section of the ride as a group: the ribbon at `lod` and, at LOD0 and LOD1, its structures.
     // rows: the ride's rows for the section, including one past each end so sections meet.
-    static section(rows, lod, { groundAt = null, roof = 6.5 } = {}) {
+    static section(rows, lod, { groundAt = null, roof = 6.5, foot = null } = {}) {
         const group = new THREE.Group();
         group.name = 'world-road-section';
         const ribbon = RoadMesh.ribbon(rows, lod);
         group.add(RoadMesh.ribbonMesh(ribbon, 'road-ribbon'));
         let triangles = ribbon.triangles;
+        triangles += RoadMesh.addEdgeWorks(group, ribbon.sides, foot);
         const add = (parts, name) => {
             const mesh = RoadMesh.structureMesh(parts, name);
             if (mesh) {
@@ -335,13 +503,16 @@ class RoadMesh {
     }
 
     // A side road beyond the junction: the stub at LOD0 when `stub`, else the LOD1 ribbon. `holdY` keeps it under
-    // the ride where it crosses the ride's road band (WorldEnvironment.sideHold)
-    static sideRoad(rows, stub, holdY = null) {
+    // the ride where it crosses the ride's road band (WorldEnvironment.sideHold); `foot` sets its edge works (RoadMesh.edgeWorks)
+    static sideRoad(rows, stub, holdY = null, foot = null) {
         const group = new THREE.Group();
         group.name = stub ? 'world-road-stub' : 'world-road-side';
         const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1, holdY, true);
         group.add(RoadMesh.ribbonMesh(ribbon, 'road-side'));
-        group.userData.triangles = ribbon.triangles;
+        // Without a foot the edge works are left to the caller, which draws those of many side roads as one mesh
+        const triangles = ribbon.triangles + (foot ? RoadMesh.addEdgeWorks(group, ribbon.sides, foot) : 0);
+        group.userData.triangles = triangles;
+        group.userData.sides = ribbon.sides;
         return group;
     }
 

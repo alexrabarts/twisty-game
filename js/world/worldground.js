@@ -184,7 +184,30 @@ class WorldGround extends Ground {
         const at = this.position(loc);
         const side = this.sideRoadY(at.x, at.z);
         if (side !== null) return side;
-        return this.landY(at.x, at.z, loc.roadY);
+        const land = this.landY(at.x, at.z, loc.roadY);
+        return this.bridgeOrDrop(loc, half) ? land : Math.max(land, this.earthworkY(loc, half, reach));
+    }
+
+    // The fill RoadMesh draws beside the road (edgeWorks' apron): the verge at the road's height, then a slope at the
+    // importer's batter down from the verge's edge. The 8 m tile triangles lie under it near the edge on a fill.
+    // It runs out only as far as it takes to fall from the edge to the land at the edge (as the apron is drawn).
+    earthworkY(loc, half, reach) {
+        const edge = half + RoadSurface.VERGE_M;
+        if (reach <= edge) return loc.roadY;
+        const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
+        const at = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * edge, this.scratchEdge || (this.scratchEdge = {}));
+        const run = Math.min(WorldEnvironment.APRON_RUN_M, Math.max(0, loc.roadY - this.landY(at.x, at.z, loc.roadY)) / RoadMesh.BATTER);
+        return reach - edge <= run ? loc.roadY - (reach - edge) * RoadMesh.BATTER : -Infinity;
+    }
+
+    // No fill on a bridge (its parapet), and none where the importer marks a retaining wall or a drop just past the
+    // verge (where WorldEnvironment.edgeFoot reads it to draw a wall instead of the fill)
+    bridgeOrDrop(loc, half) {
+        if (loc.flags && loc.flags.bridge) return true;
+        const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
+        const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchDrop || (this.scratchDrop = {}));
+        const zone = this.tileZone(out.x, out.z);
+        return zone === WorldData.ZONE.drop || zone === WorldData.ZONE.wall;
     }
 
     // (x, z) of a located point; the point itself when it carries one

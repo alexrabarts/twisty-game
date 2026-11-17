@@ -33,6 +33,31 @@ class TerrainMesh {
         return TerrainMesh.sharedMaterial;
     }
 
+    // A node the importer carved for a road (road, bench), or a drop node that took a lower road's height under the
+    // upper road's strip (tools/world/bench.mjs): drawn SINK_M under its height
+    static carved(zone) {
+        const zones = WorldData.ZONE;
+        return zone === zones.road || zone === zones.bench || zone === zones.drop;
+    }
+
+    // The height a vertex (i, j) of a tile is drawn at, at an LOD. A carved node is drawn SINK_M under the tile's height.
+    // At a coarser LOD a vertex stands for the nodes round it, and a coarse triangle that reached from a cut slope over
+    // a road would stand over the road: a vertex is held no higher than the lowest carved node within one stride
+    // (WorldEnvironment.edgeFoot reads the same heights, so the edge works meet the land drawn at any LOD).
+    static vertexY(tile, lod, i, j) {
+        const n = WorldData.TILE_N;
+        const own = tile.heights[j * n + i];
+        let y = TerrainMesh.carved(tile.zones[j * n + i]) ? own - TerrainMesh.SINK_M : own;
+        if (lod === 0) return y;
+        const stride = 1 << lod;
+        for (let b = Math.max(0, j - stride); b <= Math.min(n - 1, j + stride); b++) {
+            for (let a = Math.max(0, i - stride); a <= Math.min(n - 1, i + stride); a++) {
+                if (TerrainMesh.carved(tile.zones[b * n + a])) y = Math.min(y, tile.heights[b * n + a] - TerrainMesh.SINK_M);
+            }
+        }
+        return y;
+    }
+
     // Triangles of a tile at an LOD, skirts included
     static triangles(lod) {
         const cells = 64 >> lod;
@@ -177,11 +202,10 @@ class TerrainMesh {
         for (let b = 0; b < side; b++) {
             for (let a = 0; a < side; a++) {
                 const i = a * stride, j = b * stride;
-                const y = tile.heights[j * n + i];
                 const zone = tile.zones[j * n + i];
-                const carved = zone === WorldData.ZONE.road || zone === WorldData.ZONE.bench;
+                const carved = TerrainMesh.carved(zone);
                 const x = baseX + i * WorldData.CELL_M, z = baseZ + j * WorldData.CELL_M;
-                let drawnY = carved ? y - TerrainMesh.SINK_M : y;
+                let drawnY = TerrainMesh.vertexY(tile, lod, i, j);
                 if (carved && holdY) drawnY = holdY(x, drawnY, z);
                 const at = (j * n + i) * 3;
                 linear[0] = grid[at]; linear[1] = grid[at + 1]; linear[2] = grid[at + 2];

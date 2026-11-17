@@ -267,10 +267,42 @@ describe('RoadMesh', () => {
         expect(tunnel.boundingBox.max.y).toBeCloseTo(100 + WorldRoute.ROOF_M + 1.2, 4);
     });
 
-    test('a road with no structures is the ribbon alone', () => {
-        expect(RoadMesh.section(line(10), 1).children).toHaveLength(1);
+    test('a road whose land meets its edges is the ribbon alone', () => {
+        expect(RoadMesh.section(line(10), 1).children.map(c => c.name)).toEqual(['road-ribbon']);
+        expect(RoadMesh.section(line(10), 1, { foot: () => null }).children.map(c => c.name)).toEqual(['road-ribbon']);
         expect(RoadMesh.sideRoad(line(10), true).name).toBe('world-road-stub');
         expect(RoadMesh.sideRoad(line(10), false).name).toBe('world-road-side');
+    });
+
+    test('the edge works: an apron at the batter down to lower land, a wall with a parapet, a deck with a soffit, none on a structure', () => {
+        const rows = line(10);
+        const near = RoadMesh.ribbon(rows, 0);
+        // LOD0: the verge's outer edge; LOD1: the carriageway's
+        expect(Math.abs(near.sides[0].l[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2 + RoadSurface.VERGE_M, 4);
+        expect(Math.abs(RoadMesh.ribbon(rows, 1).sides[0].r[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2, 4);
+        const ys = parts => parts.positions.filter((_, i) => i % 3 === 1);
+        const xs = parts => parts.positions.filter((_, i) => i % 3 === 0);
+        const edgeY = 100 + RoadMesh.LIFT_M, edgeX = rows[0].width / 2 + RoadSurface.VERGE_M;
+        // An apron 3 m down runs out about 4.5 m at 1:1.5 from just under the verge: never a vertical face
+        const apron = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'apron', y: edgeY - 3 }));
+        expect(apron.wall.positions).toHaveLength(0);
+        expect(Math.min(...ys(apron.apron))).toBeCloseTo(edgeY - 3, 4);
+        expect(Math.max(...xs(apron.apron))).toBeCloseTo(edgeX + (3 - RoadMesh.APRON_UNDER_M) / RoadMesh.BATTER, 3);
+        // A wall drops to its foot and carries a parapet over the edge
+        const wall = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 6 }));
+        expect(wall.apron.positions).toHaveLength(0);
+        expect(Math.min(...ys(wall.wall))).toBeCloseTo(edgeY - 6, 4);
+        expect(Math.max(...ys(wall.wall))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
+        // A deck hangs DECK_M with a soffit under the road
+        const deck = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'deck' }));
+        expect(Math.min(...ys(deck.wall))).toBeCloseTo(edgeY - RoadMesh.DECK_M, 4);
+        expect(deck.wall.positions.length).toBeGreaterThan(wall.wall.positions.length);
+        expect(RoadMesh.edgeWorks(near.sides, () => null).apron.positions).toHaveLength(0);
+        const roofed = RoadMesh.ribbon(rows.map(r => ({ ...r, bits: 2 })), 0);
+        const none = RoadMesh.edgeWorks(roofed.sides, () => ({ kind: 'wall', y: 0 }));
+        expect(none.wall.positions.length + none.apron.positions.length).toBe(0);
+        const group = RoadMesh.section(rows, 0, { foot: () => ({ kind: 'apron', y: edgeY - 2 }) });
+        expect(group.children.map(c => c.name)).toEqual(['road-ribbon', 'road-works']);
     });
 
     test('barriers are placed across the road they close, as wide as it is', () => {

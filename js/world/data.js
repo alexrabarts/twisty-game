@@ -26,8 +26,6 @@ class WorldData {
     static get FORMAT() { return 1; }
     // Metres under the lowest carved neighbour that a node beside the road is held to
     static get DIP_M() { return 0.05; }
-    // Metres two touching carved nodes may differ by before they are two roads and not one road's grade (16% over 8 m is 1.3)
-    static get CONFLICT_M() { return 2; }
     static get SHIPPED_BASE() { return 'world/'; }
     static get ALLOWED_BASES() { return ['world/', 'tests/fixtures/world/']; }
     static get MAX_TILES() { return 160; }
@@ -269,13 +267,12 @@ class WorldData {
         return tile;
     }
 
-    // The importer carves the road and its bench flat and lets the cut slope climb away from it at up to 1:1.
-    // A node 8 m from the road can then stand a metre or more above it, and the tile's triangles lift the land
-    // above the ribbon between two nodes. So a node beside the carved ground is held no higher than the lowest
-    // carved node it touches (less DIP_M). Where two roads lie so close that a carved node of the upper one
-    // touches a carved node of the lower one (stacked hairpin legs), the upper node is held too: a road's own grade
-    // never separates two touching nodes by CONFLICT_M, a hairpin does. The mesh and the ground both read this
-    // height, so they agree; the ribbon is drawn at the road's own height either way.
+    // The importer carves the road and its bench and lets the cut slope climb away from it at up to 1:1. A node
+    // beside the carved ground that touches no road's strip can stand a metre or more over it, so it is held no higher
+    // than the lowest carved node it touches (less DIP_M): the land falls toward the road, not over it. Carved nodes
+    // are never moved: the importer already gives every node of a triangle that reaches into a road's drawn strip the
+    // height of the lowest road there (tools/world/bench.mjs), and moving one would leave its road hanging. The mesh
+    // and the ground both read this height, so they agree.
     static dipRoadSides(heights, zones) {
         const n = WorldData.TILE_N;
         const zone = WorldData.ZONE;
@@ -292,9 +289,8 @@ class WorldData {
                         lowest = Math.min(lowest, heights[b * n + a]);
                     }
                 }
-                const height = heights[j * n + i];
                 const target = lowest - WorldData.DIP_M;
-                if (own ? lowest + WorldData.CONFLICT_M < height : target < height) lowered.push([j * n + i, target]);
+                if (!own && target < heights[j * n + i]) lowered.push([j * n + i, target]);
             }
         }
         // Every neighbour was read as imported; now write
