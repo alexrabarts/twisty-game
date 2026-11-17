@@ -80,7 +80,7 @@
                 />
                 <div class="leaderboard-buttons">
                     <button id="leaderboardSubmitBtn" class="leaderboard-submit-btn" disabled>Submit</button>
-                    <button id="leaderboardCancelBtn" class="leaderboard-cancel-btn">Cancel</button>
+                    <button id="leaderboardCancelBtn" class="leaderboard-cancel-btn" data-key="Escape">Cancel</button>
                 </div>
             </div>
 
@@ -90,7 +90,7 @@
                 <div id="leaderboardRankDisplay"></div>
                 <div id="leaderboardFlaggedDisplay"></div>
                 <div class="leaderboard-buttons" style="margin-top: 30px;">
-                    <button id="leaderboardCloseBtn" class="leaderboard-submit-btn">Close</button>
+                    <button id="leaderboardCloseBtn" class="leaderboard-submit-btn" data-key="Escape,Enter">Close</button>
                 </div>
             </div>
 
@@ -98,7 +98,7 @@
             <div id="leaderboardError" style="display: none;">
                 <p class="leaderboard-error-message" id="leaderboardErrorMessage"></p>
                 <div class="leaderboard-buttons" style="margin-top: 30px;">
-                    <button id="leaderboardErrorCloseBtn" class="leaderboard-cancel-btn">Close</button>
+                    <button id="leaderboardErrorCloseBtn" class="leaderboard-cancel-btn" data-key="Escape,Enter">Close</button>
                 </div>
             </div>
         </div>
@@ -125,6 +125,8 @@
     <script src="js/leaderboard.js"></script>
 
     <!-- Game Scripts -->
+    <!-- The one stack every dialog goes through: first, so every script after it can open one -->
+    <script src="js/modals.js"></script>
     <script src="js/graphics.js"></script>
     <script src="js/hud.js"></script>
     <script src="js/virtualcontrols.js"></script>

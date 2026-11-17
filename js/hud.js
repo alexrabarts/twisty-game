@@ -386,7 +386,8 @@ const UiIcons = {
         up: '<path d="M5 15l7-7 7 7"/>',
         down: '<path d="M5 9l7 7 7-7"/>',
         wheelie: '<circle cx="6" cy="17" r="3"/><circle cx="18" cy="9" r="3"/><path d="M6 17L18 9"/>',
-        flag: '<path d="M5 21V4M5 4h12l-2 4 2 4H5"/>'
+        flag: '<path d="M5 21V4M5 4h12l-2 4 2 4H5"/>',
+        pause: '<path d="M9 5v14M15 5v14"/>'
     },
 
     svg(name, className = 'icon') {

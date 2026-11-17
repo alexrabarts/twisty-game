@@ -797,7 +797,7 @@ class Game {
     removeRunOverlays() {
         ['finishBanner', 'crashNotification'].forEach(id => {
             const element = document.getElementById(id);
-            if (element) element.remove();
+            if (element) Modals.close(element);
         });
         document.body.classList.remove('run-over');
         if (this.input) {
@@ -810,6 +810,8 @@ class Game {
     // nothing to lose, so it goes straight on. Returns true when it asked.
     // The race is paused while the box is open, so the answer is about the ride as it stood when it asked:
     // a late YES cannot throw away a ride that went on. Enter answers YES and Escape answers CANCEL.
+    // It opens on the stack (js/modals.js), so it is on top of the crash dialog or the pause panel that asked it,
+    // and the one below comes back on Cancel.
     confirmWorldLeave(text, proceed) {
         if (!this.environment || !this.environment.isWorld || this.finished) {
             proceed();
@@ -825,31 +827,25 @@ class Game {
         const yes = document.createElement('button');
         yes.id = 'worldConfirmYes';
         yes.className = 'finish-btn primary';
+        yes.dataset.key = 'Enter,NumpadEnter';
         yes.textContent = 'YES';
         const no = document.createElement('button');
         no.id = 'worldConfirmNo';
         no.className = 'finish-btn secondary';
+        no.dataset.key = 'Escape';
         no.textContent = 'CANCEL';
         box.append(message, yes, no);
         const answer = (go) => {
             this.closeWorldConfirm();
             if (go) proceed();
         };
-        const onKey = (event) => {
-            if (event.code !== 'Enter' && event.code !== 'NumpadEnter' && event.code !== 'Escape') return;
-            event.preventDefault();
-            event.stopPropagation();
-            if (!event.repeat) answer(event.code !== 'Escape');
-        };
         yes.addEventListener('click', () => answer(true));
         no.addEventListener('click', () => answer(false));
-        // Capture phase, so the answer key reaches no other handler of the page
-        document.addEventListener('keydown', onKey, true);
         // A pause the rider already took stays theirs; the box resumes only the pause it took
         const ownsPause = !this.paused;
         if (ownsPause) this.pauseRace({ panel: false });
-        this.worldConfirm = { box, onKey, ownsPause };
-        document.body.appendChild(box);
+        this.worldConfirm = { box, ownsPause };
+        Modals.open(box, { focus: yes });
         return true;
     }
 
@@ -859,8 +855,7 @@ class Game {
         const open = this.worldConfirm;
         if (!open) return;
         this.worldConfirm = null;
-        open.box.remove();
-        document.removeEventListener('keydown', open.onKey, true);
+        Modals.close(open.box);
         if (this.input && this.input.clearActions) this.input.clearActions();
         if (open.ownsPause) this.resumeRace();
     }
@@ -872,8 +867,15 @@ class Game {
         this.paused = true;
         this.pauseStartedAt = this.now();
         if (this.soundManager) this.soundManager.stopEngineSound();
-        // A world ride's pause panel holds Resume and the data credits (js/world/credits.js)
-        if (panel && this.environment && this.environment.isWorld && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace());
+        // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
+        // in the middle of a ride
+        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu());
+    }
+
+    // Menu from the pause panel: a world ride asks first (confirmWorldLeave), a leg goes
+    leaveToMenu() {
+        if (this.environment && this.environment.isWorld) this.confirmWorldLeave(Game.WORLD_MENU_ASK, () => this.returnToMenu());
+        else this.returnToMenu();
     }
 
     resumeRace() {
@@ -954,10 +956,13 @@ class Game {
             this.soundManager.stopEngineSound();
         }
 
+        // The pause panel belongs to the ride being torn down
+        if (typeof WorldCredits !== 'undefined') WorldCredits.hidePause();
+        this.paused = false;
+
         // A world owns DOM beside the scene (the guide and its map) and the streamer's buffers
         if (this.environment && this.environment.isWorld) {
             this.environment.dispose();
-            if (typeof WorldCredits !== 'undefined') WorldCredits.hidePause();
             this.camera.far = 5000;
             this.camera.updateProjectionMatrix();
         }
@@ -1006,13 +1011,13 @@ class Game {
         // Remove finish banner if exists
         const finishBanner = document.getElementById('finishBanner');
         if (finishBanner) {
-            finishBanner.remove();
+            Modals.close(finishBanner);
         }
 
         // Remove crash notification if exists
         const crashNotification = document.getElementById('crashNotification');
         if (crashNotification) {
-            crashNotification.remove();
+            Modals.close(crashNotification);
         }
 
         // Cleanup current leg
@@ -1051,7 +1056,7 @@ class Game {
         // Remove finish banner
         const finishBanner = document.getElementById('finishBanner');
         if (finishBanner) {
-            finishBanner.remove();
+            Modals.close(finishBanner);
         }
 
         // Cleanup current leg
@@ -1086,7 +1091,7 @@ class Game {
         // Remove finish banner
         const finishBanner = document.getElementById('finishBanner');
         if (finishBanner) {
-            finishBanner.remove();
+            Modals.close(finishBanner);
         }
 
         // Cleanup current leg
@@ -2225,14 +2230,17 @@ class Game {
                 <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
                 <div class="finish-deltas">${restarts}</div>
                 <div class="finish-meta">${HudRules.number(this.worldRouteDistance())} m</div>
-                <div class="finish-buttons"><button id="restartLegBtn" class="finish-btn primary"><u>R</u>ESTART</button></div>
+                <div class="finish-buttons">
+                    <button id="restartLegBtn" class="finish-btn primary" data-key="KeyR"><u>R</u>ESTART</button>
+                    <button id="returnToMenuBtn" class="finish-btn secondary" data-key="KeyM" data-menu><u>M</u>ENU</button>
+                </div>
             </div>`;
         if (this.hud) this.hud.clearTransient();
         document.body.classList.add('run-over');
-        document.body.appendChild(banner);
+        Modals.open(banner);
         if (this.input) this.input.setMenuActive(true);
-        const again = document.getElementById('restartLegBtn');
-        if (again) again.addEventListener('click', () => this.restartLeg());
+        banner.querySelector('#restartLegBtn').addEventListener('click', () => this.restartLeg());
+        banner.querySelector('#returnToMenuBtn').addEventListener('click', () => this.returnToMenu());
     }
 
     showFinishScreen() {
@@ -2329,10 +2337,11 @@ class Game {
         const unlockPanel = this.buildUnlockPanel(unlocks);
         // Until the next bike is in hand, say how far away it is
         const progress = flow.riders.length > 0 ? '' : this.tourSystem.unlockProgressText();
-        const button = (id, cls, label) => `<button id="${id}" class="finish-btn ${cls}">${label}</button>`;
+        // `key`: the KeyboardEvent.code that presses it (js/modals.js)
+        const button = (id, cls, label, key = '') => `<button id="${id}" class="finish-btn ${cls}"${key ? ` data-key="${key}"` : ''}>${label}</button>`;
         const tourButton = isLastLeg
-            ? button('restartTourBtn', flow.primary === 'restart-tour' ? 'primary' : 'secondary', '<u>R</u>ESTART TOUR')
-            : button('nextLegBtn', flow.primary === 'next-leg' ? 'primary' : 'secondary', '<u>N</u>EXT LEG →');
+            ? button('restartTourBtn', flow.primary === 'restart-tour' ? 'primary' : 'secondary', 'RESTART TOUR')
+            : button('nextLegBtn', flow.primary === 'next-leg' ? 'primary' : 'secondary', '<u>N</u>EXT LEG →', 'KeyN');
         const chooseButton = flow.primary === 'choose-rider'
             ? button('chooseRiderBtn', 'primary', 'CHOOSE YOUR NEW BIKE →')
             : '';
@@ -2359,8 +2368,8 @@ class Game {
                 <div class="finish-buttons">
                     ${chooseButton}
                     ${tourButton}
-                    ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG')}
-                    ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU')}
+                    ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG', 'KeyR')}
+                    ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU', 'KeyM')}
                 </div>
             </div>
         `;
@@ -2368,7 +2377,8 @@ class Game {
         // The results card owns the screen: no HUD or touch controls behind it
         if (this.hud) this.hud.clearTransient();
         document.body.classList.add('run-over');
-        document.body.appendChild(finishBanner);
+        // Enter takes the default action: the stack focuses the primary button
+        Modals.open(finishBanner);
 
         // Enable R key for restart
         if (this.input) {
@@ -2380,7 +2390,7 @@ class Game {
 
         // Add event listeners to buttons
         document.getElementById('restartLegBtn').addEventListener('click', () => {
-            finishBanner.remove();
+            Modals.close(finishBanner);
             // Disable R key when menu is closed
             if (this.input) {
                 this.input.setMenuActive(false);
@@ -2414,7 +2424,7 @@ class Game {
                     }
 
                     // Hide finish banner first
-                    finishBanner.remove();
+                    Modals.close(finishBanner);
 
                     // Show leaderboard entry if active, otherwise go straight to next leg
                     if (shouldShowLeaderboard) {
@@ -2437,7 +2447,7 @@ class Game {
                 if (this.input) {
                     this.input.setMenuActive(false);
                 }
-                finishBanner.remove();
+                Modals.close(finishBanner);
                 const open = () => this.returnToMenu({ riderId: flow.riders[0] });
                 if (shouldShowLeaderboard) {
                     this.showLeaderboardEntryUI(open);
@@ -2447,9 +2457,6 @@ class Game {
             });
         }
 
-        // Enter takes the default action
-        const primaryBtn = finishBanner.querySelector('.finish-btn.primary');
-        if (primaryBtn) primaryBtn.focus({ preventScroll: true });
 
         // Add event listener for restart tour button (if last leg)
         if (isLastLeg) {
@@ -2462,7 +2469,7 @@ class Game {
                     }
 
                     // Hide finish banner first
-                    finishBanner.remove();
+                    Modals.close(finishBanner);
 
                     // Show leaderboard entry if active, otherwise go straight to first leg
                     if (shouldShowLeaderboard) {
@@ -2547,7 +2554,7 @@ class Game {
             ? `<div class="crash-tip"><span class="kbd">C</span> back to the last checkpoint, +${Game.RESTART_PENALTY_MS / 1000} s</div>`
             : '';
         const checkpointButton = hasCheckpoint
-            ? `<button id="checkpointCrashBtn" class="btn btn-primary"><u>C</u>heckpoint (+${Game.RESTART_PENALTY_MS / 1000} s)</button>`
+            ? `<button id="checkpointCrashBtn" class="btn btn-primary" data-key="KeyC"><u>C</u>heckpoint (+${Game.RESTART_PENALTY_MS / 1000} s)</button>`
             : '';
         crashNotification.innerHTML = `
             <div class="crash-title">CRASHED</div>
@@ -2555,13 +2562,20 @@ class Game {
             ${tip}
             <div class="run-buttons">
                 ${checkpointButton}
-                <button id="restartCrashBtn" class="btn${hasCheckpoint ? '' : ' btn-primary'}"><u>R</u>estart</button>
-                <button id="menuCrashBtn" class="btn"><u>M</u>enu</button>
+                <button id="restartCrashBtn" class="btn${hasCheckpoint ? '' : ' btn-primary'}" data-key="KeyR"><u>R</u>estart</button>
+                <button id="menuCrashBtn" class="btn" data-key="KeyM" data-menu><u>M</u>enu</button>
             </div>
         `;
 
         if (this.hud) this.hud.clearTransient();
-        document.body.appendChild(crashNotification);
+        // A crash is not dismissed with Escape: the run waits on one of its buttons. P still pauses over it.
+        Modals.open(crashNotification, {
+            onKey: (event) => {
+                if (event.code !== 'KeyP' || event.repeat) return false;
+                this.pauseRace();
+                return true;
+            }
+        });
 
         // Enable R key for restart
         if (this.input) {
@@ -2569,9 +2583,9 @@ class Game {
         }
 
         // Add event listeners to buttons
-        document.getElementById('restartCrashBtn').addEventListener('click', () => {
+        crashNotification.querySelector('#restartCrashBtn').addEventListener('click', () => {
             const go = () => {
-                crashNotification.remove();
+                Modals.close(crashNotification);
                 // Disable R key when menu is closed
                 if (this.input) {
                     this.input.setMenuActive(false);
@@ -2582,7 +2596,7 @@ class Game {
             else go();
         });
 
-        const checkpointBtn = document.getElementById('checkpointCrashBtn');
+        const checkpointBtn = crashNotification.querySelector('#checkpointCrashBtn');
         if (checkpointBtn) {
             checkpointBtn.addEventListener('click', () => {
                 if (this.input) {
@@ -2592,7 +2606,7 @@ class Game {
             });
         }
 
-        document.getElementById('menuCrashBtn').addEventListener('click', () => {
+        crashNotification.querySelector('#menuCrashBtn').addEventListener('click', () => {
             const go = () => {
                 // Disable R key when menu is closed
                 if (this.input) {
@@ -2634,11 +2648,10 @@ class Game {
         nameInput.value = '';
         submitBtn.disabled = true;
 
-        // Show overlay
+        // Show overlay. It lives in index.html, so the stack keeps it in the page when it closes; Escape presses
+        // the visible Cancel or Close (data-key in index.html)
         overlay.classList.add('active');
-
-        // Focus input
-        setTimeout(() => nameInput.focus(), 100);
+        Modals.open(overlay, { keep: true, focus: nameInput });
 
         // Enable/disable submit button based on input
         const inputHandler = () => {
@@ -2702,6 +2715,7 @@ class Game {
             finished = true;
 
             overlay.classList.remove('active');
+            Modals.close(overlay);
             nameInput.disabled = false;
             submitBtn.disabled = false;
             cancelBtn.disabled = false;
@@ -2769,7 +2783,7 @@ class Game {
 
         // Remove any existing viewer
         const existing = document.getElementById('leaderboardViewer');
-        if (existing) existing.remove();
+        if (existing) Modals.close(existing);
 
         const overlay = document.createElement('div');
         overlay.id = 'leaderboardViewer';
@@ -2782,12 +2796,12 @@ class Game {
             <h2 class="lb-title">${UiIcons.svg('trophy')} Best times</h2>
             <div class="lb-leg">${safeLegName}</div>
             <div id="leaderboardViewerBody" class="lb-body">Loading…</div>
-            <button id="leaderboardViewerClose" class="lb-close">Close</button>
+            <button id="leaderboardViewerClose" class="lb-close" data-key="Escape">Close</button>
         `;
         overlay.appendChild(panel);
-        document.body.appendChild(overlay);
+        Modals.open(overlay);
 
-        const close = () => overlay.remove();
+        const close = () => Modals.close(overlay);
         panel.querySelector('#leaderboardViewerClose').addEventListener('click', close);
         overlay.addEventListener('click', (e) => {
             if (e.target === overlay) close();
@@ -3293,13 +3307,13 @@ class Game {
                 // Remove finish banner if it exists
                 const finishBanner = document.getElementById('finishBanner');
                 if (finishBanner) {
-                    finishBanner.remove();
+                    Modals.close(finishBanner);
                 }
 
                 // Remove crash notification if it exists
                 const crashNotification = document.getElementById('crashNotification');
                 if (crashNotification) {
-                    crashNotification.remove();
+                    Modals.close(crashNotification);
                 }
 
                 // Disable menu keys when menu is closed

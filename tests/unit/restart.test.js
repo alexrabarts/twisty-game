@@ -7,6 +7,8 @@ import { readFileSync } from 'node:fs';
 import { loadGame, buildEnvironment } from '../helpers/load-game.js';
 
 const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
+// The dialog stack every box of the game opens on (window.Modals)
+(0, eval)(readFileSync(new URL('../../js/modals.js', import.meta.url), 'utf8'));
 const classSource = source.slice(0, source.indexOf('Game.RESTART_CLEAR_SEGMENTS = 6;') + 'Game.RESTART_CLEAR_SEGMENTS = 6;'.length);
 const callouts = [];
 const Game = new Function('showCallout', 'TourSystem', 'Course', `${classSource}\nreturn Game;`)(
@@ -225,7 +227,7 @@ describe('a world ride is not thrown away in one key press', () => {
         game.environment = { isWorld: true, stage: null };
         return game;
     };
-    afterEach(() => { document.body.innerHTML = ''; });
+    afterEach(() => { Modals.reset(); document.body.innerHTML = ''; });
 
     test('a full restart asks first, and Cancel leaves the ride as it was', () => {
         const game = worldGame();
@@ -324,6 +326,8 @@ describe('a world ride is not thrown away in one key press', () => {
         expect(Game.WORLD_RESTART_TEXT.crash).toBeTruthy();
         expect(Game.WORLD_RESTART_TEXT.crash).not.toBe(Game.WORLD_RESTART_TEXT.key);
         const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
+// The dialog stack every box of the game opens on (window.Modals)
+(0, eval)(readFileSync(new URL('../../js/modals.js', import.meta.url), 'utf8'));
         expect(source).toMatch(/this\.restartFromCheckpoint\('crash'\)/);
     });
 

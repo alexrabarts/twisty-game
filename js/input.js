@@ -68,8 +68,9 @@ class InputHandler {
                 this.cameraSwitchPressed = true;
             }
 
-            // Check for pause toggle
-            if (event.code === 'KeyP') {
+            // Check for pause toggle; Escape pauses too, and the pause panel is the way to the menu. Once a dialog
+            // is open the dialog stack (js/modals.js) takes every key, so these only ever pause a ride.
+            if (event.code === 'KeyP' || event.code === 'Escape') {
                 this.pausePressed = true;
             }
 
@@ -89,30 +90,8 @@ class InputHandler {
                 this.virtualControls.highlightKey(event.code, false);
             }
 
-            if (event.code === 'KeyR') {
-                this.resetPressed = false;
-            }
-
-            if (event.code === 'KeyM') {
-                this.menuReturnPressed = false;
-                this.soundTogglePressed = false;
-            }
-
-            if (event.code === 'KeyN') {
-                this.nextLegPressed = false;
-            }
-
-            if (event.code === 'KeyC') {
-                this.checkpointRestartPressed = false;
-            }
-
-            if (event.code === 'KeyZ') {
-                this.cameraSwitchPressed = false;
-            }
-
-            if (event.code === 'KeyP') {
-                this.pausePressed = false;
-            }
+            // A one-shot press stays until the frame reads it (check*): a tap shorter than a frame, which a slow
+            // frame makes common, would otherwise be lost. clearActions drops presses nobody read.
         });
     }
 
@@ -267,6 +246,11 @@ class InputHandler {
     }
 
     checkPause() {
+        // The touch pause button (js/virtualcontrols.js), cleared once read as the camera button is
+        if (this.virtualControls && this.virtualControls.getKey('KeyP')) {
+            this.virtualControls.touches['KeyP'] = false;
+            return true;
+        }
         if (this.pausePressed) {
             this.pausePressed = false;
             return true;

@@ -13,7 +13,7 @@ const read = name => readFileSync(new URL(`../../js/${name}`, import.meta.url), 
 const vehicleSource = read('vehicle.js');
 const end = 'keepFileColours: true }));';
 const charactersSource = vehicleSource.slice(0, vehicleSource.indexOf(end) + end.length);
-(0, eval)(`${charactersSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS;`);
+(0, eval)(`${read('modals.js')}\n${charactersSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS;`);
 
 describe('unlock detection', () => {
     let tour;
@@ -24,9 +24,7 @@ describe('unlock detection', () => {
         tour = new TourSystem();
     });
 
-    afterEach(() => {
-        if (tour.keyboardHandler) document.removeEventListener('keydown', tour.keyboardHandler);
-    });
+    afterEach(() => Modals.reset());
 
     test('the first leg unlocks the next leg only, so the tour carries on', () => {
         const unlocks = tour.markLegCompleted('mountain-dawn');
@@ -111,9 +109,7 @@ describe('the bike picker', () => {
         tour = new TourSystem();
     });
 
-    afterEach(() => {
-        if (tour.keyboardHandler) document.removeEventListener('keydown', tour.keyboardHandler);
-    });
+    afterEach(() => Modals.reset());
 
     test('each rider starts on their first bike', () => {
         CHARACTERS.forEach(c => expect(tour.getSelectedBike(c.id)).toBe(c.bikes[0]));

@@ -658,6 +658,11 @@ body.touch.world-ride #hudStageKm {
     display: none;
 }
 
+/* A dialog with another on top of it (js/modals.js): inert, and out of sight unless it asked to stay in view */
+[data-modal-under="hide"] {
+    visibility: hidden !important;
+}
+
 /* The question before a world ride is thrown away */
 .world-confirm {
     position: fixed;
@@ -877,6 +882,11 @@ body.touch .hud-hint .hint-touch {
 .virtual-button-camera svg {
     width: 22px;
     height: 22px;
+}
+
+/* Pause, above the camera button (js/virtualcontrols.js); it shares the camera button's look and hiding rules */
+.virtual-button-pause {
+    bottom: calc(12px + 48px + 12px + env(safe-area-inset-bottom, 0px));
 }
 
 @media (orientation: landscape) and (max-height: 500px) {

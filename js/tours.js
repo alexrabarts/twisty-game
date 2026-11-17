@@ -377,9 +377,9 @@ class TourSystem {
         // Rebuildable: lock states change as the player progresses
         this.onLegSelected = onLegSelected || this.onLegSelected;
         const existing = document.querySelector('.tour-selector-overlay');
-        if (existing) existing.remove();
-        if (this.keyboardHandler) {
-            document.removeEventListener('keydown', this.keyboardHandler);
+        if (existing) {
+            Modals.close(existing);
+            existing.remove();
         }
 
         const icon = name => (typeof UiIcons !== 'undefined' ? UiIcons.svg(name) : '');
@@ -524,11 +524,17 @@ class TourSystem {
         };
         this.renderLegCard = renderLegCard;
 
+        // Focus follows the screen, so Enter presses the screen's own primary button
+        const focusPrimary = (id) => {
+            const button = document.getElementById(id);
+            if (button && !button.disabled) button.focus({ preventScroll: true });
+        };
         const showTrackScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'none';
             document.querySelector('.track-select-screen').style.display = 'flex';
             this.menuScreen = 'track';
             renderLegCard();
+            focusPrimary('legStartBtn');
         };
         const showRiderScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'flex';
@@ -536,6 +542,7 @@ class TourSystem {
             this.menuScreen = 'rider';
             if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
             renderRiderCard();
+            focusPrimary('riderContinueBtn');
         };
         this.showTrackScreen = showTrackScreen;
         this.showRiderScreen = showRiderScreen;
@@ -580,11 +587,10 @@ class TourSystem {
             }
         });
 
-        // Keyboard navigation
+        // Keyboard navigation. The menu is the bottom of the dialog stack (js/modals.js), which hands it a key only
+        // while nothing (credits, best times) is open on it. Returns true when it used the key.
         this.keyboardHandler = (e) => {
-            if (!this.legSelectorActive) return;
-            // The best-times viewer sits on top of the menu
-            if (document.getElementById('leaderboardViewer')) return;
+            if (!this.legSelectorActive) return false;
 
             const isLeft = e.code === 'ArrowLeft' || e.code === 'KeyA';
             const isRight = e.code === 'ArrowRight' || e.code === 'KeyD';
@@ -601,19 +607,30 @@ class TourSystem {
                     e.preventDefault();
                     document.getElementById('riderContinueBtn').click();
                 }
-                return;
+                else return false;
+                return true;
             }
 
             if (isLeft) { e.preventDefault(); moveLegFocus(-1); }
             else if (isRight) { e.preventDefault(); moveLegFocus(1); }
-            else if (e.code === 'Escape') { e.preventDefault(); showRiderScreen(); }
             else if (isConfirm) {
                 e.preventDefault();
                 document.getElementById('legStartBtn').click();
             }
+            else return false;
+            return true;
         };
 
-        document.addEventListener('keydown', this.keyboardHandler);
+        // The overlay stays in view (the 3D showcase behind it) while credits or best times sit on it, and stays
+        // in the page when hidden for a ride. Escape goes back from the leg screen to the rider screen.
+        const overlay = container.querySelector('.tour-selector-overlay');
+        Modals.open(overlay, {
+            under: 'show',
+            keep: true,
+            focus: document.getElementById('riderContinueBtn'),
+            onKey: event => this.keyboardHandler(event),
+            cancel: () => { if (this.menuScreen === 'track') showRiderScreen(); }
+        });
 
         // Kick off the 3D rider showcase
         if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
@@ -637,14 +654,10 @@ class TourSystem {
         const overlay = document.querySelector('.tour-selector-overlay');
         if (overlay) {
             overlay.style.display = 'none';
+            Modals.close(overlay);
         }
         document.body.classList.remove('in-menu');
         this.legSelectorActive = false;
-
-        // Remove keyboard event listener
-        if (this.keyboardHandler) {
-            document.removeEventListener('keydown', this.keyboardHandler);
-        }
     }
 
     // After a bike unlocks: open the rider screen on the new bike

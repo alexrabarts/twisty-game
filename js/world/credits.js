@@ -59,14 +59,14 @@ const WorldCredits = {
         notice.className = 'world-credits-notice';
         const close = document.createElement('button');
         close.className = 'btn';
+        close.dataset.key = 'Escape';
         close.textContent = 'Close';
         close.addEventListener('click', (event) => { event.stopPropagation(); WorldCredits.close(); });
         box.append(title, intro, credit, notice, close);
         panel.appendChild(box);
         panel.addEventListener('click', (event) => { if (event.target === panel) WorldCredits.close(); });
-        WorldCredits.onKey = (event) => { if (event.code === 'Escape') WorldCredits.close(); };
-        document.addEventListener('keydown', WorldCredits.onKey);
-        document.body.appendChild(panel);
+        // On top of the menu or the pause panel that opened it (js/modals.js)
+        Modals.open(panel);
         const { credit: line, notice: more } = await WorldCredits.text(environment);
         credit.textContent = line;
         notice.textContent = more;
@@ -76,13 +76,12 @@ const WorldCredits = {
 
     close() {
         const old = document.getElementById('world-credits');
-        if (old) old.remove();
-        if (WorldCredits.onKey) document.removeEventListener('keydown', WorldCredits.onKey);
-        WorldCredits.onKey = null;
+        if (old) Modals.close(old);
     },
 
-    // The pause panel of a world ride: Resume and Credits. `resume` is called by its Resume button.
-    showPause(environment, resume) {
+    // The pause panel of a ride: Resume, Menu (when `menu` is given) and Credits, and on a world ride the hairpin
+    // assist. P and Escape resume, M is Menu.
+    showPause(environment, resume, menu = null) {
         WorldCredits.hidePause();
         const panel = document.createElement('div');
         panel.id = 'world-pause';
@@ -91,19 +90,36 @@ const WorldCredits = {
         title.className = 'world-pause-title';
         title.textContent = 'Paused';
         const go = document.createElement('button');
-        go.className = 'btn';
+        go.className = 'btn btn-primary';
+        go.dataset.resume = '';
+        go.dataset.key = 'KeyP,Escape';
         go.textContent = 'Resume (P)';
         go.addEventListener('click', (event) => { event.stopPropagation(); resume(); });
-        panel.append(title, go, WorldCredits.button('btn', environment));
-        // The hairpin assist level (js/world/run.js WorldAssist)
-        if (typeof WorldAssist !== 'undefined') panel.appendChild(WorldAssist.pauseButton());
-        document.body.appendChild(panel);
+        panel.append(title, go);
+        if (menu) {
+            const leave = document.createElement('button');
+            leave.className = 'btn';
+            leave.dataset.menu = '';
+            leave.dataset.key = 'KeyM';
+            leave.innerHTML = '<u>M</u>enu';
+            leave.addEventListener('click', (event) => { event.stopPropagation(); menu(); });
+            panel.appendChild(leave);
+        }
+        panel.appendChild(WorldCredits.button('btn', environment && environment.isWorld ? environment : null));
+        // The hairpin assist level (js/world/run.js WorldAssist), a world ride's own
+        if (environment && environment.isWorld && typeof WorldAssist !== 'undefined') {
+            const assist = WorldAssist.pauseButton();
+            // The stack gives keys to the top dialog alone, so the H the ride listens for is the button's here
+            assist.dataset.key = 'KeyH';
+            panel.appendChild(assist);
+        }
+        Modals.open(panel, { focus: go });
         return panel;
     },
 
     hidePause() {
-        const old = document.getElementById('world-pause');
-        if (old) old.remove();
         WorldCredits.close();
+        const old = document.getElementById('world-pause');
+        if (old) Modals.close(old);
     }
 };
