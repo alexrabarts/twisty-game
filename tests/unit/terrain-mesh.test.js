@@ -1,5 +1,6 @@
 // Rock dressing reads the profile's face description, not the side sign.
-import { buildEnvironment, decalMeshes, groundedRecords, loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+import { buildEnvironment, decalMeshes, groundedRecords, loadSharedGame as loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 describe('embedded rock spread reads side.face.rockSpread', () => {
     let game;

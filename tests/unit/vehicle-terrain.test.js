@@ -2,7 +2,8 @@
 // band (wall, fall, run-off), ground height for a fall, the Y it rides at, and
 // the run-off rules. Real Vehicle and Environment on real three r150.
 import { jest } from '@jest/globals';
-import { buildEnvironment, loadGame } from '../helpers/load-game.js';
+import { buildEnvironment, loadSharedGame as loadGame } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const DT = 1 / 60;
 const CRASHES = /CRASHED|FALLING/;

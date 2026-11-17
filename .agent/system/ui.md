@@ -4,6 +4,7 @@
 - Two fonts: Barlow Condensed for numbers and headings (tabular figures), Inter for UI text. Both load from Google Fonts with system fallbacks.
 - `js/hud.js` owns the in-game HUD. `HudRules` holds the decisions (hint timing, FPS toggle, touch detection, speed gauge) as pure functions; `Hud` does the DOM writes. Per-frame writes go to existing text nodes and only when the shown value changes.
 - The timer column (`.hud-top`) is one flex column: timer, start card, wheelie, split, call-outs. Items in it cannot overlap. Call a message with `showCallout(text, tone, ms)`; tones are `info`, `good`, `bad`, `warn` and `gold`. At most three show at once.
+- Gate pips: one per gate, built by `Hud.setGates(passed, total)`. A converted leg has 14 to 20 gates, so above `HudRules.MANY_GATES` (8) the pips row carries `data-many` and `css/ui.css` shrinks the pips and the gap to fit a 360 px phone.
 - In-game panels do not use `backdrop-filter`: blurring the live canvas costs GPU time every frame.
 - Touch controls exist only when `(pointer: coarse)` matches, or after the first touch on a laptop. `body.touch` moves the speed gauge to the top right.
 - The FPS counter is off by default. Show it with `?fps=1` or the backquote key; the key's choice is kept in `localStorage` (`twistyShowFps`).

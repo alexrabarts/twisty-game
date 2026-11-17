@@ -9,7 +9,9 @@
 //   node tools/terrain-check.mjs <probe> --update-baseline --legs id [--part ground,decals]
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
-// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime mutate
+// Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
+// submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
+//   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
 // (`shortcuts` runs its own doubled-back control)
 // --no-assets keeps every leg's procedural dressing, trees and bushes, the procedural bike and the procedural cars (js/sceneassets.js, js/treemodels.js, js/bikemodels.js and js/carmodels.js swap nothing), for a before/after measure.
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
@@ -20,6 +22,7 @@
 //   tests/golden/terrain-baseline.json   frozen at phase 0a: the jest goldens
 //   tests/golden/parts-baseline.json     mutable per-leg `parts` and `surface`, guarded as below
 // Never let a page reach production: cloudfunctions.net, firebasedatabase.app and firebaseio.com are aborted.
+// The `submit` probe is the one exception in kind, not in effect: it answers the callable requests itself, so none leaves the machine.
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -40,6 +43,18 @@ const BLOCKED_HOSTS = ['cloudfunctions.net', 'firebasedatabase.app', 'firebaseio
 const SOLID_BOULDER_BUDGET = 1500;
 // Per leg, counted as the budget probe counts them, with any modelled scenery (js/sceneassets.js) in place
 const LEG_BUDGET = { meshes: 800, triangles: 450000, instances: 1400 };
+// The whole-scene digest of each leg that is still on the shared course, in the real
+// page with modelled assets (the `scene` probe). A converted leg's row is removed in
+// its own commit.
+const SCENE_PINS = {
+    'valley-run': ['f542b41ad8fe87d2', 836, 639, 10, true],
+    'coastal-descent': ['5ff10ec2ea619c7d', 747, 125, 8, true],
+    'foggy-gorge': ['230562653b2ff748', 679, 167, 11, true],
+    'high-pass': ['87c5427b85e7af14', 1061, 723, 9, false],
+    'storm-valley': ['b748d8c76572fb44', 704, 1173, 13, true],
+    'night-ride': ['b40ac41dad1d0656', 700, 833, 11, true],
+    'winter-pass': ['ee6c0030fa0c2523', 692, 1249, 10, true]
+};
 const LATERALS = [-80, -40, -20, -12, 0, 12, 20, 40, 80];
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.webp': 'image/webp', '.glb': 'model/gltf-binary' };
 
@@ -55,7 +70,9 @@ const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
 // The shortcuts control builds its own road and reads no leg, so it runs once, filed under the first leg asked for
-const probeLegIds = name => (name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : legIds);
+// The long-leg probes need a converted leg: leg 1 (the fixture under --fixture) unless --legs names others
+const LONG_PROBES = ['course', 'window', 'stream', 'preview', 'finish', 'hudgates'];
+const probeLegIds = name => (LONG_PROBES.includes(name) && !option('legs') ? ['mountain-dawn'] : name === 'runoff' && !option('legs') ? ['mountain-dawn'] : name === 'shortcutsControl' ? legIds.slice(0, 1) : (name === 'atmo' || name === 'atmoControl') && !option('legs') ? ['mountain-dawn'] : legIds);
 const jobs = Number(option('jobs') || 3);
 
 const fail = (code, message) => {
@@ -103,13 +120,26 @@ function startServer() {
 
 const state = { blocked: [], notFound: [], pageErrors: [], lastError: '', injected: false };
 
+// The `submit` probe answers the leaderboard callables itself. Never a request.continue():
+// nothing it handles reaches a network.
+const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
+function fulfilCallable(calls, request) {
+    if (request.method() === 'OPTIONS') return request.respond({ status: 204, headers: CORS });
+    const name = new URL(request.url()).pathname.split('/').pop();
+    (calls[name] ||= []).push(JSON.parse(request.postData() || '{}').data || {});
+    const result = name === 'startRun' ? calls.reply : name === 'submitRun' ? { rank: 1, flagged: false, entryId: 'probe' } : { entries: [] };
+    return request.respond({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ result }) });
+}
+
 async function openPage(browser, port, url = '/') {
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 540, deviceScaleFactor: 1 });
     await page.setRequestInterception(true);
     page.on('request', request => {
         const target = new URL(request.url());
-        if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
+        if (page.callables && target.hostname.endsWith('cloudfunctions.net')) {
+            fulfilCallable(page.callables, request);
+        } else if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
             state.blocked.push(request.url());
             request.abort();
         } else if (/jsdelivr\.net\/npm\/three@0\.150\.0\/build\/three\.min\.js/.test(request.url())) {
@@ -163,6 +193,13 @@ async function openGame(browser, port) {
         } else if (await page.evaluate(() => typeof SceneAssets === 'undefined')) {
             await page.addScriptTag({ url: '/js/sceneassets.js' });
             state.injected = true;
+        }
+        // The 150-segment fixture course stands in for a converted leg until one ships (installed on leg 1)
+        if (flag('fixture')) {
+            const source = readFileSync(join(root, 'tests/fixtures/course-fixture.js'), 'utf8').replace(/^export /gm, '');
+            await page.evaluate(code => {
+                new Function(`${code}\nCourse.LEGS[FIXTURE_LEG] = fixtureCourse(Terrain); Terrain.adopt(Course.LEGS);\nconst leg = game.tourSystem.legs.find(row => row.id === FIXTURE_LEG); leg.startSegment = 0; leg.endSegment = Course.LEGS[FIXTURE_LEG].segments - 1;`)();
+            }, source);
         }
         await page.evaluate(installProbe, D6_CLASSES.map(r => r.source), LATERALS);
         return page;
@@ -318,7 +355,7 @@ function installProbe(d6Sources, latSet) {
             fingerprints: await P.fingerprints(env, scene),
             decalCounts: P.decals(env).map(list => list.length),
             counts: { meshes: hashes.length, triangles: Math.round(triangles), instances: instanceCount, grounded: env.groundedObjects.length, d6: env.groundedObjects.filter(g => d6.some(r => r.test(g.label))).length },
-            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, village: assets.village, ...(assets.trees && { trees: assets.trees }), floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
+            ...(assets && { assets: { bytes: assets.bytes, ms: assets.ms, rocks: { rocks: assets.rocks.rocks, meshes: assets.rocks.meshes, error: assets.rocks.error }, portals: assets.portals, rockFace: assets.rockFace, village: assets.village, ...(assets.bridge && { bridge: assets.bridge }), ...(assets.files && { files: assets.files }), ...(assets.trees && { trees: assets.trees }), floating: assets.violations.filter(v => v.kind === 'floating').length, buried: assets.violations.filter(v => v.kind === 'buried').length } }),
             buildMs: round(buildMs, 1)
         };
     };
@@ -597,7 +634,9 @@ function installProbe(d6Sources, latSet) {
         twistyDev.autopilot({ speed });
         const out = { speed, checkpointTicks: [], finishTick: null, crashTick: null, positions: [] };
         let seen = 0;
-        for (let tick = 1; tick <= 9000; tick++) {
+        // A long leg needs more ticks than the 9000 of a short one (which keep their cap)
+        const cap = Math.max(9000, Math.ceil((leg.endSegment - leg.startSegment + 1) * 20 / speed * 60 * 1.5));
+        for (let tick = 1; tick <= cap; tick++) {
             twistyDev.step(1);
             while (seen < game.checkpointsPassed) { out.checkpointTicks.push(tick); seen++; }
             if (tick % 60 === 0) out.positions.push([game.vehicle.position.x, game.vehicle.position.y, game.vehicle.position.z].map(n => round(n)));
@@ -632,8 +671,12 @@ function installProbe(d6Sources, latSet) {
         };
         const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
         const all = [];
-        const points = [0.1, 0.3, 0.5, 0.7, 0.9].map(f => {
-            const segment = Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment));
+        // A converted leg: each part's middle and each boundary between parts
+        const parts = game.environment.sections ? game.environment.terrain.parts : null;
+        const stations = parts
+            ? parts.flatMap((part, n) => [Math.floor((part.from + (n === parts.length - 1 ? leg.endSegment : part.to)) / 2), ...(n ? [part.from] : [])]).sort((a, b) => a - b)
+            : [0.1, 0.3, 0.5, 0.7, 0.9].map(f => Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment)));
+        const points = stations.map(segment => {
             twistyDev.teleport(segment);
             twistyDev.view(0, 3, 12, 40);
             for (let i = 0; i < 3; i++) frame();
@@ -641,7 +684,57 @@ function installProbe(d6Sources, latSet) {
             all.push(...times);
             return { segment, ms: round(median(times), 10) };
         });
-        return { ms: round(median(all), 10), points, dressed: !!assets, bike: game.vehicle.modelled ? 'modelled' : 'procedural' };
+        let moving = null;
+        if (parts) {
+            // 600 rendered frames ridden across the first boundary, the world built as it goes
+            const from = Math.max(0, parts[1].from - 12);
+            twistyDev.teleport(from);
+            twistyDev.autopilot({ speed: 30 });
+            game.vehicle.speed = 30;
+            game.cameraIntroActive = false;
+            const frames = [];
+            for (let n = 0; n < 600 && !game.vehicle.crashed; n++) {
+                twistyDev.step(1);
+                frames.push(frame());
+            }
+            moving = { from, to: Math.floor(game.vehicle.currentRoadSegment), frames: frames.length, worstMs: round(Math.max(...frames.slice(5)), 10), medianMs: round(median(frames), 10), crashed: game.vehicle.crashed };
+        }
+        return { ms: round(median(all), 10), points, moving, dressed: !!assets, bike: game.vehicle.modelled ? 'modelled' : 'procedural' };
+    };
+
+    // The whole scene of the page, with the leg's modelled dressing in place, as one
+    // digest: FNV-1a over each mesh's world matrix (and its instance matrices),
+    // sorted, then SHA-256. Pins "an unconverted leg did not move" where node cannot
+    // see the modelled assets, the cones, the crew and the oncoming car.
+    P.scene = async legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        if (typeof BikeModels !== 'undefined') await BikeModels.preload();
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        const assets = game.environment.dressing ? await game.environment.dressing : null;
+        game.scene.updateMatrixWorld(true);
+        const fnv = (bytes, seed) => {
+            let hash = seed;
+            for (let i = 0; i < bytes.length; i++) hash = Math.imul(hash ^ bytes[i], 16777619) >>> 0;
+            return hash;
+        };
+        const lines = [];
+        let instances = 0;
+        game.scene.traverse(object => {
+            if (!object.isMesh) return;
+            let hash = fnv(new Uint8Array(new Float32Array(object.matrixWorld.elements).buffer), 2166136261);
+            if (object.isInstancedMesh) {
+                const used = object.instanceMatrix.array.subarray(0, object.count * 16);
+                hash = fnv(new Uint8Array(used.buffer, used.byteOffset, used.byteLength), hash);
+                instances += object.count;
+            }
+            lines.push(hash.toString(16).padStart(8, '0'));
+        });
+        lines.sort();
+        const bytes = new TextEncoder().encode(lines.join(''));
+        const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+        return { digest, meshes: lines.length, instances, cones: game.cones ? game.cones.cones.length : 0, dressed: !!assets };
     };
 
     // Mean RGB per tile of the main canvas, from fixed poses
@@ -716,6 +809,226 @@ function installProbe(d6Sources, latSet) {
         return { ride, preview };
     };
 
+    // Every value a surface of the game writes when it sets the look of the world: sky uniforms,
+    // grade, scene colours and fog, the six lights, exposure, headlight, the road material of `env`
+    // and the first terrain and mountain colours. Reads only fields that exist at 6fbc542, so the same
+    // dump runs in a base worktree. `env` may be null (the rider showcase has none).
+    P.dump = env => {
+        const hex = c => c.getHex();
+        const graphics = game.graphics;
+        const sky = {};
+        Object.keys(graphics.skyUniforms).forEach(key => {
+            const v = graphics.skyUniforms[key].value;
+            if (key === 'uTime' || key === 'tPanorama') return;
+            if (typeof v === 'number') sky[key] = v;
+            else if (v && v.isColor) sky[key] = hex(v);
+            else if (v && (v.isVector3 || v.isVector2)) sky[key] = v.toArray();
+        });
+        const light = l => ({ color: hex(l.color), intensity: l.intensity, ...(l.groundColor && { ground: hex(l.groundColor) }) });
+        let terrain = null, mountain = null;
+        game.scene.traverse(o => {
+            if (!o.isMesh) return;
+            if (terrain === null && o.userData.type === 'terrain') terrain = hex(o.material.color);
+            if (mountain === null && o.userData.type === 'mountain' && !o.geometry.attributes.color) mountain = hex(o.material.color);
+        });
+        const road = env && env.roadMaterial ? { roughness: env.roadMaterial.roughness, metalness: env.roadMaterial.metalness, envMapIntensity: env.roadMaterial.envMapIntensity, color: hex(env.roadMaterial.color) } : null;
+        const grade = graphics.grade ? { ...graphics.grade, tint: hex(graphics.grade.tint) } : null;
+        return {
+            sky,
+            timeKey: graphics.timeKey,
+            weatherType: graphics.weatherType,
+            ringStrength: graphics.ringStrength,
+            atmosphere: graphics.atmosphere ? JSON.parse(JSON.stringify(graphics.atmosphere)) : null,
+            grade,
+            background: hex(game.scene.background),
+            fogColor: hex(game.scene.fog.color),
+            fogDensity: game.scene.fog.density,
+            ambient: light(game.ambientLight),
+            hemisphere: light(game.hemisphereLight),
+            directional: light(game.directionalLight),
+            distant: light(game.distantLight),
+            fill: light(game.fillLight),
+            rim: light(game.rimLight),
+            baseSunIntensity: game.baseSunIntensity,
+            exposure: game.renderer.toneMappingExposure,
+            headlightStrength: game.headlightStrength,
+            headlightVisible: game.headlight.visible,
+            road,
+            terrain,
+            mountain,
+            physics: game.weatherSystem && env === game.environment ? game.weatherSystem.getPhysicsMultipliers() : null
+        };
+    };
+
+    // The wall clock varies the sun by +-6% in animate(); the dump reads its base value
+    const settle = (frames = 1) => {
+        for (let i = 0; i < frames; i++) twistyDev.step(1, { render: true });
+        game.directionalLight.intensity = game.baseSunIntensity !== undefined ? game.baseSunIntensity : 0.8;
+    };
+    const menuFrame = () => {
+        game.graphics.time = 0;
+        game.graphics.update(0, 0, 0);
+        game.graphics.render(game.scene, game.camera);
+    };
+
+    // The look that the menu preview, the rider showcase, a time override and a ride give, per leg
+    // (arms preview, previewAfterRide, showcase, timeOverride and ride of the plan's PR9 and PR23)
+    P.atmostate = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        const times = Object.fromEntries([leg.timeOfDay, 'golden', 'night'].map(key => [key, { sunIntensity: game.timeConfigs[key].sunIntensity, hemisphereIntensity: game.timeConfigs[key].hemisphereIntensity, fogColor: game.timeConfigs[key].fogColor, headlight: game.timeConfigs[key].headlight || 0 }]));
+        const out = { expectedFogDensity: Terrain.legConfig(legIndex).look.fogDensity, times, weather: leg.weather, weatherIntensity: leg.weatherIntensity };
+        window.__reseed(1);
+        game.startTrackPreview(legIndex);
+        menuFrame();
+        out.preview = P.dump(game.previewEnv);
+        if (leg.id === 'storm-valley') {
+            game.startRiderShowcase(CHARACTERS[0].id);
+            menuFrame();
+            out.showcase = P.dump(null);
+        }
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        game.showFinishScreen = () => {};
+        out.ride = [0, 0.25, 0.5, 0.75, 1].map(f => {
+            const segment = Math.round(leg.startSegment + f * (leg.endSegment - leg.startSegment));
+            twistyDev.teleport(segment);
+            settle();
+            return { segment, dump: P.dump(game.environment) };
+        });
+        game.returnToMenu();
+        window.__reseed(1);
+        game.startTrackPreview(legIndex);
+        menuFrame();
+        out.previewAfterRide = P.dump(game.previewEnv);
+        if (leg.id === 'storm-valley' || leg.id === 'night-ride') {
+            window.__reseed(1);
+            twistyDev.start(leg.id);
+            twistyDev.freeze();
+            game.rockfalls = null;
+            game.setTimeOfDay(leg.id === 'storm-valley' ? 'night' : 'golden');
+            settle();
+            const first = P.dump(game.environment);
+            settle(60);
+            out.timeOverride = { first, after60: P.dump(game.environment) };
+        }
+        return out;
+    };
+
+    // Draws from the global random stream: at leg start, 600 ticks into a ride, in the menu preview and
+    // in the rider showcase. `nextValue` is what the stream gives next after the start.
+    P.draws = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        const real = Math.random;
+        let count = 0;
+        Math.random = () => { count++; return real(); };
+        try {
+            window.__reseed(1);
+            count = 0;
+            twistyDev.start(leg.id);
+            const startDraws = count;
+            const nextValue = real();
+            window.__reseed(1);
+            twistyDev.start(leg.id);
+            twistyDev.freeze();
+            count = 0;
+            twistyDev.step(600);
+            const rideDraws = count;
+            window.__reseed(1);
+            count = 0;
+            game.startTrackPreview(legIndex);
+            const previewDraws = count;
+            window.__reseed(1);
+            count = 0;
+            game.startRiderShowcase(CHARACTERS[0].id);
+            return { startDraws, nextValue, rideDraws, previewDraws, showcaseDraws: count };
+        } finally {
+            Math.random = real;
+        }
+    };
+
+    // Rides across one part boundary with rendering on and reports what the blend does: the mean luminance
+    // of the sky band per frame, the environment bakes, whether the rain buffer is the one made at leg start,
+    // its draw range, and the grip along the way. `control` snaps at the boundary instead of blending.
+    // The track is synthetic: dawn in clear air to night in rain at the middle of the leg.
+    P.atmo = (legIndex, control = false) => {
+        const leg = game.tourSystem.legs[legIndex];
+        const config = Terrain.legConfig(legIndex);
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        game.traffic = null;
+        game.showFinishScreen = () => {};
+        const env = game.environment;
+        const mid = Math.round((leg.startSegment + leg.endSegment) / 2);
+        const part = (from, to, look) => ({ startSegment: from, endSegment: to, look: { fogDensity: config.look.fogDensity, heightFog: config.atmosphere.heightFog, shafts: 0, ring: 1, baseY: game.atmosphereTrack.parts[0].look.baseY, ...look } });
+        const track = AtmosphereTrack.build([
+            part(leg.startSegment, mid - 1, { timeOfDay: 'dawn', weather: 'clear', weatherIntensity: 0 }),
+            part(mid, leg.endSegment, { timeOfDay: 'night', weather: 'rain', weatherIntensity: 0.9, fogDensity: 0.003 })
+        ]);
+        game.weatherSystem.prepare(track.weatherTypes());
+        const rain = game.weatherSystem.systems.rain.points;
+        const buffer = rain.geometry.attributes.position;
+        game.atmosphereTrack = track;
+        const targets = { environment: env, weatherSystem: game.weatherSystem };
+        game.snapAtmosphere(track, leg.startSegment, targets);
+        if (control) {
+            let snapped = false;
+            game.applyAtmosphere = () => {
+                if (!snapped && game.vehicle.currentRoadSegment >= mid) {
+                    snapped = true;
+                    game.snapAtmosphere(track, mid + 10, targets);
+                }
+            };
+        }
+        twistyDev.teleport(mid - 14);
+        twistyDev.autopilot({ speed: 30 });
+        const canvas = game.graphics.renderer.domElement;
+        const read = document.createElement('canvas');
+        read.width = 32; read.height = 18;
+        const ctx = read.getContext('2d', { willReadFrequently: true });
+        const luminance = () => {
+            ctx.drawImage(canvas, 0, 0, 32, 18);
+            // The upper third is sky and far ranges, the part of the picture the blend moves
+            const d = ctx.getImageData(0, 0, 32, 6).data;
+            let sum = 0;
+            for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+            return sum / (d.length / 4);
+        };
+        const SETTLE = 40;
+        const frames = [];
+        const gripAt = [];
+        for (let tick = 0; tick < 2400 && game.vehicle.currentRoadSegment < mid + 14; tick++) {
+            twistyDev.step(1, { render: true });
+            game.vehicle.crashed = false;
+            const sample = track.sample(game.vehicle.currentRoadSegment);
+            frames.push({ segment: round(game.vehicle.currentRoadSegment, 10), t: round(sample.t, 1000), luminance: round(luminance(), 100) });
+            if (tick % 10 === 0) gripAt.push({ t: round(sample.t, 100), lateralFriction: round(game.weatherSystem.getPhysicsMultipliers().lateralFriction, 10000) });
+        }
+        const lum = frames.map(f => f.luminance);
+        const mean = list => list.reduce((a, b) => a + b, 0) / list.length;
+        const totalChange = Math.abs(mean(lum.slice(-10)) - mean(lum.slice(0, 10)));
+        // The first frames after the teleport settle the camera and are not the blend
+        const steps = lum.slice(1).map((v, i) => (i < SETTLE ? 0 : Math.abs(v - lum[i])));
+        const counts = rain.geometry.drawRange.count;
+        return {
+            control,
+            frames: frames.length,
+            totalChange: round(totalChange, 100),
+            maxFrameStep: round(Math.max(...steps), 100),
+            maxStepAt: frames[steps.indexOf(Math.max(...steps)) + 1],
+            around: frames.slice(steps.indexOf(Math.max(...steps)) - 3, steps.indexOf(Math.max(...steps)) + 6).map(f => [f.t, f.luminance]),
+            envBakes: game.graphics.stats.envBakes,
+            lastBakeFrame: game.graphics.stats.lastBakeFrame,
+            rainBufferSame: rain.geometry.attributes.position === buffer,
+            drawRange: counts,
+            gripAt,
+            lum: lum.filter((_, i) => i % 10 === 0)
+        };
+    };
+
     P.legCheck = (legIndex, ticks) => {
         const leg = game.tourSystem.legs[legIndex];
         const lines = [];
@@ -752,6 +1065,392 @@ function installProbe(d6Sources, latSet) {
             Environment.prototype.groundYAt = original;
         }
     };
+
+    // ---- Converted legs: sections, the drawn window, parts
+    // A mesh is drawn unless a group above it is hidden (a section outside
+    // the window, a step not yet revealed, a parked rider) or it is a hidden
+    // floor plane. A mesh's own visible flag is the distance cull: not counted out.
+    const drawn = object => {
+        if (object.userData.part === 'floor' && !object.visible) return false;
+        for (let n = object.parent; n; n = n.parent) if (!n.visible) return false;
+        return true;
+    };
+    P.countDrawn = () => {
+        let meshes = 0, triangles = 0, instances = 0;
+        game.scene.traverse(o => {
+            if (!o.isMesh || !drawn(o)) return;
+            const pos = o.geometry.attributes.position;
+            const index = o.geometry.index;
+            meshes++;
+            triangles += (index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+            if (o.isInstancedMesh) instances += o.count;
+        });
+        return { meshes, triangles: Math.round(triangles), instances };
+    };
+    const segmentOf = (env, x, z) => Terrain.locate(env.roadPath, x, z, 0, env.roadPath.length - 1, {}).index;
+    const inSections = (sections, s) => sections.some(section => s >= section.from && s < section.to);
+    // Bytes of every geometry the leg keeps: its own group and its built sections
+    const retainedBytes = (env, which = 'all') => {
+        const seen = new Set();
+        let total = 0;
+        const add = o => {
+            if (!o.isMesh || seen.has(o.geometry)) return;
+            seen.add(o.geometry);
+            Object.values(o.geometry.attributes).forEach(a => { total += a.array.byteLength; });
+            if (o.geometry.index) total += o.geometry.index.array.byteLength;
+            if (o.isInstancedMesh) total += o.instanceMatrix.array.byteLength;
+        };
+        if (which !== 'sections') env.fixed.traverse(add);
+        if (which !== 'fixed') env.sections.forEach(section => section.group && section.group.traverse(add));
+        return total;
+    };
+    const lastGateBefore = (env, s) => {
+        const passed = env.checkpoints.filter(gate => gate.segmentIndex <= s);
+        return passed.length ? passed[passed.length - 1].segmentIndex : null;
+    };
+    const startConverted = legIndex => {
+        const leg = game.tourSystem.legs[legIndex];
+        window.__reseed(1);
+        twistyDev.start(leg.id);
+        twistyDev.freeze();
+        const env = game.environment;
+        if (!env.sections) throw new Error(`${leg.id} is not a converted leg`);
+        return { leg, env };
+    };
+
+    // PW6: every window position of the leg, with modelled assets, cones, the
+    // crew and oncoming cars, counted as `budget` counts but only what is drawn
+    P.window = async legIndex => {
+        const { env } = startConverted(legIndex);
+        game.rockfalls = null;
+        const windows = [];
+        for (const section of env.sections) {
+            const s = Math.min(env.endSegment, section.from + Math.floor((section.to - section.from) / 2));
+            twistyDev.teleport(s);
+            env.update(s, 1e9, lastGateBefore(env, s));
+            if (game.traffic) game.traffic.update(0, game.vehicle.position, s);
+            await Promise.all(env.sections.map(entry => entry.dressing).filter(Boolean));
+            game.scene.updateMatrixWorld(true);
+            const built = env.sections.filter(entry => entry.state === 'built');
+            const cones = game.cones ? game.cones.cones : [];
+            windows.push({
+                section: section.index,
+                segment: s,
+                visible: env.visibleSections().map(entry => entry.index),
+                retained: built.map(entry => entry.index),
+                ...P.countDrawn(),
+                solidBoulders: env.boulders.filter(b => b.solid).length,
+                retainedMB: round(retainedBytes(env) / 1048576, 100),
+                sectionsMB: round(retainedBytes(env, 'sections') / 1048576, 100),
+                legMB: round(retainedBytes(env, 'fixed') / 1048576, 100),
+                cones: cones.length,
+                conesOutsideRetained: cones.filter(cone => !inSections(built, segmentOf(env, cone.position.x, cone.position.z))).length,
+                vehicles: game.traffic ? game.traffic.cars.length + game.traffic.motorcycles.filter(bike => bike.bikeGroup.visible).length : 0
+            });
+        }
+        const peak = {};
+        ['meshes', 'triangles', 'instances', 'solidBoulders', 'retainedMB', 'sectionsMB', 'legMB', 'conesOutsideRetained'].forEach(key => { peak[key] = Math.max(...windows.map(w => w[key])); });
+        return { windows, peak, sections: env.sections.length };
+    };
+
+    // PW7, PW14: the whole leg ridden at a fixed step with the world built
+    // ahead of the bike. `gpu`: every frame rendered and one pixel read back.
+    P.stream = async (legIndex, { speed = 45, gpu = false, traffic = false, cones = false, rockfalls = false } = {}) => {
+        // The modelled bike is in before the leg starts, as in the frametime probe
+        if (typeof BikeModels !== 'undefined') await BikeModels.preload();
+        const { env } = startConverted(legIndex);
+        if (!rockfalls) game.rockfalls = null;
+        if (!traffic && game.traffic) {
+            game.traffic.reset();
+            game.traffic = null;
+        }
+        if (!cones && game.cones) game.cones.checkCollision = () => {};
+        game.showFinishScreen = () => {};
+        // Oncoming cars keep to lateral +3: with traffic the bike keeps to its own side
+        twistyDev.autopilot({ speed, lane: traffic ? -3.5 : 0 });
+        const gl = game.graphics.renderer.getContext();
+        const pixel = new Uint8Array(4);
+        const render = () => {
+            const t0 = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return performance.now() - t0;
+        };
+        const stats = env.sectionStats;
+        const syncAtStart = stats.syncBuilds;
+        const out = {
+            speed, finished: false, crashes: 0, airborneFrames: 0, framesOnUnbuiltGround: 0, maxVisibleSections: 0,
+            vehiclesDrawnOutsideVisible: 0, conesOutsideRetained: 0, rocksOutsideVisible: 0, vehiclesPastTail: 0, ticks: 0
+        };
+        const frames = [];
+        const firstVisible = {};
+        const cap = Math.ceil((env.endSegment + 1) * 20 / speed * 60 * 1.5);
+        let revealed = stats.revealed.length;
+        const tail = env.endSegment + 16;
+        for (let tick = 1; tick <= cap; tick++) {
+            const s = Math.floor(game.vehicle.currentRoadSegment || 0);
+            if (env.sections[env.sectionAt(s)].state !== 'built') out.framesOnUnbuiltGround++;
+            twistyDev.step(1);
+            out.ticks = tick;
+            if (game.vehicle.isJumping) out.airborneFrames++;
+            const visible = env.visibleSections();
+            out.maxVisibleSections = Math.max(out.maxVisibleSections, visible.length);
+            if (game.traffic) {
+                const shown = [...game.traffic.cars.filter(car => car.carGroup.visible), ...game.traffic.motorcycles.filter(bike => bike.bikeGroup.visible)];
+                out.vehiclesDrawnOutsideVisible += shown.filter(v => !inSections(visible, Math.floor(v.currentSegment))).length;
+                out.vehiclesPastTail += [...game.traffic.cars, ...game.traffic.motorcycles].filter(v => v.currentSegment > tail).length;
+            }
+            if (tick % 30 === 0 && game.cones) {
+                const built = env.sections.filter(entry => entry.state === 'built');
+                out.conesOutsideRetained += game.cones.cones.filter(cone => !inSections(built, segmentOf(env, cone.position.x, cone.position.z))).length;
+            }
+            if (game.rockfalls) out.rocksOutsideVisible += game.rockfalls.rocks.filter(rock => !inSections(visible, segmentOf(env, rock.mesh.position.x, rock.mesh.position.z))).length;
+            if (gpu) {
+                const bakes = game.graphics.stats.envBakes;
+                const programs = game.graphics.renderer.info.programs.length;
+                const ms = render();
+                const compiled = game.graphics.renderer.info.programs.slice(programs).map(p => p.name);
+                if (compiled.length) (out.compiledInRide ||= []).push({ tick, segment: s, ms: round(ms, 10), programs: compiled });
+                if (game.graphics.stats.envBakes !== bakes) (out.bakeFrames ||= []).push({ tick, segment: s, ms: round(ms, 10) });
+                frames.push(ms);
+                if (ms > 16 && tick > 30) (out.slowFrames ||= []).push({ tick, segment: s, ms: round(ms, 10), headlight: !!(game.vehicle.headlight && game.vehicle.headlight.visible), weather: game.weatherSystem ? game.weatherSystem.weatherType || null : null });
+                // The frame on which a section's first step became drawn
+                for (; revealed < stats.revealed.length; revealed++) {
+                    const { section } = stats.revealed[revealed];
+                    if (firstVisible[section] === undefined) firstVisible[section] = round(ms, 10);
+                }
+            }
+            if (game.vehicle.crashed) {
+                out.crashes++;
+                out.crashSegment = s;
+                break;
+            }
+            if (game.finished) {
+                out.finished = true;
+                break;
+            }
+        }
+        Object.assign(out, {
+            syncBuildsAfterStart: stats.syncBuilds - syncAtStart,
+            maxStepMs: round(stats.maxStepMs, 10),
+            slowestStep: stats.slowest,
+            stepMs: stats.stepMs,
+            sectionsBuilt: stats.built,
+            sectionsDisposed: stats.disposed,
+            sections: env.sections.length,
+            oncomingEncounters: game.traffic ? game.traffic.oncomingEncounters : null,
+            conesPlaced: game.cones ? game.cones.placedTotal || 0 : null,
+            km: round((env.endSegment + 1) * 20 / 1000, 10)
+        });
+        if (out.conesPlaced !== null) out.conesPerKm = round(out.conesPlaced / out.km, 100);
+        if (gpu) {
+            const settled = frames.slice(30);
+            out.meanFrameMs = round(settled.reduce((a, b) => a + b, 0) / Math.max(1, settled.length), 100);
+            out.maxFrameMs = round(Math.max(...settled), 10);
+            out.framesOver16ms = settled.filter(ms => ms > 16).length;
+            out.firstVisibleFrameMs = firstVisible;
+        }
+        return out;
+    };
+
+    // PW10: the menu preview of a leg, opened through the real menu call
+    P.preview = legIndex => {
+        game.startTrackPreview(legIndex);
+        const env = game.previewEnv;
+        game.scene.updateMatrixWorld(true);
+        return {
+            converted: !!env.sections,
+            sectionsBuilt: env.sections ? env.sections.filter(section => section.state === 'built').map(section => section.index) : null,
+            ...P.countDrawn()
+        };
+    };
+
+    // PW16: the leg ridden to the finish; the best time and splits read back
+    // through the game's own keys
+    P.finish = (legIndex, speed = 25) => {
+        const leg = game.tourSystem.legs[legIndex];
+        const id = leg.id;
+        window.__reseed(1);
+        twistyDev.start(id);
+        twistyDev.freeze();
+        game.rockfalls = null;
+        twistyDev.autopilot({ speed });
+        const cap = Math.ceil((leg.endSegment - leg.startSegment + 1) * 20 / speed * 60 * 1.5);
+        for (let tick = 1; tick <= cap && !game.finished && !game.vehicle.crashed; tick++) twistyDev.step(1);
+        const current = game.tourSystem.legs[legIndex];
+        const stored = localStorage.getItem(game.bestTimeKey(current));
+        const gates = game.environment.checkpoints.length;
+        const splits = RaceTiming.loadSplits(localStorage, game.bestSplitsKey(current), gates);
+        return {
+            finished: game.finished === true,
+            crashed: game.vehicle.crashed,
+            boardId: TourSystem.boardId(current),
+            gates,
+            bestTimeStored: stored !== null,
+            bestTimeMs: stored === null ? null : Math.round(parseFloat(stored) * 1000),
+            finishTimeMs: Math.round(game.finishTime),
+            lastGateMs: game.checkpointTimes[gates - 1],
+            splitsStored: splits ? splits.length : 0,
+            finishLine: game.environment.finishGate.segmentIndex,
+            lastGate: game.environment.checkpoints[gates - 1].segmentIndex
+        };
+    };
+
+    // PW4: the built facts of each part, measured from the scene at the part's
+    // middle: ground colour (G), trees per segment (T), side shape (S), floor
+    // (F), buildings (B), road height change (H), and the part's landmark
+    P.course = async (legIndex, { gpu = false } = {}) => {
+        const { env } = startConverted(legIndex);
+        game.rockfalls = null;
+        if (game.traffic) {
+            game.traffic.reset();
+            game.traffic = null;
+        }
+        const parts = env.terrain.parts;
+        const path = env.roadPath;
+        const ray = new THREE.Raycaster();
+        const lateralOf = (s, x, z) => {
+            const p = path[s];
+            return (x - p.x) * Math.cos(p.heading) - (z - p.z) * Math.sin(p.heading);
+        };
+        const ground = () => {
+            const list = [];
+            game.scene.traverse(o => { if (o.isMesh && o.userData.part === 'ground' && o.userData.type !== 'terrain' && drawn(o)) list.push(o); });
+            return list;
+        };
+        const solid = () => {
+            const list = [];
+            game.scene.traverse(o => { if (o.isMesh && drawn(o) && !o.userData.isSky && o.userData.part !== 'floor') list.push(o); });
+            return list;
+        };
+        const out = [];
+        for (const [n, part] of parts.entries()) {
+            const to = n === parts.length - 1 ? env.endSegment + 1 : part.to;
+            const mid = Math.floor((part.from + to) / 2);
+            twistyDev.teleport(mid);
+            env.update(mid, 1e9, null);
+            await Promise.all(env.sections.map(entry => entry.dressing).filter(Boolean));
+            if (game.atmosphereTrack) game.snapAtmosphere(game.atmosphereTrack, mid, { environment: env, weatherSystem: game.weatherSystem || null });
+            game.scene.updateMatrixWorld(true);
+            const from = mid - 10;
+            const end = mid + 10;
+            // G: mean vertex colour of the drawn ribbons between lateral 10 and 40
+            const sum = [0, 0, 0];
+            let count = 0;
+            game.scene.traverse(o => {
+                if (!o.isMesh || o.userData.firstColumn === undefined || !drawn(o)) return;
+                const pos = o.geometry.attributes.position;
+                const col = o.geometry.attributes.color;
+                const rows = Terrain.ROWS + 1;
+                for (let v = 0; v < pos.count; v++) {
+                    const s = Math.floor((o.userData.firstColumn + Math.floor(v / rows)) / Terrain.COLUMNS_PER_SEGMENT);
+                    if (s < from || s >= end) continue;
+                    const d = Math.abs(lateralOf(s, pos.getX(v), pos.getZ(v)));
+                    if (d < 10 || d > 40) continue;
+                    sum[0] += col.getX(v); sum[1] += col.getY(v); sum[2] += col.getZ(v);
+                    count++;
+                }
+            });
+            const G = sum.map(v => round(v / Math.max(1, count) * 255, 10));
+            // T: tree instances per segment (procedural or modelled forest meshes)
+            let trees = 0;
+            const m = new THREE.Matrix4();
+            game.scene.traverse(o => {
+                if (!o.isInstancedMesh || !/^forest-/.test(o.name) || !drawn(o)) return;
+                for (let i = 0; i < o.count; i++) {
+                    o.getMatrixAt(i, m);
+                    const s = Terrain.locate(path, m.elements[12], m.elements[14], Math.max(0, from - 8), Math.min(path.length - 1, end + 8), {}).index;
+                    if (s >= from && s < end) trees++;
+                }
+            });
+            const T = round(trees / 20, 100);
+            // S: the ground at lateral 40 against the road, each side; roofed when a ray up hits within 8 m
+            const meshes = ground();
+            const all = solid();
+            const p = path[mid];
+            const S = [-1, 1].map(sign => {
+                ray.set(new THREE.Vector3(p.x, p.y + 1.5, p.z), new THREE.Vector3(0, 1, 0));
+                ray.far = 8;
+                if (ray.intersectObjects(all, true).length) return 'roofed';
+                ray.far = Infinity;
+                const x = p.x + Math.cos(p.heading) * 40 * sign;
+                const z = p.z - Math.sin(p.heading) * 40 * sign;
+                ray.set(new THREE.Vector3(x, 3000, z), new THREE.Vector3(0, -1, 0));
+                const hit = ray.intersectObjects(meshes, false)[0];
+                const rise = hit ? hit.point.y - p.y : -Infinity;
+                return rise > 3 ? 'up' : rise < -3 ? 'down' : 'level';
+            });
+            // F: the plane floor drawn under the part, or a river mesh in it
+            let F = 'none';
+            (env.floors || []).forEach(entry => { if (entry.mesh.visible && entry.parts.includes(n)) F = entry.floor.kind; });
+            if (F === 'none') {
+                game.scene.traverse(o => {
+                    if (o.isMesh && o.name === 'floor-river' && drawn(o)) {
+                        const a = o.geometry.attributes.position;
+                        for (let v = 0; v < a.count; v += 2) {
+                            const s = Terrain.locate(path, a.getX(v), a.getZ(v), Math.max(0, from - 30), Math.min(path.length - 1, end + 30), {}).index;
+                            if (s >= from && s < end) { F = 'river'; break; }
+                        }
+                    }
+                });
+            }
+            // B: buildings inside the part
+            let B = 0;
+            game.scene.traverse(o => {
+                const count = o.userData.buildings || (o.userData.building ? (o.isInstancedMesh ? o.count : 1) : 0);
+                if (!count || !drawn(o)) return;
+                // A set piece group stands at the middle of its span
+                const s = o.userData.span ? Math.floor((o.userData.span.from + o.userData.span.to) / 2) : segmentOf(env, ...(() => { const at = new THREE.Vector3(); o.getWorldPosition(at); return [at.x, at.z]; })());
+                if (s >= part.from && s < to) B += count;
+            });
+            const H = round(path[Math.min(to, path.length - 1)].y - path[part.from].y, 10);
+            // The landmark: its meshes, drawn, and where it stands against the road
+            const group = game.scene.getObjectByName(`landmark-${part.id}`);
+            let landmark = null;
+            if (group) {
+                let triangles = 0;
+                group.traverse(o => {
+                    if (!o.isMesh) return;
+                    const index = o.geometry.index;
+                    triangles += (index ? index.count : o.geometry.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+                });
+                let shown = true;
+                for (let node = group; node; node = node.parent) if (!node.visible) shown = false;
+                const box = new THREE.Box3().setFromObject(group);
+                const centre = box.getCenter(new THREE.Vector3());
+                const s = segmentOf(env, centre.x, centre.z);
+                const road = path[s];
+                landmark = { triangles: Math.round(triangles), visible: shown, segment: s, inside: s >= part.from && s < to, metres: round(Math.hypot(centre.x - road.x, centre.z - road.z), 10) };
+            }
+            const row = { id: part.id, from: part.from, to, mid, differs: part.differs || [], G, T, S, F, B, H, landmark };
+            if (gpu) {
+                twistyDev.view(0, 3, 12, 40);
+                game.graphics.render(game.scene, game.camera);
+                const canvas = game.graphics.renderer.domElement;
+                const probe = document.createElement('canvas');
+                probe.width = 48; probe.height = 27;
+                const c2 = probe.getContext('2d');
+                c2.drawImage(canvas, 0, 0, 48, 27);
+                const data = c2.getImageData(0, 0, 48, 27).data;
+                const rgb = [0, 0, 0];
+                for (let i = 0; i < data.length; i += 4) { rgb[0] += data[i]; rgb[1] += data[i + 1]; rgb[2] += data[i + 2]; }
+                row.frameRGB = rgb.map(v => round(v / (data.length / 4), 10));
+                row.look = { timeOfDay: part.timeOfDay, weather: part.weather || 'clear', fog: (part.look || {}).fogDensity };
+            }
+            out.push(row);
+        }
+        return { parts: out };
+    };
+
+    // PW4(c): every part takes part 0's ground, dressing and look
+    P.flattenParts = legIndex => {
+        const id = game.tourSystem.legs[legIndex].id;
+        const course = Course.LEGS[id];
+        const first = course.parts[0];
+        Course.LEGS[id] = { ...course, parts: course.parts.map(part => ({ ...part, profile: first.profile, dressing: first.dressing, look: first.look, floor: first.floor, render: first.render, timeOfDay: first.timeOfDay, weather: first.weather, setPieces: [] })) };
+        Terrain.adopt(Course.LEGS);
+        return true;
+    };
 }
 
 // ---------------------------------------------------------------- probes
@@ -774,6 +1473,139 @@ async function runPool(browser, port, ids, work) {
 const inPage = (page, name, ...args) => page.evaluate((n, a) => window.__probe[n](...a), name, args);
 
 const PROBES = {
+    // A whole leg ridden to the finish and the name form filled in, against a server answered locally
+    submit: async (page, index) => {
+        const info = await page.evaluate(i => {
+            const leg = game.tourSystem.legs[i];
+            return { id: leg.id, boardId: TourSystem.boardId(leg), row: Course.boardTable()[TourSystem.boardId(leg)] || null, last: i === game.tourSystem.legs.length - 1 };
+        }, index);
+        // --fixture: leg 1 is the 3-gate fixture board; the default reply is an old server (no fields), --reply new states them
+        const reply = { sessionId: 'probe-session', sessionToken: 'probe-token-not-a-secret' };
+        if (info.row && option('reply') === 'new') Object.assign(reply, { protocol: 2, gates: info.row.gates });
+        const calls = { reply };
+        page.callables = calls;
+        const errors = [];
+        page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+        if (option('mutate') === 'ready-always') {
+            // The handshake always agrees with whatever the server said
+            await page.evaluate(expected => {
+                const service = game.leaderboardService;
+                const start = service.startRun.bind(service);
+                service.startRun = legId => start(legId, expected);
+            }, { protocol: reply.protocol ?? 1, gates: reply.gates ?? 5 });
+        }
+        await page.evaluate(i => { window.__legIndex = i; }, index);
+        const ridden = await page.evaluate(async () => {
+            const wait = async (done, ms) => {
+                for (let t = 0; t < ms / 50 && !done(); t++) await new Promise(r => setTimeout(r, 50));
+                return done();
+            };
+            window.__reseed(1);
+            twistyDev.start(game.tourSystem.legs[window.__legIndex].id);
+            twistyDev.freeze();
+            game.rockfalls = null;
+            const service = game.leaderboardService;
+            await wait(() => service.isActive() || service.unsupported, 5000);
+            twistyDev.autopilot({ speed: 20 });
+            // A long leg needs more ticks than the 9000 of a short one
+            const leg = game.tourSystem.legs[window.__legIndex];
+            const cap = Math.max(9000, Math.ceil((leg.endSegment - leg.startSegment + 1) * 20 / 20 * 60 * 1.5));
+            for (let tick = 1; tick <= cap && !game.finished && !game.vehicle.crashed; tick++) twistyDev.step(1);
+            await service.recordQueue;
+            return { finished: game.finished, crashed: game.vehicle.crashed, unsupported: service.unsupported };
+        }).catch(error => ({ error: String(error) }));
+        // Counted before "next leg" starts the following leg's own session
+        const startRunCalls = (calls.startRun || []).length;
+        let nameFormShown = false;
+        let submitState = 'none';
+        if (ridden.finished && !info.last) {
+            await page.evaluate(() => document.getElementById('nextLegBtn').click());
+            nameFormShown = await page.waitForFunction("document.getElementById('leaderboardEntryOverlay').classList.contains('active')", { polling: 100, timeout: 2000 }).then(() => true, () => false);
+            if (nameFormShown) {
+                await page.evaluate(() => {
+                    const input = document.getElementById('leaderboardNameInput');
+                    input.value = 'TEST';
+                    input.dispatchEvent(new Event('input'));
+                    document.getElementById('leaderboardSubmitBtn').click();
+                });
+                const done = await page.waitForFunction("document.getElementById('leaderboardResult').style.display === 'block' || document.getElementById('leaderboardError').style.display !== 'none'", { polling: 100, timeout: 5000 }).then(() => true, () => false);
+                submitState = done && await page.evaluate(() => document.getElementById('leaderboardResult').style.display === 'block') ? 'submitted' : 'failed';
+            } else if (ridden.unsupported) {
+                submitState = 'not-submitted';
+            }
+        }
+        const [submit] = calls.submitRun || [];
+        return {
+            finished: ridden.finished === true,
+            startRunCalls,
+            submitCalls: (calls.submitRun || []).length,
+            submitState,
+            nameFormShown,
+            payload: submit ? { gates: submit.checkpointTimes.length, proofs: submit.proofChain.length, finish: submit.finishTime !== undefined } : null,
+            consoleErrors: errors.filter(text => /Incomplete run|Failed to submit|No active/.test(text)).length,
+            expectedGates: info.row ? info.row.gates : 5,
+            tableBoard: !!info.row,
+            replyFields: Object.keys(reply).filter(key => key === 'protocol' || key === 'gates'),
+            forwarded: 0,
+            skipped: info.last ? 'the last leg has no name form' : undefined,
+            error: ridden.error
+        };
+    },
+    // Converted legs (or the --fixture course on leg 1): parts, window, stream, preview, finish
+    async course(page, i) {
+        if (option('mutate') === 'flat-parts') await inPage(page, 'flattenParts', i);
+        return inPage(page, 'course', i, { gpu: flag('gpu') });
+    },
+    window: (page, i) => inPage(page, 'window', i),
+    stream: (page, i) => inPage(page, 'stream', i, { speed: Number(option('speed') || 45), gpu: flag('gpu'), traffic: flag('traffic'), cones: flag('cones'), rockfalls: flag('rockfalls') }),
+    // A fresh page and no ride: the preview as the menu opens it
+    preview: (page, i) => inPage(page, 'preview', i),
+    finish: (page, i) => inPage(page, 'finish', i),
+    // PR8: the gate pips on a phone, 360 x 640, for 5 to 20 gates
+    async hudgates(page, i) {
+        // A phone's width; isMobile would reload the page and lose the probe's scripts
+        await page.setViewport({ width: 360, height: 640, deviceScaleFactor: 2 });
+        return page.evaluate(async legIndex => {
+            window.__reseed(1);
+            twistyDev.start(game.tourSystem.legs[legIndex].id);
+            twistyDev.freeze();
+            const out = {};
+            for (const total of [5, 14, 16, 20]) {
+                game.hud.setGates(7 > total ? total : 7, total);
+                // A frozen game has no animation frames: a timer lets the layout settle
+                await new Promise(r => setTimeout(r, 80));
+                const pips = document.getElementById('hudGatePips');
+                const row = pips.getBoundingClientRect();
+                const panel = pips.parentElement.getBoundingClientRect();
+                const boxes = Array.from(pips.children).map(pip => pip.getBoundingClientRect());
+                // The whole line the pips share: count, style score and combo, in the timer panel
+                const combo = document.getElementById('comboDisplay');
+                if (!combo.textContent) combo.textContent = 'COMBO x1';
+                const meta = document.querySelector('.hud-meta');
+                const timer = document.querySelector('.hud-timer');
+                const items = Array.from(meta.children).filter(el => el.getBoundingClientRect().width > 0).map(el => el.getBoundingClientRect());
+                const timerBox = timer.getBoundingClientRect();
+                out[total] = {
+                    timerLeft: Math.round(timerBox.left * 10) / 10,
+                    timerRight: Math.round(timerBox.right * 10) / 10,
+                    metaRows: new Set(items.map(b => Math.round(b.top))).size,
+                    metaRight: Math.round(Math.max(...items.map(b => b.right)) * 10) / 10,
+                    metaOverflow: meta.scrollWidth > meta.clientWidth + 1,
+                    pips: pips.children.length,
+                    on: pips.querySelectorAll('i.on').length,
+                    count: document.getElementById('hudGateCount').textContent,
+                    left: Math.round(row.left * 10) / 10,
+                    right: Math.round(row.right * 10) / 10,
+                    panelLeft: Math.round(panel.left * 10) / 10,
+                    panelRight: Math.round(panel.right * 10) / 10,
+                    rows: new Set(boxes.map(b => Math.round(b.top))).size,
+                    lastPipRight: Math.round(Math.max(...boxes.map(b => b.right)) * 10) / 10,
+                    pipWidth: Math.round(boxes[0].width * 10) / 10
+                };
+            }
+            return { viewport: [innerWidth, innerHeight], gates: out };
+        }, i);
+    },
     legs: (page, i) => inPage(page, 'legCheck', i, 60),
     snapshot: (page, i) => inPage(page, 'snapshot', i),
     raycast: (page, i) => inPage(page, 'raycast', i),
@@ -781,6 +1613,14 @@ const PROBES = {
     parts: (page, i) => inPage(page, 'parts', i),
     frames: (page, i) => inPage(page, 'frames', i),
     look: (page, i) => inPage(page, 'look', i),
+    atmostate: (page, i) => inPage(page, 'atmostate', i),
+    draws: (page, i) => inPage(page, 'draws', i),
+    // The synthetic two-part track and its control (a snap at the boundary), on a fresh page each
+    async atmo(page, i) {
+        if (!flag('synthetic')) throw new Error('no leg has parts yet: run atmo with --synthetic');
+        return inPage(page, 'atmo', i, false);
+    },
+    atmoControl: (page, i) => inPage(page, 'atmo', i, true),
     runoff: (page, i) => inPage(page, 'runoff', i),
     fog: (page, i) => inPage(page, 'fog', i),
     shortcuts: (page, i) => inPage(page, 'shortcuts', i),
@@ -805,11 +1645,18 @@ const PROBES = {
         return last;
     },
     async budget(page, i) {
+        // A converted leg is counted per drawn window, with the leg's modelled assets: the peak is what is drawn at once
+        if (await page.evaluate(n => !!Course.forLeg(game.tourSystem.legs[n].id), i)) {
+            const window = await inPage(page, 'window', i);
+            const snap = await inPage(page, 'snapshot', i, true);
+            return { windowed: true, peak: window.peak, windows: window.windows.length, ...(snap.assets && { assets: snap.assets }), buildMs: snap.buildMs };
+        }
         const snap = await inPage(page, 'snapshot', i, true);
         // Solid boulders are collision work on every tick, so they count against the budget with the meshes
         return { ...snap.counts, solidBoulders: snap.boulders.filter(b => b[4] === true).length, ...(snap.assets && { assets: snap.assets }), buildMs: snap.buildMs };
     },
     frametime: (page, i) => inPage(page, 'frametime', i),
+    scene: (page, i) => inPage(page, 'scene', i),
     async mutate(page, i) {
         const clean = (await inPage(page, 'snapshot', i)).fingerprints;
         const moved = await inPage(page, 'mutate', i, 0.5);
@@ -910,7 +1757,7 @@ async function main() {
         console.log(JSON.stringify(out, null, 1));
         return;
     }
-    if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate | record-jest | record-frozen | baseline-diff');
+    if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate atmostate draws atmo | record-jest | record-frozen | baseline-diff');
 
     const executablePath = chromePath();
     const gpu = flag('gpu');
@@ -944,7 +1791,7 @@ async function main() {
         } else {
             // Writing to the mutable file re-runs every frozen section first, as the guard
             const guarded = flag('add') || flag('update-baseline') ? FROZEN_SECTIONS : [];
-            const sections = [...new Set([...guarded, ...probes.flatMap(name => (name === 'record-frozen' ? [...FROZEN_SECTIONS, 'pages'] : name === 'shortcuts' ? [name, 'shortcutsControl'] : [name]))])];
+            const sections = [...new Set([...guarded, ...probes.flatMap(name => (name === 'record-frozen' ? [...FROZEN_SECTIONS, 'pages'] : name === 'shortcuts' ? [name, 'shortcutsControl'] : name === 'atmo' ? [name, 'atmoControl'] : [name]))])];
             for (const name of sections) {
                 if (name === 'pages') {
                     report.results.pages = await withBrowser(browser => pagesProbe(browser, port));
@@ -976,6 +1823,43 @@ function finishChecks(report) {
             if (!r.vehicle) failures.push(`${id}: no vehicle after start`);
             if (r.floatingObjects) failures.push(`${id}: FLOATING OBJECTS`);
             if (r.terrainRoadOverlap) failures.push(`${id}: TERRAIN-ROAD OVERLAP`);
+        });
+    }
+    if (results.scene) {
+        Object.entries(results.scene).forEach(([id, r]) => {
+            const pin = SCENE_PINS[id];
+            if (!pin) return;
+            const got = [r.digest, r.meshes, r.instances, r.cones, r.dressed];
+            if (JSON.stringify(got) !== JSON.stringify(pin)) failures.push(`${id}: scene ${JSON.stringify(got)} differs from the pin ${JSON.stringify(pin)}`);
+        });
+    }
+    if (results.submit) {
+        Object.entries(results.submit).forEach(([id, r]) => {
+            if (r.skipped) return notes.push(`${id}: submit not run: ${r.skipped}`);
+            if (r.error) return failures.push(`${id}: submit probe error: ${r.error}`);
+            if (!r.finished) failures.push(`${id}: the autopilot did not finish the leg`);
+            // A mutation on a leg that is not a table board has no guard to defeat; a green run would prove nothing
+            if (option('mutate') === 'ready-always' && !r.tableBoard) failures.push(`${id}: --mutate ready-always needs a table board; this leg has no guard to defeat`);
+            // A board in the table is submitted only to a server that states its gate count
+            const accepted = !r.tableBoard || r.replyFields.length === 2;
+            const expectedCalls = accepted ? 1 : 0;
+            if (r.startRunCalls !== 1) failures.push(`${id}: startRunCalls: ${r.startRunCalls}, expected 1`);
+            if (r.submitCalls !== expectedCalls) failures.push(`${id}: submitCalls: ${r.submitCalls}, expected ${expectedCalls}`);
+            if (accepted && r.payload && (r.payload.gates !== r.expectedGates || r.payload.proofs !== r.expectedGates)) failures.push(`${id}: payload ${JSON.stringify(r.payload)}, expected ${r.expectedGates} times and proofs`);
+            if (accepted && r.submitState !== 'submitted') failures.push(`${id}: submitState ${r.submitState}, expected submitted`);
+            if (!accepted && (r.submitState !== 'not-submitted' || r.nameFormShown)) failures.push(`${id}: submitState ${r.submitState} with nameFormShown ${r.nameFormShown}, expected not-submitted and no form`);
+            if (r.consoleErrors) failures.push(`${id}: ${r.consoleErrors} console errors from the submit path`);
+        });
+    }
+    longLegChecks(report);
+    if (results.hudgates) {
+        Object.entries(results.hudgates).forEach(([id, r]) => {
+            Object.entries(r.gates).forEach(([total, g]) => {
+                const width = r.viewport[0];
+                const fits = g.pips === Number(total) && g.left >= 0 && g.right <= width && g.lastPipRight <= width && g.panelLeft >= 0 && g.panelRight <= width && g.rows === 1
+                    && g.timerLeft >= 0 && g.timerRight <= width && g.metaRight <= g.timerRight && !g.metaOverflow;
+                if (!fits) failures.push(`${id}: ${total} gates on a ${r.viewport[0]} px phone: ${JSON.stringify(g)}`);
+            });
         });
     }
     if (results.surface) {
@@ -1014,6 +1898,57 @@ function finishChecks(report) {
             if (placed[10].speed >= 0.5) failures.push(`${id}: placed at lateral 14, 10 s: speed ${placed[10].speed}`);
         });
     }
+    if (results.atmostate) {
+        // The pinned values of the plan's PR23 arms; the dump is also compared whole against a base tree by hand
+        Object.entries(results.atmostate).forEach(([id, r]) => {
+            const fail = text => failures.push(`${id}: atmostate ${text}`);
+            const weather = r.weather || 'clear';
+            const own = r.times[Object.keys(r.times)[0]];
+            const sun = { rain: 0.25, snow: 0.25, fog: 0.6 }[weather] ?? 1;
+            const hemisphere = { rain: 1.35, snow: 1.35, fog: 1.15 }[weather] ?? 1;
+            const road = { rain: [0.85 * (1 - r.weatherIntensity) + 0.2 * r.weatherIntensity, 0.12 * r.weatherIntensity, 0.3 + 1.9 * r.weatherIntensity], snow: [0.32, 0.08, 1.2] }[weather] || [0.85, 0, 0.3];
+            [['preview', r.preview], ['previewAfterRide', r.previewAfterRide]].forEach(([name, dump]) => {
+                if (dump.weatherType !== weather) fail(`${name}.weatherType ${dump.weatherType}, want ${weather}`);
+                if (dump.directional.intensity / own.sunIntensity !== sun) fail(`${name} sun ratio ${dump.directional.intensity / own.sunIntensity}, want ${sun}`);
+                if (dump.hemisphere.intensity / own.hemisphereIntensity !== hemisphere) fail(`${name} hemisphere ratio ${dump.hemisphere.intensity / own.hemisphereIntensity}, want ${hemisphere}`);
+                if (JSON.stringify([dump.road.roughness, dump.road.metalness, dump.road.envMapIntensity]) !== JSON.stringify(road)) fail(`${name} road ${[dump.road.roughness, dump.road.metalness, dump.road.envMapIntensity]}, want ${road}`);
+                if (dump.fogDensity !== r.expectedFogDensity) fail(`${name} fog density ${dump.fogDensity}, want the leg's look ${r.expectedFogDensity}`);
+            });
+            if (id === 'mountain-dawn' && (r.preview.ringStrength !== 0.15 || r.preview.sky.uMountains !== 0.15)) fail(`preview ring ${r.preview.ringStrength}, want 0.15`);
+            if (r.showcase) {
+                const s = r.showcase;
+                const golden = r.times.golden;
+                const ok = s.timeKey === 'golden' && s.weatherType === 'clear' && s.ringStrength === 1 && s.sky.uMountains === 1 && s.atmosphere === null
+                    && s.fogDensity === 0.0018 && s.fogColor === golden.fogColor && s.directional.intensity === golden.sunIntensity && s.hemisphere.intensity === golden.hemisphereIntensity;
+                if (!ok) fail('showcase is not the clear golden look');
+            }
+            if (r.timeOverride) {
+                const night = id === 'storm-valley';
+                const key = night ? 'night' : 'golden';
+                const cfg = r.times[key];
+                [r.timeOverride.first, r.timeOverride.after60].forEach((dump, n) => {
+                    if (dump.timeKey !== key) fail(`timeOverride[${n}] timeKey ${dump.timeKey}`);
+                    if (dump.weatherType !== weather) fail(`timeOverride[${n}] lost the weather: ${dump.weatherType}`);
+                    if (dump.directional.intensity !== cfg.sunIntensity) fail(`timeOverride[${n}] sun ${dump.directional.intensity}, want ${cfg.sunIntensity}`);
+                    if (night && dump.sky.uMoon !== 1) fail(`timeOverride[${n}] uMoon ${dump.sky.uMoon}`);
+                    if (dump.headlightVisible !== cfg.headlight > 0) fail(`timeOverride[${n}] headlight ${dump.headlightVisible}`);
+                });
+                if (JSON.stringify(r.timeOverride.first) !== JSON.stringify(r.timeOverride.after60)) fail('timeOverride changed in 60 frames');
+            }
+        });
+    }
+    if (results.atmo) {
+        // PR10, PR12: the blend moves the picture without a cut; the particles are the buffer made at leg start
+        Object.entries(results.atmo).forEach(([id, r]) => {
+            const control = results.atmoControl && results.atmoControl[id];
+            if (!(r.totalChange >= 30)) failures.push(`${id}: atmo totalChange ${r.totalChange}, want >= 30`);
+            if (!(r.maxFrameStep <= 0.1 * r.totalChange)) failures.push(`${id}: atmo maxFrameStep ${r.maxFrameStep} over a tenth of ${r.totalChange}`);
+            if (control && !(control.maxFrameStep > 0.5 * control.totalChange)) failures.push(`${id}: atmo control did not cut (${control.maxFrameStep} of ${control.totalChange})`);
+            if (!r.rainBufferSame) failures.push(`${id}: atmo reallocated the rain buffer`);
+            const inside = r.gripAt.filter(point => point.t > 0.2 && point.t < 0.8);
+            if (!inside.length || inside.some(point => !(point.lateralFriction < 1 && point.lateralFriction > 0.73))) failures.push(`${id}: atmo grip inside the blend is not between clear and rain`);
+        });
+    }
     if (results.fog) {
         Object.entries(results.fog).forEach(([id, views]) => Object.entries(views).forEach(([name, r]) => {
             if (r.nearMax !== null && r.nearMax >= 2) failures.push(`${id}: fog changes the near road by ${r.nearMax}/255 in view ${name}`);
@@ -1026,6 +1961,12 @@ function finishChecks(report) {
     }
     if (results.budget) {
         Object.entries(results.budget).forEach(([id, r]) => {
+            if (r.windowed) {
+                if (!(r.peak.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.peak.solidBoulders} solid boulders in a window, over ${SOLID_BOULDER_BUDGET}`);
+                Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r.peak[key] <= most)) failures.push(`${id}: peak window ${r.peak[key]} ${key}, over ${most}`); });
+                if (r.assets) checkAssets(id, r.assets, failures);
+                return;
+            }
             if (!(r.solidBoulders <= SOLID_BOULDER_BUDGET)) failures.push(`${id}: ${r.solidBoulders} solid boulders, over the budget of ${SOLID_BOULDER_BUDGET} per leg`);
             Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${id}: ${r[key]} ${key}, over the budget of ${most} per leg`); });
             if (r.assets?.floating) failures.push(`${id}: ${r.assets.floating} modelled rocks float`);
@@ -1154,3 +2095,86 @@ function writeBaselines(report, fresh, frozen) {
 }
 
 main();
+
+// A converted leg's asset load: nothing failed, nothing floats or is buried
+function checkAssets(id, assets, failures) {
+    ['rocks', 'portals', 'village', 'bridge', 'trees'].forEach(key => { if (assets[key] && assets[key].error) failures.push(`${id}: ${key} failed to load: ${assets[key].error}`); });
+    if (assets.trees && assets.trees.errors && assets.trees.errors.length) failures.push(`${id}: trees ${assets.trees.errors.join('; ')}`);
+    if (assets.floating) failures.push(`${id}: ${assets.floating} modelled objects float`);
+    if (assets.buried) failures.push(`${id}: ${assets.buried} modelled objects are buried`);
+}
+
+// The expectations of the long-leg probes (plan, World section 7)
+function longLegChecks(report) {
+    const { results, failures } = report;
+    const fail = text => failures.push(text);
+    if (results.course) {
+        Object.entries(results.course).forEach(([id, r]) => {
+            const parts = r.parts;
+            parts.forEach((part, n) => {
+                const mark = part.landmark;
+                if (!mark) return fail(`${id}: part ${part.id} has no landmark-${part.id}`);
+                if (!(mark.triangles > 0) || !mark.visible || !mark.inside || !(mark.metres <= 600)) fail(`${id}: landmark of ${part.id} ${JSON.stringify(mark)}`);
+                if (n === 0) return;
+                const before = parts[n - 1];
+                const ratio = (a, b) => (Math.min(a, b) === 0 ? Math.max(a, b) >= 1 : Math.max(a, b) / Math.min(a, b) >= 2);
+                const tests = {
+                    G: () => before.G.some((v, c) => Math.abs(v - part.G[c]) >= 20),
+                    T: () => ratio(before.T, part.T),
+                    S: () => before.S.some((v, c) => v !== part.S[c]),
+                    F: () => before.F !== part.F,
+                    B: () => Math.min(before.B, part.B) === 0 && Math.max(before.B, part.B) >= 6,
+                    H: () => Math.sign(before.H) !== Math.sign(part.H) && Math.abs(before.H) >= 30 && Math.abs(part.H) >= 30
+                };
+                const missed = part.differs.filter(code => !tests[code]());
+                if (missed.length) fail(`${id}: ${before.id} to ${part.id} does not differ by ${missed.join(', ')}`);
+                if (flag('gpu') && part.look && before.look && JSON.stringify(part.look) !== JSON.stringify(before.look) && before.frameRGB) {
+                    const change = Math.max(...before.frameRGB.map((v, c) => Math.abs(v - part.frameRGB[c])));
+                    if (change < 12) fail(`${id}: ${before.id} to ${part.id} frame colour changes by ${change}, under 12`);
+                }
+            });
+        });
+    }
+    if (results.window) {
+        Object.entries(results.window).forEach(([id, r]) => {
+            r.windows.forEach(w => {
+                Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(w[key] <= most)) fail(`${id}: window ${w.section} ${w[key]} ${key}, over ${most}`); });
+                if (!(w.solidBoulders <= SOLID_BOULDER_BUDGET)) fail(`${id}: window ${w.section} ${w.solidBoulders} solid boulders`);
+                if (!(w.retainedMB <= 12)) fail(`${id}: window ${w.section} retains ${w.retainedMB} MB`);
+                if (w.conesOutsideRetained) fail(`${id}: window ${w.section} has ${w.conesOutsideRetained} cones outside retained sections`);
+            });
+        });
+    }
+    if (results.stream) {
+        Object.entries(results.stream).forEach(([id, r]) => {
+            const want = { finished: true, crashes: 0, airborneFrames: 0, syncBuildsAfterStart: 0, framesOnUnbuiltGround: 0, maxVisibleSections: 4, sectionsBuilt: r.sections, sectionsDisposed: r.sections - 2 };
+            if (flag('traffic') || flag('cones') || flag('rockfalls')) Object.assign(want, { vehiclesDrawnOutsideVisible: 0, conesOutsideRetained: 0, rocksOutsideVisible: 0, vehiclesPastTail: 0 });
+            Object.entries(want).forEach(([key, value]) => { if (r[key] !== value) fail(`${id}: stream ${key}: ${r[key]}, expected ${value}`); });
+            if (!(r.maxStepMs <= 16)) fail(`${id}: stream maxStepMs ${r.maxStepMs}, over 16`);
+            // The fixture is 3 km of mostly straight road: its cone rate is not a leg's
+            if (flag('cones') && !flag('fixture') && !(r.conesPerKm >= 3 && r.conesPerKm <= 8)) fail(`${id}: stream conesPerKm ${r.conesPerKm}`);
+            if (flag('gpu')) {
+                if (!/ANGLE Metal Renderer: Apple M5/.test(report.renderer)) fail(`${id}: renderer ${report.renderer}`);
+                if (r.framesOver16ms) fail(`${id}: stream framesOver16ms ${r.framesOver16ms}`);
+                if (!(r.meanFrameMs <= 8)) fail(`${id}: stream meanFrameMs ${r.meanFrameMs}`);
+                Object.entries(r.firstVisibleFrameMs).forEach(([k, ms]) => { if (!(ms <= 16.7)) fail(`${id}: section ${k} first drawn in ${ms} ms`); });
+            }
+        });
+    }
+    if (results.preview) {
+        Object.entries(results.preview).forEach(([id, r]) => {
+            if (!r.converted) return;
+            if (r.sectionsBuilt.length !== 2) fail(`${id}: preview built sections ${JSON.stringify(r.sectionsBuilt)}, expected 2`);
+            Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) fail(`${id}: preview ${r[key]} ${key}`); });
+            if (!(r.triangles <= 191322)) fail(`${id}: preview ${r.triangles} triangles, over today's whole leg 1 (191322)`);
+        });
+    }
+    if (results.finish) {
+        Object.entries(results.finish).forEach(([id, r]) => {
+            if (!r.finished || !r.bestTimeStored) fail(`${id}: finish ${JSON.stringify(r)}`);
+            // The board time of a table board is the finish-line time (protocol 2)
+            if (r.bestTimeMs !== r.finishTimeMs) fail(`${id}: stored best ${r.bestTimeMs} is not the finish time ${r.finishTimeMs}`);
+            if (r.splitsStored !== r.gates) fail(`${id}: ${r.splitsStored} splits stored for ${r.gates} gates`);
+        });
+    }
+}

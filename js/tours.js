@@ -5,7 +5,7 @@ class TourSystem {
             {
                 id: 'mountain-dawn',
                 name: 'Mountain Dawn',
-                description: 'Gentle winding roads through misty mountain passes',
+                description: 'From the misty plain over a stone bridge and through a foothill village, up the lake cliffs to the first pass',
                 startSegment: 0,
                 endSegment: 69,
                 timeOfDay: 'dawn',
@@ -90,6 +90,15 @@ class TourSystem {
                 weatherIntensity: 1.0
             }
         ];
+
+        // A converted leg has its own road, numbered from segment 0
+        this.legs.forEach(leg => {
+            const course = typeof Course !== 'undefined' ? Course.forLeg(leg.id) : null;
+            if (course) {
+                leg.startSegment = 0;
+                leg.endSegment = course.segments - 1;
+            }
+        });
 
         this.currentLeg = null;
 

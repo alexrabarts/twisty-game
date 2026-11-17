@@ -7,7 +7,8 @@
 import { jest } from '@jest/globals';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { buildEnvironment, gameMethods, loadGame, loadScript, ribbonMeshes } from '../helpers/load-game.js';
+import { buildEnvironment, gameMethods, loadSharedGame as loadGame, loadScript, ribbonMeshes } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const DT = 1 / 60;
 const VALLEY = 0;

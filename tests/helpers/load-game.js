@@ -64,7 +64,7 @@ export function canvasStub() {
 // The game classes, built once per THREE and per file set. `log` receives the
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
 export function loadGame(THREE = realThree(), log = []) {
-    const files = ['terrain.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js'];
+    const files = ['terrain.js', 'course.js', 'race.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
     const source = files.map(loadScript).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
@@ -74,9 +74,18 @@ export function loadGame(THREE = realThree(), log = []) {
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console',
-        `${source}\nreturn { Environment, TourSystem, RockfallSystem, Vehicle, Terrain };`
+        `${source}\nreturn { Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack };`
     );
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink) };
+}
+
+// The game with every leg on the shared course, as before the long-leg
+// conversions: for tests whose subject is a shared-course leg that has since
+// been converted (leg 1). Course.release is the rollback of a conversion.
+export function loadSharedGame(THREE = realThree(), log = []) {
+    const game = loadGame(THREE, log);
+    Object.keys(game.Course.LEGS).forEach((id) => game.Course.release(id));
+    return game;
 }
 
 export function legs(game) {

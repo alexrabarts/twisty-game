@@ -9,9 +9,9 @@ const game = loadGame();
 // What the bike reads on a leg, as main.js sets it up
 function physicsOn(index) {
     const leg = legs(game)[index];
-    const weather = Object.create(WeatherSystem.prototype);
-    weather.weatherType = leg.weather;
-    weather.weatherIntensity = leg.weatherIntensity;
+    const weather = new WeatherSystem({ fog: null }, null);
+    const intensity = leg.weatherIntensity;
+    weather.setMix({ rain: leg.weather === 'rain' ? 1 : 0, snow: leg.weather === 'snow' ? 1 : 0, fog: leg.weather === 'fog' ? 1 : 0, intensity });
     weather.surfaceGrip = game.Terrain.legConfig(index).grip ?? 1;
     return weather.getPhysicsMultipliers();
 }

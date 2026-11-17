@@ -10,11 +10,15 @@ class RockfallSystem {
         this.environment = environment;
 
         // The leg's rockfall rate: 0 on the early legs, ramping up to 1
-        this.intensity = environment.config.dressing.rockfall;
+        // A converted leg: the highest rate of its parts; a fall then needs a rate where it lands
+        const parts = environment.terrain.parts;
+        this.intensity = parts
+            ? Math.max(0, ...parts.map(part => (part.dressing && part.dressing.rockfall) || 0))
+            : environment.config.dressing.rockfall;
         // Rocks come off whichever side of the road the profile makes a wall
         // (both, in a gorge); a fall picks the wall at its own segment
         this.wallSign = Terrain.wallSign(environment.terrain);
-        this.enabled = this.intensity > 0 && this.wallSign !== 0;
+        this.enabled = this.intensity > 0 && (this.wallSign !== 0 || !!parts);
 
         this.rocks = [];
         this.maxRocks = 10;
@@ -140,6 +144,12 @@ class RockfallSystem {
         if (this.environment.inSetPiece && this.environment.inSetPiece(segIdx, 1)) return segIdx;
         const seg = path[segIdx];
         const walls = Terrain.wallSignsAt(this.environment.terrain, segIdx);
+        // On a converted leg only a part with a rate sheds rock, only off a wall,
+        // and only in a section that is drawn
+        if (this.environment.sections) {
+            const drawn = this.environment.visibleSections().some(section => segIdx >= section.from && segIdx < section.to);
+            if (!drawn || !walls.length || !(Terrain.dressingAt(this.environment.config, segIdx).rockfall > 0)) return segIdx;
+        }
         // One wall sheds the whole fall; a draw is spent only when there is a choice
         const wallSign = walls.length > 1
             ? walls[Math.floor(Math.random() * walls.length)]
@@ -204,6 +214,14 @@ class RockfallSystem {
         const from = Math.max(0, last - 12);
         const to = Math.min(environment.roadPath.length - 1, last + 12);
         return Terrain.groundY(environment.terrain, environment.terrainGeometry, x, z, from, to, true);
+    }
+
+    // A checkpoint restart: no live rock stays on the spawn point, and the
+    // next fall is a whole interval away
+    reset() {
+        this.rocks.forEach(rock => this.scene.remove(rock.mesh));
+        this.rocks = [];
+        this.nextFallIn = this.rollInterval();
     }
 
     dispose() {

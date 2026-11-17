@@ -113,20 +113,57 @@ firebase emulators:start
 
 ## Step 10: Run Tests
 
+None of these need Firebase, the emulator or `functions/node_modules`:
+
 ```bash
-# Install test dependencies
-npm install --save-dev jest
+# Server rules (handlers on an in-memory database), client service, the
+# client against the real handlers, and the table contract
+npm test -- tests/unit/functions-rules.test.js tests/unit/leaderboard.test.js tests/unit/board-contract.test.js tests/integration/leaderboard-flow.test.js
 
-# Run unit tests
-npm test tests/unit/leaderboard.test.js
-
-# Run Cloud Functions tests
-cd functions
-npm test
-
-# Run integration tests (requires emulators running)
-npm test tests/integration/leaderboard-flow.test.js
+# The table of boards in functions/, with node's own test runner
+cd functions && npm test
 ```
+
+## Boards on the shared course and converted legs
+
+`functions/courses.json` is the server's copy of `Course.boardTable()` (js/course.js):
+one row per converted leg, `{ "<board id>": { "gates": 14, "segments": 700 } }`.
+`tests/unit/board-contract.test.js` fails when the copy and the game differ.
+It is empty until the first leg is converted.
+
+| | Board not in the table | Board in the table |
+|---|---|---|
+| Protocol | 1 (today) | 2 |
+| Store | `/leaderboards/{boardId}` | `/courseBoards/{boardId}` |
+| Gates | exactly 5 | exactly the row's `gates` |
+| Ranks on | the last gate time | the finish-line time, which includes 5 s per restart |
+| Limits | 2 s to 5 min cumulative per gate; session 15 min | 6 s to 8 min between gates; finish from `segments x 20 m / 82.28 m/s` plus 5 s per restart, up to 40 min; session 45 min |
+| `startRun` reply | `sessionId`, `sessionToken` | also `protocol: 2` and `gates` |
+
+The store path comes from the server's table, never from the client. An entry
+written under `/leaderboards/{id}` by a server that did not know the row can
+never become part of that board. Entries left under `/courseBoards/{id}` after
+a rollback are deliberately unread; do not clean them up as orphans.
+
+The client submits only when the server states the protocol and gate count of
+the leg it built. A reply without those fields means a server that knows no
+long boards. The client then shows "Time saved on this device. Online board
+opens soon." and sends nothing.
+
+`restarts` is self-reported. That is safe because the server's floor rises by
+5 s for each restart, so a lower count never helps. A very stubborn run (about
+90 restarts inside one gate gap) can push that gap past 8 min and be refused.
+
+Deploy (the user's step; an agent never runs it):
+
+```bash
+cd functions && npm ci && npm test && firebase deploy --only functions
+```
+
+Effect check: `startRun` for a board in the table returns `protocol` and `gates`.
+Rollback: redeploy the previous commit's functions. `database.rules.json` needs
+no change: `courseBoards` is closed to clients by default, and functions use the
+admin SDK.
 
 ## Database Structure
 
@@ -155,7 +192,7 @@ npm test tests/integration/leaderboard-flow.test.js
 
 1. **Session Tokens**: Server generates 32-byte secret token per run
 2. **Proof Chain**: Each checkpoint has HMAC proof chaining to previous
-3. **Physics Validation**:
+3. **Physics Validation** (board on the shared course; converted legs: see above):
    - Min checkpoint time: 2 seconds
    - Max checkpoint time: 5 minutes
    - Monotonic increase required
