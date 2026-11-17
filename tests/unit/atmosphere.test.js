@@ -56,8 +56,8 @@ describe('Game helpers', () => {
         const { lowestRoadHeight } = game.AtmosphereTrack;
         const { env, leg } = buildEnvironment(game, 1);
         const heights = env.roadPath.slice(leg.startSegment, leg.endSegment + 1).map(p => p.y || 0);
-        expect(lowestRoadHeight(env.roadPath, leg.startSegment, leg.endSegment)).toBe(Math.min(...heights));
-        expect(lowestRoadHeight([], 0, 5)).toBe(0);
+        expect(lowestRoadHeight(env.route, leg.startSegment, leg.endSegment)).toBe(Math.min(...heights));
+        expect(lowestRoadHeight(new game.LegRoute({ roadPath: [] }), 0, 5)).toBe(0);
     });
 
     test('applyShadowBox sizes the box and the far plane from the span', () => {

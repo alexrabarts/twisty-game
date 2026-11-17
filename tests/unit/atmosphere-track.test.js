@@ -120,7 +120,7 @@ describe('AtmosphereTrack.forLeg', () => {
             expect(look.fogDensity).toBe(config.look.fogDensity);
             expect(look.heightFog).toBe(config.atmosphere.heightFog);
             expect(look.shafts).toBe(config.atmosphere.shafts);
-            expect(look.baseY).toBe(AtmosphereTrack.lowestRoadHeight(env.roadPath, leg.startSegment, leg.endSegment));
+            expect(look.baseY).toBe(AtmosphereTrack.lowestRoadHeight(env.route, leg.startSegment, leg.endSegment));
         });
     });
 
@@ -149,7 +149,7 @@ describe('AtmosphereTrack.forLeg', () => {
         };
         const track = AtmosphereTrack.forLeg(leg, config, env);
         expect(track.parts.map(part => part.look.timeOfDay)).toEqual([leg.timeOfDay, 'night']);
-        expect(track.parts[0].look.baseY).toBe(AtmosphereTrack.lowestRoadHeight(env.roadPath, leg.startSegment, leg.startSegment + 30));
+        expect(track.parts[0].look.baseY).toBe(AtmosphereTrack.lowestRoadHeight(env.route, leg.startSegment, leg.startSegment + 30));
         expect(track.parts[1].look.fogDensity).toBe(Terrain.legConfig(0).look.fogDensity);
     });
 });
@@ -535,8 +535,10 @@ describe('Game atmosphere', () => {
         });
         const environment = Object.assign(Object.create(Environment.prototype), {
             scene: new THREE.Scene(),
-            roadMaterial: new THREE.MeshStandardMaterial({ color: 0xffffff })
+            roadMaterial: new THREE.MeshStandardMaterial({ color: 0xffffff }),
+            roadPath: []
         });
+        environment.route = new game.LegRoute(environment);
         environment.roadMaterial.map = {};
         const weatherSystem = new WeatherSystem(scene, { position: new THREE.Vector3() });
         weatherSystem.prepare(weatherTypes);
@@ -551,7 +553,7 @@ describe('Game atmosphere', () => {
             rimLight: new THREE.DirectionalLight(),
             headlight: { visible: false, intensity: 0 },
             headlightBeam: { visible: false, material: { uniforms: { uStrength: { value: 0 } } } },
-            vehicle: { currentRoadSegment: 0 },
+            vehicle: { routeS: 0 },
             atmosphereTrack: track,
             atmosphereHold: false
         };
@@ -656,7 +658,7 @@ describe('Game atmosphere', () => {
         const self = rig(track);
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
         const start = timeValues(self);
-        self.vehicle.currentRoadSegment = 100;
+        self.vehicle.routeS = 2000;
         self.applyAtmosphere();
         const middle = timeValues(self);
         expect(middle.background).not.toBe(start.background);
@@ -669,13 +671,13 @@ describe('Game atmosphere', () => {
         self.setTimeOfDay('golden');
         const held = timeValues(self);
         for (let frame = 0; frame < 60; frame++) {
-            self.vehicle.currentRoadSegment = 97 + frame * 0.1;
+            self.vehicle.routeS = (97 + frame * 0.1) * 20;
             self.applyAtmosphere();
         }
         expect(timeValues(self)).toEqual(held);
         // A snap in the zone ends the hold and blends again
         self.snapAtmosphere(track, 100, {});
-        self.vehicle.currentRoadSegment = 102;
+        self.vehicle.routeS = 2040;
         self.applyAtmosphere();
         expect(timeValues(self)).not.toEqual(held);
     });
@@ -684,9 +686,9 @@ describe('Game atmosphere', () => {
         const track = twoParts();
         const self = rig(track);
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
-        self.vehicle.currentRoadSegment = 100;
+        self.vehicle.routeS = 2000;
         self.applyAtmosphere();
-        self.vehicle.currentRoadSegment = 120;
+        self.vehicle.routeS = 2400;
         self.graphics.environmentDirty = false;
         self.applyAtmosphere();
         expect(self.graphics.environmentDirty).toBe(true);
@@ -696,9 +698,9 @@ describe('Game atmosphere', () => {
 
         const writes = jest.spyOn(self.graphics, 'writeSky');
         self.graphics.environmentDirty = false;
-        self.vehicle.currentRoadSegment = 130;
+        self.vehicle.routeS = 2600;
         self.applyAtmosphere();
-        self.vehicle.currentRoadSegment = 140;
+        self.vehicle.routeS = 2800;
         self.applyAtmosphere();
         expect(writes).not.toHaveBeenCalled();
         expect(self.graphics.environmentDirty).toBe(false);
@@ -714,7 +716,7 @@ describe('Game atmosphere', () => {
         const mix = [];
         for (const x of [97.2 * 20, 97.6 * 20, 98.1 * 20]) {
             self.vehicle.position = { x, z: 0 };
-            self.vehicle.currentRoadSegment = Math.round(x / 20);
+            self.vehicle.routeS = (Math.round(x / 20)) * 20;
             self.applyAtmosphere();
             mix.push(self.weatherSystem.mix.rain);
         }
@@ -722,7 +724,7 @@ describe('Game atmosphere', () => {
         expect(mix[1]).toBeLessThan(mix[2]);
         expect(self.roadPosition()).toBeCloseTo(98.1, 9);
         // With no road to project on it falls back to the segment
-        self.environment.roadPath = null;
+        self.environment.roadPath = [];
         expect(self.roadPosition()).toBe(98);
     });
 
@@ -734,7 +736,7 @@ describe('Game atmosphere', () => {
         let requests = 0;
         for (let frame = 0; frame < 300; frame++) {
             self.graphics.frames++;
-            self.vehicle.currentRoadSegment = 93 + frame * (14 / 300);
+            self.vehicle.routeS = (93 + frame * (14 / 300)) * 20;
             self.graphics.environmentDirty = false;
             self.applyAtmosphere();
             if (self.graphics.environmentDirty) {
@@ -757,13 +759,13 @@ describe('Game atmosphere', () => {
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
         self.directionalLight.shadow.camera.far = 0;
         self.applyShadowBox({ shadowSpan: 120 });
-        self.vehicle.currentRoadSegment = 95;
+        self.vehicle.routeS = 1900;
         self.applyAtmosphere();
         const early = self.cullDistance;
-        self.vehicle.currentRoadSegment = 106;
+        self.vehicle.routeS = 2120;
         self.applyAtmosphere();
         expect(self.cullDistance).toBeLessThan(early);
-        self.vehicle.currentRoadSegment = 150;
+        self.vehicle.routeS = 3000;
         self.applyAtmosphere();
         expect(self.cullDistance).toBe(250);
         expect(self.appliedShadowSpan).toBe(200);

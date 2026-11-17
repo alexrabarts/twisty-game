@@ -298,8 +298,8 @@ class Game {
         }
 
         // Initialize vehicle at leg start position
-        if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-            const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
+        if (this.environment.route && this.environment.route.unitCount > 0) {
+            const startPos = this.tourSystem.getStartingPosition(this.environment.route);
             this.vehicle.position.x = startPos.x;
             this.vehicle.position.y = startPos.y;
             this.vehicle.position.z = startPos.z;
@@ -649,8 +649,8 @@ class Game {
         this.removeRunOverlays();
 
         this.vehicle.reset();
-        if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-            const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
+        if (this.environment.route && this.environment.route.unitCount > 0) {
+            const startPos = this.tourSystem.getStartingPosition(this.environment.route);
             this.vehicle.position.set(startPos.x, startPos.y, startPos.z);
             this.vehicle.yawAngle = startPos.heading;
             // Re-sync segment tracking with the teleported position so the
@@ -1183,7 +1183,8 @@ class Game {
         const track = this.atmosphereTrack;
         if (!track || !this.vehicle) return;
         const scratch = this.atmosphereSample || (this.atmosphereSample = {});
-        const sample = track.sample(this.vehicle.currentRoadSegment || 0, scratch);
+        const route = this.environment.route;
+        const sample = track.sample(route.toUnits(this.vehicle.routeS || 0), scratch);
         const written = this.atmosphereWritten;
         const settled = sample.t === 0 && written && written.t === 0 && written.a === sample.a;
 
@@ -1206,13 +1207,13 @@ class Game {
     // Where the bike is along the road, in fractional segments: the segment it
     // is nearest to, and how far it has passed along the line to the next
     roadPosition() {
-        const segment = this.vehicle.currentRoadSegment || 0;
-        const path = this.environment && this.environment.roadPath;
+        const route = this.environment && this.environment.route;
         const at = this.vehicle.position;
-        if (!path || !at) return segment;
+        const segment = route ? route.toUnits(this.vehicle.routeS || 0) : 0;
+        if (!route || !at) return segment;
         for (const start of [segment, segment - 1]) {
-            const from = path[start];
-            const to = path[start + 1];
+            const from = route.pointAtUnit(start);
+            const to = route.pointAtUnit(start + 1);
             if (!from || !to) continue;
             const dx = to.x - from.x;
             const dz = to.z - from.z;
@@ -1400,14 +1401,15 @@ class Game {
     // side counts.
     tunnelRoofY() {
         const { environment, vehicle } = this;
-        if (!environment || !vehicle || !environment.setPieces.length) return null;
-        const segment = vehicle.currentRoadSegment || 0;
+        if (!environment || !vehicle || !environment.route) return null;
+        const route = environment.route;
+        const segment = route.toUnits(vehicle.routeS || 0);
         for (const index of [segment, segment - 1, segment + 1]) {
-            const ceiling = Terrain.ceilingAt(environment.terrain, index);
-            if (ceiling === undefined || !environment.roadPath[index]) continue;
+            const ceiling = route.ceilingAt(route.fromUnits(index));
+            if (ceiling === undefined || !route.pointAtUnit(index)) continue;
             // The roof rides on the road under it; on a slope the bike's own
             // segment can be the lower one, so the lower roof counts
-            return Math.min(environment.roadPath[index].y, environment.roadPath[segment].y) + ceiling;
+            return Math.min(route.pointAtUnit(index).y, route.pointAtUnit(segment).y) + ceiling;
         }
         return null;
     }
@@ -1870,7 +1872,7 @@ class Game {
         let finalPosition = 1;
         if (this.traffic && this.traffic.motorcycles) {
             // Track progress, not world Z: half the course runs toward -Z
-            const playerProgress = Math.floor(this.vehicle.currentRoadSegment || 0) + (this.vehicle.segmentProgress || 0);
+            const playerProgress = Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)) + (this.vehicle.segmentProgress || 0);
             this.traffic.motorcycles.forEach(bike => {
                 const bikeProgress = Math.floor(bike.currentSegment || 0) + (bike.segmentProgress || 0);
                 if (bikeProgress > playerProgress) {
@@ -2608,14 +2610,14 @@ class Game {
 
         // The look of the part that holds the orbit pivot. The fog density is the
         // landscape's own, written above: the preview makes no weather system.
-        const path = this.previewEnv.roadPath;
+        const route = this.previewEnv.route;
         const track = AtmosphereTrack.forLeg(leg, this.previewEnv.config, this.previewEnv);
-        const pivotSegment = course ? coursePivot : Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
+        const pivotSegment = course ? coursePivot : Math.floor((leg.startSegment + Math.min(leg.endSegment, route.unitCount - 1)) / 2);
         this.snapAtmosphere(track, track.settledSegment(pivotSegment), { environment: this.previewEnv, weatherSystem: null });
 
         // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
         // keeps the low-poly scenery reading well (wide aerials don't)
-        const mid = path[pivotSegment];
+        const mid = route.pointAtUnit(pivotSegment);
         this.previewCenter = new THREE.Vector3(mid.x, (mid.y || 0), mid.z);
         // How far out and how high the camera stands comes from the leg: a
         // leg with trees beside the road has no room for the default 30
@@ -2748,7 +2750,7 @@ class Game {
     }
 
     updateRacePosition() {
-        if (!this.traffic || !this.traffic.motorcycles || !this.vehicle || !this.environment || !this.environment.roadPath) return;
+        if (!this.traffic || !this.traffic.motorcycles || !this.vehicle || !this.environment || !this.environment.route) return;
 
         // Cache the elements; skip all the work if the UI doesn't include them
         if (this.racePositionElements === undefined) {
@@ -2763,9 +2765,9 @@ class Game {
         }
         if (!this.racePositionElements) return;
 
-        const playerSegment = Math.floor(this.vehicle.currentRoadSegment || 0);
+        const playerSegment = Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0));
         const playerProgress = this.vehicle.segmentProgress || 0;
-        const totalSegments = this.environment.roadPath.length;
+        const totalSegments = this.environment.route.unitCount;
         const playerTotalProgress = playerSegment + playerProgress;
         
         let position = 1;
@@ -2967,8 +2969,9 @@ class Game {
         let inRoadworksZone = false;
         if (this.environment.roadworksZones) {
             let currentSegment = 0;
-            if (this.vehicle.currentRoadSegment < this.environment.roadPath.length) {
-                currentSegment = this.vehicle.currentRoadSegment;
+            const vehicleSegment = this.environment.route.toUnits(this.vehicle.routeS || 0);
+            if (vehicleSegment < this.environment.route.unitCount) {
+                currentSegment = vehicleSegment;
             }
             for (const zone of this.environment.roadworksZones) {
                 if (currentSegment >= zone.startSegment && currentSegment <= zone.endSegment) {
@@ -2980,7 +2983,7 @@ class Game {
 
         // Update traffic
         if (this.traffic) {
-            const collision = this.traffic.update(deltaTime, this.vehicle.position, Math.floor(this.vehicle.currentRoadSegment || 0));
+            const collision = this.traffic.update(deltaTime, this.vehicle.position, Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)));
             // The roadworks leave one corridor for both directions, so a car
             // on its detour (which starts before the zone and ends after it)
             // cannot be avoided: no crash against it
@@ -3101,7 +3104,7 @@ class Game {
         // A converted leg builds the world ahead of the bike, a few
         // milliseconds a frame, and keeps the section of the last passed gate
         if (this.environment && this.environment.sections && this.vehicle) {
-            this.environment.update(Math.floor(this.vehicle.currentRoadSegment || 0), Game.SECTION_BUDGET_MS, this.lastCheckpointSegment);
+            this.environment.update(Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)), Game.SECTION_BUDGET_MS, this.lastCheckpointSegment);
         }
 
         // Distance-cull far scenery (throttled internally)
@@ -3523,7 +3526,7 @@ class Game {
         this.vehicle.findNearestRoadSegment();
         this.vehicle.updateMesh();
         // A converted leg keeps the gate's section; the window round it is built now
-        if (this.environment && this.environment.sections) this.environment.ensureWindow(Math.floor(this.vehicle.currentRoadSegment), { sync: true });
+        if (this.environment && this.environment.sections) this.environment.ensureWindow(Math.floor(this.environment.route.toUnits(this.vehicle.routeS)), { sync: true });
 
         // The crash banner belongs to the crash that was just undone
         this.removeRunOverlays();
@@ -3539,12 +3542,12 @@ class Game {
         // on the gate; no car may be on top of the rider
         this.cones.reset();
         if (this.rockfalls) this.rockfalls.reset();
-        if (this.traffic) this.traffic.clearAround(this.vehicle.currentRoadSegment, Game.RESTART_CLEAR_SEGMENTS);
+        if (this.traffic) this.traffic.clearAround(this.environment.route.toUnits(this.vehicle.routeS), Game.RESTART_CLEAR_SEGMENTS);
 
         // A restart can jump back across an atmosphere zone; snap the light,
         // sky, fog and weather to the gate instead of blending from the crash
         if (this.atmosphereTrack) {
-            this.snapAtmosphere(this.atmosphereTrack, this.vehicle.currentRoadSegment, {
+            this.snapAtmosphere(this.atmosphereTrack, this.environment.route.toUnits(this.vehicle.routeS), {
                 environment: this.environment,
                 weatherSystem: this.weatherSystem
             });

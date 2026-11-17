@@ -19,7 +19,7 @@ const TAGS = ['body', 'wall', 'shutter', 'glass', 'lamp'];
 
 function load({ failing = [], assets = true, course = false } = {}) {
     const THREE = realThree();
-    const files = ['terrain.js', ...(course ? ['course.js'] : []), 'vehicle.js', 'environment.js', 'tours.js', ...(assets ? ['sceneassets.js'] : [])];
+    const files = ['terrain.js', ...(course ? ['course.js'] : []), 'world/route.js', 'world/legroute.js', 'world/ground.js', 'vehicle.js', 'environment.js', 'tours.js', ...(assets ? ['sceneassets.js'] : [])];
     const source = files.map(loadScript).join('\n;\n');
     const log = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };

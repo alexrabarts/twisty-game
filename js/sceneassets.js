@@ -320,6 +320,8 @@ const SceneAssets = (() => {
   // and is counted too.
   function checkGrounding(env, groups, variants) {
     const violations = [];
+    // Leg-only: a world environment has no road path to ground against
+    if (!env.roadPath) return violations;
     const point = new THREE.Vector3();
     const last = env.roadPath.length - 1;
     const clear = (p) => Terrain.clearance(env.terrain, env.terrainGeometry, p.x, p.y, p.z, 0, last);
@@ -474,6 +476,8 @@ const SceneAssets = (() => {
   // house, its wash and its shutters come from a hash of the plot, not
   // rand(): no two neighbours and no two houses facing each other are the same.
   function villageLayout(env, plan, origin, houses, props) {
+    // Leg-only: villages are placed from a leg's road path
+    if (!env.roadPath) return [];
     const variants = [...houses.meshes.keys()].filter((name) => name.startsWith("house_")).sort();
     const post = props.meshes.get("lamp_post");
     const up = new THREE.Vector3(0, 1, 0);

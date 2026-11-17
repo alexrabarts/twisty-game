@@ -14,7 +14,7 @@ class Cones {
     // by 3 segments. A converted leg also keeps its cones clear of set pieces and
     // roadworks; a leg on the shared course places exactly as it always has.
     static placeRange(env, from, to) {
-        const path = env.roadPath;
+        const route = env.route;
         const checkpoints = env.checkpoints || [];
         const course = typeof env.course === 'function' ? env.course() : null;
         const clearOfWorks = !!course;
@@ -31,11 +31,11 @@ class Cones {
         const edgeOffset = (env.roadWidth || 16) / 2 - 0.8;
 
         for (let index = from; index <= to; index++) {
-            const point = path[index];
+            const point = route.pointAtUnit(index);
             // Check if this is a turning section by looking at heading change
             const prevIndex = Math.max(0, index - 1);
-            const nextIndex = Math.min(index + 1, path.length - 1);
-            const signedHeadingChange = path[nextIndex].heading - path[prevIndex].heading;
+            const nextIndex = Math.min(index + 1, route.unitCount - 1);
+            const signedHeadingChange = route.pointAtUnit(nextIndex).heading - route.pointAtUnit(prevIndex).heading;
             const headingChange = Math.abs(signedHeadingChange);
 
             // Keep clear of checkpoint gates to avoid double alerts
@@ -77,14 +77,14 @@ class Cones {
         const conePositions = [];
         
         // Use the environment's road path if available
-        if (this.environment && this.environment.roadPath) {
+        if (this.environment && this.environment.route) {
             // Place cones at strategic intervals
             // More cones on straights for slalom, fewer in corners
             const env = this.environment;
-            const path = env.roadPath;
+            const unitCount = env.route.unitCount;
             // Only the active leg has a road to stand on
             const legStart = Math.max(0, env.startSegment || 0);
-            const legEnd = Math.min(path.length - 1, env.endSegment !== undefined ? env.endSegment : path.length - 1);
+            const legEnd = Math.min(unitCount - 1, env.endSegment !== undefined ? env.endSegment : unitCount - 1);
             conePositions.push(...Cones.placeRange(env, legStart + 8, legEnd - 3));
         } else {
             // Fallback: simple straight line
@@ -319,18 +319,10 @@ class Cones {
             } else {
                 // Fallback: re-derive road elevation
                 let roadY = 0;
-                if (this.environment && this.environment.roadPath) {
-                    let minDist = Infinity;
-                    for (const roadPoint of this.environment.roadPath) {
-                        const dist = Math.sqrt(
-                            Math.pow(cone.position.x - roadPoint.x, 2) +
-                            Math.pow(cone.position.z - roadPoint.z, 2)
-                        );
-                        if (dist < minDist) {
-                            minDist = dist;
-                            roadY = roadPoint.y || 0;
-                        }
-                    }
+                if (this.environment && this.environment.route) {
+                    // The nearest road point over the whole route
+                    const nearest = this.environment.route.project(cone.position.x, cone.position.z, null, {});
+                    if (nearest.index >= 0) roadY = nearest.y || 0;
                 }
                 cone.position.y = roadY + 0.4;
             }

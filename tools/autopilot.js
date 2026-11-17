@@ -20,10 +20,11 @@ window.twistyDev = {
         input.getSteeringInput = () => {
             const v = game.vehicle;
             const env = game.environment;
-            if (!ap.on || !v || !env || !env.roadPath) return 0;
-            const path = env.roadPath;
-            const seg = Math.floor(v.currentRoadSegment || 0);
-            const t = path[Math.min(seg + ap.lookahead, path.length - 1)];
+            if (!ap.on || !v || !env || !env.route) return 0;
+            const route = env.route;
+            // `lookahead` counts route units (20 m on a leg) ahead of the bike
+            const ahead = Math.min((v.routeS || 0) + ap.lookahead * route.unitM, route.length);
+            const t = route.sample(ahead, this.aim || (this.aim = {}));
             const tx = t.x + Math.cos(t.heading) * ap.lane;
             const tz = t.z - Math.sin(t.heading) * ap.lane;
             const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
@@ -44,7 +45,7 @@ window.twistyDev = {
         const game = window.game;
         game.paused = true;
         const v = game.vehicle.position;
-        const p = game.environment.roadPath[Math.floor(game.vehicle.currentRoadSegment)];
+        const p = game.environment.route.sample(game.vehicle.routeS);
         const rx = Math.cos(p.heading), rz = -Math.sin(p.heading);
         const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
         game.camera.up.set(0, 1, 0);
@@ -112,9 +113,11 @@ window.twistyDev = {
         return this.ticks;
     },
 
+    // `segment` is in route units: 20 m segments on a leg
     teleport(segment) {
         const game = window.game;
-        const p = game.environment.roadPath[segment];
+        const route = game.environment.route;
+        const p = route.sample(route.fromUnits(segment));
         const v = game.vehicle;
         v.position.set(p.x, p.y, p.z);
         v.yawAngle = p.heading;
