@@ -515,8 +515,13 @@ class WorldEnvironment {
                 const low = landLow(x + ox * at, z + oz * at);
                 return low !== null && low < y - WorldEnvironment.MEET_M ? { kind: 'wall', y: low } : null;
             }
-            if (!aprons) return null;
             const low = landLow(x + ox * 0.1, z + oz * 0.1);
+            // A side road's edge high over the land drawn near it is held by a retaining wall down to the land at any
+            // level of detail (its raised centre rides on a deck, RoadMesh.sideStructures): no road edge hangs over the land
+            if (!aprons) {
+                const near = landNear(x + ox * 0.5, z + oz * 0.5);
+                return near !== null && low !== null && near < y - RoadMesh.PARAPET_DROP_M ? { kind: 'wall', y: low } : null;
+            }
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
             // The apron runs out at the batter until it meets the land drawn near (8 m triangles), never on over a
@@ -554,7 +559,14 @@ class WorldEnvironment {
         let triangles = 0;
         const hold = this.sideHold();
         const missing = new Set();
-        const sides = [];
+        const sides = [], structures = [];
+        // The land a side road's structures stand on; a chunk built before a tile under it is built again when it arrives
+        const groundAt = (x, z) => {
+            const y = this.ground.tileHeight(x, z);
+            if (y === null) missing.add(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`);
+            return y;
+        };
+        const options = { groundAt, roof: WorldRoute.ROOF_M };
         this.data.edges.forEach((edge) => {
             if (edge.onRide || this.data.chunkOf(edge.first) !== k) return;
             const samples = this.graph.samples(edge.id);
@@ -566,21 +578,23 @@ class WorldEnvironment {
             if (node !== undefined) {
                 const stub = this.graph.stub(edge.id, node);
                 if (stub && stub.length > 1) {
-                    const stubGroup = RoadMesh.sideRoad(this.holdSide(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, hold);
+                    const stubGroup = RoadMesh.sideRoad(this.holdSide(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, hold, null, options);
                     sides.push(stubGroup.userData.sides);
+                    structures.push(...stubGroup.userData.structures);
                     group.add(stubGroup);
                     triangles += stubGroup.userData.triangles;
                 }
             }
-            const side = RoadMesh.sideRoad(this.holdSide(rows), false, hold);
+            const side = RoadMesh.sideRoad(this.holdSide(rows), false, hold, null, options);
             sides.push(side.userData.sides);
+            structures.push(...side.userData.structures);
             group.add(side);
             triangles += side.userData.triangles;
         });
-        // The edge works of every side road here, one mesh: its retaining walls (a side road is seen from afar
-        // at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when a tile
-        // under them arrives
-        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }));
+        // The edge works of every side road here, one mesh: its retaining walls, decks and tubes (a side road is seen
+        // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
+        // a tile under them arrives
+        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures);
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`side:${k}`);
         group.userData.triangles = triangles;
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });

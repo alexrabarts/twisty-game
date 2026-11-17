@@ -2260,7 +2260,8 @@ const FLOAT_SEAM_SHARE = 0.1;
 
 // world-floating, in the page: walks the slice every `every` metres and checks the drawn world round each place
 // (the LOD each tile and each road section is drawn at from there). Returns per-LOD counts and the worst cases.
-async function floatingWalk(placeSource, every, tol, upM) {
+async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
+    const SIDE_FLOAT_M = sideFloatM;
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment;
     const route = env.route;
@@ -2290,6 +2291,7 @@ async function floatingWalk(placeSource, every, tol, upM) {
     const place = (p, o) => ({ x: p.x + o * Math.cos(p.heading), z: p.z - o * Math.sin(p.heading) });
     const structureNear = (k, mask) => { for (let d = -2; d <= 2; d++) { const q = points[k + d]; if (q && (q.bits & mask)) return true; } return false; };
     const edges = new Map(), ups = new Map(), physics = [];
+    const sideSeen = new Map(), horizonSeen = new Map();
     let checked = 0, missing = 0, upChecked = 0;
     const r2 = v => Math.round(v * 100) / 100;
     for (let s0 = every / 2; s0 < route.length; s0 += every) {
@@ -2299,6 +2301,39 @@ async function floatingWalk(placeSource, every, tol, upM) {
         const roads = [...meshes(env.roadGroup, o => o.name === 'road-ribbon' || o.name === 'road-side'), ...meshes(env.sideGroup, o => o.name === 'road-ribbon' || o.name === 'road-side')];
         const far = [env.horizon, ...(env.farLand || [])].filter(Boolean);
         const bikeK = route.toUnits(s0);
+        // Side roads: every edge and centre point of a resident side ribbon more than SIDE_FLOAT_M over the drawn land
+        // must stand on a structure: a deck or another road within 1.5 m under it, or a wall across its edge
+        const structures = skirts.concat(roads);
+        for (const group of env.sideGroup.children) {
+            for (const road of group.children) {
+                for (const side of road.userData.sides || []) {
+                    const centre = [(side.l[0] + side.r[0]) / 2, (side.l[1] + side.r[1]) / 2, (side.l[2] + side.r[2]) / 2];
+                    for (const [what, pt] of [['l', side.l], ['c', centre], ['r', side.r]]) {
+                        const key = `${Math.round(pt[0] * 2)},${Math.round(pt[2] * 2)},${Math.round(pt[1])}`;
+                        if (sideSeen.has(key)) continue;
+                        const land = drawnLand(pt[0], pt[2]);
+                        if (!land) continue;
+                        const gap = pt[1] - land.y;
+                        let held = gap <= sideFloatM;
+                        const inward = what === 'l' ? [side.r[0] - side.l[0], side.r[2] - side.l[2]] : what === 'r' ? [side.l[0] - side.r[0], side.l[2] - side.r[2]] : [0, 0];
+                        const len = Math.hypot(inward[0], inward[1]) || 1;
+                        if (!held) {
+                            // An edge point is read 0.3 m inside the edge: a ray down the deck's side face grazes it
+                            raycaster.set(new THREE.Vector3(pt[0] + inward[0] / len * 0.3, pt[1] - 0.03, pt[2] + inward[1] / len * 0.3), down);
+                            raycaster.far = 1.5;
+                            held = raycaster.intersectObjects(structures, false).length > 0;
+                        }
+                        if (!held && what !== 'c') {
+                            const dir = new THREE.Vector3(-inward[0] / len, 0, -inward[1] / len);
+                            raycaster.set(new THREE.Vector3(pt[0] + inward[0] / len * 0.5, pt[1] - Math.min(gap, 3) * 0.5, pt[2] + inward[1] / len * 0.5), dir);
+                            raycaster.far = 1.2;
+                            held = raycaster.intersectObjects(skirts, false).length > 0;
+                        }
+                        sideSeen.set(key, { s: Math.round(s0), x: Math.round(pt[0]), z: Math.round(pt[2]), at: what, gapM: r2(gap), landLod: land.lod, held });
+                    }
+                }
+            }
+        }
         for (const [index, held] of env.streamer.roads) {
             const sec = env.streamer.sections[index];
             // Beyond LOD0 the ribbon keeps only some rows (RoadMesh.decimate): its edge runs straight between them
@@ -2393,6 +2428,30 @@ async function floatingWalk(placeSource, every, tol, upM) {
     }
     const list = [...edges.values()];
     const byLod = {};
+    // Against the land drawn at LOD0 (a coarser tile lies lower than the land under the road: counted apart, as coarse)
+    const sideFloat = { vertices: 0, over: 0, open: 0, coarseOpen: 0, worstM: 0, worst: [] };
+    const horizonOver = { nodes: 0, over: 0, worstM: 0, worst: [] };
+    for (const v of sideSeen.values()) {
+        sideFloat.vertices++;
+        if (v.gapM <= SIDE_FLOAT_M) continue;
+        sideFloat.over++;
+        if (v.held) continue;
+        if (v.landLod !== 0) { sideFloat.coarseOpen++; continue; }
+        sideFloat.open++;
+        sideFloat.worstM = Math.max(sideFloat.worstM, v.gapM);
+        sideFloat.worst.push(v);
+    }
+    sideFloat.worst.sort((p, q) => q.gapM - p.gapM);
+    sideFloat.worst = sideFloat.worst.slice(0, 8);
+    for (const v of horizonSeen.values()) {
+        horizonOver.nodes++;
+        if (v.overM <= 0) continue;
+        horizonOver.over++;
+        horizonOver.worstM = Math.max(horizonOver.worstM, v.overM);
+        horizonOver.worst.push(v);
+    }
+    horizonOver.worst.sort((p, q) => q.overM - p.overM);
+    horizonOver.worst = horizonOver.worst.slice(0, 8);
     for (const e of list) {
         const key = `road${e.roadLod}-land${e.landLod}`;
         const row = byLod[key] || (byLod[key] = { checked: 0, overTol: 0, open: 0, worstGapM: 0 });
@@ -2409,7 +2468,8 @@ async function floatingWalk(placeSource, every, tol, upM) {
         every, tolM: tol, probes: checked, missing, edges: list.length, byLod,
         overTol: raw.length, worstGapM: raw.length ? raw[0].gapM : 0, open: open.length, worstOpen: open.slice(0, 12), worstRaw: raw.slice(0, 6),
         up: { checked: upChecked, hits: upList.length, worst: upList.slice(0, 12) },
-        physics: { checked: physics.length, over: badPhysics.length, worstM: badPhysics.length ? badPhysics[0].deltaM : 0, worst: badPhysics.slice(0, 8) }
+        physics: { checked: physics.length, over: badPhysics.length, worstM: badPhysics.length ? badPhysics[0].deltaM : 0, worst: badPhysics.slice(0, 8) },
+        sideFloat, horizonOver
     };
 }
 
@@ -3958,6 +4018,8 @@ function worldChecks(report) {
         if (!(floating.probes > 0)) failures.push('world-floating: no road edge was checked');
         if (floating.open) failures.push(`world-floating: ${floating.open} drawn road edges stand more than ${floating.tolM} m over the drawn land with nothing under them (worst ${floating.worstOpen[0].gapM} m at s ${floating.worstOpen[0].s} ${floating.worstOpen[0].side}, road LOD${floating.worstOpen[0].roadLod}, land LOD${floating.worstOpen[0].landLod}): ${JSON.stringify(floating.worstOpen.slice(0, 5))}`);
         if (floating.up.hits) failures.push(`world-floating: drawn land or far land stands within ${FLOAT_UP_M} m over the road surface at ${floating.up.hits} points (worst ${floating.up.worst[0].overM} m at s ${floating.up.worst[0].s}): ${JSON.stringify(floating.up.worst.slice(0, 5))}`);
+        const side = floating.sideFloat;
+        if (side && side.open) failures.push(`world-floating: ${side.open} of ${side.vertices} side-road points stand more than 3 m over the land drawn at LOD0 with no deck or wall under them (worst ${side.worstM} m): ${JSON.stringify(side.worst.slice(0, 5))}`);
         if (floating.physics.over) failures.push(`world-floating: the physics ground beside the road differs from the drawn ground by more than ${floating.tolM} m at ${floating.physics.over} of ${floating.physics.checked} points (worst ${floating.physics.worstM} m): ${JSON.stringify(floating.physics.worst.slice(0, 5))}`);
         floating.views.forEach(v => {
             if (v.crashed) failures.push(`world-floating: the ride into the view at s ${v.want} crashed`);

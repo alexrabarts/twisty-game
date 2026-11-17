@@ -253,18 +253,18 @@ describe('RoadMesh', () => {
     test('a tunnel run gets a tube and portals, a bridge run a deck, parapets and piers', () => {
         const rows = line(40).map((r, i) => ({ ...r, bits: i >= 5 && i < 15 ? 1 : i >= 20 && i < 30 ? 2 : 0 }));
         const group = RoadMesh.section(rows, 0, { groundAt: () => 60 });
+        // The structures share one mesh (the window counts meshes), in the structures' material group
         const names = group.children.map(c => c.name);
-        expect(names).toEqual(['road-ribbon', 'tunnel', 'bridge']);
+        expect(names).toEqual(['road-ribbon', 'road-works']);
         for (const child of group.children) expect(finite(child.geometry)).toBe(true);
+        const works = group.children[1].geometry;
+        expect(works.groups.filter(g => g.count > 0).map(g => g.materialIndex)).toEqual([1]);
         // Piers stand from the deck to the ground 40 m below
-        const bridge = group.children[2].geometry;
-        bridge.computeBoundingBox();
-        expect(bridge.boundingBox.min.y).toBeLessThan(70);
+        works.computeBoundingBox();
+        expect(works.boundingBox.min.y).toBeLessThan(70);
         expect(group.userData.triangles).toBeGreaterThan(group.children[0].geometry.attributes.position.count / 3);
         // The tunnel's roof is the route's own roof height over the road
-        const tunnel = group.children[1].geometry;
-        tunnel.computeBoundingBox();
-        expect(tunnel.boundingBox.max.y).toBeCloseTo(100 + WorldRoute.ROOF_M + 1.2, 4);
+        expect(works.boundingBox.max.y).toBeCloseTo(100 + WorldRoute.ROOF_M + 1.2, 4);
     });
 
     test('a road whose land meets its edges is the ribbon alone', () => {
@@ -272,6 +272,43 @@ describe('RoadMesh', () => {
         expect(RoadMesh.section(line(10), 1, { foot: () => null }).children.map(c => c.name)).toEqual(['road-ribbon']);
         expect(RoadMesh.sideRoad(line(10), true).name).toBe('world-road-stub');
         expect(RoadMesh.sideRoad(line(10), false).name).toBe('world-road-side');
+    });
+
+    // Every road surface more than PARAPET_DROP_M over the land stands on a structure: a side road too, flagged or not
+    test('a raised or bridge-flagged side road rides on a deck with piers, and a point of it high over the land is never bare', () => {
+        const ground = 70;
+        const under = (group, x, y, z) => {
+            const ray = new THREE.Raycaster(new THREE.Vector3(x, y - 0.03, z), new THREE.Vector3(0, -1, 0), 0, 1.5);
+            return ray.intersectObjects(group.children.filter(c => c.name === 'road-works'), false).length > 0;
+        };
+        for (const [what, rows] of [['flagged', line(12, { bits: 2 })], ['high over the land', line(12)]]) {
+            for (const stub of [true, false]) {
+                const group = RoadMesh.sideRoad(rows, stub, null, () => null, { groundAt: () => ground });
+                expect(group.children.map(c => c.name)).toEqual(['road-side', 'road-works']);
+                const works = group.children[1].geometry;
+                works.computeBoundingBox();
+                // Piers reach the land
+                expect(works.boundingBox.min.y).toBeLessThan(ground + 0.5);
+                let bare = 0, points = 0;
+                for (const side of group.userData.sides) {
+                    expect(side.bits & 2).toBe(2);
+                    const c = [0, 1, 2].map(k => (side.l[k] + side.r[k]) / 2);
+                    for (const p of [side.l, c, side.r]) {
+                        points++;
+                        if (p[1] - ground > RoadMesh.PARAPET_DROP_M && !under(group, p[0], p[1], p[2])) bare++;
+                    }
+                }
+                expect({ what, stub, points: points > 0, bare }).toEqual({ what, stub, points: true, bare: 0 });
+            }
+        }
+        // On the land, nothing: the land meets it
+        const low = RoadMesh.sideRoad(line(12), false, null, () => null, { groundAt: () => 99.5 });
+        expect(low.children.map(c => c.name)).toEqual(['road-side']);
+        expect(low.userData.structures).toEqual([]);
+        // The caller that batches side roads gets the structures to draw in its one mesh
+        const batched = RoadMesh.sideRoad(line(12, { bits: 2 }), false, null, null, { groundAt: () => ground });
+        expect(batched.children.map(c => c.name)).toEqual(['road-side']);
+        expect(batched.userData.structures[0].positions.length).toBeGreaterThan(0);
     });
 
     test('the edge works: an apron at the batter down to lower land, a wall with a parapet, a deck with a soffit, none on a structure', () => {
