@@ -151,8 +151,14 @@ class Vehicle {
         this.lastPosition = new THREE.Vector3(0, 0, 0);
 
         // Road following tracking
-        this.currentRoadSegment = 0; // Index of current road segment we're following
+        // `currentRoadSegment` is the projection's hint, read only here: the
+        // route is searched near it. `routeS` is the one progress quantity the
+        // rest of the game reads, metres along the route.
+        this.currentRoadSegment = 0;
+        this.routeS = 0;
         this.segmentProgress = 0; // Progress along current segment (0-1)
+        this.projection = {}; // Scratch for route.project
+        this.located = {}; // Scratch for a located point handed to the ground
 
         // Road boundary state tracking for hysteresis
         this.wasNearEdge = false; // Prevents oscillating between edge states
@@ -1817,7 +1823,7 @@ class Vehicle {
                 this.velocity.z *= 0.98;
 
                 // Clamp to the road surface (windowed nearest-segment search)
-                const crashRoadY = this.environment && this.environment.roadPath
+                const crashRoadY = this.environment && this.environment.route
                     ? this.surfaceAt(this.position.x, this.position.z)
                     : this.position.y;
                 if (this.position.y <= crashRoadY && this.velocity.y < 0) {
@@ -1980,8 +1986,8 @@ class Vehicle {
         }
 
         // Check if bike has fallen through the road surface (especially when crashed on side)
-        if (this.environment && this.environment.roadPath && !this.fallingOffCliff) {
-            // Windowed search - full scans here cost O(roadPath) per physics tick
+        if (this.environment && this.environment.route && !this.fallingOffCliff) {
+            // Windowed search - full scans here cost O(route) per physics tick
             const surfaceY = this.surfaceAt(this.position.x, this.position.z);
 
             if (this.position.y < surfaceY - 2.0) {
@@ -2053,7 +2059,7 @@ class Vehicle {
         let gradientForce = 0;
         // (not in the air: position.y is then above the road and reads as a
         // steep downhill)
-        if (this.environment && this.environment.roadPath && !this.isJumping) {
+        if (this.environment && this.environment.route && !this.isJumping) {
             // Find the road gradient by looking ahead and behind
             const lookDistance = 5; // meters
             let currentY = this.position.y;
@@ -2560,7 +2566,7 @@ class Vehicle {
         this.wheelieCombo = 0;
         this.wheeliePerfectFrames = 0;
         this.wheelieLastInputTime = 0;
-        this.currentRoadSegment = 0;
+        this.setRouteIndex(0);
         this.segmentProgress = 0;
         this.wasNearEdge = false;
         this.fallingOffCliff = false;
@@ -2599,17 +2605,14 @@ class Vehicle {
     // for the falling bike. Never below the height where a fall ends.
     getTerrainHeightAt(x, z) {
         const environment = this.environment;
-        if (!environment || !environment.roadPath || environment.roadPath.length === 0) {
+        if (!environment || !environment.route || environment.route.unitCount === 0) {
             return 0;
         }
 
         const range = this.getSegmentSearchRange(30);
         const loc = {};
-        const ground = Terrain.groundY(
-            environment.terrain, environment.terrainGeometry, x, z, range.start, range.end, false, loc
-        );
-        const side = Terrain.sideAt(environment.terrain, loc.lateral < 0 ? -1 : 1, loc.index);
-        return Math.max(ground, Terrain.restY(environment.terrain, side, loc.roadY));
+        const ground = environment.ground.groundY(x, z, range, false, loc);
+        return Math.max(ground, environment.ground.restY(loc));
     }
 
     // Where the bike rides: the road height of the nearest segment, lowered or
@@ -2618,7 +2621,8 @@ class Vehicle {
     // How far the bike must drop before it counts as over the lip of the
     // side it fell from. A low drop ends in a short lip.
     fallLip() {
-        const side = Terrain.sideAt(this.environment.terrain, this.fallSide, this.currentRoadSegment);
+        this.located.index = this.currentRoadSegment;
+        const side = this.environment.ground.sideAt(this.located, this.fallSide);
         return Math.min(8, side.lipDepth ?? 8);
     }
 
@@ -2626,11 +2630,8 @@ class Vehicle {
     // the bike; null before the road exists
     locateNear(x, z, radius) {
         const environment = this.environment;
-        if (environment.roadPath.length === 0) return null;
-        const range = this.getSegmentSearchRange(radius);
-        const loc = {};
-        Terrain.locate(environment.roadPath, x, z, range.start, range.end, loc);
-        return loc;
+        if (environment.route.unitCount === 0) return null;
+        return environment.ground.locate(x, z, this.getSegmentSearchRange(radius), {});
     }
 
     // Height of the road centreline nearest to (x, z)
@@ -2642,10 +2643,10 @@ class Vehicle {
     surfaceAt(x, z, radius = 10) {
         const loc = this.locateNear(x, z, radius);
         if (!loc) return this.position.y;
-        const environment = this.environment;
-        const zone = Terrain.zoneAt(environment.terrain, loc.index, loc.lateral, environment.roadWidth / 2);
+        const ground = this.environment.ground;
+        const zone = ground.zoneAt(loc, ground.halfRoad(loc));
         if (zone.kind !== 'runoff') return loc.roadY;
-        return Terrain.heightAt(environment.terrain, environment.terrainGeometry, loc, false);
+        return ground.heightAt(loc, false);
     }
 
     calculateSlopeNormal(x, z) {
@@ -2694,15 +2695,22 @@ class Vehicle {
         this.weatherSystem = weatherSystem;
     }
 
+    // Settle the projection hint on route unit `index` and the progress with it
+    setRouteIndex(index) {
+        this.currentRoadSegment = index;
+        const route = this.environment && this.environment.route;
+        this.routeS = route ? route.fromUnits(index) : 0;
+    }
+
     getSegmentSearchRange(searchRadius = 10) {
         // Return a range of segments to search (nearby segments only)
         // This dramatically improves performance vs searching all segments
 
-        if (!this.environment || !this.environment.roadPath || this.environment.roadPath.length === 0) {
+        if (!this.environment || !this.environment.route || this.environment.route.unitCount === 0) {
             return { start: 0, end: 0 };
         }
 
-        const pathLength = this.environment.roadPath.length;
+        const pathLength = this.environment.route.unitCount;
         const start = Math.max(0, this.currentRoadSegment - searchRadius);
         const end = Math.min(pathLength - 1, this.currentRoadSegment + searchRadius);
 
@@ -2714,23 +2722,12 @@ class Vehicle {
         // (reset, checkpoint restart). The per-frame searches are windowed
         // around currentRoadSegment, so a stale index after a teleport makes
         // wall/elevation checks use a segment far from the bike.
-        if (!this.environment || !this.environment.roadPath || this.environment.roadPath.length === 0) {
+        if (!this.environment || !this.environment.route || this.environment.route.unitCount === 0) {
             return 0;
         }
 
-        let best = 0;
-        let bestDistSq = Infinity;
-        this.environment.roadPath.forEach((segment, index) => {
-            const dx = this.position.x - segment.x;
-            const dz = this.position.z - segment.z;
-            const distSq = dx * dx + dz * dz;
-            if (distSq < bestDistSq) {
-                bestDistSq = distSq;
-                best = index;
-            }
-        });
-
-        this.currentRoadSegment = best;
+        const best = this.environment.route.project(this.position.x, this.position.z, null, this.projection).index;
+        this.setRouteIndex(best);
         this.segmentProgress = 0;
         this.wasNearEdge = false;
         return best;
@@ -2766,34 +2763,21 @@ class Vehicle {
         }
         
         // Find nearest road segments and interpolate between them
-        if (this.environment && this.environment.roadPath) {
-            // Get search range (only search nearby segments for performance)
-            const range = this.getSegmentSearchRange();
+        if (this.environment && this.environment.route) {
+            const route = this.environment.route;
+            // Nearest vertex within the search window around the bike's segment
+            const closest = route.project(this.position.x, this.position.z, { index: this.currentRoadSegment }, this.projection);
+            const closestIndex = closest.index;
 
-            // Find closest segment within search range
-            let closest = { segment: null, distance: Infinity };
-            let closestIndex = -1;
+            if (closestIndex >= 0 && closest.y !== undefined) {
+                let targetY = closest.y;
+                const closestY = closest.y;
+                const closestDistance = closest.distance;
 
-            for (let index = range.start; index <= range.end; index++) {
-                const segment = this.environment.roadPath[index];
-                const distance = Math.sqrt(
-                    Math.pow(this.position.x - segment.x, 2) +
-                    Math.pow(this.position.z - segment.z, 2)
-                );
-
-                if (distance < closest.distance) {
-                    closest = { segment, distance };
-                    closestIndex = index;
-                }
-            }
-            
-            if (closest.segment && closest.segment.y !== undefined) {
-                let targetY = closest.segment.y;
-                
                 // If we have adjacent segments, interpolate for smoother transitions
-                if (closestIndex > 0 && closestIndex < this.environment.roadPath.length - 1) {
-                    const prevSegment = this.environment.roadPath[closestIndex - 1];
-                    const nextSegment = this.environment.roadPath[closestIndex + 1];
+                if (closestIndex > 0 && closestIndex < route.unitCount - 1) {
+                    const prevSegment = route.pointAtUnit(closestIndex - 1);
+                    const nextSegment = route.pointAtUnit(closestIndex + 1);
                     
                     // Simple linear interpolation based on position along the road
                     const distToPrev = Math.sqrt(
@@ -2807,14 +2791,14 @@ class Vehicle {
                     
                     if (distToPrev < distToNext && prevSegment.y !== undefined) {
                         // Closer to previous segment - interpolate between prev and current
-                        const totalDist = distToPrev + closest.distance;
-                        const weight = closest.distance / totalDist;
-                        targetY = prevSegment.y * weight + closest.segment.y * (1 - weight);
+                        const totalDist = distToPrev + closestDistance;
+                        const weight = closestDistance / totalDist;
+                        targetY = prevSegment.y * weight + closestY * (1 - weight);
                     } else if (nextSegment.y !== undefined) {
                         // Closer to next segment - interpolate between current and next
-                        const totalDist = closest.distance + distToNext;
+                        const totalDist = closestDistance + distToNext;
                         const weight = distToNext / totalDist;
-                        targetY = closest.segment.y * weight + nextSegment.y * (1 - weight);
+                        targetY = closestY * weight + nextSegment.y * (1 - weight);
                     }
                 }
 
@@ -2824,7 +2808,7 @@ class Vehicle {
                 const speedRatio = Math.min(this.speed / 30, 1.0); // Normalize to 0-1 at 30 m/s
                 const lerpFactor = 0.15 + (speedRatio * 0.25); // 0.15 at low speed, 0.40 at high speed
                 // Interpolation follows the road; run-off adds the ground's offset from it
-                targetY += this.surfaceAt(this.position.x, this.position.z) - closest.segment.y;
+                targetY += this.surfaceAt(this.position.x, this.position.z) - closestY;
                 this.position.y = this.position.y * (1 - lerpFactor) + targetY * lerpFactor;
             }
         }
@@ -2836,51 +2820,32 @@ class Vehicle {
             console.log('ERROR: No environment set on vehicle');
             return;
         }
-        if (!this.environment.roadPath) {
-            console.log('ERROR: No roadPath in environment');
+        const route = this.environment.route;
+        if (!route) {
+            console.log('ERROR: No route in environment');
             return;
         }
-        if (this.environment.roadPath.length === 0) {
-            console.log('ERROR: Empty roadPath');
+        if (route.unitCount === 0) {
+            console.log('ERROR: Empty route');
             return;
         }
 
-        // Get search range (only search nearby segments for performance)
-        const range = this.getSegmentSearchRange();
+        // Project onto the route near the bike's segment (only nearby
+        // segments are searched, for performance) and keep the hint
+        const projection = route.project(this.position.x, this.position.z, { index: this.currentRoadSegment }, this.projection);
+        if (projection.index < 0) return;
+        this.setRouteIndex(projection.index);
 
-        // Use the closest segment for accurate perpDistance calculation
-        let currentSegment = null;
-        let minDistance = Infinity;
-
-        for (let index = range.start; index <= range.end; index++) {
-            const segment = this.environment.roadPath[index];
-            const distance = Math.sqrt(
-                Math.pow(this.position.x - segment.x, 2) +
-                Math.pow(this.position.z - segment.z, 2)
-            );
-
-            if (distance < minDistance) {
-                minDistance = distance;
-                currentSegment = segment;
-                this.currentRoadSegment = index; // Update current segment
-            }
-        }
-
-        if (!currentSegment) return;
-
-        // Calculate perpendicular distance from road centerline
-        // Use the same perpendicular calculation as environment.js
-        const perpX = Math.cos(currentSegment.heading);
-        const perpZ = -Math.sin(currentSegment.heading);
-        const toVehicleX = this.position.x - currentSegment.x;
-        const toVehicleZ = this.position.z - currentSegment.z;
-
-        // Dot product gives signed distance (positive = right of road, negative = left of road)
-        const perpDistance = toVehicleX * perpX + toVehicleZ * perpZ;
+        // Perpendicular distance from the road centre line, positive to the right
+        const perpDistance = projection.lateral;
+        const perpX = Math.cos(projection.heading);
+        const perpZ = -Math.sin(projection.heading);
         const sign = perpDistance < 0 ? -1 : 1;
         const sideName = sign < 0 ? 'left' : 'right';
-        const halfRoadWidth = this.environment.roadWidth / 2;
-        const terrain = this.environment.terrain;
+        const halfRoadWidth = projection.width / 2;
+        const ground = this.environment.ground;
+        const located = this.located;
+        located.index = projection.index;
 
         // Where the bike is, by the profile's bands. Hysteresis pulls the
         // edges in by half a unit once the bike has been past the road edge,
@@ -2889,8 +2854,10 @@ class Vehicle {
         // true lateral and ignore it.
         const hysteresisBuffer = 0.5;
         const bias = this.wasNearEdge ? hysteresisBuffer : 0;
-        const zone = Terrain.zoneAt(terrain, this.currentRoadSegment, perpDistance, halfRoadWidth);
-        const edgeZone = Terrain.zoneAt(terrain, this.currentRoadSegment, perpDistance + sign * bias, halfRoadWidth);
+        located.lateral = perpDistance;
+        const zone = ground.zoneAt(located, halfRoadWidth);
+        located.lateral = perpDistance + sign * bias;
+        const edgeZone = ground.zoneAt(located, halfRoadWidth);
         const reach = Math.abs(perpDistance) + bias;
 
         // Update hysteresis state
@@ -2973,11 +2940,8 @@ class Vehicle {
         const environment = this.environment;
         const range = this.getSegmentSearchRange();
         const loc = {};
-        const ground = Terrain.groundY(
-            environment.terrain, environment.terrainGeometry,
-            this.position.x, this.position.z, range.start, range.end, false, loc
-        );
-        const water = Terrain.waterLevel(environment.terrain, loc.roadY);
+        const ground = environment.ground.groundY(this.position.x, this.position.z, range, false, loc);
+        const water = environment.ground.waterLevel(loc);
         if (water !== null && ground <= water) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5;
@@ -3083,7 +3047,7 @@ class Vehicle {
         this.jumpRotation += this.jumpAngularVel * deltaTime;
         
         // Check for landing
-        if (this.environment && this.environment.roadPath) {
+        if (this.environment && this.environment.route) {
             // Find the road height at current position (windowed search - jumps
             // travel forward, so use a wider window than the on-road checks)
             const targetRoadHeight = this.surfaceAt(this.position.x, this.position.z, 25);

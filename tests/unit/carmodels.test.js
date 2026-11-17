@@ -20,7 +20,7 @@ const REACH = 2.2;
 
 function load({ failing = [], held = false, models = true } = {}) {
     const THREE = realThree();
-    const source = ['sceneassets.js', ...(models ? ['carmodels.js'] : []), 'traffic.js'].map(loadScript).join('\n;\n');
+    const source = ['sceneassets.js', ...(models ? ['carmodels.js'] : []), 'world/route.js', 'world/legroute.js', 'traffic.js'].map(loadScript).join('\n;\n');
     const log = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };
     let release;
@@ -33,7 +33,7 @@ function load({ failing = [], held = false, models = true } = {}) {
     };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'fetch', 'Blob', 'TextDecoder', 'performance',
-        `${source}\nreturn { SceneAssets, CarModels: typeof CarModels === 'undefined' ? null : CarModels, Car, Traffic };`
+        `${source}\nreturn { SceneAssets, CarModels: typeof CarModels === 'undefined' ? null : CarModels, Car, Traffic, LegRoute };`
     );
     const game = factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance);
     return { THREE, log, release, ...game };
@@ -46,6 +46,7 @@ function road(length = 40) {
 }
 
 function drive(game, color, environment = null) {
+    if (environment && !environment.route) environment.route = new game.LegRoute(environment);
     return new game.Car(new game.THREE.Scene(), environment, { direction: -1, speed: 20, startSegment: 10, lane: 'right', color });
 }
 

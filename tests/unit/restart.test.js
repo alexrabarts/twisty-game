@@ -46,8 +46,9 @@ function fakeGame() {
             reset() { this.distanceTraveled = 0; },
             findNearestRoadSegment: jest.fn(),
             updateMesh: jest.fn(),
-            currentRoadSegment: 321
+            routeS: 321 * 20
         },
+        environment: { route: { toUnits: s => s / 20 } },
         cones: { reset: jest.fn() },
         rockfalls: { reset: jest.fn() },
         traffic: { clearAround: jest.fn() },
@@ -190,7 +191,7 @@ describe('what a restart does to the leg', () => {
     test('RockfallSystem.reset removes every live rock and schedules the next fall', () => {
         const scene = new game.THREE.Scene();
         const rocks = new game.RockfallSystem(scene, env);
-        rocks.triggerFall({ currentRoadSegment: 332 });
+        rocks.triggerFall({ routeS: 332 * 20 });
         expect(rocks.rocks.length).toBeGreaterThan(0);
         const meshes = rocks.rocks.map(rock => rock.mesh);
         rocks.nextFallIn = 0;

@@ -279,6 +279,10 @@ class Environment {
   constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0, options = {}) {
     this.scene = scene;
     this.roadPath = []; // Store the path for other uses (full track for physics/AI)
+    // What the rest of the game reads of the road and the land beside it;
+    // both read roadPath and the terrain lazily, so they hold across the build
+    this.route = new LegRoute(this);
+    this.ground = new LegGround(this);
     this.startSegment = startSegment; // Start of visual geometry range
     this.endSegment = endSegment; // End of visual geometry range
     this.legIndex = legIndex; // Current leg index (0-7)

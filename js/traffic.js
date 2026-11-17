@@ -1,7 +1,7 @@
 // Segment span that has road geometry for the current leg (the leg plus its
 // run-off past the finish line)
 function legSegmentRange(environment) {
-    const last = environment.roadPath.length - 1;
+    const last = environment.route.unitCount - 1;
     const start = Math.max(0, Math.min(last, environment.startSegment || 0));
     const legEnd = environment.endSegment !== undefined ? environment.endSegment : last;
     return { start, end: Math.max(start, Math.min(last, legEnd + 16)) };
@@ -362,7 +362,7 @@ class Car {
         this.createCarModel();
         
         // Ensure initial position is on the road
-        if (this.environment && this.environment.roadPath && this.environment.roadPath.length > 0) {
+        if (this.environment && this.environment.route && this.environment.route.unitCount > 0) {
             this.updatePosition();
         }
     }
@@ -737,43 +737,27 @@ class Car {
     }
     
     updatePosition() {
-        const totalSegments = this.environment.roadPath.length;
-        
-        // Ensure currentSegment is valid
-        const safeCurrentSegment = Math.floor(this.currentSegment) % totalSegments;
-        const actualCurrentSegment = safeCurrentSegment < 0 ? safeCurrentSegment + totalSegments : safeCurrentSegment;
-        
-        const currentPoint = this.environment.roadPath[actualCurrentSegment];
-        const nextSegment = (actualCurrentSegment + 1) % totalSegments;
-        const nextPoint = this.environment.roadPath[nextSegment];
-        
-        // Interpolate position between segments
-        const t = this.segmentProgress;
-        const x = currentPoint.x + (nextPoint.x - currentPoint.x) * t;
-        const y = currentPoint.y + (nextPoint.y - currentPoint.y) * t;
-        const z = currentPoint.z + (nextPoint.z - currentPoint.z) * t;
-        
-        // Interpolate heading for smoother turns
-        let headingDiff = nextPoint.heading - currentPoint.heading;
-        // Handle wrap-around
-        if (headingDiff > Math.PI) headingDiff -= 2 * Math.PI;
-        if (headingDiff < -Math.PI) headingDiff += 2 * Math.PI;
-        const interpolatedHeading = currentPoint.heading + headingDiff * t;
+        const route = this.environment.route;
+        const road = route.sampleAt(this.currentSegment, this.segmentProgress, this.roadSample || (this.roadSample = {}));
+        const { x, y, z } = road;
+        const interpolatedHeading = road.heading;
         
         // Calculate lane offset based on interpolated heading
+        const s = route.fromUnits(this.currentSegment + this.segmentProgress);
         let laneOffset;
         if (this.inDetour) {
             // Use detour lane with wider offset to avoid construction
+            const detour = route.detourOffsets(s);
             if (this.detourSide === 'far-left' || this.detourSide === 'left') {
                 // Between the containers (inner edge at -4) and the centre
                 // cones (-0.5); -5 and -6 drove through the containers
-                laneOffset = -2.2;
+                laneOffset = detour.left;
             } else {
-                laneOffset = 5; // Right detour
+                laneOffset = detour.right; // Right detour
             }
         } else {
             // Normal lane position
-            laneOffset = this.lane === 'left' ? -3 : 3;
+            laneOffset = this.lane === 'left' ? -route.laneOffset(s) : route.laneOffset(s);
         }
         const perpX = Math.cos(interpolatedHeading) * laneOffset;
         const perpZ = -Math.sin(interpolatedHeading) * laneOffset;
@@ -790,14 +774,11 @@ class Car {
         
         if (this.direction === 1) {
             // Forward - calculate angle from current to next position
-            const dx = nextPoint.x - currentPoint.x;
-            const dz = nextPoint.z - currentPoint.z;
-            facingAngle = Math.atan2(dx, dz);
+            facingAngle = Math.atan2(road.dx, road.dz);
         } else {
             // Backward - opposite direction
-            const dx = currentPoint.x - nextPoint.x;
-            const dz = currentPoint.z - nextPoint.z;
-            facingAngle = Math.atan2(dx, dz);
+            // 0 - d, not -d: a straight road keeps +0, so atan2 stays +π rather than -π
+            facingAngle = Math.atan2(0 - road.dx, 0 - road.dz);
         }
         
         this.carGroup.rotation.y = facingAngle;
@@ -1064,7 +1045,7 @@ class AIMotorcycle {
 
         this.createBikeModel();
 
-        if (this.environment && this.environment.roadPath && this.environment.roadPath.length > 0) {
+        if (this.environment && this.environment.route && this.environment.route.unitCount > 0) {
             this.updatePosition();
         }
 
@@ -1425,25 +1406,13 @@ class AIMotorcycle {
     }
     
     updatePosition() {
-        const totalSegments = this.environment.roadPath.length;
-        const safeCurrentSegment = Math.floor(this.currentSegment) % totalSegments;
-        const actualCurrentSegment = safeCurrentSegment < 0 ? safeCurrentSegment + totalSegments : safeCurrentSegment;
+        const route = this.environment.route;
+        const road = route.sampleAt(this.currentSegment, this.segmentProgress, this.roadSample || (this.roadSample = {}));
+        const { x, y, z } = road;
+        const interpolatedHeading = road.heading;
         
-        const currentPoint = this.environment.roadPath[actualCurrentSegment];
-        const nextSegment = (actualCurrentSegment + 1) % totalSegments;
-        const nextPoint = this.environment.roadPath[nextSegment];
-        
-        const t = this.segmentProgress;
-        const x = currentPoint.x + (nextPoint.x - currentPoint.x) * t;
-        const y = currentPoint.y + (nextPoint.y - currentPoint.y) * t;
-        const z = currentPoint.z + (nextPoint.z - currentPoint.z) * t;
-        
-        let headingDiff = nextPoint.heading - currentPoint.heading;
-        if (headingDiff > Math.PI) headingDiff -= 2 * Math.PI;
-        if (headingDiff < -Math.PI) headingDiff += 2 * Math.PI;
-        const interpolatedHeading = currentPoint.heading + headingDiff * t;
-        
-        let laneOffset = this.lane === 'left' ? -3 : 3;
+        const lane = route.laneOffset(route.fromUnits(this.currentSegment + this.segmentProgress));
+        let laneOffset = this.lane === 'left' ? -lane : lane;
         
         // Add pack lateral offset for natural spread
         if (this.packLateralOffset) {
@@ -1461,14 +1430,10 @@ class AIMotorcycle {
         const roadElevation = y || 0;
         this.bikeGroup.position.set(x + perpX, roadElevation, z + perpZ);
         
-        const dx = nextPoint.x - currentPoint.x;
-        const dz = nextPoint.z - currentPoint.z;
-        const facingAngle = Math.atan2(dx, dz);
+        const facingAngle = Math.atan2(road.dx, road.dz);
         
         // Calculate turn rate based on heading change
-        let headingChange = nextPoint.heading - currentPoint.heading;
-        if (headingChange > Math.PI) headingChange -= 2 * Math.PI;
-        if (headingChange < -Math.PI) headingChange += 2 * Math.PI;
+        const headingChange = road.turn;
         
         // Calculate lean angle based on turn rate and speed (motorcycle physics)
         // Lean = arctan(v² * turnRate / g)

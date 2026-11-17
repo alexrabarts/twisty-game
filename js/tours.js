@@ -325,16 +325,16 @@ class TourSystem {
         return currentIndex === this.legs.length - 1;
     }
 
-    getStartingPosition(roadPath) {
+    getStartingPosition(route) {
         if (!this.currentLeg) {
             console.warn('No leg selected, using default start position');
-            return roadPath[0];
+            return route.sample(0);
         }
 
         // Spawn at the start line (5 segments into the leg) so the abrupt
         // edge where the rendered road begins is behind the camera
-        const startSegment = Math.min(this.currentLeg.startSegment + 5, roadPath.length - 1);
-        return roadPath[startSegment];
+        const startSegment = Math.min(this.currentLeg.startSegment + 5, route.unitCount - 1);
+        return route.sample(route.fromUnits(startSegment));
     }
 
     createLegSelector(container, onLegSelected) {

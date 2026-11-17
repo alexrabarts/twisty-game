@@ -466,23 +466,23 @@ describe('the gorge and the night forest built', () => {
 
     test('the camera stays under the roof: Game.tunnelRoofY reads the span at the bike and a segment either side', () => {
         const { env } = leg(NIGHT);
-        const self = { environment: env, vehicle: { currentRoadSegment: 517 } };
+        const self = { environment: env, vehicle: { routeS: 10340 } };
         const { tunnelRoofY } = gameMethods(['tunnelRoofY'], self, { Terrain: game.Terrain });
         const road = segment => env.roadPath[segment].y;
         expect(tunnelRoofY()).toBeCloseTo(road(517) + 7.5, 9);
         // The camera trails the bike: just outside either end still counts
-        self.vehicle.currentRoadSegment = 513;
+        self.vehicle.routeS = 10260;
         // ... and the roof rides on the lower of the road under it and the bike's own
         expect(tunnelRoofY()).toBeCloseTo(Math.min(road(513), road(514)) + 7.5, 9);
-        self.vehicle.currentRoadSegment = 522;
+        self.vehicle.routeS = 10440;
         expect(tunnelRoofY()).toBeCloseTo(Math.min(road(522), road(521)) + 7.5, 9);
-        self.vehicle.currentRoadSegment = 530;
+        self.vehicle.routeS = 10600;
         expect(tunnelRoofY()).toBeNull();
-        self.vehicle.currentRoadSegment = 586;
+        self.vehicle.routeS = 11720;
         expect(tunnelRoofY()).toBeNull();
         // A leg with no set pieces never asks the profile
         const dawn = leg(0).env;
-        expect(gameMethods(['tunnelRoofY'], { environment: dawn, vehicle: { currentRoadSegment: 517 } }, { Terrain: game.Terrain }).tunnelRoofY()).toBeNull();
+        expect(gameMethods(['tunnelRoofY'], { environment: dawn, vehicle: { routeS: 10340 } }, { Terrain: game.Terrain }).tunnelRoofY()).toBeNull();
     });
 
     test('the menu preview stands between the gorge walls and in the gap above the forest road', () => {
@@ -725,7 +725,7 @@ describe('rockfalls from the walls of the gorge (P-W12)', () => {
         try {
             for (let n = 0; n < times; n++) {
                 const rockfalls = new game.RockfallSystem(scene, env);
-                const target = rockfalls.triggerFall({ currentRoadSegment: start });
+                const target = rockfalls.triggerFall({ routeS: start * 20 });
                 const rocks = rockfalls.rocks.map(rock => {
                     const segment = nearestSegment(rock.mesh.position);
                     const point = env.roadPath[segment];
@@ -807,7 +807,7 @@ describe('rockfalls from the walls of the gorge (P-W12)', () => {
         const original = Math.random;
         Math.random = () => { draws++; return 0.5; };
         try {
-            rockfalls.triggerFall({ currentRoadSegment: 332 });
+            rockfalls.triggerFall({ routeS: 6640 });
         } finally {
             Math.random = original;
         }
@@ -826,7 +826,7 @@ describe('rockfalls from the walls of the gorge (P-W12)', () => {
         try {
             for (let n = 0; n < falls; n++) {
                 const rockfalls = new game.RockfallSystem(environmentScene, environment);
-                rockfalls.triggerFall({ currentRoadSegment: start });
+                rockfalls.triggerFall({ routeS: start * 20 });
                 const rocks = rockfalls.rocks.slice();
                 const closest = rocks.map(() => Infinity);
                 const side = rocks.map(() => 0);
@@ -877,7 +877,7 @@ describe('rockfalls from the walls of the gorge (P-W12)', () => {
         const restore = seedMath(seeded(5));
         try {
             const rockfalls = new game.RockfallSystem(scene, env);
-            rockfalls.triggerFall({ currentRoadSegment: 240 });
+            rockfalls.triggerFall({ routeS: 4800 });
             expect(rockfalls.rocks.length).toBeGreaterThan(0);
             for (let tick = 0; tick < 60 * 60; tick++) rockfalls.update(1 / 60, null);
             expect(rockfalls.rocks).toEqual([]);
