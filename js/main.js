@@ -2231,6 +2231,14 @@ class Game {
         const closeBtn = document.getElementById('leaderboardCloseBtn');
         const errorCloseBtn = document.getElementById('leaderboardErrorCloseBtn');
 
+        // The form shows the rule the service enforces
+        const rule = this.leaderboardService.nameRule();
+        const validName = value => value.trim().length >= rule.min && value.trim().length <= rule.max;
+        const letters = rule.min === rule.max ? `${rule.max} letters` : `${rule.min}-${rule.max} letters`;
+        entryForm.querySelector('.leaderboard-entry-subtitle').textContent = `Enter your name (${letters})`;
+        nameInput.maxLength = rule.max;
+        nameInput.placeholder = '_'.repeat(rule.max);
+
         // Reset to entry form
         entryForm.style.display = 'block';
         resultDiv.style.display = 'none';
@@ -2246,14 +2254,14 @@ class Game {
 
         // Enable/disable submit button based on input
         const inputHandler = () => {
-            submitBtn.disabled = nameInput.value.length !== 4;
+            submitBtn.disabled = !validName(nameInput.value);
         };
         nameInput.addEventListener('input', inputHandler);
 
         // Handle submit
         const submitHandler = () => {
-            const playerName = nameInput.value.toUpperCase();
-            if (playerName.length === 4) {
+            const playerName = nameInput.value.trim().toUpperCase();
+            if (validName(playerName)) {
                 // Disable buttons during submission
                 submitBtn.disabled = true;
                 cancelBtn.disabled = true;
@@ -2289,7 +2297,7 @@ class Game {
 
         // Handle enter key
         const keyHandler = (e) => {
-            if (e.key === 'Enter' && nameInput.value.length === 4) {
+            if (e.key === 'Enter' && validName(nameInput.value)) {
                 submitHandler();
             }
         };

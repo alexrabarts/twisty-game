@@ -135,6 +135,25 @@ describe('Leaderboard flow', () => {
         expect((await service.submitRun('TEST')).error).toContain('Invalid proof chain');
     });
 
+    test('a 5-character name goes through the real client and handlers, and a 4-character row stays', async () => {
+        const old = newService();
+        await old.startRun(OLD_ID);
+        for (let i = 0; i < 5; i++) old.recordCheckpoint(i, (i + 1) * 30000);
+        await old.submitRun('CCCC');
+
+        const service = newService();
+        await service.startRun(LONG_ID, { protocol: 2, gates: 14 });
+        expect(service.nameRule()).toEqual({ min: 1, max: 5 });
+        for (let i = 0; i < 14; i++) service.recordCheckpoint(i, (i + 1) * 20000);
+        service.recordFinish(300000);
+        await service.recordQueue;
+        expect(await service.submitRun('alexr')).toMatchObject({ success: true, rank: 1 });
+
+        expect(submitted.at(-1).playerName).toBe('ALEXR');
+        expect((await newService().fetchLeaderboard(LONG_ID, 10)).entries.map(e => e.playerName)).toEqual(['ALEXR']);
+        expect((await newService().fetchLeaderboard(OLD_ID, 10)).entries.map(e => e.playerName)).toEqual(['CCCC']);
+    });
+
     test('boards are kept apart and ranked within themselves', async () => {
         for (const [name, finish] of [['AAAA', 320000], ['BBBB', 300000]]) {
             const service = newService();

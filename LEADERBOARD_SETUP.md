@@ -138,12 +138,23 @@ It is empty until the first leg is converted.
 | Gates | exactly 5 | exactly the row's `gates` |
 | Ranks on | the last gate time | the finish-line time, which includes 5 s per restart |
 | Limits | 2 s to 5 min cumulative per gate; session 15 min | 6 s to 8 min between gates; finish from `segments x 20 m / 82.28 m/s` plus 5 s per restart, up to 40 min; session 45 min |
-| `startRun` reply | `sessionId`, `sessionToken` | also `protocol: 2` and `gates` |
+| `startRun` reply | `sessionId`, `sessionToken`, `nameMax` | also `protocol: 2` and `gates` |
 
 The store path comes from the server's table, never from the client. An entry
 written under `/leaderboards/{id}` by a server that did not know the row can
 never become part of that board. Entries left under `/courseBoards/{id}` after
 a rollback are deliberately unread; do not clean them up as orphans.
+
+### Player names
+
+A name is 1 to 5 characters on every board. `submitRun` trims it, counts it after
+Unicode NFC normalisation, rejects control and format characters (zero-width and
+bidi marks), and stores it uppercased. Names already on the boards (4 characters)
+stay valid. The limit lives in the server (`NAME_MAX` in `functions/lib/handlers.js`)
+and `startRun` states it as `nameMax`. A client that gets no `nameMax` keeps the
+old rule of exactly 4 characters, so the client and the functions can deploy in
+either order. The 1 to 5 rule reaches players only after
+`firebase deploy --only functions`.
 
 The client submits only when the server states the protocol and gate count of
 the leg it built. A reply without those fields means a server that knows no
@@ -160,7 +171,8 @@ Deploy (the user's step; an agent never runs it):
 cd functions && npm ci && npm test && firebase deploy --only functions
 ```
 
-Effect check: `startRun` for a board in the table returns `protocol` and `gates`.
+Effect check: `startRun` returns `nameMax: 5`, and for a board in the table
+also `protocol` and `gates`.
 Rollback: redeploy the previous commit's functions. `database.rules.json` needs
 no change: `courseBoards` is closed to clients by default, and functions use the
 admin SDK.

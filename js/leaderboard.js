@@ -20,6 +20,8 @@ class LeaderboardService {
         this.restarts = 0;
         this.finishTime = null;
         this.finishProof = null;
+        // The name limit the server stated; null for a server that states none
+        this.nameMax = null;
         // The server cannot take this leg's runs: no name form, no submit
         this.unsupported = false;
     }
@@ -122,6 +124,8 @@ class LeaderboardService {
             this.restarts = 0;
             this.finishTime = null;
             this.finishProof = null;
+            const stated = result.data.nameMax;
+            this.nameMax = Number.isInteger(stated) && stated >= 1 && stated <= 16 ? stated : null;
 
             console.log(`Leaderboard session started: ${this.sessionId}`);
             return true;
@@ -223,6 +227,14 @@ class LeaderboardService {
     }
 
     /**
+     * The name length the form and submitRun enforce. A server that states
+     * nameMax takes 1..nameMax; one that does not still demands exactly 4.
+     */
+    nameRule() {
+        return this.nameMax === null ? { min: 4, max: 4 } : { min: 1, max: this.nameMax };
+    }
+
+    /**
      * Submit completed run
      */
     async submitRun(playerName) {
@@ -250,14 +262,17 @@ class LeaderboardService {
         }
 
         // Validate player name
-        if (!playerName || playerName.length !== 4) {
-            return { success: false, error: 'Player name must be exactly 4 characters' };
+        const name = typeof playerName === 'string' ? playerName.trim() : '';
+        const rule = this.nameRule();
+        if (name.length < rule.min || name.length > rule.max) {
+            const words = rule.min === rule.max ? `exactly ${rule.max}` : `${rule.min} to ${rule.max}`;
+            return { success: false, error: `Player name must be ${words} characters` };
         }
 
         try {
             const payload = {
                 sessionId: this.sessionId,
-                playerName: playerName.toUpperCase(),
+                playerName: name.toUpperCase(),
                 checkpointTimes: this.checkpointTimes,
                 proofChain: this.proofChain
             };
@@ -342,5 +357,6 @@ class LeaderboardService {
         this.restarts = 0;
         this.finishTime = null;
         this.finishProof = null;
+        this.nameMax = null;
     }
 }

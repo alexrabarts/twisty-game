@@ -1479,9 +1479,13 @@ const PROBES = {
             const leg = game.tourSystem.legs[i];
             return { id: leg.id, boardId: TourSystem.boardId(leg), row: Course.boardTable()[TourSystem.boardId(leg)] || null, last: i === game.tourSystem.legs.length - 1 };
         }, index);
-        // --fixture: leg 1 is the 3-gate fixture board; the default reply is an old server (no fields), --reply new states them
+        // --fixture: leg 1 is the 3-gate fixture board; the default reply is an old server (no fields), --reply new states
+        // protocol and gates, --reply names adds the name limit a server with the 1 to 5 character rule states
         const reply = { sessionId: 'probe-session', sessionToken: 'probe-token-not-a-secret' };
-        if (info.row && option('reply') === 'new') Object.assign(reply, { protocol: 2, gates: info.row.gates });
+        const replyMode = option('reply');
+        if (info.row && (replyMode === 'new' || replyMode === 'names')) Object.assign(reply, { protocol: 2, gates: info.row.gates });
+        if (replyMode === 'names') reply.nameMax = 5;
+        const typedName = option('name') || 'TEST';
         const calls = { reply };
         page.callables = calls;
         const errors = [];
@@ -1493,6 +1497,10 @@ const PROBES = {
                 const start = service.startRun.bind(service);
                 service.startRun = legId => start(legId, expected);
             }, { protocol: reply.protocol ?? 1, gates: reply.gates ?? 5 });
+        }
+        if (option('mutate') === 'names-always') {
+            // The form and the service take 1 to 5 characters whatever the server said
+            await page.evaluate(() => { game.leaderboardService.nameRule = () => ({ min: 1, max: 5 }); });
         }
         await page.evaluate(i => { window.__legIndex = i; }, index);
         const ridden = await page.evaluate(async () => {
@@ -1518,18 +1526,32 @@ const PROBES = {
         const startRunCalls = (calls.startRun || []).length;
         let nameFormShown = false;
         let submitState = 'none';
+        let form = null;
         if (ridden.finished && !info.last) {
             await page.evaluate(() => document.getElementById('nextLegBtn').click());
             nameFormShown = await page.waitForFunction("document.getElementById('leaderboardEntryOverlay').classList.contains('active')", { polling: 100, timeout: 2000 }).then(() => true, () => false);
             if (nameFormShown) {
-                await page.evaluate(() => {
+                form = await page.evaluate(name => {
                     const input = document.getElementById('leaderboardNameInput');
-                    input.value = 'TEST';
+                    input.value = name;
                     input.dispatchEvent(new Event('input'));
-                    document.getElementById('leaderboardSubmitBtn').click();
-                });
-                const done = await page.waitForFunction("document.getElementById('leaderboardResult').style.display === 'block' || document.getElementById('leaderboardError').style.display !== 'none'", { polling: 100, timeout: 5000 }).then(() => true, () => false);
-                submitState = done && await page.evaluate(() => document.getElementById('leaderboardResult').style.display === 'block') ? 'submitted' : 'failed';
+                    const button = document.getElementById('leaderboardSubmitBtn');
+                    const disabled = button.disabled;
+                    button.click();
+                    return {
+                        submitDisabled: disabled,
+                        maxLength: input.maxLength,
+                        placeholder: input.placeholder,
+                        subtitle: document.querySelector('#leaderboardEntryForm .leaderboard-entry-subtitle').textContent,
+                        clipped: input.scrollWidth > input.clientWidth
+                    };
+                }, typedName);
+                if (form.submitDisabled) {
+                    submitState = 'blocked';
+                } else {
+                    const done = await page.waitForFunction("document.getElementById('leaderboardResult').style.display === 'block' || document.getElementById('leaderboardError').style.display !== 'none'", { polling: 100, timeout: 5000 }).then(() => true, () => false);
+                    submitState = done && await page.evaluate(() => document.getElementById('leaderboardResult').style.display === 'block') ? 'submitted' : 'failed';
+                }
             } else if (ridden.unsupported) {
                 submitState = 'not-submitted';
             }
@@ -1541,7 +1563,10 @@ const PROBES = {
             submitCalls: (calls.submitRun || []).length,
             submitState,
             nameFormShown,
-            payload: submit ? { gates: submit.checkpointTimes.length, proofs: submit.proofChain.length, finish: submit.finishTime !== undefined } : null,
+            payload: submit ? { gates: submit.checkpointTimes.length, proofs: submit.proofChain.length, finish: submit.finishTime !== undefined, playerName: submit.playerName } : null,
+            form,
+            typedName,
+            nameMax: reply.nameMax,
             consoleErrors: errors.filter(text => /Incomplete run|Failed to submit|No active/.test(text)).length,
             expectedGates: info.row ? info.row.gates : 5,
             tableBoard: !!info.row,
@@ -1842,11 +1867,21 @@ function finishChecks(report) {
             if (option('mutate') === 'ready-always' && !r.tableBoard) failures.push(`${id}: --mutate ready-always needs a table board; this leg has no guard to defeat`);
             // A board in the table is submitted only to a server that states its gate count
             const accepted = !r.tableBoard || r.replyFields.length === 2;
-            const expectedCalls = accepted ? 1 : 0;
+            // The name limit is the server's: 1 to nameMax when stated, exactly 4 when not
+            const nameOk = r.nameMax ? r.typedName.trim().length >= 1 && r.typedName.trim().length <= r.nameMax : r.typedName.trim().length === 4;
+            const expectedCalls = accepted && nameOk ? 1 : 0;
             if (r.startRunCalls !== 1) failures.push(`${id}: startRunCalls: ${r.startRunCalls}, expected 1`);
             if (r.submitCalls !== expectedCalls) failures.push(`${id}: submitCalls: ${r.submitCalls}, expected ${expectedCalls}`);
             if (accepted && r.payload && (r.payload.gates !== r.expectedGates || r.payload.proofs !== r.expectedGates)) failures.push(`${id}: payload ${JSON.stringify(r.payload)}, expected ${r.expectedGates} times and proofs`);
-            if (accepted && r.submitState !== 'submitted') failures.push(`${id}: submitState ${r.submitState}, expected submitted`);
+            if (accepted && r.nameFormShown && nameOk && r.submitState !== 'submitted') failures.push(`${id}: submitState ${r.submitState}, expected submitted`);
+            if (accepted && r.nameFormShown && !nameOk && (r.submitState !== 'blocked' || r.submitCalls !== 0)) failures.push(`${id}: name ${JSON.stringify(r.typedName)} gave submitState ${r.submitState} with ${r.submitCalls} submitRun calls, expected blocked and 0`);
+            if (r.form) {
+                const limit = r.nameMax || 4;
+                const letters = r.nameMax ? `1-${r.nameMax} letters` : '4 letters';
+                if (r.submitState === 'submitted' && r.payload.playerName !== r.typedName.trim().toUpperCase()) failures.push(`${id}: payload playerName ${JSON.stringify(r.payload.playerName)}, expected ${JSON.stringify(r.typedName.trim().toUpperCase())}`);
+                if (r.form.maxLength !== limit || r.form.placeholder !== '_'.repeat(limit) || r.form.subtitle !== `Enter your name (${letters})`) failures.push(`${id}: form shows ${JSON.stringify(r.form)}, expected maxLength ${limit} and "${letters}"`);
+                if (r.form.clipped) failures.push(`${id}: the name input clips a letter`);
+            }
             if (!accepted && (r.submitState !== 'not-submitted' || r.nameFormShown)) failures.push(`${id}: submitState ${r.submitState} with nameFormShown ${r.nameFormShown}, expected not-submitted and no form`);
             if (r.consoleErrors) failures.push(`${id}: ${r.consoleErrors} console errors from the submit path`);
         });
