@@ -90,6 +90,108 @@ class RoadSurface {
     }
     static get SIZE() { return 512; }
 
+    // Patch repairs on asphalt, one at most in each `cellM` of road, in a share `density` of the cells. Three kinds:
+    // a strip laid along one wheel track (it follows the track's wobble), a small patch where a pothole was filled,
+    // and a wider patch toward one edge. Each is a rounded box, a little turned, with its outline moved by noise
+    // (`wobbleM` at about 0.5 m, a third of it at about 0.2 m), so no edge is a straight line. The fill is a little
+    // darker (or, in a share `lighter`, a little lighter) by `tone` and mottled, its grain a little closer to the mean
+    // (`smooth`); its sealed seam is `seamM` wide on average, uneven in width and depth, missing in places, and up to
+    // `seamDark` darker. All of it goes to `farKeep` of its contrast as the pixel's footprint grows from `far[0]` to
+    // `far[1]` metres, and the edge and seam are box-filtered by the footprint, so a patch far off neither aliases nor
+    // reads as a flat shape
+    static get PATCH() {
+        return {
+            cellM: 24, density: 0.2,
+            kinds: { track: 0.45, small: 0.35 },
+            tone: [0.04, 0.09], lighter: 0.3, mottle: 0.5, smooth: 0.3,
+            wobbleM: 0.12,
+            seamM: 0.035, seamDark: 0.35,
+            far: [0.02, 0.12], farKeep: 0.25
+        };
+    }
+
+    // LandShade's GLSL hash and value noise, in JS, so the patch shapes can be checked off the GPU
+    static landHash(x, y) {
+        const fr = v => v - Math.floor(v);
+        const a = fr(x * 0.1031), b = fr(y * 0.1031), c = a;
+        const d = a * (b + 33.33) + b * (c + 33.33) + c * (a + 33.33);
+        return fr((a + d + b + d) * (c + d));
+    }
+    static landNoise(x, y) {
+        const i = Math.floor(x), j = Math.floor(y), f = x - i, g = y - j;
+        const u = f * f * (3 - 2 * f), v = g * g * (3 - 2 * g);
+        const h = RoadSurface.landHash;
+        const lo = h(i, j) + (h(i + 1, j) - h(i, j)) * u, hi = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
+        return lo + (hi - lo) * v;
+    }
+
+    // The patch of cell `cell` (the ride's 24 m cells from its start) on a road `half` metres wide each side, or null:
+    // {kind, along (its middle, metres into the cell), lat, hl, hw (half its length and width), radius, angle, side,
+    // track (it follows the wheel track's wobble), tone (the fill's change of albedo)}. RoadSurface.shader draws the same
+    static patch(cell, half) {
+        const P = RoadSurface.PATCH, h = salt => RoadSurface.landHash(cell, salt);
+        if (h(7) >= P.density) return null;
+        const pick = h(13);
+        const side = h(10) > 0.5 ? 1 : -1;
+        let kind, hl, hw, lat;
+        if (pick < P.kinds.track) {
+            kind = 'track';
+            hl = 2.5 + h(9) * 4.5;
+            hw = 0.32 + h(11) * 0.18;
+            lat = side * half * 0.5 + (h(14) > 0.5 ? 0.85 : -0.85);
+        } else if (pick < P.kinds.track + P.kinds.small) {
+            kind = 'small';
+            hl = 0.35 + h(9) * 0.75;
+            hw = 0.3 + h(11) * 0.55;
+            lat = (h(14) * 2 - 1) * Math.max(0, half - 0.4 - hw);
+        } else {
+            kind = 'area';
+            hl = 1.2 + h(9) * 1.8;
+            hw = 0.7 + h(11) * 0.7;
+            lat = side * Math.min(half - 0.35 - hw, hw + 0.2 + h(14) * Math.max(0, half - 0.55 - 2 * hw));
+        }
+        const radius = (kind === 'area' ? 0.45 : 0.75) * Math.min(hl, hw);
+        const along = hl + 0.6 + h(8) * (P.cellM - 2 * hl - 1.2);
+        const angle = kind === 'track' ? 0 : (h(12) - 0.5) * 0.16;
+        const tone = (h(15) < P.lighter ? 1 : -1) * (P.tone[0] + h(16) * (P.tone[1] - P.tone[0]));
+        return { kind, along, lat, hl, hw, radius, angle, side, track: kind === 'track', tone };
+    }
+
+    // Metres across of the patch's middle line at `s` metres along the ride: a strip follows its wheel track's wobble
+    static patchCentre(p, s) {
+        return p.lat + (p.track ? (RoadSurface.landNoise(s * 0.05, p.side * 5) - 0.5) * 0.5 : 0);
+    }
+
+    // Signed metres from the patch's outline (negative inside) at `at` metres into the cell, `lat` across, `s` metres
+    // along the ride (for the noise)
+    static patchDistance(p, cell, at, lat, s) {
+        const P = RoadSurface.PATCH, n = RoadSurface.landNoise;
+        const centre = RoadSurface.patchCentre(p, s);
+        const dx = at - p.along, dy = lat - centre;
+        const c = Math.cos(p.angle), sn = Math.sin(p.angle);
+        const x = Math.abs(c * dx + sn * dy) - (p.hl - p.radius), y = Math.abs(-sn * dx + c * dy) - (p.hw - p.radius);
+        const box = Math.hypot(Math.max(x, 0), Math.max(y, 0)) + Math.min(Math.max(x, y), 0) - p.radius;
+        const wobble = (n(s * 1.9, lat * 1.9 + cell) - 0.5) * 2 + (n(s * 5.1, lat * 5.1 + cell * 1.7) - 0.5) * 0.66;
+        return box + wobble * P.wobbleM;
+    }
+
+    // What the patch does to the albedo at a point, `fp` the pixel's footprint in metres: {cover (0 to 1, the fill),
+    // seam (0 to 1), factor (the albedo's multiplier, before the grain is smoothed)}
+    static patchShade(p, cell, at, lat, s, fp) {
+        const P = RoadSurface.PATCH, n = RoadSurface.landNoise;
+        const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+        const d = RoadSurface.patchDistance(p, cell, at, lat, s);
+        const aa = Math.max(0.012, fp);
+        const cover = 1 - smooth(-aa, aa, d);
+        const keep = 1 + (P.farKeep - 1) * smooth(P.far[0], P.far[1], fp);
+        const fill = p.tone * (1 + P.mottle * 2 * (n(s * 2.3, lat * 2.3 + cell) - 0.5));
+        const w = P.seamM * (0.3 + 1.4 * n(s * 4.3, lat * 4.3 + 5));
+        const fw = Math.max(2 * aa, 1e-4);
+        const line = (Math.min(Math.max(d + 0.5 * fw, -0.5 * w), 0.5 * w) - Math.min(Math.max(d - 0.5 * fw, -0.5 * w), 0.5 * w)) / fw;
+        const seam = line * smooth(0.3, 0.55, n(s * 1.1, lat * 1.1 + 11)) * (0.55 + 0.45 * n(s * 7.3, lat * 7.3 + 3));
+        return { cover, seam, factor: (1 + fill * cover * keep) * (1 - P.seamDark * seam * keep) };
+    }
+
     // Metres of verge drawn past the carriageway edge: gravel, then grass that thins out over the ground
     static get VERGE_M() { return 1.1; }
 
@@ -408,7 +510,7 @@ class RoadSurface {
             Object.assign(shader.uniforms, uniforms);
             RoadSurface.shader(shader);
         };
-        material.customProgramCacheKey = () => 'world-road-near-2';
+        material.customProgramCacheKey = () => 'world-road-near-3';
         RoadSurface.near = material;
         return material;
     }
@@ -469,6 +571,51 @@ float roadDashSum(float x, float d, float p) { return floor(x / p) * d + min(mod
 float roadDash(float x, float d, float p, float fw) {
     fw = max(fw, 1e-4);
     return (roadDashSum(x + 0.5 * fw, d, p) - roadDashSum(x - 0.5 * fw, d, p)) / fw;
+}`);
+        // After LandShade's noise (it is declared after <common>)
+        const P = RoadSurface.PATCH;
+        shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <map_pars_fragment>', `#include <map_pars_fragment>
+// RoadSurface.patch: the patch of a cell, or kind < 0. shape = (along, lat, hl, hw), more = (radius, angle, side, tone)
+float roadPatch(float cell, float halfW, out vec4 shape, out vec4 more) {
+    shape = vec4(0.0); more = vec4(0.0);
+    if (landHash(vec2(cell, 7.0)) >= ${f(P.density)}) return -1.0;
+    float pick = landHash(vec2(cell, 13.0));
+    float side = landHash(vec2(cell, 10.0)) > 0.5 ? 1.0 : -1.0;
+    float h9 = landHash(vec2(cell, 9.0)), h11 = landHash(vec2(cell, 11.0)), h14 = landHash(vec2(cell, 14.0));
+    float kind, hl, hw, lat;
+    if (pick < ${f(P.kinds.track)}) {
+        kind = 0.0;
+        hl = 2.5 + h9 * 4.5;
+        hw = 0.32 + h11 * 0.18;
+        lat = side * halfW * 0.5 + (h14 > 0.5 ? 0.85 : -0.85);
+    } else if (pick < ${f(P.kinds.track + P.kinds.small)}) {
+        kind = 1.0;
+        hl = 0.35 + h9 * 0.75;
+        hw = 0.3 + h11 * 0.55;
+        lat = (h14 * 2.0 - 1.0) * max(0.0, halfW - 0.4 - hw);
+    } else {
+        kind = 2.0;
+        hl = 1.2 + h9 * 1.8;
+        hw = 0.7 + h11 * 0.7;
+        lat = side * min(halfW - 0.35 - hw, hw + 0.2 + h14 * max(0.0, halfW - 0.55 - 2.0 * hw));
+    }
+    float radius = (kind > 1.5 ? 0.45 : 0.75) * min(hl, hw);
+    float along = hl + 0.6 + landHash(vec2(cell, 8.0)) * (${f(P.cellM)} - 2.0 * hl - 1.2);
+    float angle = kind < 0.5 ? 0.0 : (landHash(vec2(cell, 12.0)) - 0.5) * 0.16;
+    float tone = (landHash(vec2(cell, 15.0)) < ${f(P.lighter)} ? 1.0 : -1.0) * (${f(P.tone[0])} + landHash(vec2(cell, 16.0)) * ${f(P.tone[1] - P.tone[0])});
+    shape = vec4(along, lat, hl, hw);
+    more = vec4(radius, angle, side, tone);
+    return kind;
+}
+// RoadSurface.patchDistance: signed metres from the outline, negative inside
+float roadPatchDistance(float kind, vec4 shape, vec4 more, float cell, float at, float lat, float s) {
+    float centre = shape.y + (kind < 0.5 ? (landNoise(vec2(s * 0.05, more.z * 5.0)) - 0.5) * 0.5 : 0.0);
+    vec2 d = vec2(at - shape.x, lat - centre);
+    float c = cos(more.y), sn = sin(more.y);
+    vec2 q = abs(vec2(c * d.x + sn * d.y, -sn * d.x + c * d.y)) - (shape.zw - more.x);
+    float box = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - more.x;
+    float wobble = (landNoise(vec2(s * 1.9, lat * 1.9 + cell)) - 0.5) * 2.0 + (landNoise(vec2(s * 5.1, lat * 5.1 + cell * 1.7)) - 0.5) * 0.66;
+    return box + wobble * ${f(P.wobbleM)};
 }`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <map_fragment>', `
 float roadLat = vUv.x;
@@ -556,27 +703,28 @@ roadTrack = min(1.0, roadTrack) * step(abs(roadLat), roadHalf);
 roadAlbedo *= 1.0 - roadTrack * mix(0.12, -0.03, roadSett);
 roadRough -= roadTrack * 0.2 * smoothstep(0.12, 0.5, abs(dot(normalize(vNormal), normalize(vViewPosition))));
 
-// Repairs on asphalt: a patch of newer surface in some 24 m cells, and sealed cracks
-float roadCell = floor(roadAlong / 24.0) + vRoadBase * 3.0;
-float roadPick = landHash(vec2(roadCell, 7.0));
+// Repairs on asphalt: a patch in some cells (RoadSurface.patch, patchShade), and sealed cracks. The patch's edge and
+// seam are filtered by the footprint of a pixel in the road's own metres, and its contrast falls with it
+float roadPatchFp = roadFootprint(roadDx, roadDy);
 if (roadSett < 0.5) {
-    if (roadPick < 0.38) {
-        float patchFrom = landHash(vec2(roadCell, 8.0)) * 12.0;
-        float len = 2.5 + landHash(vec2(roadCell, 9.0)) * 8.0;
-        float inner = landHash(vec2(roadCell, 10.0)) > 0.5 ? 1.0 : -1.0;
-        float a0 = inner * (0.4 + landHash(vec2(roadCell, 11.0)) * 1.5);
-        float a1 = inner * (roadHalf - 0.2 - landHash(vec2(roadCell, 12.0)) * 1.8);
-        float lo = min(a0, a1), hi = max(a0, a1);
-        float at = mod(roadAlong, 24.0);
-        float jag = (landNoise(vec2(roadS * 3.1, roadLat * 3.1)) - 0.5) * 0.06;
-        float inside = step(patchFrom + jag, at) * step(at, patchFrom + len + jag) * step(lo + jag, roadLat) * step(roadLat, hi + jag);
-        roadAlbedo *= mix(1.0, 0.8, inside);
-        roadRough += inside * 0.03;
-        // The seam round it, sealed with bitumen
-        float seam = max(max(roadLine(at, patchFrom + jag, 0.05, roadFwAlong), roadLine(at, patchFrom + len + jag, 0.05, roadFwAlong)) * step(lo, roadLat) * step(roadLat, hi),
-                         max(roadLine(roadLat, lo + jag, 0.05, roadFwLat), roadLine(roadLat, hi + jag, 0.05, roadFwLat)) * step(patchFrom, at) * step(at, patchFrom + len));
-        roadAlbedo = mix(roadAlbedo, roadAlbedo * 0.35, seam * 0.8);
-        roadRough -= seam * 0.3;
+    float cell = floor(roadAlong / ${f(P.cellM)}) + vRoadBase * ${f(RoadSurface.PERIOD_M / P.cellM)};
+    vec4 shape, more;
+    float kind = roadPatch(cell, roadHalf, shape, more);
+    if (kind >= 0.0) {
+        float d = roadPatchDistance(kind, shape, more, cell, mod(roadAlong, ${f(P.cellM)}), roadLat, roadS);
+        float aa = max(0.012, roadPatchFp);
+        float cover = 1.0 - smoothstep(-aa, aa, d);
+        float keep = mix(1.0, ${f(P.farKeep)}, smoothstep(${f(P.far[0])}, ${f(P.far[1])}, roadPatchFp));
+        float fill = more.w * (1.0 + ${f(P.mottle * 2)} * (landNoise(vec2(roadS * 2.3, roadLat * 2.3 + cell)) - 0.5));
+        // Newer binder: the chips a little less proud, so the grain a little nearer its mean
+        roadAlbedo = mix(roadAlbedo, roadAsphaltMean * (0.82 + 0.22 * roadBroad) * 0.92, ${f(P.smooth)} * cover * keep);
+        roadAlbedo *= 1.0 + fill * cover * keep;
+        roadRough += cover * keep * (more.w < 0.0 ? -0.04 : 0.03);
+        // The seam, sealed with bitumen over the cut: uneven in width and missing in places
+        float w = ${f(P.seamM)} * (0.3 + 1.4 * landNoise(vec2(roadS * 4.3, roadLat * 4.3 + 5.0)));
+        float seam = roadLine(d, 0.0, w, 2.0 * aa) * smoothstep(0.3, 0.55, landNoise(vec2(roadS * 1.1, roadLat * 1.1 + 11.0))) * (0.55 + 0.45 * landNoise(vec2(roadS * 7.3, roadLat * 7.3 + 3.0)));
+        roadAlbedo *= 1.0 - ${f(P.seamDark)} * seam * keep;
+        roadRough -= seam * keep * 0.2;
     }
     // Transverse cracks, one in some 8 m cells: a jagged run part way across the road; a longitudinal joint along some stretches
     float crackCell = floor(roadAlong / 8.0) + vRoadBase * 9.0;
