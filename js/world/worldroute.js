@@ -132,14 +132,17 @@ class WorldRoute extends PolylineRoute {
     // sample, then a [1 2 1] pass along the ride, built once per span and interpolated linearly between the
     // samples, so it has no steps where the 4 m polyline turns from one segment to the next
     smoothCurvatureAt(s, span) {
-        if (!this.smoothCurvature || this.smoothCurvature.span !== span) {
+        // One profile per span: the assist and the camera each read their own tuned span, and neither may rebuild the other's
+        if (!this.smoothCurvature) this.smoothCurvature = new Map();
+        let values = this.smoothCurvature.get(span);
+        if (!values) {
             const count = this.points.length;
-            const raw = new Float64Array(count), values = new Float64Array(count);
+            const raw = new Float64Array(count);
+            values = new Float64Array(count);
             for (let i = 0; i < count; i++) raw[i] = this.headingChange(this.sArray[i] - span / 2, this.sArray[i] + span / 2) / span;
             for (let i = 0; i < count; i++) values[i] = (raw[Math.max(0, i - 1)] + 2 * raw[i] + raw[Math.min(count - 1, i + 1)]) / 4;
-            this.smoothCurvature = { span, values };
+            this.smoothCurvature.set(span, values);
         }
-        const values = this.smoothCurvature.values;
         const last = this.points.length - 1;
         if (last < 1) return 0;
         const clamped = Math.max(0, Math.min(this.length, s));

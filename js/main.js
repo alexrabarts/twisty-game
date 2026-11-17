@@ -1824,17 +1824,7 @@ class Game {
         // Calculate camera position relative to vehicle
         const offset = this.cameraOffset.clone();
         const world = this.environment.isWorld && currentMode.type !== 'onboard';
-        if (world) {
-            // The boom follows the route behind the bike, not the bike's yaw, and the land shortens it
-            // In a hairpin it also pulls back and up, and turns faster (WorldCamera.updatePull)
-            const routeS = this.vehicle.projection.s ?? this.vehicle.routeS;
-            this.worldCamera.updatePull(routeS, deltaTime);
-            this.worldCamera.pullOffset(offset);
-            const boomYaw = this.worldCamera.followYaw(routeS, deltaTime);
-            offset.applyEuler(new THREE.Euler(0, boomYaw, 0));
-        } else {
-            offset.applyEuler(vehicleRotation);
-        }
+        if (!world) offset.applyEuler(vehicleRotation);
         const cameraPos = vehiclePos.clone().add(offset);
 
         // Smooth camera movement with lag - adaptive based on speed and conditions
@@ -1854,18 +1844,21 @@ class Game {
             // Slightly faster at high speeds for more responsiveness
             lerpFactor *= 1.15;
         }
-        if (world) lerpFactor = this.worldCamera.follow(lerpFactor);
-        
-        this.currentCameraPos.lerp(cameraPos, adjLerp(lerpFactor));
-        
         // Ensure camera never goes below bike level (bike is at roughly y=2)
         const minCameraHeight = vehiclePos.y + 2; // At least 2 units above bike
-        if (this.currentCameraPos.y < minCameraHeight) {
-            this.currentCameraPos.y = minCameraHeight;
+        if (world) {
+            // A world's boom follows the route behind the bike, not the bike's yaw, with springs; in a hairpin it
+            // pulls back and up, and the land shortens it (WorldCamera.update)
+            const placed = this.worldCamera.update(this.worldCameraInput(vehiclePos, currentMode), deltaTime);
+            this.currentCameraPos.set(placed.x, placed.y, placed.z);
+        } else {
+            this.currentCameraPos.lerp(cameraPos, adjLerp(lerpFactor));
+            if (this.currentCameraPos.y < minCameraHeight) {
+                this.currentCameraPos.y = minCameraHeight;
+            }
         }
 
         this.camera.position.copy(this.currentCameraPos);
-        if (world) this.worldBoom(vehiclePos, this.camera.position, deltaTime);
 
         // Additional camera shake at high speeds (outside onboard mode)
         if (currentMode.type !== 'onboard') {
@@ -1901,7 +1894,7 @@ class Game {
             const lookTarget = vehiclePos.clone().add(this.tempVector);
             if (this.environment.isWorld) {
                 // A world looks along the road ahead, which turns before the bike does
-                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, 0.5);
+                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, 0.5, this.worldAhead || (this.worldAhead = {}));
                 lookTarget.set(ahead.x, ahead.y, ahead.z);
             }
 
@@ -1931,9 +1924,9 @@ class Game {
             const maxFOVIncrease = 10; // 75° → 85° at max speed
             const targetFOV = baseFOV + (speedFactor * maxFOVIncrease);
 
-            // Smooth FOV transition
+            // Smooth FOV transition; a world's FOV is a spring of WorldCamera.update, toward the same target
             if (!this.currentFOV) this.currentFOV = baseFOV;
-            this.currentFOV = THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
+            this.currentFOV = this.environment.isWorld ? this.worldCamera.fov : THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
             this.camera.fov = this.currentFOV;
             this.camera.updateProjectionMatrix();
 
@@ -1990,23 +1983,19 @@ class Game {
             lookTarget.y += currentMode.type === 'high' ? 2 : 1; // Look higher in high view
             
             if (this.environment.isWorld) {
-                // A world looks along the road ahead, which turns before the bike does
-                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, currentMode.type === 'high' ? 2 : 1);
-                lookTarget.set(ahead.x, ahead.y, ahead.z);
+                // A world looks along the road ahead, which turns before the bike does, and the target gives way
+                // to the bike until the bike is well inside the view (WorldCamera.aim), from where the camera is now
+                const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
+                bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
+                const look = this.worldCamera.aim(this.camera, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
+                this.currentLookTarget.set(look.x, look.y, look.z);
             } else {
                 // Add lean-based lateral offset for corner viewing (less in high view)
                 const leanLateralOffset = -this.vehicle.leanAngle * (currentMode.type === 'high' ? 2 : 4);
                 this.tempUpVector.set(leanLateralOffset, 0, 0);
                 this.tempUpVector.applyEuler(vehicleRotation);
                 lookTarget.add(this.tempUpVector);
-            }
-            // A world's target sweeps round a hairpin as fast as the road does, so it is followed closely
-            this.currentLookTarget.lerp(lookTarget, adjLerp(this.environment.isWorld ? WorldCamera.LOOK_FOLLOW : Math.min(this.cameraLerpFactor * 1.5, 1)));
-            if (this.environment.isWorld) {
-                // The road ahead round a hairpin can pull the view off the bike: the target gives way until the bike is well inside it
-                const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
-                bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
-                this.worldCamera.keepInView(this.camera, this.currentLookTarget, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
+                this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
             }
             
             // Camera banking BEFORE lookAt - subtle lean feedback
@@ -2049,14 +2038,24 @@ class Game {
         this.updateShadowCamera();
     }
     
-    // The boom from the bike's head to the wanted camera position, shortened by the land in the way
-    worldBoom(vehiclePos, want, deltaTime) {
-        const head = this.worldHead || (this.worldHead = { x: 0, y: 0, z: 0 });
-        head.x = vehiclePos.x;
-        head.y = vehiclePos.y + WorldCamera.HEAD_M;
-        head.z = vehiclePos.z;
-        const placed = this.worldCamera.place(head, want, this.vehicle.projection.index, deltaTime, this.worldPlaced || (this.worldPlaced = {}));
-        return want.set(placed.x, placed.y, placed.z);
+    // What the world camera reads of the bike and the view mode (WorldCamera.update): the bike's smooth road
+    // position, so nothing the camera reads from the route steps where the polyline turns
+    worldCameraInput(vehiclePos, mode) {
+        const input = this.worldInput || (this.worldInput = { offset: {} });
+        const v = this.vehicle;
+        const s = v.projection.s ?? v.routeS;
+        input.x = vehiclePos.x;
+        input.y = vehiclePos.y;
+        input.z = vehiclePos.z;
+        input.s = typeof v.roadFrame === 'function' && Number.isFinite(s) && v.projection.index >= 0 ? v.roadFrame().s : s;
+        input.index = v.projection.index >= 0 ? v.projection.index : Math.floor(this.environment.route.toUnits(input.s));
+        input.speed = v.speed;
+        input.lift = mode.type === 'high' ? 2 : 1;
+        input.offset.x = this.cameraOffset.x;
+        input.offset.y = this.cameraOffset.y;
+        input.offset.z = this.cameraOffset.z;
+        input.fov = (mode.type === 'high' ? 70 : 75) + (v.speed / v.maxSpeed) * 10;
+        return input;
     }
 
     updateShadowCamera() {

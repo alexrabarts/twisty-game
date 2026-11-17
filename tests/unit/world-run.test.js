@@ -221,9 +221,55 @@ describe('WorldRun restart speed', () => {
 });
 
 describe('WorldCamera', () => {
+    const THREE = game.THREE;
+    const T = WorldCamera.TUNING;
     const road = new WorldRoute(samplesOf(straight(400)), {});
     const flatGround = (height) => ({ groundY: () => height });
-    const origin = { x: 0, y: 101.2, z: 100 };
+
+    // A half circle of `R` m radius after `lead` m of straight along +z, then a straight leg back, sampled every 4 m
+    const hairpinRoute = (R = 15, lead = 200) => {
+        const points = [];
+        for (let z = -lead; z < 0; z += 4) points.push({ x: 0, y: 100, z, heading: 0, width: 10 });
+        const steps = Math.ceil(Math.PI * R / 4);
+        for (let k = 0; k <= steps; k++) {
+            const a = Math.PI * k / steps;
+            points.push({ x: R - R * Math.cos(a), y: 100, z: R * Math.sin(a), heading: a, width: 10 });
+        }
+        for (let z = -4; z >= -lead; z -= 4) points.push({ x: 2 * R, y: 100, z, heading: Math.PI, width: 10 });
+        return new WorldRoute(samplesOf(points), {});
+    };
+
+    // The chase view of the Standard mode, and the bike `input` WorldCamera.update reads
+    const bikeAt = (route, s, speed) => {
+        const at = route.curveAt(s, {});
+        return { x: at.px, y: 100, z: at.pz, s, index: Math.floor(route.toUnits(s)), speed, lift: 1, offset: { x: 0, y: 3, z: -6 }, fov: 75 };
+    };
+    const view = () => new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 2000);
+
+    // One frame as Game draws it: the boom, the camera put there, then the look target from it
+    const frameOf = (camera, input, eye, probe) => {
+        const placed = camera.update(input, DT);
+        eye.position.set(placed.x, placed.y, placed.z);
+        eye.fov = camera.fov;
+        eye.updateProjectionMatrix();
+        const bike = new THREE.Vector3(input.x, input.y + 0.9, input.z);
+        const look = camera.aim(eye, bike, probe);
+        eye.lookAt(look.x, look.y, look.z);
+        eye.updateMatrixWorld(true);
+        return { position: { ...placed }, look: { ...look }, ndc: bike.clone().project(eye) };
+    };
+
+    test('a spring settles on its target without passing it, and tracks a steadily moving target with no lag', () => {
+        const state = { x: 0, v: 0, t: 0 };
+        let most = 0;
+        for (let i = 0; i < 60; i++) most = Math.max(most, WorldCamera.spring(state, 1, 6, DT));
+        expect(most).toBeLessThanOrEqual(1);
+        expect(state.x).toBeGreaterThan(0.95);
+        const moving = { x: 0, v: 2, t: 0 };
+        for (let i = 1; i <= 120; i++) WorldCamera.spring(moving, 2 * i * DT, 6, DT, true);
+        expect(moving.x).toBeCloseTo(4, 9);
+        expect(moving.v).toBeCloseTo(2, 9);
+    });
 
     test('the look target is on the route ahead: 8 m and 0.6 s of speed, lifted', () => {
         const camera = new WorldCamera(road, flatGround(0));
@@ -233,112 +279,148 @@ describe('WorldCamera', () => {
     });
 
     test('on a hairpin the look target moves out to the road 30 m ahead; on a straight it does not', () => {
-        // A half circle of 15 m radius, then a straight leg back
-        const points = [];
-        const R = 15;
-        for (let a = 0; a <= Math.PI + 1e-9; a += 4 / R) points.push({ x: R - R * Math.cos(a), y: 100, z: R * Math.sin(a), heading: a, width: 10 });
-        for (let z = 0; z >= -200; z -= 4) points.push({ x: 2 * R, y: 100, z, heading: Math.PI, width: 10 });
-        const bend = new WorldRoute(samplesOf(points), {});
+        const bend = hairpinRoute(15, 0);
         const camera = new WorldCamera(bend, flatGround(0));
         expect(camera.bendShare(0)).toBeGreaterThan(0.9);
         expect(new WorldCamera(road, flatGround(0)).bendShare(100)).toBe(0);
         const at = bend.sample(30, {});
         const look = camera.lookTarget(0, 10, 0);
-        expect(Math.hypot(look.x - at.x, look.z - at.z)).toBeLessThan(1e-6);
+        expect(Math.hypot(look.x - at.x, look.z - at.z)).toBeLessThan(0.2);
     });
 
-    test('the boom yaw follows the route and turns at no more than 120 degrees a second', () => {
-        const bends = new WorldRoute(samplesOf(ladder()), {});
-        const camera = new WorldCamera(bends, flatGround(0));
-        camera.reset(0);
-        const before = camera.yaw;
-        camera.followYaw(30, 0.1);
-        expect(Math.abs(camera.yaw - before)).toBeCloseTo(WorldCamera.YAW_RATE * 0.1, 9);
-        for (let i = 0; i < 100; i++) camera.followYaw(30, 0.1);
-        expect(camera.yaw).toBeCloseTo(bends.sample(26, {}).heading, 6);
-    });
-
-    test('land in the way shortens the boom at once and it grows back slowly', () => {
-        const wall = { groundY: (x, z) => (z < 95 ? 200 : 0) };
-        const camera = new WorldCamera(road, wall);
-        const want = { x: 0, y: 104, z: 80 };
-        const out = {};
-        camera.place(origin, want, 25, DT, out);
-        expect(camera.fraction).toBeLessThan(1);
-        expect(out.z).toBeGreaterThan(want.z);
-        const blocked = camera.fraction;
-        const open = new WorldCamera(road, flatGround(0));
-        open.fraction = blocked;
-        open.clearFraction(origin, want, 25, DT);
-        expect(open.fraction).toBeCloseTo(blocked + WorldCamera.GROW_PER_FRAME, 9);
-        for (let i = 0; i < 100; i++) open.clearFraction(origin, want, 25, DT);
-        expect(open.fraction).toBe(1);
-    });
-
-    // A half circle of 15 m radius after 200 m of straight, then a straight leg back
-    const hairpinRoute = () => {
-        const R = 15;
-        const points = [];
-        for (let z = -200; z < 0; z += 4) points.push({ x: 0, y: 100, z, heading: 0, width: 10 });
-        for (let a = 0; a <= Math.PI + 1e-9; a += 4 / R) points.push({ x: R - R * Math.cos(a), y: 100, z: R * Math.sin(a), heading: a, width: 10 });
-        for (let z = 0; z >= -200; z -= 4) points.push({ x: 2 * R, y: 100, z, heading: Math.PI, width: 10 });
-        return new WorldRoute(samplesOf(points), {});
-    };
-
-    test('in a hairpin the boom pulls back and up and turns faster; on the straight after it eases back in', () => {
+    test('in a hairpin the boom pulls back and up; on the straight after it eases back in, and the yaw follows the road', () => {
         const route = hairpinRoute();
         const camera = new WorldCamera(route, flatGround(0));
-        camera.reset(0);
-        expect(camera.updatePull(60, DT)).toBe(0);
-        // The pull rises at PULL_IN a second, to all of it in the bend
-        for (let i = 0; i < 60; i++) camera.updatePull(200, DT);
-        expect(camera.pull).toBe(1);
-        const offset = camera.pullOffset({ x: 0, y: 3, z: -6 });
-        expect(offset.z).toBeCloseTo(-6 * (1 + WorldCamera.PULL_BACK), 9);
-        expect(offset.y).toBeCloseTo(3 + WorldCamera.RAISE_M, 9);
-        expect(camera.follow(0.1)).toBe(WorldCamera.FOLLOW_BEND);
-        const before = camera.yaw;
-        camera.followYaw(240, 0.05);
-        expect(Math.abs(camera.yaw - before)).toBeCloseTo(WorldCamera.YAW_RATE_BEND * 0.05, 9);
-        // On the leg back it falls at PULL_OUT a second, not at once
-        camera.updatePull(route.length - 60, 0.5);
-        expect(camera.pull).toBeCloseTo(1 - WorldCamera.PULL_OUT * 0.5, 9);
-        for (let i = 0; i < 300; i++) camera.updatePull(route.length - 60, DT);
+        camera.update(bikeAt(route, 60, 10), DT);
         expect(camera.pull).toBe(0);
-        expect(camera.follow(0.1)).toBe(0.1);
+        expect(camera.yaw).toBeCloseTo(0, 6);
+        for (let i = 0; i < 180; i++) camera.update(bikeAt(route, 215, 0), DT);
+        expect(camera.pull).toBeGreaterThan(0.99);
+        expect(camera.springs.distance.x).toBeCloseTo(6 * (1 + T.pullBack), 1);
+        expect(camera.springs.height.x).toBeCloseTo(3 + T.raiseM, 1);
+        expect(WorldCamera.wrap(camera.yaw - route.curveAt(215 - T.followBehindM, {}).heading)).toBeCloseTo(0, 3);
+        // On the leg back it eases out, not at once
+        const back = route.length - 60;
+        camera.update(bikeAt(route, back, 0), DT);
+        expect(camera.pull).toBeGreaterThan(0.99);
+        for (let i = 0; i < 60; i++) camera.update(bikeAt(route, back, 0), DT);
+        expect(camera.pull).toBeGreaterThan(0.2);
+        expect(camera.pull).toBeLessThan(0.8);
+        for (let i = 0; i < 600; i++) camera.update(bikeAt(route, back, 0), DT);
+        expect(camera.pull).toBeLessThan(1e-3);
     });
 
-    test('the look target gives way to the bike until the bike is well inside the view', () => {
-        const THREE = game.THREE;
+    test('the look target gives way to the bike until the bike is well inside the view, and never lets it past keepHard', () => {
         const camera = new WorldCamera(road, flatGround(0));
-        const view = new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 1000);
-        view.position.set(0, 3, -6);
+        const eye = view();
+        eye.position.set(0, 3, -6);
         const bike = new THREE.Vector3(0, 0.9, 0);
         const probe = new THREE.PerspectiveCamera();
-        const inView = look => {
-            view.lookAt(look);
-            view.updateMatrixWorld(true);
-            return bike.clone().project(view);
+        const project = look => {
+            eye.lookAt(look.x, look.y, look.z);
+            eye.updateMatrixWorld(true);
+            const seen = bike.clone().project(eye);
+            return Math.max(Math.abs(seen.x), Math.abs(seen.y));
         };
-        // A target far to the side, as the road round a hairpin is: the bike would be off the screen
-        const look = new THREE.Vector3(40, 0, 0);
-        expect(Math.abs(inView(look).x)).toBeGreaterThan(1);
-        const moved = camera.keepInView(view, look, bike, probe);
-        expect(moved).toBeGreaterThan(0);
-        const seen = inView(look);
-        expect(Math.max(Math.abs(seen.x), Math.abs(seen.y))).toBeLessThanOrEqual(WorldCamera.KEEP_IN + 1e-3);
-        expect(Math.max(Math.abs(seen.x), Math.abs(seen.y))).toBeGreaterThan(WorldCamera.KEEP_IN - 0.01);
-        // A target that already shows the bike is left alone
-        const ahead = new THREE.Vector3(0, 1, 20);
-        expect(camera.keepInView(view, ahead, bike, probe)).toBe(0);
-        expect(ahead.toArray()).toEqual([0, 1, 20]);
+        // A look target far to the side, as the road round a hairpin is: the bike would be off the screen
+        camera.anchor = { x: 0, y: 0, z: 0 };
+        Object.assign(camera.springs.lx, { x: 40, v: 0, t: 40 });
+        Object.assign(camera.springs.ly, { x: 0, v: 0, t: 0 });
+        Object.assign(camera.springs.lz, { x: 0, v: 0, t: 0 });
+        expect(project({ x: 40, y: 0, z: 0 })).toBeGreaterThan(1);
+        const first = project(camera.aim(eye, bike, probe));
+        expect(first).toBeLessThanOrEqual(T.keepHard + 1e-3);
+        for (let i = 0; i < 60; i++) camera.aim(eye, bike, probe);
+        const settled = project(camera.look);
+        expect(settled).toBeLessThanOrEqual(T.keepIn + 0.01);
+        expect(settled).toBeGreaterThan(T.keepIn - 0.02);
+        // A look target that already shows the bike is left alone
+        expect(camera.giveWay(eye, { x: 0, y: 1, z: 20 }, bike, probe, T.keepIn)).toBe(0);
+    });
+
+    test('land in the way shortens the boom before the boom reaches it, and it grows back slowly', () => {
+        // A steep bank beside the road, rising over 8 m from z 76, and a camera hung 4 m out to that side
+        const wall = { groundY: (x, z) => 100 + Math.max(0, x - 2) * 8 * Math.max(0, Math.min(1, (z - 76) / 8)) };
+        const camera = new WorldCamera(road, wall);
+        const at = s => ({ x: 0, y: 100, z: s, s, index: Math.floor(s / 4), speed: 12, lift: 1, offset: { x: 4, y: 3, z: -6 }, fov: 75 });
+        camera.update(at(40), DT);
+        expect(camera.fraction).toBe(1);
+        const fractions = [], places = [];
+        let reached = Infinity;
+        for (let s = 40; s < 120; s += 12 * DT) {
+            const placed = camera.update(at(s), DT);
+            fractions.push(camera.fraction);
+            places.push({ ...placed });
+            if (camera.fraction < 1 && reached === Infinity) reached = s;
+            // Never inside the land
+            expect(placed.y).toBeGreaterThan(wall.groundY(placed.x, placed.z));
+        }
+        expect(Math.min(...fractions)).toBeLessThan(0.7);
+        // It starts to shorten before the camera's place reaches the bank (6 m behind the bike)
+        expect(reached).toBeLessThan(82);
+        // The camera before snapped the boom short at once, in quarters of it
+        const steps = fractions.slice(1).map((f, i) => Math.abs(f - fractions[i]));
+        expect(Math.max(...steps)).toBeLessThan(0.05);
+        const jerks = places.slice(2).map((c, i) => Math.hypot(c.x - 2 * places[i + 1].x + places[i].x, c.y - 2 * places[i + 1].y + places[i].y, c.z - 2 * places[i + 1].z + places[i].z));
+        expect(Math.max(...jerks)).toBeLessThan(0.04);
+        // Out in the open it grows back over about two seconds, not at once
+        const open = new WorldCamera(road, flatGround(0));
+        open.update(at(200), DT);
+        Object.assign(open.springs.fraction, { x: 0.3, v: 0, t: 0.3 });
+        open.update(at(200), DT);
+        expect(open.fraction).toBeLessThan(0.32);
+        for (let i = 0; i < 120; i++) open.update(at(200), DT);
+        expect(open.fraction).toBeGreaterThan(0.9);
     });
 
     test('the camera never sits under the land', () => {
         const camera = new WorldCamera(road, flatGround(110));
-        const out = {};
-        camera.place({ x: 0, y: 112, z: 100 }, { x: 0, y: 112, z: 90 }, 25, DT, out);
+        const out = camera.update({ x: 0, y: 100, z: 100, s: 100, index: 25, speed: 0, lift: 1, offset: { x: 0, y: 3, z: -6 }, fov: 75 }, DT);
         expect(out.y).toBeGreaterThanOrEqual(110 + WorldCamera.FLOOR_M);
+        expect(WorldCamera.softFloor(150, 110)).toBe(150);
+        expect(WorldCamera.softFloor(100, 110)).toBeGreaterThanOrEqual(110);
+    });
+
+    // A ride through a 12 m hairpin, sampled every 4 m as a world's ride is: 15 m/s on the straights, braking to 7 m/s
+    // through the bend. The camera's position and look target must move with no frame-to-frame step or second
+    // difference past small bounds. The camera before these springs went over both: its boom yaw turned at a capped
+    // rate, its pull rose at a capped rate and its look target re-aimed at the polyline 0.6 of the way each frame.
+    test('through a sampled 12 m hairpin the camera and its look target move without steps', () => {
+        const R = 12;
+        const route = hairpinRoute(R);
+        const bendFrom = 200, bendTo = 200 + Math.PI * R;
+        const speedAt = s => {
+            const away = Math.max(0, bendFrom - s, s - bendTo);
+            const u = Math.min(1, away / 60);
+            return 7 + 8 * u * u * (3 - 2 * u);
+        };
+        const camera = new WorldCamera(route, flatGround(0));
+        const eye = view();
+        const probe = new THREE.PerspectiveCamera();
+        const frames = [];
+        for (let s = 120; s < bendTo + 80; s += speedAt(s) * DT) {
+            const frame = frameOf(camera, bikeAt(route, s, speedAt(s)), eye, probe);
+            frames.push(frame);
+            // The bike stays in view on every frame
+            expect(Math.max(Math.abs(frame.ndc.x), Math.abs(frame.ndc.y))).toBeLessThanOrEqual(T.keepHard + 1e-3);
+        }
+        const worst = key => {
+            let step = 0, jerk = 0;
+            // From half a second in: the first frames are the camera arriving behind the bike
+            for (let i = 32; i < frames.length; i++) {
+                const [a, b, c] = [frames[i - 2][key], frames[i - 1][key], frames[i][key]];
+                step = Math.max(step, Math.hypot(c.x - b.x, c.y - b.y, c.z - b.z));
+                jerk = Math.max(jerk, Math.hypot(c.x - 2 * b.x + a.x, c.y - 2 * b.y + a.y, c.z - 2 * b.z + a.z));
+            }
+            return { step, jerk };
+        };
+        const position = worst('position'), look = worst('look');
+        // 15 m/s is 0.25 m a frame; the camera before went to 0.021 m a frame each frame
+        expect(position.step).toBeLessThan(0.3);
+        expect(position.jerk).toBeLessThan(0.01);
+        // The look target runs round the far side of the bend at up to 40 m/s; the camera before went to 0.25 m
+        expect(look.step).toBeLessThan(0.8);
+        expect(look.jerk).toBeLessThan(0.05);
     });
 });
 
