@@ -277,6 +277,45 @@ describe('Scenery', () => {
         }
     });
 
+    test('a modelled house is drawn inside its mapped footprint, and a footprint too small for one is a box of its size', () => {
+        // A model shaped as the village houses are: 16 m along its front, 11 m deep, the front on z = 0
+        const body = new THREE.BoxGeometry(16, 10, 11.4);
+        body.translate(0, 5, 4.3);
+        const material = new THREE.MeshStandardMaterial();
+        const models = { trees: [], houses: [{ name: 'house_test', parts: [{ geometry: body, material }] }] };
+        const scenery = new Scenery(ground, data, models);
+        const houses = [
+            { x: 200, z: 60, w: 12, d: 9, heading: 0.4, h: 7, kind: 1 },
+            { x: 240, z: 60, w: 9, d: 14, heading: -1.1, h: 7, kind: 1 },
+            { x: 280, z: 60, w: 30, d: 25, heading: 2.0, h: 9, kind: 1 },
+            { x: 320, z: 60, w: 4, d: 3, heading: 0.7, h: 3.5, kind: 3 }
+        ];
+        const group = scenery.buildTile(tile, null, houses, { x: 250, z: 60 });
+        const matrix = new THREE.Matrix4();
+        const corner = new THREE.Vector3();
+        let drawn = 0;
+        for (const mesh of group.children.filter(m => m.name.startsWith('houses:'))) {
+            mesh.geometry.computeBoundingBox();
+            const box = mesh.geometry.boundingBox;
+            for (let i = 0; i < mesh.count; i++) {
+                mesh.getMatrixAt(i, matrix);
+                const at = new THREE.Vector3().setFromMatrixPosition(matrix);
+                const b = houses.reduce((best, h) => (Math.hypot(h.x - at.x, h.z - at.z) < Math.hypot(best.x - at.x, best.z - at.z) ? h : best));
+                for (const x of [box.min.x, box.max.x]) for (const z of [box.min.z, box.max.z]) {
+                    corner.set(x, 0, z).applyMatrix4(matrix);
+                    const dx = corner.x - b.x, dz = corner.z - b.z;
+                    const along = dx * Math.sin(b.heading) + dz * Math.cos(b.heading);
+                    const across = dx * Math.cos(b.heading) - dz * Math.sin(b.heading);
+                    expect(Math.abs(along)).toBeLessThanOrEqual(b.d / 2 + 1e-6);
+                    expect(Math.abs(across)).toBeLessThanOrEqual(b.w / 2 + 1e-6);
+                }
+                drawn++;
+            }
+        }
+        expect(drawn).toBe(houses.length);
+        expect(group.children.filter(m => m.name === 'houses:plain_house').reduce((n, m) => n + m.count, 0)).toBe(1);
+    });
+
     test('signposts are one instanced mesh, facing the rider who arrives', () => {
         const scenery = new Scenery(ground, data);
         const mesh = scenery.signposts([{ x: 1, y: 2, z: 3, heading: 0 }, { x: 4, y: 5, z: 6, heading: Math.PI / 2 }]);

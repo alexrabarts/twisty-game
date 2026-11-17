@@ -87,7 +87,7 @@ GitHub Pages builds `main` with the legacy Jekyll builder (checked at plan time)
 | `profile.mjs`, `dem.mjs` | Height from the TLM Z, smoothed over 40 m (Savitzky-Golay), node heights reconciled over 20 m, then checked against the 2 m DEM. |
 | `bench.mjs` | 512 m tiles at 8 m with the road bench carved for every stored edge, `wall` and `drop` between stacked legs that 1:1 cannot join. |
 | `junctions.mjs` | Passes, stubs (60 m) and barrier poses, one set per pass. |
-| `landcover.mjs`, `buildings.mjs`, `landmarks.json`, `structures.json` | Cover at 16 m, oriented boxes, hand-placed landmarks, hand-marked cobbles. |
+| `landcover.mjs`, `buildings.mjs`, `landmarks.json`, `structures.json` | Cover at 16 m, oriented boxes, hand-placed landmarks, hand-marked cobbles. `clearOfRoads` keeps every building 3 m (`ROAD_CLEAR_M`) clear of the band of every road, ride and side edge: the game road is wider than the mapped one, so a box over a band moves square off the road by up to 4 m, or is left out. `verify.mjs buildings` checks the committed data. |
 | `stations.mjs`, `floors.mjs` | The station rule (R3) and the per-link time floors. The floor is 0.9 times the time of an ideal rider on the inner edge of each bend at top speed, held only by the lean angle (closed-form, no search, so there is nothing to hang or to differ between runs). |
 | `encode.mjs` | The format below, `SHA256SUMS`, `functions/world-courses.json`. `decodeWorld` reads it back. |
 | `verify.mjs` | `fidelity`, `hairpins`, `elevation`, `size`, `graph`, `stacked`, `stations`, or `all`. |

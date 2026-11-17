@@ -20,6 +20,9 @@ class Scenery {
     // Metres of open ground a tree keeps from the road, the bench and any other road
     static get ROAD_CLEAR_M() { return 6; }
     static get BUILDING_REACH_M() { return 450; }
+    // Scale a modelled house is drawn at, at most and at least (the models are about 16 m by 11 m)
+    static get HOUSE_SCALE_MAX() { return 1.2; }
+    static get HOUSE_SCALE_MIN() { return 0.45; }
 
     // Integer hash of a cell, 0 to 1
     static hash(ix, iz, salt) {
@@ -159,20 +162,23 @@ class Scenery {
         const byHome = new Map();
         const nearest = buildings.slice().sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
         for (const b of nearest) {
-            const home = homes[Math.floor(Scenery.hash(Math.round(b.x), Math.round(b.z), 8) * homes.length)];
-            const cost = Scenery.trianglesOf(home.parts);
-            if (this.houseInstances + held.house + home.parts.length > Scenery.BUILDING_CAP || held.houseTriangles + cost > houseRoom) continue;
             if (Math.hypot(b.x - bike.x, b.z - bike.z) > Scenery.BUILDING_REACH_M) continue;
             if (this.ground.kindAt(b.x, b.z) !== 'runoff') continue;
-            const footprint = home.plain ? [1, 1] : Scenery.footprintOf(home);
-            const fit = home.plain ? [b.w, b.h || 6, b.d] : (() => { const s = Math.max(0.6, Math.min(1.8, Math.sqrt((b.w * b.d) / Math.max(1, footprint[0] * footprint[1])))); return [s, s, s]; })();
+            const pose = this.housePose(b, homes[Math.floor(Scenery.hash(Math.round(b.x), Math.round(b.z), 8) * homes.length)]);
+            const home = pose.home;
+            const cost = Scenery.trianglesOf(home.parts);
+            if (this.houseInstances + held.house + home.parts.length > Scenery.BUILDING_CAP || held.houseTriangles + cost > houseRoom) continue;
             const half = Math.max(b.w, b.d) / 2;
             let low = Infinity;
             for (const [dx, dz] of [[0, 0], [half, half], [-half, half], [half, -half], [-half, -half]]) low = Math.min(low, this.ground.tileHeight(b.x + dx, b.z + dz) ?? Infinity);
             if (!Number.isFinite(low)) continue;
-            rotation.setFromAxisAngle(up, b.heading);
-            position.set(b.x, low - 0.3, b.z);
-            scale.set(fit[0], fit[1], fit[2]);
+            rotation.setFromAxisAngle(up, pose.turn);
+            scale.set(pose.scale[0], pose.scale[1], pose.scale[2]);
+            // The model's own middle goes on the middle of the footprint
+            position.set(-pose.centre[0] * pose.scale[0], 0, -pose.centre[1] * pose.scale[2]).applyQuaternion(rotation);
+            position.x += b.x;
+            position.z += b.z;
+            position.y = low - 0.3;
             const list = byHome.get(home) || [];
             list.push(new THREE.Matrix4().compose(position, rotation, scale));
             byHome.set(home, list);
@@ -214,7 +220,7 @@ class Scenery {
         return group;
     }
 
-    // Width and depth of a house model, measured once
+    // A house model's extent on the ground, measured once: [width (x), depth (z)] and the middle [x, z]
     static footprintOf(home) {
         if (!home.footprint) {
             const box = new THREE.Box3();
@@ -222,9 +228,25 @@ class Scenery {
                 part.geometry.computeBoundingBox();
                 box.union(part.geometry.boundingBox);
             }
-            home.footprint = [Math.max(1, box.max.x - box.min.x), Math.max(1, box.max.z - box.min.z)];
+            home.footprint = { size: [Math.max(1, box.max.x - box.min.x), Math.max(1, box.max.z - box.min.z)], centre: [(box.min.x + box.max.x) / 2, (box.min.z + box.max.z) / 2] };
         }
         return home.footprint;
+    }
+
+    // How a building of the map is drawn: { home, turn, scale [x, y, z], centre [x, z] }. A modelled house stands
+    // inside the mapped footprint, turned a quarter when that fills more of it, and never larger than
+    // HOUSE_SCALE_MAX; the footprint clears every road band (tools/world/buildings.mjs), so the house does too.
+    // A footprint too small for a house at HOUSE_SCALE_MIN (a shed, a garage) is a plain box of its own size.
+    housePose(b, home) {
+        const plain = this.plain().houses[0];
+        if (!home.plain) {
+            const { size, centre } = Scenery.footprintOf(home);
+            const straight = Math.min(b.w / size[0], b.d / size[1]);
+            const turned = Math.min(b.d / size[0], b.w / size[1]);
+            const fit = Math.min(Scenery.HOUSE_SCALE_MAX, Math.max(straight, turned));
+            if (fit >= Scenery.HOUSE_SCALE_MIN) return { home, turn: b.heading + (turned > straight ? Math.PI / 2 : 0), scale: [fit, fit, fit], centre };
+        }
+        return { home: plain, turn: b.heading, scale: [b.w, b.h || 6, b.d], centre: [0, 0] };
     }
 
     // Frees the instance buffers of a tile's scenery; the shared geometry and materials stay

@@ -14,7 +14,7 @@ import { resampleEdge, resampleLine, polylineLengths } from './resample.mjs';
 import { profileEdge, reconcileNodes, limitRideCrests, demGaps, summariseGaps, FLAG } from './profile.mjs';
 import { createBencher, TILE_M } from './bench.mjs';
 import { rasterizeCover, coverLookup, coverPolysFromRows } from './landcover.mjs';
-import { buildingsFromRows } from './buildings.mjs';
+import { buildingsFromRows, clearOfRoads } from './buildings.mjs';
 import { buildJunctions } from './junctions.mjs';
 import { rideSamples, placeStations } from './stations.mjs';
 import { stageFloors } from './floors.mjs';
@@ -258,7 +258,9 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
     return { x0, z0, nx, nz, cell: FAR_CELL_M, data };
   })();
 
-  const buildings = source.buildings(samples);
+  const placedBuildings = clearOfRoads(source.buildings(samples), edges);
+  const buildings = placedBuildings.buildings;
+  log(`buildings: ${buildings.length} kept, ${placedBuildings.nudged} moved off a road, ${placedBuildings.dropped} left out`);
   const landmarks = [];
   for (const l of source.landmarks) {
     let best = null;

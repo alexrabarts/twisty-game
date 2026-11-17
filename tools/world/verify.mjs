@@ -1,5 +1,5 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22 and the stacked-leg gate).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|all> --stages <ids|all>
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
 // fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
@@ -16,6 +16,7 @@ import { scopedRoute } from './stages.mjs';
 import { TILE_M, CELL_M, TILE_N, ZONE } from './bench.mjs';
 import { buildWorld, loadTlmSource, stageDefs } from './import.mjs';
 import { syntheticSource } from './synthetic.mjs';
+import { ROAD_CLEAR_M, roadBands } from './buildings.mjs';
 import { resolveCacheDir } from './cache.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -277,6 +278,22 @@ export function checkStacked(decoded, { maxBankM = readMaxBankM() } = {}) {
   return check('stacked', problems.length === 0, { pairs: pairs.length, minStackedDs, maxBankM, steepest: [...pairs].sort((p, q) => q.slope - p.slope).slice(0, 5), withWall: pairs.filter(p => p.wall).length, problems });
 }
 
+// Buildings: no footprint closer than ROAD_CLEAR_M to the band of any road, ride or side edge. The stored box is
+// rounded (1 mm, 1e-4 rad), so a box the importer set at the clearance may read a centimetre short of it.
+export function checkBuildings(decoded, { clear = ROAD_CLEAR_M, slackM = 0.02 } = {}) {
+  const bands = roadBands(decoded.edges);
+  const near = [];
+  let least = Infinity;
+  for (const b of decoded.buildings) {
+    const worst = bands.clearance(b);
+    least = Math.min(least, worst.gap);
+    if (worst.gap < clear - slackM) near.push({ x: Math.round(b.x), z: Math.round(b.z), w: b.w, d: b.d, gapM: Math.round(worst.gap * 100) / 100, edge: worst.edge, ride: worst.ride });
+  }
+  near.sort((p, q) => p.gapM - q.gapM);
+  const problems = near.length ? [`${near.length} buildings stand within ${clear} m of a road band (worst ${near[0].gapM} m from edge ${near[0].edge})`] : [];
+  return check('buildings', problems.length === 0, { buildings: decoded.buildings.length, clearM: clear, leastGapM: Math.round(least * 100) / 100, near: near.slice(0, 10), problems });
+}
+
 async function sourceFor(opt) {
   if (opt.synthetic) return { source: syntheticSource(), spacing: 500 };
   const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
@@ -297,7 +314,7 @@ export async function main(argv) {
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
   if (wanted.some(c => ['fidelity', 'elevation', 'graph'].includes(c))) {
@@ -308,7 +325,7 @@ export async function main(argv) {
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {

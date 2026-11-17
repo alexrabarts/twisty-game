@@ -20,8 +20,8 @@ import { rideSamples, placeStations } from '../../tools/world/stations.mjs';
 import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/world/floors.mjs';
 import { encodeFiles, writeWorld, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
 import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.mjs';
-import { orientedBox } from '../../tools/world/buildings.mjs';
-import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, LIMITS } from '../../tools/world/verify.mjs';
+import { orientedBox, clearOfRoads, roadBands, boxesOverlap, ROAD_CLEAR_M, NUDGE_MAX_M } from '../../tools/world/buildings.mjs';
+import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, LIMITS } from '../../tools/world/verify.mjs';
 import { wgs84ToLv95, lv95ToWgs84 } from '../../tools/world/dem.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -393,6 +393,53 @@ describe('landcover.mjs and buildings.mjs', () => {
     });
 });
 
+describe('buildings off the road bands', () => {
+    // A straight 10 m road along z, from z = -200 to 200, sampled every 4 m
+    const road = (() => {
+        const n = 101;
+        return [{ id: 0, onRide: true, x: new Float64Array(n), z: Float64Array.from({ length: n }, (_, i) => -200 + 4 * i), width: new Float32Array(n).fill(10) }];
+    })();
+    const house = (x, z, extra = {}) => ({ x, z, w: 8, d: 10, heading: 0, h: 7, kind: 1, ...extra });
+
+    test('a house clear of the band stays where the map put it', () => {
+        const out = clearOfRoads([house(20, 0)], road);
+        expect(out.buildings).toEqual([house(20, 0)]);
+        expect(out.nudged + out.dropped).toBe(0);
+    });
+
+    test('a house a little over the band is moved out to the clearance, away from the road', () => {
+        // Its near wall is at x = 5, on the edge of the 5 m half band
+        const out = clearOfRoads([house(9, 0)], road);
+        expect(out.nudged).toBe(1);
+        const [moved] = out.buildings;
+        expect(moved.x).toBeGreaterThan(9);
+        expect(moved.x - 9).toBeLessThanOrEqual(NUDGE_MAX_M);
+        expect(roadBands(road).clearance(moved).gap).toBeGreaterThanOrEqual(ROAD_CLEAR_M);
+        expect(moved.z).toBeCloseTo(0, 6);
+    });
+
+    test('a house astride the road is left out', () => {
+        const out = clearOfRoads([house(0, 0)], road);
+        expect(out.buildings).toEqual([]);
+        expect(out.dropped).toBe(1);
+    });
+
+    test('a moved house that would land on a neighbour is left out, and the neighbour stays', () => {
+        const neighbour = house(19, 0);
+        const out = clearOfRoads([house(9, 0), neighbour], road);
+        expect(out.buildings).toEqual([neighbour]);
+        expect(out.dropped).toBe(1);
+        expect(boxesOverlap(house(12, 0), neighbour)).toBe(true);
+        expect(boxesOverlap(house(30, 0), neighbour)).toBe(false);
+    });
+
+    test('checkBuildings fails on a house over a band and passes once the importer has cleared it', () => {
+        const decoded = { edges: road, buildings: [house(9, 0)] };
+        expect(checkBuildings(decoded).ok).toBe(false);
+        expect(checkBuildings({ edges: road, buildings: clearOfRoads(decoded.buildings, road).buildings }).ok).toBe(true);
+    });
+});
+
 describe('stations.mjs', () => {
     const straight = (n, flags = {}) => {
         const s = Float64Array.from({ length: n }, (_, i) => i * 4);
@@ -535,6 +582,7 @@ describe('the committed Tremola slice (world/)', () => {
     test('its stations, graph and stacked legs pass their gates (P22)', () => {
         expect(checkStations(decoded).details.problems).toEqual([]);
         expect(checkStacked(decoded).details.problems).toEqual([]);
+        expect(checkBuildings(decoded).details.problems).toEqual([]);
         const g = checkGraph(decoded, { nodes: decoded.nodes, edges: decoded.edges });
         expect(g.details.problems).toEqual([]);
         expect(decoded.junctions.length).toBeGreaterThanOrEqual(1);
