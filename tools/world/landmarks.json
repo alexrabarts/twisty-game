@@ -1,0 +1,7 @@
+[
+  { "name": "Devil's Bridge", "asset": "assets/bridge/stone.glb", "lv95": [2688065, 1167031], "note": "placed at the Schöllenen waypoint; move onto the bridge when the model is placed" },
+  { "name": "Urnerloch", "asset": "assets/gorge/portal.glb", "lv95": [2688065, 1167031], "note": "placed at the Schöllenen waypoint; move onto the tunnel portal when the model is placed" },
+  { "name": "Gotthard Hospiz", "asset": "box", "size": [28, 10, 14], "lv95": [2686073, 1157063], "note": "a box until a model exists; at the Gotthard summit waypoint" },
+  { "name": "Furka Belvédère", "asset": "box", "size": [24, 10, 12], "lv95": [2674851, 1158387], "note": "a box until a model exists; at the Furka summit waypoint" },
+  { "name": "Grimsel dam wall", "asset": "box", "size": [260, 40, 30], "lv95": [2668937, 1157087], "note": "a box until a model exists; at the Grimsel summit waypoint" }
+]

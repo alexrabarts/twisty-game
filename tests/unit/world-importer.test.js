@@ -1,0 +1,589 @@
+/**
+ * @jest-environment node
+ */
+// The world importer on synthetic data: every module of tools/world/ that makes world data, run through the same
+// pipeline as the real import (`import.mjs --synthetic`). No cache and no network.
+import { describe, test, expect, beforeAll } from '@jest/globals';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { buildWorld, classWidth, stageDefs } from '../../tools/world/import.mjs';
+import { syntheticSource, syntheticDem } from '../../tools/world/synthetic.mjs';
+import { resampleEdge, resampleLine, R_MIN, nearestOnPolyline, polylineLengths, circumradius } from '../../tools/world/resample.mjs';
+import { buildCorridorGraph, GraphGapError } from '../../tools/world/graph.mjs';
+import { createBencher, ZONE, TILE_N, TILE_M, CELL_M } from '../../tools/world/bench.mjs';
+import { savitzkyGolay, FLAG } from '../../tools/world/profile.mjs';
+import { rideSamples, placeStations } from '../../tools/world/stations.mjs';
+import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/world/floors.mjs';
+import { encodeFiles, writeWorld, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
+import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.mjs';
+import { orientedBox } from '../../tools/world/buildings.mjs';
+import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkGraph, LIMITS } from '../../tools/world/verify.mjs';
+import { wgs84ToLv95, lv95ToWgs84 } from '../../tools/world/dem.mjs';
+
+const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const MINI = path.join(REPO, 'tests', 'fixtures', 'world', 'mini');
+const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'world-test-'));
+
+const semicircle = (radius, legM = 100, step = 3) => {
+    const pts = [];
+    for (let z = 0; z < legM; z += 8) pts.push([0, z]);
+    const n = Math.ceil((Math.PI * radius) / step);
+    for (let i = 0; i <= n; i++) {
+        const a = (Math.PI * i) / n;
+        pts.push([radius - radius * Math.cos(a), legM + radius * Math.sin(a)]);
+    }
+    for (let z = legM - 8; z >= 0; z -= 8) pts.push([2 * radius, z]);
+    return pts;
+};
+
+describe('resample.mjs', () => {
+    test('a hairpin tighter than R_MIN comes out at R_MIN or wider, and still turns the full 180 degrees', () => {
+        const r = resampleEdge(semicircle(5));
+        expect(r.minRadius).toBeGreaterThanOrEqual(R_MIN * 0.995);
+        let turn = 0;
+        for (let i = 1; i < r.heading.length; i++) {
+            let d = r.heading[i] - r.heading[i - 1];
+            d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+            turn += d;
+        }
+        expect(Math.abs(turn)).toBeGreaterThan(Math.PI * 0.98);
+        expect(Math.abs(turn)).toBeLessThan(Math.PI * 1.02);
+        expect(r.fillets.length).toBeGreaterThan(0);
+        expect(r.fillets.every(f => f.explained)).toBe(true);
+    });
+
+    test('a bend gentler than R_MIN stays as mapped', () => {
+        const pts = [];
+        for (let i = 0; i <= 20; i++) { const a = (i * 8) / 60; pts.push([60 - 60 * Math.cos(a), 60 * Math.sin(a)]); }
+        const cum = polylineLengths(pts);
+        const r = resampleEdge(pts);
+        const worst = Math.max(...Array.from(r.x, (x, i) => nearestOnPolyline(pts, cum, x, r.z[i]).dist));
+        expect(worst).toBeLessThan(0.5);
+        expect(r.fillets).toEqual([]);
+    });
+
+    test('samples are at most 4 m apart and the heading follows the line', () => {
+        const r = resampleEdge([[0, 0], [0, 100], [50, 150]]);
+        for (let i = 1; i < r.x.length; i++) expect(Math.hypot(r.x[i] - r.x[i - 1], r.z[i] - r.z[i - 1])).toBeLessThanOrEqual(4.0001);
+        expect(r.heading[0]).toBeCloseTo(0, 1);
+        expect(r.heading.at(-1)).toBeCloseTo(Math.PI / 4, 1);
+    });
+
+    test('a line of zero length is refused', () => {
+        expect(() => resampleEdge([[1, 1], [1, 1]])).toThrow(/zero length/);
+    });
+
+    test('a ride resampled as one line and cut at a node shares the node sample, and the bend across the cut stays smooth', () => {
+        const pts = semicircle(5, 100);
+        const cut = 100 + 8; // inside the bend
+        const r = resampleLine(pts, [cut]);
+        expect(r.segments).toHaveLength(2);
+        const [a, b] = r.segments;
+        expect(a.x.at(-1)).toBe(b.x[0]);
+        expect(a.z.at(-1)).toBe(b.z[0]);
+        expect(r.cuts[0]).toEqual({ x: a.x.at(-1), z: a.z.at(-1) });
+        const xs = [...a.x, ...b.x.slice(1)], zs = [...a.z, ...b.z.slice(1)];
+        for (let i = 1; i + 1 < xs.length; i++) expect(circumradius(xs[i - 1], zs[i - 1], xs[i], zs[i], xs[i + 1], zs[i + 1])).toBeGreaterThanOrEqual(R_MIN * 0.99);
+    });
+});
+
+describe('profile.mjs', () => {
+    test('Savitzky-Golay keeps a straight grade exactly and flattens noise', () => {
+        const ramp = Float64Array.from({ length: 50 }, (_, i) => 100 + i * 0.3);
+        const out = savitzkyGolay(ramp, 4);
+        out.forEach((v, i) => expect(v).toBeCloseTo(ramp[i], 6));
+        const noisy = Float64Array.from({ length: 50 }, (_, i) => 100 + (i % 2 ? 1 : -1));
+        const smooth = savitzkyGolay(noisy, 4);
+        expect(Math.max(...smooth.slice(5, 45).map(v => Math.abs(v - 100)))).toBeLessThan(0.5);
+    });
+});
+
+describe('the synthetic world', () => {
+    let world;
+    beforeAll(async () => { world = await buildWorld(syntheticSource(), { stationSpacingM: 500 }); });
+
+    test('is three 2 km stages, three gates each, and a tour of two gates', () => {
+        expect(world.stages).toHaveLength(3);
+        world.stages.forEach(s => {
+            expect(s.to - s.from).toBeGreaterThan(1990);
+            expect(s.to - s.from).toBeLessThan(2010);
+            expect(s.gates).toBe(3);
+        });
+        const rows = courseRows(world);
+        expect(Object.keys(rows)).toEqual(['world-mini-1-v1', 'world-mini-2-v1', 'world-mini-3-v1', 'world-tour-v1']);
+        expect(rows['world-tour-v1'].gates).toBe(2);
+    });
+
+    test('stations are 250 to 750 m apart, none inside 80 m of a tunnel or a ride junction', () => {
+        const ids = world.stages.flatMap(s => s.stationIds);
+        expect(new Set(ids).size).toBe(ids.length - 2); // the two stage boundaries are shared
+        world.stages.forEach(s => {
+            const at = s.stationIds.map(i => world.stations[i].s);
+            expect(at[0]).toBeCloseTo(s.from, 3);
+            expect(at.at(-1)).toBeCloseTo(s.to, 3);
+            for (let k = 1; k < at.length; k++) {
+                expect(at[k] - at[k - 1]).toBeGreaterThanOrEqual(250 - 0.5);
+                expect(at[k] - at[k - 1]).toBeLessThanOrEqual(750 + 0.5);
+            }
+        });
+        const interior = world.stations.filter(s => s.kind === 'gate').map(s => s.s);
+        const keepOut = [...world.structures.map(t => [t.s0, t.s1]), ...world.junctions.flatMap(j => j.passes.map(p => [p.sIn, p.sIn]))];
+        for (const s of interior) for (const [a, b] of keepOut) expect(s < a - 80 || s > b + 80).toBe(true);
+    });
+
+    test('has the planted features: a tightened R = 10 m hairpin, stacked legs 25 m apart, a tunnel and a junction', () => {
+        const samples = rideSamples(world.edges, world.ride);
+        const hairpins = findHairpins(samples);
+        expect(hairpins).toHaveLength(3);
+        hairpins.forEach(h => expect(h.minRadiusM).toBeGreaterThanOrEqual(R_MIN * 0.995));
+        expect(Math.min(...hairpins.map(h => h.minRadiusM))).toBeLessThan(11);
+        expect(world.structures.map(s => s.kind)).toContain('tunnel');
+        expect(world.junctions).toHaveLength(1);
+        expect(world.junctions[0].incident).toHaveLength(4);
+    });
+
+    test('a junction gives every edge that is not its pass a stub and a barrier 60 m out', () => {
+        const j = world.junctions[0];
+        const [pass] = j.passes;
+        expect(pass.barriers).toHaveLength(2);
+        expect(pass.barriers.every(b => !world.edges[b.edgeId].onRide)).toBe(true);
+        expect(pass.barriers.map(b => world.edges[b.edgeId].name).sort()).toEqual(['Alpweg', 'Seitenstrasse']);
+        for (const b of pass.barriers) {
+            const e = world.edges[b.edgeId];
+            const node = world.nodes[j.node];
+            expect(Math.hypot(b.x - node.x, b.z - node.z)).toBeCloseTo(Math.min(60, e.length), 0);
+        }
+    });
+
+    test('ground under the road is the road, and tunnel ground is not carved', () => {
+        const rideEdge = world.edges[0];
+        const key = i => `${Math.floor(rideEdge.x[i] / TILE_M)},${Math.floor(rideEdge.z[i] / TILE_M)}`;
+        const i = 20;
+        const t = world.tiles.get(key(i));
+        const col = Math.round((rideEdge.x[i] - Math.floor(rideEdge.x[i] / TILE_M) * TILE_M) / CELL_M);
+        const row = Math.round((rideEdge.z[i] - Math.floor(rideEdge.z[i] / TILE_M) * TILE_M) / CELL_M);
+        expect([ZONE.road, ZONE.bench]).toContain(t.zones[row * TILE_N + col]);
+        const tunnel = world.edges.find(e => (e.flags[0] & FLAG.tunnel) !== 0);
+        const mid = tunnel.x.length >> 1;
+        const tt = world.tiles.get(`${Math.floor(tunnel.x[mid] / TILE_M)},${Math.floor(tunnel.z[mid] / TILE_M)}`);
+        const c = Math.round((tunnel.x[mid] - Math.floor(tunnel.x[mid] / TILE_M) * TILE_M) / CELL_M);
+        const rw = Math.round((tunnel.z[mid] - Math.floor(tunnel.z[mid] / TILE_M) * TILE_M) / CELL_M);
+        expect(tt.zones[rw * TILE_N + c]).not.toBe(ZONE.road);
+    });
+
+    test('is deterministic: two builds give the same bytes', async () => {
+        const again = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        const a = encodeFiles(world), b = encodeFiles(again);
+        expect([...a.keys()]).toEqual([...b.keys()]);
+        for (const [name, buf] of a) expect(Buffer.compare(buf, b.get(name))).toBe(0);
+    });
+
+    test('the committed mini fixture is what the importer makes', () => {
+        const files = encodeFiles(world);
+        const listed = [];
+        const walk = d => fs.readdirSync(d, { withFileTypes: true }).forEach(e => (e.isDirectory() ? walk(path.join(d, e.name)) : listed.push(path.relative(MINI, path.join(d, e.name)))));
+        walk(MINI);
+        expect(listed.filter(f => f !== 'SHA256SUMS' && f !== 'world-courses.json').sort()).toEqual([...files.keys()].sort());
+        for (const [name, buf] of files) expect(Buffer.compare(fs.readFileSync(path.join(MINI, name)), buf)).toBe(0);
+        expect(fs.readFileSync(path.join(MINI, 'SHA256SUMS'), 'utf8')).toBe(sumsOf(files));
+        expect(JSON.parse(fs.readFileSync(path.join(MINI, 'world-courses.json'), 'utf8'))).toEqual(courseRows(world));
+    });
+});
+
+describe('encode.mjs', () => {
+    let world, dir;
+    beforeAll(async () => {
+        world = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        dir = tmp();
+        writeWorld(world, dir);
+    });
+
+    test('round trips: the decoded world matches the built one to a millimetre', () => {
+        const d = decodeWorld(dir);
+        expect(d.nodes).toHaveLength(world.nodes.length);
+        expect(d.edges).toHaveLength(world.edges.length);
+        d.edges.forEach((e, i) => {
+            const w = world.edges[i];
+            expect(e.x.length).toBe(w.x.length);
+            expect(e.a).toBe(w.a);
+            expect(e.b).toBe(w.b);
+            expect(e.onRide).toBe(w.onRide);
+            expect(Math.abs(e.length - w.length)).toBeLessThan(0.01);
+            for (let k = 0; k < e.x.length; k++) {
+                expect(Math.abs(e.x[k] - w.x[k])).toBeLessThan(0.001);
+                expect(Math.abs(e.y[k] - w.y[k])).toBeLessThan(0.001);
+                expect(e.flags[k]).toBe(w.flags[k]);
+            }
+        });
+        expect(d.tiles.size).toBe(world.tiles.size);
+        for (const [key, t] of world.tiles) {
+            const dt = d.tiles.get(key);
+            expect(Buffer.from(dt.zones).equals(Buffer.from(t.zones))).toBe(true);
+            for (let i = 0; i < t.heights.length; i += 97) expect(Math.abs(dt.heights[i] - t.heights[i])).toBeLessThan(0.06);
+        }
+        expect(d.buildings).toHaveLength(world.buildings.length);
+        expect(d.far.nx * d.far.nz).toBe(d.far.data.length);
+    });
+
+    test('every chunk is a place: at most the sample cap and the extent cap, with its bounding box in the manifest', () => {
+        const { manifest, edges } = decodeWorld(dir);
+        const all = edges.flatMap(e => Array.from(e.x, (x, i) => [x, e.z[i]]));
+        for (const c of manifest.chunks) {
+            expect(c.count).toBeLessThanOrEqual(MAX_CHUNK_SAMPLES);
+            expect(c.bbox[2] - c.bbox[0]).toBeLessThanOrEqual(MAX_CHUNK_EXTENT_M + 0.01);
+            expect(c.bbox[3] - c.bbox[1]).toBeLessThanOrEqual(MAX_CHUNK_EXTENT_M + 0.01);
+            const inside = all.slice(c.first, c.first + c.count);
+            expect(Math.min(...inside.map(p => p[0]))).toBeGreaterThanOrEqual(c.bbox[0] - 0.01);
+            expect(Math.max(...inside.map(p => p[1]))).toBeLessThanOrEqual(c.bbox[3] + 0.01);
+        }
+        expect(manifest.chunks.reduce((p, c) => p + c.count, 0)).toBe(all.length);
+    });
+
+    test('SHA256SUMS is in `shasum -a 256 -c` form and covers every other file', () => {
+        const sums = fs.readFileSync(path.join(dir, 'SHA256SUMS'), 'utf8').trim().split('\n');
+        const names = [];
+        const walk = d => fs.readdirSync(d, { withFileTypes: true }).forEach(e => (e.isDirectory() ? walk(path.join(d, e.name)) : names.push(path.relative(dir, path.join(d, e.name)))));
+        walk(dir);
+        expect(sums.map(l => l.split('  ')[1])).toEqual(names.filter(n => n !== 'SHA256SUMS').sort());
+        for (const line of sums) {
+            const [hash, name] = line.split('  ');
+            expect(hash).toMatch(/^[0-9a-f]{64}$/);
+            expect(crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex')).toBe(hash);
+        }
+    });
+
+    test('the credit and the format version are in the manifest', () => {
+        const { manifest } = decodeWorld(dir);
+        expect(manifest.format).toBe(1);
+        expect(manifest.dataHash).toMatch(/^[0-9a-f]{64}$/);
+        expect(manifest.stationSpacingM).toBe(500);
+    });
+});
+
+describe('graph.mjs and junctions.mjs', () => {
+    const line = (...pts) => pts.map(([x, z]) => [x, z, 1000]);
+    const road = (id, pts, name = 'Strasse') => ({ id, fid: id, cls: '6m Strasse', structure: null, name, drivable: 'Wahr', traffic: 'Durchgangsstrasse', surface: 'Hart', hasZ: true, pts: line(...pts) });
+    const wp = (id, name, [x, z]) => ({ id, name, e: x, n: z });
+
+    // A loop: west to J, J to east, east round a loop edge, back to J from the south, J on to the north.
+    // The ride passes J twice.
+    const figureEight = () => ({
+        edges: [
+            road(0, [[-300, 0], [0, 0]]), road(1, [[0, 0], [300, 0]]), road(2, [[300, 0], [300, 200], [0, 200], [0, 100]]),
+            road(3, [[0, 100], [0, 0]]), road(4, [[0, 0], [0, -300]]), road(5, [[0, 0], [-20, 40]])
+        ],
+        stages: [{ id: 'eight', name: 'Eight', waypoints: [wp(0, 'West', [-300, 0]), wp(1, 'East loop', [300, 200]), wp(2, 'North', [0, -300])] }]
+    });
+
+    test('the ride is an ordered path through the graph and a junction used twice differs per pass', () => {
+        const { nodes, edges, ride } = buildCorridorGraph(figureEight());
+        expect(ride.length).toBeGreaterThanOrEqual(5);
+        let at = null;
+        for (const u of ride) {
+            const e = edges[u.edgeId];
+            const [from, to] = u.dir === 1 ? [e.a, e.b] : [e.b, e.a];
+            if (at !== null) expect(from).toBe(at);
+            at = to;
+        }
+        expect(nodes.length).toBeGreaterThan(4);
+    });
+
+    test('built into a world, junction J has two passes with different barrier sets', async () => {
+        const g = figureEight();
+        const source = { ...syntheticSource(), ...g, demAt: () => 1000, coverPolys: () => [], buildings: () => [], landmarks: [], keptRoadClasses: ['6m Strasse'] };
+        const w = await buildWorld(source, { stationSpacingM: 500 });
+        const twice = w.junctions.filter(j => j.passes.length >= 2);
+        expect(twice).toHaveLength(1);
+        const [a, b] = twice[0].passes;
+        const ids = p => p.barriers.map(x => x.edgeId).sort();
+        expect(ids(a)).not.toEqual(ids(b));
+        expect(a.barriers.some(x => x.edgeId === a.outEdge)).toBe(false);
+        expect(b.barriers.some(x => x.edgeId === b.outEdge)).toBe(false);
+        const node = w.nodes[twice[0].node];
+        expect(node.flags & 4).toBe(4);
+    });
+
+    test('a gap between waypoints stops the import', () => {
+        const g = figureEight();
+        g.edges.push(road(9, [[1000, 1000], [1100, 1000]]));
+        g.stages[0].waypoints[1] = wp(1, 'Island', [1100, 1000]);
+        expect(() => buildCorridorGraph(g)).toThrow(GraphGapError);
+    });
+
+    test('a side road is cut to the corridor, a road outside it is left out', () => {
+        const g = figureEight();
+        g.edges.push(road(7, [[0, 0], [0, 1500], [0, 5000]], 'Long spur'), road(8, [[4000, 4000], [4100, 4000]], 'Far away'));
+        const r = buildCorridorGraph(g);
+        expect(r.edges.some(e => e.name === 'Far away')).toBe(false);
+        const spur = r.edges.find(e => e.name === 'Long spur');
+        expect(spur.srcPts.at(-1)[1]).toBeLessThan(2600);
+    });
+});
+
+describe('bench.mjs', () => {
+    const edge = (x0, y, heights) => {
+        const n = 40;
+        return {
+            x: Float64Array.from({ length: n }, () => x0), z: Float64Array.from({ length: n }, (_, i) => i * 4), y: Float64Array.from({ length: n }, () => y),
+            width: new Float32Array(n).fill(10), flags: new Uint8Array(n), spacing: 4, heights
+        };
+    };
+    const flat = () => 1000;
+
+    test('the road, its bench and the cut-and-fill slope', () => {
+        const b = createBencher({ edges: [edge(0, 1010)], demAt: flat });
+        expect(b.ground(0, 80)).toEqual({ y: 1010, zone: ZONE.road });
+        expect(b.ground(6, 80).zone).toBe(ZONE.bench); // within width/2 + 2
+        const slope = b.ground(10, 80);
+        expect(slope.zone).toBe(ZONE.terrain);
+        expect(slope.y - 1000).toBeGreaterThan(5); // still near the road height, never more than 1:1
+        expect(Math.abs(slope.y - 1010)).toBeLessThanOrEqual(10 - 7 + 1e-9);
+        expect(b.ground(60, 80).y).toBe(1000);
+    });
+
+    test('where two legs cannot be joined at 1:1, the ground nearer the lower leg is a wall and nearer the upper a drop', () => {
+        const b = createBencher({ edges: [edge(0, 1000), edge(22, 1015)], demAt: flat });
+        expect(b.ground(9, 80).zone).toBe(ZONE.wall);
+        expect(b.ground(13, 80).zone).toBe(ZONE.drop);
+        expect(b.ground(11, 80).y).toBeGreaterThan(1000);
+        expect(b.ground(11, 80).y).toBeLessThan(1015);
+        // The same two legs 20 m closer in height can be joined at 1:1: no wall, no drop.
+        const gentle = createBencher({ edges: [edge(0, 1000), edge(22, 1006)], demAt: flat });
+        expect([9, 11, 13].map(x => gentle.ground(x, 80).zone)).toEqual([ZONE.terrain, ZONE.terrain, ZONE.terrain]);
+    });
+
+    test('nothing is carved under a bridge or over a tunnel', () => {
+        const e = edge(0, 1050);
+        e.flags.fill(FLAG.tunnel);
+        const b = createBencher({ edges: [e], demAt: flat });
+        expect(b.ground(0, 80)).toEqual({ y: 1000, zone: ZONE.terrain });
+    });
+
+    test('a tile is 65 x 65 nodes and water cover marks water', () => {
+        const b = createBencher({ edges: [edge(2000, 1010)], demAt: flat, coverAt: () => COVER.water });
+        const t = b.tile(0, 0);
+        expect(t.heights).toHaveLength(TILE_N * TILE_N);
+        expect(new Set(t.zones)).toEqual(new Set([ZONE.water]));
+    });
+});
+
+describe('landcover.mjs and buildings.mjs', () => {
+    test('rasterizes polygons at 16 m, holes stay open, everything else is grass', () => {
+        const outer = [[0, 0], [160, 0], [160, 160], [0, 160], [0, 0]];
+        const hole = [[48, 48], [112, 48], [112, 112], [48, 112], [48, 48]];
+        const grids = rasterizeCover([{ cls: COVER.forest, rings: [outer, hole] }], [[0, 0]]);
+        const at = coverLookup(grids);
+        expect(at(8, 8)).toBe(COVER.forest);
+        expect(at(80, 80)).toBe(COVER.grass);
+        expect(at(300, 300)).toBe(COVER.grass);
+        expect(at(-600, 0)).toBe(COVER.none);
+    });
+
+    test('the oriented box is the smallest rectangle round a footprint', () => {
+        const ring = [[0, 0], [10, 0], [10, 4], [0, 4], [0, 0]];
+        const box = orientedBox(ring);
+        expect(box.w * box.d).toBeCloseTo(40, 6);
+        expect(Math.max(box.w, box.d)).toBeCloseTo(10, 6);
+        expect(box.x).toBeCloseTo(5, 6);
+        expect(box.z).toBeCloseTo(2, 6);
+    });
+});
+
+describe('stations.mjs', () => {
+    const straight = (n, flags = {}) => {
+        const s = Float64Array.from({ length: n }, (_, i) => i * 4);
+        return { s, x: s, z: new Float64Array(n), y: new Float64Array(n), heading: new Float64Array(n), width: new Float32Array(n).fill(10), flags: Uint8Array.from({ length: n }, (_, i) => flags[i] ?? 0), radius: new Float64Array(n).fill(Infinity) };
+    };
+
+    test('a dropped station that leaves a gap over twice the spacing fails loudly', () => {
+        const samples = straight(1001, Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [i, i * 4 > 600 && i * 4 < 3400 ? FLAG.tunnel : 0])));
+        expect(() => placeStations(samples, [{ id: 'a', from: 0, to: 4000 }], [], { spacingM: 1000 })).toThrow(/gap/);
+    });
+
+    test('picks the point with the widest bend in its window', () => {
+        const samples = straight(501);
+        for (let i = 240; i < 260; i++) samples.radius[i] = 8; // a tight bend near s = 1000
+        const r = placeStations(samples, [{ id: 'a', from: 0, to: 2000 }], [], { spacingM: 1000 });
+        const [from, gate, to] = r.perStage[0].s;
+        expect([from, to]).toEqual([0, 2000]);
+        expect(Math.abs(gate - 1000)).toBeGreaterThan(40); // not in the bend
+    });
+
+    test('a stage shorter than the minimum gap has no gate', () => {
+        const r = placeStations(straight(101), [{ id: 'a', from: 0, to: 300 }], [], { spacingM: 1000 });
+        expect(r.perStage[0].s).toEqual([0, 300]);
+    });
+});
+
+describe('floors.mjs', () => {
+    const straightRide = (length, extra = {}) => {
+        const n = Math.round(length / 4) + 1;
+        const s = Float64Array.from({ length: n }, (_, i) => i * 4);
+        return { s, x: s, z: new Float64Array(n), y: new Float64Array(n), heading: new Float64Array(n), width: new Float32Array(n).fill(10), flags: new Uint8Array(n), radius: new Float64Array(n).fill(Infinity), ...extra };
+    };
+
+    test('a straight link is the length at top speed, times 0.9', () => {
+        const ms = linkFloorMs(straightRide(1000), 0, 1000, { leanCapDeg: 50 });
+        expect(ms).toBe(Math.ceil((FLOOR_FACTOR * 1000 / TOP_SPEED) * 1000));
+    });
+
+    test('a hairpin raises the floor, and a wider R raises the allowed speed', () => {
+        const s = straightRide(400);
+        const tight = straightRide(400);
+        for (let i = 40; i < 60; i++) tight.radius[i] = 10;
+        // 180 degrees of turn across the bend
+        for (let i = 40; i < 60; i++) tight.heading[i] = ((i - 40) / 19) * Math.PI;
+        for (let i = 60; i < tight.heading.length; i++) tight.heading[i] = Math.PI;
+        expect(linkFloorMs(tight, 0, 400, { leanCapDeg: 50 })).toBeGreaterThan(linkFloorMs(s, 0, 400, { leanCapDeg: 50 }));
+        const wide = straightRide(400);
+        for (let i = 40; i < 60; i++) wide.radius[i] = 40;
+        for (let i = 40; i < 60; i++) wide.heading[i] = ((i - 40) / 19) * Math.PI;
+        for (let i = 60; i < wide.heading.length; i++) wide.heading[i] = Math.PI;
+        expect(linkFloorMs(wide, 0, 400, { leanCapDeg: 50 })).toBeLessThan(linkFloorMs(tight, 0, 400, { leanCapDeg: 50 }));
+    });
+
+    test('is a lower bound: no ideal rider on the inner edge of a real bend is faster than the floor', async () => {
+        const world = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        const samples = rideSamples(world.edges, world.ride);
+        for (const stage of world.stages) {
+            const at = stage.stationIds.map(i => world.stations[i].s);
+            const r = stageFloors(samples, at);
+            expect(r.gateFloorsMs).toHaveLength(stage.gates + 1);
+            expect(r.floorMs).toBe(r.gateFloorsMs.reduce((p, q) => p + q, 0));
+            // The floor is below the time at top speed along the whole link: an upper limit no rider beats at 82 m/s is
+            // not exceeded by the floor itself.
+            r.gateFloorsMs.forEach((ms, k) => expect(ms).toBeGreaterThanOrEqual(Math.floor(FLOOR_FACTOR * (at[k + 1] - at[k]) * 0.5 / TOP_SPEED * 1000)));
+        }
+    });
+});
+
+describe('the board rows', () => {
+    const POLICY = { maxGateMs: 20 * 60 * 1000, maxTotalMs: 2 * 60 * 60 * 1000 };
+
+    const problemsOf = (rows, manifest) => {
+        const problems = [];
+        for (const [id, row] of Object.entries(rows)) {
+            if (!/^world-.*-v\d+$/.test(id)) problems.push(`${id}: bad id`);
+            if (!['stage', 'tour'].includes(row.kind)) problems.push(`${id}: kind`);
+            if (!(row.gates > 0)) problems.push(`${id}: gates`);
+            if (row.gateFloorsMs.length !== row.gates + 1) problems.push(`${id}: gateFloorsMs length`);
+            if (row.gateFloorsMs.some(f => !(f > 0) || f >= POLICY.maxGateMs)) problems.push(`${id}: a gate floor`);
+            if (row.floorMs < row.gateFloorsMs.reduce((p, q) => p + q, 0)) problems.push(`${id}: floorMs under the sum`);
+            if (row.floorMs >= POLICY.maxTotalMs) problems.push(`${id}: floorMs over the policy`);
+            if (row.kind === 'stage') {
+                const stage = manifest.stages.find(s => id === `world-${s.id}-v1`);
+                if (!stage) problems.push(`${id}: no such stage in the manifest`);
+                else if (stage.gates !== row.gates || Math.round(stage.length) !== row.metres) problems.push(`${id}: differs from the manifest`);
+            }
+        }
+        return problems;
+    };
+
+    test('the mini rows are valid and equal to the manifest, and a planted off-by-one fails', () => {
+        const manifest = JSON.parse(fs.readFileSync(path.join(MINI, 'manifest.json'), 'utf8'));
+        const rows = JSON.parse(fs.readFileSync(path.join(MINI, 'world-courses.json'), 'utf8'));
+        expect(problemsOf(rows, manifest)).toEqual([]);
+        const broken = JSON.parse(JSON.stringify(rows));
+        broken['world-mini-2-v1'].gates += 1;
+        expect(problemsOf(broken, manifest).length).toBeGreaterThan(0);
+    });
+
+    test('functions/world-courses.json holds the committed slice and equals its manifest', () => {
+        const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'world', 'manifest.json'), 'utf8'));
+        const rows = JSON.parse(fs.readFileSync(path.join(REPO, 'functions', 'world-courses.json'), 'utf8'));
+        expect(Object.keys(rows)).toEqual(manifest.stages.map(s => `world-${s.id}-v1`));
+        expect(problemsOf(rows, manifest)).toEqual([]);
+    });
+});
+
+describe('the committed Tremola slice (world/)', () => {
+    const dir = path.join(REPO, 'world');
+    let decoded;
+    beforeAll(() => { decoded = decodeWorld(dir); });
+
+    test('is within the size budget (P17)', () => {
+        const r = checkSize(dir);
+        expect(r.details.problems).toEqual([]);
+        expect(r.details.totalBytes).toBeLessThanOrEqual(LIMITS.sliceBytes);
+    });
+
+    test('every file matches SHA256SUMS and the list of files is the list of sums (P1)', () => {
+        const sums = fs.readFileSync(path.join(dir, 'SHA256SUMS'), 'utf8').trim().split('\n').map(l => l.split('  '));
+        for (const [hash, name] of sums) expect(crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex')).toBe(hash);
+        const names = [];
+        const walk = d => fs.readdirSync(d, { withFileTypes: true }).forEach(e => (e.isDirectory() ? walk(path.join(d, e.name)) : names.push(path.relative(dir, path.join(d, e.name)))));
+        walk(dir);
+        expect(sums.map(s => s[1]).sort()).toEqual(names.filter(n => n !== 'SHA256SUMS').sort());
+    });
+
+    test('no raw swisstopo download is committed (P2)', () => {
+        const files = spawnSync('git', ['ls-files'], { cwd: REPO, encoding: 'utf8' }).stdout.split('\n');
+        expect(files.filter(f => /\.(gpkg|tif|tiff|zip)$/i.test(f))).toEqual([]);
+        expect(['a/b.gpkg', 'c.tif', 'd.zip'].filter(f => /\.(gpkg|tif|tiff|zip)$/i.test(f))).toHaveLength(3);
+    });
+
+    test('has 20 or more real hairpins, none tighter than R_MIN (P4)', () => {
+        const r = checkHairpins(decoded);
+        expect(r.details.problems).toEqual([]);
+        expect(r.details.hairpins).toBeGreaterThanOrEqual(20);
+    });
+
+    test('its stations, graph and stacked legs pass their gates (P22)', () => {
+        expect(checkStations(decoded).details.problems).toEqual([]);
+        expect(checkStacked(decoded).details.problems).toEqual([]);
+        const g = checkGraph(decoded, { nodes: decoded.nodes, edges: decoded.edges });
+        expect(g.details.problems).toEqual([]);
+        expect(decoded.junctions.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('the stacked gate fails when the cap on banked allowance is raised past half the closest pair', () => {
+        const closest = checkStacked(decoded).details.minStackedDs;
+        expect(checkStacked(decoded, { maxBankM: closest / 2 + 1 }).ok).toBe(false);
+    });
+
+    test('rides from about 1 180 m at Airolo to the Gotthard summit at about 2 107 m (P5)', () => {
+        const s = rideSamples(decoded.edges, decoded.ride.path);
+        expect(s.y[0]).toBeGreaterThan(LIMITS.startY[0]);
+        expect(s.y[0]).toBeLessThan(LIMITS.startY[1]);
+        expect(s.y.at(-1)).toBeGreaterThan(LIMITS.summitY[0]);
+        expect(s.y.at(-1)).toBeLessThan(LIMITS.summitY[1]);
+        expect(decoded.manifest.credit).toBe('© swisstopo');
+    });
+});
+
+describe('the command line and the helpers', () => {
+    test('a cache inside the repo is refused (P2)', () => {
+        const r = spawnSync('node', ['tools/world/import.mjs', '--stages', 'tremola', '--cache', path.join(REPO, 'cache'), '--out', tmp()], { cwd: REPO, encoding: 'utf8' });
+        expect(r.status).not.toBe(0);
+        expect(r.stderr).toMatch(/cache must be outside the repo/);
+    });
+
+    test('an unknown stage names the known ones', () => {
+        const route = JSON.parse(fs.readFileSync(path.join(REPO, 'tools', 'world', 'route.json'), 'utf8'));
+        expect(() => stageDefs(route, ['nowhere'])).toThrow(/Known: tremola/);
+        const [tremola] = stageDefs(route, ['tremola']);
+        expect(tremola.waypoints.map(w => w.name)).toEqual(['Airolo', 'Tremola lower', 'Tremola upper', 'Gotthard']);
+        expect(stageDefs(route, ['all'])).toHaveLength(20);
+    });
+
+    test('class widths: the class width on side roads, never under 3 m', () => {
+        expect(classWidth('6m Strasse')).toBe(6);
+        expect(classWidth('1m Weg')).toBe(3);
+        expect(classWidth('Autobahn')).toBe(12);
+    });
+
+    test('LV95 and WGS84 convert both ways to a few metres', () => {
+        const w = lv95ToWgs84(2688447, 1165379);
+        const back = wgs84ToLv95(w.lon, w.lat);
+        expect(Math.hypot(back.e - 2688447, back.n - 1165379)).toBeLessThan(2);
+        expect(w.lat).toBeCloseTo(46.634, 2);
+    });
+
+    test('the synthetic terrain is smooth', () => {
+        expect(Math.abs(syntheticDem(0, 0) - syntheticDem(1, 0))).toBeLessThan(0.5);
+    });
+});

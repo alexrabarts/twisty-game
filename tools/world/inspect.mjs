@@ -85,6 +85,7 @@ export function loadEdges(gpkg, route, marginM) {
   const nameField = colMatch(cols, /^strassenname$/i);
   const drivableField = colMatch(cols, /^befahrbarkeit$/i);
   const trafficField = colMatch(cols, /^verkehrsbedeutung$/i);
+  const surfaceField = colMatch(cols, /^belagsart$/i);
   const xs = route.waypoints.map(w => w.e), ys = route.waypoints.map(w => w.n);
   const bbox = [Math.min(...xs) - marginM, Math.min(...ys) - marginM, Math.max(...xs) + marginM, Math.max(...ys) + marginM];
   const rows = gpkg.query(TABLE, bbox);
@@ -100,6 +101,7 @@ export function loadEdges(gpkg, route, marginM) {
         name: nameField ? r[nameField] ?? null : null,
         drivable: drivableField ? r[drivableField] : null,
         traffic: trafficField ? r[trafficField] : null,
+        surface: surfaceField ? r[surfaceField] : null,
         pts,
         hasZ: r.geom.hasZ
       });
@@ -177,7 +179,7 @@ function hairpinStats(pts) {
   };
 }
 
-function shortestPath(graph, from, to) {
+export function shortestPath(graph, from, to) {
   const { nodes, pieces } = graph;
   const best = new Map([[from, 0]]), prev = new Map(), done = new Set();
   const heap = new Heap(); heap.push(0, from);
@@ -237,17 +239,13 @@ function countBy(items, keyFn, lenFn) {
   return Object.fromEntries(Object.entries(out).sort((a, b) => b[1].lengthM - a[1].lengthM));
 }
 
-export function buildReport(gpkg, route, { marginM = 3000 } = {}) {
-  const loaded = loadEdges(gpkg, route, marginM);
-  const kept = loaded.edges.filter(isMotorRoad);
-  const classCounts = countBy(loaded.edges, e => e.cls, e => e.pts.reduce((s, p, i) => (i ? s + dist(e.pts[i - 1], p) : 0), 0));
-
-  // Snap every waypoint to the nearest vertex of a kept edge.
+// Snaps every waypoint (fields e, n: the planar coordinates of the edge points) to the nearest vertex of a kept
+// edge. A through road wins over a nearby side street, so the ride never runs in and out of a spur.
+export function snapWaypoints(kept, waypoints) {
   const vIndex = spatialIndex(200);
   for (const e of kept) e.pts.forEach((p, i) => vIndex.add(p[0], p[1], [e, i]));
   const cuts = new Map();
-  const snaps = route.waypoints.map(w => {
-    // A waypoint snaps to a through road when one is near: a side street would make the ride run in and out of a spur.
+  const snaps = waypoints.map(w => {
     let best = null;
     for (let r = 100; r <= 3200 && !best; r *= 2) {
       for (const [e, i] of vIndex.near(w.e, w.n, r)) {
@@ -261,6 +259,15 @@ export function buildReport(gpkg, route, { marginM = 3000 } = {}) {
     cuts.get(best.e.id).push(best.i);
     return { waypoint: w, ...best };
   });
+  return { snaps, cuts };
+}
+
+export function buildReport(gpkg, route, { marginM = 3000 } = {}) {
+  const loaded = loadEdges(gpkg, route, marginM);
+  const kept = loaded.edges.filter(isMotorRoad);
+  const classCounts = countBy(loaded.edges, e => e.cls, e => e.pts.reduce((s, p, i) => (i ? s + dist(e.pts[i - 1], p) : 0), 0));
+
+  const { snaps, cuts } = snapWaypoints(kept, route.waypoints);
 
   const graph = buildGraph(kept, cuts);
   return finishReport({ loaded, kept, classCounts, snaps, graph, route });
