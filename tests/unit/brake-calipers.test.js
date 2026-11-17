@@ -72,6 +72,7 @@ const BIKES = {
     sport: { rear: [185, 215], front: [195, 215] },
     adventure: { rear: [185, 215], front: [195, 215] },
     scooter: { rear: [145, 175], front: [195, 215] },
+    naked: { rear: [185, 215], front: [195, 215] },
 };
 
 describe.each(Object.entries(BIKES))('assets/bikes/%s.glb brake calipers', (bike, where) => {

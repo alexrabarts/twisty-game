@@ -10,12 +10,16 @@
 // material on this.frame for the crash and wheelie tints, and the rider posed
 // from the same numbers. Physics, handling and the camera read none of it.
 const BikeModels = (() => {
-  const BIKES = {
-    steve: "assets/bikes/sport.glb",
-    alex: "assets/bikes/adventure.glb",
-    tim: "assets/bikes/scooter.glb",
-    shane: "assets/bikes/dirt.glb",
+  // The file of each kind of bike (Vehicle.BIKES)
+  const MODELS = {
+    sport: "assets/bikes/sport.glb",
+    adventure: "assets/bikes/adventure.glb",
+    scooter: "assets/bikes/scooter.glb",
+    dirt: "assets/bikes/dirt.glb",
+    naked: "assets/bikes/naked.glb",
   };
+  // The file each character's bike is read from, by character id
+  const BIKES = Object.fromEntries(CHARACTERS.map((character) => [character.id, MODELS[Vehicle.bikeOf(character)]]));
   const RIDER = "assets/bikes/rider.glb";
   // The sport bike at a fifth of the detail, for the touring crew (js/traffic.js)
   const CREW = "assets/bikes/crew.glb";
@@ -37,12 +41,12 @@ const BikeModels = (() => {
   }
 
   function file(vehicle) {
-    return BIKES[vehicle.character.id] || BIKES.steve;
+    return MODELS[vehicle.bike] || MODELS.sport;
   }
 
   // Starts every download, so a ride or the rider select finds them in
   function preload() {
-    return Promise.all([RIDER, CREW, ...Object.values(BIKES)].map((url) => load(url).catch((error) => {
+    return Promise.all([RIDER, CREW, ...Object.values(MODELS)].map((url) => load(url).catch((error) => {
       console.error(`BikeModels: ${url} did not load; its bike keeps the procedural model:`, error);
       return null;
     })));
@@ -143,12 +147,21 @@ const BikeModels = (() => {
   // put them, rather than midway, so an arm or a leg is not shrunk to fit.
   function seat(spec, bike, model) {
     const colour = (hex, roughness, metalness, extra) => new THREE.MeshStandardMaterial({ color: hex, roughness, metalness, vertexColors: true, ...extra });
+    // Gear a spec leaves out takes the colour that part had before it was
+    // a material of its own (Vehicle.buildVariantRider)
+    const glove = spec.gloveColor ?? 0x101014;
     const wear = {
       suit: colour(spec.suitColor, 0.85, 0),
       suit_accent: colour(spec.suitAccent, 0.6, 0.15),
-      glove: colour(0x101014, 0.9, 0),
+      glove: colour(glove, 0.9, 0),
+      pants: colour(spec.pantsColor ?? spec.suitColor, 0.85, 0),
+      pants_accent: colour(spec.pantsAccent ?? spec.suitAccent, 0.6, 0.15),
+      boot: colour(spec.bootColor ?? glove, 0.9, 0),
+      boot_accent: colour(spec.bootAccent ?? spec.suitAccent, 0.6, 0.15),
       helmet: colour(spec.helmetColor, 0.12, 0.35, { envMapIntensity: 1.8 }),
       helmet_accent: colour(spec.helmetAccent, 0.2, 0.4),
+      helmet_trim: colour(spec.helmetTrim ?? spec.helmetAccent, 0.2, 0.45),
+      backpack: colour(spec.backpackColor ?? spec.suitColor, 0.8, 0.05),
       visor: colour(0x0e1218, 0.06, 0.45, { envMapIntensity: 2.0 }),
     };
     const finish = (source) => wear[source.name] || wear.suit;
@@ -161,6 +174,7 @@ const BikeModels = (() => {
     const torso = part(model, "torso", finish, rider);
     torso.rotation.x = lean;
     if (spec.style === "race") part(model, "hump", finish, rider).rotation.x = lean;
+    if (spec.backpackColor != null) part(model, "backpack", finish, rider).rotation.x = lean;
 
     // The head looks up the road rather than down the tank
     const head = new THREE.Group();
@@ -168,7 +182,7 @@ const BikeModels = (() => {
     head.position.copy(up).multiplyScalar(0.375).addScaledVector(ahead, 0.03);
     head.rotation.x = lean * 0.45;
     rider.add(head);
-    const helmet = part(model, "helmet", finish, head);
+    const helmet = part(model, spec.helmetStyle ? `helmet_${spec.helmetStyle}` : "helmet", finish, head);
     if (spec.style === "mx" || spec.style === "adv") part(model, "peak", finish, head);
 
     const base = new THREE.Vector3(0, spec.y, spec.z);
@@ -377,7 +391,7 @@ const BikeModels = (() => {
     });
   }
 
-  return { dress, crew, preload, file, BIKES, RIDER, CREW, LENGTHS };
+  return { dress, crew, preload, file, MODELS, BIKES, RIDER, CREW, LENGTHS };
 })();
 
 // In the page the downloads start with the menu; a test loads what it needs

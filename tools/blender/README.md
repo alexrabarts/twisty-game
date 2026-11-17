@@ -1,13 +1,13 @@
 # Blender asset pipeline
 
-Scripts that build the modelled scenery, the trees, the traffic cars, the four bikes and the rider in `assets/` with Blender (5.3, headless). The game reads every file with the one reader in `js/sceneassets.js`. That file replaces the tagged procedural dressing of a leg once its files arrive; `js/bikemodels.js` does the same for a bike and its rider, `js/carmodels.js` for a traffic car, and `js/treemodels.js` for the trees and bushes. Each keeps the procedural meshes if a file fails. Foggy-gorge (leg 4) has rocks, portals and a rock face; night-ride (leg 7) has its village; every leg but high-pass has the trees.
+Scripts that build the modelled scenery, the trees, the traffic cars, the five bikes and the rider in `assets/` with Blender (5.3, headless). The game reads every file with the one reader in `js/sceneassets.js`. That file replaces the tagged procedural dressing of a leg once its files arrive; `js/bikemodels.js` does the same for a bike and its rider, `js/carmodels.js` for a traffic car, and `js/treemodels.js` for the trees and bushes. Each keeps the procedural meshes if a file fails. Foggy-gorge (leg 4) has rocks, portals and a rock face; night-ride (leg 7) has its village; every leg but high-pass has the trees.
 
 ## Rebuild
 
 From the repository root:
 
 ```sh
-for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bridge_stone bike_sport bike_adventure bike_scooter bike_dirt rider car_hatchback car_van tree_conifer tree_broadleaf tree_bush; do
+for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bridge_stone bike_sport bike_adventure bike_scooter bike_dirt bike_naked rider car_hatchback car_van tree_conifer tree_broadleaf tree_bush; do
   blender --background --factory-startup --python tools/blender/$script.py
 done
 ```
@@ -32,16 +32,17 @@ Each script is deterministic (fixed seeds, fixed sources) and writes its output 
 | `bike_adventure.py` | `adventure.glb` | The adventure bike with its luggage. |
 | `bike_scooter.py` | `scooter.glb` | The maxi scooter. |
 | `bike_dirt.py` | `dirt.glb` | The dirt bike. It has no headlight. |
-| `rider.py` | `rider.glb` | The rider as rigid segments: torso, helmet, peak, hump, one each of upper arm, forearm, thigh, shin, glove and boot. The game poses them. |
+| `bike_naked.py` | `naked.glb` | The naked middleweight: black, a lime-green trellis frame and stripes, copper headers into an underslung silencer. |
+| `rider.py` | `rider.glb` | The rider as rigid segments: torso, helmet, peak, hump, backpack, one each of upper arm, forearm, thigh, shin, glove and boot, and the other helmet shells a kit can pick (`helmet_streak`). The game poses them. |
 
 `bike_kit.py` is the modelling kit and `bike_parts.py` the parts the bikes share (forks, bars, drive, brakes, cans, pegs). A script writes shapes in the game's own axes (x across, y up, z forward, metres, ground at y = 0), so its numbers read against `js/vehicle.js`. The kit has lofted bodywork, turned parts, swept tubes, sheets, wheels and discs. It joins the shapes of each named node into one mesh with a primitive for each material, moves the node onto its pivot and bakes ambient occlusion into the vertex colours.
 
-A bike file has these nodes: `body`, `wheel_front`, `wheel_rear`, `disc_front`, `disc_rear`, `fork_left`, `fork_right`, `handlebar`, `brake_light`, `headlight` (not the dirt bike), and the bare points `grip` and `peg` where the rider's right hand and right foot go. The crew file folds the forks, bar, discs and headlight into its body. Material names are the contract with the game: it gives `paint`, `paint_dark`, `accent` and the rider's `suit`, `suit_accent`, `helmet`, `helmet_accent` each character's colours, and takes the other colours from the file.
+A bike file has these nodes: `body`, `wheel_front`, `wheel_rear`, `disc_front`, `disc_rear`, `fork_left`, `fork_right`, `handlebar`, `brake_light`, `headlight` (not the dirt bike), and the bare points `grip` and `peg` where the rider's right hand and right foot go. The crew file folds the forks, bar, discs and headlight into its body. Material names are the contract with the game: it gives `paint`, `paint_dark`, `accent` and the rider's `suit`, `suit_accent`, `glove`, `pants`, `pants_accent`, `boot`, `boot_accent`, `helmet`, `helmet_accent`, `helmet_trim` and `backpack` each character's colours, and takes the other colours from the file. A character's `kit` in `CHARACTERS` (`js/vehicle.js`) sets its rider's gear; gear a kit leaves out keeps the colour it had before it was a material of its own (trousers the suit's, boots the gloves', knees, soles and helmet trim the accents'). `helmetStyle` picks a helmet shell (`helmet_<style>`), and `backpackColor` adds the backpack. A character's `bikes` lists the kinds of bike it owns (`Vehicle.BIKES`, files in `BikeModels.MODELS`); it rides the first.
 
 Rules for a change to a bike:
 
 - Keep the wheel centres, the node pivots, `grip`, `peg` and the seat where `Vehicle.build*Bike` has them. The animation, the physics and the camera read the procedural numbers. `tests/unit/bikemodels.test.js` compares the two.
-- Keep each bike at or under 12000 triangles and 400 KB, the rider under 5000 triangles, and all the files under 1.5 MB. The scripts and the test fail above these.
+- Keep each bike at or under 12000 triangles and 400 KB, the seated rider (one helmet, every optional part) under 5000 triangles, the rider and crew files under 256 KB together, and the bikes under 360 KB each on average. The menu downloads every bike, so the download grows by a bike's worth with each kind of bike. The scripts and the test fail above these.
 - Set `TWISTY_PREVIEW=<directory>` to render the finished model from three sides after the export.
 - The limb lengths in `rider.py` (`LENGTHS`) and in `js/bikemodels.js` are one number in two places. Change both.
 

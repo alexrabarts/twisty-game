@@ -39,6 +39,7 @@ MATERIALS = {
     "rim": (0xB6B9BF, 0.22, 0.92),
     "disc": (0xB9BCC2, 0.32, 1.0),
     "fork_gold": (0xB8923E, 0.3, 0.85),
+    "copper": (0xA8643A, 0.32, 0.9),
     "spring": (0xC42020, 0.4, 0.5),
     "signal": (0xD88A1A, 0.2, 0.0),
     "luggage": (0x33373D, 0.5, 0.65),
@@ -51,6 +52,13 @@ MATERIALS = {
     "helmet": (0xF0F0F2, 0.12, 0.35),
     "helmet_accent": (0xCC1111, 0.2, 0.4),
     "visor": (0x0E1218, 0.06, 0.45),
+    # The rider's gear that a character may colour apart from the suit
+    "pants": (0x16161C, 0.85, 0.0),
+    "pants_accent": (0xCC1111, 0.6, 0.15),
+    "boot": (0x101014, 0.9, 0.0),
+    "boot_accent": (0xCC1111, 0.6, 0.15),
+    "helmet_trim": (0xB8693A, 0.2, 0.45),
+    "backpack": (0x18191C, 0.8, 0.05),
 }
 # In a low-detail model the finishes that read alike from a distance are one
 LOW = {"chrome": "steel", "fork_gold": "steel", "disc": "steel", "rim": "steel", "steel_dark": "dark_metal", "caliper": "dark_metal", "spring": "dark_metal",

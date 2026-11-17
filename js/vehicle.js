@@ -2,12 +2,17 @@
 // (built by Vehicle.createMesh) and stat multipliers applied to the baseline
 // Vehicle physics. stats are the 1-5 star ratings shown in the selection UI;
 // physics are the multipliers actually applied to the handling model.
+// `bikes` lists the kinds of bike the rider owns (Vehicle.BIKES), the first
+// being the one they ride; bikeLabel and bikeColor describe that one. `kit`,
+// when given, is the rider's own gear over the bike's default rider colours
+// (Vehicle.buildVariantRider's options).
 const CHARACTERS = [
     {
         id: 'steve',
         name: 'Steve',
         bikeLabel: 'Super Sports',
         bikeColor: '0xcc1111', // Red race plastics
+        bikes: ['sport'],
         stats: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
         physics: {
             comfortShake: 1.25,     // Race-firm - you feel everything
@@ -25,6 +30,7 @@ const CHARACTERS = [
         name: 'Alex',
         bikeLabel: 'Adventure',
         bikeColor: '0xc9a227', // Sandy gold
+        bikes: ['adventure'],
         stats: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
         physics: {
             comfortShake: 0.55,     // Long-travel suspension soaks it up
@@ -42,6 +48,7 @@ const CHARACTERS = [
         name: 'Tim',
         bikeLabel: 'Maxi Scooter',
         bikeColor: '0x8d96a8', // Executive silver-grey
+        bikes: ['scooter'],
         stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
@@ -59,6 +66,7 @@ const CHARACTERS = [
         name: 'Shane',
         bikeLabel: 'Dirt Bike',
         bikeColor: '0xff6600', // KTM orange
+        bikes: ['dirt'],
         stats: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
         physics: {
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
@@ -69,6 +77,35 @@ const CHARACTERS = [
             jumpPower: 1.5,        // Built for air
             wheeliePop: 1.2,
             wheelieThrottle: 1.1
+        }
+    },
+    {
+        id: 'lucy',
+        name: 'Lucy',
+        bikeLabel: 'Naked Middleweight',
+        bikeColor: '0x16181c', // Gloss black, lime-green trim
+        bikes: ['naked'],
+        kit: {
+            suitColor: 0x111215, suitAccent: 0x5c5f66,     // Black leather jacket, grey panels
+            helmetColor: 0xf2f2f0, helmetAccent: 0x121214, // White helmet, black and copper streaks
+            helmetTrim: 0xb8693a, helmetStyle: 'streak',
+            pantsColor: 0x46658f, pantsAccent: 0x46658f,   // Blue jeans
+            bootColor: 0x141416, bootAccent: 0xf0f0f0,     // Black-and-white riding trainers
+            backpackColor: 0x18191c
+        },
+        // A balanced middleweight twin: a little under the adventure bike's
+        // top speed, quick off the corners on its low-down torque, light and
+        // easy to turn on a wide flat bar
+        stats: { speed: 3, accel: 4, handling: 4, jump: 3, comfort: 3 },
+        physics: {
+            comfortShake: 0.8,      // Plain road suspension
+            maxSpeed: 0.9,         // 61.2 m/s
+            acceleration: 1.08,    // 16.2 m/s²
+            brakeForce: 1.0,       // 20 m/s²
+            steeringForce: 1.12,   // 10.64 - wide bar, light bike
+            jumpPower: 1.0,
+            wheeliePop: 1.15,      // Lifts the front easily on the torque
+            wheelieThrottle: 1.05
         }
     }
 ];
@@ -82,6 +119,8 @@ class Vehicle {
         // multipliers. Default to Steve so existing callers keep the
         // original sport bike behaviour.
         this.character = character || CHARACTERS[0];
+        // The kind of bike this vehicle is (Vehicle.BIKES)
+        this.bike = Vehicle.bikeOf(this.character);
         
         // Physical properties
         this.position = new THREE.Vector3(0, 0, 0); // Will be adjusted to road height after environment loads
@@ -215,30 +254,14 @@ class Vehicle {
         // (0, 0.3, ±0.7), rearDisc/frontDisc, frame (crash/wheelie tint
         // material), fuelTank, brakeLight (emissive), rider (rotation.z
         // animated), handlebar, leftFork/rightFork, ground contact at y=0.
-        switch (this.character.id) {
-            case 'alex':
-                this.buildAdventureBike();
-                break;
-            case 'tim':
-                this.buildScooter();
-                break;
-            case 'shane':
-                this.buildDirtBike();
-                break;
-            default:
-                this.buildSportBike();
-                break;
-        }
+        const kind = Vehicle.BIKES[this.bike];
+        this[kind.build]();
 
         // Base rider transform for the jump stand-up animation
         this.riderBasePos = this.rider.position.clone();
         this.riderBaseRotX = this.rider.rotation.x || 0;
         this.riderStandFactor = 0;
-        // How far this rider rises off the seat: motocross riders stand tall,
-        // a scooter rider barely lifts
-        this.riderStandHeight =
-            this.character.id === 'shane' ? 0.24 :
-            this.character.id === 'tim' ? 0.08 : 0.16;
+        this.riderStandHeight = kind.stand;
 
         this.scene.add(this.group);
 
@@ -897,17 +920,28 @@ class Vehicle {
     // animation (position/rotation.x driven from riderBasePos in updateMesh)
     // move the whole body. torsoLean is baked into the torso geometry so
     // rotation.x stays free for the stand-up blend.
-    buildVariantRider({
-        y = 1.15, z = -0.1, torsoLean = 0.15,
-        suitColor = 0x141418, suitAccent = 0x3a414d,
-        helmetColor = 0xf0f0f0, helmetAccent = 0xffffff,
-        style = 'road',
-        hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
-        elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16
-    } = {}) {
+    //
+    // The character's own kit (CHARACTERS[].kit) overrides the bike's rider
+    // colours. Gear left out takes the old colours: trousers the suit's,
+    // boots the gloves', the knees, boot soles and helmet trim the accents'.
+    // helmetStyle names a helmet shell of the modelled rider (helmet_<style>
+    // in tools/blender/rider.py); backpackColor gives the rider a backpack.
+    buildVariantRider(options = {}) {
+        const {
+            y = 1.15, z = -0.1, torsoLean = 0.15,
+            suitColor = 0x141418, suitAccent = 0x3a414d,
+            helmetColor = 0xf0f0f0, helmetAccent = 0xffffff,
+            helmetTrim = helmetAccent, helmetStyle = null,
+            gloveColor = 0x101014, pantsColor = suitColor, pantsAccent = suitAccent,
+            bootColor = gloveColor, bootAccent = suitAccent, backpackColor = null,
+            style = 'road',
+            hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
+            elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16
+        } = { ...options, ...this.character.kit };
         // The pose and colours, kept for the modelled rider (js/bikemodels.js)
         this.riderSpec = {
             y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent,
+            helmetTrim, helmetStyle, gloveColor, pantsColor, pantsAccent, bootColor, bootAccent, backpackColor,
             style, hand, foot, elbowOut, kneeOut, kneeForward
         };
         const suitMaterial = new THREE.MeshStandardMaterial({
@@ -917,7 +951,16 @@ class Vehicle {
             color: suitAccent, roughness: 0.6, metalness: 0.15
         });
         const gloveMaterial = new THREE.MeshStandardMaterial({
-            color: 0x101014, roughness: 0.9, metalness: 0.0
+            color: gloveColor, roughness: 0.9, metalness: 0.0
+        });
+        const pantsMaterial = new THREE.MeshStandardMaterial({
+            color: pantsColor, roughness: 0.85, metalness: 0.0
+        });
+        const bootMaterial = new THREE.MeshStandardMaterial({
+            color: bootColor, roughness: 0.9, metalness: 0.0
+        });
+        const soleMaterial = new THREE.MeshStandardMaterial({
+            color: bootAccent, roughness: 0.6, metalness: 0.15
         });
         const helmetMaterial = new THREE.MeshStandardMaterial({
             color: helmetColor, roughness: 0.12, metalness: 0.35, envMapIntensity: 1.8
@@ -965,6 +1008,15 @@ class Vehicle {
             hump.position.set(0, dY * 0.16 - fY * 0.1, dZ * 0.16 - fZ * 0.1);
             hump.castShadow = true;
             this.rider.add(hump);
+        }
+        if (backpackColor !== null) {
+            const pack = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.32, 0.12), new THREE.MeshStandardMaterial({
+                color: backpackColor, roughness: 0.8, metalness: 0.05
+            }));
+            pack.rotation.x = torsoLean;
+            pack.position.set(0, dY * 0.04 - fY * 0.17, dZ * 0.04 - fZ * 0.17);
+            pack.castShadow = true;
+            this.rider.add(pack);
         }
 
         // ---- Helmet: shell, visor, vents, accent stripe ----
@@ -1051,21 +1103,21 @@ class Vehicle {
             const kx = (px + fx) / 2 + side * kneeOut;
             const ky = (py + fy) / 2 + 0.03;
             const kz = (pz + fz) / 2 + kneeForward;
-            const thigh = this.addLimb(this.rider, suitMaterial, 0.062, px, py, pz, kx, ky, kz);
-            this.addLimb(this.rider, suitMaterial, 0.05, kx, ky, kz, fx, fy, fz);
+            const thigh = this.addLimb(this.rider, pantsMaterial, 0.062, px, py, pz, kx, ky, kz);
+            this.addLimb(this.rider, pantsMaterial, 0.05, kx, ky, kz, fx, fy, fz);
             const knee = new THREE.Mesh(new THREE.SphereGeometry(0.058, 8, 6),
-                (style === 'race' || style === 'mx') ? accentMaterial : suitMaterial);
+                (style === 'race' || style === 'mx') ? accentMaterial : pantsMaterial);
             knee.position.set(kx, ky, kz);
             knee.castShadow = true;
             this.rider.add(knee);
             // Boot with contrast sole; taller shaft for mx
             const bootHeight = style === 'mx' ? 0.13 : 0.075;
-            const boot = new THREE.Mesh(new THREE.BoxGeometry(0.085, bootHeight, 0.21), gloveMaterial);
+            const boot = new THREE.Mesh(new THREE.BoxGeometry(0.085, bootHeight, 0.21), bootMaterial);
             boot.position.set(fx, fy + bootHeight / 2 - 0.025, fz + 0.045);
             boot.rotation.x = 0.12;
             boot.castShadow = true;
             this.rider.add(boot);
-            const sole = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.22), accentMaterial);
+            const sole = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.018, 0.22), soleMaterial);
             sole.position.set(fx, fy - 0.03, fz + 0.045);
             sole.rotation.x = 0.12;
             this.rider.add(sole);
@@ -1508,6 +1560,141 @@ class Vehicle {
             helmetColor: 0xe8e8ea, helmetAccent: 0x9aa0a8, style: 'commuter',
             hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42],
             elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3
+        });
+    }
+
+    // ---- Lucy: black naked middleweight. Lime-green trellis frame, angular
+    // tank shrouds with green stripes, a sharp LED cowl, a short tail, copper
+    // headers into an underslung silencer, black wheels with green rim
+    // stripes. The modelled bike (tools/blender/bike_naked.py) stands its
+    // parts, grips and pegs where this one does. ----
+    buildNakedBike() {
+        const P = this.makeBikePalette(0x9ccc1a);
+        const copper = new THREE.MeshStandardMaterial({ color: 0xa8643a, roughness: 0.32, metalness: 0.9 });
+
+        this.buildWheelSet({
+            rearTireRadius: 0.3, rearTireWidth: 0.15,
+            frontTireRadius: 0.28, frontTireWidth: 0.11,
+            rimRadius: 0.2, style: 'alloy', spokePairs: 5,
+            discRadius: 0.22, rimColor: 0x1a1b1f, caliperColor: 0x2a2c31, palette: P
+        });
+        // Green stripes round both rims
+        const stripeGeometry = new THREE.TorusGeometry(0.2, 0.006, 4, 28);
+        stripeGeometry.rotateY(Math.PI / 2);
+        [this.rearWheel, this.frontWheel].forEach((wheel) => {
+            [-0.055, 0.055].forEach((x) => this.attachPart(stripeGeometry, P.accent, x, 0, 0, { parent: wheel }));
+        });
+
+        // Conventional forks, raked back toward the bar
+        this.buildForkPair({
+            length: 0.7, x: 0.1, y: 0.635, z: 0.59, radius: 0.021, rake: -0.32,
+            sliderColor: 0x1a1b1f, palette: P
+        });
+        this.attachPart(new THREE.CylinderGeometry(0.042, 0.042, 0.2, 10), P.darkMetal, 0, 0.88, 0.49, { rx: -0.31 });
+
+        // ---- Trellis frame in the accent green, from the headstock round
+        // the engine to the swingarm pivot; the painted spine under the tank
+        // carries the crash tint ----
+        this.frame = this.attachPart(new THREE.BoxGeometry(0.08, 0.08, 0.5), P.paint, 0, 0.8, 0.2);
+        const joints = { head: [0.06, 0.86, 0.46], top: [0.13, 0.8, 0.16], rear: [0.14, 0.72, -0.08], low: [0.13, 0.56, 0.32], mid: [0.14, 0.56, 0.04], pivot: [0.14, 0.44, -0.12] };
+        const rails = [['head', 'top'], ['top', 'rear'], ['head', 'low'], ['low', 'top'], ['top', 'mid'], ['mid', 'rear'], ['low', 'mid'], ['mid', 'pivot'], ['rear', 'pivot']];
+        [-1, 1].forEach((side) => {
+            const at = (name) => [side * joints[name][0], joints[name][1], joints[name][2]];
+            rails.forEach(([a, b]) => this.addCable([at(a), at(b)], 0.012, P.accent));
+            this.attachPart(new THREE.BoxGeometry(0.02, 0.2, 0.16), P.darkMetal, side * 0.15, 0.45, -0.1);
+            this.addCable([at('rear'), [side * 0.09, 0.88, -0.6]], 0.011, P.darkMetal);
+        });
+
+        // ---- Parallel twin: crankcase, barrels leaning forward, covers ----
+        this.engine = this.attachPart(new THREE.BoxGeometry(0.26, 0.24, 0.36), P.darkMetal, 0, 0.36, 0.05);
+        this.attachPart(new THREE.BoxGeometry(0.23, 0.2, 0.17), P.darkMetal, 0, 0.55, 0.2, { rx: -0.45 });
+        this.attachPart(new THREE.BoxGeometry(0.24, 0.08, 0.16), P.steelDark, 0, 0.67, 0.27, { rx: -0.45 });
+        const coverGeometry = new THREE.CylinderGeometry(0.085, 0.085, 0.03, 14);
+        this.attachPart(coverGeometry, P.steelDark, 0.14, 0.37, 0.02, { rz: Math.PI / 2 });
+        this.attachPart(coverGeometry, P.steelDark, -0.14, 0.37, 0.02, { rz: Math.PI / 2 });
+        this.radiator = this.attachPart(new THREE.BoxGeometry(0.3, 0.24, 0.045), P.darkMetal, 0, 0.6, 0.43, { rx: -0.3 });
+
+        // ---- Exhaust: copper headers down the front of the engine into a
+        // black silencer under it, behind green-striped belly covers ----
+        [-1, 1].forEach((side) => {
+            this.addCable([[side * 0.05, 0.63, 0.36], [side * 0.06, 0.52, 0.42], [side * 0.06, 0.36, 0.38], [side * 0.04, 0.22, 0.26], [side * 0.02, 0.17, 0.1]], 0.02, copper);
+        });
+        this.attachPart(new THREE.BoxGeometry(0.2, 0.12, 0.38), P.darkMetal, 0, 0.19, -0.07);
+        const bellyGeometry = this.makePanel([[0.14, 0.27], [0.08, 0.16], [-0.22, 0.17], [-0.26, 0.24], [-0.02, 0.29]], 0.012, 0.004);
+        const bellyStripeGeometry = new THREE.BoxGeometry(0.006, 0.02, 0.28);
+        [-1, 1].forEach((side) => {
+            this.attachPart(bellyGeometry, P.paint, side * 0.12, 0, 0);
+            this.attachPart(bellyStripeGeometry, P.accent, side * 0.13, 0.222, -0.04);
+        });
+
+        // ---- Tank and shrouds ----
+        const tankGeometry = this.makeLathe([
+            [0.0, 0.0], [0.15, 0.005], [0.2, 0.05], [0.21, 0.13],
+            [0.19, 0.2], [0.14, 0.26], [0.06, 0.3], [0.0, 0.31]
+        ], 18);
+        this.fuelTank = this.attachPart(tankGeometry, P.paint, 0, 0.74, 0.18, { rx: 0.04, sx: 0.95, sz: 1.5 });
+        const shroudGeometry = this.makePanel([[0.44, 0.96], [0.58, 0.82], [0.6, 0.7], [0.5, 0.6], [0.38, 0.62], [0.33, 0.78]], 0.026, 0.008);
+        const shroudStripeGeometry = new THREE.BoxGeometry(0.006, 0.022, 0.24);
+        [-1, 1].forEach((side) => {
+            this.attachPart(shroudGeometry, P.paint, side * 0.17, 0, 0, { ry: -side * 0.12 });
+            this.attachPart(shroudStripeGeometry, P.accent, side * 0.186, 0.728, 0.48, { rx: -0.4, ry: -side * 0.12 });
+            this.attachPart(shroudStripeGeometry, P.accent, side * 0.18, 0.84, 0.43, { rx: -0.5, ry: -side * 0.12 });
+        });
+
+        // ---- Seat, short upswept tail, tail tidy ----
+        const seatGeometry = new THREE.CapsuleGeometry(0.09, 0.3, 4, 12);
+        seatGeometry.rotateX(Math.PI / 2);
+        this.seat = this.attachPart(seatGeometry, P.leather, 0, 0.82, -0.22, { sx: 1.55, sy: 0.45 });
+        this.attachPart(new THREE.BoxGeometry(0.17, 0.05, 0.22), P.leather, 0, 0.91, -0.54, { rx: 0.1 });
+        const tailGeometry = new THREE.ConeGeometry(0.14, 0.55, 12);
+        tailGeometry.rotateX(-Math.PI / 2);
+        this.tailSection = this.attachPart(tailGeometry, P.paint, 0, 0.85, -0.56, { rx: 0.22, sy: 0.6 });
+        this.attachPart(new THREE.BoxGeometry(0.26, 0.14, 0.36), P.paint, 0, 0.74, -0.2, { rx: 0.18 });
+        const tailStripeGeometry = new THREE.BoxGeometry(0.006, 0.02, 0.3);
+        this.attachPart(tailStripeGeometry, P.accent, -0.115, 0.85, -0.52, { rx: 0.2 });
+        this.attachPart(tailStripeGeometry, P.accent, 0.115, 0.85, -0.52, { rx: 0.2 });
+        this.attachPart(new THREE.BoxGeometry(0.05, 0.025, 0.32), P.darkMetal, 0, 0.75, -0.81, { rx: 0.85 });
+        this.attachPart(new THREE.BoxGeometry(0.16, 0.1, 0.008), P.plate, 0, 0.6, -0.93, { rx: 0.25 });
+        this.buildBrakeLight(0, 0.925, -0.8, 0.35);
+
+        // ---- Swingarm, chain, laid-down shock ----
+        const swingarmGeometry = new THREE.BoxGeometry(0.035, 0.075, 0.6);
+        this.attachPart(swingarmGeometry, P.darkMetal, -0.1, 0.36, -0.42, { rx: 0.2 });
+        this.attachPart(swingarmGeometry, P.darkMetal, 0.1, 0.36, -0.42, { rx: 0.2 });
+        this.attachPart(new THREE.BoxGeometry(0.014, 0.02, 0.6), P.darkMetal, -0.1, 0.44, -0.36, { rx: 0.06 });
+        this.attachPart(new THREE.BoxGeometry(0.014, 0.02, 0.6), P.darkMetal, -0.1, 0.3, -0.36, { rx: 0.27 });
+        this.attachPart(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 8), P.steelDark, 0, 0.54, -0.23, { rx: 0.99 });
+
+        // ---- Front: LED cowl, fly screen, dash, mudguards ----
+        this.attachPart(new THREE.BoxGeometry(0.24, 0.17, 0.18), P.paint, 0, 0.89, 0.66, { rx: -0.25 });
+        this.headlight = this.attachPart(new THREE.BoxGeometry(0.15, 0.05, 0.02), P.headlight, 0, 0.85, 0.72, { rx: -0.3 });
+        this.windscreen = this.attachPart(new THREE.BoxGeometry(0.2, 0.11, 0.005), P.glass, 0, 1.0, 0.66, { rx: -0.6 });
+        this.attachPart(new THREE.BoxGeometry(0.1, 0.06, 0.008), P.dash, 0, 1.037, 0.575, { rx: -0.6 });
+        const fenderGeometry = new THREE.CylinderGeometry(0.31, 0.31, 0.12, 12, 1, true, 0.5, 1.8);
+        fenderGeometry.rotateZ(Math.PI / 2);
+        this.frontFender = this.attachPart(fenderGeometry, P.paint, 0, 0.3, 0.7);
+        const huggerGeometry = new THREE.CylinderGeometry(0.33, 0.33, 0.13, 10, 1, true, 2.7, 1.2);
+        huggerGeometry.rotateZ(Math.PI / 2);
+        this.attachPart(huggerGeometry, P.darkMetal, 0, 0.3, -0.7);
+
+        // ---- Wide flat bar, pegs, side stand ----
+        this.buildHandlebar({ y: 1.04, z: 0.46, width: 0.66, mirrors: true, cables: true, palette: P });
+        const footpegGeometry = new THREE.BoxGeometry(0.08, 0.02, 0.04);
+        this.attachPart(footpegGeometry, P.steel, -0.2, 0.42, -0.12);
+        this.attachPart(footpegGeometry, P.steel, 0.2, 0.42, -0.12);
+        const hangerGeometry = new THREE.BoxGeometry(0.015, 0.12, 0.05);
+        this.attachPart(hangerGeometry, P.steelDark, -0.15, 0.48, -0.11, { rz: 0.3 });
+        this.attachPart(hangerGeometry, P.steelDark, 0.15, 0.48, -0.11, { rz: -0.3 });
+        this.attachPart(new THREE.CylinderGeometry(0.011, 0.011, 0.3, 8), P.steelDark, -0.2, 0.17, 0.02, { rz: 0.55, rx: 0.25 });
+
+        // ---- Rider: upright on a naked bike, hands wide on the bar. The
+        // colours are a plain default; a character's kit dresses them. ----
+        this.buildVariantRider({
+            y: 1.12, z: -0.12, torsoLean: 0.22,
+            suitColor: 0x16161c, suitAccent: P.accentHex,
+            helmetColor: 0xf0f0f2, helmetAccent: 0x16161c, style: 'road',
+            hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0],
+            elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18
         });
     }
 
@@ -3613,3 +3800,19 @@ class Vehicle {
         }
     }
 }
+// The kinds of bike: the builder that makes each one from primitives, and
+// how far its rider rises off the seat over a jump (motocross riders stand
+// tall, a scooter rider barely lifts)
+Vehicle.BIKES = {
+    sport: { build: 'buildSportBike', stand: 0.16 },
+    adventure: { build: 'buildAdventureBike', stand: 0.16 },
+    scooter: { build: 'buildScooter', stand: 0.08 },
+    dirt: { build: 'buildDirtBike', stand: 0.24 },
+    naked: { build: 'buildNakedBike', stand: 0.16 }
+};
+
+// The bike a character rides: the first they own
+Vehicle.bikeOf = (character) => {
+    const kind = character && Array.isArray(character.bikes) ? character.bikes[0] : null;
+    return Vehicle.BIKES[kind] ? kind : 'sport';
+};

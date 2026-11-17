@@ -104,7 +104,7 @@ class TourSystem {
 
         // Progression: legs unlock sequentially; riders unlock at completion
         // milestones. Everyone starts on Tim's scooter and works up.
-        this.characterUnlocks = { tim: 0, shane: 2, alex: 4, steve: 6 };
+        this.characterUnlocks = { tim: 0, shane: 2, lucy: 3, alex: 4, steve: 6 };
         let savedProgress = {};
         try {
             savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');

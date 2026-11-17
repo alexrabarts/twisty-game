@@ -10,8 +10,11 @@ import { TextDecoder } from 'node:util';
 import { canvasStub, loadScript, realThree } from '../helpers/load-game.js';
 
 const root = new URL('../../', import.meta.url);
-const BUDGET = { bike: 12000, rider: 5000, crew: 2600, file: 400 * 1024, total: 1.5 * 1024 * 1024 };
-const IDS = ['steve', 'alex', 'tim', 'shane'];
+// The menu downloads every bike, so the download grows with the roster: the
+// shared files (rider, crew) have a budget of their own, and the bikes one
+// that is a fixed share per bike on top of each file's own limit
+const BUDGET = { bike: 12000, rider: 5000, crew: 2600, file: 400 * 1024, shared: 256 * 1024, perBike: 360 * 1024 };
+const IDS = ['steve', 'alex', 'tim', 'shane', 'lucy'];
 const PIVOTS = ['rearWheel', 'frontWheel', 'rearDisc', 'frontDisc', 'leftFork', 'rightFork', 'handlebar', 'brakeLight', 'headlight', 'rider'];
 
 function load({ failing = [], held = false } = {}) {
@@ -82,16 +85,19 @@ const named = (object, name) => {
 
 describe('the bike and rider files', () => {
     const game = load();
-    const files = [game.BikeModels.RIDER, game.BikeModels.CREW, ...Object.values(game.BikeModels.BIKES)];
+    const shared = [game.BikeModels.RIDER, game.BikeModels.CREW];
+    const bikes = Object.values(game.BikeModels.MODELS);
+    const size = file => statSync(new URL(file, root)).size;
+    const sum = list => list.reduce((a, b) => a + b, 0);
 
-    test('each file and all of them together fit the download budget', () => {
-        const sizes = files.map(file => statSync(new URL(file, root)).size);
-        sizes.forEach(size => expect(size).toBeLessThanOrEqual(BUDGET.file));
-        expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(BUDGET.total);
+    test('each file, the shared files and the bikes fit the download budget', () => {
+        [...shared, ...bikes].forEach(file => expect(size(file)).toBeLessThanOrEqual(BUDGET.file));
+        expect(sum(shared.map(size))).toBeLessThanOrEqual(BUDGET.shared);
+        expect(sum(bikes.map(size))).toBeLessThanOrEqual(BUDGET.perBike * bikes.length);
     });
 
     test('the reader takes their byte normals, vertex colours, pivots and marks', async () => {
-        for (const file of Object.values(game.BikeModels.BIKES)) {
+        for (const file of Object.values(game.BikeModels.MODELS)) {
             const model = await game.SceneAssets.loadModel(file);
             ['body', 'wheel_front', 'wheel_rear', 'disc_front', 'disc_rear', 'fork_left', 'fork_right', 'handlebar', 'brake_light'].forEach(name => {
                 expect(model.meshes.has(name)).toBe(true);
