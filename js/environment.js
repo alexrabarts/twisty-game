@@ -262,6 +262,13 @@ const LANDMARKS = {
 // The share of the scene fog's density the high pass's peaks take
 const PASS_PEAK_FOG = 0.5;
 
+// The coarse ground past a converted leg's drawn window (updateFarGround):
+// how many segments it reaches, a column every `step` segments, the
+// colours of its rock (a face, or ground steeper than its rock slope), and
+// the back slope a side that ends `over` metres above the road takes from
+// its last row: [metres further out, metres down] for each row of it
+const FAR_GROUND = { reach: 150, step: 5, rock: 0x7a746a, road: 0x3c3c3e, back: { over: 5, steps: [[30, 12], [330, 420]] } };
+
 // Segments kept clear between a set piece and any roadworks prop (board, cones)
 const ROADWORKS_SET_PIECE_MARGIN = 1;
 
@@ -710,6 +717,7 @@ class Environment {
     // A set piece shows while any of its segments is in a drawn section
     const low = (preview ? k : k - 1) * SECTION;
     const high = (preview ? k + 2 : k + 3) * SECTION;
+    this.updateFarGround(Math.max(0, low), high);
     (this.pieceGroups || []).forEach((group) => {
       group.visible = group.userData.span.from < high && group.userData.span.to >= low;
     });
@@ -722,16 +730,148 @@ class Environment {
     this.sections.forEach((section) => {
       if (section.index < limit && section.state !== "empty") this.disposeSection(section);
     });
-    // The plane floors under the parts of the drawn window, centred on the bike's section
+    // The plane floors under the parts of the drawn window and of the far
+    // ground past it, centred on the bike's section
     const centre = this.roadPath[Math.min(this.roadPath.length - 1, k * SECTION + Math.floor(SECTION / 2))];
     (this.floors || []).forEach((entry) => {
       const parts = this.terrain.parts;
       const from = Math.max(0, k - 1) * SECTION;
-      const to = (k + 3) * SECTION;
+      const to = (k + 3) * SECTION + FAR_GROUND.reach;
       entry.mesh.visible = entry.parts.some((n) => parts[n].from < to && (n === parts.length - 1 || parts[n].to > from));
       entry.mesh.position.x = centre.x;
       entry.mesh.position.z = centre.z;
     });
+  }
+
+  // What the drawn ribbons lack at their ends, rebuilt as the window moves,
+  // in one mesh (`far-ground`, not culled, no shadow). Two cut edges showed
+  // from the road as pale slabs with straight edges:
+  // - A side ended in the air at its last row, a sheet with no back: where
+  //   the valley jogs (segments 432 to 460) the rider looked at the back of
+  //   the side beyond the bend, and at its edge. Every side that ends above
+  //   the road now has a back slope (FAR_GROUND.back) from its last row
+  //   down and out, column for column with the drawn ribbon from `low` to
+  //   `high` (the drawn sections), so it reads as a ridge.
+  // - The window ended 1 to 1.5 km ahead with the sides' cross-section.
+  //   Past `high` the ground goes on, coarse, FAR_GROUND.reach segments: a
+  //   column every FAR_GROUND.step segments, every row as drawn (its first
+  //   column is the window's last, vertex for vertex) and the back slope.
+  //   It ends 3 km past the window, where every part's fog hides it.
+  updateFarGround(low, high) {
+    const key = `${low}|${high}`;
+    if (this.farGround && this.farGround.userData.key === key) return;
+    if (this.farGround) {
+      this.farGround.parent.remove(this.farGround);
+      this.farGround.geometry.dispose();
+      this.farGround = null;
+    }
+    const path = this.roadPath;
+    const H = Terrain.COLUMNS_PER_SEGMENT;
+    const rows = Terrain.ROWS + 1;
+    const base = Math.max(0, this.startSegment);
+    const end = path.length - 1;
+    const near = Math.min(high, end);
+    const far = Math.min(end, high + FAR_GROUND.reach);
+    // Columns: every drawn column of the window (its last row only), then the coarse ones past it
+    const columns = [];
+    for (let column = Math.max(0, low) * H; column < near * H; column++) columns.push({ column, full: false });
+    for (let i = near; i <= far; i += FAR_GROUND.step) columns.push({ column: i * H, full: true });
+    if (far > near && columns[columns.length - 1].column !== far * H) columns.push({ column: far * H, full: true });
+    if (columns.length < 2) return;
+    const ctx = { halfRoad: this.roadWidth / 2, roadY: 0, column: 0, index: 0, s: 0, pathLength: path.length };
+    const vertex = {};
+    const positions = [];
+    const colors = [];
+    const indices = [];
+    const grass = new THREE.Color();
+    const rock = new THREE.Color(FAR_GROUND.rock);
+    const road = new THREE.Color(FAR_GROUND.road);
+    const at = [0, 0, 0];
+    // A place on a column, `d` out on side `sign`, as buildTerrainRibbon places it
+    const place = (x, z, heading, d, sign, y) => {
+      at[0] = x + Math.cos(heading) * d * sign;
+      at[1] = y;
+      at[2] = z - Math.sin(heading) * d * sign;
+      return at;
+    };
+    const push = (p, colour) => {
+      positions.push(p[0], p[1], p[2]);
+      colors.push(colour.r, colour.g, colour.b);
+      return positions.length / 3 - 1;
+    };
+    const bands = { [-1]: [], [1]: [] };
+    const looks = new Map();
+    for (const sign of [-1, 1]) {
+      columns.forEach(({ column, full }) => {
+        const i = Math.min(end, Math.floor(column / H));
+        const t = column / H - i;
+        const point = path[i];
+        const next = i < end ? path[i + 1] : point;
+        const x = point.x + (next.x - point.x) * t;
+        const z = point.z + (next.z - point.z) * t;
+        const heading = point.heading + (next.heading - point.heading) * t;
+        ctx.roadY = point.y + (next.y - point.y) * t;
+        ctx.column = column - base * H;
+        ctx.index = i;
+        ctx.s = i + t;
+        const side = Terrain.sideAt(this.terrain, sign, i);
+        // The grass of the segment (a column's own mix differs by nothing the haze leaves)
+        if (!looks.has(i)) looks.set(i, Terrain.lookAt(this.config, i).grassColor);
+        grass.set(side.tint ?? looks.get(i)).multiplyScalar(side.shade ?? 1);
+        const ground = side.face === null && !side.rock;
+        const entry = { ground: [], back: [] };
+        let below = null;
+        let colour = ground ? grass : rock;
+        for (let j = full ? 0 : rows - 1; j < rows; j++) {
+          Terrain.rowAt(this.terrain, sign, j, ctx, vertex);
+          // Ground in its grass, bare where steeper than the side's rock slope; a rock face in rock
+          colour = ground ? grass : rock;
+          if (ground && below && side.rockSlope !== undefined && Math.abs(vertex.y - below.y) / Math.max(0.001, vertex.d - below.d) > side.rockSlope) colour = rock;
+          below = { d: vertex.d, y: vertex.y };
+          entry.ground.push(push(place(x, z, heading, vertex.d, sign, vertex.y), colour));
+        }
+        // The back slope, where the side ends above the road (a fall needs none)
+        const rise = vertex.y - ctx.roadY > FAR_GROUND.back.over;
+        entry.rise = rise;
+        entry.back.push(entry.ground[entry.ground.length - 1]);
+        FAR_GROUND.back.steps.forEach(([out, down]) => {
+          entry.back.push(push(place(x, z, heading, vertex.d + (rise ? out : 0), sign, vertex.y - (rise ? down : 0)), colour));
+        });
+        if (full) entry.road = push(place(x, z, heading, ctx.halfRoad, sign, ctx.roadY), road);
+        bands[sign].push(entry);
+      });
+      const strip = (a, b) => {
+        for (let j = 0; j + 1 < Math.min(a.length, b.length); j++) indices.push(a[j], b[j], a[j + 1], a[j + 1], b[j], b[j + 1]);
+      };
+      const band = bands[sign];
+      for (let c = 0; c + 1 < band.length; c++) {
+        if (columns[c].full && columns[c + 1].full) strip(band[c].ground, band[c + 1].ground);
+        if (band[c].rise || band[c + 1].rise) strip(band[c].back, band[c + 1].back);
+      }
+    }
+    // The road past the window, from edge to edge
+    for (let c = 0; c + 1 < columns.length; c++) {
+      if (!columns[c].full || !columns[c + 1].full) continue;
+      const [a, b, e, f] = [bands[-1][c].road, bands[-1][c + 1].road, bands[1][c].road, bands[1][c + 1].road];
+      indices.push(a, b, e, e, b, f);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    // Stored as the ribbons store theirs (decoded once by Graphics.fixColorSpaces)
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    if (!this.farGroundMaterial) {
+      this.farGroundMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, metalness: 0, side: THREE.DoubleSide, envMapIntensity: 0.3 });
+    }
+    const mesh = new THREE.Mesh(geometry, this.farGroundMaterial);
+    mesh.name = "far-ground";
+    mesh.userData.key = key;
+    mesh.userData.skipCulling = true;
+    mesh.userData.part = "far";
+    this.fixed.add(mesh);
+    this.farGround = mesh;
   }
 
   // Per frame: the window follows the bike's segment; queued steps build

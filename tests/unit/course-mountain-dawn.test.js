@@ -232,3 +232,68 @@ describe('Mountain Dawn, build order', () => {
         expect(hashes[2]).toEqual(hashes[0]);
     }, 120000);
 });
+
+// The ground drawn from the road has no open edge in sight. A side once
+// ended in the air at its last row, a sheet with no back, and the window
+// ended 1 to 1.5 km ahead with the sides' cross-section: both showed from
+// the road as pale slabs with straight edges (beyond the village, where the
+// valley jogs). Every edge of the drawn ground (the window's ribbons and
+// the far ground past it) that only one triangle uses, with both ends more
+// than 5 m over the road, lies behind the bike or where the fog of its part
+// has hidden 99% of it.
+describe('Mountain Dawn, the edges of the drawn ground', () => {
+    let game;
+    let env;
+    beforeAll(() => {
+        game = loadGame();
+        ({ env } = build(game, LEG));
+    });
+
+    test.each([1, 4, 7, 10, 13, 15, 16, 18, 20, 22, 24, 26])('window at section %i: no open edge of the ground stands over the road in sight', (k) => {
+        const segment = k * 25 + 12;
+        quietly(() => env.ensureWindow(segment, { sync: true }));
+        const bike = env.roadPath[segment];
+        const meshes = [];
+        env.visibleSections().forEach((section) => section.group.traverse((object) => {
+            if (object.isMesh && object.userData.side !== undefined && object.userData.firstColumn !== undefined) meshes.push(object);
+        }));
+        const far = env.fixed.getObjectByName('far-ground');
+        if (far) meshes.push(far);
+        const key = (array, i) => `${Math.round(array[i * 3] * 50)},${Math.round(array[i * 3 + 1] * 50)},${Math.round(array[i * 3 + 2] * 50)}`;
+        const edges = new Map();
+        meshes.forEach((mesh) => {
+            const position = mesh.geometry.attributes.position.array;
+            const index = mesh.geometry.index.array;
+            for (let t = 0; t < index.length; t += 3) {
+                // A triangle with no area closes no edge
+                const corners = [0, 1, 2].map((e) => key(position, index[t + e]));
+                if (new Set(corners).size < 3) continue;
+                for (let e = 0; e < 3; e++) {
+                    const a = index[t + e];
+                    const b = index[t + (e + 1) % 3];
+                    const ka = corners[e];
+                    const kb = corners[(e + 1) % 3];
+                    const id = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+                    const entry = edges.get(id);
+                    if (entry) entry.n++;
+                    else edges.set(id, { n: 1, a: [position[a * 3], position[a * 3 + 1], position[a * 3 + 2]], b: [position[b * 3], position[b * 3 + 1], position[b * 3 + 2]] });
+                }
+            }
+        });
+        const open = [];
+        for (const { n, a, b } of edges.values()) {
+            if (n !== 1) continue;
+            const x = (a[0] + b[0]) / 2;
+            const z = (a[2] + b[2]) / 2;
+            const found = game.Terrain.locate(env.roadPath, x, z, 0, env.roadPath.length - 1, {});
+            const road = env.roadPath[found.index];
+            if (Math.min(a[1], b[1]) < road.y + 5) continue;
+            if (found.index < segment) continue;
+            const distance = Math.hypot(x - bike.x, (a[1] + b[1]) / 2 - bike.y, z - bike.z);
+            const fog = game.Terrain.lookAt(env.config, found.index).fogDensity;
+            if (1 - Math.exp(-((fog * distance) ** 2)) >= 0.99) continue;
+            open.push([found.index, Math.round(distance), Math.round(Math.min(a[1], b[1]) - road.y)]);
+        }
+        expect(open.slice(0, 5)).toEqual([]);
+    });
+});
