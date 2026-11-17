@@ -205,11 +205,12 @@ def build(k):
         for side in (-1, 1):
             k.box((0.03, 0.01, 0.012), (side * 0.04, 0.872, -0.785), "brake", rot=(0.4, 0, side * 0.3), bevel=0.003)
 
-    # ---- luggage: a big black roll bag across the pillion
-    k.begin("luggage", (0, 1.0, -0.52))
-    kc.duffel(k, (0, 1.02, -0.52), 0.5, 0.25, 0.32)
+    # ---- luggage: a big black roll bag across the pillion, back far enough to
+    # keep 4 cm clear of the rider and a backpack (bikemodels.test.js)
+    k.begin("luggage", (0, 1.0, -0.6))
+    kc.duffel(k, (0, 1.0, -0.6), 0.5, 0.24, 0.28)
     if hi:
-        k.box((0.3, 0.05, 0.04), (0, 0.9, -0.66), "matt_black", bevel=0.01)
+        k.box((0.3, 0.05, 0.04), (0, 0.9, -0.72), "matt_black", bevel=0.01)
 
 
 for scheme, suffix in (("photo", ""), ("black", "_black")):

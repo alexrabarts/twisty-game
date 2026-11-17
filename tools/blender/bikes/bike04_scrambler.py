@@ -261,12 +261,13 @@ def build(k):
 def luggage(k):
     # The big black dry duffel thrown across the pillion, its ends sagging
     # down both sides of the tail, webbing straps round it, a zip pocket and
-    # a plain light-blue patch on its back face (no logo)
-    z = -0.47
+    # a plain light-blue patch on its back face (no logo). It sits back far
+    # enough to keep 4 cm clear of the seated rider (bikemodels.test.js)
+    z = -0.53
     k.begin("luggage", (0, 0.9, z))
     path = [(-0.44, 0.65, z), (-0.34, 0.83, z), (-0.17, 0.93, z), (0.0, 0.95, z), (0.17, 0.93, z), (0.34, 0.83, z), (0.44, 0.65, z)]
     kb.duffel(k, path, 0.135, 0.175, mat="bag", strap="bag", straps=(0.3, 0.7), power=2.4, pocket=(0.5, 0.24), patch=0.47,
-              anchors=[((s * 0.13, 0.84, z + 0.12), (s * 0.09, 0.77, -0.27)) for s in (-1, 1)] + [((s * 0.13, 0.84, z - 0.12), (s * 0.09, 0.77, -0.64)) for s in (-1, 1)])
+              anchors=[((s * 0.13, 0.84, z + 0.12), (s * 0.09, 0.77, -0.33)) for s in (-1, 1)] + [((s * 0.13, 0.84, z - 0.12), (s * 0.09, 0.77, -0.70)) for s in (-1, 1)])
 
 
 def full(k):

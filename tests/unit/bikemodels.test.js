@@ -486,6 +486,102 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
         expect(other.frame.material).not.toBe(vehicle.frame.material);
     });
 
+    // A bag, a scarf or a backpack never passes through a body: for every rider who rides this bike, seated, riding,
+    // leaning and standing on the pegs, no edge of the rider (body, backpack or scarf) crosses a face of the shown luggage or the other way,
+    // and no vertex of either lies within 4 cm of the other
+    test('its luggage stays clear of every rider who rides it', () => {
+        const { THREE } = game;
+        if (!vehicle.luggage || !vehicle.luggage.visible) return;
+        const hits = [];
+        for (const owner of game.CHARACTERS.filter(c => c.bikes.includes(id))) {
+            for (const pose of ['seated', 'riding', 'leaning', 'standing']) {
+            const ridden = new game.Vehicle(new THREE.Scene(), null, owner, id);
+            ridden.currentDeltaTime = 1 / 60;
+            if (pose !== 'seated') {
+                ridden.speed = 20;
+                for (let i = 0; i < 120; i++) {
+                    if (pose === 'leaning') ridden.leanAngle = 0.7;
+                    // Up on the pegs over a crest (Vehicle.updateMesh's stand-up)
+                    if (pose === 'standing') ridden.isJumping = true;
+                    ridden.updateMesh();
+                }
+            }
+            ridden.group.position.set(0, 0, 0);
+            ridden.group.rotation.set(0, 0, 0);
+            ridden.group.updateMatrixWorld(true);
+            const bags = [];
+            ridden.luggage.traverse(o => { if (o.isMesh && (!o.parent.isLOD || o.parent.levels[0].object === o)) bags.push(o); });
+            const sides = bags.map(o => [o, o.material.side]);
+            bags.forEach(o => { o.material.side = THREE.DoubleSide; });
+            const ray = new THREE.Raycaster();
+            const a = new THREE.Vector3(), b = new THREE.Vector3(), dir = new THREE.Vector3();
+            const crossing = {};
+            const body = [];
+            ridden.rider.traverse(o => { if (o.isMesh && (!o.parent.isLOD || o.parent.levels[0].object === o)) body.push(o); });
+            const bodySides = body.map(o => [o, o.material.side]);
+            body.forEach(o => { o.material.side = THREE.DoubleSide; });
+            // Each way: an edge of the rider through a face of the luggage, and an edge of the luggage through the rider
+            const edges = (meshes, targets, label) => meshes.forEach(o => {
+                const pos = o.geometry.attributes.position, index = o.geometry.index;
+                const tri = index ? index.count / 3 : pos.count / 3;
+                const at = (t, k) => (index ? index.getX(t * 3 + k) : t * 3 + k);
+                for (let t = 0; t < tri; t++) {
+                    for (let k = 0; k < 3; k++) {
+                        a.fromBufferAttribute(pos, at(t, k)).applyMatrix4(o.matrixWorld);
+                        b.fromBufferAttribute(pos, at(t, (k + 1) % 3)).applyMatrix4(o.matrixWorld);
+                        const len = a.distanceTo(b);
+                        if (len < 1e-6) continue;
+                        ray.set(a, dir.subVectors(b, a).normalize());
+                        ray.far = len;
+                        const hit = ray.intersectObjects(targets, false)[0];
+                        if (hit) {
+                            const part = label(o, hit.object);
+                            crossing[part] = (crossing[part] || 0) + 1;
+                        }
+                    }
+                }
+            });
+            const name = o => o.name || o.parent.name || o.material.name;
+            edges(body, bags, (o, t) => `${name(o)} through ${name(t)}`);
+            edges(bags, body, (o, t) => `${name(o)} through ${name(t)}`);
+            // And a gap: no vertex of either within CLEAR_M of the other's faces (a bag pressed into a thigh reads as through it)
+            const CLEAR_M = 0.04;
+            const faces = meshes => {
+                const out = [];
+                meshes.forEach(o => {
+                    const pos = o.geometry.attributes.position, index = o.geometry.index;
+                    const n = index ? index.count : pos.count;
+                    for (let t = 0; t < n; t += 3) {
+                        const v = [0, 1, 2].map(k => new THREE.Vector3().fromBufferAttribute(pos, index ? index.getX(t + k) : t + k).applyMatrix4(o.matrixWorld));
+                        out.push({ o, tri: new THREE.Triangle(...v), box: new THREE.Box3().setFromPoints(v).expandByScalar(CLEAR_M) });
+                    }
+                });
+                return out;
+            };
+            const near = (from, to) => {
+                const list = faces(to), q = new THREE.Vector3();
+                const all = new THREE.Box3();
+                list.forEach(f => all.union(f.box));
+                from.forEach(o => {
+                    const pos = o.geometry.attributes.position;
+                    for (let i = 0; i < pos.count; i++) {
+                        const p = new THREE.Vector3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
+                        if (!all.containsPoint(p)) continue;
+                        const f = list.find(f => f.box.containsPoint(p) && f.tri.closestPointToPoint(p, q).distanceTo(p) < CLEAR_M);
+                        if (f) { const part = `${name(o)} within ${CLEAR_M} m of ${name(f.o)}`; crossing[part] = (crossing[part] || 0) + 1; }
+                    }
+                });
+            };
+            near(bags, body);
+            near(body, bags);
+            sides.forEach(([o, side]) => { o.material.side = side; });
+            bodySides.forEach(([o, side]) => { o.material.side = side; });
+            if (Object.keys(crossing).length) hits.push({ rider: owner.id, pose, crossing });
+            }
+        }
+        expect(hits).toEqual([]);
+    });
+
     test('shows its luggage only if its entry does', () => {
         const has = near.meshes.has('luggage');
         expect(!!vehicle.luggage).toBe(has);
