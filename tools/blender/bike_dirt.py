@@ -98,7 +98,15 @@ def build():
     parts.swingarm(k, pivot=(0.42, -0.14), axle=(0.3, -0.7), x=0.085, size=(0.03, 0.07), brace=True)
     parts.shock(k, (0, 0.82, -0.12), (0, 0.4, -0.3), 0.036)
     parts.chain(k, x=-0.085, front=(0.42, -0.04, 0.04), rear=(0.3, -0.7, 0.125))
-    parts.caliper(k, (0.07, 0.3, -0.7), 0.11, math.radians(165))
+    # The rear caliper hangs under the swingarm, a little ahead of the axle, as
+    # on a motocross bike: a carrier on the axle holds it and the hose runs
+    # forward along the arm's underside to the master cylinder by the peg.
+    # Higher up it would sit on the arm's end; past ~305 degrees it cuts the arm.
+    rear_caliper = math.radians(290)
+    parts.caliper(k, (0.07, 0.3, -0.7), 0.11, rear_caliper)
+    held = (0.1, 0.3 + math.sin(rear_caliper) * 0.08, -0.7 + math.cos(rear_caliper) * 0.08)
+    k.beam((0.1, 0.3, -0.7), held, (0.01, 0.04), "steel_dark", bevel=0)
+    k.tube([(0.07, 0.24, -0.645), (0.075, 0.285, -0.5), (0.08, 0.33, -0.3), (0.15, 0.37, -0.13)], 0.005, "rubber", seg=5, smooth=2)
 
     # Exhaust: the header loops round the barrel to a silencer high on the right
     k.tube([(0.0, 0.6, 0.2), (0.05, 0.56, 0.32), (0.13, 0.48, 0.3), (0.15, 0.5, 0.05), (0.14, 0.66, -0.2), (0.14, 0.76, -0.34)], 0.024, "steel", seg=7, smooth=3)
