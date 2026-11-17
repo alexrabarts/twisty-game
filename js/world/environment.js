@@ -264,7 +264,39 @@ class WorldEnvironment {
     }
 
     rowsOf(from, to) {
-        return this.route.points.slice(from, to + 1).map(p => ({ x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits }));
+        const styles = this.roadStyles();
+        return this.route.points.slice(from, to + 1).map((p, i) => ({ x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, ...styles[from + i] }));
+    }
+
+    // The markings of every ride row, made once: the rules of RoadSurface.styles on the real road's class, then each
+    // side road's mouth, where the edge line on that side is broken and the verge is left out
+    roadStyles() {
+        if (this.styles) return this.styles;
+        const points = this.route.points;
+        const edges = this.data.edges || [];
+        const classOf = id => (edges[id] ? edges[id].cls : null);
+        const styles = RoadSurface.styles(points.map(p => ({ s: p.s, heading: p.heading, bits: p.bits, cls: classOf(p.edgeId) })));
+        const E = RoadSurface.EDGE;
+        for (const junction of this.graph.junctions || []) {
+            for (const pass of junction.passes) {
+                const at = this.route.sample(pass.sIn, {});
+                for (const branch of junction.incident) {
+                    if (branch.edgeId === pass.inEdge || branch.edgeId === pass.outEdge) continue;
+                    // Positive to the right of the ride (a heading of 0 is +z; right is (cos h, -sin h))
+                    const lean = Math.sin(branch.heading - at.heading);
+                    const width = Math.max(3, RoadSurface.realWidth(classOf(branch.edgeId)));
+                    const reach = Math.min(16, (width / 2 + 2.5) / Math.max(0.4, Math.abs(lean)));
+                    const key = lean > 0 ? 'right' : 'left';
+                    points.forEach((p, i) => {
+                        if (Math.abs(p.s - pass.sIn) > reach) return;
+                        styles[i][key === 'right' ? 'mouthR' : 'mouthL'] = true;
+                        if (styles[i][key] === E.solid) styles[i][key] = E.broken;
+                    });
+                }
+            }
+        }
+        this.styles = styles;
+        return styles;
     }
 
     buildRoad(section, lod) {
@@ -388,7 +420,7 @@ class WorldEnvironment {
             if (node !== undefined) {
                 const stub = this.graph.stub(edge.id, node);
                 if (stub && stub.length > 1) {
-                    const stubGroup = RoadMesh.sideRoad(this.holdSide(stub.map(p => ({ ...p, bits: p.flags }))), true, hold);
+                    const stubGroup = RoadMesh.sideRoad(this.holdSide(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, hold);
                     group.add(stubGroup);
                     triangles += stubGroup.userData.triangles;
                 }

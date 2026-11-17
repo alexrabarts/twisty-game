@@ -6,7 +6,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { fakeData, allTiles, samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { THREE, RoadMesh, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData } = game;
+const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData } = game;
 
 const finite = geometry => Array.from(geometry.attributes.position.array).every(Number.isFinite);
 const row = (x, z, heading, over = {}) => ({ x, y: 100, z, heading, width: 10, bits: 0, ...over });
@@ -27,20 +27,44 @@ function bend(radius, turn) {
 }
 
 describe('RoadMesh', () => {
-    test('LOD0 is a row of 9 strips every 4 m, markings and kerbs included', () => {
-        const { geometry, triangles, clamped } = RoadMesh.ribbon(line(11), 0);
-        expect(triangles).toBe(10 * 9 * 2);
+    test('LOD0 is six strips a row (verge, four across the carriageway, verge) with the road coordinates for the shader', () => {
+        const { geometry, triangles, clamped, near } = RoadMesh.ribbon(line(11), 0);
+        expect(near).toBe(true);
+        expect(triangles).toBe(10 * 6 * 2);
         expect(clamped).toBe(0);
         expect(finite(geometry)).toBe(true);
-        expect(geometry.attributes.color.count).toBe(geometry.attributes.position.count);
+        const count = geometry.attributes.position.count;
+        for (const name of ['uv', 'road', 'edge', 'roadBase']) expect(geometry.attributes[name].count).toBe(count);
+        // UV: metres across (verge, edge, edge, verge) and metres along
+        const uv = geometry.attributes.uv.array;
+        expect(Array.from(uv.slice(0, 14)).map(v => Math.round(v * 100) / 100)).toEqual([-5 - RoadSurface.VERGE_M, 0, -5, 0, -2.5, 0, 0, 0, 2.5, 0, 5, 0, 5 + RoadSurface.VERGE_M, 0]);
+        expect(uv[uv.length - 1]).toBeCloseTo(40, 5);
+        expect(geometry.attributes.road.array[0]).toBe(5);
     });
 
-    test('LOD1 is one strip of asphalt and far fewer triangles', () => {
+    test('the along-road UV restarts at a multiple of the shared period, so patterns meet across a section joint', () => {
+        const rows = line(4).map((r, i) => ({ ...r, s: 1000 + i * 4 }));
+        const { geometry } = RoadMesh.ribbon(rows, 0);
+        const base = Math.floor(1000 / RoadSurface.PERIOD_M);
+        expect(geometry.attributes.roadBase.array[0]).toBe(base);
+        expect(geometry.attributes.uv.array[1]).toBeCloseTo(1000 - base * RoadSurface.PERIOD_M, 4);
+        // Every pattern's period divides it: the setts, the asphalt, each dash pattern
+        const m = RoadSurface.MARKINGS;
+        for (const period of [RoadSurface.SETTS_M, RoadSurface.ASPHALT_M, RoadSurface.PERIOD_M / 13, m.broken.dashM + m.broken.gapM, m.warning.dashM + m.warning.gapM, m.mouth.dashM + m.mouth.gapM]) {
+            const copies = RoadSurface.PERIOD_M / period;
+            expect(Math.abs(copies - Math.round(copies))).toBeLessThan(1e-9);
+        }
+    });
+
+    test('LOD1 is one strip of the textures\' mean colour and far fewer triangles', () => {
         const rows = line(100);
         const near = RoadMesh.ribbon(rows, 0);
         const far = RoadMesh.ribbon(rows, 1);
-        expect(far.triangles).toBeLessThan(near.triangles / 20);
+        expect(far.near).toBe(false);
+        expect(far.triangles).toBeLessThan(near.triangles / 6);
         expect(far.triangles % 2).toBe(0);
+        const c = far.geometry.attributes.color.array;
+        expect([c[0], c[1], c[2]]).toEqual(RoadMesh.COLORS.asphalt.map(v => Math.fround(v)));
     });
 
     test('decimation keeps the ends, every row of a hairpin, and a bend at least every 0.18 rad', () => {
@@ -74,13 +98,18 @@ describe('RoadMesh', () => {
         expect(RoadMesh.ribbon(bend(60, 1), 0).clamped).toBe(0);
     });
 
-    test('cobbles lose the markings and take the cobble colour', () => {
-        const colors = RoadMesh.ribbon(line(6, { bits: 8 }), 0).geometry.attributes.color.array;
-        const seen = new Set();
-        for (let i = 0; i < colors.length; i += 3) seen.add(`${colors[i].toFixed(2)},${colors[i + 1].toFixed(2)},${colors[i + 2].toFixed(2)}`);
-        const centre = RoadMesh.COLORS.centreLine.map(v => v.toFixed(2)).join(',');
-        expect(seen.has(centre)).toBe(false);
-        expect(seen.has(RoadMesh.COLORS.cobbles.map(v => v.toFixed(2)).join(','))).toBe(true);
+    test('cobbles are flagged for the setts and never painted', () => {
+        const rows = line(6, { bits: 8, cls: '8m Strasse' });
+        const road = RoadMesh.ribbon(rows, 0).geometry.attributes.road.array;
+        const edge = RoadMesh.ribbon(rows, 0).geometry.attributes.edge.array;
+        for (let i = 0; i < road.length; i += 4) {
+            expect(road[i + 1]).toBe(1);
+            expect(road[i + 2]).toBe(RoadSurface.CENTRE.none);
+            expect(edge[i]).toBe(RoadSurface.EDGE.none);
+            expect(edge[i + 1]).toBe(RoadSurface.EDGE.none);
+        }
+        const far = RoadMesh.ribbon(line(30, { bits: 8 }), 1).geometry.attributes.color.array;
+        expect([far[0], far[1], far[2]]).toEqual(RoadMesh.COLORS.cobbles.map(v => Math.fround(v)));
     });
 
     test('a tunnel run gets a tube and portals, a bridge run a deck, parapets and piers', () => {
@@ -428,5 +457,99 @@ describe('FarLand', () => {
         expect(LandShade.DROP_PER_M2 * 40000 * 40000).toBeCloseTo(109, 0);
         expect(Horizon.material().customProgramCacheKey()).toBe('land-11');
         expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-01');
+    });
+});
+
+describe('RoadSurface', () => {
+    const along = (n, over = {}) => Array.from({ length: n }, (_, i) => ({ s: i * 4, heading: 0, bits: 0, ...over }));
+
+    test('every line is white, 15 cm wide, with the Swiss dash rhythms', () => {
+        const m = RoadSurface.MARKINGS;
+        // White paint: no channel far below the others (a yellow centre line is not a Swiss marking)
+        expect(Math.min(...m.paint)).toBeGreaterThan(0.8);
+        expect(Math.max(...m.paint) - Math.min(...m.paint)).toBeLessThan(0.05);
+        expect(m.lineWidthM).toBe(0.15);
+        expect([m.broken.dashM, m.broken.gapM]).toEqual([3, 6]);
+        expect([m.warning.dashM, m.warning.gapM, m.warning.lengthM]).toEqual([4, 2, 60]);
+        expect([m.mouth.dashM, m.mouth.gapM]).toEqual([0.5, 0.5]);
+        expect(m.edge.minWidthM).toBe(5.2);
+        expect(m.centre.minWidthM).toBe(6);
+    });
+
+    test('a narrow road has no lines, a 6 m road edge lines and a broken centre line, a cobbled road none', () => {
+        const C = RoadSurface.CENTRE, E = RoadSurface.EDGE;
+        const narrow = RoadSurface.styles(along(20), '4m Strasse');
+        expect(narrow.every(r => r.centre === C.none && r.left === E.none && r.right === E.none)).toBe(true);
+        const main = RoadSurface.styles(along(20), '6m Strasse');
+        expect(main.every(r => r.centre === C.broken && r.left === E.solid && r.right === E.solid)).toBe(true);
+        const setts = RoadSurface.styles(along(20, { bits: 8 }), '8m Strasse');
+        expect(setts.every(r => r.centre === C.none && r.left === E.none)).toBe(true);
+        // Unknown class: a narrow road
+        expect(RoadSurface.styles(along(5)).every(r => r.centre === C.none)).toBe(true);
+    });
+
+    test('a tight bend takes a continuous centre line with 60 m of warning line before and after it', () => {
+        const C = RoadSurface.CENTRE;
+        // 400 m straight, a bend of 40 m radius through 90 degrees, 400 m straight; rows 4 m apart
+        const rows = [];
+        let heading = 0;
+        for (let s = 0; s <= 900; s += 4) {
+            if (s > 400 && s <= 400 + 40 * Math.PI / 2) heading += 4 / 40;
+            rows.push({ s, heading, bits: 0 });
+        }
+        const styles = RoadSurface.styles(rows, '8m Strasse');
+        const kinds = styles.map(r => r.centre);
+        const first = kinds.indexOf(C.solid), last = kinds.lastIndexOf(C.solid);
+        expect(first).toBeGreaterThan(0);
+        expect(rows[first].s).toBeLessThan(410);
+        expect(rows[last].s).toBeGreaterThan(450);
+        const warnBefore = rows.filter((r, i) => kinds[i] === C.warning && r.s < rows[first].s);
+        expect(rows[first].s - warnBefore[0].s).toBeGreaterThanOrEqual(56);
+        expect(rows.filter((r, i) => kinds[i] === C.warning && r.s > rows[last].s).length).toBeGreaterThan(10);
+        // Kinds change one step at a time (they are interpolated between rows)
+        for (let i = 1; i < kinds.length; i++) expect(Math.abs(kinds[i] - kinds[i - 1])).toBeLessThanOrEqual(1);
+        expect(kinds[0]).toBe(C.broken);
+    });
+
+    test('the asphalt and sett textures are made with normal maps, mipmaps and anisotropic filtering', () => {
+        const t = RoadSurface.textures();
+        for (const surface of [t.asphalt, t.setts]) {
+            for (const texture of [surface.map, surface.normal]) {
+                expect(texture.isDataTexture).toBe(true);
+                expect(texture.image.width).toBe(RoadSurface.SIZE);
+                expect(texture.image.data.length).toBe(RoadSurface.SIZE * RoadSurface.SIZE * 4);
+                expect(texture.generateMipmaps).toBe(true);
+                expect(texture.minFilter).toBe(THREE.LinearMipmapLinearFilter);
+                expect(texture.anisotropy).toBeGreaterThanOrEqual(8);
+                expect(texture.wrapS).toBe(THREE.RepeatWrapping);
+            }
+            expect(surface.map.encoding).toBe(THREE.sRGBEncoding);
+            expect(surface.normal.encoding).not.toBe(THREE.sRGBEncoding);
+            // A normal map points out of the surface on average, and is not flat
+            const d = surface.normal.image.data;
+            let z = 0, spread = 0;
+            for (let i = 0; i < d.length; i += 4) { z += d[i + 2]; spread += Math.abs(d[i] - 128); }
+            expect(z / (d.length / 4)).toBeGreaterThan(200);
+            expect(spread / (d.length / 4)).toBeGreaterThan(3);
+        }
+        // The setts are paler than the asphalt; the asphalt a mid-dark grey
+        expect(t.setts.mean[1]).toBeGreaterThan(t.asphalt.mean[1]);
+        expect(t.asphalt.mean[1]).toBeGreaterThan(0.25);
+        expect(t.asphalt.mean[1]).toBeLessThan(0.4);
+        expect(t.bytes).toBeLessThan(6 * 1024 * 1024);
+    });
+
+    test('the near material reads both surfaces and compiles its shader chunks', () => {
+        const material = RoadSurface.nearMaterial();
+        expect(material.map).toBe(RoadSurface.textures().asphalt.map);
+        expect(material.normalMap).toBe(RoadSurface.textures().asphalt.normal);
+        expect(material.alphaToCoverage).toBe(true);
+        const lib = THREE.ShaderLib.physical;
+        const shader = { uniforms: THREE.UniformsUtils.clone(lib.uniforms), vertexShader: lib.vertexShader, fragmentShader: lib.fragmentShader };
+        material.onBeforeCompile(shader, null);
+        expect(shader.uniforms.roadSettMap.value).toBe(RoadSurface.textures().setts.map);
+        expect(shader.fragmentShader).toContain('textureGrad(roadSettMap');
+        expect(shader.fragmentShader).not.toContain('#include <map_fragment>');
+        expect(shader.vertexShader).toContain('attribute vec4 road;');
     });
 });

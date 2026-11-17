@@ -1,38 +1,43 @@
-// RoadMesh: the road of a world as meshes. One vertex-coloured mesh per piece
-// of road, so a section of the ride costs one draw call, plus a mesh for each
-// structure on it.
+// RoadMesh: the road of a world as meshes. One mesh per piece of road, so a section of the ride costs one draw call,
+// plus a mesh for each structure on it.
 //
-//   LOD0 (within 400 m): a row every sample (4 m) with kerbs, edge lines and a
-//                        centre line, and cobbles where the route says so
-//   LOD1 (400 m to 1.5 km): a row every 16 m, or sooner in a bend, one strip of
-//                        asphalt and no markings
+//   LOD0 (within 400 m): a row every sample (4 m), six strips (verge, four across the carriageway, verge) in RoadSurface's near
+//                        material: the UV is metres across and along the road, and the attributes carry the row's half
+//                        width, surface, centre line, edge lines and side-road mouths (RoadSurface.styles), so the
+//                        textures, markings and the verge are drawn in the shader and follow the curve
+//   LOD1 (400 m to 1.5 km): a row every 16 m, or sooner in a bend, one strip of flat colour (the textures' mean)
 //   hairpins:            the inside edge of a bend is held inside the bend's
 //                        radius, so the ribbon never folds over itself where
 //                        the road is as wide as the corner is tight; the held
-//                        kerb is drawn as asphalt (the paved apron)
+//                        edge is paved to the end (the apron), with no verge
 //   tunnels, galleries:  a tube round the road with a portal frame at each end
 //   bridges:             a deck, parapets and piers
 //   side roads:          a 60 m stub that ends in a road-closed barrier, and
 //                        LOD1 ribbons beyond it (D7 c)
-// Rows are `{x, y, z, heading, width, bits}`; `bits` carries the route flags.
-// A heading turns right as it grows, and a lateral offset is positive to the right.
+// Rows are `{x, y, z, heading, width, bits}`, and may carry `s` (metres along the ride), `cls` (the swissTLM3D road
+// class) and the styles RoadSurface.styles gives (`centre`, `left`, `right`) with `mouthL` and `mouthR`; `bits`
+// carries the route flags. A heading turns right as it grows, and a lateral offset is positive to the right.
 class RoadMesh {
     static get COLORS() {
+        // The far ribbon is the mean of the near textures (worn alpine asphalt, the pale granite setts of the Via Tremola)
+        const mean = RoadSurface.means();
         return {
-            // Worn alpine asphalt and the pale granite setts of the Via Tremola, as they read in daylight
-            asphalt: [0.28, 0.28, 0.29], cobbles: [0.45, 0.43, 0.40], kerb: [0.52, 0.51, 0.49], sideAsphalt: [0.37, 0.37, 0.37],
-            edgeLine: [0.85, 0.85, 0.82], centreLine: [0.86, 0.72, 0.18], concrete: [0.50, 0.50, 0.48],
+            asphalt: mean.asphalt, cobbles: mean.setts, sideAsphalt: [0.37, 0.37, 0.37], concrete: [0.50, 0.50, 0.48],
             tunnel: [0.32, 0.31, 0.30], deck: [0.38, 0.37, 0.36], barrierRed: [0.78, 0.12, 0.10], barrierWhite: [0.92, 0.92, 0.90]
         };
     }
 
-    // Metres above the road centre that the markings sit
+    // Metres above the road centre that the road surface sits
     static get LIFT_M() { return 0.02; }
 
     // The inside of a bend is held to this share of its radius
     static get INNER_SHARE() { return 0.9; }
 
-    // A rider sees a flat-lit road: the surface material is shared by every road mesh
+    // Verge drawn past the edge on a bridge (inside the deck's overhang) and in a tunnel (up to the wall)
+    static get BRIDGE_VERGE_M() { return 0.4; }
+    static get TUNNEL_VERGE_M() { return 0.7; }
+
+    // Structures are flat-lit vertex colour: one material for every tunnel, bridge, gate and stub structure
     static material() {
         if (!RoadMesh.sharedMaterial) {
             RoadMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
@@ -67,58 +72,107 @@ class RoadMesh {
         });
     }
 
-    // The ribbon of a run of rows: {mesh, triangles, clamped} (clamped: rows whose inside edge was held).
+    // The ribbon of a run of rows: {geometry, triangles, clamped, near} (clamped: rows whose inside edge was held).
     // `holdY(x, y, z, row)`, when given, may lower each vertex of `row` (a side road under the ride, RoadMesh.sideRoad).
     static ribbon(rows, lod = 0, holdY = null, side = false) {
+        return lod === 0 ? RoadMesh.nearRibbon(rows, holdY) : RoadMesh.farRibbon(rows, holdY, side);
+    }
+
+    // The lateral offsets of a row, the inside ones held within the bend's radius: {offsets, clamped}
+    static hold(offsets, curve) {
+        const radius = Math.abs(curve) > 1e-6 ? 1 / Math.abs(curve) : Infinity;
+        const limit = RoadMesh.INNER_SHARE * radius;
+        if (limit >= Math.max(...offsets.map(Math.abs))) return { offsets, clamped: false };
+        const inner = curve > 0 ? 1 : -1;
+        return { offsets: offsets.map(o => (Math.sign(o) === inner && Math.abs(o) > limit ? inner * limit : o)), clamped: true };
+    }
+
+    static place(row, offset) {
+        return { x: row.x + offset * Math.cos(row.heading), z: row.z - offset * Math.sin(row.heading) };
+    }
+
+    // LOD0: seven vertices a row (verge, edge, three across the carriageway, edge, verge), indexed. The inner vertices
+    // keep the drawn surface within a few centimetres of the physics surface in a bend, where a quad across half the
+    // road is not flat
+    static nearRibbon(rows, holdY) {
+        const curve = RoadMesh.curvature(rows);
+        const C = RoadSurface.CENTRE;
+        const styled = rows.length && rows[0].centre !== undefined ? rows : RoadSurface.styles(rows).map((style, i) => ({ ...rows[i], ...style }));
+        // Metres along: the ride's own s, else measured from the first row; the UV restarts at a multiple of PERIOD_M
+        const along = [];
+        rows.forEach((row, i) => along.push(row.s !== undefined ? row.s : i === 0 ? 0 : along[i - 1] + Math.hypot(row.x - rows[i - 1].x, row.z - rows[i - 1].z)));
+        const period = RoadSurface.PERIOD_M;
+        const base = rows.length ? Math.floor(along[0] / period) : 0;
+        const n = rows.length;
+        const W = 7;
+        const positions = new Float32Array(n * W * 3);
+        const uvs = new Float32Array(n * W * 2);
+        const road = new Float32Array(n * W * 4);
+        const edge = new Float32Array(n * W * 4);
+        let clamped = 0;
+        styled.forEach((row, k) => {
+            const h = row.width / 2;
+            const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
+            const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
+            const held = RoadMesh.hold([-h - verge, -h, -h / 2, 0, h / 2, h, h + verge], curve[k]);
+            if (held.clamped) clamped++;
+            const v = along[k] - base * period;
+            held.offsets.forEach((offset, j) => {
+                const p = RoadMesh.place(row, offset);
+                const y = row.y + RoadMesh.LIFT_M;
+                const at = k * W + j;
+                positions.set([p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z], at * 3);
+                uvs.set([offset, v], at * 2);
+                road.set([h, (row.bits & 8) !== 0 ? 1 : 0, row.centre ?? C.none, bridge || tunnel ? 1 : 0], at * 4);
+                edge.set([row.left ?? 0, row.right ?? 0, row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
+            });
+        });
+        const index = [];
+        for (let k = 0; k + 1 < n; k++) {
+            for (let j = 0; j < W - 1; j++) {
+                const a = k * W + j, b = a + 1, c = a + W, d = a + W + 1;
+                index.push(a, b, c, b, d, c);
+            }
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        geometry.setAttribute('road', new THREE.BufferAttribute(road, 4));
+        geometry.setAttribute('edge', new THREE.BufferAttribute(edge, 4));
+        geometry.setAttribute('roadBase', new THREE.BufferAttribute(new Float32Array(n * W).fill(base), 1));
+        geometry.setIndex(index);
+        geometry.computeVertexNormals();
+        geometry.computeBoundingSphere();
+        geometry.userData.near = true;
+        return { geometry, triangles: index.length / 3, clamped, near: true };
+    }
+
+    // LOD1: one flat-coloured strip, rows decimated
+    static farRibbon(rows, holdY, side) {
         const colors = RoadMesh.COLORS;
-        const kept = lod === 0 ? rows : RoadMesh.decimate(rows);
+        const kept = RoadMesh.decimate(rows);
         const curve = RoadMesh.curvature(kept);
         const positions = [];
         const shades = [];
         let clamped = 0;
         const push = (x, y, z, c, row) => { positions.push(x, holdY ? holdY(x, y, z, row) : y, z); shades.push(c[0], c[1], c[2]); };
-        const place = (row, offset) => ({ x: row.x + offset * Math.cos(row.heading), z: row.z - offset * Math.sin(row.heading) });
-
-        // Lateral offsets of a row and the colour of the strip that starts at each
-        const layout = (row, k) => {
+        const laid = kept.map((row, k) => {
             const h = row.width / 2;
-            const cobbles = (row.bits & 8) !== 0;
-            const road = cobbles ? colors.cobbles : colors.asphalt;
-            let offsets, strips;
-            if (lod === 0) {
-                offsets = [-h - 0.5, -h, -h + 0.25, -h + 0.45, -0.08, 0.08, h - 0.45, h - 0.25, h, h + 0.5];
-                strips = [colors.kerb, road, cobbles ? road : colors.edgeLine, road, cobbles ? road : colors.centreLine, road, cobbles ? road : colors.edgeLine, road, colors.kerb];
-            } else {
-                offsets = [-h, h];
-                // A side road is seen from far off and from above: worn grey, not the ride's fresh black
-                strips = [cobbles ? road : side ? colors.sideAsphalt : road];
-            }
-            // The inside of a bend: right offsets when the road turns right
-            const radius = Math.abs(curve[k]) > 1e-6 ? 1 / Math.abs(curve[k]) : Infinity;
-            const limit = RoadMesh.INNER_SHARE * radius;
-            if (limit < h + 0.5) {
-                clamped++;
-                const inner = curve[k] > 0 ? 1 : -1;
-                offsets = offsets.map(o => (Math.sign(o) === inner && Math.abs(o) > limit ? inner * limit : o));
-                if (lod === 0) strips = strips.map((c, s) => ((inner > 0 ? s === strips.length - 1 : s === 0) ? colors.asphalt : c));
-            }
-            return { offsets, strips, row };
-        };
-
-        const laid = kept.map(layout);
+            const held = RoadMesh.hold([-h, h], curve[k]);
+            if (held.clamped) clamped++;
+            // A side road is seen from far off and from above: worn grey
+            const c = (row.bits & 8) !== 0 ? colors.cobbles : side ? colors.sideAsphalt : colors.asphalt;
+            return { offsets: held.offsets, c, row };
+        });
         for (let k = 0; k + 1 < laid.length; k++) {
             const a = laid[k], b = laid[k + 1];
-            for (let s = 0; s < a.strips.length; s++) {
-                const lift = s === 2 || s === 4 || s === 6 ? RoadMesh.LIFT_M * 1.6 : RoadMesh.LIFT_M;
-                const pa0 = place(a.row, a.offsets[s]), pa1 = place(a.row, a.offsets[s + 1]);
-                const pb0 = place(b.row, b.offsets[s]), pb1 = place(b.row, b.offsets[s + 1]);
-                const c = a.strips[s];
-                const ya = a.row.y + lift, yb = b.row.y + lift;
-                push(pa0.x, ya, pa0.z, c, a.row); push(pa1.x, ya, pa1.z, c, a.row); push(pb0.x, yb, pb0.z, c, b.row);
-                push(pa1.x, ya, pa1.z, c, a.row); push(pb1.x, yb, pb1.z, c, b.row); push(pb0.x, yb, pb0.z, c, b.row);
-            }
+            const pa0 = RoadMesh.place(a.row, a.offsets[0]), pa1 = RoadMesh.place(a.row, a.offsets[1]);
+            const pb0 = RoadMesh.place(b.row, b.offsets[0]), pb1 = RoadMesh.place(b.row, b.offsets[1]);
+            const ya = a.row.y + RoadMesh.LIFT_M, yb = b.row.y + RoadMesh.LIFT_M;
+            push(pa0.x, ya, pa0.z, a.c, a.row); push(pa1.x, ya, pa1.z, a.c, a.row); push(pb0.x, yb, pb0.z, a.c, b.row);
+            push(pa1.x, ya, pa1.z, a.c, a.row); push(pb1.x, yb, pb1.z, a.c, b.row); push(pb0.x, yb, pb0.z, a.c, b.row);
         }
-        return { geometry: RoadMesh.geometry(positions, shades), triangles: positions.length / 9, clamped };
+        return { geometry: RoadMesh.geometry(positions, shades), triangles: positions.length / 9, clamped, near: false };
     }
 
     static geometry(positions, shades) {
@@ -130,12 +184,17 @@ class RoadMesh {
         return geometry;
     }
 
-    static mesh(geometry, name) {
-        const mesh = new THREE.Mesh(geometry, RoadMesh.material());
+    static mesh(geometry, name, material = RoadMesh.material()) {
+        const mesh = new THREE.Mesh(geometry, material);
         mesh.name = name;
         mesh.receiveShadow = true;
         mesh.userData.world = 'road';
         return mesh;
+    }
+
+    // A ribbon in its material: the near one textured, the far one flat
+    static ribbonMesh(ribbon, name) {
+        return RoadMesh.mesh(ribbon.geometry, name, ribbon.near ? RoadSurface.nearMaterial() : RoadSurface.farMaterial());
     }
 
     // Quads and boxes into position and colour lists
@@ -232,7 +291,7 @@ class RoadMesh {
         const group = new THREE.Group();
         group.name = 'world-road-section';
         const ribbon = RoadMesh.ribbon(rows, lod);
-        group.add(RoadMesh.mesh(ribbon.geometry, 'road-ribbon'));
+        group.add(RoadMesh.ribbonMesh(ribbon, 'road-ribbon'));
         let triangles = ribbon.triangles;
         const add = (parts, name) => {
             const mesh = RoadMesh.structureMesh(parts, name);
@@ -254,7 +313,7 @@ class RoadMesh {
         const group = new THREE.Group();
         group.name = stub ? 'world-road-stub' : 'world-road-side';
         const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1, holdY, true);
-        group.add(RoadMesh.mesh(ribbon.geometry, 'road-side'));
+        group.add(RoadMesh.ribbonMesh(ribbon, 'road-side'));
         group.userData.triangles = ribbon.triangles;
         return group;
     }
