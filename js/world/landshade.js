@@ -13,8 +13,9 @@
 //                       the scene fog stays for weather (a fog look, rain, snow)
 //   curvature           far meshes drop d^2 (1 - k) / 2R under the camera's horizon, as the real land does
 //   detail              world-space value noise on the albedo near the camera, so open ground is not flat paint
-//   stone               dry-stone courses in world space on a retaining wall (RoadMesh.stoneMaterial): rows of
-//                       granite blocks of mixed length and tone with dark joints, fading to their mean far off
+//   stone               dry-stone courses in world space on a retaining wall (RoadMesh.stoneMaterial): courses of
+//                       uneven height, granite blocks 0.3 to 0.6 m of mixed length and tone with thin joints and
+//                       broad stains, fading to their mean far off (LandShade.STONE)
 //   shade               the sky's fill light is held back, so the side of a valley away from the sun is dark
 class LandShade {
     static get PALETTE() {
@@ -127,6 +128,44 @@ class LandShade {
     // Metres over which the aerial tint reaches 63% of its most, and its most
     static get AERIAL_REACH_M() { return 14000; }
     static get AERIAL_MAX() { return 0.85; }
+    // The dry-stone courses of a retaining wall (metres): a band of two courses whose split falls between splitMin and
+    // splitMax of it (so the courses run 0.18 to 0.36 m high), blocks lengthMin to lengthMax long (real dry-stone
+    // blocks, 0.3 to 0.6 m: longer read as brick), the courses wandering wanderM up and down. LandShade.stoneCell is
+    // the same pattern in JS
+    static get STONE() { return { bandM: 0.54, splitMin: 0.34, splitMax: 0.66, lengthMin: 0.28, lengthMax: 0.62, wanderM: 0.2 }; }
+
+    // The block of the stone pattern at (u metres along the face, y metres up), as the shader draws it: {row, col,
+    // courseM, lengthM} (row and col name the block)
+    static stoneCell(u, y) {
+        const S = LandShade.STONE;
+        const hash = LandShade.glslHash;
+        const noise = LandShade.glslNoise;
+        const yy = y + S.wanderM * (noise(u * 0.9, y * 0.5) - 0.5);
+        const band = Math.floor(yy / S.bandM);
+        const inBand = yy / S.bandM - band;
+        const split = S.splitMin + (S.splitMax - S.splitMin) * hash(band, 5);
+        const upper = inBand >= split ? 1 : 0;
+        const row = band * 2 + upper;
+        const lengthM = S.lengthMin + (S.lengthMax - S.lengthMin) * hash(row, 7);
+        const col = Math.floor(u / lengthM + hash(row, 3));
+        return { row, col, courseM: S.bandM * (upper ? 1 - split : split), lengthM };
+    }
+
+    // The GLSL landHash and landNoise in JS
+    static glslHash(x, y) {
+        const fr = v => v - Math.floor(v);
+        const a = fr(x * 0.1031), b = fr(y * 0.1031), c = a;
+        const d = a * (b + 33.33) + b * (c + 33.33) + c * (a + 33.33);
+        return fr((a + d + b + d) * (c + d));
+    }
+    static glslNoise(x, y) {
+        const i = Math.floor(x), j = Math.floor(y), f = x - i, g = y - j;
+        const u = f * f * (3 - 2 * f), v = g * g * (3 - 2 * g);
+        const h = LandShade.glslHash;
+        const lo = h(i, j) + (h(i + 1, j) - h(i, j)) * u, hi = h(i, j + 1) + (h(i + 1, j + 1) - h(i, j + 1)) * u;
+        return lo + (hi - lo) * v;
+    }
+
     // The share of the sky's fill light the land keeps
     static get INDIRECT() { return 0.8; }
 
@@ -144,6 +183,8 @@ class LandShade {
     // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles
     static patch(material, { curvature = false, detail = false, stone = false } = {}) {
         if (material.userData.landShade) return material;
+        const S = LandShade.STONE;
+        const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
         material.userData.landShade = true;
         const shared = LandShade.uniforms;
         material.onBeforeCompile = (shader) => {
@@ -180,24 +221,33 @@ float landNoise(vec2 p) {
     diffuseColor.rgb *= mix(1.0, 0.5 + 1.0 * fine, near * uDetail) * (0.86 + 0.28 * broad) * (1.0 + (tuft - 0.5) * 0.5 * uDetail);
 }` : stone ? `#include <color_fragment>
 {
-    // Rough-coursed granite: courses about 0.34 m that wander up and down, blocks 0.4 to 1.2 m long, each course
-    // offset, each block its own tone and a warm or cool cast, the joints soft and recessed. Along the face's own
-    // horizontal, so a wall reads the same at any heading
+    // Dry-stone granite (LandShade.STONE): courses of their own height that wander up and down, blocks of mixed length
+    // offset from the course below, each block its own tone and a warm or cool cast, thin soft joints; broad stains
+    // (lichen, damp, weathering) over metres, so one wall and the next never repeat. Along the face's own horizontal,
+    // so a wall reads the same at any heading
     vec3 n = normalize(vLandNormal);
     vec2 t = normalize(vec2(-n.z, n.x) + vec2(1e-4, 0.0));
     float u = dot(vLandPos.xz, t);
-    float v = vLandPos.y / 0.34 + 0.35 * (landNoise(vec2(u * 0.7, vLandPos.y * 0.4)) - 0.5);
-    float row = floor(v);
-    float len = 0.4 + 0.8 * landHash(vec2(row, 7.0));
+    float y = vLandPos.y + ${f(S.wanderM)} * (landNoise(vec2(u * 0.9, vLandPos.y * 0.5)) - 0.5);
+    float band = floor(y / ${f(S.bandM)});
+    float inBand = fract(y / ${f(S.bandM)});
+    // Two courses to a band, split at a height of the band's own: courses of uneven height
+    float split = ${f(S.splitMin)} + ${f(S.splitMax - S.splitMin)} * landHash(vec2(band, 5.0));
+    float upper = step(split, inBand);
+    float row = band * 2.0 + upper;
+    float courseH = ${f(S.bandM)} * mix(split, 1.0 - split, upper);
+    float vIn = (inBand - upper * split) / mix(split, 1.0 - split, upper);
+    float len = ${f(S.lengthMin)} + ${f(S.lengthMax - S.lengthMin)} * landHash(vec2(row, 7.0));
     float w = u / len + landHash(vec2(row, 3.0));
     float col = floor(w);
-    vec2 f = vec2(fract(w), fract(v));
-    float joint = min(min(f.x, 1.0 - f.x) * len, min(f.y, 1.0 - f.y) * 0.34);
+    vec2 f = vec2(fract(w), vIn);
+    float joint = min(min(f.x, 1.0 - f.x) * len, min(f.y, 1.0 - f.y) * courseH);
     float h = landHash(vec2(col, row)), tint = landHash(vec2(row, col + 11.0)) - 0.5;
-    float tone = 0.74 + 0.4 * h + 0.3 * (landNoise(vec2(u, vLandPos.y) * 4.0) - 0.5);
-    vec3 face = vec3(tone * (1.0 + 0.10 * tint), tone, tone * (1.0 - 0.10 * tint)) * mix(0.55, 1.0, smoothstep(0.008, 0.06, joint));
-    float far = smoothstep(40.0, 160.0, length(vViewPosition));
-    diffuseColor.rgb *= mix(face, vec3(0.86), far);
+    float stain = landNoise(vec2(u, vLandPos.y) * 0.35) * 0.6 + landNoise(vec2(u, vLandPos.y) * 0.08) * 0.4;
+    float tone = (0.68 + 0.5 * h + 0.24 * (landNoise(vec2(u, vLandPos.y) * 5.0) - 0.5)) * (0.78 + 0.36 * stain);
+    vec3 face = vec3(tone * (1.0 + 0.14 * tint), tone * (1.0 + 0.04 * (stain - 0.5)), tone * (1.0 - 0.14 * tint)) * mix(0.66, 1.0, smoothstep(0.006, 0.035, joint));
+    float far = smoothstep(30.0, 140.0, length(vViewPosition));
+    diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)), far);
 }` : '#include <color_fragment>')
                 .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>\nreflectedLight.indirectDiffuse *= uIndirect;`)
                 .replace('#include <fog_fragment>', `{

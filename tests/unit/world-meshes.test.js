@@ -694,6 +694,37 @@ describe('Scenery', () => {
     });
 });
 
+describe('the dry-stone walls', () => {
+    // A real dry-stone wall: blocks 0.3 to 0.6 m long in courses of uneven height. Longer, even blocks read as brick
+    test('the stone pattern draws blocks 0.3 to 0.6 m long in courses of uneven height, as the shader does', () => {
+        const blocks = new Map();
+        for (let u = 0; u < 12; u += 0.02) {
+            for (let y = 0; y < 3; y += 0.02) {
+                const c = LandShade.stoneCell(u, y);
+                const key = `${c.row}:${c.col}`;
+                if (!blocks.has(key)) blocks.set(key, c);
+            }
+        }
+        const list = [...blocks.values()];
+        const mean = list.reduce((p, c) => p + c.lengthM, 0) / list.length;
+        const courses = [...new Set(list.map(c => c.row))].map(row => list.find(c => c.row === row).courseM);
+        expect(mean).toBeGreaterThanOrEqual(0.3);
+        expect(mean).toBeLessThanOrEqual(0.6);
+        expect(Math.min(...courses)).toBeGreaterThanOrEqual(0.15);
+        expect(Math.max(...courses)).toBeLessThanOrEqual(0.4);
+        // Uneven: the courses differ by 5 cm or more
+        expect(Math.max(...courses) - Math.min(...courses)).toBeGreaterThan(0.05);
+        // Blocks a square metre of face (36 m^2 here): dry stone, not ashlar or brick
+        expect(list.length / 36).toBeGreaterThan(4);
+        // The shader is built from the same numbers
+        const material = RoadMesh.stoneMaterial();
+        const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader };
+        material.onBeforeCompile(shader);
+        const S = LandShade.STONE;
+        for (const v of [S.bandM, S.lengthMin, S.lengthMax - S.lengthMin, S.splitMin]) expect(shader.fragmentShader).toContain(`${v}`);
+    });
+});
+
 describe('FarLand', () => {
     const level = (x0, z0, n, cell, h = 1500) => ({ x0, z0, nx: n, nz: n, cell, heights: new Int16Array(n * n).fill(h), shares: new Uint8Array(n * n * 4) });
     const inner = { x0: 0, z0: 0, nx: 11, nz: 11, cell: 100, data: new Int16Array(121).fill(1500) };
