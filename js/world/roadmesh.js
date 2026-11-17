@@ -57,6 +57,10 @@ class RoadMesh {
     // The longest an apron strip runs along the edge (a far ribbon's rows are up to 16 m apart)
     static get APRON_STRIP_M() { return 2; }
     static get PARAPET_W_M() { return 0.3; }
+    // A side road's pier: width across the road, depth along it, and how far its foot goes into the land
+    static get PIER_W_M() { return 1.6; }
+    static get PIER_D_M() { return 1.2; }
+    static get PIER_SINK_M() { return 0.5; }
     // How far a retaining wall's end returns under the road
     static get WALL_RETURN_M() { return 0.6; }
     static get PARAPET_H_M() { return 0.8; }
@@ -570,7 +574,7 @@ class RoadMesh {
     // a tube. `sides` are the ribbon's rows' edges ({bits, l, r}, ribbon.sides); `groundAt(x, z)` is the drawn land,
     // null where it is not known. Returns {parts, sides}: the structures ({positions, shades}, sRGB) and the sides with
     // the bridge bit on every decked row, so the edge works leave those to the deck
-    static sideStructures(sides, groundAt = null, roof = 6.5) {
+    static sideStructures(sides, groundAt = null, roof = 6.5, footAt = null) {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
         const drop = RoadMesh.PARAPET_DROP_M;
@@ -595,6 +599,7 @@ class RoadMesh {
             RoadMesh.box(out, (pa[0] + pb[0]) / 2 + (inward[0] * w) / 2, (pa[1] + pb[1]) / 2 + h / 2, (pa[2] + pb[2]) / 2 + (inward[1] * w) / 2, w, h, run + 0.02, heading, colors.concrete);
         };
         let sincePier = 24;
+        const piers = [];
         for (let k = 0; k + 1 < sides.length; k++) {
             const a = sides[k], b = sides[k + 1];
             const run = Math.hypot((a.l[0] + a.r[0] - b.l[0] - b.r[0]) / 2, (a.l[2] + a.r[2] - b.l[2] - b.r[2]) / 2);
@@ -618,13 +623,27 @@ class RoadMesh {
             if (sincePier >= 24) {
                 sincePier = 0;
                 const mx = (a.l[0] + a.r[0] + b.l[0] + b.r[0]) / 4, mz = (a.l[2] + a.r[2] + b.l[2] + b.r[2]) / 4, my = (a.l[1] + a.r[1] + b.l[1] + b.r[1]) / 4;
-                const floor = groundAt ? groundAt(mx, mz) : null;
-                const height = my - D - (Number.isFinite(floor) ? floor : my - D);
                 const heading = Math.atan2(b.l[0] + b.r[0] - a.l[0] - a.r[0], b.l[2] + b.r[2] - a.l[2] - a.r[2]);
-                if (height > 1) RoadMesh.box(out, mx, my - D - height / 2, mz, Math.min(3, len / 2), height, 2, heading, colors.concrete);
+                // The pier's foot: the lowest land under any corner of it, at any level of detail the tile is drawn
+                // at, and PIER_SINK_M into it, so it never stands on air beside a coarse triangle
+                const w = RoadMesh.PIER_W_M, dz = RoadMesh.PIER_D_M;
+                const fs = Math.sin(heading), fc = Math.cos(heading);
+                let floor = Infinity;
+                for (const [u, v] of [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+                    const x = mx + (u * w / 2) * fc + (v * dz / 2) * fs, z = mz - (u * w / 2) * fs + (v * dz / 2) * fc;
+                    const f = (footAt || groundAt) ? (footAt || groundAt)(x, z) : null;
+                    if (Number.isFinite(f)) floor = Math.min(floor, f);
+                }
+                if (!Number.isFinite(floor)) continue;
+                floor -= RoadMesh.PIER_SINK_M;
+                const height = my - D - floor;
+                if (height > 1) {
+                    RoadMesh.box(out, mx, floor + height / 2, mz, w, height, dz, heading, colors.concrete);
+                    piers.push({ x: mx, z: mz, top: my - D, foot: floor, width: w, depth: dz, heading });
+                }
             }
         }
-        return { parts: out.positions.length ? [out] : [], sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };
+        return { parts: out.positions.length ? [out] : [], piers, sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };
     }
 
     static structureMesh(parts, name) {
@@ -663,17 +682,18 @@ class RoadMesh {
     // A side road beyond the junction: the stub at LOD0 when `stub`, else the LOD1 ribbon. `holdY` keeps it under
     // the ride where it crosses the ride's road band (WorldEnvironment.sideHold); `foot` sets its edge works (RoadMesh.edgeWorks);
     // `groundAt(x, z)` is the drawn land its structures stand on (RoadMesh.sideStructures)
-    static sideRoad(rows, stub, holdY = null, foot = null, { groundAt = null, roof = 6.5 } = {}) {
+    static sideRoad(rows, stub, holdY = null, foot = null, { groundAt = null, footAt = null, roof = 6.5 } = {}) {
         const group = new THREE.Group();
         group.name = stub ? 'world-road-stub' : 'world-road-side';
         const ribbon = RoadMesh.ribbon(rows, stub ? 0 : 1, holdY, true);
         group.add(RoadMesh.ribbonMesh(ribbon, 'road-side'));
-        const built = RoadMesh.sideStructures(ribbon.sides, groundAt, roof);
+        const built = RoadMesh.sideStructures(ribbon.sides, groundAt, roof, footAt);
         // Without a foot the edge works and structures are left to the caller, which draws those of many side roads as one mesh
         const triangles = ribbon.triangles + (foot ? RoadMesh.addEdgeWorks(group, built.sides, foot, built.parts) : 0);
         group.userData.triangles = triangles;
         group.userData.sides = built.sides;
         group.userData.structures = built.parts;
+        group.userData.piers = built.piers;
         return group;
     }
 

@@ -97,6 +97,37 @@ describe('the edge works of the stacked hairpins', () => {
     }, 60000);
 });
 
+// Every pier of a side road's deck stands on the land: its foot at or under the lowest land the tile draws at any
+// level of detail under each of its corners, and no wider than 2 m (a side road's pier, not a wall)
+describe('the piers of the side-road decks', () => {
+    test('reach the land at every level of detail and are a pier\'s width', async () => {
+        const { env } = await load('', 'tremola');
+        const bad = [];
+        let piers = 0;
+        for (const s of [1731, 5133, 6481, 6533, 10867]) {
+            const p = env.route.sample(s, {});
+            env.update(p, s, null, Infinity);
+            await env.streamer.settle(p, s);
+            for (const group of env.sideMeshes.values()) {
+                for (const road of group.children) {
+                    for (const pier of road.userData.piers || []) {
+                        piers++;
+                        const fs = Math.sin(pier.heading), fc = Math.cos(pier.heading);
+                        let land = Infinity;
+                        for (const [u, v] of [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+                            const y = env.landLowAt(pier.x + (u * pier.width / 2) * fc + (v * pier.depth / 2) * fs, pier.z - (u * pier.width / 2) * fs + (v * pier.depth / 2) * fc);
+                            if (y !== null) land = Math.min(land, y);
+                        }
+                        if (pier.foot > land || pier.width > 2) bad.push({ s, x: Math.round(pier.x), z: Math.round(pier.z), gapM: Math.round((pier.foot - land) * 100) / 100, width: pier.width });
+                    }
+                }
+            }
+        }
+        expect(piers).toBeGreaterThan(10);
+        expect(bad).toEqual([]);
+    }, 120000);
+});
+
 describe('the Tremola slice', () => {
     let env, scene, bike;
     beforeAll(async () => {

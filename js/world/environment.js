@@ -452,6 +452,26 @@ class WorldEnvironment {
         return out;
     }
 
+    // The lowest land a tile draws at (x, z) at any of its levels of detail (its 8, 16 and 32 m triangles, as
+    // TerrainMesh.vertexY draws them), or null without the tile (its key goes into `missing`): what a wall's foot or a
+    // pier must reach to stand on the land whatever level of detail the tile is drawn at
+    landLowAt(x, z, missing = null) {
+        const n = WorldData.TILE_N, m = WorldData.TILE_M;
+        const tx = Math.floor(x / m), tz = Math.floor(z / m);
+        const tile = this.data.tile(`${tx},${tz}`);
+        if (!tile) { if (missing) missing.add(`${tx},${tz}`); return null; }
+        let low = Infinity;
+        for (const stride of [1, 2, 4]) {
+            const cell = WorldData.CELL_M * stride, side = (n - 1) / stride;
+            const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
+            const i = Math.max(0, Math.min(side - 1, Math.floor(fx))), j = Math.max(0, Math.min(side - 1, Math.floor(fz)));
+            const u = fx - i, v = fz - j;
+            const H = (a, b) => TerrainMesh.vertexY(tile, Math.log2(stride), (i + a) * stride, (j + b) * stride);
+            low = Math.min(low, u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1)));
+        }
+        return low;
+    }
+
     // What a road's edge point (x, y, z), facing out along (ox, oz), stands on (RoadMesh.edgeWorks): a retaining wall
     // down to a lower road (another leg of the ride, or a side road, more than DECK_UNDER_M below) whose band it lies
     // over; a retaining wall where the importer gave the land beyond it to a lower road (a `drop` node: two legs too close for a slope), or
@@ -474,21 +494,7 @@ class WorldEnvironment {
             if (side !== null && side < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, side);
             return best;
         };
-        const landLow = (x, z) => {
-            const tx = Math.floor(x / m), tz = Math.floor(z / m);
-            const tile = this.data.tile(`${tx},${tz}`);
-            if (!tile) { if (missing) missing.add(`${tx},${tz}`); return null; }
-            let low = Infinity;
-            for (const stride of [1, 2, 4]) {
-                const cell = WorldData.CELL_M * stride, side = (n - 1) / stride;
-                const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
-                const i = Math.max(0, Math.min(side - 1, Math.floor(fx))), j = Math.max(0, Math.min(side - 1, Math.floor(fz)));
-                const u = fx - i, v = fz - j;
-                const H = (a, b) => TerrainMesh.vertexY(tile, Math.log2(stride), (i + a) * stride, (j + b) * stride);
-                low = Math.min(low, u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1)));
-            }
-            return low;
-        };
+        const landLow = (x, z) => this.landLowAt(x, z, missing);
         // Whether (x, z) lies in a road's band: the ride's carriageway and verge, or a side road's
         const inBand = (x, z) => {
             for (const i of this.route.cellSegments(x, z) || []) {
@@ -589,7 +595,9 @@ class WorldEnvironment {
             if (y === null) missing.add(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`);
             return y;
         };
-        const options = { groundAt, roof: WorldRoute.ROOF_M };
+        // A pier stands on the lowest land the tile draws at any level of detail (RoadMesh.sideStructures footAt)
+        const footAt = (x, z) => this.landLowAt(x, z, missing);
+        const options = { groundAt, footAt, roof: WorldRoute.ROOF_M };
         this.data.edges.forEach((edge) => {
             if (edge.onRide || this.data.chunkOf(edge.first) !== k) return;
             const samples = this.graph.samples(edge.id);
