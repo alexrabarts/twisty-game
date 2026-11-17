@@ -97,6 +97,7 @@ class WorldEnvironment {
             data, route: this.route,
             hooks: {
                 buildTile: (key, lod) => this.buildTile(key, lod),
+                buildScenery: (key, lod) => this.buildScenery(key, lod),
                 disposeTile: key => this.disposeTile(key),
                 buildRoad: (section, lod) => this.buildRoad(section, lod),
                 disposeRoad: section => this.disposeRoad(section),
@@ -188,19 +189,25 @@ class WorldEnvironment {
         this.tileGroup.add(built.mesh);
         this.tileMeshes.set(key, built);
         this.triangleCount += built.triangles;
-        // Trees and houses stand on the detailed tiles only
-        if (lod <= 1) {
-            if (!this.scenery.perTile.has(key)) {
-                const [tx, tz] = key.split(',').map(Number);
-                const m = WorldData.TILE_M;
-                const houses = (this.data.buildings || []).filter(b => b.x >= tx * m && b.x < (tx + 1) * m && b.z >= tz * m && b.z < (tz + 1) * m);
-                const group = this.scenery.buildTile(tile, cover, houses, this.lastBike);
-                if (group) {
-                    group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
-                    this.sceneryGroup.add(group);
-                }
-            }
-        } else this.scenery.disposeTile(key);
+    }
+
+    // Trees and houses stand on the detailed tiles only (a step of its own: the streamer queues it after the land)
+    buildScenery(key, lod) {
+        if (lod > 1) {
+            this.scenery.disposeTile(key);
+            return;
+        }
+        if (this.scenery.perTile.has(key)) return;
+        const tile = this.data.tile(key);
+        if (!tile) return;
+        const [tx, tz] = key.split(',').map(Number);
+        const m = WorldData.TILE_M;
+        const houses = (this.data.buildings || []).filter(b => b.x >= tx * m && b.x < (tx + 1) * m && b.z >= tz * m && b.z < (tz + 1) * m);
+        const group = this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike);
+        if (group) {
+            group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
+            this.sceneryGroup.add(group);
+        }
     }
 
     disposeTile(key) {

@@ -2407,6 +2407,9 @@ const WORLD = {
         const v = game.vehicle;
         twistyDev.freeze();
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+        const crashes = [];
+        const log = console.log;
+        console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) crashes.push(String(args[0]) + ' ' + args.slice(1).join(' ')); log(...args); };
         let ticks = 0;
         const passed = [];
         const limit = 60 * 60 * 40;
@@ -2415,8 +2418,9 @@ const WORLD = {
             ticks++;
             if (game.checkpointsPassed !== passed.length) passed.push(Math.round(v.routeS));
         }
-        return { finished: game.finished, crashed: v.crashed, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts };
-    }, pilotWorld.toString(), Number(option('speed') || 24))
+        console.log = log;
+        return { finished: game.finished, crashed: v.crashed, crash: crashes[0] || null, lowside: v.lowsideTimerMs, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts };
+    }, pilotWorld.toString(), Number(option('speed') || 20))
 };
 
 async function worldMain() {

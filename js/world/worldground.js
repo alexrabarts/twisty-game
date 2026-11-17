@@ -24,6 +24,9 @@ class WorldGround extends Ground {
     static get BARRIER_DEPTH_M() { return 1.2; }
     static get BARRIER_MARGIN_M() { return 1.5; }
 
+    // Metres past the road edge that a bridge parapet stands (RoadMesh draws it there)
+    static get PARAPET_M() { return 0.35; }
+
     // Metres a fall below the road ends
     static get FALL_M() { return 30; }
 
@@ -205,6 +208,8 @@ class WorldGround extends Ground {
             // Rock beside a tunnel or gallery: a wall just past the kerb
             return { kind: reach <= halfRoad + WorldGround.BENCH_M ? 'shoulder' : 'wall', side: this.benchSide, sign, start: reach <= halfRoad + WorldGround.BENCH_M ? halfRoad : halfRoad + WorldGround.BENCH_M };
         }
+        // A bridge has its parapet at the edge of the deck: past it there is no ground to ride or fall to
+        if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + WorldGround.PARAPET_M };
         const kind = this.kindAt(at.x, at.z);
         // Where the zone began: step back toward the road while the kind holds
         let start = reach;

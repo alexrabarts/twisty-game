@@ -124,6 +124,7 @@ class WorldStreamer {
     // Called every frame with the bike's position and its ride progress s
     update(bike, s) {
         const time = this.now();
+        this.bike = bike;
         // The ride window moves in 32 m steps; the bike's own tiles are cheap and follow it every frame
         const rideStep = Math.floor(s / 32);
         if (rideStep !== this.rideKey) {
@@ -185,6 +186,13 @@ class WorldStreamer {
         this.hooks.buildTile(key, lod, !!held);
         this.tiles.set(key, { lod, zeroSince: null });
         this.stats.builds++;
+        // What stands on the tile is its own step, so one frame never builds the land and its trees together
+        if (this.hooks.buildScenery) {
+            this.enqueue(`scenery:${key}`, this.tileDistance(key, this.bike) + 0.5, () => {
+                const current = this.tiles.get(key);
+                if (current) this.hooks.buildScenery(key, current.lod);
+            });
+        }
     }
 
     updateRoads(bike, s, time) {

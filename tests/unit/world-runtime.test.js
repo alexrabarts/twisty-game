@@ -292,6 +292,14 @@ describe('WorldGround', () => {
         expect(g.zoneAt({ index: 25, lateral: 9 }, 5).kind).toBe('wall');
     });
 
+    test('on a bridge the edge of the deck is a parapet, not ground', () => {
+        const bridged = new WorldRoute(samplesOf(straight(400, { y: 100 }), { flags: 2 }), {});
+        const g = new WorldGround(bridged, data);
+        expect(g.zoneAt({ index: 25, lateral: 3 }, 5).kind).toBe('road');
+        expect(g.zoneAt({ index: 25, lateral: 6 }, 5)).toMatchObject({ kind: 'wall', start: 5.35 });
+        expect(g.zoneAt({ index: 25, lateral: -20 }, 5)).toMatchObject({ kind: 'wall', sign: -1 });
+    });
+
     test('a fall ends a fixed depth under the road', () => {
         expect(ground.restY({ roadY: 100 })).toBe(70);
         expect(ground.sideAt({}, 1).lipDepth).toBe(8);
@@ -383,6 +391,25 @@ describe('WorldStreamer', () => {
         await streamer.settle(route.points[0], 0);
         expect(hooks.built.length).toBeGreaterThan(0);
         expect(data.fetched.length).toBeGreaterThan(0);
+    });
+
+    test('what stands on a tile is built in a step of its own, after the land', async () => {
+        const { streamer, hooks } = streamerOn();
+        const order = [];
+        hooks.buildTile = key => order.push(`land:${key}`);
+        hooks.buildScenery = (key, lod) => order.push(`trees:${key}:${lod}`);
+        streamer.update(route.points[0], 0);
+        const steps = [];
+        while (streamer.queue.length) steps.push(streamer.pump(0));
+        // Every pump(0) runs one step, so a tile's land and its trees were never in one step
+        expect(steps.every(n => n === 1)).toBe(true);
+        const tiles = order.filter(o => o.startsWith('land:')).map(o => o.slice(5));
+        expect(tiles.length).toBeGreaterThan(0);
+        for (const key of tiles) {
+            const land = order.findIndex(o => o === `land:${key}`);
+            const trees = order.findIndex(o => o.startsWith(`trees:${key}:`));
+            expect(trees).toBeGreaterThan(land);
+        }
     });
 
     test('a frame builds nothing past the budget, but always one step', () => {
