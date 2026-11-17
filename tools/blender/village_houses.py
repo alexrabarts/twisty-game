@@ -439,4 +439,6 @@ def main():
     finish(os.path.join(common.ASSETS, "village", "houses.glb"), shapes, SEED, BUDGET)
 
 
-main()
+# Blender runs a --python script as __main__; the landmark scripts import the house kit from here
+if __name__ == "__main__":
+    main()

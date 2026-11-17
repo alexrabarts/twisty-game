@@ -10,7 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { buildWorld, classWidth, stageDefs } from '../../tools/world/import.mjs';
+import { buildWorld, classWidth, stageDefs, landmarkAssetProblem } from '../../tools/world/import.mjs';
 import { narrowRide, MIN_RIDE_WIDTH_M, RIDE_WIDTH_M } from '../../tools/world/widths.mjs';
 import { syntheticSource, syntheticDem } from '../../tools/world/synthetic.mjs';
 import { resampleEdge, resampleLine, R_MIN, R_HAIRPIN, nearestOnPolyline, polylineLengths, circumradius } from '../../tools/world/resample.mjs';
@@ -22,7 +22,7 @@ import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/w
 import { encodeFiles, writeWorld, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
 import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.mjs';
 import { orientedBox, clearOfRoads, roadBands, boxesOverlap, ROAD_CLEAR_M, NUDGE_MAX_M } from '../../tools/world/buildings.mjs';
-import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, checkHorizon, LIMITS } from '../../tools/world/verify.mjs';
+import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, checkHorizon, checkLandmarks, LIMITS } from '../../tools/world/verify.mjs';
 import { wgs84ToLv95, lv95ToWgs84 } from '../../tools/world/dem.mjs';
 import { rasterizeCoverGrid, buildLevel, levelBoxes, horizonSinks, LEVELS } from '../../tools/world/farland.mjs';
 
@@ -807,6 +807,15 @@ describe('farland.mjs: the land out to 40 km', () => {
         const horizon = checkHorizon(decodeWorld(path.join(REPO, 'world')));
         expect({ over: horizon.details.over, sinks: horizon.details.sinks }).toEqual({ over: 0, sinks: true });
         expect(horizon.details.nodes).toBeGreaterThan(100000);
+    });
+
+    // No placeholder ships: the importer and the data check refuse a landmark that is not a model in assets/
+    test('every committed landmark is a model, and a box or a missing file is refused', () => {
+        const landmarks = checkLandmarks(decodeWorld(path.join(REPO, 'world')));
+        expect(landmarks.details).toMatchObject({ landmarks: 1, bad: 0 });
+        expect(landmarkAssetProblem({ name: 'x', asset: 'box', size: [1, 1, 1] })).toMatch(/placeholder/);
+        expect(landmarkAssetProblem({ name: 'x', asset: 'assets/village/none.glb', size: [1, 1, 1] })).toMatch(/does not exist/);
+        expect(landmarkAssetProblem({ name: 'x', asset: 'assets/village/hospiz.glb', size: [43, 15, 13] })).toBeNull();
     });
 
     test('the far levels round trip through the files', async () => {

@@ -44,6 +44,9 @@ class WorldEnvironment {
     // The farthest an apron runs out from the edge before it must have met the land
     static get APRON_RUN_M() { return 6; }
 
+    // Metres from the bike within which a landmark is drawn
+    static get LANDMARK_REACH_M() { return 3000; }
+
     // The ride progress the barrier set is chosen by is rounded to this many metres
     static get BARRIER_STEP_M() { return 20; }
 
@@ -64,11 +67,13 @@ class WorldEnvironment {
         const stage = id === 'all' ? null : data.manifest.stages.find(s => s.id === id);
         if (id !== 'all' && !stage) throw new Error(`unknown world "${id}"; known: all, ${data.manifest.stages.map(s => s.id).join(', ')}`);
         const loaded = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadModels(SceneAssets.loadModel) : (models || null);
+        // The landmark models: loaded with the scenery's, or given with the models (a stand-in in node)
+        const landmarks = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadLandmarks(data.manifest.landmarks || [], SceneAssets.loadModel) : (models && models.landmarks) || null;
         await Promise.all([data.ensureFar().catch(() => null), data.ensureBuildings().catch(() => null), data.ensureFarLand().catch((error) => { console.warn(`world far land unavailable (${error.message}); the horizon ends at far.bin`); return null; })]);
-        return new WorldEnvironment(scene, data, { stage, models: loaded });
+        return new WorldEnvironment(scene, data, { stage, models: loaded, landmarks });
     }
 
-    constructor(scene, data, { stage = null, models = null } = {}) {
+    constructor(scene, data, { stage = null, models = null, landmarks = null } = {}) {
         this.isWorld = true;
         this.scene = scene;
         this.data = data;
@@ -115,6 +120,7 @@ class WorldEnvironment {
         this.sideMeshes = new Map();
         this.sideEdges = new Map();
         this.scenery = new Scenery(this.ground, data, models);
+        this.scenery.landmarkModels = landmarks;
         this.barrierMesh = RoadMesh.barriers();
         this.group.add(this.barrierMesh);
         this.barrierKey = '';
@@ -212,7 +218,8 @@ class WorldEnvironment {
             this.signMesh = this.scenery.signposts(poses);
             this.group.add(this.signMesh);
         }
-        this.group.add(this.scenery.landmarks(this.data.manifest.landmarks || [], this.route));
+        this.landmarkGroup = this.scenery.landmarks(this.data.manifest.landmarks || [], this.route);
+        this.group.add(this.landmarkGroup);
         this.group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
     }
 
@@ -639,6 +646,8 @@ class WorldEnvironment {
     // dtSec: the simulated time since the last update (0 for a call that is not a step of the ride)
     update(position, s, state = null, budgetMs = WorldStreamer.BUDGET_MS, dtSec = 0) {
         this.lastBike = position;
+        // A landmark is drawn within LANDMARK_REACH_M: beyond, it is a few pixels and costs the window its triangles
+        if (this.landmarkGroup) for (const node of this.landmarkGroup.children) node.visible = Math.hypot(node.position.x - position.x, node.position.z - position.z) < WorldEnvironment.LANDMARK_REACH_M;
         if (Number.isFinite(dtSec) && dtSec > 0) this.streamClockMs += dtSec * 1000;
         this.updateBarriers(s);
         this.streamer.update(position, s);

@@ -283,6 +283,9 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
       if (!best || d < best.d) best = { d, i };
     }
     if (!best || best.d > LANDMARK_SNAP_M) { log(`landmark ${l.name} is ${best ? Math.round(best.d) : '?'} m from the ride: not in this import`); continue; }
+    // No placeholder ships: a landmark in the import is a model in assets/
+    const problem = landmarkAssetProblem(l);
+    if (problem) throw new Error(`landmark ${l.name}: ${problem}`);
     landmarks.push({ name: l.name, asset: l.asset, size: l.size ?? null, s: Math.round(samples.s[best.i] * 10) / 10, x: Math.round(l.x * 100) / 100, z: Math.round(l.z * 100) / 100, y: Math.round(samples.y[best.i] * 100) / 100, heading: Math.round(samples.heading[best.i] * 1e4) / 1e4 });
   }
   landmarks.sort((a, b) => a.s - b.s);
@@ -292,6 +295,15 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
     nodes, edges, ride, junctions, stages, stations, tiles, cover, far, farLand, buildings, landmarks, structures: structureRuns(samples),
     samples, stats: { ...stats, corridor, tilesMissingHeight: missing, droppedStations: placed.dropped, maxStationGapM: placed.maxGapM, snaps: g.snaps }
   };
+}
+
+// Why a landmark's asset cannot be drawn, or null: it must name a .glb model under assets/ that exists, with the
+// footprint it is placed by (`size`, metres along, up and across); "box" and any other placeholder are refused
+export function landmarkAssetProblem(l, repoRoot = REPO_ROOT) {
+  if (typeof l.asset !== 'string' || !/^assets\/[\w/.-]+\.glb$/.test(l.asset)) return `asset ${JSON.stringify(l.asset)} is not a model in assets/ (a placeholder box is never drawn)`;
+  if (!fs.existsSync(path.join(repoRoot, l.asset))) return `asset ${l.asset} does not exist`;
+  if (!Array.isArray(l.size) || l.size.length !== 3 || !l.size.every(v => Number.isFinite(v) && v > 0)) return `size ${JSON.stringify(l.size)} is not a footprint of three positive metres`;
+  return null;
 }
 
 // ---- command line ----

@@ -194,8 +194,9 @@ export function modelStandIns(THREE, readFileSync, root) {
                 const a = json.accessors[p.attributes.POSITION];
                 for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], a.min[i]); max[i] = Math.max(max[i], a.max[i]); }
             }
-            const t = node.translation || [0, 0, 0];
-            out.set(node.name, { min: min.map((v, i) => v + t[i]), max: max.map((v, i) => v + t[i]) });
+            // A packed file stores integer positions under a node scale (village_kit pack_colours: 0.001)
+            const t = node.translation || [0, 0, 0], k = node.scale || [1, 1, 1];
+            out.set(node.name, { min: min.map((v, i) => v * k[i] + t[i]), max: max.map((v, i) => v * k[i] + t[i]) });
         }
         return out;
     };
@@ -211,5 +212,8 @@ export function modelStandIns(THREE, readFileSync, root) {
         for (const name of names) if (found.has(name)) trees.push({ kind, name, parts: part(found.get(name)) });
     }
     const houses = [...bounds('assets/village/houses.glb')].filter(([name]) => name.startsWith('house_') && !name.includes(':')).sort((p, q) => p[0].localeCompare(q[0])).map(([name, b]) => ({ name, parts: part(b) }));
-    return { trees, houses };
+    // The landmark models (WorldEnvironment.load reads models.landmarks in place of loading them): asset -> {meshes}
+    const assets = JSON.parse(readFileSync(new URL('tools/world/landmarks.json', root), 'utf8')).map(l => l.asset).filter(a => /\.glb$/.test(a));
+    const landmarks = new Map([...new Set(assets)].map(asset => [asset, { meshes: new Map([...bounds(asset)].filter(([name]) => !name.includes(':')).map(([name, b]) => [name, part(b)])) }]));
+    return { trees, houses, landmarks };
 }

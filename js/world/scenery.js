@@ -578,26 +578,60 @@ class Scenery {
         return null;
     }
 
-    // The boxes of landmarks.json, set beside the road they were snapped to: [{name, asset, size, x, y, z, heading}]
+    // The landmark models of a manifest ({name, asset} with asset a .glb in assets/), loaded once: asset -> model
+    static async loadLandmarks(list, loadModel) {
+        const out = new Map();
+        for (const asset of [...new Set(list.map(l => l.asset))]) {
+            try {
+                out.set(asset, await loadModel(asset));
+            } catch (error) {
+                console.warn(`world landmark model ${asset} unavailable (${error.message}); left out`);
+            }
+        }
+        return out;
+    }
+
+    // The landmarks of landmarks.json, each its model (Scenery.loadLandmarks, held in `landmarkModels`) beside the road
+    // it was snapped to: [{name, asset, size, s}]. Its front (the model's -z) faces the road, its foot on the lowest
+    // land under its footprint. A landmark with no model is left out: there is no placeholder
     landmarks(list, route) {
         const group = new THREE.Group();
         group.name = 'world-landmarks';
         for (const l of list) {
-            if (l.asset !== 'box' || !l.size) continue;
+            const model = this.landmarkModels ? this.landmarkModels.get(l.asset) : null;
+            if (!model || !l.size) {
+                console.warn(`world landmark ${l.name}: no model for ${l.asset}; left out`);
+                continue;
+            }
             const place = this.landmarkPlace(l, route);
             if (!place) {
                 console.warn(`world landmark ${l.name}: no place clear of the roads near s ${l.s}; left out`);
                 continue;
             }
-            const sample = { y: place.y, heading: place.heading };
-            const x = place.x, z = place.z;
-            const ground = this.ground.tileHeight(x, z);
-            const mesh = new THREE.Mesh(new THREE.BoxGeometry(l.size[0], l.size[1], l.size[2]), new THREE.MeshLambertMaterial({ color: 0x9d9486 }));
-            mesh.position.set(x, (ground === null ? sample.y : Math.min(ground, sample.y)) + l.size[1] / 2 - 0.5, z);
-            mesh.rotation.y = sample.heading;
-            mesh.name = `landmark:${l.name}`;
-            mesh.userData.world = 'landmark';
-            group.add(mesh);
+            const road = route.sample(Math.max(0, Math.min(route.length, l.s)), {});
+            const yaw = Math.atan2(-(road.x - place.x), -(road.z - place.z));
+            const cos = Math.cos(yaw), sin = Math.sin(yaw);
+            let ground = Infinity;
+            for (const [a, b] of [[0, 0], [-1, -1], [1, -1], [-1, 1], [1, 1], [-1, 0], [1, 0], [0, -1], [0, 1]]) {
+                const lx = (a * l.size[0]) / 2, lz = (b * l.size[2]) / 2;
+                const y = this.ground.tileHeight(place.x + lx * cos + lz * sin, place.z - lx * sin + lz * cos);
+                if (y !== null) ground = Math.min(ground, y);
+            }
+            const node = new THREE.Group();
+            node.name = `landmark:${l.name}`;
+            for (const [name, parts] of model.meshes) {
+                if (name.includes(':')) continue;
+                for (const part of parts) {
+                    const mesh = new THREE.Mesh(part.geometry, part.material);
+                    mesh.name = `landmark:${l.name}`;
+                    mesh.receiveShadow = true;
+                    mesh.userData.world = 'landmark';
+                    node.add(mesh);
+                }
+            }
+            node.position.set(place.x, Number.isFinite(ground) ? Math.min(ground, place.y) : place.y, place.z);
+            node.rotation.y = yaw;
+            group.add(node);
         }
         return group;
     }

@@ -633,14 +633,25 @@ describe('Scenery', () => {
         expect(many.count).toBe(Scenery.SIGN_CAP);
     });
 
-    test('a landmark box stands beside the road, not on it', () => {
+    test('a landmark is its model beside the road, front to the road; a placeholder box or a missing model is never drawn', () => {
         const scenery = new Scenery(ground, data);
-        const group = scenery.landmarks([{ name: 'Hospiz', asset: 'box', size: [28, 10, 14], s: 100 }, { name: 'Bridge', asset: 'assets/bridge/stone.glb', s: 200 }], route);
-        expect(group.children).toHaveLength(1);
-        const mesh = group.children[0];
-        // The road is along x = 0 here: the box clears its half width, the road's half width and a margin
-        expect(Math.abs(mesh.position.x)).toBeGreaterThanOrEqual(5 + 7 + 8 - 1e-6);
-        expect(mesh.name).toBe('landmark:Hospiz');
+        const part = { geometry: new THREE.BoxGeometry(43, 15, 13), material: new THREE.MeshBasicMaterial() };
+        scenery.landmarkModels = new Map([['assets/village/hospiz.glb', { meshes: new Map([['landmark_hospiz', [part]], ['landmark_hospiz:left', []]]) }]]);
+        const group = scenery.landmarks([
+            { name: 'Hospiz', asset: 'assets/village/hospiz.glb', size: [43, 15, 13], s: 100 },
+            { name: 'Placeholder', asset: 'box', size: [28, 10, 14], s: 150 },
+            { name: 'Bridge', asset: 'assets/bridge/stone.glb', size: [60, 20, 10], s: 200 }
+        ], route);
+        expect(group.children.map(c => c.name)).toEqual(['landmark:Hospiz']);
+        const node = group.children[0];
+        expect(node.children).toHaveLength(1);
+        expect(node.children[0].geometry).toBe(part.geometry);
+        // The road is along x = 0 here: the footprint clears its half diagonal, the road's half width and a margin
+        expect(Math.abs(node.position.x)).toBeGreaterThanOrEqual(Math.hypot(43, 13) / 2 + 5 - 1e-6);
+        // The model's front (-z) looks at the road
+        const front = new THREE.Vector3(0, 0, -1).applyEuler(node.rotation);
+        expect(Math.sign(front.x)).toBe(-Math.sign(node.position.x));
+        expect(Math.abs(front.x)).toBeCloseTo(1, 6);
     });
 });
 

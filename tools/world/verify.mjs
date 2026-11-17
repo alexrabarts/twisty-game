@@ -1,5 +1,5 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22, the stacked-leg gate and floating roads).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|floating|overlap|horizon|dem|all> --stages <ids|all>
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|floating|overlap|horizon|landmarks|dem|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
 // dem reads the DEM from the cache; fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
@@ -14,7 +14,7 @@ import { GeoPackage } from './gpkg.mjs';
 import { findGpkg } from './cache.mjs';
 import { scopedRoute } from './stages.mjs';
 import { TILE_M, CELL_M, TILE_N, ZONE, VERGE_M, JOIN_M, BATTER, EARTHWORK_M, segmentIndex, stripHalf } from './bench.mjs';
-import { buildWorld, loadTlmSource, stageDefs } from './import.mjs';
+import { buildWorld, loadTlmSource, stageDefs, landmarkAssetProblem } from './import.mjs';
 import { syntheticSource } from './synthetic.mjs';
 import { ROAD_CLEAR_M, roadBands } from './buildings.mjs';
 import { resolveCacheDir } from './cache.mjs';
@@ -605,6 +605,14 @@ export function checkHorizon(decoded) {
   return check('horizon', problems.length === 0, { nodes, over, worstM: Math.round(worst * 100) / 100, sinks: !!farSink, worst: list.slice(0, 12), problems });
 }
 
+// Landmarks: every one in the manifest is drawn from a model in assets/ (import.mjs landmarkAssetProblem): never a box
+export function checkLandmarks(decoded, repoRoot = REPO_ROOT) {
+  const list = decoded.manifest.landmarks || [];
+  const bad = list.map(l => ({ name: l.name, asset: l.asset, problem: landmarkAssetProblem(l, repoRoot) })).filter(l => l.problem);
+  const problems = bad.map(l => `landmark ${l.name}: ${l.problem}`);
+  return check('landmarks', problems.length === 0, { landmarks: list.length, bad: bad.length, problems });
+}
+
 async function sourceFor(opt) {
   if (opt.synthetic) return { source: syntheticSource(), spacing: 500 };
   const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
@@ -625,7 +633,7 @@ export async function main(argv) {
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'floating', 'overlap', 'horizon', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'floating', 'overlap', 'horizon', 'landmarks', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
   let demAt = null;
@@ -643,7 +651,7 @@ export async function main(argv) {
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), dem: () => checkDem(decoded, demAt),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), landmarks: () => checkLandmarks(decoded), dem: () => checkDem(decoded, demAt),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {
