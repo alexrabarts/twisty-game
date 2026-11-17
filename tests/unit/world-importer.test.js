@@ -21,7 +21,7 @@ import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/w
 import { encodeFiles, writeWorld, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
 import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.mjs';
 import { orientedBox } from '../../tools/world/buildings.mjs';
-import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkGraph, LIMITS } from '../../tools/world/verify.mjs';
+import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, LIMITS } from '../../tools/world/verify.mjs';
 import { wgs84ToLv95, lv95ToWgs84 } from '../../tools/world/dem.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -538,6 +538,26 @@ describe('the committed Tremola slice (world/)', () => {
         const g = checkGraph(decoded, { nodes: decoded.nodes, edges: decoded.edges });
         expect(g.details.problems).toEqual([]);
         expect(decoded.junctions.length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('the graph keeps the whole corridor inspect counts for the slice (P22): 588 source edges, 2 stubs under 1 m dropped', () => {
+        const built = { nodes: decoded.nodes, edges: decoded.edges, stats: { corridor: { sourceEdges: 588, stubsDropped: 2 } } };
+        expect(checkGraph(decoded, built, { corridorEdges: 588 }).details.problems).toEqual([]);
+        // The count inspect.mjs gave for the whole ride, which is not this slice's corridor
+        expect(checkGraph(decoded, built, { corridorEdges: 5445 }).ok).toBe(false);
+    });
+
+    test('no crest needs an airborne state: the smallest lift-off speed is 35 m/s or more, 5 crests listed (P39)', () => {
+        const r = checkCrests(decoded);
+        expect(r.details.problems).toEqual([]);
+        expect(r.details.minLiftoffMps).toBeGreaterThanOrEqual(35);
+        expect(r.details.lowest).toHaveLength(5);
+    });
+
+    test('the stations are where the placement rule puts them, and a tight bend is listed, not hidden (P36)', () => {
+        const r = checkStations(decoded);
+        expect(r.details.problems).toEqual([]);
+        expect(r.details.tightBend.map(b => b.s)).toEqual([11434.3]);
     });
 
     test('the stacked gate fails when the cap on banked allowance is raised past half the closest pair', () => {

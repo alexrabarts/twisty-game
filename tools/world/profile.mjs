@@ -126,6 +126,85 @@ export function reconcileNodes(edges, nodes) {
   }
 }
 
+// Crests keep the bike on the road without an airborne state only when it would need at least CREST_MIN_MPS to
+// leave the surface: sqrt(g / kappa) for the vertical curvature kappa at the crest. kappa is read over a fixed
+// +-CREST_WINDOW_M window, (y(s+W) - 2 y(s) + y(s-W)) / W^2 with y interpolated along the arc, so it does not
+// depend on how the resampler spaced the samples. Where a crest is sharper than the import limit, the profile is
+// eased locally: a sample moves to the height that gives the limit curvature, and the passes repeat until none is
+// sharper (a move changes its neighbours). Structures keep their own profile.
+export const CREST_MIN_MPS = 35;
+export const CREST_IMPORT_MPS = 36;
+export const CREST_WINDOW_M = 4;
+
+// Height at arc distance `at` along samples with cumulative distance `cum`, held flat beyond the ends
+export function heightAlong(cum, y, at) {
+  if (at <= cum[0]) return y[0];
+  const last = cum.length - 1;
+  if (at >= cum[last]) return y[last];
+  let lo = 0, hi = last;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (cum[mid] <= at) lo = mid; else hi = mid; }
+  const run = cum[hi] - cum[lo];
+  return run === 0 ? y[lo] : y[lo] + ((y[hi] - y[lo]) * (at - cum[lo])) / run;
+}
+
+// Vertical curvature at sample i (negative on a crest), or null where the window leaves the line
+export function verticalCurvature(cum, y, i, window = CREST_WINDOW_M) {
+  if (cum[i] - window < cum[0] - 1e-9 || cum[i] + window > cum[cum.length - 1] + 1e-9) return null;
+  return (heightAlong(cum, y, cum[i] + window) - 2 * y[i] + heightAlong(cum, y, cum[i] - window)) / (window * window);
+}
+
+// The crests are the ride's, and the sharpest sit where two edges meet, so the pass runs over the ride as one line of
+// samples. A sample that is the end of an edge is a node: the node and every edge end at it move together. Returns the
+// largest move in metres.
+export function limitRideCrests(edges, ride, nodes, { minMps = CREST_IMPORT_MPS, passes = 400 } = {}) {
+  const kMax = 9.81 / (minMps * minMps);
+  const refs = [];
+  ride.forEach((use, k) => {
+    const e = edges[use.edgeId];
+    const n = e.x.length;
+    for (let j = k === 0 ? 0 : 1; j < n; j++) refs.push({ e, i: use.dir === 1 ? j : n - 1 - j });
+  });
+  const count = refs.length;
+  const cum = new Float64Array(count);
+  const y = new Float64Array(count);
+  for (let r = 0; r < count; r++) {
+    const { e, i } = refs[r];
+    if (r) cum[r] = cum[r - 1] + Math.hypot(e.x[i] - refs[r - 1].e.x[refs[r - 1].i], e.z[i] - refs[r - 1].e.z[refs[r - 1].i]);
+    y[r] = e.y[i];
+  }
+  const incident = new Map();
+  for (const e of edges) for (const [node, i] of [[e.a, 0], [e.b, e.y.length - 1]]) {
+    if (!incident.has(node)) incident.set(node, []);
+    incident.get(node).push([e, i]);
+  }
+  const set = (r, value) => {
+    y[r] = value;
+    const { e, i } = refs[r];
+    e.y[i] = value;
+    if (i === 0 || i === e.y.length - 1) {
+      const node = i === 0 ? e.a : e.b;
+      nodes[node].y = value;
+      for (const [other, at] of incident.get(node)) other.y[at] = value;
+    }
+  };
+  let moved = 0;
+  for (let pass = 0; pass < passes; pass++) {
+    let changed = false;
+    for (let r = 1; r < count - 1; r++) {
+      if (refs[r].e.flags[refs[r].i] & ROOFED) continue;
+      const kappa = verticalCurvature(cum, y, r);
+      if (kappa === null || -kappa <= kMax) continue;
+      const ahead = heightAlong(cum, y, cum[r] + CREST_WINDOW_M), behind = heightAlong(cum, y, cum[r] - CREST_WINDOW_M);
+      const target = (ahead + behind) / 2 + (kMax * CREST_WINDOW_M * CREST_WINDOW_M) / 2;
+      moved = Math.max(moved, Math.abs(target - y[r]));
+      set(r, target);
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  return moved;
+}
+
 // How far the profile sits from the DEM outside structures: per sample, the smallest gap to the DEM at 3 lateral
 // offsets. Returns the gaps (metres), unsorted.
 export function demGaps(edge, demAt) {

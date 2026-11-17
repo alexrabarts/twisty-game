@@ -8,9 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { GeoPackage } from './gpkg.mjs';
 import { resolveCacheDir, findGpkg, ensureAlti3d, TLM_NAME } from './cache.mjs';
 import { loadEdges } from './inspect.mjs';
+import { stageDefs } from './stages.mjs';
 import { buildCorridorGraph, degreeOf, GraphGapError } from './graph.mjs';
 import { resampleEdge, resampleLine, polylineLengths } from './resample.mjs';
-import { profileEdge, reconcileNodes, demGaps, summariseGaps, FLAG } from './profile.mjs';
+import { profileEdge, reconcileNodes, limitRideCrests, demGaps, summariseGaps, FLAG } from './profile.mjs';
 import { createBencher, TILE_M } from './bench.mjs';
 import { rasterizeCover, coverLookup, coverPolysFromRows } from './landcover.mjs';
 import { buildingsFromRows } from './buildings.mjs';
@@ -42,25 +43,7 @@ export function classWidth(cls) {
   return 5;
 }
 
-const slug = name => name.toLowerCase().replace(/ö/g, 'oe').replace(/ä/g, 'ae').replace(/ü/g, 'ue').replace(/é/g, 'e').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-
-// Stages of the ride: the slices named in route.json, or the stages between its boundary waypoints.
-export function stageDefs(route, ids) {
-  const wp = route.waypoints;
-  const all = [];
-  const boundaries = wp.filter(w => w.boundary);
-  for (let k = 0; k + 1 < boundaries.length; k++) {
-    const a = wp.indexOf(boundaries[k]), b = wp.indexOf(boundaries[k + 1]);
-    all.push({ id: `${slug(boundaries[k].name)}-${slug(boundaries[k + 1].name)}`, name: `${boundaries[k].name} to ${boundaries[k + 1].name}`, waypoints: wp.slice(a, b + 1) });
-  }
-  const slices = Object.entries(route.slices ?? {}).map(([id, s]) => ({ id, name: s.name, waypoints: s.waypoints.map(i => wp.find(w => w.id === i)) }));
-  if (ids.length === 1 && ids[0] === 'all') return all;
-  return ids.map(id => {
-    const found = slices.find(s => s.id === id) ?? all.find(s => s.id === id);
-    if (!found) throw new Error(`unknown stage "${id}". Known: ${[...slices, ...all].map(s => s.id).join(', ')}`);
-    return found;
-  });
-}
+export { stageDefs };
 
 // ---- the real source: swissTLM3D and swissALTI3D from the cache ----
 
@@ -186,6 +169,8 @@ function resampleRide(edges, ride, nodes) {
 export async function buildWorld(source, { stationSpacingM = 1000, log = () => {} } = {}) {
   const g = buildCorridorGraph({ edges: source.edges, stages: source.stages });
   const edges = g.edges.filter(e => e.onRide || e.length >= 1);
+  // What the corridor held before stubs under 1 m were dropped: source edges (inspect.mjs counts those) and stubs
+  const corridor = { sourceEdges: new Set(g.edges.map(e => e.fid ?? `p${e.pieceId}`)).size, stubsDropped: g.edges.length - edges.length };
   // Dropping a side edge changes ids, so renumber and fix the ride's references.
   const remap = new Map(edges.map((e, i) => [e.id, i]));
   edges.forEach((e, i) => { e.id = i; });
@@ -223,6 +208,7 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
     }
   }
   reconcileNodes(edges, g.nodes);
+  stats.crestMoveM = limitRideCrests(edges, ride, g.nodes);
   const gaps = edges.filter(e => e.onRide).flatMap(e => demGaps(e, demAt));
   const dem = summariseGaps(gaps);
   Object.assign(stats, { demOverM: dem.over, demSamples: dem.count, demP99M: dem.p99, demMaxM: dem.max });
@@ -288,7 +274,7 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   return {
     origin: source.origin, credit: source.credit, sources: source.sources, spacingM: 4, stationSpacingM, keptRoadClasses: source.keptRoadClasses ?? [...new Set(edges.map(e => e.cls))].sort(),
     nodes, edges, ride, junctions, stages, stations, tiles, cover, far, buildings, landmarks, structures: structureRuns(samples),
-    samples, stats: { ...stats, tilesMissingHeight: missing, droppedStations: placed.dropped, maxStationGapM: placed.maxGapM, snaps: g.snaps }
+    samples, stats: { ...stats, corridor, tilesMissingHeight: missing, droppedStations: placed.dropped, maxStationGapM: placed.maxGapM, snaps: g.snaps }
   };
 }
 

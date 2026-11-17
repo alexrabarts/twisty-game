@@ -1,11 +1,14 @@
 // W0 data gate. Reads swissTLM3D from the cache, snaps route.json to the road graph and prints one JSON report.
-//   node tools/world/inspect.mjs [--gpkg <file>] [--route <route.json>] [--margin <m>]
+//   node tools/world/inspect.mjs [--gpkg <file>] [--route <route.json>] [--margin <m>] [--stages <ids|all>]
+// --stages scopes the report to those stages (default and 'all': the whole route), so its corridorEdges are the
+// ones tools/world/verify.mjs graph --stages <ids> compares the built graph with.
 // Exit code 4 when a consecutive waypoint pair is not connected (gate outcome 4: stop and change the plan).
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GeoPackage } from './gpkg.mjs';
 import { resolveCacheDir, findGpkg } from './cache.mjs';
+import { scopedRoute } from './stages.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // swissTLM3D 2026-02 GeoPackage: the road layer is tlm_strassen_strasse (the plan's TLM_STRASSE), lower-case columns.
@@ -281,14 +284,14 @@ function finishReport({ loaded, kept, classCounts, snaps, graph, route }) {
   for (let k = 0; k + 1 < snaps.length; k++) {
     const a = snapNode[k], b = snapNode[k + 1];
     const from = snaps[k].waypoint, to = snaps[k + 1].waypoint;
-    if (a === b) { connectivity.push({ from: from.name, to: to.name, gap: 0, lengthM: 0 }); continue; }
+    if (a === b) { connectivity.push({ from: from.name, to: to.name, gap: false, gapM: 0, lengthM: 0 }); continue; }
     const path = shortestPath(graph, a, b);
     if (!path) {
-      connectivity.push({ from: from.name, to: to.name, gap: round(componentGap(graph, label, a, b), 1), lengthM: null });
+      connectivity.push({ from: from.name, to: to.name, gap: true, gapM: round(componentGap(graph, label, a, b), 1), lengthM: null });
       continue;
     }
     ride.push(...path);
-    connectivity.push({ from: from.name, to: to.name, gap: 0, lengthM: Math.round(path.reduce((s, p) => s + graph.pieces[p.piece].len, 0)) });
+    connectivity.push({ from: from.name, to: to.name, gap: false, gapM: 0, lengthM: Math.round(path.reduce((s, p) => s + graph.pieces[p.piece].len, 0)) });
   }
 
   // Corridor test: a 100 m grid stamped with every cell whose centre is within 1 km of the ride polyline.
@@ -368,9 +371,12 @@ function finishReport({ loaded, kept, classCounts, snaps, graph, route }) {
     if (degree < 3) continue;
     const nw = nearestWaypoint(node.xy);
     const names = [...new Set(incident.map(p => p.name).filter(Boolean))].sort();
+    const waypoint = nw.d <= 2000 ? nw.name : null;
     junctionRows.push({
-      name: names.join(' / ') || null,
-      nearestWaypoint: nw.d <= 2000 ? nw.name : null,
+      // The junction is named for the waypoint it sits at; the roads that meet there are listed apart
+      name: waypoint ?? (names.join(' / ') || null),
+      roads: names.join(' / ') || null,
+      nearestWaypoint: waypoint,
       lv95: [Math.round(node.xy[0]), Math.round(node.xy[1])],
       degree,
       roadClasses: [...new Set(incident.map(p => p.cls))].sort(),
@@ -422,7 +428,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const opt = n => { const i = args.indexOf(`--${n}`); return i >= 0 ? args[i + 1] : null; };
   const gpkgFile = opt('gpkg') ?? findGpkg(path.join(resolveCacheDir(), 'tlm'));
-  const route = JSON.parse(fs.readFileSync(opt('route') ?? path.join(HERE, 'route.json'), 'utf8'));
+  const route = scopedRoute(JSON.parse(fs.readFileSync(opt('route') ?? path.join(HERE, 'route.json'), 'utf8')), (opt('stages') ?? 'all').split(','));
   const gpkg = new GeoPackage(gpkgFile);
   const report = buildReport(gpkg, route, { marginM: Number(opt('margin') ?? 3000) });
   report.tables = gpkg.tables().filter(t => !/^(rtree_|gpkg_|sqlite_)/.test(t));

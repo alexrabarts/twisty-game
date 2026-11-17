@@ -1,5 +1,5 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22 and the stacked-leg gate).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|all> --stages <ids|all>
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
 // fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
@@ -7,7 +7,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decodeWorld } from './encode.mjs';
 import { R_MIN, nearestOnPolyline, polylineLengths } from './resample.mjs';
-import { rideSamples } from './stations.mjs';
+import { rideSamples, placeStations } from './stations.mjs';
+import { ROOFED, CREST_MIN_MPS, verticalCurvature } from './profile.mjs';
+import { buildReport } from './inspect.mjs';
+import { GeoPackage } from './gpkg.mjs';
+import { findGpkg } from './cache.mjs';
+import { scopedRoute } from './stages.mjs';
 import { TILE_M, CELL_M, TILE_N, ZONE } from './bench.mjs';
 import { buildWorld, loadTlmSource, stageDefs } from './import.mjs';
 import { syntheticSource } from './synthetic.mjs';
@@ -142,7 +147,7 @@ export function checkSize(dir, { slice } = {}) {
 }
 
 // The graph in the files is the graph the cache gives, and the ride is one continuous path through it.
-export function checkGraph(decoded, built) {
+export function checkGraph(decoded, built, { corridorEdges = null } = {}) {
   const problems = [];
   if (decoded.nodes.length !== built.nodes.length) problems.push(`${decoded.nodes.length} nodes in the files, ${built.nodes.length} built`);
   if (decoded.edges.length !== built.edges.length) problems.push(`${decoded.edges.length} edges in the files, ${built.edges.length} built`);
@@ -157,22 +162,74 @@ export function checkGraph(decoded, built) {
     at = end;
   });
   if (decoded.junctions.length < 1) problems.push('no ride junction');
-  return check('graph', problems.length === 0, { nodes: decoded.nodes.length, edges: decoded.edges.length, rideUses: decoded.ride.path.length, junctions: decoded.junctions.length, maxLengthDiffM: Math.round(worst * 1e4) / 1e4, problems });
+  // The corridor the graph keeps is the corridor inspect.mjs counts for the same stages: every source edge in it, less
+  // the stubs under 1 m the importer drops. `corridorEdges` is inspect's count; null skips the comparison (synthetic).
+  const kept = built.stats?.corridor ?? { sourceEdges: null, stubsDropped: null };
+  if (corridorEdges !== null && kept.sourceEdges !== corridorEdges) problems.push(`the graph holds ${kept.sourceEdges} source edges of the corridor, inspect counts ${corridorEdges}`);
+  return check('graph', problems.length === 0, { corridorEdges, sourceEdges: kept.sourceEdges, stubsDropped: kept.stubsDropped, nodes: decoded.nodes.length, edges: decoded.edges.length, rideUses: decoded.ride.path.length, junctions: decoded.junctions.length, maxLengthDiffM: Math.round(worst * 1e4) / 1e4, problems });
 }
 
+// Station rule (R3): spacing, stage boundaries as stations, the placement rule itself, and clearance. A real station
+// (a gate) keeps STATION_CLEAR_M from a junction and from a structure; that is a failure. Where even the best place in
+// its window has a bend under RADIUS_MIN_M within 50 m, the station is listed in `tightBend` (reported, not failed).
+export const STATION_CLEAR_M = 80;
+export const RADIUS_MIN_M = 60;
 export function checkStations(decoded) {
   const problems = [];
   const spacing = decoded.manifest.stationSpacingM;
-  for (const st of decoded.manifest.stages) {
-    const s = st.stations.map(id => decoded.ride.stations[id].s);
-    for (let k = 1; k < s.length; k++) {
-      const gap = s[k] - s[k - 1];
+  const samples = rideOf(decoded);
+  const junctionS = decoded.junctions.flatMap(j => j.passes.map(p => p.sIn));
+  const bounds = decoded.manifest.stages.map(st => ({ id: st.id, from: st.from, to: st.to }));
+  const tightBend = [], tooNear = [];
+  const stationS = id => decoded.ride.stations[id].s;
+  const near = (list, s) => list.reduce((m, v) => Math.min(m, Math.abs(v - s)), Infinity);
+  const windowOf = (s, r, test) => {
+    let hit = Infinity;
+    for (let i = 0; i < samples.s.length; i++) {
+      if (samples.s[i] < s - r) continue;
+      if (samples.s[i] > s + r) break;
+      hit = Math.min(hit, test(i));
+    }
+    return hit;
+  };
+  decoded.manifest.stages.forEach((st, k) => {
+    const s = st.stations.map(stationS);
+    if (Math.abs(s[0] - st.from) > 0.01 || Math.abs(s[s.length - 1] - st.to) > 0.01) problems.push(`${st.id}: the stage boundaries are not stations`);
+    for (let j = 1; j < s.length; j++) {
+      const gap = s[j] - s[j - 1];
       if (gap > 2 * spacing) problems.push(`${st.id}: gap ${gap.toFixed(0)} m over ${2 * spacing} m`);
       if (s.length > 2 && gap < spacing / 2 - 0.5) problems.push(`${st.id}: gap ${gap.toFixed(0)} m under ${spacing / 2} m`);
     }
     if (s.length - 2 !== st.gates) problems.push(`${st.id}: ${s.length - 2} interior stations, gates ${st.gates}`);
+    // The rule as the importer states it: the same picks come out of the decoded ride
+    const again = placeStations(samples, [bounds[k]], junctionS, { spacingM: spacing }).perStage[0].s;
+    if (again.length !== s.length || again.some((v, j) => Math.abs(v - s[j]) > 0.5)) problems.push(`${st.id}: the stations are not where the placement rule puts them`);
+    s.slice(1, -1).forEach((at, j) => {
+      const junction = near(junctionS, at);
+      const structure = windowOf(at, STATION_CLEAR_M, i => (samples.flags[i] & ROOFED ? Math.abs(samples.s[i] - at) : Infinity));
+      if (junction < STATION_CLEAR_M) problems.push(`${st.id}: station ${j + 1} at s ${at.toFixed(1)} is ${junction.toFixed(1)} m from a junction (limit ${STATION_CLEAR_M} m)`);
+      if (structure < STATION_CLEAR_M) problems.push(`${st.id}: station ${j + 1} at s ${at.toFixed(1)} is ${structure.toFixed(1)} m from a structure (limit ${STATION_CLEAR_M} m)`);
+      tooNear.push({ s: Math.round(at * 10) / 10, junctionM: Math.round(junction * 10) / 10, structureM: structure === Infinity ? null : Math.round(structure * 10) / 10 });
+      const radius = windowOf(at, 50, i => samples.radius[i]);
+      if (radius < RADIUS_MIN_M) tightBend.push({ stage: st.id, s: Math.round(at * 10) / 10, minRadius50m: Math.round(radius * 10) / 10 });
+    });
+  });
+  return check('stations', problems.length === 0, { stations: decoded.ride.stations.length, tightBend, problems });
+}
+
+// Crests: the lift-off speed sqrt(g / kappa) at each convex sample of the ride, kappa over the +-CREST_WINDOW_M window
+// of profile.mjs. The world has no airborne state, so the smallest must be CREST_MIN_MPS.
+export function checkCrests(decoded) {
+  const samples = rideOf(decoded);
+  const crests = [];
+  for (let i = 0; i < samples.s.length; i++) {
+    const kappa = verticalCurvature(samples.s, samples.y, i);
+    if (kappa !== null && kappa < 0) crests.push({ s: Math.round(samples.s[i] * 10) / 10, liftoffMps: Math.round(Math.sqrt(9.81 / -kappa) * 10) / 10 });
   }
-  return check('stations', problems.length === 0, { stations: decoded.ride.stations.length, problems });
+  crests.sort((p, q) => p.liftoffMps - q.liftoffMps);
+  const lowest = crests.slice(0, 5);
+  const problems = lowest.length && lowest[0].liftoffMps < CREST_MIN_MPS ? [`the lowest lift-off speed is ${lowest[0].liftoffMps} m/s at s ${lowest[0].s}, under ${CREST_MIN_MPS} m/s`] : [];
+  return check('crests', problems.length === 0, { crests: crests.length, minLiftoffMps: lowest[0]?.liftoffMps ?? null, lowest, problems });
 }
 
 function zoneAt(decoded, x, z) {
@@ -227,12 +284,20 @@ async function sourceFor(opt) {
   return { source: await loadTlmSource({ stages: stageDefs(route, opt.stages.split(',')), cacheDir }), spacing: 1000 };
 }
 
+// inspect.mjs's count of the corridor edges for the same stages
+function inspectedCorridorEdges(opt) {
+  const route = scopedRoute(JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8')), opt.stages.split(','));
+  const cacheDir = resolveCacheDir(opt.cache ? { ...process.env, TWISTY_WORLD_CACHE: opt.cache } : process.env);
+  const gpkg = new GeoPackage(findGpkg(path.join(cacheDir, 'tlm')));
+  try { return buildReport(gpkg, route).corridorEdges.total.count; } finally { gpkg.close(); }
+}
+
 export async function main(argv) {
   const [cmd = 'all', ...rest] = argv;
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
   if (wanted.some(c => ['fidelity', 'elevation', 'graph'].includes(c))) {
@@ -241,9 +306,10 @@ export async function main(argv) {
     source.close?.();
   }
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
+  const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded),
-    fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built)
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded),
+    fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {
     if (!runs[c]) throw new Error(`unknown check ${c}`);
