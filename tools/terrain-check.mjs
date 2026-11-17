@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
@@ -2144,7 +2144,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2751,6 +2751,91 @@ const WORLD = {
         per.forEach(h => { h.least = Math.round(h.least * 1000) / 1000; });
         return { margin, cruise, start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, frames, out, least: Math.round(least * 1000) / 1000, worstAt, hairpins: per };
     }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('speed') || 20), FRUSTUM_MARGIN),
+    // The hairpin assist (WorldAssist) on every hairpin of the ride, at each level, with a simple scripted rider
+    // (not the pilot): the pilot rides the 40 m up to the bend at the bend's advised speed; from max(3, 0.4 v) m
+    // before the bend to 10 m after it the rider steers full into the bend while the curvature that far ahead is
+    // over 1/30 m and lets go once it is not, and throttles to the advised speed (braking only when 15% over it).
+    // Per level: crashes, run-wides (past the outside edge by 0.5 m) and cuts (past the inside edge by 0.5 m)
+    // from the hand-over to 20 m past the bend.
+    // --apex <s> rides only the hairpin nearest s and returns a trace of every 6th tick of each level.
+    'world-hairpin-assist': async (page) => page.evaluate(async (placeSource, hairpinSource, traceApex) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+        const env = game.environment;
+        const route = env.route;
+        const physics = env.physics;
+        const v = game.vehicle;
+        const input = game.input;
+        const tight = 1 / 30;
+        const k = s => route.curvatureAt(s, 4);
+        twistyDev.freeze();
+        game.worldLinger = false;
+        const bends = hairpins.map(apex => {
+            let from = apex, to = apex;
+            while (from > apex - 120 && Math.abs(k(from - 2)) > tight) from -= 2;
+            while (to < apex + 120 && Math.abs(k(to + 2)) > tight) to += 2;
+            const advice = WorldAssist.advice(route, physics, from, 4);
+            return { apex: Math.round(apex), from, to, advised: advice ? advice.speed : 8 };
+        }).filter((bend, i, all) => !traceApex || Math.abs(bend.apex - traceApex) === Math.min(...all.map(b => Math.abs(b.apex - traceApex))));
+        let rider = { target: 8, from: 0, to: 0 };
+        // The approach and the road after the hairpin are the pilot's, so a bend before it cannot spoil the test
+        twistyDev.autopilot({ speed: 15 });
+        const pilot = { steer: input.getSteeringInput, throttle: input.getThrottleInput, brake: input.getBrakeInput };
+        const lead = () => Math.max(3, 0.4 * v.speed);
+        const riding = () => {
+            const s = v.projection.s ?? v.routeS;
+            return s >= rider.from - lead() && s <= rider.to + 10;
+        };
+        input.getSteeringInput = () => {
+            if (!riding()) return pilot.steer();
+            const ahead = k((v.projection.s ?? v.routeS) + lead());
+            return Math.abs(ahead) > tight ? Math.sign(ahead) : 0;
+        };
+        // The pilot slows for whatever the approach holds; the rider takes the bend at its advised speed
+        input.getThrottleInput = () => (riding() ? (v.speed < rider.target ? 1 : 0) : Math.min(pilot.throttle(), v.speed < rider.target ? 1 : 0));
+        input.getBrakeInput = () => (riding() ? (v.speed > rider.target * 1.15 ? 1 : 0) : pilot.brake());
+        input.getWheelieInput = () => 0;
+        const levels = {};
+        for (const level of ['off', 'low', 'normal']) {
+            const rows = [];
+            for (const bend of bends) {
+                v.reset();
+                v.assistLevel = level;
+                await placeAt(bend.from - 40);
+                v.resetHairpinAssist();
+                rider = { target: bend.advised, from: bend.from, to: bend.to };
+                v.speed = bend.advised;
+                const sign = Math.sign(k(bend.apex));
+                const row = { apex: bend.apex, crashed: false, wide: 0, cut: 0, trace: traceApex ? [] : undefined };
+                for (let tick = 0; tick < 60 * 40 && !v.crashed; tick++) {
+                    twistyDev.step(1);
+                    const p = v.projection;
+                    if (p.s > bend.to + 20) break;
+                    if (p.s < bend.from - lead()) continue;
+                    const outside = -p.lateral * sign - p.width / 2;
+                    const inside = p.lateral * sign - p.width / 2;
+                    row.wide = Math.max(row.wide, outside);
+                    row.cut = Math.max(row.cut, inside);
+                    if (row.trace && tick % 6 === 0) row.trace.push([Math.round(p.s - bend.from), input.getSteeringInput(), Math.round(-p.lateral * sign * 100) / 100, Math.round(-v.leanAngle * sign * 573) / 10, Math.round(v.speed * 10) / 10, v.lineCaptured ? 1 : 0, Math.round(1 / Math.abs(WorldAssist.curvature(route, physics, p.s)))].join(' '));
+                    if (tick % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                row.crashed = v.crashed;
+                // Where and how it went down: metres from the bend's start, the lean, the speed, the bike's colour
+                if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.frame.material.color.getHexString(), radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
+                row.wide = Math.round(row.wide * 100) / 100;
+                row.cut = Math.round(row.cut * 100) / 100;
+                rows.push(row);
+            }
+            levels[level] = {
+                hairpins: rows.length,
+                crashes: rows.filter(r => r.crashed).length,
+                runWide: rows.filter(r => r.wide > 0.5).length,
+                cut: rows.filter(r => r.cut > 0.5).length,
+                bad: rows.filter(r => r.crashed || r.wide > 0.5 || r.cut > 0.5 || r.trace)
+            };
+        }
+        return { bends: bends.length, levels };
+    }, placeAt.toString(), worldHairpins.toString(), Number(option('apex') || 0)),
     // Every model file (assets/**/*.glb, globbed here) through the page's own SceneAssets.loadModel: each mesh part
     // must carry a unit normal at every vertex, colours the shader reads as linear, and sane material values
     'world-models': async page => page.evaluate(async files => {
@@ -3185,6 +3270,12 @@ function worldChecks(report) {
         if (frustum.hairpins.length < 20) failures.push(`world-frustum: ${frustum.hairpins.length} hairpins found, want 20 or more`);
         if (frustum.out) failures.push(`world-frustum: the bike was within ${frustum.margin} of the screen edge or out of view on ${frustum.out} of ${frustum.frames} frames (worst ${frustum.least} at s ${frustum.worstAt})`);
         frustum.hairpins.forEach(h => { if (!(h.frames > 0)) failures.push(`world-frustum: no frames at the hairpin at s ${h.s}`); });
+    }
+    const assist = results['world-hairpin-assist'];
+    if (assist) {
+        const normal = assist.levels.normal;
+        if (assist.bends < 20) failures.push(`world-hairpin-assist: ${assist.bends} hairpins found, want 20 or more`);
+        if (normal.crashes) failures.push(`world-hairpin-assist: the scripted rider crashed on ${normal.crashes} hairpins with the assist at normal: ${JSON.stringify(normal.bad)}`);
     }
     const models = results['world-models'];
     if (models) {
