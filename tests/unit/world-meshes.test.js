@@ -311,6 +311,45 @@ describe('RoadMesh', () => {
         expect(batched.userData.structures[0].positions.length).toBeGreaterThan(0);
     });
 
+    // Every change of surface along the road is blended over RoadMesh.FEATHER_M: asphalt to setts, onto a structure
+    test('a change of surface is feathered: no surface weight steps more than 0.3 a metre between rows', () => {
+        const steepest = (weights, along) => Math.max(...weights.slice(1).map((w, k) => Math.abs(w - weights[k]) / (along[k + 1] - along[k])));
+        for (const bit of [8, 2]) {
+            const rows = line(40).map((r, i) => ({ ...r, s: i * 4, bits: i >= 20 && i < 30 ? bit : 0 }));
+            const road = RoadMesh.ribbon(rows, 0).geometry.attributes.road.array;
+            const lane = bit === 8 ? 1 : 3;
+            const weights = rows.map((_, k) => road[k * 7 * 4 + lane]);
+            expect({ bit, steepest: steepest(weights, rows.map(r => r.s)) <= 0.3 }).toEqual({ bit, steepest: true });
+            // The blend spans FEATHER_M or more: from the last row wholly the one surface to the first wholly the other
+            const lastBare = rows[weights.findIndex(w => w > 0) - 1].s, firstFull = rows[weights.indexOf(1)].s;
+            expect(firstFull - lastBare).toBeGreaterThanOrEqual(RoadMesh.FEATHER_M);
+            // Fully the one surface away from the change, fully the other inside it
+            expect(weights[0]).toBe(0);
+            expect(weights[25]).toBe(1);
+        }
+        // Rows held closer (a side road's inserted rows): still no more than 0.3 a metre
+        const close = line(40).map((r, i) => ({ ...r, z: i, s: i, bits: i >= 20 ? 8 : 0 }));
+        const road = RoadMesh.ribbon(close, 0).geometry.attributes.road.array;
+        expect(steepest(close.map((_, k) => road[k * 7 * 4 + 1]), close.map(r => r.s))).toBeLessThanOrEqual(0.3);
+        // The shader blends the two surfaces by the weight: it never switches on it
+        const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.standard.vertexShader, fragmentShader: THREE.ShaderLib.standard.fragmentShader };
+        RoadSurface.nearMaterial().onBeforeCompile(shader);
+        expect(shader.fragmentShader).not.toMatch(/step\(0\.5, vRoad\.y\)/);
+        expect(shader.fragmentShader).toContain('mix(roadAA, roadAS, roadSett)');
+        // The far ribbon's colour blends the same way
+        const rows = line(80).map((r, i) => ({ ...r, s: i * 4, bits: i >= 40 ? 8 : 0 }));
+        const far = RoadMesh.ribbon(rows, 1);
+        const colour = far.geometry.attributes.color.array, pos = far.geometry.attributes.position.array;
+        const a = RoadMesh.COLORS.asphalt, c = RoadMesh.COLORS.cobbles;
+        const share = v => (colour[v * 3] - a[0]) / (c[0] - a[0]);
+        const byZ = new Map();
+        for (let v = 0; v < pos.length / 3; v++) byZ.set(Math.round(pos[v * 3 + 2] * 100) / 100, share(v));
+        const zs = [...byZ.keys()].sort((p, q) => p - q);
+        expect(steepest(zs.map(z => byZ.get(z)), zs)).toBeLessThanOrEqual(0.3);
+        expect(byZ.get(zs[0])).toBeCloseTo(0, 5);
+        expect(byZ.get(zs[zs.length - 1])).toBeCloseTo(1, 5);
+    });
+
     test('the edge works: an apron at the batter down to lower land, a wall with a parapet, a deck with a soffit, none on a structure', () => {
         const rows = line(10);
         const near = RoadMesh.ribbon(rows, 0);
@@ -812,8 +851,8 @@ describe('RoadSurface', () => {
         const shader = { uniforms: THREE.UniformsUtils.clone(lib.uniforms), vertexShader: lib.vertexShader, fragmentShader: lib.fragmentShader };
         material.onBeforeCompile(shader, null);
         // The fades read the footprint, not the smaller of the two widths (which stays small edge-on)
-        expect(shader.fragmentShader).toContain('roadFine = roadFootprint(gxS, gyS)');
-        expect(shader.fragmentShader).toContain('roadFine = roadFootprint(gxA, gyA)');
+        expect(shader.fragmentShader).toContain('roadFineS = roadFootprint(gxS, gyS)');
+        expect(shader.fragmentShader).toContain('roadFineA = roadFootprint(gxA, gyA)');
         expect(shader.fragmentShader).not.toMatch(/min\(roadFwLat, roadFwAlong\)/);
         expect(shader.uniforms.roadSettRough.value).toBeGreaterThan(0.5);
         expect(shader.uniforms.roadSettRough.value).toBeLessThan(1);

@@ -80,6 +80,25 @@ class RoadMesh {
         return RoadMesh.sharedStone;
     }
 
+    // Metres over which a change of surface (asphalt to setts, onto a structure and off it) is blended
+    static get FEATHER_M() { return 5; }
+
+    // A surface flag per row (`on(row)`) as a weight 0 to 1 that ramps over FEATHER_M of `along` (metres) centred on
+    // each change between two rows, so no change of surface is a hard line across the road
+    static feather(rows, along, on) {
+        const flags = rows.map(row => (on(row) ? 1 : 0));
+        const changes = [];
+        for (let k = 1; k < rows.length; k++) if (flags[k] !== flags[k - 1]) changes.push((along[k] + along[k - 1]) / 2);
+        const half = RoadMesh.FEATHER_M / 2;
+        return flags.map((flag, k) => {
+            let near = Infinity;
+            for (const at of changes) near = Math.min(near, Math.abs(along[k] - at));
+            if (near >= half) return flag;
+            const ramp = 0.5 + (0.5 * near) / half;
+            return flag ? ramp : 1 - ramp;
+        });
+    }
+
     // Verge drawn past the edge on a bridge (inside the deck's overhang) and in a tunnel (up to the wall)
     static get BRIDGE_VERGE_M() { return 0.4; }
     static get TUNNEL_VERGE_M() { return 0.7; }
@@ -175,6 +194,8 @@ class RoadMesh {
         const edge = new Float32Array(n * W * 4);
         let clamped = 0;
         const sides = [];
+        const sett = RoadMesh.feather(rows, along, row => (row.bits & 8) !== 0);
+        const built = RoadMesh.feather(rows, along, row => (row.bits & 7) !== 0);
         styled.forEach((row, k) => {
             const h = row.width / 2;
             const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
@@ -191,7 +212,7 @@ class RoadMesh {
                 const q = RoadMesh.columnShare(offset, curve[k]);
                 arc.set([v * q, turn[k] * q, q], at * 3);
                 plane.set([p.x - origin[0], p.z - origin[1]], at * 2);
-                road.set([h, (row.bits & 8) !== 0 ? 1 : 0, row.centre ?? C.none, bridge || tunnel ? 1 : 0], at * 4);
+                road.set([h, sett[k], row.centre ?? C.none, built[k]], at * 4);
                 edge.set([row.left ?? 0, row.right ?? 0, row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
             });
             const l = k * W * 3, r = (k * W + W - 1) * 3;
@@ -229,12 +250,17 @@ class RoadMesh {
         const shades = [];
         let clamped = 0;
         const push = (x, y, z, c, row) => { positions.push(x, holdY ? holdY(x, y, z, row) : y, z); shades.push(c[0], c[1], c[2]); };
+        // The setts blend in over FEATHER_M (RoadMesh.feather), each row its own colour
+        const along = [];
+        kept.forEach((row, i) => along.push(row.s !== undefined ? row.s : i === 0 ? 0 : along[i - 1] + Math.hypot(row.x - kept[i - 1].x, row.z - kept[i - 1].z)));
+        const sett = RoadMesh.feather(kept, along, row => (row.bits & 8) !== 0);
         const laid = kept.map((row, k) => {
             const h = row.width / 2;
             const held = RoadMesh.hold([-h, h], curve[k]);
             if (held.clamped) clamped++;
             // A side road is seen from far off and from above: worn grey
-            const c = (row.bits & 8) !== 0 ? colors.cobbles : side ? colors.sideAsphalt : colors.asphalt;
+            const base = side ? colors.sideAsphalt : colors.asphalt;
+            const c = base.map((v, j) => v + (colors.cobbles[j] - v) * sett[k]);
             return { offsets: held.offsets, c, row };
         });
         const sides = laid.map(({ offsets, row }) => {
@@ -247,8 +273,8 @@ class RoadMesh {
             const pa0 = RoadMesh.place(a.row, a.offsets[0]), pa1 = RoadMesh.place(a.row, a.offsets[1]);
             const pb0 = RoadMesh.place(b.row, b.offsets[0]), pb1 = RoadMesh.place(b.row, b.offsets[1]);
             const ya = a.row.y + RoadMesh.LIFT_M, yb = b.row.y + RoadMesh.LIFT_M;
-            push(pa0.x, ya, pa0.z, a.c, a.row); push(pa1.x, ya, pa1.z, a.c, a.row); push(pb0.x, yb, pb0.z, a.c, b.row);
-            push(pa1.x, ya, pa1.z, a.c, a.row); push(pb1.x, yb, pb1.z, a.c, b.row); push(pb0.x, yb, pb0.z, a.c, b.row);
+            push(pa0.x, ya, pa0.z, a.c, a.row); push(pa1.x, ya, pa1.z, a.c, a.row); push(pb0.x, yb, pb0.z, b.c, b.row);
+            push(pa1.x, ya, pa1.z, a.c, a.row); push(pb1.x, yb, pb1.z, b.c, b.row); push(pb0.x, yb, pb0.z, b.c, b.row);
         }
         return { geometry: RoadMesh.geometry(positions, shades), triangles: positions.length / 9, clamped, near: false, sides };
     }

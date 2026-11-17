@@ -638,11 +638,12 @@ float roadFwAlong = abs(roadDx.y) + abs(roadDy.y);
 // Detail that fades with distance: the normal, the cracks' relief
 float roadNear = 1.0 - smoothstep(18.0, 140.0, roadDist);
 
-vec4 roadA;
-vec4 roadN;
-float roadSett = step(0.5, vRoad.y);
-float roadFine;
-if (roadSett > 0.5) {
+// The setts' weight (RoadMesh.feather): 0 asphalt, 1 setts, between them over FEATHER_M where the surface changes, so
+// the change is a blend and never a line across the road. Each surface is read only where it has weight
+float roadSett = clamp(vRoad.y, 0.0, 1.0);
+vec4 roadAS = vec4(0.0), roadNS = vec4(0.5, 0.5, 1.0, 0.0), roadAA = vec4(0.0), roadNA = vec4(0.5, 0.5, 1.0, 0.0);
+float roadFineS = 0.0, roadFineA = 0.0;
+if (roadSett > 0.001) {
     // Each 1.6 m arc takes the metres along of its own middle (RoadSurface.settAlong), so the setts keep their size on
     // the inside of a bend; the gradients follow it, without the step at the joint between two arcs
     float settBand = floor(roadLat / ${f(RoadSurface.SETTS_M)});
@@ -651,37 +652,41 @@ if (roadSett > 0.5) {
     vec2 uvS = vec2(roadLat, settT) / ${f(RoadSurface.SETTS_M)};
     vec2 gxS = vec2(roadDx.x, roadDx.y - settMid * roadDTurn.x);
     vec2 gyS = vec2(roadDy.x, roadDy.y - settMid * roadDTurn.y);
-    roadA = textureGrad(roadSettMap, uvS, gxS / ${f(RoadSurface.SETTS_M)}, gyS / ${f(RoadSurface.SETTS_M)});
-    roadN = textureGrad(roadSettNormal, uvS, gxS / ${f(RoadSurface.SETTS_M)}, gyS / ${f(RoadSurface.SETTS_M)});
+    roadAS = textureGrad(roadSettMap, uvS, gxS / ${f(RoadSurface.SETTS_M)}, gyS / ${f(RoadSurface.SETTS_M)});
+    roadNS = textureGrad(roadSettNormal, uvS, gxS / ${f(RoadSurface.SETTS_M)}, gyS / ${f(RoadSurface.SETTS_M)});
     // Each sett toned again in each copy of the tile, so no two copies match. The copy is that of the sett's own row
     // (the arc through it, up to the tile's edge), not the pixel's, so a sett across the tile's edge keeps one tone
     float settU = (fract(uvS.x) - 0.5) * ${f(RoadSurface.SETTS_M)};
     float settSag = ${f(RoadSurface.SETT_RADIUS_M)} - sqrt(${f(RoadSurface.SETT_RADIUS_M * RoadSurface.SETT_RADIUS_M)} - settU * settU);
     float settCopy = floor((settT + settSag) / ${f(RoadSurface.SETTS_M)}) + vRoadBase * ${f(RoadSurface.PERIOD_M / RoadSurface.SETTS_M)};
-    float again = landHash(vec2(roadN.a * 251.0, settBand * 17.0 + settCopy * 3.0));
+    float again = landHash(vec2(roadNS.a * 251.0, settBand * 17.0 + settCopy * 3.0));
     // By the patch a pixel covers: the relief goes flat first (its light aliases soonest), then once a pixel spans
     // about half a sett the colour and roughness are the means, before the joints can beat against the pixels (moire)
-    roadFine = roadFootprint(gxS, gyS);
-    float settFade = smoothstep(0.02, 0.06, roadFine);
-    roadA.rgb *= mix(1.0, 0.86 + 0.28 * again, step(0.004, roadN.a) * (1.0 - settFade));
-    roadA = mix(roadA, vec4(roadSettMean, roadSettRough), settFade);
-    roadN.xyz = mix(roadN.xyz, vec3(0.5, 0.5, 1.0), smoothstep(0.006, 0.03, roadFine));
-} else {
+    roadFineS = roadFootprint(gxS, gyS);
+    float settFade = smoothstep(0.02, 0.06, roadFineS);
+    roadAS.rgb *= mix(1.0, 0.86 + 0.28 * again, step(0.004, roadNS.a) * (1.0 - settFade));
+    roadAS = mix(roadAS, vec4(roadSettMean, roadSettRough), settFade);
+    roadNS.xyz = mix(roadNS.xyz, vec3(0.5, 0.5, 1.0), smoothstep(0.006, 0.03, roadFineS));
+}
+if (roadSett < 0.999) {
     // The grain has no direction: it is laid on the ground plane, so it keeps its size round any bend
     vec2 uvA = vRoadPlane / ${f(RoadSurface.ASPHALT_M)};
     // A second, larger copy (72 m / 13), turned square to the first, breaks the 1.5 m repeat; it only modulates the first
     vec2 uvB = vec2(-vRoadPlane.y, vRoadPlane.x) / ${f(RoadSurface.PERIOD_M / 13)} + vec2(0.37, 0.0);
-    roadA = textureGrad(map, uvA, gxA / ${f(RoadSurface.ASPHALT_M)}, gyA / ${f(RoadSurface.ASPHALT_M)});
-    roadN = textureGrad(normalMap, uvA, gxA / ${f(RoadSurface.ASPHALT_M)}, gyA / ${f(RoadSurface.ASPHALT_M)});
+    roadAA = textureGrad(map, uvA, gxA / ${f(RoadSurface.ASPHALT_M)}, gyA / ${f(RoadSurface.ASPHALT_M)});
+    roadNA = textureGrad(normalMap, uvA, gxA / ${f(RoadSurface.ASPHALT_M)}, gyA / ${f(RoadSurface.ASPHALT_M)});
     vec4 roadB = textureGrad(map, uvB, vec2(-gxA.y, gxA.x) / ${f(RoadSurface.PERIOD_M / 13)}, vec2(-gyA.y, gyA.x) / ${f(RoadSurface.PERIOD_M / 13)});
-    roadA.rgb *= mix(1.0, roadB.g / max(roadAsphaltMean.g, 0.01), 0.35);
+    roadAA.rgb *= mix(1.0, roadB.g / max(roadAsphaltMean.g, 0.01), 0.35);
     // The aggregate is read only close to: past about 8 mm a pixel it is the mean, and its relief goes sooner
-    roadFine = roadFootprint(gxA, gyA);
-    float grainFade = smoothstep(0.004, 0.016, roadFine);
-    roadA.rgb = mix(roadA.rgb, roadAsphaltMean * (roadB.g / max(roadAsphaltMean.g, 0.01) * 0.35 + 0.65), grainFade * 0.7);
-    roadA.a = mix(roadA.a, roadAsphaltRough, grainFade);
-    roadN.xyz = mix(roadN.xyz, vec3(0.5, 0.5, 1.0), max(grainFade, smoothstep(4.0, 30.0, roadDist)));
+    roadFineA = roadFootprint(gxA, gyA);
+    float grainFade = smoothstep(0.004, 0.016, roadFineA);
+    roadAA.rgb = mix(roadAA.rgb, roadAsphaltMean * (roadB.g / max(roadAsphaltMean.g, 0.01) * 0.35 + 0.65), grainFade * 0.7);
+    roadAA.a = mix(roadAA.a, roadAsphaltRough, grainFade);
+    roadNA.xyz = mix(roadNA.xyz, vec3(0.5, 0.5, 1.0), max(grainFade, smoothstep(4.0, 30.0, roadDist)));
 }
+vec4 roadA = mix(roadAA, roadAS, roadSett);
+vec4 roadN = mix(roadNA, roadNS, roadSett);
+float roadFine = mix(roadFineA, roadFineS, roadSett);
 vec3 roadAlbedo = roadA.rgb;
 float roadRough = roadA.a;
 
@@ -706,7 +711,9 @@ roadRough -= roadTrack * 0.2 * smoothstep(0.12, 0.5, abs(dot(normalize(vNormal),
 // Repairs on asphalt: a patch in some cells (RoadSurface.patch, patchShade), and sealed cracks. The patch's edge and
 // seam are filtered by the footprint of a pixel in the road's own metres, and its contrast falls with it
 float roadPatchFp = roadFootprint(roadDx, roadDy);
-if (roadSett < 0.5) {
+vec3 roadBare = roadAlbedo;
+float roadBareRough = roadRough;
+if (roadSett < 0.999) {
     float cell = floor(roadAlong / ${f(P.cellM)}) + vRoadBase * ${f(RoadSurface.PERIOD_M / P.cellM)};
     vec4 shape, more;
     float kind = roadPatch(cell, roadHalf, shape, more);
@@ -743,10 +750,12 @@ if (roadSett < 0.5) {
     roadAlbedo = mix(roadAlbedo, vec3(0.025), crack * 0.85);
     roadRough -= crack * 0.45;
 }
+roadAlbedo = mix(roadAlbedo, roadBare, roadSett);
+roadRough = mix(roadRough, roadBareRough, roadSett);
 
 // Markings: white, worn through where the surface is low, with a slightly uneven edge
 float roadPaintCover = 0.0;
-if (roadSett < 0.5) {
+if (roadSett < 0.999) {
     float wear = smoothstep(0.15, 0.55, landNoise(vec2(roadS * 1.7, roadLat * 6.0)) * 0.55 + roadN.a * 0.7);
     float edgeKind = floor((roadSide < 0.0 ? vEdge.x : vEdge.y) + 0.5);
     float lineC = roadSide * (roadHalf - ${f(m.edge.insetM)});
@@ -759,7 +768,7 @@ if (roadSett < 0.5) {
     float centre = centreKind > 2.5 ? centreAcross
         : centreKind > 1.5 ? centreAcross * roadDash(roadAlong, ${f(m.warning.dashM)}, ${f(m.warning.dashM + m.warning.gapM)}, roadFwAlong)
         : centreKind > 0.5 ? centreAcross * roadDash(roadAlong, ${f(m.broken.dashM)}, ${f(m.broken.dashM + m.broken.gapM)}, roadFwAlong) : 0.0;
-    roadPaintCover = max(edgeLine, centre) * mix(0.45, 0.95, wear);
+    roadPaintCover = max(edgeLine, centre) * mix(0.45, 0.95, wear) * (1.0 - roadSett);
     roadAlbedo = mix(roadAlbedo, roadPaint * (0.92 + 0.08 * roadN.a), roadPaintCover);
     roadRough = mix(roadRough, 0.55, roadPaintCover);
 }
