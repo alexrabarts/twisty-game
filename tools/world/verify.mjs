@@ -1,5 +1,5 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22, the stacked-leg gate and floating roads).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|floating|overlap|dem|all> --stages <ids|all>
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|floating|overlap|horizon|dem|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
 // dem reads the DEM from the cache; fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
@@ -19,6 +19,7 @@ import { syntheticSource } from './synthetic.mjs';
 import { ROAD_CLEAR_M, roadBands } from './buildings.mjs';
 import { resolveCacheDir } from './cache.mjs';
 import { sampleGrid, bandHalf, minRideWidth, RIDE_WIDTH_M, END_JOIN_M, JUNCTION_M } from './widths.mjs';
+import { drawnTileLow, horizonDrawnAt } from './farland.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -577,6 +578,33 @@ export function checkDem(decoded, demAt) {
   return check('dem', problems.length === 0, { away: { nodes: far.n, meanM: r2(far.sum / Math.max(1, far.n)), maxM: r2(far.max), over: far.over, worst: far.worst.slice(0, 12) }, earthwork: { nodes: near.n, meanM: r2(near.sum / Math.max(1, near.n)), maxM: r2(near.max) }, problems });
 }
 
+// The far land under the land: at every node of every height tile the horizon as the runtime draws it (far.bin
+// minus far/sink0.bin, on its own triangles: farland.mjs horizonDrawnAt) lies at least HORIZON.clearM under the land
+// the tile draws at any level of detail (drawnTileLow), so a resident tile is never behind the far mesh.
+export const HORIZON = Object.freeze({ clearM: 0.1 });
+export function checkHorizon(decoded) {
+  const { far, farSink, tiles } = decoded;
+  let nodes = 0, over = 0, worst = 0;
+  const list = [];
+  for (const [key, t] of tiles) {
+    const [tx, tz] = key.split(',').map(Number);
+    for (let j = 0; j < TILE_N; j++) for (let i = 0; i < TILE_N; i++) {
+      const x = tx * TILE_M + i * CELL_M, z = tz * TILE_M + j * CELL_M;
+      const drawn = horizonDrawnAt(far, farSink, x, z);
+      if (drawn === null) continue;
+      nodes++;
+      const above = drawn - (drawnTileLow(t, i, j, TILE_N) - HORIZON.clearM);
+      if (above <= 0) continue;
+      over++;
+      worst = Math.max(worst, above);
+      list.push({ x, z, overM: Math.round(above * 100) / 100 });
+    }
+  }
+  list.sort((p, q) => q.overM - p.overM);
+  const problems = over ? [`the horizon stands within ${HORIZON.clearM} m of or over the drawn land at ${over} of ${nodes} tile nodes (worst ${worst.toFixed(2)} m)`] : [];
+  return check('horizon', problems.length === 0, { nodes, over, worstM: Math.round(worst * 100) / 100, sinks: !!farSink, worst: list.slice(0, 12), problems });
+}
+
 async function sourceFor(opt) {
   if (opt.synthetic) return { source: syntheticSource(), spacing: 500 };
   const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
@@ -597,7 +625,7 @@ export async function main(argv) {
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'floating', 'overlap', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'floating', 'overlap', 'horizon', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
   let demAt = null;
@@ -615,7 +643,7 @@ export async function main(argv) {
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), dem: () => checkDem(decoded, demAt),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), dem: () => checkDem(decoded, demAt),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {

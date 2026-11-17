@@ -183,27 +183,68 @@ export function heightCells(altiDir, copernicusTiles) {
   };
 }
 
-// Metres each far.bin vertex is drawn under its height (the runtime Horizon). The 100 m grid is bilinear, and in a
-// gully it stands above the tiles' land: a fixed sink lets it poke through. Each cell under a tile is sunk by the most
-// its surface stands above the tile vertices in it, plus a margin; a vertex takes the most of its four cells.
-// `tiles` maps "tx,tz" to {heights} (TILE_N x TILE_N at CELL_M); cells under no tile keep `base`.
-export function horizonSinks(far, tiles, { tileM, tileN, cellM, base = 8, margin = 3 }) {
+// The land a tile draws at node (i, j): the lowest of its levels of detail there (TerrainMesh.vertexY: a carved node,
+// road, bench or drop, is drawn TERRAIN_SINK_M under its height, and a coarse vertex no higher than the lowest carved
+// node within one stride; a fine node off the coarse grid lies on a coarse triangle split on the 01-10 diagonal)
+export const TERRAIN_SINK_M = 0.12;
+const CARVED = new Set([1, 2, 4]);
+export function drawnTileLow(tile, i, j, tileN) {
+  const carved = k => (tile.zones ? CARVED.has(tile.zones[k]) : false);
+  const vertexY = (lod, a, b) => {
+    let y = tile.heights[b * tileN + a] - (carved(b * tileN + a) ? TERRAIN_SINK_M : 0);
+    if (lod === 0) return y;
+    const stride = 1 << lod;
+    for (let q = Math.max(0, b - stride); q <= Math.min(tileN - 1, b + stride); q++) {
+      for (let p = Math.max(0, a - stride); p <= Math.min(tileN - 1, a + stride); p++) {
+        if (carved(q * tileN + p)) y = Math.min(y, tile.heights[q * tileN + p] - TERRAIN_SINK_M);
+      }
+    }
+    return y;
+  };
+  let low = vertexY(0, i, j);
+  for (const lod of [1, 2]) {
+    const stride = 1 << lod, side = (tileN - 1) / stride;
+    const ci = Math.min(side - 1, Math.floor(i / stride)), cj = Math.min(side - 1, Math.floor(j / stride));
+    const u = (i - ci * stride) / stride, v = (j - cj * stride) / stride;
+    const H = (a, b) => vertexY(lod, (ci + a) * stride, (cj + b) * stride);
+    low = Math.min(low, u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1)));
+  }
+  return low;
+}
+
+// The far mesh as the runtime Horizon draws it at (x, z): its vertices `sinks[v]` under far.bin's heights (a fixed
+// `base` without sinks), on two triangles a cell split on the 01-10 diagonal (Horizon.grid). Null off the grid or
+// where a corner has no data
+export function horizonDrawnAt(far, sinks, x, z, base = 8) {
+  const fx = (x - far.x0) / far.cell, fz = (z - far.z0) / far.cell;
+  const ci = Math.floor(fx), cj = Math.floor(fz);
+  if (ci < 0 || cj < 0 || ci >= far.nx - 1 || cj >= far.nz - 1) return null;
+  const H = (a, b) => {
+    const v = (cj + b) * far.nx + ci + a;
+    return far.data[v] === NO_DATA ? NaN : far.data[v] - (sinks ? sinks[v] : base);
+  };
+  const u = fx - ci, v = fz - cj;
+  const y = u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1));
+  return Number.isNaN(y) ? null : y;
+}
+
+// Metres each far.bin vertex is drawn under its height (the runtime Horizon). In a gully or on a cut bench the 100 m
+// triangles stand above the tiles' land, and a fixed sink lets them poke through: each cell under a tile is sunk by
+// the most the far mesh's own triangle stands above the land the tile draws at any level of detail (drawnTileLow) at
+// a node in it, plus a margin; a vertex takes the most of its four cells, so the whole cell lies under the land.
+// `tiles` maps "tx,tz" to {heights, zones} (TILE_N x TILE_N at CELL_M); cells under no tile keep `base`.
+export function horizonSinks(far, tiles, { tileM, tileN, cellM, base = 8, margin = 1.5 }) {
   const excess = new Float32Array((far.nx - 1) * (far.nz - 1)).fill(-Infinity);
-  const at = (i, j) => far.data[j * far.nx + i];
   for (const [key, t] of tiles) {
     const [tx, tz] = key.split(',').map(Number);
     for (let j = 0; j < tileN; j++) {
       for (let i = 0; i < tileN; i++) {
         const x = tx * tileM + i * cellM, z = tz * tileM + j * cellM;
-        const fx = (x - far.x0) / far.cell, fz = (z - far.z0) / far.cell;
-        const ci = Math.floor(fx), cj = Math.floor(fz);
-        if (ci < 0 || cj < 0 || ci >= far.nx - 1 || cj >= far.nz - 1) continue;
-        const h = [at(ci, cj), at(ci + 1, cj), at(ci, cj + 1), at(ci + 1, cj + 1)];
-        if (h.includes(NO_DATA)) continue;
-        const u = fx - ci, v = fz - cj;
-        const surface = (h[0] * (1 - u) + h[1] * u) * (1 - v) + (h[2] * (1 - u) + h[3] * u) * v;
+        const surface = horizonDrawnAt(far, null, x, z, 0);
+        if (surface === null) continue;
+        const ci = Math.floor((x - far.x0) / far.cell), cj = Math.floor((z - far.z0) / far.cell);
         const k = cj * (far.nx - 1) + ci;
-        excess[k] = Math.max(excess[k], surface - t.heights[j * tileN + i]);
+        excess[k] = Math.max(excess[k], surface - drawnTileLow(t, i, j, tileN));
       }
     }
   }

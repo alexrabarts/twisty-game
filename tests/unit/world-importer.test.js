@@ -22,7 +22,7 @@ import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/w
 import { encodeFiles, writeWorld, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
 import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.mjs';
 import { orientedBox, clearOfRoads, roadBands, boxesOverlap, ROAD_CLEAR_M, NUDGE_MAX_M } from '../../tools/world/buildings.mjs';
-import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, LIMITS } from '../../tools/world/verify.mjs';
+import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, checkHorizon, LIMITS } from '../../tools/world/verify.mjs';
 import { wgs84ToLv95, lv95ToWgs84 } from '../../tools/world/dem.mjs';
 import { rasterizeCoverGrid, buildLevel, levelBoxes, horizonSinks, LEVELS } from '../../tools/world/farland.mjs';
 
@@ -800,6 +800,13 @@ describe('farland.mjs: the land out to 40 km', () => {
         expect(sinks[2 * 5 + 2]).toBeGreaterThanOrEqual(39);
         expect(sinks[2 * 5 + 2]).toBeLessThanOrEqual(43);
         expect(sinks[0]).toBe(8);
+    });
+
+    // The far mesh never stands over the land a resident tile draws (at any level of detail): the committed data's sinks hold it under
+    test('the committed horizon lies under every tile node as drawn at every level of detail', () => {
+        const horizon = checkHorizon(decodeWorld(path.join(REPO, 'world')));
+        expect({ over: horizon.details.over, sinks: horizon.details.sinks }).toEqual({ over: 0, sinks: true });
+        expect(horizon.details.nodes).toBeGreaterThan(100000);
     });
 
     test('the far levels round trip through the files', async () => {

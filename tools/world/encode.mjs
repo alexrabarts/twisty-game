@@ -322,5 +322,6 @@ export function decodeWorld(dir) {
     const o = i * BUILDING_BYTES;
     buildings.push({ x: bb.readInt32LE(o) / 1000, z: bb.readInt32LE(o + 4) / 1000, w: bb.readUInt16LE(o + 8) / 10, d: bb.readUInt16LE(o + 10) / 10, heading: bb.readInt16LE(o + 12) / 1e4, h: bb[o + 14] / 2, kind: bb[o + 15] });
   }
-  return { manifest, nodes, edges, ride: JSON.parse(read('ride.json')), junctions: JSON.parse(read('graph/junctions.json')), tiles, cover, far, farLevels, buildings };
+  const farSink = manifest.farLevels ? new Uint8Array(read('far/sink0.bin')) : null;
+  return { manifest, nodes, edges, ride: JSON.parse(read('ride.json')), junctions: JSON.parse(read('graph/junctions.json')), tiles, cover, far, farLevels, farSink, buildings };
 }

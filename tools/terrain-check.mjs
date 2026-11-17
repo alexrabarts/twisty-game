@@ -2334,6 +2334,24 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                 }
             }
         }
+        // The far land: on a 16 m grid within 400 m of the bike, the horizon mesh drawn over the resident land
+        if (env.horizon) {
+            for (let dx = -400; dx <= 400; dx += 16) {
+                for (let dz = -400; dz <= 400; dz += 16) {
+                    if (dx * dx + dz * dz > 160000) continue;
+                    const x = Math.round((bike.x + dx) / 16) * 16, z = Math.round((bike.z + dz) / 16) * 16;
+                    const key = `${x},${z}`;
+                    if (horizonSeen.has(key)) continue;
+                    const land = drawnLand(x, z);
+                    if (!land) continue;
+                    raycaster.set(new THREE.Vector3(x, land.y + 400, z), down);
+                    raycaster.far = 800;
+                    const hit = raycaster.intersectObject(env.horizon, false)[0];
+                    const visible = !!hit;
+                    horizonSeen.set(key, { s: Math.round(s0), x, z, overM: visible ? r2(hit.point.y - land.y) : -1 });
+                }
+            }
+        }
         for (const [index, held] of env.streamer.roads) {
             const sec = env.streamer.sections[index];
             // Beyond LOD0 the ribbon keeps only some rows (RoadMesh.decimate): its edge runs straight between them
@@ -4020,6 +4038,8 @@ function worldChecks(report) {
         if (floating.up.hits) failures.push(`world-floating: drawn land or far land stands within ${FLOAT_UP_M} m over the road surface at ${floating.up.hits} points (worst ${floating.up.worst[0].overM} m at s ${floating.up.worst[0].s}): ${JSON.stringify(floating.up.worst.slice(0, 5))}`);
         const side = floating.sideFloat;
         if (side && side.open) failures.push(`world-floating: ${side.open} of ${side.vertices} side-road points stand more than 3 m over the land drawn at LOD0 with no deck or wall under them (worst ${side.worstM} m): ${JSON.stringify(side.worst.slice(0, 5))}`);
+        const far = floating.horizonOver;
+        if (far && far.over) failures.push(`world-floating: the horizon mesh stands over the drawn land at ${far.over} of ${far.nodes} grid nodes within 400 m of the bike (worst ${far.worstM} m): ${JSON.stringify(far.worst.slice(0, 5))}`);
         if (floating.physics.over) failures.push(`world-floating: the physics ground beside the road differs from the drawn ground by more than ${floating.tolM} m at ${floating.physics.over} of ${floating.physics.checked} points (worst ${floating.physics.worstM} m): ${JSON.stringify(floating.physics.worst.slice(0, 5))}`);
         floating.views.forEach(v => {
             if (v.crashed) failures.push(`world-floating: the ride into the view at s ${v.want} crashed`);
