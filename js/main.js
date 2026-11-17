@@ -255,12 +255,19 @@ class Game {
         note.textContent = 'Loading the road...';
         note.className = 'world-loading';
         document.body.appendChild(note);
+        // The data credit stands on the loading screen, and in Credits from the menus (js/world/credits.js)
+        if (typeof WorldCredits !== 'undefined') {
+            const credit = document.createElement('div');
+            credit.className = 'world-loading-credit';
+            note.appendChild(credit);
+            WorldCredits.text().then(({ credit: line }) => { credit.textContent = line; });
+        }
         try {
             const environment = await WorldEnvironment.load(this.scene, { id, search: window.location.search });
             await this.initializeGameWithWorld(environment);
         } catch (error) {
             console.error('Failed to load the world:', error);
-            note.textContent = `The world could not load: ${error.message}`;
+            note.firstChild.textContent = `The world could not load: ${error.message}`;
             note.style.color = '#ff8a7a';
             return;
         }
@@ -836,7 +843,7 @@ class Game {
         document.addEventListener('keydown', onKey, true);
         // A pause the rider already took stays theirs; the box resumes only the pause it took
         const ownsPause = !this.paused;
-        if (ownsPause) this.pauseRace();
+        if (ownsPause) this.pauseRace({ panel: false });
         this.worldConfirm = { box, onKey, ownsPause };
         document.body.appendChild(box);
         return true;
@@ -855,16 +862,20 @@ class Game {
     }
 
     // The race clock stops while paused: raceElapsed reads pauseStartedAt, and resume moves the start on
-    pauseRace() {
+    // `panel`: false for a pause another box owns (the world confirm box)
+    pauseRace({ panel = true } = {}) {
         if (this.paused) return;
         this.paused = true;
         this.pauseStartedAt = this.now();
         if (this.soundManager) this.soundManager.stopEngineSound();
+        // A world ride's pause panel holds Resume and the data credits (js/world/credits.js)
+        if (panel && this.environment && this.environment.isWorld && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace());
     }
 
     resumeRace() {
         if (!this.paused) return;
         this.paused = false;
+        if (typeof WorldCredits !== 'undefined') WorldCredits.hidePause();
         if (this.pauseStartedAt) {
             // Time spent paused is not race time
             this.startTime += this.now() - this.pauseStartedAt;
@@ -942,6 +953,7 @@ class Game {
         // A world owns DOM beside the scene (the guide and its map) and the streamer's buffers
         if (this.environment && this.environment.isWorld) {
             this.environment.dispose();
+            if (typeof WorldCredits !== 'undefined') WorldCredits.hidePause();
             this.camera.far = 5000;
             this.camera.updateProjectionMatrix();
         }

@@ -129,7 +129,11 @@ Checked 2026-11-17 against the licence text, "Licence for the use of the Coperni
 - Art. 6 (c): a distribution adds "The organisations in charge of the Copernicus programme by law or by delegation do not incur any liability for any use of the Copernicus WorldDEM-30".
 - Art. 6 (d): no impression of endorsement.
 
-So the derived far land may ship. `manifest.notice` holds both sentences, and the credit the game shows while a world rides (`manifest.credit`) names Copernicus WorldDEM-30, DLR and Airbus. The importer adds them only when a Copernicus height is used.
+So the derived far land may ship. `manifest.notice` holds both sentences, and `manifest.credit` names swisstopo, Copernicus WorldDEM-30, DLR and Airbus. The importer adds the Copernicus parts only when a Copernicus height is used.
+
+### Where the credit stands
+
+swisstopo's terms of use for its free geodata (https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-and-geoservices, checked 2026-11-17): "A reference to the source is mandatory", and for digital or analogue representations, publications and dissemination one of the listed references ("©swisstopo" among them) "must be attached in any case". They say nothing of where. The Copernicus licence (Art. 6 (a), (b)) asks that the public is told the source with the notice, also with no placement. Neither asks for the credit on the map view itself, so it is not on screen during a ride: `js/world/credits.js` shows `manifest.credit` and `manifest.notice` in a Credits panel from the main menu and from the pause panel of a world ride, and `manifest.credit` on the world's loading screen. The `world-credit` probe fails when the credit is missing from any of the three, or on screen during the ride.
 
 ## Binary format
 

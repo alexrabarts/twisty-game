@@ -139,7 +139,8 @@ function fulfilCallable(calls, request) {
     return request.respond({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ result }) });
 }
 
-async function openPage(browser, port, url = '/', seed = 1) {
+// `prepare(page)`, when given, runs before the page loads (a probe's evaluateOnNewDocument)
+async function openPage(browser, port, url = '/', seed = 1, prepare = null) {
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 540, deviceScaleFactor: 1 });
     await page.setRequestInterception(true);
@@ -174,6 +175,7 @@ async function openPage(browser, port, url = '/', seed = 1) {
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         };
     }, seed);
+    if (prepare) await prepare(page);
     await page.goto(`http://127.0.0.1:${port}${url}`, { waitUntil: 'load', timeout: 120000 });
     return page;
 }
@@ -2482,20 +2484,49 @@ const WORLD = {
         results.push({ name: 'ride-2km', metres: Math.round(v.routeS - env.startS), crashed: v.crashed, crash: crashes[0] || null, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, warned, restarts: game.restarts - restarts });
         return results;
     }, placeAt.toString(), pilotWorld.toString()),
+    // The data credit is in Credits, not on screen: reachable from the pause panel of a ride, on the loading screen
+    // and from the main menu, with the manifest's credit and notice; nothing on screen names it during the ride
     'world-credit': async (page, port) => {
-        const world = await page.evaluate(() => {
-            const el = document.getElementById('world-credit');
-            const box = el ? el.getBoundingClientRect() : { width: 0, height: 0 };
-            return { text: el ? el.textContent : null, width: box.width, height: box.height, opacity: el ? Number(getComputedStyle(el).opacity) : 0, inViewport: el ? box.right <= innerWidth && box.bottom <= innerHeight && box.left >= 0 : false };
-        });
+        const onScreen = () => {
+            const shown = [...document.body.querySelectorAll('*')].filter((el) => {
+                if (el.closest('#world-credits')) return false;
+                const text = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('');
+                if (!/swisstopo|Copernicus/.test(text)) return false;
+                const box = el.getBoundingClientRect();
+                return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== 'hidden' && Number(getComputedStyle(el).opacity) > 0;
+            });
+            return shown.map(el => el.id || el.className || el.tagName);
+        };
+        const readPanel = async (target) => {
+            await target.waitForFunction(() => { const p = document.querySelector('#world-credits .world-credits-credit'); return p && p.textContent.length > 0; }, { timeout: 20000 });
+            return target.evaluate(() => ({ credit: document.querySelector('#world-credits .world-credits-credit').textContent, notice: document.querySelector('#world-credits .world-credits-notice').textContent }));
+        };
+        const manifest = await page.evaluate(() => ({ credit: game.environment.data.manifest.credit, notice: game.environment.data.manifest.notice || '' }));
+        const riding = await page.evaluate(onScreen);
+        await page.evaluate(() => game.pauseRace());
+        const pause = await page.evaluate(() => { const p = document.getElementById('world-pause'); const b = p && p.querySelector('[data-credits]'); if (b) b.click(); return { panel: !!p, button: !!b }; });
+        const fromPause = pause.button ? await readPanel(page) : null;
+        await page.evaluate(() => { WorldCredits.close(); game.resumeRace(); });
+        const afterResume = await page.evaluate(() => !!document.getElementById('world-pause'));
+        // The loading screen: watch #world-loading from the first moment of a fresh world page
+        const loadingPage = await openPage(page.browser(), port, '/?world=tremola', 1, p => p.evaluateOnNewDocument(() => {
+            window.__loadingCredit = '';
+            new MutationObserver(() => {
+                const c = document.querySelector('#world-loading .world-loading-credit');
+                if (c && c.textContent) window.__loadingCredit = c.textContent;
+            }).observe(document, { childList: true, subtree: true, characterData: true });
+        }));
+        await loadingPage.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.worldRun', { timeout: 120000 });
+        const loading = await loadingPage.evaluate(() => window.__loadingCredit);
+        await loadingPage.close();
+        // The main menu
         const leg = await openPage(page.browser(), port, '/');
-        const onLeg = await leg.evaluate(() => {
-            const el = document.getElementById('world-credit');
-            const box = el ? el.getBoundingClientRect() : { width: 0, height: 0 };
-            return { width: box.width, height: box.height };
-        });
+        await leg.waitForFunction(() => document.querySelector('.tour-selector-overlay [data-credits]'), { timeout: 60000 });
+        const legScreen = await leg.evaluate(onScreen);
+        await leg.evaluate(() => document.querySelector('.tour-selector-overlay [data-credits]').click());
+        const fromMenu = await readPanel(leg);
         await leg.close();
-        return { world, onLeg };
+        return { manifest, riding, pause, fromPause, afterResume, loading, legScreen, fromMenu };
     },
     // Every request the world page made, from load to a few seconds of riding
     'world-net': async page => {
@@ -3080,9 +3111,15 @@ function worldChecks(report) {
     }
     const credit = results['world-credit'];
     if (credit) {
-        const w = credit.world;
-        if (!(w.text || '').includes('© swisstopo') || !(w.width > 0 && w.height > 0) || !(w.opacity > 0.5) || !w.inViewport) failures.push(`world-credit: ${JSON.stringify(w)}`);
-        if (credit.onLeg.width > 0 || credit.onLeg.height > 0) failures.push(`world-credit: the credit shows on a leg: ${JSON.stringify(credit.onLeg)}`);
+        const { manifest } = credit;
+        const full = panel => panel && panel.credit === manifest.credit && panel.credit.includes('© swisstopo') && (!manifest.notice || panel.notice === manifest.notice);
+        if (!manifest.credit || !manifest.credit.includes('© swisstopo')) failures.push(`world-credit: the manifest credit is missing or has no swisstopo: ${JSON.stringify(manifest.credit)}`);
+        if (credit.riding.length) failures.push(`world-credit: a credit is on screen during the ride: ${credit.riding.join(', ')}`);
+        if (!credit.pause.panel || !credit.pause.button || !full(credit.fromPause)) failures.push(`world-credit: Credits from the pause panel: ${JSON.stringify({ pause: credit.pause, panel: credit.fromPause })}`);
+        if (credit.afterResume) failures.push('world-credit: the pause panel stays after resume');
+        if (credit.loading !== manifest.credit) failures.push(`world-credit: the loading screen shows ${JSON.stringify(credit.loading)}`);
+        if (!full(credit.fromMenu)) failures.push(`world-credit: Credits from the main menu: ${JSON.stringify(credit.fromMenu)}`);
+        if (credit.legScreen.length) failures.push(`world-credit: a credit is on the menu screen itself: ${credit.legScreen.join(', ')}`);
     }
     const net = results['world-net'];
     if (net) {

@@ -105,12 +105,6 @@ class WorldGuide {
         document.body.appendChild(box);
         document.body.classList.add('world-ride');
         this.box = box;
-        // The licence credit shows while a world rides (index.html holds the element)
-        this.credit = document.getElementById('world-credit');
-        if (this.credit) {
-            this.credit.textContent = this.environment.credit;
-            this.credit.style.display = 'block';
-        }
     }
 
     render(state) {
@@ -171,7 +165,6 @@ class WorldGuide {
     dispose() {
         if (this.box && this.box.parentNode) this.box.parentNode.removeChild(this.box);
         if (typeof document !== 'undefined' && document.body) document.body.classList.remove('world-ride');
-        if (this.credit) this.credit.style.display = 'none';
         this.box = null;
     }
 }

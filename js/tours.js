@@ -389,6 +389,8 @@ class TourSystem {
 
         container.insertAdjacentHTML('beforeend', selectorHTML);
         document.body.classList.add('in-menu');
+        // The data credit of the real-map world lives in a Credits panel, not on screen (js/world/credits.js)
+        if (typeof WorldCredits !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(WorldCredits.button('showcase-secondary'));
 
         // Carousel focus state
         const riderOrder = this.riderDisplayOrder();
