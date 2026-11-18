@@ -293,7 +293,9 @@ describe('RoadMesh', () => {
                 for (const side of group.userData.sides) {
                     expect(side.bits & 2).toBe(2);
                     const c = [0, 1, 2].map(k => (side.l[k] + side.r[k]) / 2);
-                    for (const p of [side.l, c, side.r]) {
+                    // The edge points a centimetre in: a ray down the very edge of the soffit can miss it by rounding
+                    const inset = q => q.map((v, k) => v + (c[k] - v) * (0.01 / Math.max(1e-6, Math.hypot(c[0] - q[0], c[2] - q[2]))));
+                    for (const p of [inset(side.l), c, inset(side.r)]) {
                         points++;
                         if (p[1] - ground > RoadMesh.PARAPET_DROP_M && !under(group, p[0], p[1], p[2])) bare++;
                     }
@@ -350,12 +352,33 @@ describe('RoadMesh', () => {
         expect(byZ.get(zs[zs.length - 1])).toBeCloseTo(1, 5);
     });
 
+    // Every face of a box faces out: wound inward, a front-side material (the signposts, the barriers) culled the faces
+    // toward the viewer and lit the far ones from inside
+    test('every face of a box has its normal pointing away from the box centre, at any heading', () => {
+        for (const heading of [0, 0.7, Math.PI / 2, 2.5, -1.2]) {
+            const out = { positions: [], shades: [] };
+            const c = [3, 4, -2];
+            RoadMesh.box(out, c[0], c[1], c[2], 1.2, 0.8, 2.5, heading, [0.5, 0.5, 0.5]);
+            const p = out.positions;
+            expect(p.length / 9).toBe(12);
+            for (let t = 0; t < p.length; t += 9) {
+                const a = new THREE.Vector3(p[t], p[t + 1], p[t + 2]), b = new THREE.Vector3(p[t + 3], p[t + 4], p[t + 5]), d = new THREE.Vector3(p[t + 6], p[t + 7], p[t + 8]);
+                const n = b.clone().sub(a).cross(d.clone().sub(a));
+                const mid = a.clone().add(b).add(d).divideScalar(3).sub(new THREE.Vector3(...c));
+                expect(n.dot(mid)).toBeGreaterThan(0);
+            }
+        }
+    });
+
     test('the edge works: an apron at the batter down to lower land, a wall with a parapet, a deck with a soffit, none on a structure', () => {
         const rows = line(10);
         const near = RoadMesh.ribbon(rows, 0);
-        // LOD0: the verge's outer edge; LOD1: the carriageway's
+        // A road's works stand at the verge's outer edge at both levels of detail (a wall never steps when its section
+        // changes level, nor stands on the carriageway), a side road's as the ride's
         expect(Math.abs(near.sides[0].l[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2 + RoadSurface.VERGE_M, 4);
-        expect(Math.abs(RoadMesh.ribbon(rows, 1).sides[0].r[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2, 4);
+        expect(Math.abs(RoadMesh.ribbon(rows, 1).sides[0].r[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2 + RoadSurface.VERGE_M, 4);
+        expect(Math.abs(RoadMesh.ribbon(rows, 1).sides[0].rc[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2, 4);
+        expect(Math.abs(RoadMesh.ribbon(rows, 1, null, true).sides[0].r[0] - rows[0].x)).toBeCloseTo(rows[0].width / 2 + RoadSurface.VERGE_M, 4);
         const ys = parts => parts.positions.filter((_, i) => i % 3 === 1);
         const xs = parts => parts.positions.filter((_, i) => i % 3 === 0);
         const edgeY = 100 + RoadMesh.LIFT_M, edgeX = rows[0].width / 2 + RoadSurface.VERGE_M;

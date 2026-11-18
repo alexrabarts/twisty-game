@@ -30,10 +30,17 @@ class WorldEnvironment {
     static get START_M() { return 20; }
 
     // A side road inside the ride's band: how far under the ride surface it is held, how far past the road edge
-    // (the ride ribbon's kerb) that reaches, and the height apart beyond which it is a road over or under the ride
-    static get SIDE_UNDER_M() { return 0.01; }
+    // (the ride ribbon's kerb) that reaches, and the height apart beyond which it is a road over or under the ride.
+    // Held 1 cm under, the two ribbons lay in one plane for the depth test and flickered at a junction's mouth; 5 cm is
+    // clear of that and still under the land's SINK_M
+    static get SIDE_UNDER_M() { return 0.05; }
     static get SIDE_KERB_M() { return 0.5; }
     static get SIDE_PASS_M() { return 2; }
+    // A side road that crosses over the ride is lifted to stand this far over the ride's surface (a deck's soffit at
+    // Carriageways.HEADROOM_M over the ride, the deck under it, a hand's breadth spare), ramped in over at most
+    // SIDE_RAMP_M either side and never past its own edge's ends, so it meets its neighbours where it did
+    static get SIDE_CLEAR_M() { return Carriageways.HEADROOM_M + RoadMesh.DECK_M + 0.1; }
+    static get SIDE_RAMP_M() { return 40; }
     // The edge works (edgeFoot): metres under a road edge that another road must lie for the edge to stand on a wall down to it;
     // how far out the importer's zone is read for a retaining wall; how far under the edge the drawn land may lie
     // before an apron runs down to it (the land is drawn SINK_M under the road); the apron where no tile is resident
@@ -78,6 +85,8 @@ class WorldEnvironment {
         if (!samples) throw new Error('world ride is not resident');
         this.route = new WorldRoute(samples, { stations: data.ride.stations, stages: data.ride.stages, graph: this.graph });
         this.ground = new WorldGround(this.route, data);
+        // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
+        this.carriageways = new Carriageways(this.route, data);
         this.physics = WorldPhysics;
         this.roadWidth = this.route.points.length ? this.route.points[0].width : 10;
         this.trusted = data.trusted;
@@ -395,7 +404,16 @@ class WorldEnvironment {
         this.disposeRoad(section);
         // Edge works built before a tile under them arrived are built again when it does (buildTile)
         const missing = new Set();
-        const group = RoadMesh.section(this.rowsOf(section.from, Math.min(this.route.points.length - 1, section.to + 1)), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing) });
+        // A row of each neighbour either side: read for the bend and the runs, drawn by the neighbour (RoadMesh.section)
+        const last = this.route.points.length - 1;
+        const from = Math.max(0, section.from - 1), to = Math.min(last, section.to + 1);
+        const group = RoadMesh.section(this.rowsOf(from, to), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing), roads: this.carriageways, head: section.from - from, tail: to - section.to });
+        // Its works keep out of the side roads' carriageways (Carriageways): built before a side road's chunk is here,
+        // it is built again when that chunk is (buildSide)
+        if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
+            const [x0, z0, x1, z1] = section.bbox;
+            for (const k of this.data.chunksNear((x0 + x1) / 2, (z0 + z1) / 2, Math.hypot(x1 - x0, z1 - z0) / 2 + 20)) if (!this.data.chunks.has(k)) missing.add(`chunk:${k}`);
+        }
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`road:${section.index}`);
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
         this.roadGroup.add(group);
@@ -483,6 +501,44 @@ class WorldEnvironment {
         return out;
     }
 
+    // Side rows lifted where the road crosses over the ride too low for a deck over it (SIDE_CLEAR_M): a road that runs
+    // within SIDE_PASS_M of the ride's height meets it (holdSide), one higher passes over it on a deck with full headroom.
+    // The lift ramps in linearly over SIDE_RAMP_M, or over what is left of the edge before its end, so the edge's own
+    // ends keep their height. Rows are {x, y, z, heading, width}; lifted rows carry `keep`
+    liftSide(rows) {
+        const clear = WorldEnvironment.SIDE_CLEAR_M, pass = WorldEnvironment.SIDE_PASS_M;
+        const near = this.sideNear || (this.sideNear = {});
+        const need = rows.map(row => {
+            const reach = row.width / 2 + RoadMesh.PARAPET_W_M;
+            const cos = Math.cos(row.heading), sin = Math.sin(row.heading);
+            let want = 0;
+            for (let o = -reach; o <= reach + 1e-9; o += reach / 2) {
+                const x = row.x + o * cos, z = row.z - o * sin;
+                for (const i of this.route.cellSegments(x, z) || []) {
+                    this.route.nearestSegment(x, z, i, i, near);
+                    const over = row.y - near.y;
+                    if (near.distance <= near.width / 2 + RoadSurface.VERGE_M && over > pass && over < clear) want = Math.max(want, clear - over);
+                }
+            }
+            return want;
+        });
+        if (need.every(v => v === 0)) return rows;
+        const along = [0];
+        for (let i = 1; i < rows.length; i++) along.push(along[i - 1] + Math.hypot(rows[i].x - rows[i - 1].x, rows[i].z - rows[i - 1].z));
+        const total = along[along.length - 1];
+        const lift = rows.map((_, i) => {
+            let best = 0;
+            need.forEach((v, j) => {
+                if (!v) return;
+                const d = along[i] - along[j];
+                const ramp = Math.min(WorldEnvironment.SIDE_RAMP_M, d < 0 ? along[j] : total - along[j]);
+                best = Math.max(best, ramp > 0 ? v * Math.max(0, 1 - Math.abs(d) / ramp) : d === 0 ? v : 0);
+            });
+            return best;
+        });
+        return rows.map((row, i) => (lift[i] > 0 ? { ...row, y: row.y + lift[i], keep: true } : row));
+    }
+
     // The lowest land a tile draws at (x, z) at any of its levels of detail (its 8, 16 and 32 m triangles, as
     // TerrainMesh.vertexY draws them), or null without the tile (its key goes into `missing`): what a wall's foot or a
     // pier must reach to stand on the land whatever level of detail the tile is drawn at
@@ -535,8 +591,9 @@ class WorldEnvironment {
                 this.route.nearestSegment(x, z, i, i, near);
                 if (near.distance <= near.width / 2 + RoadSurface.VERGE_M && near.y < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, near.y);
             }
-            const side = this.ground.sideRoadY(x, z);
-            if (side !== null && side < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, side);
+            // Every side road whose chunk has been here (Carriageways), not only those drawn now: the order the
+            // window builds in must not change the works
+            this.carriageways.each(x, z, 0, r => { if (r.road >= 0 && r.depth >= 0 && r.y < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, r.y); });
             return best;
         };
         const landLow = (x, z) => this.landLowAt(x, z, missing);
@@ -546,7 +603,9 @@ class WorldEnvironment {
                 this.route.nearestSegment(x, z, i, i, near);
                 if (near.distance <= near.width / 2 + RoadSurface.VERGE_M) return true;
             }
-            return this.ground.sideRoadY(x, z) !== null;
+            let side = false;
+            this.carriageways.each(x, z, 0, r => { if (r.road >= 0 && r.depth >= 0) side = true; });
+            return side;
         };
         // The land as drawn at LOD0 at (x, z), or null
         const landNear = (x, z) => {
@@ -816,13 +875,13 @@ class WorldEnvironment {
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
         // detail, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
-        const draw = (rows, stub, edge, s0 = 0) => {
+        const draw = (rows, stub, edge, guard, s0 = 0) => {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
-            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, hold), options.groundAt, options.roof, options.footAt);
+            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, hold), options.groundAt, options.roof, options.footAt, guard);
             Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, rows, stub, edge: edge.id, s0 });
-            sides.push(built.sides);
-            structures.push(...built.parts);
+            sides.push(Object.assign(built.sides, { owner: edge.id }));
+            structures.push(...built.parts.map(part => Object.assign(part, { owner: edge.id })));
             group.add(road);
             roads.push(road);
         };
@@ -836,19 +895,39 @@ class WorldEnvironment {
             plain = this.sideMouths(edge, plain);
             const { rows, s0 } = this.fromRideEnd(edge, plain);
             const node = barrierEdges.get(edge.id);
+            const guard = this.carriageways.guard(edge.id);
+            let far = this.liftSide(rows);
+            let farS = s0;
             if (node !== undefined) {
                 const stub = this.graph.stub(edge.id, node);
-                if (stub && stub.length > 1) draw(this.holdSide(this.sideMouths({ ...edge, a: node, b: -1 }, WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, false)), true, edge);
+                if (stub && stub.length > 1) {
+                    // The far ribbon goes on from the stub's last row: drawn under the stub as well, the two lay one
+                    // road twice in one plane (and its deck and parapets twice), which flickers
+                    const away = Math.hypot(far[0].x - stub[0].x, far[0].z - stub[0].z) <= Math.hypot(far[far.length - 1].x - stub[0].x, far[far.length - 1].z - stub[0].z);
+                    far = away ? far.slice(stub.length - 1) : far.slice(0, far.length - stub.length + 1);
+                    const stubRows = this.holdSide(this.sideMouths({ ...edge, a: node, b: -1 }, WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, false));
+                    let length = 0;
+                    for (let i = 1; i < stubRows.length; i++) length += Math.hypot(stubRows[i].x - stubRows[i - 1].x, stubRows[i].z - stubRows[i - 1].z);
+                    // The rest goes on from the stub's end, run away from the junction and measured from it
+                    if (!away) far = far.slice().reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
+                    farS = length;
+                    draw(stubRows, true, edge, guard);
+                }
             }
-            draw(this.holdSide(rows), false, edge, s0);
+            if (far.length < 2) return;
+            draw(this.holdSide(far), false, edge, guard, farS);
         });
         // The edge works of every side road here, one mesh: its retaining walls, decks and tubes (a side road is seen
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
         // a tile under them arrives
-        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures);
+        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways);
         group.userData.roads = roads;
         group.userData.works = triangles;
         triangles += this.drawSideRibbons(k, group, near);
+        // Its works keep out of the carriageways of the side roads round it (Carriageways): built before a neighbour's
+        // chunk is here, it is built again when that chunk is
+        const box = this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox;
+        if (box) for (const j of this.data.chunksNear((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, Math.hypot(box[2] - box[0], box[3] - box[1]) / 2 + 20)) if (j !== k && !this.data.chunks.has(j)) missing.add(`chunk:${j}`);
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`side:${k}`);
         group.userData.triangles = triangles;
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
@@ -858,6 +937,8 @@ class WorldEnvironment {
         this.sideEdges.set(k, edgesHere);
         this.triangleCount += triangles;
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
+        // The ride sections built before this chunk's roads were known keep out of them now
+        this.rebuildWaiting(`chunk:${k}`);
     }
 
     // The ribbons of a side chunk's roads (buildSide): each road's rows in the pieces `near` names (WorldStreamer.sideNear:

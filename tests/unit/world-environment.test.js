@@ -73,10 +73,13 @@ describe('the edge works of the stacked hairpins', () => {
                                 }
                             }
                         } else if (g.materialIndex === 2) {
-                            // A wall face: vertical, its foot more than 1 m under its top
+                            // A wall face: vertical, its foot more than 1 m under its top. A parapet's face is not a wall:
+                            // it stands on the road's edge (its foot at the road's height) and follows the road's grade
+                            // along a whole segment, so one triangle of it can span more than 1 m
                             const top = Math.max(v[0].y, v[1].y, v[2].y), foot = v.reduce((a, b) => (b.y < a.y ? b : a));
                             const n = new THREE.Triangle(v[0], v[1], v[2]).getNormal(new THREE.Vector3());
                             if (Math.abs(n.y) > 0.1 || top - foot.y < 1) continue;
+                            if (foot.y >= env.route.project(foot.x, foot.z, null, near).y - 0.1) continue;
                             walls++;
                             const land = env.ground.tileHeight(foot.x, foot.z);
                             if (land !== null && foot.y > land + 0.5) hanging++;
