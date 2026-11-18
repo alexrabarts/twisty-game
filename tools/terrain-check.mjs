@@ -3760,7 +3760,8 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
         if (n.startsWith('landmark:')) return 'landmark';
         if (n === 'world-signposts') return 'signpost';
         if (n === 'world-barriers') return 'barrier';
-        if (n === 'world-gates') return 'gate';
+        // The checkpoint boards stand where the arches stood: cast on with the same box round each station
+        if (n === 'world-gates' || n === 'world-markers') return 'gate';
         return null;
     };
     // The barrier instances, in the order placeBarriers set them (env.activeBarriers), with the side roads each closes
@@ -3795,7 +3796,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
             const type = typeOf(o);
             if (!type) return;
             if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
-            // The gate frames are one mesh over the whole stage: a box round each gate instead of the mesh's own
+            // The gate frames and the checkpoint boards are each one mesh over the whole stage: a box round each gate instead of the mesh's own
             if (type === 'gate') {
                 for (const st of env.stationGates || []) {
                     const p = route.sample(st.s, {});

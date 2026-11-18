@@ -183,7 +183,7 @@ class WorldEnvironment {
         this.stationGates = inStage;
     }
 
-    // The things built once: the horizon, the gate frames, the signposts and the landmarks
+    // The things built once: the horizon, the gate frames, the checkpoint boards, the signposts and the landmarks
     buildFixtures() {
         if (this.data.far) {
             const horizon = Horizon.build(this.data.far, this.data.farCover, this.data.farSink);
@@ -197,9 +197,17 @@ class WorldEnvironment {
                 return mesh;
             });
         }
+        // The arch stands at the start and the finish only; each checkpoint between has its roadworks boards
+        const stations = this.stationGates || [];
+        const ends = stations.filter((st, i) => i === 0 || i === stations.length - 1);
+        const marked = stations.slice(1, -1);
+        if (marked.length) {
+            this.markerMesh = this.scenery.markers(this.scenery.markerPoses(marked, this.route));
+            this.group.add(this.markerMesh);
+        }
         const out = { positions: [], shades: [] };
         const post = [0.55, 0.55, 0.58];
-        for (const st of this.stationGates || []) {
+        for (const st of ends) {
             // The frame stands off any side road its posts would be in (Scenery.gateS); the timing line stays at st.s
             const postOut = q => q.width / 2 + 1.2;
             const p = this.route.sample(this.scenery.gateS(st.s, postOut, this.route), {});
@@ -674,6 +682,7 @@ class WorldEnvironment {
         this.lastBike = position;
         // A landmark is drawn within LANDMARK_REACH_M: beyond, it is a few pixels and costs the window its triangles
         if (this.landmarkGroup) for (const node of this.landmarkGroup.children) node.visible = Math.hypot(node.position.x - position.x, node.position.z - position.z) < WorldEnvironment.LANDMARK_REACH_M;
+        if (this.markerMesh) Scenery.placeMarkers(this.markerMesh, position.x, position.z);
         if (Number.isFinite(dtSec) && dtSec > 0) this.streamClockMs += dtSec * 1000;
         this.updateBarriers(s);
         this.streamer.update(position, s);
