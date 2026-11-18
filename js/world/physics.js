@@ -29,11 +29,24 @@ const WorldPhysics = Object.freeze({
     lockRadius: 1.6,       // m, the turn at full lock (the handlebar lock is atan(wheelbase / lockRadius)); tight for walking-pace U-turns
     handlebarLag: 0.1,     // s, how far the handlebar lags the steering
 
-    // Slope and low speed
+    // Low-speed lean: under lowLeanSpeed the lean limit rises (a smoothstep) to lowLeanDeg by lowLeanFullSpeed, so a rider
+    // can lay the bike over for a walking-pace U-turn (the rider counterbalances; the turn itself is the handlebar's)
+    lowLeanSpeed: 6,       // m/s
+    lowLeanFullSpeed: 4,   // m/s
+    lowLeanDeg: 40,
+
+    // Slope and low speed. Nothing holds the bike up or pushes it along: under idleSpeed with the throttle closed it
+    // rolls down at rollDecel, and under fallSpeed it either tips over (leaned more than tipLeanDeg for tipS) or the
+    // rider puts a foot down and it stops (footDownDecel, the lean easing out at footDownRight)
     slopeGravity: 1.0,     // share of the route grade that acts on the bike
-    creepSpeed: 4,         // m/s, the bike creeps up to this with no throttle
-    creepAccel: 6,         // m/s^2, how fast it creeps
-    footDownSpeed: 1,      // m/s, under this with the brake held the bike stops
+    idleSpeed: 4,          // m/s, the engine braking ends here
+    rollDecel: 0.4,        // m/s^2 under idleSpeed with the throttle closed
+    fallSpeed: 1.75,       // m/s
+    tipLeanDeg: 18,
+    tipS: 0.15,
+    footDownDecel: 2.5,    // m/s^2
+    footDownRight: 6,      // 1/s
+    footDownSpeed: 1,      // m/s, under this with a foot down the bike stops
 
     // Drive (Vehicle.worldDrive, updateWorldSpeed). The legs keep a constant pull (the bike's acceleration, 15 m/s^2
     // x the character) at once on a key press: 0-100 km/h in 1.75 s. The world opens the throttle over
@@ -48,7 +61,7 @@ const WorldPhysics = Object.freeze({
     launchSpeed: 6,        // m/s, the whole limit from here
     aeroDrag: 0.002,       // 1/m, the air drag (x v^2), as the legs
 
-    // Lowside: grip demand above margin * tan(capEff) for lowsideMs, on the road and bench (not on run-off)
+    // Lowside: grip demand above margin * tan(capEff) for lowsideMs, on every surface (the land's capEff is lower)
     lowsideMargin: 1.15,
     lowsideMs: 200,
 
@@ -62,21 +75,40 @@ const WorldPhysics = Object.freeze({
     brakeGain: 1.4,
     trailBrakeFloor: 0.45,
     // Engine braking with the throttle closed: engineBrake x the speed, at most engineBrakeMax, and never
-    // below creepSpeed. A long descent with the throttle closed settles near 13 m/s at 10%
+    // below idleSpeed. A long descent with the throttle closed settles near 13 m/s at 10%
     engineBrake: 0.06,     // 1/s
     engineBrakeMax: 2.5,   // m/s^2
-    // Share of the brake on run-off (grass, verge). The legs' run-off grip (0.5) halves the brake there; the
-    // world keeps the run-off grip for the lean and the throttle, and lets the rider brake hard to recover
-    runoffBrakeGrip: 0.9,
+    // Off the road (Vehicle.worldZone, worldLand). Three surfaces, by where the bike is against the drawn road:
+    //   - the carriageway (or a side road's)
+    //   - the verge: the drawn verge (RoadSurface.VERGE_M past the edge), benchDrag and nothing else
+    //   - the land past it: the drawn ground, whatever the tile's zone layer calls it (a carved bench or a road node of
+    //     the 8 m grid included). Drag: landRoll x speed, and landDrag x the speed over landCapSpeed, at most
+    //     landDecelMax. The throttle keeps landTraction of its pull and none over landCapSpeed (fading over
+    //     landCapBand), so the bike settles under the cap; the brake keeps landBrakeGrip, the lean landGrip, and the
+    //     lowside reads it as on the road. Gravity follows the land's own slope. Over landCrashSpeed for landCrashS, or
+    //     on land steeper than landSteepSlope (measured on the drawn ground landProbeM around the bike) for
+    //     landSteepS, the bike crashes.
+    benchDrag: 0.1,        // 1/s on the verge: 3.5 m/s^2 at 35 m/s
+    landRoll: 0.3,         // 1/s, rolling on the grass at any speed: at full throttle the bike holds about landCapSpeed
+    landDrag: 1.5,         // 1/s on the speed over landCapSpeed: 12 m/s^2 (landDecelMax) at 10 m/s
+    landDecelMax: 12,      // m/s^2, the most the drag takes
+    // m/s. Well under hairpin speed, or a cut across the inside of a hairpin beats the road: with the cap at 9 m/s and
+    // a drag of 0.45/s, 20 of 868 cuts on the Tremola did, and at 5 m/s some still gained 0.3 s
+    // (tests/unit/world-offroad.test.js)
+    landCapSpeed: 4,
+    landCapBand: 1,        // m/s
+    landTraction: 0.6,
+    landBrakeGrip: 0.6,
+    landGrip: 0.55,        // a lean cap of about 33 degrees
+    landCrashSpeed: 12,    // m/s
+    landCrashS: 1,
+    landSteepSlope: 0.85,  // rise over run, about 40 degrees: steeper than the 1:1.5 batter beside every road
+    landSteepS: 0.25,
+    landProbeM: 1.5,
+    // The land is rough: the drawn bike bobs and rocks, more with speed (the physics is untouched)
+    landBumpM: 0.06,       // m at landCapSpeed and over
+    landWobbleDeg: 3,
 
-    // Run-off and verge (Vehicle.checkWallCollision, worldZone). Leaving the road at speed slows the bike and takes
-    // grip from it; it does not crash it. The legs keep the ledge rule (5% of the speed a frame on the bench, about
-    // 100 m/s^2 at 35 m/s), the run-off grip 0.5 for the lean and a lowside on it, and the 6 s off-road limit.
-    benchDrag: 0.1,        // 1/s on the carved bench (the gravel verge): 3.5 m/s^2 at 35 m/s. Run-off keeps its own drag
-    runoffGrip: 0.7,       // the lean's grip on run-off: a cap of about 40 degrees, and lean over it bleeds off, not a lowside
-    runoffBumpM: 0.03,     // m, the bike's height bobs this much on run-off at runoffBumpSpeed and over (the mesh only)
-    runoffBumpSpeed: 25,   // m/s
-    offRoadLimitS: 10,     // s off the road before the run-off crashes the bike
     // A wall or drop in the tile's zone layer (a face between stacked strands, on the 8 m grid) is solid only where
     // the land at the bike shows it: wallRiseM above the road, or dropDepthM below it. Elsewhere it is run-off.
     // Barriers, tunnel and gallery rock, and bridge parapets are always solid.
@@ -98,16 +130,15 @@ const WorldPhysics = Object.freeze({
     //    lineStrength, the rest staying the rider's own torque steering. Outside the window it does nothing
     lineCapture: 0.25,
     lineStrength: 0.8,
-    // 3. Recovery: running wide toward the outside of a tight bend, the bike is pulled back to the road edge at
-    //    recoveryPull, at most recoveryBudgetM per bend and only within recoveryReachM of the edge (no wall-ride)
-    recoveryPull: 1.5,     // m/s at level normal
-    recoveryBudgetM: 3,
-    recoveryReachM: 4,
-    // 4. Edge assist, anywhere on the ride: within edgeZoneM of a road edge (or past it, within recoveryReachM) and
-    //    heading further off, a lean-rate nudge back toward the road's direction, full at the edge and at a heading
-    //    edgeAngleDeg or more off the road. None while the rider steers back, in a tunnel or gallery, or within
-    //    edgeBarrierM of a junction barrier; it fades out over edgeBudgetS of use (refilled in the middle half of
-    //    the road). Past the edge away from tight bends, the recovery pull above acts too
+    // No assist acts off the carriageway (past the drawn edge the rider rides the land alone, and steers back as on
+    //    the road), and none acts against the rider's steering unless it turns the bike toward the road's centre line
+    //    (Vehicle.worldAssistRate): an assist never pulls the bike outward against the rider and never resists a turn
+    //    back toward the road, from the lean rate and the handlebar alike. (The recovery pull, which moved a bike past the
+    //    edge back toward it, is gone: it acted where nothing drawn explained it.)
+    // 3. Edge assist: on the carriageway within edgeZoneM of an edge and heading further off, a lean-rate nudge back
+    //    toward the road's direction, full at the edge and at a heading edgeAngleDeg or more off the road. None while
+    //    the rider steers back, in a tunnel or gallery, or within edgeBarrierM of a junction barrier; it fades out over
+    //    edgeBudgetS of use (refilled in the middle half of the road)
     edgeLeanRate: 1.5,     // rad/s at level normal
     edgeZoneM: 1,
     edgeAngleDeg: 5,

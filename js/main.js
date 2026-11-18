@@ -1931,7 +1931,9 @@ class Game {
         // Additional camera shake at high speeds (outside onboard mode)
         if (currentMode.type !== 'onboard') {
             const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
-            const shakeIntensity = speedFactor * 0.05 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+            // The world's land shakes the camera as well as the bike (Vehicle.landRock)
+            const rough = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed ? 0.15 * Math.min(1, this.vehicle.speed / this.vehicle.worldPhysics.landCapSpeed) : 0;
+            const shakeIntensity = (speedFactor * 0.05 + rough) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
         }
@@ -3441,7 +3443,8 @@ class Game {
          // Play crash sound if we just crashed (but not if finished)
         if (!wasCrashed && this.vehicle.crashed && !this.finished) {
             this.soundManager.playCrashSound();
-            this.showCrashNotification();
+            // A world crash says what caused it; a leg's card keeps its own line
+            this.showCrashNotification(this.vehicle.crashCause || undefined);
         }
 
         // Show wheelie help when over halfway round the course

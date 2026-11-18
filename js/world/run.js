@@ -170,7 +170,8 @@ class WorldRun {
 // (the level is read from the page's URL and storage only when there is one), so the node harness runs it.
 //   1. speed advice: the entry speed of the next tight bend, for the HUD and for the engine braking
 //   2. line capture: Vehicle.updateWorldPhysics pulls a lean that is near the bend's line onto it
-//   3. recovery: Vehicle.updateWorldPhysics pulls a bike running wide back to the road edge
+//   3. edge assist: Vehicle.updateWorldPhysics nudges a bike heading off the carriageway back along it
+// None acts off the carriageway, and none against the rider's steering (Vehicle.worldAssistRate)
 // The level is off, low or normal (default normal): the URL's ?assist= sets it and it is stored under
 // STORAGE_KEY; the pause panel's button (pauseButton) and the H key (WorldGuide) cycle it in a ride.
 class WorldAssist {

@@ -1,4 +1,4 @@
-// The hairpin assist of a world ride (WorldAssist, Vehicle.adviceBraking / lineCapture / recoveryPull), with the
+// The hairpin assist of a world ride (WorldAssist, Vehicle.adviceBraking / lineCapture / edgeAssistRate), with the
 // real js/vehicle.js on a synthetic hairpin: a straight, a half circle of radius R turning toward +lateral, and the
 // straight back. The ground beside the road is open run-off, so leaving the road shows as a lateral past the edge.
 import { describe, test, expect } from '@jest/globals';
@@ -163,8 +163,7 @@ describe('line capture', () => {
         for (const input of [0, -1, -0.4]) {
             const off = ride(world, 'off', { input, lead: 4, physics: NO_EDGE });
             const normal = ride(world, 'normal', { input, lead: 4, physics: NO_EDGE });
-            // Compared while the two bikes stand in the same place: the recovery pull (a move, not a lean) can set the
-            // normal bike back toward the road edge, and from there the ground under it (bench, run-off) differs
+            // Compared while the two bikes stand in the same place
             const moved = normal.places.findIndex((p, i) => i < off.places.length && p !== off.places[i]);
             const n = Math.min(off.leans.length, normal.leans.length, moved < 0 ? Infinity : moved);
             expect(n).toBeGreaterThan(300);
@@ -229,8 +228,10 @@ describe('line capture', () => {
     });
 });
 
-describe('recovery', () => {
-    // A bike past the outside edge just after the hairpin's apex, facing along the road, no input
+describe('past the edge', () => {
+    // A bike past the outside edge just after the hairpin's apex, facing along the road, no input. The assist acts
+    // only on the carriageway: past the edge nothing pulls the bike (the old recovery pull moved it back to the edge,
+    // with nothing drawn to explain the move)
     function wide(level, past) {
         const world = hairpin(12);
         const s = STRAIGHT + Math.PI * 12 * 0.7;
@@ -240,45 +241,18 @@ describe('recovery', () => {
         vehicle.position.x = p.x + lateral * Math.cos(p.heading);
         vehicle.position.z = p.z - lateral * Math.sin(p.heading);
         vehicle.findNearestRoadSegment();
-        let least = Infinity;
+        const laterals = [];
         for (let tick = 0; tick < 90; tick++) {
             vehicle.speed = 6;
             vehicle.yawAngle = world.route.sample(vehicle.projection.s, {}).heading;
             vehicle.update(DT, 0, 0, 0);
-            least = Math.min(least, -vehicle.projection.lateral - WIDTH / 2);
+            laterals.push(vehicle.projection.lateral);
         }
-        return { least, used: WorldPhysics.recoveryBudgetM - vehicle.recoveryLeft, vehicle };
+        return laterals;
     }
 
-    test('a bike running wide on the exit is pulled back toward the road edge, mildly', () => {
-        const off = wide('off', 1.5);
-        const normal = wide('normal', 1.5);
-        expect(normal.least).toBeLessThan(off.least - 0.5);
-        expect(normal.least).toBeGreaterThanOrEqual(-0.25); // to the edge, not across the road
-        expect(normal.used).toBeLessThanOrEqual(WorldPhysics.recoveryBudgetM + 1e-9);
-        expect(wide('low', 1.5).used).toBeLessThan(normal.used + 1e-9);
-    });
-
-    test('it is limited: nothing beyond recoveryReachM, and never more than the budget in one bend', () => {
-        expect(wide('normal', WorldPhysics.recoveryReachM + 1).used).toBe(0);
-        const world = hairpin(12);
-        const vehicle = bikeOn(world, 'normal', STRAIGHT + 10);
-        // Held against the outside edge for 5 s: the pull stops when the budget is spent
-        let pulled = 0;
-        for (let tick = 0; tick < 300; tick++) {
-            const p = world.route.sample(vehicle.projection.s, {});
-            const lateral = -(WIDTH / 2 + 1);
-            vehicle.position.set(p.x + lateral * Math.cos(p.heading), p.y, p.z - lateral * Math.sin(p.heading));
-            vehicle.yawAngle = p.heading;
-            vehicle.speed = 0.5;
-            const before = vehicle.position.clone();
-            vehicle.update(DT, 0, 0, 0);
-            const forward = new THREE.Vector3(Math.sin(p.heading), 0, Math.cos(p.heading));
-            const moved = vehicle.position.clone().sub(before);
-            pulled += Math.abs(moved.x - forward.x * moved.dot(forward)) + Math.abs(moved.z - forward.z * moved.dot(forward));
-        }
-        expect(vehicle.recoveryLeft).toBeCloseTo(0, 9);
-        expect(pulled).toBeLessThanOrEqual(WorldPhysics.recoveryBudgetM * 1.5);
+    test('a bike running wide on the exit is left to the rider: the same as with the assist off', () => {
+        for (const past of [0.5, 1.5, 3]) expect(wide('normal', past)).toEqual(wide('off', past));
     });
 });
 
@@ -398,10 +372,10 @@ describe('edge assist', () => {
     test('a bike drifting off the edge of a straight at 20 m/s with no input is nudged back; with the assist off it leaves', () => {
         const off = drift('off');
         const normal = drift('normal');
-        expect(off.most).toBeGreaterThan(WIDTH / 2 + 3);
-        // At most a hand's width over the edge, and back on the road heading along it or back toward it
-        expect(normal.most).toBeLessThan(WIDTH / 2 + 0.1);
-        expect(normal.laterals[normal.laterals.length - 1]).toBeLessThan(WIDTH / 2);
+        expect(off.most).toBeGreaterThan(WIDTH / 2 + 1);
+        // Onto the drawn verge at most (the nudge acts only on the carriageway), heading along the road or back toward it
+        expect(normal.most).toBeLessThan(WIDTH / 2 + game.RoadSurface.VERGE_M);
+        expect(normal.laterals[normal.laterals.length - 1]).toBeLessThan(WIDTH / 2 + game.RoadSurface.VERGE_M);
         expect(Math.sin(normal.vehicle.yawAngle)).toBeLessThanOrEqual(0.01);
         // low gives less, but still some
         const low = drift('low');
@@ -440,7 +414,8 @@ describe('edge assist', () => {
         expect(first).toBeGreaterThanOrEqual(0);
         const lastActing = acting.lastIndexOf(true);
         expect((lastActing - first) * DT).toBeLessThanOrEqual(WorldPhysics.edgeBudgetS + 0.05);
-        expect(normal.vehicle.edgeUsedS).toBeGreaterThanOrEqual(WorldPhysics.edgeBudgetS);
+        // (and never past the edge: the bike reaches it before the budget is spent)
+        expect(normal.vehicle.edgeUsedS).toBeGreaterThan(0);
         // The budget refills once the bike is back in the middle half of the road
         const vehicle = normal.vehicle;
         vehicle.crashed = false;
@@ -459,11 +434,11 @@ describe('edge assist', () => {
         expect(tunnel.shares.every(x => x === 0)).toBe(true);
     });
 
-    test('past the edge of a straight, the recovery pull brings the bike back to the edge', () => {
+    test('past the edge of a straight nothing pulls the bike: the same as with the assist off', () => {
         const off = drift('off', { lateral: WIDTH / 2 + 1.5, angle: 0, seconds: 1.5 });
         const normal = drift('normal', { lateral: WIDTH / 2 + 1.5, angle: 0, seconds: 1.5 });
-        expect(normal.laterals[normal.laterals.length - 1]).toBeLessThan(off.laterals[off.laterals.length - 1] - 1);
-        expect(Math.min(...normal.laterals)).toBeGreaterThanOrEqual(WIDTH / 2 - 0.25);
+        expect(normal.laterals).toEqual(off.laterals);
+        expect(normal.shares.every(x => x === 0)).toBe(true);
     });
 });
 

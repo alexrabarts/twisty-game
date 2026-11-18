@@ -70,9 +70,10 @@ export function loadWorldPhysics() {
 
 // The game classes, built once per THREE and per file set. `log` receives the
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
-export function loadGame(THREE = realThree(), log = []) {
+// `sources` replaces a file's text by name ('vehicle.js': an older revision's).
+export function loadGame(THREE = realThree(), log = [], sources = {}) {
     const files = ['terrain.js', 'course.js', 'race.js', 'world/physics.js', 'world/route.js', 'world/legroute.js', 'world/data.js', 'world/graph.js', 'world/worldroute.js', 'world/worldground.js', 'world/streamer.js', 'world/landshade.js', 'world/roadsurface.js', 'world/roadmesh.js', 'world/terrainmesh.js', 'world/horizon.js', 'world/scenery.js', 'world/guide.js', 'world/run.js', 'world/camera.js', 'world/looks.js', 'world/environment.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
-    const source = files.map(loadScript).join('\n;\n');
+    const source = files.map(name => (sources[name] !== undefined ? sources[name] : loadScript(name))).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
         warn: (...args) => log.push(args.join(' ')),

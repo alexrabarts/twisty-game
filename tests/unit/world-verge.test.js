@@ -1,7 +1,7 @@
 // The world's verge: the real js/vehicle.js against the one before the verge change (de5a931), on straight synthetic
-// worlds whose ground beside the road is chosen per test. Leaving the road at speed slows the bike (bench drag,
-// run-off drag) and takes grip from it, and the rider can steer back; only a real wall or drop, water, or a long time
-// off the road crashes it. Before, the ledge rule took 5% of the speed a frame on the bench (about 100 m/s^2 at
+// worlds whose ground beside the road is chosen per test. Leaving the road slows the bike (the verge's drag, then the
+// land's) and takes grip from it, and the rider can steer back; only a real wall or drop, water, or the land's own
+// visible rules (too fast on it for too long, too steep) crash it. Before, the ledge rule took 5% of the speed a frame on the bench (about 100 m/s^2 at
 // 35 m/s), a bank beside the road crashed the bike through the "below the surface" rule, the run-off grip lowsided a
 // bike leaned back toward the road, and a wall or drop in the 8 m zone layer crashed it on flat verge.
 // The legs keep every rule, bit for bit.
@@ -129,56 +129,74 @@ describe('a shallow excursion onto the verge, steering back', () => {
     });
 });
 
-describe('a 35 m/s excursion with no input', () => {
-    test('slows down on the grass and does not crash before the off-road limit', () => {
+describe('an excursion with no input', () => {
+    test('35 m/s onto the grass: the land drags it down hard and it crashes as too fast on the grass, not on a timer', () => {
         const vehicle = place(game.Vehicle, WORLDS.grass(), { speed: 35, angle: 4 });
         const out = ride(vehicle, { seconds: 30 });
         const before = ride(place(Before, WORLDS.grass(), { speed: 35, angle: 4 }), { seconds: 30 });
         expect(before.crashed).toBe(true);
-        expect(before.offS).toBeLessThan(WorldPhysics.offRoadLimitS - 1); // the legs' 6 s
-        expect(out.crashed).toBe(true); // a long time off the road still ends the run
+        expect(out.crashed).toBe(true);
         expect(out.falling).toBe(false);
-        expect(out.offS).toBeGreaterThanOrEqual(WorldPhysics.offRoadLimitS - 0.1);
-        expect(out.maxDecel).toBeLessThan(20);
-        expect(out.minSpeed).toBeLessThan(8);
+        expect(vehicle.crashCause).toBe('Too fast on the grass');
+        // Within landCrashS of reaching the land past the verge (the verge is a few tenths of a second at 4 degrees)
+        expect(out.offS).toBeLessThan(WorldPhysics.landCrashS + 1.5);
+        expect(out.minSpeed).toBeLessThan(25);
     });
 
-    test('over the bench and onto the bank it slows progressively and does not crash', () => {
-        for (const make of [WORLDS.bench, WORLDS.bank]) {
-            const vehicle = place(game.Vehicle, make(), { speed: 35, angle: 4, side: make === WORLDS.bank ? -1 : 1 });
-            const out = ride(vehicle, { seconds: 8 });
-            expect(out.crashed).toBe(false);
-            expect(out.left).toBe(true);
-            expect(out.maxDecel).toBeLessThan(20);
-            expect(vehicle.speed).toBeLessThan(10);
+    test('11 m/s over the bench or onto the grass, then full throttle: down to the land\'s cap, no crash', () => {
+        for (const make of [WORLDS.bench, WORLDS.grass]) {
+            const vehicle = place(game.Vehicle, make(), { speed: 11, angle: 4 });
+            let left = 0;
+            for (let tick = 0; tick < 8 * 60 && !vehicle.crashed; tick++) {
+                // The throttle once on the land: on the road it would carry the bike onto the land over landCrashSpeed
+                vehicle.update(DT, 0, vehicle.runoff ? 1 : 0, 0);
+                if (Math.abs(vehicle.position.x) > 5 + game.RoadSurface.VERGE_M) left++;
+            }
+            expect(vehicle.crashed).toBe(false);
+            expect(left).toBeGreaterThan(120);
+            expect(vehicle.speed).toBeLessThanOrEqual(WorldPhysics.landCapSpeed + 1e-9);
         }
     });
 
     test('a wall or drop in the zone layer on flat land is run-off: no crash where the land shows none', () => {
         for (const side of [1, -1]) {
             const before = ride(place(Before, WORLDS.flatWall(), { speed: 25, angle: 8, side }), { seconds: 4 });
-            const after = ride(place(game.Vehicle, WORLDS.flatWall(), { speed: 25, angle: 8, side }), { seconds: 4 });
+            // Under landCrashSpeed and on the throttle, so the land's own drag and speed rule do not end the ride first
+            const vehicle = place(game.Vehicle, WORLDS.flatWall(), { speed: 9, angle: 8, side });
+            let maxOut = 0;
+            for (let tick = 0; tick < 4 * 60 && !vehicle.crashed; tick++) {
+                vehicle.update(DT, 0, 1, 0);
+                maxOut = Math.max(maxOut, Math.abs(vehicle.position.x) - 5);
+            }
             expect(before.crashed).toBe(true);
-            expect(after.crashed).toBe(false);
-            expect(after.maxOut).toBeGreaterThan(3);
+            expect(vehicle.crashed).toBe(false);
+            expect(maxOut).toBeGreaterThan(3);
         }
     });
 });
 
 describe('real obstacles still crash', () => {
-    test('a wall where the land rises: the crash and the bounce back toward the road', () => {
-        const vehicle = place(game.Vehicle, WORLDS.wall(), { speed: 25, angle: 20 });
-        const out = ride(vehicle, { seconds: 4 });
-        expect(out.crashed).toBe(true);
-        expect(out.falling).toBe(false);
-        expect(vehicle.velocity.x).toBeLessThan(0);
-        expect(vehicle.position.x).toBeLessThan(16);
+    // The 8 m grid draws a wall or a drop as land rising or falling across a cell: steeper than landSteepSlope, so the
+    // bike crashes on the drawn slope at its foot (or top) before it reaches the zone's face
+    test('a wall where the land rises: a crash on the rising land, or a stall at its foot, short of the wall, no fall', () => {
+        // Under landCrashSpeed, so the land's speed rule does not crash the bike first
+        for (const throttle of [0, 1]) {
+            const vehicle = place(game.Vehicle, WORLDS.wall(), { speed: 11, angle: 30 });
+            for (let tick = 0; tick < 8 * 60 && !vehicle.crashed; tick++) vehicle.update(DT, 0, throttle, 0);
+            if (vehicle.crashed) expect(vehicle.crashCause).toBe('Rode onto a slope too steep to hold');
+            else expect(vehicle.speed).toBeLessThan(WorldPhysics.fallSpeed);
+            expect(vehicle.fallingOffCliff).toBe(false);
+            expect(vehicle.position.x).toBeGreaterThan(5 + game.RoadSurface.VERGE_M);
+            expect(vehicle.position.x).toBeLessThan(16);
+        }
     });
 
-    test('a drop where the land falls away: the bike goes over the edge', () => {
-        const out = ride(place(game.Vehicle, WORLDS.drop(), { speed: 25, angle: 20 }), { seconds: 4 });
+    test('a drop where the land falls away: a crash going over it', () => {
+        const vehicle = place(game.Vehicle, WORLDS.drop(), { speed: 11, angle: 30 });
+        const out = ride(vehicle, { seconds: 4 });
         expect(out.crashed).toBe(true);
-        expect(out.falling).toBe(true);
+        expect(out.falling || /steep/.test(vehicle.crashCause)).toBe(true);
+        expect(vehicle.position.x).toBeLessThan(16);
     });
 
     test('the parapet of a retaining wall is solid: a bounce back toward the road, not a fall', () => {
@@ -199,16 +217,17 @@ describe('real obstacles still crash', () => {
     });
 });
 
-describe('the bumpy run-off moves only the drawn bike', () => {
-    test('on the grass the mesh bobs around the physics height, within runoffBumpM', () => {
-        const vehicle = place(game.Vehicle, WORLDS.grass(), { speed: 30, angle: 6 });
+describe('the rough land moves only the drawn bike', () => {
+    test('on the grass the mesh bobs around the physics height, within landBumpM, and rocks within landWobbleDeg', () => {
+        const vehicle = place(game.Vehicle, WORLDS.grass(), { speed: 11, angle: 6 });
         let bobbed = 0;
-        for (let tick = 0; tick < 120; tick++) {
+        for (let tick = 0; tick < 300; tick++) {
             vehicle.update(DT, 0, 0, 0);
             const bob = vehicle.group.position.y - vehicle.position.y;
-            expect(Math.abs(bob)).toBeLessThanOrEqual(WorldPhysics.runoffBumpM + 1e-9);
+            expect(Math.abs(bob)).toBeLessThanOrEqual(WorldPhysics.landBumpM + 1e-9);
+            expect(Math.abs(vehicle.landRock)).toBeLessThanOrEqual(WorldPhysics.landWobbleDeg * Math.PI / 180 + 1e-9);
             if (vehicle.runoff) bobbed = Math.max(bobbed, Math.abs(bob));
-            else expect(bob).toBe(0);
+            else { expect(bob).toBe(0); expect(vehicle.landRock).toBe(0); }
         }
         expect(bobbed).toBeGreaterThan(0);
     });

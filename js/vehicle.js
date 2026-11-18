@@ -361,7 +361,13 @@ class Vehicle {
         this.worldThrottle = 0; // The world's throttle opening, 0 to 1 (it follows the input over throttleRiseS)
         this.lastDemand = 0; // Grip demand of the last world tick (v^2 * kappa / g)
         this.lowsideTimerMs = 0; // Time the demand has been over the lowside limit
-        this.footDown = false; // Stopped with the brake held, no fall
+        this.footDown = false; // At a crawl near upright: a foot down, no fall
+        this.tipTimerS = 0; // Time under fallSpeed leaned past tipLeanDeg
+        this.crashCause = null; // What the crash card says caused a world crash
+        this.landFastS = 0; // Time on the land over landCrashSpeed
+        this.landSteepS = 0; // Time on land steeper than landSteepSlope
+        this.landAlong = 0; // The land's slope along the heading, and across it (rise over run)
+        this.landAcross = 0;
         this.worldSurfaceGrip = 1; // Route surface grip (cobbles) under the bike
         this.assistLevel = null; // Hairpin assist level (off, low, normal); null reads WorldAssist.level()
         this.resetHairpinAssist();
@@ -2735,32 +2741,36 @@ class Vehicle {
 
     // Reads what the route says under the bike: the grade for gravity and the
     // cobbles for grip. The surface grip goes to the weather system so its
-    // multipliers scale braking and lateral grip together.
+    // multipliers scale braking and lateral grip together. On the land the
+    // grade is the land's own along the bike's heading (worldLand).
     syncWorldSurface() {
         const world = this.worldPhysics;
         const route = this.environment.route;
         const sample = route ? route.sample(this.routeS) : null;
-        this.worldGrade = sample && Number.isFinite(sample.grade) ? sample.grade : 0;
+        this.worldGrade = this.runoff && Number.isFinite(this.landAlong) ? this.landAlong
+            : sample && Number.isFinite(sample.grade) ? sample.grade : 0;
         this.worldSurfaceGrip = sample && sample.flags && sample.flags.cobbles ? world.cobbleGrip : 1;
         if (this.weatherSystem) this.weatherSystem.surfaceGrip = this.worldSurfaceGrip;
     }
 
     // physicsMultipliers with the world's surface grip applied when there is
-    // no weather system to apply it. On run-off the brake keeps runoffBrakeGrip
-    // of itself instead of the run-off grip, which still scales the lean and
-    // the throttle.
+    // no weather system to apply it. On the land the lean keeps landGrip, the
+    // throttle landTraction and the brake landBrakeGrip of the weather's.
     worldMultipliers() {
         const multipliers = this.physicsMultipliers();
-        let { lateralFriction, brakeForce } = multipliers;
+        let { lateralFriction, brakeForce, acceleration } = multipliers;
         if (this.runoff) {
-            const weather = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers().brakeForce : 1;
-            brakeForce = weather * this.worldPhysics.runoffBrakeGrip;
+            const world = this.worldPhysics;
+            const weather = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers() : { lateralFriction: 1, brakeForce: 1, acceleration: 1 };
+            lateralFriction = weather.lateralFriction * world.landGrip;
+            brakeForce = weather.brakeForce * world.landBrakeGrip;
+            acceleration = weather.acceleration * world.landTraction;
         }
         if (!this.weatherSystem) {
             lateralFriction *= this.worldSurfaceGrip;
             brakeForce *= this.worldSurfaceGrip;
         }
-        return { ...multipliers, lateralFriction, brakeForce };
+        return { ...multipliers, lateralFriction, brakeForce, acceleration };
     }
 
     // The deceleration of the world's full brake (m/s^2): the bike's brake times brakeGain and the surface,
@@ -2791,16 +2801,27 @@ class Vehicle {
 
         if (throttleInput > 0) {
             const wheeliePenalty = this.isWheelie ? 0.3 : 1.0;
-            this.speed += this.worldDrive(this.speed) * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
+            // On the land the wheel spins up over landCapSpeed: the pull fades out across landCapBand under it
+            const spin = this.runoff ? Math.max(0, Math.min(1, (world.landCapSpeed - this.speed) / world.landCapBand)) : 1;
+            this.speed += this.worldDrive(this.speed) * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration * spin;
         }
         if (brakeInput > 0) {
             this.speed -= this.worldBrakeDecel(weatherMultipliers) * Math.min(1, brakeInput) * deltaTime;
         }
-        // Engine braking with the throttle closed, down to creepSpeed (the creep below is the engine at idle)
+        // Engine braking with the throttle closed, down to idleSpeed; under it the bike rolls down at rollDecel
         let engine = 0;
-        if (throttleInput <= 0 && this.speed > world.creepSpeed && !this.isJumping) {
-            engine = Math.min(world.engineBrakeMax, world.engineBrake * this.speed);
-            this.speed = Math.max(world.creepSpeed, this.speed - engine * deltaTime);
+        if (throttleInput <= 0 && !this.isJumping) {
+            if (this.speed > world.idleSpeed) {
+                engine = Math.min(world.engineBrakeMax, world.engineBrake * this.speed);
+                this.speed = Math.max(world.idleSpeed, this.speed - engine * deltaTime);
+            } else {
+                this.speed = Math.max(0, this.speed - world.rollDecel * deltaTime);
+            }
+        }
+        // The land's drag: landRoll x the speed, and landDrag x the speed over landCapSpeed, at most landDecelMax
+        if (this.runoff && !this.isJumping) {
+            const drag = world.landRoll * this.speed + world.landDrag * Math.max(0, this.speed - world.landCapSpeed);
+            this.speed -= Math.min(world.landDecelMax, drag) * deltaTime;
         }
 
         // The route grade acts at full strength, so a descent speeds the bike up
@@ -2810,12 +2831,11 @@ class Vehicle {
         this.speed -= world.aeroDrag * this.speed * this.speed * deltaTime;
         this.adviceBraking(deltaTime, throttleInput, brakeInput, weatherMultipliers, engine);
 
-        // Low speed never drops the bike: it creeps up to creepSpeed on its own,
-        // and with the brake held at a crawl it stops with a foot down
-        if (throttleInput <= 0 && brakeInput <= 0 && this.speed < world.creepSpeed) {
-            this.speed = Math.min(world.creepSpeed, this.speed + world.creepAccel * deltaTime);
-        }
-        this.footDown = brakeInput > 0 && this.speed < world.footDownSpeed;
+        // Under fallSpeed with the throttle closed and the bike near upright, the rider puts a foot down and it stops
+        // (leaned further it tips over instead: updateWorldPhysics). Nothing lifts the speed back up
+        const crawl = throttleInput <= 0 && this.speed < world.fallSpeed && Math.abs(this.leanAngle) <= world.tipLeanDeg * Math.PI / 180;
+        if (crawl) this.speed = Math.max(0, this.speed - world.footDownDecel * deltaTime);
+        this.footDown = crawl && this.speed < world.footDownSpeed;
         if (this.footDown) this.speed = 0;
 
         this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
@@ -2866,7 +2886,9 @@ class Vehicle {
 
         const grip = Math.max(0.01, this.worldMultipliers().lateralFriction);
         const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip);
-        const leanLimit = Math.min(capEff, Math.atan(v2 / (g * radiusFloor)));
+        // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg
+        const low = this.lowLeanShare(v);
+        const leanLimit = Math.min(capEff, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
@@ -2879,20 +2901,22 @@ class Vehicle {
         // lowsides unless the rider lets go
         const side = Math.sign(rate) || Math.sign(lean);
         const outward = side * lean;
-        // On run-off the lean over the limit bleeds off at leanLimitGain whatever the steering: the bike runs wide
-        // on the grass instead of lowsiding (the lowside below does not read run-off)
         const room = outward <= leanLimit
             ? world.leanLimitGain * (leanLimit - outward)
-            : (this.runoff ? world.leanLimitGain : world.limitReturn * Math.abs(u)) * (leanLimit - outward);
+            : world.limitReturn * Math.abs(u) * (leanLimit - outward);
         if (side * rate > room) rate = side * room;
         // The hairpin assist: the line capture, or away from a captured line the edge assist, as one change to the
-        // lean rate, low-passed over assistSmoothing so it never steps from one frame to the next
-        const assist = this.lineCapture(rate, u, leanLimit, handlebarShare, radiusFloor) - rate
-            + (this.lineCaptured ? 0 : this.edgeAssistRate(u, deltaTime));
+        // lean rate, low-passed over assistSmoothing so it never steps from one frame to the next. Only on the
+        // carriageway, and never against the rider (worldAssistRate)
+        const assist = this.onCarriageway()
+            ? this.lineCapture(rate, u, leanLimit, handlebarShare, radiusFloor) - rate + (this.lineCaptured ? 0 : this.edgeAssistRate(u, deltaTime))
+            : this.releaseAssist();
+        this.assistApplied = 0; // the assist's lean rate this tick, as applied (read by the tests)
         if (assist !== 0 || this.assistLeanRate !== 0) {
             this.assistLeanRate += (assist - this.assistLeanRate) * (1 - Math.exp(-deltaTime / world.assistSmoothing));
             if (assist === 0 && Math.abs(this.assistLeanRate) < 1e-6) this.assistLeanRate = 0;
-            rate += this.assistLeanRate;
+            this.assistApplied = this.worldAssistRate(this.assistLeanRate, u);
+            rate += this.assistApplied;
         }
         this.leanVelocity += (rate - this.leanVelocity) * (1 - Math.exp(-deltaTime / world.leanRateLag));
 
@@ -2900,12 +2924,15 @@ class Vehicle {
         // A captured line steers it too, by the line's weight, toward the handlebar of the line's curvature
         const lock = Math.atan(this.wheelbase / world.lockRadius);
         let bar = u * lock;
+        let barAssist = 0;
         if (this.lineCaptured && this.lineWeight > 0) {
-            bar += (Math.max(-lock, Math.min(lock, Math.atan(this.wheelbase * this.lineWant))) - bar) * this.lineWeight;
+            barAssist = (Math.max(-lock, Math.min(lock, Math.atan(this.wheelbase * this.lineWant))) - bar) * this.lineWeight;
         } else if (handlebarShare > 0 && this.edgeShare > 0) {
             // At low speed the lean turns the bike little, so the edge assist turns the handlebar back off the edge
-            bar += (-this.edgeSide * lock * 0.5 - bar) * this.edgeShare;
+            barAssist = (-this.edgeSide * lock * 0.5 - bar) * this.edgeShare;
         }
+        // The handlebar turns the bike as a lean rate of the other sign does: the same rule as the lean's assist
+        bar += this.worldAssistRate(-barAssist, u) === 0 ? 0 : barAssist;
         this.handlebarAngle += (bar - this.handlebarAngle) * (1 - Math.exp(-deltaTime / world.handlebarLag));
         if (handlebarShare > 0) this.steeringAngle += (this.handlebarAngle - this.steeringAngle) * handlebarShare;
 
@@ -2926,19 +2953,68 @@ class Vehicle {
         } else {
             this.yawAngle -= v * curvature * Math.sign(this.leanAngle) * deltaTime;
         }
-        this.recoveryPull(deltaTime);
 
         this.lastDemand = v2 * curvature / g;
-        if (!this.runoff && this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
+        if (this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
             this.lowsideTimerMs += deltaTime * 1000;
             if (this.lowsideTimerMs >= world.lowsideMs) {
-                this.crashed = true;
-                this.crashAngle = this.leanAngle || 0.5;
-                this.frame.material.color.setHex(0xff0000);
+                this.worldCrash(this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip', 0xff0000);
             }
         } else {
             this.lowsideTimerMs = 0;
         }
+
+        // Under fallSpeed the bike holds itself up only near upright: leaned past tipLeanDeg for tipS it falls over to
+        // that side; nearer upright the rider has a foot down (updateWorldSpeed) and the lean eases out
+        const tip = world.tipLeanDeg * Math.PI / 180;
+        if (v < world.fallSpeed && Math.abs(this.leanAngle) > tip) {
+            this.tipTimerS += deltaTime;
+            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down', 0xff6600);
+        } else {
+            this.tipTimerS = 0;
+            if (this.footDown || v < world.fallSpeed) this.leanAngle *= Math.exp(-world.footDownRight * deltaTime);
+        }
+    }
+
+    // A world crash with the cause the crash card shows
+    worldCrash(cause, color) {
+        this.crashed = true;
+        this.crashCause = cause;
+        this.crashAngle = this.leanAngle || 0.5;
+        this.frame.material.color.setHex(color);
+        console.log(`CRASHED! ${cause} at`, (this.speed * 2.237).toFixed(1) + ' mph');
+    }
+
+    // The share of lowLeanDeg the lean limit reaches at speed v: 0 at lowLeanSpeed and over, 1 at lowLeanFullSpeed and
+    // under, a smoothstep between (no step in the limit)
+    lowLeanShare(v) {
+        const world = this.worldPhysics;
+        const x = Math.max(0, Math.min(1, (world.lowLeanSpeed - v) / (world.lowLeanSpeed - world.lowLeanFullSpeed)));
+        return x * x * (3 - 2 * x);
+    }
+
+    // The bike is on the carriageway (or nowhere on the route): the only place the hairpin assist acts
+    onCarriageway() {
+        const p = this.projection;
+        return !p || !(p.index >= 0) || !Number.isFinite(p.lateral) || Math.abs(p.lateral) <= p.width / 2;
+    }
+
+    // Off the carriageway: the assist lets go of the line and the edge, and contributes nothing
+    releaseAssist() {
+        this.releaseLine(0);
+        this.edgeShare = 0;
+        return 0;
+    }
+
+    // An assist's lean rate as it may act. With the rider steering (u; the rider's own lean rate is -u x leanRate), a
+    // rate against the rider's is dropped unless it turns the bike toward the road's centre line: a lean rate of the
+    // sign of the lateral turns the bike back across it. So an assist never pulls the bike outward against the rider
+    // and never resists a turn back toward the road, while it still holds a rider at full lock off the inside of a
+    // hairpin. With no input the assist acts freely (it only ever acts on the carriageway)
+    worldAssistRate(rate, u) {
+        if (u === 0 || rate * -u >= 0) return rate;
+        const lateral = this.projection && Number.isFinite(this.projection.lateral) ? this.projection.lateral : 0;
+        return rate * lateral > 0 ? rate : 0;
     }
 
     // The share of the yaw rate the handlebar gives at speed v: 1 at rest, 0 at turnBlendSpeed and above, with no
@@ -2950,7 +3026,7 @@ class Vehicle {
         return x * x * (3 - 2 * x);
     }
 
-    // The hairpin assist's state: no line captured, the whole recovery budget left
+    // The hairpin assist's state: no line captured, no edge nudge
     resetHairpinAssist() {
         this.lineCaptured = false;
         this.lineWeight = 0;
@@ -2959,7 +3035,6 @@ class Vehicle {
         this.edgeUsedS = 0; // seconds the edge assist has acted since the bike was last near the road centre
         this.edgeShare = 0; // the edge assist's strength this frame, 0 to 1
         this.edgeSide = 0;
-        this.recoveryLeft = null; // metres of recovery pull left in this bend; null is the whole budget
         this.hairpinAdvice = null;
     }
 
@@ -2978,7 +3053,7 @@ class Vehicle {
         const world = this.worldPhysics;
         const share = this.assistShare();
         this.hairpinAdvice = null;
-        if (share <= 0 || this.crashed) return;
+        if (share <= 0 || this.crashed || !this.onCarriageway()) return;
         const v = this.speed;
         const s = Number.isFinite(this.projection.s) ? this.projection.s : this.routeS;
         const look = Math.max(40, v * v / (2 * world.adviceBrake * share) + v * 1.5);
@@ -3074,8 +3149,8 @@ class Vehicle {
         return rate;
     }
 
-    // 4. Edge assist: anywhere on the ride, a bike within edgeZoneM of either road edge (or past it, within
-    // recoveryReachM) whose heading points further off the road gets a lean-rate nudge back toward the road's
+    // 3. Edge assist: anywhere on the ride, a bike on the carriageway within edgeZoneM of either road edge whose
+    // heading points further off the road gets a lean-rate nudge back toward the road's
     // direction, scaled by how close it is to the edge (full from half the zone out) and how sharply it heads off. It does nothing while the
     // rider steers back toward the road, in a tunnel or gallery, or near a junction barrier (the wall response
     // has those), and it fades out over edgeBudgetS of use, so it cannot hold a bike against the edge like a
@@ -3091,7 +3166,7 @@ class Vehicle {
         const lateral = frame.lateral;
         if (Math.abs(lateral) <= half * 0.5) this.edgeUsedS = 0;
         const gap = half - Math.abs(lateral);
-        if (gap > world.edgeZoneM || gap < -world.recoveryReachM || this.speed < 1) return 0;
+        if (gap > world.edgeZoneM || gap < 0 || this.speed < 1) return 0;
         const side = Math.sign(lateral) || 1;
         const turn = this.yawAngle - frame.heading;
         const off = Math.sin(turn) * side;
@@ -3124,50 +3199,16 @@ class Vehicle {
         return false;
     }
 
-    // 3. Recovery: past the road edge on the outside of a tight bend (or just out of one), the bike is pulled back
-    // toward the edge at recoveryPull. Only within recoveryReachM of the edge, facing along the road, and at most
-    // recoveryBudgetM per bend, so it cannot hold a bike against a wall. Away from tight bends the same pull acts
-    // past either edge (the edge assist's positional half), except where edgeBlocked; there the budget refills
-    // only in the middle half of the road, so a bike riding the edge cannot be pulled back again and again.
-    recoveryPull(deltaTime) {
-        const share = this.assistShare();
-        const p = this.projection;
-        if (share <= 0 || this.crashed || !p || !(p.index >= 0) || !Number.isFinite(p.lateral)) return;
-        const world = this.worldPhysics;
-        if (this.recoveryLeft === null) this.recoveryLeft = world.recoveryBudgetM;
-        const here = this.roadCurvature(0), behind = this.roadCurvature(-world.assistSpanM);
-        const k = Math.abs(here) >= Math.abs(behind) ? here : behind;
-        const fade = WorldAssist.fade(world, 1 / Math.abs(k));
-        const half = p.width / 2;
-        if (fade <= 0) {
-            if (Math.abs(p.lateral) <= half * 0.5) this.recoveryLeft = world.recoveryBudgetM;
-            const out = Math.abs(p.lateral) - half;
-            if (out <= 0 || out > world.recoveryReachM || this.recoveryLeft <= 0) return;
-            if (Math.cos(this.yawAngle - p.heading) <= 0 || this.edgeBlocked(p.s)) return;
-            const back = -Math.sign(p.lateral);
-            const shift = Math.min(world.recoveryPull * share * deltaTime, out, this.recoveryLeft);
-            this.recoveryLeft -= shift;
-            this.position.x += back * shift * Math.cos(p.heading);
-            this.position.z -= back * shift * Math.sin(p.heading);
-            return;
-        }
-        const sign = Math.sign(k);
-        const out = -p.lateral * sign - half;
-        if (out <= 0 || out > world.recoveryReachM || this.recoveryLeft <= 0) return;
-        if (Math.cos(this.yawAngle - p.heading) <= 0) return;
-        const shift = Math.min(world.recoveryPull * share * fade * deltaTime, out, this.recoveryLeft);
-        this.recoveryLeft -= shift;
-        this.position.x += sign * shift * Math.cos(p.heading);
-        this.position.z -= sign * shift * Math.sin(p.heading);
-    }
-
     updateMesh() {
         this.group.position.copy(this.position);
-        // The world's run-off is bumpy: the drawn bike bobs, more with speed (the physics height is untouched)
+        // The world's land is rough: the drawn bike bobs and rocks, more with speed (the physics is untouched)
         const world = this.worldPhysics;
-        if (world && this.runoff && !this.crashed && world.runoffBumpM > 0) {
+        this.landRock = 0;
+        if (world && this.runoff && !this.crashed) {
             const d = this.distanceTraveled;
-            this.group.position.y += world.runoffBumpM * Math.min(1, this.speed / world.runoffBumpSpeed) * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
+            const rough = Math.min(1, this.speed / world.landCapSpeed);
+            this.group.position.y += world.landBumpM * rough * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
+            this.landRock = world.landWobbleDeg * Math.PI / 180 * rough * Math.sin(d * 1.7) * Math.sin(d * 0.6 + 2);
         }
         this.group.rotation.y = this.yawAngle;
         this.meshNeedsBaseCapture = true;
@@ -3280,7 +3321,7 @@ class Vehicle {
             // Normal lean
             // The world pitches the bike to the road; a leg stays level
             this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) : 0;
-            this.group.rotation.z = this.leanAngle;
+            this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) : this.leanAngle;
             this.rider.rotation.z = this.leanAngle * 0.2; // Rider leans subtly
 
             // Restore normal bike color
@@ -3383,6 +3424,12 @@ class Vehicle {
         this.lastDemand = 0;
         this.lowsideTimerMs = 0;
         this.footDown = false;
+        this.tipTimerS = 0;
+        this.crashCause = null;
+        this.landFastS = 0;
+        this.landSteepS = 0;
+        this.landAlong = 0;
+        this.landAcross = 0;
         this.resetHairpinAssist();
         this.wasNearEdge = false;
         this.fallingOffCliff = false;
@@ -3692,7 +3739,8 @@ class Vehicle {
         }
 
         this.runoff = zone.kind === 'runoff' ? (world ? this.worldRunoff(zone.side.runoff) : zone.side.runoff) : null;
-        if (this.runoff) this.checkRunoff(deltaTime, zone);
+        if (world) this.worldLand(deltaTime);
+        else if (this.runoff) this.checkRunoff(deltaTime, zone);
         // The road resets the clock; a shoulder in between neither adds nor clears it
         if (zone.kind === 'road') this.offRoadTime = 0;
 
@@ -3779,14 +3827,57 @@ class Vehicle {
         }
     }
 
-    // The world's run-off settings: the zone's drag and floor, with the world's lean grip (runoffGrip)
+    // The world's land settings, as this.runoff holds them: the zone's, with the world's lean grip (landGrip). The
+    // drag, the throttle and the brake on the land are WorldPhysics' (worldMultipliers, updateWorldSpeed)
     worldRunoff(runoff) {
         const source = runoff || WorldGround.RUNOFF;
-        if (this.worldRunoffSource !== source || !this.worldRunoffCache || this.worldRunoffCache.grip !== this.worldPhysics.runoffGrip) {
+        if (this.worldRunoffSource !== source || !this.worldRunoffCache || this.worldRunoffCache.grip !== this.worldPhysics.landGrip) {
             this.worldRunoffSource = source;
-            this.worldRunoffCache = Object.freeze({ ...source, grip: this.worldPhysics.runoffGrip });
+            this.worldRunoffCache = Object.freeze({ ...source, grip: this.worldPhysics.landGrip });
         }
         return this.worldRunoffCache;
+    }
+
+    // The world's land, once a tick: the slope of the drawn ground under the bike, and the crashes the rider can see
+    // coming: too fast on the land for landCrashS, land steeper than landSteepSlope for landSteepS, or water. Off the
+    // land the timers clear. The speed it costs is updateWorldSpeed's (landDrag, landTraction)
+    worldLand(deltaTime) {
+        const world = this.worldPhysics;
+        if (!this.runoff || this.crashed) {
+            this.landFastS = 0;
+            this.landSteepS = 0;
+            this.landAlong = 0;
+            this.landAcross = 0;
+            if (!this.runoff) this.offRoadTime = 0;
+            return;
+        }
+        this.offRoadTime += deltaTime;
+        const ground = this.environment.ground;
+        const range = this.getSegmentSearchRange();
+        const loc = this.landLoc || (this.landLoc = {});
+        const here = ground.groundY(this.position.x, this.position.z, range, false, loc);
+        const water = ground.waterLevel(loc);
+        if (water !== null && here <= water) {
+            this.worldCrash('Rode into the water', 0x1e5a8a);
+            return;
+        }
+        // The slope on the drawn ground: ahead (where the bike is going, so a drop edge counts before it is under the
+        // wheels) and across, landProbeM each way
+        const m = world.landProbeM;
+        const sin = Math.sin(this.yawAngle), cos = Math.cos(this.yawAngle);
+        const at = (dx, dz) => ground.groundY(this.position.x + dx, this.position.z + dz, range, false, this.landProbe || (this.landProbe = {}));
+        const ahead = at(sin * m, cos * m);
+        const one = at(cos * m, -sin * m), other = at(-cos * m, sin * m);
+        this.landAlong = Number.isFinite(ahead) && Number.isFinite(here) ? (ahead - here) / m : 0;
+        this.landAcross = Number.isFinite(one) && Number.isFinite(other) ? (one - other) / (2 * m) : 0;
+        const steep = Math.hypot(this.landAlong, this.landAcross);
+        this.landSteepS = steep > world.landSteepSlope ? this.landSteepS + deltaTime : 0;
+        this.landFastS = this.speed > world.landCrashSpeed ? this.landFastS + deltaTime : 0;
+        if (this.landSteepS >= world.landSteepS) {
+            this.worldCrash(this.landAlong < -world.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold', 0x8b4513);
+        } else if (this.landFastS >= world.landCrashS) {
+            this.worldCrash('Too fast on the grass', 0xff6600);
+        }
     }
 
     // A world zone as the bike meets it. A wall or a drop from the tile's zone layer is solid only where the land
@@ -3795,7 +3886,7 @@ class Vehicle {
     // toward the road, onto flat verge. Barriers, tunnel and gallery rock, bridge parapets and the parapets of
     // retaining walls stay solid.
     worldZone(zone, loc, roadY = loc.roadY) {
-        if (zone.kind !== 'wall' && zone.kind !== 'fall') return zone;
+        if (zone.kind !== 'wall' && zone.kind !== 'fall') return this.worldSurface(zone, loc);
         // A retaining wall's parapet (WorldGround.zoneAt) stands where it is drawn, whatever the land beyond it
         if (zone.parapet) return zone;
         const world = this.worldPhysics;
@@ -3822,7 +3913,30 @@ class Vehicle {
         soft.side = ground.openSide || { flat: 0, runoff: WorldGround.RUNOFF, lipDepth: 8 };
         soft.sign = zone.sign;
         soft.start = zone.start;
-        return soft;
+        return this.worldSurface(soft, loc);
+    }
+
+    // What a soft zone (road, shoulder, run-off) is to the bike, by where it stands against the drawn road rather than
+    // by the tile's 8 m zone layer, whose road and bench nodes reach several metres onto the land beside the road:
+    // the carriageway (zoneAt's own road band) or a side road's is road; the drawn verge, RoadSurface.VERGE_M past the
+    // edge, is the shoulder; past it is the land (run-off). Tunnel and gallery benches are left as they are.
+    worldSurface(zone, loc) {
+        if (zone.kind === 'road' && zone.start === 0) return zone;
+        const ground = this.environment.ground;
+        if (typeof ground.halfRoad !== 'function' || typeof ground.position !== 'function' || typeof RoadSurface === 'undefined') return zone;
+        const route = this.environment.route;
+        const point = route.points && route.points[Math.max(0, Math.min(route.points.length - 1, loc.index))];
+        const flags = point && point.flags;
+        if (flags && (flags.tunnel || flags.gallery)) return zone;
+        if (zone.kind === 'road' && typeof ground.sideRoadY === 'function') {
+            const at = ground.position(loc);
+            if (ground.sideRoadY(at.x, at.z) !== null) return zone;
+        }
+        const verge = Math.abs(loc.lateral) <= ground.halfRoad(loc) + RoadSurface.VERGE_M;
+        const kind = verge ? 'shoulder' : 'runoff';
+        if (zone.kind === kind) return zone;
+        // A new zone each time: checkWallCollision holds two at once (the bike's and the edge's)
+        return { kind, side: verge ? (ground.benchSide || zone.side) : (ground.openSide || zone.side), sign: zone.sign, start: zone.start };
     }
 
     // A solid obstacle: hit when the bike is within `radius + 1.0` of it on

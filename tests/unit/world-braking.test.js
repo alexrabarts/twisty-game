@@ -1,7 +1,7 @@
 // World braking: the real js/vehicle.js against the one before the braking change (4d46901), on a plane (flat, a
 // 10% descent, cobbles) and on a straight synthetic world whose ground beside the road is open run-off (grass).
 // The world brake is stronger (brakeGain), shares the grip with the lean (trail braking down to trailBrakeFloor
-// at the cap), keeps runoffBrakeGrip of itself on run-off, and the engine brakes with the throttle closed. The
+// at the cap), keeps landBrakeGrip of itself on the land, and the engine brakes with the throttle closed. The
 // legs keep the bike's own brake, bit for bit.
 import { describe, test, expect } from '@jest/globals';
 import { execFileSync } from 'node:child_process';
@@ -64,7 +64,8 @@ describe('stopping distance, before and after', () => {
         'run-off grass': V => onGrass(V)
     };
     // The after distance is at most this share of the before one
-    const SHARE = { flat: 0.75, 'a 10% descent': 0.75, cobbles: 0.75, 'run-off grass': 0.6 };
+    // (on the grass the brake keeps landBrakeGrip of itself, and the land's drag makes up most of it)
+    const SHARE = { flat: 0.75, 'a 10% descent': 0.75, cobbles: 0.75, 'run-off grass': 0.7 };
 
     for (const [name, make] of Object.entries(cases)) {
         for (const v0 of [20, 30, 40]) {
@@ -85,13 +86,14 @@ describe('stopping distance, before and after', () => {
         expect(stop(onPlane(game.Vehicle), 30).distance).toBeCloseTo(14.1, 0);
     });
 
-    test('off the road the brake is no longer weaker than on it', () => {
+    test('on the land the brake keeps landBrakeGrip of itself, and the land\'s drag helps it stop', () => {
         for (const v0 of [20, 30, 40]) {
             const grass = stop(onGrass(game.Vehicle), v0);
             const road = stop(onPlane(game.Vehicle), v0);
-            expect(grass.distance).toBeLessThanOrEqual(road.distance + 0.5);
-            // Before, run-off halved the brake: from 20 m/s it took 40% further than on the road
-            expect(stop(onGrass(Before), v0).distance).toBeGreaterThan(stop(onPlane(Before), v0).distance);
+            expect(grass.crashed).toBe(false);
+            // Shorter than the road's stop with the brake at landBrakeGrip alone, longer than the road's own
+            expect(grass.distance).toBeLessThan(road.distance / WorldPhysics.landBrakeGrip);
+            expect(grass.distance).toBeGreaterThan(road.distance * 0.8);
         }
     });
 
@@ -202,9 +204,15 @@ describe('engine braking', () => {
         }
     });
 
-    test('it never brakes under creepSpeed, and the creep is unchanged', () => {
-        expect(coast(onPlane(game.Vehicle), 12, 30)).toBeCloseTo(WorldPhysics.creepSpeed, 6);
-        expect(coast(onPlane(game.Vehicle), 2, 3)).toBe(coast(onPlane(Before), 2, 3));
+    test('it brakes down to idleSpeed, then the bike rolls to a stop with a foot down (no creep)', () => {
+        // Engine braking alone to idleSpeed: the same as with the roll-down off until then
+        const idle = onPlane(game.Vehicle);
+        expect(coast(onPlane(game.Vehicle), 12, 5)).toBeGreaterThan(WorldPhysics.idleSpeed);
+        const vehicle = onPlane(game.Vehicle);
+        expect(coast(vehicle, 12, 60)).toBe(0);
+        expect(coast(idle, 12, 5)).toBe(coast(onPlane(game.Vehicle, { physics: { ...WorldPhysics, rollDecel: 0 } }), 12, 5));
+        expect(vehicle.footDown).toBe(true);
+        expect(vehicle.crashed).toBe(false);
     });
 
     test('the throttle held turns it off', () => {

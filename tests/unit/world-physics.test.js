@@ -404,12 +404,13 @@ describe('hairpin (P32)', () => {
 });
 
 describe('low speed (P33)', () => {
-    test('3 m/s uphill at 12% with no input does not fall and ends at creep speed', () => {
+    test('3 m/s uphill at 12% with no input does not fall: upright, it stops with a foot down', () => {
         const vehicle = worldVehicle({ grade: 0.12 });
         vehicle.speed = 3;
         for (let tick = 0; tick < 300; tick++) vehicle.update(DT, 0, 0, 0);
         expect(vehicle.crashed).toBe(false);
-        expect(vehicle.speed).toBeGreaterThanOrEqual(3.9);
+        expect(vehicle.speed).toBe(0);
+        expect(vehicle.footDown).toBe(true);
     });
 
     test('the legacy vehicle falls on the first tick under 4 m/s', () => {
@@ -436,13 +437,16 @@ describe('low speed (P33)', () => {
         expect(Math.abs(deg(vehicle.leanAngle))).toBeLessThanOrEqual(1);
     });
 
-    test('releasing the brake after a stop creeps off again', () => {
+    test('releasing the brake after a stop leaves the bike standing; the throttle pulls it away', () => {
         const vehicle = worldVehicle();
         vehicle.speed = 0;
         vehicle.update(DT, 0, 0, 1);
         expect(vehicle.speed).toBe(0);
         for (let tick = 0; tick < 120; tick++) vehicle.update(DT, 0, 0, 0);
-        expect(vehicle.speed).toBeCloseTo(WorldPhysics.creepSpeed, 1);
+        expect(vehicle.speed).toBe(0);
+        for (let tick = 0; tick < 60; tick++) vehicle.update(DT, 0, 1, 0);
+        expect(vehicle.speed).toBeGreaterThan(2);
+        expect(vehicle.crashed).toBe(false);
     });
 });
 
@@ -642,9 +646,9 @@ describe('route without samples', () => {
 });
 
 // The low-speed turn: under turnBlendSpeed the yaw rate blends toward the handlebar's v tan(handlebar) / wheelbase
-// and the floor radius drops to lockRadius. The creep is off here (creepSpeed 0) so the speed held is the speed ridden.
+// and the floor radius drops to lockRadius. The speed is held each tick, so it is the speed ridden.
 describe('low-speed turn', () => {
-    const still = { ...WorldPhysics, creepSpeed: 0 };
+    const still = WorldPhysics;
     const BLEND = WorldPhysics.turnBlendSpeed;
     const LOCK = WorldPhysics.lockRadius;
 
@@ -665,6 +669,7 @@ describe('low-speed turn', () => {
 
     test('full lock turns close to the lock radius at 2 m/s and the radius grows smoothly with speed', () => {
         const r2 = lockRadiusAt(2), r4 = lockRadiusAt(4), r6 = lockRadiusAt(6);
+        // (under fallSpeed a held lock tips the bike over: worldTip below)
         expect(r2).toBeLessThanOrEqual(LOCK * 1.1);
         expect(r2).toBeGreaterThanOrEqual(LOCK * 0.98);
         expect(r4).toBeGreaterThan(r2);
@@ -672,7 +677,7 @@ describe('low-speed turn', () => {
         expect(r6).toBeLessThanOrEqual(WorldPhysics.radiusFloor + 0.01);
         // Smoothly: over a fine sweep the radius never falls with speed and never jumps
         let last = null;
-        for (let speed = 0.5; speed <= BLEND; speed += 0.25) {
+        for (let speed = WorldPhysics.fallSpeed + 0.25; speed <= BLEND; speed += 0.25) {
             const radius = lockRadiusAt(speed);
             if (last !== null) {
                 expect(radius).toBeGreaterThanOrEqual(last - 1e-6);
@@ -683,15 +688,16 @@ describe('low-speed turn', () => {
         }
     });
 
-    test('the bike stands up as it slows: the full-lock lean shrinks toward upright', () => {
-        const leans = [6, 4, 2, 1].map(speed => {
+    test('at walking pace the rider lays the bike over: the full-lock lean reaches lowLeanDeg by lowLeanFullSpeed', () => {
+        const leans = [7, 6, 5, 4, 3, 2].map(speed => {
             const vehicle = worldVehicle({ physics: still });
             hold(vehicle, speed, 1, 3);
+            expect(vehicle.crashed).toBe(false);
             return deg(Math.abs(vehicle.leanAngle));
         });
-        for (let i = 1; i < leans.length; i++) expect(leans[i]).toBeLessThan(leans[i - 1]);
-        // at 1 m/s on a lock radius the lean is atan(v^2 / (g r)), a few degrees at most
-        expect(leans[3]).toBeLessThan(deg(Math.atan(1 / (9.81 * LOCK))) + 0.5);
+        for (const lean of leans) expect(lean).toBeGreaterThanOrEqual(29);
+        expect(leans[3]).toBeCloseTo(WorldPhysics.lowLeanDeg, 0);
+        expect(leans[5]).toBeCloseTo(WorldPhysics.lowLeanDeg, 0);
     });
 
     test('no step in the yaw rate across the blend speed', () => {
@@ -716,6 +722,7 @@ describe('low-speed turn', () => {
 
     test('the yaw rate is 0 at speed 0: no turning on the spot', () => {
         const vehicle = worldVehicle({ physics: still });
+        // From a stop the foot is down and the lean eases out, so a held lock turns the bar and does not tip the bike
         hold(vehicle, 0, 1, 1);
         expect(Math.abs(vehicle.handlebarAngle)).toBeGreaterThan(0.3);
         const before = vehicle.yawAngle;
@@ -724,18 +731,22 @@ describe('low-speed turn', () => {
         expect(vehicle.crashed).toBe(false);
     });
 
-    test('slowing to a stop at full lock, and creeping off at full lock, never falls or crashes', () => {
-        const vehicle = worldVehicle();
-        vehicle.speed = 10;
-        for (let tick = 0; tick < 600; tick++) vehicle.update(DT, 1, 0, 0.4);
-        expect(vehicle.crashed).toBe(false);
-        expect(vehicle.speed).toBe(0);
-        for (let tick = 0; tick < 600; tick++) vehicle.update(DT, 1, 0, 0);
-        expect(vehicle.crashed).toBe(false);
-        expect(vehicle.speed).toBeCloseTo(WorldPhysics.creepSpeed, 1);
-        // At creep speed and full lock the bike circles near the lock radius, barely leaned
-        expect(deg(Math.abs(vehicle.leanAngle))).toBeLessThan(25);
-        for (const speed of [0.5, 1, 2, 3, 4, 5, 6, 7]) expect(hold(worldVehicle(), speed, -1, 4).crashTick).toBeNull();
+    test('slowing to a stop at full lock tips the bike over; upright with the brake it stops with a foot down', () => {
+        const leaned = worldVehicle();
+        leaned.speed = 10;
+        for (let tick = 0; tick < 600 && !leaned.crashed; tick++) leaned.update(DT, 1, 0, 0.4);
+        expect(leaned.crashed).toBe(true);
+        expect(leaned.crashCause).toMatch(/Fell over/);
+        const upright = worldVehicle();
+        upright.speed = 10;
+        for (let tick = 0; tick < 600; tick++) upright.update(DT, tick < 120 ? 1 : 0, 0, tick < 120 ? 0 : 0.4);
+        expect(upright.crashed).toBe(false);
+        expect(upright.speed).toBe(0);
+        expect(upright.footDown).toBe(true);
+        // From a stop, pulling away at full lock never tips: the lean starts from upright and the foot holds it
+        for (let tick = 0; tick < 600; tick++) upright.update(DT, 1, 0.3, 0);
+        expect(upright.crashed).toBe(false);
+        for (const speed of [2, 3, 4, 5, 6, 7]) expect(hold(worldVehicle(), speed, -1, 4).crashTick).toBeNull();
     });
 
     // Above the blend speed the world branch is the one of 0389aba (before the low-speed turn), tick for tick. The
