@@ -192,7 +192,8 @@ class Scenery {
             const [conifer, broadleaf, bush, houses] = await Promise.all([
                 loadModel('assets/trees/conifer.glb'), loadModel('assets/trees/broadleaf.glb'), loadModel('assets/trees/bush.glb'), loadModel('assets/village/houses.glb')
             ]);
-            const pick = (model, kind, names) => names.map(name => ({ kind, name, parts: model.meshes.get(name) })).filter(s => s.parts);
+            // A world draws the shapes in its own palette and light (js/world/vegetation.js); the legs keep the files' colours
+            const pick = (model, kind, names) => names.filter(name => model.meshes.get(name)).map(name => ({ kind, name, parts: Vegetation.shape(model.meshes.get(name), kind) }));
             const trees = [
                 ...pick(conifer, 'conifer', ['conifer_spruce', 'conifer_fir', 'conifer_pine']),
                 ...pick(broadleaf, 'broadleaf', ['broadleaf_oak', 'broadleaf_beech', 'broadleaf_ash']),
@@ -251,9 +252,9 @@ class Scenery {
             const wall = new THREE.BoxGeometry(1, 1, 1); wall.translate(0, 0.5, 0);
             this.fallback = {
                 trees: [
-                    { kind: 'conifer', name: 'plain_conifer', parts: [{ geometry: cone, material: material(0x2d4a2d) }] },
-                    { kind: 'broadleaf', name: 'plain_broadleaf', parts: [{ geometry: ball, material: material(0x4d6d34) }] },
-                    { kind: 'bush', name: 'plain_bush', parts: [{ geometry: blob, material: material(0x587a3a) }] }
+                    { kind: 'conifer', name: 'plain_conifer', parts: [{ geometry: cone, material: Vegetation.plainMaterial('conifer') }] },
+                    { kind: 'broadleaf', name: 'plain_broadleaf', parts: [{ geometry: ball, material: Vegetation.plainMaterial('broadleaf') }] },
+                    { kind: 'bush', name: 'plain_bush', parts: [{ geometry: blob, material: Vegetation.plainMaterial('bush') }] }
                 ],
                 houses: [{ name: 'plain_hut', parts: Scenery.hutParts(), plain: true }],
                 // A big mapped wall (buildings.mjs KIND.wall) is a block of stone, not a house

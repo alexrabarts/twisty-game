@@ -92,6 +92,16 @@ Three or more photos within 150 m of each other make a stop. The summary lists e
 3. Rank the engine changes by the gaps that repeat over many photos. Write each change with its evidence: the photos and the metric.
 4. Make the changes in their own PRs. Then run the next round and compare the gaps with the last round.
 
+### Vegetation colour (round 5)
+
+Round 5 sampled conifer stands, shrubs and grass by hand in the photos (rectangles on the side-by-sides, HSV of the display colour). These ranges set the world's tree palette and caps (`js/world/vegetation.js`) and the browser check `world-trees` (`TREE_BANDS`, `TREE_OVER_LAND` in `tools/terrain-check.mjs`):
+
+- Conifer stands, 300 m to 3 km: saturation 0.17 to 0.43, value 0.24 to 0.37. They are darker than the grass in the same photo (value 0.36 to 0.57): 0.5 to 0.7 of it.
+- Shrub slopes near the camera: value 0.10 to 0.33, saturation 0.14 to 0.55 (the higher in shade).
+- Far forest goes blue with distance (a far stand in shade: about sRGB 39, 64, 87).
+
+Keep the rectangles and their overlays under `matches/round-<n>/ref-rects/`, never in the repo. Sample again when a round adds photos of trees closer than 300 m.
+
 ## 5. After an import grows the world
 
 1. Run `node tools/world/photomatch.mjs coverage`. `coverage.json` lists each cluster of photos with its distance to the drawn world (`corridorDistanceM`) and to the planned route. Use it to size the next import or a free-roam corridor so that it covers the stops. In the importer, `readCoverage()` and `coverageBoxes(coverage, { reachM, marginM })` from `tools/world/photos/geo.mjs` give the LV95 boxes round the stops near the planned route.

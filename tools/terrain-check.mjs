@@ -11,7 +11,8 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees
+//   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
@@ -2148,7 +2149,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight', 'world-trees'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2705,6 +2706,147 @@ function floatingCount(STRUCTURE_DARK = 32) {
     return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0, structure: structurePx, blackStructure: structurePx ? Math.round((structureBlack / structurePx) * 10000) / 10000 : 0 };
 }
 
+// world-trees: the colour of the drawn trees against the photos (.agent/sop/photo-match.md) and against the land round
+// them. At each station the chase view, and the same place looking 70 degrees to either side over the slopes, are drawn
+// as the rider sees them; then drawn again with each tree kind and the land in an id colour and the view distance in
+// green, and each tree pixel read in the frame as drawn. TREE_BANDS are the photos' ranges by distance (HSV of the
+// display colour, 0 to 1); TREE_OVER_LAND is the most a band's trees may outshine the land round them (in 24 px cells
+// holding both, tree-weighted).
+// Stations: 0 and 400 the forest round Airolo, 1600 and 2000 the lower valley, 2800 the slopes at km 2 to 3; the rain
+// views (TREE_RAIN_VIEWS) take the climb's rain look at two of them. The rain's own stretch of road (s 7 km on) holds
+// few trees, and how many are resident there depends on the places visited before.
+const TREE_VIEWS = [0, 400, 1600, 2000, 2800];
+const TREE_RAIN_VIEWS = [0, 2800];
+const TREE_BANDS = [
+    { name: 'near', fromM: 0, toM: 60, s: [0.12, 0.58], v: [0.06, 0.4] },
+    { name: 'mid', fromM: 60, toM: 250, s: [0.12, 0.48], v: [0.1, 0.38] },
+    { name: 'far', fromM: 250, toM: 2040, s: [0.08, 0.48], v: [0.1, 0.38] }
+];
+const TREE_OVER_LAND = 0.03;
+// Metres over the road the turned views look from: over the verge's bank, so the slope and its trees show
+const TREE_EYE_M = 14;
+const TREE_MIN_PX = 400;
+
+async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle;
+    // A rain view: every stage takes the Tremola's rain look from end to end (the trees stand low, the rain falls high)
+    const env0 = game.environment;
+    if (!window.treeTrack) window.treeTrack = game.atmosphereTrack;
+    const rainPart = WorldLooks.tremola.find(part => part.look.weather === 'rain');
+    game.atmosphereTrack = rain ? AtmosphereTrack.forWorld(env0.route.stages, env0.route, Object.fromEntries(env0.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: rainPart.look }]]))) : window.treeTrack;
+    game.cameraMode = 2;
+    await placeAt(s);
+    game.atmosphereWritten = null;
+    game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env0, weatherSystem: game.weatherSystem });
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    v.speed = 0;
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 240; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const cam = game.camera;
+    if (turnDeg) {
+        // Over the slopes beside the road: turned about the vertical, from TREE_EYE_M over the road, looking down
+        cam.rotation.order = 'YXZ';
+        cam.rotation.y += turnDeg * Math.PI / 180;
+        cam.rotation.x = -0.2;
+        cam.rotation.z = 0;
+        cam.position.y = v.position.y + eyeM;
+        cam.updateMatrixWorld(true);
+    }
+    const env = game.environment, renderer = game.graphics.renderer;
+    game.graphics.render(game.scene, cam);
+    const canvas = renderer.domElement;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width; copy.height = canvas.height;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const frame = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    const W = copy.width, H = copy.height;
+    // The id frame: tree kinds and land, the view distance in green (8 m steps to 2040 m)
+    const KINDS = ['conifer', 'broadleaf', 'bush'];
+    const idMaterial = id => new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { uId: { value: id } },
+        vertexShader: 'varying float vD; void main() { vec4 p = vec4(position, 1.0);\n#ifdef USE_INSTANCING\np = instanceMatrix * p;\n#endif\nvec4 mv = modelViewMatrix * p; vD = -mv.z; gl_Position = projectionMatrix * mv; }',
+        fragmentShader: 'uniform float uId; varying float vD; void main() { gl_FragColor = vec4(uId, min(vD / 2040.0, 1.0), 0.0, 1.0); }'
+    });
+    const mats = { land: idMaterial(200 / 255), other: idMaterial(0), conifer: idMaterial(40 / 255), broadleaf: idMaterial(80 / 255), bush: idMaterial(120 / 255) };
+    const saved = new Map(), hidden = [];
+    const bike = v.group;
+    game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    const inside = (o, group) => { for (let n = o; n; n = n.parent) if (n === group) return true; return false; };
+    game.scene.traverse(o => {
+        if (!o.isMesh || !(inside(o, env.group) || inside(o, bike))) return;
+        saved.set(o, o.material);
+        const kind = /^trees:(conifer|broadleaf|bush|plain_conifer|plain_broadleaf|plain_bush)/.exec(o.name);
+        if (kind) o.material = mats[kind[1].replace('plain_', '')];
+        else if (inside(o, env.tileGroup) || o === env.horizon || (env.farLand || []).includes(o)) o.material = mats.land;
+        else o.material = mats.other;
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    const target = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const ids = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, ids);
+    renderer.setRenderTarget(null);
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    game.scene.background = background;
+    game.scene.fog = fog;
+    target.dispose();
+    Object.values(mats).forEach(m => m.dispose());
+    const bands = [{ to: 60 }, { to: 250 }, { to: 2041 }];
+    const empty = () => ({ n: 0, s: 0, v: 0, r: 0, g: 0, b: 0 });
+    const trees = bands.map(() => ({ all: empty(), conifer: empty(), broadleaf: empty(), bush: empty() }));
+    const land = bands.map(empty);
+    const CELL = 24, cw = Math.ceil(W / CELL), ch = Math.ceil(H / CELL);
+    const cells = Array.from({ length: cw * ch }, () => bands.map(() => ({ tn: 0, tv: 0, ln: 0, lv: 0 })));
+    const add = (acc, r, g, b, sat, val) => { acc.n++; acc.s += sat; acc.v += val; acc.r += r; acc.g += g; acc.b += b; };
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const k = ((H - 1 - y) * W + x) * 4, id = ids[k];
+            if (!id) continue;
+            const d = ids[k + 1] / 255 * 2040;
+            const band = d < 60 ? 0 : d < 250 ? 1 : 2;
+            const f = (y * W + x) * 4, r = frame[f], g = frame[f + 1], b = frame[f + 2];
+            const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+            const sat = mx ? (mx - mn) / mx : 0, val = mx / 255;
+            const cell = cells[Math.floor(y / CELL) * cw + Math.floor(x / CELL)][band];
+            if (id > 180) { add(land[band], r, g, b, sat, val); cell.ln++; cell.lv += val; }
+            else {
+                const kind = KINDS[Math.round(id / 40) - 1];
+                if (!kind) continue;
+                add(trees[band].all, r, g, b, sat, val);
+                add(trees[band][kind], r, g, b, sat, val);
+                cell.tn++; cell.tv += val;
+            }
+        }
+    }
+    const round = n => Math.round(n * 1000) / 1000;
+    const mean = a => a.n ? { px: a.n, s: round(a.s / a.n), v: round(a.v / a.n), rgb: [a.r, a.g, a.b].map(c => Math.round(c / a.n)) } : { px: 0 };
+    // Trees against the land round them: the cells of a band holding 8 px or more of each, weighted by tree pixels
+    const over = bands.map((_, band) => {
+        let w = 0, sum = 0, cellsUsed = 0;
+        for (const c of cells) {
+            const q = c[band];
+            if (q.tn < 8 || q.ln < 8) continue;
+            sum += (q.tv / q.tn - q.lv / q.ln) * q.tn; w += q.tn; cellsUsed++;
+        }
+        return w ? { px: w, cells: cellsUsed, vOverLand: round(sum / w) } : { px: 0 };
+    });
+    const look = game.graphics.grade ? { saturation: game.graphics.grade.saturation, contrast: game.graphics.grade.contrast } : null;
+    return {
+        s, turnDeg, rain: !!rain, size: [W, H], trees: env.scenery.treeCount, look, weather: game.weatherSystem ? game.weatherSystem.currentWeather : null,
+        bands: bands.map((_, band) => ({ trees: mean(trees[band].all), conifer: mean(trees[band].conifer), broadleaf: mean(trees[band].broadleaf), bush: mean(trees[band].bush), land: mean(land[band]), ...over[band] }))
+    };
+}
+
 // world-watertight: the drawn land is closed. From the helmet, the chase and the high camera at stations along the
 // slice, the land, the road and its edge works are drawn alone (each kind in its own colour, back faces marked) and
 // each pixel is read:
@@ -3014,6 +3156,26 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
 const WORLD = {
     // The drawn land is closed: holes, land undersides and skirts in view, and edge works whose outline stands over
     // the land, from the helmet, chase and high cameras every --every metres (50) between --from and --to
+    // The drawn trees' colour against the photos' ranges and the land round them (treeColourView), at TREE_VIEWS
+    // (--views s,s,...); --out <dir> saves each view as drawn
+    'world-trees': async (page) => {
+        const out = option('out');
+        if (out) mkdirSync(out, { recursive: true });
+        // The saved views show the frame alone, without the HUD
+        if (out) await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        const tag = option('tag') || 'trees';
+        const views = [];
+        const rain = option('rain') ? option('rain').split(',').map(Number) : TREE_RAIN_VIEWS;
+        const list = (option('views') ? option('views').split(',').map(Number) : TREE_VIEWS).map(s => ({ s, rain: false })).concat(rain.map(s => ({ s, rain: true })));
+        for (const { s, rain: wet } of list) {
+            for (const turn of [0, -70, 70]) {
+                const at = await page.evaluate(treeColourView, placeAt.toString(), s, turn, TREE_EYE_M, wet);
+                if (out) await page.screenshot({ path: join(out, `${tag}-s${s}${wet ? '-rain' : ''}${turn ? `-turn${turn}` : ''}.png`) });
+                views.push(at);
+            }
+        }
+        return { bands: TREE_BANDS, overLand: TREE_OVER_LAND, minPx: TREE_MIN_PX, views };
+    },
     'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), option('modes') ? option('modes').split(',').map(Number) : WATERTIGHT_MODES, WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
     // Floating roads and land over the road, as drawn: floatingWalk over the whole slice (every --every metres, 500 by
     // default), then the named views (FLOATING_VIEWS, or --views), each saved to --out when given
@@ -4491,10 +4653,34 @@ function isAllowedRequest(url, port) {
     return ALLOWED_HOSTS.some(host => target.hostname === host);
 }
 
+// world-trees: in a clear view each band with TREE_MIN_PX tree pixels or more keeps its mean saturation and value inside
+// the photos' range (TREE_BANDS), and in every view (rain too) a band's trees outshine the land round them by no more
+// than TREE_OVER_LAND
+function treeChecks(results, failures) {
+    const trees = results['world-trees'];
+    if (!trees) return;
+    let read = 0;
+    for (const view of trees.views) {
+        const where = `s ${view.s}${view.rain ? ' (rain)' : ''}${view.turnDeg ? ` turned ${view.turnDeg}` : ''}`;
+        view.bands.forEach((band, k) => {
+            const want = TREE_BANDS[k];
+            if (!(band.trees.px >= TREE_MIN_PX)) return;
+            read++;
+            if (!view.rain) {
+                if (band.trees.s < want.s[0] || band.trees.s > want.s[1]) failures.push(`world-trees: at ${where} the ${want.name} trees' mean saturation is ${band.trees.s}, outside the photos' ${want.s.join(' to ')}`);
+                if (band.trees.v < want.v[0] || band.trees.v > want.v[1]) failures.push(`world-trees: at ${where} the ${want.name} trees' mean value is ${band.trees.v}, outside the photos' ${want.v.join(' to ')}`);
+            }
+            if (band.vOverLand > TREE_OVER_LAND) failures.push(`world-trees: at ${where} the ${want.name} trees are ${band.vOverLand} brighter (HSV value) than the land round them, over ${TREE_OVER_LAND}`);
+        });
+    }
+    if (read < 5) failures.push(`world-trees: only ${read} view bands held ${TREE_MIN_PX} tree pixels or more, want 5`);
+}
+
 function worldChecks(report) {
     const { results, failures } = report;
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
+    treeChecks(results, failures);
     roadLookChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
