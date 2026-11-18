@@ -4009,6 +4009,105 @@ function clearanceChecks(results, failures) {
     if (clear.offenders) failures.push(`world-clearance: ${clear.offenders} drawn things stand in a road within ${clear.headroomM} m over it (${JSON.stringify(clear.byType)}): ${JSON.stringify(clear.hits.slice(0, 20))}`);
 }
 
+// Every road within the LOD0 radius looks like a road (tests/unit/world-road-look.test.js counts the triangles): the
+// chase view just past the finish (where the stage's road ended in flat grey) and at the start, and the view from a
+// side road, drawn as the game draws them but with the far (LOD1, flat) road material painted magenta and the near
+// (textured) one green where they lie within ROAD_LOOK_M of the bike (black beyond). A magenta pixel is a flat road
+// within the LOD0 radius (less the 5 m a ride section's box can lie inside its ribbon's edge, as the unit test reads
+// it). --out <dir> saves each view's colour-coded picture.
+//   node tools/terrain-check.mjs world-road-look --world tremola --gpu [--out <dir> --tag T]
+const ROAD_LOOK_M = 395;
+WORLD_PROBES.push('world-road-look');
+WORLD['world-road-look'] = async (page) => {
+    const views = await page.evaluate(async (placeSource, nearM) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, v = game.vehicle, renderer = game.graphics.renderer;
+        twistyDev.freeze();
+        const W = 480, H = 270;
+        const target = new THREE.WebGLRenderTarget(W, H);
+        // A road's colour within nearM of the bike (in plan), black beyond
+        const centre = { value: new THREE.Vector2() };
+        const painted = color => new THREE.ShaderMaterial({
+            side: THREE.DoubleSide, uniforms: { centre, color: { value: new THREE.Color(color) }, reach: { value: nearM } },
+            vertexShader: 'varying vec2 vPlan; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vPlan = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }',
+            fragmentShader: 'uniform vec2 centre; uniform vec3 color; uniform float reach; varying vec2 vPlan; void main() { gl_FragColor = vec4(distance(vPlan, centre) <= reach ? color : vec3(0.0), 1.0); }'
+        });
+        const paint = { far: painted(0xff00ff), near: painted(0x00ff00) };
+        // Chase views on the ride; the side road's view stands the bike on side edge 198, 120 m from its junction
+        const places = [['finish', env.route.length - 8, null], ['start', env.startS, null], ['side-198', null, [198, 30]]];
+        const out = [];
+        for (const [name, s, onSide] of places) {
+            game.cameraMode = 2;
+            if (onSide) {
+                await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
+                const sm = env.graph.samples(onSide[0]);
+                const i = Math.min(onSide[1], sm.x.length - 1);
+                const p = { x: sm.x[i], y: sm.y[i], z: sm.z[i] };
+                let best = Infinity, rideS = 0;
+                env.route.points.forEach((q, k) => { const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < best) { best = d; rideS = env.route.sArray[k]; } });
+                env.update(p, rideS, null, Infinity);
+                await env.streamer.settle(p, rideS);
+                v.position.set(p.x, p.y + 0.3, p.z);
+                v.yawAngle = sm.heading[i];
+            } else {
+                await placeAt(s);
+            }
+            game.worldCamera.reset(v.yawAngle);
+            twistyDev.step(1, { render: true });
+            const camera = game.camera;
+            centre.value.set(v.position.x, v.position.z);
+            const swapped = [];
+            env.group.traverse(o => {
+                if (!o.isMesh) return;
+                const kind = o.material === RoadSurface.far ? 'far' : o.material === RoadSurface.near ? 'near' : null;
+                if (kind) { swapped.push([o, o.material]); o.material = paint[kind]; }
+            });
+            const fog = game.scene.fog;
+            game.scene.fog = null;
+            renderer.setRenderTarget(target);
+            renderer.render(game.scene, camera);
+            const pixels = new Uint8Array(W * H * 4);
+            renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+            renderer.setRenderTarget(null);
+            game.scene.fog = fog;
+            swapped.forEach(([o, m]) => { o.material = m; });
+            let flat = 0, near = 0;
+            for (let k = 0; k < W * H; k++) {
+                const r = pixels[k * 4], g = pixels[k * 4 + 1], b = pixels[k * 4 + 2];
+                if (r > 200 && g < 60 && b > 200) flat++;
+                else if (g > 200 && r < 60 && b < 60) near++;
+            }
+            // The picture, flipped to screen order, for --out
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const image = canvas.getContext('2d').createImageData(W, H);
+            for (let y = 0; y < H; y++) image.data.set(pixels.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+            canvas.getContext('2d').putImageData(image, 0, 0);
+            out.push({ name, s: Math.round(v.routeS || s || 0), flat, near, png: canvas.toDataURL('image/png') });
+        }
+        target.dispose();
+        return out;
+    }, placeAt.toString(), ROAD_LOOK_M);
+    const dir = option('out');
+    if (dir) mkdirSync(dir, { recursive: true });
+    const tag = option('tag') || 'road-look';
+    return {
+        views: views.map(({ png, ...view }) => {
+            if (dir) writeFileSync(join(dir, `${tag}-${view.name}.png`), Buffer.from(png.split(',')[1], 'base64'));
+            return view;
+        })
+    };
+};
+
+function roadLookChecks(results, failures) {
+    const look = results['world-road-look'];
+    if (!look) return;
+    for (const view of look.views) {
+        if (!(view.near > 1000)) failures.push(`world-road-look: the ${view.name} view shows ${view.near} pixels of textured road, want over 1000`);
+        if (view.flat) failures.push(`world-road-look: the ${view.name} view shows ${view.flat} pixels of flat (LOD1) road within ${ROAD_LOOK_M} m of the bike`);
+    }
+}
+
 // The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
 const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
 
@@ -4086,6 +4185,7 @@ function worldChecks(report) {
     const { results, failures } = report;
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
+    roadLookChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

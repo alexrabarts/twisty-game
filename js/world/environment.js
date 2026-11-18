@@ -112,6 +112,8 @@ class WorldEnvironment {
         this.roadMeshes = new Map();
         this.sideMeshes = new Map();
         this.sideEdges = new Map();
+        // The pieces of each side chunk's roads (sidePieces), for the streamer's LOD0 test (WorldStreamer.sideNear)
+        this.sidePieceCache = new Map();
         this.scenery = new Scenery(this.ground, data, models);
         this.scenery.landmarkModels = landmarks;
         this.barrierMesh = RoadMesh.barriers();
@@ -133,7 +135,8 @@ class WorldEnvironment {
                 disposeTile: key => this.disposeTile(key),
                 buildRoad: (section, lod) => this.buildRoad(section, lod),
                 disposeRoad: section => this.disposeRoad(section),
-                buildSide: k => this.buildSide(k),
+                buildSide: (k, near) => this.buildSide(k, near),
+                sidePieces: k => this.sidePieces(k),
                 disposeSide: k => this.disposeSide(k)
             }
         });
@@ -258,8 +261,9 @@ class WorldEnvironment {
                 const held = this.streamer.roads.get(index);
                 if (kind === 'road' && held && this.roadMeshes.has(index)) this.buildRoad(this.streamer.sections[index], held.lod);
                 else if (kind === 'side' && this.sideMeshes.has(index)) {
+                    const held = this.streamer.sides.get(index);
                     this.disposeSide(index);
-                    this.buildSide(index);
+                    this.buildSide(index, held ? held.near : '');
                 }
             });
         }
@@ -577,8 +581,126 @@ class WorldEnvironment {
         };
     }
 
-    // The side roads whose first sample is in chunk k: stubs at LOD0 beside a barrier, the rest at LOD1
-    buildSide(k) {
+    // Samples a piece of side road holds (WorldEnvironment.sidePieces): neighbouring pieces share their joint sample
+    static get SIDE_PIECE_N() { return 32; }
+
+    // The pieces of the side roads whose first sample is in chunk k: [{edge, from, to, box}], `from` to `to` the
+    // piece's sample indices and `box` ([x0, z0, x1, z1]) its centre line's, for the streamer's LOD0 test
+    // (WorldStreamer.sideNear); null while an edge's samples are not resident
+    sidePieces(k) {
+        if (this.sidePieceCache.has(k)) return this.sidePieceCache.get(k);
+        if (!this.data.chunks || !this.data.chunks.has(k)) return null;
+        const out = [];
+        for (const edge of this.data.edges) {
+            if (edge.onRide || this.data.chunkOf(edge.first) !== k) continue;
+            const samples = this.graph.samples(edge.id);
+            if (!samples) return null;
+            const n = samples.x.length, step = WorldEnvironment.SIDE_PIECE_N;
+            for (let from = 0; from < n - 1; from += step) {
+                const to = Math.min(n - 1, from + step);
+                let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+                for (let j = from; j <= to; j++) {
+                    x0 = Math.min(x0, samples.x[j]); x1 = Math.max(x1, samples.x[j]);
+                    z0 = Math.min(z0, samples.z[j]); z1 = Math.max(z1, samples.z[j]);
+                }
+                out.push({ edge: edge.id, from, to, box: [x0, z0, x1, z1] });
+            }
+        }
+        this.sidePieceCache.set(k, out);
+        return out;
+    }
+
+    // The rows of a side road (WorldEnvironment.buildSide) cut into runs at LOD0 and LOD1: a row is LOD0 when `near(row)`
+    // (its sample is in a LOD0 piece, WorldStreamer.sideNear), so every road within the LOD0 radius looks like a road
+    // (texture, markings by its class, verge), as the ride does. Neighbouring runs share their joint row. Each run's
+    // first row carries `s`, the metres along the road from `s0`, so the texture and the dashes go on across a joint.
+    // [{rows, near}]
+    static sideRuns(rows, near, s0 = 0) {
+        const along = [s0];
+        for (let i = 1; i < rows.length; i++) along.push(along[i - 1] + Math.hypot(rows[i].x - rows[i - 1].x, rows[i].z - rows[i - 1].z));
+        const isNear = rows.map(row => !!near && near(row));
+        // A quad is LOD0 when either of its rows is, so the LOD0 part reaches past its last row's piece by a row
+        const quad = k => isNear[k] || isNear[k + 1];
+        const out = [];
+        let from = 0;
+        for (let k = 1; k < rows.length - 1; k++) {
+            if (quad(k) === quad(from)) continue;
+            out.push({ from, to: k, near: quad(from) });
+            from = k;
+        }
+        if (rows.length > 1) out.push({ from, to: rows.length - 1, near: quad(from) });
+        return out.map(({ from, to, near: lod0 }) => {
+            const run = rows.slice(from, to + 1);
+            run[0] = { ...run[0], s: along[from] };
+            return { rows: run, near: lod0 };
+        });
+    }
+
+    // Rows with their heading made continuous (no 2 pi step between neighbours), as the ride's are: the markings read
+    // a bend from the heading's change (RoadSurface.styles)
+    static unwrap(rows) {
+        for (let i = 1; i < rows.length; i++) {
+            const step = rows[i].heading - rows[i - 1].heading;
+            const turns = Math.round(step / (2 * Math.PI));
+            if (turns) rows[i] = { ...rows[i], heading: rows[i].heading - turns * 2 * Math.PI };
+        }
+        return rows;
+    }
+
+    // Metres over which a road that goes on past the ride's end (the finish, the start) narrows from the ride's drawn
+    // width to its own, so the ride does not step in at the line
+    static get RIDE_TAPER_M() { return 30; }
+
+    // The ride's two ends where the road goes on through the node (no junction there): {node: {s, width}}
+    rideEnds() {
+        if (this.rideEndsCache) return this.rideEndsCache;
+        const out = new Map();
+        const path = this.data.ride.path;
+        const points = this.route.points;
+        const junctionNodes = new Set((this.graph.junctions || []).map(j => j.node));
+        if (path.length && points.length) {
+            const first = path[0], last = path[path.length - 1];
+            const e0 = this.data.edges[first.edgeId], eN = this.data.edges[last.edgeId];
+            const a = points[0], b = points[points.length - 1];
+            // The row the road goes on from: the ride's end row, facing away from the ride
+            const ends = [[first.dir === 1 ? e0.a : e0.b, 0, { ...a, heading: a.heading + Math.PI }], [last.dir === 1 ? eN.b : eN.a, this.route.length, b]];
+            for (const [node, s, row] of ends) if (!junctionNodes.has(node)) out.set(node, { s, width: row.width, row: { x: row.x, y: row.y, z: row.z, heading: row.heading } });
+        }
+        this.rideEndsCache = out;
+        return out;
+    }
+
+    // A side edge's rows as they go on from the ride's end (rideEnds): turned to run away from the end, widened to the
+    // ride's width at the end and narrowed to their own over RIDE_TAPER_M, with the metres along going on from the
+    // ride's s there, its first row laid on the ride's end row so the two ribbons meet edge to edge. {rows, s0}; the
+    // rows unchanged and s0 0 for an edge that does not touch an end
+    fromRideEnd(edge, rows) {
+        const ends = this.rideEnds();
+        const end = ends.get(edge.a) || ends.get(edge.b);
+        if (!end) return { rows, s0: 0 };
+        const away = ends.has(edge.a) ? rows : rows.slice().reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
+        let run = 0;
+        const out = away.map((row, i) => {
+            if (i) run += Math.hypot(row.x - away[i - 1].x, row.z - away[i - 1].z);
+            const t = Math.min(1, run / WorldEnvironment.RIDE_TAPER_M);
+            return t < 1 ? { ...row, width: end.width + (row.width - end.width) * t } : row;
+        });
+        const heading = end.row.heading - Math.round((end.row.heading - out[0].heading) / (2 * Math.PI)) * 2 * Math.PI;
+        out[0] = { ...out[0], x: end.row.x, y: end.row.y, z: end.row.z, heading, width: end.width };
+        return { rows: out, s0: end.s };
+    }
+
+    // The side roads whose first sample is in chunk k: stubs at LOD0 beside a barrier, and each road's rows in the
+    // pieces `near` names (WorldStreamer.sideNear: their indices in sidePieces, joined) at LOD0, the rest at LOD1
+    // (drawSideRibbons)
+    buildSide(k, near = '') {
+        // Only its LOD0 pieces changed (WorldStreamer.sideNear): its ribbons alone are built again
+        const prior = this.sideMeshes.get(k);
+        if (prior && prior.userData.roads) {
+            this.drawSideRibbons(k, prior, near);
+            return;
+        }
+        this.disposeSide(k);
         const group = new THREE.Group();
         group.name = `world-side-${k}`;
         const edgesHere = [];
@@ -599,36 +721,43 @@ class WorldEnvironment {
         // A pier stands on the lowest land the tile draws at any level of detail (RoadMesh.sideStructures footAt)
         const footAt = (x, z) => this.landLowAt(x, z, missing);
         const options = { groundAt, footAt, roof: WorldRoute.ROOF_M };
+        // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
+        // detail, so a change of level of detail builds only its ribbons again (drawSideRibbons)
+        const roads = [];
+        const draw = (rows, stub, edge, s0 = 0) => {
+            const road = new THREE.Group();
+            road.name = stub ? 'world-road-stub' : 'world-road-side';
+            const ribbon = RoadMesh.ribbon(rows, 0, hold, true);
+            ribbon.geometry.dispose();
+            const built = RoadMesh.sideStructures(ribbon.sides, options.groundAt, options.roof, options.footAt);
+            Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, rows, stub, edge: edge.id, s0 });
+            sides.push(built.sides);
+            structures.push(...built.parts);
+            group.add(road);
+            roads.push(road);
+        };
         this.data.edges.forEach((edge) => {
             if (edge.onRide || this.data.chunkOf(edge.first) !== k) return;
             const samples = this.graph.samples(edge.id);
             if (!samples) return;
             edgesHere.push({ x: samples.x, z: samples.z, y: samples.y, width: samples.width });
-            const rows = Array.from(samples.x, (_, i) => ({ x: samples.x[i], y: samples.y[i], z: samples.z[i], heading: samples.heading[i], width: samples.width[i], bits: samples.flags[i] }));
-            if (rows.length < 2) return;
+            const plain = WorldEnvironment.unwrap(Array.from(samples.x, (_, i) => ({ x: samples.x[i], y: samples.y[i], z: samples.z[i], heading: samples.heading[i], width: samples.width[i], bits: samples.flags[i], cls: edge.cls, i })));
+            if (plain.length < 2) return;
+            const { rows, s0 } = this.fromRideEnd(edge, plain);
             const node = barrierEdges.get(edge.id);
             if (node !== undefined) {
                 const stub = this.graph.stub(edge.id, node);
-                if (stub && stub.length > 1) {
-                    const stubGroup = RoadMesh.sideRoad(this.holdSide(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, hold, null, options);
-                    sides.push(stubGroup.userData.sides);
-                    structures.push(...stubGroup.userData.structures);
-                    group.add(stubGroup);
-                    triangles += stubGroup.userData.triangles;
-                }
+                if (stub && stub.length > 1) draw(this.holdSide(WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls })))), true, edge);
             }
-            const side = RoadMesh.sideRoad(this.holdSide(rows), false, hold, null, options);
-            sides.push(side.userData.sides);
-            structures.push(...side.userData.structures);
-            group.add(side);
-            triangles += side.userData.triangles;
+            draw(this.holdSide(rows), false, edge, s0);
         });
         // The edge works of every side road here, one mesh: its retaining walls, decks and tubes (a side road is seen
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
         // a tile under them arrives
         triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures);
-        // The chunk's ribbons as one mesh per material: a mesh a road overran the window's mesh budget
-        RoadMesh.mergeRibbons(group);
+        group.userData.roads = roads;
+        group.userData.works = triangles;
+        triangles += this.drawSideRibbons(k, group, near);
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`side:${k}`);
         group.userData.triangles = triangles;
         group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
@@ -638,6 +767,49 @@ class WorldEnvironment {
         this.sideEdges.set(k, edgesHere);
         this.triangleCount += triangles;
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
+    }
+
+    // The ribbons of a side chunk's roads (buildSide): each road's rows in the pieces `near` names (WorldStreamer.sideNear:
+    // their indices in sidePieces, joined) at LOD0, the rest at LOD1, a stub at LOD0, in place of the ribbons it had.
+    // The chunk's ribbons are one mesh per material: a mesh a road overran the window's mesh budget. Returns their triangles
+    drawSideRibbons(k, group, near) {
+        const old = [];
+        group.traverse(o => { if (o.isMesh && o.name === 'road-side') old.push(o); });
+        for (const mesh of old) {
+            mesh.parent.remove(mesh);
+            mesh.geometry.dispose();
+        }
+        // The sample ranges at LOD0, by edge
+        const ranges = new Map();
+        const pieces = near ? this.sidePieces(k) || [] : [];
+        for (const i of near ? near.split(',').map(Number) : []) {
+            const piece = pieces[i];
+            if (piece) (ranges.get(piece.edge) || ranges.set(piece.edge, []).get(piece.edge)).push([piece.from, piece.to]);
+        }
+        const hold = this.sideHold();
+        let triangles = 0;
+        for (const road of group.userData.roads) {
+            const { rows, stub, edge, s0 } = road.userData;
+            const lod0 = ranges.get(edge) || [];
+            const inPiece = row => row.i !== undefined && lod0.some(([from, to]) => row.i >= from && row.i <= to);
+            const runs = stub ? [{ rows, near: true }] : WorldEnvironment.sideRuns(rows, lod0.length ? inPiece : null, s0);
+            for (const run of runs) {
+                if (run.rows.length < 2) continue;
+                const ribbon = RoadMesh.ribbon(run.rows, run.near ? 0 : 1, hold, true);
+                road.add(RoadMesh.ribbonMesh(ribbon, 'road-side'));
+                triangles += ribbon.triangles;
+            }
+        }
+        RoadMesh.mergeRibbons(group);
+        group.userData.near = near;
+        if (this.sideMeshes.get(k) === group) {
+            const before = group.userData.triangles;
+            group.userData.triangles = group.userData.works + triangles;
+            this.triangleCount += group.userData.triangles - before;
+            group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
+            this.onMeshBuilt(group);
+        }
+        return triangles;
     }
 
     disposeSide(k) {

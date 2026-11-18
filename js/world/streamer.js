@@ -11,7 +11,10 @@
 //     residency (what is drawn) are separate: the data stays in WorldData's LRU.
 //   - Ride sections (256 m of ride) are drawn when in [s - 1 km, s + 3 km] or
 //     within 1.2 km of the bike by place, at a level of detail by distance.
-//   - Side-edge chunks are resident within 1.2 km of the bike.
+//   - Side-edge chunks are resident within 1.2 km of the bike. A chunk draws its side roads within SIDE_NEAR_M of
+//     the bike at LOD0, as a ride section within ROAD_LOD_M[0] is: by pieces of road (hooks.sidePieces), each LOD0
+//     from SIDE_NEAR_M + SIDE_PAD_M of the bike and LOD1 again past SIDE_SLACK_M more, and the chunk is built again
+//     only when its set of LOD0 pieces changes.
 //   - Builds go through a queue, nearest first, at most BUDGET_MS a frame
 //     (one step at least, so a queue always drains).
 //
@@ -27,6 +30,13 @@ class WorldStreamer {
     static get DISPOSE_AFTER_MS() { return 3000; }
     // Distance from the bike to the nearest edge of a ride section, for each road level of detail
     static get ROAD_LOD_M() { return [400, 1500]; }
+    // A side road within this of the bike is drawn at LOD0, like a ride section (WorldStreamer.ROAD_LOD_M[0]). A piece
+    // of side road turns LOD0 when its box (its centre line's) comes within SIDE_NEAR_M + SIDE_PAD_M (the pad covers
+    // the road's half width and verge) and back to LOD1 only past SIDE_SLACK_M more, so a chunk is not built again for
+    // every few metres the bike rides
+    static get SIDE_NEAR_M() { return WorldStreamer.ROAD_LOD_M[0]; }
+    static get SIDE_PAD_M() { return 10; }
+    static get SIDE_SLACK_M() { return 100; }
     // The same for a terrain tile: LOD0 at 8 m, LOD1 at 16 m, LOD2 at 32 m
     static get TILE_LOD_M() { return [700, 2000]; }
 
@@ -238,10 +248,13 @@ class WorldStreamer {
             const held = this.sides.get(k);
             if (held) held.zeroSince = null;
             if (this.data.chunks.has(k)) {
-                if (!held) this.enqueue(`side:${k}`, WorldStreamer.distanceToBox(bike.x, bike.z, this.data.manifest.chunks[k].bbox), () => {
-                    if (this.sides.has(k)) return;
-                    this.hooks.buildSide(k);
-                    this.sides.set(k, { zeroSince: null });
+                const near = this.sideNear(k, bike, held);
+                if (!held || near !== held.near) this.enqueue(`side:${k}`, WorldStreamer.distanceToBox(bike.x, bike.z, this.data.manifest.chunks[k].bbox), () => {
+                    const prior = this.sides.get(k);
+                    const now = this.sideNear(k, this.bike || bike, prior);
+                    if (prior && now === prior.near) return;
+                    this.hooks.buildSide(k, now, !!prior);
+                    this.sides.set(k, { zeroSince: null, near: now });
                     this.stats.builds++;
                 });
             } else if (!this.loading.has(`c${k}`)) {
@@ -258,6 +271,22 @@ class WorldStreamer {
                 this.stats.disposes++;
             }
         }
+    }
+
+    // The pieces of a side chunk's roads drawn at LOD0 (hooks.sidePieces: [{box}], WorldEnvironment.sidePieces), as
+    // a key: their indices joined, '' for none. A piece is LOD0 within SIDE_NEAR_M + SIDE_PAD_M of the bike, and one
+    // that was (held.near) stays so within SIDE_SLACK_M more
+    sideNear(k, bike, held) {
+        const pieces = this.hooks.sidePieces ? this.hooks.sidePieces(k) : null;
+        if (!pieces) return '';
+        const enter = WorldStreamer.SIDE_NEAR_M + WorldStreamer.SIDE_PAD_M, leave = enter + WorldStreamer.SIDE_SLACK_M;
+        const was = held && held.near ? new Set(held.near.split(',').map(Number)) : null;
+        const near = [];
+        pieces.forEach((piece, i) => {
+            const d = WorldStreamer.distanceToBox(bike.x, bike.z, piece.box);
+            if (d <= enter || (was && was.has(i) && d <= leave)) near.push(i);
+        });
+        return near.join(',');
     }
 
     enqueue(id, priority, run) {

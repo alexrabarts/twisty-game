@@ -238,6 +238,15 @@ Every road within 400 m of the bike (`WorldStreamer.ROAD_LOD_M[0]`) is drawn at 
 - The ride's data ends at the stage's ends, but the graph keeps the road beyond. Where the road goes on through the ride's end node (no junction there), that side edge starts on the ride's end row, is as wide as the ride there and narrows to its own width over `RIDE_TAPER_M` (30 m), and its metres along go on from the ride's (`WorldEnvironment.fromRideEnd`). So the finish line is not the end of the world.
 - `tests/unit/world-road-look.test.js` checks every road ribbon triangle within the radius of the start, the finish and each station. `node tools/terrain-check.mjs world-road-look --world tremola --gpu` counts flat road pixels within the radius in the views at the finish, the start and on a side road.
 
+## Every road near the bike looks like a road
+
+Every road within 400 m of the bike (`WorldStreamer.ROAD_LOD_M[0]`) is drawn at LOD0, whatever its role: the ride, the stubs, the side roads, and the road before the start and past the finish. LOD0 is the textured asphalt or setts, the markings of the road's swissTLM3D class (`RoadSurface.styles`, the same rules as the ride) and a verge on each side. Beyond 400 m the flat LOD1 ribbon is enough.
+
+- A side chunk's roads are cut into pieces of 32 samples (about 128 m, `WorldEnvironment.sidePieces`). A piece is LOD0 when its centre line's box comes within `SIDE_NEAR_M + SIDE_PAD_M` (410 m) of the bike, and it stays LOD0 until the box is `SIDE_SLACK_M` (100 m) farther (`WorldStreamer.sideNear`). When that set changes, only the chunk's ribbons are built again (`WorldEnvironment.drawSideRibbons`; `sideRuns` cuts each road into LOD0 and LOD1 runs). A side road's structures and edge works stand at its verge's outer edge at every level of detail, as the ride's do, so they are built once per chunk. A chunk is still one mesh for each material.
+- A side road at LOD0 has a row every 16 m as at LOD1 (sooner in a bend: every 0.09 rad of turn, half the LOD1 limit) and five columns, not seven: no physics rides it, and the window's triangle budget is tight.
+- The ride's data ends at the stage's ends, but the graph keeps the road beyond. Where the road goes on through the ride's end node (no junction there), that side edge starts on the ride's end row, is as wide as the ride there and narrows to its own width over `RIDE_TAPER_M` (30 m), and its metres along go on from the ride's (`WorldEnvironment.fromRideEnd`). So the finish line is not the end of the world.
+- `tests/unit/world-road-look.test.js` checks every road ribbon triangle within the radius of the start, the finish and each station. `node tools/terrain-check.mjs world-road-look --world tremola --gpu` counts flat road pixels within the radius in the views at the finish, the start and on a side road.
+
 ## Determinism
 
 Scenery uses `Environment.rand()` (seeded per leg). The menu preview and the ride must build the same world. Do not use `Math.random()` in `environment.js`.

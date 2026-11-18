@@ -17,8 +17,11 @@
 //                        edge is paved to the end (the apron), with no verge
 //   tunnels, galleries:  a tube round the road with a portal frame at each end
 //   bridges:             a deck, parapets and piers
-//   side roads:          a 60 m stub that ends in a road-closed barrier, and
-//                        LOD1 ribbons beyond it (D7 c)
+//   side roads:          a 60 m stub that ends in a road-closed barrier, and beyond it the same LOD0 ribbon within
+//                        400 m of the bike (WorldStreamer.sideNear), with the markings of its swissTLM3D class and its
+//                        verge, and LOD1 beyond (D7 c); the road past the ride's finish and before its start is a side
+//                        road too, so the world goes on past the line (WorldEnvironment.fromRideEnd)
+
 //   edges:               the importer's land meets each drawn edge (the verge's outer edge at LOD0, the carriageway's
 //                        beyond) with an embankment or a cut no steeper than BATTER. Where the land drawn at a coarser
 //                        level of detail lies lower, an apron (land-coloured, at the batter) runs from the edge down to
@@ -151,8 +154,15 @@ class RoadMesh {
     // The ribbon of a run of rows: {geometry, triangles, clamped, near} (clamped: rows whose inside edge was held).
     // `holdY(x, y, z, row)`, when given, may lower each vertex of `row` (a side road under the ride, RoadMesh.sideRoad).
     static ribbon(rows, lod = 0, holdY = null, side = false) {
-        return lod === 0 ? RoadMesh.nearRibbon(rows, holdY) : RoadMesh.farRibbon(rows, holdY, side);
+        return lod === 0 ? RoadMesh.nearRibbon(side ? RoadMesh.decimate(rows, RoadMesh.SIDE_ROW_M, RoadMesh.SIDE_TURN) : rows, holdY, side) : RoadMesh.farRibbon(rows, holdY, side);
     }
+
+    // A side road at LOD0 is seen and not ridden: a row every SIDE_ROW_M as at LOD1, or sooner where the heading has
+    // turned SIDE_TURN radians (half LOD1's, so a bend's chords stay within a few centimetres of its arc near the
+    // camera), and five columns (verge, edge, centre, edge, verge). Its structures and edge works follow the same rows
+    // (WorldEnvironment.buildSide), so the side roads within the LOD0 radius cost the window few more triangles than LOD1
+    static get SIDE_ROW_M() { return 16; }
+    static get SIDE_TURN() { return 0.09; }
 
     // The lateral offsets of a row, the inside ones held within the bend's radius: {offsets, clamped}
     static hold(offsets, curve) {
@@ -175,18 +185,21 @@ class RoadMesh {
 
     // LOD0: seven vertices a row (verge, edge, three across the carriageway, edge, verge), indexed. The inner vertices
     // keep the drawn surface within a few centimetres of the physics surface in a bend, where a quad across half the
-    // road is not flat
-    static nearRibbon(rows, holdY) {
+    // road is not flat. A side road (`side`) has five (verge, edge, centre, edge, verge): no physics rides it.
+    // geometry.userData.columns is the count
+    static nearRibbon(rows, holdY, side = false) {
         const curve = RoadMesh.curvature(rows);
         const C = RoadSurface.CENTRE;
-        const styled = rows.length && rows[0].centre !== undefined ? rows : RoadSurface.styles(rows).map((style, i) => ({ ...rows[i], ...style }));
-        // Metres along: the ride's own s, else measured from the first row; the UV restarts at a multiple of PERIOD_M
+        // Metres along: the ride's own s, else measured on from the row before (from the first row's `s`, else 0); the
+        // UV restarts at a multiple of PERIOD_M
         const along = [];
         rows.forEach((row, i) => along.push(row.s !== undefined ? row.s : i === 0 ? 0 : along[i - 1] + Math.hypot(row.x - rows[i - 1].x, row.z - rows[i - 1].z)));
+        // A side road's markings by its class (RoadSurface.styles), read along the same metres
+        const styled = rows.length && rows[0].centre !== undefined ? rows : RoadSurface.styles(rows.map((row, i) => ({ ...row, s: along[i] }))).map((style, i) => ({ ...rows[i], ...style }));
         const period = RoadSurface.PERIOD_M;
         const base = rows.length ? Math.floor(along[0] / period) : 0;
         const n = rows.length;
-        const W = 7;
+        const W = side ? 5 : 7;
         // The heading without its 2 pi steps (the ride's is already continuous; a side road's may not be)
         const turn = [];
         rows.forEach((row, i) => {
@@ -210,7 +223,7 @@ class RoadMesh {
             const h = row.width / 2;
             const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
             const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
-            const held = RoadMesh.hold([-h - verge, -h, -h / 2, 0, h / 2, h, h + verge], curve[k]);
+            const held = RoadMesh.hold(side ? [-h - verge, -h, 0, h, h + verge] : [-h - verge, -h, -h / 2, 0, h / 2, h, h + verge], curve[k]);
             if (held.clamped) clamped++;
             const v = along[k] - base * period;
             held.offsets.forEach((offset, j) => {
@@ -248,6 +261,7 @@ class RoadMesh {
         geometry.computeVertexNormals();
         geometry.computeBoundingSphere();
         geometry.userData.near = true;
+        geometry.userData.columns = W;
         return { geometry, triangles: index.length / 3, clamped, near: true, sides };
     }
 
