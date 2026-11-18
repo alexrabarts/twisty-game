@@ -98,46 +98,6 @@ describe('the decode matches the importer', () => {
     });
 });
 
-describe('the cut slope beside the road is held below the road', () => {
-    const N = WorldData.TILE_N;
-    const grid = (fill, road) => {
-        const heights = new Float32Array(N * N).fill(fill);
-        const zones = new Uint8Array(N * N);
-        for (const [i, j, y] of road) { heights[j * N + i] = y; zones[j * N + i] = 1; }
-        return { heights, zones };
-    };
-
-    test('a node touching the carved ground is no higher than the lowest carved node it touches', () => {
-        const { heights, zones } = grid(110, [[10, 10, 100], [11, 10, 100.4], [10, 11, 99.8]]);
-        WorldData.dipRoadSides(heights, zones);
-        expect(heights[10 * N + 9]).toBeCloseTo(99.8 - WorldData.DIP_M, 4);
-        expect(heights[10 * N + 12]).toBeCloseTo(100.4 - WorldData.DIP_M, 4);
-        // The road itself, and a node that touches no carved ground, are not touched
-        expect(heights[10 * N + 10]).toBe(100);
-        expect(heights[30 * N + 30]).toBe(110);
-    });
-
-    test('carved nodes are never moved, whatever their neighbours: the importer resolves stacked legs', () => {
-        const { heights, zones } = grid(110, [[10, 10, 100], [11, 10, 100.9], [12, 10, 101.8], [13, 10, 110]]);
-        WorldData.dipRoadSides(heights, zones);
-        // A node 8 m of height over its carved neighbour is the other leg's strip: it keeps its road's height
-        expect(heights[10 * N + 11]).toBeCloseTo(100.9, 4);
-        expect(heights[10 * N + 12]).toBeCloseTo(101.8, 4);
-        expect(heights[10 * N + 13]).toBeCloseTo(110, 4);
-    });
-
-    test('a node already below the road stays where it is, and the rule reads the imported heights', () => {
-        const { heights, zones } = grid(110, [[10, 10, 100]]);
-        heights[10 * N + 12] = 90;
-        heights[10 * N + 11] = 108;
-        zones[10 * N + 11] = 3;
-        expect(WorldData.dipRoadSides(heights, zones)).toBeGreaterThan(0);
-        expect(heights[10 * N + 12]).toBe(90);
-        expect(heights[10 * N + 11]).toBeCloseTo(100 - WorldData.DIP_M, 4);
-        // The node beyond it saw the wall's imported height (108), not the held one: it touches no carved node
-        expect(heights[10 * N + 13]).toBe(110);
-    });
-});
 
 describe('trust: only the shipped, unmodified world submits', () => {
     test('the shipped folder with the manifest its SHA256SUMS lists is trusted', async () => {

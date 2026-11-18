@@ -240,13 +240,39 @@ class WorldEnvironment {
         const built = TerrainMesh.build(tile, cover, lod, (x, y, z) => {
             const low = this.rideSurfaceAt(x, z, y);
             return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
-        });
+        }, this.nearTile);
         built.mesh.userData.skipCulling = true;
         this.tileGroup.add(built.mesh);
         this.onMeshBuilt(built.mesh);
+        // A tile reads its neighbours' nodes across its edges: one whose data is not here yet is read as this tile's
+        // own edge, so the tile is built again when it comes (else the shared edge differs between the two)
+        const [tx, tz] = key.split(',').map(Number);
+        const around = [];
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) if (dx || dz) around.push(`${tx + dx},${tz + dz}`);
+        built.missing = around.filter(k => this.hasTileData(k) && !this.data.tile(k));
         this.tileMeshes.set(key, built);
         this.triangleCount += built.triangles;
+        for (const k of around) {
+            const held = this.tileMeshes.get(k);
+            if (!held || !held.missing || !held.missing.includes(key)) continue;
+            held.missing = held.missing.filter(m => m !== key);
+            this.streamer.enqueue(`seam:${k}`, 0, () => {
+                const state = this.streamer.tiles.get(k);
+                if (state && this.tileMeshes.has(k) && this.data.tile(k)) this.buildTile(k, state.lod);
+            });
+        }
         this.rebuildWaiting(key);
+    }
+
+    // A resident height tile by key, or null (TerrainMesh.node reads a neighbour's nodes through it)
+    get nearTile() {
+        return this.nearTileFn || (this.nearTileFn = k => this.data.tile(k));
+    }
+
+    // Whether the world has a height tile at key (resident or not)
+    hasTileData(key) {
+        if (!this.tileKeys) this.tileKeys = new Set(((this.data.manifest && this.data.manifest.tiles && this.data.manifest.tiles.height) || []).map(([tx, tz]) => `${tx},${tz}`));
+        return this.tileKeys.has(key);
     }
 
     // The road sections and side chunks whose edge works were built without this tile, built again through the queue
@@ -465,13 +491,27 @@ class WorldEnvironment {
         const tx = Math.floor(x / m), tz = Math.floor(z / m);
         const tile = this.data.tile(`${tx},${tz}`);
         if (!tile) { if (missing) missing.add(`${tx},${tz}`); return null; }
+        // A coarse vertex near the tile's edge reads the neighbour's nodes (TerrainMesh.vertexY): one not here yet
+        // goes into `missing` too, so what stands on this land is built again when it comes
+        if (missing) {
+            const reach = 4 * WorldData.CELL_M + WorldData.CELL_M;
+            const fx = x - tx * m, fz = z - tz * m;
+            const dxs = [0, fx < reach ? -1 : fx > m - reach ? 1 : 0], dzs = [0, fz < reach ? -1 : fz > m - reach ? 1 : 0];
+            for (const dx of dxs) for (const dz of dzs) {
+                const k = `${tx + dx},${tz + dz}`;
+                if ((dx || dz) && this.hasTileData(k) && !this.data.tile(k)) missing.add(k);
+            }
+        }
+        // The neighbours are read only where a coarse vertex's window reaches over the edge, and resolved once
+        const edgeM = 9 * WorldData.CELL_M, ex = x - tx * m, ez = z - tz * m;
+        const near = ex < edgeM || ez < edgeM || ex > m - edgeM || ez > m - edgeM ? TerrainMesh.ring(tile, this.nearTile) : null;
         let low = Infinity;
         for (const stride of [1, 2, 4]) {
             const cell = WorldData.CELL_M * stride, side = (n - 1) / stride;
             const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
             const i = Math.max(0, Math.min(side - 1, Math.floor(fx))), j = Math.max(0, Math.min(side - 1, Math.floor(fz)));
             const u = fx - i, v = fz - j;
-            const H = (a, b) => TerrainMesh.vertexY(tile, Math.log2(stride), (i + a) * stride, (j + b) * stride);
+            const H = (a, b) => TerrainMesh.vertexY(tile, Math.log2(stride), (i + a) * stride, (j + b) * stride, near);
             low = Math.min(low, u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1)));
         }
         return low;
@@ -516,7 +556,9 @@ class WorldEnvironment {
             const fx = (x - tx * m) / WorldData.CELL_M, fz = (z - tz * m) / WorldData.CELL_M;
             const i = Math.max(0, Math.min(n - 2, Math.floor(fx))), j = Math.max(0, Math.min(n - 2, Math.floor(fz)));
             const u = fx - i, v = fz - j;
-            const H = (a, b) => TerrainMesh.vertexY(tile, 0, i + a, j + b);
+            const edgeM = 2 * WorldData.CELL_M, ex = x - tx * m, ez = z - tz * m;
+            const near = ex < edgeM || ez < edgeM || ex > m - edgeM || ez > m - edgeM ? TerrainMesh.ring(tile, this.nearTile) : null;
+            const H = (a, b) => TerrainMesh.vertexY(tile, 0, i + a, j + b, near);
             return u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1));
         };
         // The land's own linear colour at the node nearest (x, z) (TerrainMesh.colours), or null

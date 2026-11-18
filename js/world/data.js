@@ -24,8 +24,6 @@ class WorldData {
     static get EDGE_BYTES() { return 24; }
     static get BUILDING_BYTES() { return 16; }
     static get FORMAT() { return 1; }
-    // Metres under the lowest carved neighbour that a node beside the road is held to
-    static get DIP_M() { return 0.05; }
     static get SHIPPED_BASE() { return 'world/'; }
     static get ALLOWED_BASES() { return ['world/', 'tests/fixtures/world/']; }
     static get MAX_TILES() { return 160; }
@@ -260,42 +258,10 @@ class WorldData {
             heights[i] = base + view.getInt16(4 + i * 2, true) / 10;
             zones[i] = view.getUint8(4 + n * 2 + i);
         }
-        WorldData.dipRoadSides(heights, zones);
         const tile = { key, tx, tz, heights, zones };
         this.tiles.set(key, tile);
         this.trim(this.tiles, WorldData.MAX_TILES, k => this.holds && this.holds(k));
         return tile;
-    }
-
-    // The importer carves the road and its bench and lets the cut slope climb away from it at up to 1:1. A node
-    // beside the carved ground that touches no road's strip can stand a metre or more over it, so it is held no higher
-    // than the lowest carved node it touches (less DIP_M): the land falls toward the road, not over it. Carved nodes
-    // are never moved: the importer already gives every node of a triangle that reaches into a road's drawn strip the
-    // height of the lowest road there (tools/world/bench.mjs), and moving one would leave its road hanging. The mesh
-    // and the ground both read this height, so they agree.
-    static dipRoadSides(heights, zones) {
-        const n = WorldData.TILE_N;
-        const zone = WorldData.ZONE;
-        const carved = z => z === zone.road || z === zone.bench;
-        const lowered = [];
-        for (let j = 0; j < n; j++) {
-            for (let i = 0; i < n; i++) {
-                const own = carved(zones[j * n + i]);
-                let lowest = Infinity;
-                for (let dj = -1; dj <= 1; dj++) {
-                    for (let di = -1; di <= 1; di++) {
-                        const a = i + di, b = j + dj;
-                        if ((!di && !dj) || a < 0 || b < 0 || a >= n || b >= n || !carved(zones[b * n + a])) continue;
-                        lowest = Math.min(lowest, heights[b * n + a]);
-                    }
-                }
-                const target = lowest - WorldData.DIP_M;
-                if (!own && target < heights[j * n + i]) lowered.push([j * n + i, target]);
-            }
-        }
-        // Every neighbour was read as imported; now write
-        for (const [at, value] of lowered) heights[at] = value;
-        return lowered.length;
     }
 
     cover(key) { return this.covers.get(key) || null; }

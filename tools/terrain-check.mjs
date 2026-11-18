@@ -11,8 +11,9 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating
+//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
+//   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
@@ -2147,7 +2148,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2704,7 +2705,316 @@ function floatingCount(STRUCTURE_DARK = 32) {
     return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0, structure: structurePx, blackStructure: structurePx ? Math.round((structureBlack / structurePx) * 10000) / 10000 : 0 };
 }
 
+// world-watertight: the drawn land is closed. From the helmet, the chase and the high camera at stations along the
+// slice, the land, the road and its edge works are drawn alone (each kind in its own colour, back faces marked) and
+// each pixel is read:
+//   holes      a pixel that shows nothing (the horizon and the far land are not drawn) although its ray passes under
+//              the drawn land before it leaves the drawn tiles (marched against each tile's own triangles at the LOD it
+//              is drawn at): the ray went through a gap in the land (a crack between tiles, an edge no skirt closes)
+//   backOpen   the underside of a land triangle seen through the land (its ray passed under the land before it)
+//   skirtOpen  a tile's skirt seen the same way (a skirt in plain view closes a step between two LODs and is counted
+//              as `skirt`, with the undersides as `backLand`, for information)
+// Then the edge works: the top edge of every retaining wall has its road's ribbon within 0.15 m beside it
+// (`jointOpen`), the feet of the aprons and retaining walls (the lowest outline edge of each triangle) must lie
+// on the land drawn at LOD0 under them or in it (`footOpen`; over coarser land `footCoarse`, for information), and no
+// corner or centre of one may stand over the ride's carriageway (`footOverRoad`: fill off an upper hairpin leg
+// reaching out over the lower one).
+const WATERTIGHT_EVERY_M = 50;
+const WATERTIGHT_MODES = [1, 2, 3];
+// Places the play-test found open: 400 to 500 the cut bank on the right (a crack along a tile edge), 2100 and 8700 a
+// fill slope off an upper hairpin leg ending in the air, 4600 a slab of land over a hollow, 6900 a folded cut face
+const WATERTIGHT_VIEWS = [400, 450, 500, 2100, 4600, 6900, 8700];
+// Metres a ray must pass under the drawn land, and a foot may stand over it, before it counts
+const WATERTIGHT_TOL_M = 0.3;
+async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    game.worldLinger = false;
+    const env = game.environment, route = env.route;
+    const renderer = game.graphics.renderer;
+    const W = 480, H = 270;
+    const target = new THREE.WebGLRenderTarget(W, H, { depthBuffer: true });
+    const pixels = new Uint8Array(W * H * 4);
+    // The kinds: land top 1, skirt 2, road 3, works 4, other drawn 5; the far kinds (horizon, far land) 6, nothing 0
+    const code = { land: 1, skirt: 2, road: 3, works: 4, other: 5, far: 6 };
+    const make = id => new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { id: { value: id } },
+        vertexShader: 'attribute float skirt; varying float vSkirt; void main(){ vSkirt = skirt; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: 'uniform float id; varying float vSkirt; void main(){ float k = vSkirt > 1.5 ? 5.0 : vSkirt > 0.5 ? 2.0 : id; gl_FragColor = vec4(k / 255.0, gl_FrontFacing ? 0.0 : 1.0, 0.0, 1.0); }'
+    });
+    const mats = {};
+    const mat = id => mats[id] || (mats[id] = make(id));
+    const marked = new WeakSet();
+    // Every vertex of a tile mesh: 0 on the land, 1 on a skirt, 2 on a forest clump
+    const markSkirt = (geometry, name) => {
+        if (marked.has(geometry)) return;
+        marked.add(geometry);
+        const count = geometry.attributes.position.count;
+        const flags = new Float32Array(count);
+        const lod = /^world-terrain-.*-lod(\d)$/.exec(name);
+        if (lod) {
+            const side = (WorldData.TILE_N - 1) / (1 << Number(lod[1])) + 1, ground = side * side + side * 4;
+            for (let v = side * side; v < count; v++) flags[v] = v < ground ? 1 : 2;
+        }
+        geometry.setAttribute('skirt', new THREE.BufferAttribute(flags, 1));
+    };
+    const kindOf = o => {
+        const w = o.userData.world;
+        if (w === 'terrain') return code.land;
+        if (w === 'road' || w === 'barriers') return code.road;
+        if (w === 'works') return code.works;
+        // The horizon and the far land are left out: one standing over the land is world-floating's horizonOver
+        return null;
+    };
+    // The drawn land at (x, z): the tile mesh drawn there, on its own triangles at its LOD
+    const drawnLand = (x, z) => {
+        const m = WorldData.TILE_M;
+        const tx = Math.floor(x / m), tz = Math.floor(z / m);
+        const held = env.tileMeshes.get(`${tx},${tz}`);
+        if (!held) return null;
+        const side = (WorldData.TILE_N - 1) / (1 << Number(/lod(\d)/.exec(held.mesh.name)[1])) + 1;
+        const cell = WorldData.TILE_M / (side - 1);
+        const pos = held.mesh.geometry.attributes.position.array;
+        const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
+        const i = Math.max(0, Math.min(side - 2, Math.floor(fx))), j = Math.max(0, Math.min(side - 2, Math.floor(fz)));
+        const u = fx - i, v = fz - j;
+        const Y = (a, b) => pos[((j + b) * side + i + a) * 3 + 1];
+        return u + v <= 1 ? Y(0, 0) + u * (Y(1, 0) - Y(0, 0)) + v * (Y(0, 1) - Y(0, 0)) : Y(1, 1) + (1 - u) * (Y(0, 1) - Y(1, 1)) + (1 - v) * (Y(1, 0) - Y(1, 1));
+    };
+    // Whether a ray from `o` along unit `d` passes more than tol under the drawn land before it leaves the drawn tiles
+    const under = (o, d, limit = 2500) => {
+        for (let t = 1; t < limit; t += t < 200 ? 1 : 2) {
+            const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
+            const land = drawnLand(x, z);
+            if (land === null) return false;
+            if (y < land - tol) return { t: Math.round(t), x: Math.round(x), z: Math.round(z), key: `${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`, underM: Math.round((land - y) * 10) / 10 };
+        }
+        return null;
+    };
+    // The ride's carriageway under (x, z) and its height, or null
+    const near = {};
+    const carriageway = (x, z, inset = 0) => {
+        let best = null;
+        for (const i of route.cellSegments(x, z) || []) {
+            route.nearestSegment(x, z, i, i, near);
+            if (near.distance <= near.width / 2 - inset) best = best === null ? near.y : Math.max(best, near.y);
+        }
+        return best;
+    };
+    // Whether (x, z) lies in a road's band (the ride's carriageway and verge, a side road's) at about height y
+    const inBand = (x, z, y) => {
+        for (const i of route.cellSegments(x, z) || []) {
+            route.nearestSegment(x, z, i, i, near);
+            if (near.distance <= near.width / 2 + RoadSurface.VERGE_M + 0.05 && Math.abs(near.y - y) < 1.5) return true;
+        }
+        const side = env.ground.sideRoadY(x, z);
+        return side !== null && Math.abs(side - y) < 1.5;
+    };
+    const r2 = v => Math.round(v * 100) / 100;
+    const views = [], feetSeen = new Set();
+    const footOpen = [], footOverRoad = [];
+    let feet = 0, footCoarse = 0, joints = 0;
+    const jointOpen = [];
+    const lodAt = (x, z) => { const held = env.tileMeshes.get(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`); return held ? Number(/lod(\d)/.exec(held.mesh.name)[1]) : 0; };
+    const stations = [];
+    for (let s = from; s <= Math.min(to, route.length - 1); s += every) stations.push(Math.round(s));
+    for (const s of shotsAt) if (!stations.includes(s)) stations.push(s);
+    stations.sort((a, b) => a - b);
+    for (const s of stations) {
+        const p = route.sample(s, {});
+        if (p.flags.tunnel || p.flags.gallery) continue;
+        await placeAt(s);
+        const v = game.vehicle;
+        // The open edges of every edge works mesh drawn now: an edge of an apron or retaining wall triangle that no
+        // other triangle of the same part shares is the part's outline. Off a road's band (where the ribbon covers it)
+        // an outline edge must lie on the land or under it: over it, the apron's or wall's foot is open
+        env.group.traverse(o => {
+            if (!o.isMesh || o.userData.world !== 'works') return;
+            for (let q = o.parent; q; q = q.parent) if (!q.visible) return;
+            const g = o.geometry, pos = g.attributes.position.array;
+            // The top of every retaining wall hangs from a drawn road: the ribbon beside it (the meshes of its own
+            // group) lies within 0.15 m of each top edge on one side, at its height or under the parapet. A gap
+            // there (a wall at the verge's edge beside a ribbon drawn without a verge) shows the drop through it
+            const ribbons = [];
+            if (o.parent) o.parent.traverse(r => { if (r.isMesh && r.userData.world === 'road') ribbons.push(r); });
+            const down = new THREE.Raycaster();
+            const ribbonAt = (x, y, z) => {
+                down.set(new THREE.Vector3(x, y + 1, z), new THREE.Vector3(0, -1, 0));
+                down.far = 2.6;
+                return down.intersectObjects(ribbons, false).length > 0;
+            };
+            const vkey = v => `${Math.round(pos[v * 3] * 50)},${Math.round(pos[v * 3 + 1] * 50)},${Math.round(pos[v * 3 + 2] * 50)}`;
+            const ekey = (a, b) => { const ka = vkey(a), kb = vkey(b); return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`; };
+            for (const group of g.groups) {
+                if (group.materialIndex !== 2 || !ribbons.length) continue;
+                const uses = new Map();
+                for (let t = group.start; t < group.start + group.count; t += 3) for (const [a, b] of [[t, t + 1], [t + 1, t + 2], [t + 2, t]]) { const e = ekey(a, b); uses.set(e, (uses.get(e) || 0) + 1); }
+                for (let t = group.start; t < group.start + group.count; t += 3) {
+                    for (const [a, b, c] of [[t, t + 1, t + 2], [t + 1, t + 2, t], [t + 2, t, t + 1]]) {
+                        if (uses.get(ekey(a, b)) !== 1) continue;
+                        const third = pos[c * 3 + 1];
+                        if (!(third < pos[a * 3 + 1] - 0.05 && third < pos[b * 3 + 1] - 0.05)) continue;
+                        const ax = pos[a * 3], az = pos[a * 3 + 2], bx = pos[b * 3], bz = pos[b * 3 + 2];
+                        const len = Math.hypot(bx - ax, bz - az);
+                        if (len < 0.05) continue;
+                        const mx = (ax + bx) / 2, my = (pos[a * 3 + 1] + pos[b * 3 + 1]) / 2, mz = (az + bz) / 2;
+                        const seen = `top:${Math.round(mx * 4)},${Math.round(mz * 4)}`;
+                        if (feetSeen.has(seen)) continue;
+                        feetSeen.add(seen);
+                        joints++;
+                        const nx = -(bz - az) / len * 0.15, nz = (bx - ax) / len * 0.15;
+                        if (!ribbonAt(mx + nx, my, mz + nz) && !ribbonAt(mx - nx, my, mz - nz)) jointOpen.push({ s, x: r2(mx), z: r2(mz), y: r2(my), road: o.parent.name });
+                    }
+                }
+            }
+            for (const group of g.groups) {
+                if (group.materialIndex === 1) continue;
+                const kind = group.materialIndex === 0 ? 'apron' : 'wall';
+                // No piece of an apron or a wall stands over another road's carriageway (a tongue of fill off an
+                // upper hairpin leg reaching out over the lower one): its corners and its centre are read
+                for (let t = group.start; t < group.start + group.count; t += 3) {
+                    const pts = [0, 1, 2].map(k => [pos[(t + k) * 3], pos[(t + k) * 3 + 1], pos[(t + k) * 3 + 2]]);
+                    pts.push(pts[0].map((c, i) => (c + pts[1][i] + pts[2][i]) / 3));
+                    for (const [px, py, pz] of pts) {
+                        const road = carriageway(px, pz, 0.1);
+                        if (road === null || py < road + 0.3) continue;
+                        const seen = `over:${Math.round(px * 2)},${Math.round(pz * 2)}`;
+                        if (feetSeen.has(seen)) continue;
+                        feetSeen.add(seen);
+                        footOverRoad.push({ s, x: r2(px), z: r2(pz), y: r2(py), road: r2(road), kind });
+                    }
+                }
+                const count = new Map();
+                const key = v => `${Math.round(pos[v * 3] * 50)},${Math.round(pos[v * 3 + 1] * 50)},${Math.round(pos[v * 3 + 2] * 50)}`;
+                const edge = (a, b) => { const ka = key(a), kb = key(b); return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`; };
+                for (let t = group.start; t < group.start + group.count; t += 3) for (const [a, b] of [[t, t + 1], [t + 1, t + 2], [t + 2, t]]) { const e = edge(a, b); count.set(e, (count.get(e) || 0) + 1); }
+                for (let t = group.start; t < group.start + group.count; t += 3) {
+                    for (const [a, b, c] of [[t, t + 1, t + 2], [t + 1, t + 2, t], [t + 2, t, t + 1]]) {
+                        const e = edge(a, b);
+                        if (count.get(e) !== 1) continue;
+                        // A foot is the lowest edge of its triangle (its top edge hangs from the road, its sides end a run)
+                        const third = pos[c * 3 + 1];
+                        if (!(third > pos[a * 3 + 1] + 0.05 && third > pos[b * 3 + 1] + 0.05)) continue;
+                        if (Math.hypot(pos[a * 3] - pos[b * 3], pos[a * 3 + 2] - pos[b * 3 + 2]) < 0.05) continue;
+                        const seen = `${kind}:${e}`;
+                        if (feetSeen.has(seen)) continue;
+                        feetSeen.add(seen);
+                        feet++;
+                        const ax = pos[a * 3], ay = pos[a * 3 + 1], az = pos[a * 3 + 2], bx = pos[b * 3], by = pos[b * 3 + 1], bz = pos[b * 3 + 2];
+                        const mx = (ax + bx) / 2, my = (ay + by) / 2, mz = (az + bz) / 2;
+                        if (inBand(mx, mz, my)) continue;
+                        if (carriageway(mx, mz) !== null) continue;
+                        const la = drawnLand(ax, az), lb = drawnLand(bx, bz);
+                        if (la === null || lb === null) continue;
+                        const over = Math.min(ay - la, by - lb);
+                        if (!(over > tol)) continue;
+                        // Over a tile drawn at LOD1 or 2 (700 m off or more), whose coarse vertices are held under
+                        // the carved nodes within a stride, the works reach the land drawn near and are counted apart
+                        if (lodAt(mx, mz) > 0) footCoarse++;
+                        else footOpen.push({ s, x: r2(mx), z: r2(mz), overM: r2(over), kind });
+                    }
+                }
+            }
+        });
+        for (const mode of modes) {
+            game.cameraMode = mode;
+            game.worldCamera.reset(v.yawAngle);
+            v.speed = 0;
+            twistyDev.autopilot({ speed: 0 });
+            for (let i = 0; i < 120; i++) twistyDev.step(1);
+            env.streamer.pump(Infinity);
+            twistyDev.step(1);
+            const cam = game.camera;
+            cam.updateMatrixWorld();
+            if (drawnLand(cam.position.x, cam.position.z) > cam.position.y) { views.push({ s, mode, skipped: 'camera under the land' }); continue; }
+            const saved = [];
+            game.scene.traverse(o => {
+                // Rain, snow and other points, lines and sprites are not the land: they would paint over a pixel
+                if (o.isPoints || o.isLine || o.isSprite) { saved.push([o, o.material, o.visible]); o.visible = false; return; }
+                if (!o.isMesh) return;
+                const kind = kindOf(o);
+                saved.push([o, o.material, o.visible]);
+                if (kind === null || o.isInstancedMesh) { o.visible = false; return; }
+                markSkirt(o.geometry, o.name);
+                if (!o.geometry.attributes.skirt) o.geometry.setAttribute('skirt', new THREE.BufferAttribute(new Float32Array(o.geometry.attributes.position.count), 1));
+                o.material = mat(kind);
+            });
+            const bg = game.scene.background, fog = game.scene.fog;
+            game.scene.background = new THREE.Color(0, 0, 0);
+            game.scene.fog = null;
+            const aspect = cam.aspect;
+            renderer.setRenderTarget(target);
+            renderer.setClearColor(0x000000, 1);
+            renderer.clear();
+            renderer.render(game.scene, cam);
+            renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+            renderer.setRenderTarget(null);
+            saved.forEach(([o, m, vis]) => { o.material = m; o.visible = vis; });
+            game.scene.background = bg;
+            game.scene.fog = fog;
+            cam.aspect = aspect;
+            let holes = 0, backLand = 0, skirt = 0, land = 0;
+            const backAt = [], skirtAt = [];
+            const worst = [];
+            const ray = new THREE.Raycaster();
+            const ndc = new THREE.Vector2();
+            for (let y = 0; y < H; y += 2) {
+                for (let x = 0; x < W; x += 2) {
+                    const at = (y * W + x) * 4;
+                    const kind = pixels[at], back = pixels[at + 1] > 127;
+                    if (kind === code.land) { land++; if (back) { backLand++; if (backAt.length < 400) backAt.push([x, y]); } continue; }
+                    if (kind === code.skirt) { skirt++; if (skirtAt.length < 400) skirtAt.push([x, y]); continue; }
+                    if (kind !== 0 && kind !== code.far) continue;
+                    // Read back from the bottom row up
+                    ndc.set((x + 0.5) / W * 2 - 1, (y + 0.5) / H * 2 - 1);
+                    ray.setFromCamera(ndc, cam);
+                    if (ray.ray.direction.y > 0.2) continue;
+                    const gone = under(ray.ray.origin, ray.ray.direction);
+                    if (gone) { holes++; if (worst.length < 4 || (gone.t < worst[0].t && worst.length < 12)) worst.push({ px: [x, H - 1 - y], ...gone }); }
+                }
+            }
+            // An underside or a skirt in view is a gap only where its ray passed under the drawn land before it met
+            // it: at a ridge seen edge-on or a tile edge seen from afar the rasteriser gives a back face or a skirt a
+            // pixel now and then, with nothing open
+            const terrain = [];
+            env.tileGroup.traverse(o => { if (o.isMesh) terrain.push(o); });
+            const through = list => {
+                const out = [];
+                for (const [x, y] of list) {
+                    ndc.set((x + 0.5) / W * 2 - 1, (y + 0.5) / H * 2 - 1);
+                    ray.setFromCamera(ndc, cam);
+                    const hit = ray.intersectObjects(terrain, false)[0];
+                    if (!hit) continue;
+                    const gone = under(ray.ray.origin, ray.ray.direction, hit.distance - 0.5);
+                    if (gone) out.push({ px: [x, H - 1 - y], t: Math.round(hit.distance), tile: hit.object.name.slice(14), ...gone });
+                }
+                return out;
+            };
+            const backOpen = through(backAt), skirtOpen = through(skirtAt);
+            views.push({ s, mode, holes, backLand, skirt, land, worst, backOpen: backOpen.length, skirtOpen: skirtOpen.length, backAt: backOpen.slice(0, 4), skirtAt: skirtOpen.slice(0, 4) });
+        }
+    }
+    target.dispose();
+    const sum = key => views.reduce((n, w) => n + (w[key] || 0), 0);
+    const top = key => views.filter(w => w[key]).sort((a, b) => b[key] - a[key]).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, [key]: w[key], at: w.worst }));
+    return {
+        stations: stations.length, views: views.length, skipped: views.filter(w => w.skipped).length,
+        holes: sum('holes'), holeViews: views.filter(w => w.holes).length, worstHoles: top('holes'),
+        backLand: sum('backLand'), skirt: sum('skirt'),
+        backOpen: sum('backOpen'), backViews: views.filter(w => w.backOpen).length, worstBack: views.filter(w => w.backOpen).sort((a, b) => b.backOpen - a.backOpen).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, backOpen: w.backOpen, at: w.backAt })),
+        skirtOpen: sum('skirtOpen'), skirtViews: views.filter(w => w.skirtOpen).length, worstSkirt: views.filter(w => w.skirtOpen).sort((a, b) => b.skirtOpen - a.skirtOpen).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, skirtOpen: w.skirtOpen, at: w.skirtAt })),
+        joints, jointOpen: jointOpen.length, worstJointOpen: jointOpen.slice(0, 8),
+        worksEdges: feet, footCoarse, footOpen: footOpen.length, worstFootOpen: footOpen.sort((a, b) => b.overM - a.overM).slice(0, 8),
+        footOverRoad: footOverRoad.length, footOverRoadByKind: { apron: footOverRoad.filter(f => f.kind === 'apron').length, wall: footOverRoad.filter(f => f.kind === 'wall').length },
+        worstFootOverRoad: footOverRoad.sort((a, b) => (b.y - b.road) - (a.y - a.road)).slice(0, 8),
+        perView: views
+    };
+}
+
 const WORLD = {
+    // The drawn land is closed: holes, land undersides and skirts in view, and edge works whose outline stands over
+    // the land, from the helmet, chase and high cameras every --every metres (50) between --from and --to
+    'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), option('modes') ? option('modes').split(',').map(Number) : WATERTIGHT_MODES, WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
     // Floating roads and land over the road, as drawn: floatingWalk over the whole slice (every --every metres, 500 by
     // default), then the named views (FLOATING_VIEWS, or --views), each saved to --out when given
     'world-floating': async (page) => {
@@ -4327,6 +4637,16 @@ function worldChecks(report) {
     if (placedHouses) {
         if (!(placedHouses.checked > 0)) failures.push('world-buildings: no building was drawn');
         if (placedHouses.onBand) failures.push(`world-buildings: ${placedHouses.onBand} drawn buildings stand on a road band: ${JSON.stringify(placedHouses.hits)}`);
+    }
+    const tight = results['world-watertight'];
+    if (tight) {
+        if (!(tight.views > 0)) failures.push('world-watertight: no view was read');
+        if (tight.holes) failures.push(`world-watertight: ${tight.holes} pixels in ${tight.holeViews} views look through the drawn land: ${JSON.stringify(tight.worstHoles)}`);
+        if (tight.backOpen) failures.push(`world-watertight: ${tight.backOpen} pixels in ${tight.backViews} views show a land triangle's underside through the land: ${JSON.stringify(tight.worstBack)}`);
+        if (tight.skirtOpen) failures.push(`world-watertight: ${tight.skirtOpen} pixels in ${tight.skirtViews} views show a tile skirt through the land: ${JSON.stringify(tight.worstSkirt)}`);
+        if (tight.jointOpen) failures.push(`world-watertight: ${tight.jointOpen} top edges of a retaining wall have no road drawn beside them: ${JSON.stringify(tight.worstJointOpen)}`);
+        if (tight.footOpen) failures.push(`world-watertight: ${tight.footOpen} edges of an apron or retaining wall stand over the drawn land: ${JSON.stringify(tight.worstFootOpen)}`);
+        if (tight.footOverRoad) failures.push(`world-watertight: ${tight.footOverRoad} edges of an apron or retaining wall stand over another road's carriageway: ${JSON.stringify(tight.worstFootOverRoad)}`);
     }
     const floating = results['world-floating'];
     if (floating) {

@@ -2,8 +2,10 @@
 //   LOD0: a vertex every 8 m  (64 x 64 cells, 8 192 triangles) within 700 m
 //   LOD1: every 16 m          (2 048 triangles) to 2 km
 //   LOD2: every 32 m          (512 triangles) beyond
-// A 3 m skirt hangs from every tile edge, so the crack between two tiles of
-// different detail is never open to the sky. Colours come from the land cover
+// The land is watertight: two tiles draw their shared edge from the same nodes
+// at the same LOD (a vertex reads the nodes of the neighbouring tile across the
+// edge), and a skirt hangs from every tile edge down to the lowest the edge is
+// drawn at any LOD, so the step between two tiles of different detail is closed. Colours come from the land cover
 // class (16 m cells), the slope, facing and height (LandShade) and the tile's zone
 // layer: the carved road and bench are bare ground, a wall or drop is rock.
 class TerrainMesh {
@@ -40,22 +42,102 @@ class TerrainMesh {
         return zone === zones.road || zone === zones.bench || zone === zones.drop;
     }
 
+    // The tile and its eight neighbours as `near(key)` gives them now (null where one is not resident): the ring
+    // TerrainMesh.node reads, made once for a build or a vertex rather than once for every node
+    static ring(tile, near) {
+        const tiles = new Array(9);
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) tiles[(dz + 1) * 3 + dx + 1] = dx || dz ? near(`${tile.tx + dx},${tile.tz + dz}`) : tile;
+        return { ring: true, tile, tiles };
+    }
+
+    // The node (i, j) of a tile, i and j up to one tile beyond its edges: {h, zone}. A node on an edge or a corner is
+    // held by two or four tiles, each file with its own copy; it is read from the resident one with the highest tx,
+    // then tz, so every tile reads one copy of each node. `near` is a function key -> resident tile or null, or a
+    // ring (TerrainMesh.ring); without it the node is the nearest of the tile's own.
+    static node(tile, i, j, near = null, out = {}) {
+        const n = WorldData.TILE_N, last = n - 1;
+        if (!near || (i > 0 && j > 0 && i < last && j < last)) {
+            const a = Math.max(0, Math.min(last, i)), b = Math.max(0, Math.min(last, j));
+            out.h = tile.heights[b * n + a];
+            out.zone = tile.zones[b * n + a];
+            return out;
+        }
+        const ring = near.ring ? near : TerrainMesh.ring(tile, near);
+        // Along each axis the tile first tried and the one after it: a node on the shared edge is read from the tile
+        // with the higher index, one beyond the edge from the neighbour, and without either from the tile's own
+        const px = i > last ? 1 : i === last ? 1 : i > 0 ? 0 : i === 0 ? 0 : -1;
+        const pa = i > last ? i - last : i === last ? 0 : i >= 0 ? i : i + last;
+        const fx = i >= last ? 0 : i <= 0 ? (i === 0 ? -1 : 0) : 2, fa = i >= last ? last : i === 0 ? last : 0;
+        const pz = j > last ? 1 : j === last ? 1 : j > 0 ? 0 : j === 0 ? 0 : -1;
+        const pb = j > last ? j - last : j === last ? 0 : j >= 0 ? j : j + last;
+        const fz = j >= last ? 0 : j <= 0 ? (j === 0 ? -1 : 0) : 2, fb = j >= last ? last : j === 0 ? last : 0;
+        const tiles = ring.tiles;
+        for (let c = 0; c < 4; c++) {
+            const dx = c < 2 ? px : fx, a = c < 2 ? pa : fa, dz = c % 2 ? fz : pz, b = c % 2 ? fb : pb;
+            if (dx === 2 || dz === 2) continue;
+            const t = tiles[(dz + 1) * 3 + dx + 1];
+            if (!t) continue;
+            out.h = t.heights[b * n + a];
+            out.zone = t.zones[b * n + a];
+            return out;
+        }
+        out.h = tile.heights[Math.max(0, Math.min(last, j)) * n + Math.max(0, Math.min(last, i))];
+        out.zone = tile.zones[Math.max(0, Math.min(last, j)) * n + Math.max(0, Math.min(last, i))];
+        return out;
+    }
+
     // The height a vertex (i, j) of a tile is drawn at, at an LOD. A carved node is drawn SINK_M under the tile's height.
     // At a coarser LOD a vertex stands for the nodes round it, and a coarse triangle that reached from a cut slope over
-    // a road would stand over the road: a vertex is held no higher than the lowest carved node within one stride
+    // a road would stand over the road: a vertex is held no higher than the lowest carved node within one stride, the
+    // neighbouring tile's included (`near`, TerrainMesh.node), so a vertex on a shared edge is the same in both tiles
     // (WorldEnvironment.edgeFoot reads the same heights, so the edge works meet the land drawn at any LOD).
-    static vertexY(tile, lod, i, j) {
-        const n = WorldData.TILE_N;
-        const own = tile.heights[j * n + i];
-        let y = TerrainMesh.carved(tile.zones[j * n + i]) ? own - TerrainMesh.SINK_M : own;
+    static vertexY(tile, lod, i, j, near = null) {
+        const last = WorldData.TILE_N - 1;
+        // A ring is made only for a vertex whose window reaches an edge
+        if (near && !near.ring && (i <= (1 << lod) || j <= (1 << lod) || i >= last - (1 << lod) || j >= last - (1 << lod))) near = TerrainMesh.ring(tile, near);
+        const own = TerrainMesh.node(tile, i, j, near, TerrainMesh.scratch || (TerrainMesh.scratch = {}));
+        let y = TerrainMesh.carved(own.zone) ? own.h - TerrainMesh.SINK_M : own.h;
         if (lod === 0) return y;
-        const stride = 1 << lod;
-        for (let b = Math.max(0, j - stride); b <= Math.min(n - 1, j + stride); b++) {
-            for (let a = Math.max(0, i - stride); a <= Math.min(n - 1, i + stride); a++) {
-                if (TerrainMesh.carved(tile.zones[b * n + a])) y = Math.min(y, tile.heights[b * n + a] - TerrainMesh.SINK_M);
+        const stride = 1 << lod, n = WorldData.TILE_N;
+        // A window inside the tile (or with no neighbour to read) is read from the tile's own arrays
+        if (!near || (i - stride > 0 && j - stride > 0 && i + stride < last && j + stride < last)) {
+            const zones = tile.zones, heights = tile.heights, zr = WorldData.ZONE;
+            for (let b = Math.max(0, j - stride); b <= Math.min(last, j + stride); b++) {
+                for (let a = Math.max(0, i - stride); a <= Math.min(last, i + stride); a++) {
+                    const z = zones[b * n + a];
+                    if ((z === zr.road || z === zr.bench || z === zr.drop) && heights[b * n + a] - TerrainMesh.SINK_M < y) y = heights[b * n + a] - TerrainMesh.SINK_M;
+                }
+            }
+            return y;
+        }
+        const q = TerrainMesh.scratchQ || (TerrainMesh.scratchQ = {});
+        for (let b = j - stride; b <= j + stride; b++) {
+            for (let a = i - stride; a <= i + stride; a++) {
+                TerrainMesh.node(tile, a, b, near, q);
+                if (TerrainMesh.carved(q.zone)) y = Math.min(y, q.h - TerrainMesh.SINK_M);
             }
         }
         return y;
+    }
+
+    // How far the skirt hangs under edge vertex k (in nodes along the edge `edge(k)` -> [i, j]) of a tile drawn at
+    // `lod`: down to the lowest the edge is drawn at any LOD between its two neighbouring vertices (a neighbour tile
+    // draws its side of the edge at its own LOD, from the same nodes), and SKIRT_M at least
+    static skirtDepth(tile, lod, k, edge, near, y, memo = null) {
+        const last = WorldData.TILE_N - 1, own = 1 << lod;
+        let low = y - TerrainMesh.SKIRT_M;
+        for (let l = 0; l <= 2; l++) {
+            const step = 1 << l;
+            const from = Math.max(0, Math.floor((k - own) / step) * step), to = Math.min(last, Math.ceil((k + own) / step) * step);
+            for (let m = from; m <= to; m += step) {
+                const [i, j] = edge(m);
+                const key = (l * 128 + i) * 128 + j;
+                let v = memo ? memo.get(key) : undefined;
+                if (v === undefined) { v = TerrainMesh.vertexY(tile, l, i, j, near); if (memo) memo.set(key, v); }
+                low = Math.min(low, v - 0.5);
+            }
+        }
+        return y - low;
     }
 
     // Triangles of a tile at an LOD, skirts included
@@ -174,13 +256,14 @@ class TerrainMesh {
     }
 
     // The mesh of tile (tx, tz): {mesh, triangles}. `cover` may be null (grass everywhere). `holdY(x, y, z)`, when
-    // given, may lower a carved vertex further (under the ride's road, WorldEnvironment.buildTile).
-    static build(tile, cover, lod, holdY = null) {
+    // given, may lower a carved vertex further (under the ride's road, WorldEnvironment.buildTile). `near(key)` gives a
+    // resident neighbouring tile or null (TerrainMesh.node): the tile reads its neighbours' nodes across its edges.
+    static build(tile, cover, lod, holdY = null, near = null) {
+        if (near && !near.ring) near = TerrainMesh.ring(tile, near);
         const n = WorldData.TILE_N;
         const stride = 1 << lod;
         const cells = (n - 1) / stride;
         const side = cells + 1;
-        const skirt = TerrainMesh.SKIRT_M;
         const baseX = tile.tx * WorldData.TILE_M, baseZ = tile.tz * WorldData.TILE_M;
         const crowns = TerrainMesh.clumps(tile, cover, lod);
         const sides = TerrainMesh.CLUMP_SIDES;
@@ -193,8 +276,8 @@ class TerrainMesh {
             positions[v * 3] = x; positions[v * 3 + 1] = y; positions[v * 3 + 2] = z;
             shades[v * 3] = c[0]; shades[v * 3 + 1] = c[1]; shades[v * 3 + 2] = c[2];
         };
-        const copy = (to, from) => {
-            positions[to * 3] = positions[from * 3]; positions[to * 3 + 1] = positions[from * 3 + 1] - skirt; positions[to * 3 + 2] = positions[from * 3 + 2];
+        const copy = (to, from, depth) => {
+            positions[to * 3] = positions[from * 3]; positions[to * 3 + 1] = positions[from * 3 + 1] - depth; positions[to * 3 + 2] = positions[from * 3 + 2];
             shades[to * 3] = shades[from * 3]; shades[to * 3 + 1] = shades[from * 3 + 1]; shades[to * 3 + 2] = shades[from * 3 + 2];
         };
         const grid = TerrainMesh.colours(tile, cover);
@@ -205,7 +288,7 @@ class TerrainMesh {
                 const zone = tile.zones[j * n + i];
                 const carved = TerrainMesh.carved(zone);
                 const x = baseX + i * WorldData.CELL_M, z = baseZ + j * WorldData.CELL_M;
-                let drawnY = TerrainMesh.vertexY(tile, lod, i, j);
+                let drawnY = TerrainMesh.vertexY(tile, lod, i, j, near);
                 if (carved && holdY) drawnY = holdY(x, drawnY, z);
                 const at = (j * n + i) * 3;
                 linear[0] = grid[at]; linear[1] = grid[at + 1]; linear[2] = grid[at + 2];
@@ -221,18 +304,23 @@ class TerrainMesh {
                 indices[at++] = v10; indices[at++] = v01; indices[at++] = v11;
             }
         }
-        // Skirts: a copy of each edge vertex, dropped, joined to the edge
+        // Skirts: a copy of each edge vertex, dropped to the lowest the edge is drawn at any LOD, joined to the edge
         const edges = [
             (k) => k,                          // z = 0 row
             (k) => (side - 1) * side + k,      // z = max row
             (k) => k * side,                   // x = 0 column
             (k) => k * side + side - 1         // x = max column
         ];
+        // The same edges in nodes of the tile: k nodes along it -> [i, j]
+        const last = n - 1;
+        const lines = [m => [m, 0], m => [m, last], m => [0, m], m => [last, m]];
+        const memo = new Map();
         edges.forEach((edge, e) => {
             const first = side * side + e * side;
             for (let k = 0; k < side; k++) {
                 const from = edge(k);
-                copy(first + k, from);
+                const depth = TerrainMesh.skirtDepth(tile, lod, k * stride, lines[e], near, positions[from * 3 + 1], memo);
+                copy(first + k, from, depth);
             }
             for (let k = 0; k + 1 < side; k++) {
                 const a = edge(k), b = edge(k + 1), c = first + k, d = first + k + 1;
@@ -260,8 +348,19 @@ class TerrainMesh {
         geometry.setAttribute('color', new THREE.BufferAttribute(shades, 3));
         // Already linear (TerrainMesh.colours): Graphics.fixColorSpaces leaves it alone
         geometry.userData.linearColors = true;
-        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        // Lit from the land's own triangles only, and each skirt vertex as the edge vertex it hangs from: a skirt is
+        // the land closed down to its neighbour, so it reads as the hillside above it, and the edge keeps the land's
+        // shade (a skirt's sideways normal averaged into it drew a dark line along every tile edge)
+        geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, cells * cells * 6), 1));
         geometry.computeVertexNormals();
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        const lit = geometry.attributes.normal.array;
+        edges.forEach((edge, e) => {
+            for (let k = 0; k < side; k++) {
+                const to = side * side + e * side + k, from = edge(k);
+                lit[to * 3] = lit[from * 3]; lit[to * 3 + 1] = lit[from * 3 + 1]; lit[to * 3 + 2] = lit[from * 3 + 2];
+            }
+        });
         // A crown clump is lit as canopy seen from afar, mostly from above: a cone's own normals put half of every
         // clump in black shade and draw it as a spike
         const normals = geometry.attributes.normal.array;
