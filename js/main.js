@@ -3496,7 +3496,6 @@ class Game {
             if (collision && collision.hit && !this.vehicle.crashed && !inRoadworksZone && !carOnDetour) {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
-                this.vehicle.frame.material.color.setHex(0xff00ff);
                 // The crash was set after vehicle.update(), so the generic
                 // "just crashed" check above never sees this one. (Not after
                 // the finish: the results banner must stay in charge.)
@@ -3555,7 +3554,6 @@ class Game {
                 !(rockHit.rock.settled && this.vehicle.attemptHop(rockHit.rock.radius))) {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
-                this.vehicle.frame.material.color.setHex(0x8b5a2b);
                 const rockPos = rockHit.rock.mesh.position;
                 const impactDir = new THREE.Vector3(
                     this.vehicle.position.x - rockPos.x,

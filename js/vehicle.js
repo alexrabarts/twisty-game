@@ -2266,7 +2266,6 @@ class Vehicle {
         if (!this.worldPhysics && !this.isJumping && this.speed < this.minSpeed) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5; // Fall to the side
-            this.frame.material.color.setHex(0xff6600); // Orange for low-speed fall
             console.log('CRASHED! Speed too low:', (this.speed * 2.237).toFixed(1) + ' mph');
         }
 
@@ -2298,7 +2297,6 @@ class Vehicle {
 
                     this.crashed = true;
                     this.crashAngle = this.leanAngle || 0.5;
-                    this.frame.material.color.setHex(0xff0000); // Red for collision
 
                     // Set crash velocity based on impact
                     const impactForce = this.speed * 0.5;
@@ -2331,7 +2329,6 @@ class Vehicle {
                 if (distance < collisionDistance) {
                     this.crashed = true;
                     this.crashAngle = this.leanAngle || 0.5;
-                    this.frame.material.color.setHex(0xFF8C00); // Dark orange for construction crash
 
                     // Set crash velocity based on impact
                     const impactForce = this.speed * 0.6;
@@ -2368,7 +2365,6 @@ class Vehicle {
                 if (!this.crashed && !this.worldPhysics) {
                     this.crashed = true;
                     this.crashAngle = this.leanAngle || 0.5;
-                    this.frame.material.color.setHex(0x8b4513); // Brown for ground collision
                 }
             }
         }
@@ -2382,7 +2378,6 @@ class Vehicle {
         if (!this.worldPhysics && Math.abs(this.leanAngle) > this.maxLeanAngle) {
             this.crashed = true;
             this.crashAngle = this.leanAngle;
-            this.frame.material.color.setHex(0xff0000); // Red for high-speed crash
             console.log('CRASHED! Lean angle exceeded:', (this.leanAngle * 180/Math.PI).toFixed(1) + '°');
         }
         
@@ -2958,7 +2953,7 @@ class Vehicle {
         if (this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
             this.lowsideTimerMs += deltaTime * 1000;
             if (this.lowsideTimerMs >= world.lowsideMs) {
-                this.worldCrash(this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip', 0xff0000);
+                this.worldCrash(this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip');
             }
         } else {
             this.lowsideTimerMs = 0;
@@ -2969,7 +2964,7 @@ class Vehicle {
         const tip = world.tipLeanDeg * Math.PI / 180;
         if (v < world.fallSpeed && Math.abs(this.leanAngle) > tip) {
             this.tipTimerS += deltaTime;
-            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down', 0xff6600);
+            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down');
         } else {
             this.tipTimerS = 0;
             if (this.footDown || v < world.fallSpeed) this.leanAngle *= Math.exp(-world.footDownRight * deltaTime);
@@ -2977,11 +2972,10 @@ class Vehicle {
     }
 
     // A world crash with the cause the crash card shows
-    worldCrash(cause, color) {
+    worldCrash(cause) {
         this.crashed = true;
         this.crashCause = cause;
         this.crashAngle = this.leanAngle || 0.5;
-        this.frame.material.color.setHex(color);
         console.log(`CRASHED! ${cause} at`, (this.speed * 2.237).toFixed(1) + ' mph');
     }
 
@@ -3749,7 +3743,6 @@ class Vehicle {
             this.crashed = true;
             this.fallingOffCliff = false; // Not falling, we hit a wall
             this.crashAngle = sign * Math.PI / 6; // Crash leaning into the wall
-            this.frame.material.color.setHex(0x8B0000); // Dark red for crash
             console.log(`CRASHED! Hit the ${sideName} wall at`, (this.speed * 2.237).toFixed(1) + ' mph');
 
             // Move bike back to the wall face and apply bounce
@@ -3789,7 +3782,6 @@ class Vehicle {
             this.tumbleRoll = 0;
             this.tumbleSpeed = 3 + this.speed * 0.12;
             this.crashAngle = -sign * Math.PI / 4; // Fall toward the other side
-            this.frame.material.color.setHex(0x8B0000); // Dark red for falling
 
             // Continue forward momentum but start falling
             this.velocity.y = -8; // Start falling downward
@@ -3817,12 +3809,10 @@ class Vehicle {
         if (water !== null && ground <= water) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5;
-            this.frame.material.color.setHex(0x1e5a8a); // Blue for water
             console.log('CRASHED! Rode into the water at', (this.speed * 2.237).toFixed(1) + ' mph');
         } else if (this.offRoadTime >= limit) {
             this.crashed = true;
             this.crashAngle = this.leanAngle || 0.5;
-            this.frame.material.color.setHex(0xff6600); // Orange, as for the low-speed fall
             console.log('CRASHED! Off the road for', limit.toFixed(1), 's');
         }
     }
@@ -3858,7 +3848,7 @@ class Vehicle {
         const here = ground.groundY(this.position.x, this.position.z, range, false, loc);
         const water = ground.waterLevel(loc);
         if (water !== null && here <= water) {
-            this.worldCrash('Rode into the water', 0x1e5a8a);
+            this.worldCrash('Rode into the water');
             return;
         }
         // The slope on the drawn ground: ahead (where the bike is going, so a drop edge counts before it is under the
@@ -3874,9 +3864,9 @@ class Vehicle {
         this.landSteepS = steep > world.landSteepSlope ? this.landSteepS + deltaTime : 0;
         this.landFastS = this.speed > world.landCrashSpeed ? this.landFastS + deltaTime : 0;
         if (this.landSteepS >= world.landSteepS) {
-            this.worldCrash(this.landAlong < -world.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold', 0x8b4513);
+            this.worldCrash(this.landAlong < -world.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold');
         } else if (this.landFastS >= world.landCrashS) {
-            this.worldCrash('Too fast on the grass', 0xff6600);
+            this.worldCrash('Too fast on the grass');
         }
     }
 
@@ -3951,7 +3941,6 @@ class Vehicle {
         // Not left in the jump state, as the forced landing does
         this.isJumping = false;
         this.crashAngle = this.leanAngle || 0.5;
-        this.frame.material.color.setHex(0xff0000); // Red for collision
 
         const impactDir = new THREE.Vector3(dx, 0, dz).normalize();
         this.velocity = impactDir.multiplyScalar(this.speed * 0.5);
