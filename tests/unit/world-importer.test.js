@@ -472,6 +472,21 @@ describe('landcover.mjs and buildings.mjs', () => {
         expect(at(-600, 0)).toBe(COVER.none);
     });
 
+    test('water is drawn only where the square 8 m round a cell corner is all lake, so its half tint keeps to the shore', () => {
+        const lake = [[36, 36], [204, 36], [204, 204], [36, 204], [36, 36]];
+        const grid = rasterizeCover([{ cls: COVER.water, rings: [lake] }], [[0, 0]]).get('0,0');
+        const water = [];
+        for (let j = 0; j < 32; j++) for (let i = 0; i < 32; i++) if (grid[j * 32 + i] === COVER.water) water.push([i * 16, j * 16]);
+        // Corners 48 to 192 hold a square of 8 m in the lake (36 to 204): 10 x 10 cells
+        expect(water.length).toBe(100);
+        for (const [x, z] of water) {
+            expect(Math.min(x - 36, 204 - x, z - 36, 204 - z)).toBeGreaterThanOrEqual(8);
+        }
+        // A pond too small to hold one square is drawn as the land round it
+        const pond = [[100, 100], [112, 100], [112, 112], [100, 112], [100, 100]];
+        expect([...rasterizeCover([{ cls: COVER.water, rings: [pond] }], [[0, 0]]).get('0,0')].includes(COVER.water)).toBe(false);
+    });
+
     test('the oriented box is the smallest rectangle round a footprint', () => {
         const ring = [[0, 0], [10, 0], [10, 4], [0, 4], [0, 0]];
         const box = orientedBox(ring);

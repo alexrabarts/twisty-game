@@ -1,5 +1,5 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22, the stacked-leg gate and floating roads).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|floating|overlap|horizon|landmarks|dem|all> --stages <ids|all>
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|water|floating|overlap|horizon|landmarks|dem|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
 // dem reads the DEM from the cache; fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
@@ -20,6 +20,7 @@ import { ROAD_CLEAR_M, roadBands } from './buildings.mjs';
 import { resolveCacheDir } from './cache.mjs';
 import { sampleGrid, bandHalf, minRideWidth, RIDE_WIDTH_M, END_JOIN_M, JUNCTION_M } from './widths.mjs';
 import { drawnTileLow, horizonDrawnAt } from './farland.mjs';
+import { COVER, COVER_CELL_M, COVER_N } from './landcover.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -303,6 +304,60 @@ export function checkBuildings(decoded, { clear = ROAD_CLEAR_M, slackM = 0.02 } 
   near.sort((p, q) => p.gapM - q.gapM);
   const problems = near.length ? [`${near.length} buildings stand within ${clear} m of a road band (worst ${near[0].gapM} m from edge ${near[0].edge})`] : [];
   return check('buildings', problems.length === 0, { buildings: decoded.buildings.length, clearM: clear, leastGapM: Math.round(least * 100) / 100, near: near.slice(0, 10), problems });
+}
+
+// Water: no building footprint stands on drawn water. The runtime draws water as the land's colour
+// (js/world/terrainmesh.js TerrainMesh.colours): a node is water where its zone is, or where it is coloured from a
+// water cover cell (every other node; the nodes between take their mean, unless their zone differs from a corner's),
+// and a triangle shows water where any of its three nodes does. Each footprint is read every metre, edges included.
+// The landmarks are placed at runtime and checked there (tests/unit/world-footing.test.js).
+export function drawnWetNode(tile, cover, i, j) {
+  const zones = tile.zones;
+  const painted = (a, b) => {
+    const zone = zones[b * TILE_N + a];
+    if (zone === ZONE.water) return true;
+    if (zone !== ZONE.terrain || !cover) return false;
+    const ci = Math.min(COVER_N - 1, Math.floor((a * CELL_M) / COVER_CELL_M)), cj = Math.min(COVER_N - 1, Math.floor((b * CELL_M) / COVER_CELL_M));
+    return cover[cj * COVER_N + ci] === COVER.water;
+  };
+  if (i % 2 === 0 && j % 2 === 0) return painted(i, j);
+  const zone = zones[j * TILE_N + i];
+  const i0 = i - (i % 2), j0 = j - (j % 2);
+  const i1 = Math.min(TILE_N - 1, i0 + (i % 2 ? 2 : 0)), j1 = Math.min(TILE_N - 1, j0 + (j % 2 ? 2 : 0));
+  const corners = [[i0, j0], [i1, j0], [i0, j1], [i1, j1]];
+  if (zone !== ZONE.terrain || corners.some(([a, b]) => zones[b * TILE_N + a] !== zone)) return painted(i, j);
+  return corners.some(([a, b]) => painted(a, b));
+}
+
+export function drawnWetAt(decoded, x, z) {
+  const tx = Math.floor(x / TILE_M), tz = Math.floor(z / TILE_M);
+  const key = `${tx},${tz}`;
+  const tile = decoded.tiles.get(key);
+  if (!tile) return false;
+  const fx = (x - tx * TILE_M) / CELL_M, fz = (z - tz * TILE_M) / CELL_M;
+  const i = Math.max(0, Math.min(TILE_N - 2, Math.floor(fx))), j = Math.max(0, Math.min(TILE_N - 2, Math.floor(fz)));
+  const u = fx - i, v = fz - j;
+  const nodes = u + v <= 1 ? [[i, j], [i + 1, j], [i, j + 1]] : [[i + 1, j + 1], [i, j + 1], [i + 1, j]];
+  const cover = decoded.cover.get(key) ?? null;
+  return nodes.some(([a, b]) => drawnWetNode(tile, cover, a, b));
+}
+
+export function checkWater(decoded, { worst = 10 } = {}) {
+  const wet = [];
+  for (const b of decoded.buildings) {
+    const fx = Math.sin(b.heading), fz = Math.cos(b.heading), lx = Math.cos(b.heading), lz = -Math.sin(b.heading);
+    const na = Math.max(1, Math.ceil(b.d)), nc = Math.max(1, Math.ceil(b.w));
+    let hits = 0, all = 0;
+    for (let a = 0; a <= na; a++) for (let c = 0; c <= nc; c++) {
+      const p = (a / na - 0.5) * b.d, q = (c / nc - 0.5) * b.w;
+      all++;
+      if (drawnWetAt(decoded, b.x + p * fx + q * lx, b.z + p * fz + q * lz)) hits++;
+    }
+    if (hits) wet.push({ x: Math.round(b.x), z: Math.round(b.z), w: b.w, d: b.d, wetShare: Math.round((hits / all) * 100) / 100 });
+  }
+  wet.sort((p, q) => q.wetShare - p.wetShare);
+  const problems = wet.length ? [`${wet.length} buildings stand on drawn water (worst ${wet[0].wetShare} of the footprint at ${wet[0].x}, ${wet[0].z})`] : [];
+  return check('water', problems.length === 0, { buildings: decoded.buildings.length, wet: wet.length, worst: wet.slice(0, worst), problems });
 }
 
 // Floating roads: the ground must meet every drawn road edge. For every ride and side-edge sample away from a
@@ -633,7 +688,7 @@ export async function main(argv) {
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'floating', 'overlap', 'horizon', 'landmarks', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'water', 'floating', 'overlap', 'horizon', 'landmarks', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
   let demAt = null;
@@ -651,7 +706,7 @@ export async function main(argv) {
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), landmarks: () => checkLandmarks(decoded), dem: () => checkDem(decoded, demAt),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), water: () => checkWater(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), landmarks: () => checkLandmarks(decoded), dem: () => checkDem(decoded, demAt),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {

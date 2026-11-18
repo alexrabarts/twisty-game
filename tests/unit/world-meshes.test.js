@@ -604,11 +604,23 @@ describe('Scenery', () => {
         const houses = Array.from({ length: 80 }, (_, i) => ({ x: 200 + (i % 10) * 20, z: 50 + Math.floor(i / 10) * 20, w: 8, d: 10, heading: 0.3, h: 6, kind: 1 }));
         houses.push({ x: 100, z: 100, w: 8, d: 10, heading: 0, h: 6, kind: 1 }, { x: 5000, z: 5000, w: 8, d: 10, heading: 0, h: 6, kind: 1 });
         const group = scenery.buildTile(tile, null, houses, { x: 200, z: 50 });
-        const meshes = group.children.filter(m => m.name.startsWith('houses:'));
+        const meshes = group.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing');
         const placed = meshes.reduce((n, mesh) => n + mesh.count, 0);
         expect(placed).toBeGreaterThan(0);
         expect(placed).toBeLessThanOrEqual(houses.length - 2);
         expect(scenery.houseInstances).toBeLessThanOrEqual(Scenery.BUILDING_CAP);
+        // Each house has its footing, from under the land (flat at 1000 here) up into the walls; the floor is on the land
+        const footing = group.children.find(m => m.name === 'houses:footing');
+        expect(footing.count).toBe(placed);
+        const foot = new THREE.Matrix4(), body = new THREE.Matrix4();
+        footing.getMatrixAt(0, foot);
+        meshes[0].getMatrixAt(0, body);
+        const base = new THREE.Vector3().setFromMatrixPosition(foot), size = new THREE.Vector3().setFromMatrixScale(foot);
+        const floor = new THREE.Vector3().setFromMatrixPosition(body).y;
+        // (the instance matrices are float32)
+        expect(base.y).toBeCloseTo(1000 - Scenery.FOOTING_UNDER_M, 3);
+        expect(floor).toBeCloseTo(1000 - Scenery.FLOOR_SINK_M, 3);
+        expect(base.y + size.y).toBeCloseTo(floor + Scenery.FOOTING_OVER_M, 3);
         // No house on the road (x = 100), none beyond reach
         const matrix = new THREE.Matrix4();
         for (const mesh of meshes) {
@@ -638,7 +650,7 @@ describe('Scenery', () => {
         const matrix = new THREE.Matrix4();
         const corner = new THREE.Vector3();
         let drawn = 0;
-        for (const mesh of group.children.filter(m => m.name.startsWith('houses:'))) {
+        for (const mesh of group.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing')) {
             mesh.geometry.computeBoundingBox();
             const box = mesh.geometry.boundingBox;
             for (let i = 0; i < mesh.count; i++) {
@@ -683,12 +695,18 @@ describe('Scenery', () => {
             { name: 'Placeholder', asset: 'box', size: [28, 10, 14], s: 150 },
             { name: 'Bridge', asset: 'assets/bridge/stone.glb', size: [60, 20, 10], s: 200 }
         ], route);
-        expect(group.children.map(c => c.name)).toEqual(['landmark:Hospiz']);
+        expect(group.children.map(c => c.name)).toEqual(['landmark:Hospiz', 'landmark:Hospiz:footing']);
         const node = group.children[0];
         expect(node.children).toHaveLength(1);
         expect(node.children[0].geometry).toBe(part.geometry);
-        // The road is along x = 0 here: the footprint clears its half diagonal, the road's half width and a margin
-        expect(Math.abs(node.position.x)).toBeGreaterThanOrEqual(Math.hypot(43, 13) / 2 + 5 - 1e-6);
+        // The road is along x = 0 here: the plan box, its 13 m depth square to the road, clears the road's half width,
+        // the verge and the landmark margin, and stands no further out than it must
+        const clear = 13 / 2 + 5 + RoadSurface.VERGE_M + Scenery.CLEAR_M.landmark;
+        expect(Math.abs(node.position.x)).toBeGreaterThanOrEqual(clear - 1e-6);
+        expect(Math.abs(node.position.x)).toBeLessThanOrEqual(clear + 2 + 1e-6);
+        // Its floor on the land (flat at 1000), its footing from under it
+        expect(node.position.y).toBeCloseTo(1000 - Scenery.FLOOR_SINK_M, 6);
+        expect(group.children[1].position.y).toBeCloseTo(1000 - Scenery.FOOTING_UNDER_M, 6);
         // The model's front (-z) looks at the road
         const front = new THREE.Vector3(0, 0, -1).applyEuler(node.rotation);
         expect(Math.sign(front.x)).toBe(-Math.sign(node.position.x));

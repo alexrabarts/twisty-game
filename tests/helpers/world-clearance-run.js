@@ -29,7 +29,7 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
     env.scenery.buildTile = (tile, ...rest) => {
         const group = build(tile, ...rest);
         if (group) for (const t of sceneryOf(THREE, group)) {
-            const key = `${t.type}:${t.x.toFixed(2)},${t.z.toFixed(2)}`;
+            const key = `${t.type}:${t.name}:${t.x.toFixed(2)},${t.z.toFixed(2)}`;
             if (seen.has(key)) continue;
             seen.add(key);
             things.push({ ...t, tile: tile.key });

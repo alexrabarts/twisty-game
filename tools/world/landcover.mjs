@@ -31,9 +31,20 @@ function inRing(ring, x, z) {
   return inside;
 }
 
+// Standing water is drawn where it is, not past it. The runtime (js/world/terrainmesh.js TerrainMesh.colours) colours
+// the node on a cell's north-west corner from the cell, the nodes 8 m either side take half of it, and a triangle
+// shades from its nodes, so a water cell's tint fades out 16 m from that corner; bench.mjs makes the nodes of a water
+// cell water nodes (a crash for the bike). A cell sampled at its middle and drawn from its corner put water 8 m off
+// to the north-west, and the fade carried it up to 16 m past the shore, over the land, a building or the road beside
+// it. A cell is water only when the square WATER_REACH_M round its corner lies wholly in a lake (sampled every
+// WATER_STEP_M): the half tint then falls on the mapped shore or inside it, a faint tint reaches at most 8 m past it,
+// and a pond under about 16 m across is drawn as the land round it. Scenery keeps buildings off any tint at runtime.
+export const WATER_REACH_M = 8;
+export const WATER_STEP_M = 4;
+
 // polys: [{ cls, rings: [[ [x, z], ... ], ...] }] (first ring outer, the rest holes). Returns Map key -> Uint8Array.
-// `tiles` is a list of [tx, tz]. Everything not covered is grass.
-export function rasterizeCover(polys, tiles) {
+// `tiles` is a list of [tx, tz]. Everything not covered is grass; water is painted by its own rule (WATER_REACH_M).
+export function rasterizeCover(polys, tiles, reach = WATER_REACH_M) {
   const boxes = polys.map(p => {
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const [x, z] of p.rings[0]) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
@@ -46,8 +57,17 @@ export function rasterizeCover(polys, tiles) {
     const bx0 = tx * TILE_M, bz0 = tz * TILE_M;
     const near = polys.map((p, k) => k).filter(k => boxes[k].x1 >= bx0 && boxes[k].x0 <= bx0 + TILE_M && boxes[k].z1 >= bz0 && boxes[k].z0 <= bz0 + TILE_M);
     near.sort((p, q) => rank(polys[p].cls) - rank(polys[q].cls) || p - q);
+    // The lakes near the tile, reach included (a square can reach past the tile's edge)
+    const lakes = polys.map((p, k) => k).filter(k => polys[k].cls === COVER.water && boxes[k].x1 >= bx0 - WATER_REACH_M && boxes[k].x0 <= bx0 + TILE_M + WATER_REACH_M && boxes[k].z1 >= bz0 - WATER_REACH_M && boxes[k].z0 <= bz0 + TILE_M + WATER_REACH_M);
+    const inLake = (x, z) => lakes.some(k => x >= boxes[k].x0 && x <= boxes[k].x1 && z >= boxes[k].z0 && z <= boxes[k].z1 && inRing(polys[k].rings[0], x, z) && !polys[k].rings.slice(1).some(r => inRing(r, x, z)));
+    let watered = false;
     for (const k of near) {
       const poly = polys[k];
+      if (poly.cls === COVER.water) {
+        if (!watered) paintWater(grid, bx0, bz0, inLake, lakes.map(l => boxes[l]), reach);
+        watered = true;
+        continue;
+      }
       for (let j = 0; j < COVER_N; j++) {
         for (let i = 0; i < COVER_N; i++) {
           const x = bx0 + (i + 0.5) * COVER_CELL_M, z = bz0 + (j + 0.5) * COVER_CELL_M;
@@ -59,6 +79,21 @@ export function rasterizeCover(polys, tiles) {
     out.set(`${tx},${tz}`, grid);
   }
   return out;
+}
+
+// Paints water on every cell of a tile whose square `reach` metres round its north-west corner lies wholly in a lake
+// (`inLake`); `boxes` bound the lakes, so a square that meets none is passed over.
+function paintWater(grid, bx0, bz0, inLake, boxes, reach) {
+  const r = reach, n = Math.max(1, Math.round((2 * r) / WATER_STEP_M));
+  for (let j = 0; j < COVER_N; j++) {
+    for (let i = 0; i < COVER_N; i++) {
+      const cx = bx0 + i * COVER_CELL_M, cz = bz0 + j * COVER_CELL_M;
+      if (!boxes.some(b => cx + r >= b.x0 && cx - r <= b.x1 && cz + r >= b.z0 && cz - r <= b.z1)) continue;
+      let wet = true;
+      for (let b = 0; b <= n && wet; b++) for (let a = 0; a <= n && wet; a++) wet = inLake(cx - r + a * WATER_STEP_M, cz - r + b * WATER_STEP_M);
+      if (wet) grid[j * COVER_N + i] = COVER.water;
+    }
+  }
 }
 
 export function coverLookup(grids) {
