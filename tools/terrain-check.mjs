@@ -4580,6 +4580,97 @@ function roadLookChecks(results, failures) {
     }
 }
 
+// world-vertex: a bike put down at a ride vertex's exact s (a restart, a resume or a put-down: stations sit at sample s
+// values) takes finite physics and draws a lit frame. Such a put-down took a NaN height on its first step (0 / 0 in
+// Vehicle.updateElevation): the NaN reached the fog density through the weather's fogElevation and bloom spread it
+// over the whole frame, pure black. At each s the bike is put down at rest (placeAt) and stepped VERTEX_STEPS ticks;
+// the fog density, the camera and the bike must be finite, the physics guard must not have fired (Vehicle
+// nonFiniteSteps), under VERTEX_BLACK_SHARE of the frame may be black, and its luminance must vary by VERTEX_SPREAD or
+// more (a NaN camera drew one flat colour, the sky's, as often as black). --at s,s,... picks the places; the default
+// is the reported vertex, the start, every station and a dozen vertices spread along the ride.
+//   node tools/terrain-check.mjs world-vertex --world tremola --gpu [--at s,s,...] [--out <dir> --tag T]
+const VERTEX_STEPS = 3;
+const VERTEX_BLACK_SHARE = 0.5;
+const VERTEX_SPREAD = 5;
+const VERTEX_REPORTED_S = 6569.245793820582;
+WORLD_PROBES.push('world-vertex');
+WORLD['world-vertex'] = async (page) => {
+    const views = await page.evaluate(async (placeSource, list, steps, reported) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, route = env.route, v = game.vehicle, S = route.sArray;
+        let at = list;
+        if (!at.length) {
+            at = [reported, env.startS, ...(env.stationGates || []).map(g => g.s)];
+            for (let k = 1; k <= 12; k++) at.push(S[Math.round(k * (S.length - 1) / 13)]);
+        }
+        const finite = (...n) => n.every(Number.isFinite);
+        const out = [];
+        game.cameraMode = 2;
+        for (const s of at) {
+            await placeAt(s);
+            game.worldCamera.reset(v.yawAngle);
+            const held = v.nonFiniteSteps || 0;
+            twistyDev.step(steps - 1);
+            env.streamer.pump(Infinity);
+            twistyDev.step(1, { render: true });
+            // The frame as drawn, read in the same task as the render
+            const canvas = game.graphics.renderer.domElement;
+            const copy = document.createElement('canvas');
+            copy.width = canvas.width; copy.height = canvas.height;
+            const ctx = copy.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(canvas, 0, 0);
+            const image = ctx.getImageData(0, 0, copy.width, copy.height).data;
+            let black = 0, sum = 0, square = 0;
+            for (let i = 0; i < image.length; i += 4) {
+                const lum = 0.2126 * image[i] + 0.7152 * image[i + 1] + 0.0722 * image[i + 2];
+                sum += lum;
+                square += lum * lum;
+                if (lum < 2) black++;
+            }
+            const px = image.length / 4;
+            const mean = sum / px;
+            const c = game.camera.position, b = v.position, fog = game.scene.fog;
+            out.push({
+                s, vertex: S[route.indexAt(s)] === s,
+                fogDensity: fog ? fog.density : null,
+                fogFinite: !fog || fog.density === undefined || Number.isFinite(fog.density),
+                cameraFinite: finite(c.x, c.y, c.z) && game.camera.matrixWorld.elements.every(Number.isFinite),
+                bikeFinite: finite(b.x, b.y, b.z, v.speed, v.leanAngle, v.yawAngle),
+                held: (v.nonFiniteSteps || 0) - held,
+                blackShare: Math.round(black / px * 1000) / 1000,
+                meanLum: Math.round(mean * 10) / 10,
+                spread: Math.round(Math.sqrt(Math.max(0, square / px - mean * mean)) * 10) / 10,
+                png: copy.toDataURL('image/png')
+            });
+        }
+        return out;
+    }, placeAt.toString(), option('at') ? option('at').split(',').map(Number) : [], VERTEX_STEPS, VERTEX_REPORTED_S);
+    const dir = option('out');
+    if (dir) mkdirSync(dir, { recursive: true });
+    const tag = option('tag') || 'vertex';
+    return {
+        views: views.map(({ png, ...view }) => {
+            if (dir) writeFileSync(join(dir, `${tag}-s${view.s}.png`), Buffer.from(png.split(',')[1], 'base64'));
+            return view;
+        })
+    };
+};
+
+function vertexChecks(results, failures) {
+    const vertex = results['world-vertex'];
+    if (!vertex) return;
+    if (!vertex.views.some(view => view.s === VERTEX_REPORTED_S && view.vertex) && !option('at')) failures.push(`world-vertex: the reported vertex s ${VERTEX_REPORTED_S} was not read at a vertex`);
+    for (const view of vertex.views) {
+        const where = `world-vertex: at s ${view.s}${view.vertex ? ' (a vertex)' : ''}`;
+        if (!view.fogFinite) failures.push(`${where} the fog density is ${view.fogDensity}`);
+        if (!view.cameraFinite) failures.push(`${where} the camera is not finite`);
+        if (!view.bikeFinite) failures.push(`${where} the bike's state is not finite`);
+        if (view.held) failures.push(`${where} the physics guard held ${view.held} non-finite steps`);
+        if (!(view.blackShare < VERTEX_BLACK_SHARE)) failures.push(`${where} ${view.blackShare} of the frame is black (mean luminance ${view.meanLum})`);
+        if (!(view.spread >= VERTEX_SPREAD)) failures.push(`${where} the frame is one flat colour (luminance ${view.meanLum}, spread ${view.spread})`);
+    }
+}
+
 // The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
 const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
 
@@ -4682,6 +4773,7 @@ function worldChecks(report) {
     fairnessChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);
+    vertexChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

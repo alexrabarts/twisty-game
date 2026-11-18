@@ -219,6 +219,16 @@ class AtmosphereTrack {
     // t is exactly 0 and a === b. u is the progress through the nearer part;
     // ua and ub are the progress through each of the two. `out` is reused when given.
     sample(segment, out = {}) {
+        // The atmosphere's one way in: a non-finite segment (a NaN progress) reads the last finite one, logged once,
+        // so a fault upstream never reaches the fog, the sky or the lights
+        if (!Number.isFinite(segment)) {
+            if (!this.nonFiniteLogged) {
+                this.nonFiniteLogged = true;
+                console.error('AtmosphereTrack.sample: non-finite segment', segment, 'held at', this.lastSegment ?? 0);
+            }
+            segment = this.lastSegment ?? 0;
+        }
+        this.lastSegment = segment;
         const { parts, boundaries, half } = this;
         let index = 0;
         let t = 0;

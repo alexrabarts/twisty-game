@@ -2026,7 +2026,47 @@ class Vehicle {
         });
     }
 
+    // The physics state a step may write, checked finite after each step: the position, the velocity and these
+    static get PHYSICS_STATE() { return ['speed', 'leanAngle', 'leanVelocity', 'yawAngle', 'handlebarAngle', 'steeringAngle', 'wheelieAngle']; }
+
+    // One physics step, and the guard on what it leaves: no non-finite number reaches the physics state (and from
+    // there the camera, the fog and the frame). A step that leaves one is undone: the last finite state is held and
+    // the first such step is logged with the inputs that produced it. A held step is a bug upstream, not a recovery
+    // (nonFiniteSteps counts them, and the tests require it to stay 0).
     update(deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput = 0) {
+        const held = this.heldState || (this.heldState = { position: new THREE.Vector3(), velocity: new THREE.Vector3() });
+        const fields = Vehicle.PHYSICS_STATE;
+        held.position.copy(this.position);
+        held.velocity.copy(this.velocity);
+        for (const k of fields) held[k] = this[k];
+        this.integrate(deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput);
+        // A field that was not a finite number before the step (unset on this bike) is not this step's to judge
+        const lost = k => Number.isFinite(held[k]) && !Number.isFinite(this[k]);
+        const lostVector = k => Vehicle.finiteVector(held[k]) && !Vehicle.finiteVector(this[k]);
+        let ok = !lostVector('position') && !lostVector('velocity');
+        for (let i = 0; ok && i < fields.length; i++) ok = !lost(fields[i]);
+        if (ok) return;
+        const bad = fields.filter(lost).concat(['position', 'velocity'].filter(lostVector));
+        this.nonFiniteSteps = (this.nonFiniteSteps || 0) + 1;
+        if (!this.nonFiniteLogged) {
+            this.nonFiniteLogged = true;
+            const p = this.projection || {};
+            console.error('Vehicle.update: a non-finite', bad.join(', '), 'held at the last finite state', JSON.stringify({
+                deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput,
+                before: { x: held.position.x, y: held.position.y, z: held.position.z, speed: held.speed, lean: held.leanAngle, yaw: held.yawAngle },
+                after: { x: this.position.x, y: this.position.y, z: this.position.z, speed: this.speed, lean: this.leanAngle, yaw: this.yawAngle },
+                projection: { index: p.index, along: p.along, s: p.s, lateral: p.lateral, distance: p.distance, y: p.y }
+            }));
+        }
+        this.position.copy(held.position);
+        this.velocity.copy(held.velocity);
+        for (const k of fields) if (Number.isFinite(held[k])) this[k] = held[k];
+        this.updateMesh();
+    }
+
+    static finiteVector(v) { return !!v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.z); }
+
+    integrate(deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput = 0) {
         // Store inputs for use in updateMesh
         this.currentBrakeInput = brakeInput;
         this.currentDeltaTime = deltaTime;
@@ -3647,15 +3687,17 @@ class Vehicle {
                         Math.pow(this.position.z - nextSegment.z, 2)
                     );
                     
+                    // A bike on a ride vertex is at distance 0 from both the projection and that vertex: the weight
+                    // is then 0 / 0, so a zero total keeps closestY, which is the road's height there
                     if (distToPrev < distToNext && prevSegment.y !== undefined) {
                         // Closer to previous segment - interpolate between prev and current
                         const totalDist = distToPrev + closestDistance;
-                        const weight = closestDistance / totalDist;
+                        const weight = totalDist > 0 ? closestDistance / totalDist : 0;
                         targetY = prevSegment.y * weight + closestY * (1 - weight);
                     } else if (nextSegment.y !== undefined) {
                         // Closer to next segment - interpolate between current and next
                         const totalDist = closestDistance + distToNext;
-                        const weight = distToNext / totalDist;
+                        const weight = totalDist > 0 ? distToNext / totalDist : 1;
                         targetY = closestY * weight + nextSegment.y * (1 - weight);
                     }
                 }

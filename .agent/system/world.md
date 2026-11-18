@@ -253,6 +253,17 @@ Every road within 400 m of the bike (`WorldStreamer.ROAD_LOD_M[0]`) is drawn at 
 - The ride's data ends at the stage's ends, but the graph keeps the road beyond. Where the road goes on through the ride's end node (no junction there), that side edge starts on the ride's end row, is as wide as the ride there and narrows to its own width over `RIDE_TAPER_M` (30 m), and its metres along go on from the ride's (`WorldEnvironment.fromRideEnd`). So the finish line is not the end of the world.
 - `tests/unit/world-road-look.test.js` checks every road ribbon triangle within the radius of the start, the finish and each station. `node tools/terrain-check.mjs world-road-look --world tremola --gpu` counts flat road pixels within the radius in the views at the finish, the start and on a side road.
 
+## No NaN reaches physics or the frame
+
+A bike put down at a ride vertex's exact `s` (a restart, a resume, a probe's put-down: stations sit at sample `s` values) took a NaN height on its first step. The projection lands on the vertex at distance 0, and `Vehicle.updateElevation` blended toward the next vertex, also at distance 0, by 0 / 0. The NaN reached the fog density through `WeatherSystem.fogElevation`, and bloom spread it over the whole frame: 21 of 31 photo-match views drew pure black. A zero total now keeps the projection's height.
+
+Each boundary has one guard, and each guard logs once, loudly. A held value is a bug upstream, not a recovery.
+- `Vehicle.update` runs the step (`integrate`) and checks the position, the velocity and `Vehicle.PHYSICS_STATE`. A step that leaves a non-finite number is undone to the last finite state, and `nonFiniteSteps` counts it.
+- `WeatherSystem.writeFogDensity`, the only writer of the fog density, keeps the last finite density.
+- `AtmosphereTrack.sample` reads the last finite segment for a non-finite one.
+
+`tests/unit/world-finite.test.js` reads every route and ground query at every sample's exact `s`, at `s` +- 1e-9, at both ends and on the ribbon's edges. It puts the bike down at every station and at every sample of every hairpin, and the guard must not fire. The GPU probe `world-vertex` puts the bike down at exact vertices: the fog, the camera and the bike must stay finite, and the frame must be neither black nor one flat colour.
+
 ## Determinism
 
 Scenery uses `Environment.rand()` (seeded per leg). The menu preview and the ride must build the same world. Do not use `Math.random()` in `environment.js`.

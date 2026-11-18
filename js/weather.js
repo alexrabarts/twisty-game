@@ -141,7 +141,18 @@ class WeatherSystem {
         const weather = 0.0015 * intensity * rain
             + 0.002 * intensity * snow
             + 0.003 * intensity * (1 - this.fogElevation * 0.5) * mist;
-        fog.density = this.originalFogDensity * (1 - strength) + weather;
+        const density = this.originalFogDensity * (1 - strength) + weather;
+        // The fog's one writer is its guard: a non-finite density (a NaN bike height through fogElevation) keeps the
+        // last finite one, logged once with its inputs, since bloom spreads one NaN pixel over the whole frame
+        if (!Number.isFinite(density)) {
+            if (!this.nonFiniteFogLogged) {
+                this.nonFiniteFogLogged = true;
+                console.error('WeatherSystem.writeFogDensity: non-finite fog density', density, JSON.stringify({ fogElevation: this.fogElevation, mix: this.mix, intensity, originalFogDensity: this.originalFogDensity }));
+            }
+            if (!Number.isFinite(fog.density)) fog.density = Number.isFinite(this.originalFogDensity) ? this.originalFogDensity : 0;
+            return;
+        }
+        fog.density = density;
     }
 
     setupRain() {
