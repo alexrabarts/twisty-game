@@ -201,14 +201,22 @@ class WorldGround extends Ground {
 
     // The fill RoadMesh draws beside the road (edgeWorks' apron): the verge at the road's height, then a slope at the
     // importer's batter down from the verge's edge. The 8 m tile triangles lie under it near the edge on a fill.
-    // It runs out only as far as it takes to fall from the edge to the land at the edge (as the apron is drawn).
+    // It runs out only as far as it takes to fall from the edge to the land at the edge (as the apron is drawn); where
+    // that is further than WorldEnvironment.APRON_RUN_M, the apron's foot stands on the land there and its slope is
+    // steeper than the batter (WorldEnvironment.edgeFoot)
     earthworkY(loc, half, reach) {
         const edge = half + RoadSurface.VERGE_M;
         if (reach <= edge) return loc.roadY;
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
-        const at = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * edge, this.scratchEdge || (this.scratchEdge = {}));
-        const run = Math.min(WorldEnvironment.APRON_RUN_M, Math.max(0, loc.roadY - this.landY(at.x, at.z, loc.roadY)) / RoadMesh.BATTER);
-        return reach - edge <= run ? loc.roadY - (reach - edge) * RoadMesh.BATTER : -Infinity;
+        const side = Math.sign(loc.lateral || 1);
+        const at = WorldGround.pointAt(point, side * edge, this.scratchEdge || (this.scratchEdge = {}));
+        const most = WorldEnvironment.APRON_RUN_M;
+        const run = Math.max(0, loc.roadY - this.landY(at.x, at.z, loc.roadY)) / RoadMesh.BATTER;
+        if (run <= most) return reach - edge <= run ? loc.roadY - (reach - edge) * RoadMesh.BATTER : -Infinity;
+        if (reach - edge > most) return -Infinity;
+        const foot = WorldGround.pointAt(point, side * (edge + most), this.scratchFoot || (this.scratchFoot = {}));
+        const slope = Math.max(RoadMesh.BATTER, (loc.roadY - this.landY(foot.x, foot.z, loc.roadY)) / most);
+        return loc.roadY - (reach - edge) * slope;
     }
 
     // No fill on a bridge (its parapet), and none where the importer marks a retaining wall or a drop just past the

@@ -593,9 +593,8 @@ class WorldEnvironment {
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
             // The apron runs out at the batter until it meets the land drawn near (8 m triangles), never on over a
-            // valley beyond (where the land falls away steeper than the batter it would hang in the air), and never
-            // into another road's band (the other leg of a hairpin, a side road): it stops at the band's edge, and
-            // where that road lies lower the edge is a wall down to it
+            // valley beyond, and never into another road's band (the other leg of a hairpin, a side road): it stops at
+            // the band's edge, and where that road lies lower the edge is a wall down to it
             let run = 0;
             for (let o = 0.5; o <= WorldEnvironment.APRON_RUN_M; o += 0.5) {
                 const px = x + ox * o, pz = z + oz * o;
@@ -608,8 +607,17 @@ class WorldEnvironment {
                 if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
             }
             if (lowerRoad(x + ox * run, z + oz * run, y) !== null) return { kind: 'wall', y: low };
+            // Its foot stands on the land: where the land falls away steeper than the batter (or the apron stopped at
+            // a band's edge) the foot drops to the land there, so the apron is steeper than the batter but never ends
+            // in the air (RoadMesh.apronRun reads its run). With no run at all (a band at once: the far ribbon's edge
+            // is its carriageway's) there is no apron to drop, and the edge is left as it was
+            let footY = y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2;
+            const footLand = landNear(x + ox * run, z + oz * run);
+            if (run > 0 && footLand !== null && footY > footLand + WorldEnvironment.MEET_M) footY = footLand - 0.2;
+            // Without the tile under the foot yet, the apron is built again when it comes
+            if (footLand === null && missing) missing.add(`${Math.floor((x + ox * run) / m)},${Math.floor((z + oz * run) / m)}`);
             // Coloured as the land at its top and at its foot (RoadMesh.edgeWorks blends them), not one sample
-            return { kind: 'apron', y: y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
+            return { kind: 'apron', y: footY, run, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
         };
     }
 

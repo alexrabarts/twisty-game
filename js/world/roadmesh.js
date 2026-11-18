@@ -310,10 +310,16 @@ class RoadMesh {
             const at = o => { const p = RoadMesh.place(row, o); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
             return { bits: row.bits, l: at(offsets[0]), r: at(offsets[1]) };
         });
+        // A side road's structures and edge works stand at the verge's outer edge at every level of detail
+        // (WorldEnvironment.buildSide), so its far ribbon reaches the verge's edge too, in the road's flat colour (two
+        // triangles a row, as before): drawn to the carriageway's edge, a retaining wall stood 1.1 m off it with the
+        // drop showing through the gap
+        const vergeOf = row => (side && !(row.bits & 7) ? RoadSurface.VERGE_M : 0);
         for (let k = 0; k + 1 < laid.length; k++) {
             const a = laid[k], b = laid[k + 1];
-            const pa0 = RoadMesh.place(a.row, a.offsets[0]), pa1 = RoadMesh.place(a.row, a.offsets[1]);
-            const pb0 = RoadMesh.place(b.row, b.offsets[0]), pb1 = RoadMesh.place(b.row, b.offsets[1]);
+            const va = vergeOf(a.row), vb = vergeOf(b.row);
+            const pa0 = RoadMesh.place(a.row, a.offsets[0] - va), pa1 = RoadMesh.place(a.row, a.offsets[1] + va);
+            const pb0 = RoadMesh.place(b.row, b.offsets[0] - vb), pb1 = RoadMesh.place(b.row, b.offsets[1] + vb);
             const ya = a.row.y + RoadMesh.LIFT_M, yb = b.row.y + RoadMesh.LIFT_M;
             push(pa0.x, ya, pa0.z, a.c, a.row); push(pa1.x, ya, pa1.z, a.c, a.row); push(pb0.x, yb, pb0.z, b.c, b.row);
             push(pa1.x, ya, pa1.z, a.c, a.row); push(pb1.x, yb, pb1.z, b.c, b.row); push(pb0.x, yb, pb0.z, b.c, b.row);
@@ -441,6 +447,12 @@ class RoadMesh {
     // the stronger kind of its two ends (deck, wall, apron). Rows with a structure bit take none.
     // Returns {apron, wall, stone}: position and colour lists; `stone` holds the retaining walls and their parapets
     // (RoadMesh.stoneMaterial), `wall` the decks, soffits and their parapets.
+    // How far out an apron's foot stands from the edge point p: where the land falls away steeper than the batter the
+    // foot (WorldEnvironment.edgeFoot) gives its own run and stands on the land there, else the batter sets it
+    static apronRun(f, p) {
+        return Number.isFinite(f.run) ? f.run : Math.max(0, p[1] - RoadMesh.APRON_UNDER_M - f.y) / RoadMesh.BATTER;
+    }
+
     static edgeWorks(sides, foot = null) {
         const apron = { positions: [], shades: [] }, wall = { positions: [], shades: [] }, stone = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
@@ -455,7 +467,7 @@ class RoadMesh {
                 const f = foot ? foot(p[0], p[1], p[2], out[key][0], out[key][1]) : null;
                 if (!f) return null;
                 const y = Number.isFinite(f.y) ? Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.y)) : p[1] - RoadMesh.DECK_M;
-                return { kind: f.kind, y, out: out[key], color: f.color || null };
+                return { kind: f.kind, y, out: out[key], color: f.color || null, run: Number.isFinite(f.run) ? f.run : null };
             };
             return { l: read('l'), r: read('r') };
         });
@@ -498,14 +510,22 @@ class RoadMesh {
                     if (ca && cb) RoadMesh.quad(apron, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
                     // Then from the verge's edge out and down at the batter to the land's height, in strips no longer
                     // than APRON_STRIP_M along the edge, so no apron triangle grows into a large flat face
-                    const foot = (f, p) => { const y = low(f, p), run = Math.max(0, p[1] - RoadMesh.APRON_UNDER_M - y) / RoadMesh.BATTER; return [p[0] + o[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + o[1] * run]; };
+                    const foot = (f, p) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + o[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + o[1] * run]; };
                     const ta = under(pa), tb = under(pb), fA = foot(fa, pa), fB = foot(fb, pb);
                     const strips = Math.max(1, Math.ceil(Math.hypot(tb[0] - ta[0], tb[2] - ta[2]) / RoadMesh.APRON_STRIP_M));
                     const lerp = (u, v, t) => u.map((c, i) => c + (v[i] - c) * t);
+                    // and down the slope in rows no longer than APRON_STRIP_M * 4 (a foot on land far under the edge
+                    // makes a long face, RoadMesh.apronRun)
+                    const fall = Math.max(Math.hypot(fA[0] - ta[0], fA[1] - ta[1], fA[2] - ta[2]), Math.hypot(fB[0] - tb[0], fB[1] - tb[1], fB[2] - tb[2]));
+                    const rows = Math.max(1, Math.ceil(fall / (RoadMesh.APRON_STRIP_M * 4)));
                     for (let n = 0; n < strips; n++) {
                         const t0 = n / strips, t1 = (n + 1) / strips;
-                        RoadMesh.quad(apron, lerp(ta, tb, t0), lerp(ta, tb, t1), lerp(fA, fB, t1), lerp(fA, fB, t0),
-                            [lerp(topColor(fa), topColor(fb), t0), lerp(topColor(fa), topColor(fb), t1), lerp(footColor(fa), footColor(fb), t1), lerp(footColor(fa), footColor(fb), t0)]);
+                        const top0 = lerp(ta, tb, t0), top1 = lerp(ta, tb, t1), foot0 = lerp(fA, fB, t0), foot1 = lerp(fA, fB, t1);
+                        const c0 = lerp(topColor(fa), topColor(fb), t0), c1 = lerp(topColor(fa), topColor(fb), t1), d0 = lerp(footColor(fa), footColor(fb), t0), d1 = lerp(footColor(fa), footColor(fb), t1);
+                        for (let r = 0; r < rows; r++) {
+                            const u0 = r / rows, u1 = (r + 1) / rows;
+                            RoadMesh.quad(apron, lerp(top0, foot0, u0), lerp(top1, foot1, u0), lerp(top1, foot1, u1), lerp(top0, foot0, u1), [lerp(c0, d0, u0), lerp(c1, d1, u0), lerp(c1, d1, u1), lerp(c0, d0, u1)]);
+                        }
                     }
                     continue;
                 }
