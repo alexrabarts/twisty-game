@@ -195,6 +195,16 @@ class AtmosphereTrack {
         return Math.min(partA.endSegment, first);
     }
 
+    // The part boundaries strictly inside units (u0, u1) where the look changes its weather or its time of day:
+    // [{ at, from, to }], each look named `time/weather`. A world stage holds at least one (WorldLooks)
+    changesWithin(u0, u1) {
+        const name = look => `${look.timeOfDay}/${look.weather}`;
+        return this.boundaries
+            .map((at, i) => ({ at, a: this.parts[i].look, b: this.parts[i + 1].look }))
+            .filter(({ at, a, b }) => at > u0 && at < u1 && (a.weather !== b.weather || a.timeOfDay !== b.timeOfDay))
+            .map(({ at, a, b }) => ({ at, from: name(a), to: name(b) }));
+    }
+
     // Every non-clear weather in the track, in first-seen order: what the weather system prepares
     weatherTypes() {
         const seen = [];

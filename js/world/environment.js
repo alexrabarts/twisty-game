@@ -13,8 +13,9 @@
 //   terrain, terrainGeometry, sections, setPieces,
 //   roadworksZones, roadworkObstacles, jumpRamps,
 //   boulders                                             null / empty: no cones, rockfalls or roadworks are built
-//   applyLandscapeConfig, applyWeatherVisuals,
-//   resolveRoadSurface, writeRoadSurface                 fog density only / no-ops
+//   applyLandscapeConfig                                 fog density only
+//   applyWeatherVisuals, resolveRoadSurface,
+//   writeRoadSurface                                     the road's wetness (RoadSurface.setWet)
 //
 // A world is loaded with WorldEnvironment.load(), which waits for the ride layer
 // (data.js) before the first frame: the route contract is synchronous.
@@ -724,11 +725,19 @@ class WorldEnvironment {
         if (look && look.fogDensity !== undefined && this.scene.fog && this.scene.fog.density !== undefined) this.scene.fog.density = look.fogDensity;
     }
 
-    applyWeatherVisuals() {}
+    // The one-time look of a weather: the road surface (the land keeps its colours; the light and the fog carry the rest)
+    applyWeatherVisuals(weatherType, intensity = 1.0) {
+        this.writeRoadSurface(this.resolveRoadSurface(weatherType, intensity));
+    }
 
-    resolveRoadSurface() { return {}; }
+    // A world road's surface is how wet it is: rain wets it by its intensity
+    resolveRoadSurface(weatherType, intensity = 1.0) {
+        return { wet: weatherType === 'rain' ? intensity : 0 };
+    }
 
-    writeRoadSurface() {}
+    writeRoadSurface(values) {
+        RoadSurface.setWet(values.wet);
+    }
 
     dispose() {
         this.guide.dispose();

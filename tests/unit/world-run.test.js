@@ -448,26 +448,26 @@ describe('the stage looks and the atmosphere along a ride', () => {
         expect(AtmosphereTrack.WORLD_UNIT_M).toBe(100);
     });
 
-    test('a world rides in clear air by default, the far land is real terrain, and cloud is a look to ask for', () => {
-        const clear = AtmosphereTrack.forWorld(stages, route, WorldLooks);
-        expect(clear.sample(90, {}).a.weather).toBe('clear');
-        expect(clear.sample(90, {}).a.fogDensity).toBeLessThanOrEqual(0.0008 / 10);
-        expect(clear.sample(5, {}).a.ring).toBe(0);
+    test('the Tremola starts in clear air and rains at the top, the far land is real terrain, and other looks are asked for', () => {
+        const track = AtmosphereTrack.forWorld(stages, route, WorldLooks);
+        expect(track.sample(5, {}).a.weather).toBe('clear');
+        expect(track.sample(5, {}).a.fogDensity).toBeLessThanOrEqual(0.0008 / 10);
+        expect(track.sample(5, {}).a.ring).toBe(0);
+        expect(track.sample(90, {}).a.weather).toBe('rain');
+        // A stage with no entry takes the default, in clear air
+        expect(track.sample(150, {}).a.weather).toBe('clear');
         const cloud = AtmosphereTrack.forWorld(stages, route, WorldLooks.pick('?world=tremola&worldLook=cloud'));
         expect(cloud.sample(5, {}).a.weather).toBe('clear');
         expect(cloud.sample(90, {}).a.weather).toBe('fog');
+        const dry = AtmosphereTrack.forWorld(stages, route, WorldLooks.pick('?worldLook=dry'));
+        expect(dry.sample(90, {}).a.weather).toBe('clear');
         expect(WorldLooks.pick('?worldLook=nothing')).toBe(WorldLooks);
     });
 
     test('baseY of a part is the lowest road under it', () => {
         const track = AtmosphereTrack.forWorld(stages, route, WorldLooks);
-        expect(track.sample(2, {}).a.baseY).toBeCloseTo(route.heightRange(0, 7000).min, 6);
-    });
-
-    test('no part with a hairpin has rain or snow', () => {
-        [WorldLooks, ...Object.values(WorldLooks.variants)].flatMap(table => Object.values(table).flat()).forEach((part) => {
-            expect(['rain', 'snow', 'storm']).not.toContain(part.look.weather);
-        });
+        expect(track.sample(2, {}).a.baseY).toBeCloseTo(route.heightRange(0, 2500).min, 6);
+        expect(track.sample(90, {}).a.baseY).toBeCloseTo(route.heightRange(5300, 10000).min, 6);
     });
 
     test('the day preset is a new key in the sky presets and the time table, so no leg look changes', () => {

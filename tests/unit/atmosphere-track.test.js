@@ -513,7 +513,10 @@ describe('Graphics sky and rebake', () => {
 
 describe('Game atmosphere', () => {
     const NAMES = ['setTimeOfDay', 'resolveTime', 'blendTime', 'writeTime', 'snapAtmosphere', 'applyAtmosphere', 'writeAtmosphere',
-        'blendRoadSurface', 'roadPosition', 'applySectionLook', 'applyShadowBox', 'updateCullDistance'];
+        'blendRoadSurface', 'roadPosition', 'applySectionLook', 'applyShadowBox', 'updateCullDistance', 'atmosphereUnit'];
+    // The Game statics the methods read, from the real source
+    const statics = name => Number(loadScript('main.js').match(new RegExp(`^Game\\.${name} = ([0-9.]+);$`, 'm'))[1]);
+    const GameStatics = { WORLD_OVERCAST_HEADLIGHT: statics('WORLD_OVERCAST_HEADLIGHT'), WORLD_OVERCAST_SUN: statics('WORLD_OVERCAST_SUN') };
 
     const rig = (track, weatherTypes = track.weatherTypes()) => {
         const scene = new THREE.Scene();
@@ -557,7 +560,7 @@ describe('Game atmosphere', () => {
             atmosphereTrack: track,
             atmosphereHold: false
         };
-        Object.assign(self, gameMethods(NAMES, self, { THREE, AtmosphereTrack }));
+        Object.assign(self, gameMethods(NAMES, self, { THREE, AtmosphereTrack, Game: GameStatics }));
         return self;
     };
 
@@ -747,6 +750,50 @@ describe('Game atmosphere', () => {
         }
         expect(requests).toBeGreaterThan(2);
         expect(requests).toBeLessThanOrEqual(8);
+    });
+
+    test('a world restart or resume at a station snaps the weather, the road and the headlight to that station', () => {
+        const { WorldLooks, WorldEnvironment, RoadSurface } = game;
+        const stages = [{ id: 'tremola', from: 0, to: 13187.4 }];
+        const track = AtmosphereTrack.forWorld(stages, { heightRange: () => ({ min: 0, max: 0 }) }, WorldLooks);
+        const self = rig(track);
+        const world = Object.assign(Object.create(WorldEnvironment.prototype), { isWorld: true, scene: self.scene });
+        self.environment = world;
+        self.weatherSystem.grip = WorldLooks.grip;
+        const target = { environment: world, weatherSystem: self.weatherSystem };
+        // Where restartAtStation and the start snap: atmosphereUnit(s), 100 m units
+        const snapAt = s => self.snapAtmosphere(track, self.atmosphereUnit(s), target);
+        expect(self.atmosphereUnit(12000)).toBe(120);
+
+        snapAt(12000);
+        expect(self.weatherSystem.mix.rain).toBe(1);
+        expect(self.graphics.weatherType).toBe('rain');
+        expect(RoadSurface.wetness).toBe(1);
+        expect(self.headlightStrength).toBe(GameStatics.WORLD_OVERCAST_HEADLIGHT);
+        expect(self.headlight.visible).toBe(true);
+        expect(self.directionalLight.intensity).toBeCloseTo(timeConfigs.day.sunIntensity * GameStatics.WORLD_OVERCAST_SUN, 12);
+
+        // Back down the road to the station at 2 km: clear air, a dry road, no headlight
+        snapAt(2000);
+        expect(self.weatherSystem.mix).toEqual({ rain: 0, snow: 0, fog: 0 });
+        expect(self.graphics.weatherType).toBe('clear');
+        expect(RoadSurface.wetness).toBe(0);
+        expect(self.headlightStrength).toBe(0);
+        expect(self.headlight.visible).toBe(false);
+        expect(self.scene.fog.density).toBe(WorldLooks.clearFog);
+
+        // A station inside the blend into the rain takes the blend at that point, not the part's look
+        snapAt(7000);
+        const sample = track.sample(70, {});
+        expect(sample.t).toBeGreaterThan(0);
+        expect(sample.t).toBeLessThan(1);
+        expect(self.weatherSystem.mix.rain).toBeCloseTo(sample.t, 12);
+        expect(RoadSurface.wetness).toBeCloseTo(sample.t, 12);
+
+        snapAt(10000);
+        expect(self.weatherSystem.mix.rain).toBe(1);
+        expect(RoadSurface.wetness).toBe(1);
+        RoadSurface.setWet(0);
     });
 
     test('the cull distance follows the fog across a zone and the shadow box follows the part', () => {

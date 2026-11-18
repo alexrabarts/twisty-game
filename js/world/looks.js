@@ -1,38 +1,72 @@
 // The look of each stage along its road (R5): what AtmosphereTrack.forWorld reads. A part spans `from` to `to`,
 // shares of the stage's length, with the look the sky, light, fog and weather take there.
 //
-// Stage ids are the importer's. A stage with no entry takes `default`. Looks keep to what the hairpins
-// need: no rain or snow on a part with a hairpin, because the lowside rule (WorldPhysics lowsideMargin)
-// puts a rider who holds full lock on wet cobbles on the road at grip 0.75, so every hairpin part keeps
-// weather x surface grip at 0.80 or more. Fog leaves the grip alone.
+// Stage ids are the importer's. A stage with no entry takes `default`. Every stage of the manifest has at least one
+// change of weather or of time of day along it (tests/unit/world-looks.test.js reads the manifest, so a stage added
+// there with no entry here fails until it is given one).
+//
+// Grip in the weather: the lowside rule (WorldPhysics lowsideMargin) puts a rider who holds full lock in a hairpin
+// on the road below a grip of 0.80, so on every part with a hairpin the weather lateral grip x the surface grip
+// (cobbles 0.85) stays at `hairpinGrip` or more. A world's rain takes the grip of `grip.rain`: its lateral grip is
+// held at that bound on wet cobbles, and its braking and acceleration are the legs' (braking 0.8: longer stops).
+// Fog leaves the grip alone.
 //
 // Clear alpine air: the photo match (round 1) found the land 3 km away had lost almost all its colour under the old
 // fog of 0.0008, where the real air is clear to 40 km and more. The clear fog is a twentieth of that, and the
 // distance tint is the aerial perspective of LandShade. `ring: 0`: the far land is real terrain (FarLand), so the
-// sky's painted ridge is off. Weather fog stays a look a stage can choose (`variants`, `?worldLook=<name>`).
+// sky's painted ridge is off. Other looks a page may ask for by name are `variants` (`?worldLook=<name>`).
 const WORLD_CLEAR_FOG = 0.00004;
+
+// The parts of a look every world part shares
+const WORLD_LOOK_BASE = { timeOfDay: 'day', fogDensity: WORLD_CLEAR_FOG, ring: 0, shadowSpan: 120 };
 
 const WorldLooks = {
     default: [
-        { from: 0, to: 1, look: { timeOfDay: 'day', weather: 'clear', fogDensity: WORLD_CLEAR_FOG, ring: 0, shadowSpan: 120 } }
+        { from: 0, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
-    // Airolo up the Tremola to the Gotthard summit, in clear air
+    // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
+    // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
+    // boundary at 0.53 (s 6,989 m, road 1,677 m) blends over 1.5 km, so the first drops fall at s 6,240 m
+    // (about 1,630 m) and the rain is full from s 7,740 m (about 1,740 m), before the cobbled hairpins stack
+    // (the first at s 7,808 m). It rains to the summit
     tremola: [
-        { from: 0, to: 1, look: { timeOfDay: 'day', weather: 'clear', fogDensity: WORLD_CLEAR_FOG, ring: 0, shadowSpan: 120 } }
+        { from: 0, to: 0.25, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.25, to: 0.53, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.15 } },
+        { from: 0.53, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } }
     ]
 };
 
 // Not stage tables, so not enumerable: Object.values(WorldLooks) lists the stages' parts only
 Object.defineProperties(WorldLooks, {
     clearFog: { value: WORLD_CLEAR_FOG },
+    // The least weather lateral grip x surface grip on a part with a hairpin: the lowside boundary at full lock
+    hairpinGrip: { value: 0.8 },
+    // The weather's grip in a world (WeatherSystem.GRIP): rain's lateral grip is the hairpin bound over the cobbles
+    // (0.80 / 0.85 = 0.9412, rounded up), so wet cobbles in a hairpin give 0.8007
+    grip: {
+        value: Object.freeze({
+            rain: Object.freeze({ lateral: 0.942, brake: 0.8, acceleration: 0.9 }),
+            snow: Object.freeze({ lateral: 0.4, brake: 0.6, acceleration: 0.7 })
+        })
+    },
+    // How a world draws its rain (WeatherSystem.RAIN): the legs' 3000 drops in a box 90 m across, not 200 m, so
+    // about five times as many fall near the rider, as brighter, wider streaks that read at riding speed. A steady
+    // alpine rain, with no lightning (its flash triples the sky light)
+    rain: { value: Object.freeze({ count: 3000, extent: 45, color: 0xd4dce4, size: 1.6, opacity: 0.7, streakPx: 4, capPx: 90, lightning: false }) },
     // Looks a page may ask for by name instead of a stage's own: `?worldLook=cloud` rides the Tremola into the
-    // cloud that often sits on the pass
+    // cloud that often sits on the pass; `?worldLook=dry` rides it in clear air all the way (the frame-time probe's
+    // control)
     variants: {
         value: {
             cloud: {
                 tremola: [
-                    { from: 0, to: 0.7, look: { timeOfDay: 'day', weather: 'clear', fogDensity: WORLD_CLEAR_FOG, ring: 0, shadowSpan: 120 } },
-                    { from: 0.7, to: 1, look: { timeOfDay: 'day', weather: 'fog', weatherIntensity: 0.5, fogDensity: WORLD_CLEAR_FOG, ring: 0, shadowSpan: 120 } }
+                    { from: 0, to: 0.7, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+                    { from: 0.7, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.5 } }
+                ]
+            },
+            dry: {
+                tremola: [
+                    { from: 0, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
                 ]
             }
         }

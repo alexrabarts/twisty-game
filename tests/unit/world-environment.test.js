@@ -145,7 +145,9 @@ describe('the Tremola slice', () => {
         expect(env.terrainGeometry).toBeNull();
         for (const list of [env.roadworksZones, env.roadworkObstacles, env.jumpRamps, env.boulders, env.setPieces]) expect(list).toEqual([]);
         expect(env.config.render.shadowSpan).toBeGreaterThan(0);
-        expect(env.resolveRoadSurface()).toEqual({});
+        // A world's road surface is its wetness: rain wets it by its intensity, any other weather leaves it dry
+        expect(env.resolveRoadSurface('rain', 0.6)).toEqual({ wet: 0.6 });
+        expect(env.resolveRoadSurface('fog', 1)).toEqual({ wet: 0 });
     });
 
     // The window's mesh count must not grow with what a chunk holds: every resident side chunk is at most three meshes

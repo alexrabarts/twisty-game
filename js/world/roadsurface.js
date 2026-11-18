@@ -471,10 +471,31 @@ class RoadSurface {
         return { asphalt: t.asphalt.mean, setts: t.setts.mean };
     }
 
+    // The road in rain: at `wet` 1 the asphalt keeps `asphalt` of its albedo (water fills its pores), the setts
+    // `setts`, and the roughness goes toward `rough` (the setts' domed tops `settRough`) as a film of water lies on
+    // it, with the clamp's floor at `floor`. The wheel tracks and the low places hold water first: elsewhere the film
+    // is `pool` thinner. LOD1 and the side roads take the asphalt's values flat (farMaterial)
+    static get WET() { return { asphalt: 0.5, setts: 0.5, rough: 0.15, settRough: 0.3, floor: 0.08, pool: 0.35, farRough: 0.9 }; }
+
+    // How wet the road is, 0 (dry) to 1: the near ribbon's uniform and the far material's albedo and roughness
+    static setWet(wet) {
+        const w = Math.min(1, Math.max(0, wet || 0));
+        RoadSurface.wetness = w;
+        if (RoadSurface.near) RoadSurface.near.userData.roadUniforms.roadWet.value = w;
+        if (RoadSurface.far) RoadSurface.writeFarWet(RoadSurface.far, w);
+    }
+
+    static writeFarWet(material, w) {
+        const W = RoadSurface.WET;
+        material.roughness = W.farRough + (W.rough + 0.1 - W.farRough) * w;
+        material.color.setScalar(1 + (W.asphalt - 1) * w);
+    }
+
     // The far ribbon (LOD1) and side roads: flat vertex colours, lit like the near ribbon so the change of level hides
     static farMaterial() {
         if (!RoadSurface.far) {
-            RoadSurface.far = LandShade.patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+            RoadSurface.far = LandShade.patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: RoadSurface.WET.farRough, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+            if (RoadSurface.wetness) RoadSurface.writeFarWet(RoadSurface.far, RoadSurface.wetness);
         }
         return RoadSurface.far;
     }
@@ -502,7 +523,8 @@ class RoadSurface {
             roadAsphaltMean: { value: linear(t.asphalt.mean) },
             roadSettMean: { value: linear(t.setts.mean) },
             roadAsphaltRough: { value: t.asphalt.rough },
-            roadSettRough: { value: t.setts.rough }
+            roadSettRough: { value: t.setts.rough },
+            roadWet: { value: RoadSurface.wetness || 0 }
         };
         material.userData.roadUniforms = uniforms;
         material.onBeforeCompile = (shader, renderer) => {
@@ -510,7 +532,7 @@ class RoadSurface {
             Object.assign(shader.uniforms, uniforms);
             RoadSurface.shader(shader);
         };
-        material.customProgramCacheKey = () => 'world-road-near-3';
+        material.customProgramCacheKey = () => 'world-road-near-4';
         RoadSurface.near = material;
         return material;
     }
@@ -522,6 +544,7 @@ class RoadSurface {
 
     static shader(shader) {
         const m = RoadSurface.MARKINGS;
+        const W = RoadSurface.WET;
         const f = v => v.toFixed(4);
         shader.vertexShader = RoadSurface.swap(shader.vertexShader, '#include <common>', `#include <common>
 attribute vec4 road;
@@ -550,6 +573,7 @@ uniform vec3 roadAsphaltMean;
 uniform vec3 roadSettMean;
 uniform float roadAsphaltRough;
 uniform float roadSettRough;
+uniform float roadWet;
 varying vec4 vRoad;
 varying vec4 vEdge;
 varying float vRoadBase;
@@ -773,6 +797,16 @@ if (roadSett < 0.999) {
     roadRough = mix(roadRough, 0.55, roadPaintCover);
 }
 
+// Rain (RoadSurface.WET): water darkens the surface and a film of it smooths it to a sheen, first in the wheel tracks
+// and the low places, then everywhere; paint darkens less, as its beads stand proud
+float roadWater = 0.0;
+if (roadWet > 0.0) {
+    float pool = smoothstep(0.45, 0.8, landNoise(vec2(roadS * 0.09, roadLat * 0.35 + 7.0)) * 0.7 + roadTrack * 0.5);
+    roadWater = roadWet * mix(1.0 - ${f(W.pool)}, 1.0, pool);
+    roadAlbedo *= mix(1.0, mix(mix(${f(W.asphalt)}, ${f(W.setts)}, roadSett), 0.8, roadPaintCover), roadWater);
+    roadRough = mix(roadRough, mix(${f(W.rough)}, ${f(W.settRough)}, roadSett), roadWater);
+}
+
 // The edge of the carriageway: ragged, a lighter worn strip, then gravel, then grass thinning out over the ground.
 // Where a side road leaves (vEdge.z, w) or the road is on a bridge or in a tunnel (vRoad.w), the verge is not drawn
 // or is hard
@@ -798,7 +832,7 @@ diffuseColor.a *= roadAlpha;
 `);
         // An opaque material writes alpha 1; the verge needs its alpha for alpha-to-coverage
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <output_fragment>', 'gl_FragColor = vec4(outgoingLight, roadAlpha);');
-        shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <roughnessmap_fragment>', `float roughnessFactor = clamp(roadRough, 0.2, 1.0);`);
+        shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <roughnessmap_fragment>', `float roughnessFactor = clamp(roadRough, mix(0.2, ${f(W.floor)}, roadWater), 1.0);`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <normal_fragment_maps>', `
 vec3 mapN = roadN.xyz * 2.0 - 1.0;
 // Seen edge-on, the relief's light is all in the pixels' few last rows and flickers: it weakens as the road turns away

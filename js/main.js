@@ -297,6 +297,9 @@ class Game {
         if (typeof WeatherSystem !== 'undefined') {
             if (this.weatherSystem) this.weatherSystem.dispose();
             this.weatherSystem = new WeatherSystem(this.scene, this.camera, AtmosphereTrack.seededRandom(`world-${environment.config.id}`));
+            // Rain in a world keeps the hairpins' grip bound (WorldLooks.grip), and falls close round the rider
+            this.weatherSystem.grip = WorldLooks.grip;
+            this.weatherSystem.rainLook = WorldLooks.rain;
             this.weatherSystem.prepare(this.atmosphereTrack.weatherTypes());
         }
 
@@ -316,6 +319,7 @@ class Game {
             environment: this.environment,
             weatherSystem: this.weatherSystem || null
         });
+        this.prewarmWorldWeather();
 
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
         this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground);
@@ -590,6 +594,21 @@ class Game {
         } finally {
             hidden.forEach(object => { object.visible = false; });
             putAway();
+        }
+    }
+
+    // The weather down the ride changes programs when it comes: its particles are new ones, and the headlight it
+    // switches on is a light every lit material is compiled for. Both are compiled now, not on the frame it starts
+    // to rain
+    prewarmWorldWeather() {
+        if (!this.graphics || !this.graphics.renderer) return;
+        const shown = [this.headlight, this.headlightBeam, ...Object.values(this.weatherSystem ? this.weatherSystem.systems : {}).map(system => system.points)]
+            .filter(object => object && !object.visible);
+        shown.forEach(object => { object.visible = true; });
+        try {
+            this.graphics.renderer.compile(this.scene, this.camera);
+        } finally {
+            shown.forEach(object => { object.visible = false; });
         }
     }
 
@@ -1343,14 +1362,17 @@ class Game {
     // full-strength hidden sun also put a hard white reflection on the wet road.)
     resolveTime(timeKey, weatherType) {
         const config = this.timeConfigs[timeKey];
+        const world = !!(this.environment && this.environment.isWorld);
         const cache = this.timeCache || (this.timeCache = new Map());
-        const cacheKey = `${timeKey}|${weatherType}`;
+        const cacheKey = `${timeKey}|${weatherType}|${world ? 'world' : 'leg'}`;
         if (cache.has(cacheKey)) return cache.get(cacheKey);
 
         const overcast = weatherType === 'rain' || weatherType === 'snow';
         const hazy = weatherType === 'fog';
-        const direct = overcast ? 0.25 : hazy ? 0.6 : 1;
-        const headlight = config.headlight || 0;
+        // A world's rain cloud hides the sun more: at a quarter it still put a glint on the wet road
+        const direct = overcast ? (world ? Game.WORLD_OVERCAST_SUN : 0.25) : hazy ? 0.6 : 1;
+        // A world rider switches the headlight on in rain or snow, by day too; a leg keeps the time's own
+        const headlight = Math.max(config.headlight || 0, world && overcast ? Game.WORLD_OVERCAST_HEADLIGHT : 0);
         const values = {
             key: timeKey,
             skyColor: config.skyColor,
@@ -1368,7 +1390,8 @@ class Game {
             // Per-time exposure - darker nights/twilights, brighter days
             exposure: config.exposure,
             fillColor: config.fillColor,
-            fillIntensity: config.fillIntensity,
+            // The fill is a second sun: under a world's rain cloud it goes with the sun, or it glints on the wet road
+            fillIntensity: config.fillIntensity * (world && overcast ? Game.WORLD_OVERCAST_SUN : 1),
             rimColor: config.rimColor,
             rimIntensity: config.rimIntensity,
             // Headlight only when it is dark enough to see the beam
@@ -1550,11 +1573,8 @@ class Game {
         const from = environment.resolveRoadSurface(a.weather, a.weatherIntensity);
         const to = environment.resolveRoadSurface(b.weather, b.weatherIntensity);
         const out = this.roadBlend || (this.roadBlend = {});
-        const number = (x, y) => x + (y - x) * t;
-        out.roughness = number(from.roughness, to.roughness);
-        out.metalness = number(from.metalness, to.metalness);
-        out.envMapIntensity = number(from.envMapIntensity, to.envMapIntensity);
-        out.color = AtmosphereTrack.lerpHex(from.color, to.color, t);
+        // Every value the environment's surface has: a leg's roughness, metalness, reflection and colour, a world's wetness
+        for (const key in from) out[key] = key === 'color' ? AtmosphereTrack.lerpHex(from.color, to.color, t) : from[key] + (to[key] - from[key]) * t;
         return out;
     }
 
@@ -4102,6 +4122,11 @@ class Game {
         console.log('Restarted from checkpoint with penalty');
     }
 }
+
+// The headlight a world rider rides with in rain or snow (the share of the night's beam), and the share of the sun
+// (and of the fill light) that comes through a world's rain cloud
+Game.WORLD_OVERCAST_HEADLIGHT = 0.5;
+Game.WORLD_OVERCAST_SUN = 0.1;
 
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
