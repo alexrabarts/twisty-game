@@ -13,7 +13,32 @@
 // stacked hairpin never snaps to the parallel leg 25 m away. It widens to the
 // whole route only when the point is further than one road width from every
 // segment in the window (COLD_LOOKUP_WIDTHS).
+//
+// Sides: the one convention. A heading h points along (sin h, cos h) in (x, z), and lateral is measured along
+// (cos h, -sin h). The chase camera looks along the heading with +y up, so the screen's right is (-cos h, sin h):
+// positive lateral is the LEFT of a rider going toward increasing s, and a heading that grows turns LEFT. (Game +x
+// is the rider's left at heading 0, which is why bike files written with +x on the right are mirrored.) A side the
+// rider is told about or that traffic keeps to is read through Route.LEFT, Route.RIGHT, Route.turnSide and
+// Route.keepRight, never a bare sign. Two older vocabularies name +lateral 'right' instead and are only labels: the
+// legs' terrain sides and lanes (.agent/system/world.md) and the road styles' edge keys (RoadSurface.styles).
 class Route {
+    // The lateral sign of the left and of the right of a rider going toward increasing s
+    static get LEFT() { return 1; }
+    static get RIGHT() { return -1; }
+
+    // 'left', 'right' or 'straight' for a heading change (radians, positive when the heading grows) on the screen
+    static turnSide(delta, straight = 0) {
+        if (Math.abs(delta) < straight) return 'straight';
+        return Math.sign(delta) === Route.LEFT ? 'left' : 'right';
+    }
+
+    // The lateral sign of the half of the road a vehicle keeps to: traffic drives on the right (Switzerland), so a
+    // vehicle going toward increasing s (direction +1) keeps to Route.RIGHT and one going against s (direction -1)
+    // keeps to its own right, which is Route.LEFT in the route's frame
+    static keepRight(direction) {
+        return direction < 0 ? -Route.RIGHT : Route.RIGHT;
+    }
+
     // Metres either side of the hint that the continuity search covers
     static get PROJECT_WINDOW_M() { return 60; }
 

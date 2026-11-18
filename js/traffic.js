@@ -7,6 +7,53 @@ function legSegmentRange(environment) {
     return { start, end: Math.max(start, Math.min(last, legEnd + 16)) };
 }
 
+// How world traffic takes a bend: the most sideways acceleration it corners at, the braking it plans with, and the
+// most it speeds up or brakes (m/s^2); and `turnIn`, the most yaw acceleration a bend's way in may ask of it (rad/s^2:
+// v^2 times the change of curvature per metre). A car corners at 2.5 m/s^2 (4.6 m/s on the 8.5 m radius of the
+// outside lane of a 6 m hairpin, 3 m/s on the 3.5 m of the inside one), a rider of the crew at 4
+const LANE_DRIVE = {
+    car: { lateral: 2.5, plan: 2.5, accel: 2, brake: 5, turnIn: 3 },
+    bike: { lateral: 4, plan: 3, accel: 3, brake: 6, turnIn: 3 }
+};
+
+// Metres between the lane line's samples when traffic looks ahead for a bend
+const LANE_LOOK_STEP_M = 1;
+
+// The units of u a world vehicle moves for `metres` along its lane line (WorldRoute.laneCurve): the line's own
+// length, so a car keeps its speed where the samples are unevenly spaced and on the outside of a bend
+function laneStep(route, vehicle, metres) {
+    const lane = route.laneCurve(vehicle.currentSegment + vehicle.segmentProgress, vehicle.direction, 0, 0, vehicle.stepSample || (vehicle.stepSample = {}));
+    return metres / Math.max(lane.metres, 0.05);
+}
+
+// A world vehicle's speed this frame: from `speed` toward `want`, but never over the speed from which it can still
+// brake at `drive.plan` to sqrt(drive.lateral / curvature), and to sqrt(drive.turnIn / curvature change per metre), at
+// every point of its lane line within its braking distance, and changed by at most drive.accel or drive.brake a second, so the speed (and with it the yaw rate a
+// bend asks for) has no step
+function laneSpeed(route, vehicle, speed, want, drive, dt) {
+    const look = vehicle.lookSample || (vehicle.lookSample = {});
+    const horizon = speed * speed / (2 * drive.plan) + 10;
+    const last = route.points.length - 1;
+    let u = vehicle.currentSegment + vehicle.segmentProgress;
+    let cap = Infinity, before = null;
+    for (let d = 0; d <= horizon && u >= 0 && u <= last; d += LANE_LOOK_STEP_M) {
+        route.laneCurve(u, vehicle.direction, 0, 0, look);
+        const k = Math.abs(look.curvature);
+        if (k > 1e-6) cap = Math.min(cap, Math.sqrt(drive.lateral / k + 2 * drive.plan * d));
+        const change = before === null ? 0 : Math.abs(look.curvature - before) / LANE_LOOK_STEP_M;
+        if (change > 1e-6) cap = Math.min(cap, Math.sqrt(drive.turnIn / change + 2 * drive.plan * d));
+        before = look.curvature;
+        u += vehicle.direction * LANE_LOOK_STEP_M / Math.max(look.metres, 0.05);
+    }
+    const target = Math.min(want, cap);
+    // A vehicle just placed (spawned, or moved by a restart) starts at a speed its place allows
+    if (!vehicle.laneMoving) {
+        vehicle.laneMoving = true;
+        return Math.min(speed, target);
+    }
+    return Math.max(speed - drive.brake * dt, Math.min(speed + drive.accel * dt, target));
+}
+
 class Traffic {
     constructor(scene, environment, playerRiderName = null) {
         this.scene = scene;
@@ -45,8 +92,7 @@ class Traffic {
                 direction: -1,
                 speed: (15 + Math.random() * 10) * this.speedScale,
                 startSegment: startSegment,
-                // Right-hand traffic: a world's oncoming car keeps to the rider's left; a leg keeps its own lanes
-                lane: this.environment.oncomingLane || 'right',
+                lane: 'right',
                 color: this.getRandomCarColor()
             });
             this.cars.push(car);
@@ -333,6 +379,7 @@ class Traffic {
             while (taken(slot, car) && slot < range.end) slot++;
             car.currentSegment = Math.min(slot, range.end);
             car.segmentProgress = 0;
+            car.laneMoving = false;
             car.updatePosition();
         });
     }
@@ -355,6 +402,8 @@ class Car {
         this.baseSpeed = options.speed || 20;
         this.currentSpeed = this.baseSpeed;
         this.currentSegment = options.startSegment || 0;
+        // A leg's lane, named by the legs' code sides (+lateral is 'right': .agent/system/world.md); a world car keeps
+        // to the side its direction gives (Route.keepRight) and never reads it
         this.lane = options.lane || 'right';
         this.originalLane = this.lane;
         this.color = options.color || 0xff0000;
@@ -741,6 +790,13 @@ class Car {
     
     updatePosition() {
         const route = this.environment.route;
+        // A world car is its lane line: a roadworks detour is a leg system, and a world builds no roadworks
+        if (route.laneCurve) {
+            const lane = route.laneCurve(this.currentSegment + this.segmentProgress, this.direction, 0, 0, this.laneSample || (this.laneSample = {}));
+            this.carGroup.position.set(lane.x, lane.y + 0.32, lane.z);
+            this.carGroup.rotation.y = this.direction === 1 ? lane.heading : lane.heading + Math.PI;
+            return;
+        }
         const road = route.sampleAt(this.currentSegment, this.segmentProgress, this.roadSample || (this.roadSample = {}));
         const { x, y, z } = road;
         const interpolatedHeading = road.heading;
@@ -844,8 +900,15 @@ class Car {
         
         this.previousSpeed = this.currentSpeed;
         
-        const distanceToMove = this.currentSpeed * deltaTime;
-        const segmentsToMove = distanceToMove / segmentLength;
+        // A world car slows for the bends ahead and moves along its lane line; a leg's moves a share of its segment
+        const route = this.environment.route;
+        let segmentsToMove;
+        if (route.laneCurve) {
+            this.currentSpeed = laneSpeed(route, this, this.currentSpeed, this.baseSpeed, LANE_DRIVE.car, deltaTime);
+            segmentsToMove = laneStep(route, this, this.currentSpeed * deltaTime);
+        } else {
+            segmentsToMove = this.currentSpeed * deltaTime / segmentLength;
+        }
         
         // Rotate wheels based on speed
         if (!this.wheelRotation) this.wheelRotation = 0;
@@ -879,6 +942,7 @@ class Car {
             this.carGroup.visible = false;
 
             this.currentSegment = this.direction < 0 ? range.end : range.start;
+            this.laneMoving = false;
 
             // A model that arrived while the car was on the road goes on
             // here, where the car is out of sight
@@ -899,8 +963,8 @@ class Car {
             }
         }
         
-        // Restore speed if slowed down
-        if (this.currentSpeed < this.baseSpeed) {
+        // Restore speed if slowed down (a world car's speed is laneSpeed's)
+        if (!route.laneCurve && this.currentSpeed < this.baseSpeed) {
             this.currentSpeed += 10 * deltaTime;
             if (this.currentSpeed > this.baseSpeed) {
                 this.currentSpeed = this.baseSpeed;
@@ -1025,6 +1089,10 @@ class Car {
 }
 
 class AIMotorcycle {
+    // A world rider's pass: metres of road it takes, and how far it swings toward the centre line
+    static get PASS_M() { return 40; }
+    static get PASS_SWING_M() { return 2; }
+
     constructor(scene, environment, options) {
         this.scene = scene;
         this.environment = environment;
@@ -1032,6 +1100,7 @@ class AIMotorcycle {
         this.baseSpeed = options.speed || 35;
         this.currentSpeed = this.baseSpeed;
         this.currentSegment = options.startSegment || 0;
+        // A leg's lane (Car's note); a world rider's side is its direction's
         this.lane = options.lane || 'left';
         this.color = options.color || 0xff0000;
         this.style = options.style || 'sport';
@@ -1410,6 +1479,10 @@ class AIMotorcycle {
     
     updatePosition() {
         const route = this.environment.route;
+        if (route.laneCurve) {
+            this.updateLanePosition(route);
+            return;
+        }
         const road = route.sampleAt(this.currentSegment, this.segmentProgress, this.roadSample || (this.roadSample = {}));
         const { x, y, z } = road;
         const interpolatedHeading = road.heading;
@@ -1455,12 +1528,40 @@ class AIMotorcycle {
         this.bikeGroup.rotation.y = facingAngle;
         this.bikeGroup.rotation.z = this.leanAngle;
     }
+
+    // A world rider on its lane line (WorldRoute.laneCurve). A pass swings it out toward the centre line and back over
+    // PASS_M of road by sin^4, so its heading and yaw rate have no step at either end; the pack's random spread is
+    // left out, as it moved the rider across the road at up to 4 m/s from frame to frame. It leans for the line's own
+    // curvature at its speed.
+    updateLanePosition(route) {
+        const u = this.currentSegment + this.segmentProgress;
+        const lane = this.laneSample || (this.laneSample = {});
+        route.laneCurve(u, this.direction, 0, 0, lane);
+        let extra = 0, extraRate = 0;
+        if (this.overtaking) {
+            const p = Math.PI * this.overtakeProgress, sin = Math.sin(p);
+            const toCentre = -Route.keepRight(this.direction) * AIMotorcycle.PASS_SWING_M;
+            extra = toCentre * sin ** 4;
+            extraRate = toCentre * 4 * sin ** 3 * Math.cos(p) * Math.PI / AIMotorcycle.PASS_M * lane.metres * this.direction;
+            route.laneCurve(u, this.direction, extra, extraRate, lane);
+        }
+        this.bikeGroup.position.set(lane.x, lane.y, lane.z);
+        this.bikeGroup.rotation.y = this.direction === 1 ? lane.heading : lane.heading + Math.PI;
+        const curvature = lane.curvature * this.direction;
+        const targetLean = -Math.atan(this.currentSpeed * this.currentSpeed * curvature / 9.81);
+        this.leanAngle += (targetLean - this.leanAngle) * Math.min(1, 3.0 * (this.currentDeltaTime || 0.016));
+        const maxLean = Math.PI / 3;
+        this.leanAngle = Math.max(-maxLean, Math.min(maxLean, this.leanAngle));
+        this.bikeGroup.rotation.z = this.leanAngle;
+    }
     
     update(deltaTime, playerPosition, allBikes, allCars) {
         this.currentDeltaTime = deltaTime;
-        const segmentLength = this.environment.route.unitM;
+        const route = this.environment.route;
+        const world = !!route.laneCurve;
+        const segmentLength = route.unitM;
         const distanceToMove = this.currentSpeed * deltaTime;
-        const segmentsToMove = distanceToMove / segmentLength;
+        const segmentsToMove = world ? laneStep(route, this, distanceToMove) : distanceToMove / segmentLength;
         
         if (!this.wheelRotation) this.wheelRotation = 0;
         const rotationSpeed = this.currentSpeed / 0.3; // rad/s = v / r
@@ -1521,7 +1622,7 @@ class AIMotorcycle {
                 this.currentSpeed = Math.min(this.currentSpeed, nearestBikeAhead.currentSpeed);
             }
             
-            // Small lateral variation for pack dynamics
+            // Small lateral variation for pack dynamics (a leg's: a world rider keeps its lane line)
             if (!this.packLateralOffset) this.packLateralOffset = 0;
             const targetOffset = (Math.random() - 0.5) * 1.5;
             this.packLateralOffset += (targetOffset - this.packLateralOffset) * 0.05;
@@ -1545,6 +1646,9 @@ class AIMotorcycle {
             this.packLateralOffset = 0;
         }
         
+        // A world rider eases toward what the pack asks, no faster than it can brake for the bends ahead
+        if (world) this.currentSpeed = laneSpeed(route, this, previousSpeed, this.currentSpeed, LANE_DRIVE.bike, deltaTime);
+
         this.isBraking = this.currentSpeed < previousSpeed;
         if (this.isBraking) {
             this.brakeLight.material.emissive.setHex(0xff0000);
@@ -1554,7 +1658,14 @@ class AIMotorcycle {
             this.brakeLight.material.emissiveIntensity = 0;
         }
         
-        if (this.overtaking) {
+        if (this.overtaking && world) {
+            // A world pass runs over PASS_M of road, not a fixed time: at hairpin speed a timed swing crossed 2 m in a few metres
+            this.overtakeProgress = Math.min(1, this.overtakeProgress + distanceToMove / AIMotorcycle.PASS_M);
+            if (this.overtakeProgress >= 1) {
+                this.overtaking = false;
+                this.overtakeProgress = 0;
+            }
+        } else if (this.overtaking) {
             this.overtakeProgress = Math.min(1, this.overtakeProgress + deltaTime * 0.8);
             this.leanAngle = Math.sin(this.overtakeProgress * Math.PI) * 0.2;
             

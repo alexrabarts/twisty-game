@@ -128,7 +128,8 @@ describe('WorldRoute', () => {
 });
 
 describe('junctionsAhead', () => {
-    // A junction on the ride at s = 300 where the road bears right a little
+    // A junction on the ride at s = 300 where the road bears left a little: the heading grows from 0 to 0.6, toward
+    // +lateral, which is the rider's left (Route.LEFT); then a sharp right at s = 900
     const graph = {
         junctions: [{
             id: 'j1', name: 'Via Test', node: 0,
@@ -140,7 +141,7 @@ describe('junctionsAhead', () => {
 
     test('names the junction, the turn and the branch to keep', () => {
         const [next] = route.junctionsAhead(0, 500);
-        expect(next).toMatchObject({ junctionId: 'j1', s: 300, name: 'Via Test', turn: 'right', keep: 'right' });
+        expect(next).toMatchObject({ junctionId: 'j1', s: 300, name: 'Via Test', turn: 'left', keep: 'left' });
         expect(next.distance).toBe(300);
     });
 
@@ -148,7 +149,7 @@ describe('junctionsAhead', () => {
         expect(route.junctionsAhead(301, 500)).toEqual([]);
         expect(route.junctionsAhead(0, 200)).toEqual([]);
         expect(route.junctionsAhead(600, 400).map(j => j.s)).toEqual([900]);
-        expect(route.junctionsAhead(600, 400)[0]).toMatchObject({ turn: 'left', keep: null });
+        expect(route.junctionsAhead(600, 400)[0]).toMatchObject({ turn: 'right', keep: null });
     });
 
     test('a ride with no graph has no junctions', () => {

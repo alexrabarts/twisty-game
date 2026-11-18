@@ -217,8 +217,60 @@ class WorldRoute extends PolylineRoute {
     // LANE_EDGE_MARGIN_M of the road's edge: on a 10 m road that is 3.99 m off the centre, and every road narrower
     // than about 12.6 m is held by the edge rather than by the 0.42.
     laneOffset(s) {
-        const width = this.sample(s, this.ruleScratch).width;
+        return WorldRoute.laneFor(this.sample(s, this.ruleScratch).width);
+    }
+
+    static laneFor(width) {
         return Math.max(0, Math.min(width * 0.42, width / 2 - Route.CAR_HALF_WIDTH - WorldRoute.LANE_EDGE_MARGIN_M));
+    }
+
+    // The lane line a traffic vehicle drives, at u (a sample index and the fraction to the next: traffic's
+    // currentSegment + segmentProgress). Each row's lane point is where the ribbon draws that lateral, P_k + l_k n_k
+    // with n_k the row's own normal (RoadMesh.nearRibbon, the frame nearestSegment projects in) and l_k the lane of
+    // a vehicle going in `direction` at that row's width (Route.keepRight). Those points joined straight are the drawn
+    // lane, but its heading steps at every row: up to 0.66 rad in the held 6 m hairpins, which a car's body showed as a
+    // snap across the bend. The line driven is their uniform cubic B-spline instead: curvature-continuous, so the
+    // heading and the yaw rate have no step, and it keeps inside each corner of the drawn lane (by about a sixth of
+    // the corner's turn times the row spacing), so every wheel stays on the drawn carriageway
+    // (tests/unit/world-traffic.test.js). `extra` moves the line across (a rider passing), with `extraRate` its
+    // change per unit of u.
+    // Fills out {x, y, z, heading (the line's tangent toward increasing u), curvature (per metre, positive where the
+    // heading grows with u), metres (metres of line per unit of u), lateral} and returns it.
+    laneCurve(u, direction, extra = 0, extraRate = 0, out = {}) {
+        const pts = this.points;
+        const last = pts.length - 1;
+        const at = Math.max(0, Math.min(last, u));
+        const i = Math.max(0, Math.min(last - 1, Math.floor(at)));
+        const t = at - i, t2 = t * t, t3 = t2 * t, m = 1 - t;
+        const w = [m * m * m / 6, (3 * t3 - 6 * t2 + 4) / 6, (-3 * t3 + 3 * t2 + 3 * t + 1) / 6, t3 / 6];
+        const d = [-m * m / 2, (3 * t2 - 4 * t) / 2, (-3 * t2 + 2 * t + 1) / 2, t2 / 2];
+        const dd = [m, 3 * t - 2, 1 - 3 * t, t];
+        const side = Route.keepRight(direction);
+        let x = 0, z = 0, dx = 0, dz = 0, ddx = 0, ddz = 0, nx = 0, nz = 0, ndx = 0, ndz = 0, lane = 0;
+        for (let k = 0; k < 4; k++) {
+            const p = pts[Math.max(0, Math.min(last, i - 1 + k))];
+            const cx = Math.cos(p.heading), cz = -Math.sin(p.heading);
+            const l = side * WorldRoute.laneFor(p.width);
+            const qx = p.x + l * cx, qz = p.z + l * cz;
+            x += w[k] * qx; z += w[k] * qz;
+            dx += d[k] * qx; dz += d[k] * qz;
+            ddx += dd[k] * qx; ddz += dd[k] * qz;
+            nx += w[k] * cx; nz += w[k] * cz;
+            ndx += d[k] * cx; ndz += d[k] * cz;
+            lane += w[k] * l;
+        }
+        x += extra * nx; z += extra * nz;
+        dx += extra * ndx + extraRate * nx; dz += extra * ndz + extraRate * nz;
+        const run = Math.hypot(dx, dz);
+        const a = pts[i], b = pts[i + 1] || a;
+        out.x = x;
+        out.z = z;
+        out.y = a.y + (b.y - a.y) * t;
+        out.heading = run > 0 ? Math.atan2(dx, dz) : a.heading;
+        out.curvature = run > 1e-9 ? (dz * ddx - dx * ddz) / (run * run * run) : 0;
+        out.metres = run;
+        out.lateral = lane + extra;
+        return out;
     }
 
     // The two lanes traffic uses while roadworks take the rest of the road: where each stays, as an offset from the centre
@@ -238,7 +290,7 @@ class WorldRoute extends PolylineRoute {
                 if (pass.sIn <= s || pass.sIn > s + distance) continue;
                 const delta = WorldGraph.turnOf(junction, pass);
                 if (delta === null) continue;
-                const turn = Math.abs(delta) < 0.35 ? 'straight' : delta > 0 ? 'right' : 'left';
+                const turn = Route.turnSide(delta, 0.35);
                 const keep = turn !== 'straight' && Math.abs(delta) < 1.0 ? turn : null;
                 out.push({ junctionId: junction.id, s: pass.sIn, name: junction.name, turn, keep, distance: pass.sIn - s });
             }

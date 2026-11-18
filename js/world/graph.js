@@ -215,7 +215,7 @@ class WorldGraph {
     }
 
     // The turn a pass makes: angle from the way the rider arrives to the way
-    // it leaves, positive to the right (a heading turns right as it grows)
+    // it leaves, positive to the left (a heading turns left as it grows: Route.turnSide)
     static turnOf(junction, pass) {
         if (pass.inEdge === null || pass.inEdge === undefined) return null;
         const incoming = junction.incident.find(i => i.edgeId === pass.inEdge);

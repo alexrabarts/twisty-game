@@ -503,8 +503,8 @@ class Scenery {
                     if (pass.sIn - before < 0) continue;
                     route.sample(pass.sIn - before, p);
                     const out = p.width / 2 + RoadClearance.verge() + radius + margin + 0.2;
-                    // A positive lateral is to the rider's right (a heading turns right as it grows: WorldGraph.turnOf)
-                    for (const side of [1, -1]) {
+                    // The rider's right first (Route.RIGHT), as Swiss signposts stand
+                    for (const side of [Route.RIGHT, Route.LEFT]) {
                         for (const extra of [0, 1.5, 3]) {
                             const o = side * (out + extra);
                             const x = p.x + o * Math.cos(p.heading), z = p.z - o * Math.sin(p.heading);

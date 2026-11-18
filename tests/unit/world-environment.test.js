@@ -419,8 +419,8 @@ describe('WorldGuide', () => {
             junctions: [{ id: 'j', name: 'Via Gottardo', node: 0, incident: [{ edgeId: 1, heading: Math.PI }, { edgeId: 2, heading: 0.6 }], passes: [{ sIn: 400, inEdge: 1, outEdge: 2, barriers: [] }] }]
         };
         const guide = new WorldGuide({ ...environment, route: new WorldRoute(samplesOf(straight(2000)), { graph }) });
-        expect(guide.promptAt(100)).toBe('Keep right, 300 m · Via Gottardo');
-        expect(guide.promptAt(396)).toBe('Keep right, 10 m · Via Gottardo');
+        expect(guide.promptAt(100)).toBe('Keep left, 300 m · Via Gottardo');
+        expect(guide.promptAt(396)).toBe('Keep left, 10 m · Via Gottardo');
         expect(guide.promptAt(600)).toBe('');
     });
 });

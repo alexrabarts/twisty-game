@@ -9,7 +9,6 @@
 //   route, ground, roadWidth, physics, config            implemented
 //   checkpoints, finishGate                              the stage's gates, from the stations
 //   startSegment, endSegment, trafficSpeedScale          the span traffic keeps to, and how fast it goes
-//   oncomingLane                                          the lane of the oncoming car
 //   terrain, terrainGeometry, sections, setPieces,
 //   roadworksZones, roadworkObstacles, jumpRamps,
 //   boulders                                             null / empty: no cones, rockfalls or roadworks are built
@@ -93,8 +92,6 @@ class WorldEnvironment {
         this.boulders = [];
         // Traffic holds to this share of its leg speed: the crew cannot take a hairpin at 50 m/s
         this.trafficSpeedScale = 0.4;
-        // Right-hand traffic: the rider keeps to the route's right lane, so the oncoming car keeps to its left
-        this.oncomingLane = 'left';
         this.config = { id: stage ? stage.id : 'world', look: { fogDensity: WorldLooks.clearFog }, render: { shadowSpan: 120, cullMax: 6000 }, grip: 1 };
 
         this.group = new THREE.Group();
@@ -345,7 +342,7 @@ class WorldEnvironment {
                 const at = this.route.sample(pass.sIn, {});
                 for (const branch of junction.incident) {
                     if (branch.edgeId === pass.inEdge || branch.edgeId === pass.outEdge) continue;
-                    // Positive to the right of the ride (a heading of 0 is +z; right is (cos h, -sin h))
+                    // Positive toward +lateral, the rider's left (Route.LEFT); the road styles name the +lateral edge 'right'
                     const lean = Math.sin(branch.heading - at.heading);
                     const width = Math.max(3, RoadSurface.realWidth(classOf(branch.edgeId)));
                     const reach = Math.min(16, (width / 2 + 2.5) / Math.max(0.4, Math.abs(lean)));

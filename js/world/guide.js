@@ -95,8 +95,8 @@ class WorldGuide {
             mph: Math.round(advice.speed * WorldGuide.MPH),
             fast: speed > advice.speed * WorldGuide.ADVICE_FAST,
             distance: advice.bend.distance,
-            // The way the bend turns: a positive heading change is to the right (WorldRoute.junctionsAhead)
-            left: advice.bend.sign < 0
+            // The way the bend turns on the screen (Route.turnSide)
+            left: Route.turnSide(advice.bend.sign) === 'left'
         };
     }
 
