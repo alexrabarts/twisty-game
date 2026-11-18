@@ -9,7 +9,7 @@ import { diskFetch } from '../helpers/world-fetch.js';
 import { readFileSync } from 'node:fs';
 
 const game = loadGame();
-const { THREE, WorldEnvironment, WorldStreamer, RoadSurface } = game;
+const { THREE, WorldEnvironment, WorldStreamer, RoadSurface, RoadMesh } = game;
 
 // The ride's section is LOD0 by the distance to the box of its centre line; a triangle's centroid can lie a quarter of
 // the road's width outside that box
@@ -91,6 +91,34 @@ describe('every road within the LOD0 radius looks like a road', () => {
         expect({ flat: r.flat, at: r.flatAt, noVerge: r.noVerge }).toEqual({ flat: 0, at: [], noVerge: 0 });
     }, 120000);
 
+    test('a side road breaks its edge line and leaves out its verge across the mouth of a road that leaves its end', () => {
+        const degree = new Map();
+        for (const e of env.data.edges) for (const n of [e.a, e.b]) degree.set(n, (degree.get(n) || 0) + 1);
+        let marked = 0, checked = 0;
+        for (const edge of env.data.edges) {
+            if (edge.onRide || degree.get(edge.b) < 3) continue;
+            const samples = env.graph.samples(edge.id);
+            if (!samples || samples.x.length < 12) continue;
+            const rows = Array.from(samples.x, (_, i) => ({ x: samples.x[i], y: samples.y[i], z: samples.z[i], heading: samples.heading[i], width: samples.width[i], bits: samples.flags[i], cls: '8m Strasse' }));
+            const out = env.sideMouths(edge, rows, false, true);
+            checked++;
+            const last = out[out.length - 1];
+            if (last.mouthL || last.mouthR) marked++;
+            // Only within the mouth's reach of the node (16 m at most)
+            expect(out[0].mouthL || out[0].mouthR || false).toBe(false);
+            // The ribbon draws a broken edge line there
+            const ribbon = RoadMesh.ribbon(out, 0, null, true);
+            const edgeAttr = ribbon.geometry.attributes.edge.array;
+            const W = ribbon.geometry.userData.columns, n = edgeAttr.length / 4 / W;
+            const end = (n - 1) * W * 4;
+            if (last.mouthL) expect(edgeAttr[end]).toBe(RoadSurface.EDGE.broken);
+            if (last.mouthR) expect(edgeAttr[end + 1]).toBe(RoadSurface.EDGE.broken);
+            ribbon.geometry.dispose();
+        }
+        expect(checked).toBeGreaterThan(5);
+        expect(marked).toBeGreaterThan(5);
+    });
+
     test('the road goes on past the finish and before the start, as wide as the ride where it leaves it', () => {
         const ends = env.rideEnds();
         expect(ends.size).toBeGreaterThan(0);
@@ -134,13 +162,17 @@ describe('the LOD0 part of a side chunk', () => {
         const streamer = Object.create(WorldStreamer.prototype);
         streamer.hooks = { sidePieces: () => pieces };
         expect(streamer.sideNear(1, { x: 500 - enter - 1, z: 0 }, null)).toBe('');
-        expect(streamer.sideNear(1, { x: 500 - enter + 1, z: 0 }, null)).toBe('0');
+        expect(streamer.sideNear(2, { x: 500 - enter + 1, z: 0 }, null)).toBe('0');
         // Held: it stays until the bike is past the slack
-        expect(streamer.sideNear(1, { x: 500 - leave + 1, z: 0 }, { near: '0' })).toBe('0');
-        expect(streamer.sideNear(1, { x: 500 - leave - 1, z: 0 }, { near: '0' })).toBe('');
-        expect(streamer.sideNear(1, { x: 1950, z: 0 }, { near: '0' })).toBe('1');
+        expect(streamer.sideNear(3, { x: 500 - leave + 1, z: 0 }, { near: '0' })).toBe('0');
+        expect(streamer.sideNear(4, { x: 500 - leave - 1, z: 0 }, { near: '0' })).toBe('');
+        expect(streamer.sideNear(5, { x: 1950, z: 0 }, { near: '0' })).toBe('1');
+        // Each chunk is read once for the bike's place (a chunk number of its own here): within SIDE_STILL_M of where it
+        // was last read, the answer stands
+        expect(streamer.sideNear(2, { x: 500 - enter - 1, z: 0 }, null)).toBe('0');
         // No pieces known: nothing at LOD0
         streamer.hooks = {};
-        expect(streamer.sideNear(1, { x: 0, z: 0 }, null)).toBe('');
+        streamer.sideMemo = null;
+        expect(streamer.sideNear(6, { x: 0, z: 0 }, null)).toBe('');
     });
 });

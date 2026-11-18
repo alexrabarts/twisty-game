@@ -157,12 +157,28 @@ class RoadMesh {
         return lod === 0 ? RoadMesh.nearRibbon(side ? RoadMesh.decimate(rows, RoadMesh.SIDE_ROW_M, RoadMesh.SIDE_TURN) : rows, holdY, side) : RoadMesh.farRibbon(rows, holdY, side);
     }
 
-    // A side road at LOD0 is seen and not ridden: a row every SIDE_ROW_M as at LOD1, or sooner where the heading has
-    // turned SIDE_TURN radians (half LOD1's, so a bend's chords stay within a few centimetres of its arc near the
-    // camera), and five columns (verge, edge, centre, edge, verge). Its structures and edge works follow the same rows
-    // (WorldEnvironment.buildSide), so the side roads within the LOD0 radius cost the window few more triangles than LOD1
+    // A side road at LOD0 is seen and not ridden: its rows are LOD1's (a row every SIDE_ROW_M, or sooner where the
+    // heading has turned SIDE_TURN radians) and it has five columns (verge, edge, centre, edge, verge). Its structures
+    // and edge works stand on the same rows (RoadMesh.vergeSides) at every level of detail, so the side roads within the
+    // LOD0 radius cost the window few more triangles than LOD1, and a change of level of detail builds no works
     static get SIDE_ROW_M() { return 16; }
-    static get SIDE_TURN() { return 0.09; }
+    static get SIDE_TURN() { return 0.18; }
+
+    // The edge points of a side road's LOD0 ribbon (nearRibbon's `sides`: the verge's outer edge `l`, `r`, the
+    // carriageway's `lc`, `rc`) without building it, for the road's structures and edge works (WorldEnvironment.buildSide)
+    static vergeSides(rows, holdY = null) {
+        const kept = RoadMesh.decimate(rows, RoadMesh.SIDE_ROW_M, RoadMesh.SIDE_TURN);
+        const curve = RoadMesh.curvature(kept);
+        return kept.map((row, k) => {
+            const h = row.width / 2;
+            const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
+            const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
+            const o = RoadMesh.hold([-h - verge, -h, h, h + verge], curve[k]).offsets;
+            const y = row.y + RoadMesh.LIFT_M;
+            const at = offset => { const p = RoadMesh.place(row, offset); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
+            return { bits: row.bits, l: at(o[0]), r: at(o[3]), lc: at(o[1]), rc: at(o[2]) };
+        });
+    }
 
     // The lateral offsets of a row, the inside ones held within the bend's radius: {offsets, clamped}
     static hold(offsets, curve) {
@@ -236,7 +252,9 @@ class RoadMesh {
                 arc.set([v * q, turn[k] * q, q], at * 3);
                 plane.set([p.x - origin[0], p.z - origin[1]], at * 2);
                 road.set([h, sett[k], row.centre ?? C.none, built[k]], at * 4);
-                edge.set([row.left ?? 0, row.right ?? 0, row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
+                // Across a side road's mouth a continuous edge line is broken (RoadSurface.MARKINGS.mouth)
+                const brokenAt = (line, mouth) => (mouth && line === RoadSurface.EDGE.solid ? RoadSurface.EDGE.broken : line ?? 0);
+                edge.set([brokenAt(row.left, row.mouthL), brokenAt(row.right, row.mouthR), row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
             });
             const l = k * W * 3, r = (k * W + W - 1) * 3;
             const at = c => [positions[c], positions[c + 1], positions[c + 2]];
@@ -742,14 +760,15 @@ class RoadMesh {
             out.setAttribute(name, new THREE.BufferAttribute(array, size));
         }
         if (list.some(g => g.index)) {
-            const index = [];
-            let base = 0;
+            // Typed throughout: a side chunk's ribbons are merged again at every change of level of detail
+            const index = new Uint32Array(list.reduce((n, g) => n + (g.index ? g.index.count : g.attributes.position.count), 0));
+            let base = 0, at = 0;
             for (const g of list) {
-                if (g.index) for (let i = 0; i < g.index.count; i++) index.push(g.index.getX(i) + base);
-                else for (let i = 0; i < g.attributes.position.count; i++) index.push(i + base);
+                if (g.index) for (let i = 0, a = g.index.array; i < a.length; i++) index[at++] = a[i] + base;
+                else for (let i = 0; i < g.attributes.position.count; i++) index[at++] = i + base;
                 base += g.attributes.position.count;
             }
-            out.setIndex(index);
+            out.setIndex(new THREE.BufferAttribute(index, 1));
         }
         Object.assign(out.userData, list[0].userData);
         out.computeBoundingSphere();

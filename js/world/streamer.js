@@ -36,7 +36,10 @@ class WorldStreamer {
     // every few metres the bike rides
     static get SIDE_NEAR_M() { return WorldStreamer.ROAD_LOD_M[0]; }
     static get SIDE_PAD_M() { return 10; }
-    static get SIDE_SLACK_M() { return 100; }
+    static get SIDE_SLACK_M() { return 200; }
+    // How far the bike may move before a side chunk's LOD0 pieces are read again (less than SIDE_PAD_M less the 5 m
+    // a road's verge reaches past its centre line's box)
+    static get SIDE_STILL_M() { return 4; }
     // The same for a terrain tile: LOD0 at 8 m, LOD1 at 16 m, LOD2 at 32 m
     static get TILE_LOD_M() { return [700, 2000]; }
 
@@ -276,9 +279,19 @@ class WorldStreamer {
     // The pieces of a side chunk's roads drawn at LOD0 (hooks.sidePieces: [{box}], WorldEnvironment.sidePieces), as
     // a key: their indices joined, '' for none. A piece is LOD0 within SIDE_NEAR_M + SIDE_PAD_M of the bike, and one
     // that was (held.near) stays so within SIDE_SLACK_M more
+    // (within SIDE_STILL_M of where it was last read for the chunk, the last answer stands: SIDE_PAD_M covers it)
     sideNear(k, bike, held) {
+        const memo = this.sideMemo || (this.sideMemo = new Map());
+        const last = memo.get(k);
+        if (last && last.held === (held ? held.near : null) && Math.hypot(bike.x - last.x, bike.z - last.z) <= WorldStreamer.SIDE_STILL_M) return last.key;
         const pieces = this.hooks.sidePieces ? this.hooks.sidePieces(k) : null;
         if (!pieces) return '';
+        const key = this.sideNearNow(pieces, bike, held);
+        memo.set(k, { x: bike.x, z: bike.z, held: held ? held.near : null, key });
+        return key;
+    }
+
+    sideNearNow(pieces, bike, held) {
         const enter = WorldStreamer.SIDE_NEAR_M + WorldStreamer.SIDE_PAD_M, leave = enter + WorldStreamer.SIDE_SLACK_M;
         const was = held && held.near ? new Set(held.near.split(',').map(Number)) : null;
         const near = [];
