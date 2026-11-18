@@ -1,5 +1,5 @@
-// WorldEnvironment: what Game holds as `environment` when `?world=<stage|all>`
-// is set. It is the world's answer to Environment (js/environment.js, the leg
+// WorldEnvironment: what Game holds as `environment` on a world ride (js/ridemode.js
+// says when). It is the world's answer to Environment (js/environment.js, the leg
 // engine): the same members the game reads (route, ground, roadWidth,
 // checkpoints, finishGate, config, physics...), built over the streamed world
 // data instead of a 20 m profile.
@@ -50,13 +50,6 @@ class WorldEnvironment {
 
     // The ride progress the barrier set is chosen by is rounded to this many metres
     static get BARRIER_STEP_M() { return 20; }
-
-    // `world` parameter: a stage id or 'all', or null when the page is not asking for a world
-    static requested(search) {
-        const params = new URLSearchParams(search || '');
-        const id = params.get('world');
-        return id ? id : null;
-    }
 
     static async load(scene, { id = 'all', search = '', fetchFn = null, models = undefined, digest = null } = {}) {
         const resolved = WorldData.resolveBase(new URLSearchParams(search).get('worldData'));

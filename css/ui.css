@@ -1358,6 +1358,21 @@ body.in-menu .virtual-button-camera {
     text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8), 0 0 30px rgba(74, 168, 255, 0.35);
 }
 
+/* A short line under the menu title: the world's data did not load and the legs took over */
+.menu-notice {
+    align-self: center;
+    max-width: min(560px, 100%);
+    margin: 0 0 var(--sp-2);
+    padding: 8px 14px;
+    border-radius: var(--r-md);
+    border: 1px solid color-mix(in srgb, var(--c-warn) 55%, transparent);
+    background: var(--panel-bg-strong);
+    color: var(--c-warn);
+    font: 600 var(--fs-sm) / 1.35 var(--font-ui);
+    text-align: center;
+    pointer-events: auto;
+}
+
 .showcase-panel .character-select-screen,
 .showcase-panel .track-select-screen {
     display: flex;

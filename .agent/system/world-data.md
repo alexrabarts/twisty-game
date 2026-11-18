@@ -74,7 +74,7 @@ The kept corridor is 646 km. At 4 m and 16 B per sample the edge samples are 2.6
 
 ## H1: hosting
 
-GitHub Pages builds `main` with the legacy Jekyll builder (checked at plan time). `.nojekyll` at the repo root stops the Jekyll build from filtering about 1 500 binary files. **Not verified:** how Pages serves a `.bin` (content-type, gzip, status). P-H1 checks it on the live site after the first merge that puts `world/` on `main`. World mode stays behind `?world=` until then.
+GitHub Pages builds `main` with the legacy Jekyll builder (checked at plan time). `.nojekyll` at the repo root stops the Jekyll build from filtering about 1 500 binary files. **Not verified:** how Pages serves a `.bin` (content-type, gzip, status). P-H1 checks it on the live site after the first merge that puts `world/` on `main`. The world is the menu's default ride before that check, so a host that does not serve the data must not leave a broken screen: when the load fails (a fetch error, a status other than 200, data not in the world format) `Game.fallBackToLegs` opens the leg screen with a note (`RideMode.FALLBACK_NOTE`), and the rider screen stops offering the world for that page.
 
 ## W2: the importer (Tremola slice)
 
@@ -158,7 +158,7 @@ All little-endian. `world/manifest.json` holds the indexes, `world/ride.json` th
 
 ## Runtime (js/world/, W3)
 
-`?world=<stage|all>` (`tremola` is the only stage until W5) starts the game on a streamed world in place of the legs. `?worldData=<path>` reads the data from another folder, for tests only: the path must be relative and under `world/` or `tests/fixtures/world/` (no scheme, `//`, `..` or backslash), and a world read from anywhere else, or whose `manifest.json` is not the one `world/SHA256SUMS` lists, is not trusted: `environment.submitAllowed` is false and no board may take its times.
+The plain page's menu rides the world: choosing a rider starts `RideMode.DEFAULT_WORLD` (`tremola`), and CLASSIC LEGS opens the leg screen. `?world=<stage|all>` (`tremola` is the only stage until W5) starts a streamed world without the menu, and `?legs` keeps the old menu. `js/ridemode.js` is the only reader of `?world`; everything else keys off `environment.isWorld`. `?worldData=<path>` reads the data from another folder, for tests only: the path must be relative and under `world/` or `tests/fixtures/world/` (no scheme, `//`, `..` or backslash), and a world read from anywhere else, or whose `manifest.json` is not the one `world/SHA256SUMS` lists, is not trusted: `environment.submitAllowed` is false and no board may take its times.
 
 | Module | What it does |
 |---|---|

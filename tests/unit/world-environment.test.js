@@ -18,13 +18,6 @@ async function load(search = '', id = 'tremola') {
 }
 
 describe('asking for a world', () => {
-    test('?world= names it, and a page without it asks for none', () => {
-        expect(WorldEnvironment.requested('?world=tremola')).toBe('tremola');
-        expect(WorldEnvironment.requested('?world=all&worldData=world/')).toBe('all');
-        expect(WorldEnvironment.requested('')).toBeNull();
-        expect(WorldEnvironment.requested('?x=1')).toBeNull();
-    });
-
     test('an unknown stage says what is known', async () => {
         await expect(load('', 'nowhere')).rejects.toThrow('unknown world "nowhere"; known: all, tremola');
     });

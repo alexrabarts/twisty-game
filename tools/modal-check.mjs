@@ -7,7 +7,11 @@
 //   - keyboard focus is inside it
 // and that the step's click or key had its effect (the next dialog on top, the one below back, or the menu).
 //
-//   node tools/modal-check.mjs [--only name,name] [--variant desktop|touch|both] [--out <dir>] [--jobs N] [--chrome <path>]
+//   node tools/modal-check.mjs [--only name,name] [--variant desktop|touch|both] [--out <dir>] [--jobs N] [--chrome <path>] [--gpu] [--port N]
+//
+// The menu sequences start on the plain page (no query), as a player does: choosing a rider rides the world, Classic
+// legs rides a leg, and a world whose data does not load hands over to the legs (menu-world-fallback answers every
+// world/ request with a 404). --gpu renders on the machine's GPU at full resolution, for screenshots worth looking at.
 //
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
 // Never lets a page reach production: cloudfunctions.net, firebasedatabase.app and firebaseio.com are aborted.
@@ -35,6 +39,8 @@ const only = option('only') ? option('only').split(',') : null;
 const variants = (option('variant') || 'both') === 'both' ? ['desktop', 'touch'] : [option('variant')];
 const outDir = option('out');
 const jobs = Number(option('jobs') || 3);
+const gpu = argv.includes('--gpu');
+const listenPort = Number(option('port') || 0);
 if (outDir) mkdirSync(outDir, { recursive: true });
 
 // The dialogs the game had before js/modals.js, by selector; anything opened through Modals carries data-modal and
@@ -52,6 +58,38 @@ const crash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotific
 // P on a keyboard; a touch screen has only its pause button to tap
 const pause = { eval: () => game.pauseRace(), touch: '.virtual-button-pause', top: 'world-pause' };
 const finish = { eval: () => game.finishRun(), top: 'finishBanner' };
+// A world ride is up: the world's environment, the bike and the run
+const WORLD_READY = 'window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun';
+// The world chosen on the menu is the one ?world=tremola gives: its environment, stage and rider, with no query
+const worldFromMenu = () => {
+    const problems = [];
+    const env = game.environment;
+    if (!env || env.constructor.name !== 'WorldEnvironment') problems.push(`the environment is ${env && env.constructor.name}, not WorldEnvironment`);
+    if (env && env.config.id !== 'tremola') problems.push(`the stage is ${env.config.id}, not tremola`);
+    if (location.search) problems.push(`the page has a query: ${location.search}`);
+    const chosen = game.tourSystem.selectedCharacterId;
+    if (!game.selectedCharacter || game.selectedCharacter.id !== chosen) problems.push(`the ride has rider ${game.selectedCharacter && game.selectedCharacter.id}, the menu chose ${chosen}`);
+    if (document.querySelector('.tour-selector-overlay') && getComputedStyle(document.querySelector('.tour-selector-overlay')).display !== 'none') problems.push('the menu is still shown');
+    return problems;
+};
+const creditShown = () => {
+    const text = (document.querySelector('#world-credits .world-credits-credit') || {}).textContent || '';
+    return /swisstopo/.test(text) ? [] : [`the credits panel shows ${JSON.stringify(text)}`];
+};
+const legScreen = () => (getComputedStyle(document.querySelector('.track-select-screen')).display === 'none' ? ['the leg screen is not shown'] : []);
+// Each check runs in the page, so it names nothing from this file
+const fallbackShown = () => {
+    const problems = [];
+    if (getComputedStyle(document.querySelector('.track-select-screen')).display === 'none') problems.push('the leg screen is not shown');
+    const note = document.querySelector('.tour-selector-overlay .menu-notice');
+    if (!note || !/could not load/.test(note.textContent)) problems.push('no note on the menu');
+    if (document.getElementById('world-loading')) problems.push('the loading screen is left over');
+    return problems;
+};
+const legRide = () => {
+    const env = game.environment;
+    return env && env.constructor.name === 'Environment' && !env.isWorld ? [] : [`the environment is ${env && env.constructor.name}, not a leg's Environment`];
+};
 const SEQUENCES = [
     // A world ride: the crash dialog, and every way from it to the menu
     { name: 'world-crash-menu-click', page: 'world', steps: [
@@ -132,11 +170,35 @@ const SEQUENCES = [
         { click: '#world-credits button', top: MENU }
     ] },
     { name: 'menu-best-times', page: 'menu', steps: [
-        { click: '#riderContinueBtn', top: MENU },
+        { click: '#riderClassicBtn', top: MENU, check: legScreen },
         { click: '#legLeaderboardBtn', top: 'leaderboardViewer' },
         { key: 'Escape', tap: '#leaderboardViewerClose', top: MENU, focus: '#legLeaderboardBtn' },
         { click: '#legLeaderboardBtn', top: 'leaderboardViewer' },
         { click: '#leaderboardViewerClose', top: MENU }
+    ] },
+
+    // The plain page: a rider chosen with real clicks rides the world, as ?world=tremola does, to its finish card
+    { name: 'menu-world-ride', page: 'menu', steps: [
+        { top: MENU },
+        { click: '#riderNextBtn', top: MENU },
+        { click: '#riderPrevBtn', top: MENU },
+        { click: '#riderContinueBtn', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
+        pause,
+        { click: '#world-pause [data-credits]', top: 'world-credits', check: creditShown },
+        { click: '#world-credits button', top: 'world-pause' },
+        { click: '#world-pause [data-resume]', top: 'none' },
+        { ...finish, check: () => (document.querySelector('#finishBanner .finish-title') || {}).textContent === 'STAGE COMPLETE' ? [] : ['the finish is not the world\'s card'] },
+        { click: '#finishBanner [data-menu]', top: MENU, nav: true }
+    ] },
+    // Classic legs on the same menu rides a leg
+    { name: 'menu-classic-leg', page: 'menu', steps: [
+        { click: '#riderClassicBtn', top: MENU, check: legScreen },
+        { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
+    ] },
+    // A host that does not serve the world: the legs take over with the note, and a leg rides
+    { name: 'menu-world-fallback', page: 'menu', noWorld: true, steps: [
+        { click: '#riderContinueBtn', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
+        { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
     ] },
 
     // A leg, for comparison: no confirm, the menu is one press away
@@ -196,10 +258,10 @@ function startServer() {
         res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream' });
         createReadStream(file).pipe(res);
     });
-    return new Promise(done => server.listen(0, '127.0.0.1', () => done(server)));
+    return new Promise(done => server.listen(listenPort, '127.0.0.1', () => done(server)));
 }
 
-async function openPage(browser, port, kind, variant, errors) {
+async function openPage(browser, port, kind, variant, errors, noWorld = false) {
     // The browser's own first tab: a second tab would be in the background, where frames stall
     const [page] = await browser.pages();
     await page.bringToFront();
@@ -209,6 +271,8 @@ async function openPage(browser, port, kind, variant, errors) {
         const target = new URL(request.url());
         if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
             request.abort();
+        } else if (noWorld && target.pathname.startsWith('/world/')) {
+            request.respond({ status: 404, contentType: 'text/plain', body: 'not served' });
         } else if (/jsdelivr\.net\/npm\/three@0\.150\.0\/build\/three\.min\.js/.test(request.url())) {
             request.respond({ status: 200, contentType: 'text/javascript', body: readFileSync(join(root, 'node_modules/three/build/three.min.js')) });
         } else {
@@ -224,7 +288,7 @@ async function openPage(browser, port, kind, variant, errors) {
         await page.waitForFunction('window.game && window.game.tourSystem && document.querySelector(".tour-selector-overlay")', { timeout: 60000, polling: 250 });
     }
     // The rule is about the DOM over the canvas: a quarter-resolution canvas keeps a software renderer quick
-    await page.evaluate(() => { window.game.adaptResolution = () => {}; window.game.renderer.setPixelRatio(0.25); });
+    if (!gpu) await page.evaluate(() => { window.game.adaptResolution = () => {}; window.game.renderer.setPixelRatio(0.25); });
     if (variant === 'touch') await page.evaluate(() => document.body.classList.add('touch'));
     if (kind === 'leg') {
         await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
@@ -348,7 +412,7 @@ async function runSequence(port, sequence, variant) {
     for (let attempt = 0; attempt < 3 && !page; attempt++) {
         browser = await launch();
         try {
-            page = await openPage(browser, port, sequence.page, variant, errors);
+            page = await openPage(browser, port, sequence.page, variant, errors, sequence.noWorld);
         } catch (error) {
             await browser.close().catch(() => {});
             if (attempt === 2) return { failures: [], log, unstarted: error.message.split('\n')[0] };
@@ -364,6 +428,7 @@ async function runSequence(port, sequence, variant) {
                 log.push({ step: label, skipped: 'keyboard' });
                 continue;
             }
+            const watched = step.watch ? page.waitForFunction(step.watch, { timeout: 120000, polling: 50 }).then(() => true, () => false) : null;
             const navigation = step.nav ? page.waitForNavigation({ waitUntil: 'load', timeout: 60000 }).catch(() => null) : null;
             if (step.touch && variant === 'touch') {
                 const point = await pointAt(page, step.touch);
@@ -387,6 +452,12 @@ async function runSequence(port, sequence, variant) {
             } else if (step.type) {
                 await page.keyboard.type(step.type);
             }
+            const waits = [];
+            if (watched && !(await watched)) waits.push(`never saw ${step.watch}`);
+            if (step.ready) {
+                const ready = await page.waitForFunction(step.ready, { timeout: 600000, polling: 500 }).then(() => true, () => false);
+                if (!ready) waits.push(`never ready: ${step.ready}`);
+            }
             if (navigation) {
                 await navigation;
                 await page.waitForFunction('window.game && window.game.tourSystem && document.querySelector(".tour-selector-overlay")', { timeout: 60000, polling: 250 }).catch(() => null);
@@ -396,7 +467,8 @@ async function runSequence(port, sequence, variant) {
                 await settle(page, 8);
                 return page.evaluate(audit, KNOWN);
             });
-            const problems = judge(state, step);
+            const problems = [...waits, ...judge(state, step)];
+            if (step.check) problems.push(...await page.evaluate(step.check));
             if (step.nav && /world=/.test(state.search)) problems.push('still on the world ride, the menu did not open');
             if (step.focus) {
                 const focused = await page.evaluate(sel => { const el = document.querySelector(sel); return !!el && document.activeElement === el; }, step.focus);
@@ -421,7 +493,8 @@ const executablePath = chromePath();
 const server = await startServer();
 const port = server.address().port;
 // A fresh browser for each sequence, its one tab in front: a background tab's frames stall
-const launch = () => puppeteer.launch({ protocolTimeout: 300000, executablePath, headless: 'new', args: ['--no-sandbox', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+const renderer = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+const launch = () => puppeteer.launch({ protocolTimeout: 300000, executablePath, headless: 'new', args: ['--no-sandbox', ...renderer, '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
 const report = { results: {}, failing: [] };
 try {
     const queue = variants.flatMap(variant => SEQUENCES.filter(sequence => !only || only.includes(sequence.name)).map(sequence => ({ variant, sequence })));

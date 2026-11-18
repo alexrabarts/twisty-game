@@ -383,6 +383,9 @@ class TourSystem {
         }
 
         const icon = name => (typeof UiIcons !== 'undefined' ? UiIcons.svg(name) : '');
+        // With a world to ride (Game.openRide sets onWorldSelected), the rider's primary button rides it and Classic
+        // legs goes to the leg screen; without one the rider goes on to the leg screen as before
+        const world = typeof this.onWorldSelected === 'function';
         const selectorHTML = `
             <div class="tour-selector-overlay showcase-mode">
                 <div class="tour-selector-panel showcase-panel">
@@ -398,7 +401,8 @@ class TourSystem {
                             <button class="carousel-arrow" id="riderNextBtn">›</button>
                         </div>
                         <div class="showcase-actions">
-                            <button id="riderContinueBtn" class="showcase-continue">CONTINUE →</button>
+                            <button id="riderContinueBtn" class="showcase-continue">${world ? 'RIDE →' : 'CONTINUE →'}</button>
+                            ${world ? '<button id="riderClassicBtn" class="showcase-secondary">CLASSIC LEGS</button>' : ''}
                         </div>
                     </div>
 
@@ -406,7 +410,7 @@ class TourSystem {
                     <div class="track-select-screen" style="display: none;">
                         <div class="showcase-label">
                             <button id="backToRidersBtn" class="carousel-back">← RIDER</button>
-                            <span>CHOOSE YOUR LEG</span>
+                            <span>${world ? 'CHOOSE A CLASSIC LEG' : 'CHOOSE YOUR LEG'}</span>
                         </div>
                         <div class="showcase-spacer"></div>
                         <div class="showcase-controls">
@@ -478,6 +482,8 @@ class TourSystem {
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
+            const classicButton = document.getElementById('riderClassicBtn');
+            if (classicButton) classicButton.disabled = tier !== 'lit';
             const prev = document.getElementById('bikePrevBtn');
             const next = document.getElementById('bikeNextBtn');
             if (prev) prev.addEventListener('click', () => moveBikeFocus(-1));
@@ -562,14 +568,28 @@ class TourSystem {
         document.getElementById('legNextBtn').addEventListener('click', () => moveLegFocus(1));
         document.getElementById('backToRidersBtn').addEventListener('click', showRiderScreen);
 
-        document.getElementById('riderContinueBtn').addEventListener('click', () => {
+        // Chooses the focused rider; false when it is locked
+        const chooseRider = () => {
             const c = riderOrder[this.riderFocusIndex];
-            if (!this.isCharacterUnlocked(c.id)) return;
+            if (!this.isCharacterUnlocked(c.id)) return false;
             this.selectCharacter(c.id);
             // Once chosen past, nothing is new any more
             this.freshRiders.clear();
-            showTrackScreen();
+            return true;
+        };
+
+        document.getElementById('riderContinueBtn').addEventListener('click', () => {
+            if (!chooseRider()) return;
+            if (!world) {
+                showTrackScreen();
+                return;
+            }
+            this.legSelectorActive = false;
+            this.onWorldSelected();
         });
+
+        const classic = document.getElementById('riderClassicBtn');
+        if (classic) classic.addEventListener('click', () => { if (chooseRider()) showTrackScreen(); });
 
         document.getElementById('legStartBtn').addEventListener('click', () => {
             const index = this.legFocusIndex;
@@ -635,6 +655,20 @@ class TourSystem {
         // Kick off the 3D rider showcase
         if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
         renderRiderCard();
+    }
+
+    // A short line on the menu, under its title (the world's data failing to load, js/ridemode.js FALLBACK_NOTE)
+    showNotice(text) {
+        const panel = document.querySelector('.tour-selector-panel');
+        if (!panel) return;
+        let notice = panel.querySelector('.menu-notice');
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.className = 'menu-notice';
+            notice.setAttribute('role', 'status');
+            panel.querySelector('.tour-title').insertAdjacentElement('afterend', notice);
+        }
+        notice.textContent = text;
     }
 
     firstPlayableLegIndex() {

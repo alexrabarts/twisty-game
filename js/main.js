@@ -232,25 +232,42 @@ class Game {
             }
         });
 
-        // `?world=<stage|all>` rides the streamed world; every other page shows the legs
-        const worldId = typeof WorldEnvironment !== 'undefined' ? WorldEnvironment.requested(window.location.search) : null;
-        if (worldId) {
-            this.startWorld(worldId);
+        // What the page rides is read from the URL in one place (js/ridemode.js); a page without it has the legs
+        this.rideMode = typeof RideMode !== 'undefined' ? RideMode.resolve(window.location.search) : { kind: 'legs', world: null, direct: false };
+        this.openRide();
+    }
+
+    // A world named in the URL starts at once. Otherwise the menu opens: choosing a rider starts the world (the
+    // default) or, under ?legs, goes on to the leg screen; Classic legs on the rider screen goes to the leg screen
+    openRide() {
+        const mode = this.rideMode;
+        if (mode.direct) {
+            this.startWorld(mode.world);
             return;
         }
-
-        // Show tour selector and wait for leg selection
-        console.log('Showing tour selector...');
+        this.tourSystem.onWorldSelected = mode.kind === 'world' ? () => this.chooseWorld() : null;
         this.tourSystem.createLegSelector(document.body, (leg) => {
             console.log('Leg selected:', leg.name);
             this.initializeGameWithLeg(leg);
         });
     }
 
-    // Loads the world's ride layer, then builds the game round it (WorldEnvironment.load)
+    // The menu's world: a leg ridden on this page has left its systems built, so the world starts on a fresh page
+    // (the rider and bike are kept in localStorage); a page that has ridden nothing starts it here
+    chooseWorld() {
+        if (this.environment) {
+            window.location.assign(RideMode.worldUrl(window.location, this.rideMode.world));
+            return;
+        }
+        this.startWorld(this.rideMode.world);
+    }
+
+    // Loads the world's ride layer, then builds the game round it (WorldEnvironment.load). A world that cannot load
+    // hands over to the legs (fallBackToLegs)
     async startWorld(id) {
         this.endMenuShowcase();
         this.removeRunOverlays();
+        this.tourSystem.hideLegSelector();
         const note = document.createElement('div');
         note.id = 'world-loading';
         note.textContent = 'Loading the road...';
@@ -269,13 +286,35 @@ class Game {
             const environment = await WorldEnvironment.load(this.scene, { id, search: window.location.search });
             await this.initializeGameWithWorld(environment);
         } catch (error) {
-            console.error('Failed to load the world:', error);
-            note.firstChild.textContent = `The world could not load: ${error.message}`;
-            note.style.color = '#ff8a7a';
+            this.fallBackToLegs(error);
             return;
         }
         note.remove();
         document.body.classList.remove('world-loading-on');
+    }
+
+    // The world's data did not load (a fetch error, a status other than 200, data not in the world format: the live
+    // host is not yet proven to serve world/*.bin). The legs take over with a note on the leg screen, and the rider
+    // screen stops offering the world for the rest of the page
+    fallBackToLegs(error) {
+        console.error('Failed to load the world; the classic legs take over:', error);
+        const note = document.getElementById('world-loading');
+        if (note) note.remove();
+        document.body.classList.remove('world-loading-on');
+        // A world built part-way is torn down, so nothing keyed off isWorld sees it
+        if (this.environment && this.environment.isWorld) {
+            try {
+                this.cleanupCurrentLeg();
+            } catch (cleanup) {
+                console.warn('The part-built world could not be torn down:', cleanup);
+            }
+            this.environment = null;
+        }
+        this.rideMode = { kind: 'legs', world: null, direct: false };
+        this.tourSystem.onWorldSelected = null;
+        this.tourSystem.createLegSelector(document.body, (leg) => this.initializeGameWithLeg(leg));
+        this.tourSystem.showTrackScreen();
+        this.tourSystem.showNotice(RideMode.FALLBACK_NOTE);
     }
 
     // The game on a world: no cones or rockfalls are built (they are leg systems), traffic rides the

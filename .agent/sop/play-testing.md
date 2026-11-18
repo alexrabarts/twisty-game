@@ -48,7 +48,9 @@ Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without
 The world is one continuous ride on real Swiss roads. It streams the land and the road round the bike. The shipped data in `world/` holds one stage, `tremola` (Airolo to the Gotthard summit, 13.3 km, 12 gates).
 
 1. Run `npm run serve`.
-2. Open `http://localhost:8080/?world=tremola`. `?world=all` rides every stage in the data folder in order.
+2. Open `http://localhost:8080/` and choose a rider: RIDE starts the Tremola slice. CLASSIC LEGS on the rider screen opens the legs (`?legs` opens the old menu, where the rider goes on to the legs). `?world=tremola` starts the world without the menu, and `?world=all` rides every stage in the data folder in order.
+
+When the world's data does not load (a fetch error, a status other than 200, data not in the world format), the leg screen opens with a note under the title. `node tools/modal-check.mjs --only menu-world-ride,menu-classic-leg,menu-world-fallback` proves the three menu paths with real clicks.
 
 `?worldData=<path>` reads the world from another folder. The path must be relative and start with `world/` or `tests/fixtures/world/`. Any other value (a URL, `..`, a leading `/`) stops the load, and the page fetches nothing. A folder that is not the shipped `world/` never submits a time. For the 6 km test fixture with two stages, open `?world=all&worldData=tests/fixtures/world/mini`.
 
