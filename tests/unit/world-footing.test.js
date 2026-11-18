@@ -19,12 +19,13 @@ const { THREE } = game;
 const list = rows => rows.map(r => `${r.name} at (${r.x}, ${r.z}) s ${r.s}: wet ${r.wetShare}, float ${r.floatM} m, buried ${r.buriedM} m`).join('\n');
 
 describe('the Tremola slice: buildings on dry land, meeting the ground', () => {
-    let env, rows;
+    let env, rows, buildings, things;
     beforeAll(async () => {
         const { fetchFn } = diskFetch();
         const gathered = await rideAndGather(game, { fetchFn, stepM: 100, models: modelStandIns(THREE, readFileSync, root) });
         env = gathered.env;
-        const buildings = buildingsOf(gathered.things, { plinthOf: modelPlinths(readFileSync, root) });
+        things = gathered.things;
+        buildings = buildingsOf(things, { plinthOf: modelPlinths(readFileSync, root) });
         rows = auditFooting(game, env.data, env.ground, buildings).map(r => ({ ...r, s: Math.round(env.route.project(r.x, r.z, null, {}).s) }));
     }, 300000);
 
@@ -48,6 +49,23 @@ describe('the Tremola slice: buildings on dry land, meeting the ground', () => {
     test(`no corner floats more than ${FOOT_TOLERANCE_M} m over the land, and no floor is sunk more than that under it`, () => {
         const bad = rows.filter(r => r.floats || r.buries).sort((p, q) => Math.max(q.floatM, q.buriedM) - Math.max(p.floatM, p.buriedM));
         if (bad.length) throw new Error(`${bad.length} buildings do not meet the land:\n${list(bad.slice(0, 20))}`);
+    });
+
+    test('every building stands on its own footing, in stone, reaching up into its walls; no footing stands alone', () => {
+        const stone = game.RoadMesh.stoneMaterial();
+        const footings = things.filter(t => t.name === 'houses:footing' || t.name.endsWith(':footing'));
+        expect(footings.length).toBe(rows.length);
+        expect(footings.every(f => f.material === stone)).toBe(true);
+        expect(buildings.orphans).toEqual([]);
+        const bare = rows.filter(r => !r.footing || r.gapM > 0);
+        if (bare.length) throw new Error(`${bare.length} buildings without a footing under their walls:\n${list(bare)}`);
+    });
+
+    test('no building is a bare box: a small one is a hut, a big mapped wall a block of stone', () => {
+        const names = [...new Set(things.filter(t => t.type === 'house').map(t => t.name))];
+        expect(names.filter(n => n === 'houses:plain_house')).toEqual([]);
+        // The plain box of old was untextured beige; a hut has its timber walls and a slate roof
+        for (const t of things.filter(t => t.name === 'houses:plain_hut')) expect(t.material.color.getHex()).not.toBe(0xb8aa94);
     });
 
     test('the Hospiz stands beside the summit, its front to the ride', () => {

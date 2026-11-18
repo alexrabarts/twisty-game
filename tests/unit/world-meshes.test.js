@@ -605,22 +605,23 @@ describe('Scenery', () => {
         houses.push({ x: 100, z: 100, w: 8, d: 10, heading: 0, h: 6, kind: 1 }, { x: 5000, z: 5000, w: 8, d: 10, heading: 0, h: 6, kind: 1 });
         const group = scenery.buildTile(tile, null, houses, { x: 200, z: 50 });
         const meshes = group.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing');
-        const placed = meshes.reduce((n, mesh) => n + mesh.count, 0);
+        // A shape of several parts is one mesh for each part, with the same name and count
+        const placed = [...new Map(meshes.map(m => [m.name, m.count])).values()].reduce((n, c) => n + c, 0);
         expect(placed).toBeGreaterThan(0);
         expect(placed).toBeLessThanOrEqual(houses.length - 2);
         expect(scenery.houseInstances).toBeLessThanOrEqual(Scenery.BUILDING_CAP);
         // Each house has its footing, from under the land (flat at 1000 here) up into the walls; the floor is on the land
         const footing = group.children.find(m => m.name === 'houses:footing');
-        expect(footing.count).toBe(placed);
-        const foot = new THREE.Matrix4(), body = new THREE.Matrix4();
-        footing.getMatrixAt(0, foot);
+        expect(footing.material).toBe(RoadMesh.stoneMaterial());
+        expect(footing.userData.footings).toHaveLength(placed);
+        const body = new THREE.Matrix4();
         meshes[0].getMatrixAt(0, body);
-        const base = new THREE.Vector3().setFromMatrixPosition(foot), size = new THREE.Vector3().setFromMatrixScale(foot);
         const floor = new THREE.Vector3().setFromMatrixPosition(body).y;
+        const first = footing.userData.footings[0];
         // (the instance matrices are float32)
-        expect(base.y).toBeCloseTo(1000 - Scenery.FOOTING_UNDER_M, 3);
+        expect(first.bottom).toBeCloseTo(1000 - Scenery.FOOTING_UNDER_M, 6);
         expect(floor).toBeCloseTo(1000 - Scenery.FLOOR_SINK_M, 3);
-        expect(base.y + size.y).toBeCloseTo(floor + Scenery.FOOTING_OVER_M, 3);
+        expect(first.top).toBeCloseTo(floor + Scenery.FOOTING_OVER_M, 3);
         // No house on the road (x = 100), none beyond reach
         const matrix = new THREE.Matrix4();
         for (const mesh of meshes) {
@@ -668,8 +669,9 @@ describe('Scenery', () => {
                 drawn++;
             }
         }
-        expect(drawn).toBe(houses.length);
-        expect(group.children.filter(m => m.name === 'houses:plain_house').reduce((n, m) => n + m.count, 0)).toBe(1);
+        // The hut (the shed's footprint is too small for a house) is two parts, walls and roof
+        expect(drawn).toBe(houses.length + 1);
+        expect(group.children.filter(m => m.name === 'houses:plain_hut').reduce((n, m) => n + m.count, 0)).toBe(2);
     });
 
     test('signposts are one instanced mesh, facing the rider who arrives', () => {
@@ -706,7 +708,8 @@ describe('Scenery', () => {
         expect(Math.abs(node.position.x)).toBeLessThanOrEqual(clear + 2 + 1e-6);
         // Its floor on the land (flat at 1000), its footing from under it
         expect(node.position.y).toBeCloseTo(1000 - Scenery.FLOOR_SINK_M, 6);
-        expect(group.children[1].position.y).toBeCloseTo(1000 - Scenery.FOOTING_UNDER_M, 6);
+        expect(group.children[1].userData.footings[0].bottom).toBeCloseTo(1000 - Scenery.FOOTING_UNDER_M, 6);
+        expect(group.children[1].material).toBe(RoadMesh.stoneMaterial());
         // The model's front (-z) looks at the road
         const front = new THREE.Vector3(0, 0, -1).applyEuler(node.rotation);
         expect(Math.sign(front.x)).toBe(-Math.sign(node.position.x));

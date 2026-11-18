@@ -92,9 +92,10 @@ export function buildingsOf(things, { plinthOf = () => 0 } = {}) {
         if (t.type !== 'house' && t.type !== 'landmark') continue;
         if (t.name === 'houses:footing' || t.name.endsWith(':footing')) { footings.push(t); continue; }
         const key = t.type === 'landmark' ? t.name : `${t.tile}|${t.name}|${t.index}`;
-        const g = groups.get(key) || { type: t.type, name: t.name, polys: [], low: Infinity };
+        const g = groups.get(key) || { type: t.type, name: t.name, polys: [], low: Infinity, high: -Infinity };
         g.polys.push(t.poly);
         g.low = Math.min(g.low, t.y0);
+        g.high = Math.max(g.high, t.y1);
         groups.set(key, g);
     }
     const inside = (r, x, z) => {
@@ -106,9 +107,12 @@ export function buildingsOf(things, { plinthOf = () => 0 } = {}) {
         const r = rectOf(g.polys);
         const under = footings.filter(f => inside(r, f.x, f.z)).sort((p, q) => Math.hypot(p.x - r.x, p.z - r.z) - Math.hypot(q.x - r.x, q.z - r.z));
         const footing = under[0] || null;
+        if (footing) footing.owned = true;
         const base = footing ? rectOf([footing.poly]) : r;
-        out.push({ type: g.type, name: g.name, ...r, floor: g.low + plinthOf(g.name), foot: footing ? Math.min(g.low, footing.y0) : g.low, base });
+        out.push({ type: g.type, name: g.name, ...r, floor: g.low + plinthOf(g.name, g.high - g.low), foot: footing ? Math.min(g.low, footing.y0) : g.low, footTop: footing ? footing.y1 : null, footing: !!footing, base });
     }
+    // A footing no building stands on (left behind where its house was left out)
+    out.orphans = footings.filter(f => !f.owned).map(f => ({ name: f.name, x: Math.round(f.x * 10) / 10, z: Math.round(f.z * 10) / 10 }));
     return out;
 }
 
@@ -132,32 +136,40 @@ export function auditFooting(game, data, ground, buildings, { tolerance = FOOT_T
             float = Math.max(float, b.foot - g);
             buried = Math.max(buried, g - b.floor);
         }
+        // A footing reaches up into the walls: no gap between its top and the floor
+        const gap = b.footTop === null ? 0 : b.floor - b.footTop;
         const round = v => Math.round(v * 100) / 100;
-        return { type: b.type, name: b.name, x: round(b.x), z: round(b.z), wetShare: known ? round(wet / known) : null, wet: wet > 0, floatM: round(float), buriedM: round(buried), floats: float > tolerance, buries: buried > tolerance };
+        return { type: b.type, name: b.name, x: round(b.x), z: round(b.z), wetShare: known ? round(wet / known) : null, wet: wet > 0, floatM: round(float), buriedM: round(buried), floats: float > tolerance, buries: buried > tolerance, footing: b.footing, gapM: round(gap) };
     });
 }
 
 // The plinth each village model draws under its y 0 (the depth of its lowest part under y 0 in its .glb), by the mesh
-// name the world gives it: houses:<node> and landmark:<name> (landmarks.json gives the asset). A plain box has none.
+// name the world gives it: houses:<node> and landmark:<name> (landmarks.json gives the asset), scaled as the model is
+// drawn (`drawn`, its drawn height, against its height in the file). A hut or a wall block has none.
 export function modelPlinths(readFileSync, root) {
-    const lowest = (file, pick) => {
+    const lowest = (file, pick, top = false) => {
         const bytes = readFileSync(new URL(file, root));
         const json = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString());
         const out = new Map();
         for (const node of json.nodes) {
             if (node.mesh === undefined || !node.name || node.name.includes(':') || !pick(node.name)) continue;
             const k = node.scale ? node.scale[1] : 1, t = node.translation ? node.translation[1] : 0;
-            const low = Math.min(...json.meshes[node.mesh].primitives.map(p => json.accessors[p.attributes.POSITION].min[1] * k + t));
-            out.set(node.name, Math.min(out.get(node.name) ?? Infinity, low));
+            const prims = json.meshes[node.mesh].primitives.map(p => json.accessors[p.attributes.POSITION]);
+            const low = Math.min(...prims.map(a => a.min[1] * k + t)), high = Math.max(...prims.map(a => a.max[1] * k + t));
+            const held = out.get(node.name);
+            out.set(node.name, held ? { low: Math.min(held.low, low), high: Math.max(held.high, high) } : { low, high });
         }
         return out;
     };
     const plinths = new Map();
-    for (const [name, low] of lowest('assets/village/houses.glb', n => n.startsWith('house_'))) plinths.set(`houses:${name}`, Math.max(0, -low));
+    for (const [name, b] of lowest('assets/village/houses.glb', n => n.startsWith('house_'))) plinths.set(`houses:${name}`, b);
     for (const l of JSON.parse(readFileSync(new URL('tools/world/landmarks.json', root), 'utf8'))) {
         if (!/\.glb$/.test(l.asset)) continue;
-        const low = Math.min(...lowest(l.asset, () => true).values());
-        plinths.set(`landmark:${l.name}`, Math.max(0, -low));
+        const all = [...lowest(l.asset, () => true).values()];
+        plinths.set(`landmark:${l.name}`, { low: Math.min(...all.map(b => b.low)), high: Math.max(...all.map(b => b.high)) });
     }
-    return name => plinths.get(name) ?? 0;
+    return (name, drawn) => {
+        const b = plinths.get(name);
+        return b ? Math.max(0, -b.low) * (drawn / (b.high - b.low)) : 0;
+    };
 }

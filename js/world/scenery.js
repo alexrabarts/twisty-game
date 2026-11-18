@@ -174,6 +174,9 @@ class Scenery {
     // land clear of every road
     static get LANDMARK_ALONG_M() { return 150; }
     static get LANDMARK_OUT_M() { return 80; }
+    // The most the land may rise under a landmark's walls where a flatter place is near: its front faces the ride,
+    // and on more the front would stand on a storey of footing
+    static get LANDMARK_RISE_M() { return 1.5; }
 
     // Integer hash of a cell, 0 to 1
     static hash(ix, iz, salt) {
@@ -245,14 +248,16 @@ class Scenery {
             const cone = new THREE.ConeGeometry(2.2, 9, 6); cone.translate(0, 4.5, 0);
             const ball = new THREE.IcosahedronGeometry(3, 0); ball.translate(0, 5.5, 0);
             const blob = new THREE.IcosahedronGeometry(1, 0); blob.translate(0, 0.6, 0);
-            const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);
+            const wall = new THREE.BoxGeometry(1, 1, 1); wall.translate(0, 0.5, 0);
             this.fallback = {
                 trees: [
                     { kind: 'conifer', name: 'plain_conifer', parts: [{ geometry: cone, material: material(0x2d4a2d) }] },
                     { kind: 'broadleaf', name: 'plain_broadleaf', parts: [{ geometry: ball, material: material(0x4d6d34) }] },
                     { kind: 'bush', name: 'plain_bush', parts: [{ geometry: blob, material: material(0x587a3a) }] }
                 ],
-                houses: [{ name: 'plain_house', parts: [{ geometry: box, material: material(0xb8aa94) }], plain: true }]
+                houses: [{ name: 'plain_hut', parts: Scenery.hutParts(), plain: true }],
+                // A big mapped wall (buildings.mjs KIND.wall) is a block of stone, not a house
+                walls: [{ name: 'plain_wall', parts: [{ geometry: wall, material: material(0x8f8a80) }], plain: true }]
             };
         }
         return this.fallback;
@@ -293,6 +298,9 @@ class Scenery {
         return false;
     }
 
+    // A big mapped wall (tools/world/buildings.mjs KIND.wall)
+    static get KIND_WALL() { return 4; }
+
     // The cover class of standing water (tools/world/landcover.mjs COVER.water)
     static get COVER_WATER() { return 7; }
 
@@ -330,14 +338,54 @@ class Scenery {
         return { low, high };
     }
 
-    // The footing part: a unit box standing on y 0, in stone
-    static footingPart() {
-        if (!Scenery.footing) {
-            const geometry = new THREE.BoxGeometry(1, 1, 1);
-            geometry.translate(0, 0.5, 0);
-            Scenery.footing = { geometry, material: new THREE.MeshLambertMaterial({ color: 0x8a8478, flatShading: true }) };
+    // The footings of a set of buildings as one mesh in the world's own metres, so the dry-stone courses of the
+    // retaining walls (RoadMesh.stoneMaterial, drawn from the world position) lie on them at their true size.
+    // `boxes`: [{rect, bottom, top}] from Scenery.footing. Each footing is kept in userData.footings for the checks.
+    static footingMesh(boxes, name) {
+        const out = { positions: [], shades: [] };
+        const stone = [0.6, 0.58, 0.54];
+        for (const f of boxes) RoadMesh.box(out, f.rect.x, (f.bottom + f.top) / 2, f.rect.z, f.rect.across, f.top - f.bottom, f.rect.along, f.rect.heading, stone);
+        const mesh = new THREE.Mesh(RoadMesh.geometry(out.positions, out.shades), RoadMesh.stoneMaterial());
+        mesh.name = name;
+        mesh.receiveShadow = true;
+        mesh.userData.world = 'scenery';
+        mesh.userData.footings = boxes.map(f => ({ rect: { ...f.rect }, bottom: f.bottom, top: f.top }));
+        return mesh;
+    }
+
+    // Triangles of one footing (a box: 6 faces of 2)
+    static get FOOTING_TRIANGLES() { return 12; }
+
+    // A small building with no model to fit it (a hut, a garage, a store): walls of weathered timber under a pitched
+    // slate roof, in a unit cube standing on y 0 (the walls to WALL_SHARE of its height, the ridge along z), drawn at
+    // the footprint's size. The roof keeps inside the footprint, as a modelled house does.
+    static get HUT_WALL_SHARE() { return 0.62; }
+
+    static hutParts() {
+        if (!Scenery.hut) {
+            const wall = Scenery.HUT_WALL_SHARE;
+            const body = new THREE.BoxGeometry(1, wall, 1);
+            body.translate(0, wall / 2, 0);
+            // The gable roof: two slopes and two gable ends, from the eaves (y wall) to the ridge (y 1) along z
+            const roof = new THREE.BufferGeometry();
+            const e = wall, r = 1;
+            const v = [
+                -0.5, e, -0.5, 0, r, -0.5, 0, r, 0.5, -0.5, e, -0.5, 0, r, 0.5, -0.5, e, 0.5,
+                0.5, e, -0.5, 0.5, e, 0.5, 0, r, 0.5, 0.5, e, -0.5, 0, r, 0.5, 0, r, -0.5,
+                -0.5, e, -0.5, 0.5, e, -0.5, 0, r, -0.5,
+                -0.5, e, 0.5, 0, r, 0.5, 0.5, e, 0.5
+            ];
+            roof.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+            roof.computeVertexNormals();
+            const material = (hex) => new THREE.MeshLambertMaterial({ color: hex, flatShading: true, side: THREE.DoubleSide });
+            Scenery.hut = [{ geometry: body, material: material(0x8a6a4a) }, { geometry: roof, material: material(0x4c4f55) }];
         }
-        return Scenery.footing;
+        return Scenery.hut;
+    }
+
+    // The height a hut is drawn at: the mapped height, but no taller than a hut of its width would be
+    static hutHeight(b) {
+        return Math.min(b.h || 6, 2.2 + 0.6 * Math.min(b.w, b.d));
     }
 
     // A model's walls in its own plan: { x0, x1, z0, z1 } of its parts named `wall`, or of all its parts
@@ -367,20 +415,14 @@ class Scenery {
         return { x: x + mx * cos + mz * sin, z: z - mx * sin + mz * cos, heading: turn, along: (w.z1 - w.z0) * scale, across: (w.x1 - w.x0) * scale };
     }
 
-    // How a building meets the land under its walls `rect`: { floor, matrix } with `floor` the height of its model's
-    // y 0 and `matrix` the footing's (a unit box, Scenery.footingPart) from under the lowest land up into the walls.
-    // null where the land under it is not resident.
+    // How a building meets the land under its walls `rect`: { floor, rect, bottom, top, land } with `floor` the height
+    // of its model's y 0 and the footing (Scenery.footingMesh) from `bottom`, under the lowest land, up to `top`, into
+    // the walls. null where the land under it is not resident.
     footing(rect) {
         const land = this.seat(rect.x, rect.z, rect.heading, rect.along, rect.across);
         if (!land) return null;
         const floor = land.high - Scenery.FLOOR_SINK_M;
-        const bottom = land.low - Scenery.FOOTING_UNDER_M;
-        const matrix = new THREE.Matrix4().compose(
-            new THREE.Vector3(rect.x, bottom, rect.z),
-            new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rect.heading),
-            new THREE.Vector3(rect.across, floor + Scenery.FOOTING_OVER_M - bottom, rect.along)
-        );
-        return { floor, matrix, land };
+        return { floor, rect, bottom: land.low - Scenery.FOOTING_UNDER_M, top: floor + Scenery.FOOTING_OVER_M, land };
     }
 
     // Whether open ground at (x, z) is clear of road, bench and wall, and dry, and a thing of plan radius `radius`
@@ -496,7 +538,7 @@ class Scenery {
         const homes = this.set().houses;
         const byHome = new Map();
         const footings = [];
-        const footingCost = Scenery.trianglesOf([Scenery.footingPart()]);
+        const footingCost = Scenery.FOOTING_TRIANGLES;
         const nearest = buildings.slice().sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
         for (const b of nearest) {
             if (Math.hypot(b.x - bike.x, b.z - bike.z) > Scenery.BUILDING_REACH_M) continue;
@@ -508,7 +550,7 @@ class Scenery {
             const pose = this.housePose(b, homes[Math.floor(Scenery.hash(Math.round(b.x), Math.round(b.z), 8) * homes.length)]);
             const home = pose.home;
             const cost = Scenery.trianglesOf(home.parts) + footingCost;
-            if (this.houseInstances + held.house + home.parts.length + 1 > Scenery.BUILDING_CAP || held.houseTriangles + cost > houseRoom) continue;
+            if (this.houseInstances + held.house + home.parts.length > Scenery.BUILDING_CAP || held.houseTriangles + cost > houseRoom) continue;
             // The floor on the highest land under the walls, a footing down to the lowest (Scenery.footing)
             const walls = home.plain ? { x: b.x, z: b.z, heading: b.heading, along: b.d, across: b.w } : Scenery.wallRect(home, b.x, b.z, pose.turn, pose.scale[0], pose.centre);
             const foot = this.footing(walls);
@@ -523,12 +565,13 @@ class Scenery {
             const list = byHome.get(home) || [];
             list.push(new THREE.Matrix4().compose(position, rotation, scale));
             byHome.set(home, list);
-            footings.push(foot.matrix);
-            held.house += home.parts.length + 1;
+            footings.push(foot);
+            held.house += home.parts.length;
             held.houseTriangles += cost;
         }
         for (const [home, matrices] of byHome) this.instanced(home.parts, matrices, `houses:${home.name}`, group);
-        if (footings.length) this.instanced([Scenery.footingPart()], footings, 'houses:footing', group);
+        // The footings of exactly the houses drawn, as one mesh in stone
+        if (footings.length) group.add(Scenery.footingMesh(footings, 'houses:footing'));
 
         let sites = this.treeSites(tile, cover);
         sites.sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
@@ -605,14 +648,18 @@ class Scenery {
             const fit = Math.min(Scenery.HOUSE_SCALE_MAX, Math.max(straight, turned));
             if (fit >= Scenery.HOUSE_SCALE_MIN) return { home, turn: b.heading + (turned > straight ? Math.PI / 2 : 0), scale: [fit, fit, fit], centre };
         }
-        return { home: plain, turn: b.heading, scale: [b.w, b.h || 6, b.d], centre: [0, 0] };
+        if (b.kind === Scenery.KIND_WALL) return { home: this.plain().walls[0], turn: b.heading, scale: [b.w, b.h || 3, b.d], centre: [0, 0] };
+        return { home: plain, turn: b.heading, scale: [b.w, Scenery.hutHeight(b), b.d], centre: [0, 0] };
     }
 
     // Frees the instance buffers of a tile's scenery; the shared geometry and materials stay
     disposeTile(key) {
         const held = this.perTile.get(key);
         if (!held) return;
-        held.group.traverse(child => { if (child.isInstancedMesh) child.dispose(); });
+        held.group.traverse(child => {
+            if (child.isInstancedMesh) child.dispose();
+            else if (child.userData.footings) child.geometry.dispose();
+        });
         if (held.group.parent) held.group.parent.remove(held.group);
         this.treeCount -= held.trees;
         this.houseInstances -= held.house;
@@ -845,8 +892,10 @@ class Scenery {
         // Nearest the mapped point first; ties in the order they were made, so the choice is the same every time
         tried.forEach((t, k) => { t.k = k; });
         tried.sort((p, q) => p.d - q.d || p.k - q.k);
-        // A place whose land is not resident (no tile is drawn there) is taken only when no place on drawn land is clear
-        let landless = null;
+        // A place whose land is not resident (no tile is drawn there) is taken only when no place on drawn land is clear;
+        // of the places on drawn land, the nearest whose land rises no more than LANDMARK_RISE_M under its walls, else the
+        // one that rises least
+        let landless = null, steep = null;
         for (const t of tried) {
             const yaw = Math.atan2(-(t.rx - t.x), -(t.rz - t.z));
             // The plan box is centred on the place: the model's own middle is moved onto it (Scenery.landmarks)
@@ -856,10 +905,16 @@ class Scenery {
             const x = t.x - (plan.centre[0] * cos + plan.centre[1] * sin), z = t.z - (-plan.centre[0] * sin + plan.centre[1] * cos);
             const rect = shape ? Scenery.wallRect(shape, x, z, yaw, 1, [0, 0]) : { x: t.x, z: t.z, heading: yaw, along: plan.depth, across: plan.width };
             const place = { x, z, yaw, rect, y: road.y };
-            if (this.seat(rect.x, rect.z, rect.heading, rect.along, rect.across)) return place;
-            if (!landless) landless = place;
+            const land = this.seat(rect.x, rect.z, rect.heading, rect.along, rect.across);
+            if (!land) {
+                if (!landless) landless = place;
+                continue;
+            }
+            const rise = land.high - land.low;
+            if (rise <= Scenery.LANDMARK_RISE_M) return place;
+            if (!steep || rise < steep.rise) steep = { place, rise };
         }
-        return landless;
+        return steep ? steep.place : landless;
     }
 
     // The landmark models of a manifest ({name, asset} with asset a .glb in assets/), loaded once: asset -> model
@@ -910,11 +965,8 @@ class Scenery {
             node.rotation.y = place.yaw;
             group.add(node);
             if (foot) {
-                const footing = Scenery.footingPart();
-                const mesh = new THREE.Mesh(footing.geometry, footing.material);
-                mesh.name = `landmark:${l.name}:footing`;
+                const mesh = Scenery.footingMesh([foot], `landmark:${l.name}:footing`);
                 mesh.userData.world = 'landmark';
-                foot.matrix.decompose(mesh.position, mesh.quaternion, mesh.scale);
                 group.add(mesh);
             }
         }

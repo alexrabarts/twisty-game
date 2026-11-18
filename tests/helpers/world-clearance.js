@@ -137,6 +137,15 @@ export function sceneryOf(THREE, root) {
         if (!o.isMesh) return;
         const type = typeOf(o);
         if (!type) return;
+        // A merged mesh of footings (Scenery.footingMesh) is one thing per footing, each its own box in the world
+        if (o.userData.footings) {
+            o.userData.footings.forEach((f, i) => {
+                const fx = Math.sin(f.rect.heading), fz = Math.cos(f.rect.heading), lx = Math.cos(f.rect.heading), lz = -Math.sin(f.rect.heading);
+                const poly = [[-1, -1], [-1, 1], [1, 1], [1, -1]].map(([a, c]) => [f.rect.x + (a * f.rect.along / 2) * fx + (c * f.rect.across / 2) * lx, f.rect.z + (a * f.rect.along / 2) * fz + (c * f.rect.across / 2) * lz]);
+                out.push({ type, name: o.name, index: i, poly, y0: f.bottom, y1: f.top, x: f.rect.x, z: f.rect.z, material: o.material });
+            });
+            return;
+        }
         o.geometry.computeBoundingBox();
         const box = o.geometry.boundingBox;
         const count = o.isInstancedMesh ? o.count : 1;
@@ -147,7 +156,7 @@ export function sceneryOf(THREE, root) {
             } else world.copy(o.matrixWorld);
             const f = footprint(THREE, box, world);
             const x = f.poly.reduce((sum, p) => sum + p[0], 0) / 4, z = f.poly.reduce((sum, p) => sum + p[1], 0) / 4;
-            out.push({ type, name: o.name, index: i, ...f, x, z });
+            out.push({ type, name: o.name, index: i, ...f, x, z, material: o.material });
         }
     });
     return out;
