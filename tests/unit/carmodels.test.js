@@ -268,6 +268,22 @@ describe.each([['hatchback', HATCH], ['van', VAN]])('swapping the model of a %s'
         expect(glow).toEqual({ headlight: [0xffffee, 0.8], taillight: [0xff0000, 0.3] });
     });
 
+    test('its headlamps come on with the rider\'s headlight, as a uniform only, and go off again', () => {
+        const lamps = [];
+        car.carGroup.traverse(o => { if (o.isMesh && o.material.name === 'headlight') lamps.push(o.material); });
+        expect(lamps.length).toBeGreaterThan(0);
+        const versions = lamps.map(m => m.version);
+        // The rider's threshold: any headlight strength over 0 (rain in a world, or the dark)
+        expect(game.Traffic.headlightsOn(0)).toBe(false);
+        expect(game.Traffic.headlightsOn(0.5)).toBe(true);
+        car.setHeadlights(game.Traffic.headlightsOn(0.5));
+        lamps.forEach(m => expect(m.emissiveIntensity).toBe(game.Car.LAMP_ON));
+        // No material is marked for a new program: the switch costs no shader compile when the rain arrives
+        expect(lamps.map(m => m.version)).toEqual(versions);
+        car.setHeadlights(false);
+        lamps.forEach(m => expect(m.emissiveIntensity).toBe(game.Car.LAMP_DAY));
+    });
+
     test('removing it frees the model without spoiling the next car', () => {
         const scene = car.carGroup.parent;
         car.remove();
@@ -346,6 +362,11 @@ describe('a car without its file', () => {
         car.update(1 / 60);
         expect(car.leftRearIndicator.material.emissiveIntensity).toBe(1);
         expect(car.wheels[0].rotation.x).not.toBe(0);
+        // The procedural headlamps switch as the modelled ones do
+        car.setHeadlights(true);
+        const lamps = car.carGroup.children.filter(o => o.name === 'headlights');
+        expect(lamps).toHaveLength(2);
+        lamps.forEach(o => expect(o.material.emissiveIntensity).toBe(game.Car.LAMP_ON));
         expect(drive(game, VAN).modelled).toBe(true);
     });
 });

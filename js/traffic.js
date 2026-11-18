@@ -300,8 +300,13 @@ class Traffic {
     update(deltaTime, playerPosition, playerSegment = null) {
         let collisionResult = null;
         
+        // Cars light their lamps when the rider does: the game sets lightLevel to its headlight strength (on in the dark,
+        // and in a world's rain or snow by day)
+        const lamps = Traffic.headlightsOn(this.lightLevel);
+
         // Update all cars
         this.cars.forEach(car => {
+            car.setHeadlights(lamps);
             car.update(deltaTime);
             
             if (!collisionResult && car.checkCollision(playerPosition)) {
@@ -384,6 +389,11 @@ class Traffic {
         });
     }
 
+    // The rider's headlight threshold (Game.writeTime switches it on above 0)
+    static headlightsOn(level) {
+        return (level || 0) > 0;
+    }
+
     reset() {
         this.cars.forEach(car => car.remove());
         this.motorcycles.forEach(motorcycle => motorcycle.remove());
@@ -395,6 +405,10 @@ class Traffic {
 }
 
 class Car {
+    // The glow of a car's headlamps (emissiveIntensity): as built by day, and switched on, over the bloom threshold
+    static get LAMP_DAY() { return 0.8; }
+    static get LAMP_ON() { return 2.4; }
+
     constructor(scene, environment, options) {
         this.scene = scene;
         this.environment = environment;
@@ -617,12 +631,14 @@ class Car {
         });
 
         const leftHeadlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+        leftHeadlight.name = 'headlights';
         leftHeadlight.position.set(0.58, 0.5, 2.08);
         leftHeadlight.scale.set(1.5, 0.55, 0.7);
         leftHeadlight.castShadow = true;
         this.carGroup.add(leftHeadlight);
 
         const rightHeadlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+        rightHeadlight.name = 'headlights';
         rightHeadlight.position.set(-0.58, 0.5, 2.08);
         rightHeadlight.scale.set(1.5, 0.55, 0.7);
         rightHeadlight.castShadow = true;
@@ -974,6 +990,18 @@ class Car {
         this.updatePosition();
     }
     
+    // Headlamps on or off. Only the lamps' emissive strength changes, a uniform: no light is added and no program is
+    // compiled, so rain arriving costs no frame. The modelled car's lamps are new materials, so its swap is followed.
+    setHeadlights(on) {
+        if (this.lampsOn === on && this.lampsModelled === !!this.modelled) return;
+        this.lampsOn = on;
+        this.lampsModelled = !!this.modelled;
+        this.carGroup.traverse(object => {
+            if (object.name !== 'headlights') return;
+            object.traverse(mesh => { if (mesh.material) mesh.material.emissiveIntensity = on ? Car.LAMP_ON : Car.LAMP_DAY; });
+        });
+    }
+
     temporarySlowdown() {
         this.currentSpeed = this.baseSpeed * 0.5;
     }

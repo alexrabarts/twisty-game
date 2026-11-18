@@ -3484,6 +3484,7 @@ class Game {
 
         // Update traffic
         if (this.traffic) {
+            this.traffic.lightLevel = this.headlightStrength || 0;
             const collision = this.traffic.update(deltaTime, this.vehicle.position, Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)));
             // The roadworks leave one corridor for both directions, so a car
             // on its detour (which starts before the zone and ends after it)
