@@ -43,7 +43,7 @@ class WorldCamera {
             // edge), at keepRate; never further out than keepHard
             keepIn: 0.55, keepHard: 0.75, keepRate: 16,
             // The boom's height comes down by speedLowerShare of itself at speedLowerMs and over (WorldCamera.speedHeight)
-            speedLowerShare: 0.42, speedLowerMs: 30,
+            speedLowerShare: 0.5, speedLowerMs: 20,
             // FOV moves at fovRate
             fovRate: 3,
             // The boom starts headM over the bike and stays clearM over the land; it is shortened at fractionIn and
@@ -81,12 +81,13 @@ class WorldCamera {
     }
 
     // The boom's height at a speed (m/s) for a view mode whose height is `base`: it comes down by speedLowerShare of
-    // itself as the speed goes from 0 to speedLowerMs, eased at both ends, so a fast ride is seen from nearer the road
-    // (more speed in the picture, and more of the road ahead under the horizon). The height spring smooths the change
+    // itself as the speed goes from 0 to speedLowerMs, most of it early (eased out), so a ride at any real speed is
+    // seen from nearer the road (more speed in the picture). Eased at both ends over 30 m/s, the drop at the 10 to
+    // 20 m/s a mountain road is ridden at was too small to see. The height spring smooths the change
     static speedHeight(base, speed) {
         const t = WorldCamera.TUNING;
         const f = Math.max(0, Math.min(1, speed / t.speedLowerMs));
-        return base * (1 - t.speedLowerShare * f * f * (3 - 2 * f));
+        return base * (1 - t.speedLowerShare * f * (2 - f));
     }
 
     // The values the tests and Game read by name
