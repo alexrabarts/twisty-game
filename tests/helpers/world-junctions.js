@@ -98,10 +98,10 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
             if (o.name === 'road-works') {
                 const owners = o.geometry.userData.owners;
                 for (const g of o.geometry.groups) {
-                    if (g.materialIndex === 0) aprons.push(gridOf(o, g.start, g.count, 4, 'apron'));
+                    if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(o, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
                     // The concrete (decks, soffits, piers, tubes and their parapets) of the side roads, by its road
                     else if (g.materialIndex === 1) built.push({ mesh: o, start: g.start, count: g.count, owners });
-                    if (g.materialIndex !== 0) upright.push(facesOf(o, g.start, g.count, `faces${g.materialIndex}`));
+                    if (g.materialIndex === 1 || g.materialIndex === 2) upright.push(facesOf(o, g.start, g.count, `faces${g.materialIndex}`));
                 }
             } else if (o.name === 'road-ribbon' || o.name === 'road-side') ribbons.push(gridOf(o, 0, whole, 4, 'ribbon'));
         });

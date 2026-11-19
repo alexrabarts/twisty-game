@@ -99,7 +99,7 @@ export function wallWindow(game, env, store, at, nearM = 350) {
     const works = (mesh) => {
         const owners = mesh.geometry.userData.owners;
         for (const g of mesh.geometry.groups) {
-            if (g.materialIndex === 0) aprons.push(gridOf(mesh, g.start, g.count, 4, 'apron'));
+            if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(mesh, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
             // The decks, soffits and tubes (and their parapets): a road that goes on over a structure hangs over nothing
             if (g.materialIndex === 1) decks.push(gridOf(mesh, g.start, g.count, 4, 'deck'));
             if (g.materialIndex === 2) stone.push({ mesh, start: g.start, count: g.count, owners });

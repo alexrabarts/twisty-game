@@ -51,9 +51,9 @@ export function fairnessWindow(game, env, vehicle, { s0, s1, stepM = 1, acrossM 
                 const uv = o.geometry.attributes.uv, road = o.geometry.attributes.road;
                 triangles(o, (tri, ids) => { tri.offset = ids.map(id => uv.getX(id)); tri.half = ids.map(id => road.getX(id)); file(ribbon, tri); });
             } else if (o.name !== 'road-ribbon') {
-                // The road works: apron (material 0) is ground; decks, walls, parapets, tunnels and bridges stand up
+                // The road works: apron and paving (materials 0 and 3) are ground; decks, walls, parapets, tunnels and bridges stand up
                 const apronIsGround = o.name === 'road-works';
-                triangles(o, (tri, ids, material) => { if (!(apronIsGround && material === 0)) file(works, tri); });
+                triangles(o, (tri, ids, material) => { if (!(apronIsGround && (material === 0 || material === 3))) file(works, tri); });
             }
         });
     }

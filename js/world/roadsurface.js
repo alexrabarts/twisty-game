@@ -483,6 +483,7 @@ class RoadSurface {
         RoadSurface.wetness = w;
         if (RoadSurface.near) RoadSurface.near.userData.roadUniforms.roadWet.value = w;
         if (RoadSurface.far) RoadSurface.writeFarWet(RoadSurface.far, w);
+        if (RoadSurface.paving) RoadSurface.writeFarWet(RoadSurface.paving, w);
     }
 
     static writeFarWet(material, w) {
@@ -498,6 +499,16 @@ class RoadSurface {
             if (RoadSurface.wetness) RoadSurface.writeFarWet(RoadSurface.far, RoadSurface.wetness);
         }
         return RoadSurface.far;
+    }
+
+    // A junction's paving (RoadMesh.addEdgeWorks): the far ribbon's look, pushed back in depth so that every ribbon
+    // laid on it wins (the far material is drawn nearer than it lies, and would show through a ribbon seen edge-on)
+    static pavingMaterial() {
+        if (!RoadSurface.paving) {
+            RoadSurface.paving = LandShade.patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: RoadSurface.WET.farRough, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 }));
+            if (RoadSurface.wetness) RoadSurface.writeFarWet(RoadSurface.paving, RoadSurface.wetness);
+        }
+        return RoadSurface.paving;
     }
 
     // The near ribbon: textured asphalt or setts, markings, wear and the verge (see the header)

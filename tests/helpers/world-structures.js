@@ -191,7 +191,7 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
         out.byKind[`${source}:${kind}`] = (out.byKind[`${source}:${kind}`] || 0) + 1;
         hits.push({ source, kind, owner: owner instanceof Set ? [...owner][0] : owner, road: worst.road === -1 ? 'ride' : worst.road, depthM: Math.round(worst.depth * 100) / 100, overM: Math.round(worst.over * 100) / 100, x: Math.round(worst.x * 10) / 10, y: Math.round(worst.y * 10) / 10, z: Math.round(worst.z * 10) / 10, s: worst.s !== null ? Math.round(worst.s) : Math.round(route.project(worst.x, worst.z, null, {}).s) });
     };
-    const kinds = ['apron', 'deck', 'stone'];
+    const kinds = ['apron', 'deck', 'stone', 'apron'];
     const meshTriangles = (mesh, source, ownerOf) => {
         if (done.has(mesh.geometry.uuid)) return;
         done.add(mesh.geometry.uuid);
@@ -285,7 +285,7 @@ function drawnSurfaces(game, env, done = null) {
             }
         }
     };
-    const works = m => (m === 0 ? null : m === 2 ? 'stone' : 'structure');
+    const works = m => (m === 0 || m === 3 ? null : m === 2 ? 'stone' : 'structure');
     for (const group of env.roadMeshes.values()) group.traverse(o => { if (o.isMesh) take(o, o.name === 'road-ribbon' ? () => 'ribbon' : o.name === 'road-works' ? works : () => 'structure'); });
     for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh) take(o, o.name === 'road-side' ? () => 'side-ribbon' : o.name === 'road-works' ? works : () => 'structure'); });
     return out;

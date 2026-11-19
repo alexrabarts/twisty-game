@@ -83,7 +83,7 @@ class RoadMesh {
 
     // The apron's colour where no land colour is known: the land's grass, linear
     // The paving the roads lay between them in a junction (a gore, the corner behind a wall's join), linear
-    static get PAVING_LINEAR() { return RoadMesh.COLORS.sideAsphalt.map(v => Math.pow(v, 2.2)); }
+    static get PAVING_LINEAR() { return RoadMesh.COLORS.asphalt.map(v => Math.pow(v, 2.2)); }
     // The ride's end of a junction's paving lies this far under its surface (under the side ribbons held there)
     static get PAVING_UNDER_M() { return 0.13; }
     static get PAVING_PIECE_M() { return 4; }
@@ -746,7 +746,7 @@ class RoadMesh {
     }
 
     static edgeWorks(sides, foot = null, guard = null) {
-        const apron = { positions: [], shades: [] }, wall = { positions: [], shades: [] }, stone = { positions: [], shades: [], face: [] };
+        const apron = { positions: [], shades: [] }, wall = { positions: [], shades: [] }, stone = { positions: [], shades: [], face: [] }, paving = { positions: [], shades: [] };
         // The metres along each edge at each row, from the first row's own metres of road: where a wall's courses lie
         const alongMemo = { l: null, r: null };
         const alongOf = (k, key) => {
@@ -887,7 +887,7 @@ class RoadMesh {
             const ea = ends[k], eb = ends[k + 1];
             if (!ea || !eb) continue;
             const drawn = k >= drawFrom && k < drawTo;
-            const apronOut = drawn ? apron : junk, wallOut = drawn ? wall : junk, stoneOut = drawn ? stone : junk;
+            const apronOut = drawn ? apron : junk, wallOut = drawn ? wall : junk, stoneOut = drawn ? stone : junk, pavingOut = drawn ? paving : junk;
             let soffit = false;
             for (const key of ['l', 'r']) {
                 const ga = paved[k] && paved[k][key], gb = paved[k + 1] && paved[k + 1][key];
@@ -903,7 +903,7 @@ class RoadMesh {
                     const dist = (u, v) => Math.hypot(v[0] - u[0], v[2] - u[2]);
                     const nu = Math.max(1, Math.ceil(Math.max(dist(a0, b0), dist(a1, b1)) / RoadMesh.PAVING_PIECE_M)), nv = Math.max(1, Math.ceil(Math.max(dist(a0, a1), dist(b0, b1)) / RoadMesh.PAVING_PIECE_M));
                     const at = (i, j) => mix(mix(a0, b0, i / nu), mix(a1, b1, i / nu), j / nv);
-                    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) RoadMesh.quad(apronOut, at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1), [c, c, c, c]);
+                    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) RoadMesh.quad(pavingOut, at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1), [c, c, c, c]);
                 }
             }
             for (const key of ['l', 'r']) {
@@ -929,7 +929,10 @@ class RoadMesh {
                     const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
                     // (not where the verge itself lies over another carriageway: the inside of a held hairpin)
                     const overOther = guard && ca && cb && [ca, cb, [(ca[0] + pb[0]) / 2, (ca[1] + pb[1]) / 2, (ca[2] + pb[2]) / 2], [(cb[0] + pa[0]) / 2, (cb[1] + pa[1]) / 2, (cb[2] + pa[2]) / 2]].some(q => guard.depth(q[0], q[2], q[1] - 0.2, q[1] - RoadMesh.APRON_UNDER_M) !== null);
-                    if (ca && cb && !overOther) RoadMesh.quad(apronOut, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
+                    // (nor in a junction's paving, where the rows have no verge and a side road lies at the edge: the
+                    // ground hid a metre of it. Carriageways holds that road at the importer's height, not as it is held)
+                    const paved2 = paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key];
+                    if (ca && cb && !overOther && !paved2) RoadMesh.quad(apronOut, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
                     // Then from the verge's edge out and down at the batter to the land's height, in strips no longer
                     // than APRON_STRIP_M along the edge, so no apron triangle grows into a large flat face
                     const foot = (f, p) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + o[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + o[1] * run]; };
@@ -957,13 +960,15 @@ class RoadMesh {
                 if (kind === 'wall') {
                     const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
                     const under = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]];
-                    const tint = f => (f && (f.top || f.color)) || RoadMesh.APRON_LINEAR;
+                    // (paving in a junction, where the rows have no verge)
+                    const inPaving = paved[k] && paved[k][key] || paved[k + 1] && paved[k + 1][key];
+                    const tint = f => (inPaving ? RoadMesh.PAVING_LINEAR : (f && (f.top || f.color)) || RoadMesh.APRON_LINEAR);
                     // (not where the verge itself lies over a carriageway: another road's, or another leg of its own)
                     const va = sides[k][key], vb = sides[k + 1][key];
                     const lerp3 = (u, v, t) => [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t, u[2] + (v[2] - u[2]) * t];
                     let over = false;
                     for (let i = 0; guard && ca && cb && i <= 4 && !over; i++) for (let j = 0; j <= 2 && !over; j++) { const q = lerp3(lerp3(ca, cb, i / 4), lerp3(va, vb, i / 4), j / 2); over = guard.any(q[0], q[2], q[1] - 0.2, q[1] - RoadMesh.APRON_UNDER_M) !== null; }
-                    if (ca && cb && !over) RoadMesh.quad(apronOut, under(ca), under(cb), under(vb), under(va), [tint(fa), tint(fb), tint(fb), tint(fa)]);
+                    if (ca && cb && !over) RoadMesh.quad(inPaving ? pavingOut : apronOut, under(ca), under(cb), under(vb), under(va), [tint(fa), tint(fb), tint(fb), tint(fa)]);
                 }
                 // A wall's end with no wall foot of its own takes the run's: it reaches the land (buried in it where
                 // the land meets the edge) and never ends hanging over the drop
@@ -1021,22 +1026,22 @@ class RoadMesh {
             RoadMesh.rails(wall, rails.wall[key], W, H, colors.concrete);
         }
         while (stone.face.length < (stone.positions.length / 3) * 4) stone.face.push(0, 0, 0, 0);
-        return { apron, wall, stone, walls: RoadMesh.wallRuns(sides, plan, drawFrom, drawTo) };
+        return { apron, wall, stone, paving, walls: RoadMesh.wallRuns(sides, plan, drawFrom, drawTo) };
     }
 
     // The edge works of a ribbon as one mesh, added to `group` ('road-works': the apron in the land's material
     // (group 0), decks and the extra structures in the structures' (1), retaining walls and their parapets in stone
-    // (2)): the triangles they cost. Any group but 0 is a structure, not ground
+    // (2), a junction's paving in the road's (3)): the triangles they cost. Groups 0 and 3 are ground, 1 and 2 structures
     // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
     // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
     // `roads` (Carriageways) keeps each run's works out of every other road's carriageway (RoadMesh.edgeWorks guard)
     static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
-        const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] } };
+        const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] }, paving: { positions: [], shades: [] } };
         const face = [];
         // The road each triangle belongs to (a run's or a part's `owner`: a side edge id, -1 for the ride), so a check
         // can tell a road's own structures from another road's
-        const owners = { apron: [], wall: [], stone: [] };
+        const owners = { apron: [], wall: [], stone: [], paving: [] };
         const own = (key, count, owner) => { for (let t = 0; t < count / 9; t++) owners[key].push(owner); };
         // The runs of retaining wall drawn here (RoadMesh.wallRuns), for the land that is cut to them
         const walls = group.userData.walls = [];
@@ -1044,7 +1049,7 @@ class RoadMesh {
             const part = RoadMesh.edgeWorks(run, foot, roads ? roads.guard(run.owner ?? -1) : null);
             for (const wall of part.walls) walls.push(Object.assign(wall, { owner: run.owner ?? -1 }));
             face.push(...part.stone.face);
-            for (const key of ['apron', 'wall', 'stone']) {
+            for (const key of ['apron', 'wall', 'stone', 'paving']) {
                 works[key].positions.push(...part[key].positions);
                 works[key].shades.push(...part[key].shades);
                 own(key, part[key].positions.length, run.owner ?? -1);
@@ -1058,44 +1063,48 @@ class RoadMesh {
             // and the ground behind it, between the two roads' edges: paving at the roads' height (under both
             // ribbons where they are paved), or the corner behind the piece was a pit
             const under = (p, back) => [p[0] - piece.o[0] * back, p[1] - RoadMesh.JOIN_UNDER_M, p[2] - piece.o[1] * back];
-            const c = RoadMesh.PAVING_LINEAR, start = works.apron.positions.length;
-            RoadMesh.quad(works.apron, under(piece.a, 0), under(piece.b, 0), under(piece.b, RoadMesh.JOIN_BACK_M), under(piece.a, RoadMesh.JOIN_BACK_M), [c, c, c, c]);
-            own('apron', works.apron.positions.length - start, piece.owner ?? -1);
+            const c = RoadMesh.PAVING_LINEAR, start = works.paving.positions.length;
+            RoadMesh.quad(works.paving, under(piece.a, 0), under(piece.b, 0), under(piece.b, RoadMesh.JOIN_BACK_M), under(piece.a, RoadMesh.JOIN_BACK_M), [c, c, c, c]);
+            own('paving', works.paving.positions.length - start, piece.owner ?? -1);
         }
-        if (!works.apron.positions.length && !works.wall.positions.length && !works.stone.positions.length && !extra.some(part => part.positions.length)) return 0;
+        if (!works.apron.positions.length && !works.wall.positions.length && !works.stone.positions.length && !works.paving.positions.length && !extra.some(part => part.positions.length)) return 0;
         for (const part of extra) {
             works.wall.positions.push(...part.positions);
             works.wall.shades.push(...part.shades);
             own('wall', part.positions.length, part.owner ?? -1);
         }
-        const apron = works.apron.positions.length / 3, wall = works.wall.positions.length / 3, stone = works.stone.positions.length / 3;
+        const apron = works.apron.positions.length / 3, wall = works.wall.positions.length / 3, stone = works.stone.positions.length / 3, paving = works.paving.positions.length / 3;
         // Every apron triangle faces up: a double-sided material flips the normal of a face seen from its back, and an
         // apron lit from underneath drew as a black line along the verge
-        const ap = works.apron.positions, ash = works.apron.shades;
-        for (let t = 0; t < ap.length; t += 9) {
-            const ux = ap[t + 3] - ap[t], uz = ap[t + 5] - ap[t + 2], vx = ap[t + 6] - ap[t], vz = ap[t + 8] - ap[t + 2];
-            if (uz * vx - ux * vz >= 0) continue;
-            for (let k = 0; k < 3; k++) {
-                [ap[t + 3 + k], ap[t + 6 + k]] = [ap[t + 6 + k], ap[t + 3 + k]];
-                [ash[t + 3 + k], ash[t + 6 + k]] = [ash[t + 6 + k], ash[t + 3 + k]];
+        for (const part of [works.apron, works.paving]) {
+            const ap = part.positions, ash = part.shades;
+            for (let t = 0; t < ap.length; t += 9) {
+                const ux = ap[t + 3] - ap[t], uz = ap[t + 5] - ap[t + 2], vx = ap[t + 6] - ap[t], vz = ap[t + 8] - ap[t + 2];
+                if (uz * vx - ux * vz >= 0) continue;
+                for (let k = 0; k < 3; k++) {
+                    [ap[t + 3 + k], ap[t + 6 + k]] = [ap[t + 6 + k], ap[t + 3 + k]];
+                    [ash[t + 3 + k], ash[t + 6 + k]] = [ash[t + 6 + k], ash[t + 3 + k]];
+                }
             }
         }
         // One colour space for the mesh: the apron's are the land's (linear), the walls' are made linear here
-        const shades = works.apron.shades.concat(works.wall.shades.map(v => Math.pow(v, 2.2)), works.stone.shades.map(v => Math.pow(v, 2.2)));
-        const geometry = RoadMesh.geometry(works.apron.positions.concat(works.wall.positions, works.stone.positions), shades);
+        const shades = works.apron.shades.concat(works.wall.shades.map(v => Math.pow(v, 2.2)), works.stone.shades.map(v => Math.pow(v, 2.2)), works.paving.shades);
+        const geometry = RoadMesh.geometry(works.apron.positions.concat(works.wall.positions, works.stone.positions, works.paving.positions), shades);
         geometry.userData.linearColors = true;
-        geometry.userData.owners = Int32Array.from(owners.apron.concat(owners.wall, owners.stone));
+        geometry.userData.owners = Int32Array.from(owners.apron.concat(owners.wall, owners.stone, owners.paving));
         geometry.addGroup(0, apron, 0);
         if (wall) geometry.addGroup(apron, wall, 1);
         if (stone) geometry.addGroup(apron + wall, stone, 2);
+        // A junction's paving is road, drawn as a road is (RoadSurface.pavingMaterial): as land it was a pale slab
+        if (paving) geometry.addGroup(apron + wall + stone, paving, 3);
         // A wall is lit flat across each quad: its two triangles share the quad's normal, so no crease shows. The apron
         // is lit as the land round it is (straight up): lit as a slope it read as a dark seam along the verge
         RoadMesh.flatNormals(geometry, apron / 3);
         const normal = geometry.attributes.normal.array;
-        for (let v = 0; v < apron; v++) { normal[v * 3] = 0; normal[v * 3 + 1] = 1; normal[v * 3 + 2] = 0; }
+        for (const v0 of [0, apron + wall + stone]) for (let v = v0; v < v0 + (v0 ? paving : apron); v++) { normal[v * 3] = 0; normal[v * 3 + 1] = 1; normal[v * 3 + 2] = 0; }
         // A retaining wall's face is lit as one face along its run (each row's outward), and its courses are laid
         // along its own metres (`wallFace`: metres along, 1 on a wall's face), LandShade's stone
-        const wallFace = new Float32Array((apron + wall + stone) * 2);
+        const wallFace = new Float32Array((apron + wall + stone + paving) * 2);
         for (let v = 0; v < stone; v++) {
             if (!face[v * 4 + 1]) continue;
             const at = apron + wall + v;
@@ -1104,10 +1113,10 @@ class RoadMesh {
             normal[at * 3] = face[v * 4 + 2]; normal[at * 3 + 1] = 0; normal[at * 3 + 2] = face[v * 4 + 3];
         }
         geometry.setAttribute('wallFace', new THREE.BufferAttribute(wallFace, 2));
-        const mesh = RoadMesh.mesh(geometry, 'road-works', [RoadMesh.apronMaterial(), RoadMesh.material(), RoadMesh.stoneMaterial()]);
+        const mesh = RoadMesh.mesh(geometry, 'road-works', [RoadMesh.apronMaterial(), RoadMesh.material(), RoadMesh.stoneMaterial(), RoadSurface.pavingMaterial()]);
         mesh.userData.world = 'works';
         group.add(mesh);
-        return (apron + wall + stone) / 3;
+        return (apron + wall + stone + paving) / 3;
     }
 
     // A piece of retaining wall from the end of one run (`a`, its top corner, `outA` the way that run faces there,

@@ -420,18 +420,31 @@ class WorldEnvironment {
         // mouth, and the ride's verge lay between the two as a strip of grass in the junction
         const foot = this.goreFoot || (this.goreFoot = this.edgeFoot());
         if (!this.goreRows) this.goreRows = new Map();
-        return this.route.points.slice(from, to + 1).map((p, i) => {
-            const row = { x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, i: from + i, ...styles[from + i] };
-            if (p.bits & 7) return row;
-            // (kept for each row until the side roads in residence change: setSideEdges)
-            let held = this.goreRows.get(from + i);
+        const points = this.route.points;
+        // (kept for each row until the side roads in residence change: setSideEdges)
+        const goreAt = i => {
+            const p = points[i];
+            if (!p || p.bits & 7) return null;
+            let held = this.goreRows.get(i);
             if (!held) {
                 const cos = Math.cos(p.heading), sin = Math.sin(p.heading), half = p.width / 2;
-                held = { l: !!foot.gore(p.x - half * cos, p.y, p.z + half * sin, -cos, sin), r: !!foot.gore(p.x + half * cos, p.y, p.z - half * sin, cos, -sin) };
-                this.goreRows.set(from + i, held);
+                const edges = { l: [p.x - half * cos, p.y, p.z + half * sin, -cos, sin], r: [p.x + half * cos, p.y, p.z - half * sin, cos, -sin] };
+                held = { l: !!foot.gore(...edges.l), r: !!foot.gore(...edges.r), edges };
+                this.goreRows.set(i, held);
             }
-            if (held.l) row.mouthL = true;
-            if (held.r) row.mouthR = true;
+            return held;
+        };
+        return points.slice(from, to + 1).map((p, i) => {
+            const row = { x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, i: from + i, ...styles[from + i] };
+            const held = goreAt(from + i);
+            if (!held) return row;
+            for (const [key, flag] of [['l', 'mouthL'], ['r', 'mouthR']]) {
+                // The row before or after the paving, where the ride's wall ends and turns to join the side road's
+                // (`joined`), has no verge either: the corner behind the join is paved, and a verge over paving was a
+                // pale slab in the junction's corner
+                const next = [goreAt(from + i - 1), goreAt(from + i + 1)].some(n => n && n[key]);
+                if (held[key] || (next && foot.joined && foot.joined(held.edges[key][0], held.edges[key][1], held.edges[key][2]))) row[flag] = true;
+            }
             return row;
         });
     }

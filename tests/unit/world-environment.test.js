@@ -63,7 +63,7 @@ describe('the edge works of the stacked hairpins', () => {
                 for (const g of o.geometry.groups) {
                     for (let t = g.start / 3; t < (g.start + g.count) / 3; t++) {
                         for (let k = 0; k < 3; k++) v[k].fromArray(pos, (t * 3 + k) * 3);
-                        if (g.materialIndex === 0) {
+                        if (g.materialIndex === 0 || g.materialIndex === 3) {
                             aprons++;
                             biggest = Math.max(biggest, new THREE.Triangle(v[0], v[1], v[2]).getArea());
                             for (const q of v) {

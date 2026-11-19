@@ -398,6 +398,19 @@ describe('RoadMesh', () => {
         const inRoad = { clear: () => true, depth: () => null, any: () => 0.5, ceiling: () => null };
         expect(RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 6 }), inRoad).apron.positions).toHaveLength(0);
         expect(wall.wall.positions).toHaveLength(0);
+        // A junction's paving (`foot.gore`) is road, a part of its own, and no ground lies under the verge there: the
+        // rows have no verge, and a side road lies at the edge
+        const gore = () => ({ kind: 'apron', y: edgeY - 3 });
+        gore.gore = (x, y, z, ox, oz) => [x + ox * 3, y - 0.13, z + oz * 3];
+        const paved = RoadMesh.edgeWorks(near.sides, gore);
+        expect(paved.paving.positions.length).toBeGreaterThan(0);
+        expect(Math.max(...ys(paved.paving))).toBeLessThanOrEqual(edgeY - RoadMesh.PAVING_UNDER_M + 1e-4);
+        expect(Math.min(...xs(paved.apron).map(Math.abs))).toBeGreaterThan(edgeX - 1e-3);
+        expect(apron.paving.positions).toHaveLength(0);
+        const pavedGroup = new THREE.Group();
+        RoadMesh.addEdgeWorks(pavedGroup, near.sides, gore);
+        expect(pavedGroup.children[0].geometry.groups.map(g => g.materialIndex)).toContain(3);
+        expect(pavedGroup.children[0].material[3]).toBe(RoadSurface.pavingMaterial());
         expect(Math.min(...ys(wall.stone))).toBeCloseTo(edgeY - 6, 4);
         expect(Math.max(...ys(wall.stone))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
         // A step lower than PARAPET_DROP_M has no parapet (the physics rides off it, as WorldPhysics.dropDepthM says)
