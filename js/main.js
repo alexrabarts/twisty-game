@@ -4094,6 +4094,45 @@ class Game {
         showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
     }
 
+    // Debug mode (`?debug` in the page's address): N puts the bike DEBUG_SKIP_BEFORE_M before the next station of a
+    // world ride, on a rolling start, so a place far up the road is seen without the ride to it. The gate ahead is
+    // then passed as any other. A ride that skipped never submits a time (the world is no longer trusted)
+    static debugEnabled(search) {
+        return new URLSearchParams(search || '').has('debug');
+    }
+
+    debugSkipToNextGate() {
+        const { environment, vehicle, worldRun } = this;
+        if (!environment || !environment.isWorld || this.finished || !worldRun) return false;
+        const route = environment.route, before = Game.DEBUG_SKIP_BEFORE_M;
+        const at = environment.stationGates.findIndex(st => st.s - before > vehicle.routeS + 1);
+        if (at < 0) return false;
+        const s = Math.max(environment.startS, environment.stationGates[at].s - before);
+        const point = route.sample(s, {});
+        environment.trusted = false;
+
+        const distanceSoFar = vehicle.distanceTraveled;
+        vehicle.reset();
+        vehicle.distanceTraveled = distanceSoFar;
+        vehicle.position.set(point.x, point.y, point.z);
+        vehicle.yawAngle = point.heading;
+        vehicle.speed = worldRun.restartSpeed(s);
+        vehicle.findNearestRoadSegment();
+        vehicle.updateMesh();
+        environment.place(s);
+
+        this.removeRunOverlays();
+        environment.guide.reset();
+        // Every station before the one ahead counts as passed, and progress starts again at s (no cut is read)
+        worldRun.stationIndex = Math.max(worldRun.stationIndex, at - 1);
+        worldRun.restartAt(s);
+        this.worldCamera.reset(point.heading);
+        if (this.traffic) this.traffic.clearAround(route.toUnits(s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / route.unitM));
+        this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(s), { environment, weatherSystem: this.weatherSystem });
+        showCallout(`Debug: before gate ${at} of ${environment.stationGates.length - 1} (no time is kept)`, 'warn', 2000);
+        return true;
+    }
+
     // Back to the last gate passed, on a rolling start. Costs 5 s and a
     // little style; the run stays valid.
     // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'wrong-way' or 'resume'. Every reason
@@ -4168,6 +4207,9 @@ class Game {
 // (and of the fill light) that comes through a world's rain cloud
 Game.WORLD_OVERCAST_HEADLIGHT = 0.5;
 Game.WORLD_OVERCAST_SUN = 0.1;
+
+// Debug mode's N puts the bike this far before the next station
+Game.DEBUG_SKIP_BEFORE_M = 40;
 
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
@@ -4474,6 +4516,14 @@ document.addEventListener('keydown', (event) => {
     if (event.code === 'KeyC') {
         console.log('Global C key detected');
     }
+});
+
+// Debug mode only: N skips to before the next station (Game.debugSkipToNextGate). Not while a dialog is open: the
+// dialog stack owns the keys then (js/modals.js)
+document.addEventListener('keydown', (event) => {
+    if (event.code !== 'KeyN' || event.repeat || !window.game || !Game.debugEnabled(window.location.search)) return;
+    if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
+    window.game.debugSkipToNextGate();
 });
 
 // Start the game when page loads
