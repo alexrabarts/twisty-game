@@ -43,7 +43,7 @@ class WorldCamera {
             // edge), at keepRate; never further out than keepHard
             keepIn: 0.55, keepHard: 0.75, keepRate: 16,
             // The boom's height comes down by speedLowerShare of itself at speedLowerMs and over (WorldCamera.speedHeight)
-            speedLowerShare: 0.3, speedLowerMs: 30,
+            speedLowerShare: 0.42, speedLowerMs: 30,
             // FOV moves at fovRate
             fovRate: 3,
             // The boom starts headM over the bike and stays clearM over the land; it is shortened at fractionIn and

@@ -190,7 +190,7 @@ describe('the world chase camera carves like the legs camera', () => {
         for (let v = 0.5; v <= 40; v += 0.5) {
             const h = WorldCamera.speedHeight(3, v);
             expect(h).toBeLessThanOrEqual(last);
-            expect(last - h).toBeLessThan(0.03);
+            expect(last - h).toBeLessThan(0.04);
             last = h;
         }
         // The legs keep their slight rise: the world's rule is asked for a world only
