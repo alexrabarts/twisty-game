@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs';
 import { Blob } from 'node:buffer';
 import { TextDecoder } from 'node:util';
 import { canvasStub, loadScript, realThree } from '../helpers/load-game.js';
+import { planeNormal } from '../helpers/bike-rig.js';
 
 const root = new URL('../../', import.meta.url);
 const RADIUS = [0.1, 0.17];
@@ -33,37 +34,6 @@ function load() {
         `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels, BIKE_MODELS };`
     );
     return { THREE, ...factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance) };
-}
-
-// The unit normal of a near-flat cloud of points: the eigenvector of its
-// covariance with the smallest eigenvalue (Jacobi rotations on a 3x3)
-export function planeNormal(list) {
-    const mid = [0, 1, 2].map(a => list.reduce((s, p) => s + p[a], 0) / list.length);
-    const m = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
-    for (const p of list) for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) m[i][j] += (p[i] - mid[i]) * (p[j] - mid[j]);
-    const v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
-    for (let sweep = 0; sweep < 50; sweep++) {
-        for (const [p, q] of [[0, 1], [0, 2], [1, 2]]) {
-            if (Math.abs(m[p][q]) < 1e-15) continue;
-            const theta = (m[q][q] - m[p][p]) / (2 * m[p][q]);
-            const t = Math.sign(theta || 1) / (Math.abs(theta) + Math.sqrt(theta * theta + 1));
-            const c = 1 / Math.sqrt(t * t + 1), s = t * c;
-            for (let k = 0; k < 3; k++) {
-                const a = m[k][p], b = m[k][q];
-                m[k][p] = c * a - s * b; m[k][q] = s * a + c * b;
-            }
-            for (let k = 0; k < 3; k++) {
-                const a = m[p][k], b = m[q][k];
-                m[p][k] = c * a - s * b; m[q][k] = s * a + c * b;
-            }
-            for (let k = 0; k < 3; k++) {
-                const a = v[k][p], b = v[k][q];
-                v[k][p] = c * a - s * b; v[k][q] = s * a + c * b;
-            }
-        }
-    }
-    const least = [0, 1, 2].reduce((best, i) => (m[i][i] < m[best][best] ? i : best), 0);
-    return { normal: [v[0][least], v[1][least], v[2][least]], mid };
 }
 
 // How one disc stands: its tilt off the axle in degrees, its centre's

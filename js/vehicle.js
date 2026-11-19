@@ -422,6 +422,7 @@ class Vehicle {
         const kind = Vehicle.BIKES[this.bike];
         this[kind.build]();
         Vehicle.mirrorParts(this.group, this.rider);
+        this.rigSteering();
 
         // Base rider transform for the jump stand-up animation
         this.riderBasePos = this.rider.position.clone();
@@ -1241,6 +1242,7 @@ class Vehicle {
 
         // ---- Arms: shoulder -> elbow -> glove, both sides ----
         const armRadius = 0.046, forearmRadius = 0.04;
+        this.arms = {};
         [-1, 1].forEach((side) => {
             const sx = side * 0.15, sy = dY * 0.17, sz = dZ * 0.17;
             const hx = side * hand[0], hy = hand[1], hz = hand[2];
@@ -1263,11 +1265,20 @@ class Vehicle {
             glove.position.set(hx, hy, hz);
             glove.castShadow = true;
             this.rider.add(glove);
-            if (side < 0) { this.leftArm = upper; this.leftForearm = lower; }
+            if (side > 0) { this.leftArm = upper; this.leftForearm = lower; }
             else { this.rightArm = upper; this.rightForearm = lower; }
+            this.arms[side] = Vehicle.rigLimb({
+                root: new THREE.Vector3(sx, sy, sz),
+                mid: new THREE.Vector3(elbowX, elbowY, elbowZ),
+                end: new THREE.Vector3(hx, hy, hz),
+                pieces: [[upper, 'root', 'mid'], [lower, 'mid', 'end']],
+                carried: { mid: [elbow], end: [glove] }
+            });
         });
 
         // ---- Legs: hip -> knee -> boot, both sides ----
+        // The rider is not mirrored with the bike, so +x is the rider's left here as everywhere (Route.LEFT)
+        this.legs = {};
         [-1, 1].forEach((side) => {
             const px = side * 0.095, py = dY * -0.16, pz = dZ * -0.16;
             const fx = side * foot[0], fy = foot[1], fz = foot[2];
@@ -1275,7 +1286,7 @@ class Vehicle {
             const ky = (py + fy) / 2 + 0.03;
             const kz = (pz + fz) / 2 + kneeForward;
             const thigh = this.addLimb(this.rider, pantsMaterial, 0.062, px, py, pz, kx, ky, kz);
-            this.addLimb(this.rider, pantsMaterial, 0.05, kx, ky, kz, fx, fy, fz);
+            const shin = this.addLimb(this.rider, pantsMaterial, 0.05, kx, ky, kz, fx, fy, fz);
             const knee = new THREE.Mesh(new THREE.SphereGeometry(0.058, 8, 6),
                 (style === 'race' || style === 'mx') ? accentMaterial : pantsMaterial);
             knee.position.set(kx, ky, kz);
@@ -1292,7 +1303,15 @@ class Vehicle {
             sole.position.set(fx, fy - 0.03, fz + 0.045);
             sole.rotation.x = 0.12;
             this.rider.add(sole);
-            if (side < 0) this.leftLeg = thigh; else this.rightLeg = thigh;
+            if (side > 0) this.leftLeg = thigh; else this.rightLeg = thigh;
+            this.legs[side] = Vehicle.rigLimb({
+                rider: this.rider,
+                root: new THREE.Vector3(px, py, pz),
+                mid: new THREE.Vector3(kx, ky, kz),
+                end: new THREE.Vector3(fx, fy, fz),
+                pieces: [[thigh, 'root', 'mid'], [shin, 'mid', 'end']],
+                carried: { mid: [knee], end: [boot, sole] }
+            });
         });
 
         this.group.add(this.rider);
@@ -3275,9 +3294,8 @@ class Vehicle {
         this.wheelRotation += rotationSpeed * (this.currentDeltaTime || 1/60);
         const frontRotation = front === rear ? this.wheelRotation : this.wheelRotation * rear / front;
         this.rearWheel.rotation.x = this.wheelRotation;
-        this.frontWheel.rotation.x = frontRotation;
         this.rearDisc.rotation.x = this.wheelRotation;
-        this.frontDisc.rotation.x = frontRotation;
+        this.steerFront(frontRotation);
         
         if (this.crashed) {
             if (this.fallingOffCliff && !this.hitGround && this.tumbleSpeed > 0) {
@@ -3369,8 +3387,6 @@ class Vehicle {
             }
         }
 
-        // Rotate front wheel for steering visualization
-        this.frontWheel.rotation.y = this.steeringAngle * 0.5;
 
         // Brake light glow - light up when brake is pressed
         if (this.currentBrakeInput > 0) {
@@ -3381,12 +3397,112 @@ class Vehicle {
             this.brakeLight.material.emissiveIntensity = 0.0;
         }
         this.previousSpeed = this.speed;
+        this.updateFooting();
 
         // Base position for render interpolation offsets
         if (!this.meshBasePosition) {
             this.meshBasePosition = new THREE.Vector3();
         }
         this.meshBasePosition.copy(this.group.position);
+    }
+
+    // The front end that turns with the handlebar (the wheel, its disc, the fork legs and the bar) and the line it
+    // turns about: the fork legs' line through the front axle (Vehicle.steerAxis). Each part's pose is kept as it is
+    // now, the rest pose; steerFront turns them from it. Run again whenever those parts are replaced.
+    rigSteering() {
+        const [y, z] = this.axles.front;
+        const spun = new Set([this.frontWheel, this.frontDisc]);
+        this.steerRig = {
+            point: new THREE.Vector3(0, y, z),
+            axis: Vehicle.steerAxis(this.group, [this.leftFork, this.rightFork]),
+            parts: [this.frontWheel, this.frontDisc, this.leftFork, this.rightFork, this.handlebar].filter(Boolean).map(part => ({
+                part, spun: spun.has(part), position: part.position.clone(), quaternion: part.quaternion.clone()
+            })),
+            turn: new THREE.Quaternion(),
+            spin: new THREE.Quaternion()
+        };
+    }
+
+    // The front end turned by the steering about the steering axis, the wheel and its disc spun by `spin` about their
+    // own axle inside that turn. Spun about the bike's x after the turn (an Euler x over a steer y), a steered wheel
+    // wobbled on a cone and leaned off upright.
+    steerFront(spin) {
+        const rig = this.steerRig;
+        const turn = rig.turn.setFromAxisAngle(rig.axis, this.steeringAngle * Vehicle.STEER_SHOWN);
+        rig.spin.setFromAxisAngle(Vehicle.AXLE, spin);
+        for (const { part, spun, position, quaternion } of rig.parts) {
+            part.position.copy(position).sub(rig.point).applyQuaternion(turn).add(rig.point);
+            part.quaternion.copy(turn);
+            if (spun) part.quaternion.multiply(rig.spin);
+            part.quaternion.multiply(quaternion);
+        }
+        // The hands go where the grips go: each by as far as its end of the bar moves, in the rider's axes
+        const arms = this.arms, rider = this.rider;
+        if (!arms || !rider || (turn.w === 1 && !rig.handsTurned)) return;
+        rig.handsTurned = turn.w !== 1;
+        const base = this.riderBasePos || rider.position;
+        const into = rig.into || (rig.into = new THREE.Quaternion());
+        const handTurn = rig.handTurn || (rig.handTurn = new THREE.Quaternion());
+        const grip = rig.grip || (rig.grip = new THREE.Vector3());
+        const moved = rig.moved || (rig.moved = new THREE.Vector3());
+        into.copy(rider.quaternion).invert();
+        handTurn.copy(into).multiply(turn).multiply(rider.quaternion);
+        for (const side of [-1, 1]) {
+            const arm = arms[side];
+            if (!arm) continue;
+            grip.copy(arm.end).add(base);
+            moved.copy(grip).sub(rig.point).applyQuaternion(turn).add(rig.point).sub(grip).applyQuaternion(into);
+            arm.place(moved.add(arm.end), handTurn);
+        }
+    }
+
+    // The ground the rider's foot comes down on at (x, z): the ride's own ground, or the plane the bike stands on
+    footGroundY(x, z) {
+        return this.environment && this.environment.ground ? this.surfaceAt(x, z) : this.position.y;
+    }
+
+    // At a stop the bike leans a little to its left and the rider puts the left foot down on the ground, over
+    // Vehicle.FOOT_S; moving off, the foot goes back to the peg and the bike comes upright. Only the drawing does this:
+    // the physics lean stays as it is (the world's fall-over rule reads it). A stop is the world's foot-down state
+    // (Vehicle.updateWorldSpeed) or any speed under STOP_SPEED, upright and on the ground.
+    updateFooting() {
+        const dt = this.currentDeltaTime || 1 / 60;
+        const stopped = !this.crashed && !this.isJumping && !this.isWheelie && (this.footDown || this.speed < Vehicle.STOP_SPEED);
+        this.footT = Math.max(0, Math.min(1, (this.footT || 0) + (stopped ? dt : -dt) / Vehicle.FOOT_S));
+        const t = this.footT;
+        const ease = t * t * (3 - 2 * t);
+        const leg = this.legs && this.legs[Vehicle.LEFT];
+        if (ease === 0) {
+            if (this.footPlaced && leg) leg.place(leg.end, null);
+            this.footPlaced = false;
+            return;
+        }
+        if (this.crashed || this.isJumping || this.isWheelie) return;
+        // A positive roll leans the bike to its right
+        this.group.rotation.z -= Vehicle.LEFT * Vehicle.FOOT_LEAN * ease;
+        if (!leg) return;
+        this.group.updateMatrixWorld(true);
+        const rider = this.rider;
+        const scratch = this.footScratch || (this.footScratch = {
+            ground: new THREE.Vector3(), up: new THREE.Vector3(), q: new THREE.Quaternion(), level: new THREE.Quaternion(),
+            euler: new THREE.Euler(0, 0, 0, 'YXZ'), boot: new THREE.Quaternion()
+        });
+        // The foot comes down out to the rider's side, a little ahead of the peg, on the ground there
+        const sin = Math.sin(this.group.rotation.y), cos = Math.cos(this.group.rotation.y);
+        const out = Vehicle.LEFT * Vehicle.FOOT_OUT, ahead = rider.position.z + leg.end.z + Vehicle.FOOT_AHEAD;
+        const gx = this.group.position.x + cos * out + sin * ahead;
+        const gz = this.group.position.z - sin * out + cos * ahead;
+        scratch.ground.set(gx, this.footGroundY(gx, gz), gz);
+        rider.worldToLocal(scratch.ground);
+        // World up and the ground's own level, in the rider's axes: the sole sits flat on the ground
+        rider.getWorldQuaternion(scratch.q).invert();
+        scratch.up.set(0, 1, 0).applyQuaternion(scratch.q);
+        scratch.euler.set(this.group.rotation.x, this.group.rotation.y, 0);
+        scratch.level.setFromEuler(scratch.euler).premultiply(scratch.q);
+        const ankle = scratch.ground.addScaledVector(scratch.up, leg.drop);
+        ankle.lerpVectors(leg.end, ankle, ease);
+        leg.place(ankle.clone(), scratch.boot.identity().slerp(scratch.level, ease));
+        this.footPlaced = true;
     }
 
     // Called once per rendered frame with the leftover fixed-timestep
@@ -3463,6 +3579,7 @@ class Vehicle {
         this.lastDemand = 0;
         this.lowsideTimerMs = 0;
         this.footDown = false;
+        this.footT = 0; // The stop pose snaps off: a reset rides away
         this.tipTimerS = 0;
         this.crashCause = null;
         this.landFastS = 0;
@@ -4137,7 +4254,7 @@ Vehicle.BIKES = {
 // on its left. Each part (each child of `group` but the rider, who is the
 // same both sides and whose lean must not flip) moves across and is turned
 // and scaled about its own pivot as its mirror image; the pose Vehicle
-// animates (spin about x, steer about y) is not mirrored.
+// animates (spin about x, steer about the steering axis) is not mirrored.
 Vehicle.mirrorParts = (group, rider) => {
     for (const part of group.children) {
         if (part === rider) continue;
@@ -4146,6 +4263,163 @@ Vehicle.mirrorParts = (group, rider) => {
         part.rotation.z = -part.rotation.z;
         part.scale.x = -part.scale.x;
     }
+};
+
+// The rider's left in the bike's axes: Route.LEFT, the one side convention (js/world/route.js), which is +x; a test
+// that loads the bike without the route gets the same
+Vehicle.LEFT = typeof Route !== 'undefined' ? Route.LEFT : 1;
+// The share of the steering angle the front end is drawn turned by, and the axle a wheel spins about
+Vehicle.STEER_SHOWN = 0.5;
+Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
+// The stop pose (Vehicle.updateFooting): under STOP_SPEED (m/s) the bike leans FOOT_LEAN (radians) to its left and the
+// left foot goes down, FOOT_OUT (m) out from the bike's centre plane and FOOT_AHEAD (m) ahead of the peg, over FOOT_S
+Vehicle.STOP_SPEED = 0.3;
+Vehicle.FOOT_LEAN = 6.5 * Math.PI / 180;
+Vehicle.FOOT_OUT = 0.34;
+Vehicle.FOOT_AHEAD = 0.08;
+Vehicle.FOOT_S = 0.4;
+
+// The steering axis of a bike in its own axes: the line of its fork legs, in the bike's centre plane, pointing up. A
+// leg turned by its own rotation (the procedural forks, stood at their rake) gives it directly. A modelled leg is
+// read from its surface, sampled evenly by area (a rod's few long faces count for their length): the middle of the
+// legs at each height is the median of the samples there, since a tube's surface stands evenly round its line, and
+// the axis is the line through those middles over the upper part, clear of the foot, the caliper and the hose.
+Vehicle.steerAxis = (group, forks) => {
+    const turned = forks.find(fork => fork && !fork.isLOD && Math.abs(fork.quaternion.w) < 1 - 1e-9);
+    if (turned) {
+        const axis = new THREE.Vector3(0, 1, 0).applyQuaternion(turned.quaternion).setX(0).normalize();
+        return axis.y < 0 ? axis.negate() : axis;
+    }
+    group.updateMatrixWorld(true);
+    const into = group.matrixWorld.clone().invert();
+    const triangles = [];
+    const m = new THREE.Matrix4();
+    for (const fork of forks) {
+        if (!fork) continue;
+        (fork.isLOD ? fork.levels[0].object : fork).traverse((o) => {
+            if (!o.isMesh) return;
+            m.multiplyMatrices(into, o.matrixWorld);
+            const position = o.geometry.attributes.position;
+            const index = o.geometry.index;
+            const count = index ? index.count : position.count;
+            const at = k => new THREE.Vector3().fromBufferAttribute(position, index ? index.getX(k) : k).applyMatrix4(m);
+            for (let k = 0; k < count; k += 3) triangles.push([at(k), at(k + 1), at(k + 2)]);
+        });
+    }
+    let total = 0;
+    const area = triangles.map(([a, b, c]) => {
+        const s = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a)).length() / 2;
+        total += s;
+        return s;
+    });
+    if (!total) return new THREE.Vector3(0, 1, 0);
+    // About 40,000 samples on a regular grid of each triangle
+    const samples = [];
+    triangles.forEach(([a, b, c], n) => {
+        const grid = Math.max(1, Math.round(Math.sqrt(area[n] / total * 40000)));
+        for (let i = 0; i < grid; i++) {
+            for (let j = 0; i + j < grid; j++) {
+                const u = (i + 1 / 3) / grid, w = (j + 1 / 3) / grid;
+                samples.push([a.y + (b.y - a.y) * u + (c.y - a.y) * w, a.z + (b.z - a.z) * u + (c.z - a.z) * w]);
+            }
+        }
+    });
+    let low = Infinity, high = -Infinity;
+    for (const [y] of samples) { low = Math.min(low, y); high = Math.max(high, y); }
+    const SLICES = 12;
+    const line = [];
+    for (let n = 0; n < SLICES; n++) {
+        const from = low + (high - low) * (0.4 + 0.55 * n / SLICES), to = low + (high - low) * (0.4 + 0.55 * (n + 1) / SLICES);
+        const zs = samples.filter(([y]) => y >= from && y < to).map(([, z]) => z).sort((p, q) => p - q);
+        if (zs.length >= 6) line.push([(from + to) / 2, zs[zs.length >> 1]]);
+    }
+    if (line.length < 3) return new THREE.Vector3(0, 1, 0);
+    // z against y by least squares: the axis climbs dz/dy
+    const my = line.reduce((s, [y]) => s + y, 0) / line.length;
+    const mz = line.reduce((s, [, z]) => s + z, 0) / line.length;
+    let syy = 0, syz = 0;
+    for (const [y, z] of line) { syy += (y - my) ** 2; syz += (y - my) * (z - mz); }
+    return new THREE.Vector3(0, 1, syz / syy).normalize();
+};
+
+// Where the elbow or knee of a two-part limb lies: the parts keep their
+// lengths `a` and `b`, and the joint stands off the line between the ends
+// toward `toward`. A reach longer than the limb leaves it all but straight,
+// both parts stretched alike to span it.
+Vehicle.joint = (from, to, a, b, toward) => {
+    const line = new THREE.Vector3().subVectors(to, from);
+    const reach = line.length();
+    const stretch = Math.max(1, reach / ((a + b) * 0.995));
+    a *= stretch;
+    b *= stretch;
+    line.normalize();
+    const along = (a * a - b * b + reach * reach) / (2 * reach);
+    const off = Math.sqrt(Math.max(0, a * a - along * along));
+    const bend = toward.clone().addScaledVector(line, -toward.dot(line)).normalize();
+    return from.clone().addScaledVector(line, along).addScaledVector(bend, off);
+};
+
+// A rider's arm or leg as rigid pieces, for the poses Vehicle draws (the hands on a steered bar, the foot down at a
+// stop): the first piece turns about the root (the shoulder, the hip) and the second about the middle joint (the
+// elbow, the knee), each stretched only if the end is further than the limb reaches; whatever rides on a joint (the
+// knee cap, the glove, the boot and its sole) moves with it. Points are in the rider's axes. `drop` is how far
+// below the end the lowest point of what the end carries is (a boot's sole under the ankle).
+Vehicle.rigLimb = ({ rider, root, mid, end, pieces, carried }) => {
+    const rest = { root: root.clone(), mid: mid.clone(), end: end.clone() };
+    const a = root.distanceTo(mid), b = mid.distanceTo(end);
+    const toward = mid.clone().sub(root.clone().add(end).multiplyScalar(0.5));
+    const held = pieces.map(([object, from, to]) => ({
+        object, from, to, along: rest[to].clone().sub(rest[from]),
+        quaternion: object.quaternion.clone(), scale: object.scale.y
+    }));
+    const riding = Object.entries(carried).flatMap(([at, list]) => list.map(object => ({
+        object, at, offset: object.position.clone().sub(rest[at]), quaternion: object.quaternion.clone()
+    })));
+    let drop = 0;
+    if (rider) {
+        rider.updateMatrixWorld(true);
+        const into = rider.matrixWorld.clone().invert();
+        const box = new THREE.Box3();
+        const m = new THREE.Matrix4();
+        const v = new THREE.Vector3();
+        for (const { object, at } of riding) {
+            if (at !== 'end') continue;
+            object.traverse((o) => {
+                if (!o.isMesh) return;
+                m.multiplyMatrices(into, o.matrixWorld);
+                const position = o.geometry.attributes.position;
+                for (let i = 0; i < position.count; i++) box.expandByPoint(v.fromBufferAttribute(position, i).applyMatrix4(m));
+            });
+        }
+        if (!box.isEmpty()) drop = end.y - box.min.y;
+    }
+    const turn = new THREE.Quaternion();
+    const now = { root: rest.root };
+    return {
+        root: rest.root, end: rest.end, drop, reach: a + b,
+        // Where the end is drawn now
+        at: () => now.end || rest.end,
+        // The end to `to`, what it carries turned by `endTurn` about it (the rest pose for the rest end and no turn)
+        place(to, endTurn) {
+            now.end = to;
+            now.mid = Vehicle.joint(rest.root, to, a, b, toward);
+            for (const piece of held) {
+                const along = now[piece.to].clone().sub(now[piece.from]);
+                turn.setFromUnitVectors(piece.along.clone().normalize(), along.clone().normalize());
+                piece.object.quaternion.copy(turn).multiply(piece.quaternion);
+                piece.object.position.addVectors(now[piece.from], now[piece.to]).multiplyScalar(0.5);
+                piece.object.scale.y = piece.scale * along.length() / piece.along.length();
+            }
+            for (const item of riding) {
+                const spin = item.at === 'end' && endTurn ? endTurn : null;
+                item.object.position.copy(item.offset);
+                if (spin) item.object.position.applyQuaternion(spin);
+                item.object.position.add(now[item.at]);
+                item.object.quaternion.copy(item.quaternion);
+                if (spin) item.object.quaternion.premultiply(spin);
+            }
+        }
+    };
 };
 
 // A scarf round the rider's neck, `neck` up the torso from its centre: a

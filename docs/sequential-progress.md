@@ -109,3 +109,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner's photos show Tim on a gloss black naked four with a 2010 plate on every trip; the game gave that bike to Guy and gave Tim the scooter alone. Tim now has the scooter first and the naked four second; Guy has four bikes.
 - Check: `tests/unit/characters.test.js` and `unlock-flow.test.js` hold the two lists and the bike picker (194 tests with the bike model tests).
 - Left: the long checks wait for the end. The riders' gear from the photos is read and private (`~/Pictures/twisty-reference/people/`); the riders' models, the three-row rider screen, the composite stats and the group ride are not built yet.
+
+## G. Bike models: the front end steers about the fork, and the rider puts a foot down
+
+- Job: committed as found in the working tree, with one test corrected. The front wheel, its disc, the fork legs and the bar turn together about the fork legs' line through the front axle (`Vehicle.steerAxis`, `steerFront`), not about the vertical; the rider's limbs are rigged (`Vehicle.rigLimb`) and a foot goes down at a stop (`updateFooting`); the rider's left is +x as everywhere.
+- Check: `tests/unit/bike-wheels.test.js` (new, every bike: the wheels run true and upright in the centre plane, the steering axis is the fork's), `bikemodels`, `brake-discs`, `brake-calipers`, `characters`, `vehicle`, `bike-stands`, `unlock-flow`: 589 tests pass. One test of the work failed as found: the dirt bike's rear tyre read 1.4 mm off the centre plane, because the measure took the mean of the tyre's vertices and a knobby tread has more on one side; it now takes the middle between the tyre's two sides.
+- Left: not looked at in the browser by me (the owner has ridden it on port 8082). The long checks wait for the end.

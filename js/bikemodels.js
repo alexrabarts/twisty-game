@@ -263,22 +263,7 @@ const BikeModels = (() => {
     return object;
   }
 
-  // Where the elbow or knee of a two-part limb lies: the parts keep their
-  // modelled lengths `a` and `b`, and the joint stands off the line between
-  // the ends toward `toward`. A reach longer than the limb leaves it all but
-  // straight, both parts stretched alike to span it.
-  function joint(from, to, a, b, toward) {
-    const line = new THREE.Vector3().subVectors(to, from);
-    const reach = line.length();
-    const stretch = Math.max(1, reach / ((a + b) * 0.995));
-    a *= stretch;
-    b *= stretch;
-    line.normalize();
-    const along = (a * a - b * b + reach * reach) / (2 * reach);
-    const off = Math.sqrt(Math.max(0, a * a - along * along));
-    const bend = toward.clone().addScaledVector(line, -toward.dot(line)).normalize();
-    return from.clone().addScaledVector(line, along).addScaledVector(bend, off);
-  }
+  const joint = Vehicle.joint;
 
   // The rider, seated where Vehicle.buildVariantRider seats its capsules:
   // the same torso lean, hands on the bike's grips and feet on its pegs (the
@@ -330,6 +315,8 @@ const BikeModels = (() => {
     const peg = level.places.get("peg");
     if (!grip || !peg) throw new Error("bike lacks its grip or peg mark");
     const limbs = {};
+    const arms = {};
+    const legs = {};
     for (const side of [-1, 1]) {
       const shoulder = up.clone().multiplyScalar(0.165).setX(side * 0.172);
       // A mirrored file has its marks on the other side: either side will do
@@ -340,6 +327,7 @@ const BikeModels = (() => {
       const lower = limb(model, "forearm", finish, rider, elbow, hand, bend);
       const glove = part(model, "glove", finish, rider);
       glove.position.copy(hand);
+      arms[side] = Vehicle.rigLimb({ root: shoulder, mid: elbow, end: hand, pieces: [[upper, "root", "mid"], [lower, "mid", "end"]], carried: { end: [glove] } });
 
       // The boot stands on the peg; the shin comes down into its ankle
       const sole = new THREE.Vector3(side * Math.abs(peg.x), peg.y + 0.05, peg.z).sub(base);
@@ -348,12 +336,13 @@ const BikeModels = (() => {
       const knee = joint(hip, ankle, LENGTHS.thigh, LENGTHS.shin, new THREE.Vector3(side * (0.06 + spec.kneeOut * 2), 0.3, 1));
       const fold = knee.clone().sub(hip.clone().add(ankle).multiplyScalar(0.5)).normalize();
       const thigh = limb(model, "thigh", finish, rider, hip, knee, fold);
-      limb(model, "shin", finish, rider, knee, ankle, fold);
+      const shin = limb(model, "shin", finish, rider, knee, ankle, fold);
       const boot = part(model, "boot", finish, rider);
       boot.position.copy(sole);
       boot.rotation.x = 0.1;
 
       limbs[side] = { upper, lower, thigh };
+      legs[side] = Vehicle.rigLimb({ rider, root: hip, mid: knee, end: ankle, pieces: [[thigh, "root", "mid"], [shin, "mid", "end"]], carried: { end: [boot] } });
     }
     if (spec.scarf != null) {
       const scarf = Vehicle.buildScarf(spec.scarf, lean, 0.27);
@@ -366,7 +355,7 @@ const BikeModels = (() => {
       });
       rider.add(scarf);
     }
-    return { rider, helmet, visor: meshOf(helmet, wear.visor), limbs };
+    return { rider, helmet, visor: meshOf(helmet, wear.visor), limbs, arms, legs };
   }
 
   // A detailed bike's rider: the character's spec in the bike's own pose,
@@ -439,12 +428,12 @@ const BikeModels = (() => {
     const base = new THREE.Vector3(0, spec.y, spec.z);
     seated.rider.position.copy(vehicle.rider.position).add(base).sub(vehicle.riderBasePos || base);
     seated.rider.rotation.copy(vehicle.rider.rotation);
+    // The front end's steer and spin are put back by Vehicle.steerFront from
+    // the parts' rest pose (Vehicle.rigSteering, below)
     built.rearWheel.rotation.copy(vehicle.rearWheel.rotation);
-    built.frontWheel.rotation.copy(vehicle.frontWheel.rotation);
     // Only the spin: the procedural disc is a cylinder stood on its side by a
     // quarter turn about z, which would lay the modelled disc flat
     built.rearDisc.rotation.x = vehicle.rearDisc.rotation.x;
-    built.frontDisc.rotation.x = vehicle.frontDisc.rotation.x;
     // The rider select may have put a flat material on every part by now
     const lit = vehicle.brakeLight.material;
     if (lit.emissive) {
@@ -478,14 +467,19 @@ const BikeModels = (() => {
       rider: seated.rider,
       helmet: seated.helmet,
       visor: seated.visor,
-      leftArm: seated.limbs[-1].upper,
-      rightArm: seated.limbs[1].upper,
-      leftForearm: seated.limbs[-1].lower,
-      rightForearm: seated.limbs[1].lower,
-      leftLeg: seated.limbs[-1].thigh,
-      rightLeg: seated.limbs[1].thigh,
+      // +x is the rider's left (Vehicle.LEFT)
+      leftArm: seated.limbs[1].upper,
+      rightArm: seated.limbs[-1].upper,
+      leftForearm: seated.limbs[1].lower,
+      rightForearm: seated.limbs[-1].lower,
+      leftLeg: seated.limbs[1].thigh,
+      rightLeg: seated.limbs[-1].thigh,
+      arms: seated.arms,
+      legs: seated.legs,
+      footPlaced: false,
       modelled: true,
     });
+    vehicle.rigSteering();
     if (vehicle.onModel) vehicle.onModel(vehicle);
   }
 
