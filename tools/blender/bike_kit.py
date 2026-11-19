@@ -59,6 +59,14 @@ MATERIALS = {
     "boot_accent": (0xCC1111, 0.6, 0.15),
     "helmet_trim": (0xB8693A, 0.2, 0.45),
     "backpack": (0x18191C, 0.8, 0.05),
+    # An outfit's own colours (CHARACTERS[].outfits in js/vehicle.js)
+    "suit_trim": (0xD94A26, 0.6, 0.15),
+    "suit_patch": (0xB9BCC0, 0.6, 0.15),
+    "pants_trim": (0xB4B8BC, 0.6, 0.15),
+    "glove_accent": (0x2A2C30, 0.8, 0.05),
+    "visor_accent": (0x2F5FB8, 0.06, 0.45),
+    "neck": (0x37428A, 0.95, 0.0),
+    "sole": (0x0C0C0E, 0.9, 0.0),
 }
 # In a low-detail model the finishes that read alike from a distance are one
 LOW = {"chrome": "steel", "fork_gold": "steel", "disc": "steel", "rim": "steel", "steel_dark": "dark_metal", "caliper": "dark_metal", "spring": "dark_metal",
@@ -498,7 +506,8 @@ class Kit:
     # occlusion and writes the file. `anchors` are bare named points.
     # `fold` names nodes to make part of the body instead, and `decimate` the
     # share of the body's triangles to keep (both for a low-detail model).
-    def finish(self, path, anchors=None, budget=None, alone=(), fold=(), decimate=None):
+    # `unit` stores the positions as whole units of that many metres (pack_colours).
+    def finish(self, path, anchors=None, budget=None, alone=(), fold=(), decimate=None, unit=None):
         joined = {}
         for name in fold:
             if name in self.nodes:
@@ -528,13 +537,14 @@ class Kit:
             self.scene.collection.objects.link(mark)
             marks.append(mark)
         size = common.export_glb(path, list(joined.values()) + marks, colours=True, texcoords=False)
-        size = pack_colours(path)
+        size = pack_colours(path, unit)
         counts = {name: self.triangles([obj]) for name, obj in joined.items()}
         total = sum(counts.values())
         print(f"{os.path.basename(path)}: {total} triangles, {size} bytes", counts)
         if budget and total > budget:
             raise SystemExit(f"{path}: {total} triangles is over the budget of {budget}")
         self.joined = joined
+        self.size = size
         return joined
 
     # Ambient occlusion into each node's vertex colours, over a short reach

@@ -246,23 +246,6 @@ const BikeModels = (() => {
     return found;
   };
 
-  // A limb between two joints: its length along the line, its outer side
-  // (the elbow, the kneecap) turned toward `out`
-  function limb(model, name, finish, parent, from, to, out) {
-    const object = part(model, name, finish, parent);
-    const along = new THREE.Vector3().subVectors(to, from);
-    const length = along.length();
-    along.normalize();
-    const front = out.clone().addScaledVector(along, -out.dot(along));
-    if (front.lengthSq() < 1e-8) front.set(0, 0, 1).addScaledVector(along, -along.z);
-    front.normalize();
-    const across = new THREE.Vector3().crossVectors(along, front);
-    object.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(across, along, front));
-    object.position.addVectors(from, to).multiplyScalar(0.5);
-    object.scale.y = length / LENGTHS[name];
-    return object;
-  }
-
   const joint = Vehicle.joint;
 
   // The rider, seated where Vehicle.buildVariantRider seats its capsules:
@@ -275,39 +258,82 @@ const BikeModels = (() => {
     // Gear a spec leaves out takes the colour that part had before it was
     // a material of its own (Vehicle.buildVariantRider)
     const glove = spec.gloveColor ?? 0x101014;
+    const pantsAccent = spec.pantsAccent ?? spec.suitAccent;
+    const visor = spec.visorColor ?? 0x0e1218;
     const wear = {
-      suit: colour(spec.suitColor, 0.85, 0),
+      suit: colour(spec.suitColor, spec.suitRoughness ?? 0.85, 0),
       suit_accent: colour(spec.suitAccent, 0.6, 0.15),
+      suit_trim: colour(spec.suitTrim ?? spec.suitAccent, 0.6, 0.15),
+      suit_patch: colour(spec.suitPatch ?? spec.suitAccent, 0.6, 0.15),
       glove: colour(glove, 0.9, 0),
+      glove_accent: colour(spec.gloveAccent ?? glove, 0.8, 0.05),
       pants: colour(spec.pantsColor ?? spec.suitColor, 0.85, 0),
-      pants_accent: colour(spec.pantsAccent ?? spec.suitAccent, 0.6, 0.15),
+      pants_accent: colour(pantsAccent, 0.6, 0.15),
+      pants_trim: colour(spec.pantsTrim ?? pantsAccent, 0.6, 0.15),
       boot: colour(spec.bootColor ?? glove, 0.9, 0),
       boot_accent: colour(spec.bootAccent ?? spec.suitAccent, 0.6, 0.15),
-      helmet: colour(spec.helmetColor, 0.12, 0.35, { envMapIntensity: 1.8 }),
+      sole: colour(0x0c0c0e, 0.9, 0),
+      helmet: colour(spec.helmetColor, spec.helmetRoughness ?? 0.12, 0.35, { envMapIntensity: 1.8 }),
       helmet_accent: colour(spec.helmetAccent, 0.2, 0.4),
       helmet_trim: colour(spec.helmetTrim ?? spec.helmetAccent, 0.2, 0.45),
       backpack: colour(spec.backpackColor ?? spec.suitColor, 0.8, 0.05),
-      visor: colour(0x0e1218, 0.06, 0.45, { envMapIntensity: 2.0 }),
+      neck: colour(spec.neckColor ?? spec.suitColor, 0.95, 0),
+      visor: colour(visor, 0.06, 0.45, { envMapIntensity: 2.0 }),
+      visor_accent: colour(spec.visorAccent ?? visor, 0.06, 0.45, { envMapIntensity: 2.0 }),
     };
     const finish = (source) => wear[source.name] || wear.suit;
+    // A part in the cut the outfit names (`<part>_<style>`), under the part's
+    // plain name, which is what the rest of the game finds it by
+    const worn = (name, style, parent) => {
+      const object = part(model, style ? `${name}_${style}` : name, finish, parent);
+      object.name = name;
+      return object;
+    };
+    // The rider's size against the model's. The hip stays on the seat: the
+    // torso grows up from it, and the shoulders and the head go with it.
+    const tall = (spec.build && spec.build.height) || 1;
+    const wide = (spec.build && spec.build.width) || 1;
+    const girth = 1 + (wide - 1) * 0.6;
+    const rise = 0.17 * (tall - 1);
 
     const rider = new THREE.Group();
     rider.name = "rider";
+    // A limb between two joints: its length along the line, its outer side
+    // (the elbow, the kneecap) turned toward `out`
+    const limb = (name, style, from, to, out) => {
+      const object = worn(name, style, rider);
+      const along = new THREE.Vector3().subVectors(to, from);
+      const length = along.length();
+      along.normalize();
+      const front = out.clone().addScaledVector(along, -out.dot(along));
+      if (front.lengthSq() < 1e-8) front.set(0, 0, 1).addScaledVector(along, -along.z);
+      front.normalize();
+      const across = new THREE.Vector3().crossVectors(along, front);
+      object.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(across, along, front));
+      object.position.addVectors(from, to).multiplyScalar(0.5);
+      object.scale.set(girth, length / LENGTHS[name], girth);
+      return object;
+    };
     const lean = spec.torsoLean;
     const up = new THREE.Vector3(0, Math.cos(lean), Math.sin(lean));
     const ahead = new THREE.Vector3(0, -Math.sin(lean), Math.cos(lean));
-    const torso = part(model, "torso", finish, rider);
-    torso.rotation.x = lean;
-    if (spec.style === "race") part(model, "hump", finish, rider).rotation.x = lean;
-    if (spec.backpackColor != null) part(model, "backpack", finish, rider).rotation.x = lean;
+    const onTorso = (object) => {
+      object.rotation.x = lean;
+      object.scale.set(wide, tall, 1 + (wide - 1) * 0.5);
+      object.position.copy(up).multiplyScalar(rise);
+    };
+    onTorso(worn("torso", spec.torsoStyle, rider));
+    if (spec.style === "race") onTorso(part(model, "hump", finish, rider));
+    if (spec.backpackColor != null) onTorso(part(model, "backpack", finish, rider));
+    if (spec.neckColor != null) onTorso(part(model, "neck", finish, rider));
 
     // The head looks up the road rather than down the tank
     const head = new THREE.Group();
     head.name = "head";
-    head.position.copy(up).multiplyScalar(0.375).addScaledVector(ahead, 0.03);
+    head.position.copy(up).multiplyScalar(0.375 * tall + rise).addScaledVector(ahead, 0.03);
     head.rotation.x = lean * 0.45;
     rider.add(head);
-    const helmet = part(model, spec.helmetStyle ? `helmet_${spec.helmetStyle}` : "helmet", finish, head);
+    const helmet = worn("helmet", spec.helmetStyle, head);
     if (spec.style === "mx" || spec.style === "adv") part(model, "peak", finish, head);
 
     const base = new THREE.Vector3(0, spec.y, spec.z);
@@ -318,26 +344,26 @@ const BikeModels = (() => {
     const arms = {};
     const legs = {};
     for (const side of [-1, 1]) {
-      const shoulder = up.clone().multiplyScalar(0.165).setX(side * 0.172);
+      const shoulder = up.clone().multiplyScalar(0.165 * tall + rise).setX(side * 0.172 * wide);
       // A mirrored file has its marks on the other side: either side will do
       const hand = new THREE.Vector3(side * Math.abs(grip.x), grip.y, grip.z).sub(base);
-      const elbow = joint(shoulder, hand, LENGTHS.upper_arm, LENGTHS.forearm, new THREE.Vector3(side * (0.5 + spec.elbowOut * 4), -0.7, -0.3));
+      const elbow = joint(shoulder, hand, LENGTHS.upper_arm * tall, LENGTHS.forearm * tall, new THREE.Vector3(side * (0.5 + spec.elbowOut * 4), -0.7, -0.3));
       const bend = elbow.clone().sub(shoulder.clone().add(hand).multiplyScalar(0.5)).normalize();
-      const upper = limb(model, "upper_arm", finish, rider, shoulder, elbow, bend);
-      const lower = limb(model, "forearm", finish, rider, elbow, hand, bend);
-      const glove = part(model, "glove", finish, rider);
+      const upper = limb("upper_arm", spec.upperArmStyle, shoulder, elbow, bend);
+      const lower = limb("forearm", spec.forearmStyle, elbow, hand, bend);
+      const glove = worn("glove", spec.gloveStyle, rider);
       glove.position.copy(hand);
       arms[side] = Vehicle.rigLimb({ root: shoulder, mid: elbow, end: hand, pieces: [[upper, "root", "mid"], [lower, "mid", "end"]], carried: { end: [glove] } });
 
       // The boot stands on the peg; the shin comes down into its ankle
       const sole = new THREE.Vector3(side * Math.abs(peg.x), peg.y + 0.05, peg.z).sub(base);
       const ankle = sole.clone().add(new THREE.Vector3(0, 0.062, -0.022));
-      const hip = up.clone().multiplyScalar(-0.17).setX(side * 0.09);
-      const knee = joint(hip, ankle, LENGTHS.thigh, LENGTHS.shin, new THREE.Vector3(side * (0.06 + spec.kneeOut * 2), 0.3, 1));
+      const hip = up.clone().multiplyScalar(-0.17).setX(side * 0.09 * wide);
+      const knee = joint(hip, ankle, LENGTHS.thigh * tall, LENGTHS.shin * tall, new THREE.Vector3(side * (0.06 + spec.kneeOut * 2), 0.3, 1));
       const fold = knee.clone().sub(hip.clone().add(ankle).multiplyScalar(0.5)).normalize();
-      const thigh = limb(model, "thigh", finish, rider, hip, knee, fold);
-      const shin = limb(model, "shin", finish, rider, knee, ankle, fold);
-      const boot = part(model, "boot", finish, rider);
+      const thigh = limb("thigh", spec.thighStyle, hip, knee, fold);
+      const shin = limb("shin", spec.shinStyle, knee, ankle, fold);
+      const boot = worn("boot", spec.bootStyle, rider);
       boot.position.copy(sole);
       boot.rotation.x = 0.1;
 
@@ -345,7 +371,7 @@ const BikeModels = (() => {
       legs[side] = Vehicle.rigLimb({ rider, root: hip, mid: knee, end: ankle, pieces: [[thigh, "root", "mid"], [shin, "mid", "end"]], carried: { end: [boot] } });
     }
     if (spec.scarf != null) {
-      const scarf = Vehicle.buildScarf(spec.scarf, lean, 0.27);
+      const scarf = Vehicle.buildScarf(spec.scarf, lean, 0.27 * tall + rise);
       scarf.traverse((o) => {
         if (!o.isMesh) return;
         // Unshaded occlusion, as the rider's own parts carry baked

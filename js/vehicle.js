@@ -1,3 +1,168 @@
+// What each rider wears: one outfit for each kind of kit they have worn, the
+// first the one they wear unless the player picks another (TourSystem's
+// selectOutfit). An outfit's `kit` is the rider's own gear over the bike's
+// default rider colours (Vehicle.buildVariantRider's options). Its colours
+// go to the modelled rider's materials by name, and its styles pick the cut
+// of each part (`<part>_<style>` in tools/blender/rider.py): helmetStyle,
+// torsoStyle, upperArmStyle, forearmStyle, thighStyle, shinStyle, gloveStyle
+// and bootStyle. neckColor adds a neck tube and backpackColor a backpack.
+// Names say what the gear looks like and never who made it.
+const OUTFITS = {
+    steve: [{
+        id: 'black-textile',
+        name: 'Black textile, silver helmet',
+        kit: {
+            suitColor: 0x121316, suitAccent: 0x1f2126,     // All black, the armour overlays a shade lighter
+            suitTrim: 0xc9a63a, suitPatch: 0x7d8188,       // A small yellow patch on the chest, grey reflective patches on the arms
+            torsoStyle: 'plain', upperArmStyle: 'plain', forearmStyle: 'band',
+            pantsColor: 0x141518, pantsAccent: 0xdcdcdc, pantsTrim: 0x9a9da2,
+            thighStyle: 'pocket', shinStyle: 'mark',
+            helmetColor: 0xe6ebe9, helmetAccent: 0x252224, // Silver-white, dark bands round the crown and the back
+            helmetStyle: 'band', visorColor: 0xb8923a, visorAccent: 0x2f5fb8,
+            gloveColor: 0x101114, gloveStyle: 'armour',
+            bootColor: 0x202229, bootAccent: 0xe8e8e6, bootStyle: 'trainer' // Riding trainers, a white midsole
+        }
+    }],
+    alex: [{
+        id: 'black-plain',
+        name: 'Plain black textile, black helmet',
+        kit: {
+            suitColor: 0x131317, suitAccent: 0x1d1d22, suitTrim: 0xb9bcc0, suitPatch: 0x1d1d22,
+            torsoStyle: 'plain', upperArmStyle: 'plain', forearmStyle: 'plain',
+            pantsColor: 0x3a3538, pantsAccent: 0x2c282b, pantsTrim: 0x2c282b, // Washed black
+            thighStyle: 'pocket', shinStyle: 'knee',
+            helmetColor: 0x0d0e11, helmetAccent: 0x1c1d21, helmetStyle: 'plain',
+            gloveColor: 0x121214, gloveAccent: 0xc2505a, gloveStyle: 'armour', // Red over the knuckles and the back of the hand
+            bootColor: 0x3c3a3a, bootAccent: 0x6a6a6c, bootStyle: 'buckle'
+        }
+    }, {
+        id: 'black-bars',
+        name: 'Black textile with grey bars, white helmet',
+        kit: {
+            suitColor: 0x111318, suitAccent: 0x111318, suitTrim: 0x8e1026, suitPatch: 0x8f9399, // Grey reflective bars, a red collar lining
+            torsoStyle: 'bars', upperArmStyle: 'bar', forearmStyle: 'plain',
+            pantsColor: 0x101216, pantsAccent: 0x8e1026, pantsTrim: 0xb4b8bc, // A pale U round the knee
+            thighStyle: 'pocket', shinStyle: 'knee',
+            helmetColor: 0xe4e7e9, helmetAccent: 0x16171a, helmetStyle: 'modular',
+            gloveColor: 0x101114, gloveStyle: 'armour',
+            bootColor: 0x0c0d10, bootAccent: 0x4a4c50, bootStyle: 'buckle'
+        }
+    }],
+    tim: [{
+        id: 'grey-touring',
+        name: 'Light grey touring textile',
+        kit: {
+            suitColor: 0xb9b9c0, suitAccent: 0x16171b,     // Light grey, a black yoke, cuffs and hem
+            suitTrim: 0xb0323a, suitPatch: 0x55585e,       // Red chevrons above the elbows
+            torsoStyle: 'touring', upperArmStyle: 'chevron', forearmStyle: 'cuff',
+            pantsColor: 0x15161a, pantsAccent: 0x15161a, pantsTrim: 0xe0e0e0, // A white mark on the shin
+            thighStyle: 'pocket', shinStyle: 'mark',
+            helmetColor: 0xf0f4f8, helmetAccent: 0x15171c, helmetTrim: 0x3a3d44, // White crown, black front and chin
+            helmetStyle: 'chin',
+            gloveColor: 0x111215, gloveStyle: 'armour',
+            bootColor: 0x141518, bootAccent: 0x0e0e10,
+            neckColor: 0x1d1e2c
+        }
+    }],
+    shane: [{
+        id: 'blue-orange',
+        name: 'Black textile with blue and orange, black helmet',
+        kit: {
+            suitColor: 0x15161a, suitAccent: 0x2f9fd6,     // Cyan-blue shoulders
+            suitTrim: 0xd94a26, suitPatch: 0xe8e8e8,       // Orange sides and forearms
+            torsoStyle: 'yoke', upperArmStyle: 'yoke', forearmStyle: 'yoke',
+            pantsColor: 0x111114, pantsAccent: 0xd94a26, pantsTrim: 0xe0e0e0, // An orange slash on the thigh
+            thighStyle: 'slash', shinStyle: 'knee',
+            helmetColor: 0x0e1014, helmetAccent: 0x9aa0a8, helmetStyle: 'lines', // Gloss black, silver-grey lines
+            gloveColor: 0x2a2c30, gloveAccent: 0xd94a26, gloveStyle: 'armour',
+            bootColor: 0x121214, bootAccent: 0x0e0e10
+        }
+    }, {
+        id: 'blue-orange-white',
+        name: 'Black textile with blue and orange, white helmet',
+        kit: {
+            suitColor: 0x15161a, suitAccent: 0x2f9fd6, suitTrim: 0xd94a26, suitPatch: 0xe8e8e8,
+            torsoStyle: 'yoke', upperArmStyle: 'yoke', forearmStyle: 'yoke',
+            pantsColor: 0x111114, pantsAccent: 0xd94a26, pantsTrim: 0xe0e0e0,
+            thighStyle: 'slash', shinStyle: 'knee',
+            helmetColor: 0xe9ebec, helmetAccent: 0x121316, helmetTrim: 0xb5342c, // White, black panels, a red centre stripe
+            helmetStyle: 'panel',
+            gloveColor: 0x2a2c30, gloveAccent: 0xd94a26, gloveStyle: 'armour',
+            bootColor: 0x121214, bootAccent: 0x0e0e10
+        }
+    }, {
+        id: 'black-piping',
+        name: 'Black textile with orange piping, white helmet',
+        kit: {
+            suitColor: 0x1a181c, suitAccent: 0xc04a32, suitTrim: 0x1a181c, suitPatch: 0x8e9196, // A large grey star-shaped patch
+            torsoStyle: 'piping', upperArmStyle: 'bar', forearmStyle: 'line',
+            pantsColor: 0x131316, pantsAccent: 0xb03a30, pantsTrim: 0x8a8d92,
+            thighStyle: 'pocket', shinStyle: 'stripe',
+            helmetColor: 0xe6e8e8, helmetAccent: 0x15161a, helmetStyle: 'modular',
+            gloveColor: 0x111114, gloveAccent: 0xc8552e, gloveStyle: 'armour',
+            bootColor: 0x121214, bootAccent: 0x0e0e10
+        }
+    }],
+    lucy: [{
+        id: 'black-leather',
+        name: 'Black leather jacket, blue jeans',
+        kit: {
+            suitColor: 0x121215, suitAccent: 0x26262b,     // Black leather, its panel seams a shade lighter
+            suitTrim: 0xa9b1c2, suitPatch: 0xeaeaea,       // A pale grey hood and hem under the jacket, white patches and piping
+            suitRoughness: 0.5,
+            torsoStyle: 'leather', upperArmStyle: 'star', forearmStyle: 'plain',
+            helmetColor: 0xf2f2f0, helmetAccent: 0x121214, // White helmet, black and copper streaks
+            helmetTrim: 0xb8693a, helmetStyle: 'streak',
+            pantsColor: 0x3a4f72, pantsAccent: 0x3a4f72,   // Blue jeans
+            shinStyle: 'jeans',
+            gloveColor: 0x111113, gloveAccent: 0x2a2c30, gloveStyle: 'armour', // Dark carbon knuckle guards
+            bootColor: 0x18181b, bootAccent: 0xf0f0f0, bootStyle: 'trainer', // Black high-top riding trainers, a white sole
+            backpackColor: 0x18191c
+        }
+    }],
+    guy: [{
+        id: 'black-mesh',
+        name: 'Black mesh jacket, dark jeans',
+        kit: {
+            suitColor: 0x0e0e12, suitAccent: 0x18181c, suitTrim: 0xd8d8d6, suitPatch: 0x8a8d90, // A white label on the chest, a grey band on the forearm
+            torsoStyle: 'plain', upperArmStyle: 'plain', forearmStyle: 'band',
+            helmetColor: 0x101318, helmetAccent: 0xd6d8d4, // Gloss black, white crown stripes and chin panel
+            helmetStyle: 'stripes', visorColor: 0x3a2226,
+            gloveColor: 0x161617, gloveStyle: 'armour',
+            pantsColor: 0x1a1b26, pantsAccent: 0x1a1b26, shinStyle: 'jeans',
+            bootColor: 0x7a5a3c, bootAccent: 0x2a2018, bootStyle: 'trainer', // Tan ankle boots
+            // His scarf, which he wears only on the scrambler
+            scarfColor: 0x8a2b2b, scarfBikes: ['bike04_scrambler']
+        }
+    }, {
+        id: 'charcoal-bands',
+        name: 'Charcoal jacket with grey bands',
+        kit: {
+            suitColor: 0x3a3b3d, suitAccent: 0x6e7072,     // Charcoal, grey leather-look bands
+            suitTrim: 0x121214, suitPatch: 0xdadada,       // A shield patch on the arm
+            torsoStyle: 'bands', upperArmStyle: 'band', forearmStyle: 'plain',
+            helmetColor: 0x0e0f12, helmetAccent: 0x1c1d21, helmetStyle: 'plain',
+            gloveColor: 0x121214, gloveStyle: 'armour',
+            pantsColor: 0x141416, pantsAccent: 0x141416, shinStyle: 'jeans',
+            bootColor: 0x14151c, bootAccent: 0xe6e6e4, bootStyle: 'trainer',
+            neckColor: 0x4a4c4e
+        }
+    }, {
+        id: 'tan-waxed',
+        name: 'Tan waxed jacket, silver helmet',
+        kit: {
+            suitColor: 0x8a7458, suitAccent: 0x75614a, suitTrim: 0x75614a, suitPatch: 0x30302c,
+            suitRoughness: 0.6,
+            torsoStyle: 'waxed', upperArmStyle: 'plain', forearmStyle: 'plain',
+            helmetColor: 0xa9adb2, helmetAccent: 0x2a2c30, helmetStyle: 'plain', helmetRoughness: 0.5, // Matt silver
+            gloveColor: 0x141416, gloveStyle: 'armour',
+            pantsColor: 0x9c9896, pantsAccent: 0x9c9896, shinStyle: 'jeans', // Light grey
+            bootColor: 0x18181a, bootAccent: 0x18181a, bootStyle: 'trainer',
+            neckColor: 0x37428a
+        }
+    }]
+};
+
 // Playable characters. Each entry defines the rider, the bikes they own
 // (BIKE_MODELS: the first is the one they ride unless the player picks
 // another on the rider select) and stat multipliers applied to the baseline
@@ -5,8 +170,10 @@
 // physics are the multipliers actually applied to the handling model, and
 // they are the character on their first bike: another bike scales them by
 // its class against that one (Vehicle.physicsOf). bikeLabel and bikeColor
-// describe the first bike. `kit`, when given, is the rider's own gear over
-// the bike's default rider colours (Vehicle.buildVariantRider's options).
+// describe the first bike. `outfits` is what the rider can wear (OUTFITS) and
+// `kit` the first outfit's gear; `build` is the rider's size against the
+// modelled rider's (height stretches the torso and the limbs, width the
+// shoulders, the hips and the girth), which the game applies to the one mesh.
 const CHARACTERS = [
     {
         id: 'steve',
@@ -14,8 +181,10 @@ const CHARACTERS = [
         bikeLabel: 'Retro sports triple',
         bikeColor: '0x021b74', // Deep blue tank, gold wheels
         bikes: ['bike08_xsr900', 'bike13_panigale'],
-        // His race leathers and helmet whatever he rides
-        kit: { suitColor: 0x16161c, suitAccent: 0xcc1111, helmetColor: 0xf0f0f2, helmetAccent: 0xcc1111 },
+        outfits: OUTFITS.steve,
+        kit: OUTFITS.steve[0].kit,
+        // The tallest of them
+        build: { height: 1.06, width: 0.98 },
         stats: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
         physics: {
             comfortShake: 1.25,     // Race-firm - you feel everything
@@ -34,8 +203,9 @@ const CHARACTERS = [
         bikeLabel: 'Naked triple',
         bikeColor: '0x020202', // Matt black, red pinstripes
         bikes: ['bike02_speed_triple', 'bike10_tiger900'],
-        // Grey textile with sandy panels, a cream helmet
-        kit: { suitColor: 0x2f3640, suitAccent: 0xc9a227, helmetColor: 0xe8e6dd, helmetAccent: 0x2f3640 },
+        outfits: OUTFITS.alex,
+        kit: OUTFITS.alex[0].kit,
+        build: { height: 1.0, width: 1.05 },
         stats: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
         physics: {
             comfortShake: 0.55,     // Long-travel suspension soaks it up
@@ -55,8 +225,10 @@ const CHARACTERS = [
         bikeColor: '0x0a0b0d', // Dark grey, bronze trim
         // The scooter first, then his gloss black naked four (the one he rides on every trip)
         bikes: ['bike14_tmax', 'bike06_z750'],
-        // A grey commuter jacket with silver piping
-        kit: { suitColor: 0x3a3f4a, suitAccent: 0xd6d8dc, helmetColor: 0xe8e8ea, helmetAccent: 0x9aa0a8 },
+        outfits: OUTFITS.tim,
+        kit: OUTFITS.tim[0].kit,
+        // Tall and slim
+        build: { height: 1.03, width: 0.95 },
         stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
@@ -75,8 +247,10 @@ const CHARACTERS = [
         bikeLabel: 'Light naked single',
         bikeColor: '0x010101', // Black, white shrouds, orange frame
         bikes: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990'],
-        // Black with orange, an orange helmet
-        kit: { suitColor: 0x1e2026, suitAccent: 0xff6600, helmetColor: 0xff6600, helmetAccent: 0xeceff1 },
+        outfits: OUTFITS.shane,
+        kit: OUTFITS.shane[0].kit,
+        // Broad
+        build: { height: 1.0, width: 1.1 },
         stats: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
         physics: {
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
@@ -95,14 +269,10 @@ const CHARACTERS = [
         bikeLabel: 'Naked middleweight',
         bikeColor: '0x010101', // Black, lime-green trim
         bikes: ['bike01_z650', 'bike07_mt09'],
-        kit: {
-            suitColor: 0x111215, suitAccent: 0x5c5f66,     // Black leather jacket, grey panels
-            helmetColor: 0xf2f2f0, helmetAccent: 0x121214, // White helmet, black and copper streaks
-            helmetTrim: 0xb8693a, helmetStyle: 'streak',
-            pantsColor: 0x46658f, pantsAccent: 0x46658f,   // Blue jeans
-            bootColor: 0x141416, bootAccent: 0xf0f0f0,     // Black-and-white riding trainers
-            backpackColor: 0x18191c
-        },
+        outfits: OUTFITS.lucy,
+        kit: OUTFITS.lucy[0].kit,
+        // Slighter than the others
+        build: { height: 0.93, width: 0.86 },
         // A balanced middleweight twin: a little under the adventure bike's
         // top speed, quick off the corners on its low-down torque, light and
         // easy to turn on a wide flat bar
@@ -124,17 +294,10 @@ const CHARACTERS = [
         bikeLabel: 'Retro scrambler',
         bikeColor: '0x750102', // Red tank, black side panels
         bikes: ['bike04_scrambler', 'bike05_g310gs', 'bike07_mt09_black', 'bike12_tracer9gt'],
-        // Dark textile touring kit: charcoal jacket with grey shoulder
-        // panels, black trousers, brown boots, a matt black helmet, and his
-        // scarf, which he wears only on the scrambler
-        kit: {
-            suitColor: 0x2a2d31, suitAccent: 0x50565e,
-            helmetColor: 0x1a1b1d, helmetAccent: 0x6d737a, helmetTrim: 0x2c2e31,
-            gloveColor: 0x161617,
-            pantsColor: 0x1d1f22, pantsAccent: 0x3a3e44,
-            bootColor: 0x3d2b1f, bootAccent: 0x1a1412,
-            scarfColor: 0x8a2b2b, scarfBikes: ['bike04_scrambler']
-        },
+        outfits: OUTFITS.guy,
+        kit: OUTFITS.guy[0].kit,
+        // Slim
+        build: { height: 0.99, width: 0.94 },
         // A mid-size all-rounder: middling pace, easy to place, comfortable
         // over a long day
         stats: { speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 },
@@ -272,6 +435,9 @@ class Vehicle {
         // The bike this vehicle is (a BIKE_MODELS id, or a kind of
         // Vehicle.BIKES), and the kind that is built while its file loads
         this.model = Vehicle.modelOf(this.character, bikeId);
+        // What the rider wears: the outfit named in options.outfit when the
+        // character has it, else their first
+        this.outfit = Vehicle.outfitOf(this.character, options.outfit);
         this.bike = Vehicle.kindOf(this.model);
         // Where the wheels turn and how big they are, [y, z, radius] in the
         // bike's axes: the procedural bike's, until a modelled bike brings
@@ -1088,11 +1254,14 @@ class Vehicle {
     // move the whole body. torsoLean is baked into the torso geometry so
     // rotation.x stays free for the stand-up blend.
     //
-    // The character's own kit (CHARACTERS[].kit) overrides the bike's rider
-    // colours. Gear left out takes the old colours: trousers the suit's,
-    // boots the gloves', the knees, boot soles and helmet trim the accents'.
-    // helmetStyle names a helmet shell of the modelled rider (helmet_<style>
-    // in tools/blender/rider.py); backpackColor gives the rider a backpack.
+    // The kit of the outfit the rider wears (OUTFITS, or a character's own
+    // `kit`) overrides the bike's rider colours. Gear left out takes the old
+    // colours: trousers the suit's, boots the gloves', the knees, boot soles
+    // and helmet trim the accents'. A style names the cut of a part of the
+    // modelled rider (helmet_<style> and the rest in tools/blender/rider.py);
+    // backpackColor gives the rider a backpack. What this stand-in does not
+    // draw (the styles, the trim colours, the neck tube, the build) goes to
+    // the modelled rider through riderSpec.
     buildVariantRider(options = {}) {
         const {
             y = 1.15, z = -0.1, torsoLean = 0.15,
@@ -1104,12 +1273,14 @@ class Vehicle {
             style = 'road',
             hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
             elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16,
-            scarfColor = null, scarfBikes = []
-        } = { ...options, ...this.character.kit };
+            scarfColor = null, scarfBikes = [],
+            ...gear
+        } = { ...options, ...(this.outfit ? this.outfit.kit : this.character.kit) };
         // A scarf is worn only on the bikes the kit names
         const scarf = scarfColor !== null && scarfBikes.includes(this.model) ? scarfColor : null;
         // The pose and colours, kept for the modelled rider (js/bikemodels.js)
         this.riderSpec = {
+            ...gear, build: this.character.build || null,
             y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent,
             helmetTrim, helmetStyle, gloveColor, pantsColor, pantsAccent, bootColor, bootAccent, backpackColor,
             style, hand, foot, elbowOut, kneeOut, kneeForward, scarf
@@ -4452,6 +4623,13 @@ const knownBike = (id) => !!(BIKE_MODELS[id] || Vehicle.BIKES[id]);
 Vehicle.bikeOf = (character) => {
     const first = character && Array.isArray(character.bikes) ? character.bikes[0] : null;
     return knownBike(first) ? first : 'sport';
+};
+
+// The outfit a character wears: the one with the id `outfitId` when they have
+// it, else their first; null for a character with no outfits
+Vehicle.outfitOf = (character, outfitId) => {
+    const outfits = character && Array.isArray(character.outfits) ? character.outfits : [];
+    return outfits.find((outfit) => outfit.id === outfitId) || outfits[0] || null;
 };
 
 // The bike a vehicle is: `bikeId` when the character owns it, else their first

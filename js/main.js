@@ -343,7 +343,7 @@ class Game {
             this.weatherSystem.prepare(this.atmosphereTrack.weatherTypes());
         }
 
-        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike());
+        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike(), { outfit: this.selectedOutfit() });
         this.vehicle.environment = this.environment;
         if (this.weatherSystem) this.vehicle.setWeatherSystem(this.weatherSystem);
 
@@ -489,7 +489,7 @@ class Game {
         this.particles = new ParticleSystem(this.scene);
 
         console.log('Creating vehicle...');
-        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike());
+        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike(), { outfit: this.selectedOutfit() });
         this.vehicle.environment = this.environment; // Pass environment reference for elevation
 
         // Connect weather system to vehicle
@@ -3050,12 +3050,19 @@ class Game {
         return this.tourSystem.getSelectedBike(this.selectedCharacter.id);
     }
 
+    // What the selected rider wears: their pick, by outfit id
+    selectedOutfit() {
+        if (!this.selectedCharacter || !this.tourSystem.getSelectedOutfit) return null;
+        return this.tourSystem.getSelectedOutfit(this.selectedCharacter.id);
+    }
+
     // One character's bike on the rider-select stage at `x`: their chosen
     // bike, built procedural only (focusRiderShowcase dresses it), shaded by
     // the rider's unlock tier
     buildShowcaseBike(c, x) {
         const bikeId = this.tourSystem.getSelectedBike ? this.tourSystem.getSelectedBike(c.id) : null;
-        const v = new Vehicle(this.scene, null, c, bikeId, { model: false });
+        const outfit = this.tourSystem.getSelectedOutfit ? this.tourSystem.getSelectedOutfit(c.id) : null;
+        const v = new Vehicle(this.scene, null, c, bikeId, { model: false, outfit });
         // Stage far below the world so previews never collide with track geometry
         v.position.set(x, -400, 0);
         v.yawAngle = 0;

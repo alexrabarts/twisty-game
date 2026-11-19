@@ -242,3 +242,117 @@ describe('Steve', () => {
         });
     });
 });
+
+// What the riders wear (OUTFITS in js/vehicle.js): each outfit names cuts of the modelled rider that are in the file, the
+// first is the one a rider wears unless another is asked for, and nothing in the source says who made the gear or whose it is
+describe('the outfits', () => {
+    const STYLES = { helmetStyle: ['helmet'], torsoStyle: ['torso'], upperArmStyle: ['upper_arm'], forearmStyle: ['forearm'], thighStyle: ['thigh'],
+        shinStyle: ['shin'], gloveStyle: ['glove'], bootStyle: ['boot'] };
+    const every = game.CHARACTERS.flatMap(c => c.outfits.map(outfit => [c.id, outfit.id, c, outfit]));
+    const nodes = () => {
+        const bytes = readFileSync(new URL(game.BikeModels.RIDER, root));
+        return new Set(JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + bytes.readUInt32LE(12)))).nodes.map(node => node.name));
+    };
+
+    test('every rider has one or more, each with an id, a neutral name and a whole kit', () => {
+        expect(game.CHARACTERS.map(c => [c.id, c.outfits.length])).toEqual([['steve', 1], ['alex', 2], ['tim', 1], ['shane', 3], ['lucy', 1], ['guy', 3]]);
+        for (const character of game.CHARACTERS) {
+            expect(new Set(character.outfits.map(outfit => outfit.id)).size).toBe(character.outfits.length);
+            // The kit the rest of the game reads is the first outfit's
+            expect(character.kit).toBe(character.outfits[0].kit);
+            expect(character.build.height).toBeGreaterThan(0.85);
+            expect(character.build.height).toBeLessThan(1.1);
+            expect(character.build.width).toBeGreaterThan(0.8);
+            expect(character.build.width).toBeLessThan(1.15);
+        }
+        for (const [, , , outfit] of every) {
+            expect(outfit.id).toMatch(/^[a-z]+(-[a-z]+)*$/);
+            expect(outfit.name.length).toBeGreaterThan(8);
+            ['suitColor', 'suitAccent', 'helmetColor', 'helmetAccent'].forEach(key => expect(Number.isInteger(outfit.kit[key])).toBe(true));
+        }
+        // The tallest and the slightest
+        const build = id => find(id).build;
+        game.CHARACTERS.forEach(c => expect(build('steve').height).toBeGreaterThanOrEqual(c.build.height));
+        game.CHARACTERS.forEach(c => expect(build('lucy').width).toBeLessThanOrEqual(c.build.width));
+    });
+
+    test.each(every)('%s in %s names cuts that are in the rider file', (id, outfitId, character, outfit) => {
+        const names = nodes();
+        for (const [key, [part]] of Object.entries(STYLES)) {
+            const style = outfit.kit[key];
+            expect(names.has(style ? `${part}_${style}` : part)).toBe(true);
+        }
+        // No style the dressing does not know
+        Object.keys(outfit.kit).filter(key => key.endsWith('Style')).forEach(key => expect(Object.keys(STYLES)).toContain(key));
+        if (outfit.kit.neckColor !== undefined) expect(names.has('neck')).toBe(true);
+        if (outfit.kit.backpackColor !== undefined) expect(names.has('backpack')).toBe(true);
+    });
+
+    test('a rider wears the first outfit unless one of their own is asked for', () => {
+        for (const character of game.CHARACTERS) {
+            expect(game.Vehicle.outfitOf(character)).toBe(character.outfits[0]);
+            expect(game.Vehicle.outfitOf(character, 'no-such-outfit')).toBe(character.outfits[0]);
+            expect(new game.Vehicle(new game.THREE.Scene(), null, character).outfit).toBe(character.outfits[0]);
+            for (const outfit of character.outfits) {
+                const vehicle = new game.Vehicle(new game.THREE.Scene(), null, character, null, { outfit: outfit.id });
+                expect(vehicle.outfit).toBe(outfit);
+                expect(vehicle.riderSpec.suitColor).toBe(outfit.kit.suitColor);
+                expect(vehicle.riderSpec.helmetStyle).toBe(outfit.kit.helmetStyle ?? null);
+                expect(vehicle.riderSpec.torsoStyle).toBe(outfit.kit.torsoStyle);
+                expect(vehicle.riderSpec.build).toBe(character.build);
+            }
+        }
+        // Another rider's outfit is not theirs
+        expect(game.Vehicle.outfitOf(find('tim'), 'tan-waxed')).toBe(find('tim').outfits[0]);
+        expect(game.Vehicle.outfitOf({ id: 'bare' })).toBeNull();
+    });
+
+    test('the modelled rider wears each outfit: its cuts, its colours, its neck tube and its build', async () => {
+        const real = load({ files: true });
+        await real.BikeModels.preload(real.CHARACTERS.map(c => c.bikes[0]));
+        for (const character of real.CHARACTERS) {
+            for (const outfit of character.outfits) {
+                const vehicle = new real.Vehicle(new real.THREE.Scene(), null, character, null, { outfit: outfit.id });
+                expect(vehicle.modelled).toBe(true);
+                const colours = new Set();
+                vehicle.rider.traverse(o => { if (o.isMesh) colours.add(o.material.color.getHex()); });
+                ['suitColor', 'helmetColor', 'pantsColor', 'bootColor', 'neckColor', 'suitPatch'].forEach(key => {
+                    if (outfit.kit[key] !== undefined) expect([key, colours.has(outfit.kit[key])]).toEqual([key, true]);
+                });
+                // Each part is found by its plain name whatever its cut, two of each limb
+                expect(named(vehicle.rider, 'torso').length).toBe(1);
+                expect(named(vehicle.rider, 'helmet').length).toBe(1);
+                ['upper_arm', 'forearm', 'thigh', 'shin', 'glove', 'boot'].forEach(name => expect(named(vehicle.rider, name).length).toBe(2));
+                expect(named(vehicle.rider, 'neck').length).toBe(outfit.kit.neckColor === undefined ? 0 : 1);
+                const [torso] = named(vehicle.rider, 'torso');
+                expect(torso.scale.x).toBeCloseTo(character.build.width, 6);
+                expect(torso.scale.y).toBeCloseTo(character.build.height, 6);
+            }
+        }
+        // The same cut in two outfits is the same geometry
+        const shane = real.CHARACTERS.find(c => c.id === 'shane');
+        const [first, second] = shane.outfits.map(outfit => new real.Vehicle(new real.THREE.Scene(), null, shane, null, { outfit: outfit.id }));
+        const geometry = v => { let found; named(v.rider, 'torso')[0].traverse(o => { if (o.isMesh && !found) found = o.geometry; }); return found; };
+        expect(geometry(first)).toBe(geometry(second));
+        expect(named(first.rider, 'helmet')[0]).not.toBe(named(second.rider, 'helmet')[0]);
+    });
+
+    test('the source names no maker, no person beyond a first name and no photo', () => {
+        // Kept turned by thirteen letters so that this file does not hold the words either
+        const turn = word => word.replace(/[a-z]/g, letter => String.fromCharCode((letter.charCodeAt(0) - 97 + 13) % 26 + 97));
+        const words = ['nycvarfgnef', 'xyvz', 'fubrv', 'nenv', 'nti', 'uwp', 'xgz', 'evpun', 'qnvarfr', 'erivg', 'oryy', 'qelfgne', 'uneqvfgl', 'enonegf'].map(turn);
+        const vehicle = loadScript('vehicle.js');
+        const sources = {
+            outfits: vehicle.slice(vehicle.indexOf('const OUTFITS'), vehicle.indexOf('const CHARACTERS')),
+            'bikemodels.js': loadScript('bikemodels.js'),
+            'tours.js': loadScript('tours.js'),
+            'rider.py': readFileSync(new URL('tools/blender/rider.py', root), 'utf8'),
+            'bike_kit.py': readFileSync(new URL('tools/blender/bike_kit.py', root), 'utf8'),
+            names: every.map(([, , , outfit]) => `${outfit.id} ${outfit.name}`).join('\n')
+        };
+        for (const [name, text] of Object.entries(sources)) {
+            for (const word of words) expect([name, word, new RegExp(`\\b${word}\\b`, 'i').test(text)]).toEqual([name, word, false]);
+            expect([name, /\b(IMG|PXL|DSC|MVIMG)_?\d|\.(jpe?g|heic)\b/i.test(text)]).toEqual([name, false]);
+        }
+    });
+});

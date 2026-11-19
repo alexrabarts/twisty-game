@@ -13,9 +13,10 @@ import { canvasStub, loadScript, realThree } from '../helpers/load-game.js';
 
 const root = new URL('../../', import.meta.url);
 // A bike file's size and each level's triangles; the shared rider and crew
-// files have budgets of their own. The menu fetches no bike until one is
+// files have budgets of their own (the rider file holds every cut of every
+// outfit, and a seated rider is one of each). The menu fetches no bike until one is
 // shown, then the rider and that one bike.
-const BUDGET = { file: 1.2 * 1024 * 1024, near: 40000, far: 10000, rider: 5000, crew: 2600, shared: 256 * 1024, menu: 1.5 * 1024 * 1024 };
+const BUDGET = { file: 1.2 * 1024 * 1024, near: 40000, far: 10000, rider: 7000, crew: 2600, shared: 700 * 1024, menu: 1.5 * 1024 * 1024 };
 // The procedural kinds, each ridden as the character who rode it, in that
 // character's old paint
 const KINDS = { steve: ['sport', '0xcc1111'], alex: ['adventure', '0xc9a227'], tim: ['scooter', '0x8d96a8'], shane: ['dirt', '0xff6600'], lucy: ['naked', '0x16181c'] };
@@ -300,7 +301,8 @@ describe.each(IDS)('swapping the model of %s', id => {
         vehicle.rider.traverse(o => { if (o.isMesh) colours.set(o.material.color.getHex(), true); });
         expect(colours.has(vehicle.riderSpec.suitColor)).toBe(true);
         expect(colours.has(vehicle.riderSpec.helmetColor)).toBe(true);
-        expect(vehicle.visor.material.color.getHex()).toBe(0x0e1218);
+        // Dark, unless the outfit has a tinted visor
+        expect(vehicle.visor.material.color.getHex()).toBe(vehicle.riderSpec.visorColor ?? 0x0e1218);
         // Every drawn part carries its baked occlusion
         vehicle.group.traverse(o => {
             if (!o.isMesh) return;

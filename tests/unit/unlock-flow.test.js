@@ -161,6 +161,34 @@ describe('the bike picker', () => {
         warn.mockRestore();
     });
 
+    test('each rider starts in their first outfit, and a chosen one is remembered per rider', () => {
+        CHARACTERS.forEach(c => expect(tour.getSelectedOutfit(c.id)).toBe(c.outfits[0].id));
+        expect(tour.getSelectedOutfit('nobody')).toBeNull();
+        tour.selectOutfit('guy', 'tan-waxed');
+        expect(tour.getSelectedOutfit('guy')).toBe('tan-waxed');
+        expect(JSON.parse(localStorage.getItem('twistyOutfits'))).toEqual({ guy: 'tan-waxed' });
+        // Kept for the next visit, and for Guy only
+        expect(new TourSystem().getSelectedOutfit('guy')).toBe('tan-waxed');
+        expect(new TourSystem().getSelectedOutfit('shane')).toBe('blue-orange');
+        // An outfit the rider does not have changes nothing
+        tour.selectOutfit('guy', 'blue-orange');
+        tour.selectOutfit('nobody', 'tan-waxed');
+        expect(tour.getSelectedOutfit('guy')).toBe('tan-waxed');
+        expect(JSON.parse(localStorage.getItem('twistyOutfits'))).toEqual({ guy: 'tan-waxed' });
+        // The bike choice is its own store
+        expect(localStorage.getItem('twistyBikes')).toBeNull();
+    });
+
+    test('ignores a saved outfit the rider does not have, and a store it cannot read', () => {
+        localStorage.setItem('twistyOutfits', JSON.stringify({ guy: 'blue-orange' }));
+        expect(new TourSystem().getSelectedOutfit('guy')).toBe('black-mesh');
+        localStorage.setItem('twistyOutfits', '{not json');
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(new TourSystem().getSelectedOutfit('guy')).toBe('black-mesh');
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved outfit choices could not be read'), expect.anything());
+        warn.mockRestore();
+    });
+
     test('debug mode opens every rider and every leg, and saves none of it as progress', () => {
         localStorage.clear();
         const open = new TourSystem({ unlockAll: true });

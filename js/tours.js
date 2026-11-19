@@ -132,6 +132,15 @@ class TourSystem {
         } catch (e) {
             console.warn('TourSystem: the saved bike choices could not be read; every rider starts on their first bike:', e);
         }
+        // Each rider's chosen outfit, by character id; a rider with none
+        // saved wears their first
+        this.selectedOutfits = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('twistyOutfits') || '{}');
+            if (saved && typeof saved === 'object') this.selectedOutfits = saved;
+        } catch (e) {
+            console.warn('TourSystem: the saved outfit choices could not be read; every rider starts in their first outfit:', e);
+        }
     }
 
     // The bike a rider rides: the one chosen for them if they own it, else their first
@@ -152,6 +161,27 @@ class TourSystem {
             localStorage.setItem('twistyBikes', JSON.stringify(this.selectedBikes));
         } catch (e) {
             console.warn('TourSystem: the bike choice could not be saved:', e);
+        }
+    }
+
+    // The outfit a rider wears, by id: the one chosen for them if they have it, else their first
+    getSelectedOutfit(characterId) {
+        if (typeof CHARACTERS === 'undefined') return null;
+        const character = CHARACTERS.find(c => c.id === characterId);
+        if (!character || !Array.isArray(character.outfits) || !character.outfits.length) return null;
+        const chosen = this.selectedOutfits[characterId];
+        return character.outfits.some(outfit => outfit.id === chosen) ? chosen : character.outfits[0].id;
+    }
+
+    // Chooses an outfit for a rider and remembers it
+    selectOutfit(characterId, outfitId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || !Array.isArray(character.outfits) || !character.outfits.some(outfit => outfit.id === outfitId)) return;
+        this.selectedOutfits[characterId] = outfitId;
+        try {
+            localStorage.setItem('twistyOutfits', JSON.stringify(this.selectedOutfits));
+        } catch (e) {
+            console.warn('TourSystem: the outfit choice could not be saved:', e);
         }
     }
 
