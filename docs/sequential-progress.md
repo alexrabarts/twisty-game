@@ -127,3 +127,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner showed Tim's real scooter (a mid-size sports scooter, blue above, a silver sweep, black below, tall clear screen); the maxi scooter model is replaced by it (`bike14_forza`, a saved choice of the old id falls back to the first bike). Lucy gets a black track version of the V4 superbike (a second scheme of the same script: no mirrors, plate or indicators, blanked headlights) and a red 250 trail single (`bike15_crf250`, new, from general knowledge: no photo). Her bikes, least powerful first: trail single, naked twin, naked triple, track superbike. Her base numbers were set so that the naked twin rides exactly as before.
 - Check: 14 test files on alex-ci, 825 tests (riders, catalogue, wheels true and steering on the fork's line, stands up, discs and calipers, model surfaces). The red superbike's file is byte-identical. Each script gives the same bytes twice. Triangles: scooter 23 680 / 9 080, track bike 22 096 / 8 512, trail bike 13 684 / 6 388 (budgets 40 000 / 10 000).
 - Left: the scooter's nose is simpler and more pointed than the real one, its headlights are plain wedges, and it has no rider-on-bike picture; whether it is the 125 or the 300 is not known (set as a full scooter class). The trail bike's exact model and year are not confirmed. The long checks wait for the end.
+
+## The bike picker steps up and down, with two ends
+
+- Job: the bike arrows on the rider screen were left and right and wrapped round. They are now an up and a down arrow, one over the other, and the list has two ends: the arrow at an end is off, and the keys do nothing there.
+- Check: `tests/unit/unlock-flow.test.js` holds the two ends for the buttons and the keys; the menu and rider tests pass (87 tests).
+- Left: not looked at in the browser. The long checks wait for the end.

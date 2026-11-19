@@ -497,9 +497,11 @@ class TourSystem {
                 const at = Math.max(0, bikes.indexOf(bike));
                 const picker = bikes.length > 1 ? `
                     <div class="bike-picker" role="group" aria-label="Bike">
-                        <button class="bike-arrow" id="bikePrevBtn" aria-label="Previous bike">‹</button>
                         <div class="bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}<span class="bike-count">${at + 1} / ${bikes.length}</span></div>
-                        <button class="bike-arrow" id="bikeNextBtn" aria-label="Next bike">›</button>
+                        <div class="bike-arrows">
+                            <button class="bike-arrow" id="bikePrevBtn" aria-label="Previous bike"${at === 0 ? ' disabled' : ''}>▲</button>
+                            <button class="bike-arrow" id="bikeNextBtn" aria-label="Next bike"${at === bikes.length - 1 ? ' disabled' : ''}>▼</button>
+                        </div>
                     </div>` : `<div class="showcase-sub bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}</div>`;
                 card.innerHTML = `
                     ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
@@ -523,13 +525,16 @@ class TourSystem {
             if (this.onRiderShowcase) this.onRiderShowcase(c.id);
         };
 
-        // Cycles the focused rider's bikes (wrapping round), remembers the
-        // choice and puts that bike on the stage
+        // Steps the focused rider's bikes up or down their list, remembers the
+        // choice and puts that bike on the stage. The list has two ends (the
+        // least powerful bike first): it does not wrap round
         const moveBikeFocus = (delta) => {
             const c = riderOrder[this.riderFocusIndex];
             if (this.riderTierFor(c.id) !== 'lit' || !Array.isArray(c.bikes) || c.bikes.length < 2) return;
             const at = c.bikes.indexOf(this.getSelectedBike(c.id));
-            this.selectBike(c.id, c.bikes[(at + delta + c.bikes.length) % c.bikes.length]);
+            const to = Math.max(0, Math.min(c.bikes.length - 1, at + delta));
+            if (to === at) return;
+            this.selectBike(c.id, c.bikes[to]);
             renderRiderCard();
             if (this.onBikeShowcase) this.onBikeShowcase(c.id);
         };

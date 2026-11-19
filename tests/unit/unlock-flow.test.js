@@ -116,26 +116,43 @@ describe('the bike picker', () => {
         expect(tour.getSelectedBike('tim')).toBe('bike14_forza');
     });
 
-    test('cycles the focused rider\'s bikes, shows each one and remembers the choice per rider', () => {
+    test('steps the focused rider\'s bikes up and down with no wrap, shows each one and remembers the choice per rider', () => {
         const shown = [];
         tour.onBikeShowcase = id => shown.push([id, tour.getSelectedBike(id)]);
         tour.showRiderSelector('guy');
         const card = () => document.getElementById('riderInfoCard');
+        const up = () => document.getElementById('bikePrevBtn'), down = () => document.getElementById('bikeNextBtn');
         expect(card().textContent).toContain('Retro scrambler twin (2017)');
         expect(card().textContent).toContain('1 / 4');
-        document.getElementById('bikeNextBtn').click();
+        // At the top of the list the up arrow is off, and up does nothing: the list does not wrap
+        expect(up().disabled).toBe(true);
+        expect(down().disabled).toBe(false);
+        tour.moveBikeFocus(-1);
+        expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
+        down().click();
         expect(tour.getSelectedBike('guy')).toBe('bike05_g310gs');
         expect(card().textContent).toContain('Small adventure single (2018)');
-        document.getElementById('bikePrevBtn').click();
-        document.getElementById('bikePrevBtn').click();
+        expect(up().disabled).toBe(false);
+        up().click();
+        expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
+        down().click(); down().click(); down().click();
         expect(tour.getSelectedBike('guy')).toBe('bike12_tracer9gt');
-        expect(shown).toEqual([['guy', 'bike05_g310gs'], ['guy', 'bike04_scrambler'], ['guy', 'bike12_tracer9gt']]);
+        // At the bottom the down arrow is off, and down does nothing
+        expect(down().disabled).toBe(true);
+        tour.moveBikeFocus(1);
+        expect(tour.getSelectedBike('guy')).toBe('bike12_tracer9gt');
+        expect(shown.map(([, bike]) => bike)).toEqual(['bike05_g310gs', 'bike04_scrambler', 'bike05_g310gs', 'bike07_mt09_black', 'bike12_tracer9gt']);
+        // The arrows stand one over the other
+        expect(up().parentElement).toBe(down().parentElement);
+        expect(up().parentElement.className).toBe('bike-arrows');
         // Kept for the next visit, and for Guy only
         expect(new TourSystem().getSelectedBike('guy')).toBe('bike12_tracer9gt');
         expect(new TourSystem().getSelectedBike('lucy')).toBe('bike15_crf250');
-        // The keyboard cycles it too
+        // The keyboard steps it too: up from the last bike, and no further down
         document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowDown' }));
-        expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
+        expect(tour.getSelectedBike('guy')).toBe('bike12_tracer9gt');
+        document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowUp' }));
+        expect(tour.getSelectedBike('guy')).toBe('bike07_mt09_black');
     });
 
     test('shows a rider with one bike without arrows, and names no maker', () => {
