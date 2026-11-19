@@ -501,11 +501,12 @@ class RoadSurface {
         return RoadSurface.far;
     }
 
-    // A junction's paving (RoadMesh.addEdgeWorks): the far ribbon's look, pushed back in depth so that every ribbon
+    // A junction's paving (RoadMesh.addEdgeWorks): the asphalt's texture on the ground plane, pushed back in depth so that every ribbon
     // laid on it wins (the far material is drawn nearer than it lies, and would show through a ribbon seen edge-on)
     static pavingMaterial() {
         if (!RoadSurface.paving) {
-            RoadSurface.paving = LandShade.patch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: RoadSurface.WET.farRough, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 }));
+            const t = RoadSurface.textures();
+            RoadSurface.paving = LandShade.patch(new THREE.MeshStandardMaterial({ map: t.asphalt.map, normalMap: t.asphalt.normal, vertexColors: true, roughness: RoadSurface.WET.farRough, metalness: 0, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 2, polygonOffsetUnits: 4 }));
             if (RoadSurface.wetness) RoadSurface.writeFarWet(RoadSurface.paving, RoadSurface.wetness);
         }
         return RoadSurface.paving;

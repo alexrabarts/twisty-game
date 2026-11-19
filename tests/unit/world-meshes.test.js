@@ -407,10 +407,19 @@ describe('RoadMesh', () => {
         expect(Math.max(...ys(paved.paving))).toBeLessThanOrEqual(edgeY - RoadMesh.PAVING_UNDER_M + 1e-4);
         expect(Math.min(...xs(paved.apron).map(Math.abs))).toBeGreaterThan(edgeX - 1e-3);
         expect(apron.paving.positions).toHaveLength(0);
+        // nor the slope from the verge's edge: it stood in the side road as a sliver of land
+        expect(paved.apron.positions).toHaveLength(0);
+        // A wall's end that a piece of wall joins to another road's has no return under the road (two quads less
+        // an end)
+        const joinedFoot = () => ({ kind: 'wall', y: edgeY - 6 });
+        joinedFoot.joined = () => true;
+        expect(wall.stone.positions.length - RoadMesh.edgeWorks(near.sides, joinedFoot).stone.positions.length).toBe(2 * 2 * 18);
         const pavedGroup = new THREE.Group();
         RoadMesh.addEdgeWorks(pavedGroup, near.sides, gore);
         expect(pavedGroup.children[0].geometry.groups.map(g => g.materialIndex)).toContain(3);
         expect(pavedGroup.children[0].material[3]).toBe(RoadSurface.pavingMaterial());
+        expect(pavedGroup.children[0].material[3].map).toBe(RoadSurface.textures().asphalt.map);
+        expect(pavedGroup.children[0].geometry.attributes.uv.count).toBe(pavedGroup.children[0].geometry.attributes.position.count);
         expect(Math.min(...ys(wall.stone))).toBeCloseTo(edgeY - 6, 4);
         expect(Math.max(...ys(wall.stone))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
         // A step lower than PARAPET_DROP_M has no parapet (the physics rides off it, as WorldPhysics.dropDepthM says)

@@ -80,10 +80,12 @@ class RoadMesh {
     // How far behind a piece of wall that joins two roads' walls the ground is laid (RoadMesh.addEdgeWorks)
     static get JOIN_BACK_M() { return 4; }
     static get JOIN_UNDER_M() { return 0.09; }
+    static get JOIN_PAST_M() { return 1.5; }
 
     // The apron's colour where no land colour is known: the land's grass, linear
     // The paving the roads lay between them in a junction (a gore, the corner behind a wall's join), linear
-    static get PAVING_LINEAR() { return RoadMesh.COLORS.asphalt.map(v => Math.pow(v, 2.2)); }
+    // (white: its material lays the asphalt's own texture on it, RoadSurface.pavingMaterial)
+    static get PAVING_LINEAR() { return [1, 1, 1]; }
     // The ride's end of a junction's paving lies this far under its surface (under the side ribbons held there)
     static get PAVING_UNDER_M() { return 0.13; }
     static get PAVING_PIECE_M() { return 4; }
@@ -931,8 +933,10 @@ class RoadMesh {
                     const overOther = guard && ca && cb && [ca, cb, [(ca[0] + pb[0]) / 2, (ca[1] + pb[1]) / 2, (ca[2] + pb[2]) / 2], [(cb[0] + pa[0]) / 2, (cb[1] + pa[1]) / 2, (cb[2] + pa[2]) / 2]].some(q => guard.depth(q[0], q[2], q[1] - 0.2, q[1] - RoadMesh.APRON_UNDER_M) !== null);
                     // (nor in a junction's paving, where the rows have no verge and a side road lies at the edge: the
                     // ground hid a metre of it. Carriageways holds that road at the importer's height, not as it is held)
-                    const paved2 = paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key];
-                    if (ca && cb && !overOther && !paved2) RoadMesh.quad(apronOut, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
+                    // The slope from the verge's edge has no place there either: it stood in the side road as a sliver
+                    // of land, a dark line along the junction
+                    if (paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key]) continue;
+                    if (ca && cb && !overOther) RoadMesh.quad(apronOut, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
                     // Then from the verge's edge out and down at the batter to the land's height, in strips no longer
                     // than APRON_STRIP_M along the edge, so no apron triangle grows into a large flat face
                     const foot = (f, p) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + o[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + o[1] * run]; };
@@ -1005,8 +1009,11 @@ class RoadMesh {
                         const q = [p[0] - out[0] * RoadMesh.WALL_RETURN_M, p[1], p[2] - out[1] * RoadMesh.WALL_RETURN_M];
                         RoadMesh.quad(stoneOut, a, q, [q[0], d, q[2]], [a[0], d, a[2]], colors.stone);
                     };
-                    if (kindOf(k - 1, key) !== 'wall') cap(pa, depth(fa, pa), k);
-                    if (kindOf(k + 1, key) !== 'wall') cap(pb, depth(fb, pb), k + 1);
+                    // (none at an end that a piece of wall joins to another road's, `foot.joined`: the wall goes on
+                    // there, and the return stood in the junction's paving as a tab of stone)
+                    const goesOn = p => !!(foot && foot.joined && foot.joined(p[0], p[1], p[2]));
+                    if (kindOf(k - 1, key) !== 'wall' && !goesOn(pa)) cap(pa, depth(fa, pa), k);
+                    if (kindOf(k + 1, key) !== 'wall' && !goesOn(pb)) cap(pb, depth(fb, pb), k + 1);
                 }
                 // (none on the segment that ends at a structure's row: the structure's own parapet ends there, a hand
                 // from where this one would, and the two made a step)
@@ -1064,7 +1071,11 @@ class RoadMesh {
             // ribbons where they are paved), or the corner behind the piece was a pit
             const under = (p, back) => [p[0] - piece.o[0] * back, p[1] - RoadMesh.JOIN_UNDER_M, p[2] - piece.o[1] * back];
             const c = RoadMesh.PAVING_LINEAR, start = works.paving.positions.length;
-            RoadMesh.quad(works.paving, under(piece.a, 0), under(piece.b, 0), under(piece.b, RoadMesh.JOIN_BACK_M), under(piece.a, RoadMesh.JOIN_BACK_M), [c, c, c, c]);
+            // (and JOIN_PAST_M past the ride's end of the piece, in under the ride's edge: between the piece, the end
+            // of the ride's wall and the paving from the carriageway a corner stayed open, a hole at the wall's end)
+            const len = Math.hypot(piece.b[0] - piece.a[0], piece.b[2] - piece.a[2]) || 1, past = RoadMesh.JOIN_PAST_M / len;
+            const b = [piece.b[0] + (piece.b[0] - piece.a[0]) * past, piece.b[1], piece.b[2] + (piece.b[2] - piece.a[2]) * past];
+            RoadMesh.quad(works.paving, under(piece.a, 0), under(b, 0), under(b, RoadMesh.JOIN_BACK_M), under(piece.a, RoadMesh.JOIN_BACK_M), [c, c, c, c]);
             own('paving', works.paving.positions.length - start, piece.owner ?? -1);
         }
         if (!works.apron.positions.length && !works.wall.positions.length && !works.stone.positions.length && !works.paving.positions.length && !extra.some(part => part.positions.length)) return 0;
@@ -1113,6 +1124,14 @@ class RoadMesh {
             normal[at * 3] = face[v * 4 + 2]; normal[at * 3 + 1] = 0; normal[at * 3 + 2] = face[v * 4 + 3];
         }
         geometry.setAttribute('wallFace', new THREE.BufferAttribute(wallFace, 2));
+        // The paving takes the asphalt's texture on the ground plane, at the near ribbon's scale (from a whole tile
+        // near the mesh, so the numbers stay small enough for the grain)
+        if (paving) {
+            const uv = new Float32Array((apron + wall + stone + paving) * 2), pos = geometry.attributes.position.array, m = RoadSurface.ASPHALT_M;
+            const first = (apron + wall + stone) * 3, u0 = Math.floor(pos[first] / m), v0 = Math.floor(pos[first + 2] / m);
+            for (let v = apron + wall + stone; v < apron + wall + stone + paving; v++) { uv[v * 2] = pos[v * 3] / m - u0; uv[v * 2 + 1] = pos[v * 3 + 2] / m - v0; }
+            geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        }
         const mesh = RoadMesh.mesh(geometry, 'road-works', [RoadMesh.apronMaterial(), RoadMesh.material(), RoadMesh.stoneMaterial(), RoadSurface.pavingMaterial()]);
         mesh.userData.world = 'works';
         group.add(mesh);

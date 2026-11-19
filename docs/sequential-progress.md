@@ -55,3 +55,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: with `debug` in the page's address every rider (and so every bike) and every leg is open. `TourSystem` takes `unlockAll`; the saved progress is not changed.
 - Check: `tests/unit/unlock-flow.test.js` holds every rider and leg open and lit in debug mode, nothing saved as progress, and the plain game still locked. The tour, restart and board files pass (47 tests).
 - Left: nothing.
+
+## The seam and the hole where a side road meets the ride
+
+- Job: four leftovers at Bedrína. A dark line along the junction: the ride's slope from the verge's edge stood in the side road in paved rows, so the ride lays none there. A hole at the wall's end: the paving behind a wall join now reaches `JOIN_PAST_M` in under the ride's edge. A tab of stone there: a wall's end that is joined to another road's wall has no return under the road. A smooth patch: the paving has the asphalt's own texture on the ground plane.
+- Check: `tests/unit/world-meshes.test.js` holds no slope in paved rows, no return at a joined end, the paving's texture and its UV. Whole unit suite on alex-ci: 98 of 98 files, 2539 tests, and the four hash files here (43). Junctions all 0; 31 in a carriageway (32 before), 7 seams; walls 0 tops, 14 open ends.
+- Left: no check reads the paving's cover (the hole at the wall's end was found by eye); the join's parapet ends a hand from the side road's; `flanks` 80; the test split.
