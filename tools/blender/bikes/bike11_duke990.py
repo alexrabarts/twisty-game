@@ -185,7 +185,7 @@ def chassis(k):
     parts.shock(k, (0.0, 0.72, -0.18), (0.0, 0.42, -0.32), 0.032)
     D.caliper(k, (RDISC_X, REAR[1], REAR[2]), RDISC_R, math.radians(205), size=(0.045, 0.055, 0.09))
     parts.pegs(k, PEG, hanger=(0.52, -0.12), wide=0.055)
-    k.rod((-0.15, 0.28, -0.06), (-0.29, 0.03, 0.05), 0.012, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.28, -0.06), (-0.29, 0.03, 0.05), 0.012, "steel_dark", seg=6)
 
 
 def luggage(k):

@@ -135,7 +135,7 @@ def build():
     parts.can(k, (0.17, 0.36, -0.2), (0.215, 0.5, -0.78), 0.062, "steel", cap="dark_metal")
 
     parts.pegs(k, PEG, hanger=(0.56, -0.1), wide=0.06)
-    k.rod((-0.15, 0.32, 0.0), (-0.29, 0.03, 0.08), 0.011, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.32, 0.0), (-0.29, 0.03, 0.08), 0.011, "steel_dark", seg=6)
 
     k.finish(OUT, anchors={"grip": GRIP, "peg": PEG}, budget=12000, alone=("wheel_front", "wheel_rear", "disc_front", "disc_rear"))
     parts.preview(k, "adventure")

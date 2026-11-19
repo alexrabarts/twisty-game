@@ -369,9 +369,7 @@ def rear_end(k):
     k.rod((-PEG[0] + 0.05, PEG[1] - 0.01, PEG[2] + 0.02), (-PEG[0] + 0.02, PEG[1] + 0.02, PEG[2] + 0.18), 0.007, "steel", seg=6)
     k.rod((PEG[0] - 0.05, PEG[1] - 0.01, PEG[2] + 0.02), (PEG[0] - 0.02, PEG[1] - 0.03, PEG[2] + 0.17), 0.007, "steel", seg=6)
     # Side stand, folded up on the left
-    k.rod((-0.15, 0.3, -0.04), (-0.27, 0.06, 0.06), 0.011, "steel_dark", seg=k.q(8, 5))
-    if not L1:
-        k.box((0.05, 0.01, 0.05), (-0.275, 0.05, 0.065), "steel_dark", bevel=0.003)
+    k.side_stand((-0.15, 0.3, -0.04), (-0.27, 0.06, 0.06), 0.011, "steel_dark", seg=k.q(8, 5), pad=not L1)
 
 
 A.build(build, "bike01_z650", seed=101, colours={"paint": BLACK, "paint_dark": 0x050506, "accent": LIME, "rim": 0x121316, "caliper": 0x24262B, "copper": 0x6E4630},

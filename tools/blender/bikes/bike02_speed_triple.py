@@ -330,7 +330,7 @@ def rear_end(k):
         k.tube([(side * 0.14, 0.66, -0.34), (side * 0.16, 0.56, -0.42), (px - side * 0.04, py, pz)], 0.012, "frame_light", seg=k.q(8, 5))
     k.rod((-PEG[0] + 0.05, PEG[1] - 0.01, PEG[2] + 0.02), (-PEG[0] + 0.02, PEG[1] + 0.02, PEG[2] + 0.18), 0.007, "steel", seg=6)
     k.rod((PEG[0] - 0.05, PEG[1] - 0.01, PEG[2] + 0.02), (PEG[0] - 0.02, PEG[1] - 0.03, PEG[2] + 0.17), 0.007, "steel", seg=6)
-    k.rod((-0.16, 0.3, -0.06), (-0.28, 0.06, 0.04), 0.011, "frame_light", seg=k.q(8, 5))
+    k.side_stand((-0.16, 0.3, -0.06), (-0.28, 0.06, 0.04), 0.011, "frame_light", seg=k.q(8, 5))
 
 
 def build_all(k):

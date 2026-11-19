@@ -190,7 +190,7 @@ def build():
 
     # Pegs on hangers, and the side stand
     parts.pegs(k, PEG, hanger=(0.52, -0.1))
-    k.rod((-0.15, 0.3, -0.02), (-0.27, 0.03, 0.06), 0.011, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.3, -0.02), (-0.27, 0.03, 0.06), 0.011, "steel_dark", seg=6)
 
     k.finish(OUT, anchors={"grip": GRIP, "peg": PEG}, budget=12000, alone=("wheel_front", "wheel_rear", "disc_front", "disc_rear"))
     parts.preview(k, "naked")

@@ -193,7 +193,7 @@ def chassis(k):
     parts.pegs(k, PEG, hanger=(0.54, -0.1), wide=0.055)
     for side in (-1, 1):
         D.panel(k, [(-0.02, 0.56), (-0.14, 0.52), (-0.16, 0.38), (-0.1, 0.36)], side * 0.18, 0.012, "steel")
-    k.rod((-0.15, 0.28, -0.05), (-0.29, 0.03, 0.06), 0.012, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.28, -0.05), (-0.29, 0.03, 0.06), 0.012, "steel_dark", seg=6)
 
 
 def luggage(k):

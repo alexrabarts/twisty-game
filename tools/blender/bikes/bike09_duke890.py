@@ -123,7 +123,7 @@ def build(k):
     kc.pegs(k, PEG, hanger_mat="matt_black", hanger=(0.5, -0.12))
     for side in (-1, 1):
         k.rod((side * 0.13, 0.52, -0.4), (side * 0.2, 0.52, -0.4), 0.01, "steel_dark", seg=k.seg(8, 5))
-    k.rod((-0.15, 0.3, -0.02), (-0.27, 0.03, 0.06), 0.011, "steel_dark", seg=k.seg(8, 5))
+    k.side_stand((-0.15, 0.3, -0.02), (-0.27, 0.03, 0.06), 0.011, "steel_dark", seg=k.seg(8, 5))
 
     # ---- face: a black cowl round the split lamps, orange inner flanks, a
     # clear screen over the dash

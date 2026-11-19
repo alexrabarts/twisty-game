@@ -168,7 +168,7 @@ def build(low=False):
 
     # Rearsets and the side stand
     parts.pegs(k, PEG, hanger=(0.5, -0.1), heel=True)
-    k.rod((-0.15, 0.3, 0.02), (-0.27, 0.03, 0.1), 0.011, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.3, 0.02), (-0.27, 0.03, 0.1), 0.011, "steel_dark", seg=6)
 
     if low:
         k.finish(CREW, anchors={"grip": GRIP, "peg": PEG}, budget=2600, alone=("wheel_front", "wheel_rear"),

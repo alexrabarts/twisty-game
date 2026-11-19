@@ -252,7 +252,7 @@ def chassis(k):
     k.beam((0.115, REAR[1] - 0.01, REAR[2] + 0.02), (0.1, REAR[1] - 0.04, REAR[2] - 0.08), (0.012, 0.04), "steel_dark")
     # Rider pegs on hangers, the side stand
     parts.pegs(k, PEG, hanger=(0.55, -0.12), wide=0.06)
-    k.rod((-0.15, 0.3, -0.04), (-0.3, 0.03, 0.08), 0.012, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.3, -0.04), (-0.3, 0.03, 0.08), 0.012, "steel_dark", seg=6)
 
 
 def luggage(k):

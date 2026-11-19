@@ -97,3 +97,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner meant the camera in the open, not under a bridge: it may come down at speed. A world's boom now loses 30% of its height from 0 to 30 m/s, eased (`WorldCamera.speedHeight`): standard 3 m to 2.1 m, high 8 m to 5.6 m. The legs keep their slight rise. The room under a deck (F3) stays.
 - Check: `tests/unit/world-camera-swing.test.js` holds the rule (monotone, no step, legs unchanged); the swing and bridge tests pass (14 tests).
 - Left: not looked at in the browser. The land limits act on the lower boom as on any boom, but the GPU probes `world-frustum` and `world-camera-smooth` were not run: the long checks wait for the end.
+
+## Bike stands up
+
+- Job: the owner asked for every bike's kickstand to be up. 17 of the 21 bike models were drawn with the side stand down (a rod from the frame to 2 to 5 cm over the ground, 27 cm out to the left); two were folded already and the scooter has a centre stand, folded. The kit now has `Kit.side_stand` (hinge and foot on the ground in, the leg swung back along the bike out), every script uses it, and the 18 model files were built again with Blender 5.3 (an unchanged script gives the same file byte for byte).
+- Check: `tests/unit/bike-stands.test.js` reads every model file: nothing of a body more than 0.2 m off the centre line within 0.12 m of the ground. Before: 0.021 to 0.054 m on 17 files. After: 0.18 m at the least. The model tests pass (bikemodels, brake-discs, sceneassets: 270 tests).
+- Left: looked at one preview picture only (the naked bike). The long checks wait for the end.

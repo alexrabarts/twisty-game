@@ -249,7 +249,7 @@ def build(k):
     for side in (-1, 1):
         k.rod((side * 0.13, 0.43, -0.34), (side * 0.2, 0.43, -0.36), 0.011, "steel", seg=8)
         k.beam((side * 0.13, 0.43, -0.34), (side * 0.12, 0.56, -0.24), (0.012, 0.04), "alu", bevel=0.004)
-    k.rod((-0.15, 0.3, -0.03), (-0.25, 0.03, 0.07), 0.011, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.3, -0.03), (-0.25, 0.03, 0.07), 0.011, "steel_dark", seg=6)
     # Swingarm-hung plate: an arm from the left axle round behind the tyre
     k.tube([(-0.15, REAR[1], REAR[2]), (-0.15, 0.4, -0.95), (-0.09, 0.46, -1.06), (0.0, 0.47, -1.075)], 0.01, "dark_metal", seg=6, smooth=2)
     kb.plate(k, (0, 0.47, -1.08), size=(0.2, 0.14), tilt=0.1)

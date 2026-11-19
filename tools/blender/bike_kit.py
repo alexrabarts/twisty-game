@@ -102,6 +102,21 @@ def spline(points, steps):
     return out
 
 
+# The way a folded side stand points from its hinge, in the bike's axes (x
+# toward the stand's own side, y up, z forward): back along the bike, a little
+# down and a little out
+STAND_UP = (0.07, -0.33, -0.94)
+
+
+# Where the end of a side stand is when it is folded: as far from `pivot` as
+# its `foot` on the ground is, along STAND_UP on the stand's own side
+def stand_up(pivot, foot):
+    length = (Vector(foot) - Vector(pivot)).length
+    side = -1 if pivot[0] < 0 else 1
+    way = Vector((side * STAND_UP[0], STAND_UP[1], STAND_UP[2])).normalized()
+    return tuple(Vector(pivot) + way * length)
+
+
 class Kit:
     # `low` builds the wheels and discs with a fraction of their detail, for a
     # model seen from a distance
@@ -262,6 +277,20 @@ class Kit:
         length = (Vector(b) - Vector(a)).length
         top = radius if top is None else top
         return self.lathe([(0, 0), (radius, 0), (top, length), (0, length)], a, mat, to=b, seg=seg, **kw)
+
+    # A side stand, folded up: every bike is drawn as it is ridden, and a stand
+    # left down pointed at the road through every bend. `pivot` is where it
+    # hinges on the frame and `foot` where its foot stands on the ground when
+    # it is down (what a script knows about its bike); the same leg is drawn
+    # swung back along the bike, a little down and out, as STAND_UP says.
+    # `pad` adds the foot's pad at its end
+    def side_stand(self, pivot, foot, radius, mat, seg=6, pad=False):
+        end = stand_up(pivot, foot)
+        self.rod(pivot, end, radius, mat, seg=seg)
+        if pad:
+            back = tuple(e + (e - p) * -0.12 for p, e in zip(pivot, end))
+            self.rod(back, end, radius * 1.9, mat, seg=seg)
+        return end
 
     def cylinder(self, radius, length, at, mat, axis="y", rot=(0, 0, 0), seg=12, top=None, **kw):
         top = radius if top is None else top

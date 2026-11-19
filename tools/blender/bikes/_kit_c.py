@@ -750,8 +750,7 @@ def cp3_chassis(k, frame_mat="frame", swing_mat="frame", sub_mat="matt_black", c
         k.rod((side * 0.15, 0.48, -0.42), (side * 0.22, 0.48, -0.42), 0.01, "steel_dark", seg=k.seg(8, 5))
         k.panel([(-0.36, 0.62), (-0.42, 0.5), (-0.46, 0.46), (-0.4, 0.46), (-0.32, 0.58)], side * 0.145, 0.012, sub_mat, bevel=k.seg(0.003, 0))
     # Side stand
-    k.rod((-0.16, 0.3, -0.04), (-0.27, 0.03, 0.04), 0.011, "steel_dark", seg=k.seg(8, 5))
-    k.box((0.05, 0.008, 0.04), (-0.27, 0.025, 0.04), "steel_dark", bevel=0)
+    k.side_stand((-0.16, 0.3, -0.04), (-0.27, 0.03, 0.04), 0.011, "steel_dark", seg=k.seg(8, 5), pad=True)
     return crank
 
 

@@ -218,7 +218,7 @@ def build(k):
     for side in (-1, 1):
         k.rod((side * 0.12, 0.5, -0.38), (side * 0.19, 0.5, -0.4), 0.011, "steel", seg=8)
         k.beam((side * 0.12, 0.5, -0.38), (side * 0.11, 0.66, -0.3), (0.012, 0.04), "dark_metal", bevel=0.004)
-    k.rod((-0.14, 0.32, -0.02), (-0.26, 0.03, 0.08), 0.011, "steel_dark", seg=6)
+    k.side_stand((-0.14, 0.32, -0.02), (-0.26, 0.03, 0.08), 0.011, "steel_dark", seg=6)
 
 
 kb.make(NAME, build, colours={"paint": RED, "caliper": 0x9A8550, "disc": 0xB4B7BC, "spring": 0xE6E6E6, "trim": 0x1A1B1E},
