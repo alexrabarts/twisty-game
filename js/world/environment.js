@@ -1125,6 +1125,12 @@ class WorldEnvironment {
             }
         }
         // and the ride's works that stand on that land (a slope's foot, a wall's)
+        this.reworkRoads(box, reach);
+    }
+
+    // The ride's sections within `reach` of a box are built again, once, after what is still to arrive
+    reworkRoads(box, reach = 30) {
+        if (!this.streamer || !box) return;
         for (const section of this.streamer.sections) {
             const b = section.bbox;
             if (!b || !this.roadMeshes.has(section.index) || b[2] < box[0] - reach || b[0] > box[2] + reach || b[3] < box[1] - reach || b[1] > box[3] + reach) continue;
@@ -1431,6 +1437,9 @@ class WorldEnvironment {
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
         // The ride sections built before this chunk's roads were known keep out of them now
         this.rebuildWaiting(`chunk:${k}`);
+        // and those built before its roads were drawn pave the junctions with them now (edgeFoot `gore` reads the
+        // side roads as they are drawn, which a section built first could not): the browser builds the ride first
+        this.reworkRoads(box);
     }
 
     // The ribbons of a side chunk's roads (buildSide): each road's rows in the pieces `near` names (WorldStreamer.sideNear:
