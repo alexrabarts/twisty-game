@@ -53,7 +53,8 @@ const CHARACTERS = [
         name: 'Tim',
         bikeLabel: 'Maxi scooter',
         bikeColor: '0x0a0b0d', // Dark grey, bronze trim
-        bikes: ['bike14_tmax'],
+        // The scooter first, then his gloss black naked four (the one he rides on every trip)
+        bikes: ['bike14_tmax', 'bike06_z750'],
         // A grey commuter jacket with silver piping
         kit: { suitColor: 0x3a3f4a, suitAccent: 0xd6d8dc, helmetColor: 0xe8e8ea, helmetAccent: 0x9aa0a8 },
         stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
@@ -122,7 +123,7 @@ const CHARACTERS = [
         name: 'Guy',
         bikeLabel: 'Retro scrambler',
         bikeColor: '0x750102', // Red tank, black side panels
-        bikes: ['bike04_scrambler', 'bike05_g310gs', 'bike06_z750', 'bike07_mt09_black', 'bike12_tracer9gt'],
+        bikes: ['bike04_scrambler', 'bike05_g310gs', 'bike07_mt09_black', 'bike12_tracer9gt'],
         // Dark textile touring kit: charcoal jacket with grey shoulder
         // panels, black trousers, brown boots, a matt black helmet, and his
         // scarf, which he wears only on the scrambler

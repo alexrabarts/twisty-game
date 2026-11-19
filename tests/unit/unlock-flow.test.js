@@ -122,7 +122,7 @@ describe('the bike picker', () => {
         tour.showRiderSelector('guy');
         const card = () => document.getElementById('riderInfoCard');
         expect(card().textContent).toContain('Retro scrambler twin (2017)');
-        expect(card().textContent).toContain('1 / 5');
+        expect(card().textContent).toContain('1 / 4');
         document.getElementById('bikeNextBtn').click();
         expect(tour.getSelectedBike('guy')).toBe('bike05_g310gs');
         expect(card().textContent).toContain('Small adventure single (2018)');
@@ -139,9 +139,16 @@ describe('the bike picker', () => {
     });
 
     test('shows a rider with one bike without arrows, and names no maker', () => {
-        tour.showRiderSelector('tim');
-        expect(document.getElementById('bikeNextBtn')).toBeNull();
-        expect(document.getElementById('bikeName').textContent).toBe('Maxi scooter, dark grey (2022)');
+        // (every rider has two bikes or more now: Tim with his scooter alone stands for a rider with one)
+        const tim = CHARACTERS.find(c => c.id === 'tim'), bikes = tim.bikes;
+        tim.bikes = ['bike14_tmax'];
+        try {
+            tour.showRiderSelector('tim');
+            expect(document.getElementById('bikeNextBtn')).toBeNull();
+            expect(document.getElementById('bikeName').textContent).toBe('Maxi scooter, dark grey (2022)');
+        } finally {
+            tim.bikes = bikes;
+        }
     });
 
     test('ignores a saved bike the rider does not own, and a store it cannot read', () => {

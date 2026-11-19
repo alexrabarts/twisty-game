@@ -103,3 +103,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner asked for every bike's kickstand to be up. 17 of the 21 bike models were drawn with the side stand down (a rod from the frame to 2 to 5 cm over the ground, 27 cm out to the left); two were folded already and the scooter has a centre stand, folded. The kit now has `Kit.side_stand` (hinge and foot on the ground in, the leg swung back along the bike out), every script uses it, and the 18 model files were built again with Blender 5.3 (an unchanged script gives the same file byte for byte).
 - Check: `tests/unit/bike-stands.test.js` reads every model file: nothing of a body more than 0.2 m off the centre line within 0.12 m of the ground. Before: 0.021 to 0.054 m on 17 files. After: 0.18 m at the least. The model tests pass (bikemodels, brake-discs, sceneassets: 270 tests).
 - Left: looked at one preview picture only (the naked bike). The long checks wait for the end.
+
+## Tim rides the black naked four
+
+- Job: the owner's photos show Tim on a gloss black naked four with a 2010 plate on every trip; the game gave that bike to Guy and gave Tim the scooter alone. Tim now has the scooter first and the naked four second; Guy has four bikes.
+- Check: `tests/unit/characters.test.js` and `unlock-flow.test.js` hold the two lists and the bike picker (194 tests with the bike model tests).
+- Left: the long checks wait for the end. The riders' gear from the photos is read and private (`~/Pictures/twisty-reference/people/`); the riders' models, the three-row rider screen, the composite stats and the group ride are not built yet.

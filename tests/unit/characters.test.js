@@ -15,10 +15,10 @@ const root = new URL('../../', import.meta.url);
 const OWNERS = {
     steve: ['bike08_xsr900', 'bike13_panigale'],
     alex: ['bike02_speed_triple', 'bike10_tiger900'],
-    tim: ['bike14_tmax'],
+    tim: ['bike14_tmax', 'bike06_z750'],
     shane: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990'],
     lucy: ['bike01_z650', 'bike07_mt09'],
-    guy: ['bike04_scrambler', 'bike05_g310gs', 'bike06_z750', 'bike07_mt09_black', 'bike12_tracer9gt']
+    guy: ['bike04_scrambler', 'bike05_g310gs', 'bike07_mt09_black', 'bike12_tracer9gt']
 };
 
 function load({ files = false } = {}) {
@@ -205,7 +205,7 @@ describe('Guy', () => {
 describe('Tim', () => {
     test('rides the maxi scooter, feet forward on its boards', async () => {
         const tim = find('tim');
-        expect(tim.bikes).toEqual(['bike14_tmax']);
+        expect(tim.bikes).toEqual(['bike14_tmax', 'bike06_z750']);
         const vehicle = ride('tim');
         expect(vehicle.model).toBe('bike14_tmax');
         expect(vehicle.bike).toBe('scooter');
