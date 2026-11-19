@@ -203,7 +203,7 @@ describe('the menu', () => {
         const tim = stage.find(v => v.character.id === 'tim');
         expect(await game.BikeModels.dress(tim)).toBe(true);
         expect(tim.modelled).toBe(true);
-        expect([...new Set(game.fetched)].sort()).toEqual([game.BikeModels.RIDER, game.BIKE_MODELS.bike14_tmax.file].sort());
+        expect([...new Set(game.fetched)].sort()).toEqual([game.BikeModels.RIDER, game.BIKE_MODELS.bike14_forza.file].sort());
         const bytes = [...new Set(game.fetched)].reduce((total, file) => total + statSync(new URL(file, root)).size, 0);
         expect(bytes).toBeLessThanOrEqual(BUDGET.menu);
         expect(stage.filter(v => v.modelled)).toEqual([tim]);

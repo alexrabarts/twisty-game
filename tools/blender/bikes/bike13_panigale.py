@@ -9,6 +9,13 @@
 # no photo shows one on), and a small black tail pack on the pillion seat.
 # No badges, no plate.
 #
+# Colour schemes: "red" is Steve's bike in the photos; "track" is the same
+# bike in gloss black as a track bike (Lucy's): dark grey where the red one
+# is black, and no road parts. It has no mirrors, no plate or its hanger, no
+# indicators, no luggage or tank-bag ring, a painted cowl in place of the
+# pillion pad, and dark covers where the headlights were. Its file has no
+# `headlight` node, like the dirt bike's, so the game lights nothing there.
+#
 # Real size (the 2020 model's published figures): 1,436 mm wheelbase,
 # 840 mm seat, 24 degrees of rake, 120/70-17 and 180/60-17 tyres, twin
 # 320 mm front discs, a 245 mm rear disc.
@@ -21,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _kit_E as E  # noqa: E402
 import bike_parts as parts  # noqa: E402
 
-OUT = os.path.join(E.OUT_DIR, "bike13_panigale.glb")
+NAME = "bike13_panigale"
 FRONT, REAR = (0, 0.300, 0.718), (0, 0.324, -0.718)
 FRONT_R, REAR_R = 0.300, 0.324
 RIM = 0.216
@@ -41,6 +48,13 @@ ARM_X = -0.105
 
 COLOURS = {"paint": 0xC8102E, "paint_dark": 0x1A1A1E, "accent": 0x1C1C20, "rim": 0x141416, "caliper": 0xB8923A, "fork_gold": 0xC9A043,
            "spring": 0x34363A, "luggage": 0x16171A, "trim": 0x161618, "glass": 0x23272C}
+SCHEMES = {
+    "red": COLOURS,
+    "track": {**COLOURS, "paint": 0x0E0E10, "trim": 0x383B40, "accent": 0x383B40},
+}
+# The scheme being built, and whether it is the track bike (set by build)
+scheme = "red"
+track = False
 EXTRA = {
     # Cast aluminium of the swingarm and the rearsets
     "alu": (0x8E9196, 0.36, 0.9),
@@ -98,9 +112,15 @@ def front_end(k):
 
     # Two slim LED lights, one deep in each nose intake, with the running
     # light along the top of each
-    k.begin("headlight", (0, 0.755, 0.94))
-    for side in (-1, 1):
-        k.box((0.075, 0.014, 0.012), (side * 0.048, 0.757, 0.943), "headlight", rot=(-0.05, side * 0.55, side * -0.05), bevel=0.004)
+    if track:
+        # A track fairing has a cover where each light was
+        k.begin("body")
+        for side in (-1, 1):
+            k.box((0.085, 0.03, 0.012), (side * 0.048, 0.752, 0.945), "trim", rot=(-0.05, side * 0.55, side * -0.05), bevel=0.004)
+    else:
+        k.begin("headlight", (0, 0.755, 0.94))
+        for side in (-1, 1):
+            k.box((0.075, 0.014, 0.012), (side * 0.048, 0.757, 0.943), "headlight", rot=(-0.05, side * 0.55, side * -0.05), bevel=0.004)
 
     k.begin("brake_light", (0, 0.955, -0.89))
     for side in (-1, 1):
@@ -177,7 +197,8 @@ def fairing(k):
     k.loft([(0.82, 0.7, 0.77, 0.1, 3, 3), (0.9, 0.7, 0.77, 0.09, 3, 3), (0.95, 0.71, 0.765, 0.06, 3, 3), (0.965, 0.715, 0.76, 0.03)], "vent", ring=14, steps=2)
     k.box((0.02, 0.06, 0.1), (0, 0.735, 0.915), "paint", bevel=0.006)
     # The tank-bag ring round the filler cap
-    k.cylinder(0.055, 0.012, (0, 1.045, 0.22), "dark_metal", rot=(-0.1, 0, 0), seg=16)
+    if not track:
+        k.cylinder(0.055, 0.012, (0, 1.045, 0.22), "dark_metal", rot=(-0.1, 0, 0), seg=16)
 
     # Side shell: a large curved panel each side covering the engine from
     # the nose's underside down to the belly pan, tucked in at the knee;
@@ -211,7 +232,7 @@ def fairing(k):
     k.box((0.16, 0.1, 0.03), (0, 1.0, 0.56), "dark_metal", rot=(-0.9, 0, 0), bevel=0.01)
     k.box((0.13, 0.075, 0.004), (0, 1.01, 0.548), "dash", rot=(-0.9, 0, 0), bevel=0)
     # Mirrors out on the fairing, each with its indicator along the outer edge
-    for side in (-1, 1):
+    for side in (() if track else (-1, 1)):
         root = (side * 0.16, 0.92, 0.67)
         head = (side * 0.27, 1.06, 0.63)
         k.tube([root, E.along(root, head, 0.5), head], 0.009, "trim", seg=6, smooth=2)
@@ -229,7 +250,7 @@ def tank_and_tail(k):
         E.panel(k, [(-0.04, 0.8), (-0.3, 0.78), (-0.32, 0.66), (-0.12, 0.6)], side * 0.1, 0.02, "dark_metal")
     # The rider's seat, very short and low, then the pillion pad on the blade
     k.loft([(0.0, 0.825, 0.855, 0.1), (-0.05, 0.815, 0.86, 0.15, 3, 3), (-0.25, 0.815, 0.855, 0.155, 3, 3), (-0.33, 0.83, 0.87, 0.13)], "seat", ring=16, steps=2)
-    k.loft([(-0.4, 0.875, 0.9, 0.07), (-0.44, 0.88, 0.92, 0.1, 3, 3), (-0.58, 0.905, 0.945, 0.085, 3, 3), (-0.64, 0.915, 0.95, 0.05)], "seat", ring=12, steps=2)
+    k.loft([(-0.4, 0.875, 0.9, 0.07), (-0.44, 0.88, 0.92, 0.1, 3, 3), (-0.58, 0.905, 0.945, 0.085, 3, 3), (-0.64, 0.915, 0.95, 0.05)], "paint" if track else "seat", ring=12, steps=2)
 
     # Tail: a slim pointed blade rising to the tip, red over black, with an
     # open gap under it to the tyre; the lights tucked under the tip
@@ -237,10 +258,11 @@ def tank_and_tail(k):
     for side in (-1, 1):
         E.panel(k, [(-0.38, 0.83), (-0.62, 0.9), (-0.66, 0.89), (-0.42, 0.815)], side * 0.128, 0.01, "vent", toe=side * 0.18, bevel=0.002)
     # Short plate hanger tucked under the blade, a blank plate, indicators
-    k.beam((0, 0.88, -0.7), (0, 0.8, -0.8), (0.05, 0.02), "trim")
-    E.plate(k, (0, 0.76, -0.81), size=(0.17, 0.12), lean=0.3)
-    for side in (-1, 1):
-        E.indicator(k, (side * 0.03, 0.84, -0.77), (side * 0.12, 0.845, -0.78), radius=0.009)
+    if not track:
+        k.beam((0, 0.88, -0.7), (0, 0.8, -0.8), (0.05, 0.02), "trim")
+        E.plate(k, (0, 0.76, -0.81), size=(0.17, 0.12), lean=0.3)
+        for side in (-1, 1):
+            E.indicator(k, (side * 0.03, 0.84, -0.77), (side * 0.12, 0.845, -0.78), radius=0.009)
     # Rear hugger close over the tyre, on the swingarm
     k.guard((REAR[1], REAR[2]), REAR_R + 0.018, 0.19, math.radians(55), math.radians(125), "trim", crown=0.025, nu=8)
 
@@ -328,7 +350,8 @@ def draw(k):
     tank_and_tail(k)
     engine(k)
     chassis(k)
-    luggage(k)
+    if not track:
+        luggage(k)
 
 
 def photo_view(k):
@@ -351,14 +374,18 @@ def photo_view(k):
     k.scene.render.film_transparent = False
 
 
-def build():
-    k = E.EKit(seed=113, colours=COLOURS, extra=EXTRA)
+def build(name, suffix):
+    global scheme, track
+    scheme, track = name, name == "track"
+    k = E.EKit(seed=113, colours=SCHEMES[scheme], extra=EXTRA)
     for lod in E.LODS:
         k.level(lod)
         draw(k)
-    k.finish_lods(OUT, {"grip": GRIP, "peg": PEG, "seat": SEAT})
-    E.previews(k, "bike13_panigale", height=0.62, reach=0.95)
-    photo_view(k)
+    k.finish_lods(os.path.join(E.OUT_DIR, NAME + suffix + ".glb"), {"grip": GRIP, "peg": PEG, "seat": SEAT})
+    E.previews(k, NAME + suffix, height=0.62, reach=0.95)
+    if not track:
+        photo_view(k)
 
 
-build()
+for name, suffix in (("red", ""), ("track", "_black")):
+    build(name, suffix)

@@ -221,10 +221,10 @@ const CHARACTERS = [
     {
         id: 'tim',
         name: 'Tim',
-        bikeLabel: 'Maxi scooter',
-        bikeColor: '0x0a0b0d', // Dark grey, bronze trim
+        bikeLabel: 'Sports scooter',
+        bikeColor: '0x030925', // Deep blue over silver and black
         // The scooter first, then his gloss black naked four (the one he rides on every trip)
-        bikes: ['bike14_tmax', 'bike06_z750'],
+        bikes: ['bike14_forza', 'bike06_z750'],
         outfits: OUTFITS.tim,
         kit: OUTFITS.tim[0].kit,
         // Tall and slim
@@ -266,23 +266,28 @@ const CHARACTERS = [
     {
         id: 'lucy',
         name: 'Lucy',
-        bikeLabel: 'Naked middleweight',
-        bikeColor: '0x010101', // Black, lime-green trim
-        bikes: ['bike01_z650', 'bike07_mt09'],
+        bikeLabel: 'Trail single',
+        bikeColor: '0xa00102', // Red, white and black blocks
+        // Least powerful first: the trail bike, her naked twin, her naked triple, the black track superbike
+        bikes: ['bike15_crf250', 'bike01_z650', 'bike07_mt09', 'bike13_panigale_black'],
         outfits: OUTFITS.lucy,
         kit: OUTFITS.lucy[0].kit,
         // Slighter than the others
         build: { height: 0.93, width: 0.86 },
-        // A balanced middleweight twin: a little under the adventure bike's
-        // top speed, quick off the corners on its low-down torque, light and
-        // easy to turn on a wide flat bar
-        stats: { speed: 3, accel: 4, handling: 4, jump: 3, comfort: 3 },
+        // A light trail single: modest pace, the easiest of all to turn, soft
+        // long-travel suspension. Each number is what her naked twin had as
+        // her first bike (0.8, 0.9, 1.08, 1.0, 1.12), times the light
+        // adventure class the trail bike rides in, over the naked class, so
+        // Vehicle.physicsOf gives the twin exactly what it had: a balanced
+        // middleweight, a little under the adventure bike's top speed,
+        // quick off the corners, easy to turn on a wide flat bar.
+        stats: { speed: 2, accel: 3, handling: 5, jump: 3, comfort: 4 },
         physics: {
-            comfortShake: 0.8,      // Plain road suspension
-            maxSpeed: 0.9,         // 61.2 m/s
-            acceleration: 1.08,    // 16.2 m/s²
-            brakeForce: 1.0,       // 20 m/s²
-            steeringForce: 1.12,   // 10.64 - wide bar, light bike
+            comfortShake: 0.8 * (0.55 * 1.1) / 0.8,     // 0.605 - long travel
+            maxSpeed: 0.9 * (1.0 * 0.85) / 0.95,        // 0.805: 54.8 m/s
+            acceleration: 1.08 * (1.0 * 0.9) / 1.08,    // 0.9: 13.5 m/s²
+            brakeForce: 1.0 * (1.05 * 0.95) / 1.0,      // 0.9975: 19.95 m/s²
+            steeringForce: 1.12 * (1.1 * 1.06) / 1.12,  // 1.166: 11.08 - wide bar, very light bike
             jumpPower: 1.0,
             wheeliePop: 1.15,      // Lifts the front easily on the torque
             wheelieThrottle: 1.05
@@ -358,7 +363,9 @@ const BIKE_MODELS = {
     bike11_duke990: { kind: 'naked', cls: 'naked', name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
     bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
     bike13_panigale: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike14_tmax: { kind: 'scooter', cls: 'scooter', name: 'Maxi scooter, dark grey', year: 2022, paint: 0x0a0b0d, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.04, style: 'commuter' } }
+    bike13_panigale_black: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, black track bike', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike14_forza: { kind: 'scooter', cls: 'scooter', name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
+    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } }
 };
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, keepFileColours: true }));
 

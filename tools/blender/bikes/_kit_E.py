@@ -1,5 +1,5 @@
 # Helpers for the detailed bikes of group E (bike13_panigale.py,
-# bike14_tmax.py), on top of the shared kit (bike_kit.py, bike_parts.py),
+# bike14_forza.py, bike15_crf250.py), on top of the shared kit (bike_kit.py, bike_parts.py),
 # which this file does not change. Started from group D's helpers.
 #
 # A detailed bike file holds the bike twice, as two node groups: `lod0` (the

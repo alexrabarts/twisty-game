@@ -3,7 +3,7 @@
 // first unless another is picked, and rides each with physics scaled from
 // their own by the bike's class. Lucy has her own kit; Guy is on the roster
 // with his own kit and a scarf he wears only on the scrambler; Tim rides the
-// maxi scooter.
+// sports scooter.
 import { existsSync, readFileSync } from 'node:fs';
 import { Blob } from 'node:buffer';
 import { TextDecoder } from 'node:util';
@@ -15,9 +15,9 @@ const root = new URL('../../', import.meta.url);
 const OWNERS = {
     steve: ['bike08_xsr900', 'bike13_panigale'],
     alex: ['bike02_speed_triple', 'bike10_tiger900'],
-    tim: ['bike14_tmax', 'bike06_z750'],
+    tim: ['bike14_forza', 'bike06_z750'],
     shane: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990'],
-    lucy: ['bike01_z650', 'bike07_mt09'],
+    lucy: ['bike15_crf250', 'bike01_z650', 'bike07_mt09', 'bike13_panigale_black'],
     guy: ['bike04_scrambler', 'bike05_g310gs', 'bike07_mt09_black', 'bike12_tracer9gt']
 };
 
@@ -33,7 +33,7 @@ function load({ files = false } = {}) {
         : async () => ({ ok: false, status: 404 });
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'fetch', 'Blob', 'TextDecoder', 'performance',
-        `${source}\nreturn { Vehicle, CHARACTERS, BikeModels, BIKE_MODELS, BIKE_CLASSES };`
+        `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels, BIKE_MODELS, BIKE_CLASSES };`
     );
     return { THREE, ...factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance) };
 }
@@ -64,7 +64,7 @@ describe('the roster', () => {
             expect(Number.isInteger(entry.year)).toBe(true);
             expect(game.Vehicle.bikeTitle(bike)).toBe(`${entry.name} (${entry.year})`);
             // The rider select shows descriptive names, never a maker's
-            expect(entry.name).not.toMatch(/kawasaki|triumph|ktm|ducati|bmw|yamaha|tmax|panigale|tiger|duke|tracer|scrambler icon|speed triple/i);
+            expect(entry.name).not.toMatch(/kawasaki|triumph|ktm|ducati|bmw|yamaha|tmax|forza|panigale|tiger|duke|tracer|scrambler icon|speed triple/i);
         }
         expect(game.Vehicle.bikeOf(character)).toBe(character.bikes[0]);
         expect(game.BikeModels.BIKES[id]).toBe(game.BIKE_MODELS[character.bikes[0]].file);
@@ -129,30 +129,71 @@ describe('the physics of a rider on a bike', () => {
 describe('Lucy', () => {
     const lucy = find('lucy');
 
-    test('is a character on her naked middleweight', () => {
+    test('is a character on her trail bike, her garage in order of power', () => {
         expect(lucy.name).toBe('Lucy');
-        expect(lucy.bikes[0]).toBe('bike01_z650');
-        expect(game.BikeModels.BIKES.lucy).toBe('assets/bikes/detail/bike01_z650.glb');
+        expect(lucy.bikes).toEqual(['bike15_crf250', 'bike01_z650', 'bike07_mt09', 'bike13_panigale_black']);
+        expect(game.BikeModels.BIKES.lucy).toBe('assets/bikes/detail/bike15_crf250.glb');
+        expect(lucy.bikeLabel).toBe('Trail single');
+        expect(parseInt(lucy.bikeColor)).toBe(game.BIKE_MODELS.bike15_crf250.paint);
+        const top = id => game.Vehicle.physicsOf(lucy, id).maxSpeed;
+        expect(top('bike15_crf250')).toBeLessThan(top('bike01_z650'));
+        expect(top('bike01_z650')).toBeLessThanOrEqual(top('bike07_mt09'));
+        expect(top('bike07_mt09')).toBeLessThan(top('bike13_panigale_black'));
     });
 
-    test('rides between the dirt-bike rider and the adventure rider for speed, and handles well', () => {
-        const top = id => find(id).physics.maxSpeed;
-        expect(lucy.physics.maxSpeed).toBeGreaterThan(top('shane'));
-        expect(lucy.physics.maxSpeed).toBeLessThan(top('alex'));
-        expect(lucy.physics.steeringForce).toBeGreaterThan(1);
+    test('rides her naked twin as she did when it was her first bike', () => {
+        // Her own numbers are her on the trail bike now; these are what they were on the twin, to the last digit shown
+        const twin = game.Vehicle.physicsOf(lucy, 'bike01_z650');
+        const was = { comfortShake: 0.8, maxSpeed: 0.9, acceleration: 1.08, brakeForce: 1.0, steeringForce: 1.12, jumpPower: 1.0, wheeliePop: 1.15, wheelieThrottle: 1.05 };
+        expect(Object.keys(twin).sort()).toEqual(Object.keys(was).sort());
+        for (const [key, value] of Object.entries(was)) expect(twin[key]).toBeCloseTo(value, 12);
+        expect(ride('lucy', 'bike01_z650').maxSpeed).toBeCloseTo(68 * 0.9, 9);
+        // On the twin: between the light naked's rider and the adventure rider for speed, and easy to turn
+        expect(twin.maxSpeed).toBeGreaterThan(find('shane').physics.maxSpeed);
+        expect(twin.maxSpeed).toBeLessThan(find('alex').physics.maxSpeed);
+        expect(twin.steeringForce).toBeGreaterThan(1);
+    });
+
+    test('rides the trail bike slower, lighter to turn and softer than the twin', () => {
+        const twin = game.Vehicle.physicsOf(lucy, 'bike01_z650');
+        expect(game.BIKE_MODELS.bike15_crf250).toMatchObject({ kind: 'dirt', cls: 'adventure', light: true, drive: 'chain' });
+        expect(lucy.physics.maxSpeed).toBeLessThan(twin.maxSpeed);
+        expect(lucy.physics.acceleration).toBeLessThan(twin.acceleration);
+        expect(lucy.physics.steeringForce).toBeGreaterThan(twin.steeringForce);
+        expect(lucy.physics.comfortShake).toBeLessThan(twin.comfortShake);
         expect(lucy.stats.handling).toBeGreaterThanOrEqual(4);
+    });
+
+    test('her track bike is the superbike in black with no road parts: no headlight node, no mirrors, plate or indicators', async () => {
+        const real = load({ files: true });
+        const [red, black] = await Promise.all(['bike13_panigale', 'bike13_panigale_black'].map(id => real.SceneAssets.loadModel(real.BIKE_MODELS[id].file)));
+        const materials = model => new Set([...model.groups.get('lod0').meshes.values()].flat().map(part => part.material.name));
+        expect(red.groups.get('lod0').meshes.has('headlight')).toBe(true);
+        expect(black.groups.get('lod0').meshes.has('headlight')).toBe(false);
+        for (const name of ['headlight', 'signal', 'plate', 'luggage']) {
+            expect(materials(red).has(name)).toBe(true);
+            expect(materials(black).has(name)).toBe(false);
+        }
+        expect(game.BIKE_MODELS.bike13_panigale_black).toMatchObject({ kind: 'sport', cls: 'supersport', year: game.BIKE_MODELS.bike13_panigale.year, pose: game.BIKE_MODELS.bike13_panigale.pose });
+        await real.BikeModels.preload(['bike13_panigale_black']);
+        const vehicle = new real.Vehicle(new real.THREE.Scene(), null, real.CHARACTERS.find(c => c.id === 'lucy'), 'bike13_panigale_black');
+        expect(vehicle.modelled).toBe(true);
+        expect(vehicle.model).toBe('bike13_panigale_black');
+        // Nothing of a headlight is drawn: the stand-in's lamp left the bike with the rest of the stand-in
+        expect(named(vehicle.group, 'headlight')).toEqual([]);
+        expect(vehicle.headlight && vehicle.headlight.parent).toBeFalsy();
     });
 
     test('builds as her bike in her own kit, with the procedural stand-in until the files are in', () => {
         const vehicle = ride('lucy');
-        expect(vehicle.bike).toBe('naked');
-        expect(vehicle.frame.material.color.getHex()).toBe(game.BIKE_MODELS.bike01_z650.paint);
+        expect(vehicle.bike).toBe('dirt');
+        expect(vehicle.frame.material.color.getHex()).toBe(game.BIKE_MODELS.bike15_crf250.paint);
         expect(vehicle.riderSpec.pantsColor).toBe(lucy.kit.pantsColor);
         expect(vehicle.riderSpec.helmetStyle).toBe('streak');
         expect(vehicle.riderSpec.backpackColor).toBe(lucy.kit.backpackColor);
         expect(vehicle.riderSpec.scarf).toBeNull();
         expect(vehicle.maxSpeed).toBeCloseTo(68 * lucy.physics.maxSpeed, 6);
-        expect(vehicle.riderStandHeight).toBe(game.Vehicle.BIKES.naked.stand);
+        expect(vehicle.riderStandHeight).toBe(game.Vehicle.BIKES.dirt.stand);
     });
 });
 
@@ -163,10 +204,11 @@ describe('Guy', () => {
         expect(guy.name).toBe('Guy');
         expect(guy.bikes[0]).toBe('bike04_scrambler');
         expect(guy.stats).toEqual({ speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 });
-        // Between Lucy and Alex for pace, softer than Lucy, easier than Steve
-        expect(guy.physics.maxSpeed).toBeGreaterThan(find('lucy').physics.maxSpeed);
+        // Between Lucy on her naked twin and Alex for pace, softer than Lucy on the twin, easier than Steve
+        const twin = game.Vehicle.physicsOf(find('lucy'), 'bike01_z650');
+        expect(guy.physics.maxSpeed).toBeGreaterThan(twin.maxSpeed);
         expect(guy.physics.maxSpeed).toBeLessThan(find('alex').physics.maxSpeed);
-        expect(guy.physics.comfortShake).toBeLessThan(find('lucy').physics.comfortShake);
+        expect(guy.physics.comfortShake).toBeLessThan(twin.comfortShake);
         const vehicle = ride('guy');
         expect(vehicle.riderSpec.suitColor).toBe(guy.kit.suitColor);
         expect(vehicle.riderSpec.helmetColor).toBe(guy.kit.helmetColor);
@@ -203,16 +245,19 @@ describe('Guy', () => {
 });
 
 describe('Tim', () => {
-    test('rides the maxi scooter, feet forward on its boards', async () => {
+    test('rides the sports scooter, feet forward on its boards', async () => {
         const tim = find('tim');
-        expect(tim.bikes).toEqual(['bike14_tmax', 'bike06_z750']);
+        expect(tim.bikes).toEqual(['bike14_forza', 'bike06_z750']);
         const vehicle = ride('tim');
-        expect(vehicle.model).toBe('bike14_tmax');
+        expect(vehicle.model).toBe('bike14_forza');
+        // The id his scooter had before it was remodelled is no bike now: asked for, it is his first
+        expect(game.Vehicle.modelOf(tim, 'bike14_tmax')).toBe('bike14_forza');
+        expect(ride('tim', 'bike14_tmax').model).toBe('bike14_forza');
         expect(vehicle.bike).toBe('scooter');
         expect(vehicle.maxSpeed).toBe(68 * tim.physics.maxSpeed);
 
         const real = load({ files: true });
-        await real.BikeModels.preload(['bike14_tmax']);
+        await real.BikeModels.preload(['bike14_forza']);
         const modelled = new real.Vehicle(new real.THREE.Scene(), null, real.CHARACTERS.find(c => c.id === 'tim'));
         expect(modelled.modelled).toBe(true);
         modelled.group.updateMatrixWorld(true);

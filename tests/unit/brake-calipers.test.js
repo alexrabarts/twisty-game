@@ -89,7 +89,9 @@ const BIKES = {
     'bikes/detail/bike11_duke990': { rear: [200, 210], front: [200, 210] },
     'bikes/detail/bike12_tracer9gt': { rear: [200, 210], front: [200, 210] },
     'bikes/detail/bike13_panigale': { rear: [240, 262], front: [200, 215] },
-    'bikes/detail/bike14_tmax': { rear: [145, 170], front: [200, 210] },
+    'bikes/detail/bike13_panigale_black': { rear: [240, 262], front: [200, 215] },
+    'bikes/detail/bike14_forza': { rear: [145, 170], front: [200, 210] },
+    'bikes/detail/bike15_crf250': { rear: [110, 125], front: [200, 210] },
 };
 
 describe.each(Object.entries(BIKES))('assets/%s.glb brake calipers', (bike, where) => {

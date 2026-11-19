@@ -113,7 +113,7 @@ describe('the bike picker', () => {
 
     test('each rider starts on their first bike', () => {
         CHARACTERS.forEach(c => expect(tour.getSelectedBike(c.id)).toBe(c.bikes[0]));
-        expect(tour.getSelectedBike('tim')).toBe('bike14_tmax');
+        expect(tour.getSelectedBike('tim')).toBe('bike14_forza');
     });
 
     test('cycles the focused rider\'s bikes, shows each one and remembers the choice per rider', () => {
@@ -132,7 +132,7 @@ describe('the bike picker', () => {
         expect(shown).toEqual([['guy', 'bike05_g310gs'], ['guy', 'bike04_scrambler'], ['guy', 'bike12_tracer9gt']]);
         // Kept for the next visit, and for Guy only
         expect(new TourSystem().getSelectedBike('guy')).toBe('bike12_tracer9gt');
-        expect(new TourSystem().getSelectedBike('lucy')).toBe('bike01_z650');
+        expect(new TourSystem().getSelectedBike('lucy')).toBe('bike15_crf250');
         // The keyboard cycles it too
         document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowDown' }));
         expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
@@ -141,11 +141,11 @@ describe('the bike picker', () => {
     test('shows a rider with one bike without arrows, and names no maker', () => {
         // (every rider has two bikes or more now: Tim with his scooter alone stands for a rider with one)
         const tim = CHARACTERS.find(c => c.id === 'tim'), bikes = tim.bikes;
-        tim.bikes = ['bike14_tmax'];
+        tim.bikes = ['bike14_forza'];
         try {
             tour.showRiderSelector('tim');
             expect(document.getElementById('bikeNextBtn')).toBeNull();
-            expect(document.getElementById('bikeName').textContent).toBe('Maxi scooter, dark grey (2022)');
+            expect(document.getElementById('bikeName').textContent).toBe('Sports scooter, blue and silver (2019)');
         } finally {
             tim.bikes = bikes;
         }
@@ -159,6 +159,26 @@ describe('the bike picker', () => {
         expect(new TourSystem().getSelectedBike('guy')).toBe('bike04_scrambler');
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved bike choices could not be read'), expect.anything());
         warn.mockRestore();
+    });
+
+    test('a saved choice of a bike the catalogue no longer has falls back to the rider\'s first, with no error', () => {
+        // Tim's scooter was `bike14_tmax` until it was remodelled from his photo
+        localStorage.setItem('twistyBikes', JSON.stringify({ tim: 'bike14_tmax' }));
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        const error = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const later = new TourSystem();
+        expect(later.getSelectedBike('tim')).toBe('bike14_forza');
+        expect(BIKE_MODELS.bike14_tmax).toBeUndefined();
+        expect(() => later.showRiderSelector('tim')).not.toThrow();
+        expect(document.getElementById('bikeName').textContent).toContain('Sports scooter, blue and silver (2019)');
+        // Choosing again writes the id the catalogue has
+        later.selectBike('tim', 'bike06_z750');
+        later.selectBike('tim', 'bike14_forza');
+        expect(JSON.parse(localStorage.getItem('twistyBikes'))).toEqual({ tim: 'bike14_forza' });
+        expect(warn).not.toHaveBeenCalled();
+        expect(error).not.toHaveBeenCalled();
+        warn.mockRestore();
+        error.mockRestore();
     });
 
     test('each rider starts in their first outfit, and a chosen one is remembered per rider', () => {
