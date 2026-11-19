@@ -2,6 +2,7 @@
 //
 //   node tools/world/photomatch.mjs [--round 1] [--only <file>] [--no-game] [--margin 300] [--max <n>]
 //   node tools/world/photomatch.mjs coverage
+//   node tools/world/photomatch.mjs haze [--round 5]
 //
 // For every row of every geo CSV (~/Pictures/twisty-reference/geo/*.csv, "file;lat;lng"):
 //   1. WGS84 -> LV95 (swisstopo's approximate formulas) -> local metres of world/manifest.json; the nearest point
@@ -365,6 +366,93 @@ function writeCoverage(rows, world) {
   return out;
 }
 
+// ---------------------------------------------------------------- haze
+// The colour of distant land in the photos by its distance, and of the sky just over the skyline: what the game's
+// haze is set to and checked against (LandShade.HAZE, terrain-check world-haze). Only these numbers leave the photos.
+export const HAZE_BANDS = [{ name: '1 to 3 km', from: 1000, to: 3000 }, { name: '3 to 8 km', from: 3000, to: 8000 }, { name: '8 km on', from: 8000, to: Infinity }];
+// The sky near the horizon: this share of the picture's height over the skyline
+export const HAZE_SKY = [0.01, 0.08];
+
+export function hsvOf(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  let h = 0;
+  if (d > 0) h = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return { h: h * 60, s: mx ? d / mx : 0, v: mx / 255 };
+}
+
+// What a list of display pixels ([r, g, b], 0 to 255) reads as: the median colour, the 10th to 90th percentile of
+// saturation and value, the hue of the mean colour, and how green it is against blue (g - b of the mean, 0 to 1;
+// under 0 is bluer than green) and against the grey of its own lightness (g - (r + b) / 2)
+export function hazeStats(pixels) {
+  if (!pixels.length) return { pixels: 0 };
+  const q = (list, t) => list[Math.min(list.length - 1, Math.floor(list.length * t))];
+  const col = k => pixels.map(p => p[k]).sort((a, b) => a - b);
+  const hsv = pixels.map(p => hsvOf(p[0], p[1], p[2]));
+  const sat = hsv.map(p => p.s).sort((a, b) => a - b), val = hsv.map(p => p.v).sort((a, b) => a - b);
+  const mean = [0, 1, 2].map(k => pixels.reduce((a, p) => a + p[k], 0) / pixels.length);
+  const m = hsvOf(mean[0], mean[1], mean[2]);
+  const r2 = v => Math.round(v * 100) / 100;
+  return {
+    pixels: pixels.length, median: [0, 1, 2].map(k => q(col(k), 0.5)), mean: mean.map(Math.round), hue: Math.round(m.h), sat: r2(m.s), val: r2(m.v),
+    satRange: [r2(q(sat, 0.1)), r2(q(sat, 0.9))], valRange: [r2(q(val, 0.1)), r2(q(val, 0.9))],
+    greenOverBlue: r2((mean[1] - mean[2]) / 255), greenOverGrey: r2((mean[1] - (mean[0] + mean[2]) / 2) / 255),
+    greenShare: r2(pixels.filter(p => p[1] > p[2] && p[1] >= p[0]).length / pixels.length)
+  };
+}
+
+// The pixels of one photo by band: the ground by its real distance along the ray, the sky by its height over the skyline
+function hazeOne(row, ctx) {
+  const { field, tmpDir, profiles } = ctx;
+  const img = readImage(row.found.path, MAX_SIDE, tmpDir);
+  const { width, height, data } = img;
+  const fov = fieldOfView(row.exif, width, height);
+  const eyeY = field.heightAt(row.x, row.z) + EYE_M;
+  const key = `${Math.round(row.x / 2)},${Math.round(row.z / 2)}`;
+  if (!profiles.has(key)) profiles.set(key, horizonProfile((x, z) => field.heightAt(x, z), row.x, row.z, eyeY));
+  const profile = profiles.get(key);
+  const fit = fitPose(img, profile, { focalPx: fov.focalPx });
+  const cam = cameraOf(fit, width, height);
+  const demRows = horizonRows(profile, cam, width, height);
+  const guided = guidedSkyline(fit.sky, width, height, demRows);
+  const validShare = guided.rows.reduce((a, v) => a + (Number.isFinite(v) ? 1 : 0), 0) / width;
+  const vfov = (2 * Math.atan(height / 2 / fit.focalPx) * 180) / Math.PI;
+  const confidence = confidenceOf({ fit, validShare, demRows, photoRows: guided.rows, height, vfov });
+  const skyRows = Float32Array.from(guided.rows, (v, u) => (Number.isFinite(v) ? v : demRows[u]));
+  const gw = 160, gh = Math.round((160 * height) / width);
+  const depth = depthGrid((x, z) => field.heightAt(x, z), { x: row.x, y: eyeY, z: row.z }, cam, gw, gh);
+  const bands = HAZE_BANDS.map(() => []), sky = [];
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x += 2) {
+      const q = (y * width + x) * 4, px = [data[q], data[q + 1], data[q + 2]];
+      const top = skyRows[x];
+      if (Number.isFinite(top) && y < top) {
+        const over = (top - y) / height;
+        if (over >= HAZE_SKY[0] && over <= HAZE_SKY[1]) sky.push(px);
+        continue;
+      }
+      // (a few rows under the skyline are left out: the fit is good to under a degree, and a row of sky read as a
+      // ridge would pale the far band)
+      if (Number.isFinite(top) && y < top + height * 0.015) continue;
+      const d = depth.dist[Math.min(gh - 1, Math.floor((y / height) * gh)) * gw + Math.min(gw - 1, Math.floor((x / width) * gw))];
+      const at = HAZE_BANDS.findIndex(b => d >= b.from && d < b.to);
+      if (at >= 0) bands[at].push(px);
+    }
+  }
+  return { photo: row.file, confidence: confidence.level, bands, sky };
+}
+
+// Each band over every photo with a camera that can be trusted, a photo's pixels counted no more than `cap` times so
+// that one wide view does not set the answer
+function hazeOf(perPhoto, cap = 4000) {
+  const thin = list => (list.length <= cap ? list : list.filter((_, i) => i % Math.ceil(list.length / cap) === 0));
+  const used = perPhoto.filter(p => p.confidence !== 'low');
+  return {
+    photos: used.length,
+    bands: HAZE_BANDS.map((b, i) => ({ name: b.name, photos: used.filter(p => p.bands[i].length >= 50).length, ...hazeStats(used.flatMap(p => thin(p.bands[i]))) })),
+    sky: { name: 'sky near the horizon', photos: used.filter(p => p.sky.length >= 50).length, ...hazeStats(used.flatMap(p => thin(p.sky))) }
+  };
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const world = loadWorld();
@@ -391,6 +479,16 @@ async function main() {
     .concat(rows.filter(r => !r.inWorld).map(r => ({ e: r.e, n: r.n, radiusKm: 0 })));
   const field = await heightField(world, cacheDir, centres);
 
+  if (command === 'haze') {
+    const ctx = { field, tmpDir, profiles: new Map() };
+    const perPhoto = inWorld.map(row => hazeOne(row, ctx));
+    const out = hazeOf(perPhoto);
+    // Per photo too, in the private folder only: which photo pulls a band where
+    writeJson(path.join(roundDir, 'haze.json'), { ...out, perPhoto: perPhoto.map(p => ({ photo: p.photo, confidence: p.confidence, bands: p.bands.map(hazeStats), sky: hazeStats(p.sky) })) });
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    console.log(JSON.stringify(out, null, 1));
+    return;
+  }
   const game = flag('no-game') || !inWorld.length ? null : await openGame(option('world', 'tremola'));
   world.ridePoints = game ? game.info.points : [];
   const road = game ? new RoadIndex(game.info.points) : null;

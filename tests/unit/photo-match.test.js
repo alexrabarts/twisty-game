@@ -9,6 +9,7 @@ import { readExif, fieldOfView } from '../../tools/world/photos/exif.mjs';
 import { makeImage, decodeBmp, encodeBmp, regionStats, statGaps, skylineFromMask, sideBySide, resize } from '../../tools/world/photos/image.mjs';
 import { HeightField, horizonProfile, profileAt, pixelRay, horizonPoint, horizonRows, fitPose, guidedSkyline, depthGrid, skynessMap } from '../../tools/world/photos/horizon.mjs';
 import { regionOf, skylineGap, confidenceOf, RoadIndex } from '../../tools/world/photos/compare.mjs';
+import { hsvOf, hazeStats, HAZE_BANDS } from '../../tools/world/photomatch.mjs';
 
 const RAD = Math.PI / 180;
 
@@ -265,5 +266,28 @@ describe('comparison', () => {
         const flat = confidenceOf({ fit: { score: 0.3, apartScore: 0.28 }, validShare: 0.2, demRows: new Float32Array(100).fill(50), photoRows: new Float32Array(100).fill(NaN), height: 200, vfov: 40 });
         expect(flat.level).toBe('low');
         expect(flat.reasons.length).toBeGreaterThanOrEqual(3);
+    });
+});
+
+describe('the haze measurement', () => {
+    test('a colour reads as hue in degrees, saturation and value', () => {
+        expect(hsvOf(255, 0, 0)).toEqual({ h: 0, s: 1, v: 1 });
+        expect(hsvOf(0, 0, 255).h).toBe(240);
+        expect(hsvOf(92, 125, 170).h).toBeCloseTo(214.6, 0);
+        expect(hsvOf(92, 125, 170).s).toBeCloseTo(0.46, 2);
+        expect(hsvOf(40, 40, 40)).toEqual({ h: 0, s: 0, v: 40 / 255 });
+    });
+
+    test('a band reads as its mean colour and how green it is against blue', () => {
+        const blue = hazeStats([[70, 100, 130], [80, 110, 150], [90, 120, 170]]);
+        expect(blue.pixels).toBe(3);
+        expect(blue.mean).toEqual([80, 110, 150]);
+        expect(blue.greenOverBlue).toBeLessThan(0);
+        expect(blue.greenShare).toBe(0);
+        const green = hazeStats([[60, 100, 50], [70, 110, 60]]);
+        expect(green.greenOverBlue).toBeGreaterThan(0);
+        expect(green.greenShare).toBe(1);
+        expect(hazeStats([])).toEqual({ pixels: 0 });
+        expect(HAZE_BANDS.map(b => [b.from, b.to])).toEqual([[1000, 3000], [3000, 8000], [8000, Infinity]]);
     });
 });

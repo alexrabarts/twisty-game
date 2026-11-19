@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
@@ -2151,7 +2151,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight', 'world-trees'];
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight', 'world-trees', 'world-haze'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2710,6 +2710,28 @@ function floatingCount(STRUCTURE_DARK = 32) {
     return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0, structure: structurePx, blackStructure: structurePx ? Math.round((structureBlack / structurePx) * 10000) / 10000 : 0 };
 }
 
+// world-haze's verdict (HAZE_BANDS, HAZE_SKY): each band of each view that holds enough of it, and every band somewhere
+function hazeChecks(haze, failures) {
+    const within = (v, range) => v >= range[0] && v <= range[1];
+    const judged = HAZE_BANDS.map(() => 0);
+    for (const view of haze.views) {
+        const where = `s ${view.s} turned ${view.turnDeg}`;
+        const sky = view.sky.px >= HAZE_MIN_PX ? view.sky : null;
+        if (view.bare.length) failures.push(`world-haze: at ${where} these are drawn without the haze: ${view.bare.join(', ')}`);
+        if (sky) {
+            for (const key of ['h', 's', 'v']) if (!within(sky[key], HAZE_SKY[key])) failures.push(`world-haze: at ${where} the sky near the horizon has ${key} ${sky[key]} (${sky.rgb}), outside the photos' ${HAZE_SKY[key].join(' to ')}`);
+        }
+        view.bands.forEach((band, i) => {
+            const want = HAZE_BANDS[i];
+            if (!(band.px >= HAZE_MIN_PX)) return;
+            judged[i]++;
+            for (const key of ['h', 's', 'v']) if (want[key] && !within(band[key], want[key])) failures.push(`world-haze: at ${where} the land at ${want.name} has ${key} ${band[key]} (${band.rgb}), outside the photos' ${want[key].join(' to ')}`);
+            if (want.blue && sky && band.greenOverBlue > sky.greenOverBlue + HAZE_GREEN_TOL + 1e-9) failures.push(`world-haze: at ${where} the land at ${want.name} is greener than the sky near the horizon (green less blue ${band.greenOverBlue} against ${sky.greenOverBlue})`);
+        });
+    }
+    HAZE_BANDS.forEach((want, i) => { if (!judged[i]) failures.push(`world-haze: no view holds ${HAZE_MIN_PX} px of land at ${want.name}`); });
+}
+
 // world-trees: the colour of the drawn trees against the photos (.agent/sop/photo-match.md) and against the land round
 // them. At each station the chase view, and the same place looking 70 degrees to either side over the slopes, are drawn
 // as the rider sees them; then drawn again with each tree kind and the land in an id colour and the view distance in
@@ -2730,6 +2752,133 @@ const TREE_OVER_LAND = 0.03;
 // Metres over the road the turned views look from: over the verge's bank, so the slope and its trees show
 const TREE_EYE_M = 14;
 const TREE_MIN_PX = 400;
+
+// world-haze: the colour of distant land against the photos, by its distance. `node tools/world/photomatch.mjs haze`
+// measured the owner's photos (19 with a camera that can be trusted; only these numbers leave them): the mean display
+// colour of the land at 1 to 3 km (90, 95, 88: its own colour still), 3 to 8 km (76, 98, 121: hue 211, saturation
+// 0.37, value 0.47), from 8 km (92, 125, 170: hue 214, saturation 0.46, value 0.67), and of the sky 1 to 8% of the
+// picture's height over the skyline (188, 203, 224: hue 215, saturation 0.16, value 0.88). So distant land takes the
+// sky's hue, deeper and darker, and it is never greener than the sky: green less blue (0 to 1) is -0.09 and -0.17
+// for the land against -0.08 for the sky. HAZE_BANDS holds each band's mean colour to the spread of the photos' own
+// means (`h` degrees, `s`, `v`), and `blue` holds it no greener than the sky near the horizon in the same view.
+// Each view is drawn in clear air (the `dry` look) from HAZE_EYE_M over the road, then again with the view distance
+// in place of the colour; the sky is read over the drawn skyline. Every material the world draws must carry the haze. HAZE_VIEWS are `s:turn` (degrees from the road's
+// heading); a band a view holds less than HAZE_MIN_PX of is not judged there, and every band must be judged somewhere.
+const HAZE_BANDS = [
+    { name: '1 to 3 km', fromM: 1000, toM: 3000, s: [0, 0.6], v: [0.25, 0.65] },
+    { name: '3 to 8 km', fromM: 3000, toM: 8000, h: [195, 225], s: [0.12, 0.6], v: [0.3, 0.68], blue: true },
+    { name: '8 km on', fromM: 8000, toM: Infinity, h: [195, 225], s: [0.28, 0.6], v: [0.5, 0.83], blue: true }
+];
+// (`over`: the share of the frame's height over the skyline, and the most degrees over the level it is read at)
+const HAZE_SKY = { name: 'sky near the horizon', over: [0.01, 0.08, 16], h: [195, 225], s: [0, 0.33], v: [0.75, 1] };
+// The most a band may be greener than the sky near the horizon (green less blue of the mean colour, 0 to 1)
+const HAZE_GREEN_TOL = 0.02;
+const HAZE_VIEWS = ['400:180', '2800:180', '6600:180', '9500:180', '12800:0', '12800:180'];
+const HAZE_EYE_M = 14;
+const HAZE_MIN_PX = 1500;
+
+async function hazeView(placeSource, s, turnDeg, eyeM, bands, skyOver) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle;
+    const env = game.environment;
+    // Clear air from end to end: the stage's own look puts mist and rain on the upper road
+    if (!window.hazeTrack) window.hazeTrack = game.atmosphereTrack;
+    const dry = WorldLooks.variants.dry.tremola[0].look;
+    game.atmosphereTrack = AtmosphereTrack.forWorld(env.route.stages, env.route, Object.fromEntries(env.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: dry }]])));
+    game.cameraMode = 2;
+    await placeAt(s);
+    game.atmosphereWritten = null;
+    game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env, weatherSystem: game.weatherSystem });
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    v.speed = 0;
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 240; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const cam = game.camera;
+    cam.rotation.order = 'YXZ';
+    cam.rotation.y += turnDeg * Math.PI / 180;
+    cam.rotation.x = 0;
+    cam.rotation.z = 0;
+    cam.position.set(v.position.x, v.position.y + eyeM, v.position.z);
+    cam.updateMatrixWorld(true);
+    const renderer = game.graphics.renderer;
+    const bike = v.group, bikeShown = bike.visible;
+    bike.visible = false;
+    game.graphics.render(game.scene, cam);
+    const canvas = renderer.domElement;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width; copy.height = canvas.height;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const frame = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    const W = copy.width, H = copy.height;
+    // The distance frame: everything the world draws, its distance from the eye in 16 bits (to 65 km)
+    const material = new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        vertexShader: 'varying float vD; void main() { vec4 p = vec4(position, 1.0);\n#ifdef USE_INSTANCING\np = instanceMatrix * p;\n#endif\nvec4 mv = modelViewMatrix * p; vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: 'varying float vD; void main() { float d = min(vD, 65535.0); float hi = floor(d / 256.0); gl_FragColor = vec4(1.0, hi / 255.0, (d - hi * 256.0) / 255.0, 1.0); }'
+    });
+    const saved = new Map(), hidden = [];
+    game.scene.children.forEach(c => { if (c !== env.group && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    // One haze for everything a world draws: a drawn mesh whose material could take it and has not is named
+    const bare = new Set();
+    env.group.traverse(o => {
+        if (!o.isMesh) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (LandShade.hazeable(m) && !m.userData.haze) bare.add(o.name || m.name || m.type);
+        saved.set(o, o.material);
+        o.material = material;
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    const target = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const ids = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, ids);
+    renderer.setRenderTarget(null);
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    bike.visible = bikeShown;
+    game.scene.background = background;
+    game.scene.fog = fog;
+    target.dispose();
+    material.dispose();
+    const empty = () => ({ n: 0, r: 0, g: 0, b: 0 });
+    const land = bands.map(empty), sky = empty();
+    const focal = H / 2 / Math.tan(cam.fov * Math.PI / 360), skyUp = skyOver[2] * Math.PI / 180;
+    for (let x = 0; x < W; x++) {
+        let top = -1;
+        for (let y = 0; y < H; y++) {
+            const k = ((H - 1 - y) * W + x) * 4;
+            if (!ids[k]) continue;
+            if (top < 0) top = y;
+            const d = ids[k + 1] * 256 + ids[k + 2];
+            const band = bands.findIndex(b => d >= b.fromM && d < (b.toM === null ? Infinity : b.toM));
+            if (band < 0) continue;
+            const f = (y * W + x) * 4, acc = land[band];
+            acc.n++; acc.r += frame[f]; acc.g += frame[f + 1]; acc.b += frame[f + 2];
+        }
+        // The sky over this column's skyline (a column with no skyline in the frame has none)
+        if (top <= 0) continue;
+        for (let y = Math.max(0, Math.round(top - skyOver[1] * H)); y <= top - skyOver[0] * H; y++) {
+            // (only the sky near the horizon: over a slope that fills the view it is the mid sky, far up)
+            if (Math.atan((H / 2 - y) / focal) > skyUp) continue;
+            const f = (y * W + x) * 4;
+            sky.n++; sky.r += frame[f]; sky.g += frame[f + 1]; sky.b += frame[f + 2];
+        }
+    }
+    const round = n => Math.round(n * 100) / 100;
+    const read = a => {
+        if (!a.n) return { px: 0 };
+        const r = a.r / a.n, g = a.g / a.n, b = a.b / a.n, mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+        const h = d > 0 ? (mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60 : 0;
+        return { px: a.n, rgb: [r, g, b].map(Math.round), h: Math.round(h), s: round(mx ? d / mx : 0), v: round(mx / 255), greenOverBlue: round((g - b) / 255) };
+    };
+    return { s, turnDeg, size: [W, H], bare: [...bare], bands: land.map(read), sky: read(sky) };
+}
 
 async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
@@ -3185,6 +3334,23 @@ const WORLD = {
             }
         }
         return { bands: TREE_BANDS, overLand: TREE_OVER_LAND, minPx: TREE_MIN_PX, views };
+    },
+    // The colour of distant land by its distance, and of the sky near the horizon, against the photos (hazeView), at
+    // HAZE_VIEWS (--views s:turn,...); --out <dir> saves each view as drawn
+    'world-haze': async (page) => {
+        const out = option('out');
+        if (out) mkdirSync(out, { recursive: true });
+        if (out) await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        const tag = option('tag') || 'haze';
+        const views = [];
+        for (const view of (option('views') ? option('views').split(',') : HAZE_VIEWS)) {
+            const [s, turn] = view.split(':').map(Number);
+            // (JSON has no Infinity: the last band's end goes over as null)
+            const at = await page.evaluate(hazeView, placeAt.toString(), s, turn || 0, HAZE_EYE_M, HAZE_BANDS.map(b => ({ fromM: b.fromM, toM: Number.isFinite(b.toM) ? b.toM : null })), HAZE_SKY.over);
+            if (out) await page.screenshot({ path: join(out, `${tag}-s${s}-turn${turn || 0}.png`) });
+            views.push(at);
+        }
+        return { views };
     },
     'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), option('modes') ? option('modes').split(',').map(Number) : WATERTIGHT_MODES, WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
     // Floating roads and land over the road, as drawn: floatingWalk over the whole slice (every --every metres, 500 by
@@ -4980,6 +5146,8 @@ function worldChecks(report) {
         if (p.walls.some(kind => kind !== 'wall')) failures.push(`world-junction ${j.id} at ${p.sIn}: a barrier does not give wall (${p.walls})`);
         if (p.outClosed) failures.push(`world-junction ${j.id} at ${p.sIn}: the road out is closed`);
     }));
+    const haze = results['world-haze'];
+    if (haze) hazeChecks(haze, failures);
     const wrong = results['world-wrongway'];
     if (wrong) {
         const [off, back, ride] = wrong;

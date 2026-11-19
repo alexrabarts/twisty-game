@@ -109,6 +109,7 @@ const GFX_SKY_BAKE_FRAGMENT = `
     uniform vec3 uZenith;
     uniform vec3 uMid;
     uniform vec3 uHorizon;
+    uniform float uHorizonSpan;
     uniform vec3 uSunDir;
     uniform vec3 uGlowColor;
     uniform vec3 uCloudLit;
@@ -127,7 +128,7 @@ const GFX_SKY_BAKE_FRAGMENT = `
         float up = d.y;
 
         // Three-stop vertical gradient
-        vec3 sky = mix(uHorizon, uMid, smoothstep(0.0, 0.22, up));
+        vec3 sky = mix(uHorizon, uMid, smoothstep(0.0, uHorizonSpan, up));
         sky = mix(sky, uZenith, smoothstep(0.12, 0.75, up));
 
         float sunDot = max(dot(d, uSunDir), 0.0);
@@ -644,6 +645,7 @@ class Graphics {
             uZenith: { value: new THREE.Color() },
             uMid: { value: new THREE.Color() },
             uHorizon: { value: new THREE.Color() },
+            uHorizonSpan: { value: Graphics.HORIZON_SPAN },
             uSunDir: { value: this.sunDirection.clone() },
             uSunColor: { value: new THREE.Color(1, 1, 1) },
             uGlowColor: { value: new THREE.Color() },
@@ -751,6 +753,17 @@ class Graphics {
         this.atmosphere = atmosphere && this.atmosphereSupported
             ? { heightFog: atmosphere.heightFog, shafts: atmosphere.shafts || 0, baseY }
             : null;
+    }
+
+    // How high the horizon's pale colour reaches up the sky before the mid colour takes over (the sine of the
+    // elevation): a leg's sky keeps it low; a world's is wider (WorldLooks.horizonSpan)
+    static get HORIZON_SPAN() { return 0.22; }
+
+    setHorizonSpan(value) {
+        if (!this.skyUniforms || this.skyUniforms.uHorizonSpan.value === value) return;
+        this.skyUniforms.uHorizonSpan.value = value;
+        // The panorama is baked with it
+        this.panoramaAge = Infinity;
     }
 
     // The far ring's strength, under whatever the weather leaves of it

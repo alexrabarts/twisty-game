@@ -102,6 +102,10 @@ Round 5 sampled conifer stands, shrubs and grass by hand in the photos (rectangl
 
 Keep the rectangles and their overlays under `matches/round-<n>/ref-rects/`, never in the repo. Sample again when a round adds photos of trees closer than 300 m.
 
+### Haze (the colour of distant land)
+
+`node tools/world/photomatch.mjs haze --round <n>` measures the colour of distant land in every matched photo by its real distance (1 to 3 km, 3 to 8 km, from 8 km) and the colour of the sky 1 to 8% of the picture's height over the skyline. It prints the numbers of each band over the photos with a camera that can be trusted, and writes them with each photo's own numbers to `matches/round-<n>/haze.json`. Only the pooled numbers go into the repo: they set `LandShade.HAZE` (`js/world/landshade.js`) and the ranges of the browser check `world-haze` (`HAZE_BANDS`, `HAZE_SKY` in `tools/terrain-check.mjs`). Measure again when a round adds photos with a far view.
+
 ## 5. After an import grows the world
 
 1. Run `node tools/world/photomatch.mjs coverage`. `coverage.json` lists each cluster of photos with its distance to the drawn world (`corridorDistanceM`) and to the planned route. Use it to size the next import or a free-roam corridor so that it covers the stops. In the importer, `readCoverage()` and `coverageBoxes(coverage, { reachM, marginM })` from `tools/world/photos/geo.mjs` give the LV95 boxes round the stops near the planned route.

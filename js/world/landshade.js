@@ -9,8 +9,11 @@
 // the eye of the curvature drop is taken from the view matrix for the same reason.
 //
 // LandShade.patch(material) gives a world material:
-//   aerial perspective  distant land shifts toward a desaturated blue, 1 - exp(-d / reach), before the scene fog;
-//                       the scene fog stays for weather (a fog look, rain, snow)
+//   haze                the one aerial perspective of everything a world draws (LandShade.HAZE): with distance the
+//                       colour loses its own saturation and goes toward the air's colour, before the scene fog; the
+//                       scene fog stays for weather (a fog look, rain, snow). LandShade.haze(material) gives the same
+//                       term to a world material that is not land (a house, a boulder, a sign), LandShade.hazeTree
+//                       to every material under a group
 //   curvature           far meshes drop d^2 (1 - k) / 2R under the camera's horizon, as the real land does
 //   detail              world-space value noise on the albedo near the camera, so open ground is not flat paint
 //   stone               dry-stone courses in world space on a retaining wall (RoadMesh.stoneMaterial): courses of
@@ -115,21 +118,46 @@ class LandShade {
     static get uniforms() {
         if (!LandShade.shared) {
             LandShade.shared = {
-                uAerialColor: { value: new THREE.Color(0.32, 0.42, 0.56) },
-                uAerialReach: { value: LandShade.AERIAL_REACH_M },
-                uAerialMax: { value: LandShade.AERIAL_MAX },
+                uHazeColor: { value: new THREE.Color(0.08, 0.13, 0.22) },
+                uHaze: { value: new THREE.Vector4() },
+                uHazeBaseY: { value: LandShade.HAZE.baseY },
+                uHazeOnset: { value: LandShade.HAZE.onset },
                 uDrop: { value: LandShade.DROP_PER_M2 },
                 uIndirect: { value: LandShade.INDIRECT },
                 uLandFloor: { value: LandShade.FLOOR },
                 uDetail: { value: 1 }
             };
+            LandShade.writeHaze(LandShade.HAZE);
         }
         return LandShade.shared;
     }
 
-    // Metres over which the aerial tint reaches 63% of its most, and its most
-    static get AERIAL_REACH_M() { return 14000; }
-    static get AERIAL_MAX() { return 0.85; }
+    // The haze of clear alpine air, measured in the owner's photos of the Tremola and the Leventina by
+    // `node tools/world/photomatch.mjs haze` (19 photos with a camera that can be trusted; the mean display colour,
+    // HSV 0 to 1, hue in degrees). Distant land in the photos:
+    //   1 to 3 km   90, 95, 88: the land's own colour still (green, olive, brown; blue only in shade)
+    //   3 to 8 km   76, 98, 121: hue 211, saturation 0.37, value 0.47
+    //   8 km on     92, 125, 170: hue 214, saturation 0.46, value 0.67
+    //   sky 1 to 8% of the picture's height over the skyline: 188, 203, 224: hue 215, saturation 0.16, value 0.88
+    // So distant land takes the hue of the sky at the horizon, but deeper: the air in front of a dark slope scatters a
+    // saturated mid blue, not the near-white of the sky behind it. `air` is that colour (sRGB, display); the scene
+    // fog's colour gives its hue (LandShade.airColor), so the air follows the sky. The share of the air grows as
+    // 1 - exp(-tau^onset): tau is the optical depth of the ray, `perM` per metre at `baseY`, thinning with height over
+    // `scaleM` (the haze lies in the valleys, but the summit still sees blue ridges). `onset` over 1 keeps the first
+    // kilometres clear, as the photos are: with a plain exponential the forest 2 km off was already blue. `most` is
+    // the share it never passes, `desat` how much of its own saturation the land loses at the full share (the
+    // grade's saturation of 1.08 boosts the land's green too). Before this the tint was a grey-blue that reached 63%
+    // at 14 km: land 3 to 8 km off read hue 170 to 180, greener than the sky behind it. The browser probe world-haze
+    // (tools/terrain-check.mjs) holds each band to the photos
+    static get HAZE() {
+        return { perM: 1 / 4400, baseY: 1500, scaleM: 6000, onset: 2, most: 0.94, desat: 0.85, air: { s: 0.5, v: 0.58 } };
+    }
+
+    static writeHaze(h) {
+        LandShade.uniforms.uHaze.value.set(h.perM, h.most, h.desat, 1 / h.scaleM);
+        LandShade.uniforms.uHazeBaseY.value = h.baseY;
+        LandShade.uniforms.uHazeOnset.value = h.onset;
+    }
     // The dry-stone courses of a retaining wall (metres): a band of two courses whose split falls between splitMin and
     // splitMax of it (so the courses run 0.18 to 0.36 m high), blocks lengthMin to lengthMax long (real dry-stone
     // blocks, 0.3 to 0.6 m: longer read as brick), the courses wandering wanderM up and down. LandShade.stoneCell is
@@ -174,15 +202,115 @@ class LandShade {
     // world-floating's views, LAND_BLACK_SHARE, holds it)
     static get FLOOR() { return 0.25; }
 
-    // The aerial colour: the blue of distant ridges in the photos (far land, 3 km and more, about sRGB 80, 103, 128),
-    // a little of the sky's horizon in it, so a weather look still tints it (linear)
-    static update(scene, graphics) {
+    // The colour of the air for a scene fog colour (linear, out): the fog's hue (the sky at the horizon) at the
+    // saturation and value of LandShade.HAZE.air in display terms; a weather look (`weather` 0 to 1: mist, rain,
+    // snow) takes the fog's own colour instead, so a mist reads as mist
+    static airColor(fog, weather, out = new THREE.Color()) {
+        const hsl = {};
+        const display = fog.clone().convertLinearToSRGB();
+        display.getHSL(hsl);
+        const { s, v } = LandShade.HAZE.air;
+        // HSV (h, s, v) to HSL for Color.setHSL
+        const l = v * (1 - s / 2);
+        const sl = l > 0 && l < 1 ? (v - l) / Math.min(l, 1 - l) : 0;
+        out.setHSL(hsl.h, sl, l).convertSRGBToLinear();
+        return out.lerp(fog, Math.min(1, Math.max(0, weather)));
+    }
+
+    // Writes this frame's air colour from the scene fog and the weather's share (WeatherSystem.mix), and gives every
+    // material under `group` the haze (LandShade.hazeTree) before it is first drawn. A colour that is not finite (a
+    // fault upstream) keeps the last one
+    static update(scene, graphics, weather = null, group = null) {
         const u = LandShade.uniforms;
         const fog = scene && scene.fog ? scene.fog.color : null;
-        const blue = LandShade.blue || (LandShade.blue = new THREE.Color(0.075, 0.13, 0.22));
-        if (fog) u.uAerialColor.value.copy(fog).multiplyScalar(0.3).lerp(blue, 0.8);
-        // The no-post path mixes fog after the colour is encoded to sRGB (Graphics.render does the same for the fog)
-        if (graphics && !graphics.postEnabled) u.uAerialColor.value.convertLinearToSRGB();
+        if (fog && Number.isFinite(fog.r + fog.g + fog.b)) {
+            const mix = weather && weather.mix ? weather.mix : null;
+            const share = mix ? Math.min(1, (mix.rain || 0) + (mix.snow || 0) + (mix.fog || 0)) : 0;
+            const air = LandShade.airColor(fog, Number.isFinite(share) ? share : 0, LandShade.air || (LandShade.air = new THREE.Color()));
+            u.uHazeColor.value.copy(air);
+            // The no-post path mixes fog after the colour is encoded to sRGB (Graphics.render does the same for the fog)
+            if (graphics && !graphics.postEnabled) u.uHazeColor.value.convertLinearToSRGB();
+        }
+        if (group) LandShade.hazeTree(group);
+    }
+
+    // The haze in GLSL: the fragment's colour c at view-space position p goes toward the air (LandShade.HAZE). The
+    // optical depth of an exponential haze along a ray from the eye (height eyeY) to the fragment (dy higher) over
+    // distance d is perM d exp(-(eyeY - baseY) / scaleM) (1 - exp(-k)) / k, k = dy / scaleM
+    static get HAZE_GLSL() {
+        return `
+uniform vec3 uHazeColor;
+uniform vec4 uHaze;
+uniform float uHazeBaseY;
+uniform float uHazeOnset;
+vec3 worldHaze(vec3 c, vec3 p) {
+    mat3 toWorld = transpose(mat3(viewMatrix));
+    float eyeY = -(toWorld * viewMatrix[3].xyz).y;
+    float k = clamp((toWorld * p).y * uHaze.w, -20.0, 20.0);
+    float shape = abs(k) < 1e-3 ? 1.0 - 0.5 * k : (1.0 - exp(-k)) / k;
+    float tau = uHaze.x * length(p) * exp(clamp(-(eyeY - uHazeBaseY) * uHaze.w, -6.0, 6.0)) * shape;
+    float t = uHaze.y * (1.0 - exp(-pow(max(tau, 0.0), uHazeOnset)));
+    c = mix(c, vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), uHaze.z * t);
+    return mix(c, uHazeColor, t);
+}`;
+    }
+
+    // Adds the haze to a compiling shader: a view-space varying (instancing included) and the mix before the fog
+    static injectHaze(shader) {
+        Object.assign(shader.uniforms, { uHazeColor: LandShade.uniforms.uHazeColor, uHaze: LandShade.uniforms.uHaze, uHazeBaseY: LandShade.uniforms.uHazeBaseY, uHazeOnset: LandShade.uniforms.uHazeOnset });
+        shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', '#include <common>\nvarying vec3 vHazeView;')
+            .replace('#include <project_vertex>', '#include <project_vertex>\nvHazeView = mvPosition.xyz;');
+        shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', `#include <common>\nvarying vec3 vHazeView;${LandShade.HAZE_GLSL}`)
+            .replace('#include <fog_fragment>', 'gl_FragColor.rgb = worldHaze(gl_FragColor.rgb, vHazeView);\n#include <fog_fragment>');
+    }
+
+    // Whether a material can take the haze: a built-in material with a fog chunk (not a ShaderMaterial)
+    static hazeable(material) {
+        return !!material && !material.isShaderMaterial && !material.isRawShaderMaterial && !material.isPointsMaterial && !material.isSpriteMaterial;
+    }
+
+    // Gives a world material that is not land the haze, in place, after any patch it already has (a material that
+    // LandShade.patch made has it already). Its program key carries the haze
+    static haze(material) {
+        if (!LandShade.hazeable(material) || material.userData.haze) return material;
+        material.userData.haze = true;
+        const before = material.onBeforeCompile;
+        // The key of the program it compiles to now (three's default is the source of onBeforeCompile), plus the haze
+        const key = `${material.customProgramCacheKey()}|haze`;
+        material.onBeforeCompile = (shader, renderer) => {
+            if (before) before.call(material, shader, renderer);
+            LandShade.injectHaze(shader);
+        };
+        material.customProgramCacheKey = () => key;
+        material.needsUpdate = true;
+        return material;
+    }
+
+    // Every material under a group takes the haze (LandShade.haze); cheap once all have it
+    static hazeTree(group) {
+        group.traverse(o => {
+            if (!o.material) return;
+            if (Array.isArray(o.material)) o.material.forEach(m => LandShade.haze(m));
+            else LandShade.haze(o.material);
+        });
+    }
+
+    // A world copy of a model's parts ([{geometry, material}]) whose materials take the haze: a model's own materials
+    // are shared with the legs (SceneAssets.loadModel caches each file), which never take it. One copy per material
+    static adopt(parts) {
+        const copies = LandShade.copies || (LandShade.copies = new Map());
+        return parts.map(part => {
+            if (!part.material || Array.isArray(part.material)) return part;
+            if (!copies.has(part.material)) copies.set(part.material, LandShade.haze(part.material.clone()));
+            return { ...part, material: copies.get(part.material) };
+        });
+    }
+
+    // A world copy of a loaded model ({meshes: name -> parts, ...}) for the haze (LandShade.adopt)
+    static adoptModel(model) {
+        return { ...model, meshes: new Map([...model.meshes].map(([name, parts]) => [name, LandShade.adopt(parts)])) };
     }
 
     // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles,
@@ -192,6 +320,7 @@ class LandShade {
         const S = LandShade.STONE;
         const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
         material.userData.landShade = true;
+        material.userData.haze = true;
         const shared = LandShade.uniforms;
         material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, shared);
@@ -203,9 +332,6 @@ class LandShade {
                 .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${stone ? '\nvLandNormal = mat3(modelMatrix) * objectNormal;\nvWallFace = wallFace;' : ''}`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
-uniform vec3 uAerialColor;
-uniform float uAerialReach;
-uniform float uAerialMax;
 uniform float uIndirect;
 uniform float uLandFloor;
 uniform float uDetail;
@@ -265,13 +391,8 @@ reflectedLight.indirectDiffuse *= uIndirect;
 {
     float up = dot(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz));
     reflectedLight.indirectDiffuse = max(reflectedLight.indirectDiffuse, diffuseColor.rgb * uLandFloor * ${f(floor)} * (0.8 + 0.2 * up));
-}`)
-                .replace('#include <fog_fragment>', `{
-    float dist = length(vViewPosition);
-    float aerial = uAerialMax * (1.0 - exp(-dist / uAerialReach));
-    gl_FragColor.rgb = mix(gl_FragColor.rgb, uAerialColor, aerial);
-}
-#include <fog_fragment>`);
+}`);
+            LandShade.injectHaze(shader);
         };
         const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${floor === 1 ? '' : `-${floor}`}`;
         material.customProgramCacheKey = () => key;

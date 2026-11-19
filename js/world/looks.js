@@ -39,6 +39,10 @@ const WorldLooks = {
 // Not stage tables, so not enumerable: Object.values(WorldLooks) lists the stages' parts only
 Object.defineProperties(WorldLooks, {
     clearFog: { value: WORLD_CLEAR_FOG },
+    // How high the horizon's pale colour reaches up a world's sky (Graphics.setHorizonSpan). In the photos the sky
+    // just over the ridges, 5 to 15 degrees up, is still the pale blue of the horizon (saturation 0.16); with a
+    // leg's span it was already the mid sky's (0.26 to 0.40), bluer than the distant land in front of it
+    horizonSpan: { value: 0.5 },
     // The least weather lateral grip x surface grip on a part with a hairpin: the lowside boundary at full lock
     hairpinGrip: { value: 0.8 },
     // The weather's grip in a world (WeatherSystem.GRIP): rain's lateral grip is the hairpin bound over the cobbles

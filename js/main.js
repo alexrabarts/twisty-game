@@ -331,6 +331,7 @@ class Game {
         // The far land stands up to 40 km away (FarLand); a leg keeps its 5 km
         this.camera.far = WorldEnvironment.FAR_PLANE_M;
         this.camera.updateProjectionMatrix();
+        this.graphics.setHorizonSpan(WorldLooks.horizonSpan);
 
         this.atmosphereTrack = AtmosphereTrack.forWorld(environment.route.stages, environment.route, WorldLooks.pick(window.location.search));
         if (typeof WeatherSystem !== 'undefined') {
@@ -1023,6 +1024,7 @@ class Game {
             this.environment.dispose();
             this.camera.far = 5000;
             this.camera.updateProjectionMatrix();
+            this.graphics.setHorizonSpan(Graphics.HORIZON_SPAN);
         }
 
         // Clear scene objects (keep camera and lights)
@@ -3706,8 +3708,9 @@ class Game {
 
         // The light, sky, fog and far ring follow the ride along the track
         this.applyAtmosphere();
-        // A world's distant land takes the colour of this frame's air (js/world/landshade.js)
-        if (this.environment.isWorld) LandShade.update(this.scene, this.graphics);
+        // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
+        // frame, before it is first drawn (js/world/landshade.js)
+        if (this.environment.isWorld) LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
         this.graphics.update(
             rawDeltaTime,
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,

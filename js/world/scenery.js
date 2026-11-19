@@ -193,13 +193,14 @@ class Scenery {
                 loadModel('assets/trees/conifer.glb'), loadModel('assets/trees/broadleaf.glb'), loadModel('assets/trees/bush.glb'), loadModel('assets/village/houses.glb')
             ]);
             // A world draws the shapes in its own palette and light (js/world/vegetation.js); the legs keep the files' colours
+            // and materials: a house draws with world copies of them, which take the haze (LandShade.adopt)
             const pick = (model, kind, names) => names.filter(name => model.meshes.get(name)).map(name => ({ kind, name, parts: Vegetation.shape(model.meshes.get(name), kind) }));
             const trees = [
                 ...pick(conifer, 'conifer', ['conifer_spruce', 'conifer_fir', 'conifer_pine']),
                 ...pick(broadleaf, 'broadleaf', ['broadleaf_oak', 'broadleaf_beech', 'broadleaf_ash']),
                 ...pick(bush, 'bush', ['bush_round', 'bush_low'])
             ];
-            const homes = [...houses.meshes.keys()].filter(name => name.startsWith('house_') && !name.includes(':')).sort().map(name => ({ name, parts: houses.meshes.get(name) }));
+            const homes = [...houses.meshes.keys()].filter(name => name.startsWith('house_') && !name.includes(':')).sort().map(name => ({ name, parts: LandShade.adopt(houses.meshes.get(name)) }));
             if (!trees.length || !homes.length) return null;
             return { trees, houses: homes };
         } catch (error) {
@@ -923,7 +924,8 @@ class Scenery {
         const out = new Map();
         for (const asset of [...new Set(list.map(l => l.asset))]) {
             try {
-                out.set(asset, await loadModel(asset));
+                // A world copy of its materials, which take the haze (LandShade.adopt); the legs' copy never does
+                out.set(asset, LandShade.adoptModel(await loadModel(asset)));
             } catch (error) {
                 console.warn(`world landmark model ${asset} unavailable (${error.message}); left out`);
             }
