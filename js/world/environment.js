@@ -48,6 +48,8 @@ class WorldEnvironment {
     static get SIDE_ROW_MIN_M() { return 1.5; }
     // A side road's wall that ends this near the end of one of the ride's is joined to it (wallJoins)
     static get WALL_JOIN_M() { return 8; }
+    // A side road's carriageway this near the ride's has paving between the two (sideGore)
+    static get SIDE_GORE_M() { return 4.5; }
     // A side road that crosses over the ride is lifted to stand this far over the ride's surface (a deck's soffit at
     // Carriageways.HEADROOM_M over the ride, the deck under it, a hand's breadth spare), ramped in over at most
     // SIDE_RAMP_M either side and never past its own edge's ends, so it meets its neighbours where it did
@@ -979,6 +981,59 @@ class WorldEnvironment {
         return out;
     }
 
+    // The paving of a junction's gore: where a side road's carriageway runs within SIDE_GORE_M of the ride's, at its
+    // height, the strip between the two is road, not verge or land (a side road that leaves at a shallow angle runs
+    // beside the ride for tens of metres, and the wedge between them was grass in the middle of the junction).
+    // `sides` are the side road's rows' edges (RoadMesh.vergeSides); returns a part for RoadMesh.addEdgeWorks' `ground`
+    sideGore(sides, owner) {
+        const out = { positions: [], shades: [], owner };
+        const near = {}, color = RoadMesh.PAVING_LINEAR;
+        // The ride's carriageway edge nearest a side road's edge point, or null where the two are not a gore apart
+        const across = p => {
+            let best = null;
+            for (const i of this.route.hashCandidates(p[0], p[2], 1)) {
+                this.route.nearestSegment(p[0], p[2], i, i, near);
+                const gap = near.distance - near.width / 2;
+                if (Math.abs(near.y - p[1]) > 1 || gap > WorldEnvironment.SIDE_GORE_M || (best && gap >= best.gap)) continue;
+                const a = this.route.points[i], b = this.route.points[i + 1];
+                const dx = b.x - a.x, dz = b.z - a.z, run = dx * dx + dz * dz;
+                const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a.x) * dx + (p[2] - a.z) * dz) / run));
+                // (not past the ride's own ends: the road that goes on from the start or the finish is no gore)
+                if ((i === 0 && t === 0) || (i === this.route.points.length - 2 && t === 1)) continue;
+                const cx = a.x + dx * t, cz = a.z + dz * t, d = Math.hypot(p[0] - cx, p[2] - cz) || 1;
+                // (just inside the ride's edge and under its surface, so the ride's ribbon covers the strip's end)
+                const reach = Math.max(0, gap) + 0.05;
+                best = { gap, y: near.y, at: [p[0] + ((cx - p[0]) / d) * reach, near.y - 0.03, p[2] + ((cz - p[2]) / d) * reach] };
+            }
+            return best;
+        };
+        const lift = p => [p[0], p[1] + 0.015, p[2]];
+        const own = owner >= 0 ? this.carriageways.chainOf(owner) : null;
+        const guard = this.carriageways.guard(owner);
+        const other = (x, z) => { let on = false; this.carriageways.each(x, z, 0, r => { if (r.depth > 0 && r.road >= 0 && !(own && own.has(r.road))) on = true; }, true); return on; };
+        // The edge of the side road that faces the ride: the nearer of its two, row by row
+        const ends = { lc: [], rc: [] };
+        for (const key of ['lc', 'rc']) ends[key] = sides.map(side => (side.bits & 7 || !side[key] ? null : across(side[key])));
+        for (let k = 0; k + 1 < sides.length; k++) {
+            const gapOf = key => (ends[key][k] && ends[key][k + 1] ? ends[key][k].gap + ends[key][k + 1].gap : Infinity);
+            const key = gapOf('lc') <= gapOf('rc') ? 'lc' : 'rc';
+            const a = ends[key][k], b = ends[key][k + 1];
+            if (!a || !b || (a.gap <= 0 && b.gap <= 0)) continue;
+            // Never over another side road of the junction (its own carriageway is its paving)
+            const pa = sides[k][key], pb = sides[k + 1][key];
+            const mid = (u, v) => [(u[0] + v[0]) / 2, 0, (u[2] + v[2]) / 2];
+            if ([a.at, b.at, mid(a.at, b.at), mid(pa, a.at), mid(pb, b.at)].some(q => other(q[0], q[2]))) continue;
+            // (an edge point that lies in the ride's own carriageway stays under the ride's surface)
+            const top = (p, e) => (e.gap <= 0 ? [p[0], Math.min(p[1] + 0.015, e.y - 0.03), p[2]] : lift(p));
+            const ta = top(pa, a), tb = top(pb, b);
+            // nor proud of any carriageway it reaches (another leg of the ride a little lower, at a hairpin)
+            const half = (u, v) => [(u[0] + v[0]) / 2, (u[1] + v[1]) / 2, (u[2] + v[2]) / 2];
+            if ([ta, tb, a.at, b.at, half(ta, a.at), half(tb, b.at), half(ta, tb), half(a.at, b.at), half(half(ta, tb), half(a.at, b.at))].some(q => !guard.clear(q[0], q[2], q[1] - 0.01, q[1]))) continue;
+            RoadMesh.quad(out, ta, tb, b.at, a.at, [color, color, color, color]);
+        }
+        return out;
+    }
+
     // The ends of the ride's retaining walls within `reach` of a box ([x0, z0, x1, z1]): [{p, foot, out}], a run that
     // goes on from one section into the next read as one. The keys its plans were made without go into `missing`
     rideWallEnds(box, reach, missing = null) {
@@ -1277,7 +1332,7 @@ class WorldEnvironment {
         }
         let triangles = 0;
         const missing = new Set();
-        const sides = [], structures = [];
+        const sides = [], structures = [], gores = [];
         // The land a side road's structures stand on; a chunk built before a tile under it is built again when it arrives
         // (the nodes' own land, not the land as it is cut to the walls: a road beside a wall, where the land in front
         // is levelled, is not a road raised over the land that needs a deck)
@@ -1300,6 +1355,8 @@ class WorldEnvironment {
             // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
             sides.push(Object.assign(built.sides, { owner: edge.id }));
+            const gore = this.sideGore(built.sides, edge.id);
+            if (gore.positions.length) gores.push(gore);
             structures.push(...built.parts.map(part => Object.assign(part, { owner: edge.id })));
             group.add(road);
             roads.push(road);
@@ -1348,7 +1405,7 @@ class WorldEnvironment {
         // a tile under them arrives
         // (and where one of their walls ends beside the end of one of the ride's, the two are joined: wallJoins)
         const box = this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox;
-        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
+        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways, walls => this.wallJoins(walls, box, missing), gores);
         // The land is cut to their walls (setSideWalls)
         this.setSideWalls(k, group.userData.walls || []);
         group.userData.roads = roads;

@@ -293,6 +293,7 @@ These are rules of the builders, with no place named in them: every world the im
 - **No deck starts in a junction.** Rows in the band and for `SIDE_FILL_M` past it carry `fill`: `RoadMesh.sideStructures` never decks them. A side road with one edge on the land (a road along a hillside) stands on a fill behind a retaining wall up to `SIDE_WALL_M` high; a deck is for land under both edges.
 - **No edge hangs open in a mouth.** A `fill` row stands on a slope down to the land as the ride does (`edgeFoot` `fill`), or on a wall where the land is `PARAPET_DROP_M` under it.
 - **Walls of two roads are one wall.** Where a side road's wall ends within `WALL_JOIN_M` of the end of one of the ride's, at its height, `WorldEnvironment.wallJoins` joins them with a piece of wall and lays ground behind it; the ride then lays no slope from its wall's end into that mouth (`foot.joined`).
+- **A junction's gore is paved.** Where a side road's carriageway runs within `SIDE_GORE_M` of the ride's, at its height, `WorldEnvironment.sideGore` lays paving between the two (never over another side road, never proud of a carriageway), and the corner behind a wall join is paved too. No check reads this yet: the junction check cannot tell paving from a slope's ground.
 - **A wall goes on to a structure's first row** (`RoadMesh.wallPlan`), with no parapet on that last segment and its face at the deck's own corner, so no edge hangs between a wall and a bridge.
 - **Two side roads in one band never share a plane**: each takes one of four depths under the ride (`sideHold`).
 

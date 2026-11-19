@@ -82,6 +82,8 @@ class RoadMesh {
     static get JOIN_UNDER_M() { return 0.09; }
 
     // The apron's colour where no land colour is known: the land's grass, linear
+    // The paving the roads lay between them in a junction (a gore, the corner behind a wall's join), linear
+    static get PAVING_LINEAR() { return RoadMesh.COLORS.sideAsphalt.map(v => Math.pow(v, 2.2)); }
     static get APRON_LINEAR() { return RoadMesh.COLORS.apron.map(v => Math.pow(v, 2.2)); }
 
     // The apron is land: lit as the land is, and pushed back in depth so the land wins where the two lie together
@@ -987,7 +989,7 @@ class RoadMesh {
     // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
     // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
     // `roads` (Carriageways) keeps each run's works out of every other road's carriageway (RoadMesh.edgeWorks guard)
-    static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null) {
+    static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null, ground = []) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
         const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] } };
         const face = [];
@@ -1007,15 +1009,21 @@ class RoadMesh {
                 own(key, part[key].positions.length, run.owner ?? -1);
             }
         }
+        // Ground the roads lay themselves (`ground`: parts in linear colour, the paving of a junction's gore)
+        for (const part of ground) {
+            works.apron.positions.push(...part.positions);
+            works.apron.shades.push(...part.shades);
+            own('apron', part.positions.length, part.owner ?? -1);
+        }
         // The pieces of wall that join these runs to another road's (`join(walls)`: WorldEnvironment.wallJoins)
         for (const piece of join ? join(walls) : []) {
             const before = works.stone.positions.length;
             RoadMesh.wallJoin(works.stone, face, piece);
             own('stone', works.stone.positions.length - before, piece.owner ?? -1);
-            // and the ground behind it, between the two roads' edges: land at the roads' height (under both
+            // and the ground behind it, between the two roads' edges: paving at the roads' height (under both
             // ribbons where they are paved), or the corner behind the piece was a pit
             const under = (p, back) => [p[0] - piece.o[0] * back, p[1] - RoadMesh.JOIN_UNDER_M, p[2] - piece.o[1] * back];
-            const c = RoadMesh.APRON_LINEAR, start = works.apron.positions.length;
+            const c = RoadMesh.PAVING_LINEAR, start = works.apron.positions.length;
             RoadMesh.quad(works.apron, under(piece.a, 0), under(piece.b, 0), under(piece.b, RoadMesh.JOIN_BACK_M), under(piece.a, RoadMesh.JOIN_BACK_M), [c, c, c, c]);
             own('apron', works.apron.positions.length - start, piece.owner ?? -1);
         }
