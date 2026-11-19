@@ -84,6 +84,9 @@ class RoadMesh {
     // The apron's colour where no land colour is known: the land's grass, linear
     // The paving the roads lay between them in a junction (a gore, the corner behind a wall's join), linear
     static get PAVING_LINEAR() { return RoadMesh.COLORS.sideAsphalt.map(v => Math.pow(v, 2.2)); }
+    // The ride's end of a junction's paving lies this far under its surface (under the side ribbons held there)
+    static get PAVING_UNDER_M() { return 0.13; }
+    static get PAVING_PIECE_M() { return 4; }
     static get APRON_LINEAR() { return RoadMesh.COLORS.apron.map(v => Math.pow(v, 2.2)); }
 
     // The apron is land: lit as the land is, and pushed back in depth so the land wins where the two lie together
@@ -869,6 +872,13 @@ class RoadMesh {
             kinds[key][k] = kind;
             return kind;
         };
+        // A junction's paving: from the carriageway's edge out to the side roads beside it (`foot.gore`), row by row
+        const paved = sides.map(side => {
+            if (!foot || !foot.gore || side.bits & 7 || !side.lc) return null;
+            const o = RoadMesh.outward(side);
+            const far = key => { const c = side[key + 'c']; return foot.gore(c[0], c[1], c[2], o[key][0], o[key][1]); };
+            return { l: far('l'), r: far('r') };
+        });
         const rails = { stone: { l: [], r: [] }, wall: { l: [], r: [] } };
         // Rows outside `sides.draw` belong to the neighbouring sections: read for the runs, drawn by those sections
         const [drawFrom, drawTo] = sides.draw || [0, sides.length - 1];
@@ -879,6 +889,23 @@ class RoadMesh {
             const drawn = k >= drawFrom && k < drawTo;
             const apronOut = drawn ? apron : junk, wallOut = drawn ? wall : junk, stoneOut = drawn ? stone : junk;
             let soffit = false;
+            for (const key of ['l', 'r']) {
+                const ga = paved[k] && paved[k][key], gb = paved[k + 1] && paved[k + 1][key];
+                if (ga || gb) {
+                    // (level with its far edge where that lies lower: never over a side road that falls away)
+                    const low = Math.min(ga ? ga[1] : Infinity, gb ? gb[1] : Infinity);
+                    const edge = j => { const c = sides[j][key + 'c']; return [c[0], Math.min(c[1] - RoadMesh.PAVING_UNDER_M, low), c[2]]; };
+                    const c = RoadMesh.PAVING_LINEAR;
+                    // In pieces no longer than PAVING_PIECE_M either way (a far ribbon's rows are 16 m apart): no
+                    // large flat face
+                    const a0 = edge(k), b0 = edge(k + 1), a1 = ga || a0, b1 = gb || b0;
+                    const mix = (u, v, t) => [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t, u[2] + (v[2] - u[2]) * t];
+                    const dist = (u, v) => Math.hypot(v[0] - u[0], v[2] - u[2]);
+                    const nu = Math.max(1, Math.ceil(Math.max(dist(a0, b0), dist(a1, b1)) / RoadMesh.PAVING_PIECE_M)), nv = Math.max(1, Math.ceil(Math.max(dist(a0, a1), dist(b0, b1)) / RoadMesh.PAVING_PIECE_M));
+                    const at = (i, j) => mix(mix(a0, b0, i / nu), mix(a1, b1, i / nu), j / nv);
+                    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) RoadMesh.quad(apronOut, at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1), [c, c, c, c]);
+                }
+            }
             for (const key of ['l', 'r']) {
                 const kind = kindOf(k, key);
                 if (!kind) continue;
@@ -989,7 +1016,7 @@ class RoadMesh {
     // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
     // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
     // `roads` (Carriageways) keeps each run's works out of every other road's carriageway (RoadMesh.edgeWorks guard)
-    static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null, ground = []) {
+    static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
         const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] } };
         const face = [];
@@ -1008,12 +1035,6 @@ class RoadMesh {
                 works[key].shades.push(...part[key].shades);
                 own(key, part[key].positions.length, run.owner ?? -1);
             }
-        }
-        // Ground the roads lay themselves (`ground`: parts in linear colour, the paving of a junction's gore)
-        for (const part of ground) {
-            works.apron.positions.push(...part.positions);
-            works.apron.shades.push(...part.shades);
-            own('apron', part.positions.length, part.owner ?? -1);
         }
         // The pieces of wall that join these runs to another road's (`join(walls)`: WorldEnvironment.wallJoins)
         for (const piece of join ? join(walls) : []) {

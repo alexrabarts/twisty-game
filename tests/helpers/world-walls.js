@@ -23,6 +23,8 @@
 //   - blocks: a run shorter than `minRunM`
 //   - steps: two runs of one road and one side whose ends are less than `minGapM` apart
 //   - open: a run's end past which the road's edge hangs open
+//   - flanks: a run's end where the ground past it stands more than `flankM` over the ground in front of the wall,
+//     with no face of stone across the end (the open side of the slope that goes on from the wall)
 // Returns {faces, measured, runs, buried, climbs, hangs, top, blocks, steps, open}: each a list, worst first, of
 // {s, x, z, ...} (s the metres of ride nearest to it).
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-walls.test.js says what each is)
@@ -202,7 +204,13 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                     const drop = end.top[1] - g - d * 0.15;
                     if (drop > 1) { open++; worst = Math.max(worst, r3(drop)); }
                 }
-                face.ends.push({ x: r3(end.top[0]), y: r3(end.top[1]), z: r3(end.top[2]), open, dropM: worst, height: r3(end.top[1] - end.foot) });
+                // The flank of what lies past the end: the ground in front of the wall just before its end against the
+                // ground in front of the road's edge just past it (a slope that starts at the wall's end stands a
+                // metre or two over the land in front of the wall, and with nothing across the end its side is open)
+                const before = groundTop(end.top[0] - ux * dir * 0.3 + ox * 0.4, end.top[2] - uz * dir * 0.3 + oz * 0.4);
+                const after = groundTop(end.top[0] + ux * dir * 0.3 + ox * 0.4, end.top[2] + uz * dir * 0.3 + oz * 0.4);
+                const flank = before !== null && after !== null ? r3(after - before) : 0;
+                face.ends.push({ x: r3(end.top[0]), y: r3(end.top[1]), z: r3(end.top[2]), open, dropM: worst, height: r3(end.top[1] - end.foot), flankM: flank });
             }
             store.faces.set(id, face);
             fresh++;
@@ -211,7 +219,7 @@ export function wallWindow(game, env, store, at, nearM = 350) {
     return { fresh, faces: store.faces.size };
 }
 
-export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6 } = {}) {
+export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6, flankM = 0.6 } = {}) {
     const faces = [...(store.faces || new Map()).values()];
     const key = p => `${Math.round(p.top[0] * 100)},${Math.round(p.top[1] * 100)},${Math.round(p.top[2] * 100)}`;
     // Faces of one road joined at the top corners they share
@@ -238,7 +246,7 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6 } = {}) {
         runs.push(run);
     });
     const r1 = n => Math.round(n * 10) / 10;
-    const out = { faces: faces.length, measured: faces.filter(f => f.samples).length, runs: runs.length, buried: [], climbs: [], hangs: [], top: [], blocks: [], steps: [], open: [] };
+    const out = { faces: faces.length, measured: faces.filter(f => f.samples).length, runs: runs.length, buried: [], climbs: [], hangs: [], top: [], blocks: [], steps: [], open: [], flanks: [] };
     faces.forEach((f, i) => {
         const mx = (f.a.top[0] + f.b.top[0]) / 2, mz = (f.a.top[2] + f.b.top[2]) / 2;
         f.atEnd = runs[runOf[i]].ends.some(end => Math.hypot(end.x - mx, end.z - mz) < endM + f.len / 2);
@@ -255,6 +263,7 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6 } = {}) {
         // (not where another wall goes on from the end: the road a side road goes on as through a node has its own
         // run, and the two stand end to end)
         const met = end => runs.some(other => other !== run && other.ends.some(e => Math.hypot(e.x - end.x, e.z - end.z) < 0.75 && Math.abs(e.y - end.y) < 1.5));
+        for (const end of run.ends) if (end.flankM > flankM && !met(end)) out.flanks.push({ s: end.s, owner: run.owner, x: end.x, z: end.z, flankM: end.flankM });
         for (const end of run.ends) if (end.open && !met(end)) out.open.push({ s: end.s, owner: run.owner, x: end.x, z: end.z, dropM: end.dropM, wallM: end.height });
     }
     // Two runs of one road, facing the same way, whose ends are close: one wall in pieces
@@ -270,6 +279,7 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6 } = {}) {
     out.climbs.sort((a, b) => b.worstM - a.worstM);
     out.hangs.sort((a, b) => b.worstM - a.worstM);
     out.open.sort((a, b) => b.dropM - a.dropM);
+    out.flanks.sort((a, b) => b.flankM - a.flankM);
     out.buried.sort((a, b) => b.samples - a.samples);
     out.steps.sort((a, b) => a.gapM - b.gapM);
     out.blocks.sort((a, b) => a.lengthM - b.lengthM);
