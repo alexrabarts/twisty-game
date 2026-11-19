@@ -185,11 +185,14 @@ describe('the world chase camera carves like the legs camera', () => {
         expect(WorldCamera.speedHeight(8, 0)).toBe(8);
         expect(WorldCamera.speedHeight(8, T.speedLowerMs)).toBeCloseTo(8 * (1 - T.speedLowerShare), 9);
         expect(WorldCamera.speedHeight(8, 3 * T.speedLowerMs)).toBeCloseTo(8 * (1 - T.speedLowerShare), 9);
-        // Most of the way down at half that speed: the drop shows at the speeds a mountain road is ridden at
-        expect(WorldCamera.speedHeight(8, T.speedLowerMs / 2)).toBeLessThan(8 * (1 - 0.7 * T.speedLowerShare));
+        // A high-speed thing: the mode's own height at the pace of the bends, half way down between the two speeds
+        expect(WorldCamera.speedHeight(8, T.speedLowerFromMs)).toBe(8);
+        expect(WorldCamera.speedHeight(8, 15)).toBe(8);
+        expect(T.speedLowerFromMs).toBeGreaterThanOrEqual(20);
+        expect(WorldCamera.speedHeight(8, (T.speedLowerFromMs + T.speedLowerMs) / 2)).toBeCloseTo(8 * (1 - T.speedLowerShare / 2), 9);
         // Lower at every step of speed, and never a step in height
         let last = WorldCamera.speedHeight(3, 0);
-        for (let v = 0.5; v <= 40; v += 0.5) {
+        for (let v = 0.5; v <= 60; v += 0.5) {
             const h = WorldCamera.speedHeight(3, v);
             expect(h).toBeLessThanOrEqual(last);
             expect(last - h).toBeLessThan(0.1);
