@@ -4105,7 +4105,8 @@ class Game {
         const { environment, vehicle, worldRun } = this;
         if (!environment || !environment.isWorld || this.finished || !worldRun) return false;
         const route = environment.route, before = Game.DEBUG_SKIP_BEFORE_M;
-        const at = environment.stationGates.findIndex(st => st.s - before > vehicle.routeS + 1);
+        // (a station the bike already stands before is skipped: a second press goes on to the one after)
+        const at = environment.stationGates.findIndex(st => st.s - before > vehicle.routeS + 10);
         if (at < 0) return false;
         const s = Math.max(environment.startS, environment.stationGates[at].s - before);
         const point = route.sample(s, {});

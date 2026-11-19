@@ -951,6 +951,20 @@ class RoadMesh {
                     }
                     continue;
                 }
+                // Under the verge on a wall there is ground too, at the road's height: the verge thins out to nothing
+                // at its outer edge, and over a wall nothing lay under it (the land stands at the wall's foot), so the
+                // rider saw through the verge to the bank below
+                if (kind === 'wall') {
+                    const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
+                    const under = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]];
+                    const tint = f => (f && (f.top || f.color)) || RoadMesh.APRON_LINEAR;
+                    // (not where the verge itself lies over a carriageway: another road's, or another leg of its own)
+                    const va = sides[k][key], vb = sides[k + 1][key];
+                    const lerp3 = (u, v, t) => [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t, u[2] + (v[2] - u[2]) * t];
+                    let over = false;
+                    for (let i = 0; guard && ca && cb && i <= 4 && !over; i++) for (let j = 0; j <= 2 && !over; j++) { const q = lerp3(lerp3(ca, cb, i / 4), lerp3(va, vb, i / 4), j / 2); over = guard.any(q[0], q[2], q[1] - 0.2, q[1] - RoadMesh.APRON_UNDER_M) !== null; }
+                    if (ca && cb && !over) RoadMesh.quad(apronOut, under(ca), under(cb), under(vb), under(va), [tint(fa), tint(fb), tint(fb), tint(fa)]);
+                }
                 // A wall's end with no wall foot of its own takes the run's: it reaches the land (buried in it where
                 // the land meets the edge) and never ends hanging over the drop
                 const runFoot = Math.min(...[fa, fb].filter(f => f && f.kind === kind).map(f => f.y));
@@ -1565,7 +1579,8 @@ class Carriageways {
             this.each(x, z, 0, r => { if (r.depth >= 0 && !(skip && skip(r.road)) && r.y > y + above && (low === null || r.y < low)) low = r.y; });
             return low;
         };
-        const out = { owner, clear: (x, z, y0, y1, margin = 0) => this.standsIn(x, z, y0, y1, skip, margin) === null, depth: (x, z, y0, y1) => this.standsIn(x, z, y0, y1, skip, 0), ceiling };
+        // `any`: how deep in any carriageway at all, the owner's own legs too
+        const out = { owner, clear: (x, z, y0, y1, margin = 0) => this.standsIn(x, z, y0, y1, skip, margin) === null, depth: (x, z, y0, y1) => this.standsIn(x, z, y0, y1, skip, 0), any: (x, z, y0, y1) => this.standsIn(x, z, y0, y1, null, 0), ceiling };
         // The ride's retaining walls are solid where the physics says so (WorldGround.onRetainingWall reads the same
         // drop zone as edgeFoot), whatever is drawn: across a side road's mouth one stays drawn, or the rider would stop
         // at nothing

@@ -389,7 +389,14 @@ describe('RoadMesh', () => {
         expect(Math.max(...xs(apron.apron))).toBeCloseTo(edgeX + (3 - RoadMesh.APRON_UNDER_M) / RoadMesh.BATTER, 3);
         // A retaining wall is stone: it drops to its foot and carries a stone parapet over the edge
         const wall = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 6 }));
-        expect(wall.apron.positions).toHaveLength(0);
+        // Ground lies under the verge on a wall, and nowhere else (the verge thins out to nothing at its outer edge):
+        // never over a carriageway, another road's or another leg of its own
+        expect(Math.min(...ys(wall.apron))).toBeCloseTo(edgeY - RoadMesh.APRON_UNDER_M, 4);
+        expect(Math.max(...ys(wall.apron))).toBeCloseTo(edgeY - RoadMesh.APRON_UNDER_M, 4);
+        expect(Math.max(...xs(wall.apron).map(Math.abs))).toBeCloseTo(edgeX, 4);
+        expect(Math.min(...xs(wall.apron).map(Math.abs))).toBeCloseTo(rows[0].width / 2, 4);
+        const inRoad = { clear: () => true, depth: () => null, any: () => 0.5, ceiling: () => null };
+        expect(RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 6 }), inRoad).apron.positions).toHaveLength(0);
         expect(wall.wall.positions).toHaveLength(0);
         expect(Math.min(...ys(wall.stone))).toBeCloseTo(edgeY - 6, 4);
         expect(Math.max(...ys(wall.stone))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
