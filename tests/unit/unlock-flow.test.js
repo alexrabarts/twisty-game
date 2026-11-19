@@ -153,4 +153,18 @@ describe('the bike picker', () => {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining('saved bike choices could not be read'), expect.anything());
         warn.mockRestore();
     });
+
+    test('debug mode opens every rider and every leg, and saves none of it as progress', () => {
+        localStorage.clear();
+        const open = new TourSystem({ unlockAll: true });
+        expect(CHARACTERS.every(c => open.isCharacterUnlocked(c.id))).toBe(true);
+        expect(open.legs.every((leg, i) => open.isLegUnlocked(i))).toBe(true);
+        expect(CHARACTERS.every(c => open.riderTierFor(c.id) === 'lit') && open.legs.every((leg, i) => open.legTierFor(i) === 'lit')).toBe(true);
+        expect(open.completedLegs).toEqual([]);
+        // A leg finished in debug mode unlocks nothing new: all of it was open
+        expect(open.markLegCompleted('mountain-dawn').characters).toEqual([]);
+        const plain = new TourSystem();
+        expect(plain.isCharacterUnlocked('steve')).toBe(false);
+        expect(plain.isLegUnlocked(plain.legs.length - 1)).toBe(false);
+    });
 });

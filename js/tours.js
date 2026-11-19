@@ -1,5 +1,7 @@
 class TourSystem {
-    constructor() {
+    // `unlockAll` (debug mode, Game.debugEnabled): every leg and every rider is open, and nothing is saved as unlocked
+    constructor({ unlockAll = false } = {}) {
+        this.unlockAll = unlockAll;
         this.legs = [
             // Leg 1: Easy warm-up (70 segments = 1400m)
             {
@@ -193,14 +195,14 @@ class TourSystem {
     }
 
     isLegUnlocked(index) {
-        if (index <= 0) return true;
+        if (index <= 0 || this.unlockAll) return true;
         return this.isLegCompleted(this.legs[index - 1].id);
     }
 
     isCharacterUnlocked(characterId) {
         const required = this.characterUnlocks[characterId];
         if (required === undefined) return false;
-        return this.completedLegs.length >= required;
+        return this.unlockAll || this.completedLegs.length >= required;
     }
 
     // Records a completed leg; returns what it newly unlocked so the finish

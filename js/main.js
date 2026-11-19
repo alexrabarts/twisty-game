@@ -143,7 +143,7 @@ class Game {
 
         // Create tour system
         console.log('Creating tour system...');
-        this.tourSystem = new TourSystem();
+        this.tourSystem = new TourSystem({ unlockAll: Game.debugEnabled(window.location.search) });
         this.tourSystem.onViewLeaderboard = (legId) => this.showLeaderboardViewer(legId);
         this.tourSystem.onRiderShowcase = (id) => this.showcaseBikes ? this.focusRiderShowcase(id) : this.startRiderShowcase(id);
         this.tourSystem.onRiderShowcaseStart = (id) => this.startRiderShowcase(id);
@@ -4094,7 +4094,7 @@ class Game {
         showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
     }
 
-    // Debug mode (`?debug` in the page's address): N puts the bike DEBUG_SKIP_BEFORE_M before the next station of a
+    // Debug mode (`?debug` in the page's address): every rider, bike and leg is open (TourSystem `unlockAll`), and N puts the bike DEBUG_SKIP_BEFORE_M before the next station of a
     // world ride, on a rolling start, so a place far up the road is seen without the ride to it. The gate ahead is
     // then passed as any other. A ride that skipped never submits a time (the world is no longer trusted)
     static debugEnabled(search) {

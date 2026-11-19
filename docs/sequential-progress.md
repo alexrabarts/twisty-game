@@ -49,3 +49,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: three artefacts where the side road meets the ride at Bedrína. The paving was drawn as land and read as a pale slab at the wall corner: it is now group 3 of the works mesh with `RoadSurface.pavingMaterial`, in the asphalt's mean colour. Ground under the ride's verge hid a metre of the side road at the edge: none lies in paved rows now. The ride's verge lay over the paved corner behind a wall join: the row at a joined wall end is a mouth row.
 - Check: `tests/unit/world-meshes.test.js` holds the paving part, its group and its material, and no ground under the verge in paved rows. Whole unit suite on alex-ci: 97 of 98 files; `world-walls` failed on a helper that read the apron's grid for the paving group, fixed, then junctions, structures and walls pass (junctions all 0; 32 in a carriageway, 7 seams; walls 0 tops, 14 open ends). Every reader of the works mesh's groups takes 0 and 3 as ground.
 - Left: no check reads the paving's cover; a 4 m wedge of land stays where the two roads part; `flanks` 80; the test split.
+
+## Debug mode opens every rider, bike and leg
+
+- Job: with `debug` in the page's address every rider (and so every bike) and every leg is open. `TourSystem` takes `unlockAll`; the saved progress is not changed.
+- Check: `tests/unit/unlock-flow.test.js` holds every rider and leg open and lit in debug mode, nothing saved as progress, and the plain game still locked. The tour, restart and board files pass (47 tests).
+- Left: nothing.
