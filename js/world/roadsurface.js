@@ -540,7 +540,11 @@ class RoadSurface {
             roadSettMean: { value: linear(t.setts.mean) },
             roadAsphaltRough: { value: t.asphalt.rough },
             roadSettRough: { value: t.setts.rough },
-            roadWet: { value: RoadSurface.wetness || 0 }
+            roadWet: { value: RoadSurface.wetness || 0 },
+            // The roadworks sites drawn now (RoadSurface.setWorks): their s, their sides and their centres
+            roadWorksS: { value: [new THREE.Vector4(1, 0, 0, 0), new THREE.Vector4(1, 0, 0, 0)] },
+            roadWorksL: { value: [new THREE.Vector4(), new THREE.Vector4()] },
+            roadWorksC: { value: [new THREE.Vector4(), new THREE.Vector4()] }
         };
         material.userData.roadUniforms = uniforms;
         material.onBeforeCompile = (shader, renderer) => {
@@ -548,9 +552,34 @@ class RoadSurface {
             Object.assign(shader.uniforms, uniforms);
             RoadSurface.shader(shader);
         };
-        material.customProgramCacheKey = () => 'world-road-near-4';
+        material.customProgramCacheKey = () => 'world-road-near-5';
+        if (RoadSurface.works) RoadSurface.setWorks(RoadSurface.works);
         RoadSurface.near = material;
         return material;
+    }
+
+    // The closed lanes of up to two roadworks sites (Roadworks sites: sa, sb, sc, sd, side, half, and their elements'
+    // places for a centre), drawn in the near ribbon's shader as the repair surface. Only uniforms change, so a site
+    // coming into reach compiles nothing
+    static setWorks(sites) {
+        RoadSurface.works = sites;
+        const material = RoadSurface.near;
+        if (!material) return;
+        const u = material.userData.roadUniforms;
+        for (let i = 0; i < 2; i++) {
+            const site = sites[i];
+            if (!site || !site.closed) {
+                u.roadWorksS.value[i].set(1, 0, 0, 0);
+                continue;
+            }
+            u.roadWorksS.value[i].set(site.sa, site.sb, site.sc, site.sd);
+            u.roadWorksL.value[i].set(site.side, Roadworks.BEACON_LAT_M + Roadworks.BEACON_HALF_M, site.half, 0);
+            const e = site.elements || [];
+            let x = 0, z = 0;
+            for (const el of e) { x += el.x; z += el.z; }
+            const n = Math.max(1, e.length);
+            u.roadWorksC.value[i].set(x / n, z / n, (site.s1 - site.s0) / 2 + 12, 0);
+        }
     }
 
     static swap(source, chunk, code) {
@@ -590,6 +619,9 @@ uniform vec3 roadSettMean;
 uniform float roadAsphaltRough;
 uniform float roadSettRough;
 uniform float roadWet;
+uniform vec4 roadWorksS[2];
+uniform vec4 roadWorksL[2];
+uniform vec4 roadWorksC[2];
 varying vec4 vRoad;
 varying vec4 vEdge;
 varying float vRoadBase;
@@ -611,6 +643,26 @@ float roadDashSum(float x, float d, float p) { return floor(x / p) * d + min(mod
 float roadDash(float x, float d, float p, float fw) {
     fw = max(fw, 1e-4);
     return (roadDashSum(x + 0.5 * fw, d, p) - roadDashSum(x - 0.5 * fw, d, p)) / fw;
+}`);
+        // After LandShade's noise: the roadworks' closed lane (RoadSurface.setWorks). Its weight is 1 inside, from the
+        // beacon line out to the edge (in the tapers from the edge in to it), feathered over a ragged edge as the setts
+        // are. `into` is metres into the closed half, `edge` metres in from its edge
+        shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <map_pars_fragment>', `#include <map_pars_fragment>
+float roadWorksAt(float s, float lat, vec2 xz, out float into, out float edge) {
+    float best = 0.0;
+    into = 0.0; edge = 99.0;
+    for (int i = 0; i < 2; i++) {
+        vec4 S = roadWorksS[i], L = roadWorksL[i], C = roadWorksC[i];
+        if (S.x >= S.w || distance(xz, C.xy) > C.z) continue;
+        float t = clamp(min((s - S.x) / max(S.y - S.x, 0.01), (S.w - s) / max(S.w - S.z, 0.01)), 0.0, 1.0);
+        float inner = mix(L.z - 0.35, L.y, t);
+        float x = lat * L.x;
+        float rag = (landNoise(vec2(s * 1.7, lat * 1.7 + 3.0)) - 0.5) * 0.3 + (landNoise(vec2(s * 6.1, lat * 6.1)) - 0.5) * 0.08;
+        float d = min(min(x - inner, L.z + 0.05 - x), min(s - S.x, S.w - s)) + rag;
+        float w = smoothstep(-0.12, 0.12, d);
+        if (w > best) { best = w; into = x; edge = L.z - x; }
+    }
+    return best;
 }`);
         // After LandShade's noise (it is declared after <common>)
         const P = RoadSurface.PATCH;
@@ -793,6 +845,22 @@ if (roadSett < 0.999) {
 roadAlbedo = mix(roadAlbedo, roadBare, roadSett);
 roadRough = mix(roadRough, roadBareRough, roadSett);
 
+// The roadworks' closed lane: the old surface milled off in fine grooves along the road (lighter and rougher, the grooves
+// fading to their mean once a pixel spans them), patches of fresh dark asphalt, and a strip of grey gravel at its edge
+float roadInto, roadEdge;
+float roadWorks = roadWorksAt(roadS, roadLat, vLandPos.xz, roadInto, roadEdge);
+if (roadWorks > 0.0) {
+    float groove = 0.5 + 0.5 * sin(roadLat * 6.2832 / 0.06);
+    float grooveFade = 1.0 - smoothstep(0.015, 0.05, roadFwLat);
+    vec3 milled = roadAsphaltMean * (1.35 + 0.25 * (groove - 0.5) * grooveFade) * (0.9 + 0.2 * landNoise(vec2(roadS * 0.8, roadLat * 0.8)));
+    float roadFresh = smoothstep(0.58, 0.64, landNoise(vec2(roadS * 0.12 + 11.0, roadLat * 0.45)) + (landNoise(vec2(roadS * 2.0, roadLat * 2.0)) - 0.5) * 0.08);
+    vec3 repair = mix(milled, vec3(0.035, 0.035, 0.038), roadFresh);
+    float roadGrit = smoothstep(0.75, 0.6, roadEdge + (landNoise(vec2(roadS * 3.0, 17.0)) - 0.5) * 0.2);
+    repair = mix(repair, roadGravel * (0.8 + 0.4 * landNoise(vec2(roadS * 9.0, roadLat * 9.0))), roadGrit);
+    roadAlbedo = mix(roadAlbedo, repair, roadWorks);
+    roadRough = mix(roadRough, mix(mix(0.92, 0.55, roadFresh), 0.97, roadGrit), roadWorks);
+}
+
 // Markings: white, worn through where the surface is low, with a slightly uneven edge
 float roadPaintCover = 0.0;
 if (roadSett < 0.999) {
@@ -808,7 +876,7 @@ if (roadSett < 0.999) {
     float centre = centreKind > 2.5 ? centreAcross
         : centreKind > 1.5 ? centreAcross * roadDash(roadAlong, ${f(m.warning.dashM)}, ${f(m.warning.dashM + m.warning.gapM)}, roadFwAlong)
         : centreKind > 0.5 ? centreAcross * roadDash(roadAlong, ${f(m.broken.dashM)}, ${f(m.broken.dashM + m.broken.gapM)}, roadFwAlong) : 0.0;
-    roadPaintCover = max(edgeLine, centre) * mix(0.45, 0.95, wear) * (1.0 - roadSett);
+    roadPaintCover = max(edgeLine, centre) * mix(0.45, 0.95, wear) * (1.0 - roadSett) * (1.0 - roadWorks);
     roadAlbedo = mix(roadAlbedo, roadPaint * (0.92 + 0.08 * roadN.a), roadPaintCover);
     roadRough = mix(roadRough, 0.55, roadPaintCover);
 }

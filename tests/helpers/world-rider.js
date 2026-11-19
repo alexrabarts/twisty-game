@@ -2,7 +2,8 @@
 // fixed step at a time. `rider` is 'pilot' (the world autopilot of tools/autopilot.js: pure pursuit and a lean held by
 // a proportional input) or 'keys' (a keyboard: full key or none past a deadband, a 0.15 s reaction, the key held to
 // full lock in a hairpin, then the input ramp of js/input.js). `lane` is metres right of the centre line, or 'inside'
-// (the inside of each bend, 1.2 m from the edge). The speed is held at `speed` with the throttle and brake.
+// (the inside of each bend, 1.2 m from the edge); through a roadworks site the rider takes the open lane, as the
+// autopilot does (Roadworks.pilotLane). The speed is held at `speed` with the throttle and brake.
 // Returns {crashed, cut, cause, s, lateral, half, speed}: the first crash or cut-rule restart, or a clean ride.
 const DT = 1 / 60, G = 9.81;
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -35,7 +36,9 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
         env.updateBarriers(s);
         const reach = Math.max(5, Math.min(30, 3 + 0.7 * v.speed));
         route.sample(s + reach, aim);
-        const side = lane === 'inside' ? Math.sign(route.curvatureAt(s + 2, 8)) * Math.max(0, aim.width / 2 - 1.2) : offset;
+        const own = lane === 'inside' ? Math.sign(route.curvatureAt(s + 2, 8)) * Math.max(0, aim.width / 2 - 1.2) : offset;
+        // A careful rider does not ride into the closed lane of a roadworks site: its plant is solid
+        const side = env.roadworks ? env.roadworks.pilotLane(s + reach, own) : own;
         const tx = aim.x + Math.cos(aim.heading) * side, tz = aim.z - Math.sin(aim.heading) * side;
         const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
         const most = Math.min(1 / world.radiusFloor, G * capTan() / Math.max(1, v.speed * v.speed));

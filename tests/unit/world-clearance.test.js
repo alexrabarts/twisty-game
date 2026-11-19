@@ -76,30 +76,20 @@ describe('the gate frames', () => {
         if (bad.length) throw new Error(`gate posts in a side road:\n${[...new Set(bad)].slice(0, 20).join('\n')}`);
     }, 60000);
 
-    test('no checkpoint board stands in a side road', async () => {
+    test('nothing of a roadworks site stands in a side road', async () => {
         const { fetchFn } = diskFetch();
         const env = await game.WorldEnvironment.load(new THREE.Scene(), { id: 'tremola', fetchFn, models: null, digest: async () => '0' });
         await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
         const bands = roadBands(env, game.RoadSurface.VERGE_M);
-        const mesh = env.markerMesh;
-        // Every board, not only those near the bike
-        game.Scenery.placeMarkers(mesh, 0, 0, Infinity);
-        mesh.geometry.computeBoundingBox();
-        const box = mesh.geometry.boundingBox;
-        const matrix = new THREE.Matrix4();
         const bad = [];
-        for (let i = 0; i < mesh.count; i++) {
-            mesh.getMatrixAt(i, matrix);
-            // The foot plate, the widest part, as its four corners under the instance's matrix
-            const poly = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]].map(([x, z]) => {
-                const v = new THREE.Vector3(x, 0, z).applyMatrix4(matrix);
-                return [v.x, v.z];
-            });
-            const y = new THREE.Vector3().setFromMatrixPosition(matrix).y;
-            const near = clearanceOf(bands, poly, y, y + box.max.y, g => g.kind === 'ride');
-            if (near.clearance < 0) bad.push(`board ${i} ${near.clearance.toFixed(2)} m past side edge ${near.edgeId}`);
+        for (const e of env.roadworks.elements) {
+            // Its box in plan, under its place and yaw (game.Roadworks.local's frame)
+            const cos = Math.cos(e.yaw), sin = Math.sin(e.yaw);
+            const poly = [[e.box.x0, e.box.z0], [e.box.x1, e.box.z0], [e.box.x1, e.box.z1], [e.box.x0, e.box.z1]].map(([c, a]) => [e.x + c * cos + a * sin, e.z - c * sin + a * cos]);
+            const near = clearanceOf(bands, poly, e.y, e.y + e.box.y1, g => g.kind === 'ride');
+            if (near.clearance < 0) bad.push(`${e.kind} of the site at s ${Math.round(e.site.s)}: ${near.clearance.toFixed(2)} m past side edge ${near.edgeId}`);
         }
-        if (bad.length) throw new Error(`checkpoint boards in a side road:\n${bad.join('\n')}`);
+        if (bad.length) throw new Error(`roadworks in a side road:\n${bad.join('\n')}`);
     }, 60000);
 });
 

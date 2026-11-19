@@ -73,6 +73,10 @@ window.twistyDev = {
                 const corner = Math.min(ap.speed, ap.apFactor * Math.sqrt(g * capTan(s + d) / k));
                 allowed = Math.min(allowed, Math.sqrt(corner * corner + 2 * ap.brake * d));
             }
+            // A roadworks light that is not green ahead (ap.obeyLights, on unless set false): stop at its line
+            const works = game.environment.roadworks;
+            const stop = works && ap.obeyLights !== false ? works.pilotStop(s) : Infinity;
+            if (stop < Infinity) return Math.min(Math.max(allowed, 5), Math.sqrt(2 * ap.brake * Math.max(0, stop - 2.5)));
             return Math.max(allowed, 5);
         };
         input.getSteeringInput = () => {
@@ -80,8 +84,11 @@ window.twistyDev = {
             if (!ap.on || !v) return 0;
             const reach = Math.max(7, Math.min(30, 4 + 0.7 * v.speed));
             const t = route.sample((v.routeS || 0) + reach, aim);
-            const tx = t.x + Math.cos(t.heading) * ap.lane;
-            const tz = t.z - Math.sin(t.heading) * ap.lane;
+            // Through a roadworks site the pilot keeps to the open lane
+            const works = game.environment.roadworks;
+            const lane = works ? works.pilotLane((v.routeS || 0) + reach, ap.lane) : ap.lane;
+            const tx = t.x + Math.cos(t.heading) * lane;
+            const tz = t.z - Math.sin(t.heading) * lane;
             const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
             const most = Math.min(1 / world.radiusFloor, g * capTan(v.routeS || 0) / Math.max(1, v.speed * v.speed));
             const wanted = Math.max(-most, Math.min(most, 2 * Math.sin(err) / reach));
@@ -91,7 +98,8 @@ window.twistyDev = {
             return Math.max(-1, Math.min(1, (v.leanAngle - lean) * ap.worldKp));
         };
         input.getThrottleInput = () => (ap.on && game.vehicle && game.vehicle.speed < target(game.vehicle.routeS || 0) ? 1 : 0);
-        input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > target(game.vehicle.routeS || 0) + 1 ? 1 : 0);
+        // Hard on the brake for a light, as for a bend over its speed
+        input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > target(game.vehicle.routeS || 0) + (game.vehicle.speed < 3 ? 0.2 : 1) ? 1 : 0);
         input.getWheelieInput = () => 0;
     },
 

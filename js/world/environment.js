@@ -11,7 +11,8 @@
 //   startSegment, endSegment, trafficSpeedScale          the span traffic keeps to, and how fast it goes
 //   terrain, terrainGeometry, sections, setPieces,
 //   roadworksZones, roadworkObstacles, jumpRamps,
-//   boulders                                             null / empty: no cones, rockfalls or roadworks are built
+//   boulders                                             null / empty: the legs' cones, rockfalls and roadworks zones are not built
+//   roadworks                                            the checkpoints' roadworks sites (js/world/roadworks.js)
 //   applyLandscapeConfig                                 fog density only
 //   applyWeatherVisuals, resolveRoadSurface,
 //   writeRoadSurface                                     the road's wetness (RoadSurface.setWet)
@@ -222,7 +223,7 @@ class WorldEnvironment {
         this.stationGates = inStage;
     }
 
-    // The things built once: the horizon, the gate frames, the checkpoint boards, the signposts and the landmarks
+    // The things built once: the horizon, the gate frames, the roadworks sites, the signposts and the landmarks
     buildFixtures() {
         if (this.data.far) {
             const horizon = Horizon.build(this.data.far, this.data.farCover, this.data.farSink);
@@ -236,14 +237,11 @@ class WorldEnvironment {
                 return mesh;
             });
         }
-        // The arch stands at the start and the finish only; each checkpoint between has its roadworks boards
+        // The arch stands at the start and the finish only; each checkpoint between is a roadworks site (Roadworks)
         const stations = this.stationGates || [];
         const ends = stations.filter((st, i) => i === 0 || i === stations.length - 1);
-        const marked = stations.slice(1, -1);
-        if (marked.length) {
-            this.markerMesh = this.scenery.markers(this.scenery.markerPoses(marked, this.route));
-            this.group.add(this.markerMesh);
-        }
+        this.roadworks = new Roadworks(this, stations);
+        if (this.roadworks.group) this.group.add(this.roadworks.group);
         const out = { positions: [], shades: [] };
         const post = [0.55, 0.55, 0.58];
         for (const st of ends) {
@@ -1371,7 +1369,7 @@ class WorldEnvironment {
         const footAt = (x, z) => this.landLowAt(x, z, missing);
         const options = { groundAt, footAt, roof: WorldRoute.ROOF_M };
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
-        // detail, so a change of level of detail builds only its ribbons again (drawSideRibbons)
+        // detail, as the ride's do, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
         const draw = (rows, stub, edge, guard, s0 = 0) => {
             const road = new THREE.Group();
@@ -1548,7 +1546,7 @@ class WorldEnvironment {
         this.lastBike = position;
         // A landmark is drawn within LANDMARK_REACH_M: beyond, it is a few pixels and costs the window its triangles
         if (this.landmarkGroup) for (const node of this.landmarkGroup.children) node.visible = Math.hypot(node.position.x - position.x, node.position.z - position.z) < WorldEnvironment.LANDMARK_REACH_M;
-        if (this.markerMesh) Scenery.placeMarkers(this.markerMesh, position.x, position.z);
+        if (this.roadworks) this.roadworks.update(position, Number.isFinite(dtSec) ? dtSec : 0);
         if (Number.isFinite(dtSec) && dtSec > 0) this.streamClockMs += dtSec * 1000;
         this.updateBarriers(s);
         this.streamer.update(position, s);

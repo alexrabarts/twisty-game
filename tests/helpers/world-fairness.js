@@ -156,3 +156,53 @@ export function fairnessWindow(game, env, vehicle, { s0, s1, stepM = 1, acrossM 
     out.worstWidthM = Math.round(out.worstWidthM * 1000) / 1000;
     return out;
 }
+
+// The roadworks sites (js/world/roadworks.js) keep their open lane clear: roadworksWindow(game, env) reads every closed
+// site's elements against the lane both directions ride, from the centre line to the open edge between the end
+// gates. Self-contained, as fairnessWindow, so the GPU probe passes it into the page. Returns
+// {sites, skipped, narrow, inOpen, drawnOff, points}:
+//   - narrow: an open lane under Roadworks.OPEN_MIN_M
+//   - inOpen: a point of an element's drawn box or of its physics zone (the same box: heavy colliders, the things
+//     knocked over, the ridden surfaces' footprints) inside the open lane
+//   - drawnOff: an element whose physics box is not the box its kind is drawn in
+export function roadworksWindow(game, env) {
+    const out = { sites: 0, skipped: [], narrow: [], inOpen: [], drawnOff: [], points: 0 };
+    const works = env.roadworks;
+    if (!works) return out;
+    const { Roadworks } = game;
+    const route = env.route;
+    const geo = Roadworks.geometries();
+    const STEP = 0.1;
+    for (const site of works.sites) {
+        if (!site.closed) { out.skipped.push({ id: site.id, s: Math.round(site.s), reason: site.reason }); continue; }
+        out.sites++;
+        if (!(site.openWidth >= Roadworks.OPEN_MIN_M)) out.narrow.push({ id: site.id, openWidth: site.openWidth });
+        for (const e of site.elements) {
+            const drawn = geo[e.kind].boundingBox;
+            const off = Math.max(Math.abs(drawn.min.x - e.box.x0), Math.abs(drawn.max.x - e.box.x1), Math.abs(drawn.min.z - e.box.z0), Math.abs(drawn.max.z - e.box.z1), Math.abs(drawn.max.y - e.box.y1));
+            if (off > 1e-6) out.drawnOff.push({ id: site.id, kind: e.kind, off });
+            const boxes = [drawn];
+            if (e.board) boxes.push(geo.beaconBoard.boundingBox);
+            if (e.face) boxes.push(geo.signFace.boundingBox);
+            if (Roadworks.PROFILES[e.kind]) {
+                const p = Roadworks.PROFILES[e.kind];
+                boxes.push({ min: { x: -p.lc, z: -p.la }, max: { x: p.lc, z: p.la } });
+            }
+            const cos = Math.cos(e.yaw), sin = Math.sin(e.yaw);
+            const hint = { index: route.indexAt(Math.max(0, e.s)) };
+            for (const b of boxes) {
+                for (let c = b.min.x; c <= b.max.x + 1e-9; c += Math.max(STEP, (b.max.x - b.min.x) / 16)) {
+                    for (let a = b.min.z; a <= b.max.z + 1e-9; a += Math.max(STEP, (b.max.z - b.min.z) / 16)) {
+                        const x = e.x + c * cos + a * sin, z = e.z - c * sin + a * cos;
+                        const at = route.project(x, z, hint, {});
+                        out.points++;
+                        if (at.s < site.s0 || at.s > site.s1) continue;
+                        const into = at.lateral * site.open;
+                        if (into > 0 && into <= at.width / 2 && out.inOpen.length < 40) out.inOpen.push({ id: site.id, kind: e.kind, s: Math.round(at.s * 10) / 10, lateral: Math.round(at.lateral * 100) / 100 });
+                    }
+                }
+            }
+        }
+    }
+    return out;
+}

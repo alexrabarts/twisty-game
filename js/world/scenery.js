@@ -146,14 +146,6 @@ class Scenery {
     static get SIGN_BEFORE_M() { return [15, 20, 25, 30, 12, 35, 40]; }
     // Metres along the ride a gate frame may be drawn from its gate, to keep its posts off a side road
     static get GATE_SHIFT_M() { return 15; }
-    // A checkpoint's roadworks boards: metres past the carriageway edge to a board's centre (on the drawn verge, which
-    // is RoadSurface.VERGE_M wide), and where along the road each board of a side stands from the checkpoint
-    static get MARKER_OUT_M() { return 0.6; }
-    static get MARKER_ALONG_M() { return [0, 1.2]; }
-    // Boards in the one mesh, for every checkpoint of a ride (they are built once, with the gate arches)
-    static get MARKER_CAP() { return 240; }
-    // Metres from the bike within which the boards are drawn (Scenery.placeMarkers)
-    static get MARKER_REACH_M() { return 400; }
     static get BUILDING_REACH_M() { return 450; }
     // Scale a modelled house is drawn at, at most and at least (the models are about 16 m by 11 m)
     static get HOUSE_SCALE_MAX() { return 1.2; }
@@ -746,93 +738,6 @@ class Scenery {
             for (const at of [s + d, s - d]) if (at >= 0 && at <= route.length && clearAt(at)) return at;
         }
         return s;
-    }
-
-    // Where a checkpoint's boards stand: MARKER_ALONG_M along the road from the checkpoint at ride distance s (moved by
-    // gateS off any side road), MARKER_OUT_M past the carriageway edge on both sides, at the verge's drawn height.
-    // [{x, y, z, heading, side}], heading the road's at the board
-    markerPoses(stations, route) {
-        const poses = [];
-        const p = {};
-        const out = q => q.width / 2 + Scenery.MARKER_OUT_M;
-        for (const st of stations) {
-            const at = this.gateS(st.s, out, route);
-            for (const along of Scenery.MARKER_ALONG_M) {
-                route.sample(Math.max(0, Math.min(route.length, at + along)), p);
-                const o = out(p);
-                for (const side of [-1, 1]) {
-                    poses.push({ x: p.x + side * o * Math.cos(p.heading), y: p.y + RoadMesh.LIFT_M, z: p.z - side * o * Math.sin(p.heading), heading: p.heading, side });
-                }
-            }
-        }
-        return poses;
-    }
-
-    // The checkpoint boards, one instanced mesh: a Swiss roadworks marker 2 m tall, a flat board 0.19 m wide in five
-    // bands of 0.38 m (red at the foot and the top), a narrow silver reflector strip on each white band, on a short
-    // stem and a metal foot. Its faces look along the road. Not solid: like the signposts and the trees, the physics
-    // never reads it, and it stands on the verge, clear of the carriageway. Drawn as outward quads, 44 triangles
-    // (boxes for each band would cost 108)
-    markers(poses) {
-        const out = { positions: [], shades: [] };
-        const red = [0.78, 0.07, 0.07], white = [0.94, 0.94, 0.92], silver = [0.70, 0.72, 0.76], metal = [0.38, 0.39, 0.41];
-        // RoadMesh.quad's corners in the order that makes the face look outward (counter-clockwise from outside)
-        const face = (a, b, c, d, color) => RoadMesh.quad(out, d, c, b, a, color);
-        const half = 0.095, depth = 0.0125, band = 0.38, low = 0.1, top = low + 5 * band;
-        // A face across the board (local x) from y0 to y1 at z, facing toward the sign of z
-        const across = (x, y0, y1, z, color) => {
-            const a = [-x, y0, z], b = [x, y0, z], c = [x, y1, z], d = [-x, y1, z];
-            if (z < 0) face(a, b, c, d, color);
-            else face(b, a, d, c, color);
-        };
-        for (let k = 0; k < 5; k++) {
-            const y0 = low + band * k, y1 = y0 + band;
-            for (const z of [-depth, depth]) {
-                across(half, y0, y1, z, k % 2 ? white : red);
-                if (k % 2) across(0.03, y0 + 0.04, y1 - 0.04, z * 1.25, silver);
-            }
-        }
-        // The board's two edges and its top
-        face([-half, low, depth], [-half, low, -depth], [-half, top, -depth], [-half, top, depth], white);
-        face([half, low, -depth], [half, low, depth], [half, top, depth], [half, top, -depth], white);
-        face([-half, top, -depth], [half, top, -depth], [half, top, depth], [-half, top, depth], white);
-        // The stem's four sides and the foot plate's top
-        // (the plate a centimetre over the verge, so the two never fight for depth)
-        const s = 0.02, foot = 0.01;
-        across(s, foot, low, -s, metal);
-        across(s, foot, low, s, metal);
-        face([-s, foot, s], [-s, foot, -s], [-s, low, -s], [-s, low, s], metal);
-        face([s, foot, -s], [s, foot, s], [s, low, s], [s, low, -s], metal);
-        face([-0.15, foot, -0.15], [0.15, foot, -0.15], [0.15, foot, 0.15], [-0.15, foot, 0.15], metal);
-        const kept = poses.slice(0, Scenery.MARKER_CAP);
-        const mesh = new THREE.InstancedMesh(RoadMesh.geometry(out.positions, out.shades), new THREE.MeshLambertMaterial({ vertexColors: true }), Math.max(1, kept.length));
-        mesh.userData.poses = kept;
-        Scenery.placeMarkers(mesh, 0, 0, Infinity);
-        mesh.name = 'world-markers';
-        mesh.frustumCulled = false;
-        mesh.userData.world = 'markers';
-        return mesh;
-    }
-
-    // Draws the boards within `reach` metres (in plan) of (x, z) and no others: a board is a few pixels at 300 m, and the
-    // window has no triangles to spare for the boards of every checkpoint at once. Rewrites the instances only when
-    // the set changes
-    static placeMarkers(mesh, x, z, reach = Scenery.MARKER_REACH_M) {
-        const poses = mesh.userData.poses || [];
-        const near = [];
-        for (let i = 0; i < poses.length; i++) if (Math.hypot(poses[i].x - x, poses[i].z - z) < reach) near.push(i);
-        const key = near.join(',');
-        if (key === mesh.userData.placed) return;
-        mesh.userData.placed = key;
-        const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1);
-        near.forEach((i, k) => {
-            rotation.setFromAxisAngle(up, poses[i].heading);
-            position.set(poses[i].x, poses[i].y, poses[i].z);
-            matrix.compose(position, rotation, scale);
-            mesh.setMatrixAt(k, matrix);
-        });
-        mesh.count = near.length;
-        mesh.instanceMatrix.needsUpdate = true;
     }
 
     // The yellow pass signposts, one instanced mesh: [{x, y, z, heading}] where heading is the way the rider arrives

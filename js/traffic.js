@@ -45,6 +45,9 @@ function laneSpeed(route, vehicle, speed, want, drive, dt) {
         before = look.curvature;
         u += vehicle.direction * LANE_LOOK_STEP_M / Math.max(look.metres, 0.05);
     }
+    // A roadworks light or the vehicle ahead in a queue (Traffic.holdForRoadworks): stop within the metres left
+    const hold = vehicle.stopM;
+    if (hold !== undefined && hold < Infinity) cap = Math.min(cap, Math.sqrt(2 * drive.plan * Math.max(0, hold - 0.3)));
     const target = Math.min(want, cap);
     // A vehicle just placed (spawned, or moved by a restart) starts at a speed its place allows
     if (!vehicle.laneMoving) {
@@ -52,6 +55,23 @@ function laneSpeed(route, vehicle, speed, want, drive, dt) {
         return Math.min(speed, target);
     }
     return Math.max(speed - drive.brake * dt, Math.min(speed + drive.accel * dt, target));
+}
+
+// The metres of its lane line a world vehicle moves this frame: its speed's, but never past the place it must stand
+// (stopM, in metres of ride), where it stops. A lane is longer or shorter than the ride beside it (a bend, the blend
+// into the open lane), so the hold is turned into the lane's own metres first
+function laneMetres(route, vehicle, dt) {
+    const want = vehicle.currentSpeed * dt;
+    const hold = vehicle.stopM;
+    if (hold === undefined || hold === Infinity) return want;
+    const u = vehicle.currentSegment + vehicle.segmentProgress;
+    const i = Math.max(0, Math.min(route.points.length - 2, Math.floor(u)));
+    const span = route.points[i + 1].s - route.points[i].s;
+    const lane = route.laneCurve(u, vehicle.direction, 0, 0, vehicle.holdSample || (vehicle.holdSample = {}));
+    const most = Math.max(0, hold) * (span > 0 ? Math.min(1, lane.metres / span) : 1);
+    if (!(want > most)) return want;
+    vehicle.currentSpeed = dt > 0 ? most / dt : 0;
+    return most;
 }
 
 class Traffic {
@@ -70,6 +90,58 @@ class Traffic {
 
         this.initializeCars();
         this.initializeMotorcycles();
+        this.clearOfRoadworks();
+    }
+
+    // The world vehicles as the roadworks read them: {vehicle, s, direction, half}
+    worldVehicles() {
+        const route = this.environment.route;
+        const list = [];
+        for (const car of this.cars) list.push({ vehicle: car, s: route.fromUnits(car.currentSegment + car.segmentProgress), direction: car.direction, half: Roadworks.CAR_HALF_M, brake: LANE_DRIVE.car.brake });
+        for (const bike of this.motorcycles) list.push({ vehicle: bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress), direction: bike.direction, half: Roadworks.BIKE_HALF_M, brake: LANE_DRIVE.bike.brake });
+        return list;
+    }
+
+    // A world's roadworks lights hold traffic at their stop lines, and a vehicle keeps QUEUE_GAP_M behind the one ahead
+    // going its way: each vehicle's stopM is the metres it may still move this frame (Infinity when free). The lights
+    // learn what is in each single lane. A leg has no roadworks lights and nothing changes
+    holdForRoadworks() {
+        const works = this.environment.roadworks;
+        if (!works || !this.environment.route.laneCurve) return;
+        const list = this.worldVehicles();
+        // The rider near a site is one of the queue and one of the lane's vehicles (Roadworks.riderEntry)
+        const rider = works.riderEntry ? works.riderEntry() : null;
+        const queue = rider ? list.concat(rider) : list;
+        works.occupy(queue);
+        for (const v of list) {
+            let hold = works.stopDistance(v.vehicle, v.s, v.direction, v.half, v.vehicle.currentSpeed || 0, v.brake * 0.9);
+            for (const o of queue) {
+                if (o === v || o.direction !== v.direction) continue;
+                const ahead = (o.s - v.s) * v.direction;
+                if (ahead <= 0) continue;
+                hold = Math.min(hold, ahead - v.half - o.half - Roadworks.QUEUE_GAP_M);
+            }
+            v.vehicle.stopM = hold;
+            // In a single lane the queue's own gap keeps the vehicles apart: the spacing rule's half speed
+            // (temporarySlowdown) made a queue clear a long lane at walking pace, and the far light stayed red for it
+            v.vehicle.inSingleLane = works.closed.some(site => v.s + v.half > site.stopIn && v.s - v.half < site.stopOut);
+        }
+    }
+
+    // No world vehicle starts inside a single lane: one there moves back before its entry, where its light holds it
+    clearOfRoadworks() {
+        const works = this.environment.roadworks;
+        if (!works || !this.environment.route.laneCurve) return;
+        const route = this.environment.route;
+        for (const v of this.worldVehicles()) {
+            const s = works.clearOf(v.s, v.direction, v.half);
+            if (s === v.s) continue;
+            const u = route.toUnits(Math.max(0, Math.min(route.length, s)));
+            v.vehicle.currentSegment = Math.floor(u);
+            v.vehicle.segmentProgress = u - Math.floor(u);
+            v.vehicle.laneMoving = false;
+            v.vehicle.updatePosition();
+        }
     }
     
     initializeCars() {
@@ -303,6 +375,7 @@ class Traffic {
         // Cars light their lamps when the rider does: the game sets lightLevel to its headlight strength (on in the dark,
         // and in a world's rain or snow by day)
         const lamps = Traffic.headlightsOn(this.lightLevel);
+        this.holdForRoadworks();
 
         // Update all cars
         this.cars.forEach(car => {
@@ -387,6 +460,7 @@ class Traffic {
             car.laneMoving = false;
             car.updatePosition();
         });
+        this.clearOfRoadworks();
     }
 
     // The rider's headlight threshold (Game.writeTime switches it on above 0)
@@ -401,6 +475,7 @@ class Traffic {
         this.motorcycles = [];
         this.initializeCars();
         this.initializeMotorcycles();
+        this.clearOfRoadworks();
     }
 }
 
@@ -921,7 +996,7 @@ class Car {
         let segmentsToMove;
         if (route.laneCurve) {
             this.currentSpeed = laneSpeed(route, this, this.currentSpeed, this.baseSpeed, LANE_DRIVE.car, deltaTime);
-            segmentsToMove = laneStep(route, this, this.currentSpeed * deltaTime);
+            segmentsToMove = laneStep(route, this, laneMetres(route, this, deltaTime));
         } else {
             segmentsToMove = this.currentSpeed * deltaTime / segmentLength;
         }
@@ -1003,7 +1078,10 @@ class Car {
     }
 
     temporarySlowdown() {
-        this.currentSpeed = this.baseSpeed * 0.5;
+        if (this.inSingleLane) return;
+        // Never a speed-up: a car that brakes for a light or a queue is already slower than this, and a car put back to
+        // half its speed each frame drove on to the stop line and stood with its nose on it
+        this.currentSpeed = Math.min(this.currentSpeed, this.baseSpeed * 0.5);
     }
     
     checkCollision(playerPosition) {
@@ -1588,7 +1666,7 @@ class AIMotorcycle {
         const route = this.environment.route;
         const world = !!route.laneCurve;
         const segmentLength = route.unitM;
-        const distanceToMove = this.currentSpeed * deltaTime;
+        const distanceToMove = world ? laneMetres(route, this, deltaTime) : this.currentSpeed * deltaTime;
         const segmentsToMove = world ? laneStep(route, this, distanceToMove) : distanceToMove / segmentLength;
         
         if (!this.wheelRotation) this.wheelRotation = 0;
@@ -1664,7 +1742,9 @@ class AIMotorcycle {
                 this.currentSpeed = Math.min(this.baseSpeed * 1.28, 54);
             } else if (distanceToPlayer < 10) {
                 this.currentSpeed = Math.min(this.baseSpeed * 1.35, 56);
-                this.overtaking = true;
+                // Never a pass that would swing across a roadworks single lane
+                const works = world && this.environment.roadworks;
+                if (!works || !works.siteAhead(route.fromUnits(myProgress), this.direction, AIMotorcycle.PASS_M + 20)) this.overtaking = true;
             } else {
                 this.currentSpeed = this.baseSpeed;
                 this.packLateralOffset = 0;

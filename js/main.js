@@ -3459,7 +3459,10 @@ class Game {
 
         // Check for checkpoint passes and jump scoring
         if (!this.vehicle.crashed && !this.finished) {
-            if (this.environment.isWorld) this.updateWorldRun(deltaTime);
+            if (this.environment.isWorld) {
+                this.updateWorldRun(deltaTime);
+                this.updateRoadworks();
+            }
             this.checkCheckpoints();
             this.checkJumpScoring();
             this.checkSpeedStreak(deltaTime);
@@ -3868,6 +3871,19 @@ class Game {
         }
     }
 
+    // A red light run at a roadworks site costs style, and says so (Roadworks.RED_RUN_STYLE): the oncoming traffic in
+    // the single lane is the rest of the risk
+    updateRoadworks() {
+        const works = this.environment.roadworks;
+        if (!works) return;
+        for (const event of works.takeEvents()) {
+            if (event.kind !== 'red') continue;
+            const cost = Math.min(Roadworks.RED_RUN_STYLE, this.score);
+            this.addScore(-cost);
+            showCallout(cost > 0 ? `Ran a red light ${HudRules.number(-cost, { sign: true })} style` : 'Ran a red light', 'bad', 2000);
+        }
+    }
+
     checkSpeedStreak(deltaTime) {
         if (this.vehicle.speed >= this.highSpeedThreshold) {
             this.speedStreakTime += deltaTime;
@@ -4086,6 +4102,7 @@ class Game {
         if (this.leaderboardService) this.leaderboardService.recordRestart();
 
         environment.guide.reset();
+        if (environment.roadworks) environment.roadworks.reset();
         worldRun.noteRestart();
         worldRun.restartAt(s);
         this.worldCamera.reset(point.heading);

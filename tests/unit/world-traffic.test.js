@@ -27,7 +27,7 @@ import { findHairpins } from '../../tools/world/verify.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const log = [];
 const game = loadGame(undefined, log);
-const { THREE, Route, WorldEnvironment, Traffic } = game;
+const { THREE, Route, WorldEnvironment, Traffic, Roadworks } = game;
 
 // A vehicle's centre is on its own half of the road by at least a quarter of the width less this (the smoothed lane
 // line keeps inside each corner of the drawn lane, toward the centre line on the outside of a bend)
@@ -82,6 +82,16 @@ function ownSide(route, vehicle, hint) {
     return { own: ownRight(vehicle.direction) * p.lateral, width: p.width, s: p.s, index: p.index };
 }
 
+// Whether a vehicle is where it belongs across the road: on its own right half; but in the single lane of a roadworks
+// site both ways drive the open lane, so there it is on the open half by the same measure, and in the blend in from
+// each stop line it is on its way from one to the other (tests/unit/world-roadworks.test.js holds that line)
+function onItsSide(env, vehicle, side) {
+    const site = env.roadworks ? env.roadworks.siteAt(side.s) : null;
+    if (!site) return side.own >= side.width / 4 - SIDE_MARGIN_M;
+    if (Roadworks.laneShare(site, side.s) < 1) return true;
+    return ownRight(vehicle.direction) * side.own * site.open >= site.half / 2 - SIDE_MARGIN_M;
+}
+
 describe('sides: one convention', () => {
     test('+lateral is the left of the chase view, a growing heading turns left, and traffic keeps right', () => {
         const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 1000);
@@ -127,7 +137,7 @@ describe('the Tremola slice: traffic keeps right', () => {
                 putAt(v, route, s);
                 const side = ownSide(route, v, { index: Math.max(0, Math.floor(route.toUnits(s)) - 2) });
                 checked++;
-                if (side.own < side.width / 4 - SIDE_MARGIN_M) bad.push({ kind, s: Math.round(s), own: Math.round(side.own * 100) / 100, want: side.width / 4 - SIDE_MARGIN_M });
+                if (!onItsSide(env, v, side)) bad.push({ kind, s: Math.round(s), own: Math.round(side.own * 100) / 100, want: side.width / 4 - SIDE_MARGIN_M });
             }
         }
         expect(checked).toBeGreaterThan(7000);
@@ -289,7 +299,7 @@ describe('the Tremola slice: traffic drives every hairpin smoothly, on its side 
                         if (drawn) results.worst.wheelOverM = Math.max(results.worst.wheelOverM, over);
                         if (over > WHEEL_SLACK_M) note('wheel', { ...at, overM: drawn ? Math.round(over * 100) / 100 : 'no ribbon' });
                     }
-                    if (!v.overtaking && side.own < side.width / 4 - SIDE_MARGIN_M) note('side', { ...at, own: Math.round(side.own * 100) / 100, width: side.width });
+                    if (!v.overtaking && !onItsSide(env, v, side)) note('side', { ...at, own: Math.round(side.own * 100) / 100, width: side.width });
                     if (type.direction === 1 ? side.s >= end : side.s <= end) break;
                 }
                 g.parent && g.parent.remove(g);

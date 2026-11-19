@@ -246,11 +246,16 @@ class WorldRoute extends PolylineRoute {
         const d = [-m * m / 2, (3 * t2 - 4 * t) / 2, (-3 * t2 + 2 * t + 1) / 2, t2 / 2];
         const dd = [m, 3 * t - 2, 1 - 3 * t, t];
         const side = Route.keepRight(direction);
+        // Through a roadworks site both directions drive the open lane (Roadworks.laneShift): a row's weight blends its
+        // own lane to that lane's middle
+        const weight = this.laneWeight, target = this.laneTarget;
         let x = 0, z = 0, dx = 0, dz = 0, ddx = 0, ddz = 0, nx = 0, nz = 0, ndx = 0, ndz = 0, lane = 0;
         for (let k = 0; k < 4; k++) {
-            const p = pts[Math.max(0, Math.min(last, i - 1 + k))];
+            const row = Math.max(0, Math.min(last, i - 1 + k));
+            const p = pts[row];
             const cx = Math.cos(p.heading), cz = -Math.sin(p.heading);
-            const l = side * WorldRoute.laneFor(p.width);
+            let l = side * WorldRoute.laneFor(p.width);
+            if (weight && weight[row] > 0) l += (target[row] - l) * weight[row];
             const qx = p.x + l * cx, qz = p.z + l * cz;
             x += w[k] * qx; z += w[k] * qz;
             dx += d[k] * qx; dz += d[k] * qz;

@@ -42,7 +42,7 @@ import { extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
-import { fairnessWindow } from '../tests/helpers/world-fairness.js';
+import { fairnessWindow, roadworksWindow } from '../tests/helpers/world-fairness.js';
 import { wallWindow, wallRuns, WALL_LIMITS } from '../tests/helpers/world-walls.js';
 import { junctionWindow, junctionReport, JUNCTION_LIMITS } from '../tests/helpers/world-junctions.js';
 
@@ -4382,7 +4382,8 @@ const WORLD = {
 // just under it, against every scenery mesh: trees, boulders, houses, landmarks, signposts, barriers and the gate
 // frames, instanced or not. Where a mesh's box reaches into a cell, the cell is cast on again every CLEAR_FINE_M, so a
 // pole or a board a few centimetres thick is not missed between rays. A hit is a failure, except a barrier over the
-// side road it closes (it is there to close it, never on the ride); a station banner spans the ride above HEADROOM_M,
+// side road it closes (it is there to close it, never on the ride) and a roadworks site's works in its own closed lane
+// (js/world/roadworks.js: the open lane beside it must stay clear); a station banner spans the ride above HEADROOM_M,
 // so no ray reaches it. --out <dir> saves a view of the worst offenders.
 //   node tools/terrain-check.mjs world-clearance --world tremola --gpu [--every 300] [--out <dir> --tag T --shots N]
 const CLEAR_HEADROOM_M = 4.5;
@@ -4408,9 +4409,15 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
         if (n.startsWith('landmark:')) return 'landmark';
         if (n === 'world-signposts') return 'signpost';
         if (n === 'world-barriers') return 'barrier';
-        // The checkpoint boards stand where the arches stood: cast on with the same box round each station
-        if (n === 'world-gates' || n === 'world-markers') return 'gate';
+        if (n === 'world-gates') return 'gate';
+        // The roadworks at the checkpoints: their works stand in the closed lane, and nowhere else on a road
+        if (n.startsWith('roadworks:')) return 'roadworks';
         return null;
+    };
+    // Whether a ride cell at (s, lat) lies in a roadworks site's closed half, between its first and last beacon
+    const closedLane = (s, lat) => {
+        for (const site of (env.roadworks && env.roadworks.closed) || []) if (s >= site.sa - 1 && s <= site.sd + 1 && lat * site.side >= 0) return true;
+        return false;
     };
     // The barrier instances, in the order placeBarriers set them (env.activeBarriers), with the side roads each closes
     const closes = (b) => {
@@ -4491,6 +4498,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
                 const t = things[ref];
                 if (t.x1 < x - h || t.x0 > x + h || t.z1 < z - h || t.z0 > z + h || t.y0 > y + headroom || t.y1 < y - 0.3) continue;
                 if (t.type === 'barrier' && road.edgeId !== null && t.barrier && closes(t.barrier).has(road.edgeId)) continue;
+                if (t.type === 'roadworks' && road.edgeId === null && closedLane(road.s, road.lat)) continue;
                 probe.geometry = t.mesh.geometry;
                 probe.material = t.mesh.material;
                 probe.matrixWorld.copy(t.world);
@@ -4518,7 +4526,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
         for (let s = Math.max(0, s0 - every / 2); s < Math.min(route.length, s0 + every / 2); s += step) {
             route.sample(s, sample);
             const half = sample.width / 2;
-            for (let o = -half; o <= half + 1e-9; o += step) cast(sample.x + o * Math.cos(sample.heading), sample.z - o * Math.sin(sample.heading), sample.y, { edgeId: null, s });
+            for (let o = -half; o <= half + 1e-9; o += step) cast(sample.x + o * Math.cos(sample.heading), sample.z - o * Math.sin(sample.heading), sample.y, { edgeId: null, s, lat: o });
         }
         // The side roads drawn from here (their chunk's ribbons are built), each once
         for (const edge of env.data.edges) {
@@ -4580,9 +4588,12 @@ WORLD['world-clearance'] = async (page) => {
 // Physics can only kill the rider where the rider can see why (tests/helpers/world-fairness.js, run in the page on
 // the meshes it draws): the whole ride every metre across the drawn road and verge, then the world pilot through
 // every hairpin at 5 and 7 m/s on the centre line and 2.5 m either side, counting crashes and restarts. --every sets the window streamed in at a time.
+// Then every roadworks site: its open lane clear of every drawn thing and physics zone (roadworksWindow), and the pilot
+// through it in the open lane at 8 and 14 m/s, stopping at its light.
 WORLD_PROBES.push('world-fairness');
-WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, placeSource, hairpinSource, every) => {
+WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, placeSource, hairpinSource, every, worksSource) => {
     const fairness = new Function(`return (${fairSource})`)();
+    const roadworks = new Function(`return (${worksSource})`)();
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment;
     const route = env.route;
@@ -4611,6 +4622,10 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
     game.worldLinger = false;
     const hairpins = new Function(`return (${hairpinSource})`)()(route);
     let rides = 0;
+    // The hairpin rides judge the road and the physics, on the centre line and to either side of it, the oncoming lane
+    // too: with the traffic on the road a ride there met a car now and then. The traffic is judged in the site rides
+    const traffic = game.traffic;
+    game.traffic = null;
     try {
         // The centre line and either side of it: off the centre, a sample's step in the old projection was a restart
         for (const [cruise, lane] of [[5, 0], [7, 0], [5, -2.5], [7, 2.5]]) {
@@ -4634,9 +4649,41 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
     } finally {
         console.log = log;
         game.restartFromCheckpoint = restart;
+        game.traffic = traffic;
     }
-    return { every, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts };
-}, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100));
+    // The roadworks: the open lanes, then the pilot through each site in its open lane, waiting at a red
+    const works = roadworks({ Roadworks }, env);
+    const siteCrashes = [];
+    let siteRides = 0;
+    console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) siteCrashes.push({ s: Math.round(v.projection.s ?? v.routeS), line: args.join(' ') }); log.apply(console, args); };
+    game.restartFromCheckpoint = (reason) => { siteCrashes.push({ s: Math.round(v.projection.s ?? v.routeS), reason }); return restart(reason); };
+    try {
+        for (const cruise of [8, 14]) {
+            for (const site of (env.roadworks ? env.roadworks.closed : [])) {
+                await placeAt(Math.max(env.startS, site.s0 - 60));
+                v.speed = cruise;
+                twistyDev.autopilot({ speed: cruise, lane: 0 });
+                const before = siteCrashes.length;
+                let ticks = 0;
+                // (time for a whole cycle of its lights at the stop line, then for the site's length at half the cruise)
+                const most = 60 * (60 + site.cycleS * 1.5 + (site.length + 70) / (cruise / 2));
+                while (!v.crashed && siteCrashes.length === before && (v.projection.s ?? v.routeS) < site.s1 + 10 && ticks < most) {
+                    twistyDev.step(1);
+                    ticks++;
+                    if (ticks % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                siteRides++;
+                if (siteCrashes.length > before) siteCrashes[siteCrashes.length - 1].site = { id: site.id, cruise };
+                else if ((v.projection.s ?? v.routeS) < site.s1 + 10) siteCrashes.push({ site: { id: site.id, cruise }, stuck: Math.round(v.projection.s ?? v.routeS) });
+                if (v.crashed) v.reset();
+            }
+        }
+    } finally {
+        console.log = log;
+        game.restartFromCheckpoint = restart;
+    }
+    return { every, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
+}, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100), roadworksWindow.toString());
 
 function fairnessChecks(results, failures) {
     const fair = results['world-fairness'];
@@ -4648,6 +4695,12 @@ function fairnessChecks(results, failures) {
     if (!(fair.hairpins >= 20 && fair.rides === fair.hairpins * 4)) failures.push(`world-fairness: ${fair.rides} rides over ${fair.hairpins} hairpins`);
     if (fair.crashes.length) failures.push(`world-fairness: ${fair.crashes.length} crashes in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.crashes.slice(0, 10))}`);
     if (fair.restarts.length) failures.push(`world-fairness: ${fair.restarts.length} restarts in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.restarts.slice(0, 10))}`);
+    const works = fair.works || {};
+    if (!(works.sites > 0) || fair.siteRides !== works.sites * 2) failures.push(`world-fairness: ${fair.siteRides} rides through ${works.sites} roadworks sites`);
+    if ((works.narrow || []).length) failures.push(`world-fairness: open lanes under 3.2 m: ${JSON.stringify(works.narrow)}`);
+    if ((works.inOpen || []).length) failures.push(`world-fairness: roadworks in an open lane: ${JSON.stringify(works.inOpen.slice(0, 10))}`);
+    if ((works.drawnOff || []).length) failures.push(`world-fairness: roadworks whose physics box is not the drawn one: ${JSON.stringify(works.drawnOff.slice(0, 10))}`);
+    if ((fair.siteCrashes || []).length) failures.push(`world-fairness: ${fair.siteCrashes.length} rides ended in a roadworks site's open lane: ${JSON.stringify(fair.siteCrashes.slice(0, 10))}`);
 }
 
 function clearanceChecks(results, failures) {

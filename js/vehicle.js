@@ -2436,7 +2436,10 @@ class Vehicle {
         const postElevationZ = this.position.z;
 
         // Wall collision already checked at the beginning of update()
-        
+
+        // A world's roadworks: the ramps and heaps ridden, the things knocked or hit, a red light run (Roadworks.ride)
+        if (this.worldPhysics && this.environment && this.environment.roadworks) this.environment.roadworks.ride(this, deltaTime);
+
         // Update 3D model
         this.updateMesh();
     }
@@ -3354,8 +3357,9 @@ class Vehicle {
         } else {
             // Normal lean
             // The world pitches the bike to the road; a leg stays level
-            this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) : 0;
-            this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) : this.leanAngle;
+            // On a roadworks ramp the bike pitches to its slope; a knocked beacon or cone leaves a wobble (Roadworks.ride)
+            this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) - (this.roadworksSurface ? this.rampPitch || 0 : 0) : 0;
+            this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) + (this.roadworksWobble || 0) : this.leanAngle;
             this.rider.rotation.z = this.leanAngle * 0.2; // Rider leans subtly
 
             // Restore normal bike color
