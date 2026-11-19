@@ -8,6 +8,10 @@
 //   - in a hairpin the boom pulls back and up and the look target moves out round the bend
 //   - the land shortens the boom, and the camera keeps clear of the ground
 //   - the look target gives way to the bike, so the bike never leaves the screen (tools/terrain-check.mjs world-frustum)
+//   - under a road that passes overhead (a bridge, a viaduct, another leg on its deck) the boom comes down and the
+//     camera goes through under the deck with the bike, never over it
+//   - the legs' carving swing: the camera moves sideways with the lean and its look point leads into the corner,
+//     both lagged, in the boom's frame (not the bike's yaw); the land scales the sideways shift down (swingShare)
 //
 // Everything the camera reads from the route is smooth: the Hermite centreline (WorldRoute.curveAt) and the
 // smoothed curvature profile (WorldRoute.smoothCurvatureAt), at the bike's smooth road position (Vehicle.roadFrame).
@@ -46,6 +50,10 @@ class WorldCamera {
             headM: 1.2, clearM: 0.6, hardClearM: 0.2, fractionIn: 10, fractionOut: 2.5, foreseeS: 0.3,
             // The camera stays floorM over the land, eased in over floorBandM
             floorM: 1.0, floorBandM: 0.4,
+            // Under a road overhead the boom stays roofClearM under its deck (the boom's height comes down at roofIn
+            // at the most and goes back up at roofOut), and the camera never comes within roofHardM of it. roofPoints points of
+            // the boom are read, now and where it will be roofAheadS on
+            roofClearM: 0.7, roofHardM: 0.25, roofIn: 10, roofOut: 2.5, roofPoints: 8, roofAheadS: 0.8,
             // The hard limit tests the boom at marchPoints points and narrows the first hit down by marchRefine halvings.
             // The soft share tests it at softPoints points: a point that the land comes within clearM + softBandM of
             // (at the camera end; less toward the head, which rides 1.2 m over the road) starts to draw the boom in,
@@ -59,7 +67,12 @@ class WorldCamera {
             curvatureSpanM: 8, turnStepM: 2.5,
             // What a target's own rate may carry into its spring (a restart is a jump, not a speed), and the rate of the
             // spring that rate is smoothed by
-            maxSpeedMs: 80, maxYawRate: 8, followRate: 8
+            maxSpeedMs: 80, maxYawRate: 8, followRate: 8,
+            // The sideways swing is cut to the largest of swingSteps whose boom the land shortens no more than
+            // swingSlack below the boom with no swing, and that brings the road aheadM on no nearer the side of the view
+            // than the boom with no swing does (or than roadKeep, 1 being the side); that share moves at fractionIn down
+            // and swingOut up
+            swingSteps: [1, 0.5, 0.25, 0], swingSlack: 0.01, swingOut: 1.5, aheadM: 30, roadKeep: 0.8
         }));
     }
 
@@ -68,15 +81,18 @@ class WorldCamera {
     // Share of the way the onboard view's look target moves to the wanted one each frame at 60 Hz
     static get LOOK_FOLLOW() { return 0.6; }
 
-    constructor(route, ground) {
+    // `overhead(x, z, y)`: the underside of the lowest road over (x, z) well above y, Infinity with open sky
+    // (WorldEnvironment.overheadY); with none given the camera knows no bridge
+    constructor(route, ground, overhead = null) {
         this.route = route;
         this.ground = ground;
+        this.overhead = overhead;
         this.land = {};
         this.hint = { start: 0, end: 0 };
         this.curve = {};
         this.sampled = {};
         this.springs = {};
-        for (const name of ['pull', 'yaw', 'distance', 'height', 'ax', 'ay', 'az', 'lx', 'ly', 'lz', 'fraction', 'keep', 'fov']) this.springs[name] = { x: 0, v: 0, t: 0, rate: null };
+        for (const name of ['pull', 'yaw', 'distance', 'height', 'ax', 'ay', 'az', 'lx', 'ly', 'lz', 'fraction', 'keep', 'fov', 'swingShare', 'roof']) this.springs[name] = { x: 0, v: 0, t: 0, rate: null };
         this.position = { x: 0, y: 0, z: 0 };
         this.anchor = { x: 0, y: 0, z: 0 };
         this.look = { x: 0, y: 0, z: 0 };
@@ -86,6 +102,7 @@ class WorldCamera {
         this.behind = { x: 0, y: 0, z: 0 };
         this.later = { x: 0, y: 0, z: 0 };
         this.aheadWant = { x: 0, y: 0, z: 0 };
+        this.bare = { x: 0, y: 0, z: 0 };
         this.reset(0);
     }
 
@@ -97,6 +114,14 @@ class WorldCamera {
         this.fraction = 1;
         this.fov = 75;
         this.index = 0;
+        this.swing = 0;
+        this.lookSwing = 0;
+        this.swingShare = 1;
+    }
+
+    // The share of the way a legs-style per-frame lerp of `factor` (tuned at 60 Hz) moves in `dt`
+    static lerpShare(factor, dt) {
+        return 1 - Math.pow(1 - Math.max(0, Math.min(1, factor)), dt * 60);
     }
 
     static wrap(angle) {
@@ -254,6 +279,24 @@ class WorldCamera {
         return share;
     }
 
+    // The most the boom's end may stand over `anchorY` to pass roofClearM under every road over the boom from `head`
+    // to `end` (this.overhead), the bike's own place included: the boom comes down as soon as the deck is over the
+    // bike, a boom's length before it reaches the camera. WorldCamera.OPEN_M with nothing overhead
+    roofHeight(head, end, anchorY, roadY) {
+        const t = WorldCamera.TUNING;
+        let most = WorldCamera.OPEN_M;
+        if (!this.overhead) return most;
+        for (let i = 0; i <= t.roofPoints; i++) {
+            const at = i / t.roofPoints;
+            const under = this.overhead(head.x + (end.x - head.x) * at, head.z + (end.z - head.z) * at, roadY);
+            if (under !== Infinity) most = Math.min(most, under - t.roofClearM - anchorY);
+        }
+        return most;
+    }
+
+    // The boom's height with open sky, as the roof spring reads it (well over any boom)
+    static get OPEN_M() { return 40; }
+
     // The least y at or over `floor` that eases to `y` once y is floorBandM over it: a smooth max, so the camera
     // rises over a crest without a kink
     static softFloor(y, floor) {
@@ -264,7 +307,10 @@ class WorldCamera {
 
     // One frame of the chase camera. `bike`: {x, y, z} the bike's position, s its smooth road position, index its
     // route sample, speed (m/s), offset {x, y, z} the view mode's chase offset (behind is -z), fov the mode's wanted
-    // FOV. Fills and returns this.position; this.fov is the FOV to draw with. Call aim() after it for the look target.
+    // FOV. `swing` (optional) is the legs' carving swing: {x, look} the sideways shift of the camera and of the look
+    // point (m, +x of the boom), and {follow, lookFollow} the per-frame lerps (at 60 Hz) they trail by; aspect the
+    // view's (for the road-ahead test of the swing, 16:9 when not given). Fills and
+    // returns this.position; this.fov is the FOV to draw with. Call aim() after it for the look target.
     update(bike, dt) {
         const t = WorldCamera.TUNING;
         const sp = this.springs;
@@ -312,25 +358,117 @@ class WorldCamera {
         anchor.y = sp.ay.x;
         anchor.z = sp.az.x;
 
-        // Where the boom would put the camera, and where it will be foreseeS on
-        const boom = (yaw, from, out) => {
+        // The carving swing, trailing as the legs' camera does: the camera's sideways place (the bike's offset across
+        // the road plus the shift) and the look point's lead into the corner, each a per-frame lerp of the legs' own
+        // factor. Across the road, not across the anchor, so the hairpin's own turn adds no trail.
+        const swing = bike.swing;
+        const road = this.centre(s, this.road || (this.road = {}));
+        const across = (anchor.x - road.x) * Math.cos(road.heading) - (anchor.z - road.z) * Math.sin(road.heading);
+        const swingWant = swing ? swing.x : 0, lookSwingWant = swing ? swing.look : 0;
+        if (fresh || !swing) {
+            this.trail = across + swingWant;
+            this.lookSwing = lookSwingWant;
+        } else {
+            this.trail += (across + swingWant - this.trail) * WorldCamera.lerpShare(swing.follow, step);
+            this.lookSwing += (lookSwingWant - this.lookSwing) * WorldCamera.lerpShare(swing.lookFollow, step);
+        }
+        this.swing = this.trail - across;
+
+        // Where the boom would put the camera, `shift` metres to its side, and where it will be foreseeS on
+        const boom = (yaw, from, shift, out) => {
             const sin = Math.sin(yaw), cos = Math.cos(yaw);
-            const ox = bike.offset.x, oz = -sp.distance.x;
+            const ox = bike.offset.x + shift, oz = -sp.distance.x;
             out.x = from.x + ox * cos + oz * sin;
-            out.y = from.y + sp.height.x;
+            // (under a road overhead no higher than the roof allows: this.roof)
+            out.y = from.y + Math.min(sp.height.x, this.roof === undefined ? Infinity : this.roof);
             out.z = from.z - ox * sin + oz * cos;
             return out;
         };
-        const want = boom(this.yaw, anchor, this.want);
         const head = this.head;
         head.x = anchor.x;
         head.y = anchor.y + t.headM;
         head.z = anchor.z;
+
+        // The look target's offset from the anchor, toward the road ahead
+        const ahead = this.lookTarget(s, bike.speed, bike.lift, this.ahead);
+        const lx = ahead.x - anchor.x, ly = ahead.y - anchor.y, lz = ahead.z - anchor.z;
+        if (fresh) {
+            WorldCamera.settle(sp.lx, lx);
+            WorldCamera.settle(sp.ly, ly);
+            WorldCamera.settle(sp.lz, lz);
+            WorldCamera.settle(sp.keep, 0);
+        } else {
+            WorldCamera.spring(sp.lx, lx, t.lookRate, step, true, t.maxSpeedMs);
+            WorldCamera.spring(sp.ly, ly, t.lookRate, step, true, t.maxSpeedMs);
+            WorldCamera.spring(sp.lz, lz, t.lookRate, step, true, t.maxSpeedMs);
+        }
+
+        // The swing gives way to the land and to the road ahead: the largest step of it whose boom the land shortens
+        // no more than the boom with no swing, and from whose end the road aheadM on is no nearer the side of the view
+        // than from the boom with no swing (or within roadKeep of the middle), eased. The boom tests below then hold
+        // the camera clear of the land whatever the swing is, and aim() keeps the bike in view.
+        let shareWant = 1;
+        if (Math.abs(this.swing) > 1e-3) {
+            // Where aim() will look: the road ahead, given way toward the bike as much as on the last frame
+            const look = this.lookFrom || (this.lookFrom = {});
+            const keep = fresh ? 0 : this.keep || 0;
+            look.x = anchor.x + (sp.lx.x + this.lookSwing * Math.cos(this.yaw)) * (1 - keep);
+            look.z = anchor.z + (sp.lz.x - this.lookSwing * Math.sin(this.yaw)) * (1 - keep);
+            const road = this.centre(s + t.aheadM, this.roadAhead || (this.roadAhead = {}));
+            const half = Math.tan(sp.fov.x * Math.PI / 360) * (bike.aspect || 16 / 9);
+            const reach = fresh ? 1 : sp.fraction.x;
+            // How far across the view the road ahead is, seen from the boom's end (1 is the side; behind is Infinity)
+            const across = end => {
+                const x = head.x + (end.x - head.x) * reach, z = head.z + (end.z - head.z) * reach;
+                const ax = look.x - x, az = look.z - z, bx = road.x - x, bz = road.z - z;
+                const angle = Math.atan2(ax * bz - az * bx, ax * bx + az * bz);
+                return Math.abs(angle) >= Math.PI / 2 ? Infinity : Math.abs(Math.tan(angle)) / half;
+            };
+            const bareEnd = boom(this.yaw, anchor, 0, this.bare);
+            const bare = this.softShare(head, bareEnd, bike.index) - t.swingSlack;
+            const seen = Math.max(t.roadKeep, across(bareEnd));
+            shareWant = 0;
+            for (const part of t.swingSteps) {
+                if (!part) break;
+                const end = boom(this.yaw, anchor, this.swing * part, this.want);
+                if (across(end) <= seen && this.softShare(head, end, bike.index) >= bare) {
+                    shareWant = part;
+                    break;
+                }
+            }
+        }
+        if (fresh) WorldCamera.settle(sp.swingShare, shareWant);
+        else WorldCamera.spring(sp.swingShare, shareWant, shareWant < sp.swingShare.x ? t.fractionIn : t.swingOut, step);
+        this.swingShare = Math.max(0, Math.min(1, sp.swingShare.x));
+        const shift = this.swing * this.swingShare;
+
+        // A road overhead: the boom's height comes down to pass under its deck, now and where the boom will be
+        // foreseeS on, eased; the land tests below still hold the camera clear of the ground
+        if (this.overhead) {
+            this.roof = undefined;
+            const open = boom(this.yaw, anchor, shift, this.want);
+            const ahead2 = this.roofLater || (this.roofLater = { x: 0, y: 0, z: 0 });
+            ahead2.x = anchor.x + sp.ax.v * t.roofAheadS; ahead2.y = anchor.y + sp.ay.v * t.roofAheadS; ahead2.z = anchor.z + sp.az.v * t.roofAheadS;
+            const openLater = boom(this.yaw + sp.yaw.v * t.roofAheadS, ahead2, shift, this.aheadWant);
+            const headLater = this.roofHead || (this.roofHead = { x: 0, y: 0, z: 0 });
+            headLater.x = ahead2.x; headLater.y = ahead2.y + t.headM; headLater.z = ahead2.z;
+            // (with open sky the limit rests at the boom's own height, so it comes back up at roofOut and not at once)
+            const roofWant = Math.min(sp.height.x, this.roofHeight(head, open, anchor.y, bike.y), this.roofHeight(headLater, openLater, ahead2.y, bike.y));
+            // Down in the time the deck takes to reach the camera (the boom's length and roofAheadS at this speed):
+            // a slow bike has a slow, long descent, a fast one a quick one, and neither is a jump
+            const lead = sp.distance.x / Math.max(1, bike.speed) + t.roofAheadS;
+            const down = Math.max(t.roofOut, Math.min(t.roofIn, 4.7 / lead));
+            if (fresh) WorldCamera.settle(sp.roof, roofWant);
+            else WorldCamera.spring(sp.roof, roofWant, roofWant < sp.roof.x ? down : t.roofOut, step);
+            // (never under the head's own height: the boom goes level at the lowest)
+            this.roof = Math.max(t.headM, sp.roof.x);
+        }
+        const want = boom(this.yaw, anchor, shift, this.want);
         const later = this.later;
         later.x = anchor.x + sp.ax.v * t.foreseeS;
         later.y = anchor.y + sp.ay.v * t.foreseeS;
         later.z = anchor.z + sp.az.v * t.foreseeS;
-        const laterWant = boom(this.yaw + sp.yaw.v * t.foreseeS, later, this.aheadWant);
+        const laterWant = boom(this.yaw + sp.yaw.v * t.foreseeS, later, shift, this.aheadWant);
         later.y += t.headM;
 
         // The land in the way: a spring toward the share clear of it now and foreseeS on, and never closer to it than hardClearM
@@ -350,20 +488,12 @@ class WorldCamera {
         out.y = head.y + (want.y - head.y) * this.fraction;
         out.z = head.z + (want.z - head.z) * this.fraction;
         out.y = WorldCamera.softFloor(out.y, this.landY(out.x, out.z, bike.index) + t.floorM);
-
-        // The look target's offset from the anchor, toward the road ahead
-        const ahead = this.lookTarget(s, bike.speed, bike.lift, this.ahead);
-        const lx = ahead.x - anchor.x, ly = ahead.y - anchor.y, lz = ahead.z - anchor.z;
-        if (fresh) {
-            WorldCamera.settle(sp.lx, lx);
-            WorldCamera.settle(sp.ly, ly);
-            WorldCamera.settle(sp.lz, lz);
-            WorldCamera.settle(sp.keep, 0);
-        } else {
-            WorldCamera.spring(sp.lx, lx, t.lookRate, step, true, t.maxSpeedMs);
-            WorldCamera.spring(sp.ly, ly, t.lookRate, step, true, t.maxSpeedMs);
-            WorldCamera.spring(sp.lz, lz, t.lookRate, step, true, t.maxSpeedMs);
+        // The hard limit under a deck: the spring may fall short when a bridge comes at speed
+        if (this.overhead) {
+            const under = this.overhead(out.x, out.z, bike.y);
+            if (out.y > under - t.roofHardM) out.y = Math.max(under - t.roofHardM, Math.min(out.y, head.y));
         }
+
         this.step = step;
         return out;
     }
@@ -376,9 +506,10 @@ class WorldCamera {
         const t = WorldCamera.TUNING;
         const sp = this.springs;
         const look = this.look;
-        look.x = this.anchor.x + sp.lx.x;
+        // The look point's lead into the corner is to the boom's side; the give-way below still keeps the bike in view
+        look.x = this.anchor.x + sp.lx.x + this.lookSwing * Math.cos(this.yaw);
         look.y = this.anchor.y + sp.ly.x;
-        look.z = this.anchor.z + sp.lz.x;
+        look.z = this.anchor.z + sp.lz.x - this.lookSwing * Math.sin(this.yaw);
         const want = this.giveWay(camera, look, bike, probe, t.keepIn);
         WorldCamera.spring(sp.keep, want, t.keepRate, this.step || 1 / 60);
         let share = Math.max(0, Math.min(1, sp.keep.x));

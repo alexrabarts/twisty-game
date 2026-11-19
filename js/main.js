@@ -362,7 +362,7 @@ class Game {
         this.prewarmWorldWeather();
 
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
-        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground);
+        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => this.environment.overheadY(x, z, y));
         this.worldCamera.reset(start.heading);
 
         const normalCameraOffset = this.baseCameraOffset.clone();
@@ -1879,7 +1879,8 @@ class Game {
             // Dynamic camera offset based on lean angle for better mountain road feel
             const leanInfluence = this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2); // More influence in high view
             
-            // Combine lateral lag with lean influence; a world's boom turns by the route, so it has neither
+            // Combine lateral lag with lean influence; a world's boom turns by the route, and WorldCamera takes the
+            // same swing in its own frame (worldCameraInput)
             this.cameraOffset.x = this.environment.isWorld ? this.baseCameraOffset.x : this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
             
             // Adjust height based on speed for dramatic effect
@@ -1919,7 +1920,7 @@ class Game {
         if (world) {
             // A world's boom follows the route behind the bike, not the bike's yaw, with springs; in a hairpin it
             // pulls back and up, and the land shortens it (WorldCamera.update)
-            const placed = this.worldCamera.update(this.worldCameraInput(vehiclePos, currentMode), deltaTime);
+            const placed = this.worldCamera.update(this.worldCameraInput(vehiclePos, currentMode, lerpFactor), deltaTime);
             this.currentCameraPos.set(placed.x, placed.y, placed.z);
         } else {
             this.currentCameraPos.lerp(cameraPos, adjLerp(lerpFactor));
@@ -2111,8 +2112,10 @@ class Game {
     }
     
     // What the world camera reads of the bike and the view mode (WorldCamera.update): the bike's smooth road
-    // position, so nothing the camera reads from the route steps where the polyline turns
-    worldCameraInput(vehiclePos, mode) {
+    // position, so nothing the camera reads from the route steps where the polyline turns. The carving swing is the
+    // legs' chase camera's (the lean shift with its lagged lateral term, and the look point pushed into the corner),
+    // with the same gains and lerps; WorldCamera applies it in its own boom frame and scales it down near the land.
+    worldCameraInput(vehiclePos, mode, follow) {
         const input = this.worldInput || (this.worldInput = { offset: {} });
         const v = this.vehicle;
         const s = v.projection.s ?? v.routeS;
@@ -2126,6 +2129,12 @@ class Game {
         input.offset.x = this.cameraOffset.x;
         input.offset.y = this.cameraOffset.y;
         input.offset.z = this.cameraOffset.z;
+        const swing = input.swing || (input.swing = {});
+        swing.x = -v.leanAngle * (mode.type === 'high' ? 3 : 2) + this.cameraLateralOffset;
+        swing.look = -v.leanAngle * (mode.type === 'high' ? 2 : 4);
+        swing.follow = follow;
+        swing.lookFollow = Math.min(this.cameraLerpFactor * 1.5, 1);
+        input.aspect = this.camera.aspect;
         input.fov = (mode.type === 'high' ? 70 : 75) + (v.speed / v.maxSpeed) * 10;
         return input;
     }

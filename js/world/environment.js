@@ -26,6 +26,9 @@ class WorldEnvironment {
     // The camera's far plane in a world: past the far land's 40 km reach. Depth steps hardly change with the far plane
     // (they go as d^2 / near), so this costs the near ground nothing
     static get FAR_PLANE_M() { return 60000; }
+    // A road counts as overhead from this far over the bike's road, and its deck reaches this far past its carriageway
+    static get OVERHEAD_FROM_M() { return 2.5; }
+    static get OVERHEAD_EDGE_M() { return 1.5; }
 
     // Metres the rider starts along the ride, so the road's cut end is behind the camera
     static get START_M() { return 20; }
@@ -558,6 +561,16 @@ class WorldEnvironment {
     // ride surface, and the road takes up its own height again outside the band. A road more than SIDE_PASS_M above
     // or below the ride is a road over or under it, and keeps its height.
     //
+    // The underside of the lowest road that passes over (x, z) more than OVERHEAD_FROM_M above y (a bridge of a side
+    // road, a viaduct, another leg of the ride on its deck), or Infinity with open sky: what the chase camera stays
+    // under, so it follows the bike through and does not fly over the deck with the bike out of sight (WorldCamera)
+    overheadY(x, z, y) {
+        let low = Infinity;
+        const reach = WorldEnvironment.OVERHEAD_EDGE_M;
+        this.carriageways.each(x, z, reach, r => { if (r.depth >= -reach && r.y > y + WorldEnvironment.OVERHEAD_FROM_M && r.y - RoadMesh.DECK_M < low) low = r.y - RoadMesh.DECK_M; });
+        return low;
+    }
+
     // rideSurfaceAt: the ride surface under (x, z) when that is in the ride's band at about height y, or null
     rideSurfaceAt(x, z, y) {
         const route = this.route;
