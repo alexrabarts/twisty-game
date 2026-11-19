@@ -79,3 +79,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the swing was in the uncommitted work and is committed as found: the camera moves sideways with the lean and its look point leads into the corner, in the route-following boom's frame, scaled down by the land. New, asked by the owner: the camera passes under a road overhead instead of over it (`WorldEnvironment.overheadY`, `WorldCamera.roofHeight`). The Tremola has three such places (s 1720, 5118, 6504; 4.3 to 5.8 m under the deck).
 - Check: `tests/unit/world-camera-swing.test.js` (5 tests) and the new `tests/unit/world-camera-bridge.test.js` (8 tests) pass. A simulation on the three real bridges, standard and high view, 8 to 30 m/s: before, the camera was over the deck for 48 and 35 frames at two of them (2.4 m and 1.05 m over); now never, at least 0.25 m under.
 - Left: by the owner's word the long checks wait for the end: the whole unit suite and the GPU probes `world-camera-smooth`, `world-frustum` and `world-camera` were not run on this commit. Not looked at in the browser.
+
+## F2. The camera comes down for a bridge over the approach, not at it
+
+- Job: the owner found the first version a switch to a low camera at speed. The camera now reads the road 2.6 s of riding ahead and changes height over that whole approach, stays as high as the deck allows (0.35 m under it, from 0.7 m), allows for the road's grade between the deck and the bike, and goes back up slowly.
+- Check: `tests/unit/world-camera-bridge.test.js` (8 tests): never over a deck, and under 3 m/s of height change at any moment at 8, 15 and 30 m/s. Simulation on the three real bridges in the high view: 8 m comes down to 5.1 m, 4.4 m and 3.4 m over the bike, over about 60 to 80 m of road at speed, with no step.
+- Left: under the lowest deck (4.3 m, on a climb) 3.4 m is the most the deck allows. The long checks wait for the end.

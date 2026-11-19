@@ -21,7 +21,7 @@ function ride(offset, speed, roof) {
     camera.reset(0);
     const out = { over: 0, room: Infinity, step: 0, before: null, under: Infinity, after: null, floor: Infinity };
     let last = null;
-    for (let z = 100; z < 330; z += speed / 60) {
+    for (let z = 40; z < 390; z += speed / 60) {
         const p = camera.update({ x: 0, y: Y, z, s: z, index: Math.floor(z / 4), speed, lift: 1, offset, fov: 75 }, 1 / 60);
         const deck = overhead(p.x, p.z);
         if (deck !== Infinity) {
@@ -32,7 +32,7 @@ function ride(offset, speed, roof) {
         if (last !== null) out.step = Math.max(out.step, Math.abs(p.y - last));
         last = p.y;
         out.floor = Math.min(out.floor, p.y - Y);
-        if (z < 150) out.before = p.y - Y;
+        if (z < 60) out.before = p.y - Y;
         out.after = p.y - Y;
     }
     return out;
@@ -48,8 +48,9 @@ describe('the chase camera under a road overhead', () => {
                 // It stays a camera: over the bike's head and over the land
                 expect(r.under).toBeGreaterThanOrEqual(WorldCamera.TUNING.headM - 1e-6);
                 expect(r.floor).toBeGreaterThanOrEqual(WorldCamera.FLOOR_M - 0.05);
-                // Down and up again with no jump (a frame at 60 Hz), and back at its own height after
-                expect(r.step).toBeLessThan(0.16);
+                // Down over the approach and up again after, never as a switch: under 3 m/s of height at any moment
+                // (a frame at 60 Hz), and back at its own height after
+                expect(r.step).toBeLessThan(0.05);
                 expect(r.after).toBeCloseTo(r.before, 1);
             });
         }
@@ -60,6 +61,9 @@ describe('the chase camera under a road overhead', () => {
         const low = ride(MODES.Standard, 15, true), free = ride(MODES.Standard, 15, false);
         // The standard boom stands 3 m over the road: under a 4.3 m deck with roofClearM to spare, it does not move
         expect(low.under).toBeCloseTo(free.under, 2);
+        // and the high view comes down only as far as the deck needs: as high as it can be under it
+        const high = ride(MODES['High View'], 15, true);
+        expect(high.room).toBeLessThan(WorldCamera.TUNING.roofClearM + 0.6);
     });
 
     test('with open sky the camera is the same with and without the rule', () => {
