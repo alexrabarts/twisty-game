@@ -1885,7 +1885,8 @@ class Game {
             
             // Adjust height based on speed for dramatic effect
             const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            this.cameraOffset.y = this.baseCameraOffset.y + speedRatio * 0.5; // Slight rise with speed
+            // (a leg's camera rises a little with speed; a world's comes down toward the road, WorldCamera.speedHeight)
+            this.cameraOffset.y = this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5;
             this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (currentMode.type === 'high' ? 2 : 1); // Move back with speed
             
             // (No lateral camera swing during wheelies - the 8-unit sideways

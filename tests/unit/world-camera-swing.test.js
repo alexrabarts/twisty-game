@@ -179,4 +179,21 @@ describe('the world chase camera carves like the legs camera', () => {
             expect(r.fraction).toBeGreaterThan(none[i].fraction - 0.02);
         });
     });
+
+    test('a world camera comes down toward the road with speed, a leg camera does not', () => {
+        const T = WorldCamera.TUNING;
+        expect(WorldCamera.speedHeight(8, 0)).toBe(8);
+        expect(WorldCamera.speedHeight(8, T.speedLowerMs)).toBeCloseTo(8 * (1 - T.speedLowerShare), 9);
+        expect(WorldCamera.speedHeight(8, 3 * T.speedLowerMs)).toBeCloseTo(8 * (1 - T.speedLowerShare), 9);
+        // Lower at every step of speed, and never a step in height
+        let last = WorldCamera.speedHeight(3, 0);
+        for (let v = 0.5; v <= 40; v += 0.5) {
+            const h = WorldCamera.speedHeight(3, v);
+            expect(h).toBeLessThanOrEqual(last);
+            expect(last - h).toBeLessThan(0.03);
+            last = h;
+        }
+        // The legs keep their slight rise: the world's rule is asked for a world only
+        expect(source).toContain('this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5');
+    });
 });

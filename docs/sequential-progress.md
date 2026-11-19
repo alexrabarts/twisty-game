@@ -91,3 +91,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: by the owner's word the camera may come down a bit more at speed. Under a deck it keeps 0.35 m of room at 10 m/s and under, rising to 1.05 m at 28 m/s (`roofFastM`).
 - Check: `tests/unit/world-camera-bridge.test.js` holds that a pass at 30 m/s is about 0.7 m lower than one at 8 m/s, with no step. Simulation on the real bridges in the high view: at km 6.50, 3.0 m over the bike at 8 m/s and 2.7 m at 30 m/s; at km 1.72, 3.8 m at 25 m/s.
 - Left: the long checks wait for the end.
+
+## F4. A world's camera comes down with speed
+
+- Job: the owner meant the camera in the open, not under a bridge: it may come down at speed. A world's boom now loses 30% of its height from 0 to 30 m/s, eased (`WorldCamera.speedHeight`): standard 3 m to 2.1 m, high 8 m to 5.6 m. The legs keep their slight rise. The room under a deck (F3) stays.
+- Check: `tests/unit/world-camera-swing.test.js` holds the rule (monotone, no step, legs unchanged); the swing and bridge tests pass (14 tests).
+- Left: not looked at in the browser. The land limits act on the lower boom as on any boom, but the GPU probes `world-frustum` and `world-camera-smooth` were not run: the long checks wait for the end.
