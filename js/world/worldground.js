@@ -104,20 +104,15 @@ class WorldGround extends Ground {
         return best;
     }
 
-    // Tile height at (x, z) on the drawn triangles, or null while the tile is not resident
-    tileHeight(x, z) {
+    // Tile height at (x, z) on the drawn triangles (cut to the retaining walls where `cutsOf(key)` gives a tile's cuts,
+    // WorldEnvironment.cutsOf), or null while the tile is not resident
+    // `cut: false` reads the nodes' own triangles
+    tileHeight(x, z, cut = true) {
         const m = WorldData.TILE_M;
-        const tx = Math.floor(x / m), tz = Math.floor(z / m);
-        const tile = this.data.tile(`${tx},${tz}`);
+        const key = `${Math.floor(x / m)},${Math.floor(z / m)}`;
+        const tile = this.data.tile(key);
         if (!tile) return null;
-        const n = WorldData.TILE_N;
-        const fx = (x - tx * m) / WorldData.CELL_M, fz = (z - tz * m) / WorldData.CELL_M;
-        const i = Math.max(0, Math.min(n - 2, Math.floor(fx))), j = Math.max(0, Math.min(n - 2, Math.floor(fz)));
-        const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fz - j));
-        const h = tile.heights;
-        const h00 = h[j * n + i], h10 = h[j * n + i + 1], h01 = h[(j + 1) * n + i], h11 = h[(j + 1) * n + i + 1];
-        // The same two triangles TerrainMesh draws (split along the 01-10 diagonal), so the ground is the drawn ground
-        return u + v <= 1 ? h00 + u * (h10 - h00) + v * (h01 - h00) : h11 + (1 - u) * (h01 - h11) + (1 - v) * (h10 - h11);
+        return TerrainMesh.heightAt(tile, x, z, cut && this.cutsOf ? this.cutsOf(key) : null);
     }
 
     // Zone code at (x, z): the nearest node of the tile's zone layer; terrain where the tile is missing
@@ -223,6 +218,9 @@ class WorldGround extends Ground {
     // verge (where WorldEnvironment.edgeFoot reads it to draw a wall instead of the fill)
     bridgeOrDrop(loc, half) {
         if (loc.flags && loc.flags.bridge) return true;
+        // Where the ride's wall plan is known (WorldEnvironment.walledAt), the drawn wall is the wall
+        const planned = this.walledAt ? this.walledAt(loc.index, Math.sign(loc.lateral || 1)) : undefined;
+        if (planned !== undefined) return planned;
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchDrop || (this.scratchDrop = {}));
         const zone = this.tileZone(out.x, out.z);
@@ -234,7 +232,8 @@ class WorldGround extends Ground {
     onRetainingWall(loc, half) {
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchWall || (this.scratchWall = {}));
-        if (this.tileZone(out.x, out.z) !== WorldData.ZONE.drop) return false;
+        const planned = this.walledAt ? this.walledAt(loc.index, Math.sign(loc.lateral || 1)) : undefined;
+        if (planned === false || (planned === undefined && this.tileZone(out.x, out.z) !== WorldData.ZONE.drop)) return false;
         const land = this.tileHeight(out.x, out.z);
         const roadY = Number.isFinite(loc.roadY) ? loc.roadY : point.y;
         return land !== null && roadY - land >= RoadMesh.PARAPET_DROP_M;

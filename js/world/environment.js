@@ -47,6 +47,14 @@ class WorldEnvironment {
     static get DECK_UNDER_M() { return 1.5; }
     static get FOOT_PROBE_M() { return 1.5; }
     static get MEET_M() { return 0.25; }
+    // The land lying this far under a slope at the batter at the end of its run asks for a wall instead
+    static get WALL_OVER_M() { return 1.5; }
+    // A side road's wall, once begun, goes on while the land lies this far under its edge: it ends in the ground
+    static get WALL_END_M() { return 0.5; }
+    // The place in the build queue of what is built again once the rest has arrived (WorldStreamer.enqueue's distance)
+    static get LATER() { return 1e9; }
+    // A retaining wall's foot stands this far under the land in front of it
+    static get WALL_UNDER_M() { return 0.3; }
     static get APRON_M() { return 3; }
     // The farthest an apron runs out from the edge before it must have met the land
     static get APRON_RUN_M() { return 6; }
@@ -85,6 +93,10 @@ class WorldEnvironment {
         if (!samples) throw new Error('world ride is not resident');
         this.route = new WorldRoute(samples, { stations: data.ride.stations, stages: data.ride.stages, graph: this.graph });
         this.ground = new WorldGround(this.route, data);
+        // The physics reads the land as it is drawn: cut to the retaining walls (cutsOf)
+        this.ground.cutsOf = key => this.cutsOf(key);
+        // and a retaining wall where the ride's wall plan draws one (rideWalls)
+        this.ground.walledAt = (index, sign) => this.walledAt(index, sign);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
         this.physics = WorldPhysics;
@@ -109,6 +121,10 @@ class WorldEnvironment {
         this.group.name = 'world';
         this.tileGroup = new THREE.Group();
         this.waitingOnTile = new Map();
+        // The retaining walls of each ride section and of each side chunk, and the land's cuts to them by tile
+        this.rideWallCache = new Map();
+        this.sideWalls = new Map();
+        this.cutCache = new Map();
         this.roadGroup = new THREE.Group();
         this.sideGroup = new THREE.Group();
         this.sceneryGroup = new THREE.Group();
@@ -246,10 +262,12 @@ class WorldEnvironment {
             this.triangleCount -= old.triangles;
         }
         // A carved cell inside the ride's band can hold a side road's height (a junction); drawn, it stays under the ride
+        // At full detail the land is cut to the retaining walls that cross the tile (cutsOf), made again with the tile
+        if (lod === 0) this.cutCache.delete(key);
         const built = TerrainMesh.build(tile, cover, lod, (x, y, z) => {
             const low = this.rideSurfaceAt(x, z, y);
             return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
-        }, this.nearTile);
+        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null);
         built.mesh.userData.skipCulling = true;
         this.tileGroup.add(built.mesh);
         this.onMeshBuilt(built.mesh);
@@ -292,6 +310,8 @@ class WorldEnvironment {
         for (const id of waiting) {
             const [kind, value] = id.split(':');
             const index = Number(value);
+            // A section's wall plan made without this tile or chunk is made again when next asked for
+            if (kind === 'walls') { this.dropRideWalls(index); continue; }
             this.streamer.enqueue(`works:${id}`, 0, () => {
                 const held = this.streamer.roads.get(index);
                 if (kind === 'road' && held && this.roadMeshes.has(index)) this.buildRoad(this.streamer.sections[index], held.lod);
@@ -302,6 +322,17 @@ class WorldEnvironment {
                 }
             });
         }
+    }
+
+    // A ride section's wall plan is made again; where its walls then stand elsewhere, the land there is cut again
+    dropRideWalls(index) {
+        const old = this.rideWallCache.get(index);
+        if (!old) return;
+        this.rideWallCache.delete(index);
+        this.streamer.enqueue(`walls:${index}`, 0, () => {
+            const sign = runs => runs.map(run => run.key + run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
+            if (sign(this.rideWalls(index).runs) !== sign(old.runs)) this.dropCuts(this.streamer.sections[index].bbox);
+        });
     }
 
     // Trees and houses stand on the detailed tiles only (a step of its own: the streamer queues it after the land)
@@ -366,7 +397,7 @@ class WorldEnvironment {
 
     rowsOf(from, to) {
         const styles = this.roadStyles();
-        return this.route.points.slice(from, to + 1).map((p, i) => ({ x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, ...styles[from + i] }));
+        return this.route.points.slice(from, to + 1).map((p, i) => ({ x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, i: from + i, ...styles[from + i] }));
     }
 
     // The markings of every ride row, made once: the rules of RoadSurface.styles on the real road's class, then each
@@ -400,6 +431,49 @@ class WorldEnvironment {
         return styles;
     }
 
+    // Where the retaining walls of a ride section stand: {plan, runs, missing}. `plan` is RoadMesh.wallPlan of every
+    // row of the section and one either side (`plan.base` the index of its first row), made with the rows
+    // WALL_PLAN_M past each end so two sections agree on the rows they share; `runs` are the walls of its own segments
+    // (RoadMesh.wallRuns). Kept until a tile or a chunk it was made without arrives (rebuildWaiting)
+    rideWalls(index) {
+        const held = this.rideWallCache.get(index);
+        if (held) return held;
+        const section = this.streamer.sections[index];
+        const points = this.route.points, last = points.length - 1, S = this.route.sArray;
+        let a = Math.max(0, section.from - 1), b = Math.min(last, section.to + 1);
+        while (a > 0 && S[section.from] - S[a] < WorldEnvironment.WALL_PLAN_M) a--;
+        while (b < last && S[b] - S[section.to] < WorldEnvironment.WALL_PLAN_M) b++;
+        const missing = new Set();
+        const sides = RoadMesh.vergeSides(this.rowsOf(a, b), null, true);
+        const all = RoadMesh.wallPlan(sides, this.edgeFoot(missing), this.carriageways.guard(-1));
+        const base = Math.max(0, section.from - 1), top = Math.min(last, section.to + 1);
+        const cut = list => list.slice(base - a, top - a + 1);
+        const plan = { base, row: { l: cut(all.row.l), r: cut(all.row.r) }, seg: { l: cut(all.seg.l), r: cut(all.seg.r) }, end: { l: cut(all.end.l), r: cut(all.end.r) } };
+        // Its own segments: from its first row to its last
+        const runs = RoadMesh.wallRuns(sides, all, section.from - a, section.to - a).map(run => Object.assign(run, { owner: -1 }));
+        if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
+            const [x0, z0, x1, z1] = section.bbox;
+            for (const k of this.data.chunksNear((x0 + x1) / 2, (z0 + z1) / 2, Math.hypot(x1 - x0, z1 - z0) / 2 + 20)) if (!this.data.chunks.has(k)) missing.add(`chunk:${k}`);
+        }
+        for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`walls:${index}`);
+        const out = { plan, runs, missing };
+        this.rideWallCache.set(index, out);
+        return out;
+    }
+
+    // Whether the ride's edge from row `index` to the next, on the right (sign > 0) or the left, stands on a retaining wall
+    walledAt(index, sign) {
+        if (!this.streamer) return undefined;
+        if (!this.rowSection) {
+            this.rowSection = new Int32Array(this.route.points.length);
+            for (const section of this.streamer.sections) for (let i = section.from; i <= section.to; i++) this.rowSection[i] = section.index;
+        }
+        const walls = this.rideWalls(this.rowSection[Math.max(0, Math.min(this.rowSection.length - 1, index))]);
+        // The segment from row `index` on (what a located point's index names), as the wall is drawn: a walled row
+        // beside a segment with no wall (a mouth, a bridge's end) is no wall there
+        return !!walls.plan.seg[sign > 0 ? 'r' : 'l'][index - walls.plan.base];
+    }
+
     buildRoad(section, lod) {
         this.disposeRoad(section);
         // Edge works built before a tile under them arrived are built again when it does (buildTile)
@@ -407,7 +481,7 @@ class WorldEnvironment {
         // A row of each neighbour either side: read for the bend and the runs, drawn by the neighbour (RoadMesh.section)
         const last = this.route.points.length - 1;
         const from = Math.max(0, section.from - 1), to = Math.min(last, section.to + 1);
-        const group = RoadMesh.section(this.rowsOf(from, to), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing), roads: this.carriageways, head: section.from - from, tail: to - section.to });
+        const group = RoadMesh.section(this.rowsOf(from, to), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing), roads: this.carriageways, head: section.from - from, tail: to - section.to, plan: this.rideWalls(section.index).plan });
         // Its works keep out of the side roads' carriageways (Carriageways): built before a side road's chunk is here,
         // it is built again when that chunk is (buildSide)
         if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
@@ -593,7 +667,7 @@ class WorldEnvironment {
             }
             // Every side road whose chunk has been here (Carriageways), not only those drawn now: the order the
             // window builds in must not change the works
-            this.carriageways.each(x, z, 0, r => { if (r.road >= 0 && r.depth >= 0 && r.y < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, r.y); });
+            this.carriageways.each(x, z, 0, r => { if (r.depth >= 0 && r.y < y - WorldEnvironment.DECK_UNDER_M) best = Math.max(best ?? -Infinity, r.y); }, true);
             return best;
         };
         const landLow = (x, z) => this.landLowAt(x, z, missing);
@@ -604,7 +678,7 @@ class WorldEnvironment {
                 if (near.distance <= near.width / 2 + RoadSurface.VERGE_M) return true;
             }
             let side = false;
-            this.carriageways.each(x, z, 0, r => { if (r.road >= 0 && r.depth >= 0) side = true; });
+            this.carriageways.each(x, z, 0, r => { if (r.depth >= 0) side = true; }, true);
             return side;
         };
         // The land as drawn at LOD0 at (x, z), or null
@@ -620,6 +694,8 @@ class WorldEnvironment {
             const H = (a, b) => TerrainMesh.vertexY(tile, 0, i + a, j + b, near);
             return u + v <= 1 ? H(0, 0) + u * (H(1, 0) - H(0, 0)) + v * (H(0, 1) - H(0, 0)) : H(1, 1) + (1 - u) * (H(0, 1) - H(1, 1)) + (1 - v) * (H(1, 0) - H(1, 1));
         };
+        // The land as it is drawn at full detail, cut to the walls' feet (WorldEnvironment.landAt), for what stands on it
+        const landDrawn = (x, z) => this.landAt(x, z, landNear);
         // The land's own linear colour at the node nearest (x, z) (TerrainMesh.colours), or null
         const landColor = (x, z) => {
             const tx = Math.floor(x / m), tz = Math.floor(z / m);
@@ -630,54 +706,232 @@ class WorldEnvironment {
             const at = (j * n + i) * 3;
             return [grid[at], grid[at + 1], grid[at + 2]];
         };
-        return (x, y, z, ox, oz) => {
+        // The lowest full-detail node of the land in front of an edge point, within twice the reach of the land's
+        // cut (TerrainMesh.cuts levels a node in front of a wall with a lower node within CUT_REACH_M, which may
+        // itself be levelled with one as far again): the lowest the land in front of a wall there can stand, so the
+        // wall reaches it, without reading the cut itself (which follows from where the walls stand)
+        const frontLow = (x, z, ox, oz) => {
+            const c = WorldData.CELL_M, last = n - 1, reach = 2 * TerrainMesh.CUT_REACH_M + 1, span = Math.ceil(reach / c);
+            let low = null;
+            for (let gj = Math.round(z / c) - span; gj <= Math.round(z / c) + span; gj++) {
+                for (let gi = Math.round(x / c) - span; gi <= Math.round(x / c) + span; gi++) {
+                    const dx = gi * c - x, dz = gj * c - z;
+                    if (dx * ox + dz * oz < 0.3 || dx * dx + dz * dz > reach * reach) continue;
+                    const tx = Math.floor(gi / last), tz = Math.floor(gj / last);
+                    const tile = this.data.tile(`${tx},${tz}`);
+                    if (!tile) continue;
+                    const h = tile.heights[(gj - tz * last) * n + gi - tx * last];
+                    if (low === null || h < low) low = h;
+                }
+            }
+            return low;
+        };
+        // How deep a wall at the edge point stands: under the land drawn at any level of detail, and under the nodes
+        // in front of it
+        const wallFoot = (x, z, ox, oz, y, low) => {
+            const front = frontLow(x, z, ox, oz);
+            const lows = [low, front].filter(v => v !== null);
+            return (lows.length ? Math.min(...lows) : y - WorldEnvironment.APRON_M) - WorldEnvironment.WALL_UNDER_M;
+        };
+        // Where the land asks for a retaining wall under the edge point, read from the tile's own nodes only (never
+        // from the land as it is cut to the walls, which follows from this): {y} its foot, or null
+        // Whether a side road lies at the edge point, near the road's own height: a junction's mouth
+        const atMouth = (x, y, z, ox, oz) => {
+            let mouth = false;
+            for (const o of [0.5, 2, 4]) this.carriageways.each(x + ox * o, z + oz * o, 0, r => { if (r.depth >= 0 && Math.abs(r.y - y) < WorldEnvironment.DECK_UNDER_M) mouth = true; }, true);
+            return mouth;
+        };
+        // `on`: asked of a row beside a wall's end, where a side road's wall goes on until the land meets its edge
+        const wall = (x, y, z, ox, oz, on = false) => {
             // Over a lower road's band (stacked hairpin legs whose verges meet): the retaining wall stands down to that
             // road, as the real ones do. Never a deck: a road over a road off a bridge is not a structure the map has
             const under = lowerRoad(x, z, y);
-            if (under !== null) return { kind: 'wall', y: under };
+            if (under !== null) return { y: under };
+            // At a side road's mouth the ride has no wall: the side road leaves at its edge, near its own height (a
+            // wall the importer's drop zone asked for there stood across the mouth of the road that goes on)
+            if (aprons && atMouth(x, y, z, ox, oz)) return null;
             const at = WorldEnvironment.FOOT_PROBE_M;
             const zone = this.ground.tileZone(x + ox * at, z + oz * at);
             if (zone === WorldData.ZONE.drop || zone === WorldData.ZONE.wall) {
-                // A wall down to the land, or where the land meets the edge after all, nothing (the physics reads the land)
+                // A wall down to the land where the land drawn at full detail lies under the edge. Where it meets the
+                // edge there is no wall: one decided on the coarser land stood buried in the bank, its parapet in
+                // pieces along the uphill side of the road
                 const low = landLow(x + ox * at, z + oz * at);
-                return low !== null && low < y - WorldEnvironment.MEET_M ? { kind: 'wall', y: low } : null;
+                const near = landNear(x + ox * at, z + oz * at);
+                const land = near !== null ? near : low;
+                if (land !== null && land < y - WorldEnvironment.MEET_M) return { y: wallFoot(x, z, ox, oz, y, low) };
             }
             const low = landLow(x + ox * 0.1, z + oz * 0.1);
             // A side road's edge high over the land drawn near it is held by a retaining wall down to the land at any
             // level of detail (its raised centre rides on a deck, RoadMesh.sideStructures): no road edge hangs over the land
             if (!aprons) {
                 const near = landNear(x + ox * 0.5, z + oz * 0.5);
-                return near !== null && low !== null && near < y - RoadMesh.PARAPET_DROP_M ? { kind: 'wall', y: low } : null;
+                return near !== null && low !== null && near < y - (on ? WorldEnvironment.WALL_END_M : RoadMesh.PARAPET_DROP_M) ? { y: wallFoot(x, z, ox, oz, y, low) } : null;
             }
+            if (low === null) return null;
+            // Where the land lies WALL_OVER_M or more under a slope at the batter anywhere along its run: land that
+            // falls away so no fill stands on it. (A slope drawn steeper to reach it was a slab of land in front of the
+            // walls either side, and where the land met the edge and then fell away, a bank of land stood to the
+            // road's edge.) A lower road within the run is such land; one nearer its height that the slope would run
+            // onto asks for a wall too
+            for (let o = 0.5; o <= WorldEnvironment.APRON_RUN_M; o += 0.5) {
+                const land = landNear(x + ox * o, z + oz * o);
+                if (land === null) break;
+                if (y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER - land > WorldEnvironment.WALL_OVER_M) return { y: wallFoot(x, z, ox, oz, y, low) };
+            }
+            for (const o of [2, 4, WorldEnvironment.APRON_RUN_M]) {
+                const land = landNear(x + ox * o, z + oz * o);
+                if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
+                if (lowerRoad(x + ox * o, z + oz * o, y) !== null) return { y: wallFoot(x, z, ox, oz, y, low) };
+            }
+            return null;
+        };
+        // `walled`: true where the road's wall plan put a wall (RoadMesh.wallPlan), false where it put none (the land
+        // then gives a slope or nothing), undefined to let the land decide (no plan)
+        const foot = (x, y, z, ox, oz, walled) => {
+            if (walled !== false) {
+                const w = wall(x, y, z, ox, oz);
+                if (w) return { kind: 'wall', y: w.y };
+                if (walled) return { kind: 'wall', y: wallFoot(x, z, ox, oz, y, landLow(x + ox * 0.1, z + oz * 0.1)) };
+            }
+            if (!aprons) return null;
+            const low = landLow(x + ox * 0.1, z + oz * 0.1);
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
-            // The apron runs out at the batter until it meets the land drawn near (8 m triangles), never on over a
-            // valley beyond, and never into another road's band (the other leg of a hairpin, a side road): it stops at
-            // the band's edge, and where that road lies lower the edge is a wall down to it
+            // The apron runs out at the batter until it meets the land drawn near (8 m triangles, cut to the walls),
+            // never on over a valley beyond, and never into another road's band (the other leg of a hairpin, a side
+            // road): it stops at the band's edge
             let run = 0;
             for (let o = 0.5; o <= WorldEnvironment.APRON_RUN_M; o += 0.5) {
                 const px = x + ox * o, pz = z + oz * o;
-                if (inBand(px, pz)) {
-                    if (lowerRoad(px, pz, y) !== null) return { kind: 'wall', y: low };
-                    break;
-                }
+                if (inBand(px, pz)) break;
                 run = o;
-                const land = landNear(px, pz);
+                const land = landDrawn(px, pz);
                 if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
             }
-            if (lowerRoad(x + ox * run, z + oz * run, y) !== null) return { kind: 'wall', y: low };
             // Its foot stands on the land: where the land falls away steeper than the batter (or the apron stopped at
             // a band's edge) the foot drops to the land there, so the apron is steeper than the batter but never ends
             // in the air (RoadMesh.apronRun reads its run). With no run at all (a band at once: the far ribbon's edge
             // is its carriageway's) there is no apron to drop, and the edge is left as it was
             let footY = y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2;
-            const footLand = landNear(x + ox * run, z + oz * run);
+            const footLand = landDrawn(x + ox * run, z + oz * run);
             if (run > 0 && footLand !== null && footY > footLand + WorldEnvironment.MEET_M) footY = footLand - 0.2;
             // Without the tile under the foot yet, the apron is built again when it comes
             if (footLand === null && missing) missing.add(`${Math.floor((x + ox * run) / m)},${Math.floor((z + oz * run) / m)}`);
             // Coloured as the land at its top and at its foot (RoadMesh.edgeWorks blends them), not one sample
             return { kind: 'apron', y: footY, run, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
         };
+        // How deep one of the ride's walls must stand to reach the land in front of it as it is drawn (cut and
+        // levelled to the walls): asked when the wall is drawn, after every wall's line is known. A side road's wall
+        // stands on the nodes' own lowest (wallFoot): its chunk is built before the land is cut to it
+        if (aprons) foot.under = (x, y, z, ox, oz) => {
+            let low = Infinity;
+            for (const o of [0.2, 1, 2]) { const land = landDrawn(x + ox * o, z + oz * o); if (land !== null && land < low) low = land; }
+            return low - WorldEnvironment.WALL_UNDER_M;
+        };
+        if (aprons) foot.mouth = atMouth;
+        foot.wall = (x, y, z, ox, oz, forced = false, on = false) => wall(x, y, z, ox, oz, on) || (forced && !(aprons && atMouth(x, y, z, ox, oz)) ? { y: wallFoot(x, z, ox, oz, y, landLow(x + ox * 0.1, z + oz * 0.1)) } : null);
+        return foot;
+    }
+
+    // The land drawn at full detail at (x, z): `raw(x, z)` the tile's own triangles, until the land is cut to the walls
+    landAt(x, z, raw) {
+        const m = WorldData.TILE_M;
+        const key = `${Math.floor(x / m)},${Math.floor(z / m)}`;
+        const tile = this.data.tile(key);
+        const cuts = tile ? this.cutsOf(key) : null;
+        return cuts ? TerrainMesh.heightAt(tile, x, z, cuts) : raw(x, z);
+    }
+
+    // The cuts of a tile's land to the retaining walls that cross it (TerrainMesh.cuts), or null: made when first
+    // asked for from the walls of the ride's sections and of the side chunks here, and again when those change
+    cutsOf(key) {
+        if (this.cutCache.has(key)) return this.cutCache.get(key);
+        const tile = this.data.tile(key);
+        if (!tile) return null;
+        // Nothing the walls are planned from reads the cut land; were it asked for meanwhile, it is the nodes' own
+        this.cutCache.set(key, null);
+        // The highest road surface between two points, read every metre and a half (a road's carriageway and verge)
+        const roadOver = (ax, az, bx, bz) => {
+            let high = -Infinity;
+            const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 1.5));
+            // (not at the first point itself: a node just outside the edge of the road its wall holds up)
+            for (let k = 1; k <= steps; k++) this.carriageways.each(ax + ((bx - ax) * k) / steps, az + ((bz - az) * k) / steps, RoadSurface.VERGE_M, r => { if (r.y > high) high = r.y; });
+            return high;
+        };
+        const cuts = TerrainMesh.cuts(tile, this.wallRunsNear(tile), this.nearTile, roadOver);
+        this.cutCache.set(key, cuts);
+        return cuts;
+    }
+
+    // The retaining walls' top lines within reach of a tile (RoadMesh.wallRuns): the ride's, a run that goes on from
+    // one section into the next joined into one, and the side roads' of the chunks here
+    wallRunsNear(tile) {
+        const m = WorldData.TILE_M, reach = TerrainMesh.CUT_TAPER_M + 30;
+        const x0 = tile.tx * m - reach, z0 = tile.tz * m - reach, x1 = (tile.tx + 1) * m + reach, z1 = (tile.tz + 1) * m + reach;
+        const near = box => box && box[2] >= x0 && box[0] <= x1 && box[3] >= z0 && box[1] <= z1;
+        const ride = [];
+        if (!this.streamer) return [];
+        for (const section of this.streamer.sections) if (near(section.bbox)) ride.push(...this.rideWalls(section.index).runs);
+        const at = p => `${Math.round(p[0] * 1000)},${Math.round(p[2] * 1000)}`;
+        const starts = new Map();
+        for (const run of ride) starts.set(`${run.key}|${at(run.points[0])}`, run);
+        const joined = new Set();
+        const out = [];
+        for (const run of ride) {
+            if (joined.has(run)) continue;
+            // Not the first piece of its wall when another ends where it starts
+            if (ride.some(other => other !== run && other.key === run.key && at(other.points[other.points.length - 1]) === at(run.points[0]))) continue;
+            const whole = { key: run.key, owner: -1, points: run.points.slice(), out: run.out.slice() };
+            for (let next = starts.get(`${run.key}|${at(whole.points[whole.points.length - 1])}`); next && next !== run && !joined.has(next); next = starts.get(`${run.key}|${at(whole.points[whole.points.length - 1])}`)) {
+                joined.add(next);
+                whole.points.push(...next.points.slice(1));
+                whole.out.push(...next.out.slice(1));
+            }
+            out.push(whole);
+        }
+        for (const runs of this.sideWalls.values()) for (const run of runs) if (near(run.box)) out.push(run);
+        return out;
+    }
+
+    // The walls of a side chunk as its edge works drew them. The land of the tiles they cross is cut again when they change
+    setSideWalls(k, runs) {
+        const sign = list => list.map(run => run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
+        const old = this.sideWalls.get(k) || [];
+        for (const run of runs) {
+            run.box = [Infinity, Infinity, -Infinity, -Infinity];
+            for (const p of run.points) { run.box[0] = Math.min(run.box[0], p[0]); run.box[1] = Math.min(run.box[1], p[2]); run.box[2] = Math.max(run.box[2], p[0]); run.box[3] = Math.max(run.box[3], p[2]); }
+        }
+        if (sign(old) === sign(runs)) return;
+        if (runs.length) this.sideWalls.set(k, runs);
+        else this.sideWalls.delete(k);
+        for (const run of old.concat(runs)) this.dropCuts(run.box);
+    }
+
+    // The land's cuts under a box ([x0, z0, x1, z1]) are made again, and the tiles drawn there at full detail with them
+    dropCuts(box) {
+        const m = WorldData.TILE_M, reach = TerrainMesh.CUT_TAPER_M + 30;
+        for (let tx = Math.floor((box[0] - reach) / m); tx <= Math.floor((box[2] + reach) / m); tx++) {
+            for (let tz = Math.floor((box[1] - reach) / m); tz <= Math.floor((box[3] + reach) / m); tz++) {
+                const key = `${tx},${tz}`;
+                if (!this.cutCache.has(key)) continue;
+                this.cutCache.delete(key);
+                // After what is still to arrive (the chunks beside this one change the same tiles): once, at the end
+                this.streamer.enqueue(`cut:${key}`, WorldEnvironment.LATER, () => {
+                    const state = this.streamer.tiles.get(key);
+                    if (state && state.lod === 0 && this.tileMeshes.has(key) && this.data.tile(key)) this.buildTile(key, 0);
+                });
+            }
+        }
+        // and the ride's works that stand on that land (a slope's foot, a wall's)
+        for (const section of this.streamer.sections) {
+            const b = section.bbox;
+            if (!b || !this.roadMeshes.has(section.index) || b[2] < box[0] - reach || b[0] > box[2] + reach || b[3] < box[1] - reach || b[1] > box[3] + reach) continue;
+            this.streamer.enqueue(`works:road:${section.index}`, WorldEnvironment.LATER, () => {
+                const held = this.streamer.roads.get(section.index);
+                if (held && this.roadMeshes.has(section.index)) this.buildRoad(section, held.lod);
+            });
+        }
     }
 
     // Per-vertex hold of a side ribbon: a vertex inside the band goes under the ride surface (RoadMesh.sideRoad holdY).
@@ -802,6 +1056,10 @@ class WorldEnvironment {
     // width to its own, so the ride does not step in at the line
     static get RIDE_TAPER_M() { return 30; }
 
+    // A ride section's wall plan reads this far past its ends, so a run that crosses into the next section is one
+    // run in both (RoadMesh.WALL_GAP_M, WALL_RUN_M)
+    static get WALL_PLAN_M() { return 36; }
+
     // The ride's two ends where the road goes on through the node (no junction there): {node: {s, width}}
     rideEnds() {
         if (this.rideEndsCache) return this.rideEndsCache;
@@ -864,8 +1122,10 @@ class WorldEnvironment {
         const missing = new Set();
         const sides = [], structures = [];
         // The land a side road's structures stand on; a chunk built before a tile under it is built again when it arrives
+        // (the nodes' own land, not the land as it is cut to the walls: a road beside a wall, where the land in front
+        // is levelled, is not a road raised over the land that needs a deck)
         const groundAt = (x, z) => {
-            const y = this.ground.tileHeight(x, z);
+            const y = this.ground.tileHeight(x, z, false);
             if (y === null) missing.add(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`);
             return y;
         };
@@ -921,6 +1181,8 @@ class WorldEnvironment {
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
         // a tile under them arrives
         triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways);
+        // The land is cut to their walls (setSideWalls)
+        this.setSideWalls(k, group.userData.walls || []);
         group.userData.roads = roads;
         group.userData.works = triangles;
         triangles += this.drawSideRibbons(k, group, near);

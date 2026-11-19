@@ -506,7 +506,11 @@ class RoadSurface {
         const t = RoadSurface.textures();
         const material = new THREE.MeshStandardMaterial({
             map: t.asphalt.map, normalMap: t.asphalt.normal, roughness: 1, metalness: 0, side: THREE.DoubleSide,
-            polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, alphaToCoverage: true
+            // Drawn a little nearer than it lies, by a fixed amount only: scaled by the surface's slope to the view (a
+            // factor), a road seen edge-on was drawn in front of everything before it, a light line across the stone
+            // of its own retaining wall at the height of its edge. The land lies TerrainMesh.SINK_M under it and a side
+            // road WorldEnvironment.SIDE_UNDER_M, which the depth buffer tells apart within the near ribbon's reach
+            polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -4, alphaToCoverage: true
         });
         material.name = 'world-road-near';
         LandShade.patch(material);

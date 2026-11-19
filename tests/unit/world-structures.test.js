@@ -19,13 +19,13 @@
 //
 // What still stands, and is held here so it can only shrink (the committed head before the fix, 78aeeec: 3781
 // intrusions, 3477 seams, 8258 coplanar pairs):
-//   - 52 triangles: aprons a few centimetres into the ride's carriageway on the inside of held bends, a side road's
-//     underpass at km 6.5 under another side road, and the ride's retaining wall across the stub at the Bedrina junction
-//     (km 1.27):
-//     the physics makes it a wall (WorldGround.onRetainingWall reads the importer's drop zone) whatever is drawn, so it
-//     stays drawn there, in the stub's carriageway. The ride's works never move for another leg of the ride, for the
-//     same reason: the physics reads its verge as ground and its wall as a wall
-//   - 3 seams of retaining walls at km 0.25, 10.2 and 10.9
+//   - 32 triangles: aprons a few centimetres into the ride's carriageway on the inside of held bends, a side road's
+//     underpass at km 6.5 under another side road, and the ride's walls between two of its own legs. (The ride's wall
+//     across the stub at the Bedrina junction, km 1.27, is gone: the ride has no wall at a side road's mouth, and the
+//     physics reads the walls the ride's plan draws, WorldEnvironment.walledAt.) The ride's works never move for
+//     another leg of the ride: the physics reads its verge as ground and its wall as a wall
+//   - 7 seams of retaining walls where the walls of two legs of the ride meet in a hairpin (km 7.8, 7.9, 9.0, 9.4,
+//     10.9 and 11.0)
 //   - 284 coplanar pairs, between two side roads that leave one node (their ribbons, held under the ride, under its
 //     ribbon) and between the structures of two side roads at one node (near km 0.4 and 0.7)
 import { describe, test, expect, beforeAll } from '@jest/globals';
@@ -33,7 +33,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { structureWindow, structureSeams, coplanarOverlaps } from '../helpers/world-structures.js';
 
-const LIMIT = { intrusions: 52, physics: 1, seams: 3, coplanar: 284 };
+const LIMIT = { intrusions: 32, physics: 0, seams: 7, coplanar: 284 };
 
 const game = loadGame(undefined, []);
 const { THREE, WorldEnvironment } = game;

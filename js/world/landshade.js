@@ -196,11 +196,11 @@ class LandShade {
         material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, shared);
             shader.vertexShader = shader.vertexShader
-                .replace('#include <common>', `#include <common>\nuniform float uDrop;\nvarying vec3 vLandPos;${stone ? '\nvarying vec3 vLandNormal;' : ''}`)
+                .replace('#include <common>', `#include <common>\nuniform float uDrop;\nvarying vec3 vLandPos;${stone ? '\nvarying vec3 vLandNormal;\nattribute vec2 wallFace;\nvarying vec2 vWallFace;' : ''}`)
                 .replace('#include <begin_vertex>', curvature
                     ? `#include <begin_vertex>\n{ vec3 eye = -(transpose(mat3(viewMatrix)) * viewMatrix[3].xyz); vec2 d = (modelMatrix * vec4(transformed, 1.0)).xz - eye.xz; transformed.y -= dot(d, d) * uDrop; }`
                     : '#include <begin_vertex>')
-                .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${stone ? '\nvLandNormal = mat3(modelMatrix) * objectNormal;' : ''}`);
+                .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${stone ? '\nvLandNormal = mat3(modelMatrix) * objectNormal;\nvWallFace = wallFace;' : ''}`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
 uniform vec3 uAerialColor;
@@ -210,7 +210,7 @@ uniform float uIndirect;
 uniform float uLandFloor;
 uniform float uDetail;
 varying vec3 vLandPos;
-${stone ? 'varying vec3 vLandNormal;' : ''}
+${stone ? 'varying vec3 vLandNormal;\nvarying vec2 vWallFace;' : ''}
 float landHash(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float landNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
@@ -234,7 +234,9 @@ float landNoise(vec2 p) {
     // so a wall reads the same at any heading
     vec3 n = normalize(vLandNormal);
     vec2 t = normalize(vec2(-n.z, n.x) + vec2(1e-4, 0.0));
-    float u = dot(vLandPos.xz, t);
+    // A retaining wall's face gives its own metres along (RoadMesh.edgeWorks wallFace), so the courses run on across
+    // its segments; any other stone is read along its own horizontal
+    float u = vWallFace.y > 0.5 ? vWallFace.x : dot(vLandPos.xz, t);
     float y = vLandPos.y + ${f(S.wanderM)} * (landNoise(vec2(u * 0.9, vLandPos.y * 0.5)) - 0.5);
     float band = floor(y / ${f(S.bandM)});
     float inBand = fract(y / ${f(S.bandM)});

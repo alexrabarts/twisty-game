@@ -255,10 +255,394 @@ class TerrainMesh {
         return out;
     }
 
+    // The land in front of a retaining wall reaches this far behind the wall's face, so the stone stands in it
+    static get CUT_BACK_M() { return 0.3; }
+    // Over a wall's last metres the cut closes: the land in front rises to the wall's top at its end
+    static get CUT_TAPER_M() { return 6; }
+    // The nodes in front of a wall within this of a point on its foot set the land's height there
+    static get CUT_REACH_M() { return 12.5; }
+
+    // The land of a tile cut to the retaining walls that cross it. A height grid of 8 m nodes cannot hold a wall: the
+    // triangle from the last node in front of the wall to the first node behind it is a ramp through the wall's
+    // plane, a mound of land in front of the stone. So:
+    //   - each full-detail triangle a wall's line crosses is cut along that line (CUT_BACK_M behind the face): the part
+    //     in front keeps the height of the node in front (the land meets the wall's foot, level), the part behind keeps
+    //     the triangle's own plane (under the road), and a face of land closes the step between them behind the stone.
+    //     Over a wall's last CUT_TAPER_M the step closes: the wall ends in the ground
+    //   - a node in front of a wall, within CUT_REACH_M of it, that stands higher than a slope at the batter
+    //     (RoadMesh.BATTER) up from a node farther from the wall (with no wall between the two) stands level with the
+    //     lowest such node instead: land does not climb to a wall steeper than a fill stands, the wall holds that
+    //     height, and a node the importer carved for the road above just outside its drawn edge is no tooth of land
+    //     in front of the stone
+    // `runs` are the walls' top lines ([{points: [[x, y, z]], out: [[ox, oz]]}], RoadMesh.wallRuns); `near` reads the
+    // neighbouring tiles' nodes (TerrainMesh.node). Returns a Map from a triangle (cell * 2 + which, cell = b * 64 + a)
+    // to {nodes: [[i, j] x 3], chain, front: {verts, tris}, behind: {verts, tris}}: a vertex is {x, z, node (0 to 2, or
+    // -1), w (its weights on the three nodes), tau (how far the step has closed there: 0 the full step, 1 none)} and,
+    // on the cut, where the land in front stands: `fn` (the node in front on the edge it lies on), `mix` (between two
+    // such, along the cut) or `f` (a height). The Map's `lowered` is a Map from a node (j * 65 + i) to its lowered
+    // height. Null when nothing is cut or lowered
+    // `roadOver(ax, az, bx, bz)` gives the highest road surface between two points (or -Infinity): a node is never
+    // lowered under a road that lies between it and the lower ground, so the land still meets that road's edge.
+    static cuts(tile, runs, near = null, roadOver = null) {
+        if (!runs || !runs.length) return null;
+        if (near && !near.ring) near = TerrainMesh.ring(tile, near);
+        const n = WorldData.TILE_N, cells = n - 1, c = WorldData.CELL_M;
+        const baseX = tile.tx * WorldData.TILE_M, baseZ = tile.tz * WorldData.TILE_M;
+        const back = TerrainMesh.CUT_BACK_M, taper = TerrainMesh.CUT_TAPER_M, reach = TerrainMesh.CUT_REACH_M;
+        const out = new Map();
+        const q = {};
+        // The walls' lines: each top line set back, and on past each end (closing over the taper, then closed)
+        const lines = [];
+        for (const run of runs) {
+            const m = run.points.length;
+            if (m < 2) continue;
+            const chain = run.points.map((p, k) => ({ x: p[0] - run.out[k][0] * back, z: p[2] - run.out[k][1] * back, nx: run.out[k][0], nz: run.out[k][1], tau: 0 }));
+            // A wall ends in the ground: over its last CUT_TAPER_M the step closes, so the land in front rises to
+            // the wall's top at its end and the land past it is as the nodes give it
+            const along = [0];
+            for (let k = 1; k < m; k++) along.push(along[k - 1] + Math.hypot(chain[k].x - chain[k - 1].x, chain[k].z - chain[k - 1].z));
+            chain.forEach((p, k) => { p.tau = Math.max(0, 1 - Math.min(along[k], along[m - 1] - along[k]) / taper); });
+            const extend = (end, next) => {
+                const len = Math.hypot(end.x - next.x, end.z - next.z) || 1;
+                const ux = (end.x - next.x) / len, uz = (end.z - next.z) / len;
+                return [taper, taper + 24].map(d => ({ x: end.x + ux * d, z: end.z + uz * d, nx: end.nx, nz: end.nz, tau: 1 }));
+            };
+            const head = extend(chain[0], chain[1]), tail = extend(chain[m - 1], chain[m - 2]);
+            const line = [head[1], head[0], ...chain, tail[0], tail[1]];
+            let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+            for (const p of line) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
+            const pad = 5 * c;
+            if (x1 < baseX - pad || z1 < baseZ - pad || x0 > baseX + WorldData.TILE_M + pad || z0 > baseZ + WorldData.TILE_M + pad) continue;
+            line.box = [x0, z0, x1, z1];
+            lines.push(line);
+        }
+        if (!lines.length) return null;
+        // Metres in front of a wall's line (negative behind it), read on the wall itself (not past its ends);
+        // `ended` when the nearest of it is one of its ends
+        const side = { d: 0, ended: false };
+        const sideOf = (line, x, z) => {
+            let best = Infinity;
+            for (let k = 2; k + 3 < line.length; k++) {
+                const a = line[k], b = line[k + 1];
+                const dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz;
+                const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / len2));
+                const px = a.x + dx * t, pz = a.z + dz * t, dist = (x - px) * (x - px) + (z - pz) * (z - pz);
+                if (dist < best) {
+                    best = dist;
+                    side.d = (x - px) * (a.nx + (b.nx - a.nx) * t) + (z - pz) * (a.nz + (b.nz - a.nz) * t);
+                    side.ended = (k === 2 && t === 0) || (k + 4 === line.length && t === 1);
+                    side.tau = a.tau + (b.tau - a.tau) * t;
+                }
+            }
+            side.near = Math.sqrt(best);
+            return side;
+        };
+        // Whether a wall lies between two points
+        const walled = (ax, az, bx, bz) => {
+            for (const line of lines) {
+                const [x0, z0, x1, z1] = line.box;
+                if (Math.max(ax, bx) < x0 || Math.min(ax, bx) > x1 || Math.max(az, bz) < z0 || Math.min(az, bz) > z1) continue;
+                for (let k = 2; k + 3 < line.length; k++) {
+                    const p = line[k], r = line[k + 1];
+                    const d1 = (bx - ax) * (p.z - az) - (bz - az) * (p.x - ax), d2 = (bx - ax) * (r.z - az) - (bz - az) * (r.x - ax);
+                    if ((d1 > 0) === (d2 > 0)) continue;
+                    const d3 = (r.x - p.x) * (az - p.z) - (r.z - p.z) * (ax - p.x), d4 = (r.x - p.x) * (bz - p.z) - (r.z - p.z) * (bx - p.x);
+                    if ((d3 > 0) !== (d4 > 0)) return true;
+                }
+            }
+            return false;
+        };
+        // The nodes in front of a wall within reach, a little past the tile's edges so two tiles lower the nodes they
+        // share alike: each with the wall it is nearest in front of
+        const W = 4, span = cells + 2 * W + 1;
+        const slot = (i, j) => (j + W) * span + i + W;
+        const raw = new Map();
+        const heightOf = (i, j) => { const k = slot(i, j); let h = raw.get(k); if (h === undefined) { h = TerrainMesh.node(tile, i, j, near, q).h; raw.set(k, h); } return h; };
+        const front = new Map();
+        for (const line of lines) {
+            for (let k = 2; k + 3 < line.length; k++) {
+                const a = line[k], b = line[k + 1];
+                const i0 = Math.max(-W, Math.floor((Math.min(a.x, b.x) - reach - baseX) / c)), i1 = Math.min(cells + W, Math.ceil((Math.max(a.x, b.x) + reach - baseX) / c));
+                const j0 = Math.max(-W, Math.floor((Math.min(a.z, b.z) - reach - baseZ) / c)), j1 = Math.min(cells + W, Math.ceil((Math.max(a.z, b.z) + reach - baseZ) / c));
+                for (let j = j0; j <= j1; j++) {
+                    for (let i = i0; i <= i1; i++) {
+                        const key = slot(i, j);
+                        const held = front.get(key);
+                        if (held && held.line === line) continue;
+                        const at = sideOf(line, baseX + i * c, baseZ + j * c);
+                        if (at.ended || at.d <= 0 || at.d > reach || at.near > reach) continue;
+                        if (!held || at.d < held.d) front.set(key, { i, j, d: at.d, line, tau: at.tau });
+                    }
+                }
+            }
+        }
+        const lowered = new Map();
+        const low = new Map();
+        const batter = RoadMesh.BATTER;
+        for (const node of [...front.values()].sort((p, r) => r.d - p.d || p.j - r.j || p.i - r.i)) {
+            const x = baseX + node.i * c, z = baseZ + node.j * c;
+            const own = heightOf(node.i, node.j);
+            let y = own;
+            for (let j = node.j - 2; j <= node.j + 2; j++) {
+                for (let i = node.i - 2; i <= node.i + 2; i++) {
+                    if ((i === node.i && j === node.j) || i < -W || j < -W || i > cells + W || j > cells + W) continue;
+                    let far = low.has(slot(i, j)) ? low.get(slot(i, j)) : heightOf(i, j);
+                    const dist = Math.hypot(i - node.i, j - node.j) * c;
+                    if (far >= y || far + batter * dist >= own) continue;
+                    // Farther from the wall than this node, with no wall between the two
+                    const ox = baseX + i * c, oz = baseZ + j * c;
+                    const at = sideOf(node.line, ox, oz);
+                    if (at.d < node.d + 1 || walled(x, z, ox, oz)) continue;
+                    // Not under a road that lies between: the land by that road stays at its edge
+                    if (roadOver) far = Math.max(far, roadOver(x, z, ox, oz));
+                    if (far >= y || far + batter * dist >= own) continue;
+                    y = far;
+                }
+            }
+            // Less toward the wall's end, where the land in front rises to its top (the cut closes there)
+            y = own - (own - y) * (1 - Math.min(1, Math.max(0, node.tau)));
+            if (y > own - 0.05) continue;
+            low.set(slot(node.i, node.j), y);
+            if (node.i >= 0 && node.j >= 0 && node.i <= cells && node.j <= cells) lowered.set(node.j * n + node.i, y);
+        }
+        // The height of the land in front at a point of a line with no node in front on its own edge: the nodes in
+        // front of the wall within reach, the nearest by far the most, or null with none
+        const frontAt = line => (x, z) => {
+            let sum = 0, weight = 0;
+            const ci = Math.round((x - baseX) / c), cj = Math.round((z - baseZ) / c);
+            for (let j = cj - 2; j <= cj + 2; j++) {
+                for (let i = ci - 2; i <= ci + 2; i++) {
+                    if (i < -W || j < -W || i > cells + W || j > cells + W) continue;
+                    const dx = baseX + i * c - x, dz = baseZ + j * c - z, d2 = dx * dx + dz * dz;
+                    if (d2 > reach * reach || sideOf(line, baseX + i * c, baseZ + j * c).d <= 0) continue;
+                    const w = 1 / (d2 * d2 + 1);
+                    sum += (low.has(slot(i, j)) ? low.get(slot(i, j)) : heightOf(i, j)) * w;
+                    weight += w;
+                }
+            }
+            return weight ? sum / weight : null;
+        };
+        // The cells each line passes, and each of their two triangles cut by the part of the line inside it
+        for (const line of lines) {
+            const seen = new Set();
+            const ahead = frontAt(line);
+            for (let k = 0; k + 1 < line.length; k++) {
+                const a = line[k], b = line[k + 1];
+                if (a.tau >= 1 && b.tau >= 1) continue;
+                const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.z - a.z) / 2));
+                for (let e = 0; e <= steps; e++) {
+                    const x = a.x + ((b.x - a.x) * e) / steps, z = a.z + ((b.z - a.z) * e) / steps;
+                    const ca = Math.floor((x - baseX) / c), cb = Math.floor((z - baseZ) / c);
+                    for (let db = -1; db <= 1; db++) for (let da = -1; da <= 1; da++) {
+                        const ia = ca + da, ib = cb + db;
+                        if (ia < 0 || ib < 0 || ia >= cells || ib >= cells) continue;
+                        for (let which = 0; which < 2; which++) {
+                            const id = (ib * cells + ia) * 2 + which;
+                            if (seen.has(id)) continue;
+                            seen.add(id);
+                            if (out.has(id)) continue;
+                            const nodes = which === 0 ? [[ia, ib], [ia, ib + 1], [ia + 1, ib]] : [[ia + 1, ib], [ia, ib + 1], [ia + 1, ib + 1]];
+                            const record = TerrainMesh.cutTriangle(nodes.map(([i, j]) => [baseX + i * c, baseZ + j * c]), line, ahead);
+                            if (record) { record.nodes = nodes; out.set(id, record); }
+                        }
+                    }
+                }
+            }
+        }
+        if (!out.size && !lowered.size) return null;
+        out.lowered = lowered;
+        return out;
+    }
+
+    // One triangle (three [x, z]) cut by the first part of `line` that crosses it from one edge to another. Null when
+    // the line does not cross it, or closes nothing there
+    static cutTriangle(tri, line, frontAt) {
+        const area = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
+        const sign = area > 0 ? 1 : -1;
+        // How far inside edge e (from corner e to corner e + 1) a point is
+        const inside = (e, x, z) => { const a = tri[e], b = tri[(e + 1) % 3]; return sign * ((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0])); };
+        const part = [];
+        let entry = -1, exit = -1;
+        for (let k = 0; k + 1 < line.length && exit < 0; k++) {
+            const a = line[k], b = line[k + 1];
+            let t0 = 0, t1 = 1, e0 = -1, e1 = -1;
+            for (let e = 0; e < 3 && t0 <= t1; e++) {
+                const da = inside(e, a.x, a.z), db = inside(e, b.x, b.z);
+                if (da < 0 && db < 0) { t0 = 2; break; }
+                if (da < 0) { const t = da / (da - db); if (t > t0) { t0 = t; e0 = e; } }
+                else if (db < 0) { const t = da / (da - db); if (t < t1) { t1 = t; e1 = e; } }
+            }
+            if (t1 - t0 < 1e-9) {
+                // Left through a corner, or only touched: not a crossing this can cut
+                if (part.length) return null;
+                continue;
+            }
+            const at = t => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, nx: a.nx + (b.nx - a.nx) * t, nz: a.nz + (b.nz - a.nz) * t, tau: a.tau + (b.tau - a.tau) * t });
+            if (!part.length) {
+                // The line starts inside the triangle only at its own first point, which lies far past the wall
+                if (e0 < 0) return null;
+                entry = e0;
+                part.push(at(t0));
+            }
+            part.push(at(t1));
+            if (e1 >= 0) exit = e1;
+        }
+        if (entry < 0 || exit < 0) return null;
+        if (part.every(p => p.tau >= 1 - 1e-6)) return null;
+        const run = [0];
+        for (let k = 0; k + 1 < part.length; k++) run.push(run[k] + Math.hypot(part[k + 1].x - part[k].x, part[k + 1].z - part[k].z));
+        const length = run[run.length - 1];
+        if (length < 0.05) return null;
+        const bary = (x, z) => {
+            const w1 = ((x - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (z - tri[0][1])) / area;
+            const w2 = ((tri[1][0] - tri[0][0]) * (z - tri[0][1]) - (x - tri[0][0]) * (tri[1][1] - tri[0][1])) / area;
+            return [1 - w1 - w2, w1, w2];
+        };
+        const corner = e => ({ x: tri[e][0], z: tri[e][1], node: e, w: [e === 0 ? 1 : 0, e === 1 ? 1 : 0, e === 2 ? 1 : 0], tau: 1 });
+        const chain = part.map(p => ({ x: p.x, z: p.z, node: -1, w: bary(p.x, p.z), tau: Math.min(1, Math.max(0, p.tau)), fn: -1, mix: null, f: null, nx: p.nx, nz: p.nz }));
+        // Where along the triangle's outline a point of edge e lies: e + its share of the edge
+        const along = (e, p) => { const a = tri[e], b = tri[(e + 1) % 3]; return e + Math.hypot(p.x - a[0], p.z - a[1]) / Math.hypot(b[0] - a[0], b[1] - a[1]); };
+        const pe = along(entry, part[0]), px = along(exit, part[part.length - 1]);
+        const corners = (from, to) => { const list = []; const end = to > from ? to : to + 3; for (let k = Math.floor(from) + 1; k <= end; k++) list.push(corner(k % 3)); return list; };
+        const first = chain[0], last = chain[chain.length - 1], inner = chain.slice(1, -1);
+        // The outline from the entry round to the exit and back along the line, and the other way
+        const one = [first, ...corners(pe, px), last, ...inner.slice().reverse()];
+        const two = [last, ...corners(px, pe), first, ...inner];
+        const within = (poly, x, z) => {
+            let on = false;
+            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                if ((poly[i].z > z) !== (poly[j].z > z) && x < ((poly[j].x - poly[i].x) * (z - poly[i].z)) / (poly[j].z - poly[i].z) + poly[i].x) on = !on;
+            }
+            return on;
+        };
+        const mid = Math.floor((part.length - 1) / 2);
+        const mx = (part[mid].x + part[mid + 1].x) / 2, mz = (part[mid].z + part[mid + 1].z) / 2;
+        const nx = part[mid].nx + part[mid + 1].nx, nz = part[mid].nz + part[mid + 1].nz, nl = Math.hypot(nx, nz) || 1;
+        const ahead = [mx + (nx / nl) * 0.02, mz + (nz / nl) * 0.02], behind = [mx - (nx / nl) * 0.02, mz - (nz / nl) * 0.02];
+        let frontIs;
+        if (within(one, ahead[0], ahead[1]) || within(two, behind[0], behind[1])) frontIs = one;
+        else if (within(two, ahead[0], ahead[1]) || within(one, behind[0], behind[1])) frontIs = two;
+        else return null;
+        // Where the land in front stands at each end of the cut: at the node in front on the edge the end lies on
+        // (so two triangles that share the edge agree), else as the nodes in front round it give
+        const inFront = new Set(frontIs.filter(v => v.node >= 0).map(v => v.node));
+        [[first, entry], [last, exit]].forEach(([v, e]) => {
+            const a = e, b = (e + 1) % 3;
+            if (inFront.has(a) !== inFront.has(b)) v.fn = inFront.has(a) ? a : b;
+            else v.f = frontAt(v.x, v.z);
+        });
+        inner.forEach((v, k) => { v.mix = { a: first, b: last, t: run[k + 1] / length }; });
+        for (const v of [first, last]) if (v.fn < 0 && v.f === null) v.tau = 1;
+        const shape = poly => {
+            const verts = [];
+            for (const v of poly) {
+                const prior = verts[verts.length - 1];
+                if (prior && Math.hypot(prior.x - v.x, prior.z - v.z) < 1e-6) continue;
+                verts.push(v);
+            }
+            if (verts.length > 1 && Math.hypot(verts[0].x - verts[verts.length - 1].x, verts[0].z - verts[verts.length - 1].z) < 1e-6) verts.pop();
+            if (verts.length < 3) return { verts: [], tris: [] };
+            // Wound as the triangle itself is, so every part is lit from the same side as the land round it
+            const tris = THREE.ShapeUtils.triangulateShape(verts.map(v => new THREE.Vector2(v.x, v.z)), []).map(([a, b, c]) => {
+                const turn = (verts[b].x - verts[a].x) * (verts[c].z - verts[a].z) - (verts[c].x - verts[a].x) * (verts[b].z - verts[a].z);
+                return turn * sign > 0 ? [a, b, c] : [a, c, b];
+            });
+            return { verts, tris };
+        };
+        return { chain, front: shape(frontIs), behind: shape(frontIs === one ? two : one) };
+    }
+
+    // The height of the land at (x, z) of a tile, on the triangles it is drawn with at full detail: the nodes' two
+    // triangles a cell, or the cut ones (TerrainMesh.cuts). The heights are the tile's own (not sunk: what the physics reads)
+    static heightAt(tile, x, z, cuts = null) {
+        const n = WorldData.TILE_N, m = WorldData.TILE_M, c = WorldData.CELL_M;
+        const fx = (x - tile.tx * m) / c, fz = (z - tile.tz * m) / c;
+        const i = Math.max(0, Math.min(n - 2, Math.floor(fx))), j = Math.max(0, Math.min(n - 2, Math.floor(fz)));
+        const u = Math.max(0, Math.min(1, fx - i)), v = Math.max(0, Math.min(1, fz - j));
+        const h = tile.heights;
+        let h00 = h[j * n + i], h10 = h[j * n + i + 1], h01 = h[(j + 1) * n + i], h11 = h[(j + 1) * n + i + 1];
+        if (cuts && cuts.lowered.size) {
+            const low = cuts.lowered;
+            let y;
+            if ((y = low.get(j * n + i)) !== undefined) h00 = y;
+            if ((y = low.get(j * n + i + 1)) !== undefined) h10 = y;
+            if ((y = low.get((j + 1) * n + i)) !== undefined) h01 = y;
+            if ((y = low.get((j + 1) * n + i + 1)) !== undefined) h11 = y;
+        }
+        const which = u + v <= 1 ? 0 : 1;
+        const record = cuts ? cuts.get((j * (n - 1) + i) * 2 + which) : undefined;
+        if (record) {
+            const nodeH = which === 0 ? [h00, h01, h10] : [h10, h01, h11];
+            const y = TerrainMesh.cutHeight(record, x, z, nodeH);
+            if (y !== null) return y;
+        }
+        // The same two triangles TerrainMesh draws (split along the 01-10 diagonal), so the ground is the drawn ground
+        return which === 0 ? h00 + u * (h10 - h00) + v * (h01 - h00) : h11 + (1 - u) * (h01 - h11) + (1 - v) * (h10 - h11);
+    }
+
+    // Where the land in front stands at a vertex on a cut, the three nodes at `nodeH`; null where it is not known
+    static cutFrontY(vertex, nodeH, sink) {
+        if (vertex.fn >= 0) return nodeH[vertex.fn];
+        if (vertex.mix) {
+            const a = TerrainMesh.cutFrontY(vertex.mix.a, nodeH, sink), b = TerrainMesh.cutFrontY(vertex.mix.b, nodeH, sink);
+            return a === null ? b : b === null ? a : a + (b - a) * vertex.mix.t;
+        }
+        return vertex.f === null ? null : vertex.f - sink;
+    }
+
+    // The height a tile's mesh (TerrainMesh.build) draws its land at over (x, z), on its own triangles: the nodes' two
+    // a cell at its level of detail, or the parts of a cut triangle
+    static drawnAt(mesh, x, z) {
+        const lod = mesh.userData.lod, stride = 1 << lod, cell = WorldData.CELL_M * stride, side = (WorldData.TILE_N - 1) / stride + 1;
+        const [tx, tz] = mesh.userData.tile.split(',').map(Number);
+        const pos = mesh.geometry.attributes.position.array;
+        const fx = (x - tx * WorldData.TILE_M) / cell, fz = (z - tz * WorldData.TILE_M) / cell;
+        const i = Math.max(0, Math.min(side - 2, Math.floor(fx))), j = Math.max(0, Math.min(side - 2, Math.floor(fz)));
+        const u = fx - i, v = fz - j;
+        const Y = (a, b) => pos[((j + b) * side + i + a) * 3 + 1];
+        const which = u + v <= 1 ? 0 : 1;
+        const record = mesh.userData.cuts ? mesh.userData.cuts.get((j * (side - 1) + i) * 2 + which) : undefined;
+        if (record) {
+            const y = TerrainMesh.cutHeight(record, x, z, which === 0 ? [Y(0, 0), Y(0, 1), Y(1, 0)] : [Y(1, 0), Y(0, 1), Y(1, 1)], TerrainMesh.SINK_M);
+            if (y !== null) return y;
+        }
+        return which === 0 ? Y(0, 0) + u * (Y(1, 0) - Y(0, 0)) + v * (Y(0, 1) - Y(0, 0)) : Y(1, 1) + (1 - u) * (Y(0, 1) - Y(1, 1)) + (1 - v) * (Y(1, 0) - Y(1, 1));
+    }
+
+    // The height of a vertex of a cut triangle whose three nodes stand at `nodeH`: in front of the wall the land in
+    // front's (a height of its own less `sink`), closing to the triangle's own plane by its tau; behind it the
+    // triangle's own plane
+    static cutVertexY(vertex, nodeH, front, sink = 0) {
+        if (vertex.node >= 0) return nodeH[vertex.node];
+        const plane = vertex.w[0] * nodeH[0] + vertex.w[1] * nodeH[1] + vertex.w[2] * nodeH[2];
+        if (!front || vertex.tau >= 1) return plane;
+        const f = TerrainMesh.cutFrontY(vertex, nodeH, sink);
+        return f === null ? plane : Math.min(plane, f + (plane - f) * vertex.tau);
+    }
+
+    // The height at (x, z) inside a cut triangle, or null where no part of it holds the point
+    static cutHeight(record, x, z, nodeH, sink = 0) {
+        for (const part of [record.front, record.behind]) {
+            const front = part === record.front;
+            for (const [a, b, c] of part.tris) {
+                const A = part.verts[a], B = part.verts[b], C = part.verts[c];
+                const d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+                if (Math.abs(d) < 1e-12) continue;
+                const wa = ((B.z - C.z) * (x - C.x) + (C.x - B.x) * (z - C.z)) / d, wb = ((C.z - A.z) * (x - C.x) + (A.x - C.x) * (z - C.z)) / d, wc = 1 - wa - wb;
+                if (wa < -1e-7 || wb < -1e-7 || wc < -1e-7) continue;
+                return wa * TerrainMesh.cutVertexY(A, nodeH, front, sink) + wb * TerrainMesh.cutVertexY(B, nodeH, front, sink) + wc * TerrainMesh.cutVertexY(C, nodeH, front, sink);
+            }
+        }
+        return null;
+    }
+
     // The mesh of tile (tx, tz): {mesh, triangles}. `cover` may be null (grass everywhere). `holdY(x, y, z)`, when
     // given, may lower a carved vertex further (under the ride's road, WorldEnvironment.buildTile). `near(key)` gives a
     // resident neighbouring tile or null (TerrainMesh.node): the tile reads its neighbours' nodes across its edges.
-    static build(tile, cover, lod, holdY = null, near = null) {
+    // `cuts` (TerrainMesh.cuts) are the full-detail triangles cut to the retaining walls: drawn at LOD0 in place of the
+    // nodes' own.
+    static build(tile, cover, lod, holdY = null, near = null, cuts = null) {
+        if (lod !== 0) cuts = null;
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
         const n = WorldData.TILE_N;
         const stride = 1 << lod;
@@ -289,19 +673,76 @@ class TerrainMesh {
                 const carved = TerrainMesh.carved(zone);
                 const x = baseX + i * WorldData.CELL_M, z = baseZ + j * WorldData.CELL_M;
                 let drawnY = TerrainMesh.vertexY(tile, lod, i, j, near);
+                const lowered = cuts ? cuts.lowered.get(j * n + i) : undefined;
+                if (lowered !== undefined) drawnY = Math.min(drawnY, carved ? lowered - TerrainMesh.SINK_M : lowered);
                 if (carved && holdY) drawnY = holdY(x, drawnY, z);
                 const at = (j * n + i) * 3;
                 linear[0] = grid[at]; linear[1] = grid[at + 1]; linear[2] = grid[at + 2];
                 put(b * side + a, x, drawnY, z, linear);
             }
         }
-        const indices = new Uint32Array(cells * cells * 6 + 4 * cells * 6 + crowns.length * sides * 3);
+        let indices = new Uint32Array(cells * cells * 6 + 4 * cells * 6 + crowns.length * sides * 3);
         let at = 0;
         for (let b = 0; b < cells; b++) {
             for (let a = 0; a < cells; a++) {
                 const v00 = b * side + a, v10 = v00 + 1, v01 = v00 + side, v11 = v01 + 1;
-                indices[at++] = v00; indices[at++] = v01; indices[at++] = v10;
-                indices[at++] = v10; indices[at++] = v01; indices[at++] = v11;
+                const id = (b * cells + a) * 2;
+                if (!cuts || !cuts.has(id)) { indices[at++] = v00; indices[at++] = v01; indices[at++] = v10; }
+                if (!cuts || !cuts.has(id + 1)) { indices[at++] = v10; indices[at++] = v01; indices[at++] = v11; }
+            }
+        }
+        // The cut triangles: their parts in front of and behind each wall, the face that closes the step between
+        // them, and where a cut meets the tile's edge, the two heights the skirt hangs from there
+        const extra = { positions: [], shades: [], land: [], faces: [], flat: [] };
+        const edgeCuts = new Map();
+        if (cuts) {
+            const add = (x, y, z, colour) => { extra.positions.push(x, y, z); extra.shades.push(colour[0], colour[1], colour[2]); return vertexCount + extra.positions.length / 3 - 1; };
+            const mix = [0, 0, 0];
+            for (const record of cuts.values()) {
+                const own = record.nodes.map(([i, j]) => j * side + i);
+                const nodeY = own.map(v => positions[v * 3 + 1]);
+                const colourOf = vertex => {
+                    for (let k = 0; k < 3; k++) mix[k] = vertex.w[0] * shades[own[0] * 3 + k] + vertex.w[1] * shades[own[1] * 3 + k] + vertex.w[2] * shades[own[2] * 3 + k];
+                    return mix;
+                };
+                const drawn = new Map();
+                for (const part of [record.front, record.behind]) {
+                    const front = part === record.front;
+                    const index = part.verts.map(vertex => {
+                        if (vertex.node >= 0) return own[vertex.node];
+                        let y = TerrainMesh.cutVertexY(vertex, nodeY, front, TerrainMesh.SINK_M);
+                        if (front && holdY) y = holdY(vertex.x, y, vertex.z);
+                        const v = add(vertex.x, y, vertex.z, colourOf(vertex));
+                        drawn.set(`${front ? 'f' : 'b'}${record.chain.indexOf(vertex)}`, v);
+                        return v;
+                    });
+                    for (const [a, b, c] of part.tris) extra.land.push(index[a], index[b], index[c]);
+                }
+                // The face between the two parts along the cut, where the step is open
+                for (let k = 0; k + 1 < record.chain.length; k++) {
+                    const a = record.chain[k], b = record.chain[k + 1];
+                    if (a.tau >= 1 && b.tau >= 1) continue;
+                    const fa = drawn.get(`f${k}`), fb = drawn.get(`f${k + 1}`), ba = drawn.get(`b${k}`), bb = drawn.get(`b${k + 1}`);
+                    if (fa === undefined || fb === undefined || ba === undefined || bb === undefined) continue;
+                    // Wound to face out from the wall, the side it is seen from
+                    const px = extra.positions[(fa - vertexCount) * 3], pz = extra.positions[(fa - vertexCount) * 3 + 2], qx = extra.positions[(fb - vertexCount) * 3], qz = extra.positions[(fb - vertexCount) * 3 + 2];
+                    const out = (qz - pz) * a.nx - (qx - px) * a.nz > 0;
+                    const at4 = (out ? [fa, fb, bb, ba] : [fb, fa, ba, bb]).map(v => { const o = (v - vertexCount) * 3; const w = add(extra.positions[o], extra.positions[o + 1], extra.positions[o + 2], extra.shades.slice(o, o + 3)); extra.flat.push(w); return w; });
+                    extra.faces.push(at4[0], at4[1], at4[2], at4[0], at4[2], at4[3]);
+                }
+                // A cut's end on the tile's edge: the heights of the two parts there
+                [0, record.chain.length - 1].forEach(k => {
+                    const vertex = record.chain[k];
+                    const fi = (vertex.x - baseX) / WorldData.CELL_M, fj = (vertex.z - baseZ) / WorldData.CELL_M;
+                    const edge = Math.abs(fj) < 1e-7 ? 0 : Math.abs(fj - cells) < 1e-7 ? 1 : Math.abs(fi) < 1e-7 ? 2 : Math.abs(fi - cells) < 1e-7 ? 3 : -1;
+                    const f = drawn.get(`f${k}`), b = drawn.get(`b${k}`);
+                    if (edge < 0 || f === undefined || b === undefined) return;
+                    const t = edge < 2 ? fi : fj, seg = Math.max(0, Math.min(cells - 1, Math.floor(t)));
+                    // Which of the two parts holds the edge's node before the cut
+                    const before = edge < 2 ? [seg, edge === 0 ? 0 : cells] : [edge === 2 ? 0 : cells, seg];
+                    const frontFirst = record.front.verts.some(v => v.node >= 0 && record.nodes[v.node][0] === before[0] && record.nodes[v.node][1] === before[1]);
+                    edgeCuts.set(edge * 128 + seg, { f, b, frontFirst });
+                });
             }
         }
         // Skirts: a copy of each edge vertex, dropped to the lowest the edge is drawn at any LOD, joined to the edge
@@ -324,10 +765,40 @@ class TerrainMesh {
             }
             for (let k = 0; k + 1 < side; k++) {
                 const a = edge(k), b = edge(k + 1), c = first + k, d = first + k + 1;
+                const cut = edgeCuts.get(e * 128 + k);
+                if (cut) {
+                    // The skirt hangs from each part of the cut edge, as deep as the deeper of its two neighbours
+                    const low = Math.min(positions[c * 3 + 1], positions[d * 3 + 1]);
+                    const hang = v => { const o = (v - vertexCount) * 3; extra.positions.push(extra.positions[o], Math.min(low, extra.positions[o + 1] - TerrainMesh.SKIRT_M), extra.positions[o + 2]); extra.shades.push(extra.shades[o], extra.shades[o + 1], extra.shades[o + 2]); const w = vertexCount + extra.positions.length / 3 - 1; extra.flat.push(w); return w; };
+                    const [p, q] = cut.frontFirst ? [cut.f, cut.b] : [cut.b, cut.f];
+                    extra.faces.push(a, c, p, p, c, hang(p), q, hang(q), b, b, hang(q), d);
+                    continue;
+                }
                 indices[at++] = a; indices[at++] = c; indices[at++] = b;
                 indices[at++] = b; indices[at++] = c; indices[at++] = d;
             }
         });
+        // The land's triangles first (the nodes' own, then the cut ones), then the skirts and the closing faces
+        const gridLand = cells * cells * 6 - (cuts ? cuts.size * 3 : 0);
+        let landCount = gridLand;
+        let positionsAll = positions, shadesAll = shades;
+        if (cuts) {
+            const rest = indices.subarray(gridLand, at);
+            const joined = new Uint32Array(gridLand + extra.land.length + rest.length + extra.faces.length + crowns.length * sides * 3);
+            joined.set(indices.subarray(0, gridLand), 0);
+            joined.set(extra.land, gridLand);
+            joined.set(rest, gridLand + extra.land.length);
+            joined.set(extra.faces, gridLand + extra.land.length + rest.length);
+            at = gridLand + extra.land.length + rest.length + extra.faces.length;
+            landCount = gridLand + extra.land.length;
+            indices = joined;
+            positionsAll = new Float32Array(positions.length + extra.positions.length);
+            positionsAll.set(positions, 0);
+            positionsAll.set(extra.positions, positions.length);
+            shadesAll = new Float32Array(shades.length + extra.shades.length);
+            shadesAll.set(shades, 0);
+            shadesAll.set(extra.shades, shades.length);
+        }
         const crown = LandShade.PALETTE.forest.map(TerrainMesh.toLinear);
         const tint = [0, 0, 0];
         crowns.forEach((c, k) => {
@@ -344,17 +815,19 @@ class TerrainMesh {
             }
         });
         const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        geometry.setAttribute('color', new THREE.BufferAttribute(shades, 3));
+        geometry.setAttribute('position', new THREE.BufferAttribute(positionsAll, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(shadesAll, 3));
         // Already linear (TerrainMesh.colours): Graphics.fixColorSpaces leaves it alone
         geometry.userData.linearColors = true;
         // Lit from the land's own triangles only, and each skirt vertex as the edge vertex it hangs from: a skirt is
         // the land closed down to its neighbour, so it reads as the hillside above it, and the edge keeps the land's
         // shade (a skirt's sideways normal averaged into it drew a dark line along every tile edge)
-        geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, cells * cells * 6), 1));
+        geometry.setIndex(new THREE.BufferAttribute(indices.subarray(0, landCount), 1));
         geometry.computeVertexNormals();
         geometry.setIndex(new THREE.BufferAttribute(indices, 1));
         const lit = geometry.attributes.normal.array;
+        // A closing face and a cut's skirt are lit as the land above them
+        for (const v of extra.flat) { lit[v * 3] = 0; lit[v * 3 + 1] = 1; lit[v * 3 + 2] = 0; }
         edges.forEach((edge, e) => {
             for (let k = 0; k < side; k++) {
                 const to = side * side + e * side + k, from = edge(k);
@@ -381,6 +854,11 @@ class TerrainMesh {
         mesh.receiveShadow = true;
         mesh.userData.world = 'terrain';
         mesh.userData.tile = tile.key;
+        // What a check needs to read the mesh on its own triangles (TerrainMesh.drawnAt): its cuts, and the vertices
+        // of what closes a step (the cuts' faces and skirts), which are no land seen from above
+        mesh.userData.lod = lod;
+        mesh.userData.cuts = cuts;
+        mesh.userData.closing = extra.flat;
         return { mesh, triangles: indices.length / 3 };
     }
 }

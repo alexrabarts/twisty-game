@@ -43,6 +43,7 @@ import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
 import { fairnessWindow } from '../tests/helpers/world-fairness.js';
+import { wallWindow, wallRuns, WALL_LIMITS } from '../tests/helpers/world-walls.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
@@ -2290,6 +2291,8 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
         const held = env.tileMeshes.get(`${tx},${tz}`);
         if (!held) return null;
         const lod = Number(/lod(\d)/.exec(held.mesh.name)[1]);
+        // On the mesh's own triangles, the ones cut to the retaining walls included (TerrainMesh.drawnAt)
+        if (TerrainMesh.drawnAt && held.mesh.userData.lod !== undefined) return { y: TerrainMesh.drawnAt(held.mesh, x, z), lod };
         const stride = 1 << lod, cell = WorldData.CELL_M * stride, side = (WorldData.TILE_N - 1) / stride + 1;
         const pos = held.mesh.geometry.attributes.position.array;
         const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
@@ -2888,15 +2891,20 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
     const mat = id => mats[id] || (mats[id] = make(id));
     const marked = new WeakSet();
     // Every vertex of a tile mesh: 0 on the land, 1 on a skirt, 2 on a forest clump
-    const markSkirt = (geometry, name) => {
+    // A tile cut to the retaining walls has more land past its grid's and its skirts' vertices (the cut triangles'
+    // parts), and the faces and skirts that close a cut (mesh.userData.closing), which are skirts here
+    const markSkirt = (mesh) => {
+        const geometry = mesh.geometry;
         if (marked.has(geometry)) return;
         marked.add(geometry);
         const count = geometry.attributes.position.count;
         const flags = new Float32Array(count);
-        const lod = /^world-terrain-.*-lod(\d)$/.exec(name);
+        const lod = /^world-terrain-.*-lod(\d)$/.exec(mesh.name);
         if (lod) {
             const side = (WorldData.TILE_N - 1) / (1 << Number(lod[1])) + 1, ground = side * side + side * 4;
-            for (let v = side * side; v < count; v++) flags[v] = v < ground ? 1 : 2;
+            const cut = !!mesh.userData.cuts;
+            for (let v = side * side; v < count; v++) flags[v] = v < ground ? 1 : cut ? 0 : 2;
+            if (cut) for (const v of mesh.userData.closing || []) flags[v] = 1;
         }
         geometry.setAttribute('skirt', new THREE.BufferAttribute(flags, 1));
     };
@@ -2914,6 +2922,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
         const tx = Math.floor(x / m), tz = Math.floor(z / m);
         const held = env.tileMeshes.get(`${tx},${tz}`);
         if (!held) return null;
+        if (TerrainMesh.drawnAt && held.mesh.userData.lod !== undefined) return TerrainMesh.drawnAt(held.mesh, x, z);
         const side = (WorldData.TILE_N - 1) / (1 << Number(/lod(\d)/.exec(held.mesh.name)[1])) + 1;
         const cell = WorldData.TILE_M / (side - 1);
         const pos = held.mesh.geometry.attributes.position.array;
@@ -3077,7 +3086,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                 const kind = kindOf(o);
                 saved.push([o, o.material, o.visible]);
                 if (kind === null || o.isInstancedMesh) { o.visible = false; return; }
-                markSkirt(o.geometry, o.name);
+                markSkirt(o);
                 if (!o.geometry.attributes.skirt) o.geometry.setAttribute('skirt', new THREE.BufferAttribute(new Float32Array(o.geometry.attributes.position.count), 1));
                 o.material = mat(kind);
             });
@@ -4671,6 +4680,86 @@ function vertexChecks(results, failures) {
     }
 }
 
+// world-walls: the retaining walls against the land drawn round them, in the page (tests/helpers/world-walls.js: the
+// bike is put down every --every metres, 300 by default, and every wall within 350 m is read from the drawn
+// triangles). It fails on land inside or in front of a wall (buried, climbs), a gap at a wall's top, at its foot or
+// past its end (top, hangs, open) and a wall in pieces (blocks, steps), over what WALL_LIMITS holds. Then the views:
+// --eyes s:lat:up:toS:toLat:toUp,... puts the eye beside the ride (metres of ride, metres right of the centre line,
+// metres over the road) and s@x:y:z:tx:ty:tz in the world's own metres; with --out each is saved, and so is a view of
+// the worst place of each kind the check found.
+//   node tools/terrain-check.mjs world-walls --world tremola --gpu [--every 300] [--eyes ...] [--out <dir> --tag T]
+WORLD_PROBES.push('world-walls');
+WORLD['world-walls'] = async (page) => {
+    const walls = await page.evaluate(async (windowSource, runsSource, placeSource, every) => {
+        const read = new Function(`return (${windowSource})`)(), runs = new Function(`return (${runsSource})`)();
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, store = {};
+        game.worldLinger = false;
+        for (let s = env.startS; s < env.endS; s += every) {
+            const p = await placeAt(Math.min(env.endS - 1, s + every / 2));
+            read({ THREE }, env, store, p);
+        }
+        const out = runs(store);
+        // Where each worst place is seen from: 14 m out from the wall's face, a little over its top
+        const eye = h => { const f = [...store.faces.values()].find(g => Math.abs((g.a.top[0] + g.b.top[0]) / 2 - h.x) < 0.2 && Math.abs((g.a.top[2] + g.b.top[2]) / 2 - h.z) < 0.2) || [...store.faces.values()].find(g => Math.hypot(g.a.top[0] - h.x, g.a.top[2] - h.z) < 0.2 || Math.hypot(g.b.top[0] - h.x, g.b.top[2] - h.z) < 0.2); return f ? { s: h.s, at: [h.x + f.ox * 14, f.a.top[1] + 3, h.z + f.oz * 14, h.x, f.a.top[1] - 2, h.z] } : null; };
+        out.worst = {};
+        for (const kind of ['buried', 'climbs', 'hangs', 'top', 'blocks', 'steps', 'open']) if (out[kind].length) out.worst[kind] = eye(out[kind][0]);
+        for (const kind of ['buried', 'climbs', 'hangs', 'top', 'blocks', 'steps', 'open']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 8) };
+        return out;
+    }, wallWindow.toString(), wallRuns.toString(), placeAt.toString(), Number(option('every') || 300));
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'walls';
+    const views = [];
+    const shoot = async (eye, name) => {
+        await page.evaluate(wallEye, placeAt.toString(), eye);
+        const file = out ? join(out, `${tag}-${name}.png`) : null;
+        if (file) await page.screenshot({ path: file });
+        views.push({ eye: name, file });
+    };
+    for (const spec of (option('eyes') ? option('eyes').split(',') : [])) {
+        // s:lat:up:toS:toLat:toUp along the ride, or s@x:y:z:tx:ty:tz in the world's own metres (the bike put down at s)
+        const eye = spec.includes('@') ? { s: Number(spec.split('@')[0]), at: spec.split('@')[1].split(':').map(Number) } : spec.split(':').map(Number);
+        await shoot(eye, spec.replace(/[:@]/g, '_'));
+    }
+    if (out) for (const [kind, eye] of Object.entries(walls.worst)) if (eye) await shoot(eye, `worst-${kind}`);
+    return { ...walls, views };
+};
+
+function wallChecks(results, failures) {
+    const walls = results['world-walls'];
+    if (!walls) return;
+    if (!(walls.faces > 500)) failures.push(`world-walls: only ${walls.faces} wall faces were read`);
+    const says = { buried: 'wall faces with the land in front at their top', climbs: 'wall faces the land climbs steeper than a fill stands', hangs: 'wall feet over the land', top: 'wall tops no road surface meets', blocks: 'runs of wall under 10 m', steps: 'pairs of runs under 12 m apart', open: 'wall ends past which the road\'s edge hangs open' };
+    for (const [kind, text] of Object.entries(says)) {
+        if (walls[kind].count > WALL_LIMITS[kind]) failures.push(`world-walls: ${walls[kind].count} ${text} (at most ${WALL_LIMITS[kind]}): ${JSON.stringify(walls[kind].worst.slice(0, 5))}`);
+    }
+}
+
+async function wallEye(placeSource, eye) {
+    const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle, route = game.environment.route;
+    game.cameraMode = 2;
+    await placeAt(s);
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 30; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const at = (s, lat, up) => { const p = route.sample(s, {}); return new THREE.Vector3(p.x + lat * Math.cos(p.heading), p.y + up, p.z - lat * Math.sin(p.heading)); };
+    if (Array.isArray(eye)) {
+        game.camera.position.copy(at(s, lat, up));
+        game.camera.lookAt(at(toS, toLat, toUp));
+    } else {
+        game.camera.position.set(eye.at[0], eye.at[1], eye.at[2]);
+        game.camera.lookAt(new THREE.Vector3(eye.at[3], eye.at[4], eye.at[5]));
+    }
+    game.camera.updateMatrixWorld(true);
+    game.graphics.render(game.scene, game.camera);
+}
+
 // The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
 const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
 
@@ -4774,6 +4863,7 @@ function worldChecks(report) {
     treeChecks(results, failures);
     roadLookChecks(results, failures);
     vertexChecks(results, failures);
+    wallChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
