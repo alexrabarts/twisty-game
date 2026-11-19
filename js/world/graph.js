@@ -117,7 +117,7 @@ class WorldGraph {
     }
 
     // The side road from a junction along `edgeId`, on through the nodes it only passes (degree 2), up to `lengthM`:
-    // [{x, z, y, heading, edgeId, run}] away from the node; `complete` false while an edge of it is not resident
+    // [{x, z, y, heading, width, bits, edgeId, run}] away from the node; `complete` false while an edge of it is not resident
     chainFrom(edgeId, nodeId, lengthM) {
         const rows = [];
         let run = 0, edge = this.edges[edgeId], from = nodeId;
@@ -130,7 +130,7 @@ class WorldGraph {
             for (let j = rows.length ? 1 : 0; j < edge.count; j++) {
                 const i = forward ? j : edge.count - 1 - j;
                 if (rows.length) run += Math.hypot(e.x[i] - rows[rows.length - 1].x, e.z[i] - rows[rows.length - 1].z);
-                rows.push({ x: e.x[i], z: e.z[i], y: e.y[i], heading: e.heading[i] + (forward ? 0 : Math.PI), edgeId: edge.id, run });
+                rows.push({ x: e.x[i], z: e.z[i], y: e.y[i], heading: e.heading[i] + (forward ? 0 : Math.PI), width: e.width[i], bits: e.flags[i], edgeId: edge.id, run });
                 if (run >= lengthM) return { rows, complete: true };
             }
             const far = forward ? edge.b : edge.a;

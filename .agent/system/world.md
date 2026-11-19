@@ -284,6 +284,20 @@ The land is shaped to the wall, not the wall to the land. The wall stands where 
 
 `tests/unit/world-walls.test.js` (on `tests/helpers/world-walls.js`) reads the drawn triangles of every wall within 350 m of the bike, every 300 m, and holds what is left in `WALL_LIMITS`. The GPU probe `world-walls` runs the same check in the page and saves a view of the worst place of each kind. Before the cut: 13 buried faces, 45 the land climbed, 29 blocks, 28 steps, 29 open ends.
 
+## A side road meets the ride
+
+These are rules of the builders, with no place named in them: every world the importer makes gets them, and `tests/unit/world-junctions.test.js` and `node tools/terrain-check.mjs world-junctions --world <id> --gpu` hold any world to them (both read the drawn triangles only). A new world passes with every count at zero before it ships; a count that is not zero is a defect of a rule here, never a case to patch at one junction.
+
+- **One height at the ride's edge.** The importer gives each road its own heights, and at the edge of the ride's band two roads differ by up to a metre. `WorldEnvironment.holdSide` holds every side row in the band at the ride's height, puts a row where the road leaves the band at the height of the ride's edge beside it (`rideBesideAt`), and takes the road back to its own height over a ramp (`SIDE_MEET_GRADE`, at least `SIDE_MEET_MIN_M`). `sideHold` sets each vertex of a held row by the ride's surface at its own place, so an oblique side road meets a ride that falls along its length. The ramp goes on through the pieces of one road (stub, far ribbon, the edges it goes on as: `sideOnward`).
+- **The physics rides what is drawn.** `WorldGround.setSideEdges` gets the drawn rows, not the importer's samples.
+- **No deck starts in a junction.** Rows in the band and for `SIDE_FILL_M` past it carry `fill`: `RoadMesh.sideStructures` never decks them. A side road with one edge on the land (a road along a hillside) stands on a fill behind a retaining wall up to `SIDE_WALL_M` high; a deck is for land under both edges.
+- **No edge hangs open in a mouth.** A `fill` row stands on a slope down to the land as the ride does (`edgeFoot` `fill`), or on a wall where the land is `PARAPET_DROP_M` under it.
+- **Walls of two roads are one wall.** Where a side road's wall ends within `WALL_JOIN_M` of the end of one of the ride's, at its height, `WorldEnvironment.wallJoins` joins them with a piece of wall and lays ground behind it; the ride then lays no slope from its wall's end into that mouth (`foot.joined`).
+- **A wall goes on to a structure's first row** (`RoadMesh.wallPlan`), with no parapet on that last segment and its face at the deck's own corner, so no edge hangs between a wall and a bridge.
+- **Two side roads in one band never share a plane**: each takes one of four depths under the ride (`sideHold`).
+
+What the check measures for each side road of each junction: a step over 0.2 m in its drawn surface on three lines from the node out to 40 m, a hole in it, land over it, a deck or parapet of its own in the first 12 m past the ride's edge, and an edge more than 0.6 m over the ground there with no wall under it. On the Tremola slice before these rules: 8 steps, 2 under the land, 3 decks, 13 open edges, of 26 side roads.
+
 ## No NaN reaches physics or the frame
 
 A bike put down at a ride vertex's exact `s` (a restart, a resume, a probe's put-down: stations sit at sample `s` values) took a NaN height on its first step. The projection lands on the vertex at distance 0, and `Vehicle.updateElevation` blended toward the next vertex, also at distance 0, by 0 / 0. The NaN reached the fog density through `WeatherSystem.fogElevation`, and bloom spread it over the whole frame: 21 of 31 photo-match views drew pure black. A zero total now keeps the projection's height.

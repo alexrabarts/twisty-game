@@ -31,11 +31,23 @@ class WorldEnvironment {
 
     // A side road inside the ride's band: how far under the ride surface it is held, how far past the road edge
     // (the ride ribbon's kerb) that reaches, and the height apart beyond which it is a road over or under the ride.
-    // Held 1 cm under, the two ribbons lay in one plane for the depth test and flickered at a junction's mouth; 5 cm is
-    // clear of that and still under the land's SINK_M
-    static get SIDE_UNDER_M() { return 0.05; }
+    // Held 1 cm under, the two ribbons lay in one plane for the depth test and flickered at a junction's mouth; 3 cm is
+    // clear of that, and the deepest of the four depths two side roads of one junction take (sideHold: 3 to 9 cm)
+    // is still over the land's SINK_M
+    static get SIDE_UNDER_M() { return 0.03; }
     static get SIDE_KERB_M() { return 0.5; }
     static get SIDE_PASS_M() { return 2; }
+    // Where a side road leaves the ride's band it stands at the height of the ride's edge beside it (read within
+    // SIDE_MEET_REACH_M of the band) and takes up its own height again over a ramp (holdSide); for SIDE_FILL_M past
+    // the band it stands on the ground, on a fill behind a wall where the land falls away, never on a deck
+    static get SIDE_MEET_REACH_M() { return 12; }
+    static get SIDE_MEET_GRADE() { return 0.08; }
+    static get SIDE_MEET_MIN_M() { return 12; }
+    static get SIDE_MEET_MAX_M() { return 45; }
+    static get SIDE_FILL_M() { return 16; }
+    static get SIDE_ROW_MIN_M() { return 1.5; }
+    // A side road's wall that ends this near the end of one of the ride's is joined to it (wallJoins)
+    static get WALL_JOIN_M() { return 8; }
     // A side road that crosses over the ride is lifted to stand this far over the ride's surface (a deck's soffit at
     // Carriageways.HEADROOM_M over the ride, the deck under it, a hand's breadth spare), ramped in over at most
     // SIDE_RAMP_M either side and never past its own edge's ends, so it meets its neighbours where it did
@@ -506,11 +518,10 @@ class WorldEnvironment {
     }
 
     // Inside the ride's road band the ground is the ride's surface (WorldGround.heightAt). A side road that crosses
-    // the band at its own height stands proud of it where the ride climbs or leans. holdSide keeps it under the ride
-    // there: every row whose cross-section reaches into the band is lowered SIDE_UNDER_M under the ride surface, and a
-    // row is put where the side road leaves the band at that height too, so the side road climbs back to its own
-    // height only outside the band. A road more than SIDE_PASS_M above or below the ride is a road over or under it,
-    // and keeps its height.
+    // the band at its own height stands proud of it where the ride climbs or leans, or lies under it. holdSide keeps
+    // it at the ride's height there: every row whose cross-section reaches into the band stands SIDE_UNDER_M under the
+    // ride surface, and the road takes up its own height again outside the band. A road more than SIDE_PASS_M above
+    // or below the ride is a road over or under it, and keeps its height.
     //
     // rideSurfaceAt: the ride surface under (x, z) when that is in the ride's band at about height y, or null
     rideSurfaceAt(x, z, y) {
@@ -544,8 +555,38 @@ class WorldEnvironment {
         return low;
     }
 
-    // Side rows held under the ride (see rideSurfaceAt); held and inserted rows carry `keep`, so no level of detail drops them
-    holdSide(rows) {
+    // The ride's surface beside (x, z), a place just outside its band at about height y: the nearest of the ride at
+    // that height (its edge's height there), or null with none within SIDE_MEET_REACH_M
+    rideBesideAt(x, z, y) {
+        const near = this.sideNear || (this.sideNear = {});
+        let surface = null, nearest = Infinity;
+        for (const i of this.route.hashCandidates(x, z, 1)) {
+            this.route.nearestSegment(x, z, i, i, near);
+            if (near.distance < nearest && near.distance <= near.width / 2 + WorldEnvironment.SIDE_MEET_REACH_M && Math.abs(y - near.y) <= WorldEnvironment.SIDE_PASS_M + 1) {
+                nearest = near.distance;
+                surface = near.y;
+            }
+        }
+        return surface;
+    }
+
+    // Side rows held at the ride's height in its band (see rideSurfaceAt), a row put in where the road leaves the band
+    // (at the height of the ride's edge beside it), and from there the road's own height taken up again over a ramp:
+    // the importer gives each road its own heights, and where two meet they differ by up to a metre at the edge of the
+    // band (the ride falls along its length while the side road climbs away from the node), which drawn as it is is a
+    // step across the side road's mouth. The ramp is no steeper than SIDE_MEET_GRADE at its middle, at least
+    // SIDE_MEET_MIN_M long. Held, inserted and ramp rows carry `keep`, so no level of detail drops them; the rows of
+    // the band and of the first SIDE_FILL_M past it carry `fill` (no deck starts in a junction, RoadMesh.sideStructures)
+    // and the ramp's rows `own`, the height the importer gave them (the land is carved to that: WorldEnvironment.sideRamps)
+    //
+    // `before` and `after` are the rows the road goes on as past this piece's two ends (the rest of its edge, the edges
+    // it goes on as: WorldEnvironment.sideOnward), read so a ramp that starts in one piece goes on in the next; only
+    // this piece's own rows are returned
+    holdSide(rows, before = [], after = []) {
+        if (before.length || after.length) {
+            const ext = list => list.map(row => ({ ...row, ext: true }));
+            return this.holdSide([...ext(before), ...rows, ...ext(after)]).filter(row => !row.ext);
+        }
         const under = rows.map(row => this.rideUnderRow(row));
         if (under.every(y => y === null)) return rows;
         const lerp = (a, b, t) => {
@@ -554,24 +595,55 @@ class WorldEnvironment {
             while (turn < -Math.PI) turn += 2 * Math.PI;
             return { ...a, x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, heading: a.heading + turn * t, width: a.width + (b.width - a.width) * t };
         };
-        const held = (row, low) => ({ ...row, y: Math.min(row.y, low - WorldEnvironment.SIDE_UNDER_M), keep: true });
-        // The first row from `held` toward `clear` whose cross-section is clear of the band, at the held height
-        const exit = (heldRow, clearRow, low) => {
+        const U = WorldEnvironment.SIDE_UNDER_M;
+        const held = (row, low) => ({ ...row, own: row.y, y: low - U, keep: true, fill: true, held: true });
+        // The first row from `held` toward `clear` whose cross-section is clear of the band
+        const exit = (heldRow, clearRow, low, away) => {
             let inside = 0, outside = 1;
             for (let k = 0; k < 12; k++) {
                 const mid = (inside + outside) / 2;
                 if (this.rideUnderRow(lerp(heldRow, clearRow, mid)) === null) outside = mid;
                 else inside = mid;
             }
-            return held(lerp(heldRow, clearRow, outside), low);
+            // Never a row within SIDE_ROW_MIN_M of the next: the clear row itself is the exit then (two rows a hand
+            // apart made a sliver of ribbon and a break in the wall beside it), and one that near the held row
+            // stands that far from it
+            const span = Math.hypot(clearRow.x - heldRow.x, clearRow.z - heldRow.z), least = WorldEnvironment.SIDE_ROW_MIN_M;
+            const own = span * (1 - outside) < least;
+            const row = own ? clearRow : lerp(heldRow, clearRow, Math.max(outside, Math.min(1, least / (span || 1))));
+            const beside = this.rideBesideAt(row.x, row.z, row.y);
+            return { ...row, own: row.y, y: (beside === null ? low : beside) - U, keep: true, fill: true, held: true, away, replaces: own };
         };
         const out = [];
         for (let i = 0; i < rows.length; i++) {
             const prev = i > 0 ? under[i - 1] : null;
-            if (under[i] === null && prev !== null) out.push(exit(rows[i - 1], rows[i], prev));
-            if (under[i] !== null && i > 0 && prev === null) out.push(exit(rows[i], rows[i - 1], under[i]));
+            if (under[i] === null && prev !== null) {
+                const e = exit(rows[i - 1], rows[i], prev, 1);
+                out.push(e);
+                if (e.replaces) continue;
+            }
+            if (under[i] !== null && i > 0 && prev === null) {
+                const e = exit(rows[i], rows[i - 1], under[i], -1);
+                if (e.replaces) out[out.length - 1] = e;
+                else out.push(e);
+            }
             out.push(under[i] === null ? rows[i] : held(rows[i], under[i]));
         }
+        const along = [0];
+        for (let i = 1; i < out.length; i++) along.push(along[i - 1] + Math.hypot(out[i].x - out[i - 1].x, out[i].z - out[i - 1].z));
+        out.forEach((from, e) => {
+            if (!from.away) return;
+            const delta = from.y - from.own;
+            const length = Math.min(WorldEnvironment.SIDE_MEET_MAX_M, Math.max(WorldEnvironment.SIDE_MEET_MIN_M, (1.5 * Math.abs(delta)) / WorldEnvironment.SIDE_MEET_GRADE));
+            for (let i = e + from.away; i >= 0 && i < out.length && !out[i].held; i += from.away) {
+                const d = Math.abs(along[i] - along[e]);
+                // The first row past the ramp is kept too: where the road is at its own height again
+                if (d >= length) { out[i] = { ...out[i], keep: true }; break; }
+                const t = d / length, share = 1 - t * t * (3 - 2 * t);
+                const own = out[i].own === undefined ? out[i].y : out[i].own;
+                out[i] = { ...out[i], own, y: out[i].y + delta * share, keep: true, ...(d <= WorldEnvironment.SIDE_FILL_M ? { fill: true } : {}) };
+            }
+        });
         return out;
     }
 
@@ -788,13 +860,16 @@ class WorldEnvironment {
         };
         // `walled`: true where the road's wall plan put a wall (RoadMesh.wallPlan), false where it put none (the land
         // then gives a slope or nothing), undefined to let the land decide (no plan)
-        const foot = (x, y, z, ox, oz, walled) => {
+        // `fill`: a side road's row in a junction's mouth (WorldEnvironment.holdSide), which stands on a slope down to
+        // the land as the ride does: the rider passes it at arm's length, and its edge over the land with nothing
+        // under it was a dark gap along the verge. (The rest of a side road has no slopes: `aprons`)
+        const foot = (x, y, z, ox, oz, walled, fill = false) => {
             if (walled !== false) {
                 const w = wall(x, y, z, ox, oz);
                 if (w) return { kind: 'wall', y: w.y };
                 if (walled) return { kind: 'wall', y: wallFoot(x, z, ox, oz, y, landLow(x + ox * 0.1, z + oz * 0.1)) };
             }
-            if (!aprons) return null;
+            if (!aprons && !fill) return null;
             const low = landLow(x + ox * 0.1, z + oz * 0.1);
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
@@ -830,6 +905,16 @@ class WorldEnvironment {
             return low - WorldEnvironment.WALL_UNDER_M;
         };
         if (aprons) foot.mouth = atMouth;
+        // Whether a side road's wall ends within reach of the place (x, y, z), the end of one of the ride's walls: the
+        // two are joined there (wallJoins), and the ride lays no slope from its wall's end into the mouth
+        if (aprons) foot.joined = (x, y, z) => {
+            for (const runs of this.sideWalls.values()) {
+                for (const run of runs) {
+                    for (const p of [run.points[0], run.points[run.points.length - 1]]) if (Math.hypot(p[0] - x, p[2] - z) < WorldEnvironment.WALL_JOIN_M && Math.abs(p[1] - y) <= 1) return true;
+                }
+            }
+            return false;
+        };
         foot.wall = (x, y, z, ox, oz, forced = false, on = false) => wall(x, y, z, ox, oz, on) || (forced && !(aprons && atMouth(x, y, z, ox, oz)) ? { y: wallFoot(x, z, ox, oz, y, landLow(x + ox * 0.1, z + oz * 0.1)) } : null);
         return foot;
     }
@@ -894,6 +979,60 @@ class WorldEnvironment {
         return out;
     }
 
+    // The ends of the ride's retaining walls within `reach` of a box ([x0, z0, x1, z1]): [{p, foot, out}], a run that
+    // goes on from one section into the next read as one. The keys its plans were made without go into `missing`
+    rideWallEnds(box, reach, missing = null) {
+        if (!this.streamer || !box) return [];
+        const at = p => `${Math.round(p[0] * 1000)},${Math.round(p[2] * 1000)}`;
+        const ends = new Map();
+        for (const section of this.streamer.sections) {
+            const b = section.bbox;
+            if (!b || b[2] < box[0] - reach || b[0] > box[2] + reach || b[3] < box[1] - reach || b[1] > box[3] + reach) continue;
+            const walls = this.rideWalls(section.index);
+            if (missing) for (const key of walls.missing) missing.add(key);
+            for (const run of walls.runs) {
+                for (const i of [0, run.points.length - 1]) {
+                    const id = `${run.key}|${at(run.points[i])}`;
+                    // Two runs' ends at one place are one wall that goes on
+                    if (ends.has(id)) ends.set(id, null);
+                    else ends.set(id, { p: run.points[i], foot: run.foot[i], out: run.out[i] });
+                }
+            }
+        }
+        return [...ends.values()].filter(Boolean);
+    }
+
+    // Where a side road's wall ends within WALL_JOIN_M of the end of one of the ride's walls, at about its height, a
+    // piece of wall joins the two (RoadMesh.wallJoin): at a junction on a bank the ride's wall stops at the mouth and
+    // the side road's starts where its edge is clear of the ride, and between them the bank showed, a wedge of land
+    // between two stone faces. `walls` are the side roads' runs (RoadMesh.wallRuns), `box` their chunk's
+    wallJoins(walls, box, missing = null) {
+        const reach = WorldEnvironment.WALL_JOIN_M;
+        const ride = walls.length ? this.rideWallEnds(box, reach + 60, missing) : [];
+        const out = [], used = new Set();
+        if (!ride.length) return out;
+        for (const run of walls) {
+            if (!(run.owner >= 0)) continue;
+            for (const i of [0, run.points.length - 1]) {
+                const a = run.points[i];
+                let best = null, bestD = reach;
+                for (const end of ride) {
+                    const d = Math.hypot(end.p[0] - a[0], end.p[2] - a[2]);
+                    if (d < bestD && d > 0.05 && Math.abs(end.p[1] - a[1]) <= 1 && !used.has(end)) { best = end; bestD = d; }
+                }
+                if (!best) continue;
+                used.add(best);
+                // It faces the way the two runs do, square to its own line
+                const dx = best.p[0] - a[0], dz = best.p[2] - a[2];
+                const mx = run.out[i][0] + best.out[0], mz = run.out[i][1] + best.out[1];
+                const side = -dz * mx + dx * mz >= 0 ? 1 : -1;
+                const drop = RoadMesh.PARAPET_DROP_M;
+                out.push({ a, b: best.p, footA: run.foot[i], footB: best.foot, outA: run.out[i], outB: best.out, o: [(-dz * side) / bestD, (dx * side) / bestD], parapet: a[1] - run.foot[i] >= drop && best.p[1] - best.foot >= drop, owner: run.owner });
+            }
+        }
+        return out;
+    }
+
     // The walls of a side chunk as its edge works drew them. The land of the tiles they cross is cut again when they change
     setSideWalls(k, runs) {
         const sign = list => list.map(run => run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
@@ -934,14 +1073,33 @@ class WorldEnvironment {
         }
     }
 
-    // Per-vertex hold of a side ribbon: a vertex inside the band goes under the ride surface (RoadMesh.sideRoad holdY).
-    // Only the rows holdSide held or put in (`keep`) can reach into the band, so the rest are not looked at.
-    sideHold() {
+    // Per-vertex hold of a side ribbon (RoadMesh.sideRoad holdY): each vertex of a row in the ride's band, and of the
+    // row where the road leaves it, stands SIDE_UNDER_M under the ride's surface at its own place (the ride falls along
+    // its length, so across an oblique side road its edge is not level: a row held level across met it at one point)
+    // Only the rows holdSide held (`held`) reach into the band, so the rest are not looked at.
+    // Two side roads of one junction both lie in the band: each takes its own depth under the ride (`edge`, its
+    // id: one of four depths 21 mm apart), or the two ribbons lay in one plane and flickered
+    sideHold(edge = 0) {
+        const under = WorldEnvironment.SIDE_UNDER_M + ((((edge % 6) + 6) % 6) % 4) * 0.021;
         return (x, y, z, row) => {
-            if (!row.keep) return y;
-            const low = this.rideSurfaceAt(x, z, y);
-            return low === null ? y : Math.min(y, low - WorldEnvironment.SIDE_UNDER_M);
+            if (!row.held) return y;
+            let low = this.rideSurfaceAt(x, z, y);
+            if (low === null) low = this.rideBesideAt(x, z, y);
+            return low === null ? y : low - under;
         };
+    }
+
+    // The rows a side road goes on as past the `end` ('a' or 'b') of `edge`, through the nodes it only passes (degree
+    // 2), for `lengthM`: in the order and the heading of the edge's own rows (those past its first row arrive at it),
+    // without the row at the node itself. Empty at a junction, at a dead end, or while the next edge is not resident
+    sideOnward(edge, end, lengthM = WorldEnvironment.SIDE_MEET_MAX_M + 30) {
+        const node = edge[end];
+        const next = this.graph.onwardEdge(edge.id, node);
+        if (!next) return [];
+        const { rows, complete } = this.graph.chainFrom(next.id, node, lengthM);
+        if (!complete || rows.length < 2) return [];
+        const out = rows.slice(1).map(row => ({ x: row.x, y: row.y, z: row.z, heading: row.heading, width: row.width, bits: row.bits }));
+        return end === 'b' ? out : out.reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
     }
 
     // Samples a piece of side road holds (WorldEnvironment.sidePieces): neighbouring pieces share their joint sample
@@ -1118,7 +1276,6 @@ class WorldEnvironment {
             for (const pass of junction.passes) for (const b of pass.barriers) barrierEdges.set(b.edgeId, junction.node);
         }
         let triangles = 0;
-        const hold = this.sideHold();
         const missing = new Set();
         const sides = [], structures = [];
         // The land a side road's structures stand on; a chunk built before a tile under it is built again when it arrives
@@ -1138,8 +1295,10 @@ class WorldEnvironment {
         const draw = (rows, stub, edge, guard, s0 = 0) => {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
-            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, hold), options.groundAt, options.roof, options.footAt, guard);
+            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard);
             Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, rows, stub, edge: edge.id, s0 });
+            // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
+            edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
             sides.push(Object.assign(built.sides, { owner: edge.id }));
             structures.push(...built.parts.map(part => Object.assign(part, { owner: edge.id })));
             group.add(road);
@@ -1149,7 +1308,6 @@ class WorldEnvironment {
             if (edge.onRide || this.data.chunkOf(edge.first) !== k) return;
             const samples = this.graph.samples(edge.id);
             if (!samples) return;
-            edgesHere.push({ x: samples.x, z: samples.z, y: samples.y, width: samples.width });
             let plain = WorldEnvironment.unwrap(Array.from(samples.x, (_, i) => ({ x: samples.x[i], y: samples.y[i], z: samples.z[i], heading: samples.heading[i], width: samples.width[i], bits: samples.flags[i], cls: edge.cls, i })));
             if (plain.length < 2) return;
             plain = this.sideMouths(edge, plain);
@@ -1165,22 +1323,32 @@ class WorldEnvironment {
                     // road twice in one plane (and its deck and parapets twice), which flickers
                     const away = Math.hypot(far[0].x - stub[0].x, far[0].z - stub[0].z) <= Math.hypot(far[far.length - 1].x - stub[0].x, far[far.length - 1].z - stub[0].z);
                     far = away ? far.slice(stub.length - 1) : far.slice(0, far.length - stub.length + 1);
-                    const stubRows = this.holdSide(this.sideMouths({ ...edge, a: node, b: -1 }, WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, false));
+                    // (the rest of the edge and what it goes on as are read for the ramp past the ride's band)
+                    const flip = list => list.slice().reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
+                    const rest = away ? far.slice(1) : flip(far).slice(1);
+                    const onward = away ? this.sideOnward(edge, 'b') : flip(this.sideOnward(edge, 'a'));
+                    const stubPlain = this.sideMouths({ ...edge, a: node, b: -1 }, WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, false);
+                    const stubRows = this.holdSide(stubPlain, [], [...rest, ...onward]);
                     let length = 0;
                     for (let i = 1; i < stubRows.length; i++) length += Math.hypot(stubRows[i].x - stubRows[i - 1].x, stubRows[i].z - stubRows[i - 1].z);
                     // The rest goes on from the stub's end, run away from the junction and measured from it
-                    if (!away) far = far.slice().reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
+                    if (!away) far = flip(far);
                     farS = length;
                     draw(stubRows, true, edge, guard);
+                    if (far.length < 2) return;
+                    draw(this.holdSide(far, stubPlain.slice(0, -1), onward), false, edge, guard, farS);
+                    return;
                 }
             }
             if (far.length < 2) return;
-            draw(this.holdSide(far), false, edge, guard, farS);
+            draw(this.holdSide(far, this.sideOnward(edge, 'a'), this.sideOnward(edge, 'b')), false, edge, guard, farS);
         });
         // The edge works of every side road here, one mesh: its retaining walls, decks and tubes (a side road is seen
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
         // a tile under them arrives
-        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways);
+        // (and where one of their walls ends beside the end of one of the ride's, the two are joined: wallJoins)
+        const box = this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox;
+        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
         // The land is cut to their walls (setSideWalls)
         this.setSideWalls(k, group.userData.walls || []);
         group.userData.roads = roads;
@@ -1188,7 +1356,6 @@ class WorldEnvironment {
         triangles += this.drawSideRibbons(k, group, near);
         // Its works keep out of the carriageways of the side roads round it (Carriageways): built before a neighbour's
         // chunk is here, it is built again when that chunk is
-        const box = this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox;
         if (box) for (const j of this.data.chunksNear((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, Math.hypot(box[2] - box[0], box[3] - box[1]) / 2 + 20)) if (j !== k && !this.data.chunks.has(j)) missing.add(`chunk:${j}`);
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`side:${k}`);
         group.userData.triangles = triangles;
@@ -1220,7 +1387,6 @@ class WorldEnvironment {
             const piece = pieces[i];
             if (piece) (ranges.get(piece.edge) || ranges.set(piece.edge, []).get(piece.edge)).push([piece.from, piece.to]);
         }
-        let hold = null;
         let triangles = 0;
         const byMaterial = new Map();
         for (const road of group.userData.roads) {
@@ -1234,8 +1400,7 @@ class WorldEnvironment {
                 const key = `${run.from}:${run.to}:${run.near ? 0 : 1}`;
                 let ribbon = kept.get(key);
                 if (!ribbon) {
-                    hold = hold || this.sideHold();
-                    ribbon = RoadMesh.ribbon(run.rows, run.near ? 0 : 1, hold, true);
+                    ribbon = RoadMesh.ribbon(run.rows, run.near ? 0 : 1, this.sideHold(edge), true);
                     kept.set(key, ribbon);
                 }
                 const material = ribbon.near ? RoadSurface.nearMaterial() : RoadSurface.farMaterial();

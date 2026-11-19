@@ -17,14 +17,17 @@
 // started at nothing, a missing triangle under the road's edge.
 //
 // What still stands, held here so it can only shrink:
-//   - 4 buried faces and 10 the land climbs: side roads' walls where two side roads' walls meet at a node, and the
+//   - 4 buried faces and 12 the land climbs: side roads' walls where two side roads' walls meet at a node, and the
 //     ride's where a wall turns the inside of a hairpin (the cut follows the first part of a wall's line through a
-//     triangle, and a line that leaves and comes back into one is cut once)
-//   - 2 faces whose top a side road's own ribbon does not meet (its far ribbon is drawn 0.1 m lower there)
+//     triangle, and a line that leaves and comes back into one is cut once). 2 of the 12 came with the junctions'
+//     rules (tests/unit/world-junctions.test.js): a side road along a hillside stands on a wall now, not on a deck,
+//     and where that wall bends with the road above another road's the land in front is cut once
+//   - 1 face whose top a side road's own ribbon does not meet (its far ribbon is drawn 0.1 m lower there)
 //   - 1 block: a side road's wall of 4.7 m at the first metres of the ride, between a deck and a junction
-//   - 19 open ends: side roads that go on over another road with no deck under them, the ride's edge from a bridge's
-//     last row to the first row past it (the bridge ends at its own last row), and the ride at a junction's mouth
-//     where a side road lies a metre under its edge
+//   - 15 open ends: side roads that go on over another road with no deck under them, and the ride at a junction's
+//     mouth where a side road lies a metre under its edge. (A wall now goes on to a bridge's first row, a side
+//     road's wall is joined to the end of the ride's beside it, and two walls that stand end to end at a node close
+//     each other: with that last rule read on the build before, it had 17)
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';

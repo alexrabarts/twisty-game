@@ -75,6 +75,11 @@ class RoadMesh {
     // A retaining wall carries its parapet only where it drops this far (WorldPhysics.dropDepthM: the physics makes
     // a drop solid from the same depth, so what is drawn and what is solid agree); a lower step is ridden off
     static get PARAPET_DROP_M() { return 2.5; }
+    // The highest retaining wall that holds up a side road along a hillside (RoadMesh.sideStructures)
+    static get SIDE_WALL_M() { return 9; }
+    // How far behind a piece of wall that joins two roads' walls the ground is laid (RoadMesh.addEdgeWorks)
+    static get JOIN_BACK_M() { return 4; }
+    static get JOIN_UNDER_M() { return 0.09; }
 
     // The apron's colour where no land colour is known: the land's grass, linear
     static get APRON_LINEAR() { return RoadMesh.COLORS.apron.map(v => Math.pow(v, 2.2)); }
@@ -187,7 +192,7 @@ class RoadMesh {
             const o = RoadMesh.hold([-h - verge, -h, h, h + verge], curve[k]).offsets;
             const y = row.y + RoadMesh.LIFT_M;
             const at = offset => { const p = RoadMesh.place(row, offset); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
-            return { bits: row.bits, i: row.i, s: row.s, l: at(o[0]), r: at(o[3]), lc: at(o[1]), rc: at(o[2]) };
+            return { bits: row.bits, i: row.i, s: row.s, fill: !!row.fill, l: at(o[0]), r: at(o[3]), lc: at(o[1]), rc: at(o[2]) };
         });
     }
 
@@ -603,8 +608,11 @@ class RoadMesh {
             const mouth = sides.map(side => { if (!foot.mouth || side.bits & 7) return false; const o = RoadMesh.outward(side)[key], p = side[key]; return foot.mouth(p[0], p[1], p[2], o[0], o[1]); });
             const clear = k => {
                 if (mouth[k] || mouth[k + 1]) return false;
-                // Never from a structure's row: the bridge's or the tunnel's own end stands there
-                if (sides[k].bits & 7 || sides[k + 1].bits & 7) return false;
+                // Not between two rows of a structure. From a walled row to a structure's first row a wall goes on: the
+                // deck starts at that row, and the edge between the two hung open over the land
+                const built = [sides[k].bits & 7, sides[k + 1].bits & 7];
+                if (built[0] && built[1]) return false;
+                if ((built[0] && !row[k + 1]) || (built[1] && !row[k])) return false;
                 if ((end[k] && end[k].blocked) || (end[k + 1] && end[k + 1].blocked)) return false;
                 if (!g) return true;
                 const pa = at(k), pb = at(k + 1), fa = row[k] ? end[k] : end[k + 1], fb = row[k + 1] ? end[k + 1] : end[k];
@@ -764,7 +772,21 @@ class RoadMesh {
             return worst(d, guard.depth(p[0] + o[0] * run, p[2] + o[1] * run, f.y, f.y + 0.1));
         };
         const ends = sides.map((side, k) => {
-            if (side.bits & 7) return null;
+            if (side.bits & 7) {
+                // A structure's row where a wall's run ends (wallPlan): the wall stands there as deep as at the row before
+                if (!plan) return null;
+                const out = RoadMesh.outward(side);
+                const borrowed = key => {
+                    const from = plan.seg[key][k - 1] ? plan.end[key][k - 1] : plan.seg[key][k] ? plan.end[key][k + 1] : null;
+                    if (!from) return null;
+                    // On the ride's own bridge the wall meets the deck's corner (BRIDGE_DECK_M past the carriageway)
+                    const c = side[key + 'c'];
+                    const at = !(sides.owner >= 0) && (side.bits & 2) && c ? [c[0] + out[key][0] * RoadMesh.BRIDGE_DECK_M, c[1], c[2] + out[key][1] * RoadMesh.BRIDGE_DECK_M] : side[key];
+                    return { kind: 'wall', y: from.y, out: out[key], color: null, top: null, at, run: null };
+                };
+                const l = borrowed('l'), r = borrowed('r');
+                return l || r ? { l, r, beside: { l: null, r: null } } : null;
+            }
             const dx = side.l[0] - side.r[0], dz = side.l[2] - side.r[2];
             const len = Math.hypot(dx, dz) || 1;
             const out = { l: [dx / len, dz / len], r: [-dx / len, -dz / len] };
@@ -772,7 +794,7 @@ class RoadMesh {
             const read = (key, slope = false) => {
                 if (plan && plan.row[key][k] && !slope) return plan.end[key][k];
                 const p = side[key];
-                const f = foot ? foot(p[0], p[1], p[2], out[key][0], out[key][1], plan ? false : undefined) : null;
+                const f = foot ? foot(p[0], p[1], p[2], out[key][0], out[key][1], plan ? false : undefined, !!side.fill) : null;
                 if (!f) return null;
                 const y = Number.isFinite(f.y) ? Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.y)) : p[1] - RoadMesh.DECK_M;
                 const end = { kind: f.kind, y, out: out[key], color: f.color || null, top: f.top || null, at: p, run: Number.isFinite(f.run) ? f.run : null };
@@ -832,7 +854,12 @@ class RoadMesh {
                 if (plan.seg[key][k]) kind = 'wall';
                 else {
                     const fa = ea ? endOf(k, key, false) : null, fb = eb ? endOf(k + 1, key, false) : null;
-                    if (ea && eb && (fa || fb) && !(fa && fa.blocked) && !(fb && fb.blocked) && between(k, key)) kind = [fa, fb].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
+                    // (none from a wall's end to a row at a side road's mouth: the side road's fill stands there,
+                    const atMouth = j => { if (!foot || !foot.mouth) return false; const p = sides[j][key], o = RoadMesh.outward(sides[j])[key]; return foot.mouth(p[0], p[1], p[2], o[0], o[1]); };
+                    // behind its wall, which a piece of wall joins to this one's end: `foot.joined`)
+                    const joined = j => { const e = plan.end[key][j], p = e ? e.at : sides[j][key]; return !!foot.joined && foot.joined(p[0], p[1], p[2]); };
+                    const toMouth = (plan.row[key][k] && atMouth(k + 1) && joined(k)) || (plan.row[key][k + 1] && atMouth(k) && joined(k + 1));
+                    if (!toMouth && ea && eb && (fa || fb) && !(fa && fa.blocked) && !(fb && fb.blocked) && between(k, key)) kind = [fa, fb].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
                 }
             } else if (ea && eb && (ea[key] || eb[key]) && !(ea[key] && ea[key].blocked) && !(eb[key] && eb[key].blocked) && between(k, key)) {
                 kind = [ea[key], eb[key]].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
@@ -912,7 +939,9 @@ class RoadMesh {
                     // Each row's own outward, so two segments put the row they share at one place
                     const P = RoadMesh.STONE_PROUD_M;
                     const oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
-                    const qa = [pa[0] + oa[0] * P, pa[1], pa[2] + oa[1] * P], qb = [pb[0] + ob[0] * P, pb[1], pb[2] + ob[1] * P];
+                    // (at a structure's row the face stands at the deck's own corner, not proud of it)
+                    const Pa = sides[k].bits & 7 ? 0 : P, Pb = sides[k + 1].bits & 7 ? 0 : P;
+                    const qa = [pa[0] + oa[0] * Pa, pa[1], pa[2] + oa[1] * Pa], qb = [pb[0] + ob[0] * Pb, pb[1], pb[2] + ob[1] * Pb];
                     while (stoneOut.face.length < (stoneOut.positions.length / 3) * 4) stoneOut.face.push(0, 0, 0, 0);
                     RoadMesh.quad(stoneOut, qa, qb, [qb[0], depth(fb, pb), qb[2]], [qa[0], depth(fa, pa), qa[2]], colors.stone);
                     const ua = alongOf(k, key), ub = alongOf(k + 1, key);
@@ -923,7 +952,7 @@ class RoadMesh {
                 if (kind === 'wall') {
                     // from the face's own corner (STONE_PROUD_M out, along the row's outward)
                     const cap = (p, d, row) => {
-                        const out = RoadMesh.outward(sides[row])[key], P = RoadMesh.STONE_PROUD_M;
+                        const out = RoadMesh.outward(sides[row])[key], P = sides[row].bits & 7 ? 0 : RoadMesh.STONE_PROUD_M;
                         const a = [p[0] + out[0] * P, p[1], p[2] + out[1] * P];
                         const q = [p[0] - out[0] * RoadMesh.WALL_RETURN_M, p[1], p[2] - out[1] * RoadMesh.WALL_RETURN_M];
                         RoadMesh.quad(stoneOut, a, q, [q[0], d, q[2]], [a[0], d, a[2]], colors.stone);
@@ -931,7 +960,10 @@ class RoadMesh {
                     if (kindOf(k - 1, key) !== 'wall') cap(pa, depth(fa, pa), k);
                     if (kindOf(k + 1, key) !== 'wall') cap(pb, depth(fb, pb), k + 1);
                 }
-                if (kind === 'deck' || Math.max(pa[1] - depth(fa, pa), pb[1] - depth(fb, pb)) >= RoadMesh.PARAPET_DROP_M) rails[kind === 'deck' ? 'wall' : 'stone'][key].push({ k, pa, pb, o, drawn, oa: RoadMesh.outward(sides[k])[key], ob: RoadMesh.outward(sides[k + 1])[key], ua: kind === 'wall' ? alongOf(k, key) : NaN, ub: kind === 'wall' ? alongOf(k + 1, key) : NaN });
+                // (none on the segment that ends at a structure's row: the structure's own parapet ends there, a hand
+                // from where this one would, and the two made a step)
+                const abuts = kind === 'wall' && ((sides[k].bits | sides[k + 1].bits) & 7);
+                if (kind === 'deck' || (!abuts && Math.max(pa[1] - depth(fa, pa), pb[1] - depth(fb, pb)) >= RoadMesh.PARAPET_DROP_M)) rails[kind === 'deck' ? 'wall' : 'stone'][key].push({ k, pa, pb, o, drawn, oa: RoadMesh.outward(sides[k])[key], ob: RoadMesh.outward(sides[k + 1])[key], ua: kind === 'wall' ? alongOf(k, key) : NaN, ub: kind === 'wall' ? alongOf(k + 1, key) : NaN });
                 if (kind === 'deck') soffit = true;
             }
             // Under an overhanging edge: the soffit, from one edge to the other at the deck's depth
@@ -955,7 +987,7 @@ class RoadMesh {
     // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
     // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
     // `roads` (Carriageways) keeps each run's works out of every other road's carriageway (RoadMesh.edgeWorks guard)
-    static addEdgeWorks(group, sides, foot, extra = [], roads = null) {
+    static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
         const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] } };
         const face = [];
@@ -974,6 +1006,18 @@ class RoadMesh {
                 works[key].shades.push(...part[key].shades);
                 own(key, part[key].positions.length, run.owner ?? -1);
             }
+        }
+        // The pieces of wall that join these runs to another road's (`join(walls)`: WorldEnvironment.wallJoins)
+        for (const piece of join ? join(walls) : []) {
+            const before = works.stone.positions.length;
+            RoadMesh.wallJoin(works.stone, face, piece);
+            own('stone', works.stone.positions.length - before, piece.owner ?? -1);
+            // and the ground behind it, between the two roads' edges: land at the roads' height (under both
+            // ribbons where they are paved), or the corner behind the piece was a pit
+            const under = (p, back) => [p[0] - piece.o[0] * back, p[1] - RoadMesh.JOIN_UNDER_M, p[2] - piece.o[1] * back];
+            const c = RoadMesh.APRON_LINEAR, start = works.apron.positions.length;
+            RoadMesh.quad(works.apron, under(piece.a, 0), under(piece.b, 0), under(piece.b, RoadMesh.JOIN_BACK_M), under(piece.a, RoadMesh.JOIN_BACK_M), [c, c, c, c]);
+            own('apron', works.apron.positions.length - start, piece.owner ?? -1);
         }
         if (!works.apron.positions.length && !works.wall.positions.length && !works.stone.positions.length && !extra.some(part => part.positions.length)) return 0;
         for (const part of extra) {
@@ -1021,6 +1065,20 @@ class RoadMesh {
         mesh.userData.world = 'works';
         group.add(mesh);
         return (apron + wall + stone) / 3;
+    }
+
+    // A piece of retaining wall from the end of one run (`a`, its top corner, `outA` the way that run faces there,
+    // `footA` its foot) to the end of another (`b`, `outB`, `footB`), facing `o`: its face shares both runs' own
+    // corners, and it takes a parapet where both runs have one. `out` is the stone ({positions, shades}), `face` its
+    // face data (four numbers a vertex, as edgeWorks lays it)
+    static wallJoin(out, face, { a, b, footA, footB, outA, outB, o, parapet }) {
+        const P = RoadMesh.STONE_PROUD_M, colors = RoadMesh.COLORS;
+        const len = Math.hypot(b[0] - a[0], b[2] - a[2]);
+        const qa = [a[0] + outA[0] * P, a[1], a[2] + outA[1] * P], qb = [b[0] + outB[0] * P, b[1], b[2] + outB[1] * P];
+        RoadMesh.quad(out, qa, qb, [qb[0], footB, qb[2]], [qa[0], footA, qa[2]], colors.stone);
+        for (const u of [0, len, len, 0, len, 0]) face.push(u, 1, o[0], o[1]);
+        if (parapet) RoadMesh.rail({ positions: out.positions, shades: out.shades, face }, [a, b], [outA, outB], RoadMesh.PARAPET_W_M, RoadMesh.PARAPET_H_M, colors.stone, [false, false], [0, len], P);
+        while (face.length < (out.positions.length / 3) * 4) face.push(0, 0, 0, 0);
     }
 
     // From triangle `first` on, each pair of triangles (a quad of RoadMesh.quad) takes the mean of their face normals
@@ -1115,7 +1173,13 @@ class RoadMesh {
         const raised = sides.map(side => {
             if (side.bits & 2) return true;
             if (side.bits & 5) return false;
-            return gap(centre(side)) > drop || (gap(side.l) > drop && gap(side.r) > drop);
+            // On a deck where the land lies under both edges. A road along a hillside, one edge on the land, stands on
+            // a fill behind a retaining wall (the edge works) while that wall is no higher than SIDE_WALL_M, and so
+            // does a road in a junction's mouth (`fill`): the importer carved no land for these roads, and a concrete
+            // deck that started in the junction, a pier in the ride's own bank, is not what stands there
+            if (side.fill) return false;
+            const l = gap(side.l), r = gap(side.r);
+            return (l > drop && r > drop) || Math.max(l, r) > RoadMesh.SIDE_WALL_M;
         });
         // A deck cross-section (soffit to its top, under the road) clear of every other carriageway: at a junction the
         // deck runs on under the road it meets, and only its parapets stop (clearRail)

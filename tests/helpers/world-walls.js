@@ -11,7 +11,8 @@
 //   - climbs: the land 0.2 m in front stands higher than the land 2.2 m in front by more than a slope at the batter
 //     allows (land that goes on through the wall's plane up to the road, in front of the stone)
 //   - hangs: the wall's foot is over the land in front of it
-//   - top: no road surface meets the wall's top behind it
+//   - top: no road surface meets the wall's top behind it (nor the ground the roads lay between two of them, behind
+//     a piece of wall that joins their walls)
 // and past each end of each face (used only where a run really ends): `open`, the road's edge hanging over the land
 // with nothing drawn under it (no slope, and no deck or bridge the road goes on over).
 //
@@ -25,7 +26,7 @@
 // Returns {faces, measured, runs, buried, climbs, hangs, top, blocks, steps, open}: each a list, worst first, of
 // {s, x, z, ...} (s the metres of ride nearest to it).
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-walls.test.js says what each is)
-export const WALL_LIMITS = { buried: 4, climbs: 10, hangs: 0, top: 2, blocks: 1, steps: 0, open: 19 };
+export const WALL_LIMITS = { buried: 4, climbs: 12, hangs: 0, top: 1, blocks: 1, steps: 0, open: 15 };
 
 export function wallWindow(game, env, store, at, nearM = 350) {
     const { THREE } = game;
@@ -57,6 +58,17 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             }
         }
         const grid = {
+            all(x, z) {
+                const out = [];
+                for (const ref of hash.get(Math.floor(x / cell) * 65536 + Math.floor(z / cell)) || []) {
+                    const t = tris[ref];
+                    const d = (t[5] - t[8]) * (t[0] - t[6]) + (t[6] - t[3]) * (t[2] - t[8]);
+                    const a = ((t[5] - t[8]) * (x - t[6]) + (t[6] - t[3]) * (z - t[8])) / d, b = ((t[8] - t[2]) * (x - t[6]) + (t[0] - t[6]) * (z - t[8])) / d, c = 1 - a - b;
+                    if (a < -1e-9 || b < -1e-9 || c < -1e-9) continue;
+                    out.push(a * t[1] + b * t[4] + c * t[7]);
+                }
+                return out;
+            },
             top(x, z) {
                 let best = null;
                 for (const ref of hash.get(Math.floor(x / cell) * 65536 + Math.floor(z / cell)) || []) {
@@ -102,6 +114,11 @@ export function wallWindow(game, env, store, at, nearM = 350) {
     const topOf = (grids, x, z) => {
         let best = null;
         for (const g of grids) { const y = g.top(x, z); if (y !== null && (best === null || y > best)) best = y; }
+        return best;
+    };
+    const nearOf = (grids, x, z, y) => {
+        let best = null;
+        for (const g of grids) for (const h of g.all(x, z)) if (best === null || Math.abs(h - y) < Math.abs(best - y)) best = h;
         return best;
     };
     const landTop = (x, z) => topOf(land, x, z);
@@ -169,7 +186,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                 const far = onRoad(x + ox * 2.2, z + oz * 2.2) ? null : groundTop(x + ox * 2.2, z + oz * 2.2);
                 if (far !== null && hf - far > 2 * BATTER + 0.3) { face.climbs++; face.worstClimb = Math.max(face.worstClimb, r3(hf - far)); }
                 if (foot > hf + 0.02) { face.hangs++; face.worstHang = Math.max(face.worstHang, r3(foot - hf)); }
-                const behind = topOf(ribbons, x - ox * 0.15, z - oz * 0.15);
+                // (the surface nearest the top's own height: a viaduct 30 m over a side road's wall is not its road)
+                const behind = nearOf([...ribbons, ...aprons], x - ox * 0.15, z - oz * 0.15, y);
                 if (behind === null || Math.abs(behind - y) > 0.1) { face.top++; face.worstTop = behind === null ? null : r3(behind - y); }
             }
             // Past each end, along the road's edge: whether the edge hangs over the ground with nothing under it
@@ -234,7 +252,10 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6 } = {}) {
     }
     for (const run of runs) {
         if (run.lengthM < minRunM) out.blocks.push({ s: run.s, owner: run.owner, lengthM: r1(run.lengthM), x: r1(faces[run.faces[0]].a.top[0]), z: r1(faces[run.faces[0]].a.top[2]) });
-        for (const end of run.ends) if (end.open) out.open.push({ s: end.s, owner: run.owner, x: end.x, z: end.z, dropM: end.dropM, wallM: end.height });
+        // (not where another wall goes on from the end: the road a side road goes on as through a node has its own
+        // run, and the two stand end to end)
+        const met = end => runs.some(other => other !== run && other.ends.some(e => Math.hypot(e.x - end.x, e.z - end.z) < 0.75 && Math.abs(e.y - end.y) < 1.5));
+        for (const end of run.ends) if (end.open && !met(end)) out.open.push({ s: end.s, owner: run.owner, x: end.x, z: end.z, dropM: end.dropM, wallM: end.height });
     }
     // Two runs of one road, facing the same way, whose ends are close: one wall in pieces
     for (let i = 0; i < runs.length; i++) {

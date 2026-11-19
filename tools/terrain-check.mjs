@@ -44,6 +44,7 @@ import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
 import { fairnessWindow } from '../tests/helpers/world-fairness.js';
 import { wallWindow, wallRuns, WALL_LIMITS } from '../tests/helpers/world-walls.js';
+import { junctionWindow, junctionReport, JUNCTION_LIMITS } from '../tests/helpers/world-junctions.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
@@ -4760,6 +4761,100 @@ async function wallEye(placeSource, eye) {
     game.graphics.render(game.scene, game.camera);
 }
 
+// world-junctions: every junction of the ride as it is drawn, in the page (tests/helpers/world-junctions.js: the bike
+// is put down at each junction and every side road that leaves it is read from the drawn triangles). It fails on a
+// step or a hole in a side road's surface from the junction out, land over it, a deck or parapet in its mouth and an
+// edge that hangs open there, over what JUNCTION_LIMITS holds. With --out, two views of every junction --at names
+// (all of them without it) are saved as the frame alone: from the ride before the junction, and from over the side
+// road looking back at it. --eyes s@x:y:z:tx:ty:tz adds views in the world's own metres.
+//   node tools/terrain-check.mjs world-junctions --world tremola --gpu [--at j7,j12] [--eyes ...] [--out <dir> --tag T]
+WORLD_PROBES.push('world-junctions');
+WORLD['world-junctions'] = async (page) => {
+    const only = option('at') ? option('at').split(',') : null;
+    const read = await page.evaluate(async (windowSource, reportSource, placeSource) => {
+        const window = new Function(`return (${windowSource})`)(), report = new Function(`return (${reportSource})`)();
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, store = {};
+        game.worldLinger = false;
+        for (const junction of env.graph.junctions) {
+            const p = await placeAt(Math.max(env.startS + 1, Math.min(env.endS - 1, junction.passes[0].sIn)));
+            window({ THREE }, env, store, p);
+        }
+        const out = report(store);
+        // Where each side road is seen from: over the road 22 m out looking back at the node, and from the ride
+        out.eyes = [...store.roads.values()].map(road => {
+            const { rows } = env.graph.chainFrom(road.edge, env.graph.junctions.find(j => j.id === road.junction).node, 24);
+            const node = rows[0], far = rows[rows.length - 1];
+            return { junction: road.junction, edge: road.edge, s: Math.max(env.startS + 1, road.s), back: [far.x, far.y + 7, far.z, node.x, node.y, node.z] };
+        });
+        for (const kind of ['steps', 'holes', 'sunk', 'decks', 'open']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 12) };
+        return out;
+    }, junctionWindow.toString(), junctionReport.toString(), placeAt.toString());
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'junction';
+    const views = [];
+    const shoot = async (eye, name) => {
+        const png = await page.evaluate(junctionEye, placeAt.toString(), eye);
+        const file = out ? join(out, `${tag}-${name}.png`) : null;
+        if (file) writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+        views.push({ eye: name, file });
+    };
+    if (out) {
+        for (const eye of read.eyes) {
+            if (only && !only.includes(eye.junction)) continue;
+            await shoot({ s: eye.s, at: eye.back }, `${eye.junction}-e${eye.edge}-back`);
+            await shoot([eye.s - 22, 0, 5, eye.s + 4, 0, 0], `${eye.junction}-e${eye.edge}-ride`);
+        }
+    }
+    for (const spec of (option('eyes') ? option('eyes').split(',') : [])) {
+        const eye = spec.includes('@') ? { s: Number(spec.split('@')[0]), at: spec.split('@')[1].split(':').map(Number) } : spec.split(':').map(Number);
+        await shoot(eye, spec.replace(/[:@]/g, '_'));
+    }
+    const { eyes, ...rest } = read;
+    return { ...rest, views };
+};
+
+function junctionChecks(results, failures) {
+    const junctions = results['world-junctions'];
+    if (!junctions) return;
+    if (!(junctions.roads >= 20)) failures.push(`world-junctions: only ${junctions.roads} side roads were read`);
+    const says = { steps: 'side roads with a step in their surface', holes: 'side roads with a hole in their surface', sunk: 'side roads with land over their surface', decks: 'side roads with a deck or parapet in their mouth', open: 'side roads whose edge hangs open in their mouth' };
+    for (const [kind, text] of Object.entries(says)) {
+        if (junctions[kind].count > JUNCTION_LIMITS[kind]) failures.push(`world-junctions: ${junctions[kind].count} ${text} (at most ${JUNCTION_LIMITS[kind]}): ${JSON.stringify(junctions[kind].worst.slice(0, 5))}`);
+    }
+}
+
+// A view for world-junctions, in the page: the frame alone (no HUD), as a PNG data URL
+async function junctionEye(placeSource, eye) {
+    const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle, route = game.environment.route;
+    game.cameraMode = 2;
+    await placeAt(s);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 30; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const at = (s, lat, up) => { const p = route.sample(s, {}); return new THREE.Vector3(p.x + lat * Math.cos(p.heading), p.y + up, p.z - lat * Math.sin(p.heading)); };
+    if (Array.isArray(eye)) {
+        game.camera.position.copy(at(s, lat, up));
+        game.camera.lookAt(at(toS, toLat, toUp));
+    } else {
+        game.camera.position.set(eye.at[0], eye.at[1], eye.at[2]);
+        game.camera.lookAt(new THREE.Vector3(eye.at[3], eye.at[4], eye.at[5]));
+    }
+    game.camera.updateMatrixWorld(true);
+    // The bike stands in the junction: out of the picture
+    const shown = v.group ? v.group.visible : null;
+    if (v.group) v.group.visible = false;
+    game.graphics.render(game.scene, game.camera);
+    const png = game.graphics.renderer.domElement.toDataURL('image/png');
+    if (v.group) v.group.visible = shown;
+    return png;
+}
+
 // The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
 const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
 
@@ -4864,6 +4959,7 @@ function worldChecks(report) {
     roadLookChecks(results, failures);
     vertexChecks(results, failures);
     wallChecks(results, failures);
+    junctionChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
