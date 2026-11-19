@@ -363,7 +363,7 @@ const BIKE_MODELS = {
     bike11_duke990: { kind: 'naked', cls: 'naked', name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
     bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
     bike13_panigale: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike13_panigale_black: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, black track bike', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike13_panigale_black: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike14_forza: { kind: 'scooter', cls: 'scooter', name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
     bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } }
 };

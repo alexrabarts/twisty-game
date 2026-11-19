@@ -60,6 +60,10 @@ EXTRA = {
     "grain": (0x2B2D31, 0.85, 0.1),
     # The silencer's black body: not `dark_metal`, which tests/unit/bike-handedness.test.js reads as the belt's pulley
     "can": (0x1A1B1D, 0.5, 0.7),
+    # The centre panel under the screen
+    "gloss": (0x0B0C0E, 0.16, 0.3),
+    # Inside the lamps
+    "housing": (0x15171A, 0.3, 0.6),
 }
 
 
@@ -123,57 +127,108 @@ def front_end(k):
         # Outboard of the disc's plane and above its rim
         k.panel([(0.87, 0.5), (0.8, 0.585), (0.66, 0.57), (0.6, 0.48), (0.67, 0.43), (0.77, 0.42)], side * 0.078, 0.008, "paint", bevel=0.003)
 
-    # Twin LED headlights: an angular lens each side of the nose, swept up
-    # and back, a slim running light along its top
-    k.begin("headlight", (0, 0.8, 0.94))
-    for side in (-1, 1):
-        E.band(k, [(1.035, 0.8), (0.98, 0.835), (0.9, 0.865), (0.82, 0.885)], [(1.035, 0.725), (0.98, 0.73), (0.9, 0.755), (0.82, 0.8)], nose_x, side, "headlight",
-               nu=8, nv=3, lift=0.008, thick=0.008)
+    headlights(k)
 
     k.begin("brake_light", (0, 0.845, -1.07))
     k.loft([(-1.045, 0.81, 0.875, 0.11, 3, 3), (-1.07, 0.815, 0.87, 0.095, 3, 3), (-1.082, 0.82, 0.865, 0.055)], "brake", ring=12, steps=1)
 
 
-# The nose's cross-sections (bike_kit.Kit.loft): a pointed nose over the
-# front wheel that rises and widens back to the screen and the leg shield.
-# It stands above the wheel; the apron's sides hang from its widest line.
-NOSE = [
-    (0.44, 0.36, 1.0, 0.28, 2.2, 2.6, 0.5, 0.7, 0.9),
-    (0.56, 0.56, 1.03, 0.285, 2.0, 2.6, 0.42, 0.62, 0.85),
-    (0.68, 0.6, 1.0, 0.27, 1.9, 2.4, 0.4, 0.55, 0.8),
-    (0.8, 0.6, 0.96, 0.235, 1.9, 2.2, 0.42, 0.5, 0.8),
-    (0.9, 0.62, 0.92, 0.19, 1.9, 2.2, 0.45, 0.5, 0.8),
-    (0.98, 0.66, 0.89, 0.15, 2.0, 2.2, 0.5, 0.55, 0.8),
-    (1.03, 0.7, 0.86, 0.09, 2.0, 2.2, 0.5, 0.6, 0.8),
-]
+# The front bodywork's feature lines, as (x, y, z) knots on the right side.
+# The face is a broad shield, not a cone: a bonnet of two silver blades
+# either side of a gloss black centre, raked back from a blunt silver beak to
+# the screen; a shoulder each side that the slim light runs along; under the
+# shoulder the blue apron, leaning out to a crease and tucking in below it.
+# Each panel is drawn between these lines (E.Patch), so two panels that meet
+# share the line they meet on.
+APEX = (0, 0.865, 0.94)
+LIPC = (0, 0.672, 0.982)
+S0 = (0.024, 0.805, 0.978)
+C0 = (0.012, 0.676, 0.98)
+T1 = (0.15, 0.862, 0.875)
+H1 = (0.088, 0.69, 0.94)
+X1 = (0.142, 0.836, 0.884)
+X2 = (0.133, 0.806, 0.895)
+S3 = (0.24, 0.955, 0.62)
+S4 = (0.26, 0.985, 0.46)
+R1 = (0.274, 0.93, 0.46)
+F1 = (0.27, 0.19, 0.42)
+LB = (0.14, 0.655, 0.875)
+DECK = (0, 1.02, 0.62)
+# Down the middle of the beak, and down its edge
+PROW = E.smooth([APEX, (0, 0.805, 0.988), (0, 0.74, 1.002), LIPC])
+BEAK = E.smooth([S0, (0.026, 0.74, 0.992), C0])
+# The shoulder: the blades' outer edge, from the beak up and back to the mirror's root and the leg shield
+SHOULDER = E.smooth([S0, T1, (0.205, 0.908, 0.765), S3, S4])
+# The blades' inner edge, the black centre's outline
+VEE = E.smooth([APEX, (0.092, 0.898, 0.865), (0.172, 0.94, 0.745), S3])
+CENTRE = E.smooth([APEX, (0, 0.93, 0.87), (0, 0.975, 0.8), (0, 1.0, 0.72), DECK])
+# The lamp's rear edge, where the blue apron's front edge climbs to the shoulder
+RISE = E.smooth([T1, X1, X2, H1], 1)
+# Under the slim light, and the crease below it where the apron is widest
+BROW = E.smooth([X1, (0.207, 0.884, 0.77), (0.245, 0.937, 0.625), S4])
+CREASE = E.smooth([X2, (0.222, 0.852, 0.775), (0.262, 0.902, 0.63), R1])
+LOWER = E.smooth([H1, LB, (0.175, 0.6, 0.79), (0.2, 0.5, 0.68), (0.225, 0.38, 0.575), (0.245, 0.25, 0.5), F1])
+TRAIL = E.smooth([R1, (0.283, 0.75, 0.455), (0.285, 0.55, 0.45), (0.28, 0.35, 0.435), F1])
+SILL = E.smooth([C0, (0.05, 0.68, 0.965), H1])
+LIP = E.smooth([(0, 0.645, 0.968), (0.03, 0.646, 0.962), (0.085, 0.648, 0.928), LB])
+ROOF = E.smooth([(0, 0.645, 0.968), (0, 0.642, 0.9), (0, 0.642, 0.8), (0, 0.642, 0.66)])
+
+BLADE = E.Patch(VEE, E.piece(SHOULDER, 0, 3), [APEX, S0], [S3, S3], out=(0.3, 1, 0.6))
+BLACK = E.Patch(CENTRE, VEE, [APEX, APEX], [DECK, (0.12, 1.0, 0.62), S3], out=(0, 1, 0.5))
+LAMP = E.Patch(E.piece(SHOULDER, 0, 1), SILL, BEAK, RISE)
+LIGHT = E.Patch(E.piece(SHOULDER, 1, 4), BROW, [T1, X1], [S4, S4])
+FACET = E.Patch(BROW, CREASE, [X1, X2], [S4, R1], out=(1, 0.8, 0.4))
+APRON = E.Patch(CREASE, LOWER, [X2, H1], TRAIL, bulge=0.018)
 
 
-def nose_at(z):
-    """The nose's section at z, its sections taken as straight between one another."""
-    for a, b in zip(NOSE, NOSE[1:]):
-        if a[0] <= z <= b[0]:
-            t = (z - a[0]) / (b[0] - a[0])
-            return [p + (q - p) * t for p, q in zip(a, b)]
-    return list(NOSE[0] if z < NOSE[0][0] else NOSE[-1])
+def face(k):
+    """The front bodywork, both sides."""
+    for side in (-1, 1):
+        # The silver blade stands proud of the black centre and of the light under its outer edge
+        E.skin(k, BLADE, "silver", side, nu=12, nv=4, thick=0.016, lift=0.004, sharp=30)
+        E.skin(k, BLACK, "gloss", side, nu=10, nv=4, thick=0.01, sharp=30)
+        # The beak: the blades' meeting, down the nose between the lamps to the lip
+        E.skin(k, E.Patch(PROW, E.piece(BEAK, 0, 2), [APEX, S0], [LIPC, C0], out=(0.3, 0.3, 1)), "silver", side, nu=8, nv=2, thick=0.012, lift=0.004)
+        # Behind the screen: the black deck back to the leg shield's top
+        deck = E.Patch([DECK, (0, 1.035, 0.55), (0, 1.0, 0.45)], E.piece(SHOULDER, 3, 4), [DECK, (0.12, 1.0, 0.62), S3],
+                       [(0, 1.0, 0.45), (0.15, 1.0, 0.45), S4], out=(0, 1, 0))
+        E.skin(k, deck, "trim", side, nu=4, nv=4, thick=0.01)
+        # The blue apron: a narrow facet under the light that leans out to the crease, the broad side below it
+        E.skin(k, FACET, "paint", side, nu=12, nv=1, thick=0.01, sharp=25)
+        E.skin(k, APRON, "paint", side, nu=16, nv=10, thick=0.012, sharp=25)
+        # The silver blade on the apron's trailing edge, a spike of it running forward over a dark scallop
+        E.skin(k, E.Strip(APRON, [(0.95, 0.12), (0.87, 0.3), (0.85, 0.55), (0.88, 0.8), (0.95, 0.97)], [(0.995, 0.1), (0.995, 0.3), (0.995, 0.55), (0.995, 0.8), (0.995, 0.97)]),
+               "silver", side, nu=10, nv=1, thick=0.008, lift=0.011)
+        E.skin(k, E.Strip(APRON, [(0.5, 0.4), (0.88, 0.2)], [(0.5, 0.405), (0.88, 0.3)]), "silver", side, nu=4, nv=1, thick=0.008, lift=0.011)
+        E.skin(k, E.Strip(APRON, [(0.52, 0.41), (0.87, 0.31)], [(0.66, 0.43), (0.87, 0.44)]), "paint_dark", side, nu=4, nv=1, thick=0.004, lift=0.009)
+        # Black under the lamps, with an air slot, and the roof over the wheel
+        lip = E.Patch([LIPC, C0] + E.piece(SILL, 0, 2)[1:] + E.piece(LOWER, 0, 1)[1:], LIP, [LIPC, LIP[0]], [LB, LB], out=(0.3, -0.2, 1))
+        E.skin(k, lip, "trim", side, nu=8, nv=2, thick=0.01)
+        k.keep = True
+        E.skin(k, E.Strip(lip, [(0.12, 0.45), (0.4, 0.45)], [(0.12, 0.75), (0.4, 0.75)]), "vent", side, nu=2, nv=1, thick=0.003, lift=0.006)
+        k.keep = False
+        roof = E.Patch(ROOF, LIP + E.piece(LOWER, 1, 3)[1:], [LIP[0], LIP[0]], [(0, 0.642, 0.66), (0.1, 0.62, 0.665), (0.2, 0.5, 0.68)], out=(0, -1, 0))
+        E.skin(k, roof, "trim", side, nu=8, nv=3, thick=0.008)
+    # A black core behind the panels, so no gap between them shows daylight
+    k.loft([(0.5, 0.67, 0.955, 0.235, 2.6, 2.6), (0.68, 0.675, 0.9, 0.165, 2.4, 2.4), (0.84, 0.69, 0.84, 0.085, 2.2, 2.2), (0.95, 0.7, 0.785, 0.022)], "trim", ring=12, steps=2)
 
 
-def wide_y(z):
-    """The height of the nose's widest line, where the apron's side hangs from."""
-    _, lo, hi, _, _, _, mid, _, _ = nose_at(z)
-    return lo + (hi - lo) * mid
-
-
-def nose_x(z, y):
-    """The front bodywork's half-width at a point of its side view: the nose above its widest
-    line, the apron's side below it, tucked in a little toward its lower edge."""
-    _, lo, hi, w, nt, nb, mid, wt, wb = nose_at(z)
-    centre = lo + (hi - lo) * mid
-    if y < centre:
-        t = min(1.0, (centre - y) / 0.45)
-        return w * (1 - 0.2 * t * t)
-    py = min(1.0, (y - centre) / (hi - centre))
-    px = max(0.0, 1 - py ** nt) ** (1 / nt)
-    return w * px * (1 - (1 - wt) * py)
+def headlights(k):
+    """The lights of the face: each side a lamp beside the beak, set into a dark housing under a
+    clear lens, and one slim bright strip from the beak along the shoulder toward the mirror."""
+    k.begin("headlight", (0, 0.8, 0.94))
+    k.keep = True
+    for side in (-1, 1):
+        E.skin(k, LAMP, "housing", side, nu=4, nv=4, thick=0.006, lift=-0.012)
+        E.skin(k, LIGHT, "housing", side, nu=10, nv=1, thick=0.006, lift=-0.004)
+        # The reflector's cells and the lamp in them
+        E.skin(k, E.Strip(LAMP, [(0.05, 0.34), (0.85, 0.3)], [(0.08, 0.95), (0.4, 0.95)]), "chrome", side, nu=4, nv=2, thick=0.004, lift=-0.008)
+        E.skin(k, E.Strip(LAMP, [(0.12, 0.44), (0.5, 0.44)], [(0.14, 0.84), (0.3, 0.84)]), "headlight", side, nu=2, nv=2, thick=0.004, lift=-0.005)
+        # The slim strip: across the lamp's top and on along the shoulder
+        E.skin(k, E.Strip(LAMP, [(0.04, 0.06), (1.0, 0.03)], [(0.04, 0.28), (1.0, 0.14)]), "headlight", side, nu=4, nv=1, thick=0.004, lift=-0.004)
+        E.skin(k, E.Strip(LIGHT, [(0.0, 0.15), (0.7, 0.2)], [(0.0, 0.85), (0.7, 0.8)]), "headlight", side, nu=8, nv=1, thick=0.004, lift=0.0)
+        E.skin(k, LAMP, "glass", side, nu=4, nv=4, thick=0.003, lift=0.0)
+    k.keep = False
 
 
 def floor_x(z, y):
@@ -200,35 +255,7 @@ def flank_x(z, y):
 def bodywork(k):
     k.begin("body")
 
-    # The nose: blue on its sides, a silver band above the blue that the
-    # narrowing nose draws into a V between the headlights, black down the
-    # middle from the screen (the screen's garnish), black underneath
-    def nose(u, up, side):
-        if up < -0.7 or (u == 1.0 and up == 0.0):
-            return "trim"
-        if up > 0.84 and u < 0.86:
-            return "trim"
-        if up > 0.6:
-            return "silver"
-        return "paint"
-
-    k.loft(NOSE, nose, ring=30, steps=4, sharp=25)
-
-    for side in (-1, 1):
-        # The apron's side: one blue face from the nose's widest line down
-        # past the wheel to the floor and the chin under it
-        top = [(z, wide_y(z)) for z in (0.44, 0.56, 0.68, 0.8, 0.9, 0.975)]
-        bottom = [(0.42, 0.19), (0.5, 0.25), (0.565, 0.41), (0.68, 0.535), (0.82, 0.6), (0.975, wide_y(0.975) - 0.06)]
-        E.coons(k, top, bottom, [top[-1], bottom[-1]], [top[0], (0.428, 0.44), bottom[0]],
-                lambda u, v, z, y, side=side: side * (nose_x(z, y) + 0.003), "paint", nu=16, nv=8, thick=0.012, sharp=25)
-        # The silver V's arm: over the headlight, up and back toward the mirror's root
-        E.band(k, [(1.03, 0.828), (0.9, 0.9), (0.78, 0.93), (0.66, 0.945)], [(1.03, 0.805), (0.9, 0.868), (0.78, 0.9), (0.66, 0.93)], nose_x, side, "silver",
-               nu=10, lift=0.006, thick=0.008)
-        # The silver blade down the apron's trailing edge, pointed at the top
-        E.band(k, [(0.5, 0.86), (0.505, 0.72), (0.5, 0.56), (0.475, 0.4)], [(0.485, 0.86), (0.455, 0.72), (0.44, 0.56), (0.428, 0.4)], nose_x, side, "silver",
-               nu=10, lift=0.016, thick=0.01)
-        # Black between the blue apron and the blue chin, behind the wheel
-        E.band(k, [(0.44, 0.39), (0.5, 0.385), (0.552, 0.4)], [(0.435, 0.3), (0.49, 0.285), (0.522, 0.3)], nose_x, side, "trim", nu=6, lift=0.012, thick=0.006)
+    face(k)
 
     # Inner leg shield behind the apron, black, with its glovebox lids, the
     # meter panel above it
@@ -242,10 +269,17 @@ def bodywork(k):
     # leaning back, on two black struts
     def screen(u, v):
         across = (v - 0.5) * 2
-        half = 0.215 - 0.045 * u * u
-        return (across * half, 0.955 + 0.47 * u - 0.07 * u * across ** 4 - 0.02 * across * across, 0.805 - 0.335 * u ** 1.15 - 0.075 * across * across)
+        x = across * (0.13 + 0.085 * min(1.0, u / 0.3) - 0.05 * u * u)
+        return (x, 0.94 + 0.485 * u - 0.07 * u * across ** 4 + 0.9 * x * x * (1 - u), 0.875 - 0.405 * u ** 1.1 - (1.6 + 5.8 * (1 - u) ** 3) * x * x)
 
     k.sheet(screen, "glass", nu=8, nv=8, thick=0.005)
+    # The screen's foot is masked black: with the panel under it, the dark centre between the blades
+
+    def mask(u, v):
+        x, y, z = screen(u * 0.2, v)
+        return (x, y + 0.004, z + 0.004)
+
+    k.sheet(mask, "gloss", nu=2, nv=8, thick=0.003)
     for side in (-1, 1):
         k.tube([(side * 0.1, 0.96, 0.7), (side * 0.105, 1.08, 0.665), (side * 0.1, 1.2, 0.585)], 0.011, "trim", seg=6, smooth=2)
 

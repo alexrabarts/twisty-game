@@ -1,20 +1,21 @@
-# bike-13: Steve's red twin-cylinder supersport, from his photos at the
-# Whipsnade viewpoint: a full red fairing with a sharp nose, a slim LED
-# headlight in each of the two nose intakes, a short smoked screen, gold
-# upside-down forks, twin front discs with radial calipers, black 5-split
-# spoke wheels, a black hugger and front mudguard, a single-sided swingarm
-# on the left (the right of the rear wheel bare but for its centre nut), an
-# underbelly silencer with twin tips on the right, a sharp upswept tail
-# with its lights tucked under the tip, a tank-bag ring on the tank (no bag:
-# no photo shows one on), and a small black tail pack on the pillion seat.
-# No badges, no plate.
+# bike-13: Steve's red four-cylinder superbike, from his photos: a full red
+# fairing whose nose is a wide, low face of two parts, two large dark air
+# intakes side by side under the upper fairing's lip, a slim LED light along
+# the top of each, a narrow red spine between them that comes to a blunt
+# point; a short, steeply raked smoked screen with a rounded top, a grey
+# insert each side of its foot; mirrors on long thin black stalks with the
+# indicators in their front edges; gold upside-down forks, twin front discs
+# with radial calipers, black 5-split spoke wheels, a black hugger and front
+# mudguard, a single-sided swingarm on the left (the right of the rear wheel
+# bare but for its centre nut), an underbelly silencer with twin tips on the
+# right, a sharp upswept tail with its lights tucked under the tip, a
+# tank-bag ring on the tank (no bag: no photo shows one on), and a small
+# black tail pack on the pillion seat. No badges, no plate.
 #
-# Colour schemes: "red" is Steve's bike in the photos; "track" is the same
-# bike in gloss black as a track bike (Lucy's): dark grey where the red one
-# is black, and no road parts. It has no mirrors, no plate or its hanger, no
-# indicators, no luggage or tank-bag ring, a painted cowl in place of the
-# pillion pad, and dark covers where the headlights were. Its file has no
-# `headlight` node, like the dirt bike's, so the game lights nothing there.
+# Colour schemes: "red" is Steve's bike in the photos; "black" is the same
+# road bike in gloss black (Lucy's), dark grey where the red one is black so
+# the panels still read, without the tail pack, which is Steve's luggage. It
+# has been crashed and kept in use: `scuffs` draws its marks.
 #
 # Real size (the 2020 model's published figures): 1,436 mm wheelbase,
 # 840 mm seat, 24 degrees of rake, 120/70-17 and 180/60-17 tyres, twin
@@ -50,11 +51,10 @@ COLOURS = {"paint": 0xC8102E, "paint_dark": 0x1A1A1E, "accent": 0x1C1C20, "rim":
            "spring": 0x34363A, "luggage": 0x16171A, "trim": 0x161618, "glass": 0x23272C}
 SCHEMES = {
     "red": COLOURS,
-    "track": {**COLOURS, "paint": 0x0E0E10, "trim": 0x383B40, "accent": 0x383B40},
+    "black": {**COLOURS, "paint": 0x0E0E10, "trim": 0x383B40, "accent": 0x383B40},
 }
-# The scheme being built, and whether it is the track bike (set by build)
+# The scheme being built (set by build)
 scheme = "red"
-track = False
 EXTRA = {
     # Cast aluminium of the swingarm and the rearsets
     "alu": (0x8E9196, 0.36, 0.9),
@@ -62,6 +62,12 @@ EXTRA = {
     "casing": (0x2A2B2E, 0.5, 0.6),
     # The inner fork tubes' dark coating
     "fork_inner": (0x3A3530, 0.2, 0.9),
+    # The grey inserts beside the screen's foot
+    "insert": (0x8A8672, 0.4, 0.5),
+    # Crash marks: primer under the paint, bare metal under that, and cloth tape
+    "scuff_primer": (0xB4B6B2, 0.85, 0.0),
+    "scuff_metal": (0xA6A9AD, 0.4, 0.9),
+    "tape": (0x4A4C50, 0.95, 0.0),
 }
 
 
@@ -110,17 +116,7 @@ def front_end(k):
     # Top yoke's steering damper and the key barrel
     k.cylinder(0.014, 0.12, (0.0, TOP[0] + 0.02, TOP[1] - 0.06), "dark_metal", axis="x", seg=8)
 
-    # Two slim LED lights, one deep in each nose intake, with the running
-    # light along the top of each
-    if track:
-        # A track fairing has a cover where each light was
-        k.begin("body")
-        for side in (-1, 1):
-            k.box((0.085, 0.03, 0.012), (side * 0.048, 0.752, 0.945), "trim", rot=(-0.05, side * 0.55, side * -0.05), bevel=0.004)
-    else:
-        k.begin("headlight", (0, 0.755, 0.94))
-        for side in (-1, 1):
-            k.box((0.075, 0.014, 0.012), (side * 0.048, 0.757, 0.943), "headlight", rot=(-0.05, side * 0.55, side * -0.05), bevel=0.004)
+    lights(k)
 
     k.begin("brake_light", (0, 0.955, -0.89))
     for side in (-1, 1):
@@ -130,14 +126,10 @@ def front_end(k):
 # The side view, traced from the real bike's hard points (wheelbase 1,436 mm,
 # 2.11 m long, 1.10 m to the screen top, 840 mm seat): each body loft takes
 # its upper and lower edges from these lines, (z, y), front to rear.
-#   SHELL: the nose and the tank as one skin, (z, lower edge, upper edge, half-width)
+#   SHELL: the fairing behind the face and the tank as one skin, (z, lower edge, upper edge, half-width)
 SHELL = [
-    (0.985, 0.795, 0.815, 0.012),
-    (0.96, 0.775, 0.835, 0.05),
-    (0.92, 0.755, 0.865, 0.09),
-    (0.85, 0.725, 0.905, 0.12),
-    (0.75, 0.705, 0.94, 0.155),
-    (0.62, 0.7, 0.965, 0.18),
+    (0.75, 0.705, 0.94, 0.178),
+    (0.62, 0.7, 0.965, 0.19),
     (0.5, 0.71, 0.99, 0.2),
     (0.38, 0.74, 1.025, 0.195),
     (0.25, 0.76, 1.045, 0.19),
@@ -157,11 +149,11 @@ TAIL = [
     (-0.97, 0.97, 0.982, 0.006),
 ]
 #   The side shell's outline and how wide the body is along its length
-SIDE_TOP = [(0.9, 0.79), (0.75, 0.8), (0.6, 0.81), (0.45, 0.835), (0.3, 0.86), (0.15, 0.86), (0.02, 0.84), (-0.08, 0.81)]
+SIDE_TOP = [(0.83, 0.79), (0.75, 0.8), (0.6, 0.81), (0.45, 0.835), (0.3, 0.86), (0.15, 0.86), (0.02, 0.84), (-0.08, 0.81)]
 SIDE_REAR = [(-0.08, 0.81), (-0.13, 0.65), (-0.15, 0.45), (-0.14, 0.27)]
 SIDE_BOTTOM = [(0.45, 0.36), (0.36, 0.26), (0.2, 0.22), (0.02, 0.22), (-0.14, 0.27)]
-SIDE_FRONT = [(0.9, 0.79), (0.82, 0.7), (0.68, 0.6), (0.55, 0.48), (0.45, 0.36)]
-WIDTH = [(1.0, 0.04), (0.9, 0.08), (0.75, 0.15), (0.6, 0.18), (0.45, 0.205), (0.3, 0.2), (0.15, 0.185), (0.02, 0.15), (-0.08, 0.13), (-0.2, 0.13)]
+SIDE_FRONT = [(0.83, 0.79), (0.78, 0.7), (0.68, 0.6), (0.55, 0.48), (0.45, 0.36)]
+WIDTH = [(0.9, 0.165), (0.83, 0.176), (0.75, 0.185), (0.6, 0.195), (0.45, 0.205), (0.3, 0.2), (0.15, 0.185), (0.02, 0.15), (-0.08, 0.13), (-0.2, 0.13)]
 
 
 def clamp(t):
@@ -185,20 +177,116 @@ def side_x(z, y):
     return width(z) * (0.78 + 0.22 * math.sin(math.pi * (0.1 + 0.75 * t)))
 
 
+# How round the shell's sections are (bike_kit.Kit.loft: top, bottom, the height of the widest line, the narrowing above it)
+ROUND = (2.4, 3.0, 0.45, 0.82)
+
+
+def rim(upper, n=12):
+    """The shell's front section from its widest point, up to the top middle or down to the
+    bottom middle: the face's panels end on it, so the face and the shell are one surface."""
+    z, lo, hi, w = SHELL[0]
+    nt, nb, mid, narrow = ROUND
+    centre = lo + (hi - lo) * mid
+    out = []
+    for i in range(n + 1):
+        t = math.pi / 2 * i / n
+        if upper:
+            px, py = math.cos(t) ** (2 / nt), math.sin(t) ** (2 / nt)
+            out.append((w * px * (1 - (1 - narrow) * py), centre + (hi - centre) * py, z))
+        else:
+            px, py = math.cos(t) ** (2 / nb), math.sin(t) ** (2 / nb)
+            out.append((w * px, centre - (centre - lo) * py, z))
+    return out
+
+
+# The face's feature lines, as (x, y, z) knots on the right side. A wide, low
+# face of two parts: the upper fairing's top runs forward to a lip whose
+# middle dips to a blunt point; under the lip an intake each side, open round
+# the corner to the fairing's side; a red chin under them.
+TIP = (0, 0.79, 1.0)
+CK = (0.178, 0.825, 0.84)
+CL = (0.176, 0.74, 0.83)
+CH = (0.17, 0.7, 0.83)
+M0 = (0, 0.715, 0.978)
+UP, DOWN = rim(True), rim(False)
+WIDE, L1 = UP[0], DOWN[6]
+RIDGE = E.smooth([TIP, (0, 0.845, 0.93), (0, 0.9, 0.84), UP[-1]])
+BROW = E.smooth([TIP, (0.06, 0.787, 0.978), (0.13, 0.803, 0.925), CK])
+EDGE = E.smooth([CK, (0.181, 0.82, 0.79), WIDE])
+SILL = E.smooth([M0, (0.07, 0.706, 0.958), (0.13, 0.712, 0.915), CL])
+CHIN = E.smooth([(0, 0.685, 0.95), (0.07, 0.68, 0.93), (0.13, 0.685, 0.89), CH])
+HOOD = E.Patch(RIDGE, EDGE, BROW, UP[::-1], bulge=0.012, way=(0, 1, 0.2), out=(0.2, 1, 0.5))
+MOUTH = E.Patch(BROW, SILL, [TIP, M0], [CK, CL], out=(0.3, 0, 1))
+
+
+def face(k):
+    """The fairing's face, both sides."""
+    for side in (-1, 1):
+        E.skin(k, HOOD, "paint", side, nu=12, nv=8, thick=0.012, sharp=30)
+        # The grey insert beside the screen's foot
+        E.skin(k, E.Strip(HOOD, [(0.6, 0.3), (1.0, 0.42)], [(0.74, 0.52), (1.0, 0.62)]), "insert", side, nu=4, nv=1, thick=0.004, lift=0.008)
+        # The intake: a dark mouth set back under the lip
+        E.skin(k, MOUTH, "vent", side, nu=8, nv=3, thick=0.006, lift=-0.04)
+        E.skin(k, E.Patch(SILL, CHIN, [M0, CHIN[0]], [CL, CH], out=(0.3, 0, 1)), "paint", side, nu=8, nv=1, thick=0.012)
+        # The cheek behind the intake's outer end, and the black underside
+        E.skin(k, E.Patch(EDGE, [CH, L1], [CK, CL, CH], DOWN[:7]), "paint", side, nu=3, nv=4, thick=0.012)
+        E.skin(k, E.Patch([CHIN[0], (0, 0.69, 0.85), DOWN[-1]], [CH, L1], CHIN, DOWN[:5:-1], out=(0, -1, 0)), "trim", side, nu=4, nv=4, thick=0.008)
+    # The spine between the intakes, its front edge leaning back from the point
+    k.box((0.026, 0.085, 0.1), (0, 0.752, 0.948), "paint", rot=(-0.28, 0, 0), bevel=0.008)
+
+
+def lights(k):
+    """A slim LED strip along the top of each intake, near the spine, and the lamp deep inside."""
+    k.begin("headlight", (0, 0.755, 0.94))
+    k.keep = True
+    for side in (-1, 1):
+        E.skin(k, E.Strip(MOUTH, [(0.1, 0.06), (0.66, 0.05)], [(0.1, 0.17), (0.66, 0.12)]), "headlight", side, nu=4, nv=1, thick=0.006, lift=-0.022)
+        E.skin(k, E.Strip(MOUTH, [(0.3, 0.52), (0.42, 0.52)], [(0.3, 0.78), (0.42, 0.78)]), "chrome", side, nu=1, nv=1, thick=0.006, lift=-0.034)
+    k.keep = False
+
+
+def scuffs(k):
+    """The black bike's crash marks: it has slid on its right side, and been down once on its left.
+    Each mark lies just proud of the part it is on. The long streaks stay in the distant model."""
+    k.begin("body")
+    k.keep = True
+    # The fairing's widest line ground through to primer in long streaks along the bike, bare metal in their middles
+    E.band(k, [(0.5, 0.6), (0.4, 0.612), (0.3, 0.598), (0.18, 0.592), (0.04, 0.585)], [(0.49, 0.565), (0.4, 0.548), (0.3, 0.55), (0.18, 0.552), (0.06, 0.566)],
+           side_x, 1, "scuff_primer", nu=10, lift=0.007, thick=0.004)
+    E.band(k, [(0.45, 0.59), (0.3, 0.584), (0.14, 0.578)], [(0.44, 0.577), (0.3, 0.569), (0.15, 0.569)], side_x, 1, "scuff_metal", nu=6, lift=0.0095, thick=0.003)
+    E.band(k, [(0.4, 0.502), (0.25, 0.492), (0.1, 0.487)], [(0.385, 0.484), (0.25, 0.474), (0.115, 0.477)], side_x, 1, "scuff_primer", nu=6, lift=0.007, thick=0.004)
+    E.band(k, [(0.44, 0.728), (0.32, 0.722), (0.2, 0.714)], [(0.43, 0.708), (0.32, 0.7), (0.21, 0.702)], side_x, 1, "scuff_primer", nu=6, lift=0.0225, thick=0.003)
+    E.band(k, [(-0.02, 0.44), (-0.1, 0.43)], [(-0.02, 0.4), (-0.1, 0.405)], side_x, 1, "scuff_metal", nu=2, lift=0.007, thick=0.004)
+    # A crack in the fairing under a strip of tape
+    E.band(k, [(0.352, 0.8), (0.3, 0.81)], [(0.32, 0.63), (0.268, 0.64)], side_x, 1, "tape", nu=1, nv=3, lift=0.024, thick=0.003)
+    # The left side went down once, more gently
+    E.band(k, [(0.3, 0.575), (0.2, 0.568), (0.1, 0.56)], [(0.29, 0.552), (0.2, 0.546), (0.11, 0.546)], side_x, -1, "scuff_primer", nu=5, lift=0.007, thick=0.004)
+    # The tail's side and the silencer's outer face, scratched
+    E.panel(k, [(-0.42, 0.872), (-0.6, 0.925), (-0.62, 0.912), (-0.44, 0.852)], 0.136, 0.004, "scuff_primer", toe=0.18, bevel=0)
+    E.panel(k, [(-0.47, 0.874), (-0.57, 0.904), (-0.575, 0.897), (-0.475, 0.866)], 0.139, 0.004, "scuff_metal", toe=0.18, bevel=0)
+    k.box((0.004, 0.035, 0.17), (0.142, 0.225, -0.03), "scuff_metal", bevel=0)
+    # The clutch cover's face and the mirror's body
+    k.cylinder(0.062, 0.004, (0.204, 0.36, 0.0), "scuff_metal", axis="x", seg=12)
+    k.box((0.006, 0.045, 0.05), (0.366, 1.06, 0.632), "scuff_primer", bevel=0)
+    k.box((0.006, 0.03, 0.035), (-0.366, 1.058, 0.632), "scuff_primer", bevel=0)
+    # In the node that turns with the steering, not the fork leg's own: the game reads the steering axis from the legs' surfaces
+    k.begin("handlebar", (0, GRIP[1], GRIP[2] + 0.04))
+    k.cylinder(0.021, 0.008, (GRIP[0] + 0.083, GRIP[1], GRIP[2]), "scuff_metal", axis="x", seg=10)
+    k.box((0.022, 0.012, 0.014), (GRIP[0] + 0.046, GRIP[1] - 0.014, GRIP[2] + 0.069), "scuff_metal", bevel=0)
+    k.box((0.006, 0.07, 0.05), (FORK_X + 0.036, FRONT[1] + 0.01, FRONT[2]), "scuff_metal", bevel=0)
+    k.cylinder(0.017, 0.03, (FORK_X + 0.05, FRONT[1], FRONT[2]), "scuff_primer", axis="x", seg=8)
+    k.keep = False
+
+
 def fairing(k):
     k.begin("body")
 
-    # Nose and tank as one skin: a low sharp point that widens and climbs to
-    # the screen, then the tank's hump right behind it, falling to the seat
-    k.loft([(z, lo, hi, w, 2.4, 3.0, 0.45, 0.82) for z, lo, hi, w in SHELL], lambda u, up, side: "trim" if up < -0.75 else "paint", ring=30, steps=3,
-           sharp=40)
-    # Under the point, the two intakes: a dark mouth across the face, split
-    # by a red fin, a slim light along the top of each
-    k.loft([(0.82, 0.7, 0.77, 0.1, 3, 3), (0.9, 0.7, 0.77, 0.09, 3, 3), (0.95, 0.71, 0.765, 0.06, 3, 3), (0.965, 0.715, 0.76, 0.03)], "vent", ring=14, steps=2)
-    k.box((0.02, 0.06, 0.1), (0, 0.735, 0.915), "paint", bevel=0.006)
+    # The tank and the fairing behind the face as one skin: it climbs to the
+    # screen, then the tank's hump right behind it, falling to the seat
+    k.loft([(z, lo, hi, w) + ROUND for z, lo, hi, w in SHELL], lambda u, up, side: "trim" if up < -0.75 else "paint", ring=30, steps=3, sharp=40)
+    face(k)
     # The tank-bag ring round the filler cap
-    if not track:
-        k.cylinder(0.055, 0.012, (0, 1.045, 0.22), "dark_metal", rot=(-0.1, 0, 0), seg=16)
+    k.cylinder(0.055, 0.012, (0, 1.045, 0.22), "dark_metal", rot=(-0.1, 0, 0), seg=16)
 
     # Side shell: a large curved panel each side covering the engine from
     # the nose's underside down to the belly pan, tucked in at the knee;
@@ -207,7 +295,7 @@ def fairing(k):
     for side in (-1, 1):
         E.coons(k, SIDE_TOP, SIDE_BOTTOM, SIDE_FRONT, SIDE_REAR, lambda u, v, z, y, side=side: side * side_x(z, y), "paint", nu=28, nv=18, thick=0.008,
                 sharp=25)
-        E.band(k, [(0.88, 0.79), (0.75, 0.8), (0.6, 0.81), (0.45, 0.835), (0.3, 0.86), (0.15, 0.858), (0.06, 0.845)],
+        E.band(k, [(0.83, 0.794), (0.75, 0.8), (0.6, 0.81), (0.45, 0.835), (0.3, 0.86), (0.15, 0.858), (0.06, 0.845)],
                [(0.8, 0.705), (0.66, 0.71), (0.5, 0.7), (0.35, 0.685), (0.22, 0.67), (0.12, 0.665), (0.06, 0.67)], side_x, side, "paint", nu=18, nv=4,
                lift=0.014, thick=0.012, sharp=25)
         E.band(k, [(0.8, 0.707), (0.66, 0.712), (0.5, 0.702), (0.35, 0.687), (0.22, 0.672), (0.12, 0.667)],
@@ -225,14 +313,18 @@ def fairing(k):
     # Short, steep smoked screen on the shell's top edge
     def screen(u, v):
         across = (v - 0.5) * 2
-        half = 0.165 - 0.07 * u
-        return (across * half, 0.925 + 0.195 * u - 0.025 * across * across, 0.71 - 0.21 * u - 0.03 * across * across)
+        if scheme == "black" and u > 0.8:
+            # A corner broken off in a fall: a notch, not a hole
+            across = min(across, 0.45)
+        x = across * (0.15 - 0.06 * u)
+        return (x, 0.9 + 0.22 * u - (0.035 * (1 - u) + 0.02 * u) * across * across - 0.045 * u * across ** 4,
+                0.815 - 0.315 * u - 0.09 * (1 - 0.6 * u) * across * across)
 
     k.sheet(screen, "glass", nu=6, nv=8, thick=0.005)
     k.box((0.16, 0.1, 0.03), (0, 1.0, 0.56), "dark_metal", rot=(-0.9, 0, 0), bevel=0.01)
     k.box((0.13, 0.075, 0.004), (0, 1.01, 0.548), "dash", rot=(-0.9, 0, 0), bevel=0)
     # Mirrors out on the fairing, each with its indicator along the outer edge
-    for side in (() if track else (-1, 1)):
+    for side in (-1, 1):
         root = (side * 0.16, 0.92, 0.67)
         head = (side * 0.27, 1.06, 0.63)
         k.tube([root, E.along(root, head, 0.5), head], 0.009, "trim", seg=6, smooth=2)
@@ -250,7 +342,7 @@ def tank_and_tail(k):
         E.panel(k, [(-0.04, 0.8), (-0.3, 0.78), (-0.32, 0.66), (-0.12, 0.6)], side * 0.1, 0.02, "dark_metal")
     # The rider's seat, very short and low, then the pillion pad on the blade
     k.loft([(0.0, 0.825, 0.855, 0.1), (-0.05, 0.815, 0.86, 0.15, 3, 3), (-0.25, 0.815, 0.855, 0.155, 3, 3), (-0.33, 0.83, 0.87, 0.13)], "seat", ring=16, steps=2)
-    k.loft([(-0.4, 0.875, 0.9, 0.07), (-0.44, 0.88, 0.92, 0.1, 3, 3), (-0.58, 0.905, 0.945, 0.085, 3, 3), (-0.64, 0.915, 0.95, 0.05)], "paint" if track else "seat", ring=12, steps=2)
+    k.loft([(-0.4, 0.875, 0.9, 0.07), (-0.44, 0.88, 0.92, 0.1, 3, 3), (-0.58, 0.905, 0.945, 0.085, 3, 3), (-0.64, 0.915, 0.95, 0.05)], "seat", ring=12, steps=2)
 
     # Tail: a slim pointed blade rising to the tip, red over black, with an
     # open gap under it to the tyre; the lights tucked under the tip
@@ -258,11 +350,10 @@ def tank_and_tail(k):
     for side in (-1, 1):
         E.panel(k, [(-0.38, 0.83), (-0.62, 0.9), (-0.66, 0.89), (-0.42, 0.815)], side * 0.128, 0.01, "vent", toe=side * 0.18, bevel=0.002)
     # Short plate hanger tucked under the blade, a blank plate, indicators
-    if not track:
-        k.beam((0, 0.88, -0.7), (0, 0.8, -0.8), (0.05, 0.02), "trim")
-        E.plate(k, (0, 0.76, -0.81), size=(0.17, 0.12), lean=0.3)
-        for side in (-1, 1):
-            E.indicator(k, (side * 0.03, 0.84, -0.77), (side * 0.12, 0.845, -0.78), radius=0.009)
+    k.beam((0, 0.88, -0.7), (0, 0.8, -0.8), (0.05, 0.02), "trim")
+    E.plate(k, (0, 0.76, -0.81), size=(0.17, 0.12), lean=0.3)
+    for side in (-1, 1):
+        E.indicator(k, (side * 0.03, 0.84, -0.77), (side * 0.12, 0.845, -0.78), radius=0.009)
     # Rear hugger close over the tyre, on the swingarm
     k.guard((REAR[1], REAR[2]), REAR_R + 0.018, 0.19, math.radians(55), math.radians(125), "trim", crown=0.025, nu=8)
 
@@ -350,8 +441,10 @@ def draw(k):
     tank_and_tail(k)
     engine(k)
     chassis(k)
-    if not track:
+    if scheme == "red":
         luggage(k)
+    else:
+        scuffs(k)
 
 
 def photo_view(k):
@@ -375,17 +468,17 @@ def photo_view(k):
 
 
 def build(name, suffix):
-    global scheme, track
-    scheme, track = name, name == "track"
+    global scheme
+    scheme = name
     k = E.EKit(seed=113, colours=SCHEMES[scheme], extra=EXTRA)
     for lod in E.LODS:
         k.level(lod)
         draw(k)
     k.finish_lods(os.path.join(E.OUT_DIR, NAME + suffix + ".glb"), {"grip": GRIP, "peg": PEG, "seat": SEAT})
     E.previews(k, NAME + suffix, height=0.62, reach=0.95)
-    if not track:
+    if scheme == "red":
         photo_view(k)
 
 
-for name, suffix in (("red", ""), ("track", "_black")):
+for name, suffix in (("red", ""), ("black", "_black")):
     build(name, suffix)

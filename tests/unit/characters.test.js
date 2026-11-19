@@ -164,24 +164,39 @@ describe('Lucy', () => {
         expect(lucy.stats.handling).toBeGreaterThanOrEqual(4);
     });
 
-    test('her track bike is the superbike in black with no road parts: no headlight node, no mirrors, plate or indicators', async () => {
+    test('her superbike is the red one in black, a road bike with its lights, mirrors, plate and indicators, and no tail pack', async () => {
         const real = load({ files: true });
         const [red, black] = await Promise.all(['bike13_panigale', 'bike13_panigale_black'].map(id => real.SceneAssets.loadModel(real.BIKE_MODELS[id].file)));
         const materials = model => new Set([...model.groups.get('lod0').meshes.values()].flat().map(part => part.material.name));
-        expect(red.groups.get('lod0').meshes.has('headlight')).toBe(true);
-        expect(black.groups.get('lod0').meshes.has('headlight')).toBe(false);
-        for (const name of ['headlight', 'signal', 'plate', 'luggage']) {
-            expect(materials(red).has(name)).toBe(true);
-            expect(materials(black).has(name)).toBe(false);
+        for (const model of [red, black]) {
+            expect(model.groups.get('lod0').meshes.has('headlight')).toBe(true);
+            for (const name of ['headlight', 'signal', 'plate']) expect(materials(model).has(name)).toBe(true);
         }
-        expect(game.BIKE_MODELS.bike13_panigale_black).toMatchObject({ kind: 'sport', cls: 'supersport', year: game.BIKE_MODELS.bike13_panigale.year, pose: game.BIKE_MODELS.bike13_panigale.pose });
+        expect(materials(red).has('luggage')).toBe(true);
+        expect(materials(black).has('luggage')).toBe(false);
+        expect(game.BIKE_MODELS.bike13_panigale_black).toMatchObject({ name: 'V4 superbike, black', kind: 'sport', cls: 'supersport', year: game.BIKE_MODELS.bike13_panigale.year, pose: game.BIKE_MODELS.bike13_panigale.pose });
         await real.BikeModels.preload(['bike13_panigale_black']);
         const vehicle = new real.Vehicle(new real.THREE.Scene(), null, real.CHARACTERS.find(c => c.id === 'lucy'), 'bike13_panigale_black');
         expect(vehicle.modelled).toBe(true);
         expect(vehicle.model).toBe('bike13_panigale_black');
-        // Nothing of a headlight is drawn: the stand-in's lamp left the bike with the rest of the stand-in
-        expect(named(vehicle.group, 'headlight')).toEqual([]);
-        expect(vehicle.headlight && vehicle.headlight.parent).toBeFalsy();
+        expect(named(vehicle.group, 'headlight').length).toBeGreaterThan(0);
+    });
+
+    test('her two own bikes carry the marks of their falls at both levels of detail, and no other bike does', async () => {
+        const real = load({ files: true });
+        const scuffed = ['bike13_panigale_black', 'bike15_crf250'];
+        for (const id of Object.keys(real.BIKE_MODELS)) {
+            const model = await real.SceneAssets.loadModel(real.BIKE_MODELS[id].file);
+            for (const lod of ['lod0', 'lod1']) {
+                const marks = [...new Set([...model.groups.get(lod).meshes.values()].flat().map(part => part.material.name))].filter(name => /^(scuff_|tape$)/.test(name));
+                if (scuffed.includes(id)) {
+                    expect(marks.some(name => name.startsWith('scuff_'))).toBe(true);
+                    if (lod === 'lod0') expect(marks).toContain('tape');
+                } else {
+                    expect([id, lod, marks]).toEqual([id, lod, []]);
+                }
+            }
+        }
     });
 
     test('builds as her bike in her own kit, with the procedural stand-in until the files are in', () => {

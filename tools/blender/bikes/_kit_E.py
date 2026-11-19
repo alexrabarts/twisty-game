@@ -320,15 +320,23 @@ def yokes(k, x, axle, top, width, mat="dark_metal", lower=0.78):
     k.rod((-x - 0.012, axle[0], axle[1]), (x + 0.012, axle[0], axle[1]), 0.012, "steel", seg=8)
 
 
-def lever_set(k, grip, side, root_x):
-    """Grip, bar-end weight, lever, perch and switch block on a straight bar."""
+def lever_set(k, grip, side, root_x, bent=None):
+    """Grip, bar-end weight, lever, perch and switch block on a straight bar. `bent` names the
+    finish of a lever's tip that a fall has snapped short and kinked."""
     g = Vector((side * grip[0], grip[1], grip[2]))
     out = Vector((side, 0, 0))
     ahead = Vector((0, -0.2, 1)).normalized()
     k.rod(g - out * 0.065, g + out * 0.06, 0.018, "rubber", seg=10)
     k.rod(g + out * 0.06, g + out * 0.08, 0.02, "steel_dark", seg=10)
     k.box((0.045, 0.04, 0.05), g - out * 0.095, "dark_metal", bevel=0.008)
-    k.rod(g - out * 0.11 + ahead * 0.035, g + out * 0.05 + ahead * 0.07, 0.006, "steel", seg=5)
+    if bent:
+        knee = g + out * 0.005 + ahead * 0.062
+        k.rod(g - out * 0.11 + ahead * 0.035, knee, 0.006, "steel", seg=5)
+        keep, k.keep = k.keep, True
+        k.rod(knee, knee + out * 0.02 + ahead * 0.03 + Vector((0, 0.014, 0)), 0.0065, bent, seg=5)
+        k.keep = keep
+    else:
+        k.rod(g - out * 0.11 + ahead * 0.035, g + out * 0.05 + ahead * 0.07, 0.006, "steel", seg=5)
     if side > 0:
         # Front brake master cylinder and its reservoir
         k.cylinder(0.016, 0.05, g - out * 0.135 + Vector((0, 0.005, 0.02)), "dark_metal", axis="x", seg=8)
@@ -363,7 +371,8 @@ def plate(k, centre, size=(0.2, 0.15), lean=0.25):
 
 def previews(k, name, height=0.7, reach=1.0, extra=None):
     """With TWISTY_PREVIEW set to a directory, renders the finished model there: both sides,
-    the front and rear three-quarters, and the distant model. TWISTY_QUICK=1 renders two views only."""
+    the front and rear three-quarters, and the distant model. TWISTY_QUICK=1 renders two views only;
+    TWISTY_VIEWS=<names with commas> renders those views of the near model only (and the distant model with `lod1` among them)."""
     out = os.environ.get("TWISTY_PREVIEW")
     if not out:
         return
@@ -386,12 +395,15 @@ def previews(k, name, height=0.7, reach=1.0, extra=None):
         shader.inputs["Alpha"].default_value = 0.3
     views.update(extra or {})
     quick = os.environ.get("TWISTY_QUICK")
+    only = [name for name in os.environ.get("TWISTY_VIEWS", "").split(",") if name]
     k.show("lod0")
     for view, (eye, target) in views.items():
+        if only and view not in only:
+            continue
         if quick and view not in ("right", "front-left", "front"):
             continue
         render(k.scene, os.path.join(out, f"{name}-lod0-{view}.png"), eye, target, size=(960, 645) if quick else (1280, 860), lens=50)
-    if quick:
+    if quick or (only and "lod1" not in only):
         return
     k.show("lod1")
     for view in ("right", "front-left"):
@@ -520,3 +532,85 @@ def band(k, top, bottom, f, side, mat, nu=12, nv=1, lift=0.008, thick=0.004, **k
     front = [top[0], bottom[0]]
     rear = [top[-1], bottom[-1]]
     return coons(k, top, bottom, front, rear, lambda u, v, z, y: side * (f(z, y) + lift), mat, nu=nu, nv=nv, thick=thick, smooth=2, **kw)
+
+
+def smooth(points, steps=8):
+    """A curve through 3D knots as a polyline, knot i at index i * steps, so that a piece cut
+    between two knots (`piece`) lies exactly on the whole curve: two panels that share a feature
+    line share its points."""
+    from bike_kit import spline
+    return spline([tuple(p) for p in points], steps)
+
+
+def piece(curve, first, last, steps=8):
+    """The part of a `smooth` curve from knot `first` to knot `last`."""
+    return curve[first * steps:last * steps + 1]
+
+
+def _on(line, t):
+    """The point a share `t` of the way along a polyline, by length."""
+    lengths = [0.0]
+    for a, b in zip(line, line[1:]):
+        lengths.append(lengths[-1] + math.dist(a, b))
+    total = lengths[-1]
+    if total < 1e-9:
+        return Vector(line[0])
+    want = total * min(1.0, max(0.0, t))
+    for j in range(len(line) - 1):
+        if lengths[j + 1] >= want:
+            span = (lengths[j + 1] - lengths[j]) or 1.0
+            return Vector(line[j]).lerp(Vector(line[j + 1]), (want - lengths[j]) / span)
+    return Vector(line[-1])
+
+
+class Patch:
+    """A panel between four feature lines in space (polylines of (x, y, z) points): `top` and
+    `bottom` run front to rear, `front` and `rear` top to bottom, and they meet at the corners.
+    An edge may be one point twice, for a three-sided panel. `bulge` swells its middle along `way`.
+    Drawn on the +x side as written; `skin` draws either side."""
+
+    def __init__(self, top, bottom, front, rear, bulge=0.0, way=(1, 0, 0), out=(1.0, 0.4, 0.8)):
+        self.edges = (top, bottom, front, rear)
+        self.corners = [Vector(p) for p in (top[0], top[-1], bottom[0], bottom[-1])]
+        self.bulge, self.way, self.out = bulge, Vector(way), Vector(out)
+
+    def point(self, u, v):
+        top, bottom, front, rear = self.edges
+        a, b, c, d = self.corners
+        p = (1 - v) * _on(top, u) + v * _on(bottom, u) + (1 - u) * _on(front, v) + u * _on(rear, v)
+        p -= (1 - u) * (1 - v) * a + u * (1 - v) * b + (1 - u) * v * c + u * v * d
+        return p + self.way * (self.bulge * 16 * u * (1 - u) * v * (1 - v))
+
+    def normal(self, u, v):
+        e = 0.01
+        u0, v0 = min(max(u, e), 1 - e), min(max(v, e), 1 - e)
+        n = (self.point(u0 + e, v0) - self.point(u0 - e, v0)).cross(self.point(u0, v0 + e) - self.point(u0, v0 - e))
+        if n.length < 1e-12:
+            return self.out.normalized()
+        n.normalize()
+        return n if n.dot(self.out) >= 0 else -n
+
+    def at(self, u, v, lift=0.0):
+        p = self.point(u, v)
+        return p + self.normal(u, v) * lift if lift else p
+
+
+class Strip:
+    """A part of a patch between two lines drawn in the patch's own (u, v): a lamp, a blade or a
+    slot that lies on the panel and follows its shape."""
+
+    def __init__(self, patch, top, bottom):
+        self.patch, self.top, self.bottom = patch, [tuple(p) + (0.0,) for p in top], [tuple(p) + (0.0,) for p in bottom]
+
+    def at(self, u, v, lift=0.0):
+        a, b = _on(self.top, u), _on(self.bottom, u)
+        return self.patch.at(a.x + (b.x - a.x) * v, a.y + (b.y - a.y) * v, lift)
+
+
+def skin(k, patch, mat, side=1, nu=8, nv=4, thick=0.008, lift=0.0, **kw):
+    """Draws a `Patch` or a `Strip` as a sheet, `lift` off the panel along its normal, on the side `side`."""
+    def at(u, v):
+        p = patch.at(u, v, lift)
+        return (side * p.x, p.y, p.z)
+
+    return k.sheet(at, mat, nu=nu, nv=nv, thick=thick, **kw)

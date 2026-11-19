@@ -13,6 +13,12 @@
 # A small low mudguard on the swingarm keeps the rear tyre's spray off the
 # shock. No badges, no wordmark, no plate lettering.
 #
+# It has been dropped many times and kept in use (`scuffs`): pale stress
+# marks where the red plastics have bent, scratched hand guards and fork
+# guards, a snapped and kinked brake lever, scraped bar ends, pegs, swingarm
+# ends and skid plate, a dented silencer, a corner broken off the right side
+# panel, a torn seat corner under a strip of tape.
+#
 # Real size (the class's published figures): 1,445 mm wheelbase, 875 mm
 # seat, 27.6 degrees of caster, 3.00-21 and 120/80-18 tyres, a 256 mm front
 # disc, a 220 mm rear disc.
@@ -57,6 +63,11 @@ EXTRA = {
     "frame": (0x121214, 0.45, 0.6),
     # The graphics' black blocks
     "block": (0x101012, 0.6, 0.1),
+    # Fall marks: red plastic bent pale, black plastic scratched grey, scraped metal, and cloth tape
+    "scuff_plastic": (0xEFC4BE, 0.9, 0.0),
+    "scuff_grey": (0x8B8D90, 0.9, 0.0),
+    "scuff_metal": (0xC9CCD0, 0.45, 0.9),
+    "tape": (0x9A9C9E, 0.8, 0.1),
 }
 
 
@@ -94,7 +105,7 @@ def front_end(k):
         k.tube([(0, clamp[0], clamp[1]), (side * 0.1, clamp[0] + 0.004, clamp[1]), (side * 0.2, GRIP[1], GRIP[2] + 0.015), (side * (GRIP[0] + 0.07), GRIP[1], GRIP[2] - 0.005)],
                0.012, "steel_dark", seg=8, smooth=2)
         k.cylinder(0.018, 0.05, (side * 0.05, clamp[0] - 0.025, clamp[1]), "alu", seg=8)
-        E.lever_set(k, GRIP, side, 0.2)
+        E.lever_set(k, GRIP, side, 0.2, bent="scuff_metal" if side > 0 else None)
         # The hand guard: a black shell wrapped round the front of the grip
         k.loft([(g[2] + 0.04, GRIP[1] - 0.05, GRIP[1] + 0.04, 0.03, 2.4, 2.4, 0.5, 1, 1, side * (GRIP[0] - 0.09)),
                 (g[2] + 0.085, GRIP[1] - 0.06, GRIP[1] + 0.05, 0.075, 2.6, 2.6, 0.5, 1, 1, side * (GRIP[0] - 0.01)),
@@ -151,9 +162,12 @@ def bodywork(k):
         # The radiator behind the shroud (the left one carries the core, the right a blank)
         k.box((0.03, 0.2, 0.1), (side * 0.115, 0.77, 0.33), "vent", rot=(0, side * -0.2, 0), bevel=0.004)
         # Side panel under the seat: red, with a white board and a black block
-        E.panel(k, [(-0.08, 0.64), (-0.42, 0.66), (-0.6, 0.78), (-0.66, 0.85), (-0.4, 0.815), (-0.08, 0.79)], side * 0.128, 0.02, "paint", toe=side * 0.06, bevel=0.008)
+        # The right one has lost its rear corner in a fall
+        corner = [(-0.585, 0.805), (-0.555, 0.812), (-0.54, 0.834)] if side > 0 else [(-0.66, 0.85)]
+        E.panel(k, [(-0.08, 0.64), (-0.42, 0.66), (-0.6, 0.78)] + corner + [(-0.4, 0.815), (-0.08, 0.79)], side * 0.128, 0.02, "paint", toe=side * 0.06, bevel=0.008)
         E.panel(k, [(-0.16, 0.68), (-0.4, 0.695), (-0.54, 0.77), (-0.36, 0.78), (-0.16, 0.77)], side * 0.141, 0.006, "plastic", toe=side * 0.06, bevel=0)
-        E.panel(k, [(-0.44, 0.795), (-0.58, 0.79), (-0.62, 0.835), (-0.44, 0.81)], side * 0.141, 0.006, "block", toe=side * 0.06, bevel=0)
+        block = [(-0.44, 0.795), (-0.54, 0.792), (-0.53, 0.816), (-0.44, 0.81)] if side > 0 else [(-0.44, 0.795), (-0.58, 0.79), (-0.62, 0.835), (-0.44, 0.81)]
+        E.panel(k, block, side * 0.141, 0.006, "block", toe=side * 0.06, bevel=0)
 
     # The flat narrow seat, one piece, black: up the tank at the front, level
     # to the rear mudguard
@@ -229,11 +243,77 @@ def chassis(k):
     k.side_stand((-0.13, 0.31, -0.04), (-0.28, 0.03, 0.05), 0.01, "steel_dark", seg=6)
 
 
+def scuffs(k):
+    """The marks of many falls, on both sides. Each lies just proud of the part it is on; the big
+    ones stay in the distant model."""
+    k.begin("body")
+    k.keep = True
+
+    # Pale stress marks along the edges of the front and rear mudguards, where the plastic has bent
+    def fender_edge(side, start, end, inner):
+        def at(u, v):
+            t = start + (end - start) * u
+            across = side * (inner + (1.0 - inner) * v)
+            half = 0.088 - 0.036 * abs(t - 0.35)
+            return (across * half, 0.824 + 0.075 * math.sin(t * math.pi * 0.85) - 0.035 * across * across - 0.05 * t, 0.34 + 0.8 * t)
+        k.sheet(at, "scuff_plastic", nu=4, nv=1, thick=0.003)
+
+    fender_edge(1, 0.66, 1.0, 0.45)
+    fender_edge(-1, 0.8, 1.0, 0.6)
+    fender_edge(-1, 0.02, 0.2, 0.5)
+
+    def tail_edge(side, start, end, inner):
+        def at(u, v):
+            t = start + (end - start) * u
+            across = side * (inner + (1.0 - inner) * v)
+            return (across * (0.095 - 0.03 * t), 0.909 + 0.1 * t ** 1.3 - 0.03 * across * across, -0.5 - 0.6 * t)
+        k.sheet(at, "scuff_plastic", nu=4, nv=1, thick=0.003)
+
+    tail_edge(1, 0.5, 1.0, 0.5)
+    tail_edge(-1, 0.7, 1.0, 0.65)
+    # The tank shrouds' leading edges and lower corners, and the side panels' lower edges
+    for side, marks in ((1, ([(0.47, 0.72), (0.555, 0.855), (0.52, 0.87), (0.44, 0.74)], [(0.3, 0.69), (0.45, 0.705), (0.43, 0.725), (0.3, 0.71)])),
+                        (-1, ([(0.5, 0.8), (0.555, 0.86), (0.5, 0.94), (0.48, 0.92), (0.52, 0.86)], [(0.28, 0.685), (0.36, 0.69), (0.35, 0.705)]))):
+        for mark in marks:
+            E.panel(k, mark, side * 0.189, 0.004, "scuff_plastic", toe=side * -0.2, bevel=0)
+    E.panel(k, [(-0.12, 0.645), (-0.42, 0.665), (-0.56, 0.76), (-0.585, 0.8), (-0.54, 0.79), (-0.42, 0.69), (-0.14, 0.665)], 0.141, 0.004, "scuff_plastic", toe=0.06, bevel=0)
+    E.panel(k, [(-0.3, 0.655), (-0.42, 0.662), (-0.5, 0.715), (-0.44, 0.7)], -0.141, 0.004, "scuff_plastic", toe=-0.06, bevel=0)
+    # The silencer: its heat shield scraped along, a dent and bare metal behind the shield
+    a, b = (0.155, 0.68, -0.3), (0.175, 0.86, -0.86)
+    lean = E.tilt(a, b)
+    k.box((0.004, 0.24, 0.035), E.along((a[0] + 0.066, a[1], a[2]), (b[0] + 0.066, b[1], b[2]), 0.52), "scuff_grey", rot=lean, bevel=0)
+    k.box((0.004, 0.07, 0.05), E.along((a[0] + 0.057, a[1], a[2]), (b[0] + 0.057, b[1], b[2]), 0.86), "scuff_metal", rot=lean, bevel=0)
+    k.box((0.004, 0.035, 0.03), E.along((a[0] + 0.059, a[1] + 0.015, a[2]), (b[0] + 0.059, b[1] + 0.015, b[2]), 0.87), "block", rot=lean, bevel=0)
+    # The skid plate's underside and flanks, the swingarm's ends and the pegs' ends
+    k.box((0.15, 0.004, 0.3), (0, 0.253, 0.1), "scuff_grey", bevel=0)
+    for side in (-1, 1):
+        k.box((0.004, 0.03, 0.22), (side * 0.121, 0.285, 0.1), "scuff_grey", bevel=0)
+        k.box((0.004, 0.05, 0.1), (side * (ARM_X + 0.019), REAR[1], REAR[2] + 0.02), "scuff_grey", bevel=0)
+        k.cylinder(0.014, 0.006, (side * (PEG[0] + 0.072), PEG[1] - 0.012, PEG[2]), "scuff_grey", axis="x", seg=8)
+    # The seat's rear right corner, torn and taped over
+    k.box((0.075, 0.004, 0.055), (0.05, 0.9075, -0.565), "tape", rot=(0.12, 0.3, 0), bevel=0)
+    k.box((0.004, 0.04, 0.055), (0.092, 0.888, -0.57), "tape", rot=(0.12, 0, 0), bevel=0)
+
+    # With the steering: the hand guards, the bar ends and the fork guards. Not in the fork legs' own nodes: the game
+    # reads the steering axis from the legs' surfaces
+    k.begin("handlebar", (0, TOP[0] + 0.05, TOP[1] - 0.03))
+    axle = (FRONT[1], FRONT[2])
+    for side in (-1, 1):
+        k.box((0.005, 0.06, 0.05), (side * (GRIP[0] + 0.068), GRIP[1] - 0.005, GRIP[2] + 0.086), "scuff_grey", bevel=0)
+        k.box((0.07, 0.012 if side > 0 else 0.02, 0.004), (side * (GRIP[0] - 0.01), GRIP[1] + 0.012 * side, GRIP[2] + 0.102), "scuff_grey", bevel=0)
+        k.cylinder(0.021, 0.008, (side * (GRIP[0] + 0.083), GRIP[1], GRIP[2]), "scuff_metal", axis="x", seg=10)
+        a = (side * (FORK_X + 0.05), axle[0], axle[1])
+        b = (side * (FORK_X + 0.05), TOP[0], TOP[1])
+        k.box((0.005, 0.14 if side > 0 else 0.08, 0.03), E.along(a, b, 0.2 if side > 0 else 0.27), "scuff_grey", rot=E.tilt(a, b), bevel=0)
+    k.keep = False
+
+
 def draw(k):
     wheels(k)
     front_end(k)
     bodywork(k)
     chassis(k)
+    scuffs(k)
 
 
 def build():
