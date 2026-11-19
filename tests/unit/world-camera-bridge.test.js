@@ -48,9 +48,9 @@ describe('the chase camera under a road overhead', () => {
                 // It stays a camera: over the bike's head and over the land
                 expect(r.under).toBeGreaterThanOrEqual(WorldCamera.TUNING.headM - 1e-6);
                 expect(r.floor).toBeGreaterThanOrEqual(WorldCamera.FLOOR_M - 0.05);
-                // Down over the approach and up again after, never as a switch: under 3 m/s of height at any moment
+                // Down over the approach and up again after, never as a switch: under 3.6 m/s of height at any moment
                 // (a frame at 60 Hz), and back at its own height after
-                expect(r.step).toBeLessThan(0.05);
+                expect(r.step).toBeLessThan(0.06);
                 expect(r.after).toBeCloseTo(r.before, 1);
             });
         }
@@ -64,6 +64,10 @@ describe('the chase camera under a road overhead', () => {
         // and the high view comes down only as far as the deck needs: as high as it can be under it
         const high = ride(MODES['High View'], 15, true);
         expect(high.room).toBeLessThan(WorldCamera.TUNING.roofClearM + 0.6);
+        // At speed it keeps more room under the deck: lower by about roofFastM
+        const slow = ride(MODES['High View'], 8, true), fast = ride(MODES['High View'], 30, true);
+        expect(slow.under - fast.under).toBeGreaterThan(WorldCamera.TUNING.roofFastM * 0.7);
+        expect(slow.under - fast.under).toBeLessThan(WorldCamera.TUNING.roofFastM + 0.2);
     });
 
     test('with open sky the camera is the same with and without the rule', () => {

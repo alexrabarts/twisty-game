@@ -50,11 +50,12 @@ class WorldCamera {
             headM: 1.2, clearM: 0.6, hardClearM: 0.2, fractionIn: 10, fractionOut: 2.5, foreseeS: 0.3,
             // The camera stays floorM over the land, eased in over floorBandM
             floorM: 1.0, floorBandM: 0.4,
-            // Under a road overhead the boom stays roofClearM under its deck, as high as it can be there, and the camera
+            // Under a road overhead the boom stays roofClearM under its deck, as high as it can be there, and roofFastM
+            // lower again at speed (from roofFastFrom to roofFastTo m/s: a fast pass has more room), and the camera
             // never comes within roofHardM of it. The road is read roofAheadS of riding ahead (roofAheadMinM at the
             // least) at roofPoints points, and the boom's height comes down at roofIn, which settles in about that
             // time, and goes back up at roofOut: both slow, so the height changes over the approach and after
-            roofClearM: 0.35, roofHardM: 0.15, roofIn: 1.8, roofOut: 1.2, roofPoints: 12, roofAheadS: 2.6, roofAheadMinM: 30,
+            roofClearM: 0.35, roofFastM: 0.7, roofFastFrom: 10, roofFastTo: 28, roofHardM: 0.15, roofIn: 1.8, roofOut: 1.2, roofPoints: 12, roofAheadS: 2.6, roofAheadMinM: 30,
             // The hard limit tests the boom at marchPoints points and narrows the first hit down by marchRefine halvings.
             // The soft share tests it at softPoints points: a point that the land comes within clearM + softBandM of
             // (at the camera end; less toward the head, which rides 1.2 m over the road) starts to draw the boom in,
@@ -290,7 +291,7 @@ class WorldCamera {
         for (let i = 0; i <= t.roofPoints; i++) {
             const at = i / t.roofPoints;
             const under = this.overhead(head.x + (end.x - head.x) * at, head.z + (end.z - head.z) * at, roadY);
-            if (under !== Infinity) most = Math.min(most, under - t.roofClearM - anchorY);
+            if (under !== Infinity) most = Math.min(most, under - (this.roofClear ?? t.roofClearM) - anchorY);
         }
         return most;
     }
@@ -449,6 +450,9 @@ class WorldCamera {
         if (this.overhead) {
             this.roof = undefined;
             const open = boom(this.yaw, anchor, shift, this.want);
+            // The room kept under a deck: more at speed
+            const fast = Math.max(0, Math.min(1, (bike.speed - t.roofFastFrom) / (t.roofFastTo - t.roofFastFrom)));
+            const clear = this.roofClear = t.roofClearM + t.roofFastM * fast * fast * (3 - 2 * fast);
             let roofWant = Math.min(sp.height.x, this.roofHeight(head, open, anchor.y, bike.y));
             const reach = Math.max(t.roofAheadMinM, bike.speed * t.roofAheadS);
             const at = this.roofAt || (this.roofAt = {});
@@ -459,7 +463,7 @@ class WorldCamera {
                 // The height is over the bike, and the bike is a boom's length up the road when the camera is under
                 // this deck: on a climb that is higher than the road under the deck
                 const then = this.centre(s + reach * k / t.roofPoints + sp.distance.x, this.roofThen || (this.roofThen = {})).y;
-                roofWant = Math.min(roofWant, under - t.roofClearM - Math.max(p.y, then));
+                roofWant = Math.min(roofWant, under - clear - Math.max(p.y, then));
             }
             // (with open sky the limit rests at the boom's own height, so it comes back up at roofOut and not at once)
             if (fresh) WorldCamera.settle(sp.roof, roofWant);

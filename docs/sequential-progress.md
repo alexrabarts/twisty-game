@@ -85,3 +85,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner found the first version a switch to a low camera at speed. The camera now reads the road 2.6 s of riding ahead and changes height over that whole approach, stays as high as the deck allows (0.35 m under it, from 0.7 m), allows for the road's grade between the deck and the bike, and goes back up slowly.
 - Check: `tests/unit/world-camera-bridge.test.js` (8 tests): never over a deck, and under 3 m/s of height change at any moment at 8, 15 and 30 m/s. Simulation on the three real bridges in the high view: 8 m comes down to 5.1 m, 4.4 m and 3.4 m over the bike, over about 60 to 80 m of road at speed, with no step.
 - Left: under the lowest deck (4.3 m, on a climb) 3.4 m is the most the deck allows. The long checks wait for the end.
+
+## F3. More room under a deck at speed
+
+- Job: by the owner's word the camera may come down a bit more at speed. Under a deck it keeps 0.35 m of room at 10 m/s and under, rising to 1.05 m at 28 m/s (`roofFastM`).
+- Check: `tests/unit/world-camera-bridge.test.js` holds that a pass at 30 m/s is about 0.7 m lower than one at 8 m/s, with no step. Simulation on the real bridges in the high view: at km 6.50, 3.0 m over the bike at 8 m/s and 2.7 m at 30 m/s; at km 1.72, 3.8 m at 25 m/s.
+- Left: the long checks wait for the end.
