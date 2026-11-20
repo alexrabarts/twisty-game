@@ -45,10 +45,10 @@ describe('every stage changes its weather or its light along it', () => {
         });
     });
 
-    test('the Tremola goes from clear air to cloud to rain', () => {
+    test('the Tremola goes from clear air to cloud to rain, and back to clear air before the top', () => {
         const stage = manifest.stages.find(s => s.id === 'tremola');
         const changes = trackOf(WorldLooks).changesWithin(stage.from / UNIT, stage.to / UNIT);
-        expect(changes.map(c => c.to)).toEqual(['day/fog', 'day/rain']);
+        expect(changes.map(c => c.to)).toEqual(['day/fog', 'day/rain', 'day/clear']);
     });
 
     test('planted: a stage in one look all the way fails, a stage with no entry fails, and a change of light alone passes', () => {
@@ -199,7 +199,7 @@ describe('the weather along the Tremola is continuous (P47)', () => {
         return out;
     };
 
-    test('rain comes in over 1.5 km and is full at the top', () => {
+    test('rain comes in over 1.5 km, is full for a time, and the last kilometre to the top is dry and clear', () => {
         const values = series(trackOf(WorldLooks));
         const first = values.rain.findIndex(r => r > 0);
         const full = values.rain.findIndex(r => r >= 1);
@@ -207,8 +207,10 @@ describe('the weather along the Tremola is continuous (P47)', () => {
         expect(full).toBeGreaterThan(first);
         const spanM = values.s[full] - values.s[first - 1];
         expect(Math.abs(spanM - 1500)).toBeLessThanOrEqual(100);
-        expect(values.rain[values.rain.length - 1]).toBe(1);
-        expect(values.wet[values.wet.length - 1]).toBe(1);
+        const last = values.rain.length - 1 - values.rain.slice().reverse().findIndex(r => r >= 1);
+        expect(values.s[last] - values.s[full]).toBeGreaterThanOrEqual(1000);
+        const top = values.s.findIndex(s => s >= stage.to - 1000);
+        for (const key of ['rain', 'fog', 'wet']) expect(Math.max(...values[key].slice(top))).toBe(0);
     });
 
     test('no value the weather writes jumps more than a blend step between samples 10 m apart', () => {

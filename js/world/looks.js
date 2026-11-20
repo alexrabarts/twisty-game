@@ -28,11 +28,13 @@ const WorldLooks = {
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
     // boundary at 0.53 (s 6,989 m, road 1,677 m) blends over 1.5 km, so the first drops fall at s 6,240 m
     // (about 1,630 m) and the rain is full from s 7,740 m (about 1,740 m), before the cobbled hairpins stack
-    // (the first at s 7,808 m). It rains to the summit
+    // (the first at s 7,808 m). The rain ends before the top: the boundary at 0.8 (s 10,550 m) thins it from
+    // s 9,800 m, and the air is clear and the road dry from s 11,300 m, so the last 1.9 km to the summit are dry
     tremola: [
         { from: 0, to: 0.25, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
         { from: 0.25, to: 0.53, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.15 } },
-        { from: 0.53, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } }
+        { from: 0.53, to: 0.8, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } },
+        { from: 0.8, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ]
 };
 

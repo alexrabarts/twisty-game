@@ -763,9 +763,9 @@ describe('Game atmosphere', () => {
         const target = { environment: world, weatherSystem: self.weatherSystem };
         // Where restartAtStation and the start snap: atmosphereUnit(s), 100 m units
         const snapAt = s => self.snapAtmosphere(track, self.atmosphereUnit(s), target);
-        expect(self.atmosphereUnit(12000)).toBe(120);
+        expect(self.atmosphereUnit(9000)).toBe(90);
 
-        snapAt(12000);
+        snapAt(9000);
         expect(self.weatherSystem.mix.rain).toBe(1);
         expect(self.graphics.weatherType).toBe('rain');
         expect(RoadSurface.wetness).toBe(1);
@@ -790,9 +790,15 @@ describe('Game atmosphere', () => {
         expect(self.weatherSystem.mix.rain).toBeCloseTo(sample.t, 12);
         expect(RoadSurface.wetness).toBeCloseTo(sample.t, 12);
 
-        snapAt(10000);
+        snapAt(9500);
         expect(self.weatherSystem.mix.rain).toBe(1);
         expect(RoadSurface.wetness).toBe(1);
+
+        // A station near the top, past the rain: clear air and a dry road again
+        snapAt(12000);
+        expect(self.weatherSystem.mix).toEqual({ rain: 0, snow: 0, fog: 0 });
+        expect(RoadSurface.wetness).toBe(0);
+        expect(self.headlightStrength).toBe(0);
         RoadSurface.setWet(0);
     });
 
