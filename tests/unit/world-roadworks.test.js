@@ -227,8 +227,19 @@ describe('the rider', () => {
     });
 
     const jump = async (kind, speed, tip = 0) => {
-        const site = works.closed.find(s => s.elements.some(e => e.kind === kind));
-        const ramp = site.elements.find(e => e.kind === kind);
+        // The first ramp of this kind whose straight line ahead stays on the road and clear of every solid thing. The
+        // bike here does not steer, the works differ from site to site (Roadworks.layout), and where the road bends
+        // after a ramp the bike leaves the ramps' line for the strip beside it, which is no fault of the ramp
+        const clearAhead = (e) => {
+            for (let a = e.box.z0 - 8; a <= e.box.z1 + 60; a += 0.5) {
+                const p = world(e, 0, a);
+                const at = env.route.project(p.x, p.z, { index: env.route.indexAt(Math.min(env.route.length, e.s + a)) }, {});
+                if (Math.abs(at.lateral) > at.width / 2 - 0.5) return false;
+                if (e.site.elements.some(o => o.role === 'heavy' && Roadworks.gap(o, p.x, p.z) < Roadworks.BIKE_R + 0.3)) return false;
+            }
+            return true;
+        };
+        const ramp = works.elements.find(e => e.kind === kind && clearAhead(e));
         const v = new Vehicle(new THREE.Scene());
         v.environment = env;
         const run = 8;

@@ -4381,7 +4381,9 @@ const WORLD = {
 // cast down on across their full drawn width, every CLEAR_STEP_M along and across, from HEADROOM_M over the surface to
 // just under it, against every scenery mesh: trees, boulders, houses, landmarks, marker stones, barriers and the gate
 // frames, instanced or not. Where a mesh's box reaches into a cell, the cell is cast on again every CLEAR_FINE_M, so a
-// pole or a board a few centimetres thick is not missed between rays. A hit is a failure, except a barrier over the
+// pole or a board a few centimetres thick is not missed between rays. A ray is cast only inside the drawn width: the
+// cells at a road's edge reach half a step past it, and what stands on the verge there (a checkpoint's boards, 0.16 m
+// off the carriageway) is not over the road. A hit is a failure, except a barrier over the
 // side road it closes (it is there to close it, never on the ride) and a roadworks site's works in its own closed lane
 // (js/world/roadworks.js: the open lane beside it must stay clear); a station banner spans the ride above HEADROOM_M,
 // so no ray reaches it. --out <dir> saves a view of the worst offenders.
@@ -4507,6 +4509,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
                 const found = [];
                 for (let fx = Math.max(x - h, t.x0); fx <= Math.min(x + h, t.x1) && !found.length; fx += fine) {
                     for (let fz = Math.max(z - h, t.z0); fz <= Math.min(z + h, t.z1) && !found.length; fz += fine) {
+                        if (Math.abs(road.lat + (fx - x) * road.ax + (fz - z) * road.az) > road.half) continue;
                         origin.set(fx, y + headroom, fz);
                         raycaster.set(origin, down);
                         raycaster.far = headroom + 0.3;
@@ -4528,7 +4531,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
         for (let s = Math.max(0, s0 - every / 2); s < Math.min(route.length, s0 + every / 2); s += step) {
             route.sample(s, sample);
             const half = sample.width / 2;
-            for (let o = -half; o <= half + 1e-9; o += step) cast(sample.x + o * Math.cos(sample.heading), sample.z - o * Math.sin(sample.heading), sample.y, { edgeId: null, s, lat: o });
+            for (let o = -half; o <= half + 1e-9; o += step) cast(sample.x + o * Math.cos(sample.heading), sample.z - o * Math.sin(sample.heading), sample.y, { edgeId: null, s, lat: o, half, ax: Math.cos(sample.heading), az: -Math.sin(sample.heading) });
         }
         // The side roads drawn from here (their chunk's ribbons are built), each once
         for (const edge of env.data.edges) {
@@ -4543,7 +4546,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
                     const t = a / len;
                     const x = e.x[i] + (e.x[i + 1] - e.x[i]) * t, z = e.z[i] + (e.z[i + 1] - e.z[i]) * t, y = e.y[i] + (e.y[i + 1] - e.y[i]) * t;
                     const half = (e.width[i] + (e.width[i + 1] - e.width[i]) * t) / 2;
-                    for (let o = -half; o <= half + 1e-9; o += step) cast(x + o * fz, z - o * fx, y, { edgeId: edge.id, s: null });
+                    for (let o = -half; o <= half + 1e-9; o += step) cast(x + o * fz, z - o * fx, y, { edgeId: edge.id, s: null, lat: o, half, ax: fz, az: -fx });
                 }
             }
         }

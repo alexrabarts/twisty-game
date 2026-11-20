@@ -560,9 +560,10 @@ class RoadSurface {
         return material;
     }
 
-    // The closed lanes of up to two roadworks sites (Roadworks sites: sa, sb, sc, sd, side, half, and their elements'
-    // places for a centre), drawn in the near ribbon's shader as the repair surface. Only uniforms change, so a site
-    // coming into reach compiles nothing
+    // The closed lanes of up to two roadworks sites (Roadworks sites: their repair span, side, half, and their elements'
+    // places for a centre), drawn in the near ribbon's shader as the repair surface. The span is the lane's full width
+    // only (Roadworks.repairSpan): the tapers keep the road's own surface. Only uniforms change, so a site coming into
+    // reach compiles nothing
     static setWorks(sites) {
         RoadSurface.works = sites;
         const material = RoadSurface.near;
@@ -574,7 +575,8 @@ class RoadSurface {
                 u.roadWorksS.value[i].set(1, 0, 0, 0);
                 continue;
             }
-            u.roadWorksS.value[i].set(site.sa, site.sb, site.sc, site.sd);
+            const [from, to] = Roadworks.repairSpan(site);
+            u.roadWorksS.value[i].set(from, from, to, to);
             u.roadWorksL.value[i].set(site.side, Roadworks.BEACON_LAT_M + Roadworks.BEACON_HALF_M, site.half, 0);
             const e = site.elements || [];
             let x = 0, z = 0;

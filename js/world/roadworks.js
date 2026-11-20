@@ -9,17 +9,23 @@
 //                 chevron boards on a black rubber foot) stand along the centre line, with a taper at each end out to
 //                 the closed lane's edge; their chevrons point toward the open lane. A Swiss mobile traffic light
 //                 stands at each entry, on the open lane's verge, with a stop line STOP_M in from the gate
-//   repair zone   the closed lane has another surface (RoadSurface.setWorks: milled asphalt, fresh dark patches, a gravel
-//                 strip at the edge, feathered into the old surface) and the plant and clutter of the works: cones,
-//                 barrier planks, a mesh fence, heaps, steel plates, pallets, a roller, a mini digger and a portable
-//                 sign. Some of it is a ramp (a plank ramp, a steel plate up a gravel heap, a sand heap with a flat top)
+//   repair zone   where the lane is fully closed (Roadworks.repairSpan: between the tapers, never under one) it has
+//                 another surface (RoadSurface.setWorks: milled asphalt, fresh dark patches, a gravel strip at the
+//                 edge, feathered into the old surface). The tapers keep the road's own surface
+//   works         cones and barrier planks, and the works in GROUPS of things that belong together (a dig, surfacing,
+//                 a stores area, a welfare corner, setts on a cobbled road), with open stretches of plain closed lane
+//                 between two. Each site draws its groups, their order and their spacing from its own id
+//                 (Roadworks.layout), no kind stands more often in one site than Roadworks.MOST allows, and a site
+//                 never has the layout of the site before it. Some of it is a ramp (a plank ramp, a steel plate up a
+//                 gravel heap, a sand heap with a flat top)
 //
 // The checkpoint line is the station's own s, as before: the site ends there, so the exit gate stands on it and a
 // restart (at the station) puts the rider just past the single lane, never in it.
 //
 // Contact (Roadworks.ride, from Vehicle.update): light things (beacons, cones, barrier planks) are knocked over and
 // slow the bike a little with a wobble; heavy things (the end gates, the lights, the fence, the pallets, the roller,
-// the digger, the sign) are solid exactly as drawn, their geometry's own box; the heaps, ramps and plates are ridden:
+// the digger, the sign and the rest of the plant and stores: ROLE) are solid exactly as drawn, their geometry's own
+// box; the heaps, ramps and plates are ridden:
 // the bike stands on the drawn surface, and leaves it where following it would need more than the game's jump gravity
 // (Vehicle.updateJump), with the vertical speed the surface gave it, so a ramp throws it at its speed times its slope.
 // The lane traffic keeps through a site (WorldRoute.laneWeight, laneTarget) and the stop lines (stopDistance) are here
@@ -34,8 +40,66 @@ class Roadworks {
     // An end gate's board: its foot over the ground and the height of each of its five bands (2.45 m to its top)
     static get GATE_LOW_M() { return 0.1; }
     static get GATE_BAND_M() { return 0.47; }
-    // Along a long site the plant stands in groups and the ramps in sets, with this much clear lane between two
-    static get GROUP_GAP_M() { return [28, 52]; }
+    // The open stretch of plain closed lane between two groups of works (cones and surface only), drawn between these
+    static get GROUP_GAP_M() { return [12, 30]; }
+    // A group's first piece stands this far past the last one's start at the least, and the pieces of a group stand
+    // PIECE_GAP_M apart (drawn between the two)
+    static get PIECE_GAP_M() { return [1.2, 2.6]; }
+    // The works start this far into the full width of the closed lane, past the planks across it; the first group may
+    // stand up to LEAD_MAX_M further on where the lane gives the room
+    static get WORKS_IN_M() { return 3; }
+    static get LEAD_MAX_M() { return 10; }
+    // The ramps' line in from the centre line, the clear lane kept after each ramp for the landing, and the room a
+    // plate laid in that landing needs before the lane ends
+    static get RAMP_LAT_M() { return 2.4; }
+    // The strip the widest solid pieces need in from the closed lane's edge (the digger and the cabin), and the gap a
+    // bike on the ramps' line keeps to a solid piece
+    static get STRIP_M() { return 1.7; }
+    static get LINE_CLEAR_M() { return 0.1; }
+    static get LANDING_M() { return 9; }
+    // The repair surface starts this far inside the closed lane's full width at each end: more than its ragged edge
+    // reaches (RoadSurface.shader, roadWorksAt: 0.19 m of noise and a 0.12 m feather), so none of it lies under a taper
+    static get REPAIR_INSET_M() { return 0.5; }
+    // How often a site draws again when its layout is the one of the site before it
+    static get LAYOUT_DRAWS() { return 8; }
+
+    // The most of a kind in one site, whatever its length. A group whose piece is at its most stands without it
+    static get MOST() { return { digger: 2, roller: 2, compressor: 1, cabin: 1, toilet: 1, van: 1 }; }
+
+    // What stands in the outer strip of the closed lane: each kind's length along the road, its centre in from the
+    // closed lane's edge and, for a solid thing, its half width (a piece that would reach the ramps' line on a narrow
+    // road is left out, so that line is clear of every solid thing from end to end), and the most a heap is turned
+    static get PIECES() {
+        return {
+            digger: { length: 2.6, out: 0.8, wide: 0.75 }, roller: { length: 2.3, out: 0.75, wide: 0.6 }, pallets: { length: 1.3, out: 0.55, wide: 0.4 },
+            heap: { length: 2.5, out: 1.0, turn: 0.6 }, fence: { length: 3.6, out: 0.2, wide: 0.13 }, sign: { length: 0.6, out: 0.5, wide: 0.33 },
+            pipes: { length: 3.2, out: 0.75, wide: 0.62 }, kerbs: { length: 1.3, out: 0.55, wide: 0.4 }, compressor: { length: 2.2, out: 0.7, wide: 0.5 },
+            cabin: { length: 3.2, out: 0.9, wide: 0.8 }, toilet: { length: 1.2, out: 0.7, wide: 0.58 }, van: { length: 3.9, out: 0.9, wide: 0.75 },
+            setts: { length: 1.3, out: 0.55, wide: 0.4 }
+        };
+    }
+
+    // The ramps and plates of the middle line: their length along the road
+    static get RAMPS() { return { plankRamp: 3.2, plateRamp: 4.4, sandRamp: 5.2, plate: 2.4 }; }
+
+    // The groups of works: `strip` the pieces along the outer strip in their order, `mid` the ramps of the middle line
+    // (a 'plate' lies in the landing of the ramp before it), `extra` the pieces of which a group may have one more
+    // somewhere along its strip, `on` the road surface a group belongs to ('asphalt' or 'cobbles'; none: any), `most`
+    // how often it may stand in one site. A site's first group is one with a ramp
+    static get GROUPS() {
+        return {
+            // A trench: the digger, its spoil, a fence along it and a steel plate up the spoil
+            dig: { strip: ['fence', 'digger', 'heap'], extra: ['fence', 'sign', 'pallets'], mid: ['plateRamp', 'plate'] },
+            // New surfacing: the roller, a heap of chippings, the sign and a heap of sand
+            surfacing: { on: 'asphalt', strip: ['sign', 'roller', 'heap'], extra: ['pallets', 'compressor', 'heap'], mid: ['sandRamp'] },
+            // The stores: pallets, a stack of pipes, kerb stones, the compressor, and planks up a trestle
+            stores: { strip: ['pallets', 'pipes', 'kerbs', 'compressor'], extra: ['pallets', 'fence'], mid: ['plankRamp', 'plate'] },
+            // The welfare corner: the site cabin, a portable toilet and a parked van
+            welfare: { most: 1, strip: ['cabin', 'toilet', 'van'], extra: ['sign', 'fence'], mid: [] },
+            // On a cobbled road: pallets of setts, kerb stones and the sand they are bedded in
+            setts: { on: 'cobbles', strip: ['setts', 'kerbs', 'setts'], extra: ['pallets', 'setts'], mid: ['sandRamp', 'plate'] }
+        };
+    }
     // The taper's length out from the closed lane's edge to the centre line. It ends BLEND_M in from the stop line, where
     // the traffic is in the open lane (Roadworks.laneShare)
     static get TAPER_M() { return 16; }
@@ -120,7 +184,14 @@ class Roadworks {
 
     // Every checkpoint station as a site: [{id, s, side, open, closed, reason, s0, s1, ...}] (no THREE: the node tests read it)
     static plan(route, stations, junctionS = []) {
-        return stations.map(st => Roadworks.site(route, st, junctionS));
+        const sites = [];
+        let before = null;
+        for (const st of stations) {
+            const site = Roadworks.site(route, st, junctionS, before);
+            if (site.closed) before = site.layout;
+            sites.push(site);
+        }
+        return sites;
     }
 
     // Where a closure may run back from the station: how many metres stay straight enough, clear of a junction and out
@@ -152,7 +223,8 @@ class Roadworks {
         return { back, reason: back >= most ? null : reason || 'the start of the ride' };
     }
 
-    static site(route, st, junctionS) {
+    // `before` is the layout of the closed site before this one, which this one does not take
+    static site(route, st, junctionS, before = null) {
         const rand = Roadworks.random(Roadworks.seedOf(st.id));
         const side = rand() < 0.5 ? Route.LEFT : Route.RIGHT;
         const p = route.sample(st.s, {});
@@ -200,12 +272,20 @@ class Roadworks {
             { s: site.stopIn, lat: site.open * (halfAt(site.stopIn) + Roadworks.LIGHT_OUT_M), facing: 1, direction: 1 },
             { s: site.stopOut, lat: site.open * (halfAt(site.stopOut) + Roadworks.LIGHT_OUT_M), facing: -1, direction: -1 }
         ];
-        site.items = Roadworks.layout(site, rand);
+        // The road the works stand on: cobbles where most of the closed lane is cobbled (the groups' `on`)
+        let cobbled = 0, samples = 0;
+        for (let s = site.sb; s <= site.sc; s += 4, samples++) if ((route.sample(s, {}).flags || {}).cobbles) cobbled++;
+        site.surface = cobbled * 2 > samples ? 'cobbles' : 'asphalt';
+        for (let draw = 0; draw < Roadworks.LAYOUT_DRAWS; draw++) {
+            site.items = Roadworks.layout(site, draw);
+            if (site.layout !== before) break;
+        }
         // The light cycle: the all-red phase clears the single lane at the slowest car's speed from a rolling start
         const lane = site.stopOut - site.stopIn + 2 * Roadworks.CAR_HALF_M;
         site.redS = Math.ceil(lane / Roadworks.CLEAR_SPEED_MS + Roadworks.CLEAR_LAG_S);
         site.cycleS = 2 * (Roadworks.GREEN_S + Roadworks.AMBER_S + site.redS);
-        site.phaseOffsetS = Math.floor(rand() * site.cycleS);
+        // (a seed of its own: the layout's draws do not move a site's lights)
+        site.phaseOffsetS = Math.floor(Roadworks.random(Roadworks.seedOf(st.id) ^ 0x85ebca6b)() * site.cycleS);
         return site;
     }
 
@@ -219,12 +299,22 @@ class Roadworks {
         return site.side * (edge + (line - edge) * t);
     }
 
+    // The stretch of a closed site that has the repair surface, [from, to] along the ride: the lane's full width less
+    // REPAIR_INSET_M at each end. Under the tapers the surface is the road's own, drawn and ridden (the bike reads no
+    // grip from a site: Vehicle.syncWorldSurface)
+    static repairSpan(site) {
+        return [site.sb + Roadworks.REPAIR_INSET_M, site.sc - Roadworks.REPAIR_INSET_M];
+    }
+
     // What stands in the closed lane, as {kind, s, lat, yaw}: the beacons, cones along its edge, and in its full width
-    // (sb to sc) the barrier planks across it, the plant along the outer strip, ramps in the middle with clear run-ups
-    // and landings, and flat plates
-    static layout(site, rand) {
+    // (sb to sc) the barrier planks across it and the works in groups (GROUPS): each group's pieces along the outer
+    // strip, its ramps on the middle line with a clear landing after each, and plain lane between two groups. The
+    // groups, their order, which way round each stands and every spacing come from the site's id and `draw` (a site
+    // draws again when its layout is its neighbour's). Sets site.groups ([{name, s0, s1, flip}]) and site.layout
+    static layout(site, draw = 0) {
         const items = [];
         const side = site.side, half = site.half;
+        const rand = Roadworks.random((Roadworks.seedOf(site.id) ^ 0xc2b2ae35) + Math.imul(draw, 0x27d4eb2f));
         const add = (kind, s, lat, yaw = 0) => items.push({ kind, s, lat: side * lat, yaw });
         const beacon = (s) => items.push({ kind: 'beacon', s, lat: Roadworks.beaconLat(site, s), yaw: 0 });
         for (let s = site.sa; s < site.sb - 0.5; s += Roadworks.TAPER_EVERY_M) beacon(s);
@@ -232,55 +322,102 @@ class Roadworks {
         const n = Math.max(1, Math.round(core / Roadworks.BEACON_EVERY_M));
         for (let k = 0; k <= n; k++) beacon(site.sb + core * k / n);
         for (let s = site.sd; s > site.sc + 0.5; s -= Roadworks.TAPER_EVERY_M) beacon(s);
-        // Cones: along the closed lane's edge in the tapers, and inside the beacon line in its full width (the plant has
-        // the edge there), clear of the plate across the lane at its start
+        // Cones: along the closed lane's edge in the tapers, and inside the beacon line in its full width (the works
+        // have the edge there), clear of the plate across the lane at its start
         for (let s = site.sa + 2; s <= site.sd - 2; s += 9) {
             if (s < site.sb || s > site.sc) add('cone', s, half - 0.45);
             else if (Math.abs(s - (site.sb + 3)) > 1.4) add('cone', s, 1.0);
         }
-        // The planks across the lane at the start of its full width
+        // The planks across the lane at the start of its full width, and a plate across it behind them
         add('planks', site.sb + 1.2, 2.1, Math.PI / 2);
-        // The outer strip: plant in a seeded order, each with a gap after it, while there is room
-        const plant = [['digger', 2.6], ['roller', 2.3], ['pallets', 1.3], ['heap', 2.5], ['fence', 3.6], ['sign', 0.6], ['pallets', 1.3]];
-        for (let i = plant.length - 1; i > 0; i--) {
-            const j = Math.floor(rand() * (i + 1));
-            [plant[i], plant[j]] = [plant[j], plant[i]];
-        }
-        const outerLat = { digger: half - 0.8, roller: half - 0.75, pallets: half - 0.55, heap: half - 1.0, fence: half - 0.2, sign: half - 0.5 };
-        const gap = () => Roadworks.GROUP_GAP_M[0] + (Roadworks.GROUP_GAP_M[1] - Roadworks.GROUP_GAP_M[0]) * rand();
-        let at = site.sb + 3;
-        // (a long site has the plant again after a clear stretch, in another order, to its end)
-        for (let group = 0; at + 4 < site.sc - 1; group++) {
-            if (group) {
-                at += gap();
-                for (let i = plant.length - 1; i > 0; i--) {
-                    const j = Math.floor(rand() * (i + 1));
-                    [plant[i], plant[j]] = [plant[j], plant[i]];
-                }
-            }
-            for (const [kind, length] of plant) {
-                if (at + length > site.sc - 1) continue;
-                add(kind, at + length / 2, outerLat[kind], kind === 'heap' ? (rand() - 0.5) * 0.6 : 0);
-                at += length + 1.5;
-            }
-        }
-        // The middle: ramps, each with RUN_UP metres clear before it and LANDING after it; a flat plate in the gaps
-        const ramps = ['plankRamp', 'plateRamp', 'sandRamp'];
-        const first = Math.floor(rand() * ramps.length);
-        const length = { plankRamp: 3.2, plateRamp: 4.4, sandRamp: 5.2 };
-        let s = site.sb + 6;
-        // (a set of the three, then a clear stretch, and again while the lane goes on)
-        for (let k = 0; ; k++) {
-            if (k && k % ramps.length === 0) s += gap();
-            const kind = ramps[(first + k) % ramps.length];
-            if (s + length[kind] + 9 > site.sc) break;
-            add(kind, s + length[kind] / 2, 2.4);
-            s += length[kind] + 9;
-            if (s + 2.4 + 4 < site.sc) {
-                add('plate', s - 4.5, 2.4, 0);
-            }
-        }
         add('plate', site.sb + 3, 1.25, Math.PI / 2);
+
+        const G = Roadworks.GROUPS, P = Roadworks.PIECES, R = Roadworks.RAMPS, most = Roadworks.MOST;
+        const between = ([low, high]) => low + (high - low) * rand();
+        const shuffled = (list) => {
+            const out = list.slice();
+            for (let i = out.length - 1; i > 0; i--) {
+                const j = Math.floor(rand() * (i + 1));
+                [out[i], out[j]] = [out[j], out[i]];
+            }
+            return out;
+        };
+        const ramped = name => G[name].mid.some(kind => kind !== 'plate');
+        const names = Object.keys(G).filter(name => !G[name].on || G[name].on === site.surface);
+        // The order the groups come in: every group once before any comes again, the first of all one with a ramp
+        let order = shuffled(names);
+        const lead = order.findIndex(ramped);
+        if (lead > 0) order.unshift(order.splice(lead, 1)[0]);
+        const stood = {}, count = {};
+        let turn = 0;
+        const next = () => {
+            for (let tries = 0; tries < names.length * 2; tries++) {
+                if (turn === order.length) {
+                    // (again in another order, not starting with the group that has just stood)
+                    const last = order[order.length - 1];
+                    order = shuffled(names);
+                    if (order.length > 1 && order[0] === last) order.push(order.shift());
+                    turn = 0;
+                }
+                const name = order[turn++];
+                if ((stood[name] || 0) < (G[name].most || Infinity)) return name;
+            }
+            return null;
+        };
+        const end = site.sc - 1;
+        const groups = [];
+        let at = site.sb + Roadworks.WORKS_IN_M;
+        // The ramps' line: at RAMP_LAT_M, or nearer the centre line where the road is too narrow to hold the strip
+        // beside it, but never so near that a ramp reaches the beacons' feet
+        const reach = Roadworks.BIKE_R + Roadworks.LINE_CLEAR_M;
+        const rampLat = Math.max(Roadworks.BEACON_LAT_M + Roadworks.BEACON_HALF_M + 1, Math.min(Roadworks.RAMP_LAT_M, half - Roadworks.STRIP_M - reach));
+        const clear = kind => !P[kind].wide || half - P[kind].out - P[kind].wide >= rampLat + reach - 1e-9;
+        site.rampLat = rampLat;
+        while (at + 4 < end) {
+            const name = next();
+            if (!name) break;
+            const group = G[name];
+            const flip = rand() < 0.5;
+            const pieces = flip ? group.strip.slice().reverse() : group.strip.slice();
+            // One of its extras, or none, anywhere along the strip
+            const extra = Math.floor(rand() * ((group.extra || []).length + 1)), where = Math.floor(rand() * (pieces.length + 1));
+            if (extra < (group.extra || []).length) pieces.splice(where, 0, group.extra[extra]);
+            const held = {};
+            const strip = pieces.filter(kind => clear(kind) && (count[kind] || 0) + (held[kind] = (held[kind] || 0) + 1) <= (most[kind] || Infinity));
+            const gaps = strip.map(() => between(Roadworks.PIECE_GAP_M));
+            const length = strip.reduce((sum, kind, i) => sum + P[kind].length + gaps[i], 0);
+            // A group after the first stands whole or not at all; the first stands as far as the lane goes
+            if (groups.length && at + length > end) break;
+            if (!groups.length) at += rand() * Math.min(Roadworks.LEAD_MAX_M, Math.max(0, end - at - Math.max(length, 3 + (R[group.mid[0]] || 0) + Roadworks.LANDING_M)));
+            const s0 = at;
+            let s1 = at;
+            strip.forEach((kind, i) => {
+                const piece = P[kind];
+                if (at + piece.length > end) return;
+                add(kind, at + piece.length / 2, half - piece.out, piece.turn ? (rand() - 0.5) * piece.turn : 0);
+                count[kind] = (count[kind] || 0) + 1;
+                at += piece.length + gaps[i];
+                s1 = at - gaps[i];
+            });
+            // The middle line: each ramp with LANDING_M of clear lane after it, a plate in that landing
+            let s = s0 + 3, landed = null;
+            for (const kind of group.mid) {
+                if (kind === 'plate') {
+                    if (landed !== null && landed + Roadworks.LANDING_M + R.plate + 4 < site.sc) add('plate', landed + Roadworks.LANDING_M / 2, rampLat, 0);
+                    continue;
+                }
+                if (s + R[kind] + Roadworks.LANDING_M > site.sc) break;
+                add(kind, s + R[kind] / 2, rampLat);
+                s += R[kind] + Roadworks.LANDING_M;
+                landed = s - Roadworks.LANDING_M;
+                s1 = Math.max(s1, s);
+            }
+            stood[name] = (stood[name] || 0) + 1;
+            groups.push({ name, s0, s1, flip });
+            at = Math.max(at, s1) + between(Roadworks.GROUP_GAP_M);
+        }
+        site.groups = groups;
+        site.layout = groups.map(group => group.name).join(' ');
         return items;
     }
 
@@ -564,7 +701,8 @@ class Roadworks {
             red: [0.78, 0.07, 0.07], white: [0.94, 0.94, 0.92], silver: [0.70, 0.72, 0.76], metal: [0.38, 0.39, 0.41],
             black: [0.05, 0.05, 0.05], rubber: [0.08, 0.08, 0.08], yellow: [0.95, 0.72, 0.08], orange: [0.95, 0.35, 0.05],
             grey: [0.45, 0.46, 0.47], steel: [0.42, 0.44, 0.47], wood: [0.58, 0.43, 0.26], gravel: [0.52, 0.51, 0.48],
-            sand: [0.76, 0.66, 0.46], sack: [0.85, 0.83, 0.78], glass: [0.12, 0.16, 0.2], concrete: [0.62, 0.62, 0.6], mesh: [0.55, 0.57, 0.58]
+            sand: [0.76, 0.66, 0.46], sack: [0.85, 0.83, 0.78], glass: [0.12, 0.16, 0.2], concrete: [0.62, 0.62, 0.6], mesh: [0.55, 0.57, 0.58],
+            pipe: [0.72, 0.36, 0.16], granite: [0.5, 0.5, 0.53], panel: [0.74, 0.77, 0.76], blue: [0.13, 0.33, 0.58], green: [0.2, 0.42, 0.3]
         };
     }
 
@@ -599,8 +737,18 @@ class Roadworks {
     static get ROLE() {
         return {
             gate: 'heavy', light: 'heavy', fence: 'heavy', pallets: 'heavy', roller: 'heavy', digger: 'heavy', sign: 'heavy',
+            pipes: 'heavy', kerbs: 'heavy', compressor: 'heavy', cabin: 'heavy', toilet: 'heavy', van: 'heavy', setts: 'heavy',
             beacon: 'light', cone: 'light', planks: 'light',
             plankRamp: 'surface', plateRamp: 'surface', sandRamp: 'surface', heap: 'surface', plate: 'surface'
+        };
+    }
+
+    // What a rider is told it hit
+    static get NAMES() {
+        return {
+            gate: 'roadworks boards', light: 'traffic light', fence: 'site fence', pallets: 'stack of pallets', roller: 'road roller',
+            digger: 'digger', sign: 'roadworks sign', pipes: 'stack of pipes', kerbs: 'pallet of kerb stones', compressor: 'compressor',
+            cabin: 'site cabin', toilet: 'portable toilet', van: 'works van', setts: 'pallet of setts'
         };
     }
 
@@ -720,6 +868,67 @@ class Roadworks {
             B(out, 0.4, 0.6, 1.0, 2.0, 0.6, 0.85, C.yellow);
             B(out, 0.42, 0.58, 0.35, 1.1, 0.9, 1.1, C.yellow);
             B(out, 0.3, 0.7, 0.05, 0.4, 0.85, 1.2, C.metal);
+        });
+        // A stack of pipes on two timber bearers: three and two on top, six-sided, open at the ends, 3 m along the road
+        geo.pipes = make(out => {
+            for (const z of [-1.0, 1.0]) B(out, -0.62, 0.62, 0.01, 0.09, z - 0.05, z + 0.05, C.wood);
+            const r = 0.2;
+            for (const [x, y] of [[-0.4, 0.29], [0, 0.29], [0.4, 0.29], [-0.2, 0.635], [0.2, 0.635]]) {
+                for (let k = 0; k < 6; k++) {
+                    const a0 = k * Math.PI / 3, a1 = (k + 1) * Math.PI / 3;
+                    Roadworks.face(out, [x + r * Math.cos(a0), y + r * Math.sin(a0), -1.5], [x + r * Math.cos(a1), y + r * Math.sin(a1), -1.5], [x + r * Math.cos(a1), y + r * Math.sin(a1), 1.5], [x + r * Math.cos(a0), y + r * Math.sin(a0), 1.5], C.pipe);
+                }
+            }
+        });
+        // Kerb stones on a pallet: a full layer and a part layer
+        geo.kerbs = make(out => {
+            B(out, -0.4, 0.4, 0.01, 0.15, -0.6, 0.6, C.wood);
+            B(out, -0.38, 0.38, 0.15, 0.4, -0.5, 0.5, C.concrete);
+            B(out, -0.38, 0.12, 0.4, 0.65, -0.5, 0.5, C.concrete);
+        });
+        // Setts on a pallet: a banded block of them and a loose row on top
+        geo.setts = make(out => {
+            B(out, -0.4, 0.4, 0.01, 0.15, -0.6, 0.6, C.wood);
+            B(out, -0.37, 0.37, 0.15, 0.72, -0.55, 0.55, C.granite);
+            B(out, -0.37, 0.37, 0.72, 0.84, -0.2, 0.55, C.granite);
+        });
+        // A towed compressor: one axle, a green housing, the tow bar and its jockey leg
+        geo.compressor = make(out => {
+            B(out, -0.5, 0.5, 0.01, 0.5, -0.02, 0.38, C.black);
+            B(out, -0.42, 0.42, 0.3, 1.15, -0.5, 0.9, C.green);
+            B(out, -0.04, 0.04, 0.36, 0.44, -1.1, -0.5, C.metal);
+            B(out, -0.03, 0.03, 0.01, 0.36, -1.02, -0.96, C.metal);
+        });
+        // The site cabin: a small hut on two skids, a door and a window on each long side
+        geo.cabin = make(out => {
+            for (const x of [-0.6, 0.45]) B(out, x, x + 0.15, 0.01, 0.12, -1.5, 1.5, C.metal);
+            B(out, -0.75, 0.75, 0.12, 2.2, -1.5, 1.5, C.panel);
+            B(out, -0.8, 0.8, 2.2, 2.28, -1.55, 1.55, C.white);
+            for (const sign of [-1, 1]) {
+                const x = sign * 0.755;
+                const quad = (z0, z1, y0, y1, color) => (sign < 0
+                    ? Roadworks.face(out, [x, y0, z1], [x, y1, z1], [x, y1, z0], [x, y0, z0], color)
+                    : Roadworks.face(out, [x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1], color));
+                quad(-1.2, -0.4, 0.14, 2.0, C.grey);
+                quad(0.1, 1.1, 1.1, 1.8, C.glass);
+            }
+        });
+        // A portable toilet: a dark base, a blue cabin with its door toward -z, a white roof
+        geo.toilet = make(out => {
+            B(out, -0.57, 0.57, 0.01, 0.14, -0.57, 0.57, C.black);
+            B(out, -0.55, 0.55, 0.14, 2.2, -0.55, 0.55, C.blue);
+            B(out, -0.58, 0.58, 2.2, 2.3, -0.58, 0.58, C.white);
+            Roadworks.face(out, [-0.35, 0.2, -0.555], [-0.35, 1.95, -0.555], [0.35, 1.95, -0.555], [0.35, 0.2, -0.555], C.white);
+        });
+        // A parked works van: its nose toward -z, a glazed cab, a box body and an amber bar on the roof
+        geo.van = make(out => {
+            for (const z of [-1.2, 1.2]) B(out, -0.75, 0.75, 0.01, 0.6, z - 0.3, z + 0.3, C.black);
+            B(out, -0.72, 0.72, 0.3, 1.05, -1.9, 1.9, C.white);
+            B(out, -0.7, 0.7, 1.05, 1.85, -1.2, 1.9, C.white);
+            Roadworks.face(out, [-0.64, 1.1, -1.205], [-0.64, 1.75, -1.205], [0.64, 1.75, -1.205], [0.64, 1.1, -1.205], C.glass);
+            Roadworks.face(out, [-0.705, 1.15, -0.4], [-0.705, 1.7, -0.4], [-0.705, 1.7, -1.15], [-0.705, 1.15, -1.15], C.glass);
+            Roadworks.face(out, [0.705, 1.15, -1.15], [0.705, 1.7, -1.15], [0.705, 1.7, -0.4], [0.705, 1.15, -0.4], C.glass);
+            B(out, -0.4, 0.4, 1.85, 1.93, -1.0, -0.85, C.orange);
         });
         // The portable sign's A frame; its triangle face is the atlas's (signFace)
         geo.sign = make(out => {
@@ -874,7 +1083,7 @@ class Roadworks {
         this.group = new THREE.Group();
         this.group.name = 'world-roadworks';
         this.meshes = {};
-        const kinds = ['gate', 'triangle', 'light', 'beacon', 'beaconBoard', 'cone', 'planks', 'fence', 'pallets', 'roller', 'digger', 'sign', 'signFace', 'plankRamp', 'plateRamp', 'sandRamp', 'heap', 'plate'];
+        const kinds = ['gate', 'triangle', 'light', 'beacon', 'beaconBoard', 'cone', 'planks', 'fence', 'pallets', 'roller', 'digger', 'sign', 'signFace', 'pipes', 'kerbs', 'setts', 'compressor', 'cabin', 'toilet', 'van', 'plankRamp', 'plateRamp', 'sandRamp', 'heap', 'plate'];
         const count = kind => elements.filter(e => e.kind === kind || (kind === 'beaconBoard' && e.board) || (kind === 'signFace' && e.face)).length;
         for (const kind of kinds) {
             const n = count(kind);
@@ -1083,7 +1292,7 @@ class Roadworks {
                 vehicle.roadworksWobble = (vehicle.roadworksWobble || 0) + (Math.random() < 0.5 ? -1 : 1) * 0.12;
                 continue;
             }
-            const names = { gate: 'roadworks boards', light: 'traffic light', fence: 'site fence', pallets: 'stack of pallets', roller: 'road roller', digger: 'digger', sign: 'roadworks sign' };
+            const names = Roadworks.NAMES;
             const dx = pos.x - e.x, dz = pos.z - e.z, len = Math.hypot(dx, dz) || 1;
             vehicle.velocity.set(dx / len * vehicle.speed * 0.5, 2, dz / len * vehicle.speed * 0.5);
             vehicle.isJumping = false;
