@@ -1505,6 +1505,20 @@ body.in-menu .virtual-button-camera {
     gap: 4px;
 }
 
+/* The outfit row's arrows stand side by side: Q and E step them, as up and down step the bikes */
+.outfit-arrows {
+    flex-direction: row;
+}
+
+.outfit-picker {
+    margin-top: 6px;
+}
+
+.bike-locked {
+    margin-top: 2px;
+    color: var(--c-text-dim);
+}
+
 .bike-arrow {
     flex: none;
     width: 34px;

@@ -106,6 +106,8 @@ describe('the bike picker', () => {
         localStorage.clear();
         document.body.innerHTML = '';
         localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: done }));
+        // Guy and Tim with every bike of theirs open: the picker's own tests (the unlock rule has its own, below)
+        localStorage.setItem('twistyBikeUnlocks', JSON.stringify({ guy: 4, tim: 2 }));
         tour = new TourSystem();
     });
 
@@ -238,5 +240,111 @@ describe('the bike picker', () => {
         const plain = new TourSystem();
         expect(plain.isCharacterUnlocked('steve')).toBe(false);
         expect(plain.isLegUnlocked(plain.legs.length - 1)).toBe(false);
+    });
+});
+
+describe('a rider\'s bikes open one by one, and the outfit row', () => {
+    const done = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley'];
+    beforeEach(() => {
+        localStorage.clear();
+        document.body.innerHTML = '';
+        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: done }));
+    });
+    afterEach(() => Modals.reset());
+
+    test('every rider starts with their first bike only, the least powerful, and the picker stops there', () => {
+        const tour = new TourSystem();
+        for (const c of CHARACTERS) {
+            expect(tour.openBikes(c.id)).toEqual([c.bikes[0]]);
+            expect(tour.isBikeUnlocked(c.id, c.bikes[1])).toBe(false);
+        }
+        tour.showRiderSelector('guy');
+        expect(document.getElementById('riderInfoCard').textContent).toContain('1 / 4');
+        expect(document.getElementById('bikeLockHint').textContent).toContain('Finish a ride on this bike to open the next');
+        expect(document.getElementById('bikeNextBtn').disabled).toBe(true);
+        tour.moveBikeFocus(1);
+        expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
+        // A locked bike cannot be chosen, and a saved choice of one falls back to the first
+        tour.selectBike('guy', 'bike12_tracer9gt');
+        expect(tour.getSelectedBike('guy')).toBe('bike04_scrambler');
+        localStorage.setItem('twistyBikes', JSON.stringify({ guy: 'bike12_tracer9gt' }));
+        expect(new TourSystem().getSelectedBike('guy')).toBe('bike04_scrambler');
+    });
+
+    test('a ride finished on the best open bike opens the next one, for that rider only, and it is kept', () => {
+        const tour = new TourSystem();
+        const guy = CHARACTERS.find(c => c.id === 'guy');
+        const opened = tour.markRideFinished('guy', guy.bikes[0]);
+        expect(opened).toMatchObject({ id: guy.bikes[1], rider: 'Guy', paint: BIKE_MODELS[guy.bikes[1]].paint });
+        expect(opened.title).toBe(TourSystem.bikeTitle(guy.bikes[1]));
+        expect(tour.openBikes('guy')).toEqual(guy.bikes.slice(0, 2));
+        expect(tour.openBikes('lucy')).toHaveLength(1);
+        // Another ride on the first bike opens nothing: the next comes from the best one open
+        expect(tour.markRideFinished('guy', guy.bikes[0])).toBeNull();
+        expect(tour.openBikes('guy')).toHaveLength(2);
+        expect(tour.markRideFinished('guy', guy.bikes[1]).id).toBe(guy.bikes[2]);
+        expect(tour.markRideFinished('guy', guy.bikes[2]).id).toBe(guy.bikes[3]);
+        // All open: nothing more, and a new visit has them
+        expect(tour.markRideFinished('guy', guy.bikes[3])).toBeNull();
+        const later = new TourSystem();
+        expect(later.openBikes('guy')).toEqual(guy.bikes);
+        later.selectBike('guy', guy.bikes[3]);
+        expect(later.getSelectedBike('guy')).toBe(guy.bikes[3]);
+        later.showRiderSelector('guy');
+        expect(document.getElementById('bikeLockHint')).toBeNull();
+        // A bike of another rider, or a rider that is not one, opens nothing
+        expect(later.markRideFinished('lucy', guy.bikes[0])).toBeNull();
+        expect(later.markRideFinished('nobody', 'bike01_z650')).toBeNull();
+    });
+
+    test('debug mode opens every bike and saves nothing; a store it cannot read gives the first bike', () => {
+        const debug = new TourSystem({ unlockAll: true });
+        for (const c of CHARACTERS) expect(debug.openBikes(c.id)).toEqual(c.bikes);
+        expect(debug.markRideFinished('guy', 'bike04_scrambler')).toBeNull();
+        expect(localStorage.getItem('twistyBikeUnlocks')).toBeNull();
+        localStorage.setItem('twistyBikeUnlocks', '{not json');
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(new TourSystem().openBikes('guy')).toEqual(['bike04_scrambler']);
+        localStorage.setItem('twistyBikeUnlocks', JSON.stringify({ guy: 99, lucy: 'x', tim: -3 }));
+        const odd = new TourSystem();
+        expect(odd.openBikes('guy')).toHaveLength(4);
+        expect(odd.openBikes('lucy')).toHaveLength(1);
+        expect(odd.openBikes('tim')).toHaveLength(1);
+        warn.mockRestore();
+    });
+
+    test('the outfit row steps the rider\'s outfits with no wrap, by its arrows and by Q and E, and remembers', () => {
+        const tour = new TourSystem();
+        const shown = [];
+        tour.onBikeShowcase = id => shown.push([id, tour.getSelectedOutfit(id)]);
+        const guy = CHARACTERS.find(c => c.id === 'guy');
+        tour.showRiderSelector('guy');
+        const before = () => document.getElementById('outfitPrevBtn'), after = () => document.getElementById('outfitNextBtn');
+        const name = () => document.getElementById('outfitName').textContent;
+        expect(name()).toContain(guy.outfits[0].name);
+        expect(name()).toContain(`OUTFIT 1 / ${guy.outfits.length}`);
+        expect(before().disabled).toBe(true);
+        tour.moveOutfitFocus(-1);
+        expect(tour.getSelectedOutfit('guy')).toBe(guy.outfits[0].id);
+        after().click();
+        expect(tour.getSelectedOutfit('guy')).toBe(guy.outfits[1].id);
+        expect(name()).toContain(guy.outfits[1].name);
+        document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
+        expect(tour.getSelectedOutfit('guy')).toBe(guy.outfits[2].id);
+        document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyQ' }));
+        expect(tour.getSelectedOutfit('guy')).toBe(guy.outfits[1].id);
+        for (let i = 0; i < guy.outfits.length; i++) tour.moveOutfitFocus(1);
+        expect(tour.getSelectedOutfit('guy')).toBe(guy.outfits[guy.outfits.length - 1].id);
+        expect(after().disabled).toBe(true);
+        // The stage is dressed again at each change, and the bike is not changed by it
+        expect(shown.length).toBeGreaterThanOrEqual(4);
+        expect(shown.every(([id]) => id === 'guy')).toBe(true);
+        expect(tour.getSelectedBike('guy')).toBe(guy.bikes[0]);
+        expect(new TourSystem().getSelectedOutfit('guy')).toBe(guy.outfits[guy.outfits.length - 1].id);
+        // Its arrows stand side by side, in a row of their own under the bike row
+        expect(before().parentElement.className).toBe('bike-arrows outfit-arrows');
+        expect(document.querySelector('.outfit-picker').previousElementSibling.className).toBe('bike-picker');
+        // Every rider has the row: each has two outfits or more
+        for (const c of CHARACTERS) expect(c.outfits.length).toBeGreaterThanOrEqual(2);
     });
 });

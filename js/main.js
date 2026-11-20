@@ -2314,6 +2314,10 @@ class Game {
         if (finishedLeg && this.tourSystem.markLegCompleted) {
             unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
         }
+        // A ride finished on the rider's best open bike opens their next one (TourSystem.markRideFinished)
+        const newBike = this.selectedCharacter && this.tourSystem.markRideFinished
+            ? this.tourSystem.markRideFinished(this.selectedCharacter.id, this.selectedBike()) : null;
+        if (newBike) unlocks = { ...unlocks, bikes: [newBike] };
         const flow = TourSystem.finishFlow(unlocks, isLastLeg);
 
         // Time is what ranks a run: compare it with the personal best (per
@@ -2526,7 +2530,8 @@ class Game {
     buildUnlockPanel(unlocks) {
         const legs = (unlocks && unlocks.legs) || [];
         const characters = (unlocks && unlocks.characters) || [];
-        if (legs.length === 0 && characters.length === 0) return '';
+        const bikes = (unlocks && unlocks.bikes) || [];
+        if (legs.length === 0 && characters.length === 0 && bikes.length === 0) return '';
         const skies = {
             dawn: ['#f6a96b', '#5b6fa8'],
             golden: ['#f7c548', '#c86b28'],
@@ -2534,8 +2539,13 @@ class Game {
             night: ['#26305c', '#070a1c'],
             storm: ['#59677a', '#1e2530']
         };
-        const bikeCards = characters.map(c => {
-            const colour = '#' + parseInt(c.bikeColor).toString(16).padStart(6, '0');
+        // A new rider comes with their first bike; a rider's next bike is a card of the same kind
+        const riderCards = [
+            ...characters.map(c => ({ paint: parseInt(c.bikeColor), name: c.name, sub: c.bikeLabel })),
+            ...bikes.map(b => ({ paint: b.paint, name: b.title, sub: `${b.rider}'s next bike` }))
+        ];
+        const bikeCards = riderCards.map(c => {
+            const colour = '#' + c.paint.toString(16).padStart(6, '0');
             return `
                 <div class="unlock-card unlock-bike" style="--bike: ${colour};">
                     <svg class="unlock-bike-art" viewBox="0 0 120 64" aria-hidden="true">
@@ -2548,7 +2558,7 @@ class Game {
                     </svg>
                     <div class="unlock-kind">NEW BIKE</div>
                     <div class="unlock-name">${c.name}</div>
-                    <div class="unlock-sub">${c.bikeLabel}</div>
+                    <div class="unlock-sub">${c.sub}</div>
                 </div>`;
         });
         const legCards = legs.map(leg => {

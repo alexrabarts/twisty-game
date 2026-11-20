@@ -132,6 +132,15 @@ class TourSystem {
         } catch (e) {
             console.warn('TourSystem: the saved bike choices could not be read; every rider starts on their first bike:', e);
         }
+        // How many of each rider's bikes are open, by character id (a rider with none saved has their first only):
+        // a rider's bikes open one by one, least powerful first (TourSystem.markRideFinished)
+        this.bikeUnlocks = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('twistyBikeUnlocks') || '{}');
+            if (saved && typeof saved === 'object') this.bikeUnlocks = saved;
+        } catch (e) {
+            console.warn('TourSystem: the saved bike unlocks could not be read; every rider starts with their first bike:', e);
+        }
         // Each rider's chosen outfit, by character id; a rider with none
         // saved wears their first
         this.selectedOutfits = {};
@@ -143,19 +152,52 @@ class TourSystem {
         }
     }
 
-    // The bike a rider rides: the one chosen for them if they own it, else their first
+    // The bikes of a rider that are open, least powerful first: the first, and one more for each ride finished on
+    // the best open one (markRideFinished). Debug mode opens them all. A rider's own bikes only: swapping bikes
+    // between riders is not here
+    openBikes(characterId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || !Array.isArray(character.bikes)) return [];
+        if (this.unlockAll) return character.bikes.slice();
+        const open = Math.floor(Number(this.bikeUnlocks[characterId])) || 1;
+        return character.bikes.slice(0, Math.max(1, Math.min(character.bikes.length, open)));
+    }
+
+    isBikeUnlocked(characterId, bikeId) {
+        return this.openBikes(characterId).includes(bikeId);
+    }
+
+    // A ride finished by this rider on this bike. On the best bike the rider has open, it opens the next one:
+    // returns that bike ({ id, title, paint }) for the finish screen, or null. Debug mode saves nothing
+    markRideFinished(characterId, bikeId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || this.unlockAll) return null;
+        const open = this.openBikes(characterId);
+        if (open.length >= character.bikes.length || open[open.length - 1] !== bikeId) return null;
+        this.bikeUnlocks[characterId] = open.length + 1;
+        try {
+            localStorage.setItem('twistyBikeUnlocks', JSON.stringify(this.bikeUnlocks));
+        } catch (e) {
+            console.warn('TourSystem: the bike unlock could not be saved:', e);
+        }
+        const id = character.bikes[open.length];
+        const model = typeof BIKE_MODELS !== 'undefined' ? BIKE_MODELS[id] : null;
+        return { id, title: TourSystem.bikeTitle(id), paint: model ? model.paint : parseInt(character.bikeColor), rider: character.name };
+    }
+
+    // The bike a rider rides: the one chosen for them if they have it open, else their first
     getSelectedBike(characterId) {
         if (typeof CHARACTERS === 'undefined') return null;
         const character = CHARACTERS.find(c => c.id === characterId);
         if (!character || !Array.isArray(character.bikes) || !character.bikes.length) return null;
         const chosen = this.selectedBikes[characterId];
-        return character.bikes.includes(chosen) ? chosen : character.bikes[0];
+        return this.isBikeUnlocked(characterId, chosen) ? chosen : character.bikes[0];
     }
 
     // Chooses a bike for a rider and remembers it
     selectBike(characterId, bikeId) {
         const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
-        if (!character || !character.bikes.includes(bikeId)) return;
+        if (!character || !this.isBikeUnlocked(characterId, bikeId)) return;
         this.selectedBikes[characterId] = bikeId;
         try {
             localStorage.setItem('twistyBikes', JSON.stringify(this.selectedBikes));
@@ -493,20 +535,36 @@ class TourSystem {
                 const fresh = this.isRiderFresh(c.id);
                 card.classList.toggle('fresh', fresh);
                 const bikes = Array.isArray(c.bikes) ? c.bikes : [];
+                const open = this.openBikes(c.id);
                 const bike = this.getSelectedBike(c.id);
                 const at = Math.max(0, bikes.indexOf(bike));
+                // The next bike opens with a ride finished on the best one open
+                const locked = open.length < bikes.length;
+                const hint = !locked ? '' : `<span class="bike-count bike-locked" id="bikeLockHint">${icon('lock')} ${at === open.length - 1 ? 'Finish a ride on this bike to open the next' : 'Finish a ride on the last open bike to open the next'}</span>`;
                 const picker = bikes.length > 1 ? `
                     <div class="bike-picker" role="group" aria-label="Bike">
-                        <div class="bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}<span class="bike-count">${at + 1} / ${bikes.length}</span></div>
+                        <div class="bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}<span class="bike-count">${at + 1} / ${bikes.length}</span>${hint}</div>
                         <div class="bike-arrows">
                             <button class="bike-arrow" id="bikePrevBtn" aria-label="Previous bike"${at === 0 ? ' disabled' : ''}>▲</button>
-                            <button class="bike-arrow" id="bikeNextBtn" aria-label="Next bike"${at === bikes.length - 1 ? ' disabled' : ''}>▼</button>
+                            <button class="bike-arrow" id="bikeNextBtn" aria-label="Next bike"${at >= open.length - 1 ? ' disabled' : ''}>▼</button>
                         </div>
                     </div>` : `<div class="showcase-sub bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}</div>`;
+                // The outfit row, under the bike row: the rider's own outfits, the first their usual one
+                const outfits = Array.isArray(c.outfits) ? c.outfits : [];
+                const worn = Math.max(0, outfits.findIndex(outfit => outfit.id === this.getSelectedOutfit(c.id)));
+                const wardrobe = outfits.length > 1 ? `
+                    <div class="bike-picker outfit-picker" role="group" aria-label="Outfit">
+                        <div class="bike-name" id="outfitName">${outfits[worn].name}<span class="bike-count">OUTFIT ${worn + 1} / ${outfits.length}</span></div>
+                        <div class="bike-arrows outfit-arrows">
+                            <button class="bike-arrow" id="outfitPrevBtn" aria-label="Previous outfit (Q)" title="Q"${worn === 0 ? ' disabled' : ''}>◀</button>
+                            <button class="bike-arrow" id="outfitNextBtn" aria-label="Next outfit (E)" title="E"${worn === outfits.length - 1 ? ' disabled' : ''}>▶</button>
+                        </div>
+                    </div>` : '';
                 card.innerHTML = `
                     ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
                     <div class="showcase-name">${c.name}</div>
                     ${picker}
+                    ${wardrobe}
                     <div class="showcase-stats">
                         <span>SPEED</span>${statBar(c.stats.speed)}
                         <span>ACCEL</span>${statBar(c.stats.accel)}
@@ -522,6 +580,9 @@ class TourSystem {
             const next = document.getElementById('bikeNextBtn');
             if (prev) prev.addEventListener('click', () => moveBikeFocus(-1));
             if (next) next.addEventListener('click', () => moveBikeFocus(1));
+            const before = document.getElementById('outfitPrevBtn'), after = document.getElementById('outfitNextBtn');
+            if (before) before.addEventListener('click', () => moveOutfitFocus(-1));
+            if (after) after.addEventListener('click', () => moveOutfitFocus(1));
             if (this.onRiderShowcase) this.onRiderShowcase(c.id);
         };
 
@@ -532,13 +593,27 @@ class TourSystem {
             const c = riderOrder[this.riderFocusIndex];
             if (this.riderTierFor(c.id) !== 'lit' || !Array.isArray(c.bikes) || c.bikes.length < 2) return;
             const at = c.bikes.indexOf(this.getSelectedBike(c.id));
-            const to = Math.max(0, Math.min(c.bikes.length - 1, at + delta));
+            const to = Math.max(0, Math.min(this.openBikes(c.id).length - 1, at + delta));
             if (to === at) return;
             this.selectBike(c.id, c.bikes[to]);
             renderRiderCard();
             if (this.onBikeShowcase) this.onBikeShowcase(c.id);
         };
         this.moveBikeFocus = moveBikeFocus;
+
+        // Steps the focused rider's outfits, remembers the choice and dresses the rider on the stage. Two ends, as
+        // the bikes
+        const moveOutfitFocus = (delta) => {
+            const c = riderOrder[this.riderFocusIndex];
+            if (this.riderTierFor(c.id) !== 'lit' || !Array.isArray(c.outfits) || c.outfits.length < 2) return;
+            const at = c.outfits.findIndex(outfit => outfit.id === this.getSelectedOutfit(c.id));
+            const to = Math.max(0, Math.min(c.outfits.length - 1, at + delta));
+            if (to === at) return;
+            this.selectOutfit(c.id, c.outfits[to].id);
+            renderRiderCard();
+            if (this.onBikeShowcase) this.onBikeShowcase(c.id);
+        };
+        this.moveOutfitFocus = moveOutfitFocus;
 
         const renderLegCard = () => {
             const index = this.legFocusIndex;
@@ -660,6 +735,8 @@ class TourSystem {
                 else if (isRight) { e.preventDefault(); moveRiderFocus(1); }
                 else if (isUp) { e.preventDefault(); moveBikeFocus(-1); }
                 else if (isDown) { e.preventDefault(); moveBikeFocus(1); }
+                else if (e.code === 'KeyQ') { e.preventDefault(); moveOutfitFocus(-1); }
+                else if (e.code === 'KeyE') { e.preventDefault(); moveOutfitFocus(1); }
                 else if (isConfirm) {
                     e.preventDefault();
                     document.getElementById('riderContinueBtn').click();
