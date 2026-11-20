@@ -493,7 +493,8 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
         expect(other.frame.material).not.toBe(vehicle.frame.material);
     });
 
-    // A bag, a scarf or a backpack never passes through a body: for every rider who rides this bike, seated, riding,
+    // A bag, a scarf or a backpack never passes through a body: for every rider who rides this bike, in every outfit (a hood,
+    // a loose oversuit or a hoodie tied round the waist reaches further back than a jacket), seated, riding,
     // leaning and standing on the pegs, no edge of the rider (body, backpack or scarf) crosses a face of the shown luggage or the other way,
     // and no vertex of either lies within 4 cm of the other
     test('its luggage stays clear of every rider who rides it', () => {
@@ -501,8 +502,8 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
         if (!vehicle.luggage || !vehicle.luggage.visible) return;
         const hits = [];
         for (const owner of game.CHARACTERS.filter(c => c.bikes.includes(id))) {
-            for (const pose of ['seated', 'riding', 'leaning', 'standing']) {
-            const ridden = new game.Vehicle(new THREE.Scene(), null, owner, id);
+            for (const outfit of owner.outfits) for (const pose of ['seated', 'riding', 'leaning', 'standing']) {
+            const ridden = new game.Vehicle(new THREE.Scene(), null, owner, id, { outfit: outfit.id });
             ridden.currentDeltaTime = 1 / 60;
             if (pose !== 'seated') {
                 ridden.speed = 20;
@@ -583,7 +584,7 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
             near(body, bags);
             sides.forEach(([o, side]) => { o.material.side = side; });
             bodySides.forEach(([o, side]) => { o.material.side = side; });
-            if (Object.keys(crossing).length) hits.push({ rider: owner.id, pose, crossing });
+            if (Object.keys(crossing).length) hits.push({ rider: owner.id, outfit: outfit.id, pose, crossing });
             }
         }
         expect(hits).toEqual([]);

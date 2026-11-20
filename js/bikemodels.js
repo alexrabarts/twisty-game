@@ -326,6 +326,12 @@ const BikeModels = (() => {
     if (spec.style === "race") onTorso(part(model, "hump", finish, rider));
     if (spec.backpackColor != null) onTorso(part(model, "backpack", finish, rider));
     if (spec.neckColor != null) onTorso(part(model, "neck", finish, rider));
+    // A mark on the back of the jacket, for a kit that names one
+    if (spec.backStyle) {
+      const back = part(model, `back_${spec.backStyle}`, finish, rider);
+      back.name = "back";
+      onTorso(back);
+    }
 
     // The head looks up the road rather than down the tank
     const head = new THREE.Group();

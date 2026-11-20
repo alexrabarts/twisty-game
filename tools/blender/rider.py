@@ -20,6 +20,8 @@
 #                style (CHARACTERS[].outfits in js/vehicle.js): helmet shells,
 #                jackets with their sleeves, trousers, gloves and boots. The
 #                plain names are the touring crew's rider and stay light.
+#   back_<style> about the torso's origin: a mark on the back of a jacket, for
+#                a kit that names it (backStyle)
 #
 # +x is the rider's left. One mesh serves both arms and both legs, so a mark
 # on the side of a limb is drawn on both of its sides: each limb then shows it
@@ -57,8 +59,9 @@ LENGTHS = {"upper_arm": 0.31, "forearm": 0.3, "thigh": 0.42, "shin": 0.42}
 # and six at this budget are about one detailed bike at its near level. An
 # outfit as worn is about 5000.
 BUDGET = 7000
-# The file holds every cut of every outfit and is fetched once for them all
-FILE = 600 * 1024
+# The file holds every cut of every outfit and is fetched once for them all;
+# with the crew's bike it stays under the 700 KB tests/unit/bikemodels.test.js allows the two
+FILE = 624 * 1024
 # Positions are whole units of this many metres (bike_kit.pack_colours)
 UNIT = 0.0005
 DEFAULTS = (2.4, 2.4, 0.5, 1.0, 1.0, 0.0)
@@ -123,34 +126,36 @@ def face(obj, out):
 
 
 # A strip laid on a skin along `path`, (degrees, s) points, `width` metres
-# wide: piping, a reflective bar, a patch. It is one-sided, which halves its
-# triangles; `thick` makes it a raised panel with edges instead. `both` draws
-# it on the rider's right as well, `across` splits its width for a wide strip
-# on a curved shell.
-def decal(k, skin, path, width, mat, lift=0.003, both=False, thick=0.0, across=1):
+# wide: piping, a reflective bar, a patch. A point may carry a width of its
+# own, (degrees, s, width), for a blade that runs from a tip to a broad end.
+# It is one-sided, which halves its triangles; `thick` makes it a raised panel
+# with edges instead. `both` draws it on the rider's right as well, `across`
+# splits its width for a wide strip on a curved shell, `step` is the most
+# degrees round the axis one piece of it covers.
+def decal(k, skin, path, width, mat, lift=0.003, both=False, thick=0.0, across=1, step=10):
     for side in ((1, -1) if both else (1,)):
-        points = [(d if side > 0 else 180 - d, s) for d, s in path]
+        points = [(p[0] if side > 0 else 180 - p[0], p[1], p[2] if len(p) > 2 else width) for p in path]
         line = []
-        for (d0, s0), (d1, s1) in zip(points, points[1:]):
-            n = max(1, math.ceil(max(abs(d1 - d0) / 10, abs(skin.y(s1) - skin.y(s0)) / 0.035)))
-            line += [(d0 + (d1 - d0) * i / n, s0 + (s1 - s0) * i / n) for i in range(n)]
+        for (d0, s0, w0), (d1, s1, w1) in zip(points, points[1:]):
+            n = max(1, math.ceil(max(abs(d1 - d0) / step, abs(skin.y(s1) - skin.y(s0)) / 0.035)))
+            line += [(d0 + (d1 - d0) * i / n, s0 + (s1 - s0) * i / n, w0 + (w1 - w0) * i / n) for i in range(n)]
         line.append(points[-1])
         unit = 1.0 if skin.span is None else skin.span[1]
         verts = []
-        for i, (d, s) in enumerate(line):
+        for i, (d, s, wide) in enumerate(line):
             a, b = line[max(i - 1, 0)], line[min(i + 1, len(line) - 1)]
             r = skin.half(s)
             tx, ty = math.radians(b[0] - a[0]) * r, (b[1] - a[1]) * unit
             n = math.hypot(tx, ty) or 1.0
             nx, ny = -ty / n, tx / n
             for j in range(across + 1):
-                e = (j / across - 0.5) * width
+                e = (j / across - 0.5) * wide
                 verts.append(skin.at(s + ny * e / unit, d + math.degrees(nx * e / r), lift))
         row = across + 1
         faces = [(i * row + j, i * row + j + 1, (i + 1) * row + j + 1, (i + 1) * row + j) for i in range(len(line) - 1) for j in range(across)]
         obj = k.emit(verts, faces, mat, sharp=80, solid=thick, weld=False)
         if not thick:
-            d, s = line[0]
+            d, s = line[0][:2]
             face(obj, Vector(skin.at(s, d, 0.01)) - Vector(skin.at(s, d)))
 
 
@@ -178,13 +183,16 @@ def limb_sections(name, rows):
     length = LENGTHS[name]
     first, last = rows[0][1], rows[-1][1]
     sections = [(-length / 2 - first * 0.85, -first * 0.3, first * 0.3, first * 0.3), (-length / 2 - first * 0.5, -first * 0.8, first * 0.8, first * 0.8)]
-    for t, radius, bulge in rows:
-        sections.append((-length / 2 + t * length, -radius, radius + bulge, radius, 2.2, 2.2, radius / (2 * radius + bulge)))
+    for t, radius, bulge, *rest in rows:
+        back = rest[0] if rest else 0.0
+        sections.append((-length / 2 + t * length, -radius - back, radius + bulge, radius, 2.2, 2.2, (radius + back) / (2 * radius + bulge + back)))
     return sections + [(length / 2 + last * 0.5, -last * 0.8, last * 0.8, last * 0.8), (length / 2 + last * 0.85, -last * 0.3, last * 0.3, last * 0.3)]
 
 
 # A limb along y: (t, radius, bulge) rows from the near joint (t = 0) to the
-# far one (t = 1), closed by a ball at each end. bulge pushes the +z side out.
+# far one (t = 1), closed by a ball at each end. bulge pushes the +z side out
+# (the elbow, the kneecap, the top of the thigh), and a fourth number the -z
+# side (the calf, the underside of the thigh, the front of the upper arm).
 def limb(k, name, rows, mat, ring=8):
     k.begin(name)
     k.loft(limb_sections(name, rows), mat, axis="y", ring=ring, steps=1, sharp=80)
@@ -196,7 +204,7 @@ def cut(k, node, rows, paint, ring=10):
     sections = limb_sections(name, rows)
     skin = Skin(sections, 1, span=(-LENGTHS[name] / 2, LENGTHS[name]))
     k.begin(node)
-    k.loft(sections, skin.zones(paint), axis="y", ring=ring, steps=1, sharp=80)
+    skin.shell = k.loft(sections, skin.zones(paint), axis="y", ring=ring, steps=1, sharp=80)
     return skin
 
 
@@ -227,20 +235,6 @@ def helmet(k, name, shell, ring=16, steps=3):
            "helmet_accent", axis="y", ring=8, steps=1)
 
 
-# A painted streak laid on the shell along `path`, (degrees round, height)
-# points, `width` high, on both sides of the helmet
-def streak(k, path, width, mat):
-    for side in (1, -1):
-        def at(u, v, side=side):
-            span = u * (len(path) - 1)
-            i = min(int(span), len(path) - 2)
-            f = span - i
-            degrees = path[i][0] + (path[i + 1][0] - path[i][0]) * f
-            y = path[i][1] + (path[i + 1][1] - path[i][1]) * f + (v - 0.5) * width
-            return SKULL.at(y, degrees if side > 0 else 180 - degrees, 0.0025)
-        k.sheet(at, mat, nu=12, nv=1, thick=0.0015, sharp=80)
-
-
 # An outfit's helmet: the same shell painted by `paint(y, up, side)`, with a
 # visor proud of its port, a neck roll, a spoiler lip, a chin vent, crown
 # vents, an exhaust vent and the visor's pivot plates. `seam` is the cut line
@@ -257,14 +251,15 @@ def lid(k, name, paint, lip="helmet", vents="visor", plates="glove", chin="visor
     k.begin(name)
     k.loft(SHELL, SKULL.zones(zone), axis="y", ring=16, steps=3, sharp=80)
     if mirror:
-        decal(k, SKULL, [(14, 0.024), (166, 0.024)], 0.05, "visor", lift=0.004, across=2)
-        decal(k, SKULL, [(14, -0.026), (166, -0.026)], 0.05, "visor_accent", lift=0.004, across=2)
+        decal(k, SKULL, [(14, 0.024), (166, 0.024)], 0.05, "visor", lift=0.004, step=14)
+        decal(k, SKULL, [(14, -0.026), (166, -0.026)], 0.05, "visor_accent", lift=0.004, step=14)
     else:
-        decal(k, SKULL, [(14, 0.0), (166, 0.0)], 0.1, "visor", lift=0.004, across=3)
+        decal(k, SKULL, [(14, 0.0), (166, 0.0)], 0.1, "visor", lift=0.004, across=2, step=14)
     k.box((0.07, 0.022, 0.02), (0, -0.098, 0.146), chin, rot=(0.25, 0, 0), bevel=0.006)
-    k.box((0.06, 0.016, 0.012), (0, -0.02, -0.141), vents, bevel=0.004)
+    # The small vents are plain blocks: a bevel on them is under a pixel from the chase camera and a kilobyte a helmet
+    k.box((0.06, 0.016, 0.012), (0, -0.02, -0.141), vents, bevel=0)
     for side in (-1, 1):
-        k.box((0.03, 0.012, 0.045), (side * 0.05, 0.128, 0.03), vents, rot=(0.35, 0, 0), bevel=0.004)
+        k.box((0.03, 0.012, 0.045), (side * 0.05, 0.128, 0.03), vents, rot=(0.35, 0, 0), bevel=0)
         k.cylinder(0.027 if seam else 0.018, 0.012, (side * 0.129, -0.012, 0.03), plates, axis="x", seg=10)
     k.loft([(-0.06, -0.165, -0.13, 0.05), (-0.005, -0.172, -0.13, 0.075, 2.4, 2.4), (0.05, -0.16, -0.125, 0.06), (0.075, -0.145, -0.115, 0.03)],
            lip, axis="y", ring=8, steps=1)
@@ -273,28 +268,62 @@ def lid(k, name, paint, lip="helmet", vents="visor", plates="glove", chin="visor
         decal(k, SKULL, [(8, -0.02), (22, -0.078), (26, -0.128)], 0.006, "glove", both=True)
 
 
-# The jacket's sections, along y: the hips, the waist, the chest, the shoulders and the neck
+# The jacket's sections, along y: the hips, a waist drawn in, the ribs, a deep
+# chest under round shoulder blades, square shoulders, the slope up to the
+# neck. The hips are no further back than the seat's luggage allows
+# (tests/unit/bikemodels.test.js keeps 4 cm between them).
 TORSO = [
     (-0.27, -0.07, 0.07, 0.08),
-    (-0.23, -0.115, 0.115, 0.15, 2.6, 2.6),
-    (-0.15, -0.11, 0.105, 0.15, 2.6, 2.6),
-    (-0.08, -0.1, 0.1, 0.14, 2.6, 2.6),
-    (0.03, -0.105, 0.118, 0.165, 2.6, 2.6),
-    (0.13, -0.11, 0.122, 0.19, 2.8, 2.6),
-    (0.19, -0.1, 0.1, 0.185, 2.6, 2.6),
-    (0.235, -0.075, 0.07, 0.1, 2.4, 2.4),
+    (-0.23, -0.115, 0.113, 0.15, 2.6, 2.6),
+    (-0.15, -0.106, 0.1, 0.141, 2.5, 2.5),
+    (-0.07, -0.094, 0.093, 0.127, 2.4, 2.5),
+    (0.03, -0.108, 0.117, 0.157, 2.6, 2.5, 0.5, 0.96, 1.0),
+    (0.12, -0.12, 0.128, 0.187, 2.9, 2.4, 0.5, 0.93, 1.0),
+    (0.185, -0.108, 0.103, 0.19, 2.6, 2.4),
+    (0.228, -0.08, 0.07, 0.108, 2.3, 2.3),
     (0.27, -0.055, 0.05, 0.058),
     (0.3, -0.05, 0.045, 0.052),
 ]
+# A thin oversuit worn over the jacket: loose all the way down, gathered by
+# the elastic of its hem, with the cloth standing off the body in folds
+RAIN = [
+    (-0.27, -0.07, 0.07, 0.08),
+    (-0.235, -0.114, 0.118, 0.156, 2.6, 2.6),
+    (-0.2, -0.112, 0.116, 0.158, 2.5, 2.5),
+    (-0.155, -0.118, 0.132, 0.174, 2.3, 2.4),
+    (-0.08, -0.11, 0.118, 0.16, 2.4, 2.4),
+    (0.0, -0.12, 0.13, 0.174, 2.5, 2.5),
+    (0.07, -0.116, 0.124, 0.176, 2.5, 2.5),
+    (0.13, -0.126, 0.136, 0.202, 2.7, 2.5),
+    (0.19, -0.114, 0.11, 0.202, 2.6, 2.4),
+    (0.235, -0.088, 0.08, 0.118, 2.3, 2.3),
+    (0.27, -0.06, 0.055, 0.065),
+    (0.3, -0.05, 0.045, 0.052),
+]
+
+
+# Crumples a thin garment: each point moves in or out by up to `amount`, by a
+# number made from its own place, so the same script gives the same creases
+def crinkle(obj, amount):
+    for v in obj.data.vertices:
+        wave = math.sin(v.co.x * 127.1 + v.co.y * 311.7 + v.co.z * 74.7) * 43758.5453
+        v.co += v.normal * ((wave - math.floor(wave)) * 2 - 1) * amount
+
+
+# A hard plate proud of a limb on the outside of its bend, from `start` to
+# `end` along it: the armour over an elbow or a knee
+def pad(k, skin, start, end, width, mat, thick=0.009):
+    decal(k, skin, [(90, start), (90, end)], width, mat, thick=thick, lift=thick / 2 + 0.0015)
 
 
 # An outfit's jacket: `paint(y, up, side)` colours it down to its `hem`, with
 # the trousers below (and `under`, a shirt's hem, between them). It has a
 # collar with a `lining`, armour `cups` on the shoulders, a storm `flap` down
 # the front and, with `spine`, a back protector. `flare` widens a hip-length
-# jacket over the trousers. Returns its skin for the marks of each design.
-def torso(k, name, paint, hem=-0.155, flare=1.0, collar="suit", lining=None, cups="suit", flap="suit", spine=True, under=None):
-    sections = [(s[0],) + tuple(v * flare for v in s[1:4]) + tuple(s[4:]) if -0.25 < s[0] < -0.1 else s for s in TORSO]
+# jacket over the trousers; `sections` is a looser garment's own shape (RAIN).
+# Returns its skin for the marks of each design, with the body as `shell`.
+def torso(k, name, paint, hem=-0.155, flare=1.0, collar="suit", lining=None, cups="suit", flap="suit", spine=True, under=None, sections=None):
+    sections = sections or [(s[0],) + tuple(v * flare for v in s[1:4]) + tuple(s[4:]) if -0.25 < s[0] < -0.1 else s for s in TORSO]
     skin = Skin(sections, 2)
 
     def zone(y, up, side):
@@ -303,12 +332,13 @@ def torso(k, name, paint, hem=-0.155, flare=1.0, collar="suit", lining=None, cup
         return paint(y, up, side)
 
     k.begin(name)
-    k.loft(sections, skin.zones(zone), axis="y", ring=16, steps=2, sharp=80)
-    k.loft([(0.2, -0.094, 0.086, 0.105), (0.228, -0.09, 0.08, 0.098), (0.252, -0.084, 0.072, 0.09)],
+    skin.shell = k.loft(sections, skin.zones(zone), axis="y", ring=16, steps=2, sharp=80)
+    k.loft([(0.2, -0.094, 0.086, 0.105), (0.228, -0.09, 0.08, 0.098), (0.256, -0.086, 0.074, 0.092)],
            lambda u, up, side: (lining or collar) if u > 0.5 else collar, axis="y", ring=12, steps=1, sharp=80)
-    for side in (-1, 1):
-        k.loft([(0.13, -0.05, 0.05, 0.036, 2.4, 2.4, 0.5, 1, 1, side * 0.17), (0.18, -0.074, 0.072, 0.062, 2.4, 2.4, 0.5, 1, 1, side * 0.166),
-                (0.218, -0.06, 0.058, 0.05, 2.4, 2.4, 0.5, 1, 1, side * 0.158), (0.234, -0.03, 0.03, 0.024, 2.4, 2.4, 0.5, 1, 1, side * 0.15)],
+    # The shoulder armour: a cup that stands off the shoulder and overhangs the top of the arm
+    for side in (-1, 1) if cups else ():
+        k.loft([(0.118, -0.05, 0.05, 0.032, 2.4, 2.4, 0.5, 1, 1, side * 0.176), (0.168, -0.082, 0.078, 0.066, 2.6, 2.6, 0.5, 1, 1, side * 0.17),
+                (0.214, -0.066, 0.062, 0.054, 2.4, 2.4, 0.5, 1, 1, side * 0.158), (0.236, -0.03, 0.03, 0.024, 2.4, 2.4, 0.5, 1, 1, side * 0.148)],
                cups, axis="y", ring=8, steps=1, sharp=80)
     if flap:
         decal(k, skin, [(90, hem + 0.01), (90, 0.2)], 0.03, flap, thick=0.005, lift=0.0035)
@@ -317,14 +347,22 @@ def torso(k, name, paint, hem=-0.155, flare=1.0, collar="suit", lining=None, cup
     return skin
 
 
-UPPER = [(0, 0.06, 0), (0.1, 0.064, 0.006), (0.3, 0.058, 0.006), (0.5, 0.052, 0), (0.85, 0.047, 0.008), (1, 0.046, 0.012)]
-FORE = [(0, 0.047, 0.014), (0.12, 0.051, 0.012), (0.3, 0.048, 0.004), (0.55, 0.044, 0), (0.78, 0.038, 0), (0.8, 0.044, 0), (1, 0.042, 0)]
+# The top of the arm fills the shoulder, the muscle is at its front and the elbow comes to a point
+UPPER = [(0, 0.058, 0), (0.12, 0.066, 0.006, 0.004), (0.32, 0.06, 0.004, 0.008), (0.55, 0.052, 0, 0.006), (0.8, 0.047, 0.004), (0.93, 0.047, 0.014), (1, 0.045, 0.016)]
+# Thick below the elbow, drawn in to the wrist, the glove's cuff over it
+FORE = [(0, 0.046, 0.016), (0.1, 0.052, 0.014, 0.004), (0.28, 0.051, 0.004, 0.006), (0.55, 0.044, 0, 0.002), (0.78, 0.037, 0), (0.8, 0.044, 0), (1, 0.042, 0)]
 # A long glove cuff flares over the sleeve
-GAUNTLET = [(0, 0.047, 0.014), (0.12, 0.051, 0.012), (0.3, 0.048, 0.004), (0.55, 0.043, 0), (0.6, 0.057, 0), (0.8, 0.048, 0), (1, 0.043, 0)]
-THIGH = [(0, 0.082, 0), (0.25, 0.082, 0), (0.7, 0.068, 0), (1, 0.062, 0.006)]
-# The trouser leg goes down to the ankle, over the boot
-SHIN = [(0, 0.06, 0.02), (0.12, 0.062, 0.022), (0.3, 0.059, 0.008), (0.6, 0.05, 0), (0.92, 0.047, 0), (1, 0.05, 0)]
-JEANS = [(0, 0.06, 0.008), (0.15, 0.06, 0.006), (0.6, 0.051, 0), (0.92, 0.049, 0), (1, 0.052, 0)]
+GAUNTLET = [(0, 0.046, 0.016), (0.1, 0.052, 0.014, 0.004), (0.28, 0.051, 0.004, 0.006), (0.55, 0.043, 0), (0.6, 0.057, 0), (0.8, 0.048, 0), (1, 0.043, 0)]
+# Full at the seat, the muscle on top, drawn in to a knee that stands out
+THIGH = [(0, 0.08, 0), (0.2, 0.083, 0.004, 0.003), (0.55, 0.074, 0.006), (0.85, 0.064, 0.004), (1, 0.061, 0.012)]
+# The kneecap, the calf behind, the ankle. The trouser leg goes down to the ankle, over the boot.
+SHIN = [(0, 0.058, 0.022), (0.1, 0.061, 0.026), (0.26, 0.057, 0.01, 0.008), (0.45, 0.052, 0.002, 0.012), (0.7, 0.047, 0, 0.004), (0.92, 0.046, 0), (1, 0.05, 0)]
+JEANS = [(0, 0.058, 0.012), (0.12, 0.06, 0.012, 0.002), (0.32, 0.055, 0.004, 0.01), (0.6, 0.05, 0, 0.006), (0.92, 0.048, 0), (1, 0.052, 0)]
+# The oversuit's sleeves and legs: loose, in folds, gathered by elastic at the wrist and over the boot
+RAIN_UPPER = [(0, 0.066, 0), (0.1, 0.076, 0.006, 0.004), (0.25, 0.068, 0.004, 0.006), (0.4, 0.074, 0.004, 0.004), (0.6, 0.064, 0.006, 0.002), (0.8, 0.068, 0.01), (1, 0.06, 0.014)]
+RAIN_FORE = [(0, 0.06, 0.014), (0.15, 0.066, 0.01, 0.004), (0.35, 0.058, 0.004, 0.004), (0.55, 0.063, 0, 0.002), (0.72, 0.056, 0), (0.79, 0.036, 0), (0.83, 0.044, 0), (1, 0.042, 0)]
+RAIN_THIGH = [(0, 0.084, 0), (0.2, 0.09, 0.004, 0.003), (0.4, 0.083, 0.008), (0.6, 0.087, 0.006, 0.002), (0.85, 0.076, 0.006), (1, 0.072, 0.014)]
+RAIN_SHIN = [(0, 0.07, 0.02), (0.12, 0.074, 0.022, 0.004), (0.3, 0.066, 0.01, 0.01), (0.45, 0.07, 0.004, 0.008), (0.62, 0.062, 0, 0.006), (0.8, 0.066, 0, 0.002), (0.93, 0.054, 0), (1, 0.05, 0)]
 
 
 # A path all the way round a skin at `s`
@@ -392,10 +430,10 @@ def build_crew(k):
     # A daypack on the back, its straps over the shoulders
     k.begin("backpack")
     k.loft([(-0.13, -0.2, -0.1, 0.1), (-0.1, -0.235, -0.1, 0.14, 3, 3), (0.12, -0.245, -0.1, 0.145, 3, 3), (0.17, -0.225, -0.1, 0.12, 3, 3), (0.195, -0.19, -0.1, 0.06)],
-           "backpack", axis="y", ring=12, steps=2, sharp=60)
+           "backpack", axis="y", ring=10, steps=1, sharp=60)
     k.box((0.16, 0.12, 0.03), (0, -0.04, -0.25), "backpack", bevel=0.01)
     for side in (-1, 1):
-        k.tube([(side * 0.075, 0.15, -0.1), (side * 0.08, 0.215, -0.03), (side * 0.085, 0.18, 0.1), (side * 0.09, 0.02, 0.135)], 0.012, "backpack", seg=5, smooth=2)
+        k.tube([(side * 0.075, 0.15, -0.1), (side * 0.08, 0.215, -0.03), (side * 0.085, 0.18, 0.1), (side * 0.09, 0.02, 0.135)], 0.012, "backpack", seg=4, smooth=1)
 
 
 FIST = [(-0.06, -0.022, 0.022, 0.03), (-0.04, -0.034, 0.036, 0.044, 3, 3), (0.0, -0.038, 0.042, 0.05, 3, 3), (0.04, -0.036, 0.036, 0.048, 3, 3), (0.058, -0.02, 0.02, 0.036)]
@@ -453,24 +491,42 @@ def build_helmets(k):
 
     lid(k, "helmet_stripes", stripes, chin="helmet_accent")
 
-    # The streak shell, as it was first made: the shell colour over an accent
-    # base, a thin accent stripe down the crown, and streaks laid on it that
-    # sweep back and down from over the visor: an accent one between two trim lines
-    def streaked(u, up, side):
-        if u < 0.07:
-            return "glove"
-        if up > 0.35 and 0.3 < u < 0.64:
-            return "visor"
-        if u < 0.3 or (abs(side) < 0.12 and u > 0.66):
+    # Streak: broad blades, each from a tip at the front to a broad end at the
+    # back. Three sweep back from the brow along the side of the crown (the
+    # accent, the trim, the accent); three fan up and back from the chin
+    # across the cheek (the accent, the trim, the shell colour). The ground
+    # is the shell colour above and the accent low at the back and under the chin.
+    def ground(y, up, side):
+        if y < -0.09 or (y < -0.02 and up < 0.25):
             return "helmet_accent"
         return "helmet"
 
-    helmet(k, "helmet_streak", streaked)
-    # A thin dark trim round its base
-    k.loft([(-0.168, -0.062, 0.078, 0.064), (-0.152, -0.084, 0.102, 0.083), (-0.14, -0.078, 0.096, 0.078)], "glove", axis="y", ring=10, steps=1, sharp=80)
-    streak(k, [(84, 0.112), (35, 0.1), (-25, 0.056), (-88, -0.02)], 0.012, "helmet_trim")
-    streak(k, [(80, 0.088), (32, 0.074), (-28, 0.024), (-88, -0.052)], 0.03, "helmet_accent")
-    streak(k, [(16, 0.008), (-30, -0.026), (-88, -0.084)], 0.013, "helmet_trim")
+    lid(k, "helmet_streak", ground)
+    for mat, path in (
+            ("helmet_accent", [(74, 0.106, 0.002), (30, 0.118, 0.014), (-30, 0.112, 0.024), (-80, 0.09, 0.03)]),
+            ("helmet_trim", [(68, 0.084, 0.002), (25, 0.092, 0.018), (-30, 0.078, 0.03), (-82, 0.05, 0.036)]),
+            ("helmet_accent", [(44, 0.068, 0.002), (0, 0.06, 0.012), (-45, 0.04, 0.018), (-84, 0.012, 0.02)]),
+            ("helmet_accent", [(74, -0.082, 0.003), (42, -0.07, 0.024), (12, -0.046, 0.034)]),
+            ("helmet_trim", [(72, -0.112, 0.003), (34, -0.098, 0.018), (-16, -0.07, 0.03), (-62, -0.04, 0.036)]),
+            ("helmet", [(58, -0.126, 0.003), (18, -0.118, 0.012), (-32, -0.1, 0.02), (-74, -0.082, 0.026)])):
+        decal(k, SKULL, path, 0.0, mat, lift=0.003, both=True, step=14, across=2 if max(p[2] for p in path) > 0.028 else 1)
+
+    # Graphic: the shell colour over the crown and down the middle of the chin
+    # bar, the accent low on the sides and round the back, the trim round the
+    # eye port and in lines between the two, a blade of the accent swept back
+    # over each side of the crown and a plain oval mark on the brow
+    def graphic(y, up, side):
+        if up > 0.3 and -0.075 < y < 0.075:
+            return "helmet_trim"
+        if y < -0.045 and (abs(side) > 0.35 or up < 0):
+            return "helmet_accent"
+        return "helmet"
+
+    lid(k, "helmet_graphic", graphic, chin="helmet_trim", vents="helmet_trim")
+    decal(k, SKULL, [(40, -0.05), (0, -0.036), (-88, -0.036)], 0.012, "helmet_trim", lift=0.003, both=True, step=14)
+    decal(k, SKULL, [(58, 0.1, 0.004), (10, 0.104, 0.02), (-55, 0.088, 0.026)], 0.0, "helmet_accent", lift=0.003, both=True, step=14)
+    decal(k, SKULL, [(50, 0.082, 0.003), (8, 0.082, 0.007), (-55, 0.064, 0.008)], 0.0, "helmet_trim", lift=0.003, both=True, step=14)
+    badge(k, SKULL, 90, 0.092, [(math.sin(i * math.pi / 4) * 0.022, math.cos(i * math.pi / 4) * 0.011) for i in range(8)], "helmet_accent", lift=0.003)
 
 
 def build_jackets(k):
@@ -485,6 +541,7 @@ def build_jackets(k):
     decal(k, skin, [(70, 0.42), (110, 0.42)], 0.02, "suit_patch", lift=0.004)
     skin = cut(k, "forearm_yoke", FORE, lambda t, up, side: "glove" if t > 0.78 else ("suit_trim" if up < -0.2 else "suit"))
     decal(k, skin, hoop(0.69), 0.012, "suit_patch", lift=0.004)
+    pad(k, skin, 0.02, 0.3, 0.066, "suit")
 
     # Piping: thin accent lines (a diagonal on each side of the chest, lines
     # on the back of the shoulders, one down each forearm), a large
@@ -496,7 +553,8 @@ def build_jackets(k):
     skin = cut(k, "upper_arm_bar", UPPER, lambda t, up, side: "suit")
     decal(k, skin, [(20, 0.38), (160, 0.38)], 0.022, "suit_patch", lift=0.004)
     skin = cut(k, "forearm_line", FORE, lambda t, up, side: "glove" if t > 0.78 else "suit")
-    decal(k, skin, [(90, 0.08), (90, 0.72)], 0.009, "suit_accent", lift=0.004)
+    pad(k, skin, 0.02, 0.3, 0.066, "suit")
+    decal(k, skin, [(90, 0.08), (90, 0.72)], 0.009, "suit_accent", lift=0.012)
 
     # Plain: one colour, armour overlays on the shoulders and elbows in the
     # accent, a small patch in the trim on the left chest, a patch on each arm
@@ -504,9 +562,11 @@ def build_jackets(k):
     decal(k, skin, [(53, 0.1), (67, 0.1)], 0.022, "suit_trim")
     skin = cut(k, "upper_arm_plain", UPPER, lambda t, up, side: "suit_accent" if (up > 0 and (t < 0.26 or t > 0.86)) else "suit")
     decal(k, skin, [(72, 0.42), (108, 0.42)], 0.03, "suit_patch", lift=0.004)
-    cut(k, "forearm_plain", FORE, lambda t, up, side: "glove" if t > 0.78 else "suit")
+    skin = cut(k, "forearm_plain", FORE, lambda t, up, side: "glove" if t > 0.78 else "suit")
+    pad(k, skin, 0.02, 0.3, 0.066, "suit")
     skin = cut(k, "forearm_band", FORE, lambda t, up, side: "glove" if t > 0.78 else "suit")
     decal(k, skin, [(10, 0.5), (170, 0.5)], 0.028, "suit_patch", lift=0.004)
+    pad(k, skin, 0.02, 0.3, 0.066, "suit_accent")
 
     # Bars: hip length, reflective bars (a diagonal on each side of the chest
     # and one on the back of each shoulder), piping down each side, trim in
@@ -566,6 +626,33 @@ def build_jackets(k):
     badge(k, skin, 90, 0.3, star(0.034), "suit_patch")
     decal(k, skin, [(20, 0.62), (160, 0.62)], 0.004, "suit_accent", lift=0.004)
 
+    # Open: a plain jacket worn open over a top in the accent, which shows
+    # down the front and below the hem; the jacket's front edges stand off
+    # it. A hoodie in the trim is tied round the waist: its body hangs down
+    # the back, its sleeves are knotted at the front and their ends hang
+    skin = torso(k, "torso_open", lambda y, up, side: "suit_accent" if (up > 0.8 and y < 0.2) else "suit", hem=-0.15, under="suit_accent",
+                 flap=None, spine=False)
+    decal(k, skin, [(64, -0.15), (66, 0.06), (72, 0.2)], 0.034, "suit", thick=0.012, lift=0.007, both=True)
+    k.loft([(-0.215, -0.126, 0.118, 0.158, 2.6, 2.6), (-0.19, -0.13, 0.124, 0.164, 2.6, 2.6), (-0.15, -0.122, 0.12, 0.16, 2.6, 2.6), (-0.128, -0.112, 0.11, 0.15, 2.6, 2.6)],
+           "suit_trim", axis="y", ring=12, steps=1, sharp=80)
+    k.box((0.07, 0.04, 0.03), (0, -0.168, 0.128), "suit_trim", bevel=0.008)
+    for side in (-1, 1):
+        k.box((0.036, 0.1, 0.02), (side * 0.035, -0.225, 0.122), "suit_trim", rot=(-0.3, 0, side * 0.3), bevel=0.006)
+
+    # Rain: a thin oversuit, loose and crumpled. The hood lies down round the
+    # collar with its two cords (the trim) down the chest, a flap covers the
+    # front zip, a small pale mark is on the left chest
+    skin = torso(k, "torso_rain", lambda y, up, side: "suit", hem=-0.2, cups=None, flap=None, spine=False, sections=RAIN)
+    crinkle(skin.shell, 0.007)
+    decal(k, skin, [(88, -0.19), (88, 0.2)], 0.046, "suit", thick=0.014, lift=0.008)
+    decal(k, skin, [(80, 0.21), (76, 0.085)], 0.006, "suit_trim", lift=0.011, both=True)
+    decal(k, skin, [(52, 0.1), (65, 0.1)], 0.016, "suit_patch", lift=0.011)
+    hood = k.loft([(0.176, -0.15, -0.045, 0.085), (0.206, -0.176, -0.02, 0.134, 2.4, 2.4), (0.242, -0.17, -0.025, 0.126, 2.4, 2.4), (0.27, -0.13, -0.05, 0.07)],
+                  "suit", axis="y", ring=10, steps=2, sharp=80)
+    crinkle(hood, 0.007)
+    crinkle(cut(k, "upper_arm_rain", RAIN_UPPER, lambda t, up, side: "suit").shell, 0.005)
+    crinkle(cut(k, "forearm_rain", RAIN_FORE, lambda t, up, side: "glove" if t > 0.81 else "suit").shell, 0.005)
+
 
 def build_trousers(k):
     # A diagonal slash across the thigh
@@ -578,16 +665,22 @@ def build_trousers(k):
     # A U-shaped reflective line round the knee
     skin = cut(k, "shin_knee", SHIN, lambda t, up, side: "pants")
     decal(k, skin, [(35, 0.04), (42, 0.26), (90, 0.36), (138, 0.26), (145, 0.04)], 0.009, "pants_trim", lift=0.004)
+    pad(k, skin, 0.0, 0.25, 0.07, "pants")
     # Piping down the outside of the leg and a short line across the shin
     skin = cut(k, "shin_stripe", SHIN, lambda t, up, side: "pants")
     decal(k, skin, [(0, 0.08), (0, 0.92)], 0.01, "pants_trim", lift=0.004, both=True)
     decal(k, skin, [(60, 0.55), (120, 0.55)], 0.008, "pants_accent", lift=0.004)
+    pad(k, skin, 0.0, 0.25, 0.07, "pants")
     # A long mark down the outside of the shin and a small one at the knee
     skin = cut(k, "shin_mark", SHIN, lambda t, up, side: "pants")
     decal(k, skin, [(0, 0.42), (0, 0.78)], 0.022, "pants_trim", lift=0.004, both=True)
-    decal(k, skin, [(78, 0.1), (102, 0.1)], 0.014, "pants_trim", lift=0.004)
+    pad(k, skin, 0.0, 0.25, 0.07, "pants")
+    decal(k, skin, [(78, 0.1), (102, 0.1)], 0.014, "pants_trim", lift=0.013)
     # Jeans: no armour at the knee
     cut(k, "shin_jeans", JEANS, lambda t, up, side: "pants")
+    # The oversuit's trousers
+    crinkle(cut(k, "thigh_rain", RAIN_THIGH, lambda t, up, side: "pants").shell, 0.005)
+    crinkle(cut(k, "shin_rain", RAIN_SHIN, lambda t, up, side: "pants").shell, 0.005)
 
 
 def build_hands_feet(k):
@@ -612,6 +705,27 @@ def build_hands_feet(k):
     k.box((0.112, 0.016, 0.03), (0, 0.045, 0.045), "boot_accent", rot=(0.6, 0, 0), bevel=0.004)
     for y in (0.085, 0.128):
         k.box((0.118, 0.022, 0.012), (0, y, 0.034), "boot_accent", bevel=0.004)
+
+    # A road boot: a shaft to the middle of the shin over a heel and a sole,
+    # with a plate on the shin, a band round the top and a heel cup in the accent
+    k.begin("boot_road")
+    k.loft(FOOT, lambda u, up, side: "sole" if up < -0.8 else "boot", ring=10, steps=2, sharp=80)
+    k.loft([(0.02, -0.086, 0.036, 0.055), (0.09, -0.084, 0.034, 0.056), (0.165, -0.082, 0.03, 0.056)], "boot", axis="y", ring=8, steps=1, sharp=80)
+    k.box((0.06, 0.085, 0.012), (0, 0.105, 0.036), "boot_accent", rot=(-0.04, 0, 0), bevel=0.004)
+    k.box((0.122, 0.018, 0.05), (0, 0.15, -0.024), "boot_accent", bevel=0.004)
+    k.box((0.07, 0.04, 0.016), (0, 0.022, -0.086), "boot_accent", bevel=0.004)
+
+    # A rain cover pulled over a boot: a loose bag, gathered by elastic above the ankle
+    k.begin("boot_cover")
+    bag = k.loft([(s[0] * 1.06,) + tuple(v * 1.14 for v in s[1:4]) + tuple(s[4:]) for s in FOOT], "boot", ring=10, steps=2, sharp=80)
+    crinkle(bag, 0.004)
+    top = k.loft([(0.015, -0.094, 0.044, 0.062), (0.075, -0.092, 0.04, 0.064), (0.12, -0.078, 0.028, 0.052), (0.14, -0.086, 0.034, 0.058)], "boot", axis="y", ring=8, steps=1, sharp=80)
+    crinkle(top, 0.003)
+
+    # A reflective bar across the shoulder blades of a jacket of the plain
+    # cut, for a kit that names it (backStyle): a mark that reads from behind
+    k.begin("back_bar")
+    decal(k, Skin(TORSO, 2), [(-126, 0.116), (-54, 0.116)], 0.04, "suit_trim", lift=0.0085)
 
     # A neck tube, gathered in folds under the helmet
     k.begin("neck")
@@ -679,6 +793,8 @@ def seat(k, joined, kit, build, place, yaw):
         put("backpack", None, body)
     if kit.get("neckColor") is not None:
         put("neck", None, body)
+    if kit.get("backStyle"):
+        put("back", kit["backStyle"], body)
     put("helmet", kit.get("helmetStyle"), Matrix.Translation(up * (0.375 * tall + rise) + ahead * 0.03) @ Matrix.Rotation(lean * 0.45, 4, "X"))
 
     def limb(name, style, start, end, out):
@@ -756,7 +872,7 @@ def build():
         return max(n for name, n in count.items() if name == base or name.startswith(base + "_"))
 
     pairs = sum(most(name) for name in ("upper_arm", "forearm", "thigh", "shin", "glove", "boot"))
-    seated = most("torso") + count["hump"] + count["peak"] + count["backpack"] + count["neck"] + most("helmet") + 2 * pairs
+    seated = most("torso") + count["hump"] + count["peak"] + count["backpack"] + count["neck"] + most("back") + most("helmet") + 2 * pairs
     print(f"rider as seated, at most: {seated} triangles; {sum(count.values())} in the file of {size} bytes")
     if seated > BUDGET:
         raise SystemExit(f"{OUT}: a seated rider of {seated} triangles is over the budget of {BUDGET}")

@@ -5,10 +5,28 @@
 // go to the modelled rider's materials by name, and its styles pick the cut
 // of each part (`<part>_<style>` in tools/blender/rider.py): helmetStyle,
 // torsoStyle, upperArmStyle, forearmStyle, thighStyle, shinStyle, gloveStyle
-// and bootStyle. neckColor adds a neck tube and backpackColor a backpack.
+// and bootStyle. neckColor adds a neck tube, backpackColor a backpack and
+// backStyle a mark on the back of the jacket (`back_<style>`). Every rider has
+// two or more, and the first of each carries a mark that reads from behind
+// and sets it apart from the other riders' (tests/unit/characters.test.js
+// measures both from these colours and the model file).
 // Names say what the gear looks like and never who made it.
 const OUTFITS = {
     steve: [{
+        id: 'black-textile-red',
+        name: 'Black textile, red helmet, grey jeans',
+        kit: {
+            suitColor: 0x121316, suitAccent: 0x1f2126,     // All black, the armour overlays a shade lighter
+            suitTrim: 0xc9a63a, suitPatch: 0x7d8188,       // A small yellow patch on the chest, grey reflective patches on the arms
+            torsoStyle: 'plain', upperArmStyle: 'plain', forearmStyle: 'band',
+            pantsColor: 0x5b5e65, pantsAccent: 0x5b5e65,   // Grey jeans
+            shinStyle: 'jeans',
+            helmetColor: 0xc41f1c, helmetAccent: 0xeeeeec, // Red, white low on the sides and the back, black lines and eye port
+            helmetTrim: 0x111214, helmetStyle: 'graphic', visorColor: 0x0b0d11,
+            gloveColor: 0x101114, gloveStyle: 'armour',
+            bootColor: 0x121316, bootAccent: 0xe8e8e6, bootStyle: 'road' // Black road boots, white marks
+        }
+    }, {
         id: 'black-textile',
         name: 'Black textile, silver helmet',
         kit: {
@@ -33,7 +51,8 @@ const OUTFITS = {
             thighStyle: 'pocket', shinStyle: 'knee',
             helmetColor: 0x0d0e11, helmetAccent: 0x1c1d21, helmetStyle: 'plain',
             gloveColor: 0x121214, gloveAccent: 0xc2505a, gloveStyle: 'armour', // Red over the knuckles and the back of the hand
-            bootColor: 0x3c3a3a, bootAccent: 0x6a6a6c, bootStyle: 'buckle'
+            bootColor: 0x3c3a3a, bootAccent: 0x6a6a6c, bootStyle: 'buckle',
+            backStyle: 'bar'                               // A pale bar across the shoulder blades, the colour of the chest patch
         }
     }, {
         id: 'black-bars',
@@ -60,7 +79,35 @@ const OUTFITS = {
             helmetColor: 0xf0f4f8, helmetAccent: 0x15171c, helmetTrim: 0x3a3d44, // White crown, black front and chin
             helmetStyle: 'chin',
             gloveColor: 0x111215, gloveStyle: 'armour',
-            bootColor: 0x141518, bootAccent: 0x0e0e10,
+            bootColor: 0x141518, bootAccent: 0x0e0e10, bootStyle: 'road',
+            neckColor: 0x1d1e2c
+        }
+    }, {
+        id: 'grey-touring-black',
+        name: 'Light grey touring textile, black and white helmet',
+        kit: {
+            suitColor: 0xb9b9c0, suitAccent: 0x16171b, suitTrim: 0xb0323a, suitPatch: 0x55585e,
+            torsoStyle: 'touring', upperArmStyle: 'chevron', forearmStyle: 'cuff',
+            pantsColor: 0x15161a, pantsAccent: 0x15161a, pantsTrim: 0xe0e0e0,
+            thighStyle: 'pocket', shinStyle: 'mark',
+            helmetColor: 0x111317, helmetAccent: 0xeceeef, helmetTrim: 0xb5282c, // An older one: black, white panels, a red centre stripe
+            helmetStyle: 'panel',
+            gloveColor: 0x111215, gloveStyle: 'armour',
+            bootColor: 0x141518, bootAccent: 0x0e0e10, bootStyle: 'road',
+            neckColor: 0x1d1e2c
+        }
+    }, {
+        id: 'black-jacket',
+        name: 'Plain black jacket, black and white helmet',
+        kit: {
+            suitColor: 0x121316, suitAccent: 0x1c1d22, suitTrim: 0x1c1d22, suitPatch: 0x1c1d22, // No patch that shows
+            torsoStyle: 'plain', upperArmStyle: 'plain', forearmStyle: 'plain',
+            pantsColor: 0x15161a, pantsAccent: 0x15161a, pantsTrim: 0xe0e0e0,
+            thighStyle: 'pocket', shinStyle: 'mark',
+            helmetColor: 0x111317, helmetAccent: 0xeceeef, helmetTrim: 0xb5282c,
+            helmetStyle: 'panel',
+            gloveColor: 0x111215, gloveStyle: 'armour',
+            bootColor: 0x141518, bootAccent: 0x0e0e10, bootStyle: 'road',
             neckColor: 0x1d1e2c
         }
     }],
@@ -75,7 +122,7 @@ const OUTFITS = {
             thighStyle: 'slash', shinStyle: 'knee',
             helmetColor: 0x0e1014, helmetAccent: 0x9aa0a8, helmetStyle: 'lines', // Gloss black, silver-grey lines
             gloveColor: 0x2a2c30, gloveAccent: 0xd94a26, gloveStyle: 'armour',
-            bootColor: 0x121214, bootAccent: 0x0e0e10
+            bootColor: 0x121214, bootAccent: 0x0e0e10, bootStyle: 'road'
         }
     }, {
         id: 'blue-orange-white',
@@ -88,7 +135,7 @@ const OUTFITS = {
             helmetColor: 0xe9ebec, helmetAccent: 0x121316, helmetTrim: 0xb5342c, // White, black panels, a red centre stripe
             helmetStyle: 'panel',
             gloveColor: 0x2a2c30, gloveAccent: 0xd94a26, gloveStyle: 'armour',
-            bootColor: 0x121214, bootAccent: 0x0e0e10
+            bootColor: 0x121214, bootAccent: 0x0e0e10, bootStyle: 'road'
         }
     }, {
         id: 'black-piping',
@@ -100,7 +147,7 @@ const OUTFITS = {
             thighStyle: 'pocket', shinStyle: 'stripe',
             helmetColor: 0xe6e8e8, helmetAccent: 0x15161a, helmetStyle: 'modular',
             gloveColor: 0x111114, gloveAccent: 0xc8552e, gloveStyle: 'armour',
-            bootColor: 0x121214, bootAccent: 0x0e0e10
+            bootColor: 0x121214, bootAccent: 0x0e0e10, bootStyle: 'road'
         }
     }],
     lucy: [{
@@ -111,13 +158,24 @@ const OUTFITS = {
             suitTrim: 0xa9b1c2, suitPatch: 0xeaeaea,       // A pale grey hood and hem under the jacket, white patches and piping
             suitRoughness: 0.5,
             torsoStyle: 'leather', upperArmStyle: 'star', forearmStyle: 'plain',
-            helmetColor: 0xf2f2f0, helmetAccent: 0x121214, // White helmet, black and copper streaks
+            helmetColor: 0xf2f2f0, helmetAccent: 0x121214, // Pearl white helmet, broad black and copper blades
             helmetTrim: 0xb8693a, helmetStyle: 'streak',
             pantsColor: 0x3a4f72, pantsAccent: 0x3a4f72,   // Blue jeans
             shinStyle: 'jeans',
             gloveColor: 0x111113, gloveAccent: 0x2a2c30, gloveStyle: 'armour', // Dark carbon knuckle guards
-            bootColor: 0x18181b, bootAccent: 0xf0f0f0, bootStyle: 'trainer', // Black high-top riding trainers, a white sole
-            backpackColor: 0x18191c
+            bootColor: 0x18181b, bootAccent: 0xf0f0f0, bootStyle: 'trainer' // Black high-top riding trainers, a white sole
+        }
+    }, {
+        id: 'black-open',
+        name: 'Black textile jacket worn open, blue top',
+        kit: {
+            suitColor: 0x141417, suitAccent: 0x2f5fa8,     // A plain black jacket, open over a blue top
+            suitTrim: 0xb4bac6, suitPatch: 0x2a2b30,       // A pale grey hoodie tied round the waist
+            torsoStyle: 'open', upperArmStyle: 'bar', forearmStyle: 'plain',
+            helmetColor: 0xf2f2f0, helmetAccent: 0x121214, helmetTrim: 0xb8693a, helmetStyle: 'streak',
+            pantsColor: 0x3a4f72, pantsAccent: 0x3a4f72, shinStyle: 'jeans',
+            gloveColor: 0x111113, gloveAccent: 0x2a2c30, gloveStyle: 'armour',
+            bootColor: 0x18181b, bootAccent: 0xf0f0f0, bootStyle: 'trainer'
         }
     }],
     guy: [{
@@ -159,6 +217,19 @@ const OUTFITS = {
             pantsColor: 0x9c9896, pantsAccent: 0x9c9896, shinStyle: 'jeans', // Light grey
             bootColor: 0x18181a, bootAccent: 0x18181a, bootStyle: 'trainer',
             neckColor: 0x37428a
+        }
+    }, {
+        id: 'yellow-rain',
+        name: 'Yellow rain oversuit, black helmet',
+        kit: {
+            suitColor: 0xe6c41c, suitAccent: 0xe6c41c,     // A thin bright yellow oversuit, jacket and trousers
+            suitTrim: 0x131314, suitPatch: 0xdfe6d2,       // Black hood cords, a small pale mark on the chest
+            suitRoughness: 0.45,
+            torsoStyle: 'rain', upperArmStyle: 'rain', forearmStyle: 'rain',
+            pantsColor: 0xe6c41c, pantsAccent: 0xe6c41c, thighStyle: 'rain', shinStyle: 'rain',
+            helmetColor: 0x0c0d10, helmetAccent: 0x1c1d21, helmetStyle: 'plain', // Plain gloss black
+            gloveColor: 0x111113, gloveStyle: 'armour',
+            bootColor: 0xa6abb1, bootAccent: 0xa6abb1, bootStyle: 'cover' // Pale grey rain covers over the boots
         }
     }]
 };
