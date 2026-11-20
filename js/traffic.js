@@ -29,6 +29,71 @@ const CREW_PACES = [
     { trait: 5, skill: 'expert', speed: 48, spread: 8, corner: 4 }
 ];
 
+// Contact between the bikes and the cars of a world ride (Traffic.contact, Traffic.holdForRoadworks,
+// Traffic.clearRiders; .agent/system/world.md, "Contact"). Every size and threshold is here, so a new rider, bike or
+// world is held with no code.
+const CONTACT = {
+    // A vehicle's footprint in the ground plane: its length along its heading and its width across, in metres, about
+    // the model's origin (midway between a bike's wheels, between a car's axles). A bike is its 1.4 m wheelbase and
+    // two 0.3 m tyres, and its bar; the car is its body. A bike of BIKE_MODELS may carry its own `contact: {length,
+    // width}`. A ball about the origin, as before, was a hit 1.25 m beside a car and no hit at a bike's wheels
+    boxes: { bike: { length: 2.1, width: 0.8 }, car: { length: 4.2, width: 1.9 } },
+    // Two boxes meet only within this height of each other: a bike in the air over a ramp is clear of what is under it
+    heightM: 1.2,
+    // The player and a rider closing faster than this along the line of the contact is a crash, slower is a bump: a
+    // lean on a shoulder or a nudge of a back wheel is ridden out, and 4 m/s is a bicycle's pace into a standing thing.
+    // The line of the contact is the one of the rider's two axes along which the boxes are less deep in each other:
+    // across the road when they met side by side (the closing speed is then the player's speed across the rider's
+    // heading), along it when they met end to end (the player's speed over the rider's)
+    hardMs: 4,
+    bump: {
+        // The share of its speed the player keeps (a knocked cone keeps 0.9: Roadworks.KNOCK_KEEP)
+        keep: 0.94,
+        // The roll the bump puts on the bike (rad, away from the rider) and the seconds over which it dies away
+        wobble: 0.12, wobbleFadeS: 0.25,
+        // One contact is one bump: for this long after one, the boxes are still held apart but nothing more is lost
+        cooldownS: 0.8,
+        // The rider moves this far off its lane line, away from the player, at this speed; the boxes are set this
+        // far apart
+        shoveM: 0.35, shoveMs: 1.5, clearM: 0.02
+    },
+    nudge: {
+        // The most a rider is ever off its lane line (and nothing in a roadworks single lane, whose cones are close)
+        mostM: 0.5,
+        // It comes back at this speed, and only once the player is this far away: never toward a bike beside it
+        backMs: 0.4, holdM: 6
+    },
+    crash: {
+        // The rider that was hit keeps this share of its pace for slowS, shaking by `wobble` rad at wobbleHz, then
+        // rides on. It does not go down, so it never lies in the road
+        slowTo: 0.35, slowS: 2.5, wobble: 0.2, wobbleHz: 3,
+        // For this long after a crash or a restart beside it the rider cannot be hit: the player's bike slides through
+        // it and is not put down in it
+        ghostS: 4,
+        // The player's bike slides on at the rider's speed and this share of the closing speed, off the rider
+        throw: 0.3
+    },
+    follow: {
+        // The player is ahead of a vehicle in its lane when it is within this of the vehicle's lane line across the
+        // road: just over one bar width, so a player passing a metre to the side is not braked for
+        bandM: 0.95,
+        // The hardest the player is taken to brake (m/s^2): a vehicle behind keeps the room to stop behind a player
+        // who does
+        playerBrake: 9,
+        // It is ahead once its origin is this far up the road from the vehicle's: nearer, the two are side by side,
+        // which a vehicle does not brake for (it would drop back from a bike that leans on it)
+        aheadM: 1.2,
+        // Near a roadworks site a player slower than this is one of the queue at the light (Roadworks.riderEntry)
+        queueMs: 2
+    },
+    restart: {
+        // A rider from backM behind to aheadM ahead of where the player is put down moves to the first free place from
+        // slotM ahead, placeM apart; one up to settleM behind takes the speed its place allows; one within ghostM
+        // cannot be hit for crash.ghostS
+        backM: 6, aheadM: 10, slotM: 14, placeM: 8, settleM: 80, ghostM: 25
+    }
+};
+
 // Metres between the lane line's samples when traffic looks ahead for a bend
 const LANE_LOOK_STEP_M = 1;
 
@@ -58,8 +123,10 @@ function laneSpeed(route, vehicle, speed, want, drive, dt) {
         before = look.curvature;
         u += vehicle.direction * LANE_LOOK_STEP_M / Math.max(look.metres, 0.05);
     }
-    // A roadworks light or the vehicle ahead in a queue (Traffic.holdForRoadworks): stop within the metres left
-    const hold = vehicle.stopM;
+    // A roadworks light or what is ahead in the lane (Traffic.holdForRoadworks): stop within the metres left. planM
+    // has the room the vehicle ahead still needs to stop itself, so a vehicle follows one that moves at a gap that
+    // grows with its speed; stopM alone is the room to a thing that stands
+    const hold = vehicle.planM !== undefined ? vehicle.planM : vehicle.stopM;
     if (hold !== undefined && hold < Infinity) cap = Math.min(cap, Math.sqrt(2 * drive.plan * Math.max(0, hold - 0.3)));
     const target = Math.min(want, cap);
     // A vehicle just placed (spawned, or moved by a restart) starts at a speed its place allows
@@ -117,6 +184,57 @@ class Traffic {
         return kind.hairpin * Vehicle.traitOf(character, 'hairpins') + kind.mountain * mountain + kind.country * country;
     }
 
+    // The sizes and thresholds of contact (CONTACT above)
+    static get CONTACT() { return CONTACT; }
+
+    // The footprint of a kind of vehicle ('bike', 'car'), or of a bike model that carries its own
+    static sizeOf(kind, model = null) {
+        const own = model && typeof BIKE_MODELS !== 'undefined' && BIKE_MODELS[model] ? BIKE_MODELS[model].contact : null;
+        return own || CONTACT.boxes[kind];
+    }
+
+    // A box in the ground plane: {x, z, yaw, halfLength, halfWidth}, its length along (sin yaw, cos yaw)
+    static box(x, z, yaw, size, out = {}) {
+        out.x = x;
+        out.z = z;
+        out.yaw = yaw;
+        out.halfLength = size.length / 2;
+        out.halfWidth = size.width / 2;
+        return out;
+    }
+
+    // The box of a car or a rider of the crew, where its model stands
+    static boxOf(vehicle, out = {}) {
+        const group = vehicle.carGroup || vehicle.bikeGroup;
+        return Traffic.box(group.position.x, group.position.z, group.rotation.y, Traffic.sizeOf(vehicle.carGroup ? 'car' : 'bike', vehicle.model), out);
+    }
+
+    // The box of the player's bike ({position, yawAngle, model})
+    static playerBox(player, out = {}) {
+        return Traffic.box(player.position.x, player.position.z, player.yawAngle, Traffic.sizeOf('bike', player.model), out);
+    }
+
+    // How far two boxes reach into each other along the unit axis (ax, az): negative when they are apart along it
+    static reachAlong(a, b, ax, az) {
+        const reach = o => o.halfLength * Math.abs(Math.sin(o.yaw) * ax + Math.cos(o.yaw) * az) + o.halfWidth * Math.abs(Math.cos(o.yaw) * ax - Math.sin(o.yaw) * az);
+        return reach(a) + reach(b) - Math.abs((b.x - a.x) * ax + (b.z - a.z) * az);
+    }
+
+    // How deep two boxes are in each other: the least of their reach along the four box axes, and 0 when a line passes
+    // between them (two boxes that only touch are 0 deep). The one test for the player against a rider or a car and
+    // for the crew and the cars against each other
+    static overlap(a, b) {
+        let least = Infinity;
+        for (const box of [a, b]) {
+            const sin = Math.sin(box.yaw), cos = Math.cos(box.yaw);
+            least = Math.min(least, Traffic.reachAlong(a, b, sin, cos));
+            if (least <= 0) return 0;
+            least = Math.min(least, Traffic.reachAlong(a, b, cos, -sin));
+            if (least <= 0) return 0;
+        }
+        return least;
+    }
+
     // The touring crew: every character but the one the player rides as (by name), in the order of CHARACTERS
     static crewOf(playerRiderName) {
         return CHARACTERS.filter(character => character.name !== playerRiderName);
@@ -144,34 +262,77 @@ class Traffic {
     worldVehicles() {
         const route = this.environment.route;
         const list = [];
-        for (const car of this.cars) list.push({ vehicle: car, s: route.fromUnits(car.currentSegment + car.segmentProgress), direction: car.direction, half: Roadworks.CAR_HALF_M, brake: LANE_DRIVE.car.brake });
-        for (const bike of this.motorcycles) list.push({ vehicle: bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress), direction: bike.direction, half: Roadworks.BIKE_HALF_M, brake: LANE_DRIVE.bike.brake });
+        for (const car of this.cars) list.push({ vehicle: car, s: route.fromUnits(car.currentSegment + car.segmentProgress), direction: car.direction, half: Roadworks.CAR_HALF_M, brake: LANE_DRIVE.car.brake, speed: car.currentSpeed || 0 });
+        // (a rider that finished the ride is parked out of sight at its end: nothing queues behind it)
+        for (const bike of this.motorcycles) list.push({ vehicle: bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress), direction: bike.direction, half: Roadworks.BIKE_HALF_M, brake: LANE_DRIVE.bike.brake, speed: bike.currentSpeed || 0, parked: !bike.bikeGroup.visible });
         return list;
+    }
+
+    // The player as the traffic behind it reads it: {s, direction, speed, x, z, crashed}, or null off the route. The
+    // direction is the way its bike points along the ride, and the speed its speed that way
+    playerLead(player) {
+        const route = this.environment.route;
+        if (!player || !player.position || !Number.isFinite(player.yawAngle)) return null;
+        const p = player.projection && player.projection.index >= 0 ? player.projection : route.project(player.position.x, player.position.z, this.leadHint || null, this.leadSample || (this.leadSample = {}));
+        if (!(p.index >= 0) || !Number.isFinite(p.s) || Math.abs(p.lateral) > p.width / 2 + 2) return null;
+        this.leadHint = this.leadHint || {};
+        this.leadHint.index = p.index;
+        const along = Math.cos(player.yawAngle - p.heading);
+        const direction = along < 0 ? -1 : 1;
+        return { s: p.s, direction, speed: player.crashed ? 0 : Math.max(0, (player.speed || 0) * along * direction), x: player.position.x, z: player.position.z, off: {} };
+    }
+
+    // How far the player is off the lane line of traffic going in `direction`, across the road (+ is Route.LEFT)
+    leadOff(lead, direction) {
+        if (lead.off[direction] !== undefined) return lead.off[direction];
+        const route = this.environment.route;
+        const lane = route.laneCurve(route.toUnits(lead.s), direction, 0, 0, this.leadLane || (this.leadLane = {}));
+        return (lead.off[direction] = (lead.x - lane.x) * Math.cos(lane.heading) - (lead.z - lane.z) * Math.sin(lane.heading));
     }
 
     // A world's roadworks lights hold traffic at their stop lines, and a vehicle keeps QUEUE_GAP_M behind the one ahead
     // going its way: each vehicle's stopM is the metres it may still move this frame (Infinity when free). The lights
-    // learn what is in each single lane. A leg has no roadworks lights and nothing changes
-    holdForRoadworks() {
-        const works = this.environment.roadworks;
-        if (!works || !this.environment.route.laneCurve) return;
+    // learn what is in each single lane. A leg has no roadworks lights and nothing changes.
+    // Following: planM is the room a vehicle plans its speed by (laneSpeed). It is stopM and the room the vehicle
+    // ahead needs to stop at its own hardest braking, so a vehicle closes up on one that moves and its gap grows with
+    // its speed, and it still stops behind one that stops. `player` (the player's bike) is ahead of every vehicle going
+    // its way whose lane line it is on (CONTACT.follow): the crew brake for it and do not ride into its back. It
+    // holds no vehicle's stopM: a player who cuts in is braked for as hard as the vehicle can, never by a dead stop
+    holdForRoadworks(player = null) {
+        if (!this.environment.route.laneCurve) return;
+        const works = this.environment.roadworks || null;
         const list = this.worldVehicles();
         // The rider near a site is one of the queue and one of the lane's vehicles (Roadworks.riderEntry)
-        const rider = works.riderEntry ? works.riderEntry() : null;
+        const rider = works && works.riderEntry ? works.riderEntry() : null;
         const queue = rider ? list.concat(rider) : list;
-        works.occupy(queue);
+        if (works) works.occupy(queue);
+        const lead = this.playerLead(player);
+        // A player who is moving is followed as a player ahead is, below. As one of the queue it held every vehicle
+        // behind it along the ride wherever it was across the road, so a rider the player passed on the way into a
+        // site stood still at once. A player who stands or crawls there is still one of the queue
+        const moving = !!lead && lead.speed > CONTACT.follow.queueMs;
         for (const v of list) {
-            let hold = works.stopDistance(v.vehicle, v.s, v.direction, v.half, v.vehicle.currentSpeed || 0, v.brake * 0.9);
+            let hold = works ? works.stopDistance(v.vehicle, v.s, v.direction, v.half, v.vehicle.currentSpeed || 0, v.brake * 0.9) : Infinity;
+            let plan = hold;
             for (const o of queue) {
-                if (o === v || o.direction !== v.direction) continue;
+                if (o === v || o.direction !== v.direction || o.parked || (o.rider && moving)) continue;
                 const ahead = (o.s - v.s) * v.direction;
                 if (ahead <= 0) continue;
-                hold = Math.min(hold, ahead - v.half - o.half - Roadworks.QUEUE_GAP_M);
+                const room = ahead - v.half - o.half - Roadworks.QUEUE_GAP_M;
+                hold = Math.min(hold, room);
+                plan = Math.min(plan, room + (o.speed > 0 ? o.speed * o.speed / (2 * o.brake) : 0));
+            }
+            if (lead && lead.direction === v.direction) {
+                const ahead = (lead.s - v.s) * v.direction;
+                if (ahead > CONTACT.follow.aheadM && Math.abs(this.leadOff(lead, v.direction) - (v.vehicle.nudge || 0)) < CONTACT.follow.bandM) {
+                    plan = Math.min(plan, ahead - v.half - Roadworks.BIKE_HALF_M - Roadworks.QUEUE_GAP_M + lead.speed * lead.speed / (2 * CONTACT.follow.playerBrake));
+                }
             }
             v.vehicle.stopM = hold;
+            v.vehicle.planM = plan;
             // In a single lane the queue's own gap keeps the vehicles apart: the spacing rule's half speed
             // (temporarySlowdown) made a queue clear a long lane at walking pace, and the far light stayed red for it
-            v.vehicle.inSingleLane = works.closed.some(site => v.s + v.half > site.stopIn && v.s - v.half < site.stopOut);
+            v.vehicle.inSingleLane = !!works && works.closed.some(site => v.s + v.half > site.stopIn && v.s - v.half < site.stopOut);
         }
     }
 
@@ -180,9 +341,14 @@ class Traffic {
         const works = this.environment.roadworks;
         if (!works || !this.environment.route.laneCurve) return;
         const route = this.environment.route;
-        for (const v of this.worldVehicles()) {
-            const s = works.clearOf(v.s, v.direction, v.half);
+        const list = this.worldVehicles();
+        for (const v of list) {
+            let s = works.clearOf(v.s, v.direction, v.half);
             if (s === v.s) continue;
+            // Several moved out of one lane stand behind each other before its entry, not in each other
+            const taken = at => list.some(o => o !== v && o.direction === v.direction && !o.parked && Math.abs(o.s - at) < v.half + o.half + Roadworks.QUEUE_GAP_M);
+            while (taken(s) && s > 0 && s < route.length) s -= v.direction * (2 * v.half + Roadworks.QUEUE_GAP_M);
+            v.s = s;
             const u = route.toUnits(Math.max(0, Math.min(route.length, s)));
             v.vehicle.currentSegment = Math.floor(u);
             v.vehicle.segmentProgress = u - Math.floor(u);
@@ -336,20 +502,25 @@ class Traffic {
         });
     }
 
-    update(deltaTime, playerPosition, playerSegment = null) {
+    // `player` is the player's bike (Vehicle: position, yawAngle, speed, crashed, worldCrash). With it a world's
+    // traffic keeps off the player's back and the crew can be touched (contact); without it, and on a leg, nothing of
+    // either
+    update(deltaTime, playerPosition, playerSegment = null, player = null) {
         let collisionResult = null;
+        const world = !!this.environment.route.laneCurve;
+        const mine = world && player ? Traffic.playerBox(player, this.playerSample || (this.playerSample = {})) : null;
         
         // Cars light their lamps when the rider does: the game sets lightLevel to its headlight strength (on in the dark,
         // and in a world's rain or snow by day)
         const lamps = Traffic.headlightsOn(this.lightLevel);
-        this.holdForRoadworks();
+        this.holdForRoadworks(player);
 
         // Update all cars
         this.cars.forEach(car => {
             car.setHeadlights(lamps);
             car.update(deltaTime);
             
-            if (!collisionResult && car.checkCollision(playerPosition)) {
+            if (!collisionResult && car.checkCollision(playerPosition, mine)) {
                 car.onCollision();
                 collisionResult = { hit: true, car: car };
             }
@@ -359,11 +530,6 @@ class Traffic {
         this.motorcycles.forEach(motorcycle => {
             motorcycle.update(deltaTime, playerPosition, this.motorcycles, this.cars);
             
-            // Collisions with AI motorcycles disabled
-            // if (!collisionResult && motorcycle.checkCollision(playerPosition)) {
-            //     motorcycle.onCollision();
-            //     collisionResult = { hit: true, vehicle: motorcycle };
-            // }
         });
 
         // After the riders moved: their visibility is the window's
@@ -372,6 +538,10 @@ class Traffic {
         if (collisionResult) {
             return collisionResult;
         }
+
+        // The player against the crew of a world: a bump or a crash (a leg's riders are not solid: they chase and pass
+        // the player by the legs' own rules, which would run them into its back)
+        const touched = mine ? this.contact(player, mine, deltaTime) : null;
         
         // Check spacing between cars going same direction
         for (let i = 0; i < this.cars.length; i++) {
@@ -407,7 +577,133 @@ class Traffic {
             }
         }
         
-        return { hit: false };
+        return touched ? { hit: false, rider: touched } : { hit: false };
+    }
+
+    // The player's bike against each rider of the crew, after both have moved (CONTACT). Where the two boxes are in
+    // each other:
+    // - the rider ran into the player's back (the following rule failed it): the rider takes the player's speed and
+    //   drops back clear. Nothing is lost by the player, and it is never a crash: the player could not see it coming;
+    // - closing faster than CONTACT.hardMs along the line of the contact (across the road when side by side, along it
+    //   end to end): the player crashes, with the rider's name as the cause. The rider slows hard, shakes and rides on;
+    // - slower: a bump. The player is set clear of the rider and loses a little speed, the bike wobbles, and the rider
+    //   moves off its line away from the player. One contact is one bump (cooldownS): until then the boxes are only
+    //   held apart.
+    // Returns {kind: 'crash' | 'bump' | 'rear', bike, name} for the frame's contact, or null.
+    contact(player, mine, deltaTime) {
+        this.bumpS = Math.max(0, (this.bumpS || 0) - deltaTime);
+        if (player.contactWobble) {
+            player.contactWobble *= Math.exp(-deltaTime / CONTACT.bump.wobbleFadeS);
+            if (Math.abs(player.contactWobble) < 1e-3) player.contactWobble = 0;
+        }
+        const theirs = this.riderSample || (this.riderSample = {});
+        let event = null;
+        for (const bike of this.motorcycles) {
+            const at = bike.bikeGroup.position;
+            const near = Math.hypot(player.position.x - at.x, player.position.z - at.z) < CONTACT.nudge.holdM;
+            // A rider off its line comes back only when the player is not there to be turned into
+            bike.nudgeFree = !near || !!player.crashed;
+            if (!near || player.crashed || !bike.bikeGroup.visible || bike.ghostS > 0) continue;
+            if (Math.abs(player.position.y - at.y) > CONTACT.heightM) continue;
+            Traffic.boxOf(bike, theirs);
+            if (!(Traffic.overlap(mine, theirs) > 0)) continue;
+            event = this.touch(player, bike, mine, theirs) || event;
+            if (player.crashed) break;
+            Traffic.playerBox(player, mine);
+        }
+        return event;
+    }
+
+    touch(player, bike, mine, theirs) {
+        const fx = Math.sin(theirs.yaw), fz = Math.cos(theirs.yaw), lx = fz, lz = -fx;
+        const dx = mine.x - theirs.x, dz = mine.z - theirs.z;
+        const along = dx * fx + dz * fz, side = dx * lx + dz * lz;
+        const speed = player.speed || 0;
+        const pvx = speed * Math.sin(player.yawAngle), pvz = speed * Math.cos(player.yawAngle);
+        const playerAlong = pvx * fx + pvz * fz;
+        // The line of the contact (CONTACT.hardMs), from the rider toward the player, and how fast the two close along it
+        const deepSide = Traffic.reachAlong(mine, theirs, lx, lz), deepAlong = Traffic.reachAlong(mine, theirs, fx, fz);
+        const beside = deepSide <= deepAlong;
+        const sign = (beside ? side : along) >= 0 ? 1 : -1;
+        const nx = (beside ? lx : fx) * sign, nz = (beside ? lz : fz) * sign;
+        const closing = beside ? -(pvx * lx + pvz * lz) * sign : -(playerAlong - bike.currentSpeed) * sign;
+        const deep = Math.min(deepSide, deepAlong) + CONTACT.bump.clearM;
+        const result = { kind: 'bump', bike, name: bike.riderName, closing };
+
+        if (!beside && along > 0 && playerAlong > 0) {
+            bike.currentSpeed = Math.min(bike.currentSpeed, playerAlong);
+            bike.dropBack(deep);
+            result.kind = 'rear';
+            return result;
+        }
+        // The rider gives way across the road, away from the player (AIMotorcycle.update moves it there)
+        bike.nudgeWant = bike.nudgeRoom((bike.nudge || 0) - (side >= 0 ? 1 : -1) * CONTACT.bump.shoveM);
+        bike.nudgeFree = false;
+        if (closing > CONTACT.hardMs) {
+            const kick = closing * CONTACT.crash.throw;
+            if (player.velocity && player.velocity.set) player.velocity.set(fx * bike.currentSpeed + nx * kick, 0, fz * bike.currentSpeed + nz * kick);
+            player.isJumping = false;
+            player.worldCrash(`Rode into ${bike.riderName}`, 'lowside');
+            bike.shakenS = CONTACT.crash.slowS;
+            bike.shakeT = 0;
+            bike.ghostS = CONTACT.crash.ghostS;
+            this.bumpS = CONTACT.bump.cooldownS;
+            result.kind = 'crash';
+            return result;
+        }
+        player.position.x += nx * deep;
+        player.position.z += nz * deep;
+        if (this.bumpS > 0) return null;
+        this.bumpS = CONTACT.bump.cooldownS;
+        // (end to end the player was the faster: it comes down to the rider's speed as well)
+        player.speed = Math.max(0, Math.min(speed * CONTACT.bump.keep, beside ? Infinity : speed - Math.max(0, closing)));
+        // The bike rolls away from the rider (a lean to the bike's own right is positive)
+        const left = Math.cos(player.yawAngle) * nx - Math.sin(player.yawAngle) * nz;
+        player.contactWobble = (player.contactWobble || 0) + (left <= 0 ? 1 : -1) * CONTACT.bump.wobble;
+        return result;
+    }
+
+    // Every pair of boxes that are in each other among the crew in sight, the cars and (when given) the player:
+    // [{a, b, deep}]. The following rule keeps this empty; the tests and a console read it
+    overlaps(player = null) {
+        const all = [...this.motorcycles.filter(bike => bike.bikeGroup.visible), ...this.cars.filter(car => car.carGroup.visible)];
+        const boxes = all.map(vehicle => Traffic.boxOf(vehicle));
+        if (player) { all.push(player); boxes.push(Traffic.playerBox(player)); }
+        const found = [];
+        for (let i = 0; i < all.length; i++) {
+            for (let j = i + 1; j < all.length; j++) {
+                const deep = Traffic.overlap(boxes[i], boxes[j]);
+                if (deep > 0) found.push({ a: all[i], b: all[j], deep });
+            }
+        }
+        return found;
+    }
+
+    // Where the player is put down (a restart, a debug skip) no rider of a world's crew is in it or about to be
+    // (CONTACT.restart): one beside the place moves to the first free place ahead, by a fixed rule with no random
+    // draw; one close behind takes the speed its place allows; one near cannot be hit for a moment
+    clearRiders(s) {
+        const route = this.environment.route;
+        if (!route.laneCurve) return;
+        const rule = CONTACT.restart;
+        const range = legSegmentRange(this.environment);
+        const sOf = bike => route.fromUnits(bike.currentSegment + bike.segmentProgress);
+        const riders = this.motorcycles.filter(bike => bike.direction === 1 && bike.bikeGroup.visible);
+        for (const bike of riders) {
+            const ahead = sOf(bike) - s;
+            if (ahead < -rule.settleM || ahead > Math.max(rule.aheadM, rule.ghostM)) continue;
+            if (Math.abs(ahead) <= rule.ghostM) bike.ghostS = CONTACT.crash.ghostS;
+            bike.nudge = 0;
+            bike.nudgeWant = 0;
+            bike.laneMoving = false;
+            if (ahead < -rule.backM || ahead > rule.aheadM) continue;
+            let slot = s + rule.slotM;
+            while (riders.some(other => other !== bike && Math.abs(sOf(other) - slot) < rule.placeM)) slot += rule.placeM;
+            const u = Math.min(range.end, route.toUnits(Math.min(route.length, slot)));
+            bike.currentSegment = Math.floor(u);
+            bike.segmentProgress = u - Math.floor(u);
+            bike.updatePosition();
+        }
     }
     
 
@@ -427,6 +723,7 @@ class Traffic {
             car.laneMoving = false;
             car.updatePosition();
         });
+        this.clearRiders(this.environment.route.fromUnits(segment));
         this.clearOfRoadworks();
     }
 
@@ -1081,10 +1378,13 @@ class Car {
         this.currentSpeed = Math.min(this.currentSpeed, this.baseSpeed * 0.5);
     }
     
-    checkCollision(playerPosition) {
+    // `box` is the player's bike in a world (Traffic.playerBox): the car is hit where its body is, box against box. A
+    // leg has the ball about the car's origin, as before
+    checkCollision(playerPosition, box = null) {
         const dx = this.carGroup.position.x - playerPosition.x;
         const dy = this.carGroup.position.y - playerPosition.y;
         const dz = this.carGroup.position.z - playerPosition.z;
+        if (box) return Math.abs(dy - 0.32) <= CONTACT.heightM && Traffic.overlap(box, Traffic.boxOf(this, this.boxSample || (this.boxSample = {}))) > 0;
         const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
         
         // More accurate collision detection considering actual vehicle sizes
@@ -1666,14 +1966,16 @@ class AIMotorcycle {
         const u = this.currentSegment + this.segmentProgress;
         const lane = this.laneSample || (this.laneSample = {});
         route.laneCurve(u, this.direction, 0, 0, lane);
-        let extra = 0, extraRate = 0;
+        // (a rider bumped by the player is `nudge` off its line for a while: Traffic.touch, stepNudge)
+        let extra = this.nudge || 0, extraRate = 0;
         if (this.overtaking) {
             const p = Math.PI * this.overtakeProgress, sin = Math.sin(p);
             const toCentre = -Route.keepRight(this.direction) * AIMotorcycle.PASS_SWING_M;
-            extra = toCentre * sin ** 4;
+            extra += toCentre * sin ** 4;
             extraRate = toCentre * 4 * sin ** 3 * Math.cos(p) * Math.PI / AIMotorcycle.PASS_M * lane.metres * this.direction;
-            route.laneCurve(u, this.direction, extra, extraRate, lane);
         }
+        if (extra !== 0 || extraRate !== 0) route.laneCurve(u, this.direction, extra, extraRate, lane);
+        this.laneExtra = extra;
         this.bikeGroup.position.set(lane.x, lane.y, lane.z);
         this.bikeGroup.rotation.y = this.direction === 1 ? lane.heading : lane.heading + Math.PI;
         const curvature = lane.curvature * this.direction;
@@ -1682,7 +1984,44 @@ class AIMotorcycle {
         const maxLean = Math.PI / 3;
         this.leanAngle = Math.max(-maxLean, Math.min(maxLean, this.leanAngle));
         this.bikeGroup.rotation.z = this.leanAngle;
+        // A rider the player rode into shakes while it slows (CONTACT.crash), less as it gathers itself
+        if (this.shakenS > 0) this.bikeGroup.rotation.z += CONTACT.crash.wobble * Math.sin(2 * Math.PI * CONTACT.crash.wobbleHz * (this.shakeT || 0)) * this.shakenS / CONTACT.crash.slowS;
         this.leanRider();
+    }
+
+    // Where a rider may be off its lane line, for a `want` of metres (+ is Route.LEFT): at most CONTACT.nudge.mostM,
+    // its box on its own half of the road and on the carriageway, and on its line in a roadworks single lane
+    nudgeRoom(want) {
+        const route = this.environment.route;
+        if (this.inSingleLane || !this.laneSample || !route.laneCurve) return 0;
+        const most = CONTACT.nudge.mostM, half = Traffic.sizeOf('bike', this.model).width / 2 + 0.1;
+        const base = this.laneSample.lateral - (this.laneExtra || 0);
+        const own = Math.sign(base) || Route.keepRight(this.direction);
+        const width = route.sample(route.fromUnits(this.currentSegment + this.segmentProgress), this.widthSample || (this.widthSample = {})).width;
+        if (width / 2 - half < half) return 0;
+        const at = Math.max(half, Math.min(width / 2 - half, (base + Math.max(-most, Math.min(most, want))) * own));
+        return at * own - base;
+    }
+
+    // The rider moves toward where a bump sent it while the player is beside it, and back to its line once the player
+    // has gone (Traffic.contact sets nudgeFree): never across the road toward a bike that is there
+    stepNudge(deltaTime) {
+        const held = this.nudgeFree === false;
+        const want = held ? this.nudgeWant || 0 : 0, now = this.nudge || 0;
+        if (now === want) return;
+        const most = (held ? CONTACT.bump.shoveMs : CONTACT.nudge.backMs) * deltaTime;
+        this.nudge = now + Math.max(-most, Math.min(most, want - now));
+        if (!held && this.nudge === 0) this.nudgeWant = 0;
+    }
+
+    // Back along its lane line by `metres`: a rider that came into the player's back stands clear of it again
+    dropBack(metres) {
+        const route = this.environment.route;
+        const lane = route.laneCurve(this.currentSegment + this.segmentProgress, this.direction, 0, 0, this.stepSample || (this.stepSample = {}));
+        const u = Math.max(0, this.currentSegment + this.segmentProgress - this.direction * metres / Math.max(lane.metres, 0.05));
+        this.currentSegment = Math.floor(u);
+        this.segmentProgress = u - Math.floor(u);
+        this.updatePosition();
     }
     
     // A rider of the crew in a world rides the road it is on at its own pace for that kind of road: its base speed, and
@@ -1765,10 +2104,13 @@ class AIMotorcycle {
                 this.currentSpeed = Math.min(this.currentSpeed, nearestBikeAhead.currentSpeed);
             }
             
-            // Small lateral variation for pack dynamics (a leg's: a world rider keeps its lane line)
-            if (!this.packLateralOffset) this.packLateralOffset = 0;
-            const targetOffset = (Math.random() - 0.5) * 1.5;
-            this.packLateralOffset += (targetOffset - this.packLateralOffset) * 0.05;
+            // Small lateral variation for pack dynamics. A leg's: a world rider keeps its lane line and never read it,
+            // so a world draws nothing here (it drew from Math.random each frame a rider was in a pack)
+            if (!world) {
+                if (!this.packLateralOffset) this.packLateralOffset = 0;
+                const targetOffset = (Math.random() - 0.5) * 1.5;
+                this.packLateralOffset += (targetOffset - this.packLateralOffset) * 0.05;
+            }
         } else if (playerPosition && world) {
             // A world rider never races the player: it starts no pass because the player is near, and it does not
             // speed up while the player is alongside or coming past (the leg rule below did both, and the pass swings
@@ -1801,6 +2143,17 @@ class AIMotorcycle {
             this.packLateralOffset = 0;
         }
         
+        if (world) {
+            // A rider the player rode into slows hard for a moment and cannot be hit again until it has ridden clear
+            if (this.ghostS > 0) this.ghostS = Math.max(0, this.ghostS - deltaTime);
+            if (this.shakenS > 0) {
+                this.shakenS = Math.max(0, this.shakenS - deltaTime);
+                this.shakeT = (this.shakeT || 0) + deltaTime;
+                this.currentSpeed = Math.min(this.currentSpeed, this.baseSpeed * CONTACT.crash.slowTo);
+            }
+            this.stepNudge(deltaTime);
+        }
+
         // A world rider eases toward what the pack asks, no faster than it can brake for the bends ahead
         if (world) this.currentSpeed = laneSpeed(route, this, previousSpeed, this.currentSpeed, this.drive || LANE_DRIVE.bike, deltaTime);
 

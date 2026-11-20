@@ -3743,8 +3743,9 @@ class Vehicle {
             // Normal lean
             // The world pitches the bike to the road; a leg stays level
             // On a roadworks ramp the bike pitches to its slope; a knocked beacon or cone leaves a wobble (Roadworks.ride)
+            // (and a bump against a rider of the crew: Traffic.touch)
             this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) - (this.roadworksSurface ? this.rampPitch || 0 : 0) : 0;
-            this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) + (this.roadworksWobble || 0) : this.leanAngle;
+            this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) + (this.roadworksWobble || 0) + (this.contactWobble || 0) : this.leanAngle;
             // The rider's body goes into the turn as that rider does (CHARACTERS bodyLean)
             this.leanRider(1);
 
@@ -4083,6 +4084,7 @@ class Vehicle {
         this.footT = 0; // The stop pose snaps off: a reset rides away
         this.tipTimerS = 0;
         this.crashCause = null;
+        this.contactWobble = 0;
         this.landFastS = 0;
         this.landSteepS = 0;
         this.landAlong = 0;

@@ -3507,7 +3507,16 @@ class Game {
         // Update traffic
         if (this.traffic) {
             this.traffic.lightLevel = this.headlightStrength || 0;
-            const collision = this.traffic.update(deltaTime, this.vehicle.position, Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)));
+            const collision = this.traffic.update(deltaTime, this.vehicle.position, Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)), this.vehicle);
+            // A rider of a world's crew touched (Traffic.contact): a crash says whom the player rode into (the crash
+            // was set after vehicle.update(), as the car's below), a bump says who was bumped
+            const touched = collision && collision.rider;
+            if (touched && touched.kind === 'crash' && !this.finished) {
+                this.soundManager.playCrashSound();
+                this.showCrashNotification(this.vehicle.crashCause || undefined);
+            } else if (touched && touched.kind === 'bump' && !this.finished) {
+                showCallout(`Bumped ${touched.name}`, 'warn', 1200);
+            }
             // The roadworks leave one corridor for both directions, so a car
             // on its detour (which starts before the zone and ends after it)
             // cannot be avoided: no crash against it
