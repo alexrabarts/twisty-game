@@ -2999,11 +2999,12 @@ class Game {
 
     focusRiderShowcase(focusId) {
         this.showcaseFocusId = focusId;
-        // Only the bike in view is fetched: the others keep their procedural
-        // stand-in until they are focused (BikeModels.dress fetches once),
-        // and a locked rider's silhouette never needs the file
+        // Only the bike in view is fetched: the others keep their stand-in
+        // (their own far level when the file is in memory, else procedural)
+        // until they are focused (BikeModels.dress fetches once), and a
+        // locked rider's silhouette never needs the file
         const v = this.showcaseBikes && this.showcaseBikes[focusId];
-        if (v && !v.modelled && !v.dressing && this.riderTier(focusId) !== 'silhouette' && typeof BikeModels !== 'undefined') {
+        if (v && (!v.modelled || v.far) && !v.dressing && this.riderTier(focusId) !== 'silhouette' && typeof BikeModels !== 'undefined') {
             v.dressing = true;
             BikeModels.dress(v);
         }
@@ -3022,12 +3023,12 @@ class Game {
     }
 
     // One character's bike on the rider-select stage at `x`: their chosen
-    // bike, built procedural only (focusRiderShowcase dresses it), shaded by
-    // the rider's unlock tier
+    // bike as a stand-in (focusRiderShowcase dresses it), shaded by the
+    // rider's unlock tier
     buildShowcaseBike(c, x) {
         const bikeId = this.tourSystem.getSelectedBike ? this.tourSystem.getSelectedBike(c.id) : null;
         const outfit = this.tourSystem.getSelectedOutfit ? this.tourSystem.getSelectedOutfit(c.id) : null;
-        const v = new Vehicle(this.scene, null, c, bikeId, { model: false, outfit });
+        const v = new Vehicle(this.scene, null, c, bikeId, { model: 'far', outfit });
         // Stage far below the world so previews never collide with track geometry
         v.position.set(x, -400, 0);
         v.yawAngle = 0;

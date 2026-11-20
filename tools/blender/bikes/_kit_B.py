@@ -28,6 +28,7 @@ from mathutils import Vector  # noqa: E402
 import bike_parts as parts  # noqa: E402,F401
 from bike_kit import LOW, MATERIALS, Kit, render  # noqa: E402
 from common import ASSETS  # noqa: E402
+import far  # noqa: E402
 
 OUT_DIR = os.path.join(ASSETS, "bikes", "detail")
 LOD0_BUDGET = 40000
@@ -666,6 +667,8 @@ def make(name, build, colours=None, anchors=None, seed=11, alone=("wheel_front",
             f.write(json.dumps({"name": name, "lod0": total["lod0"], "lod1": total["lod1"], "bytes": size, "nodes": counts}) + "\n")
     if total["lod0"] > LOD0_BUDGET or total["lod1"] > LOD1_BUDGET or size > SIZE_BUDGET:
         raise SystemExit(f"{name}: over budget (lod0 {total['lod0']}/{LOD0_BUDGET}, lod1 {total['lod1']}/{LOD1_BUDGET}, {size}/{SIZE_BUDGET} bytes)")
+    # The bike as the touring crew ride it, from the file just written (far.py)
+    far.bike(out)
     return kits["lod0"]
 
 

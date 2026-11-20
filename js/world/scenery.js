@@ -137,7 +137,9 @@ class Scenery {
     // (200 000 until the far land took about 50 000 of the window: js/world/horizon.js FarLand)
     // (140 000 until the tufts beside the road took 2 000, TUFT_CAP, and the window stood 2 600 over its budget at
     // km 4, where this cap is what holds the trees: world-budget)
-    static get TRIANGLE_CAP() { return 134000; }
+    // (134 000 until the touring crew rode their own bikes: five riders at about 3 100 triangles each, 15 500, where
+    // the window had counted four procedural bikes, 10 300, and stood 1 400 over at km 4 with a fifth)
+    static get TRIANGLE_CAP() { return 128000; }
     // Boulders on rock and scree, nearest first (20 triangles each)
     static get BOULDER_CAP() { return 160; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take

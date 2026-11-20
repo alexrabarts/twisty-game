@@ -469,7 +469,8 @@ const BIKE_MODELS = {
     bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
     bike16_superadv: { kind: 'adventure', cls: 'adventure', offroad: 0.5, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
 };
-Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, keepFileColours: true }));
+// `far` is the bike as the touring crew ride it, a light file of its own made from the detail file (tools/blender/far.py)
+Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, far: `assets/bikes/far/${id}.glb`, keepFileColours: true }));
 
 class Vehicle {
     // The layer a mesh the camera is inside is moved to: the camera draws layer 0 only
@@ -531,9 +532,10 @@ class Vehicle {
 
     constructor(scene, onWheelieScore = null, character = null, bikeId = null, options = {}) {
         this.scene = scene;
-        // { model: false } builds the procedural bike only; the caller dresses
-        // it when it is shown (the rider select, which fetches only the bike
-        // in view)
+        // { model: false } builds the procedural bike only. { model: 'far' } is
+        // the rider select's bike, which the caller dresses when it is looked
+        // at (only the bike in view is fetched): until then it is drawn from
+        // its own far level if its file is in memory, else procedural
         this.options = options;
         this.onWheelieScore = onWheelieScore;
 
@@ -714,7 +716,10 @@ class Vehicle {
         // The Blender-made bike and rider take the place of the parts built
         // above once their files are in; until then, and if a file fails,
         // the procedural model is the bike
-        if (typeof BikeModels !== 'undefined' && this.options.model !== false) BikeModels.dress(this);
+        // { model: 'far' } is the stand-in of a bike that is shown but not looked at: the bike's own far level
+        // when its file is in memory, and the parts built above the first time
+        if (typeof BikeModels !== 'undefined' && this.options.model === 'far') BikeModels.standIn(this);
+        else if (typeof BikeModels !== 'undefined' && this.options.model !== false) BikeModels.dress(this);
     }
 
     buildSportBike() {
@@ -954,11 +959,8 @@ class Vehicle {
 
         // ---- Rider: full racing tuck with aero hump and knee sliders ----
         this.buildVariantRider({
-            y: 1.06, z: -0.08, torsoLean: 0.72,
-            suitColor: 0x16161c, suitAccent: P.paintHex,
-            helmetColor: 0xf0f0f2, helmetAccent: P.paintHex, style: 'race',
-            hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05],
-            elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13
+            ...Vehicle.BIKES.sport.seat,
+            suitColor: 0x16161c, suitAccent: P.paintHex, helmetColor: 0xf0f0f2, helmetAccent: P.paintHex
         });
     }
 
@@ -1376,28 +1378,12 @@ class Vehicle {
     // draw (the styles, the trim colours, the neck tube, the build) goes to
     // the modelled rider through riderSpec.
     buildVariantRider(options = {}) {
-        const {
-            y = 1.15, z = -0.1, torsoLean = 0.15,
-            suitColor = 0x141418, suitAccent = 0x3a414d,
-            helmetColor = 0xf0f0f0, helmetAccent = 0xffffff,
-            helmetTrim = helmetAccent, helmetStyle = null,
-            gloveColor = 0x101014, pantsColor = suitColor, pantsAccent = suitAccent,
-            bootColor = gloveColor, bootAccent = suitAccent, backpackColor = null,
-            style = 'road',
-            hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
-            elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16,
-            scarfColor = null, scarfBikes = [],
-            ...gear
-        } = { ...options, ...(this.outfit ? this.outfit.kit : this.character.kit) };
-        // A scarf is worn only on the bikes the kit names
-        const scarf = scarfColor !== null && scarfBikes.includes(this.model) ? scarfColor : null;
         // The pose and colours, kept for the modelled rider (js/bikemodels.js)
-        this.riderSpec = {
-            ...gear, build: this.character.build || null,
-            y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent,
-            helmetTrim, helmetStyle, gloveColor, pantsColor, pantsAccent, bootColor, bootAccent, backpackColor,
-            style, hand, foot, elbowOut, kneeOut, kneeForward, scarf
-        };
+        this.riderSpec = Vehicle.riderSpec({ ...options, ...(this.outfit ? this.outfit.kit : this.character.kit) }, this.character, this.model);
+        const {
+            y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent, gloveColor, pantsColor, bootColor, bootAccent,
+            backpackColor, style, hand, foot, elbowOut, kneeOut, kneeForward, scarf
+        } = this.riderSpec;
         const suitMaterial = new THREE.MeshStandardMaterial({
             color: suitColor, roughness: 0.85, metalness: 0.0
         });
@@ -1887,11 +1873,8 @@ class Vehicle {
 
         // Upright touring rider in ADV gear
         this.buildVariantRider({
-            y: 1.22, z: -0.12, torsoLean: 0.18,
-            suitColor: 0x2f3640, suitAccent: P.paintHex,
-            helmetColor: 0xe8e6dd, helmetAccent: 0x2f3640, style: 'adv',
-            hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06],
-            elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2
+            ...Vehicle.BIKES.adventure.seat,
+            suitColor: 0x2f3640, suitAccent: P.paintHex, helmetColor: 0xe8e6dd, helmetAccent: 0x2f3640
         });
     }
 
@@ -2029,11 +2012,8 @@ class Vehicle {
 
         // Relaxed commuter: upright, feet forward on the floorboard
         this.buildVariantRider({
-            y: 1.16, z: -0.18, torsoLean: 0.08,
-            suitColor: 0x3a3f4a, suitAccent: 0xd6d8dc,
-            helmetColor: 0xe8e8ea, helmetAccent: 0x9aa0a8, style: 'commuter',
-            hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42],
-            elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3
+            ...Vehicle.BIKES.scooter.seat,
+            suitColor: 0x3a3f4a, suitAccent: 0xd6d8dc, helmetColor: 0xe8e8ea, helmetAccent: 0x9aa0a8
         });
     }
 
@@ -2164,11 +2144,8 @@ class Vehicle {
         // ---- Rider: upright on a naked bike, hands wide on the bar. The
         // colours are a plain default; a character's kit dresses them. ----
         this.buildVariantRider({
-            y: 1.12, z: -0.12, torsoLean: 0.22,
-            suitColor: 0x16161c, suitAccent: P.accentHex,
-            helmetColor: 0xf0f0f2, helmetAccent: 0x16161c, style: 'road',
-            hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0],
-            elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18
+            ...Vehicle.BIKES.naked.seat,
+            suitColor: 0x16161c, suitAccent: P.accentHex, helmetColor: 0xf0f0f2, helmetAccent: 0x16161c
         });
     }
 
@@ -2322,11 +2299,8 @@ class Vehicle {
 
         // Attack-posture rider in MX gear: up off the seat, elbows high
         this.buildVariantRider({
-            y: 1.22, z: -0.02, torsoLean: 0.45,
-            suitColor: 0x1e2026, suitAccent: P.paintHex,
-            helmetColor: P.paintHex, helmetAccent: 0xeceff1, style: 'mx',
-            hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06],
-            elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22
+            ...Vehicle.BIKES.dirt.seat,
+            suitColor: 0x1e2026, suitAccent: P.paintHex, helmetColor: P.paintHex, helmetAccent: 0xeceff1
         });
     }
 
@@ -4734,11 +4708,37 @@ class Vehicle {
 // is the kind itself (BIKE_MODELS `offroad`); a detailed bike keeps its own,
 // whatever kind stands in for it
 Vehicle.BIKES = {
-    sport: { build: 'buildSportBike', stand: 0.16 },
-    adventure: { build: 'buildAdventureBike', stand: 0.16, offroad: 0.6 },
-    scooter: { build: 'buildScooter', stand: 0.08 },
-    dirt: { build: 'buildDirtBike', stand: 0.24, offroad: 1 },
-    naked: { build: 'buildNakedBike', stand: 0.16 }
+    sport: { build: 'buildSportBike', stand: 0.16, seat: { y: 1.06, z: -0.08, torsoLean: 0.72, style: 'race', hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05], elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13 } },
+    adventure: { build: 'buildAdventureBike', stand: 0.16, offroad: 0.6, seat: { y: 1.22, z: -0.12, torsoLean: 0.18, style: 'adv', hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06], elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2 } },
+    scooter: { build: 'buildScooter', stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
+    dirt: { build: 'buildDirtBike', stand: 0.24, offroad: 1, seat: { y: 1.22, z: -0.02, torsoLean: 0.45, style: 'mx', hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06], elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22 } },
+    naked: { build: 'buildNakedBike', stand: 0.16, seat: { y: 1.12, z: -0.12, torsoLean: 0.22, style: 'road', hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0], elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18 } }
+};
+
+// A rider's pose and colours for the modelled rider (js/bikemodels.js) from a kind's `seat` or a builder's own
+// options with an outfit's kit laid over them. Gear a kit leaves out takes these colours. A scarf is worn only on
+// the bikes the kit names. One rule for the rider the player rides as and for a rider of the group.
+Vehicle.riderSpec = (options, character, model) => {
+    const {
+        y = 1.15, z = -0.1, torsoLean = 0.15,
+        suitColor = 0x141418, suitAccent = 0x3a414d,
+        helmetColor = 0xf0f0f0, helmetAccent = 0xffffff,
+        helmetTrim = helmetAccent, helmetStyle = null,
+        gloveColor = 0x101014, pantsColor = suitColor, pantsAccent = suitAccent,
+        bootColor = gloveColor, bootAccent = suitAccent, backpackColor = null,
+        style = 'road',
+        hand = [0.19, -0.05, 0.6], foot = [0.2, -0.66, -0.05],
+        elbowOut = 0.07, kneeOut = 0.05, kneeForward = 0.16,
+        scarfColor = null, scarfBikes = [],
+        ...gear
+    } = options;
+    const scarf = scarfColor !== null && scarfBikes.includes(model) ? scarfColor : null;
+    return {
+        ...gear, build: (character && character.build) || null,
+        y, z, torsoLean, suitColor, suitAccent, helmetColor, helmetAccent,
+        helmetTrim, helmetStyle, gloveColor, pantsColor, pantsAccent, bootColor, bootAccent, backpackColor,
+        style, hand, foot, elbowOut, kneeOut, kneeForward, scarf
+    };
 };
 
 // Mirrors a bike built with +x on the rider's right, as the procedural

@@ -156,16 +156,3 @@ describe.each(Object.keys(game.Vehicle.BIKES))('the procedural %s', kind => {
         expect(ahead.x).toBeGreaterThan(0);
     });
 });
-
-describe('the touring crew\'s bike', () => {
-    test('carries its chain on the rider\'s left', async () => {
-        await game.BikeModels.preload([]);
-        const bike = new game.AIMotorcycle(new THREE.Scene(), null, { color: 0x0000ff, style: 'sport', riderName: 'Steve', helmetColor: 0xffffff, suitColor: 0x222222 });
-        expect(bike.modelled).toBe(true);
-        bike.bikeGroup.position.set(0, 0, 0);
-        bike.bikeGroup.rotation.set(0, 0, 0);
-        const body = triangles(bike.bikeGroup.children.find(child => child.name === 'body'));
-        expect(chainSide(body, [0.3, -0.7])).toBe(LEFT);
-        bike.remove();
-    });
-});

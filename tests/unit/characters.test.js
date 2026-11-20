@@ -525,6 +525,23 @@ describe('the outfits', () => {
         expect(differ(plain, backView(real, new real.Vehicle(new real.THREE.Scene(), null, guy)))).toBeLessThan(APART_CM2);
     });
 
+    test('the light rider (the crew\'s, and a stand-in\'s) keeps each first outfit\'s mark from behind, and no two look alike', async () => {
+        const real = load({ files: true });
+        await real.BikeModels.preload(real.CHARACTERS.map(c => c.bikes[0]));
+        const views = real.CHARACTERS.map(character => {
+            const vehicle = new real.Vehicle(new real.THREE.Scene(), null, character, null, { model: 'far' });
+            expect(vehicle.far).toBe(true);
+            return [character.id, backView(real, vehicle)];
+        });
+        expect(views.filter(([, view]) => mark(view) < MARK_CM2).map(([id, view]) => [id, Math.round(mark(view))])).toEqual([]);
+        const alike = [];
+        views.forEach(([id, view], i) => views.slice(i + 1).forEach(([other, theirs]) => {
+            const area = differ(view, theirs);
+            if (area < APART_CM2) alike.push([id, other, Math.round(area)]);
+        }));
+        expect(alike).toEqual([]);
+    });
+
     test('the source names no maker, no person beyond a first name and no photo', () => {
         // Kept turned by thirteen letters so that this file does not hold the words either
         const turn = word => word.replace(/[a-z]/g, letter => String.fromCharCode((letter.charCodeAt(0) - 97 + 13) % 26 + 97));

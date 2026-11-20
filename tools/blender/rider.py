@@ -19,7 +19,8 @@
 #                the same part in another cut, for an outfit that names the
 #                style (CHARACTERS[].outfits in js/vehicle.js): helmet shells,
 #                jackets with their sleeves, trousers, gloves and boots. The
-#                plain names are the touring crew's rider and stay light.
+#                plain names are the cut of a part an outfit names no style
+#                for, and stay light.
 #   back_<style> about the torso's origin: a mark on the back of a jacket, for
 #                a kit that names it (backStyle)
 #
@@ -50,17 +51,17 @@ from mathutils import Matrix, Vector
 sys.path.insert(0, os.path.dirname(__file__))
 from bike_kit import B, Kit, render, rgb, spline  # noqa: E402
 from common import ASSETS, ROOT  # noqa: E402
+import far  # noqa: E402
 
 OUT = os.path.join(ASSETS, "bikes", "rider.glb")
 # Joint to joint, as modelled; js/bikemodels.js scales each to the pose
 LENGTHS = {"upper_arm": 0.31, "forearm": 0.3, "thigh": 0.42, "shin": 0.42}
 # A seated rider at most: each part in its heaviest cut, both of each limb and
-# every optional part. Six riders can be on screen (the player and the crew),
-# and six at this budget are about one detailed bike at its near level. An
-# outfit as worn is about 5000.
+# every optional part. An outfit as worn is about 5000. Only the rider the
+# player rides as wears it on a ride: the crew wear the light rider (far.py).
 BUDGET = 7000
 # The file holds every cut of every outfit and is fetched once for them all;
-# with the crew's bike it stays under the 700 KB tests/unit/bikemodels.test.js allows the two
+# with the light rider's file (far.py) it stays under the 800 KB tests/unit/bikemodels.test.js allows the two
 FILE = 624 * 1024
 # Positions are whole units of this many metres (bike_kit.pack_colours)
 UNIT = 0.0005
@@ -878,6 +879,8 @@ def build():
         raise SystemExit(f"{OUT}: a seated rider of {seated} triangles is over the budget of {BUDGET}")
     if size > FILE:
         raise SystemExit(f"{OUT}: {size} bytes is over the budget of {FILE}")
+    # Every node again, light, for the crew and for a rider far away (far.py)
+    far.rider(OUT)
     preview(k, joined)
 
 

@@ -14,6 +14,13 @@
 // bike's own grip, peg and seat marks. A detailed bike brings its own axles
 // (vehicle.axles), which the wheel spin and the wheelie pivot read, its own
 // colours and its own luggage. Physics, handling and the camera read none of it.
+//
+// The touring crew (AIMotorcycle, js/traffic.js) are the other characters:
+// each rides its own bike from that bike's far file (assets/bikes/far, one
+// light level made from the detail file by tools/blender/far.py) and wears
+// its own first outfit on the light rider (rider_far.glb). A rider select
+// bike that is not looked at ({ model: 'far' }) is drawn from its file's
+// farthest level once that file is in memory (standIn).
 const BikeModels = (() => {
   // The file of each procedural kind of bike (Vehicle.BIKES). These were
   // written with +x on the rider's right, so they are mirrored like the
@@ -29,10 +36,9 @@ const BikeModels = (() => {
   // The file each character's first bike is read from, by character id
   const BIKES = Object.fromEntries(CHARACTERS.map((character) => [character.id, entry(Vehicle.bikeOf(character)).file]));
   const RIDER = "assets/bikes/rider.glb";
-  // The sport bike at a fifth of the detail, for the touring crew (js/traffic.js)
-  const CREW = "assets/bikes/crew.glb";
-  // How a crew rider sits it: the tuck Vehicle.buildSportBike gives its rider
-  const CREW_POSE = { y: 1.06, z: -0.08, torsoLean: 0.72, style: "race", elbowOut: 0.05, kneeOut: 0.06 };
+  // Every node of the rider again, light: the crew's rider and a stand-in's
+  const RIDER_FAR = "assets/bikes/rider_far.glb";
+  const RIDERS = [RIDER, RIDER_FAR];
   // Joint to joint, as tools/blender/rider.py models each limb
   const LENGTHS = { upper_arm: 0.31, forearm: 0.3, thigh: 0.42, shin: 0.42 };
   // Glow of the lit materials, which the reader does not take from the file
@@ -56,7 +62,7 @@ const BikeModels = (() => {
 
   function load(url) {
     return SceneAssets.loadModel(url).then((model) => {
-      if (!arrived.has(url)) arrived.set(url, url === RIDER ? model : prepare(model, url));
+      if (!arrived.has(url)) arrived.set(url, RIDERS.includes(url) ? model : prepare(model, url));
       return arrived.get(url);
     });
   }
@@ -65,10 +71,16 @@ const BikeModels = (() => {
     return entry(vehicle.model || vehicle.bike).file;
   }
 
-  // Starts the downloads a ride needs: the rider, the crew's bike and each
-  // character's first bike, or the bikes named. The menu calls none of it.
+  // The bike a character rides in the crew: its first
+  function crewBike(character) {
+    return Vehicle.bikeOf(character);
+  }
+
+  // Starts the downloads a ride needs: the rider, the light rider, and each
+  // character's first bike with its far file (the bike it rides in the crew),
+  // or the bikes named. The menu calls none of it.
   function preload(ids = CHARACTERS.map((character) => Vehicle.bikeOf(character))) {
-    const urls = new Set([RIDER, CREW, ...ids.map((id) => entry(id).file)]);
+    const urls = new Set([RIDER, RIDER_FAR, ...ids.map((id) => entry(id).file), ...ids.map((id) => entry(id).far).filter(Boolean)]);
     return Promise.all([...urls].map((url) => load(url).catch((error) => {
       console.error(`BikeModels: ${url} did not load; its bike keeps the procedural model:`, error);
       return null;
@@ -80,7 +92,8 @@ const BikeModels = (() => {
   // in place: mirrored where its entry says so, and each wheel's pivot moved
   // onto its axle (the middle of its tyre), where a file put it elsewhere
   function prepare(model, url) {
-    const known = [...Object.values(BIKE_MODELS), ...Object.values(KINDS), { file: CREW, mirror: true }].find((bike) => bike.file === url);
+    // A far file keeps the handedness of the detail file it was made from
+    const known = [...Object.values(BIKE_MODELS), ...Object.values(KINDS)].find((bike) => bike.file === url || bike.far === url);
     const levels = model.groups && model.groups.has("lod0") ? ["lod0", "lod1"].filter((name) => model.groups.has(name)).map((name) => model.groups.get(name)) : [model];
     for (const level of levels) {
       if (known && known.mirror) mirror(level);
@@ -252,8 +265,7 @@ const BikeModels = (() => {
   // the same torso lean, hands on the bike's grips and feet on its pegs (the
   // model's own marks). Elbows and knees fall where limbs of a fixed length
   // put them, rather than midway, so an arm or a leg is not shrunk to fit.
-  function seat(spec, bike, model) {
-    const level = bike.levels ? bike.levels[0] : bike;
+  function seat(spec, level, model) {
     const colour = (hex, roughness, metalness, extra) => new THREE.MeshStandardMaterial({ color: hex, roughness, metalness, vertexColors: true, ...extra });
     // Gear a spec leaves out takes the colour that part had before it was
     // a material of its own (Vehicle.buildVariantRider)
@@ -393,14 +405,13 @@ const BikeModels = (() => {
   // A detailed bike's rider: the character's spec in the bike's own pose,
   // the hip set on the seat (the file's seat mark, or the entry's), the
   // hands and feet on its grips and pegs as for every bike
-  function pose(vehicle, bike) {
-    const known = BIKE_MODELS[vehicle.model];
-    if (!known) return vehicle.riderSpec;
-    const spec = { ...vehicle.riderSpec, ...known.pose };
-    const level = bike.levels[0];
+  function pose(riderSpec, id, level) {
+    const known = BIKE_MODELS[id];
+    if (!known) return riderSpec;
+    const spec = { ...riderSpec, ...known.pose };
     const mark = level.places.get("seat");
     const [top, back] = mark ? [mark.y, mark.z] : known.seat;
-    if (top === undefined) throw new Error(`${vehicle.model} has no seat mark and no seat in its entry`);
+    if (top === undefined) throw new Error(`${id} has no seat mark and no seat in its entry`);
     const lean = spec.torsoLean;
     spec.y = top + HIP + Math.cos(lean) * 0.17;
     spec.z = back + Math.sin(lean) * 0.17;
@@ -411,12 +422,14 @@ const BikeModels = (() => {
   }
 
   // Puts the modelled bike and rider in the vehicle's group in place of
-  // everything the procedural builder put there
-  function swap(vehicle, bike, riderModel) {
+  // everything that was there (the procedural builder's parts, or a stand-in's).
+  // `far` draws the file's farthest level alone, for a stand-in.
+  function swap(vehicle, file, riderModel, far = false) {
     const group = vehicle.group;
     const palette = vehicle.palette;
     const known = entry(vehicle.model || vehicle.bike);
     const keep = !!known.keepFileColours;
+    const bike = far ? { levels: [file.levels[file.levels.length - 1]] } : file;
     const level = bike.levels[0];
     const before = [...group.children];
     const kept = new Set(Object.values(palette).filter((value) => value && value.isMaterial));
@@ -449,8 +462,8 @@ const BikeModels = (() => {
     const paint = keep ? painted && finish(painted.material) : palette.paint;
     const frame = paint && meshOf(body, paint);
     if (!frame) throw new Error("bike body has no painted part");
-    const spec = pose(vehicle, bike);
-    const seated = seat(spec, bike, riderModel);
+    const spec = pose(vehicle.riderSpec, vehicle.model, level);
+    const seated = seat(spec, level, riderModel);
     // A detailed bike turns on its own axles; a procedural kind's file was
     // made to the procedural bike's
     const axles = BIKE_MODELS[vehicle.model] ? { rear: axle(level, "wheel_rear"), front: axle(level, "wheel_front") } : vehicle.axles;
@@ -510,6 +523,7 @@ const BikeModels = (() => {
       legs: seated.legs,
       footPlaced: false,
       modelled: true,
+      far,
     });
     vehicle.rigSteering();
     if (vehicle.onModel) vehicle.onModel(vehicle);
@@ -545,46 +559,96 @@ const BikeModels = (() => {
     });
   }
 
-  // Finishes every crew bike shares; only its paint and its rider's kit are its own
-  const shared = new Map();
+  // The stand-in of a bike that is shown but not looked at (Vehicle, { model: 'far' }): the bike's own farthest
+  // level and the light rider, when the bike's file is in memory. Nothing is fetched for it, so the first time a
+  // bike is shown its procedural model stands (returns false), and from then on its own shape does.
+  function standIn(vehicle) {
+    const url = file(vehicle);
+    const rider = arrived.get(RIDER_FAR) || arrived.get(RIDER);
+    if (!BIKE_MODELS[vehicle.model] || !arrived.has(url) || !rider) return false;
+    try {
+      swap(vehicle, arrived.get(url), rider, true);
+      return true;
+    } catch (error) {
+      console.error(`BikeModels: ${vehicle.character.id} keeps its procedural model:`, error);
+      return false;
+    }
+  }
 
-  // A touring-crew rider's bike (AIMotorcycle) as the low-detail sport bike
-  // in its own colour, with the modelled rider in its own kit. It keeps what
-  // AIMotorcycle drives: the wheels it spins, the frame it flashes on a
-  // collision and the lens it lights under braking. Geometry is shared by
-  // the whole crew. Only at once, or before the bike first moves: a bike on
-  // the road keeps the model it has until Traffic rebuilds the crew.
+  // three takes the id of every object it makes from Math.random. A crew
+  // swap happens when a file arrives or when a rider is out of sight, and
+  // must not move the numbers Traffic draws next (as js/carmodels.js), so
+  // three draws from a generator of its own while one runs.
+  let seed = 0x7c2e51b9;
+  const ids = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  function apart(work) {
+    const random = Math.random;
+    Math.random = ids;
+    try {
+      return work();
+    } finally {
+      Math.random = random;
+    }
+  }
+
+  // What a crew rider's bike lights and sees through, on a far file's own colours
+  function crewFinish(source) {
+    const material = source.clone();
+    if (source.name === "glass") Object.assign(material, { transparent: true, opacity: 0.32 });
+    if (source.name === "headlight") Object.assign(material, { emissive: new THREE.Color(0xffffee), emissiveIntensity: 0.85 });
+    if (GLOW[source.name]) {
+      material.emissive.setHex(GLOW[source.name][0]);
+      material.emissiveIntensity = GLOW[source.name][1];
+    }
+    material.vertexColors = true;
+    return material;
+  }
+
+  // A touring-crew rider (AIMotorcycle) as its character: the character's
+  // own bike from its far file, in the file's colours, with the light rider
+  // in the character's first outfit and build, seated on the bike's own
+  // marks. It keeps what AIMotorcycle drives: the wheels it spins, the frame
+  // it flashes on a collision and the lens it lights under braking; and it
+  // takes what Vehicle.holdRider needs to keep the hands and feet in place
+  // while the rider leans (AIMotorcycle.leanRider). Riders on the same bike
+  // share its geometry. At once, or before the bike first moves; a bike on
+  // the road when its files arrive takes them when it is next out of sight
+  // (bike.modelWaiting, which AIMotorcycle.update runs). The files are asked
+  // for here and no earlier: with them asked for as a world starts,
+  // world-budget once stood 70 000 over with twice the trees in the window
+  // (taken to be the tree models held back by six more requests; not proven).
   function crew(bike) {
-    const attempt = () => {
+    const character = bike.character;
+    const id = bike.model;
+    const known = BIKE_MODELS[id];
+    if (!character || !known) return false;
+    const attempt = () => apart(() => {
       try {
-        const model = arrived.get(CREW);
+        const model = arrived.get(known.far);
+        const level = model.levels[0];
         const group = bike.bikeGroup;
-        const paint = bike.frame.material.clone();
-        paint.color.setHex(bike.color);
-        paint.vertexColors = true;
+        const made = new Map();
         const finish = (source) => {
-          if (source.name === "paint") return paint;
-          if (!shared.has(source.name)) {
-            const material = source.clone();
-            if (source.name === "paint_dark") material.color.setHex(0x16161a);
-            if (source.name === "glass") Object.assign(material, { transparent: true, opacity: 0.32 });
-            if (source.name === "headlight") Object.assign(material, { emissive: new THREE.Color(0xffffee), emissiveIntensity: 0.85 });
-            material.vertexColors = true;
-            shared.set(source.name, material);
-          }
-          return shared.get(source.name);
+          if (!made.has(source.name)) made.set(source.name, crewFinish(source));
+          return made.get(source.name);
         };
         const fresh = new THREE.Group();
         const body = part(model, "body", finish, fresh);
         const rearWheel = part(model, "wheel_rear", finish, fresh);
         const frontWheel = part(model, "wheel_front", finish, fresh);
+        if (level.meshes.has("luggage") && known.luggage) part(model, "luggage", finish, fresh);
         const lens = bike.brakeLight.material.clone();
         lens.vertexColors = true;
         const brakeLight = part(model, "brake_light", () => lens, fresh);
-        const frame = meshOf(body, paint);
+        const frame = made.has("paint") && meshOf(body, made.get("paint"));
         if (!frame) throw new Error("crew bike has no painted part");
-        const spec = { ...CREW_POSE, suitColor: bike.suitColor, suitAccent: bike.color, helmetColor: bike.helmetColor, helmetAccent: bike.color };
-        const seated = seat(spec, model, arrived.get(RIDER));
+        const outfit = Vehicle.outfitOf(character);
+        const kit = outfit ? outfit.kit : character.kit;
+        const spec = pose(Vehicle.riderSpec({ ...Vehicle.BIKES[Vehicle.kindOf(id)].seat, ...kit }, character, id), id, level);
+        const seated = seat(spec, level, arrived.get(RIDER_FAR));
         seated.rider.position.set(0, spec.y, spec.z);
         rearWheel.rotation.copy(bike.rearWheel.rotation);
         frontWheel.rotation.copy(bike.frontWheel.rotation);
@@ -598,22 +662,33 @@ const BikeModels = (() => {
           });
         }
         group.add(...fresh.children, seated.rider);
-        Object.assign(bike, { frame, rearWheel, frontWheel, brakeLight, rider: seated.rider, helmet: seated.helmet, visor: seated.visor, modelled: true });
+        Object.assign(bike, {
+          frame, rearWheel, frontWheel, brakeLight,
+          rider: seated.rider, helmet: seated.helmet, visor: seated.visor, arms: seated.arms, legs: seated.legs,
+          riderBasePos: seated.rider.position.clone(),
+          // The bar of a crew bike does not turn: Vehicle.holdRider reads a rig at rest
+          steerRig: { turn: new THREE.Quaternion(), point: new THREE.Vector3() },
+          modelled: true,
+        });
         return true;
       } catch (error) {
-        console.error(`BikeModels: ${bike.riderName} keeps the procedural bike:`, error);
+        console.error(`BikeModels: ${character.id} keeps the procedural bike:`, error);
         return false;
       }
-    };
-    if (arrived.has(CREW) && arrived.has(RIDER)) return attempt();
-    return Promise.all([load(CREW), load(RIDER)]).then(() => {
-      if (!bike.bikeGroup.parent || bike.wheelRotation) return false;
+    });
+    if (arrived.has(known.far) && arrived.has(RIDER_FAR)) return attempt();
+    return Promise.all([load(known.far), load(RIDER_FAR)]).then(() => {
+      if (!bike.bikeGroup.parent) return false;
+      if (bike.wheelRotation) {
+        bike.modelWaiting = attempt;
+        return false;
+      }
       return attempt();
     }).catch((error) => {
-      console.error(`BikeModels: ${bike.riderName} keeps the procedural bike:`, error);
+      console.error(`BikeModels: ${character.id} keeps the procedural bike:`, error);
       return false;
     });
   }
 
-  return { dress, crew, preload, file, entry, MODELS, BIKES, RIDER, CREW, LENGTHS, FAR };
+  return { dress, standIn, crew, crewBike, preload, file, entry, MODELS, BIKES, RIDER, RIDER_FAR, LENGTHS, FAR };
 })();

@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 import bike_parts as parts  # noqa: E402
 from bike_kit import Kit, euler, render  # noqa: E402
 from common import ASSETS  # noqa: E402
+import far  # noqa: E402
 
 OUT_DIR = os.path.join(ASSETS, "bikes", "detail")
 # Wheel centres where Vehicle has them for every bike (js/vehicle.js)
@@ -542,6 +543,8 @@ def build_file(name, build, seed, colours, anchors):
     print(f"{name}.glb: lod0 {counts[0]} triangles, lod1 {counts[1]} triangles, {size} bytes")
     if size > FILE_BUDGET:
         raise SystemExit(f"{out}: {size} bytes is over the budget of {FILE_BUDGET}")
+    # The bike as the touring crew ride it, from the file just written (far.py)
+    far.bike(out)
     return out
 
 

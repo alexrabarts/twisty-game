@@ -40,7 +40,8 @@ function lowestSide(file) {
     return { low, bodies };
 }
 
-const files = [...readdirSync(root).filter(f => f.endsWith('.glb') && f !== 'rider.glb'), ...readdirSync(new URL('detail/', root)).filter(f => f.endsWith('.glb')).map(f => `detail/${f}`)];
+// Every bike file: the kinds', the riders' own (detail) and those as the crew ride them (far); not the rider's files
+const files = [...readdirSync(root).filter(f => f.endsWith('.glb') && !f.startsWith('rider')), ...['detail', 'far'].flatMap(folder => readdirSync(new URL(`${folder}/`, root)).filter(f => f.endsWith('.glb')).map(f => `${folder}/${f}`))];
 
 describe('every bike has its stand up', () => {
     test('there are bikes to read, the five kinds and the riders\' own', () => {

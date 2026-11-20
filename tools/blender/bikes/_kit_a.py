@@ -27,6 +27,7 @@ from mathutils import Matrix, Vector  # noqa: E402
 
 import common  # noqa: E402
 from bike_kit import Kit, B, euler, pack_colours, render  # noqa: E402
+import far  # noqa: E402
 
 OUT_DIR = os.path.join(common.ASSETS, "bikes", "detail")
 SCRATCH = os.environ.get("TWISTY_PREVIEW")
@@ -397,6 +398,8 @@ def build(make, name, seed, colours, anchors, budgets=(40000, 10000), cap=1.2 * 
         raise SystemExit(f"{name}: triangles {counts} over {budgets}")
     if size > cap:
         raise SystemExit(f"{name}: {size} bytes is over {cap}")
+    # The bike as the touring crew ride it, from the file just written (far.py)
+    far.bike(path)
     if SCRATCH:
         preview(k, name, lod0, lod1, views)
     return k, lod0, lod1

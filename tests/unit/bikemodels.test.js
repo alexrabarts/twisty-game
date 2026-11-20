@@ -12,11 +12,12 @@ import { TextDecoder } from 'node:util';
 import { canvasStub, loadScript, realThree } from '../helpers/load-game.js';
 
 const root = new URL('../../', import.meta.url);
-// A bike file's size and each level's triangles; the shared rider and crew
-// files have budgets of their own (the rider file holds every cut of every
-// outfit, and a seated rider is one of each). The menu fetches no bike until one is
+// A bike file's size and each level's triangles; the rider's two files
+// (the rider, 624 KB, and the light rider of the crew, 176 KB) have a budget
+// of their own (each holds every cut of every outfit, and a seated rider is
+// one of each; tests/unit/crew.test.js holds the far files). The menu fetches no bike until one is
 // shown, then the rider and that one bike.
-const BUDGET = { file: 1.2 * 1024 * 1024, near: 40000, far: 10000, rider: 7000, crew: 2600, shared: 700 * 1024, menu: 1.5 * 1024 * 1024 };
+const BUDGET = { file: 1.2 * 1024 * 1024, near: 40000, far: 10000, rider: 7000, shared: 800 * 1024, menu: 1.5 * 1024 * 1024 };
 // The procedural kinds, each ridden as the character who rode it, in that
 // character's old paint
 const KINDS = { steve: ['sport', '0xcc1111'], alex: ['adventure', '0xc9a227'], tim: ['scooter', '0x8d96a8'], shane: ['dirt', '0xff6600'], lucy: ['naked', '0x16181c'] };
@@ -112,7 +113,7 @@ const named = (object, name) => {
 
 describe('the bike and rider files', () => {
     const game = load();
-    const shared = [game.BikeModels.RIDER, game.BikeModels.CREW];
+    const shared = [game.BikeModels.RIDER, game.BikeModels.RIDER_FAR];
     const bikes = [...Object.values(game.BikeModels.MODELS), ...Object.values(game.BIKE_MODELS).map(bike => bike.file)];
     const size = file => statSync(new URL(file, root)).size;
     const sum = list => list.reduce((a, b) => a + b, 0);
@@ -737,59 +738,5 @@ describe('a bike file that lacks a part', () => {
         expect(vehicle.group.children.length).toBeGreaterThan(40);
         expect(vehicle.rider.parent).toBe(vehicle.group);
         expect(game.log.some(line => line.includes('fork_right'))).toBe(true);
-    });
-});
-
-describe('a touring-crew rider', () => {
-    const game = load();
-    const options = { color: 0x0000ff, style: 'sport', riderName: 'Guy', helmetColor: 0xffffff, suitColor: 0x4a4a4a };
-    const crew = () => new game.AIMotorcycle(new game.THREE.Scene(), null, options);
-
-    beforeAll(() => game.BikeModels.preload(KIND_IDS));
-
-    test('rides the low-detail bike in its own colours, on geometry the crew shares', () => {
-        const a = crew();
-        const b = new game.AIMotorcycle(new game.THREE.Scene(), null, { ...options, color: 0x00ff00 });
-        expect(a.modelled).toBe(true);
-        expect(a.frame.material.color.getHex()).toBe(0x0000ff);
-        expect(b.frame.material.color.getHex()).toBe(0x00ff00);
-        expect(a.frame.geometry).toBe(b.frame.geometry);
-        expect(a.frame.material).not.toBe(b.frame.material);
-        expect(triangles(a.bikeGroup) - triangles(a.rider)).toBeLessThanOrEqual(BUDGET.crew);
-        const kit = new Set();
-        a.rider.traverse(o => { if (o.isMesh) kit.add(o.material.color.getHex()); });
-        expect(kit.has(0x4a4a4a)).toBe(true);
-        expect(kit.has(0xffffff)).toBe(true);
-        // A fraction of the player's bike, and of its draw calls
-        const player = ride(game, 'steve');
-        expect(triangles(a.bikeGroup)).toBeLessThan(triangles(player.group) * 0.45);
-        let meshes = 0;
-        a.bikeGroup.traverse(o => { if (o.isMesh) meshes++; });
-        expect(meshes).toBeLessThan(60);
-    });
-
-    test('keeps the parts AIMotorcycle drives', () => {
-        const bike = crew();
-        [bike.rearWheel, bike.frontWheel, bike.brakeLight, bike.frame, bike.rider].forEach(part => {
-            let top = part;
-            while (top.parent) top = top.parent;
-            expect(top).toBe(bike.bikeGroup.parent);
-        });
-        bike.brakeLight.material.emissive.setHex(0xff0000);
-        expect(bike.frame.material.emissive.getHex()).toBe(0x000000);
-        bike.onCollision();
-        expect(bike.frame.material.color.getHex()).toBe(0xff0000);
-        bike.remove();
-    });
-
-    test('keeps the procedural bike when the files fail', async () => {
-        const broken = load({ failing: ['crew.glb'] });
-        await broken.BikeModels.preload(KIND_IDS);
-        const bike = new broken.AIMotorcycle(new broken.THREE.Scene(), null, options);
-        const parts = bike.bikeGroup.children.slice();
-        expect(await broken.BikeModels.crew(bike)).toBe(false);
-        expect(bike.modelled).toBeFalsy();
-        expect(bike.bikeGroup.children).toEqual(parts);
-        expect(broken.log.some(line => line.includes('crew.glb'))).toBe(true);
     });
 });

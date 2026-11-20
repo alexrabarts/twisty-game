@@ -11,20 +11,23 @@ import { canvasStub, loadScript, realThree } from './load-game.js';
 
 const root = new URL('../../', import.meta.url);
 
-export function loadBikes() {
+export function loadBikes({ failing = [] } = {}) {
     const THREE = realThree();
     const source = ['vehicle.js', 'sceneassets.js', 'bikemodels.js', 'traffic.js'].map(loadScript).join('\n;\n');
     const log = [];
+    const fetched = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };
     const fetch = async url => {
+        fetched.push(url);
+        if (failing.some(part => url.includes(part))) return { ok: false, status: 404 };
         const bytes = readFileSync(new URL(url, root));
         return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
     };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'fetch', 'Blob', 'TextDecoder', 'performance',
-        `${source}\nreturn { Vehicle, CHARACTERS, SceneAssets, BikeModels, BIKE_MODELS };`
+        `${source}\nreturn { Vehicle, CHARACTERS, OUTFITS, SceneAssets, BikeModels, BIKE_MODELS, AIMotorcycle, Traffic };`
     );
-    return { THREE, log, ...factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance) };
+    return { THREE, log, fetched, ...factory(THREE, canvasStub(), { getItem: () => null, setItem() {} }, sink, fetch, Blob, TextDecoder, performance) };
 }
 
 // [label, bike id, modelled]: every detailed bike, every procedural kind's

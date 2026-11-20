@@ -75,6 +75,23 @@ function laneMetres(route, vehicle, dt) {
 }
 
 class Traffic {
+    // The paces of the touring crew, quickest first: a skill (how it passes and holds the pack) and a base speed in
+    // m/s with a random spread on top. They belong to the crew, not to a rider: each rider's own way of riding is to come
+    static get CREW_PACES() {
+        return [
+            { skill: 'expert', speed: 48, spread: 8 },
+            { skill: 'fast', speed: 42, spread: 6 },
+            { skill: 'average', speed: 36, spread: 5 },
+            { skill: 'average', speed: 36, spread: 5 },
+            { skill: 'slow', speed: 30, spread: 5 }
+        ];
+    }
+
+    // The touring crew: every character but the one the player rides as (by name), in the order of CHARACTERS
+    static crewOf(playerRiderName) {
+        return CHARACTERS.filter(character => character.name !== playerRiderName);
+    }
+
     constructor(scene, environment, playerRiderName = null) {
         this.scene = scene;
         this.environment = environment;
@@ -174,78 +191,46 @@ class Traffic {
     initializeMotorcycles() {
         const range = legSegmentRange(this.environment);
 
-        // The Touring Crew - Fixed riders with personalities
-        const touringCrew = [
-            {
-                name: 'Steve',
-                skill: 'expert',
-                helmet: 0x000000,  // Black
-                suit: 0x1a1a1a,    // Dark gray
-                bikeColor: 0xff0000, // Red
-                baseSpeed: 48 + Math.random() * 8
-            },
-            {
-                name: 'Alex',
-                skill: 'fast',
-                helmet: 0xff0000,  // Red
-                suit: 0x8b0000,    // Dark red
-                bikeColor: 0x0000ff, // Blue
-                baseSpeed: 42 + Math.random() * 6
-            },
-            {
-                name: 'Shane',
-                skill: 'average',
-                helmet: 0xffdd00,  // Yellow/gold
-                suit: 0x3a3a1a,    // Olive/yellow tint
-                bikeColor: 0xffff00, // Yellow
-                baseSpeed: 36 + Math.random() * 5
-            },
-            {
-                name: 'Tim',
-                skill: 'average',
-                helmet: 0xeecc00,  // Gold
-                suit: 0x3a3a1a,    // Olive/yellow tint
-                bikeColor: 0x00ff00, // Green
-                baseSpeed: 36 + Math.random() * 5
-            },
-            {
-                name: 'Guy',
-                skill: 'slow',
-                helmet: 0xffffff,  // White
-                suit: 0x4a4a4a,    // Medium gray
-                bikeColor: 0xff8800, // Orange
-                baseSpeed: 30 + Math.random() * 5
-            }
-        ];
+        // The touring crew are the characters the player did not pick, each on its own bike (BikeModels.crewBike:
+        // its first) in its own first outfit. How they ride is not theirs yet: the paces below go to them in the
+        // order of CHARACTERS, the quickest first, and a rider past the last pace takes the last one.
+        const others = Traffic.crewOf(this.playerRiderName);
+        const paces = others.map((character, i) => {
+            const pace = Traffic.CREW_PACES[Math.min(i, Traffic.CREW_PACES.length - 1)];
+            return { skill: pace.skill, baseSpeed: pace.speed + Math.random() * pace.spread };
+        });
 
-        // The player rides as one of the crew - don't spawn their AI double
-        const activeCrew = touringCrew.filter(rider => rider.name !== this.playerRiderName);
-
-        for (let i = 0; i < activeCrew.length; i++) {
+        for (let i = 0; i < others.length; i++) {
             // Grid the crew on the leg, just ahead of the start line. Spacing
             // them over the whole 700-segment course left most legs empty.
             // (slowest rider nearest the start line, so there is someone to
             // catch; the quick ones begin further up the road)
-            const slot = activeCrew.length - 1 - i;
+            const slot = others.length - 1 - i;
             const startSegment = Math.min(range.end, range.start + 8 + slot * 3 + Math.floor(Math.random() * 2));
-            const riderConfig = activeCrew[i];
+            const character = others[i];
+            const bike = typeof BikeModels !== 'undefined' ? BikeModels.crewBike(character) : Vehicle.bikeOf(character);
+            const outfit = Vehicle.outfitOf(character);
+            const kit = (outfit ? outfit.kit : character.kit) || {};
 
             const motorcycle = new AIMotorcycle(this.scene, this.environment, {
                 direction: 1,
-                speed: riderConfig.baseSpeed * this.speedScale,
+                speed: paces[i].baseSpeed * this.speedScale,
                 startSegment: startSegment,
                 lane: 'left',
-                color: riderConfig.bikeColor,
-                style: 'sport',  // All sport bikes for touring crew
-                skill: riderConfig.skill,
-                riderName: riderConfig.name,
-                helmetColor: riderConfig.helmet,
-                suitColor: riderConfig.suit
+                // The procedural bike that stands until the files are in takes the bike's paint and the kit's colours
+                color: BIKE_MODELS[bike] ? BIKE_MODELS[bike].paint : parseInt(character.bikeColor),
+                style: 'sport',
+                skill: paces[i].skill,
+                character,
+                model: bike,
+                riderName: character.name,
+                helmetColor: kit.helmetColor,
+                suitColor: kit.suitColor
             });
             this.motorcycles.push(motorcycle);
         }
     }
-    
+
     getRandomBikeColor() {
         const colors = [
             0xff0000,
@@ -265,58 +250,6 @@ class Traffic {
         return styles[Math.floor(Math.random() * styles.length)];
     }
 
-    getRiderName(skill) {
-        const namesBySkill = {
-            'expert': [
-                'Throttle Bottom',
-                'Rev Hardley',
-                'Skid Marks',
-                'Willy Wheeler'
-            ],
-            'fast': [
-                'Clutch Burner',
-                'Brake Wind',
-                'Torque McSquirt',
-                'Flash Johnson'
-            ],
-            'average': [
-                'Rusty Pipes',
-                'Sticky Wicket',
-                'Lean Meister',
-                'Two Stroke Tony'
-            ],
-            'slow': [
-                'Wheelie Wonka',
-                'Putt Putt Patterson',
-                'Granny Shifter',
-                'Chicken Strips Charlie'
-            ]
-        };
-
-        const names = namesBySkill[skill] || namesBySkill['average'];
-        return names[Math.floor(Math.random() * names.length)];
-    }
-
-    getHelmetColorForSkill(skill) {
-        const helmetColors = {
-            'expert': 0x000000,  // Black (intimidating)
-            'fast': 0xff0000,     // Red (aggressive)
-            'average': 0xffdd00,  // Yellow/gold (visible)
-            'slow': 0xffffff      // White (clean)
-        };
-        return helmetColors[skill] || 0x000000;
-    }
-
-    getRiderSuitColor(skill) {
-        const suitColors = {
-            'expert': 0x1a1a1a,   // Dark gray (professional)
-            'fast': 0x8b0000,     // Dark red (aggressive)
-            'average': 0x3a3a1a,  // Olive/yellow tint
-            'slow': 0x4a4a4a      // Medium gray
-        };
-        return suitColors[skill] || 0x2a2a2a;
-    }
-    
     getRandomCarColor() {
         const colors = [
             0xf5f5f5, // White
@@ -1228,6 +1161,12 @@ class AIMotorcycle {
     // A world rider's pass: metres of road it takes, and how far it swings toward the centre line
     static get PASS_M() { return 40; }
     static get PASS_SWING_M() { return 2; }
+    // Beyond this many metres from the player a rider is out of sight enough to change its model unseen
+    static get UNSEEN_M() { return 120; }
+    // A rider in sight waits at most this many frames for such a moment, then changes anyway: on the first ride of a
+    // page the riders nearest the player start code-drawn, and a change seen once at the start is better than the
+    // wrong bike beside the player for the next minutes
+    static get SEEN_WAIT_FRAMES() { return 45; }
 
     constructor(scene, environment, options) {
         this.scene = scene;
@@ -1245,8 +1184,10 @@ class AIMotorcycle {
         this.overtaking = false;
         this.overtakeProgress = 0;
 
-        // Rider identity
-        this.riderName = options.riderName || 'Unknown Rider';
+        // Who rides it: one of CHARACTERS on one of its bikes (BIKE_MODELS), for a rider of the touring crew
+        this.character = options.character || null;
+        this.model = options.model || null;
+        this.riderName = options.riderName || (this.character ? this.character.name : 'Unknown Rider');
         this.helmetColor = options.helmetColor || 0x000000;
         this.suitColor = options.suitColor || 0x2a2a2a;
         this.skill = options.skill || 'average';
@@ -1608,9 +1549,20 @@ class AIMotorcycle {
 
         this.scene.add(this.bikeGroup);
 
-        // The touring crew ride the modelled sport bike once its files are in
+        // A rider of the touring crew rides its character's own bike once its files are in
         // (js/bikemodels.js); the parts built above stand until then
-        if (this.style === 'sport' && typeof BikeModels !== 'undefined') BikeModels.crew(this);
+        if (this.character && typeof BikeModels !== 'undefined') BikeModels.crew(this);
+    }
+
+    // The modelled rider's body goes into the turn as its character does (CHARACTERS bodyLean, Vehicle.riderLean),
+    // and its hands and feet stay on the grips and the pegs (Vehicle.holdRider). Drawn only: the line, the speed
+    // and the bike's own lean are as they were
+    leanRider() {
+        if (!this.arms || !this.riderBasePos || typeof Vehicle === 'undefined') return;
+        const lean = Vehicle.riderLean(this.leanAngle, this.character.bodyLean);
+        this.rider.rotation.z = lean.roll;
+        this.rider.position.x = this.riderBasePos.x + lean.shift;
+        Vehicle.prototype.holdRider.call(this);
     }
     
     updatePosition() {
@@ -1663,6 +1615,7 @@ class AIMotorcycle {
         
         this.bikeGroup.rotation.y = facingAngle;
         this.bikeGroup.rotation.z = this.leanAngle;
+        this.leanRider();
     }
 
     // A world rider on its lane line (WorldRoute.laneCurve). A pass swings it out toward the centre line and back over
@@ -1689,6 +1642,7 @@ class AIMotorcycle {
         const maxLean = Math.PI / 3;
         this.leanAngle = Math.max(-maxLean, Math.min(maxLean, this.leanAngle));
         this.bikeGroup.rotation.z = this.leanAngle;
+        this.leanRider();
     }
     
     update(deltaTime, playerPosition, allBikes, allCars) {
@@ -1841,6 +1795,22 @@ class AIMotorcycle {
         }
         
         this.updatePosition();
+        this.takeModel(playerPosition);
+    }
+
+    // A model whose files came after the bike set off (BikeModels.crew) is put on when the player cannot see the
+    // change: the bike is hidden, or further off than UNSEEN_M. A bike that stays in sight takes it after
+    // SEEN_WAIT_FRAMES
+    takeModel(playerPosition) {
+        if (!this.modelWaiting) return;
+        const at = this.bikeGroup.position;
+        const far = playerPosition && Math.hypot(at.x - playerPosition.x, at.z - playerPosition.z) > AIMotorcycle.UNSEEN_M;
+        this.modelWaitFrames = (this.modelWaitFrames || 0) + 1;
+        if (this.bikeGroup.visible && !far && this.modelWaitFrames <= AIMotorcycle.SEEN_WAIT_FRAMES) return;
+        this.modelWaitFrames = 0;
+        const swap = this.modelWaiting;
+        this.modelWaiting = null;
+        swap();
     }
     
     checkCollision(playerPosition) {

@@ -35,6 +35,7 @@ from mathutils import Matrix, Vector  # noqa: E402
 
 import common  # noqa: E402
 from bike_kit import Kit, B, render, pack_colours  # noqa: E402
+import far  # noqa: E402
 
 OUT_DIR = os.path.join(common.ASSETS, "bikes", "detail")
 LODS = ("lod0", "lod1")
@@ -183,6 +184,8 @@ class EKit(Kit):
                 raise SystemExit(f"{path}: {lod} has {totals[lod]} triangles, over its budget of {BUDGET[lod]}")
         if size > FILE_BUDGET:
             raise SystemExit(f"{path}: {size} bytes is over the budget of {FILE_BUDGET}")
+        # The bike as the touring crew ride it, from the file just written (far.py)
+        far.bike(path)
         self.joined = joined
         self.totals = totals
         return joined

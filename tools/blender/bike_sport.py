@@ -16,17 +16,14 @@ from bike_kit import Kit  # noqa: E402
 from common import ASSETS  # noqa: E402
 
 OUT = os.path.join(ASSETS, "bikes", "sport.glb")
-# The same bike at a fraction of the detail, for the touring crew's riders
-# (js/traffic.js), who are seen from a distance and are several at once
-CREW = os.path.join(ASSETS, "bikes", "crew.glb")
 FRONT, REAR = (0, 0.3, 0.7), (0, 0.3, -0.7)
 # Where the rider's hand and foot go (right side), as buildSportBike poses them
 GRIP = (0.19, 1.0, 0.6)
 PEG = (0.21, 0.43, -0.13)
 
 
-def build(low=False):
-    k = Kit(seed=11, low=low)
+def build():
+    k = Kit(seed=11)
 
     k.begin("wheel_rear", REAR)
     k.wheel(REAR, 0.30, 0.16, 0.212, style="alloy", spokes=5)
@@ -170,14 +167,8 @@ def build(low=False):
     parts.pegs(k, PEG, hanger=(0.5, -0.1), heel=True)
     k.side_stand((-0.15, 0.3, 0.02), (-0.27, 0.03, 0.1), 0.011, "steel_dark", seg=6)
 
-    if low:
-        k.finish(CREW, anchors={"grip": GRIP, "peg": PEG}, budget=2600, alone=("wheel_front", "wheel_rear"),
-                 fold=("fork_left", "fork_right", "handlebar", "headlight", "disc_front", "disc_rear"), decimate=0.2)
-        parts.preview(k, "crew")
-    else:
-        k.finish(OUT, anchors={"grip": GRIP, "peg": PEG}, budget=12000, alone=("wheel_front", "wheel_rear", "disc_front", "disc_rear"))
-        parts.preview(k, "sport")
+    k.finish(OUT, anchors={"grip": GRIP, "peg": PEG}, budget=12000, alone=("wheel_front", "wheel_rear", "disc_front", "disc_rear"))
+    parts.preview(k, "sport")
 
 
 build()
-build(low=True)
