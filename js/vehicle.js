@@ -485,25 +485,29 @@ const LEG_OFFROAD = { drag: 0.15, grip: 0.7, floorSpeed: 10 };
 // tyres, 245 kg and its luggage),
 // 0.2 the scrambler (road tyres and short travel: wide bars and little else).
 // A bike without it rides the land as a road bike.
+// `kg` and `spare` are the two facts a wheelie reads (Vehicle.wheelieOf, Vehicle.popShare, Vehicle.liftShare): `kg`
+// is the bike's weight ready to ride, and `spare` (0 to 1) the power it has to spare at speed, about 1.75 x its peak
+// kW for each kg of bike and an 80 kg rider, at most 1; 0 for a bike with no clutch to slip and a belt that varies
+// its own gearing, which can snap no drive to the wheel. .agent/system/handling.md has the rule.
 const BIKE_MODELS = {
-    bike01_z650: { kind: 'naked', cls: 'naked', name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
-    bike02_speed_triple: { kind: 'naked', cls: 'naked', name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
-    bike03_duke390: { kind: 'naked', cls: 'naked', light: true, name: 'Light naked single', year: 2016, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.2 } },
-    bike04_scrambler: { kind: 'naked', cls: 'retro', offroad: 0.2, name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
-    bike05_g310gs: { kind: 'adventure', cls: 'adventure', light: true, offroad: 0.75, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
-    bike06_z750: { kind: 'naked', cls: 'naked', name: 'Naked four, gloss black', year: 2010, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.818, -0.2], pose: { torsoLean: 0.24 } },
-    bike07_mt09: { kind: 'naked', cls: 'naked', name: 'Naked triple, dark grey', year: 2021, paint: 0x08090b, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
-    bike07_mt09_black: { kind: 'naked', cls: 'naked', name: 'Naked triple, blacked out', year: 2021, paint: 0x020202, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
-    bike08_xsr900: { kind: 'sport', cls: 'retro', name: 'Retro sports triple', year: 2023, paint: 0x021b74, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
-    bike09_duke890: { kind: 'naked', cls: 'naked', name: 'Naked twin, white and orange', year: 2020, paint: 0xcfcfc9, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
-    bike10_tiger900: { kind: 'adventure', cls: 'adventure', offroad: 0.6, name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
-    bike11_duke990: { kind: 'naked', cls: 'naked', name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
-    bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
-    bike13_panigale: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike13_panigale_black: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike14_forza: { kind: 'scooter', cls: 'scooter', name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
-    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
-    bike16_superadv: { kind: 'adventure', cls: 'adventure', offroad: 0.5, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
+    bike01_z650: { kind: 'naked', cls: 'naked', kg: 187, spare: 0.33, name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
+    bike02_speed_triple: { kind: 'naked', cls: 'naked', kg: 214, spare: 0.66, name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
+    bike03_duke390: { kind: 'naked', cls: 'naked', light: true, kg: 154, spare: 0.24, name: 'Light naked single', year: 2016, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.2 } },
+    bike04_scrambler: { kind: 'naked', cls: 'retro', offroad: 0.2, kg: 186, spare: 0.35, name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
+    bike05_g310gs: { kind: 'adventure', cls: 'adventure', light: true, offroad: 0.75, kg: 170, spare: 0.14, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
+    bike06_z750: { kind: 'naked', cls: 'naked', kg: 226, spare: 0.45, name: 'Naked four, gloss black', year: 2010, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.818, -0.2], pose: { torsoLean: 0.24 } },
+    bike07_mt09: { kind: 'naked', cls: 'naked', kg: 189, spare: 0.57, name: 'Naked triple, dark grey', year: 2021, paint: 0x08090b, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
+    bike07_mt09_black: { kind: 'naked', cls: 'naked', kg: 189, spare: 0.57, name: 'Naked triple, blacked out', year: 2021, paint: 0x020202, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
+    bike08_xsr900: { kind: 'sport', cls: 'retro', kg: 193, spare: 0.57, name: 'Retro sports triple', year: 2023, paint: 0x021b74, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
+    bike09_duke890: { kind: 'naked', cls: 'naked', kg: 183, spare: 0.57, name: 'Naked twin, white and orange', year: 2020, paint: 0xcfcfc9, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
+    bike10_tiger900: { kind: 'adventure', cls: 'adventure', offroad: 0.6, kg: 220, spare: 0.42, name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
+    bike11_duke990: { kind: 'naked', cls: 'naked', kg: 190, spare: 0.59, name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
+    bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', kg: 220, spare: 0.51, name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
+    bike13_panigale: { kind: 'sport', cls: 'supersport', kg: 198, spare: 1, name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike13_panigale_black: { kind: 'sport', cls: 'supersport', kg: 198, spare: 1, name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike14_forza: { kind: 'scooter', cls: 'scooter', kg: 182, spare: 0, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
+    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, kg: 146, spare: 0.1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
+    bike16_superadv: { kind: 'adventure', cls: 'adventure', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
 };
 // `far` is the bike as the touring crew ride it, a light file of its own made from the detail file (tools/blender/far.py)
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, far: `assets/bikes/far/${id}.glb`, keepFileColours: true }));
@@ -587,6 +591,8 @@ class Vehicle {
         this.outfit = Vehicle.outfitOf(this.character, options.outfit);
         this.bike = Vehicle.kindOf(this.model);
         this.offroad = Vehicle.offroadOf(this.model);
+        // How light the bike is and the power it has to spare, which shape its wheelie (Vehicle.popShare, liftShare)
+        this.wheelieBike = Vehicle.wheelieOf(this.model);
         // Where the wheels turn and how big they are, [y, z, radius] in the
         // bike's axes: the procedural bike's, until a modelled bike brings
         // its own (BikeModels). Only the drawing reads them; the handling
@@ -2872,9 +2878,9 @@ class Vehicle {
             // Start wheelie with a stronger pop
             this.isWheelie = true;
             this.wheelieAngle = 0.05; // Start with more visible angle
-            // Initial lift (character-dependent), and lower the faster the bike goes: at speed there is less drive
-            // to spare and the air holds the front down (Vehicle.popShare)
-            this.wheelieVelocity = 3.5 * (this.wheeliePopMult || 1) * Vehicle.popShare(this.speed);
+            // Initial lift: the rider's own, by how light the bike is at low speed and by the drive it has to spare at
+            // this speed (Vehicle.popShare)
+            this.wheelieVelocity = 3.5 * (this.wheeliePopMult || 1) * Vehicle.popShare(this.wheelieBike, this.speed);
             this.wheelieStartTime = performance.now();
             this.wheelieScoreAccumulated = 0;
             console.log('===== WHEELIE STARTED! =====');
@@ -2893,7 +2899,9 @@ class Vehicle {
             // Throttle control - main way to control wheelie after initiation
             if (throttleInput > 0) {
                 // Progressive throttle response - more sensitive at higher angles
-                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.wheelieThrottleMult || 1);
+                // The throttle lifts only by the drive the bike has to spare at this speed (Vehicle.liftShare): a
+                // bike with none cannot hold the front up, a powerful one still can at speed
+                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.wheelieThrottleMult || 1) * Vehicle.liftShare(this.wheelieBike, this.speed);
                 this.wheelieVelocity += throttleInput * throttleSensitivity * deltaTime;
             }
             
@@ -4749,11 +4757,11 @@ class Vehicle {
 // is the kind itself (BIKE_MODELS `offroad`); a detailed bike keeps its own,
 // whatever kind stands in for it
 Vehicle.BIKES = {
-    sport: { build: 'buildSportBike', stand: 0.16, seat: { y: 1.06, z: -0.08, torsoLean: 0.72, style: 'race', hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05], elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13 } },
-    adventure: { build: 'buildAdventureBike', stand: 0.16, offroad: 0.6, seat: { y: 1.22, z: -0.12, torsoLean: 0.18, style: 'adv', hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06], elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2 } },
-    scooter: { build: 'buildScooter', stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
-    dirt: { build: 'buildDirtBike', stand: 0.24, offroad: 1, seat: { y: 1.22, z: -0.02, torsoLean: 0.45, style: 'mx', hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06], elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22 } },
-    naked: { build: 'buildNakedBike', stand: 0.16, seat: { y: 1.12, z: -0.12, torsoLean: 0.22, style: 'road', hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0], elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18 } }
+    sport: { build: 'buildSportBike', kg: 198, spare: 0.8, stand: 0.16, seat: { y: 1.06, z: -0.08, torsoLean: 0.72, style: 'race', hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05], elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13 } },
+    adventure: { build: 'buildAdventureBike', kg: 220, spare: 0.42, stand: 0.16, offroad: 0.6, seat: { y: 1.22, z: -0.12, torsoLean: 0.18, style: 'adv', hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06], elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2 } },
+    scooter: { build: 'buildScooter', kg: 182, spare: 0, stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
+    dirt: { build: 'buildDirtBike', kg: 146, spare: 0.1, stand: 0.24, offroad: 1, seat: { y: 1.22, z: -0.02, torsoLean: 0.45, style: 'mx', hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06], elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22 } },
+    naked: { build: 'buildNakedBike', kg: 189, spare: 0.57, stand: 0.16, seat: { y: 1.12, z: -0.12, torsoLean: 0.22, style: 'road', hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0], elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18 } }
 };
 
 // A rider's pose and colours for the modelled rider (js/bikemodels.js) from a kind's `seat` or a builder's own
@@ -4812,13 +4820,39 @@ Vehicle.STEER_SHOWN = 0.5;
 // rider drops riderLag of each metre behind the bike, at most riderLagMax m; sparkS seconds between the sparks a bike
 // sliding on the carriageway throws, over sparkSpeed m/s (Game)
 Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, riderLag: 0.3, riderLagMax: 5, sparkS: 0.08, sparkSpeed: 4 });
-// How high the front comes up when a wheelie pops, by the speed (Vehicle.popShare): the whole pop up to fullSpeed
-// m/s, `least` of it from leastSpeed, a smoothstep between
-Vehicle.WHEELIE_POP = Object.freeze({ fullSpeed: 10, leastSpeed: 50, least: 0.45 });
-Vehicle.popShare = (speed) => {
-    const pop = Vehicle.WHEELIE_POP;
-    const x = Math.max(0, Math.min(1, (speed - pop.fullSpeed) / (pop.leastSpeed - pop.fullSpeed)));
-    return 1 - (1 - pop.least) * x * x * (3 - 2 * x);
+// A wheelie by the bike (Vehicle.wheelieOf, popShare, liftShare), from two facts of its catalogue entry: `kg` and
+// `spare`. A bike of lightKg or less is wholly light and one of heavyKg or more not at all. Up to weightFrom m/s a pop
+// is lightPop of the usual on a wholly light bike and heavyPop on a heavy one, and from weightTo m/s the weight no
+// longer counts: at speed it is the power that lifts. fadeSpeed (m/s) is the speed at which a bike with all the power
+// to spare has half its drive left for the front; a bike with less has half left sooner. `tug` is the share of a
+// pop that is the rider's pull on the bars and needs no drive. `usual` stands in for a bike that names no facts.
+Vehicle.WHEELIE = Object.freeze({ lightKg: 145, heavyKg: 250, lightPop: 1.15, heavyPop: 0.8, weightFrom: 10, weightTo: 30, fadeSpeed: 68, tug: 0.1, usual: Object.freeze({ kg: 190, spare: 0.55 }) });
+// The two facts of a bike as a wheelie reads them, each 0 to 1: `light` and `spare`. `bike` is a catalogue id, a
+// procedural kind, or an entry itself ({ kg, spare }), so a new bike needs nothing but its two numbers
+Vehicle.wheelieOf = (bike) => {
+    const rule = Vehicle.WHEELIE;
+    const entry = (bike && typeof bike === 'object' ? bike : (BIKE_MODELS[bike] || Vehicle.BIKES[bike])) || rule.usual;
+    const kg = Number.isFinite(entry.kg) ? entry.kg : rule.usual.kg;
+    const spare = Number.isFinite(entry.spare) ? entry.spare : rule.usual.spare;
+    const unit = (x) => Math.max(0, Math.min(1, x));
+    return { light: unit((rule.heavyKg - kg) / (rule.heavyKg - rule.lightKg)), spare: unit(spare) };
+};
+// The share of its throttle lift a bike has left at a speed, 0 to 1: the whole of it at a standstill, less the faster
+// it goes, and sooner the less power it has to spare; none at any speed for a bike with none. `facts` is what
+// Vehicle.wheelieOf returns
+Vehicle.liftShare = (facts, speed) => {
+    if (!(facts.spare > 0)) return 0;
+    const pace = Math.max(0, speed) / Vehicle.WHEELIE.fadeSpeed;
+    return facts.spare / (facts.spare + pace * pace);
+};
+// How high a pop starts against the usual pop, by the bike and the speed: the bike's weight at low speed, times the
+// rider's tug and the drive the bike has to spare at this speed
+Vehicle.popShare = (facts, speed) => {
+    const rule = Vehicle.WHEELIE;
+    const x = Math.max(0, Math.min(1, (speed - rule.weightFrom) / (rule.weightTo - rule.weightFrom)));
+    const slow = 1 - x * x * (3 - 2 * x);
+    const weight = 1 + (rule.heavyPop + (rule.lightPop - rule.heavyPop) * facts.light - 1) * slow;
+    return weight * (rule.tug + (1 - rule.tug) * Vehicle.liftShare(facts, speed));
 };
 Vehicle.BAR = Object.freeze({ counter: 0.12, counterMax: 0.16, intoMax: 0.07, lag: 0.12, directSpeed: 7 });
 Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
