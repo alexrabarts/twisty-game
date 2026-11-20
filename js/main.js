@@ -814,6 +814,7 @@ class Game {
     resetRunState() {
         this.closeWorldConfirm();
         this.score = 0;
+        this.redLightsPaid = null;
         this.combo = 0;
         this.comboMultiplier = 1;
         this.checkpointsPassed = 0;
@@ -1075,6 +1076,7 @@ class Game {
         // Reset game state
         this.finished = false;
         this.score = 0;
+        this.redLightsPaid = null;
         this.checkpointsPassed = 0;
         this.combo = 0;
         this.comboMultiplier = 1;
@@ -3913,16 +3915,18 @@ class Game {
         }
     }
 
-    // A red light run at a roadworks site costs style, and says so (Roadworks.RED_RUN_STYLE): the oncoming traffic in
-    // the single lane is the rest of the risk
+    // A red light jumped at a roadworks site earns style, and says so (Roadworks.RED_RUN_STYLE): the oncoming traffic
+    // in the single lane is the risk it is paid for. Once for each site in a ride, so going back for it earns nothing
     updateRoadworks() {
         const works = this.environment.roadworks;
         if (!works) return;
         for (const event of works.takeEvents()) {
             if (event.kind !== 'red') continue;
-            const cost = Math.min(Roadworks.RED_RUN_STYLE, this.score);
-            this.addScore(-cost);
-            showCallout(cost > 0 ? `Ran a red light ${HudRules.number(-cost, { sign: true })} style` : 'Ran a red light', 'bad', 2000);
+            const paid = this.redLightsPaid || (this.redLightsPaid = new Set());
+            if (paid.has(event.site)) continue;
+            paid.add(event.site);
+            this.addScore(Roadworks.RED_RUN_STYLE);
+            showCallout(`Jumped a red light ${HudRules.number(Roadworks.RED_RUN_STYLE, { sign: true })} style`, 'good', 2000);
         }
     }
 

@@ -129,7 +129,7 @@ class Roadworks {
     static get AMBER_S() { return 3; }
     static get CLEAR_SPEED_MS() { return 6; }
     static get CLEAR_LAG_S() { return 4; }
-    // Style a rider loses for running a red (shown, never hidden)
+    // Style a rider earns for jumping a red, once for each site (shown; it cost style before)
     static get RED_RUN_STYLE() { return 250; }
     // The bike's half width for contact, and the most a knock costs of its speed
     static get BIKE_R() { return 0.35; }
