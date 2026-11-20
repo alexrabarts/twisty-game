@@ -109,6 +109,48 @@ const WorldPhysics = Object.freeze({
     landBumpM: 0.06,       // m at landCapSpeed and over
     landWobbleDeg: 3,
 
+    // An off-road bike (BIKE_MODELS `offroad`, 0 to 1; Vehicle.landValues) rides the land on knobbly tyres and long
+    // suspension: each land value above moves from its own toward the one here by the bike's trait, so a bike with no
+    // trait reads the values above unchanged. The three that set its speed (`pace`) move only by `soon` of the trait
+    // at once, and by all of it once the bike has been on the land for settleS and then riseS more: a cut across the
+    // inside of a hairpin is 1 to 3 s of land and must not beat the road on any bike, the trail single included
+    // (tests/unit/world-offroad.test.js), but a rider who stays on the land gets up to speed on it. With them at once
+    // (a cap of 5 m/s) 2 to 5 of the trail single's scripted cuts beat the road that do not without the trait, by
+    // 0.45 to 0.8 s; with soon at 0.15, or settleS at 1, one does, by 0.2 to 0.3 s; at soon 0 and settleS 1.5 to
+    // 2.5, none
+    offroad: Object.freeze({
+        landCapSpeed: 6.5,
+        landRoll: 0.15,
+        landDrag: 1.0,
+        landTraction: 0.9,
+        landBrakeGrip: 0.8,
+        landGrip: 0.62,    // a lean cap of about 36 degrees
+        landBumpM: 0.025,
+        landWobbleDeg: 1.2,
+        pace: Object.freeze(['landCapSpeed', 'landRoll', 'landDrag']),
+        soon: 0,
+        settleS: 2,
+        riseS: 2
+    }),
+    // The power slide (Vehicle.updateWorldPhysics), for an off-road bike on the land with the throttle open. `hold`
+    // is the trait x the throttle opening, and 0 with the brake over slideBrake. The drive takes grip from the rear
+    // tyre, so it steps out before the lean alone would lose it: from a demand of (1 - slideOnset x hold) of the grip
+    // the drawn bike heads slideGain x hold x (the demand over that, in grips) further into the turn, at most
+    // slideMaxDeg. The lean limit rises to slideLean x hold over the grip (under lowsideMargin, so shutting the
+    // throttle in a slide does not drop the bike by itself), the path never turns tighter than the grip gives, the
+    // slide scrubs slideScrub x its angle off the speed, and the lowside margin rises by slideRoom x hold, so a bike
+    // that arrives on the land leaned over slides where a road bike falls. Past that margin it falls too
+    slideOnset: 0.35,
+    slideLean: 0.12,
+    slideRoom: 0.6,
+    slideGain: 1.8,        // rad of slide for each grip of demand over the onset
+    slideMaxDeg: 35,
+    slideRiseS: 0.15,      // s, the slide angle follows its target with this lag stepping out
+    slideFallS: 0.25,      // s, and with this one coming back
+    slideScrub: 3,         // m/s^2 for each rad of slide
+    slideBrake: 0.5,       // brake input over this ends the hold
+    slideSpin: 4,          // the drawn rear wheel turns this much faster for each rad of slide
+
     // A wall or drop in the tile's zone layer (a face between stacked strands, on the 8 m grid) is solid only where
     // the land at the bike shows it: wallRiseM above the road, or dropDepthM below it. Elsewhere it is run-off.
     // Barriers, tunnel and gallery rock, and bridge parapets are always solid.

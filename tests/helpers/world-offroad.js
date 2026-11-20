@@ -76,10 +76,14 @@ export async function offRoadPlaces(game, env, hairpins, { perKind = 3 } = {}) {
     return places;
 }
 
-function makeRider(game, env, s, lateral, yawOff, speed, assist) {
+function makeRider(game, env, s, lateral, yawOff, speed, assist, rider = null) {
     const { THREE, Vehicle, WorldRun, WorldGuide } = game;
     const route = env.route;
-    const v = new Vehicle(new THREE.Scene());
+    const v = rider
+        ? new Vehicle(new THREE.Scene(), null, game.CHARACTERS.find(c => c.id === rider.character), rider.bike, { model: false })
+        : new Vehicle(new THREE.Scene());
+    // The same rider and bike with another off-road trait (0: what the trait adds is the difference)
+    if (rider && rider.offroad !== undefined) v.offroad = rider.offroad;
     v.environment = env;
     v.assistLevel = assist;
     const p = route.sample(s, {});
@@ -123,13 +127,13 @@ function pursue(v, world, tx, tz, reach) {
     return Math.max(-1, Math.min(1, (v.leanAngle - lean) * 8));
 }
 
-export async function leaveRoad(game, env, place, { speed, mode = 'exit', assist = 'normal', seconds = 25, log = null }) {
+export async function leaveRoad(game, env, place, { speed, mode = 'exit', assist = 'normal', seconds = 25, log = null, rider = null }) {
     const route = env.route, world = env.physics;
     const p0 = route.sample(place.s, {});
     await env.streamer.settle({ x: p0.x, z: p0.z }, place.s);
     if (log) log.length = 0;
     const side = place.side;
-    const { v, step } = makeRider(game, env, place.s, side * (p0.width / 2 - 1), side * (mode === 'exit' ? 20 : 8) * Math.PI / 180, speed, assist);
+    const { v, step } = makeRider(game, env, place.s, side * (p0.width / 2 - 1), side * (mode === 'exit' ? 20 : 8) * Math.PI / 180, speed, assist, rider);
     const out = { end: 'ride', endS: null, entry: null, at2: null, at5: null, offM: 0, offS: 0, cause: null };
     let left = null, time = 0, settled = place.s;
     const aim = {};
@@ -183,18 +187,19 @@ export function hairpinApex(route, hairpin) {
     return { apex, inside: Math.sign(route.curvatureAt(apex, 8)) };
 }
 
-// One ride through a hairpin from 40 m before it to 15 m past it. plan: {line: 'centre' | 'inside', lean} on the road,
+// One ride through a hairpin from 40 m before it to 15 m past it, on the default bike or on `rider`'s ({character, bike, offroad}: a
+// CHARACTERS id, one of their bikes, and optionally the off-road trait it rides with in place of its own). plan: {line: 'centre' | 'inside', lean} on the road,
 // at the speed a `lean` degree lean (35 by default) takes the bend at (at most `speed`); {cut: L} the road until L m before the apex, then straight at the
 // point L m past it (on the inside lane) at full throttle up to `speed`, then the road again. `cut: Infinity` aims
 // straight at the exit from the start. Returns {time, end, cause, landS}: the time to the exit (held CONFIRM_S, so a
 // cut rule or a crash just after it counts), or how the ride ended, and the seconds spent past the carriageway
-export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'normal', log = null }) {
+export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'normal', log = null, rider = null }) {
     const route = env.route, world = env.physics;
     const s0 = Math.max(env.startS, hairpin.s0 - 40), s1 = hairpin.s1 + 15;
     const { apex, inside } = hairpinApex(route, hairpin);
     await env.streamer.settle(route.sample(s0, {}), s0);
     if (log) log.length = 0;
-    const { v, step } = makeRider(game, env, s0, 0, 0, Math.min(speed, roadSpeed(route, s0, speed)), assist);
+    const { v, step } = makeRider(game, env, s0, 0, 0, Math.min(speed, roadSpeed(route, s0, speed)), assist, rider);
     const aim = {};
     const cut = plan.cut !== undefined ? plan.cut : null;
     const from = cut === Infinity ? -Infinity : cut !== null ? apex - cut : Infinity;

@@ -337,6 +337,12 @@ const LIGHT_BIKE = { maxSpeed: 0.85, acceleration: 0.9, steeringForce: 1.06, bra
 // what the handling model was tuned over
 const BIKE_LIMITS = { maxSpeed: [0.7, 1.2], acceleration: [0.75, 1.25], steeringForce: [0.9, 1.25], brakeForce: [0.9, 1.15], comfortShake: [0.25, 1.4] };
 
+// An off-road bike (BIKE_MODELS `offroad`) on a leg's run-off ground: the
+// run-off's drag, grip and floor speed (Terrain's RUNOFF) move toward these
+// by the bike's trait (Vehicle.legRunoff). The legs have no grip lowside (a
+// leg crashes on lean alone), so there is no power slide there
+const LEG_OFFROAD = { drag: 0.15, grip: 0.7, floorSpeed: 10 };
+
 // The detailed bikes (tools/blender/bikes, assets/bikes/detail). `kind` is
 // the procedural bike (Vehicle.BIKES) that stands in while the file loads
 // or if it fails; `name` and `year` are what the rider select shows; `paint`
@@ -348,24 +354,31 @@ const BIKE_LIMITS = { maxSpeed: [0.7, 1.2], acceleration: [0.75, 1.25], steering
 // final drive; a chain is on the left on all of them. `seat` stands in for
 // a file without a seat mark, `pose` sets the rider's lean and riding style,
 // `luggage` shows the file's luggage node. Every one keeps its file's colours.
+// `offroad` (0 to 1) is how much of an off-road bike it is on a world's land
+// (WorldPhysics.offroad, the power slide), by its tyres, wheels, weight and
+// suspension travel: 1 the trail single (knobbly tyres, 21 inch front, 150 kg),
+// 0.75 the small adventure single (light, dual-sport tyres, a 19 inch front),
+// 0.6 the adventure triple (a 21 inch front and long travel, but 220 kg),
+// 0.2 the scrambler (road tyres and short travel: wide bars and little else).
+// A bike without it rides the land as a road bike.
 const BIKE_MODELS = {
     bike01_z650: { kind: 'naked', cls: 'naked', name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
     bike02_speed_triple: { kind: 'naked', cls: 'naked', name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
     bike03_duke390: { kind: 'naked', cls: 'naked', light: true, name: 'Light naked single', year: 2016, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.2 } },
-    bike04_scrambler: { kind: 'naked', cls: 'retro', name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
-    bike05_g310gs: { kind: 'adventure', cls: 'adventure', light: true, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
+    bike04_scrambler: { kind: 'naked', cls: 'retro', offroad: 0.2, name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
+    bike05_g310gs: { kind: 'adventure', cls: 'adventure', light: true, offroad: 0.75, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
     bike06_z750: { kind: 'naked', cls: 'naked', name: 'Naked four, gloss black', year: 2010, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.818, -0.2], pose: { torsoLean: 0.24 } },
     bike07_mt09: { kind: 'naked', cls: 'naked', name: 'Naked triple, dark grey', year: 2021, paint: 0x08090b, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
     bike07_mt09_black: { kind: 'naked', cls: 'naked', name: 'Naked triple, blacked out', year: 2021, paint: 0x020202, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
     bike08_xsr900: { kind: 'sport', cls: 'retro', name: 'Retro sports triple', year: 2023, paint: 0x021b74, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
     bike09_duke890: { kind: 'naked', cls: 'naked', name: 'Naked twin, white and orange', year: 2020, paint: 0xcfcfc9, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
-    bike10_tiger900: { kind: 'adventure', cls: 'adventure', name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
+    bike10_tiger900: { kind: 'adventure', cls: 'adventure', offroad: 0.6, name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
     bike11_duke990: { kind: 'naked', cls: 'naked', name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
     bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
     bike13_panigale: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike13_panigale_black: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike14_forza: { kind: 'scooter', cls: 'scooter', name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
-    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } }
+    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } }
 };
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, keepFileColours: true }));
 
@@ -446,6 +459,7 @@ class Vehicle {
         // character has it, else their first
         this.outfit = Vehicle.outfitOf(this.character, options.outfit);
         this.bike = Vehicle.kindOf(this.model);
+        this.offroad = Vehicle.offroadOf(this.model);
         // Where the wheels turn and how big they are, [y, z, radius] in the
         // bike's axes: the procedural bike's, until a modelled bike brings
         // its own (BikeModels). Only the drawing reads them; the handling
@@ -535,6 +549,9 @@ class Vehicle {
         this.worldThrottle = 0; // The world's throttle opening, 0 to 1 (it follows the input over throttleRiseS)
         this.lastDemand = 0; // Grip demand of the last world tick (v^2 * kappa / g)
         this.lowsideTimerMs = 0; // Time the demand has been over the lowside limit
+        this.worldBrake = 0; // The brake input of the last world tick, 0 to 1
+        this.slideAngle = 0; // Power slide: how far the drawn bike heads into the turn past its path (rad, signed as the yaw)
+        this.wheelSlip = 0; // The drawn rear wheel's turn over the front's, from the slide
         this.footDown = false; // At a crawl near upright: a foot down, no fall
         this.tipTimerS = 0; // Time under fallSpeed leaned past tipLeanDeg
         this.crashCause = null; // What the crash card says caused a world crash
@@ -2225,7 +2242,7 @@ class Vehicle {
     }
 
     // The physics state a step may write, checked finite after each step: the position, the velocity and these
-    static get PHYSICS_STATE() { return ['speed', 'leanAngle', 'leanVelocity', 'yawAngle', 'handlebarAngle', 'steeringAngle', 'wheelieAngle']; }
+    static get PHYSICS_STATE() { return ['speed', 'leanAngle', 'leanVelocity', 'yawAngle', 'handlebarAngle', 'steeringAngle', 'wheelieAngle', 'slideAngle']; }
 
     // One physics step, and the guard on what it leaves: no non-finite number reaches the physics state (and from
     // there the camera, the fog and the frame). A step that leaves one is undone: the last finite state is held and
@@ -2650,7 +2667,7 @@ class Vehicle {
             acceleration: 1.0
         };
         if (!this.runoff) return weather;
-        const { grip } = this.runoff;
+        const { grip } = this.legRunoff();
         return {
             ...weather,
             lateralFriction: weather.lateralFriction * grip,
@@ -2998,15 +3015,47 @@ class Vehicle {
         if (this.runoff) {
             const world = this.worldPhysics;
             const weather = this.weatherSystem ? this.weatherSystem.getPhysicsMultipliers() : { lateralFriction: 1, brakeForce: 1, acceleration: 1 };
-            lateralFriction = weather.lateralFriction * world.landGrip;
-            brakeForce = weather.brakeForce * world.landBrakeGrip;
-            acceleration = weather.acceleration * world.landTraction;
+            const land = this.landValues();
+            lateralFriction = weather.lateralFriction * land.landGrip;
+            brakeForce = weather.brakeForce * land.landBrakeGrip;
+            acceleration = weather.acceleration * land.landTraction;
         }
         if (!this.weatherSystem) {
             lateralFriction *= this.worldSurfaceGrip;
             brakeForce *= this.worldSurfaceGrip;
         }
         return { ...multipliers, lateralFriction, brakeForce, acceleration };
+    }
+
+    // The run-off values this bike reads on a leg: the zone's own for a bike with no off-road trait (the same
+    // object), else each one moved toward LEG_OFFROAD's by the trait
+    legRunoff() {
+        const runoff = this.runoff;
+        if (!this.offroad) return runoff;
+        if (this.legRunoffSource !== runoff) {
+            this.legRunoffSource = runoff;
+            this.legRunoffCache = Object.freeze({ ...runoff, ...Object.fromEntries(Object.entries(LEG_OFFROAD)
+                .map(([key, value]) => [key, runoff[key] + (value - runoff[key]) * this.offroad])) });
+        }
+        return this.legRunoffCache;
+    }
+
+    // The land values this bike reads now: the world's own for a bike with no off-road trait (the same object, so
+    // nothing moves for it), else each one moved toward WorldPhysics.offroad's by the trait. The values that set the
+    // speed (offroad.pace) move by `soon` of the trait at once and by all of it as the time on the land
+    // (offRoadTime, which the carriageway clears) passes settleS and then riseS. One scratch object, written each call
+    landValues() {
+        const world = this.worldPhysics;
+        const to = world.offroad;
+        if (!this.offroad || !to) return world;
+        const x = Math.max(0, Math.min(1, (this.offRoadTime - to.settleS) / to.riseS));
+        const settled = to.soon + (1 - to.soon) * x * x * (3 - 2 * x);
+        const land = this.landScratch || (this.landScratch = {});
+        for (const key in to) {
+            if (typeof to[key] !== 'number' || typeof world[key] !== 'number') continue;
+            land[key] = world[key] + (to[key] - world[key]) * this.offroad * (to.pace.includes(key) ? settled : 1);
+        }
+        return land;
     }
 
     // The deceleration of the world's full brake (m/s^2): the bike's brake times brakeGain and the surface,
@@ -3034,11 +3083,13 @@ class Vehicle {
             ? Math.min(want, this.worldThrottle + step)
             : Math.max(want, this.worldThrottle - step);
         throttleInput = this.worldThrottle;
+        this.worldBrake = Math.max(0, Math.min(1, brakeInput || 0));
+        const land = this.landValues();
 
         if (throttleInput > 0) {
             const wheeliePenalty = this.isWheelie ? 0.3 : 1.0;
             // On the land the wheel spins up over landCapSpeed: the pull fades out across landCapBand under it
-            const spin = this.runoff ? Math.max(0, Math.min(1, (world.landCapSpeed - this.speed) / world.landCapBand)) : 1;
+            const spin = this.runoff ? Math.max(0, Math.min(1, (land.landCapSpeed - this.speed) / world.landCapBand)) : 1;
             this.speed += this.worldDrive(this.speed) * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration * spin;
         }
         if (brakeInput > 0) {
@@ -3056,9 +3107,12 @@ class Vehicle {
         }
         // The land's drag: landRoll x the speed, and landDrag x the speed over landCapSpeed, at most landDecelMax
         if (this.runoff && !this.isJumping) {
-            const drag = world.landRoll * this.speed + world.landDrag * Math.max(0, this.speed - world.landCapSpeed);
+            const drag = land.landRoll * this.speed + land.landDrag * Math.max(0, this.speed - land.landCapSpeed);
             this.speed -= Math.min(world.landDecelMax, drag) * deltaTime;
         }
+        // A power slide scrubs speed by its angle (updateWorldPhysics), on the land only: back on the carriageway
+        // the slide that is left costs nothing
+        if (this.slideAngle !== 0 && this.runoff) this.speed -= world.slideScrub * Math.abs(this.slideAngle) * deltaTime;
 
         // The route grade acts at full strength, so a descent speeds the bike up
         if (!this.isJumping) {
@@ -3122,9 +3176,15 @@ class Vehicle {
 
         const grip = Math.max(0.01, this.worldMultipliers().lateralFriction);
         const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip);
+        // An off-road bike on the land (not the verge, which has the road's grip) with the throttle open steps its
+        // rear out past the grip instead of falling: hold is how much of that this bike has now, 0 for a road bike,
+        // on the carriageway, with the throttle shut or the brake on hard
+        const hold = this.offroad > 0 && this.runoff && !this.isJumping && this.worldBrake <= world.slideBrake
+            ? this.offroad * this.worldThrottle : 0;
+        const capLean = hold > 0 ? Math.atan(Math.tan(capEff) * (1 + world.slideLean * hold)) : capEff;
         // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg
         const low = this.lowLeanShare(v);
-        const leanLimit = Math.min(capEff, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
+        const leanLimit = Math.min(capLean, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
@@ -3180,21 +3240,35 @@ class Vehicle {
 
         const tanLean = Math.tan(Math.abs(this.leanAngle));
         let curvature = v2 > 1e-6 ? Math.min(1 / radiusFloor, g * tanLean / v2) : 0;
+        // Signed toward +yaw: the lean turns the bike away from its sign, the handlebar toward its own
+        let turn = -curvature * Math.sign(this.leanAngle);
         if (handlebarShare > 0) {
-            // Signed toward +yaw: the lean turns the bike away from its sign, the handlebar toward its own
-            const turn = (1 - handlebarShare) * -curvature * Math.sign(this.leanAngle)
-                + handlebarShare * Math.tan(this.handlebarAngle) / this.wheelbase;
-            this.yawAngle += v * turn * deltaTime;
+            turn = (1 - handlebarShare) * turn + handlebarShare * Math.tan(this.handlebarAngle) / this.wheelbase;
             curvature = Math.abs(turn);
-        } else {
-            this.yawAngle -= v * curvature * Math.sign(this.leanAngle) * deltaTime;
+        }
+        this.lastDemand = v2 * curvature / g;
+
+        // The power slide. With a hold the rear steps out from a demand under the grip (the drive uses some of it),
+        // and the drawn bike heads further into the turn by the slide angle; the path never turns tighter than the
+        // grip gives (yawAngle stays the way the bike travels, so the camera, the cut rule and the progress read the
+        // path). With no hold the slide comes back and the lowside below is the one every bike has
+        const tanCap = Math.tan(capEff);
+        const used = this.lastDemand / tanCap;
+        if (hold > 0 && used > 1) turn /= used;
+        this.yawAngle += v * turn * deltaTime;
+        if (hold > 0 || this.slideAngle !== 0) {
+            const over = hold > 0 ? Math.max(0, used - (1 - world.slideOnset * hold)) : 0;
+            const want = Math.sign(turn) * Math.min(world.slideMaxDeg * Math.PI / 180, world.slideGain * over * hold);
+            const lag = Math.abs(want) > Math.abs(this.slideAngle) ? world.slideRiseS : world.slideFallS;
+            this.slideAngle += (want - this.slideAngle) * (1 - Math.exp(-deltaTime / lag));
+            if (want === 0 && Math.abs(this.slideAngle) < 1e-3) this.slideAngle = 0;
         }
 
-        this.lastDemand = v2 * curvature / g;
-        if (this.lastDemand > world.lowsideMargin * Math.tan(capEff)) {
+        if (this.lastDemand > (world.lowsideMargin + world.slideRoom * hold) * tanCap) {
             this.lowsideTimerMs += deltaTime * 1000;
             if (this.lowsideTimerMs >= world.lowsideMs) {
-                this.worldCrash(this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip');
+                this.worldCrash(hold > 0 ? 'Slid too far: the rear came round on the grass'
+                    : this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip');
             }
         } else {
             this.lowsideTimerMs = 0;
@@ -3215,6 +3289,7 @@ class Vehicle {
     // A world crash with the cause the crash card shows
     worldCrash(cause) {
         this.crashed = true;
+        this.slideAngle = 0;
         this.crashCause = cause;
         this.crashAngle = this.leanAngle || 0.5;
         console.log(`CRASHED! ${cause} at`, (this.speed * 2.237).toFixed(1) + ' mph');
@@ -3441,11 +3516,13 @@ class Vehicle {
         this.landRock = 0;
         if (world && this.runoff && !this.crashed) {
             const d = this.distanceTraveled;
-            const rough = Math.min(1, this.speed / world.landCapSpeed);
-            this.group.position.y += world.landBumpM * rough * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
-            this.landRock = world.landWobbleDeg * Math.PI / 180 * rough * Math.sin(d * 1.7) * Math.sin(d * 0.6 + 2);
+            const land = this.landValues();
+            const rough = Math.min(1, this.speed / land.landCapSpeed);
+            this.group.position.y += land.landBumpM * rough * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
+            this.landRock = land.landWobbleDeg * Math.PI / 180 * rough * Math.sin(d * 1.7) * Math.sin(d * 0.6 + 2);
         }
-        this.group.rotation.y = this.yawAngle;
+        // In a power slide the drawn bike heads into the turn past the way it travels
+        this.group.rotation.y = this.yawAngle + this.slideAngle;
         this.meshNeedsBaseCapture = true;
 
         // Rider stands up over the jump and settles back on landing - an
@@ -3471,8 +3548,10 @@ class Vehicle {
         const rotationSpeed = this.speed / rear; // rad/s = v / r
         this.wheelRotation += rotationSpeed * (this.currentDeltaTime || 1/60);
         const frontRotation = front === rear ? this.wheelRotation : this.wheelRotation * rear / front;
-        this.rearWheel.rotation.x = this.wheelRotation;
-        this.rearDisc.rotation.x = this.wheelRotation;
+        // In a power slide the rear tyre spins faster than the bike travels
+        if (this.slideAngle !== 0) this.wheelSlip += rotationSpeed * this.worldPhysics.slideSpin * Math.abs(this.slideAngle) * (this.currentDeltaTime || 1/60);
+        this.rearWheel.rotation.x = this.wheelRotation + this.wheelSlip;
+        this.rearDisc.rotation.x = this.wheelRotation + this.wheelSlip;
         this.steerFront(frontRotation);
         
         if (this.crashed) {
@@ -3713,7 +3792,7 @@ class Vehicle {
         if (dyaw > Math.PI) dyaw -= Math.PI * 2;
         else if (dyaw < -Math.PI) dyaw += Math.PI * 2;
         this.renderYawAngle = (this.prevRenderYaw !== undefined ? this.prevRenderYaw : this.yawAngle) + dyaw * t;
-        this.group.rotation.y = this.renderYawAngle;
+        this.group.rotation.y = this.renderYawAngle + this.slideAngle;
 
         // Shift the mesh by the interpolation offset relative to the physics
         // position (idempotent - rebased from meshBasePosition every call)
@@ -3756,6 +3835,8 @@ class Vehicle {
         this.worldThrottle = 0;
         this.lastDemand = 0;
         this.lowsideTimerMs = 0;
+        this.worldBrake = 0;
+        this.slideAngle = 0;
         this.footDown = false;
         this.footT = 0; // The stop pose snaps off: a reset rides away
         this.tipTimerS = 0;
@@ -4136,7 +4217,7 @@ class Vehicle {
     checkRunoff(deltaTime, zone) {
         if (this.crashed) return;
 
-        const { drag, floorSpeed } = this.runoff;
+        const { drag, floorSpeed } = this.legRunoff();
         const limit = this.worldPhysics ? this.worldPhysics.offRoadLimitS : this.maxOffRoadTime;
         // Drag only ever slows the bike: one that enters below the floor keeps its speed
         const floor = Math.min(this.speed, floorSpeed);
@@ -4417,12 +4498,14 @@ class Vehicle {
 }
 // The kinds of bike: the builder that makes each one from primitives, and
 // how far its rider rises off the seat over a jump (motocross riders stand
-// tall, a scooter rider barely lifts)
+// tall, a scooter rider barely lifts). `offroad` is the trait of a bike that
+// is the kind itself (BIKE_MODELS `offroad`); a detailed bike keeps its own,
+// whatever kind stands in for it
 Vehicle.BIKES = {
     sport: { build: 'buildSportBike', stand: 0.16 },
-    adventure: { build: 'buildAdventureBike', stand: 0.16 },
+    adventure: { build: 'buildAdventureBike', stand: 0.16, offroad: 0.6 },
     scooter: { build: 'buildScooter', stand: 0.08 },
-    dirt: { build: 'buildDirtBike', stand: 0.24 },
+    dirt: { build: 'buildDirtBike', stand: 0.24, offroad: 1 },
     naked: { build: 'buildNakedBike', stand: 0.16 }
 };
 
@@ -4647,6 +4730,13 @@ Vehicle.modelOf = (character, bikeId) => {
 
 // The procedural kind (Vehicle.BIKES) a bike is built as
 Vehicle.kindOf = (id) => (BIKE_MODELS[id] ? BIKE_MODELS[id].kind : (Vehicle.BIKES[id] ? id : 'sport'));
+
+// How much of an off-road bike a bike is, 0 to 1: the catalogue entry's own
+// trait, so it is the same before and after the bike's file loads
+Vehicle.offroadOf = (id) => {
+    const bike = BIKE_MODELS[id] || Vehicle.BIKES[id];
+    return Math.max(0, Math.min(1, (bike && bike.offroad) || 0));
+};
 
 // The class physics of a bike: a detailed bike's class, scaled for a light
 // one; a procedural kind has none of its own

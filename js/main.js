@@ -1935,8 +1935,11 @@ class Game {
         // Additional camera shake at high speeds (outside onboard mode)
         if (currentMode.type !== 'onboard') {
             const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
-            // The world's land shakes the camera as well as the bike (Vehicle.landRock)
-            const rough = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed ? 0.15 * Math.min(1, this.vehicle.speed / this.vehicle.worldPhysics.landCapSpeed) : 0;
+            // The world's land shakes the camera as well as the bike (Vehicle.landRock), and an off-road bike less
+            // (as its bump, Vehicle.landValues)
+            const onLand = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed;
+            const land = onLand ? this.vehicle.landValues() : null;
+            const rough = onLand ? 0.15 * Math.min(1, this.vehicle.speed / land.landCapSpeed) * land.landBumpM / this.vehicle.worldPhysics.landBumpM : 0;
             const shakeIntensity = (speedFactor * 0.05 + rough) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
@@ -3665,6 +3668,18 @@ class Game {
                 rearWheelPos.x -= Math.sin(this.vehicle.yawAngle) * 0.7;
                 rearWheelPos.z -= Math.cos(this.vehicle.yawAngle) * 0.7;
                 this.particles.createTireSmoke(rearWheelPos, this.vehicle.velocity, smokeIntensity);
+            }
+
+            // Roost from the rear wheel in a power slide (Vehicle.slideAngle), a puff every 0.12 s at most
+            const slide = Math.abs(this.vehicle.slideAngle || 0);
+            this.roostS = slide > 0.1 ? (this.roostS || 0) + rawDeltaTime : 0;
+            if (this.roostS >= 0.12) {
+                this.roostS = 0;
+                const rear = this.vehicle.position.clone();
+                const heading = this.vehicle.yawAngle + this.vehicle.slideAngle;
+                rear.x -= Math.sin(heading) * 0.7;
+                rear.z -= Math.cos(heading) * 0.7;
+                this.particles.createDustCloud(rear, Math.min(1, 0.4 + slide));
             }
 
             // Brief oily smoke puffs when accelerating hard at very high speed
