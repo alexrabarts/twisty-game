@@ -254,7 +254,8 @@ const CHARACTERS = [
         name: 'Shane',
         bikeLabel: 'Light naked single',
         bikeColor: '0x010101', // Black, white shrouds, orange frame
-        bikes: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990'],
+        // Least powerful first: the light single, the naked twin, the big naked twin, the big adventure tourer
+        bikes: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990', 'bike16_superadv'],
         outfits: OUTFITS.shane,
         kit: OUTFITS.shane[0].kit,
         // Broad
@@ -373,6 +374,8 @@ const LEG_OFFROAD = { drag: 0.15, grip: 0.7, floorSpeed: 10 };
 // suspension travel: 1 the trail single (knobbly tyres, 21 inch front, 150 kg),
 // 0.75 the small adventure single (light, dual-sport tyres, a 19 inch front),
 // 0.6 the adventure triple (a 21 inch front and long travel, but 220 kg),
+// 0.5 the big adventure tourer (long travel, but a 19 inch cast front, road
+// tyres, 245 kg and its luggage),
 // 0.2 the scrambler (road tyres and short travel: wide bars and little else).
 // A bike without it rides the land as a road bike.
 const BIKE_MODELS = {
@@ -392,7 +395,8 @@ const BIKE_MODELS = {
     bike13_panigale: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike13_panigale_black: { kind: 'sport', cls: 'supersport', name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike14_forza: { kind: 'scooter', cls: 'scooter', name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
-    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } }
+    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
+    bike16_superadv: { kind: 'adventure', cls: 'adventure', offroad: 0.5, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
 };
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, keepFileColours: true }));
 

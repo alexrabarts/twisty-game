@@ -92,6 +92,7 @@ const BIKES = {
     'bikes/detail/bike13_panigale_black': { rear: [240, 262], front: [200, 215] },
     'bikes/detail/bike14_forza': { rear: [145, 170], front: [200, 210] },
     'bikes/detail/bike15_crf250': { rear: [110, 125], front: [200, 210] },
+    'bikes/detail/bike16_superadv': { rear: [200, 210], front: [200, 210] },
 };
 
 describe.each(Object.entries(BIKES))('assets/%s.glb brake calipers', (bike, where) => {

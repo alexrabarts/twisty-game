@@ -17,6 +17,8 @@ const world = game.WorldPhysics;
 const rad = d => d * Math.PI / 180;
 const TRAIL = ['lucy', 'bike15_crf250'], SINGLE = ['guy', 'bike05_g310gs'], TRIPLE = ['alex', 'bike10_tiger900'], SCRAMBLER = ['guy', 'bike04_scrambler'];
 const OFFROAD = [TRAIL, SINGLE, TRIPLE, SCRAMBLER];
+// The big adventure tourer: its trait is between the triple's and the scrambler's
+const TOURER = ['shane', 'bike16_superadv'];
 const ROAD_BIKES = [['steve', 'bike08_xsr900'], ['steve', 'bike13_panigale'], ['tim', 'bike14_forza'], ['shane', 'bike11_duke990'], ['guy', 'bike12_tracer9gt']];
 const ROAD = {
     landHold: 3.768, landFrom20: [7.956, 4.053, 3.77], landTurn8: { lean: -0.58, yaw: 2.212 }, landLean42: { at: 0.2, lean: -0.663, yaw: 0.202 },
@@ -75,7 +77,7 @@ function turn(who, land, { speed = 8, throttle = 1, brake = 0, leanDeg = 0, seco
 const close = (got, want) => expect(got).toBeCloseTo(want, 2);
 
 describe('the off-road trait is data', () => {
-    test('the four off-road bikes carry it in the catalogue, in order, and no other bike does', () => {
+    test('the five off-road bikes carry it in the catalogue, in order, and no other bike does', () => {
         const trait = id => game.Vehicle.offroadOf(id);
         const [trail, single, triple, scrambler] = OFFROAD.map(([, id]) => trait(id));
         expect(trail).toBe(1);
@@ -83,8 +85,12 @@ describe('the off-road trait is data', () => {
         expect(single).toBeGreaterThan(triple);
         expect(triple).toBeGreaterThan(2 * scrambler);
         expect(scrambler).toBeGreaterThan(0);
-        const others = Object.keys(game.BIKE_MODELS).filter(id => !OFFROAD.some(([, own]) => own === id));
-        expect(others.length).toBe(Object.keys(game.BIKE_MODELS).length - 4);
+        const tourer = trait(TOURER[1]);
+        expect(tourer).toBe(0.5);
+        expect(tourer).toBeLessThan(triple);
+        expect(tourer).toBeGreaterThan(scrambler);
+        const others = Object.keys(game.BIKE_MODELS).filter(id => ![...OFFROAD, TOURER].some(([, own]) => own === id));
+        expect(others.length).toBe(Object.keys(game.BIKE_MODELS).length - 5);
         for (const id of others) expect(trait(id)).toBe(0);
     });
 
@@ -131,6 +137,17 @@ describe('the land slows an off-road bike less', () => {
         expect(triple).toBeGreaterThan(scrambler);
         expect(scrambler).toBeGreaterThan(road);
         expect(trail).toBeLessThan(world.offroad.landCapSpeed);
+    });
+
+    test('the big adventure tourer holds a speed between the scrambler\'s and the adventure triple\'s, and slides between them', () => {
+        const speed = hold(TOURER, true);
+        console.log(`speed held on flat land at full throttle (m/s): big adventure tourer ${speed.toFixed(2)}`);
+        expect(speed).toBeLessThan(hold(TRIPLE, true));
+        expect(speed).toBeGreaterThan(hold(SCRAMBLER, true));
+        const slid = turn(TOURER, true);
+        expect(slid.crashed).toBe(false);
+        expect(slid.slide).toBeGreaterThan(turn(SCRAMBLER, true).slide);
+        expect(slid.slide).toBeLessThan(turn(TRIPLE, true).slide);
     });
 
     test('the speed comes with time on the land: in the first seconds the trail single has little of it', () => {

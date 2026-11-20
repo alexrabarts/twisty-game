@@ -16,7 +16,7 @@ const OWNERS = {
     steve: ['bike08_xsr900', 'bike13_panigale'],
     alex: ['bike02_speed_triple', 'bike10_tiger900'],
     tim: ['bike14_forza', 'bike06_z750'],
-    shane: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990'],
+    shane: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990', 'bike16_superadv'],
     lucy: ['bike15_crf250', 'bike01_z650', 'bike07_mt09', 'bike13_panigale_black'],
     guy: ['bike04_scrambler', 'bike05_g310gs', 'bike07_mt09_black', 'bike12_tracer9gt']
 };
@@ -123,6 +123,26 @@ describe('the physics of a rider on a bike', () => {
         const shane = find('shane');
         expect(game.Vehicle.physicsOf(shane, 'bike11_duke990').maxSpeed).toBeGreaterThan(shane.physics.maxSpeed);
         expect(ride('shane', 'bike11_duke990').maxSpeed).toBeCloseTo(68 * game.Vehicle.physicsOf(shane, 'bike11_duke990').maxSpeed, 9);
+    });
+
+    test('Shane\'s big adventure tourer is his last and fastest bike: quicker at the top, softer and slower to turn than his nakeds, with its luggage on', () => {
+        const shane = find('shane');
+        expect(shane.bikes[shane.bikes.length - 1]).toBe('bike16_superadv');
+        expect(shane.bikes[0]).toBe('bike03_duke390');
+        expect(game.BIKE_MODELS.bike16_superadv).toMatchObject({ kind: 'adventure', cls: 'adventure', drive: 'chain', rearBrake: 'right', luggage: true });
+        expect(game.BIKE_MODELS.bike16_superadv.light).toBeUndefined();
+        const tourer = game.Vehicle.physicsOf(shane, 'bike16_superadv');
+        const naked = game.Vehicle.physicsOf(shane, 'bike11_duke990');
+        expect(tourer.maxSpeed).toBeGreaterThan(naked.maxSpeed);
+        expect(tourer.maxSpeed).toBeGreaterThan(shane.physics.maxSpeed);
+        expect(tourer.comfortShake).toBeLessThan(naked.comfortShake);
+        expect(tourer.steeringForce).toBeLessThan(naked.steeringForce);
+        // Jumps and wheelies are the rider's, not the bike's
+        expect(tourer.jumpPower).toBe(shane.physics.jumpPower);
+        expect(tourer.wheeliePop).toBe(shane.physics.wheeliePop);
+        expect(ride('shane', 'bike16_superadv').maxSpeed).toBeCloseTo(68 * tourer.maxSpeed, 9);
+        // He wears no backpack on any bike, so none meets the duffel behind him
+        for (const bike of shane.bikes) expect(ride('shane', bike).riderSpec.backpackColor).toBeNull();
     });
 });
 
