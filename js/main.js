@@ -300,7 +300,7 @@ class Game {
             this.fallBackToLegs(error);
             return;
         }
-        note.remove();
+        screen.remove();
         document.body.classList.remove('world-loading-on');
     }
 
