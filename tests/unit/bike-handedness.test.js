@@ -146,7 +146,8 @@ describe.each(Object.keys(game.Vehicle.BIKES))('the procedural %s', kind => {
         expect(vehicle.leftFork.position.x).toBeGreaterThan(0);
         expect(vehicle.rightFork.position.x).toBeLessThan(0);
         // Mirrored, not turned: the wheels still spin and steer the right way
-        vehicle.speed = 10;
+        // At walking pace, where the bar is drawn with the steering (Vehicle.shownBar)
+        vehicle.speed = 1;
         vehicle.steeringAngle = 0.2;
         vehicle.currentDeltaTime = 1 / 60;
         vehicle.updateMesh();

@@ -319,10 +319,11 @@ describe.each(IDS)('swapping the model of %s', id => {
         vehicle.steeringAngle = 0.2;
         vehicle.updateMesh();
         expect(vehicle.rearWheel.rotation.x).toBeGreaterThan(0);
-        // The front end is turned by half the steering about the steering
-        // axis, the wheel and its disc spun about their own axle inside it
+        // The front end is turned by the drawn bar (Vehicle.shownBar: at this speed and lean, a little into the
+        // turn) about the steering axis, the wheel and its disc spun about their own axle inside it
         const { THREE } = game;
-        const turned = new THREE.Quaternion().setFromAxisAngle(vehicle.steerRig.axis, 0.1)
+        expect(vehicle.barState.shown).toBeLessThan(0);
+        const turned = new THREE.Quaternion().setFromAxisAngle(vehicle.steerRig.axis, vehicle.barState.shown)
             .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), vehicle.rearWheel.rotation.x));
         for (const node of ['frontWheel', 'frontDisc']) expect(Math.abs(vehicle[node].quaternion.dot(turned))).toBeCloseTo(1, 9);
         expect(vehicle.rider.rotation.z).toBeCloseTo(0.08, 6);

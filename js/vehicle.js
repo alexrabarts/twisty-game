@@ -3552,7 +3552,7 @@ class Vehicle {
         if (this.slideAngle !== 0) this.wheelSlip += rotationSpeed * this.worldPhysics.slideSpin * Math.abs(this.slideAngle) * (this.currentDeltaTime || 1/60);
         this.rearWheel.rotation.x = this.wheelRotation + this.wheelSlip;
         this.rearDisc.rotation.x = this.wheelRotation + this.wheelSlip;
-        this.steerFront(frontRotation);
+        this.steerFront(frontRotation, this.shownBar(this.currentDeltaTime));
         
         if (this.crashed) {
             if (this.fallingOffCliff && !this.hitGround && this.tumbleSpeed > 0) {
@@ -3663,6 +3663,43 @@ class Vehicle {
         this.meshBasePosition.copy(this.group.position);
     }
 
+    // The handlebar angle the bike is drawn with (radians, the sign of steeringAngle), from the lean alone: nothing
+    // in the physics reads it. A bike at speed is steered by the lean, and the bar does what a real one does
+    // (Vehicle.BAR): while the bike rolls, the bar is pushed the other way (to roll left the rider pushes the bar to
+    // the right), by `counter` for each rad/s of roll; at a held lean it sits a little into the turn, by the angle the
+    // front wheel needs for that radius. Under `directSpeed` the bar turns the bike itself, so the drawn bar goes over
+    // to the steering angle. A crashed bike keeps the bar it fell with
+    shownBar(deltaTime) {
+        const bar = Vehicle.BAR, state = this.barState || (this.barState = { lean: this.leanAngle, rate: 0, shown: 0 });
+        if (this.crashed) {
+            state.held = true;
+            return state.shown;
+        }
+        // A restart puts the bike upright at once: that is not a roll
+        if (state.held) {
+            state.held = false;
+            state.lean = this.leanAngle;
+            state.rate = 0;
+        }
+        if (deltaTime > 0) {
+            const rate = (this.leanAngle - state.lean) / deltaTime;
+            state.rate += (rate - state.rate) * (1 - Math.exp(-deltaTime / bar.lag));
+        }
+        state.lean = this.leanAngle;
+        state.shown = Vehicle.barShown(this.leanAngle, state.rate, this.speed, this.steeringAngle, this.wheelbase);
+        return state.shown;
+    }
+
+    static barShown(lean, rate, speed, steer, wheelbase) {
+        const bar = Vehicle.BAR;
+        const x = Math.max(0, 1 - Math.max(0, speed) / bar.directSpeed);
+        const direct = x * x * (3 - 2 * x);
+        const counter = Math.max(-bar.counterMax, Math.min(bar.counterMax, bar.counter * rate));
+        const v = Math.max(speed, bar.directSpeed / 2);
+        const into = -Math.sign(lean) * Math.min(bar.intoMax, Math.atan(wheelbase * 9.81 * Math.tan(Math.min(Math.abs(lean), 1.2)) / (v * v)));
+        return direct * steer * Vehicle.STEER_SHOWN + (1 - direct) * (counter + into);
+    }
+
     // The front end that turns with the handlebar (the wheel, its disc, the fork legs and the bar) and the line it
     // turns about: the fork legs' line through the front axle (Vehicle.steerAxis). Each part's pose is kept as it is
     // now, the rest pose; steerFront turns them from it. Run again whenever those parts are replaced.
@@ -3683,9 +3720,9 @@ class Vehicle {
     // The front end turned by the steering about the steering axis, the wheel and its disc spun by `spin` about their
     // own axle inside that turn. Spun about the bike's x after the turn (an Euler x over a steer y), a steered wheel
     // wobbled on a cone and leaned off upright.
-    steerFront(spin) {
+    steerFront(spin, bar = this.steeringAngle * Vehicle.STEER_SHOWN) {
         const rig = this.steerRig;
-        const turn = rig.turn.setFromAxisAngle(rig.axis, this.steeringAngle * Vehicle.STEER_SHOWN);
+        const turn = rig.turn.setFromAxisAngle(rig.axis, bar);
         rig.spin.setFromAxisAngle(Vehicle.AXLE, spin);
         for (const { part, spun, position, quaternion } of rig.parts) {
             part.position.copy(position).sub(rig.point).applyQuaternion(turn).add(rig.point);
@@ -3813,6 +3850,7 @@ class Vehicle {
         this.leanAngle = 0;
         this.leanVelocity = 0;
         this.crashed = false;
+        this.barState = null;
         this.crashAngle = 0;
         this.isJumping = false;
         this.jumpVelocityY = 0;
@@ -4531,6 +4569,10 @@ Vehicle.mirrorParts = (group, rider) => {
 Vehicle.LEFT = typeof Route !== 'undefined' ? Route.LEFT : 1;
 // The share of the steering angle the front end is drawn turned by, and the axle a wheel spins about
 Vehicle.STEER_SHOWN = 0.5;
+// The drawn handlebar at speed (Vehicle.shownBar): `counter` s, the bar angle against each rad/s of roll (a full roll
+// rate of 1.15 rad/s shows 8 degrees), at most counterMax; at most intoMax into the turn at a held lean; the roll rate
+// is smoothed over `lag` s; under directSpeed m/s the drawn bar goes over to the steering angle
+Vehicle.BAR = Object.freeze({ counter: 0.12, counterMax: 0.16, intoMax: 0.07, lag: 0.12, directSpeed: 7 });
 Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
 // The stop pose (Vehicle.updateFooting): under STOP_SPEED (m/s) the bike leans FOOT_LEAN (radians) to its left and the
 // left foot goes down, FOOT_OUT (m) out from the bike's centre plane and FOOT_AHEAD (m) ahead of the peg, over FOOT_S

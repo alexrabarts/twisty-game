@@ -151,3 +151,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner found the rain went on too long; it rained to the summit. The rain part of the stage now ends at 0.8 of its length. It thins from s 9,800 m, and the air is clear and the road dry from s 11,300 m, so the last 1.9 km to the summit are dry. The rain is still full through the first stack of cobbled hairpins (s 7,740 to 9,800 m).
 - Check: `tests/unit/world-looks.test.js` (rain full for at least 1 km, then no rain, mist or wet road in the last kilometre; the hairpin grip rule), `world-run.test.js` and `atmosphere-track.test.js` (a restart at a station near the top is in clear air on a dry road): 79 tests pass locally.
 - Left: not looked at in the browser. A mist between the rain and the clear air is not there: a part must be longer than the 1.5 km blend, and the top of the stage has no room for one. The long checks wait for the end.
+
+## The handlebar is drawn as a bike is steered
+
+- Job: the owner saw the bars and arms go left for left and right for right at any speed. The drawn bar now follows the lean (`Vehicle.shownBar`, `Vehicle.BAR`): while the bike rolls into a turn the bar is pushed the other way (up to 9 degrees), at a held lean it sits a little into the turn (at most 4 degrees), and under 7 m/s it goes over to the steering angle. The hands follow through the rig as before. No physics changed.
+- Check: `tests/unit/bike-counter-steer.test.js` (6 tests: against the roll then into the turn, both sides; no step from frame to frame; walking pace; the wheel drawn at that angle; a crash and a restart; the same ride with the bar held straight is the same to the last bit) and four older bike files, 573 tests, pass locally; the four pinned-hash files pass.
+- Left: not looked at in the browser. The crew's bikes are not steered at all, as before. The long checks wait for the end.
