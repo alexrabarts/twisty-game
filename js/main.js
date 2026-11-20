@@ -223,6 +223,8 @@ class Game {
         this.soundManager = new SoundManager();
         this.soundManager.masterVolume = 0.3;
         this.hud = new Hud(document, window);
+        // The tuning (js/tuning.js) reads its stored values in debug mode only, and only then is its panel built
+        this.startTuning();
 
         // requestAnimationFrame stops on a hidden tab, so nothing else would
         // silence the engine drone
@@ -331,6 +333,7 @@ class Game {
     // The game on a world: no cones or rockfalls are built (they are leg systems), traffic rides the
     // route, and the atmosphere track runs along the whole ride in 100 m units (R5).
     async initializeGameWithWorld(environment) {
+        this.beginTunedRide();
         this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
         this.environment = environment;
         this.environment.onMeshBuilt = root => this.graphics.fixColorSpaces(root);
@@ -455,6 +458,7 @@ class Game {
     }
 
     initializeGameWithLeg(leg) {
+        this.beginTunedRide();
         // Tear down any menu showcase (bikes / preview environment / RAF loop)
         this.endMenuShowcase();
 
@@ -582,8 +586,8 @@ class Game {
         // measured then say nothing about the steady state
         this.adaptGraceUntil = performance.now() + 4000;
 
-        // Start leaderboard session
-        if (this.leaderboardService) {
+        // Start leaderboard session (a tuned ride keeps none: markTuned)
+        if (this.leaderboardService && !this.rideTuned) {
             this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
                 if (result === true) {
                     console.log('Leaderboard session started for leg:', leg.id);
@@ -1880,7 +1884,7 @@ class Game {
         } else {
             // Standard and High View cameras
             // Dynamic camera offset based on lean angle for better mountain road feel
-            const leanInfluence = this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2); // More influence in high view
+            const leanInfluence = Game.tune('camera', 'swing', this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2)); // More influence in high view
             
             // Combine lateral lag with lean influence; a world's boom turns by the route, and WorldCamera takes the
             // same swing in its own frame (worldCameraInput)
@@ -1891,6 +1895,12 @@ class Game {
             // (a leg's camera rises a little with speed; a world's comes down toward the road, WorldCamera.speedHeight)
             this.cameraOffset.y = this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5;
             this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (currentMode.type === 'high' ? 2 : 1); // Move back with speed
+            // The tuning's camera distance: the boom's length and height together
+            const far = Game.tune('camera', 'distance', 1);
+            if (far !== 1) {
+                this.cameraOffset.y *= far;
+                this.cameraOffset.z *= far;
+            }
             
             // (No lateral camera swing during wheelies - the 8-unit sideways
             // jump made the bike read as tipping left while it was straight)
@@ -2137,8 +2147,8 @@ class Game {
         input.offset.y = this.cameraOffset.y;
         input.offset.z = this.cameraOffset.z;
         const swing = input.swing || (input.swing = {});
-        swing.x = -v.leanAngle * (mode.type === 'high' ? 3 : 2) + this.cameraLateralOffset;
-        swing.look = -v.leanAngle * (mode.type === 'high' ? 2 : 4);
+        swing.x = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'high' ? 3 : 2) + this.cameraLateralOffset);
+        swing.look = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'high' ? 2 : 4));
         swing.follow = follow;
         swing.lookFollow = Math.min(this.cameraLerpFactor * 1.5, 1);
         input.aspect = this.camera.aspect;
@@ -2983,7 +2993,8 @@ class Game {
         // was played earlier in the same page life must not give it a board
         if (this.environment && this.environment.isWorld) return;
         const leg = this.tourSystem.getCurrentLeg();
-        if (leg) {
+        // A tuned ride stays without a session until the next ride begins (markTuned)
+        if (leg && !this.rideTuned) {
             this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
                 if (result !== true && result.error) {
                     console.warn('Leaderboard session restart failed:', result.message);
@@ -3417,6 +3428,8 @@ class Game {
             this.graphics.render(this.scene, this.camera);
             return;
         }
+
+        this.watchTuning();
 
         // A world ride eases the steer keys (SteerEase); a leg has no physics object and keeps its own smoothing
         const world = this.vehicle && this.vehicle.worldPhysics;
@@ -4255,6 +4268,47 @@ class Game {
         });
         // (a crash has said its cause and its cost during the fall)
         if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
+    }
+
+    // The tuning (js/tuning.js, .agent/system/handling.md): multipliers over the handling's numbers, moved with the
+    // panel of debug mode (js/tuningpanel.js; T opens it and the ride goes on). Outside debug mode nothing stored is
+    // read and no panel is built
+    startTuning() {
+        if (typeof Tuning === 'undefined') return;
+        const debug = Game.debugEnabled(window.location.search);
+        let storage = null;
+        try {
+            storage = window.localStorage;
+        } catch (error) {
+            console.warn('Tuning: no storage, the values last for this page only:', error);
+        }
+        Tuning.start({ debug, storage });
+        if (debug && typeof TuningPanel !== 'undefined') this.tuningPanel = new TuningPanel(document, Tuning, { world: () => !this.environment || !!this.environment.isWorld });
+    }
+
+    // One of the numbers the tuning scales (Tuning.field), or the number itself where the tuning is not loaded
+    static tune(on, field, value) {
+        return typeof Tuning === 'undefined' ? value : Tuning.field(on, field, value);
+    }
+
+    // A ride begins: it is flagged as tuned from the start when a multiplier is off 1 already
+    beginTunedRide() {
+        this.rideTuned = typeof Tuning !== 'undefined' && Tuning.beginRide();
+        if (this.hud) this.hud.setTuned(this.rideTuned);
+    }
+
+    // Each frame: a ride in which a multiplier was off 1 at any moment submits no time, and stays so after Reset
+    // until the next ride begins. A world is no longer trusted, as after the debug skip (WorldEnvironment
+    // submitAllowed); a classic leg loses its leaderboard session and gets none on a restart
+    watchTuning() {
+        if (typeof Tuning === 'undefined' || !Tuning.ride.tuned) return;
+        if (!this.rideTuned) {
+            this.rideTuned = true;
+            if (this.hud) this.hud.setTuned(true);
+        }
+        const environment = this.environment;
+        if (environment && environment.isWorld) environment.trusted = false;
+        else if (this.leaderboardService && this.leaderboardService.isActive()) this.leaderboardService.cancelSession();
     }
 
     // Debug mode (`?debug` in the page's address): every rider, bike and leg is open (TourSystem `unlockAll`), and N puts the bike DEBUG_SKIP_BEFORE_M before the next station of a

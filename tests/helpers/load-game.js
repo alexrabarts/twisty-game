@@ -72,7 +72,7 @@ export function loadWorldPhysics() {
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
 // `sources` replaces a file's text by name ('vehicle.js': an older revision's).
 export function loadGame(THREE = realThree(), log = [], sources = {}) {
-    const files = ['terrain.js', 'course.js', 'race.js', 'world/physics.js', 'world/route.js', 'world/legroute.js', 'world/data.js', 'world/graph.js', 'world/worldroute.js', 'world/worldground.js', 'world/streamer.js', 'world/landshade.js', 'world/roadsurface.js', 'world/roadmesh.js', 'world/terrainmesh.js', 'world/horizon.js', 'world/vegetation.js', 'world/scenery.js', 'world/roadworks.js', 'world/places.js', 'world/guide.js', 'world/run.js', 'world/camera.js', 'world/looks.js', 'world/environment.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
+    const files = ['tuning.js', 'terrain.js', 'course.js', 'race.js', 'world/physics.js', 'world/route.js', 'world/legroute.js', 'world/data.js', 'world/graph.js', 'world/worldroute.js', 'world/worldground.js', 'world/streamer.js', 'world/landshade.js', 'world/roadsurface.js', 'world/roadmesh.js', 'world/terrainmesh.js', 'world/horizon.js', 'world/vegetation.js', 'world/scenery.js', 'world/roadworks.js', 'world/places.js', 'world/guide.js', 'world/run.js', 'world/camera.js', 'world/looks.js', 'world/environment.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
     const source = files.map(name => (sources[name] !== undefined ? sources[name] : loadScript(name))).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
@@ -82,7 +82,7 @@ export function loadGame(THREE = realThree(), log = [], sources = {}) {
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'TextDecoder', 'crypto',
-        `${source}\nreturn { WorldPhysics, CHARACTERS, BIKE_MODELS, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, RoadClearance, Scenery, Roadworks, WorldPlaces, WorldGuide, WorldRun, WorldCamera, WorldLooks, WorldEnvironment };`
+        `${source}\nreturn { Tuning: typeof Tuning === 'undefined' ? undefined : Tuning, WorldPhysics, CHARACTERS, BIKE_MODELS, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, RoadClearance, Scenery, Roadworks, WorldPlaces, WorldGuide, WorldRun, WorldCamera, WorldLooks, WorldEnvironment };`
     );
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink, NodeTextDecoder, webcrypto) };
 }

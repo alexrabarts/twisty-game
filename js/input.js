@@ -213,8 +213,10 @@ class InputHandler {
     // whose lean has its own momentum) the steering is smoothed as it always was
     getSteeringInput(ease = null) {
         if (ease !== this.steerKeys) {
+            // Between a leg and a world the keys start again; another set of the world's values (the tuning's,
+            // js/tuning.js) only changes the ramps to come
+            if (!ease || !this.steerKeys) this.steerEase.reset();
             this.steerKeys = ease;
-            this.steerEase.reset();
         }
         // Update inputs before returning (for virtual controls and smoothing)
         this.advanceSteerEase();

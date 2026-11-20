@@ -2354,3 +2354,229 @@ body.in-menu .virtual-button-camera {
     8%, 80% { opacity: 1; }
     100% { opacity: 0; }
 }
+
+/* The tuning panel of debug mode (js/tuningpanel.js, .agent/system/ui.md): a side panel on the left edge, not a
+   dialog, so the ride goes on beside it. The "tuned" tag and the button that opens the panel stand under the FPS
+   counter (over it on touch, where the counter is over the steering buttons) */
+.hud-tuned {
+    position: absolute;
+    top: calc(var(--edge-top) + 24px);
+    left: var(--edge-left);
+    padding: 2px 8px;
+    border-radius: var(--r-sm);
+    background: var(--panel-bg);
+    font: 700 var(--fs-xs) / 1.4 var(--font-ui);
+    letter-spacing: 0.1em;
+    color: var(--c-warn);
+    text-shadow: none;
+}
+
+.hud-tuned[hidden],
+.tuning-panel[hidden] {
+    display: none;
+}
+
+.tuning-open {
+    position: fixed;
+    top: calc(var(--edge-top) + 48px);
+    left: var(--edge-left);
+    z-index: calc(var(--z-controls) + 10);
+    padding: 3px 8px;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--r-sm);
+    background: var(--panel-bg);
+    font: 600 var(--fs-xs) / 1.4 var(--font-ui);
+    color: var(--c-text-dim);
+    cursor: pointer;
+}
+
+.tuning-panel {
+    position: fixed;
+    top: var(--edge-top);
+    left: var(--edge-left);
+    bottom: var(--edge-bottom);
+    z-index: calc(var(--z-controls) + 20);
+    box-sizing: border-box;
+    width: min(268px, calc(100vw - 2 * var(--edge)));
+    padding: var(--sp-2) var(--sp-2) var(--sp-3);
+    overflow-y: auto;
+    background: var(--panel-bg-strong);
+    font: 500 var(--fs-xs) / 1.3 var(--font-ui);
+    color: var(--c-text);
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.tuning-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    font-size: var(--fs-sm);
+}
+
+.tuning-head span {
+    flex: 1;
+    font-size: var(--fs-xs);
+    color: var(--c-text-faint);
+}
+
+.tuning-group {
+    margin: var(--sp-2) 0 2px;
+    font: 700 var(--fs-xs) / 1.4 var(--font-ui);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--c-text-faint);
+}
+
+.tuning-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 18px 84px 18px 34px;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+}
+
+.tuning-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--c-text-dim);
+}
+
+.tuning-row[data-changed] .tuning-label,
+.tuning-row[data-changed] .tuning-value {
+    color: var(--c-warn);
+}
+
+/* A row that only a world ride reads says nothing on a classic leg */
+.tuning-panel[data-ride="legs"] .tuning-row[data-world] {
+    opacity: 0.4;
+}
+
+.tuning-step,
+.tuning-button {
+    padding: 0;
+    border: 1px solid var(--panel-border);
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.08);
+    font: 700 var(--fs-xs) / 16px var(--font-ui);
+    color: var(--c-text);
+    cursor: pointer;
+}
+
+.tuning-step {
+    width: 18px;
+    height: 18px;
+}
+
+.tuning-slider {
+    position: relative;
+    height: 18px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.1);
+    cursor: ew-resize;
+    touch-action: none;
+    overflow: hidden;
+}
+
+.tuning-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    background: var(--c-accent);
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+/* Where 1.00 is on the track */
+.tuning-one {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--c-text);
+    pointer-events: none;
+}
+
+.tuning-value {
+    font-family: var(--font-display);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    cursor: default;
+}
+
+.tuning-buttons {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: var(--sp-3);
+}
+
+.tuning-button {
+    flex: 1;
+    padding: 4px 0;
+}
+
+.tuning-status {
+    min-height: 1.3em;
+    margin: var(--sp-1) 0;
+    color: var(--c-text-dim);
+}
+
+.tuning-text {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    padding: var(--sp-1);
+    border: 1px solid var(--panel-border);
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.3);
+    font: 500 var(--fs-xs) / 1.4 ui-monospace, Menlo, monospace;
+    color: var(--c-text);
+    resize: none;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+/* Touch: the button and the tag stand in one row over the FPS counter and under the key hints, and the panel ends
+   over that row, so the thumbs keep the steering buttons */
+body.touch .tuning-open {
+    top: auto;
+    bottom: calc(12px + 68px + var(--sp-2) + 20px + env(safe-area-inset-bottom, 0px));
+    height: 24px;
+    padding: 0 10px;
+    line-height: 22px;
+}
+
+body.touch .hud-tuned {
+    top: auto;
+    bottom: calc(12px + 68px + var(--sp-2) + 22px + env(safe-area-inset-bottom, 0px));
+    left: calc(var(--edge-left) + 72px);
+}
+
+body.touch .tuning-panel {
+    bottom: calc(12px + 68px + var(--sp-2) + 48px + env(safe-area-inset-bottom, 0px));
+}
+
+body.touch .tuning-row {
+    grid-template-columns: minmax(0, 1fr) 24px 84px 24px 34px;
+    height: 30px;
+}
+
+body.touch .tuning-step {
+    width: 24px;
+    height: 24px;
+}
+
+body.touch .tuning-slider {
+    height: 24px;
+}
+
+body.run-over .tuning-open,
+body.run-over .tuning-panel,
+body.in-menu .tuning-open,
+body.in-menu .tuning-panel,
+body.world-loading-on .tuning-open,
+body.world-loading-on .tuning-panel {
+    display: none;
+}

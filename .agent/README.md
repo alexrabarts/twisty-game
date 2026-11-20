@@ -7,7 +7,7 @@ Notes for people and AI agents who work on this repo.
   - [world.md](system/world.md) - the terrain model and the rules for scenery placement.
   - [world-data.md](system/world-data.md) - the swisstopo data gate: tools, real inspect values, gate outcomes, the world binary format.
   - [ui.md](system/ui.md) - the HUD, the design tokens and the touch controls.
-  - [handling.md](system/handling.md) - how a bike's weight and spare power shape its wheelie, and how to set the two facts for a new bike.
+  - [handling.md](system/handling.md) - the tuning table (multipliers over the handling's numbers, the debug panel's and a rider mode's), how a bike's weight and spare power shape its wheelie, and how to set the two facts for a new bike.
   - [leaderboard.md](system/leaderboard.md) - checkpoint restart, which time a board ranks, the server handshake and store.
 - `sop/` - procedures.
   - [play-testing.md](sop/play-testing.md) - how to ride a leg with the dev autopilot.

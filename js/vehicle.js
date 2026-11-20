@@ -2738,7 +2738,7 @@ class Vehicle {
         this.updatePhysics(deltaTime, steeringInput);
         
         // Check for crash from excessive lean
-        if (!this.worldPhysics && Math.abs(this.leanAngle) > this.maxLeanAngle) {
+        if (!this.worldPhysics && Math.abs(this.leanAngle) > this.tuned('maxLeanAngle')) {
             this.crashed = true;
             this.crashAngle = this.leanAngle;
             console.log('CRASHED! Lean angle exceeded:', (this.leanAngle * 180/Math.PI).toFixed(1) + '°');
@@ -2824,12 +2824,12 @@ class Vehicle {
         // Apply throttle (reduced during wheelie for challenge)
         if (throttleInput > 0) {
             const wheeliePenalty = this.isWheelie ? 0.3 : 1.0; // Only 30% acceleration during wheelie
-            this.speed += this.acceleration * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
+            this.speed += this.tuned('acceleration') * throttleInput * deltaTime * wheeliePenalty * weatherMultipliers.acceleration;
         }
 
         // Apply brakes (reduced in bad weather)
         if (brakeInput > 0) {
-            this.speed -= this.brakeForce * brakeInput * deltaTime * weatherMultipliers.brakeForce;
+            this.speed -= this.tuned('brakeForce') * brakeInput * deltaTime * weatherMultipliers.brakeForce;
         }
         
         // Apply gradient force
@@ -2840,7 +2840,7 @@ class Vehicle {
         this.speed -= dragForce * deltaTime;
         
         // Clamp speed
-        this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
+        this.speed = Math.max(0, Math.min(this.tuned('maxSpeed'), this.speed));
     }
 
     updateWheelie(deltaTime, throttleInput, brakeInput, wheelieInput = 0, onWheelieScore = null) {
@@ -2882,7 +2882,7 @@ class Vehicle {
             this.wheelieAngle = 0.05; // Start with more visible angle
             // Initial lift: the rider's own, by how light the bike is at low speed and by the drive it has to spare at
             // this speed (Vehicle.popShare)
-            this.wheelieVelocity = 3.5 * (this.wheeliePopMult || 1) * Vehicle.popShare(this.wheelieBike, this.speed);
+            this.wheelieVelocity = 3.5 * (this.tuned('wheeliePopMult') || 1) * Vehicle.popShare(this.wheelieBike, this.speed);
             this.wheelieStartTime = performance.now();
             this.wheelieScoreAccumulated = 0;
             console.log('===== WHEELIE STARTED! =====');
@@ -2903,7 +2903,7 @@ class Vehicle {
                 // Progressive throttle response - more sensitive at higher angles
                 // The throttle lifts only by the drive the bike has to spare at this speed (Vehicle.liftShare): a
                 // bike with none cannot hold the front up, a powerful one still can at speed
-                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.wheelieThrottleMult || 1) * Vehicle.liftShare(this.wheelieBike, this.speed);
+                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.tuned('wheelieThrottleMult') || 1) * Vehicle.liftShare(this.wheelieBike, this.speed);
                 this.wheelieVelocity += throttleInput * throttleSensitivity * deltaTime;
             }
             
@@ -3014,6 +3014,8 @@ class Vehicle {
         if (this.worldPhysics) return this.updateWorldPhysics(deltaTime, steeringInput);
         // Get weather physics multipliers
         const weatherMultipliers = this.physicsMultipliers();
+        const gripTune = this.gripTune();
+        const lateralFriction = gripTune === 1 ? weatherMultipliers.lateralFriction : weatherMultipliers.lateralFriction * gripTune;
 
         // Steering visualization
         this.steeringAngle = steeringInput * 0.3;
@@ -3026,7 +3028,7 @@ class Vehicle {
         // 1. STEERING TORQUE: Counter-steering effect (speed-dependent)
         // Higher speed = more gyroscopic stability = harder to lean
         // Increase torque when trying to return to upright from a lean
-        let steeringTorque = -steeringInput * this.steeringForce * speedFactor;
+        let steeringTorque = -steeringInput * this.tuned('steeringForce') * speedFactor;
         
         // Boost steering torque when actively steering against current lean (counter-steering)
         // (torque is -steeringInput, so input and lean share a sign when the
@@ -3035,7 +3037,7 @@ class Vehicle {
             steeringTorque *= 1.5; // 50% more responsive when counter-steering to upright
         }
         
-        steeringTorque *= (1 - Math.abs(this.leanAngle) / this.maxLeanAngle);
+        steeringTorque *= (1 - Math.abs(this.leanAngle) / this.tuned('maxLeanAngle'));
         
         // 2. GRAVITY TORQUE: Always tries to increase lean (destabilizing)
         // Once leaning, gravity pulls the bike further over
@@ -3054,7 +3056,7 @@ class Vehicle {
             // Centripetal force opposes lean only in steady-state turn
             // This creates the balance point
             // Weather reduces available grip for turning
-            centripetalTorque = -Math.sign(this.leanAngle) * turnRate * this.speed * 0.15 * weatherMultipliers.lateralFriction;
+            centripetalTorque = -Math.sign(this.leanAngle) * turnRate * this.speed * 0.15 * lateralFriction;
         }
 
         // 4. GYROSCOPIC RESISTANCE: Higher speed = more stability
@@ -3062,7 +3064,7 @@ class Vehicle {
 
         // 5. SELF-RIGHTING TORQUE: Bike naturally tries to return upright
         // REDUCED BY WEATHER: Low grip means tire contact patch has less righting authority
-        const selfRightingTorque = -this.leanAngle * 3.5 * weatherMultipliers.lateralFriction;
+        const selfRightingTorque = -this.leanAngle * 3.5 * lateralFriction;
 
         // Total torque is sum of all forces
         const totalTorque = steeringTorque + gravityTorque + centripetalTorque - gyroResistance + selfRightingTorque;
@@ -3101,7 +3103,23 @@ class Vehicle {
     // The world physics parameters, or null on a leg. They come from the
     // environment, so a leg (physics: null) never reaches the world branches.
     get worldPhysics() {
-        return (this.environment && this.environment.physics) || null;
+        const world = (this.environment && this.environment.physics) || null;
+        // As the tuning has them (js/tuning.js): the same object while no multiplier over a world field is off 1
+        return world && typeof Tuning !== 'undefined' ? Tuning.view('world', world) : world;
+    }
+
+    // One of the bike's own numbers as the tuning has it (Tuning rows `on: 'bike'`): the number itself, untouched,
+    // while no multiplier over it is off 1. The character's and the bike's own multipliers are in the number already
+    tuned(field) {
+        return typeof Tuning === 'undefined' ? this[field] : Tuning.field('bike', field, this[field]);
+    }
+
+    // The tuning's multiplier of the lean's grip (Tuning `gripDry`, `gripWet`): wet is any weather that takes grip
+    gripTune() {
+        if (typeof Tuning === 'undefined' || !Tuning.live) return 1;
+        const weather = this.weatherSystem;
+        const wet = !!weather && typeof weather.weatherPhysics === 'function' && weather.weatherPhysics().lateralFriction < 1;
+        return Tuning.field('grip', wet ? 'wet' : 'dry', 1);
     }
 
     // Reads what the route says under the bike: the grade for gravity and the
@@ -3136,6 +3154,8 @@ class Vehicle {
             lateralFriction *= this.worldSurfaceGrip;
             brakeForce *= this.worldSurfaceGrip;
         }
+        const gripTune = this.gripTune();
+        if (gripTune !== 1) lateralFriction *= gripTune;
         return { ...multipliers, lateralFriction, brakeForce, acceleration };
     }
 
@@ -3192,7 +3212,7 @@ class Vehicle {
         const tanCap = Math.tan(world.leanCapDeg * Math.PI / 180) * grip;
         const used = Math.min(1, Math.tan(Math.min(Math.abs(this.leanAngle), 1.5)) / tanCap);
         const share = world.trailBrakeFloor + (1 - world.trailBrakeFloor) * Math.sqrt(1 - used * used);
-        return this.brakeForce * world.brakeGain * multipliers.brakeForce * share;
+        return this.tuned('brakeForce') * world.brakeGain * multipliers.brakeForce * share;
     }
 
     updateWorldSpeed(deltaTime, throttleInput, brakeInput) {
@@ -3253,7 +3273,7 @@ class Vehicle {
         this.footDown = crawl && this.speed < world.footDownSpeed;
         if (this.footDown) this.speed = 0;
 
-        this.speed = Math.max(0, Math.min(this.maxSpeed, this.speed));
+        this.speed = Math.max(0, Math.min(this.tuned('maxSpeed'), this.speed));
     }
 
     // The engine's drive at full throttle on the flat (m/s^2) at speed v. Over the air drag it gives the traction
@@ -3266,7 +3286,7 @@ class Vehicle {
         const speed = Math.max(0, v);
         const x = Math.min(1, speed / world.launchSpeed);
         const launch = world.launchShare + (1 - world.launchShare) * x * x * (3 - 2 * x);
-        const limit = this.acceleration * world.driveShare;
+        const limit = this.tuned('acceleration') * world.driveShare;
         return world.aeroDrag * speed * speed + limit * Math.min(launch, speed > world.powerSpeed ? world.powerSpeed / speed : 1);
     }
 
@@ -3807,7 +3827,7 @@ class Vehicle {
     // front wheel needs for that radius. Under `directSpeed` the bar turns the bike itself, so the drawn bar goes over
     // to the steering angle. A crashed bike keeps the bar it fell with
     shownBar(deltaTime) {
-        const bar = Vehicle.BAR, state = this.barState || (this.barState = { lean: this.leanAngle, rate: 0, shown: 0 });
+        const bar = Vehicle.barRule(), state = this.barState || (this.barState = { lean: this.leanAngle, rate: 0, shown: 0 });
         if (this.crashed) {
             state.held = true;
             return state.shown;
@@ -3827,8 +3847,12 @@ class Vehicle {
         return state.shown;
     }
 
+    // Vehicle.BAR and Vehicle.BODY as the tuning has them (js/tuning.js): the objects themselves with none
+    static barRule() { return typeof Tuning === 'undefined' ? Vehicle.BAR : Tuning.view('bar', Vehicle.BAR); }
+    static bodyRule() { return typeof Tuning === 'undefined' ? Vehicle.BODY : Tuning.view('body', Vehicle.BODY); }
+
     static barShown(lean, rate, speed, steer, wheelbase) {
-        const bar = Vehicle.BAR;
+        const bar = Vehicle.barRule();
         const x = Math.max(0, 1 - Math.max(0, speed) / bar.directSpeed);
         const direct = x * x * (3 - 2 * x);
         const counter = Math.max(-bar.counterMax, Math.min(bar.counterMax, bar.counter * rate));
@@ -3874,7 +3898,7 @@ class Vehicle {
     // inside and the hips off the seat. `roll` is the rider's own roll (radians, the sign of the lean) and `shift` how
     // far the rider moves across the seat (m, in the bike's x). Drawn only: the physics reads none of it
     static riderLean(lean, bodyLean) {
-        const body = Vehicle.BODY;
+        const body = Vehicle.bodyRule();
         const share = bodyLean === undefined ? body.usual : bodyLean;
         // A positive roll leans the bike to its right, which is -x
         return { roll: lean * body.roll * share, shift: -body.shift * share * Math.max(-1, Math.min(1, lean / body.full)) };

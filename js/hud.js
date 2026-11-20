@@ -131,6 +131,7 @@ class Hud {
             callouts: byId('callouts'),
             hint: byId('hudHint'),
             fps: byId('fps'),
+            tuned: byId('hudTuned'),
             start: byId('startCard'),
             startLeg: byId('startLeg'),
             progress: byId('hudProgress'),
@@ -400,6 +401,11 @@ class Hud {
         }
         this.applyFps();
         return this.fpsVisible;
+    }
+
+    // The "tuned" tag: this ride had a tuning multiplier off 1 and submits no time (Game.watchTuning)
+    setTuned(on) {
+        if (this.el.tuned) this.el.tuned.hidden = !on;
     }
 
     applyFps() {

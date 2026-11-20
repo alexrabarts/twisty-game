@@ -2,6 +2,70 @@
 
 How a bike's own data changes the way it rides. The code is in `js/vehicle.js`.
 
+## The tuning
+
+`js/tuning.js` holds one table (`Tuning.PARAMS`) of the handling's parameters. Each row is a multiplier on the default: 1.00 is the game as it is, and the table itself changes no default. The panel of debug mode moves the multipliers while the owner rides (`.agent/system/ui.md`, "The tuning panel"), and the owner sends the values back as text to be written into the defaults.
+
+A row is `{ id, label, hint, group, min, max, step, scales }`. `scales` lists the numbers the row multiplies, each `{ on, field, inverse }`:
+
+| `on` | The number | How the physics reads it |
+| --- | --- | --- |
+| `world` | A field of `WorldPhysics`; a path for a nested one (`steerKeys.keyS`, `offroad.top.landCapSpeed`). | `Vehicle.worldPhysics` is `Tuning.view('world', ...)`. A row needs no other code. |
+| `bar`, `body` | A field of `Vehicle.BAR`, `Vehicle.BODY`. | `Vehicle.barRule()`, `Vehicle.bodyRule()` (the same `Tuning.view`). |
+| `bike` | One of the bike's own numbers (`maxSpeed`, `acceleration`, `brakeForce`, `steeringForce`, `maxLeanAngle`, `wheeliePopMult`, `wheelieThrottleMult`). | `this.tuned(field)` where the number is used. The character's and the bike's multipliers are in the number already, so they stay on top. |
+| `grip` | `dry` or `wet`: the lean's grip. Wet is any weather that takes grip. | `Vehicle.gripTune()`. |
+| `camera` | `distance` or `swing` of the chase camera. | `Game.tune('camera', field, value)`. |
+
+`inverse: true` divides, for a number where less is more (a turn radius). `world: true` is set by the table itself for a row that scales only `WorldPhysics` fields: a classic leg does not read it.
+
+The rows:
+
+| id | Scales | Ride |
+| --- | --- | --- |
+| `steerRate` | `leanRate`; the bike's `steeringForce` | both |
+| `steerFast` | `steerSpeed` (the speed from which the lean rate falls) | world |
+| `steerSlow` | `lockRadius`, divided (the turn at full lock under `turnBlendSpeed`) | world |
+| `pickUp` | `pickUpBoost` | world |
+| `selfRight` | `selfRighting` | world |
+| `leanMax` | `leanCapDeg`; the bike's `maxLeanAngle` | both |
+| `steerKey` | `steerKeys.keyS`, `steerKeys.featherS` | world |
+| `brake` | the bike's `brakeForce` (the front and the rear are one number) | both |
+| `brakeLean` | `trailBrakeFloor` | world |
+| `engineBrake` | `engineBrake`, `engineBrakeMax` | world |
+| `accel` | the bike's `acceleration` | both |
+| `topSpeed` | the bike's `maxSpeed`, where the speed is held to it | both |
+| `gripDry`, `gripWet` | the lean's grip (`lateralFriction`), dry or wet | both |
+| `assist` | `lineStrength`, `edgeLeanRate`, `adviceBrake` | world |
+| `wheeliePop`, `wheelieLift` | the rider's `wheeliePop` and `wheelieThrottle`, over `Vehicle.popShare` and `liftShare` | both |
+| `offroadPace` | `landCapSpeed`, of the world, of `offroad` and of `offroad.top` | world |
+| `bar` | `Vehicle.BAR` `counter`, `counterMax`, `intoMax` (drawn only) | both |
+| `body` | `Vehicle.BODY` `roll`, `shift` (drawn only) | both |
+| `camDistance`, `camSwing` | the chase and high cameras' boom (height and length), and their swing with the lean | both |
+
+Rules:
+
+- **At 1 nothing is scaled and nothing is copied.** `Tuning.view` returns the object it was given and `Tuning.field` the number it was given (not the number x 1). `tests/unit/tuning.test.js` rides the same script with `js/tuning.js` not loaded and requires the same state to the last bit. The frozen defaults (`WorldPhysics`, `Vehicle.BAR`, `Vehicle.BODY`) are never written: off 1, a view is a copy.
+- **One function gives the multiplier:** `Tuning.of(id)`. It multiplies two sources: the debug panel's (`Tuning.values`, read only in debug mode) and a rider mode's (`Tuning.mode`, null today).
+- **Outside debug mode the stored values are not read.** `Tuning.start({ debug, storage })` reads `localStorage` (`twistyTuning`) only with `debug`.
+- **A tuned ride keeps no time.** From the first moment a debug multiplier is off 1 the ride is flagged (`Tuning.ride.tuned`), and it stays flagged after Reset until the next ride begins (`Tuning.beginRide`, at `Game.initializeGameWithLeg` and `initializeGameWithWorld`). `Game.watchTuning` then sets a world's `trusted` to false, the flag of the debug skip (`WorldEnvironment.submitAllowed`), and cancels a classic leg's leaderboard session; a restart of the leg starts none. The HUD shows the "tuned" tag.
+- **The text.** `Tuning.text()` gives `twisty tuning v1`, then a line `id = 1.08` for each multiplier off 1. `Tuning.parse(text)` reads it back as `{ values, errors }` and refuses an unknown id, a value outside the row's range, a line that is not `id = number` and an id given twice, each with its line number. To write tuned values into the defaults, parse the text and multiply each field of the row's `scales` by the value (divide for `inverse`).
+
+To add a parameter:
+
+1. Add one row to `Tuning.PARAMS`. For a `WorldPhysics`, `Vehicle.BAR` or `Vehicle.BODY` field this is all.
+2. For a number of the bike itself, read it with `this.tuned('<field>')` where the physics uses it. Do not write the scaled number back to the bike.
+3. Add its measure to `MEASURES` in `tests/unit/tuning.test.js`: a number that the row moves, and the way it moves. The test fails on a row with no measure.
+
+Rider modes (Rain, Road, Sport, Track) reuse the table. A mode is a set of multipliers over the same ids: `Tuning.setMode({ steerRate: 1.1, brake: 0.9 })`, and `Tuning.setMode(null)` for none. It needs no change to the physics, it is read in every mode of the page, and it does not flag the ride. The panel's multiplier stays on top of the mode's. Show the mode in the HUD's `#hudMode` slot.
+
+Left out, because no single number scales them cleanly:
+
+- **How hard the bike turns for a lean.** The turn is `g tan(lean) / v^2`, and the lowside reads the same number as the grip demand. A multiplier on the turn alone drops a bike at full lean. `steerRate` (how fast the lean comes) and `leanMax` are the steering authority.
+- **A front and a rear brake.** The code has one brake.
+- **The off-road pace of a classic leg.** A leg's run-off values belong to each zone of the leg (`LEG_OFFROAD`).
+
+`leanMax` and `gripDry` both move the lean limit and the lowside limit of a world ride together, by nearly the same amount. On a classic leg they differ: `leanMax` is the lean at which the bike falls, `gripDry` the tyre's hold in the turn.
+
 ## A wheelie by the bike
 
 Two facts of each bike shape its wheelie. They are in the catalogue entry (`BIKE_MODELS`) and in each procedural kind (`Vehicle.BIKES`). No code names a bike: one rule reads the two facts.

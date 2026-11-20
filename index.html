@@ -76,6 +76,8 @@
         </div>
 
         <div id="fps" class="fps" hidden>FPS 0</div>
+        <!-- Debug mode only: this ride had a tuning multiplier off 1 and keeps no time (js/tuning.js) -->
+        <div id="hudTuned" class="hud-tuned" hidden>TUNED</div>
     </div>
 
     <!-- Speed Vignette - darkens edges at high speed -->
@@ -147,6 +149,9 @@
     <!-- Game Scripts -->
     <!-- The one stack every dialog goes through: first, so every script after it can open one -->
     <script src="js/modals.js"></script>
+    <!-- The tuning's table and multipliers, before everything that reads them; its panel is built in debug mode only -->
+    <script src="js/tuning.js"></script>
+    <script src="js/tuningpanel.js"></script>
     <script src="js/graphics.js"></script>
     <script src="js/hud.js"></script>
     <script src="js/virtualcontrols.js"></script>
