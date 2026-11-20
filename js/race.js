@@ -64,7 +64,13 @@ const RaceTiming = {
         if (!raw) return null;
         try {
             const splits = JSON.parse(raw);
-            return RaceTiming.validSplits(splits, count) ? splits : null;
+            if (RaceTiming.validSplits(splits, count)) return splits;
+            // A table of another length is from before the course's split points moved (a world's checkpoints were
+            // halved with its board kept): it compares with nothing now, so it is dropped, with no word to the rider
+            if (Array.isArray(splits) && splits.length !== count) {
+                try { storage.removeItem(key); } catch (error) { /* storage blocked: it is ignored on every load instead */ }
+            }
+            return null;
         } catch (error) {
             console.warn('Best splits corrupted, ignoring:', error);
             return null;

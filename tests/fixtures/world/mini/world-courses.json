@@ -1,49 +1,43 @@
 {
   "world-mini-1-v1": {
     "kind": "stage",
-    "gates": 3,
+    "gates": 1,
     "metres": 2003,
-    "floorMs": 24124,
+    "floorMs": 24122,
     "gateFloorsMs": [
-      5467,
-      5439,
-      7751,
-      5467
+      10861,
+      13261
     ]
   },
   "world-mini-2-v1": {
     "kind": "stage",
-    "gates": 3,
+    "gates": 1,
     "metres": 1996,
-    "floorMs": 25423,
+    "floorMs": 25316,
     "gateFloorsMs": [
-      9931,
-      3538,
-      6494,
-      5460
+      15015,
+      10301
     ]
   },
   "world-mini-3-v1": {
     "kind": "stage",
-    "gates": 3,
+    "gates": 1,
     "metres": 1996,
-    "floorMs": 22330,
+    "floorMs": 22328,
     "gateFloorsMs": [
-      5477,
-      7271,
-      4113,
-      5469
+      11960,
+      10368
     ]
   },
   "world-tour-v1": {
     "kind": "tour",
     "gates": 2,
     "metres": 5995,
-    "floorMs": 71877,
+    "floorMs": 71766,
     "gateFloorsMs": [
-      24124,
-      25423,
-      22330
+      24122,
+      25316,
+      22328
     ]
   }
 }

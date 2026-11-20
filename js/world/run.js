@@ -13,9 +13,14 @@
 //     progress. Progress may grow only as fast as the bike can move along the
 //     road. A forward jump that is not explained by speed and holds for
 //     cutConfirmMs is a cut across stacked road: the game restarts the rider
-//     at the last station. A backward jump is ignored and costs nothing. The
-//     rule protects the client's own integrity; the server's floors are the
-//     only check against a modified client.
+//     where the bike left the road. A backward jump is ignored and costs
+//     nothing. The rule protects the client's own integrity; the server's
+//     floors are the only check against a modified client.
+//   - where a restart puts the rider (restartPlace). A station is a timing
+//     line and nothing else: after a crash the rider goes on from `roadS`,
+//     the last ride distance at which the bike was on the carriageway, so a
+//     crash on the road is where it happened and a crash off it, in water or
+//     down a drop is where the bike left the road.
 class WorldRun {
     // Metres past the road edge that still count as on the road for a station
     static get STATION_REACH_M() { return 8; }
@@ -43,6 +48,7 @@ class WorldRun {
         // A restart or a put-down lands in the stage that holds s
         this.stageIndex = this.stageOf(s);
         this.lastS = s;
+        this.roadS = s;
         this.allowAccum = 0;
         this.pendingCutMs = 0;
     }
@@ -117,6 +123,11 @@ class WorldRun {
         const allowance = Math.max(physics.cutFloorM || 0, Math.min(physics.maxBankM, this.allowAccum + growth) + physics.progressEpsM);
         const gap = frame.s - this.lastS;
 
+        // Where the bike last was on the carriageway: every accepted frame there, and a frame that follows on from it
+        // (a rider who turns back along the road). A fall onto a lower leg of a ladder is a step no riding makes
+        const carriageway = Math.abs(frame.lateral) <= frame.width / 2;
+        if (carriageway && gap <= allowance && (gap >= -allowance || Math.abs(frame.s - this.roadS) <= allowance)) this.roadS = frame.s;
+
         if (gap >= -allowance && gap <= allowance) {
             this.lastS = Math.max(this.lastS, frame.s);
             this.allowAccum = 0;
@@ -147,12 +158,31 @@ class WorldRun {
         return this.stationIndex;
     }
 
-    // A restart or a resume: back to the last station passed, progress starts again there
+    // A restart, a resume or a put-down: progress starts again at s. A restart just past a timing line puts the
+    // rider back over it: the station stays passed (stationIndex), and a stage that ended stays ended
     restartAt(s) {
+        const stage = this.stageIndex;
         this.reset(s);
+        this.stageIndex = Math.max(stage, this.stageIndex);
     }
 
-    // The speed a restart rolls away at: 0.8 of what the tightest bend in the next 100 m allows, at most restartSpeedMax
+    // Where a restart puts the rider: {s, lateral}. restartBackM behind the last place the bike was on the
+    // carriageway, never before the ride's start, and never at a station for its own sake.
+    // Across the road it is the middle of the rider's own half (traffic's lane where that is nearer the centre line),
+    // and through a roadworks site the open lane (`works`: Roadworks.pilotLane), so never the closed lane or the works.
+    // It only ever moves the rider back (`further` metres more where the place itself is not safe: Game.beginWorldCrash),
+    // so it is never past a stop line the rider had not passed
+    restartPlace(works = null, further = 0) {
+        const route = this.route;
+        const floor = this.stations.length ? this.stations[0].s : 0;
+        const s = Math.min(route.length, Math.max(floor, Math.min(this.roadS, this.lastS) - (this.physics.restartBackM || 0) - Math.max(0, further)));
+        const width = route.sample(s, {}).width;
+        const lane = typeof route.laneOffset === 'function' ? route.laneOffset(s) : width / 4;
+        const own = Route.keepRight(1) * Math.min(lane, width / 4);
+        return { s, lateral: works && typeof works.pilotLane === 'function' ? works.pilotLane(s, own) : own };
+    }
+
+    // The speed a put-down rolls away at (the debug skip; a restart starts at a standstill): 0.8 of what the tightest bend in the next 100 m allows, at most restartSpeedMax
     restartSpeed(s) {
         const physics = this.physics;
         let tightest = 0;

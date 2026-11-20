@@ -130,13 +130,128 @@ describe('WorldRun stations', () => {
         expect(run.stationIndex).toBe(3);
     });
 
-    test('a restart starts progress again at the station, so the ride goes on from there', () => {
+    test('a restart starts progress again at its place, so the ride goes on from there with no station taken twice', () => {
         const run = new WorldRun(route, stations, WorldPhysics);
         for (let s = 0; s <= 150; s += 0.2) run.update(frame(s));
-        run.restartAt(100);
-        expect(run.lastS).toBe(100);
+        run.restartAt(140);
+        expect(run.lastS).toBe(140);
+        expect(run.roadS).toBe(140);
         expect(run.stationIndex).toBe(1);
-        expect(run.update(frame(100.2)).cut).toBe(false);
+        const next = run.update(frame(140.2));
+        expect([next.cut, next.station]).toEqual([false, -1]);
+    });
+});
+
+// A checkpoint is a timing line and nothing else: after a crash the rider goes on from where the bike last was on the
+// carriageway (WorldRun.roadS), a few metres back (WorldPhysics.restartBackM), on its own side
+describe('where a restart puts the rider', () => {
+    const { Route } = game;
+    const back = WorldPhysics.restartBackM;
+    const route = new WorldRoute(samplesOf(straight(400)), {});
+    const stations = [{ s: 0 }, { s: 100 }, { s: 200 }, { s: 300 }];
+    const ridden = (to, from = 0) => {
+        const run = new WorldRun(route, stations, WorldPhysics);
+        run.begin(from);
+        for (let s = from; s <= to + 1e-9; s += 0.2) run.update(frame(s));
+        return run;
+    };
+
+    test('the distance back is data, a few metres', () => {
+        expect(back).toBeGreaterThanOrEqual(3);
+        expect(back).toBeLessThanOrEqual(15);
+    });
+
+    test('a crash called on the carriageway restarts within restartBackM behind it, never at a station', () => {
+        const run = ridden(157);
+        const place = run.restartPlace();
+        expect(place.s).toBeLessThanOrEqual(157);
+        expect(place.s).toBeGreaterThanOrEqual(157 - back - 0.21);
+        expect(stations.some(st => Math.abs(st.s - place.s) < 1)).toBe(false);
+    });
+
+    test('a crash off the road restarts where the bike left the carriageway, however far it went on', () => {
+        const run = ridden(157);
+        // Off the edge (the road is 10 m wide) and on over the land for 60 m, then the crash
+        for (let s = 157.2; s <= 217; s += 0.2) run.update(frame(s, { lateral: 9 }));
+        expect(run.roadS).toBeCloseTo(157, 1);
+        expect(run.restartPlace().s).toBeCloseTo(157 - back, 1);
+        // (the timing line at 200 was crossed beside the road: the place is still where the bike left it)
+        expect(run.stationIndex).toBe(2);
+    });
+
+    test('a fall onto a lower leg of a ladder is not where the bike was on the road', () => {
+        const run = ridden(257);
+        // Down a drop, and the bike lies on the carriageway 120 m back along the ride
+        for (let i = 0; i < 30; i++) run.update(frame(137, { speed: 0 }));
+        expect(run.roadS).toBeCloseTo(257, 1);
+        expect(run.restartPlace().s).toBeCloseTo(257 - back, 1);
+    });
+
+    test('a rider who turns back along the road restarts where they are, facing along the ride', () => {
+        const run = ridden(157);
+        for (let s = 157; s >= 110; s -= 0.2) run.update(frame(s, { forwardDot: -1 }));
+        expect(run.roadS).toBeCloseTo(110, 0);
+        expect(run.restartPlace().s).toBeCloseTo(110 - back, 0);
+        // (the high-water mark is not lost, and no station is credited on the way back)
+        expect(run.lastS).toBeCloseTo(157, 1);
+        expect(run.stationIndex).toBe(1);
+    });
+
+    test('never before the start; just past a timing line it goes back over it, and the split is not taken twice', () => {
+        expect(ridden(2).restartPlace().s).toBe(0);
+        const run = ridden(102);
+        const place = run.restartPlace();
+        expect(place.s).toBeCloseTo(102 - back, 1);
+        run.restartAt(place.s);
+        expect(run.stationIndex).toBe(1);
+        const seen = [];
+        for (let s = place.s; s <= 120; s += 0.2) seen.push(run.update(frame(s)).station);
+        expect(seen.every(station => station === -1)).toBe(true);
+    });
+
+    test('a restart back over a stage boundary leaves the stage that ended ended', () => {
+        const staged = new WorldRoute(samplesOf(straight(700)), { stages: [{ id: 'a', name: 'A', from: 0, to: 300 }, { id: 'b', name: 'B', from: 300, to: 600 }] });
+        const run = new WorldRun(staged, [{ s: 0, stage: 'a', kind: 'start' }, { s: 300, stage: 'a', kind: 'boundary' }, { s: 600, stage: 'b', kind: 'end' }], WorldPhysics);
+        for (let s = 0; s <= 302; s += 0.2) if (run.update(frame(s)).station === 1) run.onStageFinish(0, 20000);
+        expect(run.stageIndex).toBe(1);
+        const place = run.restartPlace();
+        expect(place.s).toBeLessThan(300);
+        run.restartAt(place.s);
+        expect(run.stageIndex).toBe(1);
+    });
+
+    test('across the road it is the rider\'s own side, inside the carriageway, and the open lane through a roadworks site', () => {
+        const run = ridden(157);
+        const place = run.restartPlace();
+        expect(Math.sign(place.lateral)).toBe(Route.keepRight(1));
+        expect(Math.abs(place.lateral)).toBeGreaterThan(1);
+        expect(Math.abs(place.lateral)).toBeLessThan(10 / 2 - 1);
+        const works = { pilotLane: jest.fn((s, own) => -own) };
+        const inWorks = run.restartPlace(works);
+        expect(works.pilotLane).toHaveBeenCalledWith(inWorks.s, place.lateral);
+        expect(inWorks.lateral).toBe(-place.lateral);
+    });
+
+    test('progress goes on from the place: no cut, no station taken twice, and the next one is taken', () => {
+        const run = ridden(157);
+        for (let s = 157.2; s <= 180; s += 0.2) run.update(frame(s, { lateral: 9 }));
+        const place = run.restartPlace();
+        run.noteRestart();
+        run.restartAt(place.s);
+        const seen = [];
+        let cut = false;
+        // From a standstill up to speed
+        let s = place.s;
+        for (let i = 0; i < 600; i++) {
+            const speed = Math.min(15, i * 0.2);
+            s += speed * DT;
+            const result = run.update(frame(s, { speed, lateral: place.lateral }));
+            cut = cut || result.cut;
+            if (result.station >= 0) seen.push(result.station);
+        }
+        expect(cut).toBe(false);
+        expect(seen).toEqual([2]);
+        expect(run.stageRestarts[0]).toBe(1);
     });
 });
 
@@ -220,7 +335,7 @@ describe('WorldRun cut rule', () => {
 });
 
 describe('WorldRun restart speed', () => {
-    test('a straight road restarts at the most; a hairpin restarts at 0.8 of what it allows', () => {
+    test('a put-down on a straight road rolls away at the most; before a hairpin at 0.8 of what it allows', () => {
         const flat = new WorldRun(new WorldRoute(samplesOf(straight(400)), {}), [{ s: 0 }], WorldPhysics);
         expect(flat.restartSpeed(0)).toBe(WorldPhysics.restartSpeedMax);
         const bends = new WorldRun(new WorldRoute(samplesOf(ladder()), {}), [{ s: 0 }], WorldPhysics);

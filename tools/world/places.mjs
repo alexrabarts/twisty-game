@@ -34,10 +34,9 @@ export const PLACE = Object.freeze({
   // the land within wallRunM past the verge lies wallUnderM under a slope at the batter (WorldEnvironment.edgeFoot:
   // WALL_OVER_M 1.5 over 6 m; here with 0.3 m to spare), and joins two walls less than 12 m apart into one
   wallRunM: 6, wallUnderM: 1.2, wallClearM: 16,
-  // A checkpoint's roadworks may run back this far from its station (Roadworks.LENGTH_MAX_M and the clearance a
-  // waiting rider keeps, WorldPlaces.WORKS_CLEAR_M), and the runtime closes a place there: a found place stands
-  // outside those stretches where it can
-  worksBackM: 570, worksPastM: 20
+  // A checkpoint's roadworks run on from its station (the importer hands the span: stations.mjs siteReach), and the
+  // runtime closes a place within this of one (WorldPlaces.WORKS_CLEAR_M): a found place stands outside where it can
+  worksClearM: 20
 });
 
 const r1 = v => Math.round(v * 10) / 10;
@@ -217,9 +216,9 @@ export function wallRisk(tiles, samples, i, side) {
 }
 
 // Standing places where the map has none: `taken` are the places already there. One in each stretch of foundGapM with
-// no place, the rider's right first (traffic keeps right, so a rider pulls in without crossing the road). `gates` are
-// the ride distances of the checkpoint stations: a candidate clear of their roadworks is taken before one that is not
-export function foundPlaces(samples, tiles, mouths, edges, taken = [], gates = []) {
+// no place, the rider's right first (traffic keeps right, so a rider pulls in without crossing the road). `works` are
+// the spans [{ s0, s1 }] of the checkpoints' roadworks: a candidate clear of them is taken before one that is not
+export function foundPlaces(samples, tiles, mouths, edges, taken = [], works = []) {
   const P = PLACE;
   const index = segmentIndex(edges, VERGE_M + 1);
   const n = samples.s.length;
@@ -263,7 +262,7 @@ export function foundPlaces(samples, tiles, mouths, edges, taken = [], gates = [
     }
     const open = candidates.filter(c => c.s >= from + P.foundGapM / 2 && c.s + c.length <= limit - P.foundGapM / 2);
     const inGap = open.filter(c => c.s <= from + P.foundGapM);
-    const atWorks = c => gates.some(g => c.s + c.length > g - P.worksBackM && c.s < g + P.worksPastM);
+    const atWorks = c => works.some(w => c.s + c.length > w.s0 - P.worksClearM && c.s < w.s1 + P.worksClearM);
     const free = open.filter(c => !atWorks(c)), freeInGap = inGap.filter(c => !atWorks(c));
     // (one clear of the works up to half a gap beyond the gap is better than one in the works inside it)
     const pick = freeInGap.findLast(c => c.side === -1) ?? freeInGap.at(-1) ?? free.find(c => c.s <= from + 1.5 * P.foundGapM)

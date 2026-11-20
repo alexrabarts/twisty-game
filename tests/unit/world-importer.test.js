@@ -166,21 +166,21 @@ describe('profile.mjs', () => {
 
 describe('the synthetic world', () => {
     let world;
-    beforeAll(async () => { world = await buildWorld(syntheticSource(), { stationSpacingM: 500 }); });
+    beforeAll(async () => { world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 }); });
 
-    test('is three 2 km stages, three gates each, and a tour of two gates', () => {
+    test('is three 2 km stages, one checkpoint each (the spacing is 1 km), and a tour of two gates', () => {
         expect(world.stages).toHaveLength(3);
         world.stages.forEach(s => {
             expect(s.to - s.from).toBeGreaterThan(1990);
             expect(s.to - s.from).toBeLessThan(2010);
-            expect(s.gates).toBe(3);
+            expect(s.gates).toBe(1);
         });
         const rows = courseRows(world);
         expect(Object.keys(rows)).toEqual(['world-mini-1-v1', 'world-mini-2-v1', 'world-mini-3-v1', 'world-tour-v1']);
         expect(rows['world-tour-v1'].gates).toBe(2);
     });
 
-    test('stations are 250 to 750 m apart, none inside 80 m of a tunnel or a ride junction', () => {
+    test('stations are 500 to 1500 m apart (half the spacing to one and a half), none inside 80 m of a tunnel or a ride junction', () => {
         const ids = world.stages.flatMap(s => s.stationIds);
         expect(new Set(ids).size).toBe(ids.length - 2); // the two stage boundaries are shared
         world.stages.forEach(s => {
@@ -188,8 +188,8 @@ describe('the synthetic world', () => {
             expect(at[0]).toBeCloseTo(s.from, 3);
             expect(at.at(-1)).toBeCloseTo(s.to, 3);
             for (let k = 1; k < at.length; k++) {
-                expect(at[k] - at[k - 1]).toBeGreaterThanOrEqual(250 - 0.5);
-                expect(at[k] - at[k - 1]).toBeLessThanOrEqual(750 + 0.5);
+                expect(at[k] - at[k - 1]).toBeGreaterThanOrEqual(500 - 0.5);
+                expect(at[k] - at[k - 1]).toBeLessThanOrEqual(1500 + 0.5);
             }
         });
         const interior = world.stations.filter(s => s.kind === 'gate').map(s => s.s);
@@ -238,7 +238,7 @@ describe('the synthetic world', () => {
     });
 
     test('is deterministic: two builds give the same bytes', async () => {
-        const again = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        const again = await buildWorld(syntheticSource(), { stationSpacingM: 1000 });
         const a = encodeFiles(world), b = encodeFiles(again);
         expect([...a.keys()]).toEqual([...b.keys()]);
         for (const [name, buf] of a) expect(Buffer.compare(buf, b.get(name))).toBe(0);
@@ -259,7 +259,7 @@ describe('the synthetic world', () => {
 describe('encode.mjs', () => {
     let world, dir;
     beforeAll(async () => {
-        world = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 });
         dir = tmp();
         writeWorld(world, dir);
     });
@@ -322,7 +322,7 @@ describe('encode.mjs', () => {
         const { manifest } = decodeWorld(dir);
         expect(manifest.format).toBe(1);
         expect(manifest.dataHash).toMatch(/^[0-9a-f]{64}$/);
-        expect(manifest.stationSpacingM).toBe(500);
+        expect(manifest.stationSpacingM).toBe(1000);
     });
 });
 
@@ -357,7 +357,7 @@ describe('graph.mjs and junctions.mjs', () => {
     test('built into a world, junction J has two passes with different barrier sets', async () => {
         const g = figureEight();
         const source = { ...syntheticSource(), ...g, demAt: () => 1000, coverPolys: () => [], buildings: () => [], landmarks: [], keptRoadClasses: ['6m Strasse'] };
-        const w = await buildWorld(source, { stationSpacingM: 500 });
+        const w = await buildWorld(source, { stationSpacingM: 1000 });
         const twice = w.junctions.filter(j => j.passes.length >= 2);
         expect(twice).toHaveLength(1);
         const [a, b] = twice[0].passes;
@@ -555,13 +555,16 @@ describe('stations.mjs', () => {
         expect(() => placeStations(samples, [{ id: 'a', from: 0, to: 4000 }], [], { spacingM: 1000 })).toThrow(/gap/);
     });
 
-    test('picks the point with the widest bend in its window', () => {
+    test('picks the place nearest its target where a full roadworks site fits ahead, not one in a bend', () => {
         const samples = straight(501);
-        for (let i = 240; i < 260; i++) samples.radius[i] = 8; // a tight bend near s = 1000
+        // A tight bend near s = 1000 (8 m radius over 80 m of road)
+        for (let i = 0, h = 0; i < 501; i++) { if (i > 240 && i <= 260) h += 4 / 8; samples.heading[i] = h; }
         const r = placeStations(samples, [{ id: 'a', from: 0, to: 2000 }], [], { spacingM: 1000 });
         const [from, gate, to] = r.perStage[0].s;
         expect([from, to]).toEqual([0, 2000]);
-        expect(Math.abs(gate - 1000)).toBeGreaterThan(40); // not in the bend
+        // Just past the bend: the bend is behind the line, the whole site ahead of it is straight
+        expect(gate).toBe(1048);
+        expect(r.dropped).toEqual([]);
     });
 
     test('a stage shorter than the minimum gap has no gate', () => {
@@ -598,7 +601,7 @@ describe('floors.mjs', () => {
     });
 
     test('is a lower bound: no ideal rider on the inner edge of a real bend is faster than the floor', async () => {
-        const world = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        const world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 });
         const samples = rideSamples(world.edges, world.ride);
         for (const stage of world.stages) {
             const at = stage.stationIds.map(i => world.stations[i].s);
@@ -709,7 +712,8 @@ describe('the committed Tremola slice (world/)', () => {
     test('the stations are where the placement rule puts them, and a tight bend is listed, not hidden (P36)', () => {
         const r = checkStations(decoded);
         expect(r.details.problems).toEqual([]);
-        expect(r.details.tightBend.map(b => b.s)).toEqual([10284.6, 11366.6]);
+        // (a bend within 50 m behind the line: the site runs on from it, so it may begin just out of a hairpin)
+        expect(r.details.tightBend.map(b => b.s)).toEqual([5725.3, 9216.5, 11477.2]);
     });
 
     test('the stacked gate fails when the cap on banked allowance is raised past half the closest pair', () => {
@@ -834,7 +838,7 @@ describe('farland.mjs: the land out to 40 km', () => {
     });
 
     test('the far levels round trip through the files', async () => {
-        const world = await buildWorld(syntheticSource(), { stationSpacingM: 500 });
+        const world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 });
         const level = { x0: -1000, z0: -1000, nx: 3, nz: 2, cell: 1000, heights: new Int16Array([1, 2, 3, 4, 5, -32768]), shares: new Uint8Array(24).map((_, i) => i) };
         const files = encodeFiles({ ...world, farLand: { levels: [level], cover0: new Uint8Array(world.far.nx * world.far.nz * 4), sink0: new Uint8Array(world.far.nx * world.far.nz).fill(8), copernicus: false } });
         const dir = tmp();

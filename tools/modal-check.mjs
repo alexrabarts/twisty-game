@@ -55,6 +55,8 @@ const MENU = 'tour-selector-overlay';
 // that button instead (so the sequence goes on from the same state), and one without is skipped;
 // `eval` steps stand in for what the game does on its own (a crash, a finish).
 const crash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotification(); }, top: 'crashNotification' };
+// A world ride has no crash dialog: the fall plays and the game restarts the rider in place (Game.beginWorldCrash)
+const worldCrash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotification(); }, top: 'none' };
 // P on a keyboard; a touch screen has only its pause button to tap
 const pause = { eval: () => game.pauseRace(), touch: '.virtual-button-pause', top: 'world-pause' };
 const finish = { eval: () => game.finishRun(), top: 'finishBanner' };
@@ -91,48 +93,38 @@ const legRide = () => {
     return env && env.constructor.name === 'Environment' && !env.isWorld ? [] : [`the environment is ${env && env.constructor.name}, not a leg's Environment`];
 };
 const SEQUENCES = [
-    // A world ride: the crash dialog, and every way from it to the menu
-    { name: 'world-crash-menu-click', page: 'world', steps: [
-        crash,
-        { click: '#menuCrashBtn', top: 'worldConfirm' },
-        { click: '#worldConfirmNo', top: 'crashNotification', focus: '#menuCrashBtn' },
-        { click: '#menuCrashBtn', top: 'worldConfirm' },
-        { key: 'Escape', tap: '#worldConfirmNo', top: 'crashNotification', focus: '#menuCrashBtn' },
-        { click: '#menuCrashBtn', top: 'worldConfirm' },
-        { click: '#worldConfirmYes', top: MENU, nav: true }
-    ] },
-    { name: 'world-crash-menu-key', page: 'world', steps: [
-        crash,
-        { key: 'KeyM', top: 'worldConfirm' },
-        { key: 'Enter', top: MENU, nav: true }
-    ] },
-    { name: 'world-crash-restart', page: 'world', steps: [
-        crash,
-        { click: '#restartCrashBtn', top: 'worldConfirm' },
-        { click: '#worldConfirmYes', top: 'none' }
-    ] },
-    { name: 'world-crash-restart-key', page: 'world', steps: [
-        crash,
-        { key: 'KeyR', top: 'worldConfirm' },
-        { key: 'Escape', top: 'crashNotification' },
-        { key: 'KeyC', top: 'none' }
-    ] },
-    { name: 'world-crash-checkpoint', page: 'world', steps: [
-        crash,
-        { click: '#checkpointCrashBtn', top: 'none' }
-    ] },
-    { name: 'world-crash-pause-key', page: 'world', steps: [
-        crash,
-        { key: 'Escape', top: 'crashNotification' },
-        { key: 'KeyP', top: 'world-pause' },
-        { key: 'KeyP', top: 'crashNotification' }
-    ] },
-    { name: 'world-crash-pause-credits', page: 'world', steps: [
-        crash,
+    // A world ride: a crash opens no dialog (the game puts the bike back by itself), and the ride's own dialogs open
+    // over the fall as over any riding
+    { name: 'world-crash-no-dialog', page: 'world', steps: [
+        worldCrash,
+        { key: 'KeyR', top: 'none' },
+        { key: 'KeyC', top: 'none' },
         pause,
         { click: '#world-pause [data-credits]', top: 'world-credits' },
         { click: '#world-credits button', top: 'world-pause' },
-        { click: '#world-pause [data-resume]', top: 'crashNotification' }
+        { click: '#world-pause [data-resume]', top: 'none' }
+    ] },
+    { name: 'world-crash-pause-key', page: 'world', steps: [
+        worldCrash,
+        { key: 'KeyP', top: 'world-pause' },
+        { key: 'KeyM', top: 'worldConfirm' },
+        { key: 'Escape', top: 'world-pause' },
+        { key: 'KeyP', top: 'none' }
+    ] },
+    // Restart leg is on the pause panel of a world ride, through the confirm
+    { name: 'world-pause-restart', page: 'world', steps: [
+        pause,
+        { click: '#world-pause [data-restart]', top: 'worldConfirm' },
+        { click: '#worldConfirmNo', top: 'world-pause' },
+        { click: '#world-pause [data-restart]', top: 'worldConfirm' },
+        { click: '#worldConfirmYes', top: 'none' }
+    ] },
+    { name: 'world-pause-restart-key', page: 'world', steps: [
+        { key: 'KeyP', top: 'world-pause' },
+        { key: 'KeyR', top: 'worldConfirm' },
+        { key: 'Escape', top: 'world-pause' },
+        { key: 'KeyR', top: 'worldConfirm' },
+        { key: 'Enter', top: 'none' }
     ] },
     // The pause panel of a world ride: credits, and the menu through the confirm
     { name: 'world-pause-menu', page: 'world', steps: [

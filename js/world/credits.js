@@ -79,9 +79,10 @@ const WorldCredits = {
         if (old) Modals.close(old);
     },
 
-    // The pause panel of a ride: Resume, Menu (when `menu` is given) and Credits, and on a world ride the hairpin
-    // assist. P and Escape resume, M is Menu.
-    showPause(environment, resume, menu = null) {
+    // The pause panel of a ride: Resume, Restart leg (when `restart` is given: a world ride, whose crash opens no card
+    // to offer it), Menu (when `menu` is given) and Credits, and on a world ride the hairpin assist. P and Escape
+    // resume, R is Restart leg, M is Menu.
+    showPause(environment, resume, menu = null, restart = null) {
         WorldCredits.hidePause();
         const panel = document.createElement('div');
         panel.id = 'world-pause';
@@ -96,6 +97,15 @@ const WorldCredits = {
         go.textContent = 'Resume (P)';
         go.addEventListener('click', (event) => { event.stopPropagation(); resume(); });
         panel.append(title, go);
+        if (restart) {
+            const again = document.createElement('button');
+            again.className = 'btn';
+            again.dataset.restart = '';
+            again.dataset.key = 'KeyR';
+            again.innerHTML = '<u>R</u>estart leg';
+            again.addEventListener('click', (event) => { event.stopPropagation(); restart(); });
+            panel.appendChild(again);
+        }
         if (menu) {
             const leave = document.createElement('button');
             leave.className = 'btn';

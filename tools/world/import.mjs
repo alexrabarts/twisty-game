@@ -16,7 +16,7 @@ import { createBencher, TILE_M } from './bench.mjs';
 import { rasterizeCover, coverLookup, coverPolysFromRows } from './landcover.mjs';
 import { buildingsFromRows, clearOfRoads } from './buildings.mjs';
 import { buildJunctions } from './junctions.mjs';
-import { rideSamples, placeStations } from './stations.mjs';
+import { rideSamples, placeStations, siteReach } from './stations.mjs';
 import { stageFloors } from './floors.mjs';
 import { Dem, wgs84Bbox } from './dem.mjs';
 import { NODE_FLAG, writeWorld, writeCourses } from './encode.mjs';
@@ -179,7 +179,7 @@ function resampleRide(edges, ride, nodes) {
   return legs;
 }
 
-export async function buildWorld(source, { stationSpacingM = 1000, log = () => {} } = {}) {
+export async function buildWorld(source, { stationSpacingM = 2000, log = () => {} } = {}) {
   const g = buildCorridorGraph({ edges: source.edges, stages: source.stages });
   const edges = g.edges.filter(e => e.onRide || e.length >= 1);
   // What the corridor held before stubs under 1 m were dropped: source edges (inspect.mjs counts those) and stubs
@@ -256,7 +256,8 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   const mapped = source.areas ? mapPlaces(source.areas(samples), samples, mouths, edges) : [];
   applyPads(edges, ride, mapped);
 
-  const placed = placeStations(samples, bounds, junctions.flatMap(j => j.passes.map(p => p.sIn)), { spacingM: stationSpacingM });
+  const placed = placeStations(samples, bounds, junctions.flatMap(j => j.passes.map(p => p.sIn)), { spacingM: stationSpacingM, places: mapped });
+  for (const d of placed.dropped) log(`station: no full roadworks site within reach of s ${Math.round(d.target)} in ${d.stage} (${d.reason}); no checkpoint there`);
   const stations = [];
   const stages = bounds.map((b, k) => {
     const picks = placed.perStage[k].s;
@@ -276,7 +277,10 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   let missing = 0;
   for (const [tx, tz] of tileList) { const t = bencher.tile(tx, tz); missing += t.missing; tiles.set(`${tx},${tz}`, t); }
 
-  const places = numberPlaces([...mapped, ...foundPlaces(samples, tiles, mouths, edges, mapped, stations.filter(st => st.kind === 'gate').map(st => st.s))]);
+  // Each checkpoint's roadworks, as far as the game may build them: the found places keep clear of them
+  const junctionS = junctions.flatMap(j => j.passes.map(p => p.sIn));
+  const works = stations.filter(st => st.kind === 'gate').map(st => ({ s0: st.s, s1: st.s + siteReach(samples, st.s, junctionS) }));
+  const places = numberPlaces([...mapped, ...foundPlaces(samples, tiles, mouths, edges, mapped, works)]);
   log(`places: ${mapped.length} from the map, ${places.length - mapped.length} found`);
 
   const far = (() => {
@@ -345,14 +349,14 @@ export async function main(argv) {
   let source, spacing;
   if (opt.synthetic) {
     source = syntheticSource();
-    spacing = Number(opt.spacing ?? 500);
+    spacing = Number(opt.spacing ?? 1000);
   } else {
     if (!opt.stages) throw new Error('--stages <ids|all> is required');
     let cacheDir;
     try { cacheDir = resolveCacheDir(opt.cache ? { ...process.env, TWISTY_WORLD_CACHE: opt.cache } : process.env); } catch (err) { throw new Error(`cache must be outside the repo (${err.message})`); }
     const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
     source = await loadTlmSource({ stages: stageDefs(route, opt.stages.split(',')), cacheDir });
-    spacing = Number(opt.spacing ?? 1000);
+    spacing = Number(opt.spacing ?? 2000);
   }
   const world = await buildWorld(source, { stationSpacingM: spacing, log });
   source.close?.();

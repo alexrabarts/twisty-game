@@ -184,8 +184,9 @@ export function checkGraph(decoded, built, { corridorEdges = null } = {}) {
 }
 
 // Station rule (R3): spacing, stage boundaries as stations, the placement rule itself, and clearance. A real station
-// (a gate) keeps STATION_CLEAR_M from a junction and from a structure; that is a failure. Where even the best place in
-// its window has a bend under RADIUS_MIN_M within 50 m, the station is listed in `tightBend` (reported, not failed).
+// (a gate) keeps STATION_CLEAR_M from a junction and from a structure; that is a failure. A station stands where a
+// roadworks site fits ahead of it (stations.mjs); where a bend under RADIUS_MIN_M lies within 50 m of it (behind the
+// line: a site may begin just out of a hairpin), the station is listed in `tightBend` (reported, not failed).
 export const STATION_CLEAR_M = 80;
 export const RADIUS_MIN_M = 60;
 export function checkStations(decoded) {
@@ -195,6 +196,7 @@ export function checkStations(decoded) {
   const junctionS = decoded.junctions.flatMap(j => j.passes.map(p => p.sIn));
   const bounds = decoded.manifest.stages.map(st => ({ id: st.id, from: st.from, to: st.to }));
   const tightBend = [], tooNear = [];
+  const mapped = (decoded.manifest.places || []).filter(p => p.source === 'map');
   const stationS = id => decoded.ride.stations[id].s;
   const near = (list, s) => list.reduce((m, v) => Math.min(m, Math.abs(v - s)), Infinity);
   const windowOf = (s, r, test) => {
@@ -216,7 +218,7 @@ export function checkStations(decoded) {
     }
     if (s.length - 2 !== st.gates) problems.push(`${st.id}: ${s.length - 2} interior stations, gates ${st.gates}`);
     // The rule as the importer states it: the same picks come out of the decoded ride
-    const again = placeStations(samples, [bounds[k]], junctionS, { spacingM: spacing }).perStage[0].s;
+    const again = placeStations(samples, [bounds[k]], junctionS, { spacingM: spacing, places: mapped }).perStage[0].s;
     if (again.length !== s.length || again.some((v, j) => Math.abs(v - s[j]) > 0.5)) problems.push(`${st.id}: the stations are not where the placement rule puts them`);
     s.slice(1, -1).forEach((at, j) => {
       const junction = near(junctionS, at);
@@ -727,10 +729,10 @@ export function checkPlaces(decoded) {
 }
 
 async function sourceFor(opt) {
-  if (opt.synthetic) return { source: syntheticSource(), spacing: 500 };
+  if (opt.synthetic) return { source: syntheticSource(), spacing: 1000 };
   const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
   const cacheDir = resolveCacheDir(opt.cache ? { ...process.env, TWISTY_WORLD_CACHE: opt.cache } : process.env);
-  return { source: await loadTlmSource({ stages: stageDefs(route, opt.stages.split(',')), cacheDir }), spacing: 1000 };
+  return { source: await loadTlmSource({ stages: stageDefs(route, opt.stages.split(',')), cacheDir }), spacing: 2000 };
 }
 
 // inspect.mjs's count of the corridor edges for the same stages

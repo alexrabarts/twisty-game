@@ -205,7 +205,7 @@ class Game {
         this.finished = false;
         this.finishTime = 0;
         this.startTime = this.now();
-        // A checkpoint restart adds 5 s to the clock; the count is signed with the finish
+        // A restart adds 5 s to the clock; the count is signed with the finish
         this.penaltyMs = 0;
         this.restarts = 0;
 
@@ -417,7 +417,7 @@ class Game {
         return stage ? { from: stage.from, to: stage.to } : { from: 0, to: this.environment.route.length };
     }
 
-    // Until a gate is passed, a restart puts the rider back on the start
+    // A world ride starts on the start line (a restart is in place: restartInPlace)
     armWorldStart() {
         const start = this.environment.startPosition();
         this.lastCheckpointPosition = new THREE.Vector3(start.x, start.y, start.z);
@@ -814,6 +814,9 @@ class Game {
     resetRunState() {
         this.closeWorldConfirm();
         this.score = 0;
+        this.worldCrash = null;
+        this.worldCrashStreak = 0;
+        this.worldSinceRestartS = Infinity;
         this.redLightsPaid = null;
         this.combo = 0;
         this.comboMultiplier = 1;
@@ -956,7 +959,16 @@ class Game {
         if (this.soundManager) this.soundManager.stopEngineSound();
         // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
         // in the middle of a ride
-        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu());
+        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null);
+    }
+
+    // Restart leg from the pause panel of a world ride (a world crash opens no card to offer it): it asks first, and
+    // Yes takes the pause panel down with the ride it belonged to
+    restartFromPause() {
+        this.confirmWorldLeave(this.worldRestartAsk(), () => {
+            this.resumeRace();
+            this.restartLeg();
+        });
     }
 
     // Menu from the pause panel: a world ride asks first (confirmWorldLeave), a leg goes
@@ -2279,7 +2291,7 @@ class Game {
         const banner = document.createElement('div');
         banner.id = 'finishBanner';
         banner.className = 'finish-banner';
-        const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} checkpoint ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
+        const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
         banner.innerHTML = `
             <div class="finish-main">
                 <div class="finish-title">STAGE COMPLETE</div>
@@ -2389,7 +2401,7 @@ class Game {
         }
 
         if (this.restarts > 0) {
-            recordLine += `<div class="finish-board">${this.restarts} checkpoint ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>`;
+            recordLine += `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>`;
         }
         if (this.leaderboardService && this.leaderboardService.unsupported) {
             recordLine += '<div class="finish-board">Time saved on this device. Online board opens soon.</div>';
@@ -2607,8 +2619,40 @@ class Game {
             </div>`;
     }
 
+    // A crash in a world ride opens no dialog and waits for no key: the fall plays out as it is drawn for a short,
+    // fixed time (Game.WORLD_CRASH), the call-out says why and what it costs, and then the game puts the bike back on
+    // the road by itself (restartInPlace). One crash is one penalty: a second crash called during the fall is the same
+    // one. A crash within quickS of the last restart, twice running, means the place is not safe, and each further
+    // one moves the next place backStepM further back, so no rider is held in a loop
+    beginWorldCrash(cause) {
+        if (this.worldCrash || this.finished) return;
+        const rule = Game.WORLD_CRASH;
+        this.worldCrashStreak = this.worldSinceRestartS < rule.quickS ? (this.worldCrashStreak || 0) + 1 : 0;
+        this.worldCrash = { s: 0, stillS: 0 };
+        showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', rule.mostS * 1000);
+    }
+
+    // One step of a world ride's crash: the restart once the fall has been seen (mostS, or leastS when the bike has
+    // lain still for stillS). A crash nothing announced is begun here, so no crashed bike is ever left lying
+    updateWorldCrash(dt) {
+        if (!(this.worldSinceRestartS >= 0)) this.worldSinceRestartS = Infinity;
+        this.worldSinceRestartS += dt;
+        if (this.finished) { this.worldCrash = null; return; }
+        if (!this.worldCrash && this.vehicle.crashed) this.beginWorldCrash(this.vehicle.crashCause || undefined);
+        const crash = this.worldCrash;
+        if (!crash) return;
+        const rule = Game.WORLD_CRASH;
+        crash.s += dt;
+        crash.stillS = Math.abs(this.vehicle.speed || 0) < rule.stillMs ? crash.stillS + dt : 0;
+        if (crash.s >= rule.mostS || (crash.s >= rule.leastS && crash.stillS >= rule.stillS)) this.restartFromCheckpoint('crash');
+    }
+
     // cause: what the rider hit, when the game knows it
     showCrashNotification(cause) {
+        if (this.environment && this.environment.isWorld) {
+            this.beginWorldCrash(cause);
+            return;
+        }
         // A card over the upper half: the crashed bike stays in view below it
         const crashNotification = document.createElement('div');
         crashNotification.id = 'crashNotification';
@@ -3425,9 +3469,9 @@ class Game {
             this.soundManager.toggleSound();
         }
 
-        // Check for checkpoint restart
+        // Check for checkpoint restart (a world ride: the restart in place)
         if (this.input.checkCheckpointRestart()) {
-            if (this.lastCheckpointPosition) {
+            if (this.lastCheckpointPosition || (this.environment && this.environment.isWorld)) {
                 this.restartFromCheckpoint();
             } else {
                 console.log('No checkpoint available for restart');
@@ -3462,6 +3506,8 @@ class Game {
             // A world crash says what caused it; a leg's card keeps its own line
             this.showCrashNotification(this.vehicle.crashCause || undefined);
         }
+
+        if (this.environment.isWorld) this.updateWorldCrash(deltaTime);
 
         // Show wheelie help when over halfway round the course
         if (!this.hasShownWheelieHelp && !this.vehicle.crashed && !this.finished) {
@@ -4064,7 +4110,7 @@ class Game {
     }
     
     // Race time as shown: frozen at the finish and while paused. Includes the
-    // 5 s of every checkpoint restart, so every signed time holds the penalty.
+    // 5 s of every restart, so every signed time holds the penalty.
     raceElapsed() {
         if (this.finished) return this.finishTime;
         if (this.paused && this.pauseStartedAt) return this.pauseStartedAt - this.startTime + this.penaltyMs;
@@ -4129,26 +4175,39 @@ class Game {
         this.renderer.setSize(window.innerWidth, window.innerHeight);
     }
 
-    // The one restart of a world, for every reason: back to the last station passed (the start line before the
-    // first), rolling away at a speed the next bend allows. The run stays valid; the 5 s and the restart are
-    // counted once, and the guide's timers and the cut rule start again, so one excursion costs one penalty.
-    restartAtStation(reason) {
+    // The one restart of a world, for every reason: the rider goes on from where the bike last was on the road
+    // (WorldRun.restartPlace: a few metres back, on its own side, in the open lane through a roadworks site), facing
+    // along the ride at a standstill. A checkpoint is a timing line and nothing else. No dialog asks: a crash comes
+    // here by itself once its fall has played (updateWorldCrash). The run stays valid; the 5 s and
+    // the restart are counted once, and the guide's timers and the cut rule start again, so one excursion costs one
+    // penalty.
+    restartInPlace(reason) {
         const { environment, vehicle, worldRun } = this;
         const route = environment.route;
-        const s = worldRun.stationIndex === 0 ? environment.startS : worldRun.lastStation.s;
+        // (further back each time the place itself has crashed the rider twice running: beginWorldCrash)
+        const streak = this.worldCrashStreak || 0;
+        const { s, lateral } = worldRun.restartPlace(environment.roadworks, streak >= 2 ? (streak - 1) * Game.WORLD_CRASH.backStepM : 0);
         const point = route.sample(s, {});
+        this.worldCrash = null;
+        this.worldSinceRestartS = 0;
 
         this.addScore(-Math.min(500, this.score));
 
         const distanceSoFar = vehicle.distanceTraveled;
         vehicle.reset();
         vehicle.distanceTraveled = distanceSoFar;
-        vehicle.position.set(point.x, point.y, point.z);
+        vehicle.position.set(point.x + lateral * Math.cos(point.heading), point.y, point.z - lateral * Math.sin(point.heading));
         vehicle.yawAngle = point.heading;
-        vehicle.speed = worldRun.restartSpeed(s);
+        vehicle.speed = 0;
         vehicle.findNearestRoadSegment();
         vehicle.updateMesh();
-        // The ground under the station is held until the data is there; until then it reads the far grid
+        // A key held through the fall starts again from nothing (the steer ease's ramp), and a key pressed during it
+        // does not fire after it
+        if (this.input) {
+            if (this.input.steerEase) this.input.steerEase.reset();
+            if (this.input.clearActions) this.input.clearActions();
+        }
+        // The ground under the place is held until the data is there; until then it reads the far grid
         environment.place(s);
 
         this.removeRunOverlays();
@@ -4157,16 +4216,22 @@ class Game {
         if (this.leaderboardService) this.leaderboardService.recordRestart();
 
         environment.guide.reset();
-        if (environment.roadworks) environment.roadworks.reset();
         worldRun.noteRestart();
         worldRun.restartAt(s);
         this.worldCamera.reset(point.heading);
+        // Nothing stands where the rider is put down (Traffic.clearAround: the cars, the riders, the single lanes), and
+        // inside a single lane the lights are the rider's (Roadworks.admit)
         if (this.traffic) this.traffic.clearAround(route.toUnits(s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / route.unitM));
+        if (environment.roadworks) {
+            environment.roadworks.reset();
+            environment.roadworks.admit(s);
+        }
         this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(s), {
             environment,
             weatherSystem: this.weatherSystem
         });
-        showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
+        // (a crash has said its cause and its cost during the fall)
+        if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
     }
 
     // Debug mode (`?debug` in the page's address): every rider, bike and leg is open (TourSystem `unlockAll`), and N puts the bike DEBUG_SKIP_BEFORE_M before the next station of a
@@ -4212,14 +4277,14 @@ class Game {
     // Back to the last gate passed, on a rolling start. Costs 5 s and a
     // little style; the run stays valid.
     // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'wrong-way' or 'resume'. Every reason
-    // costs the same 5 s. A world answers it in restartAtStation.
+    // costs the same 5 s. A world answers it in restartInPlace: there the rider goes on where the bike was.
     restartFromCheckpoint(reason = 'key') {
         this.closeWorldConfirm();
         // The run is over once the line is crossed; the finish banner owns
         // what happens next
         if (this.finished) return;
         if (this.environment && this.environment.isWorld) {
-            this.restartAtStation(reason);
+            this.restartInPlace(reason);
             return;
         }
         if (!this.lastCheckpointPosition) {
@@ -4290,16 +4355,21 @@ Game.DEBUG_SKIP_BEFORE_M = 40;
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
 
-// What a world restart tells the rider, by reason
+// A crash in a world ride: the seconds the fall is shown before the bike is put back (mostS; leastS once the bike has
+// lain under stillMs for stillS), the seconds after a restart within which a crash counts against the place (quickS),
+// and the metres further back each such crash after the second moves the next place
+Game.WORLD_CRASH = { mostS: 2.2, leastS: 1.5, stillMs: 0.5, stillS: 0.4, quickS: 1, backStepM: 20 };
+
+// What a world restart tells the rider, by reason (a crash says its own cause during the fall: beginWorldCrash)
 Game.WORLD_RESTART_TEXT = {
-    key: 'Back to checkpoint',
-    crash: 'Crashed, back to checkpoint',
-    'off-route': 'Off route, back to checkpoint',
-    'wrong-way': 'Wrong way, back to checkpoint',
-    resume: 'Back to checkpoint'
+    key: 'Back on the road',
+    crash: 'Crashed, back on the road',
+    'off-route': 'Off route, back on the road',
+    'wrong-way': 'Wrong way, turned round',
+    resume: 'Back on the road'
 };
 
-// A checkpoint restart costs this much on the clock. functions/lib/boards.js
+// A restart (at a leg's checkpoint, in place in a world) costs this much on the clock. functions/lib/boards.js
 // holds the same number (LONG.penaltyMs); tests/unit/board-contract.test.js
 // fails when they differ.
 Game.RESTART_PENALTY_MS = 5000;

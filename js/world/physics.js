@@ -198,6 +198,8 @@ const WorldPhysics = Object.freeze({
 
     // Used by the run layer (R3) and the restart (R3), kept here with the rest
     restartSpeedMax: 15,
+    // A restart puts the rider this far behind where the bike last was on the carriageway: room to see what it hit
+    restartBackM: 6,
     progressSlack: 1.1,
     progressFloorFrac: 0.25,
     progressEpsM: 0.1,

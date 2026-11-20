@@ -1,10 +1,10 @@
-// Roadworks: every checkpoint of a world ride is a Swiss roadworks site (Baustelle) on the straight before its station.
+// Roadworks: every checkpoint of a world ride is a Swiss roadworks site (Baustelle) on the straight after its station.
 //
 //   end gates     at each end, on each verge, three red and white boards side by side on one foot frame (the board of
 //                 the old checkpoint markers, a fifth taller: 2.45 m, five bands, red at the foot and the top, a silver strip on each white
 //                 band). The group on the closed lane's side carries the red-bordered roadworks triangle on the face
 //                 toward the traffic that arrives at that end
-//   single lane   one lane is closed from the entry gate to the station. The closed side is drawn from the station id
+//   single lane   one lane is closed from the station (the entry gate) to the exit gate. The closed side is drawn from the station id
 //                 (Roadworks.random), so it is the same on every ride and every restart. Leitbaken (red and white
 //                 chevron boards on a black rubber foot) stand along the centre line, with a taper at each end out to
 //                 the closed lane's edge; their chevrons point toward the open lane. A Swiss mobile traffic light
@@ -16,11 +16,14 @@
 //                 a stores area, a welfare corner, setts on a cobbled road), with open stretches of plain closed lane
 //                 between two. Each site draws its groups, their order and their spacing from its own id
 //                 (Roadworks.layout), no kind stands more often in one site than Roadworks.MOST allows, and a site
-//                 never has the layout of the site before it. Some of it is a ramp (a plank ramp, a steel plate up a
+//                 never has the layout of the site before it, nor of any site before where its draws give another. Some of it is a ramp (a plank ramp, a steel plate up a
 //                 gravel heap, a sand heap with a flat top)
 //
-// The checkpoint line is the station's own s, as before: the site ends there, so the exit gate stands on it and a
-// restart (at the station) puts the rider just past the single lane, never in it.
+// The checkpoint line is the station's own s, and the site begins there: the entry gate stands on it, the first stop
+// line STOP_M past it, so the split is taken before the rider waits at the light or picks a way through the works.
+// The importer puts a station only where a full site fits ahead (tools/world/stations.mjs), so no checkpoint is the
+// bare gates; Roadworks.problems names a site that is. A checkpoint is a timing line and nothing else: a rider who
+// crashes goes on from where they crashed (Game.restartInPlace), in the open lane when that is inside a site.
 //
 // Contact (Roadworks.ride, from Vehicle.update): light things (beacons, cones, barrier planks) are knocked over and
 // slow the bike a little with a wobble; heavy things (the end gates, the lights, the fence, the pallets, the roller,
@@ -60,7 +63,13 @@ class Roadworks {
     // The repair surface starts this far inside the closed lane's full width at each end: more than its ragged edge
     // reaches (RoadSurface.shader, roadWorksAt: 0.19 m of noise and a 0.12 m feather), so none of it lies under a taper
     static get REPAIR_INSET_M() { return 0.5; }
-    // How often a site draws again when its layout is the one of the site before it
+    // No stretch of the closed lane's full width longer than this is bare (outside every group of works): a group
+    // that does not fit whole before the lane's end stands as far as the lane goes when the end would be barer. And
+    // the least solid pieces a site's works hold (Roadworks.problems)
+    static get BARE_MAX_M() { return 30; }
+    static get TAIL_ROOM_M() { return 8; }
+    static get SOLID_MIN() { return 3; }
+    // How often a site draws again when its layout is the one of a site before it
     static get LAYOUT_DRAWS() { return 8; }
 
     // The most of a kind in one site, whatever its length. A group whose piece is at its most stands without it
@@ -115,8 +124,9 @@ class Roadworks {
     // The narrowest open lane a closure may leave, and the tightest bend it may stand in (1/m: 50 m radius)
     static get OPEN_MIN_M() { return 3.2; }
     static get CURVE_MAX() { return 0.02; }
-    // Metres from a ride junction a closure keeps
+    // Metres from a ride junction a closure keeps, and from a bridge or a tunnel ahead of its exit gate
     static get JUNCTION_CLEAR_M() { return 25; }
+    static get STRUCTURE_CLEAR_M() { return 6; }
     // A gate group's centre and a light's past the carriageway edge, on the drawn verge
     static get GROUP_OUT_M() { return 0.6; }
     static get LIGHT_OUT_M() { return 0.55; }
@@ -185,17 +195,16 @@ class Roadworks {
     // Every checkpoint station as a site: [{id, s, side, open, closed, reason, s0, s1, ...}] (no THREE: the node tests read it)
     static plan(route, stations, junctionS = []) {
         const sites = [];
-        let before = null;
+        // (the layouts of the closed sites so far, the last one the site just before)
+        const before = [];
         for (const st of stations) {
             const site = Roadworks.site(route, st, junctionS, before);
-            if (site.closed) before = site.layout;
+            if (site.closed) before.push(site.layout);
             sites.push(site);
         }
         return sites;
     }
 
-    // Where a closure may run back from the station: how many metres stay straight enough, clear of a junction and out
-    // of a tunnel or gallery, and the reason the stretch ends
     // The most metres the site of the station with this id may run: its own draw between the short closure and the
     // longest (a seed of its own, so the closed side and the layout keep their draws)
     static mostOf(id) {
@@ -203,42 +212,50 @@ class Roadworks {
         return Math.round(Roadworks.LENGTH_SHORT_M + (Roadworks.LENGTH_MAX_M - Roadworks.LENGTH_SHORT_M) * t);
     }
 
+    // Where a closure may run on from the station: how many metres ahead stay straight enough, wide enough for the
+    // open lane, clear of a junction and out of a tunnel or gallery, and the reason the stretch ends
     static stretch(route, s, junctionS, most = Roadworks.LENGTH_MAX_M) {
         const p = {};
         const why = (at) => {
-            route.sample(at, p);
-            if (p.flags && (p.flags.tunnel || p.flags.gallery)) return 'a tunnel';
-            if (p.flags && p.flags.bridge) return 'a bridge';
+            // (a structure STRUCTURE_CLEAR_M ahead too: the verge narrows toward a bridge or a tunnel over the row before
+            // it, and an end gate there had no verge to stand on)
+            for (const ahead of [Roadworks.STRUCTURE_CLEAR_M, 0]) {
+                route.sample(Math.min(route.length, at + ahead), p);
+                if (p.flags && (p.flags.tunnel || p.flags.gallery)) return 'a tunnel';
+                if (p.flags && p.flags.bridge) return 'a bridge';
+            }
             if (junctionS.some(j => Math.abs(j - at) < Roadworks.JUNCTION_CLEAR_M)) return 'a junction';
             const k = Math.abs(route.curvatureAt(at - 4, 8));
             if (k >= Roadworks.CURVE_MAX) return `a bend of ${Math.round(1 / k)} m radius`;
+            const open = p.width / 2 - Roadworks.BEACON_HALF_M + Roadworks.BEACON_LAT_M;
+            if (open < Roadworks.OPEN_MIN_M) return `a road that leaves an open lane of ${open.toFixed(2)} m`;
             return null;
         };
-        let back = 0, reason = null;
-        while (back < most && s - back - 1 >= 0) {
-            reason = why(s - back - 1);
-            if (reason) break;
-            back++;
+        let on = 0, reason = why(s);
+        while (!reason && on < most && s + on + 1 <= route.length) {
+            reason = why(s + on + 1);
+            if (!reason) on++;
         }
-        return { back, reason: back >= most ? null : reason || 'the start of the ride' };
+        return { on, reason: on >= most ? null : reason || 'the end of the ride' };
     }
 
-    // `before` is the layout of the closed site before this one, which this one does not take
+    // `before` holds the layouts of the closed sites before this one along the ride (or the one layout of the site just
+    // before): this one takes none of them where its draws give another, and never the last
     static site(route, st, junctionS, before = null) {
         const rand = Roadworks.random(Roadworks.seedOf(st.id));
         const side = rand() < 0.5 ? Route.LEFT : Route.RIGHT;
         const p = route.sample(st.s, {});
         const most = Roadworks.mostOf(st.id);
-        const { back, reason } = Roadworks.stretch(route, st.s, junctionS, most);
-        const length = Math.min(most, back);
-        const site = { id: st.id, s: st.s, side, open: -side, closed: false, reason: null, s1: st.s, rand, most };
+        const { on, reason } = Roadworks.stretch(route, st.s, junctionS, most);
+        const length = Math.min(most, on);
+        const site = { id: st.id, s: st.s, side, open: -side, closed: false, reason: null, s0: st.s, rand, most };
         // The narrowest carriageway over the site, and the open lane it leaves (centre line to its edge, past the beacons' feet)
         let half = p.width / 2;
-        for (let d = 0; d <= length; d += 4) half = Math.min(half, route.sample(st.s - d, {}).width / 2);
+        for (let d = 0; d <= length; d += 4) half = Math.min(half, route.sample(st.s + d, {}).width / 2);
         site.half = half;
         site.openWidth = half - Roadworks.BEACON_HALF_M + Roadworks.BEACON_LAT_M;
         if (length < Roadworks.LENGTH_MIN_M) {
-            site.reason = `the straight before it is ${back} m long (it ends at ${reason}), under the ${Roadworks.LENGTH_MIN_M} m a closure needs`;
+            site.reason = `the straight after it is ${on} m long (it ends at ${reason}), under the ${Roadworks.LENGTH_MIN_M} m a closure needs`;
         } else if (site.openWidth < Roadworks.OPEN_MIN_M) {
             site.reason = `the open lane would be ${site.openWidth.toFixed(2)} m wide, under ${Roadworks.OPEN_MIN_M} m`;
         } else {
@@ -246,13 +263,13 @@ class Roadworks {
         }
         if (!site.closed) {
             // The end gates alone, a short warning stretch with no lane closed, no lights and no works
-            site.s0 = Math.max(0, st.s - 24);
+            site.s1 = Math.min(route.length, st.s + 24);
             site.gates = [{ s: site.s0, facing: 1 }, { s: site.s1, facing: -1 }];
             site.lights = [];
             site.items = [];
             return site;
         }
-        const s0 = st.s - length, s1 = st.s;
+        const s0 = st.s, s1 = st.s + length;
         Object.assign(site, { s0, s1, length });
         site.stopIn = s0 + Roadworks.STOP_M;
         site.stopOut = s1 - Roadworks.STOP_M;
@@ -276,10 +293,16 @@ class Roadworks {
         let cobbled = 0, samples = 0;
         for (let s = site.sb; s <= site.sc; s += 4, samples++) if ((route.sample(s, {}).flags || {}).cobbles) cobbled++;
         site.surface = cobbled * 2 > samples ? 'cobbles' : 'asphalt';
+        const earlier = Array.isArray(before) ? before : before === null ? [] : [before];
+        const last = earlier[earlier.length - 1];
+        let spare = null;
         for (let draw = 0; draw < Roadworks.LAYOUT_DRAWS; draw++) {
             site.items = Roadworks.layout(site, draw);
-            if (site.layout !== before) break;
+            if (!earlier.includes(site.layout)) { spare = null; break; }
+            // (a short lane has few layouts to draw: the first that is not its neighbour's stands if none is new)
+            if (spare === null && site.layout !== last) spare = draw;
         }
+        if (spare !== null) site.items = Roadworks.layout(site, spare);
         // The light cycle: the all-red phase clears the single lane at the slowest car's speed from a rolling start
         const lane = site.stopOut - site.stopIn + 2 * Roadworks.CAR_HALF_M;
         site.redS = Math.ceil(lane / Roadworks.CLEAR_SPEED_MS + Roadworks.CLEAR_LAG_S);
@@ -310,7 +333,8 @@ class Roadworks {
     // (sb to sc) the barrier planks across it and the works in groups (GROUPS): each group's pieces along the outer
     // strip, its ramps on the middle line with a clear landing after each, and plain lane between two groups. The
     // groups, their order, which way round each stands and every spacing come from the site's id and `draw` (a site
-    // draws again when its layout is its neighbour's). Sets site.groups ([{name, s0, s1, flip}]) and site.layout
+    // draws again when its layout is its neighbour's). Sets site.groups ([{name, s0, s1, flip, strip1}]: `strip1`
+    // where its strip ends, `s1` where its last thing or landing does) and site.layout
     static layout(site, draw = 0) {
         const items = [];
         const side = site.side, half = site.half;
@@ -366,6 +390,7 @@ class Roadworks {
         };
         const end = site.sc - 1;
         const groups = [];
+        const solid = () => items.filter(item => P[item.kind] && P[item.kind].wide).length;
         let at = site.sb + Roadworks.WORKS_IN_M;
         // The ramps' line: at RAMP_LAT_M, or nearer the centre line where the road is too narrow to hold the strip
         // beside it, but never so near that a ramp reaches the beacons' feet
@@ -386,8 +411,9 @@ class Roadworks {
             const strip = pieces.filter(kind => clear(kind) && (count[kind] || 0) + (held[kind] = (held[kind] || 0) + 1) <= (most[kind] || Infinity));
             const gaps = strip.map(() => between(Roadworks.PIECE_GAP_M));
             const length = strip.reduce((sum, kind, i) => sum + P[kind].length + gaps[i], 0);
-            // A group after the first stands whole or not at all; the first stands as far as the lane goes
-            if (groups.length && at + length > end) break;
+            // A group after the first stands whole, or not at all where the lane then ends bare for BARE_MAX_M at the
+            // most and the site has its SOLID_MIN solid pieces; else it stands as far as the lane goes, as the first does
+            if (groups.length && at + length > end && site.sc - groups[groups.length - 1].s1 <= Roadworks.BARE_MAX_M && solid() >= Roadworks.SOLID_MIN) break;
             if (!groups.length) at += rand() * Math.min(Roadworks.LEAD_MAX_M, Math.max(0, end - at - Math.max(length, 3 + (R[group.mid[0]] || 0) + Roadworks.LANDING_M)));
             const s0 = at;
             let s1 = at;
@@ -399,6 +425,7 @@ class Roadworks {
                 at += piece.length + gaps[i];
                 s1 = at - gaps[i];
             });
+            const stripS1 = s1;
             // The middle line: each ramp with LANDING_M of clear lane after it, a plate in that landing
             let s = s0 + 3, landed = null;
             for (const kind of group.mid) {
@@ -412,13 +439,62 @@ class Roadworks {
                 landed = s - Roadworks.LANDING_M;
                 s1 = Math.max(s1, s);
             }
+            // (a group of which nothing found room is no group)
+            if (s1 === s0) break;
             stood[name] = (stood[name] || 0) + 1;
-            groups.push({ name, s0, s1, flip });
-            at = Math.max(at, s1) + between(Roadworks.GROUP_GAP_M);
+            groups.push({ name, s0, s1, flip, strip1: stripS1 });
+            // The plain lane to the next group, from this one's last thing. Where the lane would end bare for longer
+            // than BARE_MAX_M, the next group starts with TAIL_ROOM_M of lane left, so some of it stands
+            let gap = between(Roadworks.GROUP_GAP_M);
+            if (site.sc - s1 > Roadworks.BARE_MAX_M) gap = Math.min(gap, end - s1 - Roadworks.TAIL_ROOM_M);
+            at = s1 + gap;
+        }
+        // A site still short of its solid pieces (a short lane, a small group) has pallets stood after a group's
+        // strip, the last group's first, where the lane or the plain stretch to the next group gives the room
+        for (let i = groups.length - 1; i >= 0; i--) {
+            const group = groups[i];
+            const limit = i + 1 < groups.length ? groups[i + 1].s0 - Roadworks.GROUP_GAP_M[0] : end;
+            for (let s = group.strip1; solid() < Roadworks.SOLID_MIN && clear('pallets');) {
+                s += between(Roadworks.PIECE_GAP_M);
+                if (s + P.pallets.length > limit) break;
+                add('pallets', s + P.pallets.length / 2, half - P.pallets.out);
+                s += P.pallets.length;
+                group.s1 = Math.max(group.s1, s);
+            }
         }
         site.groups = groups;
         site.layout = groups.map(group => group.name).join(' ');
         return items;
+    }
+
+    // The longest stretch of a closed site's full-width lane that is outside every group of works, in metres
+    static bare(site) {
+        let from = site.sb, longest = 0;
+        for (const group of site.groups || []) {
+            longest = Math.max(longest, group.s0 - from);
+            from = Math.max(from, group.s1);
+        }
+        return Math.max(longest, site.sc - from);
+    }
+
+    // The solid pieces of a site's works (the plant and the stores: not the gates, the lights or the beacons)
+    static solid(site) {
+        const pieces = Roadworks.PIECES;
+        return (site.items || []).filter(item => pieces[item.kind] && pieces[item.kind].wide).length;
+    }
+
+    // Why a checkpoint's site is not real roadworks, as a list of sentences (none: it is): no lane closed, no group
+    // of works, under SOLID_MIN solid pieces, or a bare stretch over BARE_MAX_M
+    static problems(site) {
+        if (!site.closed) return [`no lane is closed: ${site.reason}`];
+        const out = [];
+        const core = Math.round(site.sc - site.sb);
+        if (!(site.groups || []).length) out.push(`no works stand in its closed lane of ${core} m`);
+        const solid = Roadworks.solid(site);
+        if (solid < Roadworks.SOLID_MIN) out.push(`${solid} solid pieces in its closed lane of ${core} m, under ${Roadworks.SOLID_MIN}`);
+        const bare = Roadworks.bare(site);
+        if (bare > Roadworks.BARE_MAX_M + 1e-6) out.push(`${bare.toFixed(1)} m of its closed lane is bare, over ${Roadworks.BARE_MAX_M} m`);
+        return out;
     }
 
     // The ride's stations that are checkpoints (every station but the start and the finish)
@@ -1214,6 +1290,17 @@ class Roadworks {
             for (const e of site.elements) if (e.knock && e.knock.t < 0.35) { e.knock.t += dtSec; this.knocking = true; }
         }
         if (position) this.place(position.x, position.z);
+    }
+
+    // A rider put down at s (a restart in place, a debug skip): where that is inside a single lane, its lights go
+    // to green the rider's way, as for a rider who had entered on green. The traffic is moved out of every single
+    // lane at the same time (Traffic.clearOfRoadworks), so nothing comes the other way in the lane
+    admit(s) {
+        const site = this.siteAt(s);
+        if (!site) return null;
+        site.timer = { index: 0, left: Roadworks.GREEN_S, started: true };
+        this.lampsDirty = true;
+        return site;
     }
 
     // A restart: every knocked thing stands again

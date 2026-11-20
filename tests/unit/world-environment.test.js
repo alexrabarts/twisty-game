@@ -34,7 +34,7 @@ describe('asking for a world', () => {
         expect(env.submitAllowed).toBe(false);
         expect(env.stage.id).toBe('mini-1');
         expect(env.endS).toBeCloseTo(2002.66, 2);
-        expect(env.checkpoints).toHaveLength(3);
+        expect(env.checkpoints).toHaveLength(1);
         expect(env.finishGate.s).toBeCloseTo(2002.66, 1);
         env.dispose();
     });
@@ -161,8 +161,8 @@ describe('the Tremola slice', () => {
         expect(Math.max(...counts.map(c => c.roads))).toBeGreaterThan(5);
     });
 
-    test('the stage has its 12 gates in order and a finish at the end of the ride', () => {
-        expect(env.checkpoints).toHaveLength(12);
+    test('the stage has its 6 gates in order and a finish at the end of the ride', () => {
+        expect(env.checkpoints).toHaveLength(6);
         env.checkpoints.forEach((cp, i) => {
             expect(cp.index).toBe(i);
             expect(cp.passed).toBe(false);

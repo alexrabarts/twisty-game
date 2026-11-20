@@ -3709,8 +3709,10 @@ const WORLD = {
         const stageM = env.stage ? env.stage.length || env.stage.to - env.stage.from : env.route.length;
         return { badHud, shownM, stageM: Math.round(stageM), finished: game.finished, crashed: v.crashed, crash: crashes[0] || null, lowside: v.lowsideTimerMs, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, maxLateral: Math.round(maxLateral * 10) / 10, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts, penaltyMs: game.penaltyMs, traffic, cones: !!game.cones, rockfalls: !!game.rockfalls, rows };
     }, pilotWorld.toString(), Number(option('speed') || 20), countScene.toString(), Number(option('every') || 1000)),
-    // A restart from a key press: the bike is put on the last station, +5 s, a rolling start, and the ride goes on
-    // to the next station. An excursion that the guide ends costs one penalty, not two.
+    // A restart is in place: from a key press the bike is put a few metres behind where it was (not on a station),
+    // at a standstill, +5 s, and the ride goes on to the next station. A crash opens no dialog: the fall plays, the
+    // call-out says the cause and the cost, and the game restarts the rider by itself within Game.WORLD_CRASH.mostS.
+    // An excursion that the guide ends costs one penalty, not two.
     'world-restart': async page => page.evaluate(async (pilotSource) => {
         const env = game.environment;
         const v = game.vehicle;
@@ -3720,13 +3722,25 @@ const WORLD = {
         const ride = (until, limit = 60 * 600) => {
             for (let tick = 0; tick < limit && !until() && !v.crashed; tick++) twistyDev.step(1);
         };
-        ride(() => game.checkpointsPassed >= 3);
-        const station = env.stationGates[3];
+        ride(() => game.checkpointsPassed >= 2);
+        const station = env.stationGates[2];
         ride(() => v.routeS >= station.s + 300);
         const before = { passed: game.checkpointsPassed, elapsed: game.raceElapsed(), s: v.routeS, penaltyMs: game.penaltyMs };
         game.restartFromCheckpoint('key');
         const after = { s: v.projection.s, speed: v.speed, restarts: game.restarts, penaltyMs: game.penaltyMs, elapsedJump: game.raceElapsed() - before.elapsed, passed: game.checkpointsPassed, lastS: game.worldRun.lastS };
-        ride(() => game.checkpointsPassed >= 4);
+        // A crash 150 m on: no dialog, the cause in a call-out, and the game puts the bike back by itself
+        ride(() => v.routeS >= before.s + 150);
+        const crashAt = { s: v.projection.s, elapsed: game.raceElapsed(), restarts: game.restarts, ticks: twistyDev.ticks };
+        v.crashed = true;
+        v.crashCause = 'Hit the probe';
+        twistyDev.step(1);
+        const callout = [...document.querySelectorAll('.hud-top *')].map(el => el.textContent).find(text => /Hit the probe/.test(text)) || null;
+        const dialogs = () => ['crashNotification', 'worldConfirm', 'world-pause'].filter(id => document.getElementById(id));
+        const during = { dialogs: dialogs(), restarts: game.restarts - crashAt.restarts, crashed: v.crashed };
+        for (let tick = 0; tick < 60 * 5 && game.restarts === crashAt.restarts; tick++) twistyDev.step(1);
+        const crash = { callout, during, dialogs: dialogs(), seconds: (twistyDev.ticks - crashAt.ticks) / 60, mostS: Game.WORLD_CRASH.mostS, backM: crashAt.s - v.projection.s, speed: v.speed, crashed: v.crashed,
+            restarts: game.restarts - crashAt.restarts, penaltyMs: game.penaltyMs - after.penaltyMs, lateral: v.projection.lateral, half: v.projection.width / 2 };
+        ride(() => game.checkpointsPassed >= 3);
         const next = { passed: game.checkpointsPassed, restarts: game.restarts, crashed: v.crashed };
         // The restart-the-ride box holds the race: real animate() frames run no physics and stop the clock, Escape
         // answers CANCEL and the ride goes on, Enter answers YES. twistyDev.step unpauses each frame, so call animate itself.
@@ -3761,7 +3775,7 @@ const WORLD = {
         for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) twistyDev.step(1);
         v.update = base;
         for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
-        return { station: 3, stationS: station.s, before, after, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
+        return { station: 2, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
     // The HUD of a ride that holds more than one stage (P48): put the bike in stage 2 of the mini world
     // (--worldData tests/fixtures/world/mini, --world all), at 1280x720 and at 390x844 as a touch device. The stage line,
@@ -5252,14 +5266,18 @@ function worldChecks(report) {
     }
     const restart = results['world-restart'];
     if (restart) {
-        const { before, after, next, confirm, excursion, stationS } = restart;
+        const { before, after, crash, next, confirm, excursion, stationS, backM } = restart;
         const { held, cancelled, entered } = confirm;
         if (held.ticks !== 0 || held.moved !== 0 || held.clock !== 0 || !held.open) failures.push(`world-restart: the ride went on while the restart box was open: ${JSON.stringify(held)}`);
         if (cancelled.open || cancelled.paused || cancelled.proceeded !== 0 || cancelled.ticks !== 30) failures.push(`world-restart: Escape must cancel and give the ride back: ${JSON.stringify(cancelled)}`);
         if (entered.open || entered.paused || entered.proceeded !== 1) failures.push(`world-restart: Enter must answer yes: ${JSON.stringify(entered)}`);
-        if (!(Math.abs(after.s - stationS) <= 6) || after.restarts !== 1 || after.penaltyMs !== 5000 || !(after.elapsedJump >= 5000 && after.elapsedJump < 5100) || !(after.speed <= 15) || after.passed !== before.passed) failures.push(`world-restart: ${JSON.stringify({ stationS, before, after })}`);
-        if (next.passed !== 4 || next.restarts !== 1 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
-        if (excursion.restarts !== 1 || excursion.penaltyMs !== 10000 || excursion.guideCause !== null || excursion.pendingCutMs !== 0) failures.push(`world-restart: an excursion must cost one penalty: ${JSON.stringify(excursion)}`);
+        // In place: a few metres behind where the bike was (300 m past the station, so not on it), at a standstill
+        if (!(before.s - after.s >= backM - 2 && before.s - after.s <= backM + 2) || Math.abs(after.s - stationS) < 100 || after.restarts !== 1 || after.penaltyMs !== 5000 || !(after.elapsedJump >= 5000 && after.elapsedJump < 5100) || after.speed !== 0 || after.passed !== before.passed) failures.push(`world-restart: ${JSON.stringify({ stationS, before, after })}`);
+        if (crash.during.dialogs.length || crash.dialogs.length || crash.during.restarts !== 0 || !crash.during.crashed) failures.push(`world-restart: a crash must open no dialog and play its fall first: ${JSON.stringify(crash)}`);
+        if (!crash.callout || !/Hit the probe\s+\+5 s/.test(crash.callout)) failures.push(`world-restart: the call-out must say the cause and the cost: ${JSON.stringify(crash.callout)}`);
+        if (crash.restarts !== 1 || crash.penaltyMs !== 5000 || crash.crashed || !(crash.seconds <= crash.mostS + 0.1) || !(crash.backM >= 0 && crash.backM <= backM + 25) || Math.abs(crash.lateral) > crash.half) failures.push(`world-restart: the game must restart a crashed rider in place by itself: ${JSON.stringify(crash)}`);
+        if (next.passed !== 3 || next.restarts !== 2 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
+        if (excursion.restarts !== 1 || excursion.penaltyMs !== 15000 || excursion.guideCause !== null || excursion.pendingCutMs !== 0) failures.push(`world-restart: an excursion must cost one penalty: ${JSON.stringify(excursion)}`);
     }
     const cut = results['world-cut'];
     if (cut) {

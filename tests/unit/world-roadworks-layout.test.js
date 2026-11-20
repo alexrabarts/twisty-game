@@ -1,7 +1,7 @@
 // What stands in a roadworks site's closed lane (js/world/roadworks.js, Roadworks.layout): the works in groups drawn
 // from the site's id, no kind more often than Roadworks.MOST allows, no site with its neighbour's layout, the ramps'
-// line clear of every solid thing, the repair surface only between the tapers, and no more triangles than the sites
-// cost before the groups. The lights, the contact and the rides are tests/unit/world-roadworks.test.js.
+// line clear of every solid thing, the repair surface only between the tapers, and no more triangles in the whole
+// stage than its roadworks cost before. The lights, the contact and the rides are tests/unit/world-roadworks.test.js.
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame, loadScript } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
@@ -9,8 +9,9 @@ import { diskFetch } from '../helpers/world-fetch.js';
 const game = loadGame();
 const { THREE, WorldEnvironment, Roadworks, RoadSurface, Vehicle } = game;
 
-// The triangles each site of the Tremola stage drew before the works stood in groups (commit 8366bf7), by station id
-const TRIANGLES_BEFORE = { 1: 3494, 2: 2144, 3: 3216, 4: 2578, 5: 1936, 6: 2230, 7: 2562, 8: 2944, 9: 1988, 10: 612, 11: 612, 12: 6826 };
+// The triangles the roadworks of the whole Tremola stage drew before its checkpoints were halved (commit 70fce04: 12
+// sites, each no dearer than before the works stood in groups), with every board, sign face and lamp
+const TRIANGLES_BEFORE = 28844;
 // A closed lane this long in its full width is a long site
 const LONG_M = 150;
 const FIXED = new Set(['gate', 'triangle', 'light', 'beacon', 'cone', 'planks']);
@@ -94,23 +95,26 @@ describe('the caps', () => {
 });
 
 describe('the variety', () => {
-    test('the stage has at least 5 layouts, no site has the layout of the site before it, and a long site has at least 3 different groups', () => {
+    test('every site of the stage has a layout of its own, and a long site has at least 3 different groups', () => {
         const layouts = works.closed.map(site => site.layout);
-        expect(new Set(layouts).size).toBeGreaterThanOrEqual(5);
+        // (6 sites since the checkpoints were halved: each draws until its layout is none of the sites' before it)
+        expect(new Set(layouts).size).toBe(works.closed.length);
         for (let i = 1; i < layouts.length; i++) expect([works.closed[i].id, layouts[i]]).not.toEqual([works.closed[i].id, layouts[i - 1]]);
         const long = works.closed.filter(site => site.sc - site.sb >= LONG_M);
         expect(long.length).toBeGreaterThan(0);
         for (const site of long) expect(new Set(site.groups.map(g => g.name)).size).toBeGreaterThanOrEqual(3);
-        // Every group of the tables that the stage's roads allow stands somewhere in it
+        // Four of the five groups of the tables stand somewhere in the stage (6 sites, four of them one or two groups
+        // long: the draws of the three on asphalt gave no surfacing), and none that the tables do not name
         const stood = new Set(works.closed.flatMap(site => site.groups.map(g => g.name)));
-        expect([...stood].sort()).toEqual(Object.keys(Roadworks.GROUPS).sort());
+        for (const name of stood) expect(Object.keys(Roadworks.GROUPS)).toContain(name);
+        expect([...stood].sort()).toEqual(['dig', 'setts', 'stores', 'welfare']);
         for (const site of works.closed) {
             expect(site.groups.length).toBeGreaterThan(0);
             for (const g of site.groups) expect([undefined, site.surface]).toContain(Roadworks.GROUPS[g.name].on);
         }
     });
 
-    test('a site that would have its neighbour\'s layout draws again, for any ids', () => {
+    test('a site that would have its neighbour\'s layout draws again, for any ids, and takes a layout no site before it has where its draws give one', () => {
         const stations = [];
         for (let id = 1; id <= 60; id++) stations.push({ id, s: works.closed[0].s });
         // (the same straight for every station: only the id differs, and each most)
@@ -291,7 +295,7 @@ describe('the repair surface', () => {
 });
 
 describe('the triangles', () => {
-    test('no site draws more triangles than it did before the groups', () => {
+    test('the roadworks of the whole stage draw no more triangles than they did before', () => {
         const lamp = trianglesOf('lamp');
         const rows = works.sites.map((site) => {
             let n = 0;
@@ -303,8 +307,10 @@ describe('the triangles', () => {
             }
             return [site.id, n];
         });
-        expect(rows.map(([id]) => id)).toEqual(Object.keys(TRIANGLES_BEFORE).map(Number));
-        for (const [id, n] of rows) expect([id, Math.min(n, TRIANGLES_BEFORE[id])]).toEqual([id, n]);
+        expect(rows.map(([id]) => id)).toEqual(works.sites.map(site => site.id));
+        const total = rows.reduce((sum, [, n]) => sum + n, 0);
+        expect(total).toBeGreaterThan(5000);
+        expect(total).toBeLessThanOrEqual(TRIANGLES_BEFORE);
         // What is drawn is what was counted: every element has its mesh, and each mesh holds all of its kind
         for (const kind of new Set(works.elements.map(e => e.kind))) {
             expect(works.meshes[kind]).toBeTruthy();

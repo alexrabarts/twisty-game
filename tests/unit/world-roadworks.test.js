@@ -229,9 +229,12 @@ describe('the rider', () => {
     const jump = async (kind, speed, tip = 0) => {
         // The first ramp of this kind whose straight line ahead stays on the road and clear of every solid thing. The
         // bike here does not steer, the works differ from site to site (Roadworks.layout), and where the road bends
-        // after a ramp the bike leaves the ramps' line for the strip beside it, which is no fault of the ramp
+        // after a ramp the bike leaves the ramps' line for the strip beside it, which is no fault of the ramp. The
+        // line is read as far as the bike goes: the flight and half a second of road after the landing (AHEAD_M;
+        // the sites stand on roads of 55 m radius and more, where a straight line leaves the lane within 25 m)
+        const AHEAD_M = 20;
         const clearAhead = (e) => {
-            for (let a = e.box.z0 - 8; a <= e.box.z1 + 60; a += 0.5) {
+            for (let a = e.box.z0 - 8; a <= e.box.z1 + AHEAD_M; a += 0.5) {
                 const p = world(e, 0, a);
                 const at = env.route.project(p.x, p.z, { index: env.route.indexAt(Math.min(env.route.length, e.s + a)) }, {});
                 if (Math.abs(at.lateral) > at.width / 2 - 0.5) return false;
@@ -254,7 +257,9 @@ describe('the rider', () => {
         const out = { launched: false, vy: null, peak: -Infinity, landed: false, crashed: false, air: 0, grade: ramp.grade };
         // Long enough to reach the ramp and pass it at this speed, and four seconds at least
         const steps = 60 * Math.max(4, (run + ramp.box.z1 - ramp.box.z0 + 6) / speed);
-        for (let i = 0; i < steps && !v.crashed; i++) {
+        let rolled = 0;
+        for (let i = 0; i < steps && !v.crashed && rolled < 30 && Roadworks.local(ramp, v.position.x, v.position.z).a < ramp.box.z1 + AHEAD_M; i++) {
+            if (out.landed) rolled++;
             v.update(1 / 60, 0, v.speed < speed ? 1 : 0, 0, 0);
             if (v.isJumping && !out.launched) { out.launched = true; out.vy = v.jumpVelocityY; out.launchSpeed = v.speed; }
             if (v.isJumping) {

@@ -337,7 +337,7 @@ class Traffic {
     }
 
     // No world vehicle starts inside a single lane: one there moves back before its entry, where its light holds it
-    clearOfRoadworks() {
+    clearOfRoadworks(player = null) {
         const works = this.environment.roadworks;
         if (!works || !this.environment.route.laneCurve) return;
         const route = this.environment.route;
@@ -346,7 +346,9 @@ class Traffic {
             let s = works.clearOf(v.s, v.direction, v.half);
             if (s === v.s) continue;
             // Several moved out of one lane stand behind each other before its entry, not in each other
-            const taken = at => list.some(o => o !== v && o.direction === v.direction && !o.parked && Math.abs(o.s - at) < v.half + o.half + Roadworks.QUEUE_GAP_M);
+            // (nor in the player, put down at `player` and facing along the ride: they queue behind it)
+            const onPlayer = at => player !== null && v.direction === 1 && Math.abs(player - at) < Math.max(CONTACT.restart.backM + 0.01, v.half + Roadworks.BIKE_HALF_M + Roadworks.QUEUE_GAP_M);
+            const taken = at => onPlayer(at) || list.some(o => o !== v && o.direction === v.direction && !o.parked && Math.abs(o.s - at) < v.half + o.half + Roadworks.QUEUE_GAP_M);
             while (taken(s) && s > 0 && s < route.length) s -= v.direction * (2 * v.half + Roadworks.QUEUE_GAP_M);
             v.s = s;
             const u = route.toUnits(Math.max(0, Math.min(route.length, s)));
@@ -707,7 +709,7 @@ class Traffic {
     }
     
 
-    // A checkpoint restart: a car within `radius` segments of the rider moves
+    // A restart (a leg's checkpoint, a world's restart in place): a car within `radius` segments of the rider moves
     // to the first free slot ahead, by a fixed rule with no random draw, so a
     // restart never puts a car on the rider and never skips traffic further on
     clearAround(segment, radius) {
@@ -724,7 +726,7 @@ class Traffic {
             car.updatePosition();
         });
         this.clearRiders(this.environment.route.fromUnits(segment));
-        this.clearOfRoadworks();
+        this.clearOfRoadworks(this.environment.route.fromUnits(segment));
     }
 
     // The rider's headlight threshold (Game.writeTime switches it on above 0)

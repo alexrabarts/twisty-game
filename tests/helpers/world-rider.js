@@ -4,11 +4,13 @@
 // full lock in a hairpin, then the input ramp of js/input.js). `lane` is metres right of the centre line, or 'inside'
 // (the inside of each bend, 1.2 m from the edge); through a roadworks site the rider takes the open lane, as the
 // autopilot does (Roadworks.pilotLane). The speed is held at `speed` with the throttle and brake.
-// Returns {crashed, cut, cause, s, lateral, half, speed}: the first crash or cut-rule restart, or a clean ride.
+// Returns {crashed, cut, cause, s, lateral, half, speed, ticks, stations}: the first crash or cut-rule restart, or a
+// clean ride; `ticks` the steps of 1/60 s ridden and `stations` the tick at which each station was passed. `most` is
+// the most steps (300 s unless given: a whole stage needs more).
 const DT = 1 / 60, G = 9.81;
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, assist = 'normal', lane = 0, log = null }) {
+export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, assist = 'normal', lane = 0, log = null, most = 60 * 300 }) {
     const { THREE, Vehicle, WorldRun } = game;
     const route = env.route, world = env.physics;
     const v = new Vehicle(new THREE.Scene());
@@ -26,9 +28,11 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
     const aim = {};
     const capTan = () => Math.tan(Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * Math.max(0.01, v.worldMultipliers().lateralFriction)));
     const reaction = [];
-    let smooth = 0, settled = s0;
+    let smooth = 0, settled = s0, ticks = 0;
+    const stations = [];
     if (log) log.length = 0;
-    for (let tick = 0; tick < 60 * 300; tick++) {
+    for (let tick = 0; tick < most; tick++) {
+        ticks = tick;
         const p = v.projection;
         const s = p.index >= 0 ? p.s : s0;
         if (s >= s1) break;
@@ -62,9 +66,10 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
             const line = log ? log.filter(l => /CRASH/.test(l)).pop() : null;
             return { crashed: true, cut: false, cause: line || (v.lowsideTimerMs >= world.lowsideMs ? 'lowside' : 'crash'), ...at };
         }
-        if (q.index >= 0 && run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading) }).cut) {
-            return { crashed: false, cut: true, cause: 'cut rule: back to the station', ...at };
-        }
+        const result = q.index >= 0 ? run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading) }) : null;
+        if (result && result.cut) return { crashed: false, cut: true, cause: 'cut rule: a restart', ...at };
+        if (result && result.station >= 0) stations.push({ index: result.station, tick: tick + 1 });
+        if (run.finished) { ticks = tick + 1; break; }
     }
-    return { crashed: false, cut: false, cause: null, s: Math.round(v.projection.s) };
+    return { crashed: false, cut: false, cause: null, s: Math.round(v.projection.s), ticks, stations };
 }

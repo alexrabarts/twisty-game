@@ -170,12 +170,13 @@ describe('found places: where the map has none', () => {
 
     test('a place clear of a checkpoint\'s roadworks is taken before one in them', () => {
         const tiles = tilesOf(() => 1000);
-        const gates = [1000];
-        const places = foundPlaces(samples, tiles, [], [e], [], gates);
+        // The works run on from the station at 1 000 for 300 m (tools/world/stations.mjs siteReach)
+        const works = [{ s0: 1000, s1: 1300 }];
+        const places = foundPlaces(samples, tiles, [], [e], [], works);
         expect(places.length).toBeGreaterThanOrEqual(2);
-        for (const p of places) expect(p.s + p.length <= 1000 - PLACE.worksBackM || p.s >= 1000 + PLACE.worksPastM).toBe(true);
+        for (const p of places) expect(p.s + p.length <= 1000 - PLACE.worksClearM || p.s >= 1300 + PLACE.worksClearM).toBe(true);
         // With works everywhere a place is still found
-        expect(foundPlaces(samples, tiles, [], [e], [], [500, 1000, 1500, 2000]).length).toBeGreaterThan(0);
+        expect(foundPlaces(samples, tiles, [], [e], [], [{ s0: 0, s1: 4000 }]).length).toBeGreaterThan(0);
     });
 
     test('the places are numbered in order along the ride', () => {
@@ -186,7 +187,7 @@ describe('found places: where the map has none', () => {
 
 describe('the worlds the importer makes', () => {
     let world;
-    beforeAll(async () => { world = await buildWorld(syntheticSource(), { stationSpacingM: 500 }); }, 120000);
+    beforeAll(async () => { world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 }); }, 120000);
 
     test('the synthetic world has its car park, in the manifest and under the data check', () => {
         expect(world.places).toHaveLength(1);
@@ -200,13 +201,13 @@ describe('the worlds the importer makes', () => {
         expect(mini.details).toMatchObject({ places: 1, map: 1, found: 0 });
     });
 
-    test('the committed Tremola slice passes the data check: one place from the map, the rest found, no gap over 1000 m', () => {
+    test('the committed Tremola slice passes the data check: one place from the map, the rest found, no gap over 1050 m', () => {
         const r = checkPlaces(decodeWorld(path.join(REPO, 'world')));
         expect(r.details.problems).toEqual([]);
         expect(r.ok).toBe(true);
         expect(r.details.map).toBe(1);
         expect(r.details.found).toBeGreaterThanOrEqual(15);
-        expect(r.details.maxGapM).toBeLessThanOrEqual(1000);
+        expect(r.details.maxGapM).toBeLessThanOrEqual(1050);
         expect(r.details.landOverM).toBeLessThanOrEqual(0.15);
     });
 

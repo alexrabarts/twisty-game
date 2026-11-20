@@ -160,9 +160,10 @@ describe('the checkpoint roadworks sites', () => {
         expect(replanned.map(site => site.side)).toEqual(works.sites.map(site => site.side));
     }, 300000);
 
-    test('each closure runs from 64 m to its own most on the straight before its station, some of them long, its checkpoint line the station; the stations it skips say why', () => {
+    test('each closure runs from 64 m to its own most on the straight after its station, some of them long, its checkpoint line the station at its entry; no station is skipped', () => {
         for (const site of works.closed) {
-            expect(site.s1).toBe(site.s);
+            expect(site.s0).toBe(site.s);
+            expect(site.s1).toBe(site.s + site.length);
             expect(site.length).toBeGreaterThanOrEqual(Roadworks.LENGTH_MIN_M);
             expect(site.length).toBeLessThanOrEqual(site.most);
             expect(site.most).toBe(Roadworks.mostOf(site.id));
@@ -176,13 +177,26 @@ describe('the checkpoint roadworks sites', () => {
         expect(Math.max(...mosts)).toBeLessThanOrEqual(Roadworks.LENGTH_MAX_M);
         expect(new Set(mosts).size).toBeGreaterThan(works.sites.length / 2);
         expect(works.closed.filter(site => site.length > Roadworks.LENGTH_SHORT_M).length).toBeGreaterThanOrEqual(works.closed.length / 3);
-        const skipped = works.sites.filter(site => !site.closed);
-        expect(skipped.length).toBeLessThan(works.sites.length / 2);
-        for (const site of skipped) {
-            expect(site.reason).toMatch(/bend|junction|tunnel|bridge|open lane/);
-            expect(site.elements.filter(e => e.kind === 'gate')).toHaveLength(4);
-            expect(site.elements.filter(e => e.kind === 'light' || e.kind === 'beacon')).toHaveLength(0);
-        }
+        // The importer puts a station only where a full site fits (tools/world/stations.mjs): none has the gates only
+        expect(works.sites.filter(site => !site.closed).map(site => `${site.id}: ${site.reason}`)).toEqual([]);
+    });
+
+    test('a station where no closure fits would have the gates only and say why: the end of the ride, a bend, a narrow road', () => {
+        const route = env.route;
+        // (stations nobody shipped: 30 m before the finish, and in the first hairpin of the stacked ladder)
+        const end = Roadworks.site(route, { id: 90, s: env.endS - 30 }, []);
+        expect(end.closed).toBe(false);
+        expect(end.reason).toMatch(/the straight after it is \d+ m long \(it ends at .*\), under the 64 m a closure needs/);
+        expect([end.s0, end.gates.map(g => g.s), end.lights, end.items]).toEqual([end.s, [end.s, end.s1], [], []]);
+        expect(end.s1).toBeLessThanOrEqual(route.length);
+        let bend = null;
+        for (let s = 9400; s < 11400 && !bend; s += 4) if (Math.abs(route.curvatureAt(s - 4, 8)) > 0.05) bend = Roadworks.site(route, { id: 91, s }, []);
+        expect(bend.closed).toBe(false);
+        expect(bend.reason).toMatch(/it ends at a bend of \d+ m radius/);
+        expect(Roadworks.problems(bend)).toEqual([`no lane is closed: ${bend.reason}`]);
+        // A road too narrow for the open lane ends the stretch as a bend does
+        const narrow = { length: route.length, sample: (s, out) => Object.assign(route.sample(s, out), { width: 6 }), curvatureAt: (s, span) => route.curvatureAt(s, span) };
+        expect(Roadworks.stretch(narrow, works.sites[0].s, []).reason).toMatch(/a road that leaves an open lane of 3\.03 m/);
     });
 
     test('every open lane is at least 3.2 m wide and free of every drawn thing and physics zone', () => {

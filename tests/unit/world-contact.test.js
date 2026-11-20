@@ -359,20 +359,27 @@ describe('the crew behind the player', () => {
 });
 
 describe('the whole crew, the car and the player over a long stretch', () => {
-    test('3.5 km with hairpins and roadworks, the player in the middle of the group at its mean pace: no two boxes are ever in each other', () => {
-        const seen = { queue: 0, redWaits: 0, sites: new Set(), frames: 0, checked: 0 };
+    // (6 km: the checkpoints are 2 km apart, and the ride passes the roadworks of three of them)
+    test('6 km with hairpins and roadworks, the player in the middle of the group at its mean pace: no two boxes are ever in each other', () => {
+        const seen = { queue: 0, redWaits: 0, stood: 0, sites: new Set(), frames: 0, checked: 0 };
         // The lights are met in three phases, so at least one ride stands at a red one with others of the crew
         for (const warmS of [0, 20, 40]) {
             const stats = packRide(game, env, {
-                metres: 3500, place: 'middle', pace: mean, warmS,
+                metres: 6000, place: 'middle', pace: mean, warmS,
                 // The game's own test agrees with the tests' measure, every tenth frame
-                onFrame: ({ f, traffic, player }) => { if (f % 10 === 0) { seen.checked++; expect(traffic.overlaps(player)).toHaveLength(0); } }
+                onFrame: ({ f, s, traffic, proxy, player }) => {
+                    if (f % 10 === 0) { seen.checked++; expect(traffic.overlaps(player)).toHaveLength(0); }
+                    // The player stands in the queue at a red light (in the middle of the group it is seldom the first at
+                    // the line, which is all `redWaits` counts)
+                    const site = works.closed.find(st => st.stopIn > s && st.stopIn - s < 80);
+                    if (site && proxy.currentSpeed < 0.1 && works.light(site, 1) === 'red') seen.stood++;
+                }
             });
             measured[`pack ${warmS}`] = { ...stats, overlaps: stats.overlaps.slice(0, 4) };
             if (stats.count) throw new Error(`lights ${warmS} s on: ${stats.count} frames with boxes in each other (worst ${stats.worst.toFixed(2)} m): ${JSON.stringify(stats.pairs)}\n${list(stats.overlaps)}`);
             expect(stats.events).toEqual({});
             expect(stats.causes).toEqual([]);
-            expect(stats.metres).toBeGreaterThanOrEqual(3500);
+            expect(stats.metres).toBeGreaterThanOrEqual(6000);
             seen.queue = Math.max(seen.queue, stats.queue);
             seen.redWaits += stats.redWaits;
             stats.sites.forEach(id => seen.sites.add(id));
@@ -381,7 +388,7 @@ describe('the whole crew, the car and the player over a long stretch', () => {
             expect(hairpins.filter(h => h.s0 > from && h.s1 < stats.playerS).length).toBeGreaterThanOrEqual(3);
         }
         expect(seen.sites.size).toBeGreaterThanOrEqual(3);
-        expect(seen.redWaits).toBeGreaterThan(60);
+        expect(seen.stood).toBeGreaterThan(60);
         expect(seen.queue).toBeGreaterThanOrEqual(2);
         expect(seen.frames).toBeGreaterThan(60000);
         expect(seen.checked).toBeGreaterThan(6000);
@@ -403,8 +410,13 @@ describe('where the player is put down', () => {
 
     test('a restart or a debug skip onto the crew: nobody is in the player, and nobody behind rides into it while it stands', () => {
         const stations = env.stationGates.slice(1, 4).map(st => st.s);
+        // A station is the entry of its roadworks site, so a rider moved out of the single lane stands before the
+        // player there, not in it. A restart is in place (Game.restartInPlace), anywhere: also just before a stop
+        // line, inside a single lane and at its end
+        const site = works.closed[0];
+        const places = [site.stopIn - 5, site.stopIn + 40, site.stopOut - 4, site.s1 + 30];
         // (the debug skip puts the bike 40 m before a station: Game.DEBUG_SKIP_BEFORE_M)
-        for (const s of [...stations, ...stations.map(at => at - 40)]) {
+        for (const s of [...stations, ...stations.map(at => at - 40), ...places]) {
             const traffic = crewOf([s, s - 4, s + 6, s - 20, s - 55]);
             expect(traffic.motorcycles).toHaveLength(5);
             traffic.motorcycles.forEach((bike, i) => putAt(bike, route, [s, s - 4, s + 6, s - 20, s - 55][i]));
