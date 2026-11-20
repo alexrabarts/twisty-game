@@ -2787,7 +2787,9 @@ class Vehicle {
             // Start wheelie with a stronger pop
             this.isWheelie = true;
             this.wheelieAngle = 0.05; // Start with more visible angle
-            this.wheelieVelocity = 3.5 * (this.wheeliePopMult || 1); // Initial lift (character-dependent)
+            // Initial lift (character-dependent), and lower the faster the bike goes: at speed there is less drive
+            // to spare and the air holds the front down (Vehicle.popShare)
+            this.wheelieVelocity = 3.5 * (this.wheeliePopMult || 1) * Vehicle.popShare(this.speed);
             this.wheelieStartTime = performance.now();
             this.wheelieScoreAccumulated = 0;
             console.log('===== WHEELIE STARTED! =====');
@@ -4694,6 +4696,14 @@ Vehicle.STEER_SHOWN = 0.5;
 // rider drops riderLag of each metre behind the bike, at most riderLagMax m; sparkS seconds between the sparks a bike
 // sliding on the carriageway throws, over sparkSpeed m/s (Game)
 Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, riderLag: 0.3, riderLagMax: 5, sparkS: 0.08, sparkSpeed: 4 });
+// How high the front comes up when a wheelie pops, by the speed (Vehicle.popShare): the whole pop up to fullSpeed
+// m/s, `least` of it from leastSpeed, a smoothstep between
+Vehicle.WHEELIE_POP = Object.freeze({ fullSpeed: 10, leastSpeed: 50, least: 0.45 });
+Vehicle.popShare = (speed) => {
+    const pop = Vehicle.WHEELIE_POP;
+    const x = Math.max(0, Math.min(1, (speed - pop.fullSpeed) / (pop.leastSpeed - pop.fullSpeed)));
+    return 1 - (1 - pop.least) * x * x * (3 - 2 * x);
+};
 Vehicle.BAR = Object.freeze({ counter: 0.12, counterMax: 0.16, intoMax: 0.07, lag: 0.12, directSpeed: 7 });
 Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
 // The rider's body in a turn (Vehicle.riderLean), for a rider whose bodyLean is 1: `roll` rad of the rider's own roll
