@@ -117,14 +117,17 @@ const WorldPhysics = Object.freeze({
     landWobbleDeg: 3,
 
     // An off-road bike (BIKE_MODELS `offroad`, 0 to 1; Vehicle.landValues) rides the land on knobbly tyres and long
-    // suspension: each land value above moves from its own toward the one here by the bike's trait, so a bike with no
-    // trait reads the values above unchanged. The three that set its speed (`pace`) move only by `soon` of the trait
-    // at once, and by all of it once the bike has been on the land for settleS and then riseS more: a cut across the
-    // inside of a hairpin is 1 to 3 s of land and must not beat the road on any bike, the trail single included
-    // (tests/unit/world-offroad.test.js), but a rider who stays on the land gets up to speed on it. With them at once
-    // (a cap of 5 m/s) 2 to 5 of the trail single's scripted cuts beat the road that do not without the trait, by
-    // 0.45 to 0.8 s; with soon at 0.15, or settleS at 1, one does, by 0.2 to 0.3 s; at soon 0 and settleS 1.5 to
-    // 2.5, none
+    // suspension. Two tables and one curve give every bike its degree from that one number:
+    //   - the values here are the least an off-road bike has: each land value above moves from its own toward the one
+    //     here by the trait (a straight line, as when the trait was first given), so a bike with no trait reads the
+    //     values above unchanged
+    //   - `top` is the bike that rides most of the map (trait 1): each value moves on from the least toward `top`'s by
+    //     the trait to the power `rise`, so the top of the scale is far past the middle of it and no bike is ever under
+    //     its least
+    //   - the values named in `pace` take that second step by the ground as well: the share of the land cover under the
+    //     bike (landCover) times the share of the slope there (all of it up to slopeFrom, none from slopeTo, rise over
+    //     run on the drawn ground). On steep or rough ground every off-road bike is back at its least
+    // The pace is the bike's at once: a cut across a hairpin is held by the cut rule (WorldRun), not by the bike
     offroad: Object.freeze({
         landCapSpeed: 6.5,
         landRoll: 0.15,
@@ -134,11 +137,43 @@ const WorldPhysics = Object.freeze({
         landGrip: 0.62,    // a lean cap of about 36 degrees
         landBumpM: 0.025,
         landWobbleDeg: 1.2,
-        pace: Object.freeze(['landCapSpeed', 'landRoll', 'landDrag']),
-        soon: 0,
-        settleS: 2,
-        riseS: 2
+        top: Object.freeze({
+            landCapSpeed: 17,      // m/s on open, level grass
+            landRoll: 0.1,
+            landTraction: 1.2,     // the drive it puts down on a climb: it holds a slope of about 1 in 1
+            landBrakeGrip: 0.9,
+            landGrip: 0.72,        // a lean cap of about 41 degrees
+            landCrashSpeed: 28,
+            landSteepSlope: 1.5    // rise over run, about 56 degrees
+        }),
+        rise: 2,
+        pace: Object.freeze(['landCapSpeed', 'landRoll']),
+        slopeFrom: 0.2,
+        slopeTo: 1.0
     }),
+    // The land cover under the bike (WorldGround.coverAt: the tile data's class, tools/world/landcover.mjs COVER, as
+    // the land is coloured). `pace` is the share of an off-road bike's pace over its least that the cover leaves,
+    // `rough` scales its drawn bump and rock, `on` names the ground in a crash cause. A bike with no trait reads only
+    // the name. Class 0 (no cover data) is grass, as it is drawn
+    landCover: Object.freeze([
+        Object.freeze({ name: 'grass', pace: 1, rough: 1, on: 'on the grass' }),
+        Object.freeze({ name: 'forest', pace: 0.15, rough: 1.4, on: 'in the forest' }),
+        Object.freeze({ name: 'open forest', pace: 0.4, rough: 1.3, on: 'among the trees' }),
+        Object.freeze({ name: 'rock', pace: 0.4, rough: 2, on: 'on the rock' }),
+        Object.freeze({ name: 'scree', pace: 0.55, rough: 1.7, on: 'on the scree' }),
+        Object.freeze({ name: 'grass', pace: 1, rough: 1, on: 'on the grass' }),
+        Object.freeze({ name: 'snow', pace: 0.35, rough: 0.7, on: 'on the snow' }),
+        Object.freeze({ name: 'water', pace: 0, rough: 1, on: 'on the wet ground' }),
+        Object.freeze({ name: 'settlement', pace: 0.6, rough: 1, on: 'between the houses' })
+    ]),
+    // A drawn building is solid to within this of its walls (Scenery.houseAt), for every bike
+    houseHitM: 0.3,
+    // An off-road bike's rider stands on the pegs on the land from this speed (the drawn rider only), by the trait
+    landStandSpeed: 3,
+    landStand: 0.6,        // of the stand over a jump, at trait 1
+    // Dust from the wheels of any bike on the land from landDustSpeed, a puff every landDustS (Game)
+    landDustSpeed: 6,
+    landDustS: 0.25,
     // The power slide (Vehicle.updateWorldPhysics), for an off-road bike on the land with the throttle open. `hold`
     // is the trait x the throttle opening, and 0 with the brake over slideBrake. The drive takes grip from the rear
     // tyre, so it steps out before the lean alone would lose it: from a demand of (1 - slideOnset x hold) of the grip
@@ -212,5 +247,13 @@ const WorldPhysics = Object.freeze({
     // gains on the bike by a tenth of its speed, 0.5 m/s at 5 m/s, so at hairpin speed a step of 15 cm in the
     // projection held for cutConfirmMs restarted the rider as a cut. Stacked legs lie over 2 x maxBankM apart in s,
     // so no cut across them is anywhere near this short
-    cutFloorM: 3
+    cutFloorM: 3,
+    // Road skipped over the land (WorldRun.update, `skip`): while the bike is on the land, the ride distance it
+    // gains over the metres it rides is road it did not ride. A stay off the carriageway is held to the most of it
+    // (metres ridden on the land afterwards pay nothing back). Over cutSkipM, once the bike is back on the
+    // carriageway for cutConfirmMs, is a cut. Beside a straight the two are equal and nothing is skipped. On the
+    // inside of a bend the road is longer than the line over the land: inside a hairpin of 6 m radius the ride
+    // distance passes four times as fast as the bike, so a wheel on the land there for 2 m is over it (the verge is
+    // free), and 20 m of land 6 m inside the edge of a 50 m bend is too
+    cutSkipM: 5
 });

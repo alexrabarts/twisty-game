@@ -571,6 +571,8 @@ class Scenery {
         const homes = this.set().houses;
         const byHome = new Map();
         const footings = [];
+        // The walls of the houses drawn, which the bike cannot ride through (houseAt)
+        const standing = [];
         const footingCost = Scenery.FOOTING_TRIANGLES;
         const nearest = buildings.slice().sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
         for (const b of nearest) {
@@ -599,6 +601,7 @@ class Scenery {
             list.push(new THREE.Matrix4().compose(position, rotation, scale));
             byHome.set(home, list);
             footings.push(foot);
+            standing.push(walls);
             held.house += home.parts.length;
             held.houseTriangles += cost;
         }
@@ -670,8 +673,22 @@ class Scenery {
         this.houseInstances += held.house;
         this.houseTriangles += held.houseTriangles;
         this.triangles += held.treeTriangles + held.houseTriangles;
-        this.perTile.set(tile.key, { group, ...held });
+        this.perTile.set(tile.key, { group, walls: standing, ...held });
         return group;
+    }
+
+    // The drawn house whose walls (x, z) is in or within `margin` of: its wall rect {x, z, heading, along, across}, or
+    // null. Only the houses drawn now count (a house the caps left out is not there to hit)
+    houseAt(x, z, margin = 0) {
+        for (const held of this.perTile.values()) {
+            for (const w of held.walls || []) {
+                const dx = x - w.x, dz = z - w.z;
+                if (Math.abs(dx) + Math.abs(dz) > w.along + w.across + 2 * margin) continue;
+                const cos = Math.cos(w.heading), sin = Math.sin(w.heading);
+                if (Math.abs(dx * cos - dz * sin) <= w.across / 2 + margin && Math.abs(dx * sin + dz * cos) <= w.along / 2 + margin) return w;
+            }
+        }
+        return null;
     }
 
     // A house model's extent on the ground, measured once: [width (x), depth (z)] and the middle [x, z]

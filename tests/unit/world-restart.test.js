@@ -211,7 +211,7 @@ describe('a bike at the place', () => {
                 const lean = -Math.sign(wanted) * Math.atan(v.speed * v.speed * Math.abs(wanted) / 9.81);
                 v.update(DT, Math.max(-1, Math.min(1, (v.leanAngle - lean) * 8)), v.speed < 5 ? 1 : 0, v.speed > 6 ? 1 : 0, 0);
                 const q = v.projection;
-                if (q.index >= 0 && run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading) }).cut) cut = true;
+                if (q.index >= 0 && run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading), land: !!v.runoff }).cut) cut = true;
             }
             if (v.crashed) bad.push(`${spot.name}: crashed pulling away (${v.crashCause})`);
             else if (cut) bad.push(`${spot.name}: the cut rule fired pulling away`);

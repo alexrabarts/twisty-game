@@ -244,10 +244,15 @@ class WorldData {
         return tile;
     }
 
+    // Whether the world's data has a height tile for `key` (held or not)
+    hasTile(key) {
+        if (!this.tileSet) this.tileSet = new Set(this.manifest.tiles.height.map(([tx, tz]) => this.tileKey(tx, tz)));
+        return this.tileSet.has(key);
+    }
+
     async ensureTile(key) {
         if (this.tiles.has(key)) return this.tiles.get(key);
-        if (!this.tileSet) this.tileSet = new Set(this.manifest.tiles.height.map(([tx, tz]) => this.tileKey(tx, tz)));
-        if (!this.tileSet.has(key)) return null;
+        if (!this.hasTile(key)) return null;
         const [tx, tz] = key.split(',').map(Number);
         const view = new DataView(await this.fetchBuffer(`height/h-${WorldData.tileName(tx)}_${WorldData.tileName(tz)}.bin`));
         const n = WorldData.TILE_N * WorldData.TILE_N;

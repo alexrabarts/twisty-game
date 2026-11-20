@@ -66,7 +66,7 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
             const line = log ? log.filter(l => /CRASH/.test(l)).pop() : null;
             return { crashed: true, cut: false, cause: line || (v.lowsideTimerMs >= world.lowsideMs ? 'lowside' : 'crash'), ...at };
         }
-        const result = q.index >= 0 ? run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading) }) : null;
+        const result = q.index >= 0 ? run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading), land: !!v.runoff }) : null;
         if (result && result.cut) return { crashed: false, cut: true, cause: 'cut rule: a restart', ...at };
         if (result && result.station >= 0) stations.push({ index: result.station, tick: tick + 1 });
         if (run.finished) { ticks = tick + 1; break; }

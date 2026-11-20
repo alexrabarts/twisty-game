@@ -9,13 +9,20 @@
 //   - stage state. A ride holds one or more stages; a 'boundary' station ends one stage and starts the next
 //     (onStageFinish). The ride itself ends only at the last station. The tour and stage leaderboard
 //     sessions are R6 and are not here.
-//   - the cut rule (Decision 16). `lastS` is a high-water mark of accepted
-//     progress. Progress may grow only as fast as the bike can move along the
-//     road. A forward jump that is not explained by speed and holds for
-//     cutConfirmMs is a cut across stacked road: the game restarts the rider
-//     where the bike left the road. A backward jump is ignored and costs
-//     nothing. The rule protects the client's own integrity; the server's
-//     floors are the only check against a modified client.
+//   - the cut rule (Decision 16): road that was not ridden is not counted, on any bike. `lastS` is a high-water
+//     mark of accepted progress, and two things are road not ridden:
+//       - a forward jump of the projection that the bike's speed does not explain (across stacked legs)
+//       - road skipped over the land (`skip`): while the bike is on the land (past the drawn verge), the ride
+//         distance it gains over the metres it rides. It catches a line across the inside of a bend, where the
+//         projection sweeps round with no jump. A stay off the road is held to the most that sum reached: over
+//         cutSkipM is a cut, and metres ridden on the land afterwards do not pay it back. Riding beside the road
+//         and coming back to it gains nothing and is free, and so is the verge
+//     Neither is judged on the land: a rider with road skipped is credited no station there, and may turn back
+//     to where the road was left. Once the bike is back on the carriageway with road skipped, and
+//     that holds for cutConfirmMs, it is a
+//     cut: the game restarts the rider where the bike left the road. A backward jump is ignored and costs
+//     nothing. The rule is the ride's (a timed ride), not the bike's: the bike's physics knows nothing of it.
+//     It protects the client's own integrity; the server's floors are the only check against a modified client.
 //   - where a restart puts the rider (restartPlace). A station is a timing
 //     line and nothing else: after a crash the rider goes on from `roadS`,
 //     the last ride distance at which the bike was on the carriageway, so a
@@ -51,6 +58,10 @@ class WorldRun {
         this.roadS = s;
         this.allowAccum = 0;
         this.pendingCutMs = 0;
+        this.prevS = s;
+        this.skip = 0;
+        this.skipPeak = 0;
+        this.landFromS = null;
     }
 
     // A ride starts: no station passed, progress starts at s
@@ -109,9 +120,11 @@ class WorldRun {
     // The signed heading change per metre at s (positive toward +lateral)
     curvatureAt(s) { return this.route.curvatureAt(s, WorldRun.CURVATURE_SPAN_M); }
 
-    // One frame. `frame`: {s, lateral, width, speed, dt, forwardDot} from the one projection of the frame.
-    // Returns {cut, station}: `cut` when a forward jump has held for cutConfirmMs, `station` the index of
-    // the station this frame passed (or -1).
+    // One frame. `frame`: {s, lateral, width, speed, dt, forwardDot, land} from the one projection of the frame;
+    // `land` is whether the bike is on the land (past the drawn verge: Vehicle.runoff), and past the carriageway
+    // counts as that where it is not given.
+    // Returns {cut, station}: `cut` when the bike has been back on the carriageway with road skipped for
+    // cutConfirmMs, `station` the index of the station this frame passed (or -1).
     update(frame) {
         const physics = this.physics;
         const result = { cut: false, station: -1 };
@@ -122,13 +135,41 @@ class WorldRun {
         const growth = physics.progressSlack * frame.speed * frame.dt / shorter;
         const allowance = Math.max(physics.cutFloorM || 0, Math.min(physics.maxBankM, this.allowAccum + growth) + physics.progressEpsM);
         const gap = frame.s - this.lastS;
+        const carriageway = Math.abs(frame.lateral) <= frame.width / 2;
+
+        // Road skipped over the land: what the projection gained this frame over the metres the bike rode, added up
+        // and never under nothing (metres ridden first buy nothing). One stay off the carriageway is held to the most
+        // that sum reached (`skipPeak`): metres ridden on the land afterwards, a loop or a zigzag, do not pay road
+        // back. Only the road itself does: the peak counts no further than the ride distance the bike is now ahead of
+        // where it went onto the land, so a rider who turns back is level again. The stay ends, and is forgotten,
+        // on the carriageway with cutSkipM or less
+        const step = frame.s - this.prevS;
+        const from = this.prevS;
+        this.prevS = frame.s;
+        const most = physics.cutSkipM;
+        const land = most !== undefined && (frame.land !== undefined ? frame.land : !carriageway);
+        let skipped = false;
+        if (most !== undefined) {
+            if (land) {
+                if (this.landFromS === null) this.landFromS = from;
+                this.skip = Math.max(0, this.skip + step - frame.speed * frame.dt);
+                this.skipPeak = Math.max(this.skipPeak, this.skip);
+            }
+            skipped = this.landFromS !== null && Math.min(this.skipPeak, frame.s - this.landFromS) > most;
+            if (carriageway && !skipped) {
+                this.skip = 0;
+                this.skipPeak = 0;
+                this.landFromS = null;
+            }
+        }
 
         // Where the bike last was on the carriageway: every accepted frame there, and a frame that follows on from it
         // (a rider who turns back along the road). A fall onto a lower leg of a ladder is a step no riding makes
-        const carriageway = Math.abs(frame.lateral) <= frame.width / 2;
-        if (carriageway && gap <= allowance && (gap >= -allowance || Math.abs(frame.s - this.roadS) <= allowance)) this.roadS = frame.s;
+        if (carriageway && !skipped && gap <= allowance && (gap >= -allowance || Math.abs(frame.s - this.roadS) <= allowance)) this.roadS = frame.s;
 
-        if (gap >= -allowance && gap <= allowance) {
+        // On the land the road skipped is the whole measure of a forward step: the projection there may stand still
+        // and then step (the outside of a bend, well off the road), which the skip adds up to nothing
+        if (!skipped && gap >= -allowance && (gap <= allowance || land)) {
             this.lastS = Math.max(this.lastS, frame.s);
             this.allowAccum = 0;
             this.pendingCutMs = 0;
@@ -140,10 +181,11 @@ class WorldRun {
         // facing along the road and inside its band. Circling on one leg of a ladder banks nothing past the cap.
         const onRoad = frame.forwardDot > 0 && Math.abs(frame.lateral) <= frame.width / 2 + WorldRun.STATION_REACH_M;
         if (onRoad) this.allowAccum = Math.min(physics.maxBankM, this.allowAccum + growth);
-        if (gap > allowance) {
+        // The verdict waits for the road: on the land nothing is a cut yet
+        if ((skipped || gap > allowance) && carriageway) {
             this.pendingCutMs += frame.dt * 1000;
             if (this.pendingCutMs >= physics.cutConfirmMs) result.cut = true;
-        }
+        } else this.pendingCutMs = 0;
         return result;
     }
 

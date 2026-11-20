@@ -1,10 +1,15 @@
 /**
  * @jest-environment node
  */
-// Riding off the road is costly, and every cost is one the rider can see. The real Vehicle, the cut rule and the
-// off-route restart on the streamed Tremola slice (tests/helpers/world-offroad.js), at full throttle, leaving the road
-// on gentle grass beside a straight, on a steep hillside, off the outside of a hairpin, and cutting across the inside
-// of every hairpin, at 10, 15, 20 and 30 m/s.
+// Riding off the road is costly on a road bike, and every cost is one the rider can see. The real Vehicle, the cut
+// rule and the off-route restart on the streamed Tremola slice (tests/helpers/world-offroad.js), at full throttle,
+// leaving the road on gentle grass beside a straight, on a steep hillside, off the outside of a hairpin, and cutting
+// across the inside of every hairpin.
+//
+// A cut is not counted, on any bike. Before c111f28's successor the land's low speed was what held a cut ("no cut
+// beats the road line by more than 0.15 s", with an off-road bike's pace given 2 s late for it). An off-road bike
+// now has its pace at once, and the cut rule holds the cut instead (WorldRun `skip`): a ride that skips more road
+// over the land than WorldPhysics.cutSkipM is never counted, and the rider is put back where the bike left the road.
 //
 // Before (aaa6f8c) the land past the road was mostly the tile's carved bench (its 'shoulder', 0.1/s of drag and no
 // clock) or one of its road nodes (no drag, and the off-road clock reset): at full throttle the bike gained speed off
@@ -16,7 +21,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
-import { offRoadPlaces, leaveRoad, rideHairpin, CUTS, ROAD_LINES } from '../helpers/world-offroad.js';
+import { offRoadPlaces, leaveRoad, rideHairpin, CUTS } from '../helpers/world-offroad.js';
+import { byTrait } from '../helpers/world-offroad-measure.js';
 import { decodeWorld } from '../../tools/world/encode.mjs';
 import { rideSamples } from '../../tools/world/stations.mjs';
 import { findHairpins } from '../../tools/world/verify.mjs';
@@ -24,14 +30,11 @@ import { findHairpins } from '../../tools/world/verify.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BEFORE = 'aaa6f8c';
 const SPEEDS = [10, 15, 20, 30];
-// A cut counts as one across the land when it spends this long past the drawn verge: a clip of the verge (drawn as
-// part of the road) is not one
-const LAND_CUT_S = 0.25;
-// The scripted road lines are not the fastest possible, so a land cut that ties one within this is no gain (the closest
-// now: 0.09 s, a 6 m clip of 11133-11269 at 20 m/s with 0.77 s on the land; before, cuts gained up to 1.3 s)
-const TIE_S = 0.15;
-// The best off-road bike in the catalogue and its rider
-const TRAIL = { character: 'lucy', bike: 'bike15_crf250' };
+// The speeds the hairpin cuts are tried at: a hairpin pace and the pace the top bike holds on open grass
+const CUT_SPEEDS = [10, 17];
+// The road skipped is measured from the bike's positions a frame at a time: this much over the allowance is the
+// measure's own slack, not a cut that was counted
+const SKIP_SLACK_M = 1;
 const show = file => execFileSync('git', ['show', `${BEFORE}:js/${file}`], { encoding: 'utf8', maxBuffer: 1 << 26 });
 
 async function slice(game) {
@@ -50,7 +53,9 @@ function judge(rides) {
         const line = fmt(place, mode, speed, r);
         const crashedBy = s => r.end !== 'ride' && r.endS !== null && r.endS <= s;
         if (place.kind === 'grass' && speed >= 20 && !crashedBy(2) && !(r.at2 !== null && r.at2 <= speed / 2)) bad.push(`at least half the speed gone in 2 s: ${line}`);
-        if (speed === 30 && !crashedBy(3)) bad.push(`30 m/s held off the road ends within 3 s: ${line}`);
+        // (the cut rule no longer judges a bike on the land, so a ride it used to end there may go on: then the bike
+        // must be at a standstill, which is as far from 30 m/s as a crash is)
+        if (speed === 30 && !crashedBy(3) && !(r.at5 !== null && r.at5 <= 1)) bad.push(`30 m/s held off the road ends within 3 s, or the bike has stopped in 5 s: ${line}`);
         if (r.at5 !== null && r.at5 > 10) bad.push(`at most 10 m/s 5 s off the road: ${line}`);
         // Up a hillside the bike may stall before the steepest of it: stopped there, it goes nowhere either
         if (place.kind === 'steep' && !crashedBy(5) && !(r.at5 !== null && r.at5 <= 1)) bad.push(`a steep hillside crashes or stalls the bike within 5 s: ${line}`);
@@ -59,10 +64,13 @@ function judge(rides) {
 }
 
 describe('the Tremola slice off the road', () => {
-    let games, envs, places, hairpins;
+    // TRAIL: the bike at the top of the off-road scale and a rider who has it, from the catalogue
+    let games, envs, places, hairpins, TRAIL;
     beforeAll(async () => {
         games = { after: loadGame(), before: loadGame(undefined, [], { 'vehicle.js': show('vehicle.js'), 'world/physics.js': show('world/physics.js') }) };
         envs = { after: await slice(games.after), before: await slice(games.before) };
+        TRAIL = byTrait(games.after)[0];
+        expect(TRAIL.trait).toBe(1);
         const world = decodeWorld(path.join(REPO, 'world'));
         hairpins = findHairpins(rideSamples(world.edges, world.ride.path));
         places = await offRoadPlaces(games.after, envs.after, hairpins);
@@ -98,83 +106,97 @@ describe('the Tremola slice off the road', () => {
         if (bad.length) throw new Error(`${bad.length} rides:\n${bad.join('\n')}`);
     }, 600000);
 
-    // Every scripted cut of every hairpin (or of `only`: [{h, speed}]) on the default bike or on `rider`'s: the land
-    // cuts that beat the best road line by more than TIE_S, as {key, h, speed, time, line}, and the best road line of
-    // each hairpin and speed (`road`, by `${h.s0} ${speed}`)
-    async function landCuts(rider = null, only = null) {
+    // Every scripted cut of every hairpin on the default bike or on `rider`'s, at each of `speeds`: how each ride ended
+    // ('exit': the run counted the hairpin's exit) and the road it skipped
+    async function cuts(rider, speeds) {
         const game = games.after, env = envs.after;
-        const bad = [], rows = [], roads = new Map();
-        let cuts = 0, wins = 0, most = -Infinity;
+        const rides = [], rows = [];
         for (const h of hairpins) {
-            for (const speed of SPEEDS) {
-                if (only && !only.some(o => o.h === h && o.speed === speed)) continue;
-                const road = [];
-                for (const plan of ROAD_LINES) {
-                    const r = await rideHairpin(game, env, h, plan, { speed, rider });
-                    if (r.end === 'exit') road.push(r.time);
-                }
-                const parts = [], tried = [];
+            for (const speed of speeds) {
+                const parts = [];
                 for (const L of CUTS) {
-                    const r = await rideHairpin(game, env, h, { cut: L }, { speed, rider });
-                    tried.push({ L, r });
-                    // A chord that keeps to the road and its verge is a road line too
-                    if (r.end === 'exit' && r.landS < LAND_CUT_S) road.push(r.time);
-                    parts.push(`${L}:${r.end === 'exit' ? `${r.time}/${r.landS}` : r.end}`);
+                    const r = await rideHairpin(game, env, h, { cut: L }, { speed, rider, seconds: 45 });
+                    rides.push({ h, speed, L, r, line: `${h.s0}-${h.s1} at ${speed} m/s, cut ${L} m: ${r.end}${r.end === 'crash' ? ` (${r.cause})` : ''}, ${r.landS} s on the land, ${r.landSkipM} m of road skipped over the land (${r.netSkipM} m when it came back), ${r.skipM} m off the carriageway` });
+                    parts.push(`${L}:${r.end === 'exit' ? r.time : r.end}/${r.landS}/${r.landSkipM}`);
                 }
-                const best = road.length ? Math.min(...road) : Infinity;
-                roads.set(`${h.s0} ${speed}`, best);
-                for (const { L, r } of tried) {
-                    if (r.landS < LAND_CUT_S) continue;
-                    cuts++;
-                    if (r.end !== 'exit') continue;
-                    if (r.time < best) wins++;
-                    most = Math.max(most, best - r.time);
-                    if (r.time < best - TIE_S) bad.push({ key: `${h.s0}-${h.s1} at ${speed} m/s, cut ${L} m`, h, speed, time: r.time, line: `${h.s0}-${h.s1} at ${speed} m/s, cut ${L} m: ${r.time} s with ${r.landS} s on the land, the road ${best} s` });
-                }
-                rows.push(`${h.s0}-${h.s1} ${speed}: road ${best} s; ${parts.join(' ')}`);
+                rows.push(`${h.s0}-${h.s1} ${speed}: ${parts.join(' ')}`);
             }
         }
-        return { cuts, wins, most, bad, rows, roads };
+        return { rides, rows };
     }
 
-    test('now: no cut across the land inside a hairpin beats the road', async () => {
-        const { cuts, wins, most, bad, rows } = await landCuts();
-        console.log(`hairpin cuts (time/seconds on the land, or how the cut ended):\n${rows.join('\n')}\n${cuts} land cuts, ${wins} under the best road line, by at most ${most.toFixed(2)} s, ${bad.length} by more than ${TIE_S} s`);
-        expect(cuts).toBeGreaterThan(50);
-        if (bad.length) throw new Error(`${bad.length} cuts beat the road:\n${bad.map(b => b.line).join('\n')}`);
+    // The rule, as failures: a ride the run counted skipped no more road over the land than the allowance; a ride
+    // ended as a cut did skip road (nobody is put back for nothing); and every crash has a cause the rider is shown.
+    // A ride that never came back to the road in its 45 s ('timeout') was not counted either
+    function judgeCuts(rides) {
+        const most = games.after.WorldPhysics.cutSkipM;
+        const bad = [];
+        for (const { r, line } of rides) {
+            if (r.end === 'exit' && r.landSkipM > most + SKIP_SLACK_M) bad.push(`counted with road skipped: ${line}`);
+            if (r.end === 'cut' && Math.max(r.skipM, r.landSkipM) < most - SKIP_SLACK_M) bad.push(`a cut with no road skipped: ${line}`);
+            if (r.end === 'crash' && (!r.cause || r.cause === 'crash')) bad.push(`a crash with no cause: ${line}`);
+        }
+        return bad;
+    }
+
+    test('now: a cut across the land inside a hairpin is not counted on a road bike', async () => {
+        const { rides, rows } = await cuts(null, CUT_SPEEDS.slice(0, 1));
+        const ended = kind => rides.filter(x => x.r.end === kind).length;
+        const most = Math.max(0, ...rides.filter(x => x.r.end === 'exit').map(x => x.r.landSkipM));
+        console.log(`a road bike's hairpin cuts (time or how it ended / seconds on the land / road skipped over the land):\n${rows.join('\n')}\n${rides.length} rides: ${ended('exit')} counted (most road skipped over the land ${most} m), ${ended('cut')} cuts, ${ended('crash')} crashes`);
+        expect(rides.length).toBeGreaterThan(150);
+        const bad = judgeCuts(rides);
+        if (bad.length) throw new Error(`${bad.length} rides:\n${bad.join('\n')}`);
     }, 1800000);
 
-    test('now: the trail single is still slowed hard off the road in its first seconds, and a steep hillside stops it', async () => {
-        const rides = [];
+    test('now: a cut is not counted on the top off-road bike at its own pace, and the rule finds the cuts', async () => {
+        const { rides, rows } = await cuts(TRAIL, CUT_SPEEDS);
+        const ended = kind => rides.filter(x => x.r.end === kind);
+        const counted = ended('exit');
+        // (cuts whose sum had come back under the allowance by the time the bike rejoined: metres ridden on the land after the skip, which no longer pay it back)
+        const paid = ended('cut').filter(x => x.r.netSkipM <= games.after.WorldPhysics.cutSkipM && x.r.landSkipM > games.after.WorldPhysics.cutSkipM);
+        console.log(`the top bike's hairpin cuts (time or how it ended / seconds on the land / road skipped over the land):\n${rows.join('\n')}\n${rides.length} rides: ${counted.length} counted (most road skipped over the land ${Math.max(0, ...counted.map(x => x.r.landSkipM))} m), ${ended('cut').length} cuts, ${ended('crash').length} crashes; ${paid.length} of the cuts had ridden the skip off on the land before they rejoined:\n${paid.map(x => x.line).join('\n')}`);
+        expect(rides.length).toBeGreaterThan(300);
+        const bad = judgeCuts(rides);
+        if (bad.length) throw new Error(`${bad.length} rides:\n${bad.join('\n')}`);
+        // The rule is not idle: with the pace the bike now has, many of these lines reach the road ahead and are cuts
+        expect(ended('cut').length).toBeGreaterThan(40);
+        // And the hairpins are still ridden: a line that keeps to the road and its verge is counted
+        expect(counted.length).toBeGreaterThan(60);
+    }, 3600000);
+
+    test('now: the top off-road bike holds a real pace on open grass beside the road: no crash, no cut, 12 to 18 m/s', async () => {
+        const game = games.after, env = envs.after;
+        const lines = [];
+        for (const place of places.grass) {
+            for (const speed of [10, 17, 30]) {
+                // (the place is known to be open for its first metres: 3 s of it)
+                const r = await leaveRoad(game, env, place, { speed, mode: 'along', rider: TRAIL, seconds: 3 });
+                lines.push(fmt(place, 'along', speed, r));
+                expect([place.s, speed, r.end]).toEqual([place.s, speed, 'ride']);
+                expect(r.at2).toBeGreaterThanOrEqual(12);
+                expect(r.at2).toBeLessThanOrEqual(18);
+            }
+        }
+        console.log(`the top bike beside the road:\n${lines.join('\n')}`);
+        expect(lines.length).toBeGreaterThanOrEqual(3);
+    }, 600000);
+
+    test('now: every crash of the top off-road bike off the road has a cause the rider is shown', async () => {
+        const game = games.after, env = envs.after;
+        const lines = [], causes = new Set();
         for (const kind of ['grass', 'steep', 'outside']) {
             for (const place of places[kind]) {
-                for (const mode of ['exit', 'along']) {
-                    for (const speed of SPEEDS) rides.push({ place, mode, speed, r: await leaveRoad(games.after, envs.after, place, { speed, mode, rider: TRAIL }) });
+                for (const speed of SPEEDS) {
+                    const r = await leaveRoad(game, env, place, { speed, mode: 'exit', rider: TRAIL, seconds: 15 });
+                    lines.push(fmt(place, 'exit', speed, r));
+                    if (r.end === 'crash') {
+                        causes.add(r.cause);
+                        expect([place.s, speed, typeof r.cause === 'string' && r.cause.length > 8 && !/^CRASHED/.test(r.cause)]).toEqual([place.s, speed, true]);
+                    }
                 }
             }
         }
-        console.log(`the trail single:\n${rides.map(x => fmt(x.place, x.mode, x.speed, x.r)).join('\n')}`);
-        const bad = judge(rides);
-        if (bad.length) throw new Error(`${bad.length} rides:\n${bad.join('\n')}`);
+        console.log(`the top bike leaving the road:\n${lines.join('\n')}\ncauses: ${[...causes].join('; ')}`);
     }, 600000);
-
-    // The best off-road bike, the trail single (BIKE_MODELS offroad 1), against the same bar. Its rider's scripted
-    // road lines are weaker than the first rider's: on any of her bikes, off-road trait or none, a 20 m chord that
-    // clips the land for under a second beats them at two hairpins (the first rider's same chord stays on the road
-    // and is his road line). Those cuts are not the trait's, so the bar is held on what the trait adds: a cut that
-    // beats the road on the trail single must beat it on the same bike and rider with the trait taken away
-    // (rider.offroad 0), by the same TIE_S. The road it must not beat is the better of the two bikes' road lines: the
-    // carriageway is the same for both, and a scripted road line that strays onto the land at a 45 degree lean is
-    // slowed there by the slide (at 7963-8106 the trait's cut takes the same 23.9 s and its road line 0.3 s more).
-    test('now: the off-road trait makes no cut across the land inside a hairpin beat the road', async () => {
-        const trail = await landCuts(TRAIL);
-        console.log(`the trail single's hairpin cuts:\n${trail.rows.join('\n')}\n${trail.cuts} land cuts, ${trail.wins} under the best road line, by at most ${trail.most.toFixed(2)} s, ${trail.bad.length} by more than ${TIE_S} s`);
-        expect(trail.cuts).toBeGreaterThan(50);
-        const plain = trail.bad.length ? await landCuts({ ...TRAIL, offroad: 0 }, trail.bad) : { bad: [], roads: new Map() };
-        const known = new Set(plain.bad.map(b => b.key));
-        console.log(`with the trait taken away, of those:\n${plain.bad.map(b => b.line).join('\n') || 'none'}`);
-        const road = b => Math.min(trail.roads.get(`${b.h.s0} ${b.speed}`), plain.roads.get(`${b.h.s0} ${b.speed}`));
-        const added = trail.bad.filter(b => !known.has(b.key) && b.time < road(b) - TIE_S);
-        if (added.length) throw new Error(`${added.length} cuts beat the road on the trail single and not without its off-road trait:\n${added.map(b => b.line).join('\n')}`);
-    }, 3600000);
 });

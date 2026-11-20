@@ -334,6 +334,201 @@ describe('WorldRun cut rule', () => {
     });
 });
 
+// Road that was not ridden is not counted, on any bike: a line over the land that gains ride distance faster than the
+// bike moves (the inside of a bend, where the projection sweeps round with no jump) is a cut once the bike is back on
+// the carriageway. The frames are the projection's as the game hands them over (`land`: Vehicle.runoff)
+describe('WorldRun: road skipped over the land', () => {
+    const route = new WorldRoute(samplesOf(straight(900)), {});
+    const stations = [{ s: 0 }, { s: 400 }, { s: 800 }];
+    const most = WorldPhysics.cutSkipM;
+    const confirm = Math.ceil(WorldPhysics.cutConfirmMs / 1000 / DT);
+    const road = (s, speed = 10) => frame(s, { speed });
+    const land = (s, speed = 10) => frame(s, { speed, lateral: 9, land: true });
+    const verge = (s, speed = 10) => frame(s, { speed, lateral: 5.6, land: false });
+    // Rides from run.prevS: `ratio` metres of ride distance for each metre ridden, for `metres` ridden. Returns whether a cut fired
+    const ride = (run, make, metres, ratio = 1, speed = 10) => {
+        let cut = false, s = run.prevS;
+        for (let d = 0; d < metres - 1e-9; d += speed * DT) {
+            s += ratio * speed * DT;
+            if (run.update(make(s, speed)).cut) cut = true;
+        }
+        return cut;
+    };
+    const start = (s = 100) => {
+        const run = new WorldRun(route, stations, WorldPhysics);
+        run.begin(s);
+        ride(run, road, 20);
+        return run;
+    };
+
+    test('the allowance is a few metres: more than the projection\'s noise, less than any hairpin', () => {
+        expect(most).toBeGreaterThanOrEqual(3);
+        expect(most).toBeLessThanOrEqual(8);
+    });
+
+    test('riding beside the road on the land and coming back skips nothing: no cut, and the progress counts', () => {
+        const run = start();
+        expect(ride(run, land, 250)).toBe(false);
+        expect(run.skip).toBeLessThan(1e-6);
+        expect(ride(run, road, 30)).toBe(false);
+        expect(run.lastS).toBeCloseTo(400, 0);
+        expect(run.pendingCutMs).toBe(0);
+        // The station beside the land ride was passed once the bike was back in the road's band
+        expect(run.stationIndex).toBe(1);
+    });
+
+    test('a line over the land that gains the road four times as fast as the bike moves is a cut, once the bike is back on the road', () => {
+        const run = start();
+        const left = run.roadS;
+        // 6 m ridden on the land for 24 m of road: 18 m skipped
+        expect(ride(run, land, 6, 4)).toBe(false);
+        expect(run.skip).toBeGreaterThan(17);
+        // On the land nothing is judged, however long the bike stays there, and no station is credited
+        expect(ride(run, land, 400)).toBe(false);
+        expect(run.prevS).toBeGreaterThan(500);
+        expect(run.stationIndex).toBe(0);
+        expect(run.pendingCutMs).toBe(0);
+        // Back on the carriageway: a cut, when it has held for cutConfirmMs and not before
+        let frames = 0, cut = false;
+        while (!cut && frames < 60) { cut = run.update(road(run.prevS + 10 * DT)).cut; frames++; }
+        expect(cut).toBe(true);
+        expect(frames).toBeGreaterThanOrEqual(confirm - 1);
+        expect(frames).toBeLessThanOrEqual(confirm + 1);
+        // The rider goes back to where the bike left the road
+        expect(run.roadS).toBe(left);
+        expect(run.restartPlace().s).toBeCloseTo(left - WorldPhysics.restartBackM, 6);
+        run.restartAt(run.restartPlace().s);
+        expect(run.skip).toBe(0);
+        expect(ride(run, road, 50)).toBe(false);
+    });
+
+    test('metres ridden on the land after a skip do not pay it back: a loop or the outside of a bend, and it is still a cut', () => {
+        const run = start();
+        const left = run.roadS;
+        ride(run, land, 6, 4);
+        expect(run.skipPeak).toBeGreaterThan(17);
+        // 40 m ridden on the land for 20 m of road (the outside of a long bend, a zigzag): the sum comes down, the peak stays
+        expect(ride(run, land, 40, 0.5)).toBe(false);
+        expect(run.skip).toBe(0);
+        expect(run.skipPeak).toBeGreaterThan(17);
+        // A loop on the spot: 30 m ridden for no road at all
+        expect(ride(run, land, 30, 0)).toBe(false);
+        expect(run.stationIndex).toBe(0);
+        let frames = 0, cut = false;
+        while (!cut && frames < 60) { cut = run.update(road(run.prevS + 10 * DT)).cut; frames++; }
+        expect(cut).toBe(true);
+        expect(frames).toBeLessThanOrEqual(confirm + 1);
+        expect(run.restartPlace().s).toBeCloseTo(left - WorldPhysics.restartBackM, 6);
+    });
+
+    test('metres ridden on the land first bank nothing against a skip made after', () => {
+        const run = start();
+        expect(ride(run, land, 40, 0.5)).toBe(false);
+        expect(run.skip).toBe(0);
+        ride(run, land, 6, 4);
+        expect(run.skipPeak).toBeGreaterThan(17);
+        let cut = false;
+        for (let i = 0; i < 30; i++) cut = run.update(road(run.prevS + 10 * DT)).cut || cut;
+        expect(cut).toBe(true);
+    });
+
+    test('no station is passed with road skipped', () => {
+        const run = start(350);
+        ride(run, land, 6, 4);
+        ride(run, land, 60);
+        expect(run.prevS).toBeGreaterThan(410);
+        expect(run.stationIndex).toBe(0);
+    });
+
+    test('a clip of the land under the allowance costs nothing and is forgotten on the road', () => {
+        const run = start();
+        // 1 m ridden for 4 m of road: 3 m skipped
+        expect(ride(run, land, 1, 4)).toBe(false);
+        expect(run.skip).toBeGreaterThan(2.5);
+        expect(run.skip).toBeLessThan(most);
+        expect(ride(run, road, 20)).toBe(false);
+        expect(run.skip).toBe(0);
+        // So clips do not add up: ten of them with the road between
+        for (let i = 0; i < 10; i++) expect(ride(run, land, 1, 4) || ride(run, road, 5)).toBe(false);
+    });
+
+    test('the verge is free: the same sweep on the drawn verge is no cut', () => {
+        const run = start();
+        // (the progress rule's own floor lets the projection pass four times as fast as the bike on the inside of a bend)
+        expect(ride(run, verge, 6, 3)).toBe(false);
+        expect(run.skip).toBe(0);
+        expect(ride(run, road, 20)).toBe(false);
+    });
+
+    test('a rider who turns back over the land gives back what was gained, and rejoins free', () => {
+        const run = start();
+        const left = run.roadS;
+        ride(run, land, 6, 4);
+        expect(run.skip).toBeGreaterThan(most);
+        // Back the way it came, to where it left the road
+        ride(run, land, 6, -4);
+        expect(run.skip).toBe(0);
+        // (the peak stays, but it counts no further than the road the bike is ahead of where it left: none)
+        expect(run.skipPeak).toBeGreaterThan(most);
+        let cut = false;
+        for (let i = 0; i < 60; i++) cut = run.update(road(left + i * 10 * DT)).cut || cut;
+        expect(cut).toBe(false);
+    });
+
+    test('the projection standing still well off the road and then stepping is held as a skip: the peak rule does not net it out', () => {
+        // (10 m and more outside a bend the ribbon frame's projection can stand for 12 m of riding and then step 12 m.
+        // With the sum read as it stands this was free; held to its peak it is a cut. The cost of the peak rule)
+        const run = start();
+        const held = run.prevS;
+        let cut = false;
+        for (let d = 0; d < 12; d += 10 * DT) cut = run.update(land(held)).cut || cut;
+        cut = run.update(land(held + 12)).cut || cut;
+        expect(run.skipPeak).toBeGreaterThan(most);
+        expect(ride(run, land, 30) || cut).toBe(false);
+        for (let i = 0; i < 30; i++) cut = run.update(road(run.prevS + 10 * DT)).cut || cut;
+        expect(cut).toBe(true);
+    });
+
+    test('a jump across the ladder made on the land is not judged there; on the far leg\'s road it is a cut, and back on its own it is free', () => {
+        const ladderRoute = new WorldRoute(samplesOf(ladder()), {});
+        const make = () => {
+            const run = new WorldRun(ladderRoute, [{ s: 0 }, { s: 300 }], WorldPhysics);
+            run.begin(20);
+            return run;
+        };
+        const far = make();
+        let cut = false;
+        for (let i = 0; i < 300; i++) cut = far.update(frame(131 + i * 0.1, { lateral: 12, land: true })).cut || cut;
+        expect(cut).toBe(false);
+        expect(far.lastS).toBe(20);
+        expect(far.stationIndex).toBe(0);
+        let frames = 0;
+        while (!cut && frames < 60) { cut = far.update(frame(162 + frames * 0.2)).cut; frames++; }
+        expect(cut).toBe(true);
+        expect(frames).toBeLessThanOrEqual(confirm + 1);
+        expect(far.restartPlace().s).toBeCloseTo(Math.max(0, 20 - WorldPhysics.restartBackM), 6);
+
+        const home = make();
+        cut = false;
+        for (let i = 0; i < 300; i++) cut = home.update(frame(131, { lateral: 12, land: true })).cut || cut;
+        // The projection is back on the leg the bike left, a little further on, and so is the bike
+        cut = home.update(frame(22, { lateral: 8, land: true })).cut || cut;
+        for (let i = 0; i < 120; i++) cut = home.update(frame(22 + i * 0.2)).cut || cut;
+        expect(cut).toBe(false);
+        expect(home.lastS).toBeGreaterThan(40);
+    });
+
+    test('with no cutSkipM the rule is off and the run is as it was', () => {
+        const { cutSkipM, ...plain } = WorldPhysics;
+        const run = new WorldRun(route, stations, plain);
+        run.begin(100);
+        ride(run, road, 20);
+        ride(run, land, 6, 4);
+        expect(run.skip).toBe(0);
+        expect(ride(run, road, 20)).toBe(false);
+    });
+});
+
 describe('WorldRun restart speed', () => {
     test('a put-down on a straight road rolls away at the most; before a hairpin at 0.8 of what it allows', () => {
         const flat = new WorldRun(new WorldRoute(samplesOf(straight(400)), {}), [{ s: 0 }], WorldPhysics);

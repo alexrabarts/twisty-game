@@ -8,8 +8,16 @@
 //
 // ROAD is what the first rider's first bike did before the trait existed (b4ce4de, by the same rides):
 // a bike with no trait must still do exactly that, on the land and on the road.
+//
+// The degrees (WorldPhysics.offroad `top`, `rise`, landCover): what each bike of the real catalogue can do on the
+// land (tests/helpers/world-offroad-measure.js), in the order of its trait, and against the same bike at c111f28
+// (the game's source of that commit, loaded beside this one), when the trait was one straight line to a cap of
+// 6.5 m/s, given 2 s late.
 import { describe, test, expect } from '@jest/globals';
+import { execFileSync } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 import { loadGame } from '../helpers/load-game.js';
+import { landBike, landTick, paceOn, steepest, sustained, crashSpeed, capability } from '../helpers/world-offroad-measure.js';
 
 const DT = 1 / 60;
 const game = loadGame();
@@ -119,9 +127,43 @@ describe('the off-road trait is data', () => {
             expect(slid.crashed).toBe(false);
             expect(slid.slide).toBeGreaterThan(turn(SCRAMBLER, true).slide);
             expect(slid.slide).toBeLessThan(turn(TRIPLE, true).slide);
+            // And its degree: every measure between the two bikes its trait lies between
+            const mine = capability(game, who), more = capability(game, TRIPLE), less = capability(game, SCRAMBLER);
+            for (const key of ['grass', 'scree', 'rock', 'forest', 'snow', 'crash']) {
+                expect([key, mine[key] < more[key], mine[key] > less[key]]).toEqual([key, true, true]);
+            }
+            expect(mine.steep).toBeLessThanOrEqual(more.steep);
+            expect(mine.steep).toBeGreaterThan(less.steep);
         } finally {
             game.CHARACTERS.pop();
             delete game.BIKE_MODELS[id];
+        }
+    });
+
+    test('a made-up bike at the top of the scale gets the top bike\'s land values from its trait alone', () => {
+        const id = 'bike98_test_top';
+        game.BIKE_MODELS[id] = { ...game.BIKE_MODELS.bike12_tracer9gt, id, offroad: 1 };
+        const rider = { ...game.CHARACTERS.find(c => c.id === 'guy'), id: 'tester', bikes: [id] };
+        game.CHARACTERS.push(rider);
+        try {
+            const land = { ...bike(['tester', id], 4, true).landValues() };
+            const trail = bike(TRAIL, 4, true).landValues();
+            for (const key of Object.keys(world.offroad.top)) expect([key, land[key]]).toEqual([key, trail[key]]);
+            for (const key of Object.keys(world.offroad.top)) expect([key, land[key]]).toEqual([key, world.offroad.top[key]]);
+        } finally {
+            game.CHARACTERS.pop();
+            delete game.BIKE_MODELS[id];
+        }
+    });
+
+    test('no bike is named in the land rules: the physics reads the trait and nothing else of the catalogue', () => {
+        const dir = new URL('../../js/world/', import.meta.url);
+        const files = readdirSync(dir).filter(name => name.endsWith('.js'));
+        expect(files.length).toBeGreaterThan(5);
+        const ids = Object.keys(game.BIKE_MODELS);
+        for (const name of files) {
+            const text = readFileSync(new URL(name, dir), 'utf8');
+            for (const id of ids) expect([name, id, text.includes(id)]).toEqual([name, id, false]);
         }
     });
 });
@@ -136,7 +178,7 @@ describe('the land slows an off-road bike less', () => {
         expect(single).toBeGreaterThan(triple);
         expect(triple).toBeGreaterThan(scrambler);
         expect(scrambler).toBeGreaterThan(road);
-        expect(trail).toBeLessThan(world.offroad.landCapSpeed);
+        expect(trail).toBeLessThan(world.offroad.top.landCapSpeed);
     });
 
     test('the big adventure tourer holds a speed between the scrambler\'s and the adventure triple\'s, and slides between them', () => {
@@ -150,29 +192,22 @@ describe('the land slows an off-road bike less', () => {
         expect(slid.slide).toBeLessThan(turn(TRIPLE, true).slide);
     });
 
-    test('the speed comes with time on the land: in the first seconds the trail single has little of it', () => {
-        const to = world.offroad;
-        const v = bike(TRAIL, 4, true), road = bike(ROAD_BIKES[0], 4, true);
-        let early = 0;
-        for (let i = 0; i < 600; i++) {
-            tick(v, 0, 1, 0);
-            tick(road, 0, 1, 0);
-            if (v.offRoadTime <= to.settleS) early = Math.max(early, v.speed - road.speed);
-        }
-        // Until settleS the cap is up by `soon` of the trait's rise, and after settleS + riseS by all of it
-        expect(early).toBeGreaterThan(0);
-        expect(early).toBeLessThan((to.landCapSpeed - world.landCapSpeed) * to.soon + 0.3);
-        expect(v.landValues().landCapSpeed).toBeCloseTo(to.landCapSpeed, 9);
-        expect(v.speed - road.speed).toBeGreaterThan(2);
-        // The carriageway clears the time: back on the land the bike starts again
+    test('the pace is the bike\'s at once: no time on the land is waited for', () => {
+        const v = bike(TRAIL, 4, true);
+        // (the carriageway clears the time on the land: nothing reads it)
         v.offRoadTime = 0;
-        expect(v.landValues().landCapSpeed).toBeCloseTo(world.landCapSpeed + (to.landCapSpeed - world.landCapSpeed) * to.soon, 9);
-        // What the tyres grip does not wait
-        expect(v.landValues().landGrip).toBe(to.landGrip);
-        expect(v.landValues().landTraction).toBe(to.landTraction);
+        const first = { ...v.landValues() };
+        v.offRoadTime = 60;
+        expect({ ...v.landValues() }).toEqual(first);
+        expect(first.landCapSpeed).toBe(world.offroad.top.landCapSpeed);
+        // From 4 m/s the trail single is over the old cap inside a second and at 12 m/s inside three
+        const seen = [];
+        for (let i = 0; i < 180; i++) { tick(v, 0, 1, 0); if ((i + 1) % 60 === 0) seen.push(v.speed); }
+        expect(seen[0]).toBeGreaterThan(6.5);
+        expect(seen[2]).toBeGreaterThan(12);
     });
 
-    test('arriving on the land at 20 m/s every bike is slowed as hard at first, and the off-road bikes pick up after', () => {
+    test('arriving on the land at 20 m/s the off-road bikes keep their pace in the order of their trait, and a road bike is slowed as before', () => {
         const run = who => {
             const v = bike(who, 20, true);
             const out = [];
@@ -181,20 +216,16 @@ describe('the land slows an off-road bike less', () => {
         };
         const road = run(ROAD_BIKES[0]);
         const rows = OFFROAD.map(run);
-        console.log(`from 20 m/s onto the land at full throttle, the speed after 1 to 6 s (m/s): road bike ${road.map(x => x.toFixed(1)).join(' ')}; trail single ${rows[0].map(x => x.toFixed(1)).join(' ')}`);
-        // The first second is the same for all: the speed values wait for settleS (the hairpin cuts)
-        for (const row of rows) expect(row[0]).toBeCloseTo(road[0], 6);
-        for (const row of rows) expect(row[1]).toBeLessThan(10);
-        // From settleS + riseS the four are in the order of their trait
-        for (const at of [4, 5]) {
+        console.log(`from 20 m/s onto the land at full throttle, the speed after 1 to 6 s (m/s): road bike ${road.map(x => x.toFixed(1)).join(' ')}; ${rows.map((row, i) => `${OFFROAD[i][1]} ${row.map(x => x.toFixed(1)).join(' ')}`).join('; ')}`);
+        ROAD.landFrom20.forEach((speed, i) => close(road[i], speed));
+        for (let at = 0; at < 6; at++) {
             expect(rows[0][at]).toBeGreaterThan(rows[1][at]);
             expect(rows[1][at]).toBeGreaterThan(rows[2][at]);
             expect(rows[2][at]).toBeGreaterThan(rows[3][at]);
             expect(rows[3][at]).toBeGreaterThan(road[at]);
         }
-        expect(rows[0][5]).toBeGreaterThan(road[5] + 2);
-        // Still the land: under the speed that crashes a bike held on it
-        expect(Math.max(...rows[0].slice(1))).toBeLessThan(world.landCrashSpeed);
+        // The trail single never drops under the pace it holds on grass
+        expect(Math.min(...rows[0])).toBeGreaterThan(15);
     });
 
     test('the drawn trail single bobs and rocks less on the land', () => {
@@ -379,6 +410,196 @@ describe('the power slide', () => {
         };
         expect(spin(TRAIL)).toBeGreaterThan(1);
         expect(spin(ROAD_BIKES[0])).toBe(0);
+    });
+});
+
+describe('degrees of off-road capability', () => {
+    const BEFORE = 'c111f28';
+    const show = file => execFileSync('git', ['show', `${BEFORE}:js/${file}`], { encoding: 'utf8', maxBuffer: 1 << 26 });
+    const before = loadGame(undefined, [], { 'vehicle.js': show('vehicle.js'), 'world/physics.js': show('world/physics.js') });
+    // Every bike of the catalogue with the rider who has it, the most off-road first
+    const riders = [];
+    for (const c of game.CHARACTERS) for (const id of c.bikes || []) if (!riders.some(r => r[1] === id)) riders.push([c.id, id]);
+    const trait = who => game.Vehicle.offroadOf(who[1]);
+    const offroad = riders.filter(who => trait(who) > 0).sort((a, b) => trait(b) - trait(a));
+    const plain = riders.filter(who => trait(who) === 0);
+    const tables = new Map();
+    const table = (g, who) => {
+        const key = `${g === game ? 'now' : 'before'} ${who[1]}`;
+        if (!tables.has(key)) tables.set(key, capability(g, who));
+        return tables.get(key);
+    };
+    const MEASURES = ['grass', 'scree', 'rock', 'forest', 'snow', 'steep', 'sustained', 'crash'];
+
+    test('the catalogue has off-road bikes of several degrees and bikes with none', () => {
+        expect(offroad.length).toBeGreaterThanOrEqual(4);
+        expect(new Set(offroad.map(trait)).size).toBeGreaterThanOrEqual(4);
+        expect(trait(offroad[0])).toBe(1);
+        expect(plain.length).toBeGreaterThanOrEqual(8);
+    });
+
+    test('by the trait: the pace on open grass, the pace on scree and the steepest bank climbed are in the order of the trait', () => {
+        const rows = offroad.map(who => ({ who, t: trait(who), ...table(game, who) }));
+        console.log(`now, by trait (m/s on grass, scree, rock, forest, snow; steepest 3 m bank; steepest slope held; crash speed):\n${rows.map(r => `${r.who[1]} ${r.t}: ${MEASURES.map(k => r[k]).join(' ')}`).join('\n')}`);
+        for (let i = 1; i < rows.length; i++) {
+            const more = rows[i - 1], less = rows[i];
+            if (more.t === less.t) continue;
+            for (const key of ['grass', 'scree', 'rock', 'forest', 'snow', 'crash']) expect([less.who[1], key, more[key] > less[key]]).toEqual([less.who[1], key, true]);
+            expect([less.who[1], 'steep', more.steep >= less.steep]).toEqual([less.who[1], 'steep', true]);
+        }
+        // Strictly from the least to the most over the whole scale
+        expect(rows[0].steep).toBeGreaterThan(rows[rows.length - 1].steep + 0.5);
+        // And every one of them past any bike with no trait
+        const road = table(game, plain[0]);
+        for (const r of rows) for (const key of ['grass', 'scree', 'steep', 'crash']) expect([r.who[1], key, r[key] > road[key]]).toEqual([r.who[1], key, true]);
+    });
+
+    test(`each off-road bike is at least what it was at ${BEFORE} in every measure`, () => {
+        const lines = [];
+        for (const who of offroad) {
+            const was = table(before, who), now = table(game, who);
+            lines.push(`${who[1]} ${trait(who)}: ${MEASURES.map(k => `${k} ${was[k]} -> ${now[k]}`).join(', ')}`);
+            for (const key of MEASURES) expect([who[1], key, now[key] >= was[key]]).toEqual([who[1], key, true]);
+            // What its tyres hold and put down, value by value
+            const old = landBike(before, who), mine = landBike(game, who);
+            const a = { ...old.landValues() }, b = { ...mine.landValues() };
+            for (const key of ['landTraction', 'landBrakeGrip', 'landGrip', 'landCapSpeed']) expect([who[1], key, b[key] >= a[key] - 1e-9]).toEqual([who[1], key, true]);
+            for (const key of ['landRoll', 'landDrag']) expect([who[1], key, b[key] <= a[key] + 1e-9]).toEqual([who[1], key, true]);
+        }
+        console.log(`${BEFORE} -> now:\n${lines.join('\n')}`);
+    });
+
+    test(`every bike with no trait is what it was at ${BEFORE} in every measure, to the last digit`, () => {
+        // (the whole table for the first three, which are of three classes; the pace and the crash speed for all)
+        for (const who of plain.slice(0, 3)) expect([who[1], table(game, who)]).toEqual([who[1], table(before, who)]);
+        for (const who of plain) {
+            for (const cover of [5, 4, 1]) expect([who[1], cover, paceOn(game, who, cover)]).toEqual([who[1], cover, paceOn(before, who, cover)]);
+            expect(crashSpeed(game, who)).toBe(crashSpeed(before, who));
+            expect(landBike(game, who).landValues()).toBe(world);
+            // The same ride, step for step: 6 s from 20 m/s on the land at full throttle, on rock, up a slope of 0.3
+            const a = landBike(before, who, { speed: 20, slope: 0.3, cover: 3 }), b = landBike(game, who, { speed: 20, slope: 0.3, cover: 3 });
+            for (let i = 0; i < 360; i++) { landTick(a, 0.2, 1, 0); landTick(b, 0.2, 1, 0); }
+            expect([who[1], b.speed, b.leanAngle, b.yawAngle, b.crashed]).toEqual([who[1], a.speed, a.leanAngle, a.yawAngle, a.crashed]);
+        }
+        // The world's own land values are the ones of that commit
+        for (const key of Object.keys(before.WorldPhysics).filter(k => k.startsWith('land') && typeof before.WorldPhysics[k] === 'number')) {
+            expect([key, world[key]]).toEqual([key, before.WorldPhysics[key]]);
+        }
+    });
+
+    test('the top bike rides open ground at a real pace: fast on grass, slower on scree and rock, slow in forest', () => {
+        const top = offroad[0];
+        const row = table(game, top);
+        expect(row.grass).toBeGreaterThanOrEqual(12);
+        expect(row.grass).toBeLessThanOrEqual(18);
+        expect(row.scree).toBeGreaterThanOrEqual(10);
+        expect(row.scree).toBeLessThan(row.grass - 2);
+        expect(row.rock).toBeLessThan(row.scree);
+        expect(row.snow).toBeLessThan(row.scree);
+        expect(row.forest).toBeLessThan(row.rock);
+        expect(row.forest).toBeGreaterThan(table(before, top).forest);
+        // Every cover class the tile data can hold has a row, and none gives more than open grass
+        expect(world.landCover.length).toBe(9);
+        for (const cover of world.landCover) {
+            expect(cover.pace).toBeGreaterThanOrEqual(0);
+            expect(cover.pace).toBeLessThanOrEqual(1);
+            expect(cover.on.length).toBeGreaterThan(5);
+        }
+    });
+
+    test('no "too fast" crash at a pace the bike is built for: held flat out for 30 s on every cover, no off-road bike crashes', () => {
+        for (const who of offroad) {
+            for (let cover = 0; cover < world.landCover.length; cover++) {
+                const v = landBike(game, who, { speed: 4, cover });
+                let most = 0;
+                for (let i = 0; i < 1800 && !v.crashed; i++) { landTick(v, 0, 1, 0); most = Math.max(most, v.speed); }
+                expect([who[1], cover, v.crashed]).toEqual([who[1], cover, false]);
+                expect(most).toBeLessThan(crashSpeed(game, who) - 2);
+            }
+        }
+        // Over its crash speed for landCrashS it still falls, and the cause names the ground
+        const top = offroad[0];
+        expect(crashSpeed(game, top)).toBe(world.offroad.top.landCrashSpeed);
+        expect(crashSpeed(game, plain[0])).toBe(world.landCrashSpeed);
+    });
+
+    test('the slope takes speed, not the bike: the pace falls as the slope rises, with no crash under the bike\'s own limit', () => {
+        const top = offroad[0];
+        const land = landBike(game, top).landValues();
+        const limit = land.landSteepSlope;
+        expect(limit).toBe(world.offroad.top.landSteepSlope);
+        expect(limit).toBeGreaterThan(world.landSteepSlope + 0.5);
+        // Across a slope (the land steep, the bike's own way level): the pace falls from the grass pace to the least
+        const across = [];
+        for (let slope = 0; slope <= limit + 1e-9; slope += 0.1) {
+            const v = landBike(game, top, { speed: 4 });
+            v.slope = 0;
+            for (let i = 0; i < 900 && !v.crashed; i++) {
+                landTick(v, 0, 1, 0);
+                v.landSteep = slope;
+            }
+            // (landTick sets the slope it climbs; here the land's steepness is given apart from it)
+            const u = landBike(game, top, { speed: 4 });
+            for (let i = 0; i < 900 && !u.crashed; i++) {
+                u.runoff = u.hold;
+                u.landAlong = 0;
+                u.landSteep = slope;
+                u.landCover = 0;
+                u.update(1 / 60, 0, 1, 0, 0);
+            }
+            expect([slope, u.crashed]).toEqual([slope, false]);
+            across.push(u.speed);
+        }
+        console.log(`the top bike across a slope (m/s at slope 0, 0.1, ...): ${across.map(x => x.toFixed(1)).join(' ')}`);
+        for (let i = 1; i < across.length; i++) expect(across[i]).toBeLessThanOrEqual(across[i - 1] + 1e-9);
+        expect(across[0]).toBeGreaterThan(15);
+        expect(across[across.length - 1]).toBeGreaterThan(6);
+        expect(across[across.length - 1]).toBeLessThan(7);
+        // Straight up: slower with every step of the slope, and it stalls before it crashes
+        const up = [];
+        for (let slope = 0; slope <= limit + 1e-9; slope += 0.1) up.push(paceOn(game, top, 0, slope));
+        for (let i = 1; i < up.length; i++) expect(up[i]).toBeLessThanOrEqual(up[i - 1] + 1e-9);
+        expect(up[5]).toBeGreaterThan(8);
+        // Straight down with the throttle shut, to its limit: it does not run away to its crash speed
+        for (let slope = 0.2; slope <= limit + 1e-9; slope += 0.2) {
+            const v = landBike(game, top, { speed: 8, slope: -slope });
+            let most = 0;
+            for (let i = 0; i < 1200 && !v.crashed; i++) { landTick(v, 0, 0, 0); most = Math.max(most, v.speed); }
+            expect([slope, v.crashed]).toEqual([slope, false]);
+            expect(most).toBeLessThan(land.landCrashSpeed);
+        }
+        // Past its limit for landSteepS it falls, as every bike does past its own
+        const over = landBike(game, top, { speed: 10, slope: limit + 0.1 });
+        for (let i = 0; i < 60 && !over.crashed; i++) landTick(over, 0, 1, 0);
+        expect(over.crashed).toBe(true);
+        expect(over.crashCause).toBe('Rode onto a slope too steep to hold');
+        // What it climbs: a bank 3 m high at over 1 in 1, and a slope without end at about 1 in 1
+        expect(steepest(game, top)).toBeGreaterThan(1.2);
+        expect(sustained(game, top)).toBeGreaterThanOrEqual(0.85);
+        expect(steepest(game, plain[0])).toBeLessThan(0.5);
+    });
+
+    test('the drawn bike shows the ground: rougher on rock and scree, and the rider of an off-road bike stands on the pegs', () => {
+        const most = (who, cover) => {
+            const v = landBike(game, who, { speed: 8, cover });
+            let bump = 0;
+            for (let i = 0; i < 600; i++) { v.speed = 8; landTick(v, 0, 1, 0); bump = Math.max(bump, Math.abs(v.group.position.y - v.position.y)); }
+            return { bump, stand: v.riderStandFactor };
+        };
+        const top = offroad[0];
+        const grass = most(top, 5), rock = most(top, 3), scree = most(top, 4);
+        expect(rock.bump).toBeGreaterThan(scree.bump);
+        expect(scree.bump).toBeGreaterThan(grass.bump * 1.3);
+        expect(grass.stand).toBeCloseTo(world.landStand, 2);
+        // A road bike's rider sits, and its bump is the world's own on every cover
+        const road = most(plain[0], 5), roadRock = most(plain[0], 3);
+        expect(road.stand).toBe(0);
+        expect(roadRock.bump).toBe(road.bump);
+        // On the road nobody stands
+        const v = landBike(game, top, { speed: 8 });
+        v.hold = null;
+        for (let i = 0; i < 120; i++) { v.runoff = null; v.update(1 / 60, 0, 1, 0, 0); }
+        expect(v.riderStandFactor).toBe(0);
     });
 });
 

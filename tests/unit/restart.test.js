@@ -517,15 +517,32 @@ describe('a world crash restarts in place by itself', () => {
 
     test('exactly 5 s once for each restart, for every reason, and the restart is counted in its stage', () => {
         expect(Game.RESTART_PENALTY_MS).toBe(5000);
-        for (const reason of ['key', 'crash', 'off-route', 'wrong-way', 'resume']) {
+        for (const reason of ['key', 'crash', 'off-route', 'cut', 'wrong-way', 'resume']) {
             const game = worldGame();
             game.advance(30000);
+            callouts.length = 0;
             game.restartFromCheckpoint(reason);
             expect([reason, game.penaltyMs, game.restarts, game.raceElapsed()]).toEqual([reason, 5000, 1, 35000]);
+            // Every reason but a crash (which said its cause during the fall) has words of its own with the cost
+            if (reason !== 'crash') expect([reason, callouts.length, /\+5 s$/.test(callouts[0][0]), !!Game.WORLD_RESTART_TEXT[reason]]).toEqual([reason, 1, true, true]);
             expect(game.worldRun.noteRestart).toHaveBeenCalledTimes(1);
             expect(game.leaderboardService.recordRestart).toHaveBeenCalledTimes(1);
             expect(game.leaderboardService.cancelSession).not.toHaveBeenCalled();
         }
+    });
+
+    test('the cut rule\'s restart says what it was: the game hands the run\'s cut over with its own reason', () => {
+        const game = worldGame();
+        game.vehicle.projection = { index: 3, s: 500, lateral: 0, width: 7, heading: 0 };
+        game.vehicle.yawAngle = 0;
+        game.vehicle.runoff = null;
+        let frame = null;
+        game.worldRun.update = (f) => { frame = f; return { cut: true, station: -1 }; };
+        game.updateWorldRun(DT);
+        // The run is told whether the bike is on the land (the road it skips there is what the rule counts)
+        expect(frame.land).toBe(false);
+        expect([game.penaltyMs, game.restarts]).toEqual([5000, 1]);
+        expect(callouts[callouts.length - 1]).toEqual(['Cut the road, back where you left it +5 s', 'warn']);
     });
 
     test('the traffic is moved clear of the place, every knocked thing stands again, and inside a single lane the lights are the rider\'s', () => {

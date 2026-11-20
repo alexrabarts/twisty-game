@@ -691,6 +691,8 @@ class Vehicle {
         this.landFastS = 0; // Time on the land over landCrashSpeed
         this.landSteepS = 0; // Time on land steeper than landSteepSlope
         this.landAlong = 0; // The land's slope along the heading, and across it (rise over run)
+        this.landSteep = 0; // The land's slope whichever way it faces (rise over run), on the land
+        this.landCover = 0; // The land cover class under the bike (WorldPhysics.landCover), on the land
         this.landAcross = 0;
         this.worldSurfaceGrip = 1; // Route surface grip (cobbles) under the bike
         this.assistLevel = null; // Hairpin assist level (off, low, normal); null reads WorldAssist.level()
@@ -3151,19 +3153,32 @@ class Vehicle {
     }
 
     // The land values this bike reads now: the world's own for a bike with no off-road trait (the same object, so
-    // nothing moves for it), else each one moved toward WorldPhysics.offroad's by the trait. The values that set the
-    // speed (offroad.pace) move by `soon` of the trait at once and by all of it as the time on the land
-    // (offRoadTime, which the carriageway clears) passes settleS and then riseS. One scratch object, written each call
+    // nothing moves for it). Else each one moves toward WorldPhysics.offroad's by the trait (the least an off-road
+    // bike has), and on toward offroad.top's by the trait to the power offroad.rise; the values that set the pace
+    // (offroad.pace) take that second step by the ground under the bike too: the land cover's share and the slope's
+    // (worldLand reads both from the tile data and the drawn ground). One scratch object, written each call
     landValues() {
         const world = this.worldPhysics;
         const to = world.offroad;
         if (!this.offroad || !to) return world;
-        const x = Math.max(0, Math.min(1, (this.offRoadTime - to.settleS) / to.riseS));
-        const settled = to.soon + (1 - to.soon) * x * x * (3 - 2 * x);
+        const top = to.top || {};
+        const more = Math.pow(this.offroad, to.rise || 1);
+        const cover = world.landCover ? world.landCover[this.landCover] || world.landCover[0] : null;
+        const x = Math.max(0, Math.min(1, (this.landSteep - to.slopeFrom) / (to.slopeTo - to.slopeFrom)));
+        const ground = (cover ? cover.pace : 1) * (1 - x * x * (3 - 2 * x));
         const land = this.landScratch || (this.landScratch = {});
         for (const key in to) {
             if (typeof to[key] !== 'number' || typeof world[key] !== 'number') continue;
-            land[key] = world[key] + (to[key] - world[key]) * this.offroad * (to.pace.includes(key) ? settled : 1);
+            land[key] = world[key] + (to[key] - world[key]) * this.offroad;
+        }
+        for (const key in top) {
+            if (typeof world[key] !== 'number') continue;
+            const least = typeof to[key] === 'number' ? to[key] : world[key];
+            land[key] = world[key] + (least - world[key]) * this.offroad + (top[key] - least) * more * (to.pace.includes(key) ? ground : 1);
+        }
+        if (cover) {
+            land.landBumpM *= cover.rough;
+            land.landWobbleDeg *= cover.rough;
         }
         return land;
     }
@@ -3641,7 +3656,9 @@ class Vehicle {
         // eased blend rather than a pose snap
         if (this.riderBasePos) {
             const dt = this.currentDeltaTime || 1 / 60;
-            const standTarget = (this.isJumping && !this.crashed) ? 1 : 0;
+            // (and an off-road bike's rider stands on the pegs over the land, by the bike's trait)
+            const pegs = world && this.runoff && this.offroad > 0 && !this.crashed && this.speed > world.landStandSpeed ? world.landStand * this.offroad : 0;
+            const standTarget = (this.isJumping && !this.crashed) ? 1 : pegs;
             const standRate = standTarget > this.riderStandFactor ? 5.5 : 4;
             this.riderStandFactor += (standTarget - this.riderStandFactor) *
                 Math.min(1, standRate * dt);
@@ -4096,6 +4113,8 @@ class Vehicle {
         this.landFastS = 0;
         this.landSteepS = 0;
         this.landAlong = 0;
+        this.landSteep = 0;
+        this.landCover = 0;
         this.landAcross = 0;
         this.resetHairpinAssist();
         this.wasNearEdge = false;
@@ -4418,6 +4437,8 @@ class Vehicle {
             this.crashed = true;
             this.fallingOffCliff = false; // Not falling, we hit a wall
             this.crashAngle = sign * Math.PI / 6; // Crash leaning into the wall
+            // A world's crash says what it was (a leg's crash card has its own words)
+            if (world) this.crashCause = 'Hit the wall';
             console.log(`CRASHED! Hit the ${sideName} wall at`, (this.speed * 2.237).toFixed(1) + ' mph');
 
             // Move bike back to the wall face and apply bounce
@@ -4448,6 +4469,7 @@ class Vehicle {
             console.log(`=== FALLING OFF ${sideName.toUpperCase()} EDGE ===`);
             console.log(`CRASHED! Fell off the ${sideName} edge at`, (this.speed * 2.237).toFixed(1) + ' mph');
             this.crashed = true;
+            if (world) this.crashCause = 'Went over the edge of a drop';
             this.fallingOffCliff = true;
             this.fallSide = sign;
             this.fallStartY = this.position.y;
@@ -4503,9 +4525,11 @@ class Vehicle {
         return this.worldRunoffCache;
     }
 
-    // The world's land, once a tick: the slope of the drawn ground under the bike, and the crashes the rider can see
-    // coming: too fast on the land for landCrashS, land steeper than landSteepSlope for landSteepS, or water. Off the
-    // land the timers clear. The speed it costs is updateWorldSpeed's (landDrag, landTraction)
+    // The world's land, once a tick: the slope of the drawn ground under the bike and the land cover there (what an
+    // off-road bike's pace reads: landValues), and the crashes the rider can see coming: too fast on the land for
+    // landCrashS, land steeper than landSteepSlope for landSteepS (both the bike's own: an off-road bike's are higher),
+    // water, a drawn building, or the end of the land the world has in detail. Off the land the timers clear. The
+    // speed it costs is updateWorldSpeed's (landDrag, landTraction)
     worldLand(deltaTime) {
         const world = this.worldPhysics;
         if (!this.runoff || this.crashed) {
@@ -4513,7 +4537,11 @@ class Vehicle {
             this.landSteepS = 0;
             this.landAlong = 0;
             this.landAcross = 0;
-            if (!this.runoff) this.offRoadTime = 0;
+            this.landSteep = 0;
+            if (!this.runoff) {
+                this.offRoadTime = 0;
+                this.landCover = 0;
+            }
             return;
         }
         this.offRoadTime += deltaTime;
@@ -4526,6 +4554,17 @@ class Vehicle {
             this.worldCrash('Rode into the water');
             return;
         }
+        // Past the tiles the world has in detail the land is the far grid's, drawn coarse and with nothing on it
+        if (typeof ground.mapped === 'function' && !ground.mapped(this.position.x, this.position.z)) {
+            this.worldCrash('Rode off the edge of the mapped land');
+            return;
+        }
+        const scenery = this.environment.scenery;
+        if (scenery && typeof scenery.houseAt === 'function' && scenery.houseAt(this.position.x, this.position.z, world.houseHitM || 0)) {
+            this.worldCrash('Rode into a building');
+            return;
+        }
+        this.landCover = typeof ground.coverAt === 'function' ? ground.coverAt(this.position.x, this.position.z) : 0;
         // The slope on the drawn ground: ahead (where the bike is going, so a drop edge counts before it is under the
         // wheels) and across, landProbeM each way
         const m = world.landProbeM;
@@ -4536,12 +4575,15 @@ class Vehicle {
         this.landAlong = Number.isFinite(ahead) && Number.isFinite(here) ? (ahead - here) / m : 0;
         this.landAcross = Number.isFinite(one) && Number.isFinite(other) ? (one - other) / (2 * m) : 0;
         const steep = Math.hypot(this.landAlong, this.landAcross);
-        this.landSteepS = steep > world.landSteepSlope ? this.landSteepS + deltaTime : 0;
-        this.landFastS = this.speed > world.landCrashSpeed ? this.landFastS + deltaTime : 0;
+        this.landSteep = steep;
+        const land = this.landValues();
+        this.landSteepS = steep > land.landSteepSlope ? this.landSteepS + deltaTime : 0;
+        this.landFastS = this.speed > land.landCrashSpeed ? this.landFastS + deltaTime : 0;
         if (this.landSteepS >= world.landSteepS) {
-            this.worldCrash(this.landAlong < -world.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold');
+            this.worldCrash(this.landAlong < -land.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold');
         } else if (this.landFastS >= world.landCrashS) {
-            this.worldCrash('Too fast on the grass');
+            const cover = world.landCover ? world.landCover[this.landCover] || world.landCover[0] : null;
+            this.worldCrash(`Too fast ${cover ? cover.on : 'on the grass'}`);
         }
     }
 

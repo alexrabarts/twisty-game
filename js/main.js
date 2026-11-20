@@ -3741,6 +3741,18 @@ class Game {
                 this.particles.createDustCloud(rear, Math.min(1, 0.4 + slide));
             }
 
+            // Dust from the wheels at pace on a world's land (no slide needed), a small puff every landDustS
+            const landPhysics = this.vehicle.worldPhysics;
+            const dusty = landPhysics && this.vehicle.runoff && !this.vehicle.isJumping && slide <= 0.1 && this.vehicle.speed >= landPhysics.landDustSpeed;
+            this.landDustS = dusty ? (this.landDustS || 0) + rawDeltaTime : 0;
+            if (dusty && this.landDustS >= landPhysics.landDustS) {
+                this.landDustS = 0;
+                const rear = this.vehicle.position.clone();
+                rear.x -= Math.sin(this.vehicle.yawAngle) * 0.7;
+                rear.z -= Math.cos(this.vehicle.yawAngle) * 0.7;
+                this.particles.createDustCloud(rear, Math.min(0.6, 0.15 + this.vehicle.speed / 40));
+            }
+
             // Brief oily smoke puffs when accelerating hard at very high speed
             // Only when: full throttle, speed is increasing, and at near-max speed
             const isAccelerating = throttleInput > 0.95 && this.vehicle.speed > (this.lastSpeed || 0) + 1;
@@ -3955,10 +3967,11 @@ class Game {
             width: projection.width,
             speed: vehicle.speed,
             dt,
-            forwardDot: Math.cos(vehicle.yawAngle - projection.heading)
+            forwardDot: Math.cos(vehicle.yawAngle - projection.heading),
+            land: !!vehicle.runoff
         });
         if (result.cut) {
-            this.restartFromCheckpoint('off-route');
+            this.restartFromCheckpoint('cut');
             return;
         }
         if (result.station < 0) return;
@@ -4286,7 +4299,7 @@ class Game {
 
     // Back to the last gate passed, on a rolling start. Costs 5 s and a
     // little style; the run stays valid.
-    // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'wrong-way' or 'resume'. Every reason
+    // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'cut' (WorldRun's cut rule), 'wrong-way' or 'resume'. Every reason
     // costs the same 5 s. A world answers it in restartInPlace: there the rider goes on where the bike was.
     restartFromCheckpoint(reason = 'key') {
         this.closeWorldConfirm();
@@ -4375,6 +4388,7 @@ Game.WORLD_RESTART_TEXT = {
     key: 'Back on the road',
     crash: 'Crashed, back on the road',
     'off-route': 'Off route, back on the road',
+    cut: 'Cut the road, back where you left it',
     'wrong-way': 'Wrong way, turned round',
     resume: 'Back on the road'
 };

@@ -102,12 +102,12 @@ function makeRider(game, env, s, lateral, yawOff, speed, assist, rider = null) {
         if (v.crashed) return 'crash';
         const q = v.projection;
         if (q.index < 0) return null;
-        if (run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading) }).cut) return 'cut';
+        if (run.update({ s: q.s, lateral: q.lateral, width: q.width, speed: v.speed, dt: DT, forwardDot: Math.cos(v.yawAngle - q.heading), land: !!v.runoff }).cut) return 'cut';
         guide.step({ projection: q, speed: v.speed, yaw: v.yawAngle, dt: DT });
         if (restart) return 'restart';
         return null;
     };
-    return { v, step };
+    return { v, step, run };
 }
 
 function crashCause(v, log) {
@@ -191,15 +191,17 @@ export function hairpinApex(route, hairpin) {
 // CHARACTERS id, one of their bikes, and optionally the off-road trait it rides with in place of its own). plan: {line: 'centre' | 'inside', lean} on the road,
 // at the speed a `lean` degree lean (35 by default) takes the bend at (at most `speed`); {cut: L} the road until L m before the apex, then straight at the
 // point L m past it (on the inside lane) at full throttle up to `speed`, then the road again. `cut: Infinity` aims
-// straight at the exit from the start. Returns {time, end, cause, landS}: the time to the exit (held CONFIRM_S, so a
-// cut rule or a crash just after it counts), or how the ride ended, and the seconds spent past the carriageway
-export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'normal', log = null, rider = null }) {
+// straight at the exit from the start. Returns {time, end, cause, landS, skipM, landSkipM, netSkipM}: the time to the exit as the run counts it (held CONFIRM_S, so a
+// cut rule or a crash just after it counts), or how the ride ended, the seconds spent past the drawn verge, and
+// the road skipped: skipM over a stay off the carriageway, landSkipM over a stay on the land (the ride distance
+// gained less the metres ridden)
+export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'normal', log = null, rider = null, seconds = 120 }) {
     const route = env.route, world = env.physics;
     const s0 = Math.max(env.startS, hairpin.s0 - 40), s1 = hairpin.s1 + 15;
     const { apex, inside } = hairpinApex(route, hairpin);
     await env.streamer.settle(route.sample(s0, {}), s0);
     if (log) log.length = 0;
-    const { v, step } = makeRider(game, env, s0, 0, 0, Math.min(speed, roadSpeed(route, s0, speed)), assist, rider);
+    const { v, step, run } = makeRider(game, env, s0, 0, 0, Math.min(speed, roadSpeed(route, s0, speed)), assist, rider);
     const aim = {};
     const cut = plan.cut !== undefined ? plan.cut : null;
     const from = cut === Infinity ? -Infinity : cut !== null ? apex - cut : Infinity;
@@ -208,11 +210,20 @@ export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'n
     const tLat = cut !== null && cut !== Infinity ? inside * Math.max(0, target.width / 2 - 1.2) : 0;
     const tx = target.x + Math.cos(target.heading) * tLat, tz = target.z - Math.sin(target.heading) * tLat;
     let time = 0, reached = null, phase = 0, landS = 0;
-    for (let tick = 0; tick < 60 * 120; tick++) {
+    // The road skipped, measured here from where the bike went (the bike's positions and the projection, not the cut
+    // rule's own state): the ride distance gained less the metres ridden, added up a frame at a time on the land and
+    // never under nothing (metres wasted first buy nothing). landSkipM is the most that sum reached in a stay off the
+    // carriageway, counted no further than the ride distance the bike was ahead of where it went onto the land when
+    // it came back (what the cut rule holds against cutSkipM); netSkipM is the sum as it stood when the bike came
+    // back (under landSkipM when metres ridden afterwards brought it down); skipM is landSkipM with the verge counted
+    let lastS = null, held = 0, peak = 0, offFrom = null, landHeld = 0, landPeak = 0, landFrom = null, skipM = 0, landSkipM = 0, netSkipM = 0;
+    const done = (out) => ({ ...out, landS: Math.round(landS * 100) / 100, skipM: Math.round(skipM * 10) / 10, landSkipM: Math.round(landSkipM * 10) / 10, netSkipM: Math.round(netSkipM * 10) / 10 });
+    for (let tick = 0; tick < 60 * seconds; tick++) {
         const q = v.projection;
         const s = q.index >= 0 ? q.s : s0;
-        if (reached === null && s >= s1 && Math.abs(q.lateral) < 30) reached = time;
-        if (reached !== null && time - reached >= CONFIRM_S) return { time: Math.round(reached * 100) / 100, end: 'exit', cause: null, landS: Math.round(landS * 100) / 100 };
+        // The exit is reached when the run counts it: progress the cut rule has accepted
+        if (reached === null && run.lastS >= s1) reached = time;
+        if (reached !== null && time - reached >= CONFIRM_S) return done({ time: Math.round(reached * 100) / 100, end: 'exit', cause: null });
         env.updateBarriers(s);
         let steer, want;
         const d = Math.hypot(tx - v.position.x, tz - v.position.z);
@@ -230,12 +241,37 @@ export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'n
             steer = pursue(v, world, aim.x + Math.cos(aim.heading) * lat, aim.z - Math.sin(aim.heading) * lat, reach);
             want = roadSpeed(route, s, speed, plan.lean || 35);
         }
+        const x0 = v.position.x, z0 = v.position.z;
         const end = step(steer, v.speed < want ? 1 : 0, v.speed > want + 0.5 ? 1 : 0);
         time += DT;
         if (Math.abs(v.projection.lateral) > v.projection.width / 2 + game.RoadSurface.VERGE_M) landS += DT;
-        if (end) return { time: Math.round(time * 100) / 100, end, cause: end === 'crash' ? crashCause(v, log) : end, landS: Math.round(landS * 100) / 100 };
+        const off = Math.abs(v.projection.lateral) > v.projection.width / 2;
+        const moved = Math.hypot(v.position.x - x0, v.position.z - z0);
+        const before = lastS === null ? s : lastS;
+        const gained = v.projection.s - before;
+        lastS = v.projection.s;
+        if (off) {
+            if (offFrom === null) offFrom = before;
+            held = Math.max(0, held + gained - moved);
+            peak = Math.max(peak, held);
+        }
+        if (v.runoff) {
+            if (landFrom === null) landFrom = before;
+            landHeld = Math.max(0, landHeld + gained - moved);
+            landPeak = Math.max(landPeak, landHeld);
+        }
+        if (!off) {
+            if (offFrom !== null) skipM = Math.max(skipM, Math.min(peak, v.projection.s - offFrom));
+            if (landFrom !== null) {
+                landSkipM = Math.max(landSkipM, Math.min(landPeak, v.projection.s - landFrom));
+                netSkipM = Math.max(netSkipM, landHeld);
+            }
+            held = 0; peak = 0; offFrom = null;
+            landHeld = 0; landPeak = 0; landFrom = null;
+        }
+        if (end) return done({ time: Math.round(time * 100) / 100, end, cause: end === 'crash' ? crashCause(v, log) : end });
     }
-    return { time: null, end: 'timeout', cause: null, landS: Math.round(landS * 100) / 100 };
+    return done({ time: null, end: 'timeout', cause: null });
 }
 
 export const CUTS = [6, 9, 12, 15, 20, 30, Infinity];

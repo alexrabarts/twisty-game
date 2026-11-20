@@ -127,6 +127,25 @@ class WorldGround extends Ground {
         return tile.zones[j * n + i];
     }
 
+    // The land cover class at (x, z) (WorldPhysics.landCover; tools/world/landcover.mjs COVER): the cell of the
+    // tile's cover grid that colours the land there (TerrainMesh.colorAt), 0 where the tile or its cover is not held
+    coverAt(x, z) {
+        const m = WorldData.TILE_M, n = WorldData.COVER_N;
+        const tx = Math.floor(x / m), tz = Math.floor(z / m);
+        const cover = this.data.cover ? this.data.cover(`${tx},${tz}`) : null;
+        if (!cover) return 0;
+        const i = Math.max(0, Math.min(n - 1, Math.floor((x - tx * m) / (m / n))));
+        const j = Math.max(0, Math.min(n - 1, Math.floor((z - tz * m) / (m / n))));
+        return cover[j * n + i] || 0;
+    }
+
+    // Whether the world has (x, z) in detail: a height tile of its data covers it (held or not yet). Past them the
+    // land is the far grid's
+    mapped(x, z) {
+        const m = WorldData.TILE_M;
+        return typeof this.data.hasTile !== 'function' || this.data.hasTile(`${Math.floor(x / m)},${Math.floor(z / m)}`);
+    }
+
     // The land's height at (x, z) away from the road band; `fallbackY` is the route height to fall back on
     landY(x, z, fallbackY) {
         const tile = this.tileHeight(x, z);
