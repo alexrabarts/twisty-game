@@ -2470,6 +2470,7 @@ class Vehicle {
             }
             
             this.speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+            if (this.fall) this.stepFall(deltaTime);
             this.updateMesh();
             return;
         }
@@ -3282,7 +3283,7 @@ class Vehicle {
             this.lowsideTimerMs += deltaTime * 1000;
             if (this.lowsideTimerMs >= world.lowsideMs) {
                 this.worldCrash(hold > 0 ? 'Slid too far: the rear came round on the grass'
-                    : this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip');
+                    : this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip', 'lowside');
             }
         } else {
             this.lowsideTimerMs = 0;
@@ -3293,16 +3294,18 @@ class Vehicle {
         const tip = world.tipLeanDeg * Math.PI / 180;
         if (v < world.fallSpeed && Math.abs(this.leanAngle) > tip) {
             this.tipTimerS += deltaTime;
-            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down');
+            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down', 'tip');
         } else {
             this.tipTimerS = 0;
             if (this.footDown || v < world.fallSpeed) this.leanAngle *= Math.exp(-world.footDownRight * deltaTime);
         }
     }
 
-    // A world crash with the cause the crash card shows
-    worldCrash(cause) {
+    // A world crash with the cause the crash card shows. `fall` is how the bike is drawn going down (Vehicle.FALL):
+    // 'lowside' and 'tip' fall over time (Vehicle.drawFall); any other crash lies on its side at once, as before
+    worldCrash(cause, fall = null) {
         this.crashed = true;
+        this.fall = fall && { kind: fall, t: 0, from: this.leanAngle + (this.landRock || 0), heading: this.yawAngle, yaw: this.slideAngle, lag: 0, down: 0 };
         this.slideAngle = 0;
         this.crashCause = cause;
         this.crashAngle = this.leanAngle || 0.5;
@@ -3567,6 +3570,7 @@ class Vehicle {
         this.rearWheel.rotation.x = this.wheelRotation + this.wheelSlip;
         this.rearDisc.rotation.x = this.wheelRotation + this.wheelSlip;
         this.steerFront(frontRotation, this.shownBar(this.currentDeltaTime));
+        if (this.fall && !this.crashed) this.endFall();
         
         if (this.crashed) {
             if (this.fallingOffCliff && !this.hitGround && this.tumbleSpeed > 0) {
@@ -3581,15 +3585,19 @@ class Vehicle {
                 this.meshBasePosition.copy(this.group.position);
                 return;
             }
-            // Fall over animation
-            this.group.rotation.z = this.crashAngle > 0 ? Math.PI/2 : -Math.PI/2;
-            this.group.rotation.x = 0;
-            // Only adjust height if not falling off cliff
-            if (!this.fallingOffCliff) {
-                // Adjust bike position so it sits properly on the ground when rotated
-                this.group.position.y = this.position.y + 0.3;
-            }
             this.leanRider(0); // Rider doesn't lean when crashed
+            if (this.fall && !this.fallingOffCliff) {
+                this.drawFall();
+            } else {
+                // Fall over animation
+                this.group.rotation.z = this.crashAngle > 0 ? Math.PI/2 : -Math.PI/2;
+                this.group.rotation.x = 0;
+                // Only adjust height if not falling off cliff
+                if (!this.fallingOffCliff) {
+                    // Adjust bike position so it sits properly on the ground when rotated
+                    this.group.position.y = this.position.y + 0.3;
+                }
+            }
         } else if (this.isJumping) {
             // Jumping animation - forward rotation
             this.group.rotation.x = this.jumpRotation;
@@ -3766,12 +3774,69 @@ class Vehicle {
         this.rider.position.x = (this.riderBasePos ? this.riderBasePos.x : 0) + lean.shift;
     }
 
+    // A lowside or a fall at walking pace, drawn as it happens (Vehicle.FALL). The crash itself, the slide of the
+    // bike along the road and the restart are the physics', unchanged: this is only how the bike and the rider are
+    // drawn from the moment the crash is called. The bike goes down from the lean it had to its side over `downS`
+    // (`tipS` at walking pace), slowly at first as a falling thing does. While it slides its rear comes round, so it
+    // turns into the bend by `spin` rad for each metre slid, at most `spinMax`. The rider comes off: he stays on the
+    // line the bike slid along and drops behind it by `riderLag` of each metre, at most `riderLagMax`, on his side as
+    // he left the seat
+    stepFall(deltaTime) {
+        const f = Vehicle.FALL, fall = this.fall;
+        const side = this.crashAngle > 0 ? 1 : -1;
+        fall.t += deltaTime;
+        const x = Math.min(1, fall.t / (fall.kind === 'tip' ? f.tipS : f.downS));
+        fall.down = x * x;
+        // The bend turns the bike against the sign of its lean, and the rear steps out to the outside of it
+        fall.yaw = Math.max(-f.spinMax, Math.min(f.spinMax, fall.yaw - side * f.spin * this.speed * deltaTime));
+        fall.lag = Math.min(f.riderLagMax, fall.lag + f.riderLag * this.speed * deltaTime * fall.down);
+    }
+
+    // The bike and the rider drawn as the fall stands now (stepFall moves it on with the physics' own time, so it
+    // plays at one pace however often the bike is drawn)
+    drawFall() {
+        const fall = this.fall, down = fall.down;
+        const side = this.crashAngle > 0 ? 1 : -1;
+        const roll = fall.from + (side * Math.PI / 2 - fall.from) * down;
+        this.group.rotation.set(this.group.rotation.x * (1 - down), fall.heading + fall.yaw, roll);
+        // On its side the bike lies on its tyres' edges and its bar end, 0.3 m over its upright origin
+        this.group.position.y = this.position.y + 0.3 * down;
+        const rider = this.rider;
+        if (!rider || !this.riderBasePos) return;
+        const s = this.fallScratch || (this.fallScratch = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), g: new THREE.Quaternion(), e: new THREE.Euler(), p: new THREE.Vector3(), one: new THREE.Vector3(1, 1, 1) });
+        // Where the rider would be on a bike that fell without turning, then back along the line of the slide
+        s.q.setFromEuler(s.e.set(0, fall.heading, roll));
+        s.m.compose(this.group.position, s.q, s.one);
+        s.p.copy(this.riderBasePos).applyMatrix4(s.m);
+        s.p.x -= Math.sin(fall.heading) * fall.lag;
+        s.p.z -= Math.cos(fall.heading) * fall.lag;
+        this.group.updateMatrixWorld(true);
+        rider.position.copy(this.group.worldToLocal(s.p));
+        s.g.setFromEuler(this.group.rotation).invert();
+        rider.quaternion.copy(s.g).multiply(s.q).multiply(s.q.setFromEuler(s.e.set(this.riderBaseRotX || 0, 0, 0)));
+    }
+
+    // Riding again after a drawn fall: the rider is back on the seat
+    endFall() {
+        this.fall = null;
+        if (this.rider && this.riderBasePos) {
+            this.rider.position.copy(this.riderBasePos);
+            this.rider.rotation.set(this.riderBaseRotX || 0, 0, 0);
+        }
+    }
+
     // The hands stay on the grips and the feet on the pegs while the bar turns and the rider leans across the bike:
     // each limb's end goes to where it is with the rider in line with the bike (and the hand then round with the
     // bar), in the rider's axes as the rider is drawn now. A rider who stands over a jump takes the limbs up as before
     holdRider() {
         const rig = this.steerRig, rider = this.rider, arms = this.arms, legs = this.legs;
         if (!rig || !rider || (!arms && !legs)) return;
+        // A rider who has come off (Vehicle.drawFall) holds nothing: the limbs go back to their own pose
+        if (this.fall) {
+            if (rig.held) for (const side of [-1, 1]) for (const limb of [arms && arms[side], legs && legs[side]]) if (limb) limb.place(limb.end, null);
+            rig.held = false;
+            return;
+        }
         const leaned = rider.rotation.z !== 0 || rider.position.x !== (this.riderBasePos ? this.riderBasePos.x : 0);
         const turned = rig.turn.w !== 1;
         if (!leaned && !turned && !rig.held) return;
@@ -3901,6 +3966,7 @@ class Vehicle {
         this.leanAngle = 0;
         this.leanVelocity = 0;
         this.crashed = false;
+        if (this.fall) this.endFall();
         this.barState = null;
         this.crashAngle = 0;
         this.isJumping = false;
@@ -4623,6 +4689,11 @@ Vehicle.STEER_SHOWN = 0.5;
 // The drawn handlebar at speed (Vehicle.shownBar): `counter` s, the bar angle against each rad/s of roll (a full roll
 // rate of 1.15 rad/s shows 8 degrees), at most counterMax; at most intoMax into the turn at a held lean; the roll rate
 // is smoothed over `lag` s; under directSpeed m/s the drawn bar goes over to the steering angle
+// A lowside or a fall at walking pace as it is drawn (Vehicle.drawFall): downS and tipS seconds for the bike to go
+// from its lean to its side; spin rad the sliding bike turns into the bend for each metre slid, at most spinMax; the
+// rider drops riderLag of each metre behind the bike, at most riderLagMax m; sparkS seconds between the sparks a bike
+// sliding on the carriageway throws, over sparkSpeed m/s (Game)
+Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, riderLag: 0.3, riderLagMax: 5, sparkS: 0.08, sparkSpeed: 4 });
 Vehicle.BAR = Object.freeze({ counter: 0.12, counterMax: 0.16, intoMax: 0.07, lag: 0.12, directSpeed: 7 });
 Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
 // The rider's body in a turn (Vehicle.riderLean), for a rider whose bodyLean is 1: `roll` rad of the rider's own roll

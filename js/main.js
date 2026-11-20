@@ -3700,6 +3700,20 @@ class Game {
                 this.particles.createDustCloud(this.vehicle.position.clone(), dustIntensity);
             }
             this.lastJumpState = this.vehicle.isJumping;
+        } else if (this.particles && this.vehicle.fall) {
+            // A bike that slides on its side (Vehicle.drawFall) scrapes the road: sparks on the carriageway, dust on
+            // the land, while it still moves
+            this.particles.update(rawDeltaTime);
+            const fall = Vehicle.FALL;
+            this.scrapeS = (this.scrapeS || 0) + rawDeltaTime;
+            if (this.vehicle.fall.kind === 'lowside' && this.vehicle.speed > fall.sparkSpeed && this.scrapeS >= fall.sparkS) {
+                this.scrapeS = 0;
+                const at = this.vehicle.position.clone();
+                at.y += 0.15;
+                const share = Math.min(1, this.vehicle.speed / 20);
+                if (this.vehicle.runoff) this.particles.createDustCloud(at, 0.4 + 0.6 * share);
+                else this.particles.createCollisionSparks(at, this.vehicle.velocity.clone().negate().setY(Math.abs(this.vehicle.speed) * 0.3), 0.3 + 0.5 * share);
+            }
         }
 
         // (updateCamera() already re-anchored the sun to the bike)
