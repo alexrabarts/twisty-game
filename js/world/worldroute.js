@@ -155,6 +155,86 @@ class WorldRoute extends PolylineRoute {
         return values[i] + (values[i + 1] - values[i]) * t;
     }
 
+    // What kind of road the ride is at s, as three shares that sum to 1: {hairpin, mountain, country}. A rider of the
+    // crew rides each kind at its own pace (Traffic.PACES), so the shares have no step along the ride. All of it is
+    // measured from the samples, so a new world has it with no line written for it:
+    //   hairpin   the road turns hairpinTurn[1] or more inside hairpinSpanM around s (the 150 degrees in 80 m of
+    //             tools/world/verify.mjs findHairpins); from hairpinTurn[0] it counts in part
+    //   mountain  over the next mountainSpanM the road climbs or falls at grade[1] or more, or winds (the turning of
+    //             every bend, summed, per metre) at wind[1] or more, or is cobbled for cobbles[1] of it or more; each
+    //             counts in part from its first number, and the most of the three is taken
+    //   country   the rest: the open, straighter road
+    // Both are then averaged over blendM of road, which is what makes a rider's pace change over a distance. A hairpin
+    // first takes the most of its measure within blendM / 2, so the whole of it stays a hairpin and the road near it
+    // is the blend. The hairpin has the first call on a place; the mountain takes what it leaves.
+    static get KIND() {
+        return { hairpinSpanM: 80, hairpinTurn: [110 * Math.PI / 180, 150 * Math.PI / 180], mountainSpanM: 200, grade: [0.03, 0.06], wind: [0.004, 0.012], cobbles: [0, 0.5], blendM: 60 };
+    }
+
+    kindAt(s, out = {}) {
+        if (!this.kinds) this.kinds = this.buildKinds();
+        const last = this.points.length - 1;
+        out.hairpin = out.mountain = 0;
+        if (last >= 1) {
+            const clamped = Math.max(0, Math.min(this.length, s));
+            const i = Math.min(last - 1, this.indexAt(clamped));
+            const run = this.sArray[i + 1] - this.sArray[i];
+            const t = run > 0 ? (clamped - this.sArray[i]) / run : 0;
+            out.hairpin = this.kinds.hairpin[i] + (this.kinds.hairpin[i + 1] - this.kinds.hairpin[i]) * t;
+            out.mountain = (this.kinds.mountain[i] + (this.kinds.mountain[i + 1] - this.kinds.mountain[i]) * t) * (1 - out.hairpin);
+        }
+        out.country = Math.max(0, 1 - out.hairpin - out.mountain);
+        return out;
+    }
+
+    // The hairpin and mountain measures of kindAt at every sample, built once
+    buildKinds() {
+        const K = WorldRoute.KIND;
+        const count = this.points.length, s = this.sArray;
+        const share = (value, [from, to]) => Math.max(0, Math.min(1, (value - from) / (to - from)));
+        // Running sums along the ride: the signed turn, the turn of every bend whichever way, and the cobbled metres
+        const turn = new Float64Array(count), wind = new Float64Array(count), setts = new Float64Array(count);
+        for (let i = 1; i < count; i++) {
+            let d = this.points[i].heading - this.points[i - 1].heading;
+            d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+            turn[i] = turn[i - 1] + d;
+            wind[i] = wind[i - 1] + Math.abs(d);
+            setts[i] = setts[i - 1] + (this.points[i - 1].flags.cobbles ? s[i] - s[i - 1] : 0);
+        }
+        const hairpin = new Float64Array(count), mountain = new Float64Array(count);
+        let a = 0, b = 0, c = 0;
+        for (let i = 0; i < count; i++) {
+            while (s[a] < s[i] - K.hairpinSpanM / 2) a++;
+            while (b < count - 1 && s[b + 1] <= s[i] + K.hairpinSpanM / 2) b++;
+            // The most the heading swings inside the span, so a turn counts wherever in the span it lies
+            let low = Infinity, high = -Infinity;
+            for (let k = a; k <= b; k++) { low = Math.min(low, turn[k]); high = Math.max(high, turn[k]); }
+            hairpin[i] = share(high - low, K.hairpinTurn);
+            while (c < count - 1 && s[c + 1] <= s[i] + K.mountainSpanM) c++;
+            const span = s[c] - s[i];
+            if (span > 0) {
+                const grade = Math.abs(this.points[c].y - this.points[i].y) / span;
+                mountain[i] = Math.max(share(grade, K.grade), share((wind[c] - wind[i]) / span, K.wind), share((setts[c] - setts[i]) / span, K.cobbles));
+            } else if (i > 0) mountain[i] = mountain[i - 1];
+        }
+        return { hairpin: this.blendAlong(this.blendAlong(hairpin, K.blendM, true), K.blendM), mountain: this.blendAlong(mountain, K.blendM) };
+    }
+
+    // The mean of `values` over `span` metres of ride centred on each sample, or with `most` the greatest of them
+    blendAlong(values, span, most = false) {
+        const count = values.length, s = this.sArray;
+        const out = new Float64Array(count);
+        let a = 0, b = 0;
+        for (let i = 0; i < count; i++) {
+            while (s[a] < s[i] - span / 2) a++;
+            while (b < count - 1 && s[b + 1] <= s[i] + span / 2) b++;
+            let sum = 0, top = 0;
+            for (let k = a; k <= b; k++) { sum += values[k]; top = Math.max(top, values[k]); }
+            out[i] = most ? top : sum / (b + 1 - a);
+        }
+        return out;
+    }
+
     // The road frame at (x, z) on a smooth centreline: a cubic through the samples with each sample's heading
     // as its tangent, so the frame has no kinks at the samples. From the projection's s (which jumps a little
     // on the inside of a turn, where the nearest polyline segment changes) a few Newton steps find the point

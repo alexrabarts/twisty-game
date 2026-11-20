@@ -279,7 +279,35 @@ Proofs: `tests/unit/world-clearance.test.js` rides the slice and fails on any tr
 
 One convention, defined in `Route` (`js/world/route.js`): lateral runs along `(cos h, -sin h)`, which the chase camera shows on the left of the screen, so `Route.LEFT` is +1, `Route.RIGHT` is -1 and a heading that grows turns left (`Route.turnSide`). Junction prompts, the hairpin advice chevron, the pass signposts (the rider's right first) and traffic read their side through it. The legs' terrain sides and lanes and the road styles' edge keys (`RoadSurface.styles`) still call +lateral "right"; they are labels only. The world gave its oncoming car the lane named "left" meaning the rider's left, which the leg vocabulary put at -lateral, the rider's right: every world car drove on the left, and the prompts and the chevron named each turn the wrong way.
 
-Traffic keeps right: a vehicle going toward increasing s keeps to `Route.RIGHT`, one going against s to `Route.LEFT` (`Route.keepRight`). A world vehicle drives `WorldRoute.laneCurve`: the uniform cubic B-spline through each row's drawn lane point (`P + l n`, the ribbon's own frame), so its heading and yaw rate have no step where the 4 m polyline turns (0.66 rad a sample in the 6 m hairpins) and it stays inside each corner of the drawn lane. It moves by the line's own length, and looks ahead over its braking distance for the speed each bend allows (`LANE_DRIVE` in `js/traffic.js`: a car corners at 2.5 m/s^2, a crew rider at 4, so about 3 m/s on the inside lane of a 6 m hairpin). A crew rider passing swings 2 m toward the centre line and back over 40 m of road by sin^4 and keeps its lane otherwise. `tests/unit/world-traffic.test.js` holds this: every placing on its own half, and every type through every hairpin with no yaw-rate step, its body along its path and every wheel on the drawn carriageway. Leg traffic is unchanged (bound by `tests/unit/legroute-equivalence.test.js`).
+### The crew's pace
+
+Each character has `traits` in `CHARACTERS` (js/vehicle.js), 1 to 5: the pace on `country` roads, on `mountain` roads and round `hairpins`, and how `daring` over a jump. `place` is the rider's home place in the group, 1 at the front; nothing reads it yet (the group ride is a later job). The traits never touch the player's physics (`Vehicle.physicsOf`; `tests/unit/characters.test.js` pins the numbers of every rider on every bike).
+
+A trait gives a pace by one table, `Traffic.PACES` (`CREW_PACES` in js/traffic.js). A trait between two rows takes a pace between them (`Traffic.paceOf`).
+
+| Trait | Name | Base speed (m/s) | Spread (m/s) | Corner (m/s^2) |
+| --- | --- | --- | --- | --- |
+| 1 | slow | 30 | 5 | 2.4 |
+| 2 | steady | 33 | 5 | 2.8 |
+| 3 | average | 36 | 5 | 3.2 |
+| 4 | fast | 42 | 6 | 3.6 |
+| 5 | expert | 48 | 8 | 4.0 |
+
+Rows 5, 4, 3 and 1 are the old paces by seat (expert, fast, average, slow); row 2 is new. `corner` is the most sideways acceleration the rider takes a world's bend at; the whole crew cornered at 4 before. The speed is the base speed plus the rider's share of the spread (one draw at the start, kept for the ride), times the place's `trafficSpeedScale` (0.4 in a world).
+
+- **On a leg** a rider takes the mean of its `country` and `mountain` traits, once, at the start.
+- **In a world** a rider takes its trait for the kind of road it is on, each frame (`AIMotorcycle.takePace`, `Traffic.roadTrait`). `WorldRoute.kindAt(s)` gives the kind as three shares that sum to 1, measured from the samples (`WorldRoute.KIND`):
+  - `hairpin`: the road turns 150 degrees or more inside 80 m around s (the rule of `findHairpins` in tools/world/verify.mjs). From 110 degrees it counts in part.
+  - `mountain`: over the next 200 m the road climbs or falls at 6 % or more, or its bends turn 0.012 rad a metre or more in sum, or half of it or more is cobbled. Each counts in part from 3 %, 0.004 rad a metre and the first cobbles. The most of the three is taken.
+  - `country`: the rest.
+  - Both measures are averaged over 60 m of road, so the pace changes over a distance. A hairpin first takes the most of its measure within 30 m, so the whole hairpin is one and the 60 m before and after it are the blend.
+- The Tremola slice is 62 % mountain, 30 % hairpin and 8 % country (its two ends).
+- The start order, the passes, the spacing and the pack rules are as before. The crew do not stop, wait or regroup.
+- The pace draws nothing from `Math.random` after the start, and the start draws as before: one draw a rider for the pace, one for the start segment.
+
+A new character with `traits` and a new world need no code: a character without traits rides the middle of the scale (3), and `kindAt` reads only the route's samples. `tests/unit/crew-pace.test.js` holds the table, the kinds on made roads and on the Tremola slice, the order of the riders on each kind of road, and that neither the speed nor the heading has a step.
+
+Traffic keeps right: a vehicle going toward increasing s keeps to `Route.RIGHT`, one going against s to `Route.LEFT` (`Route.keepRight`). A world vehicle drives `WorldRoute.laneCurve`: the uniform cubic B-spline through each row's drawn lane point (`P + l n`, the ribbon's own frame), so its heading and yaw rate have no step where the 4 m polyline turns (0.66 rad a sample in the 6 m hairpins) and it stays inside each corner of the drawn lane. It moves by the line's own length, and looks ahead over its braking distance for the speed each bend allows (`LANE_DRIVE` in `js/traffic.js`: a car corners at 2.5 m/s^2, a crew rider at 4 at most, by its traits ("The crew's pace"), so about 3 m/s on the inside lane of a 6 m hairpin). A crew rider passing swings 2 m toward the centre line and back over 40 m of road by sin^4 and keeps its lane otherwise. `tests/unit/world-traffic.test.js` holds this: every placing on its own half, and every type through every hairpin with no yaw-rate step, its body along its path and every wheel on the drawn carriageway. Leg traffic is unchanged (bound by `tests/unit/legroute-equivalence.test.js`).
 
 ## Every road near the bike looks like a road
 

@@ -237,10 +237,16 @@ const OUTFITS = {
 // Playable characters. Each entry defines the rider, the bikes they own
 // (BIKE_MODELS: the first is the one they ride unless the player picks
 // another on the rider select) and stat multipliers applied to the baseline
-// Vehicle physics. stats are the 1-5 star ratings shown in the selection UI;
-// physics are the multipliers actually applied to the handling model, and
-// they are the character on their first bike: another bike scales them by
-// its class against that one (Vehicle.physicsOf). bikeLabel and bikeColor
+// Vehicle physics. physics are the multipliers actually applied to the
+// handling model, and they are the character on their first bike: another
+// bike scales them by its class against that one (Vehicle.physicsOf). The
+// 1-5 stars of the rider select are worked out from them, the bike and the
+// rider's traits (Vehicle.statsOf); nobody writes them by hand. `traits` (1
+// to 5) are how the rider really rides: the pace on open country roads, on
+// mountain roads and round hairpins, and how daring over a jump. `place` is
+// the rider's home place in the group, 1 at the front. The traits set the
+// stars and the pace of a rider of the crew (Traffic.PACES); they never
+// touch the player's physics. bikeLabel and bikeColor
 // describe the first bike. `outfits` is what the rider can wear (OUTFITS) and
 // `kit` the first outfit's gear; `build` is the rider's size against the
 // modelled rider's (height stretches the torso and the limbs, width the
@@ -260,7 +266,10 @@ const CHARACTERS = [
         build: { height: 1.06, width: 0.98 },
         // Hangs off: the body well into the turn (Vehicle.riderLean)
         bodyLean: 1,
-        stats: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
+        // Fast everywhere, a little less so on tight twisty roads; daring in the middle
+        traits: { country: 5, mountain: 5, hairpins: 4, daring: 3 },
+        // Often in front, and navigates
+        place: 1,
         physics: {
             comfortShake: 1.25,     // Race-firm - you feel everything
             maxSpeed: 1.10,        // 74.8 m/s top end
@@ -283,7 +292,10 @@ const CHARACTERS = [
         build: { height: 1.0, width: 1.05 },
         // A modest lean into the turn (Vehicle.riderLean)
         bodyLean: 0.5,
-        stats: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
+        // Quite slow on country roads, faster on mountain roads, not the fastest round hairpins
+        traits: { country: 2, mountain: 4, hairpins: 3, daring: 2 },
+        // Leads and navigates most of the time
+        place: 2,
         physics: {
             comfortShake: 0.55,     // Long-travel suspension soaks it up
             maxSpeed: 1.0,         // 68 m/s
@@ -308,7 +320,10 @@ const CHARACTERS = [
         build: { height: 1.03, width: 0.95 },
         // A modest lean into the turn (Vehicle.riderLean)
         bodyLean: 0.5,
-        stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
+        // Usually quite slow, though he can ride fast at times; the least daring with Guy
+        traits: { country: 2, mountain: 2, hairpins: 2, daring: 1 },
+        // Toward the back, sometimes last, at a distance from the others
+        place: 5,
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
             maxSpeed: 0.75,        // 51 m/s
@@ -333,7 +348,10 @@ const CHARACTERS = [
         build: { height: 1.0, width: 1.1 },
         // Sits in line with the bike at any lean (Vehicle.riderLean)
         bodyLean: 0,
-        stats: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
+        // Slower on country roads, bursts on mountain roads; the fastest round hairpins when he wants to, and the most daring for jumps
+        traits: { country: 2, mountain: 4, hairpins: 5, daring: 5 },
+        // In the middle, with bursts
+        place: 4,
         physics: {
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
             maxSpeed: 0.85,        // 57.8 m/s
@@ -365,7 +383,10 @@ const CHARACTERS = [
         // Vehicle.physicsOf gives the twin exactly what it had: a balanced
         // middleweight, a little under the adventure bike's top speed,
         // quick off the corners, easy to turn on a wide flat bar.
-        stats: { speed: 2, accel: 3, handling: 5, jump: 3, comfort: 4 },
+        // Careful, and a bit daring sometimes
+        traits: { country: 3, mountain: 3, hairpins: 3, daring: 3 },
+        // Near the front, never leading
+        place: 3,
         physics: {
             comfortShake: 0.8 * (0.55 * 1.1) / 0.8,     // 0.605 - long travel
             maxSpeed: 0.9 * (1.0 * 0.85) / 0.95,        // 0.805: 54.8 m/s
@@ -391,7 +412,10 @@ const CHARACTERS = [
         bodyLean: 0.2,
         // A mid-size all-rounder: middling pace, easy to place, comfortable
         // over a long day
-        stats: { speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 },
+        // The slowest, on mountain roads too
+        traits: { country: 1, mountain: 1, hairpins: 1, daring: 1 },
+        // Last, and stops often
+        place: 6,
         physics: {
             comfortShake: 0.7,
             maxSpeed: 0.92,        // 62.6 m/s
@@ -5016,6 +5040,45 @@ Vehicle.physicsOf = (character, id) => {
         physics[key] = Math.min(high, Math.max(low, base * to[key] / from[key]));
     }
     return physics;
+};
+
+// The stars of the rider select, 1 to 5 a bar, for a character on a bike. A
+// bar reads one number of Vehicle.physicsOf over `from` (1 star) to `to` (5
+// stars), a range chosen so that the first bikes read as their cards did when
+// the stars were written by hand; `offroad` adds that many stars for a whole
+// off-road bike (BIKE_MODELS `offroad`); and `traits` names the rider's own
+// part, the mean of those traits, which is RIDER_SHARE of the bar. The bike's
+// class and a light bike are in the physics already.
+const STAT_BARS = {
+    speed: { physics: 'maxSpeed', from: 0.7, to: 1.2, traits: ['country', 'mountain'] },
+    accel: { physics: 'acceleration', from: 0.65, to: 1.25 },
+    handling: { physics: 'steeringForce', from: 0.9, to: 1.15, traits: ['hairpins'] },
+    jump: { physics: 'jumpPower', from: 0.5, to: 1.6, offroad: 1.75, traits: ['daring'] },
+    comfort: { physics: 'comfortShake', from: 1.4, to: 0.3 }
+};
+// A fifth of a bar is the rider: enough to move a star, never enough to hide the bike
+const RIDER_SHARE = 0.2;
+// A trait a character does not have: the middle of the scale, which moves no bar far
+const TRAIT_MIDDLE = 3;
+
+// A character's trait, 1 to 5; the middle for a character without it
+Vehicle.traitOf = (character, name) => {
+    const value = character && character.traits ? character.traits[name] : undefined;
+    return Number.isFinite(value) ? Math.max(1, Math.min(5, value)) : TRAIT_MIDDLE;
+};
+
+Vehicle.statsOf = (character, id) => {
+    const ridden = id || Vehicle.bikeOf(character);
+    const physics = Vehicle.physicsOf(character, ridden);
+    const offroad = Vehicle.offroadOf(ridden);
+    const stars = {};
+    for (const [name, bar] of Object.entries(STAT_BARS)) {
+        const value = physics[bar.physics] !== undefined ? physics[bar.physics] : 1;
+        const bike = Math.max(1, Math.min(5, 1 + 4 * (value - bar.from) / (bar.to - bar.from) + (bar.offroad || 0) * offroad));
+        const rider = bar.traits ? bar.traits.reduce((sum, trait) => sum + Vehicle.traitOf(character, trait), 0) / bar.traits.length : bike;
+        stars[name] = Math.max(1, Math.min(5, Math.round(bike * (1 - RIDER_SHARE) + rider * RIDER_SHARE)));
+    }
+    return stars;
 };
 
 // The rider-select text of a bike: its descriptive name and year

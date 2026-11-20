@@ -16,6 +16,19 @@ const LANE_DRIVE = {
     bike: { lateral: 4, plan: 3, accel: 3, brake: 6, turnIn: 3 }
 };
 
+// The pace of a rider of the crew by a trait of the rider (CHARACTERS `traits`, 1 to 5): a base speed in m/s, the
+// random spread on top of it, and `corner`, the most sideways acceleration the rider takes a world's bend at
+// (LANE_DRIVE.bike.lateral is the most of them). `skill` names the row. 5 and 1 are the crew's old quickest and slowest
+// paces and 4 and 3 its old fast and average ones; the crew cornered at 4 m/s^2 whoever they were. A trait between two
+// rows takes a pace between them (Traffic.paceOf).
+const CREW_PACES = [
+    { trait: 1, skill: 'slow', speed: 30, spread: 5, corner: 2.4 },
+    { trait: 2, skill: 'steady', speed: 33, spread: 5, corner: 2.8 },
+    { trait: 3, skill: 'average', speed: 36, spread: 5, corner: 3.2 },
+    { trait: 4, skill: 'fast', speed: 42, spread: 6, corner: 3.6 },
+    { trait: 5, skill: 'expert', speed: 48, spread: 8, corner: 4 }
+];
+
 // Metres between the lane line's samples when traffic looks ahead for a bend
 const LANE_LOOK_STEP_M = 1;
 
@@ -75,16 +88,33 @@ function laneMetres(route, vehicle, dt) {
 }
 
 class Traffic {
-    // The paces of the touring crew, quickest first: a skill (how it passes and holds the pack) and a base speed in
-    // m/s with a random spread on top. They belong to the crew, not to a rider: each rider's own way of riding is to come
-    static get CREW_PACES() {
-        return [
-            { skill: 'expert', speed: 48, spread: 8 },
-            { skill: 'fast', speed: 42, spread: 6 },
-            { skill: 'average', speed: 36, spread: 5 },
-            { skill: 'average', speed: 36, spread: 5 },
-            { skill: 'slow', speed: 30, spread: 5 }
-        ];
+    // The crew's paces by trait, slowest first (CREW_PACES above)
+    static get PACES() { return CREW_PACES; }
+
+    // The pace of a trait value: {speed, spread, corner}, between two rows for a value between them
+    static paceOf(trait, out = {}) {
+        const last = CREW_PACES.length - 1;
+        const at = Math.max(0, Math.min(last, (Number.isFinite(trait) ? trait : CREW_PACES[0].trait) - CREW_PACES[0].trait));
+        const low = CREW_PACES[Math.min(last - 1, Math.floor(at))], high = CREW_PACES[Math.min(last - 1, Math.floor(at)) + 1];
+        const t = at - (low.trait - CREW_PACES[0].trait);
+        out.speed = low.speed + (high.speed - low.speed) * t;
+        out.spread = low.spread + (high.spread - low.spread) * t;
+        out.corner = low.corner + (high.corner - low.corner) * t;
+        return out;
+    }
+
+    // The name of the row nearest a trait value
+    static skillOf(trait) {
+        return CREW_PACES.reduce((best, row) => (Math.abs(row.trait - trait) < Math.abs(best.trait - trait) ? row : best)).skill;
+    }
+
+    // The trait a rider's pace is read at. On a leg, which has no kinds of road, the mean of its country and mountain
+    // traits; in a world, its trait for each kind of road by that kind's share of the road it is on
+    // (WorldRoute.kindAt: {hairpin, mountain, country}), so the pace changes over the same distance as the shares do
+    static roadTrait(character, kind = null) {
+        const country = Vehicle.traitOf(character, 'country'), mountain = Vehicle.traitOf(character, 'mountain');
+        if (!kind) return (country + mountain) / 2;
+        return kind.hairpin * Vehicle.traitOf(character, 'hairpins') + kind.mountain * mountain + kind.country * country;
     }
 
     // The touring crew: every character but the one the player rides as (by name), in the order of CHARACTERS
@@ -192,12 +222,15 @@ class Traffic {
         const range = legSegmentRange(this.environment);
 
         // The touring crew are the characters the player did not pick, each on its own bike (BikeModels.crewBike:
-        // its first) in its own first outfit. How they ride is not theirs yet: the paces below go to them in the
-        // order of CHARACTERS, the quickest first, and a rider past the last pace takes the last one.
+        // its first) in its own first outfit, at its own pace: the pace of its traits (Traffic.PACES). A rider starts
+        // at its leg pace; in a world it then takes the pace of the road it is on (AIMotorcycle.takePace). `luck` is
+        // the rider's one draw for its pace, its share of the spread for the whole ride.
         const others = Traffic.crewOf(this.playerRiderName);
-        const paces = others.map((character, i) => {
-            const pace = Traffic.CREW_PACES[Math.min(i, Traffic.CREW_PACES.length - 1)];
-            return { skill: pace.skill, baseSpeed: pace.speed + Math.random() * pace.spread };
+        const paces = others.map((character) => {
+            const trait = Traffic.roadTrait(character);
+            const pace = Traffic.paceOf(trait);
+            const luck = Math.random();
+            return { skill: Traffic.skillOf(trait), baseSpeed: pace.speed + luck * pace.spread, luck };
         });
 
         for (let i = 0; i < others.length; i++) {
@@ -221,6 +254,7 @@ class Traffic {
                 color: BIKE_MODELS[bike] ? BIKE_MODELS[bike].paint : parseInt(character.bikeColor),
                 style: 'sport',
                 skill: paces[i].skill,
+                pace: { luck: paces[i].luck, scale: this.speedScale },
                 character,
                 model: bike,
                 riderName: character.name,
@@ -1191,6 +1225,8 @@ class AIMotorcycle {
         this.helmetColor = options.helmetColor || 0x000000;
         this.suitColor = options.suitColor || 0x2a2a2a;
         this.skill = options.skill || 'average';
+        // A rider of the crew: {luck, scale}, its share of the pace's spread and the speed scale of the place (takePace)
+        this.pace = options.pace || null;
 
         this.createBikeModel();
 
@@ -1645,10 +1681,23 @@ class AIMotorcycle {
         this.leanRider();
     }
     
+    // A rider of the crew in a world rides the road it is on at its own pace for that kind of road: its base speed, and
+    // the sideways acceleration it takes a bend at. The kinds blend along the road, so neither has a step; the speed
+    // itself is eased by laneSpeed. A leg rider keeps the pace it started with.
+    takePace(route) {
+        if (!this.pace || !this.character || typeof route.kindAt !== 'function') return;
+        const kind = route.kindAt(route.fromUnits(this.currentSegment + this.segmentProgress), this.kindSample || (this.kindSample = {}));
+        const pace = Traffic.paceOf(Traffic.roadTrait(this.character, kind), this.paceSample || (this.paceSample = {}));
+        this.baseSpeed = (pace.speed + this.pace.luck * pace.spread) * this.pace.scale;
+        if (!this.drive) this.drive = { ...LANE_DRIVE.bike };
+        this.drive.lateral = Math.min(LANE_DRIVE.bike.lateral, pace.corner);
+    }
+
     update(deltaTime, playerPosition, allBikes, allCars) {
         this.currentDeltaTime = deltaTime;
         const route = this.environment.route;
         const world = !!route.laneCurve;
+        if (world) this.takePace(route);
         const segmentLength = route.unitM;
         const distanceToMove = world ? laneMetres(route, this, deltaTime) : this.currentSpeed * deltaTime;
         const segmentsToMove = world ? laneStep(route, this, distanceToMove) : distanceToMove / segmentLength;
@@ -1739,7 +1788,7 @@ class AIMotorcycle {
         }
         
         // A world rider eases toward what the pack asks, no faster than it can brake for the bends ahead
-        if (world) this.currentSpeed = laneSpeed(route, this, previousSpeed, this.currentSpeed, LANE_DRIVE.bike, deltaTime);
+        if (world) this.currentSpeed = laneSpeed(route, this, previousSpeed, this.currentSpeed, this.drive || LANE_DRIVE.bike, deltaTime);
 
         this.isBraking = this.currentSpeed < previousSpeed;
         if (this.isBraking) {

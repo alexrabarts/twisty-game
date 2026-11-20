@@ -71,11 +71,8 @@ describe('the roster', () => {
         expect(character.name).toBeTruthy();
         expect(character.bikeLabel).toBeTruthy();
         expect(parseInt(character.bikeColor)).toBe(game.BIKE_MODELS[character.bikes[0]].paint);
-        Object.values(character.stats).forEach(value => {
-            expect(Number.isInteger(value)).toBe(true);
-            expect(value).toBeGreaterThanOrEqual(1);
-            expect(value).toBeLessThanOrEqual(5);
-        });
+        // The stars are worked out (Vehicle.statsOf), not written on the character
+        expect(character.stats).toBeUndefined();
     });
 
     test('a vehicle rides the bike asked for if the rider owns it, else their first', () => {
@@ -181,7 +178,7 @@ describe('Lucy', () => {
         expect(lucy.physics.acceleration).toBeLessThan(twin.acceleration);
         expect(lucy.physics.steeringForce).toBeGreaterThan(twin.steeringForce);
         expect(lucy.physics.comfortShake).toBeLessThan(twin.comfortShake);
-        expect(lucy.stats.handling).toBeGreaterThanOrEqual(4);
+        expect(game.Vehicle.statsOf(lucy, lucy.bikes[0]).handling).toBeGreaterThanOrEqual(4);
     });
 
     test('her superbike is the red one in black, a road bike with its lights, mirrors, plate and indicators, and no tail pack', async () => {
@@ -240,7 +237,7 @@ describe('Guy', () => {
     test('is a mid-size all-rounder on his scrambler, in his own dark textile kit', () => {
         expect(guy.name).toBe('Guy');
         expect(guy.bikes[0]).toBe('bike04_scrambler');
-        expect(guy.stats).toEqual({ speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 });
+        expect(game.Vehicle.statsOf(guy, guy.bikes[0])).toEqual({ speed: 2, accel: 3, handling: 3, jump: 3, comfort: 4 });
         // Between Lucy on her naked twin and Alex for pace, softer than Lucy on the twin, easier than Steve
         const twin = game.Vehicle.physicsOf(find('lucy'), 'bike01_z650');
         expect(guy.physics.maxSpeed).toBeGreaterThan(twin.maxSpeed);
@@ -559,5 +556,210 @@ describe('the outfits', () => {
             for (const word of words) expect([name, word, new RegExp(`\\b${word}\\b`, 'i').test(text)]).toEqual([name, word, false]);
             expect([name, /\b(IMG|PXL|DSC|MVIMG)_?\d|\.(jpe?g|heic)\b/i.test(text)]).toEqual([name, false]);
         }
+    });
+});
+
+// How the six really ride, as the owner gave it: the pace on country roads, on mountain roads and round hairpins,
+// and how daring, 1 to 5; and the home place in the group, 1 at the front
+const TRAITS = {
+    steve: { country: 5, mountain: 5, hairpins: 4, daring: 3 },
+    shane: { country: 2, mountain: 4, hairpins: 5, daring: 5 },
+    alex: { country: 2, mountain: 4, hairpins: 3, daring: 2 },
+    lucy: { country: 3, mountain: 3, hairpins: 3, daring: 3 },
+    tim: { country: 2, mountain: 2, hairpins: 2, daring: 1 },
+    guy: { country: 1, mountain: 1, hairpins: 1, daring: 1 }
+};
+const PLACES = ['steve', 'alex', 'lucy', 'shane', 'tim', 'guy'];
+
+// The stars each card showed for the rider on their first bike while they were written by hand: the worked-out stars
+// stay within one of them. Where they differ, and why (each is one star):
+//   steve speed 5 to 4 and comfort 1 to 2: his superbike must show more speed and less comfort, and 5 and 1 left no room
+//   alex jump 4 to 3: he is not daring, and his adventure bike must show more
+//   lucy jump 3 to 4: her first bike is the trail bike, which must show more than her road bikes
+//   guy speed 3 to 2 and handling 4 to 3: the rider's part, the slowest of them everywhere
+const CARD = {
+    steve: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
+    alex: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
+    tim: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
+    shane: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
+    lucy: { speed: 2, accel: 3, handling: 5, jump: 3, comfort: 4 },
+    guy: { speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 }
+};
+const DIFFERS = { steve: ['speed', 'comfort'], alex: ['jump'], lucy: ['jump'], guy: ['speed', 'handling'] };
+
+// Vehicle.physicsOf for every rider on every bike of theirs, as it was before the traits (commit 411016e), to six
+// places: the traits set the stars and the crew's pace, and never the player's physics
+const HEAD_PHYSICS = {
+    steve: {
+        bike08_xsr900: { comfortShake: 1.25, maxSpeed: 1.1, acceleration: 1.1, brakeForce: 1.05, steeringForce: 1, jumpPower: 0.85, wheeliePop: 1.3, wheelieThrottle: 1.15 },
+        bike13_panigale: { comfortShake: 1.4, maxSpeed: 1.2, acceleration: 1.21, brakeForce: 1.15, steeringForce: 0.943396, jumpPower: 0.85, wheeliePop: 1.3, wheelieThrottle: 1.15 }
+    },
+    alex: {
+        bike02_speed_triple: { comfortShake: 0.55, maxSpeed: 1, acceleration: 1, brakeForce: 1.05, steeringForce: 1.1, jumpPower: 1.25, wheeliePop: 1, wheelieThrottle: 1 },
+        bike10_tiger900: { comfortShake: 0.378125, maxSpeed: 1.052632, acceleration: 0.925926, brakeForce: 1.1025, steeringForce: 1.080357, jumpPower: 1.25, wheeliePop: 1, wheelieThrottle: 1 }
+    },
+    tim: {
+        bike14_forza: { comfortShake: 0.3, maxSpeed: 0.75, acceleration: 0.8, brakeForce: 1, steeringForce: 1.1, jumpPower: 0.6, wheeliePop: 0.75, wheelieThrottle: 0.9 },
+        bike06_z750: { comfortShake: 0.8, maxSpeed: 0.95, acceleration: 1.08, brakeForce: 1, steeringForce: 1.12, jumpPower: 0.6, wheeliePop: 0.75, wheelieThrottle: 0.9 }
+    },
+    shane: {
+        bike03_duke390: { comfortShake: 0.85, maxSpeed: 0.85, acceleration: 1.1, brakeForce: 1, steeringForce: 1.15, jumpPower: 1.5, wheeliePop: 1.2, wheelieThrottle: 1.1 },
+        bike09_duke890: { comfortShake: 0.772727, maxSpeed: 1, acceleration: 1.222222, brakeForce: 1.052632, steeringForce: 1.084906, jumpPower: 1.5, wheeliePop: 1.2, wheelieThrottle: 1.1 },
+        bike11_duke990: { comfortShake: 0.772727, maxSpeed: 1, acceleration: 1.222222, brakeForce: 1.052632, steeringForce: 1.084906, jumpPower: 1.5, wheeliePop: 1.2, wheelieThrottle: 1.1 },
+        bike16_superadv: { comfortShake: 0.53125, maxSpeed: 1.052632, acceleration: 1.131687, brakeForce: 1.105263, steeringForce: 1.065532, jumpPower: 1.5, wheeliePop: 1.2, wheelieThrottle: 1.1 }
+    },
+    lucy: {
+        bike15_crf250: { comfortShake: 0.605, maxSpeed: 0.805263, acceleration: 0.9, brakeForce: 0.9975, steeringForce: 1.166, jumpPower: 1, wheeliePop: 1.15, wheelieThrottle: 1.05 },
+        bike01_z650: { comfortShake: 0.8, maxSpeed: 0.9, acceleration: 1.08, brakeForce: 1, steeringForce: 1.12, jumpPower: 1, wheeliePop: 1.15, wheelieThrottle: 1.05 },
+        bike07_mt09: { comfortShake: 0.8, maxSpeed: 0.9, acceleration: 1.08, brakeForce: 1, steeringForce: 1.12, jumpPower: 1, wheeliePop: 1.15, wheelieThrottle: 1.05 },
+        bike13_panigale_black: { comfortShake: 1.25, maxSpeed: 1.042105, acceleration: 1.1, brakeForce: 1.05, steeringForce: 1, jumpPower: 1, wheeliePop: 1.15, wheelieThrottle: 1.05 }
+    },
+    guy: {
+        bike04_scrambler: { comfortShake: 0.7, maxSpeed: 0.92, acceleration: 1.02, brakeForce: 1, steeringForce: 1.08, jumpPower: 1.05, wheeliePop: 1, wheelieThrottle: 1 },
+        bike05_g310gs: { comfortShake: 0.564667, maxSpeed: 0.868889, acceleration: 0.918, brakeForce: 1.05, steeringForce: 1.188, jumpPower: 1.05, wheeliePop: 1, wheelieThrottle: 1 },
+        bike07_mt09_black: { comfortShake: 0.746667, maxSpeed: 0.971111, acceleration: 1.1016, brakeForce: 1.052632, steeringForce: 1.141132, jumpPower: 1.05, wheeliePop: 1, wheelieThrottle: 1 },
+        bike12_tracer9gt: { comfortShake: 0.56, maxSpeed: 1.042667, acceleration: 1.0404, brakeForce: 1.105263, steeringForce: 1.059623, jumpPower: 1.05, wheeliePop: 1, wheelieThrottle: 1 }
+    }
+};
+
+describe('the riders\' traits', () => {
+    test('are the owner\'s table, exactly, and the places are the group\'s order', () => {
+        expect(Object.fromEntries(game.CHARACTERS.map(c => [c.id, c.traits]))).toEqual(TRAITS);
+        expect([...game.CHARACTERS].sort((a, b) => a.place - b.place).map(c => c.id)).toEqual(PLACES);
+        expect(game.CHARACTERS.map(c => c.place).sort()).toEqual(PLACES.map((id, i) => i + 1));
+    });
+
+    test('do not touch the physics: every rider on every bike has the numbers of before', () => {
+        expect(game.CHARACTERS.map(c => c.id).sort()).toEqual(Object.keys(HEAD_PHYSICS).sort());
+        for (const character of game.CHARACTERS) {
+            expect(character.bikes).toEqual(Object.keys(HEAD_PHYSICS[character.id]));
+            for (const bike of character.bikes) {
+                const now = game.Vehicle.physicsOf(character, bike), before = HEAD_PHYSICS[character.id][bike];
+                expect(Object.keys(now).sort()).toEqual(Object.keys(before).sort());
+                for (const key of Object.keys(before)) expect([character.id, bike, key, Math.round(now[key] * 1e6) / 1e6]).toEqual([character.id, bike, key, before[key]]);
+            }
+        }
+        // A character with other traits, or with none, has the same physics
+        for (const character of game.CHARACTERS) {
+            for (const traits of [undefined, { country: 1, mountain: 1, hairpins: 1, daring: 1 }, { country: 5, mountain: 5, hairpins: 5, daring: 5 }]) {
+                for (const bike of character.bikes) expect(game.Vehicle.physicsOf({ ...character, traits }, bike)).toEqual(game.Vehicle.physicsOf(character, bike));
+            }
+        }
+    });
+});
+
+describe('the stars of the rider card', () => {
+    const BARS = ['speed', 'accel', 'handling', 'jump', 'comfort'];
+    const stars = (character, bike) => game.Vehicle.statsOf(character, bike);
+    const model = bike => game.BIKE_MODELS[bike];
+    // Every pair of two bikes of one rider: [character, bike, other]
+    const pairs = game.CHARACTERS.flatMap(c => c.bikes.flatMap(a => c.bikes.filter(b => b !== a).map(b => [c, a, b])));
+    // An adventure or trail bike, by the catalogue's own facts
+    const rough = bike => model(bike).cls === 'adventure' || (model(bike).offroad || 0) >= 0.5;
+    // The class that rides the firmest: the superbikes'
+    const firmest = Object.keys(game.BIKE_CLASSES).reduce((a, b) => (game.BIKE_CLASSES[b].comfortShake > game.BIKE_CLASSES[a].comfortShake ? b : a));
+
+    test('every bar of every rider on every bike is a whole number of stars from 1 to 5', () => {
+        for (const character of game.CHARACTERS) {
+            for (const bike of character.bikes) {
+                const got = stars(character, bike);
+                expect(Object.keys(got)).toEqual(BARS);
+                for (const bar of BARS) {
+                    expect(Number.isInteger(got[bar])).toBe(true);
+                    expect(got[bar]).toBeGreaterThanOrEqual(1);
+                    expect(got[bar]).toBeLessThanOrEqual(5);
+                }
+            }
+        }
+        // No traits and the two ends of the scale, on the two ends of the physics: still 1 to 5
+        const ends = [undefined, { country: 1, mountain: 1, hairpins: 1, daring: 1 }, { country: 5, mountain: 5, hairpins: 5, daring: 5 }];
+        for (const traits of ends) {
+            for (const scale of [0.1, 3]) {
+                const physics = Object.fromEntries(Object.entries(game.CHARACTERS[0].physics).map(([key, value]) => [key, value * scale]));
+                const got = stars({ ...game.CHARACTERS[0], traits, physics });
+                for (const bar of BARS) expect(got[bar] >= 1 && got[bar] <= 5 && Number.isInteger(got[bar])).toBe(true);
+            }
+        }
+    });
+
+    test('on the first bike they are the card\'s old stars within one, and differ only where it is written down', () => {
+        expect(game.CHARACTERS.map(c => c.id).sort()).toEqual(Object.keys(CARD).sort());
+        for (const character of game.CHARACTERS) {
+            const got = stars(character, character.bikes[0]);
+            expect(stars(character)).toEqual(got);
+            for (const bar of BARS) expect([character.id, bar, Math.abs(got[bar] - CARD[character.id][bar]) <= 1]).toEqual([character.id, bar, true]);
+            expect([character.id, BARS.filter(bar => got[bar] !== CARD[character.id][bar])]).toEqual([character.id, DIFFERS[character.id] || []]);
+        }
+    });
+
+    test('a bike with more top speed under the same rider never shows less speed, and a tenth more shows more', () => {
+        let strict = 0;
+        for (const [character, bike, other] of pairs) {
+            const more = game.Vehicle.physicsOf(character, bike).maxSpeed - game.Vehicle.physicsOf(character, other).maxSpeed;
+            if (more > 0) expect([character.id, bike, other, stars(character, bike).speed >= stars(character, other).speed]).toEqual([character.id, bike, other, true]);
+            if (more >= 0.1 - 1e-9) {
+                strict++;
+                expect([character.id, bike, other, stars(character, bike).speed > stars(character, other).speed]).toEqual([character.id, bike, other, true]);
+            }
+        }
+        expect(strict).toBeGreaterThanOrEqual(game.CHARACTERS.length);
+        // The last bike of a rider's list is the most powerful: it shows more speed than the first
+        for (const character of game.CHARACTERS.filter(c => c.bikes.length > 1)) {
+            expect([character.id, stars(character, character.bikes[character.bikes.length - 1]).speed > stars(character, character.bikes[0]).speed]).toEqual([character.id, true]);
+        }
+    });
+
+    test('an adventure or trail bike shows more jump and more comfort than the same rider\'s road bikes', () => {
+        let jump = 0, comfort = 0;
+        for (const [character, bike, other] of pairs) {
+            const a = stars(character, bike), b = stars(character, other);
+            const offroad = (model(bike).offroad || 0) - (model(other).offroad || 0);
+            // More of an off-road bike never jumps less; half an off-road bike more jumps more, unless the other is at 5
+            if (offroad > 0) expect([character.id, bike, other, a.jump >= b.jump]).toEqual([character.id, bike, other, true]);
+            if (offroad >= 0.5 && b.jump < 5) {
+                jump++;
+                expect([character.id, bike, other, a.jump > b.jump]).toEqual([character.id, bike, other, true]);
+            }
+            if (!rough(bike) || rough(other)) continue;
+            // Never less comfort than a road bike, and more than one that rides firmer by 0.15 of shake or more
+            expect([character.id, bike, other, a.comfort >= b.comfort]).toEqual([character.id, bike, other, true]);
+            if (game.Vehicle.physicsOf(character, other).comfortShake - game.Vehicle.physicsOf(character, bike).comfortShake >= 0.15) {
+                comfort++;
+                expect([character.id, bike, other, a.comfort > b.comfort]).toEqual([character.id, bike, other, true]);
+            }
+        }
+        expect(jump).toBeGreaterThanOrEqual(4);
+        expect(comfort).toBeGreaterThanOrEqual(4);
+    });
+
+    test('a superbike shows less comfort than every other bike of the same rider', () => {
+        let held = 0;
+        for (const [character, bike, other] of pairs) {
+            if (model(bike).cls !== firmest || model(other).cls === firmest) continue;
+            held++;
+            expect([character.id, bike, other, stars(character, bike).comfort < stars(character, other).comfort]).toEqual([character.id, bike, other, true]);
+        }
+        expect(held).toBeGreaterThanOrEqual(2);
+    });
+
+    test('the rider is part of the bars: pace moves speed and handling, daring the jump, and nothing else', () => {
+        const low = { country: 1, mountain: 1, hairpins: 1, daring: 1 }, high = { country: 5, mountain: 5, hairpins: 5, daring: 5 };
+        const moved = { speed: 0, handling: 0, jump: 0 };
+        let rides = 0;
+        for (const character of game.CHARACTERS) {
+            for (const bike of character.bikes) {
+                rides++;
+                const slow = stars({ ...character, traits: low }, bike), quick = stars({ ...character, traits: high }, bike);
+                for (const bar of Object.keys(moved)) {
+                    expect([character.id, bike, bar, quick[bar] >= slow[bar], quick[bar] - slow[bar] <= 1]).toEqual([character.id, bike, bar, true, true]);
+                    if (quick[bar] > slow[bar]) moved[bar]++;
+                }
+                for (const bar of ['accel', 'comfort']) expect([character.id, bike, bar, quick[bar]]).toEqual([character.id, bike, bar, slow[bar]]);
+                // A character with no traits is the middle of the scale
+                expect(stars({ ...character, traits: undefined }, bike)).toEqual(stars({ ...character, traits: { country: 3, mountain: 3, hairpins: 3, daring: 3 } }, bike));
+            }
+        }
+        // The rider is a fifth of a bar: the slowest and the quickest rider differ by a star on most bikes, never by two
+        for (const bar of Object.keys(moved)) expect([bar, moved[bar] > rides / 2]).toEqual([bar, true]);
     });
 });

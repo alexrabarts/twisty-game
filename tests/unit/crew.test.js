@@ -108,8 +108,9 @@ describe('the touring crew', () => {
         expect(Traffic.prototype.getRiderName).toBeUndefined();
     });
 
-    test('the paces are the crew\'s as they were: expert, fast, two average and slow', () => {
-        expect(Traffic.CREW_PACES.map(pace => [pace.skill, pace.speed, pace.spread])).toEqual([['expert', 48, 8], ['fast', 42, 6], ['average', 36, 5], ['average', 36, 5], ['slow', 30, 5]]);
+    test('the paces are by a rider\'s trait, and keep the old scale: 5 the old expert, 4 fast, 3 average, 1 slow', () => {
+        expect(Traffic.CREW_PACES).toBeUndefined();
+        expect(Traffic.PACES.map(pace => [pace.trait, pace.skill, pace.speed, pace.spread, pace.corner])).toEqual([[1, 'slow', 30, 5, 2.4], [2, 'steady', 33, 5, 2.8], [3, 'average', 36, 5, 3.2], [4, 'fast', 42, 6, 3.6], [5, 'expert', 48, 8, 4]]);
     });
 
     test.each(CHARACTERS.map(c => c.id))('%s rides its own first bike from its far file, in its own first outfit and build', async (id) => {

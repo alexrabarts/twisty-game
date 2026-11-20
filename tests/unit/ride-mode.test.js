@@ -19,7 +19,10 @@ const read = name => readFileSync(join(root, 'js', name), 'utf8');
 const vehicleSource = read('vehicle.js');
 const end = 'keepFileColours: true }));';
 const charactersSource = vehicleSource.slice(0, vehicleSource.indexOf(end) + end.length);
-(0, eval)(`${read('modals.js')}\n${charactersSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS;`);
+// The catalogue's rules are the statics at the end of the file (the bike a rider rides, its physics, the card's stars:
+// the rider card shows Vehicle.statsOf); they need the class's name and nothing of the class itself
+const rulesSource = `class Vehicle {}\nVehicle.BIKES = {};\n${vehicleSource.slice(vehicleSource.indexOf('const knownBike ='))}`;
+(0, eval)(`${read('modals.js')}\n${charactersSource}\n${rulesSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS;`);
 const RideMode = new Function(`${read('ridemode.js')}\nreturn RideMode;`)();
 
 const METHODS = ['openRide', 'chooseWorld', 'startWorld', 'fallBackToLegs'];

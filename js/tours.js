@@ -233,6 +233,11 @@ class TourSystem {
         return bike ? `${bike.name} (${bike.year})` : bikeId;
     }
 
+    // The rider select's stars for a character on a bike, 1 to 5 a bar: the bike's part and the rider's (Vehicle.statsOf)
+    static statsOf(character, bikeId) {
+        return Vehicle.statsOf(character, bikeId);
+    }
+
     // The id the leaderboard and the local best time are keyed by. A leg whose
     // course changed carries a track version above 1 and so gets a board of its
     // own; version 1 keeps the plain leg id and its history. Takes a leg or an
@@ -361,6 +366,7 @@ class TourSystem {
                         <div style="color: #cc8833; margin-top: 6px; font-size: 10px;">
                             🔒 Complete ${required} leg${required === 1 ? '' : 's'} to unlock
                         </div>`;
+                    const stats = TourSystem.statsOf(c, this.getSelectedBike(c.id));
                     return `
                     <div class="rider-card ${c.id === this.selectedCharacterId ? 'selected' : ''} ${unlocked ? '' : 'locked'}" data-character-id="${c.id}" style="
                         background: rgba(10, 16, 32, 0.85);
@@ -379,10 +385,10 @@ class TourSystem {
                             <span style="color: white; font-weight: bold; font-size: 14px;">${unlocked ? '' : '🔒 '}${c.name}</span>
                         </div>
                         <div style="color: #8899bb; margin-bottom: 6px;">${c.bikeLabel}</div>
-                        <div>Speed&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
-                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
-                        <div>Handling ${statBar(c.stats.handling)}</div>
-                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
+                        <div>Speed&nbsp;&nbsp;&nbsp; ${statBar(stats.speed)}</div>
+                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(stats.accel)}</div>
+                        <div>Handling ${statBar(stats.handling)}</div>
+                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(stats.jump)}</div>
                         ${lockHint}
                     </div>`;
                 }).join('')}
@@ -560,17 +566,19 @@ class TourSystem {
                             <button class="bike-arrow" id="outfitNextBtn" aria-label="Next outfit (E)" title="E"${worn === outfits.length - 1 ? ' disabled' : ''}>▶</button>
                         </div>
                     </div>` : '';
+                // The stars are the rider on the bike in the row above, so they change as the row steps
+                const stats = TourSystem.statsOf(c, bike);
                 card.innerHTML = `
                     ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
                     <div class="showcase-name">${c.name}</div>
                     ${picker}
                     ${wardrobe}
                     <div class="showcase-stats">
-                        <span>SPEED</span>${statBar(c.stats.speed)}
-                        <span>ACCEL</span>${statBar(c.stats.accel)}
-                        <span>HANDLING</span>${statBar(c.stats.handling)}
-                        <span>JUMP</span>${statBar(c.stats.jump)}
-                        <span>COMFORT</span>${statBar(c.stats.comfort)}
+                        <span>SPEED</span>${statBar(stats.speed)}
+                        <span>ACCEL</span>${statBar(stats.accel)}
+                        <span>HANDLING</span>${statBar(stats.handling)}
+                        <span>JUMP</span>${statBar(stats.jump)}
+                        <span>COMFORT</span>${statBar(stats.comfort)}
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';

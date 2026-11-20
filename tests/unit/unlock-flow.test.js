@@ -13,7 +13,10 @@ const read = name => readFileSync(new URL(`../../js/${name}`, import.meta.url), 
 const vehicleSource = read('vehicle.js');
 const end = 'keepFileColours: true }));';
 const charactersSource = vehicleSource.slice(0, vehicleSource.indexOf(end) + end.length);
-(0, eval)(`${read('modals.js')}\n${charactersSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS;`);
+// The catalogue's rules are the statics at the end of the file (the bike a rider rides, its physics, the card's stars:
+// the rider card shows Vehicle.statsOf); they need the class's name and nothing of the class itself
+const rulesSource = `class Vehicle {}\nVehicle.BIKES = {};\n${vehicleSource.slice(vehicleSource.indexOf('const knownBike ='))}`;
+(0, eval)(`${read('modals.js')}\n${charactersSource}\n${rulesSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS;`);
 
 describe('unlock detection', () => {
     let tour;
@@ -155,6 +158,27 @@ describe('the bike picker', () => {
         expect(tour.getSelectedBike('guy')).toBe('bike12_tracer9gt');
         document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowUp' }));
         expect(tour.getSelectedBike('guy')).toBe('bike07_mt09_black');
+    });
+
+    test('the five bars are the rider on the bike in the row, and change as the row steps', () => {
+        const guy = CHARACTERS.find(c => c.id === 'guy');
+        tour.showRiderSelector('guy');
+        // The lit squares of each bar of the card, in the card's order
+        const shown = () => [...document.querySelectorAll('#riderInfoCard .showcase-stats .stat-bar')].map(bar => bar.querySelectorAll('i.on').length);
+        const stars = bike => Object.values(TourSystem.statsOf(guy, bike));
+        const seen = [];
+        guy.bikes.forEach((bike, i) => {
+            if (i > 0) document.getElementById('bikeNextBtn').click();
+            expect(tour.getSelectedBike('guy')).toBe(bike);
+            expect(shown()).toEqual(stars(bike));
+            expect(shown().length).toBe(5);
+            seen.push(shown().join(' '));
+        });
+        // The bikes of one rider do not all read the same
+        expect(new Set(seen).size).toBeGreaterThan(1);
+        document.getElementById('bikePrevBtn').click();
+        expect(shown()).toEqual(stars(guy.bikes[guy.bikes.length - 2]));
+        expect(Object.keys(TourSystem.statsOf(guy, guy.bikes[0]))).toEqual(['speed', 'accel', 'handling', 'jump', 'comfort']);
     });
 
     test('shows a rider with one bike without arrows, and names no maker', () => {
