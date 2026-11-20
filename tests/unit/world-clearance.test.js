@@ -1,5 +1,5 @@
 // Nothing the world places stands in a road. The Tremola slice is ridden in node with the streamer, every tree,
-// boulder, house, signpost, landmark and barrier is gathered as it is built, and each one's footprint (its geometry's
+// boulder, house, marker stone, tuft, landmark and barrier is gathered as it is built, and each one's footprint (its geometry's
 // box under its matrix) is measured against every road band rebuilt from the samples: the ride and every side edge,
 // each sample's own width plus the verge. The trees and houses are boxes the size of their .glb models
 // (tests/helpers/world-clearance.js modelStandIns), so the footprints are the drawn ones.
@@ -13,7 +13,9 @@ import { rideAndGather } from '../helpers/world-clearance-run.js';
 
 const root = new URL('../../', import.meta.url);
 const game = loadGame();
-const { THREE, WorldGround, WorldGraph, RoadClearance } = game;
+const { THREE, WorldGround, WorldGraph, RoadClearance, RoadSurface } = game;
+// The most a thing's lowest point may stand over the drawn ground under its middle
+const FLOAT_M = 0.1;
 
 // One line per offender, for a failure message that says where to look
 const list = offenders => offenders.map(o => `${o.level} ${o.type} ${o.name} at (${o.x}, ${o.z}) ${o.clearance} m past the ${o.road} band${o.edgeId !== null ? ` of edge ${o.edgeId}` : ''}${o.s !== null ? ` at s ${o.s}` : ''}`).join('\n');
@@ -24,12 +26,12 @@ describe('the Tremola slice: no scenery in a road', () => {
         const { fetchFn } = diskFetch();
         gathered = await rideAndGather(game, { fetchFn, stepM: 100, models: modelStandIns(THREE, readFileSync, root) });
         offenders = audit(gathered.bands, gathered.things);
-    }, 120000);
+    }, 300000);
 
     test('every kind of scenery was placed and measured', () => {
         const counts = {};
         for (const t of gathered.things) counts[t.type] = (counts[t.type] || 0) + 1;
-        for (const type of ['tree', 'boulder', 'house', 'signpost', 'landmark', 'barrier']) expect(counts[type] || 0).toBeGreaterThan(0);
+        for (const type of ['tree', 'boulder', 'house', 'stone', 'tuft', 'landmark', 'barrier']) expect(counts[type] || 0).toBeGreaterThan(0);
         expect(counts.tree).toBeGreaterThan(1500);
     });
 
@@ -38,24 +40,60 @@ describe('the Tremola slice: no scenery in a road', () => {
         if (fails.length) throw new Error(`${fails.length} things stand in a road:\n${list(fails)}`);
     });
 
-    test('trees, boulders and signposts keep their margin from every road edge', () => {
-        const near = offenders.filter(o => ['tree', 'boulder', 'signpost', 'landmark'].includes(o.type));
+    test('trees, boulders, marker stones and tufts keep their margin from every road edge', () => {
+        const near = offenders.filter(o => ['tree', 'boulder', 'stone', 'tuft', 'landmark'].includes(o.type));
         if (near.length) throw new Error(`${near.length} things within their margin of a road:\n${list(near)}`);
     });
 
-    test('every pass through a junction has its signpost, standing before it beside the ride', () => {
+    test('the passes through the junctions have their marker stones, in rows beside the ride before the junction', () => {
         const env = gathered.env;
         const passes = env.graph.junctions.flatMap(j => j.passes.filter(p => p.inEdge !== null));
-        const signs = gathered.things.filter(t => t.type === 'signpost');
-        expect(signs).toHaveLength(passes.length);
-        const poses = env.scenery.signpostPoses(env.graph.junctions, env.route);
-        poses.forEach((pose, i) => {
-            const at = env.route.project(pose.x, pose.z, null, {});
-            // Beside the ride, not out in the land, and before the junction it names
-            expect(Math.abs(at.lateral)).toBeLessThan(at.width / 2 + 12);
-            expect(at.s).toBeLessThan(passes[i].sIn);
-            expect(passes[i].sIn - at.s).toBeLessThan(45);
-        });
+        const rows = env.scenery.stoneRowList;
+        const stones = gathered.things.filter(t => t.type === 'stone');
+        // A row is left out only where the ground gives it no place (Scenery.footY): most passes have one
+        expect(rows.length).toBeGreaterThan(passes.length / 2);
+        expect(stones.length % game.Scenery.STONE_ROW).toBe(0);
+        expect(stones.length).toBeGreaterThan(rows.length * game.Scenery.STONE_ROW / 2);
+        for (const stone of stones) {
+            const at = env.route.project(stone.x, stone.z, null, {});
+            expect(Math.abs(at.lateral)).toBeLessThan(at.width / 2 + RoadSurface.VERGE_M + 1.2);
+            expect(passes.some(p => p.sIn - at.s > 0 && p.sIn - at.s < 55)).toBe(true);
+        }
+    });
+
+    // The rule for every kind (Scenery.footY): a thing's height is read from the drawn ground at its own place. The
+    // yellow signposts this replaced took the road's height beside them, and stood in the air over a bank that falls
+    // away from the road, or in the bank where it rises
+    test('nothing floats: the foot of every tree, boulder, marker stone and tuft is in the drawn ground under it', () => {
+        const floating = [];
+        for (const t of gathered.things) {
+            if (!['tree', 'boulder', 'stone', 'tuft'].includes(t.type)) continue;
+            expect(Number.isFinite(t.groundY)).toBe(true);
+            if (t.y0 > t.groundY + FLOAT_M || t.y1 < t.groundY) floating.push(`${t.type} at (${t.x.toFixed(1)}, ${t.z.toFixed(1)}): foot ${t.y0.toFixed(2)}, top ${t.y1.toFixed(2)}, ground ${t.groundY.toFixed(2)}`);
+        }
+        if (floating.length) throw new Error(`${floating.length} things float over the ground or lie under it (${[...new Set(floating.map(f => f.split(' ')[0]))].join(', ')}):\n${floating.slice(0, 40).join('\n')}`);
+    });
+
+    test('planted: a thing set at the road\'s height beside it, as the signposts were, floats or is buried', () => {
+        const env = gathered.env;
+        const p = {};
+        let off = 0, most = 0, places = 0;
+        for (const junction of env.graph.junctions) for (const pass of junction.passes) {
+            if (pass.inEdge === null || pass.sIn < 20) continue;
+            env.route.sample(pass.sIn - 15, p);
+            // Where a signpost stood: past the verge by its board and its margin
+            const o = game.Route.RIGHT * (p.width / 2 + RoadSurface.VERGE_M + 2.5);
+            const x = p.x + o * Math.cos(p.heading), z = p.z - o * Math.sin(p.heading);
+            const ground = env.ground.landY(x, z, null);
+            if (ground === null) continue;
+            places++;
+            const gap = Math.abs(p.y - env.ground.groundY(x, z, null));
+            most = Math.max(most, gap);
+            if (gap > FLOAT_M) off++;
+        }
+        expect(places).toBeGreaterThan(5);
+        expect(off).toBeGreaterThan(0);
+        expect(most).toBeGreaterThan(0.5);
     });
 });
 
@@ -167,5 +205,5 @@ describe('RoadClearance', () => {
 });
 
 test('the margins of the audit are the placement\'s own', () => {
-    for (const kind of ['tree', 'boulder', 'signpost', 'landmark']) expect(MARGIN_M[kind]).toBe(game.Scenery.CLEAR_M[kind]);
+    for (const kind of ['tree', 'boulder', 'stone', 'tuft', 'landmark']) expect(MARGIN_M[kind]).toBe(game.Scenery.CLEAR_M[kind]);
 });

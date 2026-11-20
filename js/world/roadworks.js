@@ -868,7 +868,7 @@ class Roadworks {
         }
         this.elements = elements;
         // The meshes, one for each kind, drawn only for the sites near the bike (update)
-        // Plain materials, as the signposts': the land's shading reads the model matrix, which an instance does not move
+        // Plain materials, as the marker stones': the land's shading reads the model matrix, which an instance does not move
         const lambert = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
         const printed = new THREE.MeshLambertMaterial({ map: Roadworks.atlas(), side: THREE.DoubleSide });
         this.group = new THREE.Group();

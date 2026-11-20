@@ -4,7 +4,7 @@
 // Plain ESM with no jest dependency, so the audit in the scratch runner and the unit test share it.
 
 // Margins past the band's edge inside which a thing is too close (a warning, not a failure), by kind
-export const MARGIN_M = { tree: 2, boulder: 2, house: 3, landmark: 3, signpost: 1.5, barrier: 1.5, gate: 1.5 };
+export const MARGIN_M = { tree: 2, boulder: 2, house: 3, landmark: 3, stone: 0.15, tuft: 0.2, barrier: 1.5, gate: 1.5 };
 // Height over the road under which a thing stands in the rider's way (a station banner is above it)
 export const HEADROOM_M = 4.5;
 // A thing whose top is this far under the road is under it (a road on a bridge or a viaduct), not in it
@@ -146,6 +146,14 @@ export function sceneryOf(THREE, root) {
             });
             return;
         }
+        // A merged mesh of tufts (Scenery.tuftMesh) is one thing per tuft
+        if (o.userData.tufts) {
+            o.userData.tufts.forEach((f, i) => {
+                const poly = [[-1, -1], [-1, 1], [1, 1], [1, -1]].map(([a, c]) => [f.x + a * f.radius, f.z + c * f.radius]);
+                out.push({ type, name: o.name, index: i, poly, y0: f.y, y1: f.y + f.height, x: f.x, z: f.z, material: o.material });
+            });
+            return;
+        }
         o.geometry.computeBoundingBox();
         const box = o.geometry.boundingBox;
         const count = o.isInstancedMesh ? o.count : 1;
@@ -156,7 +164,8 @@ export function sceneryOf(THREE, root) {
             } else world.copy(o.matrixWorld);
             const f = footprint(THREE, box, world);
             const x = f.poly.reduce((sum, p) => sum + p[0], 0) / 4, z = f.poly.reduce((sum, p) => sum + p[1], 0) / 4;
-            out.push({ type, name: o.name, index: i, ...f, x, z, material: o.material });
+            // `at`: where the thing itself was put (its own origin: a tree's trunk), which is not its box's middle
+            out.push({ type, name: o.name, index: i, ...f, x, z, at: [world.elements[12], world.elements[14]], material: o.material });
         }
     });
     return out;
@@ -168,7 +177,8 @@ export function typeOf(mesh) {
     if (name === 'boulders') return 'boulder';
     if (name.startsWith('houses:')) return 'house';
     if (name.startsWith('landmark:')) return 'landmark';
-    if (name === 'world-signposts') return 'signpost';
+    if (name === 'stones') return 'stone';
+    if (name === 'tufts') return 'tuft';
     if (name === 'world-barriers') return 'barrier';
     return null;
 }

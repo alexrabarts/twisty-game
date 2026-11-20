@@ -92,7 +92,7 @@ class WorldEnvironment {
         if (resolved.error) throw new Error(resolved.error);
         const data = new WorldData({ base: resolved.base, overridden: resolved.overridden, fetchFn, digest });
         await data.load();
-        // The side roads round the junctions and landmarks, which the signposts and landmarks keep clear of
+        // The side roads round the junctions and landmarks, which the marker stones and landmarks keep clear of
         await data.ensureChunks(Scenery.fixtureChunks(data)).catch(error => console.warn(`world fixture chunks: ${error.message}`));
         // The land and cover round the landmarks, which a landmark stands on dry and seated
         await Promise.all(Scenery.fixtureTiles(data).map(key => Promise.all([data.ensureTile(key), data.ensureCover(key)]))).catch(error => console.warn(`world fixture tiles: ${error.message}`));
@@ -226,7 +226,7 @@ class WorldEnvironment {
         this.stationGates = inStage;
     }
 
-    // The things built once: the horizon, the gate frames, the roadworks sites, the signposts and the landmarks
+    // The things built once: the horizon, the gate frames, the roadworks sites, the marker stone rows and the landmarks
     buildFixtures() {
         if (this.data.far) {
             const horizon = Horizon.build(this.data.far, this.data.farCover, this.data.farSink);
@@ -260,12 +260,9 @@ class WorldEnvironment {
             this.gateMesh = RoadMesh.mesh(RoadMesh.geometry(out.positions, out.shades), 'world-gates');
             this.group.add(this.gateMesh);
         }
-        // Beside the ride before each junction, clear of every road (Scenery.signpostPoses)
-        const poses = this.scenery.signpostPoses(this.graph.junctions, this.route);
-        if (poses.length) {
-            this.signMesh = this.scenery.signposts(poses);
-            this.group.add(this.signMesh);
-        }
+        // Where the marker stones may stand before each junction, clear of every road; each tile draws its own on
+        // the ground it holds (Scenery.stoneRows, Scenery.stoneSites)
+        this.scenery.stoneRowList = this.scenery.stoneRows(this.graph.junctions, this.route);
         this.landmarkGroup = this.scenery.landmarks(this.data.manifest.landmarks || [], this.route);
         this.group.add(this.landmarkGroup);
         this.group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });

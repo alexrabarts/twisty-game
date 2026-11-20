@@ -4379,7 +4379,7 @@ const WORLD = {
 // world-clearance: nothing drawn stands in a road. The slice is walked every --every metres (default 300); at each
 // place the drawn road bands round the bike (the ride within half a step either side, and every side road drawn) are
 // cast down on across their full drawn width, every CLEAR_STEP_M along and across, from HEADROOM_M over the surface to
-// just under it, against every scenery mesh: trees, boulders, houses, landmarks, signposts, barriers and the gate
+// just under it, against every scenery mesh: trees, boulders, houses, landmarks, marker stones, barriers and the gate
 // frames, instanced or not. Where a mesh's box reaches into a cell, the cell is cast on again every CLEAR_FINE_M, so a
 // pole or a board a few centimetres thick is not missed between rays. A hit is a failure, except a barrier over the
 // side road it closes (it is there to close it, never on the ride) and a roadworks site's works in its own closed lane
@@ -4407,7 +4407,9 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
         if (n === 'boulders') return 'boulder';
         if (n.startsWith('houses:')) return 'house';
         if (n.startsWith('landmark:')) return 'landmark';
-        if (n === 'world-signposts') return 'signpost';
+        // The tufts are one mesh for a whole tile, too slow to cast on from every cell: tests/unit/world-clearance.test.js
+        // measures each tuft's own footprint
+        if (n === 'stones') return 'stone';
         if (n === 'world-barriers') return 'barrier';
         if (n === 'world-gates') return 'gate';
         // The roadworks at the checkpoints: their works stand in the closed lane, and nowhere else on a road

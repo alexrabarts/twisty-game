@@ -6,7 +6,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { fakeData, allTiles, samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData, WorldPhysics } = game;
+const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData, WorldPhysics, Route } = game;
 
 const finite = geometry => Array.from(geometry.attributes.position.array).every(Number.isFinite);
 const row = (x, z, heading, over = {}) => ({ x, y: 100, z, heading, width: 10, bits: 0, ...over });
@@ -352,7 +352,7 @@ describe('RoadMesh', () => {
         expect(byZ.get(zs[zs.length - 1])).toBeCloseTo(1, 5);
     });
 
-    // Every face of a box faces out: wound inward, a front-side material (the signposts, the barriers) culled the faces
+    // Every face of a box faces out: wound inward, a front-side material (the marker stones, the barriers) culled the faces
     // toward the viewer and lit the far ones from inside
     test('every face of a box has its normal pointing away from the box centre, at any heading', () => {
         for (const heading of [0, 0.7, Math.PI / 2, 2.5, -1.2]) {
@@ -630,7 +630,7 @@ describe('Scenery', () => {
         const bike = { x: 100, z: 100 };
         const group = scenery.buildTile(tile, forest, [], bike);
         expect(group).not.toBeNull();
-        const count = group.children.reduce((n, mesh) => n + mesh.count, 0);
+        const count = group.children.filter(mesh => mesh.name.startsWith('trees:')).reduce((n, mesh) => n + mesh.count, 0);
         expect(count).toBe(scenery.treeCount);
         expect(scenery.treeCount).toBeLessThanOrEqual(Scenery.TREES_PER_TILE);
         expect(scenery.triangles).toBeLessThanOrEqual(Scenery.TRIANGLE_CAP);
@@ -648,7 +648,7 @@ describe('Scenery', () => {
         scenery.treeCount = Scenery.TREE_CAP - 10;
         const group = scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
         expect(scenery.treeCount).toBeLessThanOrEqual(Scenery.TREE_CAP);
-        expect(group.children.reduce((n, mesh) => n + mesh.count, 0)).toBeLessThanOrEqual(10);
+        expect(group.children.filter(mesh => mesh.name.startsWith('trees:')).reduce((n, mesh) => n + mesh.count, 0)).toBeLessThanOrEqual(10);
     });
 
     test('houses stand on open ground within reach, nearest first, capped by their triangles', () => {
@@ -726,18 +726,68 @@ describe('Scenery', () => {
         expect(group.children.filter(m => m.name === 'houses:plain_hut').reduce((n, m) => n + m.count, 0)).toBe(2);
     });
 
-    test('signposts are one instanced mesh, facing the rider who arrives', () => {
+    test('marker stones stand in a row before a junction, each on the ground at its own place', () => {
+        // A road along x = 100 at the land's own height, so both of its sides are in the tile
+        const route = new WorldRoute(samplesOf(straight(400, { y: 1000 }).map(q => ({ ...q, x: 100 }))), {});
+        const ground = new WorldGround(route, data);
         const scenery = new Scenery(ground, data);
-        const mesh = scenery.signposts([{ x: 1, y: 2, z: 3, heading: 0 }, { x: 4, y: 5, z: 6, heading: Math.PI / 2 }]);
-        expect(mesh.isInstancedMesh).toBe(true);
-        expect(mesh.count).toBe(2);
-        const matrix = new THREE.Matrix4();
-        mesh.getMatrixAt(0, matrix);
-        // The board's face looks back at a rider heading along +z
-        const normal = new THREE.Vector3(0, 0, 1).applyMatrix4(matrix.clone().setPosition(0, 0, 0));
-        expect(normal.z).toBeCloseTo(-1, 6);
-        const many = scenery.signposts(Array.from({ length: Scenery.SIGN_CAP + 20 }, () => ({ x: 0, y: 0, z: 0, heading: 0 })));
-        expect(many.count).toBe(Scenery.SIGN_CAP);
+        const junctions = [{ id: 7, passes: [{ inEdge: 1, sIn: 200 }, { inEdge: null, sIn: 300 }] }];
+        const rows = scenery.stoneRows(junctions, route);
+        // One row for the pass that comes in on an edge, offered on the rider's right first, then the left
+        expect(rows).toHaveLength(1);
+        expect(rows[0].sides).toHaveLength(2);
+        const p = route.sample(200 - Scenery.STONE_BEFORE_M[0], {});
+        const lateral = q => (q.x - p.x) * Math.cos(p.heading) - (q.z - p.z) * Math.sin(p.heading);
+        expect(Math.sign(lateral(rows[0].sides[0][0]))).toBe(Route.RIGHT);
+        for (const side of rows[0].sides) {
+            expect(side).toHaveLength(Scenery.STONE_ROW);
+            for (const q of side) expect(scenery.roads.clearance(q.x, q.z)).toBeGreaterThanOrEqual(Scenery.STONE_RADIUS_M + Scenery.CLEAR_M.stone - 1e-9);
+        }
+        scenery.stoneRowList = rows;
+        const group = scenery.buildTile(tile, null, [], { x: 100, z: 100 });
+        const stones = group.children.find(m => m.name === 'stones');
+        expect(stones.isInstancedMesh).toBe(true);
+        expect(stones.count).toBe(Scenery.STONE_ROW);
+        const matrix = new THREE.Matrix4(), at = new THREE.Vector3();
+        for (let i = 0; i < stones.count; i++) {
+            stones.getMatrixAt(i, matrix);
+            at.setFromMatrixPosition(matrix);
+            expect(at.y).toBeCloseTo(ground.groundY(at.x, at.z, null) - Scenery.STONE_SINK_M, 3);
+        }
+        // Ground too far from the road's height on the right (the foot of a wall, the land under a bridge): the left
+        const stepped = new Scenery(ground, data);
+        stepped.stoneRowList = rows;
+        const footY = stepped.footY.bind(stepped);
+        stepped.footY = (x, z, index, step) => (Math.sign(lateral({ x, z })) === Route.RIGHT && step < Infinity ? null : footY(x, z, index, step));
+        const left = stepped.stoneSites(tile);
+        expect(left).toHaveLength(Scenery.STONE_ROW);
+        for (const q of left) expect(Math.sign(lateral(q))).toBe(Route.LEFT);
+        // And no ground on either side: no row, not a row in the air
+        stepped.footY = () => null;
+        expect(stepped.stoneSites(tile)).toEqual([]);
+    });
+
+    test('tufts stand on the open strip beside the ride, clear of the road, each on the ground at its own place', () => {
+        const scenery = new Scenery(ground, data);
+        const sites = scenery.tuftSites(tile);
+        expect(sites.length).toBeGreaterThan(50);
+        expect(scenery.tuftSites(tile)).toEqual(sites);
+        for (const t of sites) {
+            const past = scenery.roads.clearance(t.x, t.z);
+            expect(past).toBeGreaterThanOrEqual(Scenery.CLEAR_M.tuft + Scenery.tuftRadius(t.green, t.size) * Math.SQRT2 - 1e-9);
+            expect(past).toBeLessThanOrEqual(Scenery.TUFT_REACH_M + 1e-9);
+            expect(t.y).toBeCloseTo(ground.groundY(t.x, t.z, null) - Scenery.TUFT_SINK_M, 9);
+        }
+        const group = scenery.buildTile(tile, null, [], { x: 100, z: 100 });
+        const mesh = group.children.find(m => m.name === 'tufts');
+        // One mesh and no instances, 3 triangles a tussock and 4 a green clump, nearest the bike first within the caps
+        expect(mesh.isInstancedMesh).toBeFalsy();
+        expect(scenery.tuftCount).toBe(Math.min(sites.length, Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP));
+        expect(mesh.geometry.attributes.position.count).toBe(mesh.userData.tufts.length * 9 + mesh.userData.tufts.filter(s => s.green).length * 3);
+        expect(mesh.userData.tufts).toHaveLength(scenery.tuftCount);
+        expect(Scenery.TUFT_CAP * 4).toBeLessThanOrEqual(140000 - Scenery.TRIANGLE_CAP);
+        scenery.disposeTile('0,0');
+        expect(scenery.tuftCount).toBe(0);
     });
 
     test('a landmark is its model beside the road, front to the road; a placeholder box or a missing model is never drawn', () => {

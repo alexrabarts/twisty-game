@@ -193,10 +193,10 @@ describe('the Tremola slice', () => {
         }
     });
 
-    test('the horizon, the gates, the signposts and the barriers are in the scene', () => {
+    test('the horizon, the gates and the barriers are in the scene, and the marker stone rows are placed', () => {
         const names = [];
         env.group.traverse(o => names.push(o.name));
-        for (const name of ['world-horizon', 'world-gates', 'world-barriers', 'world-signposts']) expect(names).toContain(name);
+        for (const name of ['world-horizon', 'world-gates', 'world-barriers']) expect(names).toContain(name);
         expect(scene.children).toContain(env.group);
     });
 

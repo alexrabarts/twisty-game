@@ -16,7 +16,7 @@ class RoadClearance {
         const points = route.points;
         for (let i = 0; i + 1 < points.length; i++) {
             const a = points[i], b = points[i + 1];
-            this.add({ edgeId: null, x0: a.x, z0: a.z, x1: b.x, z1: b.z, h0: a.width / 2 + verge, h1: b.width / 2 + verge });
+            this.add({ edgeId: null, index: i, x0: a.x, z0: a.z, x1: b.x, z1: b.z, h0: a.width / 2 + verge, h1: b.width / 2 + verge });
         }
     }
 
@@ -57,7 +57,8 @@ class RoadClearance {
 
     // Metres from (x, z) past the edge of the nearest road band (negative inside one), looked for within `reach`
     // metres; `reach` when there is none that near. `skip(edgeId)` leaves side edges out; `sidesOnly` leaves the ride out.
-    clearance(x, z, reach = 20, skip = null, sidesOnly = false) {
+    // `near.segment` is set to the band found (edgeId null and `index`, the ride's point, for the ride)
+    clearance(x, z, reach = 20, skip = null, sidesOnly = false, near = null) {
         this.sync();
         const cell = RoadClearance.HASH_M;
         let best = reach;
@@ -75,7 +76,10 @@ class RoadClearance {
                     const run = dx * dx + dz * dz;
                     const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - g.x0) * dx + (z - g.z0) * dz) / run));
                     const past = Math.hypot(g.x0 + dx * t - x, g.z0 + dz * t - z) - (g.h0 + (g.h1 - g.h0) * t);
-                    if (past < best) best = past;
+                    if (past < best) {
+                        best = past;
+                        if (near) near.segment = g;
+                    }
                 }
             }
         }
@@ -115,35 +119,57 @@ class RoadClearance {
 //               modelled shapes of js/treemodels.js's files when they are loaded
 //   buildings   from buildings.bin, in the modelled houses of assets/village/houses.glb
 //   landmarks   the boxes of landmarks.json beside the road
-//   signposts   a yellow pass signpost at each ride junction (D7 b)
+//   stones      a short row of granite marker stones beside the ride before each junction
+//   tufts       dry grass tussocks and low green clumps on the open strip beside the ride
+// Every one stands on the drawn ground: its height is read from the ground at its own place (Scenery.footY), never
+// from the road beside it, and where there is no ground to read it is left out.
 // Placement uses a stable integer hash of the cell, so the same tile is the same
 // every time. Nothing is placed in a road: every footprint keeps CLEAR_M of every road band
 // (RoadClearance: the ride and every side road, each sample's own width plus the verge), and a
 // tile's scenery waits for the side roads round it (WorldEnvironment.buildScenery).
 // Counts are capped against the window budget of 1 400 instances,
 // nearest first (tiles are built nearest first): TREE_CAP trees, BUILDING_CAP
-// instances of house parts, and a few dozen signposts and barriers.
+// instances of house parts, and a few dozen marker stones and barriers.
 class Scenery {
     static get TREE_CAP() { return 1000; }
     static get BUILDING_CAP() { return 300; }
     // Triangles the trees and houses may add up to in a window (the window budget is 450 000 in all)
     // (200 000 until the far land took about 50 000 of the window: js/world/horizon.js FarLand)
-    static get TRIANGLE_CAP() { return 140000; }
+    // (140 000 until the tufts beside the road took 2 000, TUFT_CAP, and the window stood 2 600 over its budget at
+    // km 4, where this cap is what holds the trees: world-budget)
+    static get TRIANGLE_CAP() { return 134000; }
     // Boulders on rock and scree, nearest first (20 triangles each)
     static get BOULDER_CAP() { return 160; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
     static get HOUSE_TRIANGLES() { return 80000; }
-    static get SIGN_CAP() { return 40; }
+    // Marker stones: STONE_ROW of them STONE_GAP_M apart along the ride before a junction, STONE_OUT_M past the verge,
+    // sunk STONE_SINK_M. Granite posts stand along the edge of the pass roads in the photos; no yellow sign does
+    static get STONE_ROW() { return 3; }
+    static get STONE_GAP_M() { return 2.5; }
+    static get STONE_OUT_M() { return 0.35; }
+    static get STONE_RADIUS_M() { return 0.2; }
+    static get STONE_SINK_M() { return 0.15; }
+    static get STONE_CAP() { return 120; }
+    // A marker stone is road furniture: it stands only where the drawn ground at its foot is within this of the road
+    // beside it (not at the foot of a retaining wall, not on the land under a bridge)
+    static get ROADSIDE_STEP_M() { return 0.8; }
+    // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
+    // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
+    // 3 or 4 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
+    static get TUFT_CAP() { return 500; }
+    static get TUFTS_PER_TILE() { return 250; }
+    static get TUFT_REACH_M() { return 7; }
+    static get TUFT_TRIES() { return 6; }
+    static get TUFT_SHARE() { return 0.5; }
+    static get TUFT_SINK_M() { return 0.05; }
     static get TREES_PER_TILE() { return 350; }
     // Metres of open ground a tree keeps from the road, the bench and any other road
     static get ROAD_CLEAR_M() { return 6; }
     // Metres past the edge of every road band (its drawn width and the verge, RoadClearance) that the plan footprint
-    // of each kind keeps clear: a tree's crown or a boulder, a house, a signpost's board, a landmark
-    static get CLEAR_M() { return { tree: 2, boulder: 2, house: 0, signpost: 1.5, landmark: 3 }; }
-    // A signpost's board is 1.5 m wide: its plan radius
-    static get SIGN_RADIUS_M() { return 0.8; }
-    // Metres before a junction a signpost may stand, nearest the junction first
-    static get SIGN_BEFORE_M() { return [15, 20, 25, 30, 12, 35, 40]; }
+    // of each kind keeps clear: a tree's crown or a boulder, a house, a marker stone, a tuft, a landmark
+    static get CLEAR_M() { return { tree: 2, boulder: 2, house: 0, stone: 0.15, tuft: 0.2, landmark: 3 }; }
+    // Metres before a junction the last stone of a row may stand, nearest the junction first
+    static get STONE_BEFORE_M() { return [15, 20, 25, 30, 12, 35, 40]; }
     // Metres along the ride a gate frame may be drawn from its gate, to keep its posts off a side road
     static get GATE_SHIFT_M() { return 15; }
     static get BUILDING_REACH_M() { return 450; }
@@ -605,8 +631,27 @@ class Scenery {
         held.boulders = stones.length;
         held.boulderTriangles = stones.length * 20;
 
+        // The marker stones before the junctions of this tile
+        const posts = this.stoneSites(tile).slice(0, Math.max(0, Scenery.STONE_CAP - (this.stoneCount || 0)));
+        if (posts.length) {
+            const lean = new THREE.Euler(0, 0, 0, 'YXZ');
+            this.instanced([Scenery.stonePart()], posts.map((q) => {
+                rotation.setFromEuler(lean.set(q.lean, q.turn, -q.lean));
+                position.set(q.x, q.y, q.z);
+                return new THREE.Matrix4().compose(position, rotation, scale.set(1, 1, 1));
+            }), 'stones', group);
+        }
+        held.stones = posts.length;
+
+        // The tufts beside the ride, nearest the bike first
+        const tufts = this.tuftSites(tile).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Math.min(Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP - (this.tuftCount || 0))));
+        if (tufts.length) group.add(Scenery.tuftMesh(tufts));
+        held.tufts = tufts.length;
+
         if (!group.children.length) return null;
         this.boulderCount = (this.boulderCount || 0) + held.boulders;
+        this.stoneCount = (this.stoneCount || 0) + held.stones;
+        this.tuftCount = (this.tuftCount || 0) + held.tufts;
         this.triangles += held.boulderTriangles;
         this.treeCount += held.trees;
         this.houseInstances += held.house;
@@ -652,7 +697,7 @@ class Scenery {
         if (!held) return;
         held.group.traverse(child => {
             if (child.isInstancedMesh) child.dispose();
-            else if (child.userData.footings) child.geometry.dispose();
+            else if (child.userData.footings || child.userData.tileOwned) child.geometry.dispose();
         });
         if (held.group.parent) held.group.parent.remove(held.group);
         this.treeCount -= held.trees;
@@ -660,11 +705,13 @@ class Scenery {
         this.houseTriangles -= held.houseTriangles;
         this.triangles -= held.treeTriangles + held.houseTriangles + (held.boulderTriangles || 0);
         this.boulderCount = (this.boulderCount || 0) - (held.boulders || 0);
+        this.stoneCount = (this.stoneCount || 0) - (held.stones || 0);
+        this.tuftCount = (this.tuftCount || 0) - (held.tufts || 0);
         this.perTile.delete(key);
     }
 
     // The chunks of the side roads round the junctions and the landmarks, which the fixtures are placed clear of:
-    // WorldEnvironment.load has them before it builds the signposts and the landmarks
+    // WorldEnvironment.load has them before it places the marker stone rows and the landmarks
     static fixtureChunks(data) {
         const wanted = new Set();
         for (const j of data.junctions || []) for (const k of data.chunksNear(data.nodes.x[j.node], data.nodes.z[j.node], 120)) wanted.add(k);
@@ -686,36 +733,169 @@ class Scenery {
         return [...wanted].sort();
     }
 
-    // Where the yellow pass signposts stand: one for each pass of the ride through a junction, SIGN_BEFORE_M before
-    // it, on the rider's right (else the left) past the verge, the board keeping CLEAR_M.signpost of every road band.
-    // [{x, y, z, heading, junctionId}], heading the way the rider arrives. A pass with no clear place gets none.
-    signpostPoses(junctions, route) {
-        const poses = [];
+    // The ground a thing beside the ride stands on at (x, z): the drawn ground there (the verge, the fill beside the
+    // road or the land: WorldGround.groundY), or null where there is none to stand on (the tile is not here, a tunnel
+    // or a gallery, water). `index` is the ride's point it stands beside, where known. `step` (metres) also leaves out
+    // a place whose ground is further than that from the road's own height. One rule for everything placed by the
+    // road: a new kind of roadside thing takes its height from here
+    footY(x, z, index = null, step = Infinity) {
+        if (this.ground.tileHeight(x, z) === null || this.ground.tileZone(x, z) === WorldData.ZONE.water) return null;
+        const loc = this.footLoc || (this.footLoc = {});
+        const y = this.ground.groundY(x, z, index === null ? null : { start: index - 4, end: index + 4 }, false, loc);
+        if (!Number.isFinite(y)) return null;
+        if (loc.flags && (loc.flags.tunnel || loc.flags.gallery || (step < Infinity && loc.flags.bridge))) return null;
+        return Math.abs(y - loc.roadY) > step ? null : y;
+    }
+
+    // Where the marker stones may stand: for each pass of the ride through a junction, a row of STONE_ROW places
+    // beside the ride, the last STONE_BEFORE_M before the junction, on the rider's right and on the left, each
+    // keeping CLEAR_M.stone of every road band. [{junctionId, sides: [[{x, z, heading}]]}], the right side first; a
+    // side with a place in a road is not offered, and a pass with no clear side gets no row. The heights come when
+    // the row's tile is built (Scenery.stoneSites)
+    stoneRows(junctions, route) {
+        const rows = [];
         const p = {};
-        const radius = Scenery.SIGN_RADIUS_M, margin = Scenery.CLEAR_M.signpost;
+        const radius = Scenery.STONE_RADIUS_M, margin = Scenery.CLEAR_M.stone;
         for (const junction of junctions) {
             for (const pass of junction.passes) {
                 if (pass.inEdge === null || pass.inEdge === undefined) continue;
-                let found = null;
-                for (const before of Scenery.SIGN_BEFORE_M) {
-                    if (pass.sIn - before < 0) continue;
-                    route.sample(pass.sIn - before, p);
-                    const out = p.width / 2 + RoadClearance.verge() + radius + margin + 0.2;
-                    // The rider's right first (Route.RIGHT), as Swiss signposts stand
+                for (const before of Scenery.STONE_BEFORE_M) {
+                    const sides = [];
+                    // The rider's right first (Route.RIGHT), where a Swiss road's furniture stands
                     for (const side of [Route.RIGHT, Route.LEFT]) {
-                        for (const extra of [0, 1.5, 3]) {
-                            const o = side * (out + extra);
+                        const row = [];
+                        for (let k = 0; k < Scenery.STONE_ROW; k++) {
+                            const s = pass.sIn - before - k * Scenery.STONE_GAP_M;
+                            if (s < 0) break;
+                            route.sample(s, p);
+                            const o = side * (p.width / 2 + RoadClearance.verge() + Scenery.STONE_OUT_M + radius);
                             const x = p.x + o * Math.cos(p.heading), z = p.z - o * Math.sin(p.heading);
-                            if (this.clearOfRoad(x, z, radius, margin)) { found = { x, y: p.y, z, heading: p.heading, junctionId: junction.id }; break; }
+                            if (!this.clearOfRoad(x, z, radius, margin)) break;
+                            row.push({ x, z, heading: p.heading });
                         }
-                        if (found) break;
+                        if (row.length === Scenery.STONE_ROW) sides.push(row);
                     }
-                    if (found) break;
+                    if (sides.length) { rows.push({ junctionId: junction.id, sides }); break; }
                 }
-                if (found) poses.push(found);
             }
         }
-        return poses;
+        return rows;
+    }
+
+    // The marker stones of a tile: the rows whose first place is in it, each on its first side where every stone
+    // has ground to stand on within ROADSIDE_STEP_M of the road (Scenery.footY). [{x, y, z, turn, lean}]
+    stoneSites(tile) {
+        const sites = [];
+        const m = WorldData.TILE_M;
+        for (const [r, row] of (this.stoneRowList || []).entries()) {
+            const first = row.sides[0][0];
+            if (Math.floor(first.x / m) !== tile.tx || Math.floor(first.z / m) !== tile.tz) continue;
+            for (const side of row.sides) {
+                const feet = side.map(q => this.footY(q.x, q.z, null, Scenery.ROADSIDE_STEP_M));
+                if (feet.some(y => y === null)) continue;
+                side.forEach((q, k) => sites.push({
+                    x: q.x, y: feet[k] - Scenery.STONE_SINK_M, z: q.z,
+                    turn: q.heading + (Scenery.hash(r, k, 41) - 0.5) * 0.5, lean: (Scenery.hash(r, k, 42) - 0.5) * 0.1
+                }));
+                break;
+            }
+        }
+        return sites;
+    }
+
+    // A marker stone: a squared granite post, 0.75 m out of the ground
+    static stonePart() {
+        if (!Scenery.stone) {
+            const out = { positions: [], shades: [] };
+            const low = [0.50, 0.49, 0.46], high = [0.66, 0.65, 0.62];
+            RoadMesh.box(out, 0, 0.3, 0, 0.3, 0.6, 0.3, 0, low);
+            RoadMesh.box(out, 0, 0.75, 0, 0.26, 0.3, 0.26, 0, high);
+            Scenery.stone = { geometry: RoadMesh.geometry(out.positions, out.shades), material: new THREE.MeshLambertMaterial({ vertexColors: true }) };
+        }
+        return Scenery.stone;
+    }
+
+    // Tuft sites of a tile: [{x, y, z, size, turn, green}], TUFT_TRIES places for each side of each point of the ride
+    // in the tile, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge, clear of every road band, each on
+    // the drawn ground at its own place (Scenery.footY)
+    tuftSites(tile) {
+        const sites = [];
+        if (!this.roads) return sites;
+        const m = WorldData.TILE_M, points = this.ground.route.points;
+        const inTile = (x, z) => Math.floor(x / m) === tile.tx && Math.floor(z / m) === tile.tz;
+        const reach = Scenery.TUFT_REACH_M, near = {};
+        for (let i = 0; i + 1 < points.length; i++) {
+            const p = points[i];
+            // A tuft of this point lies within the reach and one spacing of it
+            if (Math.abs(p.x - (tile.tx + 0.5) * m) > m / 2 + reach + p.width + 8 || Math.abs(p.z - (tile.tz + 0.5) * m) > m / 2 + reach + p.width + 8) continue;
+            const q = points[i + 1];
+            for (const side of [-1, 1]) {
+                for (let k = 0; k < Scenery.TUFT_TRIES; k++) {
+                    const salt = (side + 1) * 8 + k;
+                    if (Scenery.hash(i, salt, 51) >= Scenery.TUFT_SHARE) continue;
+                    const along = Scenery.hash(i, salt, 52);
+                    const green = Scenery.hash(i, salt, 56) < 0.3, size = 0.7 + 0.6 * Scenery.hash(i, salt, 54);
+                    // The whole tuft keeps clear, to the corners of the square round its top
+                    const least = Scenery.CLEAR_M.tuft + Scenery.tuftRadius(green, size) * Math.SQRT2;
+                    const out = side * (p.width / 2 + RoadClearance.verge() + least + Scenery.hash(i, salt, 53) ** 1.5 * (reach - least));
+                    const x = p.x + (q.x - p.x) * along + out * Math.cos(p.heading), z = p.z + (q.z - p.z) * along - out * Math.sin(p.heading);
+                    if (!inTile(x, z)) continue;
+                    // Another strand of the ride or a side road may lie nearer: the ground there is that road's to
+                    // give (its fill may lie over this one's), so the place is left to it
+                    near.segment = null;
+                    const past = this.roads.clearance(x, z, reach + 1, null, false, near);
+                    if (past < least || !near.segment || near.segment.edgeId !== null || Math.abs(near.segment.index - i) > 6) continue;
+                    if (this.ground.kindAt(x, z) === 'road') continue;
+                    const y = this.footY(x, z, near.segment.index);
+                    if (y === null) continue;
+                    sites.push({ x, y: y - Scenery.TUFT_SINK_M, z, size, turn: Scenery.hash(i, salt, 55) * Math.PI, green });
+                }
+            }
+        }
+        return sites;
+    }
+
+    // Half the width of a tuft's top, its widest part
+    static tuftRadius(green, size) { return (green ? 0.42 : 0.3) * size; }
+    static tuftHeight(green, size) { return (green ? 0.28 : 0.7) * size; }
+
+    // The tufts of a tile as one mesh (no instances: the window's instance budget is the trees'). A tussock is a
+    // spray of three pointed blades of dry grass leaning out from its foot (3 triangles); a green clump is two low
+    // crossed leaves, broader at the top (4). Colours from the photos: pale straw over a darker foot, and the dull
+    // green of the low broad-leaved plants
+    static tuftMesh(sites) {
+        const out = { positions: [], shades: [] };
+        const foot = [0.42, 0.39, 0.25], straw = [0.68, 0.62, 0.44];
+        const green = [[0.15, 0.21, 0.11], [0.15, 0.21, 0.11], [0.27, 0.37, 0.19], [0.27, 0.37, 0.19]];
+        for (const t of sites) {
+            const reach = Scenery.tuftRadius(t.green, t.size), h = Scenery.tuftHeight(t.green, t.size);
+            if (t.green) {
+                const low = 0.3 * t.size;
+                for (let k = 0; k < 2; k++) {
+                    const a = t.turn + k * Math.PI / 2, cos = Math.cos(a), sin = Math.sin(a);
+                    RoadMesh.quad(out,
+                        [t.x - cos * low, t.y, t.z - sin * low], [t.x + cos * low, t.y, t.z + sin * low],
+                        [t.x + cos * reach, t.y + h, t.z + sin * reach], [t.x - cos * reach, t.y + h, t.z - sin * reach], green);
+                }
+                continue;
+            }
+            for (let k = 0; k < 3; k++) {
+                const a = t.turn + k * Math.PI * 2 / 3, cos = Math.cos(a), sin = Math.sin(a);
+                // Uneven, so no two blades stand alike: the tallest nearly upright, the others lower and further out
+                const out_ = reach * (0.35 + 0.65 * k / 2), up = h * (1 - 0.45 * k / 2), w = 0.13 * t.size;
+                const bx = t.x + cos * 0.04 * t.size, bz = t.z + sin * 0.04 * t.size;
+                out.positions.push(bx + sin * w, t.y, bz - cos * w, bx - sin * w, t.y, bz + cos * w, t.x + cos * out_, t.y + up, t.z + sin * out_);
+                out.shades.push(...foot, ...foot, ...straw);
+            }
+        }
+        if (!Scenery.tuftMaterial) Scenery.tuftMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+        const mesh = new THREE.Mesh(RoadMesh.geometry(out.positions, out.shades), Scenery.tuftMaterial);
+        mesh.name = 'tufts';
+        mesh.userData.world = 'scenery';
+        mesh.userData.tileOwned = true;
+        // Each tuft's place and size, for whatever measures the scenery thing by thing
+        mesh.userData.tufts = sites.map(t => ({ x: t.x, y: t.y, z: t.z, green: t.green, radius: Scenery.tuftRadius(t.green, t.size), height: Scenery.tuftHeight(t.green, t.size) }));
+        return mesh;
     }
 
     // Where a gate frame is drawn for a gate at ride distance s: s itself, or the nearest s within GATE_SHIFT_M (ahead
@@ -738,30 +918,6 @@ class Scenery {
             for (const at of [s + d, s - d]) if (at >= 0 && at <= route.length && clearAt(at)) return at;
         }
         return s;
-    }
-
-    // The yellow pass signposts, one instanced mesh: [{x, y, z, heading}] where heading is the way the rider arrives
-    signposts(poses) {
-        const out = { positions: [], shades: [] };
-        const pole = [0.45, 0.45, 0.47], board = [0.95, 0.78, 0.10], text = [0.12, 0.12, 0.12];
-        RoadMesh.box(out, 0, 1.5, 0, 0.12, 3, 0.12, 0, pole);
-        RoadMesh.box(out, 0, 2.7, 0.04, 1.5, 0.55, 0.06, 0, board);
-        RoadMesh.box(out, 0, 2.7, 0.08, 1.2, 0.08, 0.02, 0, text);
-        const mesh = new THREE.InstancedMesh(RoadMesh.geometry(out.positions, out.shades), new THREE.MeshLambertMaterial({ vertexColors: true }), Math.max(1, Math.min(poses.length, Scenery.SIGN_CAP)));
-        const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), position = new THREE.Vector3(), scale = new THREE.Vector3(1, 1, 1);
-        const count = Math.min(poses.length, Scenery.SIGN_CAP);
-        for (let i = 0; i < count; i++) {
-            rotation.setFromAxisAngle(up, poses[i].heading + Math.PI);
-            position.set(poses[i].x, poses[i].y, poses[i].z);
-            matrix.compose(position, rotation, scale);
-            mesh.setMatrixAt(i, matrix);
-        }
-        mesh.count = count;
-        mesh.instanceMatrix.needsUpdate = true;
-        mesh.name = 'world-signposts';
-        mesh.frustumCulled = false;
-        mesh.userData.world = 'signposts';
-        return mesh;
     }
 
     // Where a landmark stands: { x, z, yaw, rect }, its front (the model's -z) facing the ride, its walls `rect`

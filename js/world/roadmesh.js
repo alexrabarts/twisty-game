@@ -402,7 +402,7 @@ class RoadMesh {
         const hx = sx / 2, hy = sy / 2, hz = sz / 2;
         const v = [at(-hx, -hy, -hz), at(hx, -hy, -hz), at(hx, hy, -hz), at(-hx, hy, -hz), at(-hx, -hy, hz), at(hx, -hy, hz), at(hx, hy, hz), at(-hx, hy, hz)];
         // Each face wound counter-clockwise seen from outside, so its normal points away from the centre and a
-        // front-side material (signposts, barriers) lights the face the viewer sees
+        // front-side material (marker stones, barriers) lights the face the viewer sees
         for (const f of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) RoadMesh.quad(out, v[f[3]], v[f[2]], v[f[1]], v[f[0]], color);
     }
 
