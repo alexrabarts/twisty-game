@@ -693,24 +693,71 @@ body.world-loading-on .hud {
     visibility: hidden;
 }
 
+/* The loading screen of a world: the menu's last frame dimmed, and the note in a panel like the rider card's */
 .world-loading {
     position: fixed;
     inset: 0;
     display: flex;
-    flex-direction: column;
-    align-items: center;
+    /* Low on the screen, where the rider card stood: the rider on the stage stays in view above it */
+    align-items: flex-end;
     justify-content: center;
-    color: #fff;
-    font: 600 20px system-ui, sans-serif;
+    padding: 16px 16px 12vh;
+    background: rgba(6, 9, 15, 0.6);
     z-index: 30;
     pointer-events: none;
 }
 
+.world-loading-box {
+    box-sizing: border-box;
+    width: min(420px, 100%);
+    padding: 22px 24px;
+    border-radius: var(--r-lg, 18px);
+    background: var(--panel-bg-strong, rgba(12, 17, 27, 0.92));
+    border: 1px solid var(--panel-border, rgba(255, 255, 255, 0.14));
+    color: var(--c-text, #fff);
+    text-align: center;
+}
+
+.world-loading-title {
+    font: 700 var(--fs-lg, 20px) / 1.2 var(--font-ui, system-ui, sans-serif);
+    letter-spacing: 0.04em;
+}
+
+/* A bar that runs while the road loads: the screen is not stuck */
+.world-loading-bar {
+    position: relative;
+    height: 4px;
+    margin-top: 14px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.14);
+    overflow: hidden;
+}
+
+.world-loading-bar::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -40%;
+    width: 40%;
+    border-radius: 2px;
+    background: var(--c-accent, #4aa8ff);
+    animation: world-loading-run 1.1s linear infinite;
+}
+
+@keyframes world-loading-run {
+    to { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .world-loading-bar::after { animation: none; left: 0; width: 100%; opacity: 0.5; }
+}
+
 /* The data credit of a world: on its loading screen, and in Credits from the menus (js/world/credits.js) */
 .world-loading-credit {
-    margin-top: 10px;
-    font: 12px system-ui, sans-serif;
-    opacity: 0.8;
+    margin-top: 12px;
+    font: 12px / 1.4 var(--font-ui, system-ui, sans-serif);
+    color: var(--c-text-dim, rgba(255, 255, 255, 0.75));
 }
 
 .world-credits {

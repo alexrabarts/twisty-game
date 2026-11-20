@@ -268,11 +268,22 @@ class Game {
         this.endMenuShowcase();
         this.removeRunOverlays();
         this.tourSystem.hideLegSelector();
+        // A dimmed screen with the note in a panel: the last frame of the menu (the rider on the stage) stays drawn
+        // behind it, and plain text over that could not be read
+        const screen = document.createElement('div');
+        screen.id = 'world-loading';
+        screen.className = 'world-loading';
+        screen.setAttribute('role', 'status');
         const note = document.createElement('div');
-        note.id = 'world-loading';
-        note.textContent = 'Loading the road...';
-        note.className = 'world-loading';
-        document.body.appendChild(note);
+        note.className = 'world-loading-box';
+        const title = document.createElement('div');
+        title.className = 'world-loading-title';
+        title.textContent = 'Loading the road...';
+        const bar = document.createElement('div');
+        bar.className = 'world-loading-bar';
+        note.append(title, bar);
+        screen.appendChild(note);
+        document.body.appendChild(screen);
         // No HUD over the loading screen: its clock, gates and keys are a ride's, and there is none yet
         document.body.classList.add('world-loading-on');
         // The data credit stands on the loading screen, and in Credits from the menus (js/world/credits.js)
