@@ -69,9 +69,15 @@ const HudRules = {
         return `${minutes}:${String(seconds).padStart(2, '0')}.${rest % 10}`;
     },
 
-    // "Stage 8/14 · Tremola  3:12.4"
+    // "Stage 8/14 · Tremola  3:12.4" under the progress bar. A ride of one stage shows nothing: its stage clock
+    // is the main clock and "Stage 1/1" says nothing
     stageLine(index, count, name, ms) {
-        return `Stage ${index}/${count} · ${name}  ${HudRules.stageClock(ms)}`;
+        return count > 1 ? `Stage ${index}/${count} · ${name}  ${HudRules.stageClock(ms)}` : '';
+    },
+
+    // The start card of a world ride: the stage's name, with its number only when the ride has more than one
+    stageLabel(index, count, name) {
+        return count > 1 ? `Stage ${index}/${count} · ${name}` : name;
     },
 
     // The share of a stage ridden, 0 to 1
@@ -82,6 +88,15 @@ const HudRules = {
     // "km 3.2 / 13.3": the distance along the whole ride
     kmText(s, length) {
         return `km ${(Math.max(0, s) / 1000).toFixed(1)} / ${(length / 1000).toFixed(1)}`;
+    },
+
+    // The ticks of the progress bar: the share of the span (from, to) at which each checkpoint stands. A station
+    // that is not a checkpoint (the start, the end, a stage boundary) and one outside the span get no tick, so the
+    // ticks are as many as the count beside the bar
+    progressMarks(stations, from, to) {
+        return (stations || [])
+            .filter(station => station.kind === 'gate' && station.s >= from - 0.01 && station.s <= to + 0.01)
+            .map(station => HudRules.stageShare(station.s, from, to));
     },
 
     // -1 stopped, 0 too slow, 1 slow, 2 at pace
@@ -109,6 +124,7 @@ class Hud {
             speed: byId('speed'),
             speedBox: byId('hudSpeed'),
             speedFill: byId('speedFill'),
+            gates: byId('hudGates'),
             pips: byId('hudGatePips'),
             gateCount: byId('hudGateCount'),
             split: byId('splitPopup'),
@@ -117,12 +133,15 @@ class Hud {
             fps: byId('fps'),
             start: byId('startCard'),
             startLeg: byId('startLeg'),
-            stage: byId('hudStage'),
-            stageName: byId('hudStageName'),
-            stageKm: byId('hudStageKm'),
-            stageFill: byId('hudStageFill'),
-            stageMarks: byId('hudStageMarks')
+            progress: byId('hudProgress'),
+            progressBar: byId('hudProgressBar'),
+            progressMarks: byId('hudProgressMarks'),
+            progressCount: byId('hudProgressCount'),
+            progressKm: byId('hudProgressKm'),
+            stageText: byId('hudStageText')
         };
+        // A world ride shows its checkpoints on the progress bar; the classic legs on the pips
+        this.progressOn = false;
         this.shown = {};
         this.hintShown = true;
         this.gateTotal = 0;
@@ -192,7 +211,15 @@ class Hud {
         if (this.el.speedFill) this.el.speedFill.style.strokeDashoffset = String(HudRules.gaugeOffset(shown, maxMph));
     }
 
+    // Checkpoints passed, of how many. One display holds them: the progress bar of a world ride (its ticks and
+    // the count at its end), else the pips of a classic leg
     setGates(passed, total) {
+        if (this.progressOn) {
+            const marks = this.el.progressMarks;
+            if (marks) Array.from(marks.children).forEach((mark, i) => mark.classList.toggle('on', i < passed));
+            this.setText(this.el.progressCount, `${passed}/${total}`);
+            return;
+        }
         const pips = this.el.pips;
         if (pips && total !== this.gateTotal) {
             this.gateTotal = total;
@@ -209,15 +236,19 @@ class Hud {
         this.setText(this.el.gateCount, `${passed}/${total}`);
     }
 
-    // The stage meta of a world ride under the clock: the stage line, a progress bar with a mark for each
-    // station, and the distance along the ride. Leg pages never show it. `marks` are shares of the stage.
-    showStage(marks) {
-        const box = this.el.stage;
+    // The progress element of a world ride, in place of the pips: a bar for the stage being ridden with a tick at
+    // each checkpoint (`marks`: shares of the stage, HudRules.progressMarks), the rider's place on it and the
+    // count. Leg pages never show it.
+    showProgress(marks) {
+        const box = this.el.progress;
         if (!box) return;
         box.hidden = false;
+        this.progressOn = true;
+        if (this.el.gates) this.el.gates.hidden = true;
         this.shown.stageLine = null;
-        this.shown.stageShare = null;
-        const holder = this.el.stageMarks;
+        this.shown.progressShare = null;
+        this.shown.progressKm = null;
+        const holder = this.el.progressMarks;
         if (holder) {
             holder.textContent = '';
             marks.forEach((share) => {
@@ -228,24 +259,29 @@ class Hud {
         }
     }
 
-    hideStage() {
-        if (this.el.stage) this.el.stage.hidden = true;
+    hideProgress() {
+        this.progressOn = false;
+        if (this.el.progress) this.el.progress.hidden = true;
+        if (this.el.gates) this.el.gates.hidden = false;
+        this.setText(this.el.progressKm, '');
+        this.setText(this.el.stageText, '');
     }
 
-    // Once per frame in a world: only a changed value touches the DOM
-    setStage(line, share, km) {
-        if (this.shown.stageLine !== line) {
-            this.shown.stageLine = line;
-            this.setText(this.el.stageName, line);
-        }
+    // Once per frame in a world: only a changed value touches the DOM. `share` is the rider's place in the stage
+    // (one custom property moves the fill and the marker), `stageLine` is empty for a ride of one stage
+    setProgress(share, km, stageLine = '') {
         const rounded = Math.round(share * 1000) / 10;
-        if (this.shown.stageShare !== rounded) {
-            this.shown.stageShare = rounded;
-            if (this.el.stageFill) this.el.stageFill.style.width = `${rounded}%`;
+        if (this.shown.progressShare !== rounded) {
+            this.shown.progressShare = rounded;
+            if (this.el.progressBar) this.el.progressBar.style.setProperty('--at', `${rounded}%`);
         }
-        if (this.shown.stageKm !== km) {
-            this.shown.stageKm = km;
-            this.setText(this.el.stageKm, km);
+        if (this.shown.progressKm !== km) {
+            this.shown.progressKm = km;
+            this.setText(this.el.progressKm, km);
+        }
+        if (this.shown.stageLine !== stageLine) {
+            this.shown.stageLine = stageLine;
+            this.setText(this.el.stageText, stageLine);
         }
     }
 
@@ -255,7 +291,7 @@ class Hud {
         this.clearTransient();
         this.doc.body.classList.remove('run-over');
         this.hintShown = true;
-        if (this.el.hint) this.el.hint.classList.remove('hidden');
+        if (this.el.hint) this.el.hint.classList.remove('hidden', 'recall');
         this.pendingStart = legLabel || '';
         this.startDelayFrames = HudRules.START_CARD_DELAY_FRAMES;
     }
@@ -282,6 +318,11 @@ class Hud {
         if (visible === this.hintShown || !this.el.hint) return;
         this.hintShown = visible;
         this.el.hint.classList.toggle('hidden', !visible);
+    }
+
+    // The key hints fade after the first seconds; the pause panel brings them back for as long as it is open
+    recallHint(on) {
+        if (this.el.hint) this.el.hint.classList.toggle('recall', !!on);
     }
 
     showSplit(html) {

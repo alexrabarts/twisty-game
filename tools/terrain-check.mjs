@@ -19,7 +19,7 @@
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
-//   world-hud rides the two-stage fixture tests/fixtures/world/mini (--world all) unless --worldData is given
+//   world-hud rides the fixture of three stages tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
 //   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
@@ -3777,9 +3777,12 @@ const WORLD = {
         for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
         return { station: 2, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
-    // The HUD of a ride that holds more than one stage (P48): put the bike in stage 2 of the mini world
-    // (--worldData tests/fixtures/world/mini, --world all), at 1280x720 and at 390x844 as a touch device. The stage line,
-    // the pips of the stage and a box that overlaps no other.
+    // The HUD of a world ride (.agent/system/ui.md), in stage 2 of the mini world (--worldData tests/fixtures/world/mini,
+    // --world all), at 1024x640, 1440x900 and 390x844 as a touch device. The checkpoints are shown once: a tick on the
+    // progress bar for each checkpoint of the stage and the count, and no pips. The stage text shows (the ride has more
+    // than one stage). With everything the HUD can show at once on the screen (a split, the wheelie meter, three
+    // call-outs, the turn prompt, the advised speed, the key hints, the FPS counter and the empty slots beside the
+    // gauge), no two boxes intersect and none leaves the screen.
     'world-hud': async page => {
         const read = () => page.evaluate(async (placeSource) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
@@ -3791,26 +3794,68 @@ const WORLD = {
             const run = game.worldRun;
             run.stationIndex = env.stationGates.filter(st => st.s <= stage.from + 300).length - 1;
             run.stageIndex = run.stageOf(stage.from + 300);
+            const guide = env.guide;
+            guide.promptAt = () => 'Continue straight, 150 m · A road with a long name';
+            guide.adviceAt = () => ({ mph: 25, fast: true, distance: 60, left: true });
             twistyDev.freeze();
             for (let i = 0; i < 20; i++) twistyDev.step(1);
-            const box = el => { if (!el) return null; const r = el.getBoundingClientRect(); return r.width && r.height ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom } : null; };
-            const boxes = { timer: box(document.querySelector('.hud-timer')), minimap: box(document.querySelector('.world-guide')), speed: box(document.querySelector('.hud-speed')) };
-            const names = Object.keys(boxes).filter(k => boxes[k]);
+            const hud = game.hud;
+            const gates = run.stageGates(1);
+            game.showSplit(0, 61234, 137);
+            const wheelie = document.getElementById('wheelieIndicator');
+            wheelie.classList.add('active');
+            for (const text of ['Jumped a red light +400 style', 'Speed streak +250', 'Hairpin assist: full']) hud.callout(text, 'info', 60000);
+            document.getElementById('hudHint').classList.remove('hidden');
+            const fpsWas = hud.fpsVisible;
+            hud.fpsVisible = true;
+            hud.applyFps();
+            // The cards fade in and a frozen game has no animation frames: read them as they end up
+            await new Promise(r => setTimeout(r, 80));
+            document.body.getBoundingClientRect();
+            document.getAnimations().forEach(animation => {
+                try {
+                    if (animation.effect && animation.effect.getTiming().iterations !== Infinity) animation.finish();
+                } catch { /* an animation that cannot end stays as it is */ }
+            });
+            const shown = el => {
+                if (!el || !el.isConnected) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 1 || r.height < 1) return false;
+                for (let at = el; at && at.nodeType === 1; at = at.parentElement) {
+                    const style = getComputedStyle(at);
+                    if (style.display === 'none' || style.visibility !== 'visible' || parseFloat(style.opacity) < 0.05) return false;
+                }
+                return true;
+            };
+            const parts = { timer: '.hud-timer', split: '#splitPopup', wheelie: '#wheelieIndicator', prompt: '#hudPrompt', advice: '#hudAdvice', map: '#world-guide canvas', speed: '#hudSpeed', gear: '#hudGear', revs: '#hudRevs', mode: '#hudMode', hint: '#hudHint', fps: '#fps' };
+            const boxes = {};
+            const put = (name, el) => { if (shown(el)) { const r = el.getBoundingClientRect(); boxes[name] = { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; } };
+            Object.entries(parts).forEach(([name, selector]) => put(name, document.querySelector(selector)));
+            document.querySelectorAll('.callout').forEach((el, i) => put(`callout${i + 1}`, el));
+            const names = Object.keys(boxes);
             const overlaps = [];
             for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
                 const a = boxes[names[i]], b = boxes[names[j]];
-                if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom) overlaps.push([names[i], names[j]]);
+                if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push([names[i], names[j]]);
             }
-            const gates = game.worldRun.stageGates(1);
-            const hud = game.hud;
-            hud.setGates(0, 30);
-            const many = { pips: document.querySelectorAll('#hudGatePips i').length, count: document.getElementById('hudGateCount').textContent };
-            hud.setGates(0, gates.total);
-            return { pips: document.querySelectorAll('#hudGatePips i').length, gateTotal: gates.total, count: document.getElementById('hudGateCount').textContent, meta: document.getElementById('hudStageName').textContent, many, overlaps, stageIndex: game.worldRun.stageIndex };
+            const off = names.filter(n => boxes[n].left < -0.5 || boxes[n].top < -0.5 || boxes[n].right > innerWidth + 0.5 || boxes[n].bottom > innerHeight + 0.5);
+            const out = {
+                viewport: [innerWidth, innerHeight], boxes: names, missing: Object.keys(parts).filter(n => !boxes[n]), overlaps, off,
+                ticks: document.querySelectorAll('#hudProgressMarks i').length, gateTotal: gates.total, count: document.getElementById('hudProgressCount').textContent,
+                pipsShown: shown(document.getElementById('hudGates')), bars: document.querySelectorAll('.hud-progress-bar').length,
+                stageText: document.getElementById('hudStageText').textContent, stages: env.route.stages.length, stageIndex: run.stageIndex
+            };
+            hud.clearTransient();
+            wheelie.classList.remove('active');
+            hud.fpsVisible = fpsWas;
+            hud.applyFps();
+            return out;
         }, placeAt.toString());
         const out = {};
-        await page.setViewport({ width: 1280, height: 720 });
-        out.desktop = await read();
+        await page.setViewport({ width: 1024, height: 640 });
+        out.small = await read();
+        await page.setViewport({ width: 1440, height: 900 });
+        out.large = await read();
         await page.setViewport({ width: 390, height: 844 });
         await page.evaluate(() => document.body.classList.add('touch'));
         out.touch = await read();
@@ -4383,7 +4428,7 @@ const WORLD = {
         const hud = await page.evaluate(() => ({
             guide: !!document.getElementById('world-guide'),
             guideBox: (() => { const b = document.getElementById('world-guide').getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) }; })(),
-            stage: document.getElementById('hudStage') ? document.getElementById('hudStage').textContent : null,
+            progress: document.getElementById('hudProgress') ? document.getElementById('hudProgress').textContent.trim() : null,
             renderer: game.graphics.renderer.getContext().getParameter(game.graphics.renderer.getContext().getExtension('WEBGL_debug_renderer_info') ? game.graphics.renderer.getContext().getExtension('WEBGL_debug_renderer_info').UNMASKED_RENDERER_WEBGL : 0x1F01)
         }));
         return { sites, files, hud };
@@ -5093,7 +5138,7 @@ async function junctionEye(placeSource, eye) {
     return png;
 }
 
-// The data world-hud rides when the run names no --worldData: the 6 km fixture of two stages
+// The data world-hud rides when the run names no --worldData: the 6 km fixture of three stages
 const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
 
 // The seeds world-finish rides: --seeds N rides N seeds from --seed (default 1); --seed S alone rides S once.
@@ -5290,13 +5335,15 @@ function worldChecks(report) {
     }
     const hud = results['world-hud'];
     if (hud) {
-        for (const view of ['desktop', 'touch']) {
+        for (const view of ['small', 'large', 'touch']) {
             const h = hud[view];
             if (h.error) { failures.push(`world-hud ${view}: ${h.error}`); continue; }
-            if (!/^Stage 2\/\d+ · /.test(h.meta)) failures.push(`world-hud ${view}: the stage line reads ${JSON.stringify(h.meta)}, want Stage 2/<n>`);
-            if (h.pips !== h.gateTotal || h.count !== `0/${h.gateTotal}`) failures.push(`world-hud ${view}: ${h.pips} pips and ${h.count} for a stage of ${h.gateTotal} gates`);
-            if (h.many.pips !== 0 || h.many.count !== '0/30') failures.push(`world-hud ${view}: 30 gates must show the count and no pips: ${JSON.stringify(h.many)}`);
+            if (h.bars !== 1 || h.pipsShown) failures.push(`world-hud ${view}: the checkpoints must show once, on the progress bar: ${h.bars} bars, pips shown ${h.pipsShown}`);
+            if (h.ticks !== h.gateTotal || h.count !== `0/${h.gateTotal}`) failures.push(`world-hud ${view}: ${h.ticks} ticks and ${h.count} for a stage of ${h.gateTotal} checkpoints`);
+            if (!new RegExp(`^Stage 2/${h.stages} · `).test(h.stageText)) failures.push(`world-hud ${view}: the stage text reads ${JSON.stringify(h.stageText)}, want Stage 2/${h.stages}`);
+            if (h.missing.length) failures.push(`world-hud ${view}: not on the screen: ${h.missing.join(', ')}`);
             if (h.overlaps.length) failures.push(`world-hud ${view}: boxes overlap: ${JSON.stringify(h.overlaps)}`);
+            if (h.off.length) failures.push(`world-hud ${view}: off the screen: ${h.off.join(', ')}`);
         }
     }
     const camera = results['world-camera'];

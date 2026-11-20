@@ -41,8 +41,18 @@
     --fs-xl: 28px;
     --fs-timer: clamp(34px, 2.4vw + 22px, 56px);
     --fs-callout: clamp(17px, 0.9vw + 12px, 26px);
+    --fs-split: calc(var(--fs-callout) + 6px);
     --fs-meta: clamp(11px, 0.35vw + 7px, 14px);
     --speed-size: clamp(112px, 5vw + 60px, 156px);
+
+    /* The HUD's layout (.agent/system/ui.md). --side-w is the width a corner may take (the mini map with its turn
+       prompt, the gauge with its slots); --col-w is what that leaves the top centre column; --top-row is the height
+       of the row a phone's top corners and its timer share */
+    --map-size: 150px;
+    --bike-side: 72px;
+    --side-w: clamp(var(--map-size), 22vw, 260px);
+    --col-w: min(440px, calc(100vw - 2 * (var(--edge) + var(--side-w) + var(--sp-3))));
+    --top-row: var(--map-size);
 
     --edge: 16px;
     --edge-top: calc(var(--edge) + env(safe-area-inset-top, 0px));
@@ -182,8 +192,16 @@ canvas {
     transform: scale(1.15);
 }
 
+.hud-gates[hidden] {
+    display: none;
+}
+
 .hud-gates b {
     margin-left: 3px;
+}
+
+/* Checkpoints passed of how many: the one number, on the progress bar of a world ride or by a leg's pips */
+.hud-count {
     font: 700 calc(var(--fs-meta) + 2px) / 1 var(--font-display);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.04em;
@@ -265,23 +283,25 @@ canvas {
     100% { opacity: 0; transform: scale(1.06); }
 }
 
-/* Checkpoint split, read against the timer above it */
+/* Checkpoint split, read against the timer above it: two rows, so it stays above the middle of the screen */
 .split-popup {
     display: none;
-    min-width: 200px;
+    grid-template-areas: "gate style" "time deltas";
+    align-items: baseline;
+    gap: 0 var(--sp-3);
     max-width: 100%;
     box-sizing: border-box;
-    padding: 6px 16px 8px;
-    text-align: center;
+    padding: 5px 14px 6px;
+    text-align: left;
 }
 
 .split-popup.show {
-    display: block;
+    display: grid;
     animation: drop-in var(--dur) var(--ease-out);
 }
 
 .split-popup.leaving {
-    display: block;
+    display: grid;
     opacity: 0;
     transform: translateY(-4px);
     transition: opacity var(--dur) ease-in, transform var(--dur) ease-in;
@@ -293,23 +313,26 @@ canvas {
 }
 
 .split-gate {
+    grid-area: gate;
     font: 700 var(--fs-xs) / 1.2 var(--font-ui);
     letter-spacing: 0.14em;
     color: var(--c-text-dim);
 }
 
 .split-time {
-    font: 700 30px / 1.05 var(--font-display);
+    grid-area: time;
+    font: 700 var(--fs-split) / 1.05 var(--font-display);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.02em;
 }
 
 .split-deltas {
+    grid-area: deltas;
     display: flex;
     gap: var(--sp-3);
-    justify-content: center;
+    justify-content: flex-end;
     flex-wrap: wrap;
-    font: 700 22px / 1.1 var(--font-display);
+    font: 700 var(--fs-callout) / 1.1 var(--font-display);
     font-variant-numeric: tabular-nums;
 }
 
@@ -321,7 +344,8 @@ canvas {
 }
 
 .split-style {
-    margin-top: 2px;
+    grid-area: style;
+    text-align: right;
     font: 600 var(--fs-xs) / 1.2 var(--font-ui);
     color: var(--c-gold);
     opacity: 0.85;
@@ -395,125 +419,242 @@ canvas {
     display: none;
 }
 
-/* A world ride: the stage line, its progress bar with a mark for each station, the distance along the ride */
-.hud-stage {
-    margin-top: 5px;
-    font: 700 var(--fs-meta) / 1 var(--font-ui);
-    letter-spacing: 0.06em;
-    color: var(--c-text-dim);
+/* A world ride: the one progress element under the clock. The bar is the stage being ridden, with a tick for each
+   checkpoint (green once passed), a marker at the rider's place (--at, written by js/hud.js) and the count at its end */
+.hud-progress {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    margin: 5px 0 2px;
 }
 
-.hud-stage[hidden] {
+.hud-progress[hidden] {
     display: none;
 }
 
-.hud-stage-line {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--sp-3);
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-}
-
-.hud-stage-bar {
+.hud-progress-bar {
+    --at: 0%;
     position: relative;
+    flex: 1;
+    min-width: 180px;
     height: 4px;
-    margin-top: 4px;
     border-radius: 2px;
     background: rgba(255, 255, 255, 0.22);
 }
 
-.hud-stage-bar #hudStageFill {
+.hud-progress-fill {
     position: absolute;
     left: 0;
     top: 0;
     bottom: 0;
-    width: 0;
+    width: var(--at);
     border-radius: 2px;
     background: var(--c-go);
 }
 
-.hud-stage-bar #hudStageMarks i {
+#hudProgressMarks i {
     position: absolute;
-    top: -2px;
+    top: -3px;
     width: 2px;
-    height: 8px;
+    height: 10px;
     margin-left: -1px;
-    background: rgba(255, 255, 255, 0.7);
+    border-radius: 1px;
+    background: rgba(255, 255, 255, 0.75);
 }
 
-/* The minimap and the turn prompt of a world: top right; the speed gauge keeps the bottom right */
+#hudProgressMarks i.on {
+    background: var(--c-go);
+}
+
+.hud-progress-at {
+    position: absolute;
+    left: var(--at);
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    margin: -5px 0 0 -5px;
+    border-radius: 50%;
+    background: var(--c-text);
+    box-shadow: 0 0 0 2px rgba(10, 14, 22, 0.8);
+}
+
+/* The distance along the ride, in the meta row */
+.hud-km {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.06em;
+    color: var(--c-text-faint);
+}
+
+.hud-km:empty,
+.hud-stage-text:empty {
+    display: none;
+}
+
+/* The stage and its clock: a world of more than one stage only */
+.hud-stage-text {
+    margin-top: 5px;
+    overflow: hidden;
+    font: 700 var(--fs-meta) / 1 var(--font-ui);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--c-text-dim);
+}
+
+/* A world ride: the column spans the screen and each thing in it keeps to --col-w, clear of both corners */
+body.world-ride .hud-top {
+    left: var(--edge-left);
+    right: var(--edge-right);
+    width: auto;
+    min-width: 0;
+    transform: none;
+}
+
+body.world-ride .hud-top > * {
+    max-width: var(--col-w);
+}
+
+body.world-ride .callout {
+    max-width: 100%;
+}
+
+/* The mini map of a world (js/world/guide.js): top right; the bike's corner keeps the bottom right */
 .world-guide {
     position: fixed;
     top: var(--edge-top);
     right: var(--edge-right);
     z-index: var(--z-hud);
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 6px;
-    max-width: min(260px, 40vw);
     pointer-events: none;
-    font: 600 14px / 1.3 var(--font-ui);
-    text-align: right;
-    color: var(--c-text);
-    text-shadow: var(--text-shadow);
 }
 
 .world-guide canvas {
     display: block;
-    width: 150px;
-    height: 150px;
-    border-radius: 8px;
-    background: rgba(10, 14, 18, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    width: var(--map-size);
+    height: var(--map-size);
+    box-sizing: border-box;
+    border-radius: var(--r-sm);
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
 }
 
-.world-prompt:empty {
+/* What the road does next, under the mini map: the turn prompt, and the advised speed for the next tight bend */
+.hud-guide {
     display: none;
 }
 
-/* The hairpin advice under the turn prompt: a chevron and the speed for the next tight bend, red when over it */
-.world-advice {
+body.world-ride .hud-guide {
+    position: fixed;
+    top: calc(var(--edge-top) + var(--map-size) + 6px);
+    right: var(--edge-right);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    width: var(--side-w);
+    max-width: var(--side-w);
+    font: 600 var(--fs-sm) / 1.3 var(--font-ui);
+    text-align: right;
+}
+
+.hud-prompt,
+.hud-advice {
+    box-sizing: border-box;
+    max-width: 100%;
+    padding: 3px 8px;
+    border-radius: var(--r-sm);
+    background: var(--panel-bg);
+    border: 1px solid var(--panel-border);
+}
+
+.hud-prompt:empty {
+    display: none;
+}
+
+/* A chevron and the speed for the bend, red when the bike is over it */
+.hud-advice {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 8px;
-    border-radius: 6px;
-    background: rgba(10, 14, 18, 0.55);
-    border: 1px solid rgba(255, 255, 255, 0.25);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
-.world-advice[hidden] {
+.hud-advice[hidden] {
     display: none;
 }
 
-.world-advice svg {
+.hud-advice svg {
     width: 18px;
     height: 18px;
     color: var(--c-warn);
 }
 
-.world-advice.fast {
+.hud-advice.fast {
     color: var(--c-bad);
     border-color: var(--c-bad);
 }
 
-.world-advice.fast svg {
+.hud-advice.fast svg {
     color: var(--c-bad);
 }
 
 /* The chevron is drawn for a right-hand bend */
-.world-advice.left svg {
+.hud-advice.left svg {
     transform: scaleX(-1);
 }
 
-/* Speed: a compact gauge in the bottom-right corner */
-.hud-speed {
+/* The bike's corner, bottom right: the speed gauge, and beside it the room kept for a rider mode tag, a gear number
+   and a rev bar. A slot has its place and size here and draws nothing while it is empty */
+.hud-bike {
     position: absolute;
     right: var(--edge-right);
     bottom: var(--edge-bottom);
+    display: flex;
+    align-items: flex-end;
+    gap: var(--sp-2);
+}
+
+.hud-bike-side {
+    display: grid;
+    grid-template-areas: "mode" "gear" "revs";
+    justify-items: end;
+    gap: var(--sp-1);
+    width: var(--bike-side);
+}
+
+.hud-mode {
+    grid-area: mode;
+    min-width: 100%;
+    height: 18px;
+    font: 700 var(--fs-xs) / 18px var(--font-ui);
+    letter-spacing: 0.1em;
+    text-align: right;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--c-text-dim);
+}
+
+.hud-gear {
+    grid-area: gear;
+    min-width: 100%;
+    height: calc(var(--speed-size) * 0.3);
+    font: 700 calc(var(--speed-size) * 0.3) / 1 var(--font-display);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.hud-revs {
+    grid-area: revs;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+}
+
+/* Speed: a compact gauge */
+.hud-speed {
+    position: relative;
+    flex: none;
     width: var(--speed-size);
     height: var(--speed-size);
     border-radius: 50%;
@@ -577,7 +718,8 @@ canvas {
     position: absolute;
     left: var(--edge-left);
     bottom: var(--edge-bottom);
-    max-width: calc(100vw - 2 * var(--edge) - 150px);
+    max-width: calc(100vw - 2 * var(--edge) - var(--speed-size) - var(--bike-side) - 2 * var(--sp-3));
+    box-sizing: border-box;
     padding: 8px 12px;
     font: 600 var(--fs-sm) / 1.9 var(--font-ui);
     color: var(--c-text-dim);
@@ -588,6 +730,11 @@ canvas {
 
 .hud-hint.hidden {
     opacity: 0;
+}
+
+/* Back for as long as the pause panel is open (Hud.recallHint) */
+.hud-hint.recall {
+    opacity: 1;
 }
 
 .hud-hint .hint-touch {
@@ -616,46 +763,123 @@ canvas {
     display: none;
 }
 
-/* Touch devices: the thumbs own the bottom corners, so speed moves up */
+/* Touch devices: the thumbs own the bottom corners, so the bike's corner moves to the top right, with its slots
+   under the gauge, and the mini map to the top left */
 body.touch {
     --speed-size: 84px;
+    --map-size: 96px;
+    --side-w: clamp(var(--map-size), 22vw, 260px);
+    --col-w: min(440px, calc(100vw - 2 * (var(--edge) + var(--side-w) + var(--sp-3))));
+    /* The gauge and the 24 px of its slots */
+    --top-row: calc(var(--speed-size) + 24px);
 }
 
-body.touch .hud-speed {
+body.touch .hud-bike {
     top: var(--edge-top);
     bottom: auto;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 2px;
 }
 
-/* The speed gauge takes the top right on touch, so the minimap moves to the top left and the
-   FPS counter sits under it and its prompt */
+body.touch .hud-bike-side {
+    grid-template: "revs revs" 4px "gear mode" 16px / auto 1fr;
+    gap: 2px;
+    width: var(--speed-size);
+}
+
+body.touch .hud-revs,
+body.touch .hud-mode,
+body.touch .hud-gear {
+    min-width: 0;
+    height: auto;
+    align-self: stretch;
+    justify-self: stretch;
+}
+
+body.touch .hud-gear {
+    min-width: 16px;
+    font-size: 16px;
+    text-align: left;
+}
+
+body.touch .hud-mode {
+    font-size: 9px;
+    line-height: 16px;
+}
+
 body.touch .world-guide {
+    right: auto;
+    left: var(--edge-left);
+}
+
+body.touch.world-ride .hud-guide {
     right: auto;
     left: var(--edge-left);
     align-items: flex-start;
     text-align: left;
-    max-width: 112px;
 }
 
-body.touch .world-guide canvas {
-    width: 96px;
-    height: 96px;
-}
+/* A screen too narrow for a corner block beside the column (a phone held upright): the timer stands between the two
+   top corners and is as tall as they are, and everything else follows under that row in the one column, the turn
+   prompt and the advised speed first. Nothing in the column can reach a corner */
+@media (max-width: 699px) {
+    body.world-ride {
+        --map-size: 96px;
+    }
 
-/* The timer panel keeps clear of the minimap on the left and the speed gauge on the right; the stage line
-   shortens with an ellipsis instead of spilling over either */
-body.touch.world-ride .hud-top {
-    width: calc(100vw - 2 * (var(--edge-left, var(--edge)) + 96px + 8px));
-    min-width: 0;
-}
+    body.world-ride:not(.touch) {
+        --top-row: var(--map-size);
+    }
 
-.hud-stage-line #hudStageName {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
+    body.world-ride .hud-top > * {
+        max-width: 100%;
+    }
 
-body.touch.world-ride #hudStageKm {
-    display: none;
+    /* (a leg on touch too: its split is as wide as the screen and must start under the bike's corner) */
+    body.world-ride .hud-timer,
+    body.touch .hud-timer {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: var(--top-row);
+    }
+
+    body.world-ride .hud-timer {
+        max-width: calc(100vw - 2 * (var(--edge) + var(--map-size) + var(--sp-2)));
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+
+    body.world-ride .hud-progress-bar {
+        min-width: 0;
+    }
+
+    body.world-ride .hud-km {
+        display: none;
+    }
+
+    /* The stage and its clock take two lines here: the clock is never cut off */
+    body.world-ride .hud-stage-text {
+        line-height: 1.3;
+        white-space: normal;
+    }
+
+    body.world-ride .hud-guide,
+    body.touch.world-ride .hud-guide {
+        position: static;
+        flex-flow: row wrap;
+        justify-content: center;
+        align-items: center;
+        width: auto;
+        max-width: 100%;
+        text-align: center;
+    }
+
+    /* (no gap in the column for a prompt that says nothing) */
+    body.world-ride .hud-guide:not(:has(.hud-prompt:not(:empty), .hud-advice:not([hidden]))) {
+        display: none;
+    }
 }
 
 /* A dialog with another on top of it (js/modals.js): inert, and out of sight unless it asked to stay in view */
@@ -813,8 +1037,10 @@ body.world-loading-on .hud {
     font: 600 20px system-ui, sans-serif;
 }
 
-body.touch.world-ride .fps {
-    top: calc(var(--edge-top) + 96px + 6px + 40px);
+/* The FPS counter keeps the left edge: over the steering buttons on touch */
+body.touch .fps {
+    top: auto;
+    bottom: calc(12px + 68px + var(--sp-2) + env(safe-area-inset-bottom, 0px));
 }
 
 body.touch .speed-unit {
@@ -826,12 +1052,12 @@ body.touch .speed-fill {
     stroke-width: 8;
 }
 
+/* The touch hint stands over the steering buttons and the two round buttons, left of the throttle column */
 body.touch .hud-hint {
-    left: 50%;
-    bottom: calc(var(--edge-bottom) + 92px);
-    transform: translateX(-50%);
-    width: max-content;
-    max-width: calc(100vw - 2 * var(--edge) - 2 * 96px);
+    left: var(--edge-left);
+    right: calc(12px + 68px + 12px + env(safe-area-inset-right, 0px));
+    bottom: calc(12px + 48px + 12px + 48px + 12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
     text-align: center;
     font-size: var(--fs-xs);
     line-height: 1.5;
@@ -943,7 +1169,9 @@ body.touch .hud-hint .hint-touch {
     .virtual-button.wheelie { height: 42px; }
     .virtual-button-camera { right: calc(12px + 60px + 12px + env(safe-area-inset-right, 0px)); }
     .virtual-controls-right { gap: 8px; }
-    body.touch .hud-hint { bottom: calc(var(--edge-bottom) + 4px); }
+    /* A phone on its side: between the steering buttons and the round buttons */
+    body.touch .hud-hint { left: 160px; right: 160px; bottom: calc(var(--edge-bottom) + 4px); }
+    body.touch .fps { bottom: calc(12px + 60px + var(--sp-2) + env(safe-area-inset-bottom, 0px)); }
 }
 
 /* Speed effects */
@@ -963,6 +1191,8 @@ body.run-over .hud,
 body.run-over .virtual-controls-left,
 body.run-over .virtual-controls-right,
 body.run-over .virtual-button-camera,
+body.run-over .world-guide,
+body.in-menu .world-guide,
 body.in-menu .hud,
 body.in-menu #speedVignette,
 body.in-menu #speedBlurOverlay,
@@ -1912,18 +2142,9 @@ body.in-menu .virtual-button-camera {
     }
 
     .split-popup {
-        min-width: 0;
         width: max-content;
         max-width: calc(100vw - 2 * var(--edge));
-        padding: 5px 12px 7px;
-    }
-
-    .split-time {
-        font-size: 24px;
-    }
-
-    .split-deltas {
-        font-size: 19px;
+        padding: 5px 12px 6px;
     }
 
     .showcase-info {
@@ -1976,14 +2197,6 @@ body.in-menu .virtual-button-camera {
         flex-wrap: wrap;
         gap: 0 var(--sp-2);
         padding: 3px 12px 4px;
-    }
-
-    .split-time {
-        font-size: 22px;
-    }
-
-    .split-deltas {
-        font-size: 18px;
     }
 
     .split-style {

@@ -398,17 +398,23 @@ class Game {
         this.animationFrameId = requestAnimationFrame(() => this.animate());
     }
 
-    // The stage the HUD shows and the stations on its bar, as shares of the stage
+    // The progress bar of the HUD: the stage ridden, with a tick for each of its checkpoints
     showWorldStage() {
         const { environment, hud } = this;
         const { from, to } = this.worldStageSpan();
-        hud.showStage(environment.stationGates.map(station => HudRules.stageShare(station.s, from, to)));
+        hud.showProgress(HudRules.progressMarks(environment.stationGates, from, to));
     }
 
-    // "Tremola" for the stage "Tremola, Airolo to the Gotthard summit"
-    worldStageName() {
-        const stage = this.environment.stage;
+    // The short name of a stage (the words before the comma of its full name): the stage the page rides, else stage `k`
+    // of a ride of every stage
+    worldStageName(k) {
+        const stage = this.environment.stage || this.environment.route.stages[k];
         return stage ? stage.name.split(',')[0] : 'Andermatt';
+    }
+
+    // How many stages this ride holds: one for a page that rides a single stage of a longer route
+    worldStageCount() {
+        return this.environment.stage ? 1 : Math.max(1, this.environment.route.stages.length);
     }
 
     // The span of the stage being ridden: the selected stage, or the whole ride
@@ -847,11 +853,13 @@ class Game {
             const leg = this.tourSystem && this.tourSystem.getCurrentLeg();
             const index = leg ? this.tourSystem.getCurrentLegIndex() : -1;
             const world = this.environment && this.environment.isWorld;
-            this.hud.startRun(world ? `Stage 1 · ${this.worldStageName()}` : leg ? `Leg ${index + 1} · ${leg.name}` : '');
-            this.hud.setGates(0, this.gateTotal());
+            this.hud.startRun(world ? HudRules.stageLabel(1, this.worldStageCount(), this.worldStageName(0)) : leg ? `Leg ${index + 1} · ${leg.name}` : '');
             this.shownWorldStage = null;
             this.shownWorldGates = null;
+            // (before the count: a world's count stands on its progress bar, a leg's on its pips)
             if (world) this.showWorldStage();
+            else this.hud.hideProgress();
+            this.hud.setGates(0, this.gateTotal());
         }
         this.hideSplit();
         this.updateScoreDisplay();
@@ -959,6 +967,7 @@ class Game {
         if (this.soundManager) this.soundManager.stopEngineSound();
         // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
         // in the middle of a ride
+        if (panel && this.hud) this.hud.recallHint(true);
         if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null);
     }
 
@@ -980,6 +989,7 @@ class Game {
     resumeRace() {
         if (!this.paused) return;
         this.paused = false;
+        if (this.hud) this.hud.recallHint(false);
         if (typeof WorldCredits !== 'undefined') WorldCredits.hidePause();
         if (this.pauseStartedAt) {
             // Time spent paused is not race time
@@ -2220,28 +2230,28 @@ class Game {
     }
     
     
-    // The stage line, its bar and the ride distance: from the one projection of the frame
+    // The progress bar, the ride distance and (a ride of more than one stage) the stage line: from the one
+    // projection of the frame
     updateWorldHud() {
         const { from, to } = this.worldStageSpan();
         const s = this.vehicle.projection.s ?? this.vehicle.routeS ?? 0;
         const run = this.worldRun;
         const k = run.stageIndex;
         const stage = this.environment.route.stages[k];
-        const name = stage ? stage.name.split(',')[0] : this.worldStageName();
-        const line = HudRules.stageLine(k + 1, run.stageCount, name, this.raceElapsed() - run.stageStartMs);
-        // The bar and the pips follow the stage being ridden: a new stage starts them again
+        const line = HudRules.stageLine(k + 1, this.worldStageCount(), this.worldStageName(k), this.raceElapsed() - run.stageStartMs);
+        // The bar and its count follow the stage being ridden: a new stage starts them again
         const span = stage ? { from: stage.from, to: stage.to } : { from, to };
         const gates = run.stageGates(k);
         if (this.shownWorldStage !== k) {
             this.shownWorldStage = k;
             this.shownWorldGates = null;
-            this.hud.showStage(this.environment.stationGates.filter(station => station.s >= span.from - 0.01 && station.s <= span.to + 0.01).map(station => HudRules.stageShare(station.s, span.from, span.to)));
+            this.hud.showProgress(HudRules.progressMarks(this.environment.stationGates, span.from, span.to));
         }
         if (this.shownWorldGates !== gates.passed) {
             this.shownWorldGates = gates.passed;
             this.hud.setGates(gates.passed, gates.total);
         }
-        this.hud.setStage(line, HudRules.stageShare(s, span.from, span.to), HudRules.kmText(s, this.environment.route.length));
+        this.hud.setProgress(HudRules.stageShare(s, span.from, span.to), HudRules.kmText(s, this.environment.route.length), line);
     }
 
     updateWheelieIndicator() {

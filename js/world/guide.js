@@ -124,15 +124,12 @@ class WorldGuide {
         box.className = 'world-guide';
         this.canvas = document.createElement('canvas');
         this.canvas.width = this.canvas.height = WorldGuide.MAP_SIZE;
-        this.prompt = document.createElement('div');
-        this.prompt.className = 'world-prompt';
-        // The hairpin advice: a hairpin chevron and the speed for it
-        this.adviceBox = document.createElement('div');
-        this.adviceBox.className = 'world-advice';
-        this.adviceBox.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 20V9a5 5 0 0 1 10 0v6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M13.5 12.5L17 16l3.5-3.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span></span>';
-        this.adviceText = this.adviceBox.querySelector('span');
-        this.adviceBox.hidden = true;
-        box.append(this.canvas, this.prompt, this.adviceBox);
+        box.append(this.canvas);
+        // The turn prompt and the hairpin advice (a chevron and the speed for the bend) are the HUD's own elements
+        // (index.html #hudGuide): its stylesheet stands them under the map, or in the timer's column on a phone
+        this.prompt = document.getElementById('hudPrompt');
+        this.adviceBox = document.getElementById('hudAdvice');
+        this.adviceText = this.adviceBox ? this.adviceBox.querySelector('span') : null;
         // H cycles the hairpin assist
         this.onKey = (event) => {
             if (event.code !== 'KeyH' || event.repeat) return;
@@ -148,10 +145,10 @@ class WorldGuide {
 
     render(state) {
         if (!this.box) return;
-        this.prompt.textContent = this.promptText;
+        if (this.prompt && this.prompt.textContent !== this.promptText) this.prompt.textContent = this.promptText;
         const advice = this.advice;
-        this.adviceBox.hidden = !advice;
-        if (advice) {
+        if (this.adviceBox) this.adviceBox.hidden = !advice;
+        if (advice && this.adviceBox) {
             const text = `${advice.mph} mph`;
             if (this.adviceText.textContent !== text) this.adviceText.textContent = text;
             this.adviceBox.classList.toggle('fast', advice.fast);
@@ -246,6 +243,8 @@ class WorldGuide {
         if (this.onKey && typeof document !== 'undefined') document.removeEventListener('keydown', this.onKey);
         this.onKey = null;
         if (this.box && this.box.parentNode) this.box.parentNode.removeChild(this.box);
+        if (this.prompt) this.prompt.textContent = '';
+        if (this.adviceBox) this.adviceBox.hidden = true;
         if (typeof document !== 'undefined' && document.body) document.body.classList.remove('world-ride');
         this.box = null;
     }
