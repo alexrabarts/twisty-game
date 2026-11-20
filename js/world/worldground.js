@@ -164,6 +164,8 @@ class WorldGround extends Ground {
         out.roadY = found.y;
         out.lateral = found.lateral;
         out.along = (x - found.x) * Math.sin(found.heading) + (z - found.z) * Math.cos(found.heading);
+        // The share of the way from row `index` to the next (the ribbon is drawn linear between its rows)
+        out.t = found.along;
         out.width = found.width;
         out.flags = this.route.points[found.index].flags;
         return out;
@@ -172,6 +174,18 @@ class WorldGround extends Ground {
     halfRoad(loc) {
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         return point.width / 2;
+    }
+
+    // The verge's width on the `sign` side of the ride between row `index` and the next, at share `t`: the drawn verge
+    // (RoadSurface.VERGE_M), and a stopping place's hard standing where the ride has one (WorldPlaces: padN, padP).
+    // `safe` reads every place, drawn or not (safeN, safeP): what the bike's surface rule calls the verge
+    vergeAt(index, sign, t = 0, safe = false) {
+        const points = this.route.points;
+        const i = Math.max(0, Math.min(points.length - 1, index));
+        const a = points[i], b = points[Math.min(points.length - 1, i + 1)];
+        const key = safe ? (sign > 0 ? 'safeP' : 'safeN') : sign > 0 ? 'padP' : 'padN';
+        const pa = a[key] || 0, pb = b[key] || 0;
+        return RoadSurface.VERGE_M + (pa || pb ? pa + (pb - pa) * Math.max(0, Math.min(1, t || 0)) : 0);
     }
 
     groundY(x, z, hint, exact = false, loc = {}) {
@@ -191,7 +205,7 @@ class WorldGround extends Ground {
         if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach));
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
         // parapet stands on the last PARAPET_W_M of the verge)
-        return !(loc.flags && loc.flags.bridge) && reach < half + RoadSurface.VERGE_M - RoadMesh.PARAPET_W_M ? loc.roadY : land;
+        return !(loc.flags && loc.flags.bridge) && reach < half + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M ? loc.roadY : land;
     }
 
     // The fill RoadMesh draws beside the road (edgeWorks' apron): the verge at the road's height, then a slope at the
@@ -200,7 +214,7 @@ class WorldGround extends Ground {
     // that is further than WorldEnvironment.APRON_RUN_M, the apron's foot stands on the land there and its slope is
     // steeper than the batter (WorldEnvironment.edgeFoot)
     earthworkY(loc, half, reach) {
-        const edge = half + RoadSurface.VERGE_M;
+        const edge = half + this.vergeAt(loc.index, loc.lateral, loc.t);
         if (reach <= edge) return loc.roadY;
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         const side = Math.sign(loc.lateral || 1);
@@ -222,7 +236,7 @@ class WorldGround extends Ground {
         const planned = this.walledAt ? this.walledAt(loc.index, Math.sign(loc.lateral || 1)) : undefined;
         if (planned !== undefined) return planned;
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
-        const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchDrop || (this.scratchDrop = {}));
+        const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + this.vergeAt(loc.index, loc.lateral, loc.t) + WorldEnvironment.FOOT_PROBE_M), this.scratchDrop || (this.scratchDrop = {}));
         const zone = this.tileZone(out.x, out.z);
         return zone === WorldData.ZONE.drop || zone === WorldData.ZONE.wall;
     }
@@ -231,7 +245,7 @@ class WorldGround extends Ground {
     // upper road's wall, WorldEnvironment.edgeFoot) where the land lies RoadMesh.PARAPET_DROP_M or more under the road
     onRetainingWall(loc, half) {
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
-        const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + RoadSurface.VERGE_M + WorldEnvironment.FOOT_PROBE_M), this.scratchWall || (this.scratchWall = {}));
+        const out = WorldGround.pointAt(point, Math.sign(loc.lateral || 1) * (half + this.vergeAt(loc.index, loc.lateral, loc.t) + WorldEnvironment.FOOT_PROBE_M), this.scratchWall || (this.scratchWall = {}));
         const planned = this.walledAt ? this.walledAt(loc.index, Math.sign(loc.lateral || 1)) : undefined;
         if (planned === false || (planned === undefined && this.tileZone(out.x, out.z) !== WorldData.ZONE.drop)) return false;
         const land = this.tileHeight(out.x, out.z);
@@ -266,7 +280,7 @@ class WorldGround extends Ground {
         // draws the wall and its parapet instead of the fill): the verge is drawn at the road's height up to the
         // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall
         if (this.onRetainingWall(loc, halfRoad)) {
-            const parapet = halfRoad + RoadSurface.VERGE_M - RoadMesh.PARAPET_W_M;
+            const parapet = halfRoad + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M;
             return reach > parapet ? { kind: 'wall', side: this.wallSide, sign, start: parapet, parapet: true } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
         }
         const kind = this.kindAt(at.x, at.z);

@@ -194,13 +194,20 @@ class RoadMesh {
         const curve = RoadMesh.curvature(kept);
         return kept.map((row, k) => {
             const h = row.width / 2;
-            const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
-            const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
-            const o = RoadMesh.hold([-h - verge, -h, h, h + verge], curve[k]).offsets;
+            const [vn, vp] = RoadMesh.verges(row);
+            const o = RoadMesh.hold([-h - vn, -h, h, h + vp], curve[k]).offsets;
             const y = row.y + RoadMesh.LIFT_M;
             const at = offset => { const p = RoadMesh.place(row, offset); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
             return { bits: row.bits, i: row.i, s: row.s, fill: !!row.fill, l: at(o[0]), r: at(o[3]), lc: at(o[1]), rc: at(o[2]) };
         });
+    }
+
+    // The verge of a row on its -lateral and its +lateral side: RoadSurface.VERGE_M on open ground (less on a bridge and
+    // in a tunnel), and a stopping place's pad more where the ride has one (WorldPlaces: row.padN, row.padP)
+    static verges(row) {
+        const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
+        const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
+        return [verge + (row.padN || 0), verge + (row.padP || 0)];
     }
 
     // The lateral offsets of a row, the inside ones held within the bend's radius: {offsets, clamped}
@@ -254,15 +261,17 @@ class RoadMesh {
         const plane = new Float32Array(n * W * 2);
         const road = new Float32Array(n * W * 4);
         const edge = new Float32Array(n * W * 4);
+        const pad = new Float32Array(n * W * 3);
         let clamped = 0;
         const sides = [];
         const sett = RoadMesh.feather(rows, along, row => (row.bits & 8) !== 0);
         const built = RoadMesh.feather(rows, along, row => (row.bits & 7) !== 0);
         styled.forEach((row, k) => {
             const h = row.width / 2;
-            const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
-            const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
-            const held = RoadMesh.hold(side ? [-h - verge, -h, 0, h, h + verge] : [-h - verge, -h, -h / 2, 0, h / 2, h, h + verge], curve[k]);
+            const [vn, vp] = RoadMesh.verges(row);
+            const held = RoadMesh.hold(side ? [-h - vn, -h, 0, h, h + vp] : [-h - vn, -h, -h / 2, 0, h / 2, h, h + vp], curve[k]);
+            // A stopping place's hard standing: its depth on each side and its surface (RoadSurface.PAD)
+            const padKind = row.padN || row.padP ? RoadSurface.PAD[row.padSurface] || RoadSurface.PAD.asphalt : 0;
             if (held.clamped) clamped++;
             const v = along[k] - base * period;
             held.offsets.forEach((offset, j) => {
@@ -275,6 +284,7 @@ class RoadMesh {
                 arc.set([v * q, turn[k] * q, q], at * 3);
                 plane.set([p.x - origin[0], p.z - origin[1]], at * 2);
                 road.set([h, sett[k], row.centre ?? C.none, built[k]], at * 4);
+                pad.set([row.padN || 0, row.padP || 0, padKind], at * 3);
                 // Across a side road's mouth a continuous edge line is broken (RoadSurface.MARKINGS.mouth)
                 const brokenAt = (line, mouth) => (mouth && line === RoadSurface.EDGE.solid ? RoadSurface.EDGE.broken : line ?? 0);
                 edge.set([brokenAt(row.left, row.mouthL), brokenAt(row.right, row.mouthR), row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
@@ -298,6 +308,7 @@ class RoadMesh {
         geometry.setAttribute('roadPlane', new THREE.BufferAttribute(plane, 2));
         geometry.setAttribute('road', new THREE.BufferAttribute(road, 4));
         geometry.setAttribute('edge', new THREE.BufferAttribute(edge, 4));
+        geometry.setAttribute('roadPad', new THREE.BufferAttribute(pad, 3));
         geometry.setAttribute('roadBase', new THREE.BufferAttribute(new Float32Array(n * W).fill(base), 1));
         geometry.setIndex(index);
         geometry.computeVertexNormals();
@@ -338,10 +349,9 @@ class RoadMesh {
         const sides = laid.map(({ offsets, row }, k) => {
             const y = row.y + RoadMesh.LIFT_M;
             const at = o => { const p = RoadMesh.place(row, o); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
-            const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
-            const v = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
+            const [vn, vp] = RoadMesh.verges(row);
             const h = row.width / 2;
-            const held = RoadMesh.hold([-h - v, h + v], curve[k]).offsets;
+            const held = RoadMesh.hold([-h - vn, h + vp], curve[k]).offsets;
             return { bits: row.bits, i: row.i, s: row.s, l: at(held[0]), r: at(held[1]), lc: at(offsets[0]), rc: at(offsets[1]) };
         });
         // A side road's structures and edge works stand at the verge's outer edge at every level of detail

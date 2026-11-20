@@ -4562,7 +4562,8 @@ class Vehicle {
     // What a soft zone (road, shoulder, run-off) is to the bike, by where it stands against the drawn road rather than
     // by the tile's 8 m zone layer, whose road and bench nodes reach several metres onto the land beside the road:
     // the carriageway (zoneAt's own road band) or a side road's is road; the drawn verge, RoadSurface.VERGE_M past the
-    // edge, is the shoulder; past it is the land (run-off). Tunnel and gallery benches are left as they are.
+    // edge, is the shoulder, and so is the strip of a stopping place (WorldPlaces); past it is the land (run-off).
+    // Tunnel and gallery benches are left as they are.
     worldSurface(zone, loc) {
         if (zone.kind === 'road' && zone.start === 0) return zone;
         const ground = this.environment.ground;
@@ -4575,7 +4576,9 @@ class Vehicle {
             const at = ground.position(loc);
             if (ground.sideRoadY(at.x, at.z) !== null) return zone;
         }
-        const verge = Math.abs(loc.lateral) <= ground.halfRoad(loc) + RoadSurface.VERGE_M;
+        // (a stopping place's strip is verge too, as deep as the place: WorldGround.vergeAt, WorldPlaces)
+        const width = typeof ground.vergeAt === 'function' ? ground.vergeAt(loc.index, loc.lateral, loc.t, true) : RoadSurface.VERGE_M;
+        const verge = Math.abs(loc.lateral) <= ground.halfRoad(loc) + width;
         const kind = verge ? 'shoulder' : 'runoff';
         if (zone.kind === kind) return zone;
         // A new zone each time: checkWallCollision holds two at once (the bike's and the edge's)

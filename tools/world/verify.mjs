@@ -1,5 +1,5 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22, the stacked-leg gate and floating roads).
-//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|water|floating|overlap|horizon|landmarks|dem|all> --stages <ids|all>
+//   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|water|floating|overlap|horizon|landmarks|places|dem|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
 // dem reads the DEM from the cache; fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
@@ -21,6 +21,7 @@ import { resolveCacheDir } from './cache.mjs';
 import { sampleGrid, bandHalf, minRideWidth, RIDE_WIDTH_M, END_JOIN_M, JUNCTION_M } from './widths.mjs';
 import { drawnTileLow, horizonDrawnAt } from './farland.mjs';
 import { COVER, COVER_CELL_M, COVER_N } from './landcover.mjs';
+import { PLACE, AREA_KINDS, padOf, mouthsOf, levelOff, wallRisk } from './places.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -668,6 +669,63 @@ export function checkLandmarks(decoded, repoRoot = REPO_ROOT) {
   return check('landmarks', problems.length === 0, { landmarks: list.length, bad: bad.length, problems });
 }
 
+// The stopping places beside the ride (places.mjs), on the committed data: in order along the ride, each inside it,
+// of a known kind, clear of structures, tight bends and the side roads' mouths on its side. No land stands over a map
+// place's widened verge (PLACES.above), and under it the land lies no further down than the fill RoadMesh draws from
+// the verge's edge closes (PLACES.below: as under any verge, the 8 m triangle across the strip's edge falls toward
+// the ground); beside a found place the land is level out to its depth (PLACE.foundLevelM, and the heights' 0.1 m
+// storage). Reports how many of each source and the gaps between them along the ride.
+export const PLACES = Object.freeze({ below: 2, above: 0.15, storageM: 0.1 });
+export function checkPlaces(decoded) {
+  const places = decoded.manifest.places ?? [];
+  const samples = rideSamples(decoded.edges, decoded.ride.path);
+  const mouths = mouthsOf(decoded.junctions, samples);
+  const length = decoded.ride.length;
+  const kinds = new Set([...Object.values(AREA_KINDS), 'viewpoint', 'verge']);
+  const problems = [];
+  let worstUnder = 0, worstOver = 0, worstLevel = 0;
+  places.forEach((p, k) => {
+    const say = m => problems.push(`place ${p.id} at s ${p.s}: ${m}`);
+    if (k && places[k - 1].s > p.s) say('is out of order');
+    if (!(p.s >= 0 && p.s + p.length <= length)) say('lies outside the ride');
+    if (!kinds.has(p.kind) || !['map', 'found'].includes(p.source) || ![1, -1].includes(p.side)) say(`has kind ${p.kind}, source ${p.source}, side ${p.side}`);
+    if (!(p.depth > 0 && p.length >= PLACE.lengthMinM)) say(`is ${p.length} m long and ${p.depth} m deep`);
+    const radiusMin = p.source === 'map' ? PLACE.radiusMinM : PLACE.foundRadiusM;
+    for (let i = 0; i < samples.s.length; i++) {
+      const s = samples.s[i];
+      if (s < p.s || s > p.s + p.length) continue;
+      if (samples.flags[i] & (ROOFED | 2)) say(`is on a structure at s ${s.toFixed(0)}`);
+      if (samples.radius[i] < radiusMin) say(`is in a bend of ${samples.radius[i].toFixed(0)} m radius at s ${s.toFixed(0)}`);
+      const cos = Math.cos(samples.heading[i]), sin = Math.sin(samples.heading[i]), half = samples.width[i] / 2;
+      if (p.source === 'map') {
+        const pad = padOf(p, s);
+        for (let d = 0; d <= VERGE_M + pad + 1e-9; d += 0.5) {
+          const o = p.side * (half + d);
+          const land = tileHeightAt(decoded.tiles, samples.x[i] + o * cos, samples.z[i] - o * sin);
+          if (land === null) { say(`has no land at s ${s.toFixed(0)}`); break; }
+          worstUnder = Math.max(worstUnder, samples.y[i] - land);
+          worstOver = Math.max(worstOver, land - samples.y[i]);
+        }
+      } else {
+        worstLevel = Math.max(worstLevel, levelOff(decoded.tiles, samples, i, p.side, p.depth));
+        if (wallRisk(decoded.tiles, samples, i, p.side)) say(`has the land falling away at its edge at s ${s.toFixed(0)} (a retaining wall would stand there)`);
+      }
+    }
+    const clear = p.source === 'map' ? PLACE.mouthClearM : PLACE.foundJunctionM;
+    if (mouths.some(m => (p.source === 'found' || m.side !== -p.side) && m.s > p.s - clear + 4 && m.s < p.s + p.length + clear - 4)) say('is at a side road mouth');
+  });
+  if (worstUnder > PLACES.below) problems.push(`the land lies ${worstUnder.toFixed(2)} m under a map place (limit ${PLACES.below})`);
+  if (worstOver > PLACES.above) problems.push(`the land stands ${worstOver.toFixed(2)} m over a map place (limit ${PLACES.above})`);
+  if (worstLevel > PLACE.foundLevelM + PLACES.storageM) problems.push(`the land beside a found place is ${worstLevel === Infinity ? 'not ground to stand on' : `${worstLevel.toFixed(2)} m off the road`} (limit ${PLACE.foundLevelM + PLACES.storageM})`);
+  const at = [0, ...places.map(p => p.s), length];
+  const gaps = at.slice(1).map((s, k) => Math.round(s - at[k]));
+  const r2 = v => Math.round(v * 100) / 100;
+  return check('places', problems.length === 0, {
+    places: places.length, map: places.filter(p => p.source === 'map').length, found: places.filter(p => p.source === 'found').length,
+    maxGapM: Math.max(...gaps), gapsM: gaps, landUnderM: r2(worstUnder), landOverM: r2(worstOver), foundLevelM: worstLevel === Infinity ? null : r2(worstLevel), problems
+  });
+}
+
 async function sourceFor(opt) {
   if (opt.synthetic) return { source: syntheticSource(), spacing: 500 };
   const route = JSON.parse(fs.readFileSync(path.join(HERE, 'route.json'), 'utf8'));
@@ -688,7 +746,7 @@ export async function main(argv) {
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
-  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'water', 'floating', 'overlap', 'horizon', 'landmarks', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
+  const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'water', 'floating', 'overlap', 'horizon', 'landmarks', 'places', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;
   let built = null;
   let demAt = null;
@@ -706,7 +764,7 @@ export async function main(argv) {
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), water: () => checkWater(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), landmarks: () => checkLandmarks(decoded), dem: () => checkDem(decoded, demAt),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), water: () => checkWater(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), landmarks: () => checkLandmarks(decoded), places: () => checkPlaces(decoded), dem: () => checkDem(decoded, demAt),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {

@@ -13,6 +13,8 @@
 //   roadworksZones, roadworkObstacles, jumpRamps,
 //   boulders                                             null / empty: the legs' cones, rockfalls and roadworks zones are not built
 //   roadworks                                            the checkpoints' roadworks sites (js/world/roadworks.js)
+//   places                                               the stopping places beside the ride (js/world/places.js): places.list,
+//                                                        places.next(s), places.stopAt(place, slot, ground)
 //   applyLandscapeConfig                                 fog density only
 //   applyWeatherVisuals, resolveRoadSurface,
 //   writeRoadSurface                                     the road's wetness (RoadSurface.setWet)
@@ -114,6 +116,8 @@ class WorldEnvironment {
         const samples = this.graph.rideSamples();
         if (!samples) throw new Error('world ride is not resident');
         this.route = new WorldRoute(samples, { stations: data.ride.stations, stages: data.ride.stages, graph: this.graph });
+        // The stopping places beside the ride (WorldPlaces), on the route's points before anything reads a verge
+        this.places = new WorldPlaces(data.manifest.places || [], this.route, stage ? { from: stage.from, to: stage.to } : {});
         this.ground = new WorldGround(this.route, data);
         // The physics reads the land as it is drawn: cut to the retaining walls (cutsOf)
         this.ground.cutsOf = key => this.cutsOf(key);
@@ -245,6 +249,8 @@ class WorldEnvironment {
         const ends = stations.filter((st, i) => i === 0 || i === stations.length - 1);
         this.roadworks = new Roadworks(this, stations);
         if (this.roadworks.group) this.group.add(this.roadworks.group);
+        // No rider waits in the works or under a gate: the places there are closed (WorldPlaces.close)
+        this.places.close([...(this.roadworks.sites || []).map(site => ({ s0: site.s0, s1: site.s1 })), { s0: this.startS, s1: this.startS }, { s0: this.endS, s1: this.endS }]);
         const out = { positions: [], shades: [] };
         const post = [0.55, 0.55, 0.58];
         for (const st of ends) {
@@ -434,6 +440,12 @@ class WorldEnvironment {
         };
         return points.slice(from, to + 1).map((p, i) => {
             const row = { x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, i: from + i, ...styles[from + i] };
+            // A stopping place's hard standing on either side (WorldPlaces.apply)
+            // (every row of it is kept at the lower level of detail, RoadMesh.decimate: there the works lay the ground
+            // under the verge, and across a place 5 m deep a row every 16 m made triangles of 44 m2 of flat ground)
+            if (p.padN || p.padP) Object.assign(row, { padN: p.padN || 0, padP: p.padP || 0, padSurface: p.padSurface, keep: true });
+            // (and the row before and after it, so the taper starts from a row beside it)
+            else if ([points[from + i - 1], points[from + i + 1]].some(q => q && (q.padN || q.padP))) row.keep = true;
             const held = goreAt(from + i);
             if (!held) return row;
             for (const [key, flag] of [['l', 'mouthL'], ['r', 'mouthR']]) {

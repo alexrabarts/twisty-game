@@ -1,6 +1,6 @@
 // The synthetic source for `import.mjs --synthetic`: a made-up mountain road of three 2 km stages with the features
 // the tests and the board contract need, run through the same pipeline as the real data. Nothing here is random.
-//   stage 1: a 20 degree kink at R = 20 m and a 180 degree hairpin at R = 10 m
+//   stage 1: a 20 degree kink at R = 20 m and a 180 degree hairpin at R = 10 m, and a car park beside the first straight
 //   stage 2: a stacked switchback pair, the legs 25 m apart (hairpins at R = 12.5 m)
 //   stage 3: a four-way junction, a 120 m tunnel and gentle bends
 const STEP_M = 3;
@@ -98,6 +98,8 @@ export function syntheticSource() {
     prepare: async () => {},
     coverPolys: () => [rect(3, minX - 400, minZ - 300, minX - 100, maxZ), rect(1, (minX + maxX) / 2 - 80, minZ, (minX + maxX) / 2 + 200, (minZ + maxZ) / 2), rect(7, maxX + 60, minZ, maxX + 300, minZ + 500)],
     buildings: samples => [40, 90, 140].map((k, i) => ({ x: samples.x[k] + 35, z: samples.z[k], w: 8 + i, d: 12, heading: 0.3 * i, h: 7, kind: 1 })),
+    // A car park along the first straight, on the rider's right: 40 m long, from inside the drawn road to 9 m out
+    areas: () => [{ cls: 'Oeffentliches Parkplatzareal', name: null, ring: [[-9, 300], [-3.5, 300], [-3.5, 340], [-9, 340], [-9, 300]] }, { cls: 'Verkehrsflaeche', name: null, ring: [[3.5, 100], [9, 100], [9, 140], [3.5, 140], [3.5, 100]] }],
     landmarks: []
   };
 }

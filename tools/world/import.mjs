@@ -24,6 +24,7 @@ import { syntheticSource } from './synthetic.mjs';
 import { buildFarLand, horizonSinks, COPERNICUS_NOTICE } from './farland.mjs';
 import { TILE_N } from './bench.mjs';
 import { RIDE_WIDTH_M, classWidth, narrowRide } from './widths.mjs';
+import { mapPlaces, foundPlaces, applyPads, mouthsOf, numberPlaces } from './places.mjs';
 
 export { RIDE_WIDTH_M, classWidth };
 
@@ -82,6 +83,17 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     buildings(samples) {
       const box = [Math.min(...samples.x) - 250, Math.min(...samples.z) - 250, Math.max(...samples.x) + 250, Math.max(...samples.z) + 250];
       return buildingsFromRows(gpkg.query('tlm_bauten_gebaeude_footprint', lvBox(box)), ([e, n]) => [e - e0, -(n - n0)], samples);
+    },
+    // The mapped traffic areas (car parks, rest areas) round the ride, for places.mjs: the class, the public name
+    // where the map has one, and the outer ring
+    areas(samples) {
+      const box = [Math.min(...samples.x) - 100, Math.min(...samples.z) - 100, Math.max(...samples.x) + 100, Math.max(...samples.z) + 100];
+      const out = [];
+      for (const row of gpkg.query('tlm_areale_verkehrsareal', lvBox(box))) {
+        const polys = row.geom.type === 'Polygon' ? [row.geom.coordinates] : row.geom.type === 'MultiPolygon' ? row.geom.coordinates : [];
+        for (const poly of polys) out.push({ cls: String(row.objektart), name: row.name ?? null, ring: poly[0].map(p => [p[0] - e0, -(p[1] - n0)]) });
+      }
+      return out;
     },
     landmarks,
     cobbles: JSON.parse(fs.readFileSync(structuresFile, 'utf8')).cobbles.map(c => ({ name: c.name, classes: c.classes, box: [c.lv95Box[0] - e0, -(c.lv95Box[3] - n0), c.lv95Box[2] - e0, -(c.lv95Box[1] - n0)] })),
@@ -239,6 +251,11 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   const twice = new Set(junctions.filter(j => j.passes.length >= 2).map(j => j.node));
   nodes.forEach(n => { if (twice.has(n.id)) n.flags |= NODE_FLAG.usedTwice; });
 
+  // The stopping places the map has beside the ride widen its verge there, before the land is carved (places.mjs)
+  const mouths = mouthsOf(junctions, samples);
+  const mapped = source.areas ? mapPlaces(source.areas(samples), samples, mouths, edges) : [];
+  applyPads(edges, ride, mapped);
+
   const placed = placeStations(samples, bounds, junctions.flatMap(j => j.passes.map(p => p.sIn)), { spacingM: stationSpacingM });
   const stations = [];
   const stages = bounds.map((b, k) => {
@@ -258,6 +275,9 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
   const bencher = createBencher({ edges, demAt, coverAt: coverLookup(cover) });
   let missing = 0;
   for (const [tx, tz] of tileList) { const t = bencher.tile(tx, tz); missing += t.missing; tiles.set(`${tx},${tz}`, t); }
+
+  const places = numberPlaces([...mapped, ...foundPlaces(samples, tiles, mouths, edges, mapped, stations.filter(st => st.kind === 'gate').map(st => st.s))]);
+  log(`places: ${mapped.length} from the map, ${places.length - mapped.length} found`);
 
   const far = (() => {
     const x0 = Math.floor(box[0] / FAR_CELL_M) * FAR_CELL_M, z0 = Math.floor(box[1] / FAR_CELL_M) * FAR_CELL_M;
@@ -292,7 +312,7 @@ export async function buildWorld(source, { stationSpacingM = 1000, log = () => {
 
   return {
     origin: source.origin, credit, notice, sources: farLand ? { ...source.sources, far: farLand.copernicus ? ['alti3d', 'copernicus-glo30'] : ['alti3d'] } : source.sources, spacingM: 4, stationSpacingM, keptRoadClasses: source.keptRoadClasses ?? [...new Set(edges.map(e => e.cls))].sort(),
-    nodes, edges, ride, junctions, stages, stations, tiles, cover, far, farLand, buildings, landmarks, structures: structureRuns(samples),
+    nodes, edges, ride, junctions, stages, stations, tiles, cover, far, farLand, buildings, landmarks, places, structures: structureRuns(samples),
     samples, stats: { ...stats, corridor, tilesMissingHeight: missing, droppedStations: placed.dropped, maxStationGapM: placed.maxGapM, snaps: g.snaps }
   };
 }

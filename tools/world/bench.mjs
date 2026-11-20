@@ -52,6 +52,15 @@ const nodeKey = (gi, gj) => (gi + NODE_BIAS) * 65536 + (gj + NODE_BIAS);
 // Half the drawn strip of a road `width` wide: the ribbon, its verge and the probe margin
 export const stripHalf = width => width / 2 + VERGE_M + CLAIM_MARGIN_M;
 
+// The extra verge of edge `e` between samples i and i + 1 at share t, on the side of (x, z): a stopping place
+// (places.mjs applyPads: e.padP on the edge's +lateral side, e.padN on the other), 0 for every other edge
+function padAt(e, i, t, x, z) {
+  if (!e.padP && !e.padN) return 0;
+  const dx = e.x[i + 1] - e.x[i], dz = e.z[i + 1] - e.z[i];
+  const pad = (x - (e.x[i] + dx * t)) * dz - (z - (e.z[i] + dz * t)) * dx >= 0 ? e.padP : e.padN;
+  return pad ? pad[i] + (pad[i + 1] - pad[i]) * t : 0;
+}
+
 // A hash of every segment outside a structure, for "which strands lie near (x, z)": near(x, z) gives, per edge and
 // per STRAND_GAP_M of its length, the nearest point within `reach` of that road's band: {edge, arc, d, y, w, low},
 // `low` the lowest road height of that strand within reach
@@ -136,7 +145,7 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
       const d = Math.hypot(px - x, pz - z);
       const w = e.width[i] + (e.width[i + 1] - e.width[i]) * t;
       if (d > w / 2 + BENCH_M + SLOPE_REACH_M) continue;
-      out.push({ d, w, y: e.y[i] + (e.y[i + 1] - e.y[i]) * t, edge: ei, arc: (i + t) * e.spacing, px, pz });
+      out.push({ d, w, v: VERGE_M + padAt(e, i, t, x, z), y: e.y[i] + (e.y[i + 1] - e.y[i]) * t, edge: ei, arc: (i + t) * e.spacing, px, pz });
     }
     return out;
   }
@@ -158,7 +167,7 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
     // One claim per strand: the same edge within SAME_STRAND_M of arc is the same piece of road (the two sides of a
     // hairpin are not, though they lie within STRAND_GAP_M)
     const held = list.find(c => c.edge === ei && Math.abs(c.arc - arc) <= SAME_STRAND_M);
-    const c = { edge: ei, arc, d, y: e.y[i] + (e.y[i + 1] - e.y[i]) * t, w: e.width[i] + (e.width[i + 1] - e.width[i]) * t, ride: !!e.onRide };
+    const c = { edge: ei, arc, d, v: VERGE_M + padAt(e, i, t, x, z), y: e.y[i] + (e.y[i + 1] - e.y[i]) * t, w: e.width[i] + (e.width[i + 1] - e.width[i]) * t, ride: !!e.onRide };
     if (!held) list.push(c);
     else if (d < held.d) Object.assign(held, c);
   };
@@ -179,6 +188,17 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
           const xa = e.x[i] + f * ha * ca, za = e.z[i] - f * ha * sa;
           const xb = e.x[i + 1] + f * hb * cb, zb = e.z[i + 1] - f * hb * sb;
           visit(e, ei, i, t, (xa + (xb - xa) * t) / CELL_M, (za + (zb - za) * t) / CELL_M);
+        }
+        // A stopping place's side of the strip goes on past the usual verge, by its pad
+        for (const [pad, sign] of [[e.padP, 1], [e.padN, -1]]) {
+          if (!pad || !(pad[i] > 0 || pad[i + 1] > 0)) continue;
+          const more = Math.max(pad[i], pad[i + 1]);
+          for (let d = CLAIM_STEP_M; d < more + CLAIM_STEP_M; d += CLAIM_STEP_M) {
+            const oa = sign * (ha + Math.min(d, pad[i])), ob = sign * (hb + Math.min(d, pad[i + 1]));
+            const xa = e.x[i] + oa * ca, za = e.z[i] - oa * sa;
+            const xb = e.x[i + 1] + ob * cb, zb = e.z[i + 1] - ob * sb;
+            visit(e, ei, i, t, (xa + (xb - xa) * t) / CELL_M, (za + (zb - za) * t) / CELL_M);
+          }
         }
       }
     }
@@ -211,7 +231,7 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
       const low = Math.min(...list.map(c => c.y));
       // The lowest road owns the node, so no land stands over any road; but under its own carriageway and verge the
       // ride owns it when it is within JOIN_M of the lowest (a junction: the side road is drawn under the ride there)
-      const own = list.filter(c => c.ride && c.d <= c.w / 2 + VERGE_M && c.y <= low + JOIN_M).sort(byNear);
+      const own = list.filter(c => c.ride && c.d <= c.w / 2 + c.v && c.y <= low + JOIN_M).sort(byNear);
       const lowest = [...list].sort((p, q) => p.y - q.y || byNear(p, q))[0];
       // The ride is one road across its edges: where the lowest claim is the ride, the nearest piece of the ride
       // within JOIN_M of it owns the node (two edges of the ride meet at a node at one height)
@@ -220,10 +240,10 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
       const nearest = [...list].sort(byNear)[0];
       // A node nearer an upper road than the road it took its height from is a drop (the upper road's retaining wall)
       // only beyond that road's strip: on the strip it stays bench, so the drop never reaches onto the verge
-      const zone = nearest.y > win.y + JOIN_M && nearest.d > stripHalf(nearest.w) ? ZONE.drop : win.d <= win.w / 2 ? ZONE.road : ZONE.bench;
+      const zone = nearest.y > win.y + JOIN_M && nearest.d > stripHalf(nearest.w) + (nearest.v - VERGE_M) ? ZONE.drop : win.d <= win.w / 2 ? ZONE.road : ZONE.bench;
       // Past the road's strip (in a triangle that only reaches into it) the node is the fill at the batter down to the
       // ground, or the ground where it stands higher, but never over the road: no flat shelf, no land over the verge
-      const past = win.d - (win.w / 2 + VERGE_M);
+      const past = win.d - (win.w / 2 + win.v);
       let y = win.y;
       if (past > 0) {
         const dem = demAt(gi * CELL_M, gj * CELL_M);
@@ -288,7 +308,7 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
     if (a.d <= a.w / 2) return { y: a.y, zone: ZONE.road };
     // The earthwork: past the strip the ground, held within the batter of the road (fill under it, cut above it) out
     // to EARTHWORK_M; beyond it the ground itself
-    const past = a.d - (a.w / 2 + VERGE_M);
+    const past = a.d - (a.w / 2 + a.v);
     const y = Number.isNaN(dem) || past <= 0 ? a.y : past > EARTHWORK_M ? dem : Math.max(a.y - past * BATTER, Math.min(a.y + past * BATTER, dem));
     if (past <= 0) return { y, zone: ZONE.bench };
     // Two strands too close and too far apart in height for the batter: a cliff face, `wall` nearer the lower road

@@ -194,6 +194,8 @@ class RoadSurface {
 
     // Metres of verge drawn past the carriageway edge: gravel, then grass that thins out over the ground
     static get VERGE_M() { return 1.1; }
+    // The surface of a stopping place's hard standing (the `roadPad` vertex attribute's third value; 0 is no place)
+    static get PAD() { return { asphalt: 1, gravel: 2 }; }
 
     // The carriageway width a swissTLM3D class stands for; an unknown class is a narrow road
     static realWidth(cls) {
@@ -552,7 +554,7 @@ class RoadSurface {
             Object.assign(shader.uniforms, uniforms);
             RoadSurface.shader(shader);
         };
-        material.customProgramCacheKey = () => 'world-road-near-5';
+        material.customProgramCacheKey = () => 'world-road-near-6';
         if (RoadSurface.works) RoadSurface.setWorks(RoadSurface.works);
         RoadSurface.near = material;
         return material;
@@ -597,6 +599,8 @@ attribute vec4 edge;
 attribute float roadBase;
 attribute vec3 roadArc;
 attribute vec2 roadPlane;
+attribute vec3 roadPad;
+varying vec3 vRoadPad;
 varying vec4 vRoad;
 varying vec4 vEdge;
 varying float vRoadBase;
@@ -607,7 +611,8 @@ vRoad = road;
 vEdge = edge;
 vRoadBase = roadBase;
 vRoadArc = roadArc;
-vRoadPlane = roadPlane;`);
+vRoadPlane = roadPlane;
+vRoadPad = roadPad;`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <common>', `#include <common>
 uniform sampler2D roadSettMap;
 uniform sampler2D roadSettNormal;
@@ -627,6 +632,7 @@ varying vec4 vEdge;
 varying float vRoadBase;
 varying vec3 vRoadArc;
 varying vec2 vRoadPlane;
+varying vec3 vRoadPad;
 // RoadSurface.footprint: metres of texture a pixel covers once the anisotropic filter has done what it can
 float roadFootprint(vec2 gx, vec2 gy) {
     float a = length(gx), b = length(gy);
@@ -899,6 +905,22 @@ float roadRag = (landNoise(vec2(roadS * 1.3, roadSide * 13.0)) - 0.5) * 0.22 + (
 float roadOut = abs(roadLat) - roadHalf - roadRag * (1.0 - vRoad.w);
 float roadWorn = smoothstep(-0.5, 0.0, roadOut) * (1.0 - step(0.0, roadOut));
 roadAlbedo = mix(roadAlbedo, roadAlbedo * 1.12 + roadGravel * 0.08, roadWorn * (1.0 - roadSett) * 0.7);
+// A stopping place (WorldPlaces, the roadPad attribute): the hard standing goes on past the edge by the pad's depth on
+// that side, in the road's own surface or in gravel, with a broken white line along the carriageway's edge where it is
+// asphalt; the verge's gravel and grass start at the pad's outer edge
+float roadPadM = roadSide < 0.0 ? vRoadPad.x : vRoadPad.y;
+if (roadPadM > 0.0) {
+    float roadOnPad = smoothstep(-0.015, 0.015, roadOut) * (1.0 - smoothstep(-0.015, 0.015, roadOut - roadPadM));
+    float padGravel = step(1.5, vRoadPad.z);
+    float padGrain = landNoise(vec2(roadS * 6.0, roadLat * 6.0)) * 0.6 + landNoise(vec2(roadS * 23.0, roadLat * 23.0)) * 0.4;
+    vec3 padStone = roadGravel * (0.75 + 0.5 * padGrain);
+    roadAlbedo = mix(roadAlbedo, mix(roadAlbedo * 0.94 + roadGravel * 0.05, padStone, padGravel), roadOnPad);
+    roadRough = mix(roadRough, mix(roadRough, 0.97, padGravel), roadOnPad);
+    float padLine = roadLine(roadLat, roadSide * (roadHalf + ${f(m.lineWidthM)}), ${f(m.lineWidthM)}, roadFwLat) * roadDash(roadS, ${f(m.mouth.dashM)}, ${f(m.mouth.dashM + m.mouth.gapM)}, roadFwAlong);
+    padLine *= (1.0 - padGravel) * (1.0 - roadSett) * smoothstep(0.6, 1.2, roadPadM) * 0.8;
+    roadAlbedo = mix(roadAlbedo, roadPaint, padLine);
+    roadOut -= roadPadM;
+}
 float roadVerge = smoothstep(-0.015, 0.015, roadOut);
 float roadAlpha = 1.0;
 if (roadVerge > 0.0) {

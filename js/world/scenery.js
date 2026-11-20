@@ -1,6 +1,6 @@
 // RoadClearance: where the roads of a world are, for whatever is placed beside them. The road bands are the ride's
 // samples (from the route) and every side edge's samples (from the chunks in residence), each with its own drawn width
-// plus the verge (RoadSurface.VERGE_M), in a 16 m hash. A side edge is added the first time its chunks are here and
+// plus the verge (RoadSurface.VERGE_M) and the strip of each stopping place beside the ride (WorldPlaces), in a 16 m hash. A side edge is added the first time its chunks are here and
 // kept after they go: the data never changes. No THREE.
 class RoadClearance {
     static get HASH_M() { return 16; }
@@ -17,6 +17,17 @@ class RoadClearance {
         for (let i = 0; i + 1 < points.length; i++) {
             const a = points[i], b = points[i + 1];
             this.add({ edgeId: null, index: i, x0: a.x, z0: a.z, x1: b.x, z1: b.z, h0: a.width / 2 + verge, h1: b.width / 2 + verge });
+            // A stopping place beside the ride (WorldPlaces: safeN, safeP on the route's points) is a band of its own,
+            // along the middle of its strip, so nothing is planted where a rider pulls in
+            for (const [key, sign] of [['safeN', -1], ['safeP', 1]]) {
+                const pa = a[key] || 0, pb = b[key] || 0;
+                if (!pa && !pb) continue;
+                const oa = sign * (a.width / 2 + verge + pa / 2), ob = sign * (b.width / 2 + verge + pb / 2);
+                this.add({
+                    edgeId: null, index: i, place: true, h0: pa / 2, h1: pb / 2,
+                    x0: a.x + oa * Math.cos(a.heading), z0: a.z - oa * Math.sin(a.heading), x1: b.x + ob * Math.cos(b.heading), z1: b.z - ob * Math.sin(b.heading)
+                });
+            }
         }
     }
 

@@ -1,7 +1,8 @@
 // The world data format: encode a built world into compact files, and decode them back (verify.mjs and the tests
 // read the files through decodeWorld, so the format has one definition). Little-endian throughout.
 //
-//   manifest.json            format, sources, origin, road classes, stages, stations, tile and chunk indexes, structures
+//   manifest.json            format, sources, origin, road classes, stages, stations, tile and chunk indexes, structures,
+//                            landmarks and the stopping places beside the ride (tools/world/places.mjs)
 //   ride.json                the ride as a path of edge uses, stages and stations
 //   graph/nodes.bin          16 B per node: x z y Int32 mm, degree Uint8, flags Uint8 (1 junction, 2 on ride, 4 used twice), 2 B spare
 //   graph/edges.bin          24 B per edge: id from to length(mm) firstSample Uint32, sampleCount Uint16, class Uint8, flags Uint8 (1 on ride)
@@ -209,6 +210,7 @@ export function encodeFiles(world) {
     junctions: world.junctions.map(j => ({ id: j.id, node: j.node, name: j.name, passes: j.passes.map(p => r2(p.sIn)) })),
     structures: world.structures,
     landmarks: world.landmarks,
+    places: world.places ?? [],
     ...(world.farLand ? { farLevels: world.farLand.levels.map((l, k) => ({ file: `far/l${k + 1}.bin`, cell: l.cell, nx: l.nx, nz: l.nz })) } : {}),
     counts: { nodes: world.nodes.length, edges: world.edges.length, samples: chunks.reduce((p, c) => p + c.count, 0), buildings: world.buildings.length },
     dataHash
