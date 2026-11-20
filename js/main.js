@@ -642,7 +642,7 @@ class Game {
     // to rain
     prewarmWorldWeather() {
         if (!this.graphics || !this.graphics.renderer) return;
-        const shown = [this.headlight, this.headlightBeam, ...Object.values(this.weatherSystem ? this.weatherSystem.systems : {}).map(system => system.points)]
+        const shown = [this.headlight, ...Object.values(this.weatherSystem ? this.weatherSystem.systems : {}).map(system => system.points)]
             .filter(object => object && !object.visible);
         shown.forEach(object => { object.visible = true; });
         try {
@@ -991,8 +991,7 @@ class Game {
         const keep = new Set([
             this.camera,
             this.ambientLight, this.hemisphereLight, this.fillLight, this.rimLight,
-            this.graphics ? this.graphics.skyMesh : null,
-            this.headlightBeam
+            this.graphics ? this.graphics.skyMesh : null
         ]);
         [this.directionalLight, this.distantLight, this.headlight].forEach(light => {
             if (light) {
@@ -1322,7 +1321,8 @@ class Game {
         this.rimLight.position.set(0, 10, -50);
         this.scene.add(this.rimLight);
 
-        // Bike headlight: one wide, soft-edged beam. It is switched off
+        // Bike headlight: one wide, soft-edged beam, and the only thing the bike's lamp draws (a glowing cone in the
+        // air in front of the lamp read as a second light). It is switched off
         // entirely in daylight (see setTimeOfDay): a spot light costs every
         // lit fragment in the scene whether or not its beam shows.
         // It falls off with the square of its reach, so the road ahead is lit and
@@ -1332,52 +1332,6 @@ class Game {
         this.headlight.castShadow = false;
         this.headlight.visible = false;
         this.scene.add(this.headlight);
-
-        // Visible beam: light scattering in the night air ahead of the bike
-        const beamGeometry = new THREE.ConeGeometry(3.4, 16, 28, 1, true);
-        beamGeometry.translate(0, -8, 0);
-        beamGeometry.rotateX(-Math.PI / 2); // Apex at the lamp, opening along +Z
-        this.headlightBeam = new THREE.Mesh(beamGeometry, new THREE.ShaderMaterial({
-            uniforms: {
-                uColor: { value: new THREE.Color(0xfff1d6) },
-                uStrength: { value: 0 }
-            },
-            vertexShader: `
-                varying float vAlong;
-                varying vec3 vNormalView;
-                varying vec3 vViewDir;
-                void main() {
-                    vAlong = position.z / 16.0;
-                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                    vNormalView = normalize(normalMatrix * normal);
-                    vViewDir = normalize(-mvPosition.xyz);
-                    gl_Position = projectionMatrix * mvPosition;
-                }
-            `,
-            fragmentShader: `
-                uniform vec3 uColor;
-                uniform float uStrength;
-                varying float vAlong;
-                varying vec3 vNormalView;
-                varying vec3 vViewDir;
-                void main() {
-                    // Bright at the lamp, gone by the end; soft at the silhouette
-                    float along = (1.0 - vAlong) * (1.0 - vAlong);
-                    float rim = pow(abs(dot(normalize(vNormalView), normalize(vViewDir))), 1.6);
-                    gl_FragColor = vec4(uColor * along * rim * uStrength, 1.0);
-                }
-            `,
-            transparent: true,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-            fog: false
-        }));
-        this.headlightBeam.rotation.order = 'YXZ';
-        this.headlightBeam.frustumCulled = false;
-        this.headlightBeam.visible = false;
-        this.headlightBeam.userData.skipCulling = true;
-        this.scene.add(this.headlightBeam);
     }
 
     // A time of day, in clear air, and nothing else: the road, the particles, the
@@ -1496,8 +1450,6 @@ class Game {
         this.headlightStrength = values.headlight;
         this.headlight.visible = this.headlightStrength > 0;
         this.headlight.intensity = this.headlightStrength * 10;
-        this.headlightBeam.visible = this.headlight.visible;
-        this.headlightBeam.material.uniforms.uStrength.value = this.headlightStrength * 0.14;
     }
 
     // Write the atmosphere at a segment all at once: no blending in time, a
@@ -3730,16 +3682,20 @@ class Game {
             const renderYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
             const sinYaw = Math.sin(renderYaw);
             const cosYaw = Math.cos(renderYaw);
-            // The light source sits well above the lamp and is dipped onto the
-            // road about 30 m ahead: a beam from lamp height only grazes the
-            // tarmac and leaves it black. The visible beam cone below starts
-            // at the real lamp.
+            // The light source sits well above the lamp and is aimed down onto
+            // the road ahead: a beam from lamp height only grazes the tarmac
+            // and leaves it black.
+            // Main beam with a clear road; dipped while a car or a rider is in front, going either way (Traffic.BEAM)
+            const beam = Traffic.BEAM;
+            const ahead = !!this.traffic && this.traffic.inBeam(renderPos.x, renderPos.z, renderYaw);
+            const dip = Traffic.stepDip(this.headlightDip || (this.headlightDip = {}), ahead, rawDeltaTime);
+            const mix = key => beam.main[key] + (beam.dipped[key] - beam.main[key]) * dip;
+            const aim = mix('aimM');
             this.headlight.position.set(renderPos.x + sinYaw * 0.8, renderPos.y + 2.9, renderPos.z + cosYaw * 0.8);
-            this.headlight.target.position.set(renderPos.x + sinYaw * 30, renderPos.y - 0.4, renderPos.z + cosYaw * 30);
+            this.headlight.target.position.set(renderPos.x + sinYaw * aim, renderPos.y - 0.4, renderPos.z + cosYaw * aim);
             this.headlight.target.updateMatrixWorld();
-
-            this.headlightBeam.position.set(renderPos.x + sinYaw * 0.8, renderPos.y + 0.9, renderPos.z + cosYaw * 0.8);
-            this.headlightBeam.rotation.set(0.045, renderYaw, 0);
+            this.headlight.distance = mix('reachM');
+            this.headlight.intensity = this.headlightStrength * 10 * mix('gain');
         }
 
         // Rim light: from behind and above the bike, aimed at it. (It used to

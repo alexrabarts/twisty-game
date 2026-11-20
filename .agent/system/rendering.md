@@ -68,6 +68,8 @@ On a leg with `rockFace` in `SceneAssets.LEGS` (foggy-gorge), the wall ribbon's 
 
 `headlight` in a config switches on the one spot light and the visible beam cone. They are off in daylight because a spot light costs every lit fragment. The spot reaches 120 m with decay 2: a near-flat falloff lit a white house 60 m ahead as brightly as the road under the wheel, and the bloom turned it into a halo.
 
+- **Headlight.** The bike's lamp is one spot light and nothing else: no cone, no second light (`tests/unit/headlight-dip.test.js` holds the count). It rides on the main beam with a clear road and dips while a car or a rider is in front, going either way (`Traffic.inBeam`: within `rangeM` ahead inside the beam's cone; `Traffic.stepDip`: down over `dipS`, held `holdS` after the road clears, up over `riseS`; `Traffic.BEAM` has the aim, reach and strength of each beam). `Game` writes the light's target, distance and intensity from the dip each frame.
+
 ## Cost
 
 The game is fill-rate bound on high-DPI screens. `adaptResolution` lowers the pixel ratio below 52 fps. It ignores the first 4 s of a leg, when shaders compile.

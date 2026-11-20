@@ -468,6 +468,36 @@ class Traffic {
         return (level || 0) > 0;
     }
 
+    // The rider's beam (Traffic.BEAM): whether a car or a rider is in front of a bike at (x, z) heading `yaw`, going
+    // either way: within `rangeM` ahead, not nearer than `nearM`, and no further to the side than `sideM` plus `spread`
+    // of its distance ahead (the beam's own cone). One behind, or off to the side of the beam, does not count
+    inBeam(x, z, yaw) {
+        const beam = Traffic.BEAM, sin = Math.sin(yaw), cos = Math.cos(yaw);
+        for (const list of [this.cars, this.motorcycles]) {
+            for (const other of list) {
+                const at = (other.carGroup || other.bikeGroup).position;
+                const dx = at.x - x, dz = at.z - z;
+                const ahead = dx * sin + dz * cos;
+                if (ahead < beam.nearM || ahead > beam.rangeM) continue;
+                if (Math.abs(dx * cos - dz * sin) <= beam.sideM + beam.spread * ahead) return true;
+            }
+        }
+        return false;
+    }
+
+    // The dip of the rider's beam, 0 (main beam) to 1 (dipped), moved on by `deltaTime`: it dips over dipS while a
+    // vehicle is in the beam, holds for holdS after the last one left (a car behind a bend comes back), then rises
+    // over riseS. `state` is {dip, clearS}; returns the dip, eased so the beam has no step in its rate
+    static stepDip(state, inBeam, deltaTime) {
+        const beam = Traffic.BEAM;
+        // A new state has had a clear road for as long as it likes
+        state.clearS = inBeam ? 0 : (state.clearS === undefined ? Infinity : state.clearS + deltaTime);
+        const want = inBeam || state.clearS < beam.holdS ? 1 : 0;
+        const rate = deltaTime / (want ? beam.dipS : beam.riseS);
+        state.dip = Math.max(0, Math.min(1, (state.dip || 0) + (want ? rate : -rate)));
+        return state.dip * state.dip * (3 - 2 * state.dip);
+    }
+
     reset() {
         this.cars.forEach(car => car.remove());
         this.motorcycles.forEach(motorcycle => motorcycle.remove());
@@ -1855,3 +1885,12 @@ function disposeGroupResources(group) {
         });
     });
 }
+
+// The rider's headlight beam (Traffic.inBeam, Traffic.stepDip, Game): `main` with a clear road and `dipped` with a
+// vehicle in front, each the metres ahead the light is aimed at the road, its reach in metres and its share of the
+// headlight's strength
+Traffic.BEAM = Object.freeze({
+    rangeM: 110, nearM: 3, sideM: 3.5, spread: 0.18, dipS: 0.3, holdS: 1, riseS: 0.7,
+    main: Object.freeze({ aimM: 48, reachM: 150, gain: 1.15 }),
+    dipped: Object.freeze({ aimM: 20, reachM: 70, gain: 0.75 })
+});

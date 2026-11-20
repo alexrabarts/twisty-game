@@ -555,7 +555,6 @@ describe('Game atmosphere', () => {
             fillLight: new THREE.DirectionalLight(),
             rimLight: new THREE.DirectionalLight(),
             headlight: { visible: false, intensity: 0 },
-            headlightBeam: { visible: false, material: { uniforms: { uStrength: { value: 0 } } } },
             vehicle: { routeS: 0 },
             atmosphereTrack: track,
             atmosphereHold: false
