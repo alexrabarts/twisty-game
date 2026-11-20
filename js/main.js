@@ -429,7 +429,23 @@ class Game {
     // What the guide reads each frame; the projection is the vehicle's own, from its wall check
     worldGuideState(dt) {
         const vehicle = this.vehicle;
-        return { projection: vehicle.projection, speed: vehicle.speed, yaw: vehicle.yawAngle, dt, position: vehicle.position };
+        return { projection: vehicle.projection, speed: vehicle.speed, yaw: vehicle.yawAngle, dt, position: vehicle.position, riders: this.groupOnMap() };
+    }
+
+    // The group's riders for the mini map (WorldGuide.markers): where each one that is on the road is, and its
+    // character's map colour. One list, filled again each frame
+    groupOnMap() {
+        const list = this.mapRiders || (this.mapRiders = []);
+        let n = 0;
+        for (const rider of (this.traffic ? this.traffic.motorcycles : [])) {
+            if (!rider.bikeGroup || !rider.bikeGroup.visible) continue;
+            const m = list[n] || (list[n] = {});
+            m.x = rider.bikeGroup.position.x; m.z = rider.bikeGroup.position.z;
+            m.color = rider.character && rider.character.mapColor !== undefined ? rider.character.mapColor : 0xffffff;
+            n++;
+        }
+        list.length = n;
+        return list;
     }
 
     initializeGameWithLeg(leg) {

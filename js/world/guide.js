@@ -1,5 +1,5 @@
 // WorldGuide: the rider's guidance in a world (D7 b and d).
-//   - a minimap in a HUD corner: the ride, the side roads in residence, the bike;
+//   - a minimap in a HUD corner: the ride, the side roads in residence, the group's riders, the bike;
 //     north up, MAP_SPAN_M across
 //   - a turn prompt for the next junction within PROMPT_M ("Keep left, 300 m")
 //   - the hairpin advice beside the prompt: the speed for the next tight bend within ADVICE_M
@@ -19,6 +19,7 @@ class WorldGuide {
     static get RESTART_AFTER_S() { return 10; }
     static get MAP_SIZE() { return 150; }
     static get MAP_REFRESH_MS() { return 100; }
+    static get MARKER_INSET() { return 5; }
     static get ADVICE_M() { return 150; }
     static get ADVICE_FAST() { return 1.1; }
     // m/s to the HUD's mph
@@ -163,6 +164,28 @@ class WorldGuide {
         }
     }
 
+    // Where the group's riders stand on the map: [{x, y, color, edge}] in canvas pixels for `riders` ([{x, z, color}],
+    // color a number) round `at`, on a map `size` pixels wide that shows `spanM` metres. A rider outside the map is
+    // moved to MARKER_INSET pixels inside its edge along the line from the middle to the rider (`edge`). `out` is filled and
+    // returned, so the map's refresh allocates nothing
+    static markers(riders, at, size, spanM, out = []) {
+        const scale = size / spanM, mid = size / 2, most = mid - WorldGuide.MARKER_INSET;
+        let n = 0;
+        for (const rider of riders || []) {
+            if (!rider || !Number.isFinite(rider.x) || !Number.isFinite(rider.z)) continue;
+            let dx = (rider.x - at.x) * scale, dy = (rider.z - at.z) * scale;
+            const reach = Math.max(Math.abs(dx), Math.abs(dy));
+            const edge = reach > most;
+            if (edge) { dx *= most / reach; dy *= most / reach; }
+            const m = out[n] || (out[n] = {});
+            m.x = mid + dx; m.y = mid + dy; m.edge = edge;
+            m.color = `#${(rider.color >>> 0).toString(16).padStart(6, '0').slice(-6)}`;
+            n++;
+        }
+        out.length = n;
+        return out;
+    }
+
     drawMap(state) {
         const ctx = this.canvas.getContext('2d');
         if (!ctx) return;
@@ -195,6 +218,17 @@ class WorldGuide {
             pen = true;
         }
         ctx.stroke();
+        // The others of the group: a dot each in the rider's own map colour, under the bike's arrow; one off the map
+        // is a smaller dot held at the map's edge toward where it is, so the rider sees who is ahead and who behind
+        for (const m of WorldGuide.markers(state.riders, at, size, WorldGuide.MAP_SPAN_M, this.markerScratch || (this.markerScratch = []))) {
+            ctx.beginPath();
+            ctx.arc(m.x, m.y, m.edge ? 2.2 : 3.2, 0, Math.PI * 2);
+            ctx.fillStyle = m.color;
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(8,12,20,.9)';
+            ctx.stroke();
+        }
         // The bike: an arrow along its heading
         ctx.save();
         ctx.translate(size / 2, size / 2);

@@ -266,6 +266,8 @@ const CHARACTERS = [
         build: { height: 1.06, width: 0.98 },
         // Hangs off: the body well into the turn (Vehicle.riderLean)
         bodyLean: 1,
+        // The rider's dot on the mini map (WorldGuide.markers): told apart from the others, the player's red arrow and the yellow ride
+        mapColor: 0x4aa8ff,
         // Fast everywhere, a little less so on tight twisty roads; daring in the middle
         traits: { country: 5, mountain: 5, hairpins: 4, daring: 3 },
         // Often in front, and navigates
@@ -292,6 +294,8 @@ const CHARACTERS = [
         build: { height: 1.0, width: 1.05 },
         // A modest lean into the turn (Vehicle.riderLean)
         bodyLean: 0.5,
+        // The rider's dot on the mini map (WorldGuide.markers): told apart from the others, the player's red arrow and the yellow ride
+        mapColor: 0xb884ff,
         // Quite slow on country roads, faster on mountain roads, not the fastest round hairpins
         traits: { country: 2, mountain: 4, hairpins: 3, daring: 2 },
         // Leads and navigates most of the time
@@ -320,6 +324,8 @@ const CHARACTERS = [
         build: { height: 1.03, width: 0.95 },
         // A modest lean into the turn (Vehicle.riderLean)
         bodyLean: 0.5,
+        // The rider's dot on the mini map (WorldGuide.markers): told apart from the others, the player's red arrow and the yellow ride
+        mapColor: 0xffffff,
         // Usually quite slow, though he can ride fast at times; the least daring with Guy
         traits: { country: 2, mountain: 2, hairpins: 2, daring: 1 },
         // Toward the back, sometimes last, at a distance from the others
@@ -348,6 +354,8 @@ const CHARACTERS = [
         build: { height: 1.0, width: 1.1 },
         // Sits in line with the bike at any lean (Vehicle.riderLean)
         bodyLean: 0,
+        // The rider's dot on the mini map (WorldGuide.markers): told apart from the others, the player's red arrow and the yellow ride
+        mapColor: 0x9aff3a,
         // Slower on country roads, bursts on mountain roads; the fastest round hairpins when he wants to, and the most daring for jumps
         traits: { country: 2, mountain: 4, hairpins: 5, daring: 5 },
         // In the middle, with bursts
@@ -376,6 +384,8 @@ const CHARACTERS = [
         build: { height: 0.93, width: 0.86 },
         // A modest lean into the turn (Vehicle.riderLean)
         bodyLean: 0.5,
+        // The rider's dot on the mini map (WorldGuide.markers): told apart from the others, the player's red arrow and the yellow ride
+        mapColor: 0xff6ad5,
         // A light trail single: modest pace, the easiest of all to turn, soft
         // long-travel suspension. Each number is what her naked twin had as
         // her first bike (0.8, 0.9, 1.08, 1.0, 1.12), times the light
@@ -410,6 +420,8 @@ const CHARACTERS = [
         build: { height: 0.99, width: 0.94 },
         // Hardly leans off the bike (Vehicle.riderLean)
         bodyLean: 0.2,
+        // The rider's dot on the mini map (WorldGuide.markers): told apart from the others, the player's red arrow and the yellow ride
+        mapColor: 0x46d39a,
         // A mid-size all-rounder: middling pace, easy to place, comfortable
         // over a long day
         // The slowest, on mountain roads too
