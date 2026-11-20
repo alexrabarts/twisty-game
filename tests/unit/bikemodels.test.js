@@ -326,7 +326,8 @@ describe.each(IDS)('swapping the model of %s', id => {
         const turned = new THREE.Quaternion().setFromAxisAngle(vehicle.steerRig.axis, vehicle.barState.shown)
             .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), vehicle.rearWheel.rotation.x));
         for (const node of ['frontWheel', 'frontDisc']) expect(Math.abs(vehicle[node].quaternion.dot(turned))).toBeCloseTo(1, 9);
-        expect(vehicle.rider.rotation.z).toBeCloseTo(0.08, 6);
+        // The rider's own lean into the turn, as that rider does it (tests/unit/rider-lean.test.js)
+        expect(vehicle.rider.rotation.z).toBeCloseTo(game.Vehicle.riderLean(0.4, vehicle.character.bodyLean).roll, 12);
         expect(vehicle.brakeLight.material.emissive.getHex()).toBe(0xff0000);
         expect(vehicle.brakeLight.material.emissiveIntensity).toBe(1);
         expect(vehicle.brakeLight.material).not.toBe(vehicle.palette.paint);

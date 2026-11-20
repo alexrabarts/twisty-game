@@ -174,6 +174,8 @@ const OUTFITS = {
 // `kit` the first outfit's gear; `build` is the rider's size against the
 // modelled rider's (height stretches the torso and the limbs, width the
 // shoulders, the hips and the girth), which the game applies to the one mesh.
+// `bodyLean` (0 to 1) is how far the rider's body goes into a turn past the bike's
+// own lean: drawn only, for the player and for a rider of the group alike.
 const CHARACTERS = [
     {
         id: 'steve',
@@ -185,6 +187,8 @@ const CHARACTERS = [
         kit: OUTFITS.steve[0].kit,
         // The tallest of them
         build: { height: 1.06, width: 0.98 },
+        // Hangs off: the body well into the turn (Vehicle.riderLean)
+        bodyLean: 1,
         stats: { speed: 5, accel: 4, handling: 3, jump: 2, comfort: 1 },
         physics: {
             comfortShake: 1.25,     // Race-firm - you feel everything
@@ -206,6 +210,8 @@ const CHARACTERS = [
         outfits: OUTFITS.alex,
         kit: OUTFITS.alex[0].kit,
         build: { height: 1.0, width: 1.05 },
+        // A modest lean into the turn (Vehicle.riderLean)
+        bodyLean: 0.5,
         stats: { speed: 3, accel: 3, handling: 4, jump: 4, comfort: 4 },
         physics: {
             comfortShake: 0.55,     // Long-travel suspension soaks it up
@@ -229,6 +235,8 @@ const CHARACTERS = [
         kit: OUTFITS.tim[0].kit,
         // Tall and slim
         build: { height: 1.03, width: 0.95 },
+        // A modest lean into the turn (Vehicle.riderLean)
+        bodyLean: 0.5,
         stats: { speed: 2, accel: 2, handling: 4, jump: 1, comfort: 5 },
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
@@ -251,6 +259,8 @@ const CHARACTERS = [
         kit: OUTFITS.shane[0].kit,
         // Broad
         build: { height: 1.0, width: 1.1 },
+        // Sits in line with the bike at any lean (Vehicle.riderLean)
+        bodyLean: 0,
         stats: { speed: 2, accel: 4, handling: 5, jump: 5, comfort: 3 },
         physics: {
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
@@ -274,6 +284,8 @@ const CHARACTERS = [
         kit: OUTFITS.lucy[0].kit,
         // Slighter than the others
         build: { height: 0.93, width: 0.86 },
+        // A modest lean into the turn (Vehicle.riderLean)
+        bodyLean: 0.5,
         // A light trail single: modest pace, the easiest of all to turn, soft
         // long-travel suspension. Each number is what her naked twin had as
         // her first bike (0.8, 0.9, 1.08, 1.0, 1.12), times the light
@@ -303,6 +315,8 @@ const CHARACTERS = [
         kit: OUTFITS.guy[0].kit,
         // Slim
         build: { height: 0.99, width: 0.94 },
+        // Hardly leans off the bike (Vehicle.riderLean)
+        bodyLean: 0.2,
         // A mid-size all-rounder: middling pace, easy to place, comfortable
         // over a long day
         stats: { speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 },
@@ -3559,7 +3573,7 @@ class Vehicle {
                 // Cartwheeling down the hillside
                 this.group.rotation.x = this.tumbleAngle;
                 this.group.rotation.z = this.tumbleRoll;
-                this.rider.rotation.z = 0;
+                this.leanRider(0);
                 this.previousSpeed = this.speed;
                 if (!this.meshBasePosition) {
                     this.meshBasePosition = new THREE.Vector3();
@@ -3575,12 +3589,12 @@ class Vehicle {
                 // Adjust bike position so it sits properly on the ground when rotated
                 this.group.position.y = this.position.y + 0.3;
             }
-            this.rider.rotation.z = 0; // Rider doesn't lean when crashed
+            this.leanRider(0); // Rider doesn't lean when crashed
         } else if (this.isJumping) {
             // Jumping animation - forward rotation
             this.group.rotation.x = this.jumpRotation;
             this.group.rotation.z = this.leanAngle * 0.5; // Reduce lean while jumping
-            this.rider.rotation.z = this.leanAngle * 0.1;
+            this.leanRider(0.5);
         } else if (this.isWheelie) {
             // Wheelie animation - pivot around center of rear wheel
             // Rear wheel centre is at this.axles.rear in local space
@@ -3619,7 +3633,7 @@ class Vehicle {
             
             // Apply lean (reduced during wheelie)
             this.group.rotation.z = this.leanAngle * 0.3; // Reduce lean during wheelie
-            this.rider.rotation.z = this.leanAngle * 0.1;
+            this.leanRider(0.5);
             
             // Simple visual feedback - bike gets brighter during wheelie,
             // brightening the character's own paint color
@@ -3636,7 +3650,8 @@ class Vehicle {
             // On a roadworks ramp the bike pitches to its slope; a knocked beacon or cone leaves a wobble (Roadworks.ride)
             this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) - (this.roadworksSurface ? this.rampPitch || 0 : 0) : 0;
             this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) + (this.roadworksWobble || 0) : this.leanAngle;
-            this.rider.rotation.z = this.leanAngle * 0.2; // Rider leans subtly
+            // The rider's body goes into the turn as that rider does (CHARACTERS bodyLean)
+            this.leanRider(1);
 
             // Restore normal bike color
             if (!this.crashed) {
@@ -3655,6 +3670,7 @@ class Vehicle {
         }
         this.previousSpeed = this.speed;
         this.updateFooting();
+        this.holdRider();
 
         // Base position for render interpolation offsets
         if (!this.meshBasePosition) {
@@ -3730,23 +3746,58 @@ class Vehicle {
             if (spun) part.quaternion.multiply(rig.spin);
             part.quaternion.multiply(quaternion);
         }
-        // The hands go where the grips go: each by as far as its end of the bar moves, in the rider's axes
-        const arms = this.arms, rider = this.rider;
-        if (!arms || !rider || (turn.w === 1 && !rig.handsTurned)) return;
-        rig.handsTurned = turn.w !== 1;
-        const base = this.riderBasePos || rider.position;
-        const into = rig.into || (rig.into = new THREE.Quaternion());
-        const handTurn = rig.handTurn || (rig.handTurn = new THREE.Quaternion());
-        const grip = rig.grip || (rig.grip = new THREE.Vector3());
-        const moved = rig.moved || (rig.moved = new THREE.Vector3());
-        into.copy(rider.quaternion).invert();
-        handTurn.copy(into).multiply(turn).multiply(rider.quaternion);
+    }
+
+    // How far the rider's body goes into a turn past the bike's own lean (Vehicle.BODY), by the rider's `bodyLean`
+    // (CHARACTERS, 0 to 1): 0 sits in line with the bike at any lean, 1 hangs off, the shoulders and the head well
+    // inside and the hips off the seat. `roll` is the rider's own roll (radians, the sign of the lean) and `shift` how
+    // far the rider moves across the seat (m, in the bike's x). Drawn only: the physics reads none of it
+    static riderLean(lean, bodyLean) {
+        const body = Vehicle.BODY;
+        const share = bodyLean === undefined ? body.usual : bodyLean;
+        // A positive roll leans the bike to its right, which is -x
+        return { roll: lean * body.roll * share, shift: -body.shift * share * Math.max(-1, Math.min(1, lean / body.full)) };
+    }
+
+    // The rider drawn leaned into the turn, by `share` of what this rider does (less in the air, none in a crash)
+    leanRider(share) {
+        const lean = Vehicle.riderLean(this.leanAngle * share, this.character && this.character.bodyLean);
+        this.rider.rotation.z = lean.roll;
+        this.rider.position.x = (this.riderBasePos ? this.riderBasePos.x : 0) + lean.shift;
+    }
+
+    // The hands stay on the grips and the feet on the pegs while the bar turns and the rider leans across the bike:
+    // each limb's end goes to where it is with the rider in line with the bike (and the hand then round with the
+    // bar), in the rider's axes as the rider is drawn now. A rider who stands over a jump takes the limbs up as before
+    holdRider() {
+        const rig = this.steerRig, rider = this.rider, arms = this.arms, legs = this.legs;
+        if (!rig || !rider || (!arms && !legs)) return;
+        const leaned = rider.rotation.z !== 0 || rider.position.x !== (this.riderBasePos ? this.riderBasePos.x : 0);
+        const turned = rig.turn.w !== 1;
+        if (!leaned && !turned && !rig.held) return;
+        rig.held = leaned || turned;
+        const hold = rig.hold || (rig.hold = {
+            plain: new THREE.Matrix4(), inverse: new THREE.Matrix4(), q: new THREE.Quaternion(), into: new THREE.Quaternion(),
+            end: new THREE.Quaternion(), euler: new THREE.Euler(), at: new THREE.Vector3(), one: new THREE.Vector3(1, 1, 1), to: new THREE.Vector3()
+        });
+        hold.q.setFromEuler(hold.euler.set(rider.rotation.x, 0, 0));
+        hold.at.set(this.riderBasePos ? this.riderBasePos.x : 0, rider.position.y, rider.position.z);
+        hold.plain.compose(hold.at, hold.q, hold.one);
+        rider.updateMatrix();
+        hold.inverse.copy(rider.matrix).invert();
+        hold.into.copy(rider.quaternion).invert();
         for (const side of [-1, 1]) {
-            const arm = arms[side];
-            if (!arm) continue;
-            grip.copy(arm.end).add(base);
-            moved.copy(grip).sub(rig.point).applyQuaternion(turn).add(rig.point).sub(grip).applyQuaternion(into);
-            arm.place(moved.add(arm.end), handTurn);
+            const arm = arms && arms[side];
+            if (arm) {
+                hold.to.copy(arm.end).applyMatrix4(hold.plain).sub(rig.point).applyQuaternion(rig.turn).add(rig.point).applyMatrix4(hold.inverse);
+                arm.place(hold.to.clone(), hold.end.copy(hold.into).multiply(rig.turn).multiply(hold.q));
+            }
+            // The left foot at a stop is on the ground (updateFooting)
+            const leg = legs && legs[side];
+            if (leg && !(this.footPlaced && side === Vehicle.LEFT)) {
+                hold.to.copy(leg.end).applyMatrix4(hold.plain).applyMatrix4(hold.inverse);
+                leg.place(hold.to.clone(), hold.end.copy(hold.into).multiply(hold.q));
+            }
         }
     }
 
@@ -4574,6 +4625,10 @@ Vehicle.STEER_SHOWN = 0.5;
 // is smoothed over `lag` s; under directSpeed m/s the drawn bar goes over to the steering angle
 Vehicle.BAR = Object.freeze({ counter: 0.12, counterMax: 0.16, intoMax: 0.07, lag: 0.12, directSpeed: 7 });
 Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
+// The rider's body in a turn (Vehicle.riderLean), for a rider whose bodyLean is 1: `roll` rad of the rider's own roll
+// for each rad of the bike's lean, and `shift` m across the seat at a lean of `full` rad and over. `usual` is the
+// bodyLean of a rider who names none (0.57 x 0.35 is the 0.2 every rider had)
+Vehicle.BODY = Object.freeze({ roll: 0.35, shift: 0.16, full: 0.87, usual: 0.57 });
 // The stop pose (Vehicle.updateFooting): under STOP_SPEED (m/s) the bike leans FOOT_LEAN (radians) to its left and the
 // left foot goes down, FOOT_OUT (m) out from the bike's centre plane and FOOT_AHEAD (m) ahead of the peg, over FOOT_S
 Vehicle.STOP_SPEED = 0.3;
