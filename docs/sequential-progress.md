@@ -239,3 +239,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner could not read "Loading the road..." on the menu: it was bare white text in the middle of the screen, over the rider on the stage. The loading screen now dims the stage and shows the note in a panel like the rider card's, low on the screen where the card stood, with a running bar and the data credit under it.
 - Check: `tests/unit/ride-mode.test.js` passes; pictures in a real browser at 1024 by 640 and 390 by 760 show the panel inside the screen and readable.
 - Left: `tools/modal-check.mjs` not run (it reads the credit line on this screen): with the long checks at the end. No other bare status text over the stage was found.
+
+## A rider the player overtakes holds its line
+
+- Job: the owner reported that a rider of the group swerves into him when he overtakes. Cause: a rule from the classic legs made a rider within 10 m of the player, in any direction, a third faster and began a pass of its own, and a world pass swings 2 m toward the centre line, where the overtaking player is. A world rider now starts no pass because the player is near and holds its own pace while the player is alongside or coming past; it closes up only on a player 12 to 35 m ahead of it.
+- Check: a new test in `tests/unit/world-traffic.test.js` passes the player by a rider at 5 and 15 m/s more, on a straight and into a hairpin, against the same rider with nobody there. Before the fix it failed (the rider 3.7 m/s faster as the player came up, then a pass); after it the rider's place across the road and its speed are the same as alone. 5 traffic and crew files on alex-ci (144 tests) pass.
+- Left: no world rider overtakes anything now until the group ride job gives passes a rule with a look beside and behind. The legs keep their rule (a leg pass only leans the bike). Not ridden. The long checks wait for the end.

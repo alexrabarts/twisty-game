@@ -1195,6 +1195,10 @@ class AIMotorcycle {
     // A world rider's pass: metres of road it takes, and how far it swings toward the centre line
     static get PASS_M() { return 40; }
     static get PASS_SWING_M() { return 2; }
+    // A world rider closes up on a player who is this far ahead of it (metres along its heading), and not nearer:
+    // alongside or just past, it holds its own pace
+    static get CHASE_FROM_M() { return 12; }
+    static get CHASE_TO_M() { return 35; }
     // Beyond this many metres from the player a rider is out of sight enough to change its model unseen
     static get UNSEEN_M() { return 120; }
     // A rider in sight waits at most this many frames for such a moment, then changes anyway: on the first ride of a
@@ -1765,6 +1769,16 @@ class AIMotorcycle {
             if (!this.packLateralOffset) this.packLateralOffset = 0;
             const targetOffset = (Math.random() - 0.5) * 1.5;
             this.packLateralOffset += (targetOffset - this.packLateralOffset) * 0.05;
+        } else if (playerPosition && world) {
+            // A world rider never races the player: it starts no pass because the player is near, and it does not
+            // speed up while the player is alongside or coming past (the leg rule below did both, and the pass swings
+            // toward the centre line: into a player who overtakes there). It closes up only on a player who is ahead
+            // of it and clear, by CHASE_FROM_M to CHASE_TO_M along its own heading
+            const heading = this.bikeGroup.rotation.y;
+            const ahead = (playerPosition.x - this.bikeGroup.position.x) * Math.sin(heading) + (playerPosition.z - this.bikeGroup.position.z) * Math.cos(heading);
+            const chase = ahead > AIMotorcycle.CHASE_FROM_M && ahead < AIMotorcycle.CHASE_TO_M;
+            this.currentSpeed = chase ? Math.min(this.baseSpeed * 1.28, 54) : this.baseSpeed;
+            this.packLateralOffset = 0;
         } else if (playerPosition) {
             const dx = this.bikeGroup.position.x - playerPosition.x;
             const dz = this.bikeGroup.position.z - playerPosition.z;

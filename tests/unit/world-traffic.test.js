@@ -171,6 +171,45 @@ describe('the Tremola slice: traffic keeps right', () => {
         }
         if (bad.length) throw new Error(`${bad.length} passes crossed the centre line for long or did not come back:\n${list(bad)}`);
     });
+
+    // The report: "when I overtake someone from the group, they swerve into me". A rider near the player (within 10 m,
+    // alongside included) sped up by a third and began a pass of its own, which swings it 2 m toward the centre line:
+    // where the passing player is. A rider being passed holds its line and its pace
+    test('a rider the player overtakes holds its line and its pace: it starts no pass and does not speed up alongside', () => {
+        const route = env.route;
+        const { AIMotorcycle } = fleet(env);
+        const hairpins = findHairpins(rideSamples(...(w => [w.edges, w.ride.path])(decodeWorld(path.join(REPO, 'world')))));
+        const bad = [];
+        let alongside = 0;
+        // A straight and the way into a hairpin; the player comes past at 5 and at 15 m/s more, on the centre line side
+        for (const s0 of [2600, hairpins[3].s0 - 60]) for (const faster of [5, 15]) {
+            const make = () => { const bike = new AIMotorcycle(new THREE.Scene(), env, { direction: 1, speed: 20, startSegment: 0 }); putAt(bike, route, s0); return bike; };
+            const alone = make(), passed = make();
+            const p = {};
+            let playerS = s0 - 30, prevAlone = null, prevPassed = null;
+            for (let f = 0; f < 60 * 12; f++) {
+                playerS += (passed.currentSpeed + faster) * DT;
+                route.sample(playerS, p);
+                // Half a metre over the centre line, on the side a pass is made
+                const lateral = -ownRight(1) * 0.5;
+                const player = new THREE.Vector3(p.x + lateral * Math.cos(p.heading), p.y, p.z - lateral * Math.sin(p.heading));
+                alone.update(DT, null, [alone], []);
+                passed.update(DT, player, [passed], []);
+                const a = ownSide(route, alone, prevAlone ? { index: prevAlone.index } : null);
+                const b = ownSide(route, passed, prevPassed ? { index: prevPassed.index } : null);
+                prevAlone = a; prevPassed = b;
+                const gap = playerS - b.s;
+                if (Math.abs(gap) < 10) alongside++;
+                if (passed.overtaking) bad.push({ s0, faster, f, error: 'began a pass', gap: Math.round(gap) });
+                // Its place across the road is the one it has with nobody there
+                else if (Math.abs(b.own - a.own) > 0.05 && Math.abs(b.s - a.s) < 0.5) bad.push({ s0, faster, f, moved: Math.round((b.own - a.own) * 100) / 100, gap: Math.round(gap) });
+                else if (Math.abs(gap) < 10 && passed.currentSpeed > alone.currentSpeed + 0.05) bad.push({ s0, faster, f, spedUp: Math.round((passed.currentSpeed - alone.currentSpeed) * 100) / 100, gap: Math.round(gap) });
+                if (bad.length > 20) break;
+            }
+        }
+        if (bad.length) throw new Error(`a rider being overtaken moved toward the player or raced it:\n${list(bad)}`);
+        expect(alongside).toBeGreaterThan(200);
+    });
 });
 
 // The drawn LOD0 ribbon of the resident road sections, filed in 8 m cells: each triangle with its drawn column offsets
