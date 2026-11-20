@@ -3335,7 +3335,9 @@ class Game {
             return;
         }
 
-        const steeringInput = this.input.getSteeringInput();
+        // A world ride eases the steer keys (SteerEase); a leg has no physics object and keeps its own smoothing
+        const world = this.vehicle && this.vehicle.worldPhysics;
+        const steeringInput = this.input.getSteeringInput(world ? world.steerKeys : null);
         const throttleInput = this.input.getThrottleInput();
         const brakeInput = this.input.getBrakeInput();
         const wheelieInput = this.input.getWheelieInput();

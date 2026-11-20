@@ -1,3 +1,47 @@
+// The steer keys, eased for a world ride (WorldPhysics.steerKeys; the classic legs keep steeringSmoothing). A key is on
+// or off, and the world's bike leans at a rate set by the steering, so a rider who taps a key to hold a line gave it
+// full rate in, the self-righting out, full rate in: the lean rocked by 4 to 6 degrees and the drawn bar with it.
+// Each change of the keys is a straight ramp of the steering instead, over keyS, or over featherS when the two
+// changes before it came within featherGapS of each other (the rider is tapping). Tapped keys then give nearly their
+// mean, a held key and a flick answer as fast as before, and a ramp gives the lean a press of its length gave
+// before, however long the ramp. No DOM: tests/unit/world-steer-ease.test.js rides it
+class SteerEase {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this.key = 0;
+        this.base = 0;
+        this.ramps = [];
+        this.since = Infinity;
+        this.before = Infinity;
+    }
+
+    // The keys are at `key` (-1, 0 or 1) from now on
+    turn(key, ease) {
+        if (key === this.key) return;
+        const tapping = this.since < ease.featherGapS && this.before < ease.featherGapS;
+        this.ramps.push({ step: key - this.key, over: tapping ? ease.featherS : ease.keyS, age: 0 });
+        this.key = key;
+        this.before = this.since;
+        this.since = 0;
+    }
+
+    advance(seconds) {
+        if (!(seconds > 0)) return;
+        this.since += seconds;
+        for (const ramp of this.ramps) ramp.age += seconds;
+        while (this.ramps.length && this.ramps[0].age >= this.ramps[0].over) this.base += this.ramps.shift().step;
+    }
+
+    get value() {
+        let value = this.base;
+        for (const ramp of this.ramps) value += ramp.step * Math.min(1, ramp.age / ramp.over);
+        return Math.max(-1, Math.min(1, value));
+    }
+}
+
 class InputHandler {
     constructor() {
         this.keys = {};
@@ -15,6 +59,8 @@ class InputHandler {
         this.pausePressed = false;
         this.virtualControls = null;
         this.steeringSmoothing = 0.4; // How quickly steering ramps up (0-1, higher = faster)
+        this.steerEase = new SteerEase();
+        this.steerKeys = null; // WorldPhysics.steerKeys on a world ride (getSteeringInput), null on a leg
         this.menuActive = false; // Track if crash/finish menu is showing
         this.setupEventListeners();
         this.setupMobileControls();
@@ -27,6 +73,7 @@ class InputHandler {
             if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
 
             this.keys[event.code] = true;
+            this.advanceSteerEase();
             this.updateInputs();
 
             // One-shot actions fire once per press, not on key auto-repeat
@@ -83,6 +130,7 @@ class InputHandler {
 
         document.addEventListener('keyup', (event) => {
             this.keys[event.code] = false;
+            this.advanceSteerEase();
             this.updateInputs();
 
             // Unhighlight virtual controls
@@ -138,6 +186,8 @@ class InputHandler {
             this.targetSteeringInput = -1;  // D/Right now steers left
         }
 
+        if (this.steerKeys) this.steerEase.turn(this.targetSteeringInput, this.steerKeys);
+
         // Steering smoothing happens in getSteeringInput() - updateInputs()
         // runs on every key event and every getter call, so smoothing here
         // made steering response depend on call frequency and frame rate
@@ -151,8 +201,23 @@ class InputHandler {
         this.wheelieInput = (this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['Space'] || virtualSpace) ? 1 : 0;
     }
 
-    getSteeringInput() {
+    // The eased keys run on their own clock, moved on at each key event as well as each frame, so a tap is as long
+    // as the rider made it and not a whole number of frames. A stall (a pause, a hidden tab) counts as 0.1 s
+    advanceSteerEase() {
+        const now = performance.now();
+        if (this.steerKeys) this.steerEase.advance(Math.min((now - (this.steerEaseTime || now)) / 1000, 0.1));
+        this.steerEaseTime = now;
+    }
+
+    // `ease` is WorldPhysics.steerKeys on a world ride: the keys are eased by SteerEase. With none (a classic leg,
+    // whose lean has its own momentum) the steering is smoothed as it always was
+    getSteeringInput(ease = null) {
+        if (ease !== this.steerKeys) {
+            this.steerKeys = ease;
+            this.steerEase.reset();
+        }
         // Update inputs before returning (for virtual controls and smoothing)
+        this.advanceSteerEase();
         this.updateInputs();
 
         // Smooth steering towards target, scaled by elapsed time so the ramp
@@ -160,6 +225,10 @@ class InputHandler {
         const now = performance.now();
         const elapsed = Math.min((now - (this.lastSteeringTime || now)) / 1000, 0.1);
         this.lastSteeringTime = now;
+        if (ease) {
+            this.steeringInput = this.steerEase.value;
+            return this.steeringInput;
+        }
         const blend = 1 - Math.pow(1 - this.steeringSmoothing, elapsed * 60);
         this.steeringInput = this.steeringInput + (this.targetSteeringInput - this.steeringInput) * blend;
 

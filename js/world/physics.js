@@ -15,6 +15,13 @@ const WorldPhysics = Object.freeze({
     // steering with the lag leanRateLag, so a press leans the bike by the same amount whatever it was doing.
     leanRate: 1.15,        // rad/s at full steering, up to steerSpeed: a 0.3 s key press is about 16 degrees
     leanRateLag: 0.04,     // s, how far the lean rate lags the steering (no lean momentum to fall over with)
+    // The steer keys (SteerEase, js/input.js): a key is on or off, and each change of it is a ramp of the steering.
+    // Only the rider's keys and touch buttons: an autopilot, the crew and the tests steer the bike directly
+    steerKeys: Object.freeze({
+        keyS: 0.07,        // s, the ramp of a key held or let go: a lag of 35 ms, as the smoothing it replaces (33 ms)
+        featherS: 0.16,    // s, the ramp while the rider taps: tapped keys give their mean, not a lean that rocks
+        featherGapS: 0.3   // s, three changes of the keys each within this of the last are tapping
+    }),
     steerSpeed: 20,        // m/s, above it the rate falls as (steerSpeed / speed) ^ steerFalloff, floor 0.3
     steerFalloff: 0.7,     // 1 is the legacy speedFactor; it felt sluggish at speed with no lean momentum to help it
     pickUpBoost: 1.5,      // steering against the lean picks the bike up this much quicker (as the legacy bike)
