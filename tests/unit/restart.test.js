@@ -15,8 +15,10 @@ const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8'
 (0, eval)(readFileSync(new URL('../../js/modals.js', import.meta.url), 'utf8'));
 const classSource = source.slice(0, source.indexOf('Game.RESTART_CLEAR_SEGMENTS = 6;') + 'Game.RESTART_CLEAR_SEGMENTS = 6;'.length);
 const callouts = [];
+// How long each call-out was asked to stay up (ms), in the order of `callouts`
+const shown = [];
 const Game = new Function('showCallout', 'TourSystem', 'Course', `${classSource}\nreturn Game;`)(
-    (text, tone) => callouts.push([text, tone]),
+    (text, tone, ms) => { callouts.push([text, tone]); shown.push(ms); },
     { boardId: leg => `${leg.id}-v${leg.trackVersion || 2}` },
     { boardTable: () => ({ 'long-v3': { gates: 14, segments: 700 } }) }
 );
@@ -454,6 +456,18 @@ describe('a world crash restarts in place by itself', () => {
         run(game, Game.WORLD_CRASH.mostS + 0.1);
         expect(callouts[0]).toEqual(['Hit the wall  +5 s', 'bad']);
         expect([game.penaltyMs, game.restarts]).toEqual([5000, 1]);
+    });
+
+    test('a call-out for a crash or a restart stays up twice as long as the fall is watched', () => {
+        const rule = Game.WORLD_CRASH;
+        expect(Game.CALLOUT_MS.crash).toBe(2 * rule.mostS * 1000);
+        expect(Game.CALLOUT_MS).toEqual({ crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400 });
+        const game = worldGame();
+        shown.length = 0;
+        game.beginWorldCrash('Hit the wall');
+        expect(shown).toEqual([Game.CALLOUT_MS.crash]);
+        // The fall itself is no longer: the restart still comes at mostS
+        expect([rule.mostS, rule.leastS]).toEqual([2.2, 1.5]);
     });
 
     test('each crash adds 5 s; a place that crashes the rider within a second twice running moves further back each time', () => {

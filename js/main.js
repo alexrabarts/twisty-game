@@ -389,7 +389,7 @@ class Game {
         this.currentCameraPos.copy(normalCameraPos);
 
         this.environment.guide.onRestart = (reason) => this.restartFromCheckpoint(reason);
-        this.environment.guide.onWarning = (text) => showCallout(text, 'bad', 2500);
+        this.environment.guide.onWarning = (text) => showCallout(text, 'bad', Game.CALLOUT_MS.warning);
         this.resetRunState();
         this.armWorldStart();
         this.graphics.fixColorSpaces();
@@ -2650,7 +2650,7 @@ class Game {
         const rule = Game.WORLD_CRASH;
         this.worldCrashStreak = this.worldSinceRestartS < rule.quickS ? (this.worldCrashStreak || 0) + 1 : 0;
         this.worldCrash = { s: 0, stillS: 0 };
-        showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', rule.mostS * 1000);
+        showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', Game.CALLOUT_MS.crash);
     }
 
     // One step of a world ride's crash: the restart once the fall has been seen (mostS, or leastS when the bike has
@@ -3585,7 +3585,7 @@ class Game {
                 this.soundManager.playCrashSound();
                 this.showCrashNotification(this.vehicle.crashCause || undefined);
             } else if (touched && touched.kind === 'bump' && !this.finished) {
-                showCallout(`Bumped ${touched.name}`, 'warn', 1200);
+                showCallout(`Bumped ${touched.name}`, 'warn', Game.CALLOUT_MS.bump);
             }
             // The roadworks leave one corridor for both directions, so a car
             // on its detour (which starts before the zone and ends after it)
@@ -4087,7 +4087,7 @@ class Game {
     }
     
     showCollisionWarning() {
-        showCallout('Collision!', 'bad', 1500);
+        showCallout('Collision!', 'bad', Game.CALLOUT_MS.collision);
     }
     
     checkJumpScoring() {
@@ -4273,7 +4273,7 @@ class Game {
             weatherSystem: this.weatherSystem
         });
         // (a crash has said its cause and its cost during the fall)
-        if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
+        if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
     }
 
     // The tuning (js/tuning.js, .agent/system/handling.md): multipliers over the handling's numbers, moved with the
@@ -4449,7 +4449,7 @@ class Game {
         }
 
         // Show notification
-        showCallout(`Back to checkpoint +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', 2000);
+        showCallout(`Back to checkpoint +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
 
         console.log('Restarted from checkpoint with penalty');
     }
@@ -4470,6 +4470,10 @@ Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
 // lain under stillMs for stillS), the seconds after a restart within which a crash counts against the place (quickS),
 // and the metres further back each such crash after the second moves the next place
 Game.WORLD_CRASH = { mostS: 2.2, leastS: 1.5, stillMs: 0.5, stillS: 0.4, quickS: 1, backStepM: 20 };
+
+// How long a call-out that tells the rider what went wrong stays up (ms). These outlast the fall itself: the rider
+// reads the cause after the bike is back on the road, where the first half was spent watching the crash
+Game.CALLOUT_MS = { crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400 };
 
 // What a world restart tells the rider, by reason (a crash says its own cause during the fall: beginWorldCrash)
 Game.WORLD_RESTART_TEXT = {
