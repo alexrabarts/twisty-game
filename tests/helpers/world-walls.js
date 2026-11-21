@@ -165,6 +165,9 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             const len = Math.hypot(b.top[0] - a.top[0], b.top[2] - a.top[2]);
             // Not a wall end's return or a parapet's end (short), nor a parapet's face (PARAPET high at both ends)
             if (len < 0.7) continue;
+            // nor a wing down the side of a slope (RoadMesh.edgeWorks `wing`): its top falls with the slope, a wall's
+            // with the road
+            if (Math.abs(a.top[1] - b.top[1]) > 0.4 * len) continue;
             if (Math.abs(a.top[1] - a.foot - PARAPET) < 2e-3 && Math.abs(b.top[1] - b.foot - PARAPET) < 2e-3) continue;
             const owner = part.owners ? part.owners[i / 3] : -1;
             const ux = (b.top[0] - a.top[0]) / len, uz = (b.top[2] - a.top[2]) / len;

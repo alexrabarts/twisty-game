@@ -16,14 +16,21 @@
 //     side of a bank that starts at the wall's end)
 //   - overhangs: an outer edge of the ground a road lays (the ground under a verge on a wall, a slope's side or foot)
 //     more than `airM` over everything drawn just outside it, with no wall face under it: a shelf over open air
-// spikeReport(store) gives {tiles, stretched, beside, setback, bare, ends, overhangs, km}: each a list, worst first,
-// of {s, x, z, ...} (s the metres of ride nearest), and `km` the offenders counted by kilometre of ride (one decimal).
+//   - flaps: a wall's end with an open side beside it: within `flapNearM` of the end, an outer edge of the ground a
+//     road lays (an edge one triangle holds: the side or the foot of a slope, the end of the ground under a verge)
+//     more than `flapM` over what is drawn just outside it, with no stone across it there. The land in front of a
+//     wall is levelled under the wall's top, so the side of a slope that starts at the wall's end stood open over
+//     it: a triangle of ground beside the stone with the dark under it. `gapM` is the widest of it, `at` where,
+//     `edge` the edge
+// spikeReport(store) gives {tiles, stretched, beside, setback, bare, ends, overhangs, flaps, wallEnds, km}: each a
+// list, worst first, of {s, x, z, ...} (s the metres of ride nearest), `wallEnds` the wall ends read, and `km` the
+// offenders counted by kilometre of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 64 };
-export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 50, flaps: 4 };
+export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15 };
 
-export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40 }) {
+export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15 }) {
     const { THREE } = game;
     store.tiles = store.tiles || new Map();
     store.works = store.works || new Map();
@@ -203,8 +210,12 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
 
     // The walls' runs: faces of one road joined at the top corners they share; an end is a corner one face holds
     store.ends = store.ends || new Map();
+    store.wallEnds = store.wallEnds || new Map();
     store.overhangs = store.overhangs || new Map();
-    const faces = quads.filter(q => !q.parapet && q.len >= 0.7);
+    store.rims = store.rims || new Map();
+    store.flaps = store.flaps || new Map();
+    // (a wing down the side of a slope falls with the slope: it is no face of a run)
+    const faces = quads.filter(q => !q.parapet && q.len >= 0.7 && Math.abs(q.a.top - q.b.top) <= 0.4 * q.len);
     const key3 = (p, owner) => `${owner}|${Math.round(p.x * 100)},${Math.round(p.top * 100)},${Math.round(p.z * 100)}`;
     const corners = new Map();
     for (const f of faces) for (const p of [f.a, f.b]) { const k = key3(p, f.owner); corners.set(k, (corners.get(k) || 0) + 1); }
@@ -229,6 +240,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             const front = drawnTop(end.x - ux * 0.3 + ox * 0.4, end.z - uz * 0.3 + oz * 0.4);
             const past = drawnTop(end.x + ux * 0.4 + ox * 0.4, end.z + uz * 0.4 + oz * 0.4);
             const record = { s: rideS(end.x, end.z), owner: f.owner, x: r2(end.x), z: r2(end.z), heightM: r2(end.top - end.foot), problems: [] };
+            store.wallEnds.set(id, { s: record.s, owner: f.owner, x: end.x, z: end.z, top: end.top });
             if (!across) record.problems.push('open');
             if (front !== null && end.foot > front + 0.05) record.problems.push(`hangs ${r2(end.foot - front)}`);
             // The step across the end, with no stone across it: a wing past the end that spans the step's middle
@@ -241,8 +253,9 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     for (const part of ground) {
         const id = `${part.mesh.geometry.uuid}:${part.start}`;
         if (store.overhangs.has(id)) continue;
-        const list = [];
+        const list = [], rim = [];
         store.overhangs.set(id, list);
+        store.rims.set(id, rim);
         part.mesh.updateMatrixWorld(true);
         const pos = part.mesh.geometry.attributes.position;
         const edges = new Map();
@@ -260,6 +273,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         for (const { a, b, c, n } of edges.values()) {
             if (n !== 1) continue;
             const len = Math.hypot(b[0] - a[0], b[2] - a[2]);
+            if (len >= 0.1) rim.push({ a, b, c });
             if (len < 0.3) continue;
             const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, mz = (a[2] + b[2]) / 2;
             if (!nearRide(mx, mz)) continue;
@@ -275,11 +289,54 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             list.push({ s: rideS(mx, mz), x: r2(mx), y: r2(my), z: r2(mz), airM: r2(my - out), lengthM: r2(len) });
         }
     }
+
+    // The wall ends: every outer edge of the ground a road lays within `flapNearM` of one, read at five places along
+    // it against what is drawn just outside it. Stone across it there (a wing down the side of a slope) closes it
+    const stoneAcross = (x, y, z) => {
+        for (const ref of qhash.get(Math.floor(x / 8) * 65536 + Math.floor(z / 8)) || []) {
+            const q = quads[ref];
+            if (q.parapet) continue;
+            const dx = q.b.x - q.a.x, dz = q.b.z - q.a.z, run = dx * dx + dz * dz;
+            const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - q.a.x) * dx + (z - q.a.z) * dz) / run));
+            if (Math.hypot(q.a.x + dx * t - x, q.a.z + dz * t - z) > 0.12) continue;
+            if (y <= q.a.top + (q.b.top - q.a.top) * t + 0.1 && y >= q.a.foot + (q.b.foot - q.a.foot) * t - 0.1) return true;
+        }
+        return false;
+    };
+    const rims = ground.map(part => store.rims.get(`${part.mesh.geometry.uuid}:${part.start}`) || []);
+    for (const [id, end] of store.wallEnds) {
+        if (store.flaps.has(id)) continue;
+        let worst = null;
+        for (const rim of rims) {
+            for (const { a, b, c } of rim) {
+                const dx = b[0] - a[0], dz = b[2] - a[2], run = dx * dx + dz * dz, len = Math.sqrt(run);
+                const t = Math.max(0, Math.min(1, ((end.x - a[0]) * dx + (end.z - a[2]) * dz) / run));
+                if (Math.hypot(a[0] + dx * t - end.x, a[2] + dz * t - end.z) > rules.flapNearM) continue;
+                let ox = -dz / len, oz = dx / len;
+                if ((c[0] - (a[0] + b[0]) / 2) * ox + (c[2] - (a[2] + b[2]) / 2) * oz > 0) { ox = -ox; oz = -oz; }
+                for (const u of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+                    const x = a[0] + dx * u, y = a[1] + (b[1] - a[1]) * u, z = a[2] + dz * u;
+                    // (hard by the edge too: where a strip's edge lies along a longer one's, the ground goes on)
+                    const far = drawnTop(x + ox * 0.25, z + oz * 0.25), close = drawnTop(x + ox * 0.03, z + oz * 0.03);
+                    const out = far === null || close === null ? null : Math.max(far, close);
+                    if (out === null || y - out <= rules.flapM) continue;
+                    if (worst && y - out <= worst.gapM) continue;
+                    if (stoneAcross(x, (y + out) / 2, z)) continue;
+                    const deck = topOf(decks, x + ox * 0.25, z + oz * 0.25);
+                    if (deck !== null && deck > y - 2.5) continue;
+                    worst = { s: end.s, owner: end.owner, x: r2(end.x), z: r2(end.z), gapM: r2(y - out), at: [r2(x), r2(y), r2(z)], edge: [a.map(r2), b.map(r2)] };
+                }
+            }
+        }
+        store.flaps.set(id, worst);
+    }
     return { tiles: store.tiles.size };
 }
 
 export function spikeReport(store, besideM = 10) {
-    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], km: {} };
+    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], wallEnds: (store.wallEnds || new Map()).size, km: {} };
+    for (const record of (store.flaps || new Map()).values()) if (record) out.flaps.push(record);
+    out.flaps.sort((a, b) => b.gapM - a.gapM);
     for (const record of (store.tiles || new Map()).values()) { out.stretched.push(...record.stretched); out.bare.push(...record.bare); }
     for (const record of (store.ends || new Map()).values()) if (record) out.ends.push(record);
     // (one place is drawn by one geometry at a time; a section built again leaves its old geometry's list behind)
@@ -290,10 +347,10 @@ export function spikeReport(store, besideM = 10) {
     out.bare.sort((a, b) => b.spanM - a.spanM);
     out.ends.sort((a, b) => b.heightM - a.heightM);
     out.overhangs.sort((a, b) => b.airM - a.airM);
-    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs']) {
+    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps']) {
         for (const o of out[kind]) {
             const km = (Math.round(o.s / 100) / 10).toFixed(1);
-            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0 };
+            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0 };
             out.km[km][kind]++;
         }
     }

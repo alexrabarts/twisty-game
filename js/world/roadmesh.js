@@ -68,6 +68,8 @@ class RoadMesh {
     static get PIER_CLEAR_M() { return 0.3; }
     // How far a retaining wall's end returns under the road
     static get WALL_RETURN_M() { return 0.6; }
+    // A wall's wing down the side of a slope stands this deep in the land drawn under it
+    static get WING_UNDER_M() { return 0.5; }
     // A retaining wall's face and its parapet's stand this far out from the road's edge, so the ribbon's own edge
     // (lifted LIFT_M over the wall's top) lies behind the stone and never shows as a line across it
     static get STONE_PROUD_M() { return 0.03; }
@@ -613,11 +615,12 @@ class RoadMesh {
             // A wall goes on from its last row while the land still asks for one there (a side road's edge that stands
             // over the land with no slope under it: it ends where the land meets the edge; the ride's edge over the
             // strip of a leg below that no bank down from the wall's end clears: round a hairpin's corner)
+            const went = [];
             for (const step of [1, -1]) {
                 for (let k = step > 0 ? 1 : n - 2; k >= 0 && k < n; k += step) {
                     if (row[k] || !row[k - step]) continue;
                     const e = RoadMesh.wallEnd(sides[k], key, foot, guard, false, true);
-                    if (e && !e.blocked) { end[k] = e; row[k] = true; }
+                    if (e && !e.blocked) { end[k] = e; row[k] = true; went[k] = true; }
                 }
             }
             const at = k => (row[k] ? end[k].at : sides[k][key]);
@@ -678,9 +681,12 @@ class RoadMesh {
             }
             if (filled) seg = segs();
             // A run shorter than WALL_RUN_M is no wall. A run that reaches the first or the last row goes on past it
+            // (the rows a wall only goes on to are not counted: a wall too short to stand does not stand because it
+            // went on, 12 m of stone on an open bank with the land it levelled a pit at its foot)
+            const own = k => row[k] && !went[k];
             for (const [from, to] of runsOf(seg)) {
                 let length = 0;
-                for (let k = from; k <= to; k++) length += step(k);
+                for (let k = from; k <= to; k++) if (own(k) || own(k + 1)) length += step(k);
                 if (length >= RoadMesh.WALL_RUN_M || from === 0 || to === seg.length - 1) continue;
                 for (let k = from; k <= to; k++) seg[k] = false;
                 for (let k = from; k <= to + 1; k++) if (!(seg[k - 1] || seg[k])) row[k] = false;
@@ -965,6 +971,28 @@ class RoadMesh {
                     // makes a long face, RoadMesh.apronRun)
                     const fall = Math.max(Math.hypot(fA[0] - ta[0], fA[1] - ta[1], fA[2] - ta[2]), Math.hypot(fB[0] - tb[0], fB[1] - tb[1], fB[2] - tb[2]));
                     const rows = Math.max(1, Math.ceil(fall / (RoadMesh.APRON_STRIP_M * 4)));
+                    // A slope that starts at a wall's end has its side closed in stone, the wall's wing: the land in
+                    // front of a wall is levelled under the wall's top, so the side of the slope's first strip stood
+                    // open over it, a flap of ground beside the stone with the dark under it. The wing hangs from the
+                    // wall's own top corner (the face's, as its return does) and the strip's own foot down into the land
+                    // drawn under that line
+                    const wing = (row, low) => {
+                        const e = plan && plan.end[key][row], p = e ? e.at : sides[row][key];
+                        const out = RoadMesh.outward(sides[row])[key], P = sides[row].bits & 7 ? 0 : RoadMesh.STONE_PROUD_M;
+                        const top = [p[0] + out[0] * P, p[1], p[2] + out[1] * P];
+                        const run = Math.hypot(low[0] - top[0], low[2] - top[2]);
+                        if (run < 0.05) return;
+                        let under = low[1];
+                        const steps = Math.ceil(run / 0.5);
+                        for (let i = 0; landAt && i <= steps; i++) {
+                            const land = landAt(top[0] + ((low[0] - top[0]) * i) / steps, top[2] + ((low[2] - top[2]) * i) / steps);
+                            if (land !== null && land < under) under = land;
+                        }
+                        under -= RoadMesh.WING_UNDER_M;
+                        RoadMesh.quad(stoneOut, top, low, [low[0], under, low[2]], [top[0], under, top[2]], colors.stone);
+                    };
+                    if (kindOf(k - 1, key) === 'wall') wing(k, seated(fA));
+                    if (kindOf(k + 1, key) === 'wall') wing(k + 1, seated(fB));
                     for (let n = 0; n < strips; n++) {
                         const t0 = n / strips, t1 = (n + 1) / strips;
                         const top0 = lerp(ta, tb, t0), top1 = lerp(ta, tb, t1), foot0 = seated(lerp(fA, fB, t0)), foot1 = seated(lerp(fA, fB, t1));

@@ -747,8 +747,9 @@ function inspectedCorridorEdges(opt) {
 // The drawn land and wall ends beside the ride (tests/helpers/world-spikes.js): the world is streamed in node as the
 // page streams it and read every 300 m of the ride. Not one of `all`: it builds every mesh, and it reads the folder
 // the page reads (the shipped `world/`, or the synthetic fixture), not --world. It fails on what the test holds at
-// nothing for any world (a bare closing face, an open wall end); the stretched triangles and overhangs it lists by
-// kilometre are held for the shipped slice by tests/unit/world-spikes.test.js
+// nothing for any world (a bare closing face, an open wall end); the stretched triangles, the overhangs and the wall
+// ends with an open side beside them (`flaps`) it lists by kilometre are held for the shipped slice by
+// tests/unit/world-spikes.test.js
 export async function checkSpikes(opt) {
   const { loadGame } = await import('../../tests/helpers/load-game.js');
   const { diskFetch } = await import('../../tests/helpers/world-fetch.js');
@@ -769,7 +770,7 @@ export async function checkSpikes(opt) {
   if (report.bare.length) problems.push(`${report.bare.length} faces of land close a cut's step with no stone in front of them`);
   if (report.ends.length) problems.push(`${report.ends.length} wall ends are open, hang or have an open flank`);
   const worst = Number(opt.worst ?? 8);
-  return check('spikes', problems.length === 0, { tiles: report.tiles, stretched: report.stretched.length, beside: report.beside.length, setback: report.setback.length, bare: report.bare.length, ends: report.ends.length, overhangs: report.overhangs.length, byKm: report.km, worstBeside: report.beside.slice(0, worst), worstOverhangs: report.overhangs.slice(0, worst), worstEnds: report.ends.slice(0, worst), problems });
+  return check('spikes', problems.length === 0, { tiles: report.tiles, stretched: report.stretched.length, beside: report.beside.length, setback: report.setback.length, bare: report.bare.length, ends: report.ends.length, overhangs: report.overhangs.length, wallEnds: report.wallEnds, flaps: report.flaps.length, byKm: report.km, worstBeside: report.beside.slice(0, worst), worstOverhangs: report.overhangs.slice(0, worst), worstEnds: report.ends.slice(0, worst), worstFlaps: report.flaps.slice(0, worst), problems });
 }
 
 export async function main(argv) {

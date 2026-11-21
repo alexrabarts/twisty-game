@@ -439,6 +439,50 @@ describe('RoadMesh', () => {
         expect(group.children.map(c => c.name)).toEqual(['road-ribbon', 'road-works']);
     });
 
+    test('a slope that starts at a wall\'s end has its side closed in stone, down into the land', () => {
+        // A wall along the first 20 m (asked for at the rows to 16 m: a segment is a wall when either row is), then a
+        // slope 3 m down; the land in front of the wall 2 m under the edge
+        const rows = line(10);
+        const near = RoadMesh.ribbon(rows, 0);
+        const edgeY = 100 + RoadMesh.LIFT_M, land = edgeY - 2;
+        const foot = (x, y, z, ox, oz, walled) => (walled !== false && z <= 16 ? { kind: 'wall', y: y - 6 } : { kind: 'apron', y: y - 3 });
+        foot.wall = (x, y, z) => (z <= 16 ? { y: y - 6 } : null);
+        foot.land = () => land;
+        const works = RoadMesh.edgeWorks(near.sides, foot);
+        const points = part => { const out = []; for (let i = 0; i < part.positions.length; i += 3) out.push(part.positions.slice(i, i + 3)); return out; };
+        const stone = points(works.stone), apron = points(works.apron);
+        const has = (list, p) => list.some(q => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) < 1e-4);
+        for (const key of ['l', 'r']) {
+            // The side of the slope at the wall's last row: from under the edge point out and down to its foot
+            const edge = near.sides[5][key], top = [edge[0], edge[1] - RoadMesh.APRON_UNDER_M, edge[2]];
+            const side = apron.filter(q => Math.abs(q[2] - 20) < 1e-6 && Math.sign(q[0]) === Math.sign(top[0]) && Math.abs(q[0]) >= Math.abs(top[0]) - 1e-6);
+            const low = side.reduce((a, b) => (b[1] < a[1] ? b : a));
+            expect(low[1]).toBeLessThan(top[1] - 2);
+            // The wing hangs from the wall's top corner (the face's own, STONE_PROUD_M out) and the side's foot, and
+            // stands WING_UNDER_M in the lowest land under it
+            const corner = [edge[0] + Math.sign(edge[0]) * RoadMesh.STONE_PROUD_M, edge[1], edge[2]];
+            expect(has(stone, corner)).toBe(true);
+            expect(has(stone, low)).toBe(true);
+            expect(has(stone, [corner[0], Math.min(land, low[1]) - RoadMesh.WING_UNDER_M, 20])).toBe(true);
+            expect(has(stone, [low[0], Math.min(land, low[1]) - RoadMesh.WING_UNDER_M, 20])).toBe(true);
+        }
+        // Two wings: 12 vertices more than the same wall with no slope past its end
+        const bare = (x, y, z, ox, oz, walled) => (walled !== false && z <= 16 ? { kind: 'wall', y: y - 6 } : null);
+        bare.wall = foot.wall;
+        expect(stone.length - points(RoadMesh.edgeWorks(near.sides, bare).stone).length).toBe(12);
+    });
+
+    test('a wall too short to stand does not stand because it went on', () => {
+        const rows = line(10);
+        const sides = RoadMesh.ribbon(rows, 0).sides;
+        // The land asks for a wall at one row (two segments, 8 m: under WALL_RUN_M), and lets a wall go on a row more
+        const short = { wall: (x, y, z, ox, oz, forced, on) => (z === 16 || (on && z === 20) ? { y: y - 6 } : null) };
+        expect(RoadMesh.wallPlan(sides, short).seg.l.some(Boolean)).toBe(false);
+        // Asked for at two rows (12 m), it stands, and goes on
+        const long = { wall: (x, y, z, ox, oz, forced, on) => (z === 12 || z === 16 || (on && z === 20) ? { y: y - 6 } : null) };
+        expect(RoadMesh.wallPlan(sides, long).seg.l.filter(Boolean)).toHaveLength(4);
+    });
+
     test('barriers are placed across the road they close, as wide as it is', () => {
         const mesh = RoadMesh.barriers(4);
         const placed = RoadMesh.placeBarriers(mesh, [{ x: 10, y: 5, z: 20, heading: 0, width: 6 }, { x: 0, y: 0, z: 0, heading: Math.PI / 2, width: 12 }]);

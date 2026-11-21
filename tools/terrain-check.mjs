@@ -3158,6 +3158,9 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                         const ax = pos[a * 3], az = pos[a * 3 + 2], bx = pos[b * 3], bz = pos[b * 3 + 2];
                         const len = Math.hypot(bx - ax, bz - az);
                         if (len < 0.05) continue;
+                        // (a wing down the side of a slope is no wall's top: its top falls with the slope, and the
+                        // slope's ground lies beside it, not a road)
+                        if (Math.abs(pos[a * 3 + 1] - pos[b * 3 + 1]) > 0.4 * len) continue;
                         const mx = (ax + bx) / 2, my = (pos[a * 3 + 1] + pos[b * 3 + 1]) / 2, mz = (az + bz) / 2;
                         const seen = `top:${Math.round(mx * 4)},${Math.round(mz * 4)}`;
                         if (feetSeen.has(seen)) continue;

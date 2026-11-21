@@ -8,6 +8,8 @@
 //   2. `bare`: a face of land that closes a cut's step with no stone in front of it
 //   3. `ends`: a wall's end with no face of stone across it, a foot over the ground, or an open flank
 //   4. `overhangs`: an edge of the ground a road lays more than 1 m over everything drawn outside it
+//   5. `flaps`: a wall's end with an open side beside it: an outer edge of the ground a road lays, within 3 m of the
+//      end, more than 0.15 m over what is drawn outside it with no stone across it
 //
 // At 732d95c, before the land was laid back (TerrainMesh.laidBack) and banked to the walls' ends (CUT_BANK): 1084
 // stretched (245 beside, 839 set back, 14 of them in the wedge at km 7.8) and 149 overhangs. The importer gives a
@@ -32,10 +34,20 @@
 //   - 354 set back: 269 of free land, most the fall of the land under a road's fill where the importer's earthwork
 //     ends on the downhill side (left as it is: a road's fill is not undercut, LAY_HOLD), the rest a hillside
 //     steeper than the lay-back's slope for more than its reach; 85 with a node of a road's strip
-//   - 64 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
-//     slopes whose side stands over land that falls away beside them. A wall's end stands up to 2 m over the land
-//     beside it (the land between the nodes round the end lies under its top), and the slope laid on past the end
-//     has its side open there
+//   - 50 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
+//     slopes whose side stands over land that falls away beside them
+//   - 4 flaps: the ride's first row (two side roads' walls end there: the ground under the ride's verge ends with
+//     the ride, 3.3 m over the land), the ground under a verge 0.15 m over a junction's paving at km 4.4, and the
+//     foot of a slope 0.5 m over the land inside the hairpin at km 7.9, where the land is drawn under the height
+//     the slope's foot is seated on
+//
+// At 4590977 a flap stood at 98 of the 128 wall ends (33 of 38 on the synthetic world), and 64 overhangs. A wall's
+// end stands up to 2 m over the land in front of it (the land a wall levels lies under its top), and the slope laid
+// on past the end had its side open over that land: the triangle of ground beside the stone at the end of the wall
+// inside the hairpin at km 8.0, 0.6 m open. Now the side of a slope that starts at a wall's end is closed in stone
+// (RoadMesh.edgeWorks `wing`), down into the land drawn under it. And a wall the land asks for over less than
+// WALL_RUN_M is no wall, however far it could go on (RoadMesh.wallPlan `went`): 12 m of it stood on an open bank at
+// km 11.3
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
@@ -113,7 +125,7 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
     beforeAll(async () => {
         report = await read({ id: 'tremola' });
         const km = Object.entries(report.km).sort((a, b) => a[0] - b[0]).map(([k, c]) => `${k}:${c.beside}/${c.setback}/${c.bare}/${c.ends}/${c.overhangs}`).join(' ');
-        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs\nby km (beside/setback/bare/ends/overhangs): ${km}`);
+        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends\nby km (beside/setback/bare/ends/overhangs): ${km}`);
     }, 3600000);
 
     test('the land of the whole slice was read', () => {
@@ -146,26 +158,39 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
     test('no ground a road lays runs out over open air', () => {
         if (report.overhangs.length > SPIKE_LIMITS.overhangs) throw new Error(`${report.overhangs.length} edges of laid ground over open air (at most ${SPIKE_LIMITS.overhangs}):\n${list(report.overhangs)}`);
     });
+
+    test('no wall ends with an open side beside it', () => {
+        expect(report.wallEnds).toBeGreaterThan(100);
+        if (report.flaps.length > SPIKE_LIMITS.flaps) throw new Error(`${report.flaps.length} wall ends with an open side beside them (at most ${SPIKE_LIMITS.flaps}):\n${list(report.flaps)}`);
+    });
+
+    test('the side of the slope at the wall\'s end inside the hairpin at km 8.0 is closed', () => {
+        // Where the wall of the leg above starts inside the hairpin (the owner's picture): 0.6 m open before
+        const there = report.flaps.filter(o => Math.hypot(o.x + 1111.2, o.z - 9760.4) < 6);
+        if (there.length) throw new Error(`an open side at the wall's end at km 8.0:\n${list(there)}`);
+    });
 });
 
 describe('the synthetic world: the same check', () => {
     let report;
     beforeAll(async () => {
         report = await read({ id: 'all', search: '?worldData=tests/fixtures/world/mini' });
-        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs`);
+        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends`);
     }, 3600000);
 
-    test('every wall end is closed and no closing face is bare', () => {
+    test('every wall end is closed, with no open side beside it, and no closing face is bare', () => {
         expect(report.tiles).toBeGreaterThan(10);
         expect(report.bare).toEqual([]);
         expect(report.ends).toEqual([]);
+        expect(report.wallEnds).toBeGreaterThan(30);
+        expect(report.flaps).toEqual([]);
     });
 
     // Its land is a made hillside steeper than the lay-back's slope from end to end: what is left is that hillside
-    // (before: 283 beside, 2174 set back, 10 bare, 110 overhangs)
+    // (before: 283 beside, 2174 set back, 10 bare, 110 overhangs; 16 overhangs before the slopes' sides were closed)
     test('what is left of its steep hillside can only shrink', () => {
         expect(report.beside.length).toBeLessThanOrEqual(265);
         expect(report.setback.length).toBeLessThanOrEqual(2188);
-        expect(report.overhangs.length).toBeLessThanOrEqual(16);
+        expect(report.overhangs.length).toBeLessThanOrEqual(13);
     });
 });
