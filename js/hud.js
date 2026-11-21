@@ -132,6 +132,7 @@ class Hud {
             hint: byId('hudHint'),
             fps: byId('fps'),
             tuned: byId('hudTuned'),
+            mode: byId('hudMode'),
             start: byId('startCard'),
             startLeg: byId('startLeg'),
             progress: byId('hudProgress'),
@@ -406,6 +407,15 @@ class Hud {
     // The "tuned" tag: this ride had a tuning multiplier off 1 and submits no time (Game.watchTuning)
     setTuned(on) {
         if (this.el.tuned) this.el.tuned.hidden = !on;
+    }
+
+    // The rider mode's tag in its slot beside the speed gauge (js/ridermodes.js); `tone` colours it, '' for none
+    setMode(name, tone = '') {
+        const el = this.el.mode;
+        if (!el) return;
+        if (el.textContent !== name) el.textContent = name;
+        if (tone) el.dataset.tone = tone;
+        else delete el.dataset.tone;
     }
 
     applyFps() {

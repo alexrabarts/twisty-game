@@ -82,7 +82,7 @@ export function loadGame(THREE = realThree(), log = [], sources = {}) {
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
         'THREE', 'document', 'localStorage', 'console', 'TextDecoder', 'crypto',
-        `${source}\nreturn { Tuning: typeof Tuning === 'undefined' ? undefined : Tuning, WorldPhysics, CHARACTERS, BIKE_MODELS, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, RoadClearance, Scenery, Roadworks, WorldPlaces, WorldGuide, WorldRun, WorldCamera, WorldLooks, WorldEnvironment };`
+        `${source}\nreturn { Tuning: typeof Tuning === 'undefined' ? undefined : Tuning, WorldPhysics, CHARACTERS, BIKE_MODELS, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, RoadClearance, Scenery, Roadworks, WorldPlaces, WorldGuide, WorldRun, WorldAssist, WorldCamera, WorldLooks, WorldEnvironment };`
     );
     return { THREE, log, ...factory(THREE, canvasStub(), storage, sink, NodeTextDecoder, webcrypto) };
 }

@@ -92,6 +92,32 @@ const legRide = () => {
     const env = game.environment;
     return env && env.constructor.name === 'Environment' && !env.isWorld ? [] : [`the environment is ${env && env.constructor.name}, not a leg's Environment`];
 };
+// The rider mode (js/ridermodes.js): the mode in force, the HUD's tag and every control on the page say `id`
+const modeIs = (id) => {
+    const problems = [];
+    const mode = RiderModes.get();
+    if (mode.id !== id) problems.push(`the rider mode is ${mode.id}, not ${id}`);
+    // Nothing is stored until the rider chooses: the default then
+    const stored = localStorage.getItem(RiderModes.KEY) || RiderModes.DEFAULT;
+    if (stored !== id) problems.push(`the stored rider mode is ${stored}, not ${id}`);
+    const tag = document.getElementById('hudMode').textContent;
+    if (tag !== mode.name) problems.push(`the HUD's tag says "${tag}", not "${mode.name}"`);
+    document.querySelectorAll('[data-mode-picker]').forEach((box) => {
+        const on = [...box.querySelectorAll('[aria-checked="true"]')].map(b => b.dataset.mode).join(',');
+        if (on !== id) problems.push(`a control shows ${on || 'nothing'}, not ${id}`);
+    });
+    return problems;
+};
+const modeCheck = id => new Function(`return (${modeIs})(${JSON.stringify(id)});`);
+// The pause panel's control with the bike moving: every button off, the reason shown
+const modeLocked = () => {
+    const box = document.querySelector('#world-pause [data-mode-picker]');
+    if (!box) return ['the pause panel has no rider mode control'];
+    const problems = [];
+    if ([...box.querySelectorAll('button')].some(b => !b.disabled)) problems.push('a rider mode button is enabled while the bike moves');
+    if (box.querySelector('.mode-picker-hint').textContent !== RiderModes.LOCKED_TEXT) problems.push('the control does not say why it is locked');
+    return problems;
+};
 const SEQUENCES = [
     // A world ride: a crash opens no dialog (the game puts the bike back by itself), and the ride's own dialogs open
     // over the fall as over any riding
@@ -125,6 +151,17 @@ const SEQUENCES = [
         { key: 'Escape', top: 'world-pause' },
         { key: 'KeyR', top: 'worldConfirm' },
         { key: 'Enter', top: 'none' }
+    ] },
+    // The rider mode on the pause panel: free while the bike stands (a click, and H through the dialog stack), locked
+    // with the reason once it moves
+    { name: 'world-pause-rider-mode', page: 'world', steps: [
+        { eval: () => { game.vehicle.speed = 0; game.pauseRace(); }, top: 'world-pause', check: modeCheck('road') },
+        { click: '#world-pause [data-mode="sport"]', top: 'world-pause', check: modeCheck('sport') },
+        { key: 'KeyH', tap: '#world-pause [data-mode="track"]', top: 'world-pause', check: modeCheck('track') },
+        { click: '#world-pause [data-resume]', top: 'none', check: modeCheck('track') },
+        { eval: () => { game.vehicle.speed = 20; game.pauseRace(); }, top: 'world-pause', check: modeLocked },
+        { key: 'KeyH', top: 'world-pause', check: modeCheck('track') },
+        { click: '#world-pause [data-resume]', top: 'none' }
     ] },
     // The pause panel of a world ride: credits, and the menu through the confirm
     { name: 'world-pause-menu', page: 'world', steps: [
@@ -167,6 +204,19 @@ const SEQUENCES = [
         { key: 'Escape', tap: '#leaderboardViewerClose', top: MENU, focus: '#legLeaderboardBtn' },
         { click: '#legLeaderboardBtn', top: 'leaderboardViewer' },
         { click: '#leaderboardViewerClose', top: MENU }
+    ] },
+
+    // The rider mode on the menu: free, by a click or H, and Enter still rides (the focus goes back to RIDE)
+    { name: 'menu-rider-mode', page: 'menu', steps: [
+        { top: MENU, check: modeCheck('road') },
+        { click: '#riderModeRow [data-mode="track"]', top: MENU, focus: '#riderContinueBtn', check: modeCheck('track') },
+        { key: 'KeyH', tap: '#riderModeRow [data-mode="rain"]', top: MENU, check: modeCheck('rain') },
+        { click: '#riderModeRow [data-mode="road"]', top: MENU, check: modeCheck('road') }
+    ] },
+    { name: 'leg-pause-rider-mode', page: 'leg', steps: [
+        { eval: () => { game.vehicle.speed = 0; game.pauseRace(); }, top: 'world-pause' },
+        { click: '#world-pause [data-mode="rain"]', top: 'world-pause', check: modeCheck('rain') },
+        { click: '#world-pause [data-menu]', top: MENU, check: modeCheck('rain') }
     ] },
 
     // The plain page: a rider chosen with real clicks rides the world, as ?world=tremola does, to its finish card

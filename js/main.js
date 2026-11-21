@@ -225,6 +225,7 @@ class Game {
         this.hud = new Hud(document, window);
         // The tuning (js/tuning.js) reads its stored values in debug mode only, and only then is its panel built
         this.startTuning();
+        this.startRiderModes();
 
         // requestAnimationFrame stops on a hidden tab, so nothing else would
         // silence the engine drone
@@ -972,7 +973,7 @@ class Game {
         // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
         // in the middle of a ride
         if (panel && this.hud) this.hud.recallHint(true);
-        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null);
+        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null, this.vehicle ? this.vehicle.speed : 0);
     }
 
     // Restart leg from the pause panel of a world ride (a world crash opens no card to offer it): it asks first, and
@@ -4291,6 +4292,34 @@ class Game {
         if (debug && typeof TuningPanel !== 'undefined') this.tuningPanel = new TuningPanel(document, Tuning, { world: () => !this.environment || !!this.environment.isWorld });
     }
 
+    // The rider mode (js/ridermodes.js): the stored choice is in force from the page's start, on a world ride and on
+    // a classic leg alike, and the HUD's tag follows every change
+    startRiderModes() {
+        if (typeof RiderModes === 'undefined') return;
+        let storage = null;
+        try {
+            storage = window.localStorage;
+        } catch (error) {
+            console.warn('RiderModes: no storage, the mode lasts for this page only:', error);
+        }
+        RiderModes.start({ storage });
+        const show = (mode) => {
+            if (this.hud) this.hud.setMode(mode.name, mode.tone);
+            RiderModes.refresh(document);
+        };
+        RiderModes.watch(show);
+        show(RiderModes.get());
+    }
+
+    // The mode key in a ride: the next mode while the bike stands, else a call-out that says to stop first. The
+    // pause panel's control holds the same rule (WorldCredits.showPause)
+    stepRiderMode() {
+        if (typeof RiderModes === 'undefined' || !this.vehicle || !this.environment) return false;
+        const step = RiderModes.step(this.vehicle.speed);
+        showCallout(step.changed ? `Rider mode: ${step.mode.name}` : RiderModes.LOCKED_TEXT, step.changed ? 'info' : 'warn', 1500);
+        return step.changed;
+    }
+
     // One of the numbers the tuning scales (Tuning.field), or the number itself where the tuning is not loaded
     static tune(on, field, value) {
         return typeof Tuning === 'undefined' ? value : Tuning.field(on, field, value);
@@ -4753,6 +4782,15 @@ document.addEventListener('keydown', (event) => {
     if (event.code !== 'KeyN' || event.repeat || !window.game || !Game.debugEnabled(window.location.search)) return;
     if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
     window.game.debugSkipToNextGate();
+});
+
+// The rider mode's key in a ride (Game.stepRiderMode). Not while a dialog is open: the dialog stack owns the keys
+// then (js/modals.js), and the menu and the pause panel step the mode themselves. Not while a name is typed
+document.addEventListener('keydown', (event) => {
+    if (typeof RiderModes === 'undefined' || event.code !== RiderModes.STEP_KEY || event.repeat || event.ctrlKey || event.metaKey || event.altKey || !window.game) return;
+    if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
+    if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
+    window.game.stepRiderMode();
 });
 
 // Start the game when page loads

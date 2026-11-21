@@ -450,9 +450,21 @@ describe('assist level', () => {
         expect(WorldAssist.share(WorldPhysics, 'bogus')).toBe(0);
         WorldAssist.chosen = undefined;
         expect(WorldAssist.level()).toBe('normal');
-        expect(WorldAssist.cycle()).toBe('off');
-        expect(WorldAssist.cycle()).toBe('low');
-        expect(WorldAssist.setLevel('nonsense')).toBe('low');
+    });
+
+    // The level is the rider mode's (js/ridermodes.js, tests/unit/rider-modes.test.js): the assist has no setting,
+    // no key and no storage of its own
+    test('the level is what it is set to, a level no table knows gives no assist, and nothing here is stored', () => {
+        WorldAssist.chosen = undefined;
+        expect(WorldAssist.setLevel('low')).toBe('low');
+        expect(WorldAssist.level()).toBe('low');
+        expect(WorldAssist.setLevel('')).toBe('low');
+        expect(WorldAssist.setLevel(undefined)).toBe('low');
+        expect(WorldAssist.share(WorldPhysics, WorldAssist.setLevel('made-up'))).toBe(0);
+        for (const gone of ['cycle', 'store', 'pauseButton', 'STORAGE_KEY', 'ORDER']) expect(WorldAssist[gone]).toBeUndefined();
+        expect(loadScript('world/run.js')).not.toMatch(/localStorage|location\.search/);
+        expect(loadScript('world/guide.js')).not.toMatch(/keydown/);
+        WorldAssist.chosen = undefined;
     });
 
     test('a leg never reaches the assist', () => {

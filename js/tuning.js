@@ -3,7 +3,7 @@
 // THREE: the panel that moves the multipliers is js/tuningpanel.js, built only in debug mode.
 //
 // Two sources multiply into a parameter's multiplier (Tuning.of): the debug panel's (`values`, read only in debug
-// mode) and a rider mode's (`mode`, null today: a later job sets it with Tuning.setMode). With both at 1 nothing is
+// mode) and a rider mode's (`mode`: js/ridermodes.js sets it with Tuning.setMode). With both at 1 nothing is
 // scaled and nothing is copied: Tuning.view returns the object it was given and Tuning.field the number it was given,
 // so the ride is the same to the last bit.
 //
@@ -37,9 +37,11 @@ const Tuning = {
 
         { id: 'accel', label: 'Acceleration', hint: 'The pull of the engine', group: 'Engine', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'acceleration' }] },
         { id: 'topSpeed', label: 'Top speed', hint: 'The top speed', group: 'Engine', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'maxSpeed' }] },
+        { id: 'throttle', label: 'Throttle', hint: 'How fast the twist grip opens: more is a sharper throttle', group: 'Engine', min: 0.5, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'throttleRiseS', inverse: true }] },
 
         { id: 'gripDry', label: 'Grip dry', hint: 'The grip of the lean on a dry road', group: 'Grip', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'grip', field: 'dry' }] },
         { id: 'gripWet', label: 'Grip wet', hint: 'The grip of the lean in rain or snow', group: 'Grip', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'grip', field: 'wet' }] },
+        { id: 'lowside', label: 'Lowside room', hint: 'How far over the grip the lean may ask before the bike lowsides', group: 'Grip', min: 0.9, max: 1.3, step: 0.01, world: true, scales: [{ on: 'world', field: 'lowsideMargin' }] },
 
         { id: 'assist', label: 'Assist', hint: 'The hairpin assist: the line, the edge and the advised braking', group: 'Assist', min: 0, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'lineStrength' }, { on: 'world', field: 'edgeLeanRate' }, { on: 'world', field: 'adviceBrake' }] },
 

@@ -480,6 +480,7 @@ class TourSystem {
                             <div class="showcase-info" id="riderInfoCard"></div>
                             <button class="carousel-arrow" id="riderNextBtn">›</button>
                         </div>
+                        <div class="showcase-mode" id="riderModeRow"></div>
                         <div class="showcase-actions">
                             <button id="riderContinueBtn" class="showcase-continue">${world ? 'RIDE →' : 'CONTINUE →'}</button>
                             ${world ? '<button id="riderClassicBtn" class="showcase-secondary">CLASSIC LEGS</button>' : ''}
@@ -511,6 +512,20 @@ class TourSystem {
         document.body.classList.add('in-menu');
         // The data credit of the real-map world lives in a Credits panel, not on screen (js/world/credits.js)
         if (typeof WorldCredits !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(WorldCredits.button('showcase-secondary'));
+
+        // The rider mode (js/ridermodes.js): free on the menu, for the world ride and the classic legs alike. A choice
+        // gives the focus back to the primary button, so Enter still rides
+        if (typeof RiderModes !== 'undefined') {
+            const row = container.querySelector('#riderModeRow');
+            row.appendChild(RiderModes.control(document, { after: () => focusPrimary('riderContinueBtn') }));
+            if (RiderModes.note) {
+                const note = document.createElement('div');
+                note.className = 'mode-picker-note';
+                note.setAttribute('role', 'status');
+                note.textContent = RiderModes.note;
+                row.appendChild(note);
+            }
+        }
 
         // Carousel focus state
         const riderOrder = this.riderDisplayOrder();

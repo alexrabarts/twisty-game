@@ -696,7 +696,7 @@ class Vehicle {
         this.landCover = 0; // The land cover class under the bike (WorldPhysics.landCover), on the land
         this.landAcross = 0;
         this.worldSurfaceGrip = 1; // Route surface grip (cobbles) under the bike
-        this.assistLevel = null; // Hairpin assist level (off, low, normal); null reads WorldAssist.level()
+        this.assistLevel = null; // Hairpin assist level (off, low, normal); null reads WorldAssist.level(), the rider mode's
         this.resetHairpinAssist();
 
         // Road boundary state tracking for hysteresis

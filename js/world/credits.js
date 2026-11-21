@@ -80,9 +80,10 @@ const WorldCredits = {
     },
 
     // The pause panel of a ride: Resume, Restart leg (when `restart` is given: a world ride, whose crash opens no card
-    // to offer it), Menu (when `menu` is given) and Credits, and on a world ride the hairpin assist. P and Escape
-    // resume, R is Restart leg, M is Menu.
-    showPause(environment, resume, menu = null, restart = null) {
+    // to offer it), Menu (when `menu` is given), Credits and the rider mode. P and Escape resume, R is Restart leg,
+    // M is Menu. `speed` is the bike's as the pause began: the mode changes only while the bike stands
+    // (RiderModes.canChange), so with the bike moving its control is shown locked.
+    showPause(environment, resume, menu = null, restart = null, speed = 0) {
         WorldCredits.hidePause();
         const panel = document.createElement('div');
         panel.id = 'world-pause';
@@ -116,13 +117,9 @@ const WorldCredits = {
             panel.appendChild(leave);
         }
         panel.appendChild(WorldCredits.button('btn', environment && environment.isWorld ? environment : null));
-        // The hairpin assist level (js/world/run.js WorldAssist), a world ride's own
-        if (environment && environment.isWorld && typeof WorldAssist !== 'undefined') {
-            const assist = WorldAssist.pauseButton();
-            // The stack gives keys to the top dialog alone, so the H the ride listens for is the button's here
-            assist.dataset.key = 'KeyH';
-            panel.appendChild(assist);
-        }
+        // The rider mode (js/ridermodes.js). The stack gives keys to the top dialog alone, so the step key the ride
+        // listens for is here the `data-key` of the next mode's button
+        if (typeof RiderModes !== 'undefined') panel.appendChild(RiderModes.control(document, { locked: !RiderModes.canChange(speed) }));
         Modals.open(panel, { focus: go });
         return panel;
     },

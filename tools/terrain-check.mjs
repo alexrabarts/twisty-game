@@ -3804,7 +3804,7 @@ const WORLD = {
             game.showSplit(0, 61234, 137);
             const wheelie = document.getElementById('wheelieIndicator');
             wheelie.classList.add('active');
-            for (const text of ['Jumped a red light +400 style', 'Speed streak +250', 'Hairpin assist: full']) hud.callout(text, 'info', 60000);
+            for (const text of ['Jumped a red light +400 style', 'Speed streak +250', 'Rider mode: Sport']) hud.callout(text, 'info', 60000);
             document.getElementById('hudHint').classList.remove('hidden');
             const fpsWas = hud.fpsVisible;
             hud.fpsVisible = true;

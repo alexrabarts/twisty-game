@@ -178,6 +178,27 @@ const MEASURES = {
             return v.speed;
         }
     },
+    // The opening of the twist grip 0.2 s after the throttle key goes down
+    throttle: {
+        way: 1,
+        of: () => {
+            const v = onPlane();
+            v.speed = 10;
+            for (let i = 0; i < 12; i++) v.update(DT, 0, 1, 0);
+            return v.worldThrottle;
+        }
+    },
+    // The least lean past the grip's own, as a share of it, from which the bike lowsides with the steering held
+    lowside: {
+        way: 1,
+        of: () => {
+            const cap = Math.tan(WorldPhysics.leanCapDeg * Math.PI / 180);
+            for (let k = 1; k < 3; k += 0.01) {
+                if (leanAfter(30, 1, 0.5, -Math.atan(k * cap)).crashed) return k;
+            }
+            return 3;
+        }
+    },
     gripDry: { way: 1, of: () => leanAfter(30, 1, 3).lean },
     gripWet: { way: 1, of: () => leanAfter(30, 1, 3, 0, WET).lean },
     assist: {

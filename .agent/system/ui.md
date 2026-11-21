@@ -29,7 +29,7 @@
 
   | Slot | For | Wide screen | Touch |
   | --- | --- | --- | --- |
-  | `#hudMode` (`.hud-mode`) | a rider mode tag | left of the gauge, top row, 18 px high | under the gauge, right of the gear, 16 px high |
+  | `#hudMode` (`.hud-mode`) | the rider mode's tag (filled: `Hud.setMode`) | left of the gauge, top row, 18 px high | under the gauge, right of the gear, 16 px high |
   | `#hudGear` (`.hud-gear`) | a gear number | left of the gauge, middle row, in the display font at 0.3 of `--speed-size` | under the gauge, left, 16 px |
   | `#hudRevs` (`.hud-revs`) | a rev bar | left of the gauge, bottom row, `--bike-side` (72 px) wide, 6 px high | directly under the gauge, its width, 4 px high |
 
@@ -46,7 +46,14 @@
 - Touch controls exist only when `(pointer: coarse)` matches, or after the first touch on a laptop. `body.touch` moves the bike's corner to the top right and the mini map to the top left.
 - The FPS counter is off by default. Show it with `?fps=1` or the backquote key; the key's choice is kept in `localStorage` (`twistyShowFps`).
 - A crash in a world ride opens no card and waits for no key: the fall plays for about 2 s (`Game.WORLD_CRASH`), a call-out in the `bad` tone says the cause and the penalty for that time (`Game.beginWorldCrash`: `<cause>  +5 s`), and the game puts the bike back on the road by itself (`.agent/system/world.md`, "A restart is in place"). The crash card (`showCrashNotification`: Checkpoint, Restart, Menu) is the classic legs' only.
-- The pause panel (`WorldCredits.showPause`): Resume (P, Escape), Restart leg (R; a world ride only, through the confirm box), Menu (M), Credits, and on a world ride the hairpin assist (H). The finish cards count "restarts".
+- The pause panel (`WorldCredits.showPause`): Resume (P, Escape), Restart leg (R; a world ride only, through the confirm box), Menu (M), Credits, and the rider mode's control (below). The finish cards count "restarts".
+- The rider mode (`js/ridermodes.js`; the table and its rules are in `.agent/system/handling.md`, "The rider modes").
+  - The control (`RiderModes.control`, `.mode-picker`): a button for each mode in one row, and one line under them. It stands on the menu's rider screen (`#riderModeRow`, over RIDE) and on the pause panel, for a world ride and a classic leg alike.
+  - The key is H (`RiderModes.STEP_KEY`): the next mode, round the table. On the menu and on the pause panel the button of the next mode carries it as `data-key`, so the dialog stack steps the mode. In a ride `Game.stepRiderMode` hears it.
+  - On the menu the choice is free. In a ride the mode changes only while the bike stands. While the bike moves, H shows the call-out "Stop the bike to change the rider mode" and changes nothing. The pause panel reads the speed as the pause began: with the bike moving its buttons are disabled and the line under them gives the same reason. Touch has no key: pause at a stop and use the control.
+  - The tag: `Hud.setMode(name, tone)` writes the mode's name into the `#hudMode` slot, on a world ride and on a classic leg. `tone` is the row's own (`data-tone`: `info`, `warn`, `bad`, or none) and colours the tag and the chosen button.
+  - A change in a ride shows the call-out "Rider mode: <name>".
+  - The choice is stored (`twistyRiderMode`) and is in force from the page's start.
 - `body.run-over` hides the HUD, the mini map and the touch controls behind the finish card. `body.in-menu` hides them behind the menus.
 - `prefers-reduced-motion` keeps every message but drops the movement.
 - The rider screen's card has three rows that are chosen apart: the rider (the carousel, left and right), the bike (`.bike-picker`, up and down, the least powerful first, no wrap) and the outfit (`.outfit-picker`, Q and E or its arrows, no wrap; a rider with one outfit has no row). A rider's bikes open one by one: the first is open, and a ride finished on the best open bike opens the next (`TourSystem.openBikes`, `markRideFinished`, saved as `twistyBikeUnlocks`; the finish screen shows it as an unlock card). Debug mode opens every bike and saves nothing. A new rider or bike needs no code here: the rows read `CHARACTERS[*].bikes` and `.outfits`. Swapping bikes between riders is not built.

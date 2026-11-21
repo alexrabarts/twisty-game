@@ -34,7 +34,9 @@ The rows:
 | `engineBrake` | `engineBrake`, `engineBrakeMax` | world |
 | `accel` | the bike's `acceleration` | both |
 | `topSpeed` | the bike's `maxSpeed`, where the speed is held to it | both |
+| `throttle` | `throttleRiseS`, divided (how fast the twist grip opens) | world |
 | `gripDry`, `gripWet` | the lean's grip (`lateralFriction`), dry or wet | both |
+| `lowside` | `lowsideMargin` (how far over the grip the lean may ask before the bike lowsides) | world |
 | `assist` | `lineStrength`, `edgeLeanRate`, `adviceBrake` | world |
 | `wheeliePop`, `wheelieLift` | the rider's `wheeliePop` and `wheelieThrottle`, over `Vehicle.popShare` and `liftShare` | both |
 | `offroadPace` | `landCapSpeed`, of the world, of `offroad` and of `offroad.top` | world |
@@ -45,7 +47,7 @@ The rows:
 Rules:
 
 - **At 1 nothing is scaled and nothing is copied.** `Tuning.view` returns the object it was given and `Tuning.field` the number it was given (not the number x 1). `tests/unit/tuning.test.js` rides the same script with `js/tuning.js` not loaded and requires the same state to the last bit. The frozen defaults (`WorldPhysics`, `Vehicle.BAR`, `Vehicle.BODY`) are never written: off 1, a view is a copy.
-- **One function gives the multiplier:** `Tuning.of(id)`. It multiplies two sources: the debug panel's (`Tuning.values`, read only in debug mode) and a rider mode's (`Tuning.mode`, null today).
+- **One function gives the multiplier:** `Tuning.of(id)`. It multiplies two sources: the debug panel's (`Tuning.values`, read only in debug mode) and the rider mode's (`Tuning.mode`, "The rider modes" below).
 - **Outside debug mode the stored values are not read.** `Tuning.start({ debug, storage })` reads `localStorage` (`twistyTuning`) only with `debug`.
 - **A tuned ride keeps no time.** From the first moment a debug multiplier is off 1 the ride is flagged (`Tuning.ride.tuned`), and it stays flagged after Reset until the next ride begins (`Tuning.beginRide`, at `Game.initializeGameWithLeg` and `initializeGameWithWorld`). `Game.watchTuning` then sets a world's `trusted` to false, the flag of the debug skip (`WorldEnvironment.submitAllowed`), and cancels a classic leg's leaderboard session; a restart of the leg starts none. The HUD shows the "tuned" tag.
 - **The text.** `Tuning.text()` gives `twisty tuning v1`, then a line `id = 1.08` for each multiplier off 1. `Tuning.parse(text)` reads it back as `{ values, errors }` and refuses an unknown id, a value outside the row's range, a line that is not `id = number` and an id given twice, each with its line number. To write tuned values into the defaults, parse the text and multiply each field of the row's `scales` by the value (divide for `inverse`).
@@ -56,8 +58,6 @@ To add a parameter:
 2. For a number of the bike itself, read it with `this.tuned('<field>')` where the physics uses it. Do not write the scaled number back to the bike.
 3. Add its measure to `MEASURES` in `tests/unit/tuning.test.js`: a number that the row moves, and the way it moves. The test fails on a row with no measure.
 
-Rider modes (Rain, Road, Sport, Track) reuse the table. A mode is a set of multipliers over the same ids: `Tuning.setMode({ steerRate: 1.1, brake: 0.9 })`, and `Tuning.setMode(null)` for none. It needs no change to the physics, it is read in every mode of the page, and it does not flag the ride. The panel's multiplier stays on top of the mode's. Show the mode in the HUD's `#hudMode` slot.
-
 Left out, because no single number scales them cleanly:
 
 - **How hard the bike turns for a lean.** The turn is `g tan(lean) / v^2`, and the lowside reads the same number as the grip demand. A multiplier on the turn alone drops a bike at full lean. `steerRate` (how fast the lean comes) and `leanMax` are the steering authority.
@@ -65,6 +65,47 @@ Left out, because no single number scales them cleanly:
 - **The off-road pace of a classic leg.** A leg's run-off values belong to each zone of the leg (`LEG_OFFROAD`).
 
 `leanMax` and `gripDry` both move the lean limit and the lowside limit of a world ride together, by nearly the same amount. On a classic leg they differ: `leanMax` is the lean at which the bike falls, `gripDry` the tyre's hold in the turn.
+
+## The rider modes
+
+`js/ridermodes.js` holds one table, `RiderModes.MODES`. A mode is a row: `{ id, name, tone, assist, hint, tune }`. `assist` is a hairpin assist level (a key of `WorldPhysics.assistLevels`). `tune` holds multipliers by the ids of `Tuning.PARAMS`, and only those that are not 1. The rider chooses the mode; the hairpin assist has no setting of its own any more.
+
+| | Rain | Road | Sport | Track |
+| --- | --- | --- | --- | --- |
+| hairpin assist | `normal` (1) | `normal` (1) | `low` (0.5) | `off` (0) |
+| `topSpeed` | 0.85 | 1 | 1 | 1 |
+| `accel` | 0.8 | 1 | 1 | 1 |
+| `throttle` | 0.7 | 1 | 1.25 | 1.5 |
+| `brake` | 0.9 | 1 | 1.08 | 1.15 |
+| `brakeLean` | 1 | 1 | 1.1 | 1.2 |
+| `steerRate` | 0.9 | 1 | 1.1 | 1.2 |
+| `steerKey` (time: less is quicker) | 1.15 | 1 | 0.9 | 0.8 |
+| `leanMax` | 1 | 1 | 1 | 1.04 |
+| `lowside` | 1.1 | 1 | 1 | 1 |
+| `wheeliePop`, `wheelieLift` | 0.6 | 1 | 1 | 1 |
+
+Measured on the bike with the most power to spare, on the flat (`tests/unit/rider-modes.test.js` holds the order, not the numbers):
+
+| | Rain | Road | Sport | Track |
+| --- | --- | --- | --- | --- |
+| top speed, m/s | 69.4 | 81.6 | 81.6 | 81.6 |
+| 0 to 20 m/s, s | 3.03 | 2.40 | 2.35 | 2.32 |
+| stop from 25 m/s, m | 10.0 | 9.0 | 8.4 | 7.9 |
+| upright to 30 degrees with a key held, s | 0.58 | 0.52 | 0.48 | 0.43 |
+
+Rules:
+
+- **Road is the bike as it is.** Its `tune` is empty and its assist is the assist's own default, so a ride in Road is the ride with no mode and no tuning loaded, to the last bit. The test rides the same script both ways. Do not give Road a multiplier.
+- **Two doors to the physics.** `RiderModes.apply` calls `Tuning.setMode(row.tune)` and `WorldAssist.setLevel(row.assist)`. No code names a mode, and the physics knows nothing of modes.
+- **How it stacks.** A number the physics reads is: the rider's own multiplier x the bike's class and weight (both in the number already, `Vehicle.physicsOf`) x the mode's multiplier x the debug panel's multiplier (`Tuning.of`). The mode does not change the stars on the rider card.
+- **One board.** A mode never flags the ride (`Tuning.ride.tuned` rises only with a debug multiplier), and a board is not told the mode. For that reason no mode has `topSpeed` or `accel` over 1: the server's time floor is a speed (`functions/lib/boards.js` `FLOOR_SPEED`), and the fastest bike is close under it.
+- **Classic legs.** The mode is in force on a classic leg too. A leg reads the rows marked "both" in the table above (`topSpeed`, `accel`, `brake`, `steerRate`, `leanMax`, the wheelie rows). The rows marked "world" and the hairpin assist do nothing there.
+- **Margin.** `leanMax` does not make the lowside further away on a world ride: the lean limit and the lowside limit move together. `lowside` does (Rain). On a classic leg `leanMax` is the lean at which the bike falls, so Rain does not lower it.
+- **In a ride the mode changes only while the bike stands** (`RiderModes.canChange`: under `STOP_SPEED`, 0.5 m/s). `.agent/system/ui.md`, "The rider mode", has the control, the key and the tag.
+- **Storage.** The choice is kept in `localStorage` under `twistyRiderMode`; the default is Road. An old hairpin assist setting (`twistyHairpinAssist`) is moved once: every level becomes Road, the mode is stored and the old key is removed. A rider whose level was not Road's (`off` or `low`) gets one line on the menu that says so. Road was chosen for all levels because it is the only mode with the bike that rider knows.
+- **The group's riders** have their own pace (`Traffic.PACES`) and read no mode.
+
+To add a mode: add one row to `RiderModes.MODES`. Use only ids of `Tuning.PARAMS`, each in its row's range, and a key of `WorldPhysics.assistLevels`. For a new `tone`, add its colour to `.hud-mode[data-tone]` and `.mode-btn.on[data-tone]` in `css/ui.css`. The control, the key, the tag and the storage need no change. If a mode needs a number that has no row, add the row to `Tuning.PARAMS` with its measure (above), not a special case.
 
 ## A wheelie by the bike
 

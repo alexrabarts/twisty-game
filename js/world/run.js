@@ -244,11 +244,10 @@ class WorldRun {
 //   2. line capture: Vehicle.updateWorldPhysics pulls a lean that is near the bend's line onto it
 //   3. edge assist: Vehicle.updateWorldPhysics nudges a bike heading off the carriageway back along it
 // None acts off the carriageway, and none against the rider's steering (Vehicle.worldAssistRate)
-// The level is off, low or normal (default normal): the URL's ?assist= sets it and it is stored under
-// STORAGE_KEY; the pause panel's button (pauseButton) and the H key (WorldGuide) cycle it in a ride.
+// The level (a key of WorldPhysics.assistLevels: off, low or normal) is the rider mode's (js/ridermodes.js sets it
+// with setLevel); with no mode it is normal.
 class WorldAssist {
-    static get STORAGE_KEY() { return 'twistyHairpinAssist'; }
-    static get ORDER() { return ['off', 'low', 'normal']; }
+    static get DEFAULT() { return 'normal'; }
 
     // 1/s, how fast a captured lean is pulled onto the line (the weight is lineStrength)
     static get LINE_GAIN() { return 8; }
@@ -260,63 +259,15 @@ class WorldAssist {
     // Metres between the points the bend scan reads
     static get SCAN_STEP_M() { return 2; }
 
-    // The level in force: chosen this session, else the URL's ?assist=, else storage, else normal
+    // The level in force
     static level() {
-        if (WorldAssist.chosen) return WorldAssist.chosen;
-        let level = null;
-        try {
-            const param = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('assist') : null;
-            if (WorldAssist.ORDER.includes(param)) {
-                level = param;
-                WorldAssist.store(level);
-            }
-        } catch (error) { /* no URL to read */ }
-        if (!level) {
-            try {
-                const stored = typeof localStorage !== 'undefined' ? localStorage.getItem(WorldAssist.STORAGE_KEY) : null;
-                if (WorldAssist.ORDER.includes(stored)) level = stored;
-            } catch (error) { /* storage blocked */ }
-        }
-        WorldAssist.chosen = level || 'normal';
-        return WorldAssist.chosen;
+        return WorldAssist.chosen || WorldAssist.DEFAULT;
     }
 
+    // Sets the level in force; a level that is not a text is refused. It is not stored here: the rider mode is
     static setLevel(level) {
-        if (!WorldAssist.ORDER.includes(level)) return WorldAssist.level();
-        WorldAssist.chosen = level;
-        WorldAssist.store(level);
-        return level;
-    }
-
-    // off -> low -> normal -> off
-    static cycle() {
-        const order = WorldAssist.ORDER;
-        return WorldAssist.setLevel(order[(order.indexOf(WorldAssist.level()) + 1) % order.length]);
-    }
-
-    // A button for the pause panel of a world ride (WorldCredits.showPause): it shows the level and cycles it
-    static pauseButton() {
-        const button = document.createElement('button');
-        button.className = 'btn';
-        button.dataset.assist = 'cycle';
-        const show = () => {
-            const level = WorldAssist.level();
-            button.textContent = `Hairpin assist: ${level[0].toUpperCase()}${level.slice(1)} (H)`;
-        };
-        show();
-        button.refresh = show;
-        button.addEventListener('click', (event) => {
-            event.stopPropagation();
-            WorldAssist.cycle();
-            show();
-        });
-        return button;
-    }
-
-    static store(level) {
-        try {
-            if (typeof localStorage !== 'undefined') localStorage.setItem(WorldAssist.STORAGE_KEY, level);
-        } catch (error) { /* storage blocked: the level holds for this page only */ }
+        if (typeof level === 'string' && level) WorldAssist.chosen = level;
+        return WorldAssist.level();
     }
 
     // The share of each assist a level gives (0 off, 1 normal)

@@ -4,7 +4,7 @@
 //   - a turn prompt for the next junction within PROMPT_M ("Keep left, 300 m")
 //   - the hairpin advice beside the prompt: the speed for the next tight bend within ADVICE_M
 //     (WorldAssist.advice), red when the rider is over it by ADVICE_FAST; hidden with the assist off.
-//     The H key cycles the assist level (off, low, normal), said in a callout
+//     The level is the rider mode's (js/ridermodes.js)
 //   - the off-route rule: more than Route.OFF_ROUTE_M from the ride line, or riding
 //     against the route at over REVERSE_SPEED for REVERSE_WARN_S, shows "Wrong way";
 //     RESTART_AFTER_S later (still wrong) it calls `onRestart`, the same path as the
@@ -130,14 +130,6 @@ class WorldGuide {
         this.prompt = document.getElementById('hudPrompt');
         this.adviceBox = document.getElementById('hudAdvice');
         this.adviceText = this.adviceBox ? this.adviceBox.querySelector('span') : null;
-        // H cycles the hairpin assist
-        this.onKey = (event) => {
-            if (event.code !== 'KeyH' || event.repeat) return;
-            const level = WorldAssist.cycle();
-            document.querySelectorAll('[data-assist="cycle"]').forEach(button => button.refresh && button.refresh());
-            if (typeof showCallout === 'function') showCallout(`Hairpin assist: ${level}`, 'info', 1500);
-        };
-        document.addEventListener('keydown', this.onKey);
         document.body.appendChild(box);
         document.body.classList.add('world-ride');
         this.box = box;
@@ -240,8 +232,6 @@ class WorldGuide {
     }
 
     dispose() {
-        if (this.onKey && typeof document !== 'undefined') document.removeEventListener('keydown', this.onKey);
-        this.onKey = null;
         if (this.box && this.box.parentNode) this.box.parentNode.removeChild(this.box);
         if (this.prompt) this.prompt.textContent = '';
         if (this.adviceBox) this.adviceBox.hidden = true;
