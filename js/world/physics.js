@@ -4,7 +4,11 @@
 // a leg environment has `physics: null`, and Vehicle stays on its legacy path.
 const WorldPhysics = Object.freeze({
     // Lean controller
-    leanCapDeg: 50,        // the lean at grip 1.0; grip lowers it (capEff)
+    leanCapDeg: 50,        // the lean at grip 1.0; grip lowers it (capEff). The rider's daring multiplies it (Vehicle.leanOf)
+    // The lean the server's time floors are worked out at (tools/world/floors.mjs reads this line): at least the most
+    // any rider has in any rider mode, leanCapDeg x the most daring rider (Vehicle.RIDER_LEAN) x the sharpest mode's
+    // leanMax (RiderModes), 59.3 now. tests/unit/tuning-defaults.test.js fails when a rider or a mode passes it
+    floorLeanDeg: 60,
     radiusFloor: 5,        // m, tightest radius the bike turns (R_MIN - width/2)
     rMin: 10,              // m, centreline fillet radius the importer builds
     // m, the radius a stacked hairpin is held to instead (tools/world/resample.mjs): where a rMin arc would push a
@@ -13,7 +17,9 @@ const WorldPhysics = Object.freeze({
     rHairpin: 6,
     // Steering (Vehicle.updateWorldPhysics). A held key leans the bike at leanRate; the lean rate follows the
     // steering with the lag leanRateLag, so a press leans the bike by the same amount whatever it was doing.
-    leanRate: 1.15,        // rad/s at full steering, up to steerSpeed: a 0.3 s key press is about 16 degrees
+    // rad/s at full steering, up to steerSpeed: 1.725, a 0.3 s key press is about 24 degrees. Written as the product
+    // (1.15 x the owner's lean rate of 1.50), which is one bit under the literal: the ride is the tuned one to the last bit
+    leanRate: 1.15 * 1.5,
     leanRateLag: 0.04,     // s, how far the lean rate lags the steering (no lean momentum to fall over with)
     // The steer keys (SteerEase, js/input.js): a key is on or off, and each change of it is a ramp of the steering.
     // Only the rider's keys and touch buttons: an autopilot, the crew and the tests steer the bike directly
@@ -74,13 +80,13 @@ const WorldPhysics = Object.freeze({
 
     cobbleGrip: 0.85,      // surface grip on a route sample flagged cobbles
 
-    // Braking (Vehicle.updateWorldSpeed). The legs keep the bike's own brake (brakeForce, 20 m/s^2 x the
+    // Braking (Vehicle.updateWorldSpeed). The legs keep the bike's own brake (brakeForce, 14 m/s^2 x the
     // character); the world multiplies it by brakeGain, so the rider can scrub speed to turn in or to recover.
     // The brake shares the grip with the lean, as a friction circle: the lean's share of the cap is used, and
     // the brake keeps sqrt(1 - share^2) of itself, never under trailBrakeFloor (at the cap). It never crashes
     // the bike: braking changes only the speed, and the lowside reads the lean.
     brakeGain: 1.4,
-    trailBrakeFloor: 0.45,
+    trailBrakeFloor: 0.3375,
     // Engine braking with the throttle closed: engineBrake x the speed, at most engineBrakeMax, and never
     // below idleSpeed. A long descent with the throttle closed settles near 13 m/s at 10%
     engineBrake: 0.06,     // 1/s

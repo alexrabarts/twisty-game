@@ -3,19 +3,19 @@
     "kind": "stage",
     "gates": 1,
     "metres": 2003,
-    "floorMs": 24122,
+    "floorMs": 22924,
     "gateFloorsMs": [
       10861,
-      13261
+      12063
     ]
   },
   "world-mini-2-v1": {
     "kind": "stage",
     "gates": 1,
     "metres": 1996,
-    "floorMs": 25316,
+    "floorMs": 24423,
     "gateFloorsMs": [
-      15015,
+      14122,
       10301
     ]
   },
@@ -23,9 +23,9 @@
     "kind": "stage",
     "gates": 1,
     "metres": 1996,
-    "floorMs": 22328,
+    "floorMs": 22011,
     "gateFloorsMs": [
-      11960,
+      11643,
       10368
     ]
   },
@@ -33,11 +33,11 @@
     "kind": "tour",
     "gates": 2,
     "metres": 5995,
-    "floorMs": 71766,
+    "floorMs": 69358,
     "gateFloorsMs": [
-      24122,
-      25316,
-      22328
+      22924,
+      24423,
+      22011
     ]
   }
 }

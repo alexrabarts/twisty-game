@@ -67,8 +67,10 @@ describe('the handlebar is drawn as a bike is steered', () => {
         const bars = [...ride(v, 1, 1), ...ride(v, -1, 1), ...ride(v, 0, 1)];
         let worst = 0;
         for (let i = 1; i < bars.length; i++) worst = Math.max(worst, Math.abs(bars[i] - bars[i - 1]));
-        // A flick from full lean rate one way to the other takes the bar from one stop to the other, 2 degrees a frame at most
-        expect(worst).toBeLessThan(0.04);
+        // A flick from full lean rate one way to the other takes the bar from one stop to the other, 3.3 degrees a frame
+        // at most (2 before the owner's lean rate of 1.50, 2026-11-21: the bar is drawn from the lean rate). The steering
+        // here changes in one frame; a rider's keys are eased (tests/unit/world-steer-ease.test.js holds the bar's rock)
+        expect(worst).toBeLessThan(0.06);
     });
 
     test('at walking pace the bar turns with the steering, and the two meet with no step between', () => {

@@ -17,6 +17,8 @@ export function landBike(game, [character, model], { speed = 4, slope = 0, cover
         physics: world,
         route: { unitCount: 0, fromUnits: u => u, project: () => ({ index: -1 }), sample: () => ({ grade: 0, flags: {} }) }
     };
+    // The bike's own lean limit: how far the rider dares to lean (Vehicle.leanOf) is not what is measured here
+    v.leanDare = 1;
     v.speed = speed;
     v.hold = Object.freeze({ drag: 0.35, grip: world.landGrip, floorSpeed: 6 });
     v.slope = slope;

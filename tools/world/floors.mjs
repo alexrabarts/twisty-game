@@ -2,12 +2,18 @@
 // lower bound on any rider's time, 0.9 times the time of an ideal rider who accelerates and brakes without limit,
 // takes the inner edge of every bend and is held only by the lean angle and the top speed. It is deliberately
 // simple: no search, so nothing in it can hang or differ between two runs.
+//
+// The lean is the most any rider has in any rider mode (WorldPhysics.floorLeanDeg), not the bike's own limit. A bend
+// is a run of tight samples that turn one way: the ideal rider is held to a bend's speed inside that bend only, and
+// rides the road between two bends, and between the two halves of an S, at top speed. (Bends were joined whatever
+// way they turned: a stack of hairpins was one bend of 1 000 degrees, its whole length was held to the hairpin
+// speed, and a real ride beat that floor.)
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const FALLBACK_LEAN_CAP_DEG = 50;
+const FALLBACK_LEAN_CAP_DEG = 60;
 export const TOP_SPEED = 82.28;
 export const GRAVITY = 9.81;
 export const FLOOR_FACTOR = 0.9;
@@ -16,22 +22,26 @@ const BEND_RADIUS_M = 200;
 const BEND_GAP_M = 40;
 const MIN_LENGTH_FACTOR = 0.5;
 
+// The lean the floors are worked out at: WorldPhysics.floorLeanDeg, read from the file's text (no game is loaded)
 export function readLeanCapDeg(repoRoot = REPO_ROOT) {
   const file = path.join(repoRoot, 'js', 'world', 'physics.js');
   if (!fs.existsSync(file)) return FALLBACK_LEAN_CAP_DEG;
-  const m = /\bleanCapDeg\b[^0-9\n]*([0-9]+(?:\.[0-9]+)?)/.exec(fs.readFileSync(file, 'utf8'));
+  const m = /\bfloorLeanDeg\b[^0-9\n]*([0-9]+(?:\.[0-9]+)?)/.exec(fs.readFileSync(file, 'utf8'));
   return m ? Number(m[1]) : FALLBACK_LEAN_CAP_DEG;
 }
 
 const wrap = a => a - Math.round(a / (2 * Math.PI)) * 2 * Math.PI;
 
-// Bends in samples [i0, i1]: runs of radius <= BEND_RADIUS_M, joined when closer than BEND_GAP_M.
+// Bends in samples [i0, i1]: runs of radius <= BEND_RADIUS_M that turn one way, joined when closer than BEND_GAP_M.
+// A sample that turns the other way starts a new bend.
 function bendsIn(samples, i0, i1) {
   const bends = [];
+  const last = samples.s.length - 1;
+  const way = i => Math.sign(wrap(samples.heading[Math.min(last, i + 1)] - samples.heading[Math.max(0, i - 1)]));
   for (let i = i0; i <= i1; i++) {
     if (!(samples.radius[i] <= BEND_RADIUS_M)) continue;
-    const last = bends[bends.length - 1];
-    if (last && samples.s[i] - samples.s[last.to] <= BEND_GAP_M) last.to = i; else bends.push({ from: i, to: i });
+    const bend = bends[bends.length - 1];
+    if (bend && samples.s[i] - samples.s[bend.to] <= BEND_GAP_M && way(i) === bend.way) bend.to = i; else bends.push({ from: i, to: i, way: way(i) });
   }
   return bends;
 }

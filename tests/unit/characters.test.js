@@ -100,8 +100,8 @@ describe('the physics of a rider on a bike', () => {
         const physics = character.physics;
         expect(vehicle.maxSpeed).toBe(68 * physics.maxSpeed);
         expect(vehicle.acceleration).toBe(15 * physics.acceleration);
-        expect(vehicle.brakeForce).toBe(20 * physics.brakeForce);
-        expect(vehicle.steeringForce).toBe(9.5 * physics.steeringForce);
+        expect(vehicle.brakeForce).toBe(14 * physics.brakeForce);
+        expect(vehicle.steeringForce).toBe(14.25 * physics.steeringForce);
         expect(vehicle.comfortShake).toBe(physics.comfortShake);
         expect(game.Vehicle.physicsOf(character, character.bikes[0])).toEqual(physics);
     });
@@ -588,7 +588,8 @@ const CARD = {
 const DIFFERS = { steve: ['speed', 'comfort'], alex: ['jump'], lucy: ['jump'], guy: ['speed', 'handling'] };
 
 // Vehicle.physicsOf for every rider on every bike of theirs, as it was before the traits (commit 411016e), to six
-// places: the traits set the stars and the crew's pace, and never the player's physics
+// places: the traits set the stars and the crew's pace, and none of these multipliers. (Of the player's physics the
+// traits touch one number, the lean limit by `daring`: Vehicle.leanOf, tests/unit/tuning-defaults.test.js)
 const HEAD_PHYSICS = {
     steve: {
         bike08_xsr900: { comfortShake: 1.25, maxSpeed: 1.1, acceleration: 1.1, brakeForce: 1.05, steeringForce: 1, jumpPower: 0.85, wheeliePop: 1.3, wheelieThrottle: 1.15 },
@@ -742,7 +743,7 @@ describe('the stars of the rider card', () => {
         expect(held).toBeGreaterThanOrEqual(2);
     });
 
-    test('the rider is part of the bars: pace moves speed and handling, daring the jump, and nothing else', () => {
+    test('the rider is part of the bars: pace moves speed and handling, daring the jump (and, with the hairpins, the handling), and nothing else', () => {
         const low = { country: 1, mountain: 1, hairpins: 1, daring: 1 }, high = { country: 5, mountain: 5, hairpins: 5, daring: 5 };
         const moved = { speed: 0, handling: 0, jump: 0 };
         let rides = 0;

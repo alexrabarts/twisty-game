@@ -25,8 +25,14 @@ const { SteerEase, InputHandler } = new Function('document', 'window', 'performa
 // Measured at 50dc816 (the keys through InputHandler's steeringSmoothing, 60 frames a second, 20 m/s): seconds from
 // a key pressed on an upright bike to a lean of 20 and of 40 degrees, and from a key changed for the other at the
 // full lean (50 degrees) to 20 and 40 degrees the other way. The same commit, keys tapped for 3 s: the lean rocked
-// by 3.5 to 6.2 degrees and the drawn bar by 3.2 to 4.7
-const BEFORE = { to20: 0.361, to40: 0.665, flick20: 0.829, flick40: 1.133 };
+// by 3.5 to 6.2 degrees and the drawn bar by 3.2 to 4.7: 0.361, 0.665, 0.829 and 1.133 s.
+// With the owner's tuning of 2026-11-21 in the defaults (a lean rate of 1.50, and a lean limit of 54 degrees for this
+// rider: .agent/system/handling.md, "The defaults") the same keys through the same smoothing give the times below, and
+// tapped keys rock the lean by 5.3 to 6.2 degrees and the bar by 4.8 to 5.2
+const BEFORE = { to20: 0.260, to40: 0.462, flick20: 0.599, flick40: 0.802 };
+
+// The lean limit of the rider these tests ride as: the bike's by how daring the rider is (Vehicle.leanOf)
+const CAP_DEG = game.WorldPhysics.leanCapDeg * Vehicle.leanOf(game.CHARACTERS[0]);
 
 function bike(speed) {
     const v = new Vehicle(new game.THREE.Scene(), null, game.CHARACTERS[0], undefined, { model: false });
@@ -157,23 +163,28 @@ describe('tapped keys hold a lean that does not rock', () => {
     test.each([[0.08, 0.08, 15], [0.08, 0.08, 25], [0.12, 0.06, 15], [0.12, 0.06, 25]])('%f s on, %f s off at %i m/s', (on, off, speed) => {
         const rows = ride(bike(speed), eased(), tapped(on, off), 3);
         const before = ride(bike(speed), smoothed(), tapped(on, off), 3);
-        // Before: 3.5 to 6.2 degrees of lean and 3.2 to 4.7 of the bar
+        // Without the ease: 5.3 to 6.2 degrees of lean and 4.8 to 5.2 of the bar. With it 0.6 to 1.7 of lean (under
+        // 0.6 before the lean rate of 1.50: the rock grows with the rate) and 0.1 to 0.6 of the bar
         expect(ripple(before, 'lean')).toBeGreaterThan(3);
         expect(ripple(before, 'bar')).toBeGreaterThan(3);
-        expect(ripple(rows, 'lean')).toBeLessThan(1);
+        expect(ripple(rows, 'lean')).toBeLessThan(2);
+        expect(ripple(rows, 'lean')).toBeLessThan(ripple(before, 'lean') / 3);
         expect(ripple(rows, 'bar')).toBeLessThan(1.5);
-        // A lean into the turn is held: the bike is neither upright nor on its limit (50 degrees)
+        // A lean into the turn is held: the bike is neither upright nor on its limit
         const held = -rows.slice(-60).reduce((sum, row) => sum + row.lean, 0) / 60;
         expect(held).toBeGreaterThan(20);
-        expect(held).toBeLessThan(48.5);
+        expect(held).toBeLessThan(CAP_DEG - 1.5);
     });
 
     test('shorter taps hold less lean, so the taps set the line', () => {
         const held = (on, off) => -ride(bike(20), eased(), tapped(on, off), 4).slice(-60).reduce((sum, row) => sum + row.lean, 0) / 60;
         const light = held(0.05, 0.1), half = held(0.08, 0.08), heavy = held(0.12, 0.06);
+        // 21, 49 and 51 degrees (14, 36 and 48 before the lean rate of 1.50): taps of half the time now hold the bike
+        // within 6 degrees of its limit, so the line is set by taps of a third of the time or less
         expect(light).toBeGreaterThan(5);
         expect(half).toBeGreaterThan(light + 8);
-        expect(heavy).toBeGreaterThan(half + 8);
+        expect(heavy).toBeGreaterThan(half + 1);
+        expect(heavy).toBeLessThan(CAP_DEG - 1.5);
     });
 
     test('a gap of 60 to 100 ms between taps does not start a swing back', () => {
@@ -192,9 +203,9 @@ describe('tapped keys hold a lean that does not rock', () => {
         };
         for (const gap of [0.06, 0.08, 0.1]) {
             const before = swing(smoothed(), gap), now = swing(eased(), gap);
-            // Before 2.4, 2.4 and 3.5 degrees; now 0, 0 and 0.85 (the longer gap is less steering, so less lean)
+            // Without the ease 3.6, 3.6 and 5.2 degrees; with it 0, 0 and 1.3 (the longer gap is less steering, so less lean)
             expect(before).toBeGreaterThan(1.5);
-            expect(now).toBeLessThan(1);
+            expect(now).toBeLessThan(1.5);
             expect(now).toBeLessThan(before / 3);
         }
     });
@@ -204,11 +215,12 @@ describe('tapped keys hold a lean that does not rock', () => {
         const rows = ride(v, eased(), t => (t < 0.05 ? 1 : 0), 2);
         const peak = -Math.min(...rows.map(row => row.lean));
         expect(peak).toBeGreaterThan(1.5);
-        expect(peak).toBeLessThan(3.5);
+        // 3.8 degrees (2.5 before the lean rate of 1.50)
+        expect(peak).toBeLessThan(4.5);
         let worst = Math.abs(rows[0].lean);
         for (let i = 1; i < rows.length; i++) worst = Math.max(worst, Math.abs(rows[i].lean - rows[i - 1].lean));
-        // The full lean rate is 1.1 degrees a frame
-        expect(worst).toBeLessThan(0.6);
+        // The full lean rate is 1.65 degrees a frame
+        expect(worst).toBeLessThan(0.9);
         expect(Math.abs(rows[rows.length - 1].lean)).toBeLessThan(0.1);
     });
 });
@@ -232,7 +244,7 @@ describe('a held key, a flick and a release answer as before', () => {
             expect(now[key]).toBeGreaterThan(BEFORE[key] * 0.9);
             expect(now[key]).toBeLessThan(BEFORE[key] * 1.1);
         }
-        expect(now.full).toBeCloseTo(-50, 1);
+        expect(now.full).toBeCloseTo(-CAP_DEG, 1);
     });
 
     test('a flick in the middle of tapping is no more than 10% slower', () => {

@@ -15,9 +15,20 @@ const game = loadGame();
 const { THREE, WorldRoute, WorldGround, WorldPhysics, WorldData } = game;
 const BEFORE = 'de5a931';
 const quiet = { log() {}, warn() {}, error() {} };
-const Before = new Function('THREE', 'document', 'console', `${execFileSync('git', ['show', `${BEFORE}:js/vehicle.js`], { encoding: 'utf8', maxBuffer: 1 << 26 })}\nreturn Vehicle;`)(
+// The code of that commit with the brake, steering and lean numbers of today's bike: the owner's tuning of 2026-11-21
+// changed them for the legs too (.agent/system/handling.md, "The defaults"), and the comparison is of the code
+const Old = new Function('THREE', 'document', 'console', `${execFileSync('git', ['show', `${BEFORE}:js/vehicle.js`], { encoding: 'utf8', maxBuffer: 1 << 26 })}\nreturn Vehicle;`)(
     realThree(), canvasStub(), quiet
 );
+const TODAY = new game.Vehicle(new THREE.Scene());
+class Before extends Old {
+    constructor(...args) {
+        super(...args);
+        this.brakeForce = TODAY.brakeForce;
+        this.steeringForce = TODAY.steeringForce;
+        this.maxLeanAngle = TODAY.maxLeanAngle;
+    }
+}
 const Z = WorldData.ZONE;
 const road = x => Math.abs(x) <= 5;
 

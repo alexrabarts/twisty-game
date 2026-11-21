@@ -14,9 +14,21 @@ const game = loadGame();
 const { THREE, WorldRoute, WorldGround, WorldPhysics } = game;
 const BEFORE = '4d46901';
 const quiet = { log() {}, warn() {}, error() {} };
-const Before = new Function('THREE', 'document', 'console', `${execFileSync('git', ['show', `${BEFORE}:js/vehicle.js`], { encoding: 'utf8', maxBuffer: 1 << 26 })}\nreturn Vehicle;`)(
+// The code before the braking change with the brake and the steering numbers of today's bike. The owner's tuning of
+// 2026-11-21 lowered the bike's brake to 0.70 of what it was and raised its lean rate, for the legs and a world alike
+// (.agent/system/handling.md, "The defaults"), so what is compared here is the braking rule, not those numbers
+const Old = new Function('THREE', 'document', 'console', `${execFileSync('git', ['show', `${BEFORE}:js/vehicle.js`], { encoding: 'utf8', maxBuffer: 1 << 26 })}\nreturn Vehicle;`)(
     realThree(), canvasStub(), quiet
 );
+const TODAY = new game.Vehicle(new THREE.Scene());
+class Before extends Old {
+    constructor(...args) {
+        super(...args);
+        this.brakeForce = TODAY.brakeForce;
+        this.steeringForce = TODAY.steeringForce;
+        this.maxLeanAngle = TODAY.maxLeanAngle;
+    }
+}
 const NO_ENGINE = Object.freeze({ ...WorldPhysics, engineBrake: 0 });
 
 function onPlane(VehicleClass, { grade = 0, cobbles = false, physics = WorldPhysics } = {}) {
@@ -67,8 +79,14 @@ describe('stopping distance, before and after', () => {
     // (on the grass the brake keeps landBrakeGrip of itself, and the land's drag makes up most of it)
     const SHARE = { flat: 0.75, 'a 10% descent': 0.75, cobbles: 0.75, 'run-off grass': 0.7 };
 
+    // On the grass the land's own speed rule ends a ride that is over landCrashSpeed for landCrashS, whatever the brake
+    // does. A full brake brings the bike under it in time from 38 m/s (44 m/s before the owner's brake of 0.70), so
+    // the grass is measured to 35 m/s
+    const GRASS_MOST = 35;
+    const speedsOf = name => (name === 'run-off grass' ? [20, 30, GRASS_MOST] : [20, 30, 40]);
+
     for (const [name, make] of Object.entries(cases)) {
-        for (const v0 of [20, 30, 40]) {
+        for (const v0 of speedsOf(name)) {
             test(`${name} from ${v0} m/s stops clearly shorter, with no crash`, () => {
                 const before = stop(make(Before), v0);
                 const after = stop(make(game.Vehicle), v0);
@@ -81,13 +99,13 @@ describe('stopping distance, before and after', () => {
         }
     }
 
-    test('30 m/s on the flat: about 20 m before and about 14 m after', () => {
-        expect(stop(onPlane(Before), 30).distance).toBeCloseTo(20.3, 0);
-        expect(stop(onPlane(game.Vehicle), 30).distance).toBeCloseTo(14.1, 0);
+    test('30 m/s on the flat: about 29 m before and about 20 m after', () => {
+        expect(stop(onPlane(Before), 30).distance).toBeCloseTo(28.6, 0);
+        expect(stop(onPlane(game.Vehicle), 30).distance).toBeCloseTo(19.7, 0);
     });
 
     test('on the land the brake keeps landBrakeGrip of itself, and the land\'s drag helps it stop', () => {
-        for (const v0 of [20, 30, 40]) {
+        for (const v0 of [20, 30, GRASS_MOST]) {
             const grass = stop(onGrass(game.Vehicle), v0);
             const road = stop(onPlane(game.Vehicle), v0);
             expect(grass.crashed).toBe(false);
@@ -97,18 +115,27 @@ describe('stopping distance, before and after', () => {
         }
     });
 
-    test('the off-road clock stays fair: a stop on the grass from 40 m/s takes well under maxOffRoadTime', () => {
+    test('the off-road clock stays fair: a stop on the grass from 35 m/s takes well under maxOffRoadTime', () => {
         const vehicle = onGrass(game.Vehicle);
-        const run = stop(vehicle, 40);
+        const run = stop(vehicle, GRASS_MOST);
         expect(run.crashed).toBe(false);
         expect(vehicle.offRoadTime).toBeLessThan(1.5);
         expect(vehicle.maxOffRoadTime).toBe(6);
     });
 
-    test('full brake at 40 m/s on every surface and in the rain never crashes or rears up', () => {
+    test('from 40 m/s on the grass the land\'s speed rule ends the ride, not the brake: the cause says so', () => {
+        const vehicle = onGrass(game.Vehicle);
+        const run = stop(vehicle, 40);
+        expect(run.crashed).toBe(true);
+        expect(run.wheelie).toBe(false);
+        expect(vehicle.crashWhy).toBe('fast');
+        expect(vehicle.lowsideTimerMs).toBe(0);
+    });
+
+    test('full brake at 40 m/s on every surface (35 m/s on the grass) and in the rain never crashes or rears up', () => {
         const rain = { surfaceGrip: 1, getPhysicsMultipliers: () => ({ lateralFriction: 0.7, brakeForce: 0.8, acceleration: 0.9 }) };
-        for (const make of [...Object.values(cases), V => Object.assign(onPlane(V), { weatherSystem: rain })]) {
-            const run = stop(make(game.Vehicle), 40);
+        for (const [name, make] of [...Object.entries(cases), ['rain', V => Object.assign(onPlane(V), { weatherSystem: rain })]]) {
+            const run = stop(make(game.Vehicle), speedsOf(name)[2]);
             expect(run.crashed).toBe(false);
             expect(run.wheelie).toBe(false);
         }
@@ -155,10 +182,10 @@ describe('trail braking', () => {
         const upright = (30 - straightUp.speed) / DT;
         const first = decels[0];
         expect(first).toBeLessThan(upright - 1);
-        expect(first).toBeGreaterThan(20 * WorldPhysics.brakeGain * WorldPhysics.trailBrakeFloor);
+        expect(first).toBeGreaterThan(vehicle.brakeForce * WorldPhysics.brakeGain * WorldPhysics.trailBrakeFloor);
         expect(deg(lean)).toBeGreaterThan(30);
-        // Slowing mid-bend: still more than the old upright brake gave
-        expect(first).toBeGreaterThan(20);
+        // Slowing mid-bend: still more than the bike's own upright brake gives without the world's gain
+        expect(first).toBeGreaterThan(vehicle.brakeForce);
     });
 
     test('braking on to a stop while leaned never crashes', () => {
@@ -173,16 +200,18 @@ describe('trail braking', () => {
         const multipliers = { lateralFriction: 1, brakeForce: 1, acceleration: 1 };
         const full = vehicle.brakeForce * WorldPhysics.brakeGain;
         let previous = Infinity;
-        for (let d = 0; d <= WorldPhysics.leanCapDeg; d += 0.5) {
+        // The cap is the rider's own: the bike's by how daring the rider is (Vehicle.leanOf)
+        const capDeg = vehicle.worldPhysics.leanCapDeg;
+        for (let d = 0; d <= capDeg; d += 0.5) {
             vehicle.leanAngle = d * Math.PI / 180;
             const decel = vehicle.worldBrakeDecel(multipliers);
             expect(decel).toBeLessThanOrEqual(previous + 1e-12);
-            if (previous !== Infinity && d < WorldPhysics.leanCapDeg - 2) expect(previous - decel).toBeLessThan(full * 0.03);
+            if (previous !== Infinity && d < capDeg - 2) expect(previous - decel).toBeLessThan(full * 0.03);
             previous = decel;
         }
         vehicle.leanAngle = 0;
         expect(vehicle.worldBrakeDecel(multipliers)).toBeCloseTo(full, 9);
-        vehicle.leanAngle = -WorldPhysics.leanCapDeg * Math.PI / 180;
+        vehicle.leanAngle = -capDeg * Math.PI / 180;
         expect(vehicle.worldBrakeDecel(multipliers)).toBeCloseTo(full * WorldPhysics.trailBrakeFloor, 6);
     });
 });

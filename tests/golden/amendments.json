@@ -1602,11 +1602,56 @@
      -72.2575,
      -0.0001
     ]
+   ],
+   "gates.approaches": [
+    {
+     "gate": "cp0",
+     "lane": 0,
+     "fired": true,
+     "crashed": false,
+     "ticks": 529
+    },
+    {
+     "gate": "cp0",
+     "lane": 6,
+     "fired": true,
+     "crashed": false,
+     "ticks": 532
+    },
+    {
+     "gate": "cp0",
+     "lane": 9,
+     "fired": false,
+     "crashed": true,
+     "ticks": 400
+    },
+    {
+     "gate": "finish",
+     "lane": 0,
+     "fired": true,
+     "crashed": false,
+     "ticks": 727
+    },
+    {
+     "gate": "finish",
+     "lane": 6,
+     "fired": true,
+     "crashed": false,
+     "ticks": 722
+    },
+    {
+     "gate": "finish",
+     "lane": 9,
+     "fired": false,
+     "crashed": true,
+     "ticks": 400
+    }
    ]
   },
-  "declaredReason": "Declared deltas on high-pass, each an explicit expected value (plan U3, U8, D6, U22). counts and budget: the golden 772 meshes, 229435 triangles, 362 grounded, 118 d6 become 758, 229197, 359, 115: the U3 roadworks plant (bulldozer, barrier, work truck: 14 meshes, 238 triangles, 3 grounded, 3 d6) is not built up the wall; instances 723 are unchanged. groundGrid and raycast.rays: D6 makes the wall exact, so only the wall-side laterals (-80, -40, -20, -12) and the wall-side ray gaps change; every ray hit height is the golden's. hashes, fingerprints.full and noDecal: the moved wall rocks and hairpin barriers (with their stripe children) and the removed plant (198 golden mesh hashes go, 184 come). Measured from the follow-up tree with terrain-check snapshot,raycast,budget --legs high-pass. S1: hashes, fingerprints.full and noDecal also carry the sign moves (no sign, post or marker in a wall band; tests/unit/signs.test.js): mesh and draw counts, rand, boulders, groundGrid, raycast, traj, gates, look and shortcuts are unchanged. Measured with terrain-check snapshot,raycast,traj,gates,look,shortcuts,budget --legs high-pass.",
+  "declaredReason": "Declared deltas on high-pass, each an explicit expected value (plan U3, U8, D6, U22). counts and budget: the golden 772 meshes, 229435 triangles, 362 grounded, 118 d6 become 758, 229197, 359, 115: the U3 roadworks plant (bulldozer, barrier, work truck: 14 meshes, 238 triangles, 3 grounded, 3 d6) is not built up the wall; instances 723 are unchanged. groundGrid and raycast.rays: D6 makes the wall exact, so only the wall-side laterals (-80, -40, -20, -12) and the wall-side ray gaps change; every ray hit height is the golden's. hashes, fingerprints.full and noDecal: the moved wall rocks and hairpin barriers (with their stripe children) and the removed plant (198 golden mesh hashes go, 184 come). Measured from the follow-up tree with terrain-check snapshot,raycast,budget --legs high-pass. S1: hashes, fingerprints.full and noDecal also carry the sign moves (no sign, post or marker in a wall band; tests/unit/signs.test.js): mesh and draw counts, rand, boulders, groundGrid, raycast, traj, gates, look and shortcuts are unchanged. Measured with terrain-check snapshot,raycast,traj,gates,look,shortcuts,budget --legs high-pass. gates.approaches (2026-11-21): the six approach rides to a gate with the owner's tuning in the defaults (a lean rate of 1.50, a brake of 0.70: .agent/system/handling.md, \"The defaults\"). Each ride ends as in the golden (the gate fired at lanes 0 and 6, the bike crashed at lane 9); only the step counts moved, by 3 to 10 steps. gates.map is compared with the golden as before.",
   "unbound": {
-   "frames": "U18: the frozen high-pass frame golden does not reproduce at its own source (15.50/255 over 311 tiles on the untouched e44721d tree), and phase 7 (depth atmosphere) changes every frame of every leg by design. High-pass frames are recorded, not compared."
+   "frames": "U18: the frozen high-pass frame golden does not reproduce at its own source (15.50/255 over 311 tiles on the untouched e44721d tree), and phase 7 (depth atmosphere) changes every frame of every leg by design. High-pass frames are recorded, not compared.",
+   "traj": "The owner's tuning written into the defaults (2026-11-21: a lean rate of 1.50 and a brake of 0.70, .agent/system/handling.md, \"The defaults\") changes the steering and the brake of every bike on the legs too, so the autopilot's ride is another ride: it finishes high-pass at 25 m/s with no crash in 4333 steps where the golden has 4335, and two rides are still the same. The golden's road, gates and scene are compared as before. High-pass traj is recorded, not compared."
   }
  }
 }

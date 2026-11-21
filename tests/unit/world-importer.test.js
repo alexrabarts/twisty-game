@@ -600,6 +600,29 @@ describe('floors.mjs', () => {
         expect(linkFloorMs(wide, 0, 400, { leanCapDeg: 50 })).toBeLessThan(linkFloorMs(tight, 0, 400, { leanCapDeg: 50 }));
     });
 
+    test('a bend is a run that turns one way: two hairpins that turn opposite ways hold the rider in each, not on the road between', () => {
+        // Two hairpins of 10 m radius, 80 m long each, the second 32 m after the first: right then left, and right twice
+        const pair = (second) => {
+            const ride = straightRide(600);
+            let heading = 0;
+            for (let i = 0; i < ride.s.length; i++) {
+                const first = i >= 40 && i < 60, other = i >= 68 && i < 88;
+                if (first || other) ride.radius[i] = 10;
+                if (first) heading += Math.PI / 20;
+                if (other) heading += second * Math.PI / 20;
+                ride.heading[i] = heading;
+            }
+            return ride;
+        };
+        const one = (() => { const ride = pair(0); for (let i = 68; i < 88; i++) ride.radius[i] = Infinity; return ride; })();
+        const lone = linkFloorMs(one, 0, 600, { leanCapDeg: 50 }), straight = linkFloorMs(straightRide(600), 0, 600, { leanCapDeg: 50 });
+        const opposite = linkFloorMs(pair(-1), 0, 600, { leanCapDeg: 50 }), same = linkFloorMs(pair(1), 0, 600, { leanCapDeg: 50 });
+        // What one hairpin adds to the straight, twice: the 32 m between the two are ridden at top speed
+        expect(Math.abs((opposite - straight) - 2 * (lone - straight))).toBeLessThan(0.02 * (lone - straight));
+        // Two that turn the same way are one bend of 360 degrees, and the road between them is inside it: a higher floor
+        expect(same).toBeGreaterThan(opposite * 1.2);
+    });
+
     test('is a lower bound: no ideal rider on the inner edge of a real bend is faster than the floor', async () => {
         const world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 });
         const samples = rideSamples(world.edges, world.ride);

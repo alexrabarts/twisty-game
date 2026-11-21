@@ -7,7 +7,9 @@
 // in a ride).
 //
 // ROAD is what the first rider's first bike did before the trait existed (b4ce4de, by the same rides):
-// a bike with no trait must still do exactly that, on the land and on the road.
+// a bike with no trait must still do exactly that, on the land and on the road. The yaw of the three turns (3 s of
+// full steering) is the one with the owner's lean rate of 1.50 in the defaults (2026-11-21: the bike is at its lean
+// sooner, so it has turned further: 2.212, 3.63 and 3.732 before); the lean they settle at and every speed are the same.
 //
 // The degrees (WorldPhysics.offroad `top`, `rise`, landCover): what each bike of the real catalogue can do on the
 // land (tests/helpers/world-offroad-measure.js), in the order of its trait, and against the same bike at c111f28
@@ -29,11 +31,11 @@ const OFFROAD = [TRAIL, SINGLE, TRIPLE, SCRAMBLER];
 const TOURER = ['shane', 'bike16_superadv'];
 const ROAD_BIKES = [['steve', 'bike08_xsr900'], ['steve', 'bike13_panigale'], ['tim', 'bike14_forza'], ['shane', 'bike11_duke990'], ['guy', 'bike12_tracer9gt']];
 const ROAD = {
-    landHold: 3.768, landFrom20: [7.956, 4.053, 3.77], landTurn8: { lean: -0.58, yaw: 2.212 }, landLean42: { at: 0.2, lean: -0.663, yaw: 0.202 },
-    roadHold: 52.723, roadFrom20: [24.846, 30.234, 34.792], roadTurn8: { lean: -0.873, yaw: 3.63 }
+    landHold: 3.768, landFrom20: [7.956, 4.053, 3.77], landTurn8: { lean: -0.58, yaw: 2.283 }, landLean42: { at: 0.2, lean: -0.663, yaw: 0.202 },
+    roadHold: 52.723, roadFrom20: [24.846, 30.234, 34.792], roadTurn8: { lean: -0.873, yaw: 3.834 }
 };
 // The trail single on the road before the trait: the carriageway is not the trait's
-const TRAIL_ROAD = { roadHold: 47.498, roadFrom20: [24.008, 28.621, 32.584], roadTurn8: { lean: -0.873, yaw: 3.732 } };
+const TRAIL_ROAD = { roadHold: 47.498, roadFrom20: [24.008, 28.621, 32.584], roadTurn8: { lean: -0.873, yaw: 3.906 } };
 
 function bike([character, model], speed, land, physics = world) {
     const v = new game.Vehicle(new game.THREE.Scene(), null, game.CHARACTERS.find(c => c.id === character), model, { model: false });
@@ -41,6 +43,8 @@ function bike([character, model], speed, land, physics = world) {
         physics,
         route: { unitCount: 0, fromUnits: u => u, project: () => ({ index: -1 }), sample: () => ({ grade: 0, flags: {} }) }
     };
+    // The bike's own lean limit: how far the rider dares to lean (Vehicle.leanOf) is not what is measured here
+    v.leanDare = 1;
     v.speed = speed;
     v.hold = land ? Object.freeze({ drag: 0.35, grip: world.landGrip, floorSpeed: 6 }) : null;
     return v;
@@ -478,6 +482,10 @@ describe('degrees of off-road capability', () => {
             expect(landBike(game, who).landValues()).toBe(world);
             // The same ride, step for step: 6 s from 20 m/s on the land at full throttle, on rock, up a slope of 0.3
             const a = landBike(before, who, { speed: 20, slope: 0.3, cover: 3 }), b = landBike(game, who, { speed: 20, slope: 0.3, cover: 3 });
+            // The numbers of the owner's tuning (2026-11-21) are today's in both: the comparison is of the land's rule
+            a.environment.physics = Object.freeze({ ...before.WorldPhysics, leanRate: world.leanRate, trailBrakeFloor: world.trailBrakeFloor });
+            a.brakeForce = b.brakeForce;
+            a.steeringForce = b.steeringForce;
             for (let i = 0; i < 360; i++) { landTick(a, 0.2, 1, 0); landTick(b, 0.2, 1, 0); }
             expect([who[1], b.speed, b.leanAngle, b.yawAngle, b.crashed]).toEqual([who[1], a.speed, a.leanAngle, a.yawAngle, a.crashed]);
         }

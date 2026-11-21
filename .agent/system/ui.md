@@ -64,7 +64,7 @@
     | --- | --- | --- | --- | --- | --- |
     | speed | `maxSpeed` | 0.7 | 1.2 | | mean of `country` and `mountain` |
     | accel | `acceleration` | 0.65 | 1.25 | | |
-    | handling | `steeringForce` | 0.9 | 1.15 | | `hairpins` |
+    | handling | `steeringForce` | 0.9 | 1.15 | | mean of `hairpins` and `daring` (the lean the rider dares: `.agent/system/handling.md`, "The lean limit by the rider") |
     | jump | `jumpPower` | 0.5 | 1.6 | + 1.75 x `offroad` | `daring` |
     | comfort | `comfortShake` | 1.4 | 0.3 | | |
 

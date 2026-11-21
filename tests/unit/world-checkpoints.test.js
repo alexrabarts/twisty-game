@@ -26,8 +26,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const BEFORE = '70fce04';
 const GATES_BEFORE = 12;
 // The scripted careful rider (tests/helpers/world-rider.js, the pilot at 7 m/s) over the whole stage at that commit,
-// in steps of 1/60 s, start line to finish line: 1 888.1 s
-const RIDE_TICKS_BEFORE = 113286;
+// in steps of 1/60 s, start line to finish line: 1 888.1 s (113 286 steps). The same rider on the bike with the owner's
+// tuning of 2026-11-21 in its defaults (a lean rate of 1.50, a brake of 0.70: .agent/system/handling.md, "The
+// defaults") takes 113 154 steps, 2.2 s less: the bike changed, the splits did not
+const RIDE_TICKS_BEFORE = 113154;
 const game = loadGame();
 const { THREE, WorldEnvironment, Roadworks } = game;
 

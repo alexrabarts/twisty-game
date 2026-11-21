@@ -63,20 +63,24 @@ window.twistyDev = {
             const base = v.worldMultipliers().lateralFriction / (v.worldSurfaceGrip || 1);
             return base * (here.flags && here.flags.cobbles ? world.cobbleGrip : 1);
         };
-        const capTan = (s) => Math.tan(Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip(s)));
+        // The lean limit is the bike's own (the rider's daring, the mode and the tuning are in it)
+        const capTan = (s) => Math.tan(Math.atan(Math.tan(game.vehicle.worldPhysics.leanCapDeg * Math.PI / 180) * grip(s)));
+        // The braking the pilot plans with: ap.brake, or less where the bike's own brake has less at full lean
+        const braking = () => Math.min(ap.brake, game.vehicle.worldBrakeLeast(game.vehicle.worldMultipliers()));
         const curvature = (s) => Math.abs(route.curvatureAt(s, 6));
         const target = (s) => {
             let allowed = ap.speed;
+            const brake = braking();
             for (let d = 0; d <= 120; d += 6) {
                 const k = Math.min(curvature(s + d), 1 / world.radiusFloor);
                 if (k < 1e-4) continue;
                 const corner = Math.min(ap.speed, ap.apFactor * Math.sqrt(g * capTan(s + d) / k));
-                allowed = Math.min(allowed, Math.sqrt(corner * corner + 2 * ap.brake * d));
+                allowed = Math.min(allowed, Math.sqrt(corner * corner + 2 * brake * d));
             }
             // A roadworks light that is not green ahead (ap.obeyLights, on unless set false): stop at its line
             const works = game.environment.roadworks;
             const stop = works && ap.obeyLights !== false ? works.pilotStop(s) : Infinity;
-            if (stop < Infinity) return Math.min(Math.max(allowed, 5), Math.sqrt(2 * ap.brake * Math.max(0, stop - 2.5)));
+            if (stop < Infinity) return Math.min(Math.max(allowed, 5), Math.sqrt(2 * brake * Math.max(0, stop - 2.5)));
             return Math.max(allowed, 5);
         };
         input.getSteeringInput = () => {

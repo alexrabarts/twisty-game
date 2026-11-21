@@ -37,6 +37,21 @@ function worldVehicle(options = {}, VehicleClass = game.Vehicle) {
     return vehicle;
 }
 
+// The lean cap of the rider these tests ride as (the first character): the bike's (WorldPhysics.leanCapDeg) by how
+// daring the rider is (Vehicle.leanOf). Every limit a test reads off the bike is this one
+const CAP_DEG = worldVehicle().worldPhysics.leanCapDeg;
+// The bike's own numbers today, for a reference built from an older vehicle.js: the owner's tuning of 2026-11-21
+// changed them (.agent/system/handling.md, "The defaults"), and a comparison with older code is of the code
+const TODAY = new game.Vehicle(new THREE.Scene());
+const withToday = Old => class extends Old {
+    constructor(...args) {
+        super(...args);
+        this.brakeForce = TODAY.brakeForce;
+        this.steeringForce = TODAY.steeringForce;
+        this.maxLeanAngle = TODAY.maxLeanAngle;
+    }
+};
+
 function grippy(vehicle, grip) {
     vehicle.weatherSystem = {
         surfaceGrip: 1,
@@ -96,7 +111,7 @@ describe('full lock (P30)', () => {
             expect(vehicle.crashed).toBe(false);
             const settled = Math.abs(vehicle.leanAngle);
             expect(run.peak / settled).toBeLessThanOrEqual(1.02);
-            expect(deg(settled)).toBeLessThanOrEqual(50.1);
+            expect(deg(settled)).toBeLessThanOrEqual(CAP_DEG + 0.1);
             const radius = settledRadius(speed, run.yaws);
             if (speed <= 6) expect(radius).toBeLessThanOrEqual(5.1);
             if (speed === 12) expect(radius).toBeLessThanOrEqual(12.5);
@@ -127,7 +142,11 @@ describe('full lock (P30)', () => {
 // full lock still settles at the cap. The pins are the same ones the lean-target controller met: the steering
 // torque falls with speed as the legacy speedFactor does, and the lean has no momentum, so it is slower still.
 describe('step response at speed', () => {
-    const STEP_MARGIN = 1.1;
+    // 1.1 until the owner's lean rate of 1.50 (2026-11-21). The same factor is on both bikes, but the legacy bike's
+    // steering is a torque on a lean with momentum (its time to a lean falls as the root of the factor) and the
+    // world's is a lean rate (its time falls as the factor), so the world bike now reaches 10 degrees 15%
+    // sooner than the legacy bike at 45 m/s and 25% at 20 m/s. The owner left `steerFast` (the fall of the lean rate with speed) at 1
+    const STEP_MARGIN = 1.25;
     const TEN = 10 * Math.PI / 180;
 
     function step(vehicle, speed, input) {
@@ -178,7 +197,7 @@ describe('step response at speed', () => {
             const vehicle = worldVehicle();
             const run = hold(vehicle, speed, 1, 6);
             expect(run.crashTick).toBeNull();
-            expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(WorldPhysics.leanCapDeg, 1);
+            expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(CAP_DEG, 1);
             expect(run.peak / Math.abs(vehicle.leanAngle)).toBeLessThanOrEqual(1.02);
         }
     });
@@ -252,7 +271,7 @@ describe('keyboard presses', () => {
         test(`(c) a held key settles under the cap without a lowside at ${speed} m/s`, () => {
             const run = keys(worldVehicle(), speed, [[1, 4]]);
             expect(run.crashed).toBe(false);
-            expect(run.peak).toBeLessThanOrEqual(WorldPhysics.leanCapDeg + 0.1);
+            expect(run.peak).toBeLessThanOrEqual(CAP_DEG + 0.1);
             // Settled: the last second moved the lean by less than a tenth of a degree
             const vehicle = worldVehicle();
             keys(vehicle, speed, [[1, 3]]);
@@ -275,9 +294,9 @@ describe('legacy equivalence (P31)', () => {
     const base = execFileSync('git', ['show', 'a9e8add:js/vehicle.js'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 
     function vehicleClass(source) {
-        return new Function('THREE', 'document', 'console', `${source}\nreturn Vehicle;`)(
+        return withToday(new Function('THREE', 'document', 'console', `${source}\nreturn Vehicle;`)(
             realThree(), canvasStub(), { log() {}, warn() {}, error() {} }
-        );
+        ));
     }
 
     // Steps, ramps and a seeded random walk
@@ -386,10 +405,10 @@ describe('hairpin (P32)', () => {
         });
     }
 
-    // 12 m on the centreline at 10.8 m/s, the most the R_MIN fillet allows on its centreline at the lean cap
+    // 12 m on the centreline at 11.6 m/s, the most the R_MIN fillet allows on its centreline at the rider's lean cap
     test('the keyboard rider makes a 12 m hairpin at the fillet speed', () => {
-        const speed = Math.sqrt(G * WorldPhysics.rMin * Math.tan(WorldPhysics.leanCapDeg * Math.PI / 180));
-        expect(speed).toBeCloseTo(10.8, 1);
+        const speed = Math.sqrt(G * WorldPhysics.rMin * Math.tan(CAP_DEG * Math.PI / 180));
+        expect(speed).toBeCloseTo(11.6, 1);
         const result = ride(worldVehicle(), { target: speed, radius: 12 });
         expect(result.crashed).toBe(false);
         expect(result.worst).toBeLessThanOrEqual(5);
@@ -496,7 +515,7 @@ describe('slope (P34)', () => {
 });
 
 describe('grip (P35)', () => {
-    const CAP = WorldPhysics.leanCapDeg * Math.PI / 180;
+    const CAP = CAP_DEG * Math.PI / 180;
 
     // The lowside law read off the ride itself: the first tick at which the demand the vehicle reports
     // (lastDemand) has stayed over margin * tan(capEff) for lowsideMs. The lean dynamics decide the demand; the
@@ -511,13 +530,13 @@ describe('grip (P35)', () => {
         return null;
     }
 
-    // Settled at the 50 degree cap on full lock, then the grip steps down. Returns the crash tick after the
+    // Settled at the rider's cap on full lock, then the grip steps down. Returns the crash tick after the
     // step and the tick the law gives for the demand recorded on the way
     function stepGrip(speed, newGrip, { release = false, physics = WorldPhysics, withLaw = false } = {}) {
         const grip = { value: 1 };
         const vehicle = grippy(worldVehicle({ physics }), grip);
         hold(vehicle, speed, 1, 2);
-        expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(50, 0);
+        expect(deg(Math.abs(vehicle.leanAngle))).toBeCloseTo(CAP_DEG, 0);
         grip.value = newGrip;
         const demands = [];
         let crashTick = null;
@@ -530,7 +549,7 @@ describe('grip (P35)', () => {
         return withLaw ? { tick: crashTick, law: lawTick(demands, newGrip) } : crashTick;
     }
 
-    test('(a) grip 0.85 at full lock settles at atan(tan 50 * 0.85) without a crash', () => {
+    test('(a) grip 0.85 at full lock settles at atan(tan cap * 0.85) without a crash', () => {
         const grip = { value: 0.85 };
         const vehicle = grippy(worldVehicle(), grip);
         const run = hold(vehicle, 12, 1, 4);
@@ -559,8 +578,10 @@ describe('grip (P35)', () => {
         expect(stepGrip(12, 0.60, { release: true })).toBeNull();
     });
 
-    test('(e) a step to 0.30 crashes even with the input released', () => {
-        const { tick, law } = stepGrip(12, 0.30, { release: true, withLaw: true });
+    // The grip from which letting go no longer saves the bike is 0.30 for the least daring rider and 0.25 for the most
+    // daring in the sharpest mode (a higher cap leaves more lean to shed, and more room under the lowside)
+    test('(e) a step to 0.20 crashes even with the input released', () => {
+        const { tick, law } = stepGrip(12, 0.20, { release: true, withLaw: true });
         expect(law).not.toBeNull();
         expect(tick).toBe(law);
     });
@@ -582,7 +603,7 @@ describe('grip (P35)', () => {
 });
 
 describe('cobbles', () => {
-    const CAP = WorldPhysics.leanCapDeg * Math.PI / 180;
+    const CAP = CAP_DEG * Math.PI / 180;
     function onSurface(cobbles) {
         const vehicle = worldVehicle({ cobbles });
         const weather = new WeatherSystem({ fog: null }, null);
@@ -758,8 +779,10 @@ describe('low-speed turn', () => {
         );
 
         // With the engine braking off: it changes the speed within the tick, and this pins the steering
+        // The reference does not know the rider's lean cap (Vehicle.riderWorld), so its world carries it
+        const RIDER_NO_ENGINE = Object.freeze({ ...NO_ENGINE, leanCapDeg: CAP_DEG });
         function trace(VehicleClass, speed, inputs) {
-            const vehicle = worldVehicle({ physics: NO_ENGINE }, VehicleClass);
+            const vehicle = worldVehicle({ physics: VehicleClass === Reference ? RIDER_NO_ENGINE : NO_ENGINE }, VehicleClass);
             const out = [];
             for (const input of inputs) {
                 vehicle.speed = speed;

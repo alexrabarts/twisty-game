@@ -50,7 +50,7 @@ Rules:
 - **One function gives the multiplier:** `Tuning.of(id)`. It multiplies two sources: the debug panel's (`Tuning.values`, read only in debug mode) and the rider mode's (`Tuning.mode`, "The rider modes" below).
 - **Outside debug mode the stored values are not read.** `Tuning.start({ debug, storage })` reads `localStorage` (`twistyTuning`) only with `debug`.
 - **A tuned ride keeps no time.** From the first moment a debug multiplier is off 1 the ride is flagged (`Tuning.ride.tuned`), and it stays flagged after Reset until the next ride begins (`Tuning.beginRide`, at `Game.initializeGameWithLeg` and `initializeGameWithWorld`). `Game.watchTuning` then sets a world's `trusted` to false, the flag of the debug skip (`WorldEnvironment.submitAllowed`), and cancels a classic leg's leaderboard session; a restart of the leg starts none. The HUD shows the "tuned" tag.
-- **The text.** `Tuning.text()` gives `twisty tuning v1`, then a line `id = 1.08` for each multiplier off 1. `Tuning.parse(text)` reads it back as `{ values, errors }` and refuses an unknown id, a value outside the row's range, a line that is not `id = number` and an id given twice, each with its line number. To write tuned values into the defaults, parse the text and multiply each field of the row's `scales` by the value (divide for `inverse`).
+- **The text.** `Tuning.text()` gives `twisty tuning v1`, then a line `id = 1.08` for each multiplier off 1. `Tuning.parse(text)` reads it back as `{ values, errors }` and refuses an unknown id, a value outside the row's range, a line that is not `id = number` and an id given twice, each with its line number. "The defaults" below says how to write a block into the defaults.
 
 To add a parameter:
 
@@ -65,6 +65,75 @@ Left out, because no single number scales them cleanly:
 - **The off-road pace of a classic leg.** A leg's run-off values belong to each zone of the leg (`LEG_OFFROAD`).
 
 `leanMax` and `gripDry` both move the lean limit and the lowside limit of a world ride together, by nearly the same amount. On a classic leg they differ: `leanMax` is the lean at which the bike falls, `gripDry` the tyre's hold in the turn.
+
+## The defaults
+
+The owner rode with the tuning panel in the wet on cobbled hairpins and sent this block on 2026-11-21 (his second set of that day): "this feels better as a default. we should adjust max lean as part of how daring each character is".
+
+```
+twisty tuning v1
+steerRate = 1.50
+leanMax = 1.08
+brake = 0.70
+brakeLean = 0.75
+```
+
+It is in the defaults now, so the panel reads 1.00 and Road is all ones at that behaviour:
+
+| Row | Number | Before | Now | Where |
+| --- | --- | --- | --- | --- |
+| `steerRate` | `WorldPhysics.leanRate` | 1.15 rad/s | 1.725 (written `1.15 * 1.5`, one bit under the literal) | `js/world/physics.js` |
+| `steerRate` | the bike's `steeringForce`, before the rider's multiplier | 9.5 | 14.25 | the `Vehicle` constructor |
+| `brake` | the bike's `brakeForce`, before the rider's multiplier | 20 m/s^2 | 14 | the `Vehicle` constructor |
+| `brakeLean` | `WorldPhysics.trailBrakeFloor` | 0.45 | 0.3375 | `js/world/physics.js` |
+| `leanMax` | the lean limit of a rider of middle daring | 1 | 1.08 | `RIDER_LEAN` ("The lean limit by the rider") |
+
+The class table (`BIKE_CLASSES`), `LIGHT_BIKE`, `BIKE_LIMITS` and each rider's `physics` are multipliers of those bases and did not change. A classic leg reads `steeringForce`, `brakeForce` and `maxLeanAngle`, so the legs changed too.
+
+What the new numbers mean in Road:
+
+- The full brake upright in a world is 19.6 m/s^2 x the rider's multiplier (28 before). At the lean limit it is 6.6 (12.6 before): `brakeGain` 1.4 x `trailBrakeFloor`.
+- A stop from 25 m/s on the bike with the most power to spare takes 12.7 m (9.0 before): 1.40 to 1.41 of the old distance on every bike, a little under 1 / 0.70 because the engine braking and the air's drag did not change. On a leg it is 1 / 0.70.
+- From upright to 30 degrees with a key held takes 0.37 s (0.52 before).
+
+What depended on the old numbers, and what holds now:
+
+- **The speed advice** is a lean (`adviceLeanDeg`), not a brake: the advised speeds did not move. The advice's own braking (`adviceBrake`, 4 m/s^2) plans with no more than the brake has at the lean limit (`Vehicle.worldBrakeLeast`). In Road that least is over 4 on every bike, dry and wet, so the advice brakes as before. It is under 4 only in Rain on wet cobbles (3.6 to 4.7 by the bike), where the advice now starts sooner on the bikes under 4.
+- **A scripted rider** counts on the same least brake: `advisedPace` in `tests/helpers/world-rider.js` and the pilot of `tools/autopilot.js` (`ap.brake`, 6, or the bike's least where that is less). Both read the lean limit from the bike (`vehicle.worldPhysics`), so the rider's daring, the mode and the panel are in it.
+- **The crew and the cars** read none of these numbers (`LANE_DRIVE`, `CREW_PACES`). The braking a vehicle behind the player allows for (`CONTACT.follow.playerBrake`, 9 m/s^2) is still under the player's brake.
+- **The board floors** (`tools/world/floors.mjs`) read a lean and the top speed. They assume a rider who brakes and accelerates without limit, so a weaker brake keeps them valid. The lean and one rule of the floors did change: "The lean limit by the rider" and `.agent/system/world-data.md`, "The floors and the rider's lean".
+- **The land's speed rule** did not change (`landCrashSpeed`, `landCrashS`). A full brake on the grass now brings a road bike under it in time from 38 m/s (44 before).
+- **The key ease** (`steerKeys`) did not change: the owner rode it at 1.00. Tapped keys rock the lean by 0.6 to 1.7 degrees (under 0.6 before; 5.3 to 6.2 with no ease). Taps of half the time now hold 49 degrees (36 before), so a line is set with taps of a third of the time or less.
+- **The legs' frozen golden.** The autopilot's rides of the one leg still bound to `tests/golden/browser-baseline.json` are other rides now (the same outcomes, 2 to 10 steps apart). `tests/golden/amendments.json` declares it: `unbound.traj` and `declared["gates.approaches"]`. The baseline files are not changed.
+- **At speed** the world's bike reaches 10 degrees 15% to 25% sooner than a leg's bike (within 10% before), because a leg's steering is a torque and a world's is a rate. The owner left `steerFast` at 1.00.
+
+To apply the next block:
+
+1. Run `node tools/apply-tuning.mjs block.txt` (or pipe the text in). It reads the block with `Tuning.parse` and prints each number the rows scale, its default now and the default to write. It edits no file.
+2. Write the numbers. A `world` number is in `js/world/physics.js`. A `bike` number is its base in the `Vehicle` constructor: scale the base, not the class table. Write a product (`1.15 * 1.5`) where the literal is not the same double, so the proof can be to the last bit.
+3. Put the block in `BLOCK` and the commit before the change in `BEFORE` in `tests/unit/tuning-defaults.test.js`. It rides the stage and a leg at that commit with the block set through `Tuning` and requires the same ride on the new tree with every multiplier at 1: to the last bit for a rider with no multiplier of their own, and within 1e-9 for the real riders (their own multipliers change the order of two multiplications; the measured difference is 9e-13).
+4. Run the tests that read the bike's numbers, and derive again what they pin (the list above). Do not change a test's number without the measure that gives it.
+
+## The lean limit by the rider
+
+A rider's `daring` trait (1 to 5, `CHARACTERS`) sets how far that rider leans the bike. One table holds the rule, `RIDER_LEAN` in `js/vehicle.js`: `{ trait: 'daring', least: 1.02, most: 1.14 }`. `Vehicle.leanOf(character)` is a straight line between the two ends:
+
+| `daring` | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| multiplier | 1.02 | 1.05 | 1.08 | 1.11 | 1.14 |
+| lean limit in a world, dry (degrees) | 51 | 52.5 | 54 | 55.5 | 57 |
+| speed held in a 30 m bend, dry (m/s) | 19.06 | 19.58 | 20.13 | 20.69 | 21.29 |
+| speed held in a 30 m bend, wet (m/s) | 15.95 | 16.39 | 16.84 | 17.31 | 17.81 |
+
+Before the trait every rider held 18.71 m/s dry and 15.66 wet (50 degrees). Wet is a grip of 0.7.
+
+- **Where it acts.** The multiplier is on the bike's own limit, under the rider mode and the debug panel: `maxLeanAngle` in the constructor (a leg), and `leanCapDeg` in the rider's view of the world (`Vehicle.riderWorld`, a frozen copy that `Vehicle.worldPhysics` hands to `Tuning.view`). `WorldPhysics.leanCapDeg` itself stays 50.
+- **The lowside moves with it.** The grip cap, the lean limit and the lowside all read `leanCapDeg`. A rider holds full steering at their own limit, and falls from the same share over it (about 1.3 with the steering held) whatever the daring. With full steering held, a step in grip lowsides only below 0.78 for every rider in every mode (0.78 before), so the hairpin grip bound of `WorldLooks` (0.80) holds.
+- **No code names a rider.** A character without the trait is the middle (1.08). A new character gets its limit from the trait alone.
+- **The stars.** The handling bar's rider part is the mean of `hairpins` and `daring` (`STAT_BARS`). No star of a shipped rider moved.
+- **The crew** read `CREW_PACES` (`corner`, by the `hairpins` trait) and not this table: their cornering pace by daring is the group ride's job.
+- **The drawn body lean** (`bodyLean`) is another thing and did not change.
+- **The board floors.** The most lean a ride can have is 59.3 degrees (daring 5 in Track), so the floors are worked out at `WorldPhysics.floorLeanDeg` (60), not at the bike's 50. A new rider mode or a wider `RIDER_LEAN` that passes 60 fails `tests/unit/tuning-defaults.test.js`: raise `floorLeanDeg` and import again. `.agent/system/world-data.md`, "The floors and the rider's lean", has the rule and the check.
 
 ## The rider modes
 
@@ -90,14 +159,18 @@ Measured on the bike with the most power to spare, on the flat (`tests/unit/ride
 | --- | --- | --- | --- | --- |
 | top speed, m/s | 69.4 | 81.6 | 81.6 | 81.6 |
 | 0 to 20 m/s, s | 3.03 | 2.40 | 2.35 | 2.32 |
-| stop from 25 m/s, m | 10.0 | 9.0 | 8.4 | 7.9 |
-| upright to 30 degrees with a key held, s | 0.58 | 0.52 | 0.48 | 0.43 |
+| stop from 25 m/s, m | 14.0 | 12.7 | 11.8 | 11.1 |
+| stop from 25 m/s in the wet, m | 17.3 | 15.7 | 14.6 | 13.8 |
+| upright to 30 degrees with a key held, s | 0.42 | 0.37 | 0.33 | 0.32 |
+| tapped keys (0.1 s on, 0.1 s off) at 15 m/s: the lean's rock, degrees | 7.6 | 4.8 | 3.3 | 4.2 |
+
+Before the owner's tuning of 2026-11-21 ("The defaults") the stops were 10.0, 9.0, 8.4 and 7.9 m, the lean-in 0.58, 0.52, 0.48 and 0.43 s and the rock 5.3, 6.3, 6.9 and 7.4 degrees. With no key ease the rock is 6.9, 7.6, 8.4 and 9.1 degrees now. Two things to know: in Rain the ease does not lower the rock at this tap (it did not before either), and Track's shorter taps rock the lean more than Road's (1.5 to 2.7 degrees against 0.6 to 1.7 at 0.08 s on, 0.08 s off), because its key ease is 0.8 of Road's on a lean rate of 1.2.
 
 Rules:
 
 - **Road is the bike as it is.** Its `tune` is empty and its assist is the assist's own default, so a ride in Road is the ride with no mode and no tuning loaded, to the last bit. The test rides the same script both ways. Do not give Road a multiplier.
 - **Two doors to the physics.** `RiderModes.apply` calls `Tuning.setMode(row.tune)` and `WorldAssist.setLevel(row.assist)`. No code names a mode, and the physics knows nothing of modes.
-- **How it stacks.** A number the physics reads is: the rider's own multiplier x the bike's class and weight (both in the number already, `Vehicle.physicsOf`) x the mode's multiplier x the debug panel's multiplier (`Tuning.of`). The mode does not change the stars on the rider card.
+- **How it stacks.** A number the physics reads is: the rider's own multiplier x the bike's class and weight (both in the number already, `Vehicle.physicsOf`) x the mode's multiplier x the debug panel's multiplier (`Tuning.of`). The lean limit has the rider's daring in it the same way ("The lean limit by the rider"). The mode does not change the stars on the rider card.
 - **One board.** A mode never flags the ride (`Tuning.ride.tuned` rises only with a debug multiplier), and a board is not told the mode. For that reason no mode has `topSpeed` or `accel` over 1: the server's time floor is a speed (`functions/lib/boards.js` `FLOOR_SPEED`), and the fastest bike is close under it.
 - **Classic legs.** The mode is in force on a classic leg too. A leg reads the rows marked "both" in the table above (`topSpeed`, `accel`, `brake`, `steerRate`, `leanMax`, the wheelie rows). The rows marked "world" and the hairpin assist do nothing there.
 - **Margin.** `leanMax` does not make the lowside further away on a world ride: the lean limit and the lowside limit move together. `lowside` does (Rain). On a classic leg `leanMax` is the lean at which the bike falls, so Rain does not lower it.

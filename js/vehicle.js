@@ -245,8 +245,9 @@ const OUTFITS = {
 // to 5) are how the rider really rides: the pace on open country roads, on
 // mountain roads and round hairpins, and how daring over a jump. `place` is
 // the rider's home place in the group, 1 at the front. The traits set the
-// stars and the pace of a rider of the crew (Traffic.PACES); they never
-// touch the player's physics. bikeLabel and bikeColor
+// stars and the pace of a rider of the crew (Traffic.PACES); of the player's
+// physics they touch one number, the lean limit, by `daring` (RIDER_LEAN,
+// Vehicle.leanOf). bikeLabel and bikeColor
 // describe the first bike. `outfits` is what the rider can wear (OUTFITS) and
 // `kit` the first outfit's gear; `build` is the rider's size against the
 // modelled rider's (height stretches the torso and the limbs, width the
@@ -276,8 +277,8 @@ const CHARACTERS = [
             comfortShake: 1.25,     // Race-firm - you feel everything
             maxSpeed: 1.10,        // 74.8 m/s top end
             acceleration: 1.10,    // 16.5 m/s²
-            brakeForce: 1.05,      // 21 m/s²
-            steeringForce: 1.0,    // 9.5 baseline
+            brakeForce: 1.05,      // 14.7 m/s²
+            steeringForce: 1.0,    // 14.25 baseline
             jumpPower: 0.85,       // Stiff suspension, low clearance
             wheeliePop: 1.3,       // Power wheelies come easily
             wheelieThrottle: 1.15
@@ -304,8 +305,8 @@ const CHARACTERS = [
             comfortShake: 0.55,     // Long-travel suspension soaks it up
             maxSpeed: 1.0,         // 68 m/s
             acceleration: 1.0,     // 15 m/s²
-            brakeForce: 1.05,      // 21 m/s²
-            steeringForce: 1.1,    // 10.45 - wide bars
+            brakeForce: 1.05,      // 14.7 m/s²
+            steeringForce: 1.1,    // 15.68 - wide bars
             jumpPower: 1.25,       // Long-travel suspension
             wheeliePop: 1.0,
             wheelieThrottle: 1.0
@@ -334,8 +335,8 @@ const CHARACTERS = [
             comfortShake: 0.3,      // Plush armchair ride
             maxSpeed: 0.75,        // 51 m/s
             acceleration: 0.8,     // 12 m/s² - smooth CVT
-            brakeForce: 1.0,       // 20 m/s²
-            steeringForce: 1.1,    // 10.45 - nimble at low speed
+            brakeForce: 1.0,       // 14 m/s²
+            steeringForce: 1.1,    // 15.68 - nimble at low speed
             jumpPower: 0.6,        // Terrible jumper
             wheeliePop: 0.75,
             wheelieThrottle: 0.9
@@ -364,8 +365,8 @@ const CHARACTERS = [
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
             maxSpeed: 0.85,        // 57.8 m/s
             acceleration: 1.1,     // 16.5 m/s²
-            brakeForce: 1.0,       // 20 m/s²
-            steeringForce: 1.15,   // 10.93 - flickable
+            brakeForce: 1.0,       // 14 m/s²
+            steeringForce: 1.15,   // 16.39 - flickable
             jumpPower: 1.5,        // Built for air
             wheeliePop: 1.2,
             wheelieThrottle: 1.1
@@ -401,8 +402,8 @@ const CHARACTERS = [
             comfortShake: 0.8 * (0.55 * 1.1) / 0.8,     // 0.605 - long travel
             maxSpeed: 0.9 * (1.0 * 0.85) / 0.95,        // 0.805: 54.8 m/s
             acceleration: 1.08 * (1.0 * 0.9) / 1.08,    // 0.9: 13.5 m/s²
-            brakeForce: 1.0 * (1.05 * 0.95) / 1.0,      // 0.9975: 19.95 m/s²
-            steeringForce: 1.12 * (1.1 * 1.06) / 1.12,  // 1.166: 11.08 - wide bar, very light bike
+            brakeForce: 1.0 * (1.05 * 0.95) / 1.0,      // 0.9975: 13.97 m/s²
+            steeringForce: 1.12 * (1.1 * 1.06) / 1.12,  // 1.166: 16.62 - wide bar, very light bike
             jumpPower: 1.0,
             wheeliePop: 1.15,      // Lifts the front easily on the torque
             wheelieThrottle: 1.05
@@ -432,8 +433,8 @@ const CHARACTERS = [
             comfortShake: 0.7,
             maxSpeed: 0.92,        // 62.6 m/s
             acceleration: 1.02,    // 15.3 m/s²
-            brakeForce: 1.0,       // 20 m/s²
-            steeringForce: 1.08,   // 10.26
+            brakeForce: 1.0,       // 14 m/s²
+            steeringForce: 1.08,   // 15.39
             jumpPower: 1.05,
             wheeliePop: 1.0,
             wheelieThrottle: 1.0
@@ -608,7 +609,7 @@ class Vehicle {
         this.minSpeed = 4; // m/s (~14 km/h) - below this, bike falls
         this.maxSpeed = 68; // m/s (~245 km/h) - increased for more thrill
         this.acceleration = 15; // m/s² - snappier acceleration
-        this.brakeForce = 20; // m/s² - better braking
+        this.brakeForce = 14; // m/s²: 20 x the owner's brake of 0.70 (.agent/system/handling.md, "The defaults")
         this.wheelbase = 1.4; // metres
         this.cgHeight = 0.6; // centre of gravity height
         this.mass = 200; // kg
@@ -703,9 +704,12 @@ class Vehicle {
         this.wasNearEdge = false; // Prevents oscillating between edge states
 
          // Physics tuning
-        this.steeringForce = 9.5; // How much force steering creates - more responsive
+        this.steeringForce = 14.25; // How much force steering creates: 9.5 x the owner's lean rate of 1.50
         this.leanDamping = 0.016; // Natural damping - slightly less for more agility
         this.maxLeanAngle = Math.PI / 2.7; // ~67 degrees before crash - slightly more forgiving
+        // How far this rider dares to lean, over the bike's own limit: in the leg's limit here, in a world's by riderWorld
+        this.leanDare = Vehicle.leanOf(this.character);
+        this.maxLeanAngle *= this.leanDare;
 
         // Apply per-character stat multipliers to the baseline physics,
         // scaled for a bike other than the character's first
@@ -3120,8 +3124,22 @@ class Vehicle {
     // environment, so a leg (physics: null) never reaches the world branches.
     get worldPhysics() {
         const world = (this.environment && this.environment.physics) || null;
+        if (!world) return null;
+        const own = this.riderWorld(world);
         // As the tuning has them (js/tuning.js): the same object while no multiplier over a world field is off 1
-        return world && typeof Tuning !== 'undefined' ? Tuning.view('world', world) : world;
+        return typeof Tuning !== 'undefined' ? Tuning.view('world', own) : own;
+    }
+
+    // The world's numbers as this rider has them: the lean limit by how daring the rider is (Vehicle.leanOf). The grip
+    // cap, the lean limit and the lowside all read leanCapDeg, so they move together. A frozen copy, kept for the
+    // world it was made from; the rider mode and the debug tuning multiply on top of it
+    riderWorld(world) {
+        if (this.leanDare === 1) return world;
+        const kept = this.riderWorldKept;
+        if (kept && kept.base === world) return kept.out;
+        const out = Object.freeze({ ...world, leanCapDeg: world.leanCapDeg * this.leanDare });
+        this.riderWorldKept = { base: world, out };
+        return out;
     }
 
     // One of the bike's own numbers as the tuning has it (Tuning rows `on: 'bike'`): the number itself, untouched,
@@ -3229,6 +3247,14 @@ class Vehicle {
         const used = Math.min(1, Math.tan(Math.min(Math.abs(this.leanAngle), 1.5)) / tanCap);
         const share = world.trailBrakeFloor + (1 - world.trailBrakeFloor) * Math.sqrt(1 - used * used);
         return this.tuned('brakeForce') * world.brakeGain * multipliers.brakeForce * share;
+    }
+
+    // The least the world's full brake gives on this surface (m/s^2): at the lean limit, where the lean has all of
+    // the grip and the brake keeps trailBrakeFloor of itself. What a rider, the advice or a pilot may count on at
+    // any lean
+    worldBrakeLeast(multipliers) {
+        const world = this.worldPhysics;
+        return this.tuned('brakeForce') * world.brakeGain * multipliers.brakeForce * world.trailBrakeFloor;
     }
 
     updateWorldSpeed(deltaTime, throttleInput, brakeInput) {
@@ -3532,11 +3558,13 @@ class Vehicle {
         if (share <= 0 || this.crashed || !this.onCarriageway()) return;
         const v = this.speed;
         const s = Number.isFinite(this.projection.s) ? this.projection.s : this.routeS;
-        const look = Math.max(40, v * v / (2 * world.adviceBrake * share) + v * 1.5);
+        // The advice plans with no more braking than the brake has at full lean (worldBrakeLeast), so a weak brake
+        // (a slippery surface, a soft mode) makes it start sooner and the bike still reaches the advised speed
+        const decel = Math.min(world.adviceBrake * share, this.worldBrakeLeast(multipliers));
+        const look = Math.max(40, v * v / (2 * decel) + v * 1.5);
         const advice = WorldAssist.advice(this.environment.route, world, s, look, multipliers.lateralFriction);
         this.hairpinAdvice = advice;
         if (!advice || throttleInput > 0 || v <= advice.speed * 1.1) return;
-        const decel = world.adviceBrake * share;
         // Brake only once the bike would no longer make the advised speed at the bend with this braking
         if ((v * v - advice.speed * advice.speed) / (2 * decel) < advice.bend.distance - v * 0.5) return;
         // The engine braking already applied counts toward the advice, so the two together slow at adviceBrake
@@ -5641,7 +5669,8 @@ Vehicle.physicsOf = (character, id) => {
 const STAT_BARS = {
     speed: { physics: 'maxSpeed', from: 0.7, to: 1.2, traits: ['country', 'mountain'] },
     accel: { physics: 'acceleration', from: 0.65, to: 1.25 },
-    handling: { physics: 'steeringForce', from: 0.9, to: 1.15, traits: ['hairpins'] },
+    // The rider's part of the handling is the pace round hairpins and the lean the rider dares (RIDER_LEAN)
+    handling: { physics: 'steeringForce', from: 0.9, to: 1.15, traits: ['hairpins', 'daring'] },
     jump: { physics: 'jumpPower', from: 0.5, to: 1.6, offroad: 1.75, traits: ['daring'] },
     comfort: { physics: 'comfortShake', from: 1.4, to: 0.3 }
 };
@@ -5650,11 +5679,20 @@ const RIDER_SHARE = 0.2;
 // A trait a character does not have: the middle of the scale, which moves no bar far
 const TRAIT_MIDDLE = 3;
 
+// How far a rider dares to lean: a multiplier of the bike's lean limit by one trait of the rider, on a straight line
+// from `least` (the trait at 1) to `most` (at 5). The middle of the scale is the owner's tuned 1.08. No code names a
+// rider: a character gets its limit from the trait alone
+const RIDER_LEAN = Object.freeze({ trait: 'daring', least: 1.02, most: 1.14 });
+
 // A character's trait, 1 to 5; the middle for a character without it
 Vehicle.traitOf = (character, name) => {
     const value = character && character.traits ? character.traits[name] : undefined;
     return Number.isFinite(value) ? Math.max(1, Math.min(5, value)) : TRAIT_MIDDLE;
 };
+
+// The rider's multiplier of the bike's lean limit (RIDER_LEAN)
+Vehicle.leanOf = (character) => RIDER_LEAN.least + (RIDER_LEAN.most - RIDER_LEAN.least) * (Vehicle.traitOf(character, RIDER_LEAN.trait) - 1) / 4;
+Vehicle.RIDER_LEAN = RIDER_LEAN;
 
 Vehicle.statsOf = (character, id) => {
     const ridden = id || Vehicle.bikeOf(character);

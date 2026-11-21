@@ -106,6 +106,9 @@ describe('the legs keep their throttle', () => {
     // A leg: no world physics. updateSpeed with the throttle against de5a931 at every tick
     function trace(VehicleClass) {
         const vehicle = new VehicleClass(new THREE.Scene());
+        // The bike's brake is a number of today's bike (the owner's tuning of 2026-11-21 lowered it): the code path is
+        // what is compared
+        vehicle.brakeForce = new game.Vehicle(new THREE.Scene()).brakeForce;
         vehicle.environment = { physics: null };
         vehicle.speed = 0;
         const out = [];

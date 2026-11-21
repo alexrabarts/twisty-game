@@ -347,7 +347,7 @@ One convention, defined in `Route` (`js/world/route.js`): lateral runs along `(c
 
 ### The crew's pace
 
-Each character has `traits` in `CHARACTERS` (js/vehicle.js), 1 to 5: the pace on `country` roads, on `mountain` roads and round `hairpins`, and how `daring` over a jump. `place` is the rider's home place in the group, 1 at the front; nothing reads it yet (the group ride is a later job). The traits never touch the player's physics (`Vehicle.physicsOf`; `tests/unit/characters.test.js` pins the numbers of every rider on every bike).
+Each character has `traits` in `CHARACTERS` (js/vehicle.js), 1 to 5: the pace on `country` roads, on `mountain` roads and round `hairpins`, and how `daring` over a jump. `place` is the rider's home place in the group, 1 at the front; nothing reads it yet (the group ride is a later job). Of the player's physics the traits touch one number: `daring` sets the lean limit (`Vehicle.leanOf`; `.agent/system/handling.md`, "The lean limit by the rider"). The multipliers of `Vehicle.physicsOf` do not read them (`tests/unit/characters.test.js` pins those of every rider on every bike).
 
 A trait gives a pace by one table, `Traffic.PACES` (`CREW_PACES` in js/traffic.js). A trait between two rows takes a pace between them (`Traffic.paceOf`).
 

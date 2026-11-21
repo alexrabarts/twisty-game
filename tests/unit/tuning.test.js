@@ -441,15 +441,18 @@ describe('every multiplier at 1 is the ride without the tuning', () => {
     test('at 1 nothing is copied: the world physics, the bar and the body are the objects themselves', () => {
         Tuning.start({ debug: true });
         const v = onPlane();
-        expect(v.worldPhysics).toBe(WorldPhysics);
+        // The rider's own view of the world (the lean limit by the rider's daring, Vehicle.riderWorld) is what the
+        // tuning is given: at 1 it hands that same object back
+        const own = v.riderWorld(WorldPhysics);
+        expect(v.worldPhysics).toBe(own);
         expect(Vehicle.barRule()).toBe(Vehicle.BAR);
         expect(Vehicle.bodyRule()).toBe(Vehicle.BODY);
         Tuning.set('bar', 1.5);
         // A row over another object leaves this one alone
-        expect(v.worldPhysics).toBe(WorldPhysics);
+        expect(v.worldPhysics).toBe(own);
         expect(Vehicle.barRule()).not.toBe(Vehicle.BAR);
         Tuning.set('steerKey', 2);
-        expect(v.worldPhysics).not.toBe(WorldPhysics);
+        expect(v.worldPhysics).not.toBe(own);
         expect(v.worldPhysics.steerKeys.keyS).toBe(WorldPhysics.steerKeys.keyS * 2);
         expect(v.worldPhysics.steerKeys.featherGapS).toBe(WorldPhysics.steerKeys.featherGapS);
         expect(v.worldPhysics.offroad).toBe(WorldPhysics.offroad);
@@ -469,7 +472,8 @@ describe('storage', () => {
         expect(Tuning.live).toBe(false);
         expect(Tuning.active()).toBe(false);
         expect(Tuning.beginRide()).toBe(false);
-        expect(onPlane().worldPhysics).toBe(WorldPhysics);
+        const plain = onPlane();
+        expect(plain.worldPhysics).toBe(plain.riderWorld(WorldPhysics));
         const v = bike();
         expect(v.tuned('brakeForce')).toBe(v.brakeForce);
         // Nothing is written either

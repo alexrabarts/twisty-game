@@ -250,7 +250,9 @@ describe('the default mode is the ride with no mode at all', () => {
 
     test('at the default mode nothing is copied: the world physics is the object itself', () => {
         RiderModes.start({ storage: null });
-        expect(onPlane().worldPhysics).toBe(WorldPhysics);
+        // The rider's own view (Vehicle.riderWorld: the lean limit by the rider's daring) is what a mode multiplies
+        const plain = onPlane();
+        expect(plain.worldPhysics).toBe(plain.riderWorld(WorldPhysics));
         RiderModes.set(RiderModes.MODES.find(mode => Object.keys(mode.tune).length > 0).id);
         expect(onPlane().worldPhysics).not.toBe(WorldPhysics);
         expect(Object.isFrozen(WorldPhysics)).toBe(true);

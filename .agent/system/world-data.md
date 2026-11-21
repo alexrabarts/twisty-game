@@ -91,7 +91,7 @@ GitHub Pages builds `main` with the legacy Jekyll builder (checked at plan time)
 | `junctions.mjs` | Passes, stubs (60 m) and barrier poses, one set per pass. A barrier follows its side road on through nodes of degree 2 and stands 8 m short of the next junction (half way along a shorter edge), never on another junction. |
 | `landcover.mjs`, `buildings.mjs`, `landmarks.json`, `structures.json` | Cover at 16 m, oriented boxes, hand-placed landmarks, hand-marked cobbles. `clearOfRoads` keeps every building 3 m (`ROAD_CLEAR_M`) clear of the band of every road, ride and side edge: the game road is wider than the mapped one, so a box over a band moves square off the road by up to 4 m, or is left out. `verify.mjs buildings` checks the committed data. Water is painted where it is, not past it: `TerrainMesh.colours` colours the node on a cell's north-west corner from the cell and fades it out 16 m away, so a cell is water only when the square 8 m round that corner lies in a lake (`WATER_REACH_M`, sampled every 4 m). The half tint falls on the mapped shore or inside it, a faint tint reaches at most 8 m past it, and a pond under about 16 m across is drawn as land. Before, the 16 m cells (sampled at their middles, drawn from their corners) put water up to 16 m past the shore, over two mapped buildings. `verify.mjs water` fails on a building footprint over drawn water. |
 | `places.mjs` | The stopping places beside the ride ("Stopping places" below): `mapPlaces` (a mapped parking or rest area along the ride), `applyPads` (its wider verge on the ride's edges, which `bench.mjs` carves the land to), `foundPlaces` (level verge where the map has none), `padOf` (the taper the runtime repeats). |
-| `stations.mjs`, `floors.mjs` | The station rule (R3, "Stations" below) and the per-link time floors. The floor is 0.9 times the time of an ideal rider on the inner edge of each bend at top speed, held only by the lean angle (closed-form, no search, so there is nothing to hang or to differ between runs). |
+| `stations.mjs`, `floors.mjs` | The station rule (R3, "Stations" below) and the per-link time floors. The floor is 0.9 times the time of an ideal rider on the inner edge of each bend at top speed, held only by the lean angle (closed-form, no search, so there is nothing to hang or to differ between runs). "The floors and the rider's lean" below has the lean and the rule of a bend. |
 | `encode.mjs` | The format below, `SHA256SUMS`, `functions/world-courses.json`. `decodeWorld` reads it back. |
 | `verify.mjs` | `fidelity`, `hairpins`, `elevation`, `size`, `graph`, `stacked`, `stations`, `crests`, `buildings`, `water`, `floating`, `overlap`, `horizon`, `landmarks`, `places`, `dem`, or `all`. |
 
@@ -184,6 +184,25 @@ A station is a timing line: a stage's start, its finish, and each checkpoint bet
 - **What a new import of stations changes.** `manifest.json` (`stationSpacingM`, the stage's `gates` and `stations`, `stationCount`, the found places, which keep `PLACE.worksClearM` clear of the works that run on from each line as far as the game may build them: `siteReach`, and `dataHash`), `ride.json`, `SHA256SUMS`, and the stage's row in `functions/world-courses.json` (`gates`, `gateFloorsMs`, and `floorMs`, the sum of the link floors). Every other file is the same bytes (`tests/unit/world-checkpoints.test.js` holds this against the commit before).
 - **The board keeps its id.** A row's key is `world-<stage>-v<version>` with the version from `tools/world/boards.json` (1 while that file does not exist): the gate count is in the row, not in the key. A change of split points bumps nothing. A world records no board time and stores no best time or splits yet (R6); when it does, a saved split table of another length is dropped on load (`RaceTiming.loadSplits`).
 - `tests/unit/world-checkpoints.test.js` holds the rule, the shipped stations, the sites they get and the finish time of a scripted ride; `node tools/world/verify.mjs stations` re-runs the rule on the decoded ride.
+
+## The floors and the rider's lean
+
+A floor must be a time no honest ride beats. Two things made the old floors too high, and both are changed (2026-11-21):
+
+- **The lean.** The floors were worked out at the bike's `leanCapDeg` (50 degrees). A rider's daring and the rider mode now raise the lean limit to 59.3 degrees at the most (`.agent/system/handling.md`, "The lean limit by the rider"). `floors.mjs` reads `WorldPhysics.floorLeanDeg` (60) from the text of `js/world/physics.js`. `tests/unit/tuning-defaults.test.js` fails when a rider and a mode together pass it.
+- **A bend is a run that turns one way.** A bend is the samples of radius 200 m or less that turn the same way, joined over a gap of 40 m or less. The ideal rider is held to a bend's speed inside that bend only. Before, bends were joined whatever way they turned: the stacked hairpins of the fifth link (s 7 594 to 8 146) were one bend of 1 000 degrees, and the whole 552 m was held to the hairpin speed. A scripted ride of that link took 92.4 s against a floor of 104.3 s at the branch head, and 83.9 s with the owner's tuning in the defaults.
+
+The floors of the shipped stage (ms), and a fast scripted ride of each link (the most daring rider in Track, every bend at 0.8 of its limit speed, from a flying start):
+
+| Link | 1 | 2 | 3 | 4 | 5 | 6 | 7 | Sum |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| floor before | 39 592 | 29 977 | 44 887 | 46 027 | 104 308 | 83 985 | 23 327 | 372 103 |
+| floor now | 29 222 | 21 738 | 28 260 | 25 487 | 37 028 | 46 842 | 19 738 | 208 315 |
+| scripted ride | 58 133 | 52 567 | 64 783 | 59 983 | 83 917 | 122 217 | 50 300 | |
+
+- The ride is 2.0 to 2.6 times its floor. The floor is loose because its rider brakes and accelerates without limit and has a grip of 1 on wet cobbles: it is a bound, not an estimate.
+- The import wrote `functions/world-courses.json` and `tests/fixtures/world/mini/world-courses.json` only. Every file of `world/` and of the fixture is the same bytes, and a second import gives the same bytes again.
+- No server code reads the floors yet (a world records no board time: R6).
 
 ## Binary format
 
