@@ -17,7 +17,11 @@
 // with nothing drawn under it (no slope, and no deck or bridge the road goes on over).
 //
 // A wall ends in the ground: within `endM` of a run's end the land may stand to the wall's top and rise to it, so the
-// faces there are not held to `buried` and `climbs`; and farther along a high wall the land in front may stand as high
+// faces there are not held to `buried` and `climbs`. Past its end a wall's face goes on along the road's edge and
+// tapers to nothing (RoadMesh.edgeWorks `taper`: its top stands under the edge, where the ground under the verge ends). A taper's
+// faces are part of the run but hold less and less: they are not held to `buried` and `climbs` either, their foot is
+// read on their own line (the slope starts at it), the wall's own end is the corner it shares with its taper, and an
+// end with no height is no end of a piece (`steps`); and farther along a high wall the land in front may stand as high
 // as a bank at `bank` down from the end's top (the cone of ground the land's cut lays there, TerrainMesh.CUT_BANK).
 //
 // wallRuns(store) joins the faces of one road that share a top corner into runs and reports, with the measurements:
@@ -29,11 +33,11 @@
 // Returns {faces, measured, runs, buried, climbs, hangs, top, blocks, steps, open}: each a list, worst first, of
 // {s, x, z, ...} (s the metres of ride nearest to it).
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-walls.test.js says what each is)
-export const WALL_LIMITS = { buried: 4, climbs: 6, hangs: 0, top: 1, blocks: 1, steps: 0, open: 15 };
+export const WALL_LIMITS = { buried: 4, climbs: 6, hangs: 0, top: 1, blocks: 1, steps: 0, open: 13 };
 
 export function wallWindow(game, env, store, at, nearM = 350) {
     const { THREE } = game;
-    const BATTER = 1 / 1.5, PARAPET = 0.8;
+    const BATTER = 1 / 1.5, PARAPET = 0.8, KERB = 0.3;
     store.faces = store.faces || new Map();
     store.grids = store.grids || new Map();
     const v = new THREE.Vector3();
@@ -165,10 +169,10 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             const len = Math.hypot(b.top[0] - a.top[0], b.top[2] - a.top[2]);
             // Not a wall end's return or a parapet's end (short), nor a parapet's face (PARAPET high at both ends)
             if (len < 0.7) continue;
-            // nor a wing down the side of a slope (RoadMesh.edgeWorks `wing`): its top falls with the slope, a wall's
-            // with the road
+            // nor a sheet whose top falls faster than a road does (tests/helpers/world-spikes.js counts those as `fins`)
             if (Math.abs(a.top[1] - b.top[1]) > 0.4 * len) continue;
-            if (Math.abs(a.top[1] - a.foot - PARAPET) < 2e-3 && Math.abs(b.top[1] - b.foot - PARAPET) < 2e-3) continue;
+            // (or the kerb it falls to at a wall's end, RoadMesh.PARAPET_END_M)
+            if ([a, b].every(p => Math.abs(p.top[1] - p.foot - PARAPET) < 2e-3 || Math.abs(p.top[1] - p.foot - KERB) < 2e-3)) continue;
             const owner = part.owners ? part.owners[i / 3] : -1;
             const ux = (b.top[0] - a.top[0]) / len, uz = (b.top[2] - a.top[2]) / len;
             const mx = (a.top[0] + b.top[0]) / 2, mz = (a.top[2] + b.top[2]) / 2;
@@ -179,7 +183,12 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             // The parapet's inner face is a wall face's twin 0.3 m in: a face whose foot is its road's surface is no wall
             const id = [a, b].map(p => `${Math.round(p.top[0] * 100)},${Math.round(p.top[1] * 100)},${Math.round(p.top[2] * 100)}`).sort().join('|') + `|${owner}`;
             if (store.faces.has(id) || Math.hypot(mx - at.x, mz - at.z) > nearM) continue;
-            const face = { owner, a, b, len, ox, oz, s: rideS(mx, mz), buried: 0, climbs: 0, hangs: 0, top: 0, samples: 0, worstClimb: 0, worstHang: 0, ends: [], climbAt: [] };
+            // A wall's face past its end, where it tapers to nothing (RoadMesh.edgeWorks `taper`): its top stands under
+            // the road's edge (APRON_UNDER_M). It holds less and less of the slope that starts at its foot, so
+            // it is not held to `buried` and `climbs`: the ground is meant to rise over it
+            // (at either end: its first strip starts at the wall's own corner, at the road's height)
+            const taper = [a, b].some(p => { const rim = nearOf(ribbons, p.top[0] - ox * 0.15, p.top[2] - oz * 0.15, p.top[1]); return rim !== null && rim - p.top[1] > 0.04 && rim - p.top[1] < 0.2; });
+            const face = { owner, a, b, len, ox, oz, taper, s: rideS(mx, mz), buried: 0, climbs: 0, hangs: 0, top: 0, samples: 0, worstClimb: 0, worstHang: 0, ends: [], climbAt: [] };
             const n = Math.max(1, Math.round(len));
             for (let k = 0; k < n; k++) {
                 const t = (k + 0.5) / n;
@@ -188,10 +197,12 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                 const hf = groundTop(x + ox * 0.2, z + oz * 0.2);
                 if (hf === null) continue;
                 face.samples++;
-                if (hf > y - 0.25) { face.buried++; continue; }
+                if (hf > y - 0.25) { if (!taper) face.buried++; continue; }
                 const far = onRoad(x + ox * 2.2, z + oz * 2.2) ? null : groundTop(x + ox * 2.2, z + oz * 2.2);
-                if (far !== null && hf - far > 2 * BATTER + 0.3) { face.climbs++; face.worstClimb = Math.max(face.worstClimb, r3(hf - far)); face.climbAt.push({ x, z, y: hf, by: r3(hf - far) }); }
-                if (foot > hf + 0.02) { face.hangs++; face.worstHang = Math.max(face.worstHang, r3(foot - hf)); }
+                if (!taper && far !== null && hf - far > 2 * BATTER + 0.3) { face.climbs++; face.worstClimb = Math.max(face.worstClimb, r3(hf - far)); face.climbAt.push({ x, z, y: hf, by: r3(hf - far) }); }
+                // (a taper's foot is read on its own line: the slope that starts at it falls away from there)
+                const under = taper ? groundTop(x + ox * 0.03, z + oz * 0.03) ?? hf : hf;
+                if (foot > under + 0.02) { face.hangs++; face.worstHang = Math.max(face.worstHang, r3(foot - under)); }
                 // (the surface nearest the top's own height: a viaduct 30 m over a side road's wall is not its road)
                 const behind = nearOf([...ribbons, ...aprons], x - ox * 0.15, z - oz * 0.15, y);
                 if (behind === null || Math.abs(behind - y) > 0.1) { face.top++; face.worstTop = behind === null ? null : r3(behind - y); }
@@ -253,10 +264,17 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6, flankM =
     const out = { faces: faces.length, measured: faces.filter(f => f.samples).length, runs: runs.length, buried: [], climbs: [], hangs: [], top: [], blocks: [], steps: [], open: [], flanks: [] };
     faces.forEach((f, i) => {
         const mx = (f.a.top[0] + f.b.top[0]) / 2, mz = (f.a.top[2] + f.b.top[2]) / 2;
-        f.atEnd = runs[runOf[i]].ends.some(end => Math.hypot(end.x - mx, end.z - mz) < endM + f.len / 2);
+        // (a wall's own end is where its face starts to taper: the corner a face of the wall shares with a taper's)
+        const run = runs[runOf[i]];
+        if (!run.heads) {
+            run.heads = [...run.ends];
+            const tapers = run.faces.filter(j => faces[j].taper), walls = run.faces.filter(j => !faces[j].taper);
+            for (const j of tapers) for (const p of [faces[j].a, faces[j].b]) if (walls.some(k => [faces[k].a, faces[k].b].some(q => key(q) === key(p)))) run.heads.push({ x: p.top[0], y: p.top[1], z: p.top[2] });
+        }
+        f.atEnd = run.heads.some(end => Math.hypot(end.x - mx, end.z - mz) < endM + f.len / 2);
         // The bank a wall ends in (TerrainMesh.CUT_BANK): land that stands no higher than a slope at `bank` down from
         // the top of one of its run's ends rises to that end, and is no land the wall should hold
-        const held = (f.climbAt || []).filter(c => !runs[runOf[i]].ends.some(end => c.y <= end.y - bank * Math.hypot(end.x - c.x, end.z - c.z) + 0.5));
+        const held = (f.climbAt || []).filter(c => !run.heads.some(end => c.y <= end.y - bank * Math.hypot(end.x - c.x, end.z - c.z) + 0.5));
         if (f.climbAt) { f.climbs = held.length; f.worstClimb = held.reduce((most, c) => Math.max(most, c.by), 0); }
     });
     for (const f of faces) {
@@ -280,7 +298,8 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6, flankM =
             const p = runs[i], q = runs[j];
             if (p.owner !== q.owner || p.ox * q.ox + p.oz * q.oz < 0.5) continue;
             let best = Infinity, where = null;
-            for (const a of p.ends) for (const b of q.ends) { const d = Math.hypot(a.x - b.x, a.z - b.z); if (d < best) { best = d; where = a; } }
+            // (an end with no height is no piece's end: a wall that tapers to nothing has died into the slope)
+            for (const a of p.ends) for (const b of q.ends) { if (a.height < 0.05 || b.height < 0.05) continue; const d = Math.hypot(a.x - b.x, a.z - b.z); if (d < best) { best = d; where = a; } }
             if (best < minGapM) out.steps.push({ s: where.s, owner: p.owner, gapM: r1(best), x: where.x, z: where.z, lengthsM: [r1(p.lengthM), r1(q.lengthM)] });
         }
     }

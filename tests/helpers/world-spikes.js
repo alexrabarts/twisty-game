@@ -22,15 +22,25 @@
 //     wall is levelled under the wall's top, so the side of a slope that starts at the wall's end stood open over
 //     it: a triangle of ground beside the stone with the dark under it. `gapM` is the widest of it, `at` where,
 //     `edge` the edge
-// spikeReport(store) gives {tiles, stretched, beside, setback, bare, ends, overhangs, flaps, wallEnds, km}: each a
-// list, worst first, of {s, x, z, ...} (s the metres of ride nearest), `wallEnds` the wall ends read, and `km` the
-// offenders counted by kilometre of ride (one decimal).
+//   - proud: the end of a run of retaining wall that stands more than `proudM` over the ground in front of it there:
+//     a wall cut off at its height. A wall's face tapers to nothing past its end (RoadMesh.edgeWorks `taper`), so
+//     its run ends with no height (`tapers` counts those), or it ends in the ground (`low`), or another road's wall
+//     goes on from it (`joined`). An end counts as tapered when it has no height left, or when its top lies under
+//     the ground the road lays on its own line on both sides of it
+//   - fins: an upright face of stone, 0.7 m or longer, whose top falls more than 0.4 a metre faster than its road
+//     does: a slanted sheet standing out from a wall's end, which no mason builds
+//   - unfaced: an upright face of stone that is no parapet's and is not laid and lit as its wall's face (no
+//     `wallFace`): it shows paler or darker than the wall it closes
+// spikeReport(store) gives {tiles, stretched, beside, setback, bare, ends, overhangs, flaps, proud, fins, unfaced,
+// tapers, low, joined, wallEnds, km}: each a list, worst first, of {s, x, z, ...} (s the metres of ride nearest),
+// `tapers`, `low` and `joined` counts, `wallEnds` the wall ends read, and `km` the offenders counted by kilometre
+// of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 50, flaps: 4 };
-export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 41, flaps: 4, proud: 4, fins: 0, unfaced: 0 };
+export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.5 };
 
-export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15 }) {
+export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.5 }) {
     const { THREE } = game;
     store.tiles = store.tiles || new Map();
     store.works = store.works || new Map();
@@ -111,10 +121,11 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     const rideS = (x, z) => Math.round(env.route.coldLookup(x, z, hint).s);
     // Metres from the ride's carriageway edge (0 on it), or null farther than `rideM` from it
     const rideAway = (x, z, reach = rules.rideM) => { let best = null; env.carriageways.each(x, z, reach, r => { if (r.road === -1 && (best === null || -r.depth < best)) best = Math.max(0, -r.depth); }, false); return best; };
-    const nearRide = (x, z) => rideAway(x, z) !== null;
+    const nearRide = (x, z, reach = rules.rideM) => rideAway(x, z, reach) !== null;
 
     // The stone: every upright quad of a wall (RoadMesh.quad lays six vertices: a b c, a c d), as a plan segment with
     // its heights. `faces` are a wall's own faces (0.7 m or longer, not a parapet's); `all` holds the returns too
+    // (a parapet's face stands 0.8 m high, or falls to its 0.3 m kerb at a wall's end: RoadMesh.PARAPET_END_M)
     const quads = [];
     for (const part of stone) {
         const id = `${part.mesh.geometry.uuid}`;
@@ -122,7 +133,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         if (!held) {
             held = [];
             part.mesh.updateMatrixWorld(true);
-            const pos = part.mesh.geometry.attributes.position, owners = part.mesh.geometry.userData.owners;
+            const pos = part.mesh.geometry.attributes.position, owners = part.mesh.geometry.userData.owners, flag = part.mesh.geometry.attributes.wallFace;
             for (let i = part.start; i + 5 < part.start + part.count; i += 6) {
                 const q = [0, 1, 2, 5].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(part.mesh.matrixWorld); return [v.x, v.y, v.z]; });
                 const pairs = [], used = [false, false, false, false];
@@ -137,7 +148,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
                 }
                 if (pairs.length !== 2) continue;
                 const [a, b] = pairs;
-                held.push({ a, b, len: Math.hypot(b.x - a.x, b.z - a.z), owner: owners ? owners[i / 3] : -1, parapet: Math.abs(a.top - a.foot - 0.8) < 2e-3 && Math.abs(b.top - b.foot - 0.8) < 2e-3 });
+                held.push({ a, b, len: Math.hypot(b.x - a.x, b.z - a.z), owner: owners ? owners[i / 3] : -1, parapet: [a, b].every(p => Math.abs(p.top - p.foot - 0.8) < 2e-3 || Math.abs(p.top - p.foot - 0.3) < 2e-3), faced: !flag || flag.getY(i) > 0.5 });
             }
             store.works.set(id, held);
         }
@@ -214,8 +225,31 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     store.overhangs = store.overhangs || new Map();
     store.rims = store.rims || new Map();
     store.flaps = store.flaps || new Map();
-    // (a wing down the side of a slope falls with the slope: it is no face of a run)
+    store.looks = store.looks || new Map();
+    store.stones = store.stones || new Map();
+    // (a face whose top falls faster than a road does is no face of a run: a fin)
     const faces = quads.filter(q => !q.parapet && q.len >= 0.7 && Math.abs(q.a.top - q.b.top) <= 0.4 * q.len);
+    // The stone that is no wall a mason builds: `fins` (an upright face whose top falls more than 0.4 a metre faster
+    // than its road, a slanted sheet past a wall's end) and `unfaced` (an upright face of a wall, a return or a closing piece that
+    // is not laid and lit as its wall's face is: no `wallFace`), each once for a geometry, near the ride only
+    for (const part of stone) {
+        const id = `${part.mesh.geometry.uuid}`;
+        if (store.stones.has(id)) continue;
+        const record = { fins: [], unfaced: [] };
+        store.stones.set(id, record);
+        for (const q of store.works.get(id) || []) {
+            if (q.parapet || Math.max(q.a.top - q.a.foot, q.b.top - q.b.foot) < 0.05) continue;
+            const mx = (q.a.x + q.b.x) / 2, mz = (q.a.z + q.b.z) / 2;
+            // (the top of a wall of the ride falls as the ride does there: a fin's falls faster than its road's)
+            let grade = 0;
+            if (q.owner === -1) { const at = env.route.coldLookup(mx, mz, hint).s, lo = env.route.sample(Math.max(0, at - 2), {}), hi = env.route.sample(at + 2, {}); grade = Math.abs(hi.y - lo.y) / Math.max(1e-6, Math.hypot(hi.x - lo.x, hi.z - lo.z)); }
+            const fin = q.len >= 0.7 && Math.abs(q.a.top - q.b.top) > (0.4 + grade) * q.len;
+            if ((!fin && q.faced) || !nearRide(mx, mz, rules.endsNearM)) continue;
+            const where = { s: rideS(mx, mz), owner: q.owner, x: r2(mx), z: r2(mz), lengthM: r2(q.len), fallM: r2(Math.abs(q.a.top - q.b.top)) };
+            if (fin) record.fins.push(where);
+            if (!q.faced) record.unfaced.push(where);
+        }
+    }
     const key3 = (p, owner) => `${owner}|${Math.round(p.x * 100)},${Math.round(p.top * 100)},${Math.round(p.z * 100)}`;
     const corners = new Map();
     for (const f of faces) for (const p of [f.a, f.b]) { const k = key3(p, f.owner); corners.set(k, (corners.get(k) || 0) + 1); }
@@ -241,9 +275,24 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             const past = drawnTop(end.x + ux * 0.4 + ox * 0.4, end.z + uz * 0.4 + oz * 0.4);
             const record = { s: rideS(end.x, end.z), owner: f.owner, x: r2(end.x), z: r2(end.z), heightM: r2(end.top - end.foot), problems: [] };
             store.wallEnds.set(id, { s: record.s, owner: f.owner, x: end.x, z: end.z, top: end.top });
+            // How the wall ends: `taper` (its height has fallen to nothing along its run: nothing stands at its
+            // end), `low` (it stands no more than `proudM` over the ground in front of it at its end: it ends in
+            // the ground) or `proud` (it stops at that height or more over the ground in front, a wall cut off)
+            // The ground the roads lay on the end's own line, a hand before it and a hand past it: the lower of the two
+            // (the highest of it from just inside the line to a hand out from it: the ground under the verge ends on
+            // the line)
+            const laidAt = d => [-0.02, 0.005, 0.02, 0.06].reduce((most, out) => { const x = end.x + ux * d + ox * out, z = end.z + uz * d + oz * out, y = landTop(x, z) === null ? null : topOf(laid, x, z); return y === null ? most : most === null ? y : Math.max(most, y); }, null);
+            const edge = [-0.1, 0.1].map(laidAt).reduce((least, y) => (y === null || least === null ? null : Math.min(least, y)), Infinity);
+            // (tapered to nothing: no height left, or its top under the ground the road lays over it there)
+            const died = end.top - end.foot < 0.05 || (edge !== null && edge >= end.top - 0.1);
+            const standsM = front === null ? 0 : r2(end.top - front);
+            store.looks.set(id, { s: record.s, owner: f.owner, x: r2(end.x), z: r2(end.z), kind: died ? 'taper' : standsM > rules.proudM ? 'proud' : 'low', standsM: died ? 0 : standsM });
+            // (a wall that tapers to nothing has no end face to close: the ground must meet it there)
+            // (a wall that has tapered to nothing has no end face to close and no foot to hang)
+            if (died) { store.ends.set(id, null); continue; }
             if (!across) record.problems.push('open');
             if (front !== null && end.foot > front + 0.05) record.problems.push(`hangs ${r2(end.foot - front)}`);
-            // The step across the end, with no stone across it: a wing past the end that spans the step's middle
+            // The step across the end, with no stone across it there
             if (front !== null && past !== null && past - front > rules.flankM && !stoneAt(end.x + ox * 0.4, (front + past) / 2, end.z + oz * 0.4, 0.5, f)) record.problems.push(`flank ${r2(past - front)}`);
             store.ends.set(id, record.problems.length ? record : null);
         }
@@ -262,16 +311,20 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         const k3 = p => `${Math.round(p[0] * 100)},${Math.round(p[1] * 100)},${Math.round(p[2] * 100)}`;
         for (let i = part.start; i + 2 < part.start + part.count; i += 3) {
             const t = [0, 1, 2].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(part.mesh.matrixWorld); return [v.x, v.y, v.z]; });
-            if (Math.abs((t[1][0] - t[0][0]) * (t[2][2] - t[0][2]) - (t[2][0] - t[0][0]) * (t[1][2] - t[0][2])) < 1e-4) continue;
+            // (a piece that stands upright has no plan of its own, but it holds its edges: the edge of a slope that
+            // an upright piece of the same ground closes is no outer edge)
+            const upright = Math.abs((t[1][0] - t[0][0]) * (t[2][2] - t[0][2]) - (t[2][0] - t[0][0]) * (t[1][2] - t[0][2])) < 1e-4;
+            if (upright && Math.max(t[0][1], t[1][1], t[2][1]) - Math.min(t[0][1], t[1][1], t[2][1]) < 0.05) continue;
             for (let e = 0; e < 3; e++) {
                 const a = t[e], b = t[(e + 1) % 3], c = t[(e + 2) % 3];
                 const ka = k3(a), kb = k3(b), id2 = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+                if (ka === kb) continue;
                 const held = edges.get(id2);
-                if (held) held.n++; else edges.set(id2, { a, b, c, n: 1 });
+                if (held) { held.n++; if (held.upright && !upright) Object.assign(held, { a, b, c, upright }); } else edges.set(id2, { a, b, c, n: 1, upright });
             }
         }
-        for (const { a, b, c, n } of edges.values()) {
-            if (n !== 1) continue;
+        for (const { a, b, c, n, upright } of edges.values()) {
+            if (n !== 1 || upright) continue;
             const len = Math.hypot(b[0] - a[0], b[2] - a[2]);
             if (len >= 0.1) rim.push({ a, b, c });
             if (len < 0.3) continue;
@@ -291,7 +344,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     }
 
     // The wall ends: every outer edge of the ground a road lays within `flapNearM` of one, read at five places along
-    // it against what is drawn just outside it. Stone across it there (a wing down the side of a slope) closes it
+    // it against what is drawn just outside it. Stone across it there (a wall's face that goes on past its end) closes it
     const stoneAcross = (x, y, z) => {
         for (const ref of qhash.get(Math.floor(x / 8) * 65536 + Math.floor(z / 8)) || []) {
             const q = quads[ref];
@@ -334,7 +387,17 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
 }
 
 export function spikeReport(store, besideM = 10) {
-    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], wallEnds: (store.wallEnds || new Map()).size, km: {} };
+    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], tapers: 0, low: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
+    // (an end another road's wall goes on from is no end: the two walls meet at a junction, `joined`)
+    const looks = [...(store.looks || new Map()).values()];
+    for (const look of looks) {
+        if (look.kind === 'taper') out.tapers++;
+        else if (look.kind === 'low') out.low++;
+        else if (looks.some(other => other.owner !== look.owner && Math.hypot(other.x - look.x, other.z - look.z) < 0.75)) out.joined++;
+        else out.proud.push(look);
+    }
+    out.proud.sort((a, b) => b.standsM - a.standsM);
+    for (const record of (store.stones || new Map()).values()) { out.fins.push(...record.fins); out.unfaced.push(...record.unfaced); }
     for (const record of (store.flaps || new Map()).values()) if (record) out.flaps.push(record);
     out.flaps.sort((a, b) => b.gapM - a.gapM);
     for (const record of (store.tiles || new Map()).values()) { out.stretched.push(...record.stretched); out.bare.push(...record.bare); }
@@ -347,10 +410,10 @@ export function spikeReport(store, besideM = 10) {
     out.bare.sort((a, b) => b.spanM - a.spanM);
     out.ends.sort((a, b) => b.heightM - a.heightM);
     out.overhangs.sort((a, b) => b.airM - a.airM);
-    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps']) {
+    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced']) {
         for (const o of out[kind]) {
             const km = (Math.round(o.s / 100) / 10).toFixed(1);
-            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0 };
+            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0 };
             out.km[km][kind]++;
         }
     }

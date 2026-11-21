@@ -125,6 +125,7 @@ class WorldEnvironment {
         this.ground.cutsOf = key => this.cutsOf(key);
         // and a retaining wall where the ride's wall plan draws one (rideWalls)
         this.ground.walledAt = (index, sign) => this.walledAt(index, sign);
+        this.ground.taperAt = (index, sign, t) => this.taperAt(index, sign, t);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
         this.physics = WorldPhysics;
@@ -520,7 +521,7 @@ class WorldEnvironment {
         const all = RoadMesh.wallPlan(sides, this.edgeFoot(missing), this.carriageways.guard(-1));
         const base = Math.max(0, section.from - 1), top = Math.min(last, section.to + 1);
         const cut = list => list.slice(base - a, top - a + 1);
-        const plan = { base, row: { l: cut(all.row.l), r: cut(all.row.r) }, seg: { l: cut(all.seg.l), r: cut(all.seg.r) }, end: { l: cut(all.end.l), r: cut(all.end.r) } };
+        const plan = { base, row: { l: cut(all.row.l), r: cut(all.row.r) }, seg: { l: cut(all.seg.l), r: cut(all.seg.r) }, end: { l: cut(all.end.l), r: cut(all.end.r) }, past: { l: cut(all.past.l), r: cut(all.past.r) } };
         // Its own segments: from its first row to its last
         const runs = RoadMesh.wallRuns(sides, all, section.from - a, section.to - a).map(run => Object.assign(run, { owner: -1 }));
         if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
@@ -531,6 +532,20 @@ class WorldEnvironment {
         const out = { plan, runs, missing };
         this.rideWallCache.set(index, out);
         return out;
+    }
+
+    // The share of the fill's fall that a wall's face holds past its end (RoadMesh.edgeWorks `taper`), `t` of the way
+    // from row `index` to the next on the right (sign > 0) or the left: 1 at a wall's end, 0 from TAPER_M past it.
+    // Read from the same plan the stone is drawn from, so the physics ground beside the road is the drawn slope
+    taperAt(index, sign, t = 0) {
+        if (this.walledAt(index, sign) !== false) return 0;
+        const walls = this.rideWalls(this.rowSection[Math.max(0, Math.min(this.rowSection.length - 1, index))]);
+        const past = walls.plan.past && walls.plan.past[sign > 0 ? 'r' : 'l'];
+        const a = past && past[index - walls.plan.base], b = past && past[index + 1 - walls.plan.base];
+        if (!a || !b) return 0;
+        const share = p => Math.max(0, 1 - Math.min(p[0], p[1]) / RoadMesh.TAPER_M);
+        const u = Math.max(0, Math.min(1, t || 0));
+        return share(a) + (share(b) - share(a)) * u;
     }
 
     // Whether the ride's edge from row `index` to the next, on the right (sign > 0) or the left, stands on a retaining wall

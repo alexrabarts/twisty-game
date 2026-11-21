@@ -366,6 +366,9 @@ float landNoise(vec2 p) {
     vec2 t = normalize(vec2(-n.z, n.x) + vec2(1e-4, 0.0));
     // A retaining wall's face gives its own metres along (RoadMesh.edgeWorks wallFace), so the courses run on across
     // its segments; any other stone is read along its own horizontal
+    // (a face that tapers out past a wall's end is drawn only from the side it faces: wallFace 2, its normal the
+    // way out from its road; read in view space, where the eye is the origin)
+    if (vWallFace.y > 1.5 && dot(vViewPosition, vNormal) < 0.0) discard;
     float u = vWallFace.y > 0.5 ? vWallFace.x : dot(vLandPos.xz, t);
     float y = vLandPos.y + ${f(S.wanderM)} * (landNoise(vec2(u * 0.9, vLandPos.y * 0.5)) - 0.5);
     float band = floor(y / ${f(S.bandM)});

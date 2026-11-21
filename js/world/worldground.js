@@ -239,12 +239,15 @@ class WorldGround extends Ground {
         const side = Math.sign(loc.lateral || 1);
         const at = WorldGround.pointAt(point, side * edge, this.scratchEdge || (this.scratchEdge = {}));
         const most = WorldEnvironment.APRON_RUN_M;
+        // Past a wall's end the wall's face goes on and holds a share of the fill's fall (RoadMesh.edgeWorks `taper`,
+        // WorldEnvironment.taperAt): the slope starts that much under the edge and is that much shorter, as it is drawn
+        const held = this.taperAt ? this.taperAt(loc.index, side, loc.t) : 0;
         const run = Math.max(0, loc.roadY - this.landY(at.x, at.z, loc.roadY)) / RoadMesh.BATTER;
-        if (run <= most) return reach - edge <= run ? loc.roadY - (reach - edge) * RoadMesh.BATTER : -Infinity;
-        if (reach - edge > most) return -Infinity;
+        if (run <= most) return reach - edge <= run * (1 - held) ? loc.roadY - run * RoadMesh.BATTER * held - (reach - edge) * RoadMesh.BATTER : -Infinity;
+        if (reach - edge > most * (1 - held)) return -Infinity;
         const foot = WorldGround.pointAt(point, side * (edge + most), this.scratchFoot || (this.scratchFoot = {}));
         const slope = Math.max(RoadMesh.BATTER, (loc.roadY - this.landY(foot.x, foot.z, loc.roadY)) / most);
-        return loc.roadY - (reach - edge) * slope;
+        return loc.roadY - most * slope * held - (reach - edge) * slope;
     }
 
     // No fill on a bridge (its parapet), and none where the importer marks a retaining wall or a drop just past the

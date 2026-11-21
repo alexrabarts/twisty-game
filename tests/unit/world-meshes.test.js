@@ -439,7 +439,7 @@ describe('RoadMesh', () => {
         expect(group.children.map(c => c.name)).toEqual(['road-ribbon', 'road-works']);
     });
 
-    test('a slope that starts at a wall\'s end has its side closed in stone, down into the land', () => {
+    test('past its end a wall\'s face goes on along the edge and tapers to nothing, and the slope starts at its foot', () => {
         // A wall along the first 20 m (asked for at the rows to 16 m: a segment is a wall when either row is), then a
         // slope 3 m down; the land in front of the wall 2 m under the edge
         const rows = line(10);
@@ -452,24 +452,42 @@ describe('RoadMesh', () => {
         const points = part => { const out = []; for (let i = 0; i < part.positions.length; i += 3) out.push(part.positions.slice(i, i + 3)); return out; };
         const stone = points(works.stone), apron = points(works.apron);
         const has = (list, p) => list.some(q => Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]) < 1e-4);
+        const T = RoadMesh.TAPER_M;
         for (const key of ['l', 'r']) {
-            // The side of the slope at the wall's last row: from under the edge point out and down to its foot
-            const edge = near.sides[5][key], top = [edge[0], edge[1] - RoadMesh.APRON_UNDER_M, edge[2]];
-            const side = apron.filter(q => Math.abs(q[2] - 20) < 1e-6 && Math.sign(q[0]) === Math.sign(top[0]) && Math.abs(q[0]) >= Math.abs(top[0]) - 1e-6);
-            const low = side.reduce((a, b) => (b[1] < a[1] ? b : a));
-            expect(low[1]).toBeLessThan(top[1] - 2);
-            // The wing hangs from the wall's top corner (the face's own, STONE_PROUD_M out) and the side's foot, and
-            // stands WING_UNDER_M in the lowest land under it
-            const corner = [edge[0] + Math.sign(edge[0]) * RoadMesh.STONE_PROUD_M, edge[1], edge[2]];
-            expect(has(stone, corner)).toBe(true);
-            expect(has(stone, low)).toBe(true);
-            expect(has(stone, [corner[0], Math.min(land, low[1]) - RoadMesh.WING_UNDER_M, 20])).toBe(true);
-            expect(has(stone, [low[0], Math.min(land, low[1]) - RoadMesh.WING_UNDER_M, 20])).toBe(true);
+            const edge = near.sides[5][key], sign = Math.sign(edge[0]), own = q => Math.sign(q[0]) === sign;
+            // At the wall's end the face goes on from the wall's own top corner (STONE_PROUD_M out), and the parapet
+            // has come down to its kerb there
+            const corner = [edge[0] + sign * RoadMesh.STONE_PROUD_M, edge[1], 20];
+            expect(stone.filter(q => Math.hypot(q[0] - corner[0], q[1] - corner[1], q[2] - corner[2]) < 1e-4).length).toBeGreaterThan(3);
+            expect(has(stone, [corner[0], edge[1] + RoadMesh.PARAPET_END_M, 20])).toBe(true);
+            expect(has(stone, [corner[0], near.sides[4][key][1] + RoadMesh.PARAPET_H_M, 16])).toBe(true);
+            // and the slope has no width there: no ground of this side stands out from the edge at the wall's last row
+            expect(apron.filter(q => own(q) && Math.abs(q[2] - 20) < 1e-6 && Math.abs(q[0]) > Math.abs(edge[0]) + 0.01)).toEqual([]);
+            // Half way along the taper the stone holds half of the 3 m the slope falls: its top stands on the edge
+            // where the ground under the verge ends, and the slope starts 1.5 m under the edge
+            const mid = 20 + T / 2;
+            expect(has(stone, [edge[0], edge[1] - RoadMesh.APRON_UNDER_M, mid])).toBe(true);
+            // (its foot no higher than the wall's own, 6 m under the edge at its end, carried on and rising along it)
+            expect(has(stone, [edge[0], edge[1] - 3, mid])).toBe(true);
+            expect(has(apron, [edge[0], edge[1] - 1.5, mid])).toBe(true);
+            // Past TAPER_M there is no stone, and the slope starts at the edge as any slope does
+            expect(stone.filter(q => own(q) && q[2] > 20 + T + 1e-6)).toEqual([]);
+            expect(has(apron, [edge[0], edge[1] - RoadMesh.APRON_UNDER_M, 20 + T])).toBe(true);
         }
-        // Two wings: 12 vertices more than the same wall with no slope past its end
-        const bare = (x, y, z, ox, oz, walled) => (walled !== false && z <= 16 ? { kind: 'wall', y: y - 6 } : null);
-        bare.wall = foot.wall;
-        expect(stone.length - points(RoadMesh.edgeWorks(near.sides, bare).stone).length).toBe(12);
+        // Every face of it is upright and is laid and lit as the wall's own face (`face`: 1, or 2 where it is drawn
+        // from its front only), with the wall's metres
+        const face = works.stone.face;
+        let faces = 0;
+        for (let i = 0; i + 2 < stone.length; i += 3) {
+            const t = [stone[i], stone[i + 1], stone[i + 2]];
+            if (!t.every(q => q[2] > 20 - 1e-6) || t.every(q => Math.abs(q[2] - 20) < 1e-6)) continue;
+            faces++;
+            expect(Math.abs((t[1][0] - t[0][0]) * (t[2][2] - t[0][2]) - (t[2][0] - t[0][0]) * (t[1][2] - t[0][2]))).toBeLessThan(1e-3);
+            for (let v = i; v < i + 3; v++) expect(face[v * 4 + 1]).toBeGreaterThanOrEqual(1);
+        }
+        expect(faces).toBeGreaterThan(8);
+        // and no stone stands out from the edge: the wing that closed the slope's side is gone
+        expect(stone.filter(q => Math.abs(q[0]) > Math.abs(near.sides[5].l[0]) + 0.2)).toEqual([]);
     });
 
     test('a wall too short to stand does not stand because it went on', () => {

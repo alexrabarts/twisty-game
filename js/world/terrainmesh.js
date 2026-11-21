@@ -1011,6 +1011,24 @@ class TerrainMesh {
         geometry.computeVertexNormals();
         geometry.setIndex(new THREE.BufferAttribute(indices, 1));
         const lit = geometry.attributes.normal.array;
+        // A cut triangle lays its own vertices along the cut, so two cut triangles that share an edge each lit their
+        // own copy of the vertex on it by their own parts only: the land in front of a wall showed every cell's edge
+        // as a straight crease across the bank at the wall's end. The copies that stand at one place are lit alike
+        if (extra.land.length) {
+            const groups = new Map();
+            for (const v of new Set(extra.land)) {
+                if (v < vertexCount) continue;
+                const id = `${Math.round(positionsAll[v * 3] * 1000)},${Math.round(positionsAll[v * 3 + 1] * 1000)},${Math.round(positionsAll[v * 3 + 2] * 1000)}`;
+                (groups.get(id) || groups.set(id, []).get(id)).push(v);
+            }
+            for (const group of groups.values()) {
+                if (group.length < 2) continue;
+                let nx = 0, ny = 0, nz = 0;
+                for (const v of group) { nx += lit[v * 3]; ny += lit[v * 3 + 1]; nz += lit[v * 3 + 2]; }
+                const l = Math.hypot(nx, ny, nz) || 1;
+                for (const v of group) { lit[v * 3] = nx / l; lit[v * 3 + 1] = ny / l; lit[v * 3 + 2] = nz / l; }
+            }
+        }
         // A closing face and a cut's skirt are lit as the land above them
         for (const v of extra.flat) { lit[v * 3] = 0; lit[v * 3 + 1] = 1; lit[v * 3 + 2] = 0; }
         edges.forEach((edge, e) => {
