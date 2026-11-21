@@ -140,7 +140,8 @@ class RoadClearance {
 // tile's scenery waits for the side roads round it (WorldEnvironment.buildScenery).
 // Counts are capped against the window budget of 1 400 instances,
 // nearest first (tiles are built nearest first): TREE_CAP trees, BUILDING_CAP
-// instances of house parts, STONE_CAP marker stones and a few barriers.
+// instances of house parts, STONE_CAP marker stones (the nearest to the bike, chosen
+// again as it moves: Scenery.rankStones) and a few barriers.
 class Scenery {
     static get TREE_CAP() { return 1000; }
     static get BUILDING_CAP() { return 300; }
@@ -157,25 +158,56 @@ class Scenery {
     static get BOULDER_CAP() { return 160; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
     static get HOUSE_TRIANGLES() { return 80000; }
-    // Marker stones: STONE_GAP_M apart along the ride, STONE_OUT_M past the verge, sunk STONE_SINK_M. Granite posts
-    // stand along the edge of the pass roads in the photos; no yellow sign does
+    // Marker stones: STONE_GAP_M apart along the road's edge, STONE_OUT_M past the verge, sunk STONE_SINK_M. Sawn
+    // granite blocks stand along the edge of the pass roads in the photos, on a low kerb course of granite setts; no
+    // yellow sign does. A block is STONE_WIDTH_M square and its top STONE_HEIGHT_M over its seat (in the photos
+    // about 0.6 m square and 0.6 to 0.7 m high, 2 to 2.5 m apart)
     static get STONE_GAP_M() { return 2.5; }
-    static get STONE_OUT_M() { return 0.35; }
-    static get STONE_RADIUS_M() { return 0.2; }
-    static get STONE_WIDTH_M() { return 0.3; }
+    static get STONE_OUT_M() { return 0.25; }
+    // (from its middle to a corner)
+    static get STONE_RADIUS_M() { return 0.42; }
+    static get STONE_WIDTH_M() { return 0.6; }
+    static get STONE_HEIGHT_M() { return 0.68; }
     static get STONE_SINK_M() { return 0.15; }
+    // The kerb course a row's stones stand on: this wide, this far over the row's seat, and this far on under it. The
+    // seat of a stone is the verge's edge beside it where that is higher than the ground at its own middle: a fill
+    // starts to fall at the verge's edge, and a row seated on the fill stood half a metre under the road it guards.
+    // The kerb's sides go down into the fill, as the course of setts on the edge of a wall does in the photos (as far
+    // as a stone's root, STONE_ROOT_M, and wider than the stone, so the root is inside it), and they are drawn as the
+    // retaining walls are (RoadMesh.stoneMaterial): where the fill lies low the row stands on a low dry-stone wall
+    static get KERB() { return { widthM: 0.66, proudM: 0.12, rootM: 2 }; }
+    // Granite as the photos have it: a light speckled grey, a little cool. Measured on the photos, sRGB: a block's
+    // face in the sun 165 169 176 and in its own shade 85 89 96, the setts of the kerb 150 155 165, the asphalt
+    // beside them 143 143 146. The game's sky light is blue: a neutral 0.60 is drawn on an overcast ride at
+    // 120 130 137 on a face and 138 146 153 on the top, beside asphalt at 88 93 95. The kerb is the dry-stone granite
+    // of the walls (LandShade.STONE), which draws its tone at about 0.84 of this: 0.83 of the block, as the setts
+    // are in the photos
+    static get STONE_COLORS() { return { block: [0.60, 0.60, 0.60], kerb: [0.59, 0.595, 0.61] }; }
     // A stone goes on this far under its foot, as a post set in the ground does: on a bank that falls from it no corner
-    // of it hangs in the air, and the drawn bank may lie a little under the ground the physics reads
-    static get STONE_ROOT_M() { return 0.9; }
+    // of it hangs in the air, and the drawn bank may lie under the ground the physics reads
+    // (0.9 under the post of 0.3 m. A block's corners are twice as far from its middle. And round the outside of a
+    // hairpin the fill is drawn flat from one row of the ride to the next, inside the cone the physics reads: 0.67 m
+    // past the verge it was drawn up to 1.8 m under the road where the physics has 0.45 m)
+    static get STONE_ROOT_M() { return 2; }
     // (120 at 24 triangles until the stone lost its hidden faces: the same 2 880 triangles at the most)
-    static get STONE_CAP() { return 160; }
+    // (160 at 18 until the rows went round the hairpins: a block is 10 triangles, and the cap takes the stones nearest
+    // the bike: Scenery.rankStones. With 140 the rows are drawn to 190 m from the bike at the least, where the
+    // hairpins stand closest; with 100 to 83 m)
+    static get STONE_CAP() { return 140; }
+    // The pieces of kerb drawn, under the stones nearest the bike (6 triangles each): from further off a row is its
+    // blocks. 140 blocks and 50 pieces are 1 700 triangles, where the 160 posts were 2 880 and the window of the
+    // upper hairpins had 150 of them
+    static get KERB_CAP() { return 50; }
+    // Metres the bike moves before the nearest stones are chosen again
+    static get STONE_RANK_M() { return 20; }
     // A marker stone is road furniture: it stands only where the drawn ground at its foot is within this of the road
     // beside it (not at the foot of a retaining wall, not on the land under a bridge)
     static get ROADSIDE_STEP_M() { return 0.8; }
-    // Where the marker stones stand (Scenery.stonePlace, stoneRuns, stoneSites). On an old pass road the stones are the
-    // guard at a sharp drop: a row is seen only where the land falls away from the road's edge, on the side it falls,
-    // and not at every drop. So no stone stands on a level verge, on the uphill side, or where a wall's parapet, a
-    // bridge's or a barrier already guards the edge.
+    // Where the marker stones stand (Scenery.stonePlace, stoneRuns, hairpinRuns, stoneSites). On an old pass road the
+    // stones are the guard at a sharp drop: a row is seen only where the land falls away from the road's edge, on the
+    // side it falls, and not at every drop. A row also goes round the outside of a hairpin, over its arc, whether the
+    // land falls there or not. So no stone stands on a level verge of a straight, on the uphill side, on the inside
+    // of a hairpin, or where a wall's parapet, a bridge's or a barrier already guards the edge.
     //   dropM, reachM   a sharp drop: the drawn ground reachM past the verge lies more than dropM under the road. A
     //                   fill at the batter (RoadMesh.BATTER, 1:1.5) falls 6.7 m in 10, and the downhill edge of a
     //                   mountain road stands on one for kilometres: 7 m takes only the banks that fall more steeply
@@ -187,8 +219,13 @@ class Scenery {
     //   mouthM          metres a stone keeps from every side road's band: a junction's mouth is not an edge to guard
     //   worksM          metres a row keeps from the first and the last thing of a roadworks site
     //   footM           the most the ground may fall under a stone's own foot, from its middle to its lowest corner:
-    //                   on more its root (STONE_ROOT_M) could show, so that stone of the row is left out
-    static get STONE_RULE() { return { dropM: 7, reachM: 10, blockM: 60, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.45 }; }
+    //                   on more its root (STONE_ROOT_M) could show, so that stone of the row is left out, and with
+    //                   it a stone that would then stand alone
+    //   hairpinShare    the share of the hairpins (WorldRoute.hairpins) that have a row round their outside, drawn
+    //                   from the metre of the hairpin's apex: most of them, not all. The row is on the arc only, its
+    //                   stones STONE_GAP_M apart along the outer edge itself, and every rule above but the drop
+    //                   holds for it. Along a hairpin's arc the drop rule places nothing, on either side
+    static get STONE_RULE() { return { dropM: 7, reachM: 10, blockM: 60, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75 }; }
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
     // 3 or 4 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
@@ -577,7 +614,8 @@ class Scenery {
     }
 
     // The trees and houses of a tile as one group, or null when it has none. `bike` ranks the tile's share of the caps.
-    buildTile(tile, cover, buildings, bike) {
+    // `markers`: whether its marker stones stand (Scenery.setStones)
+    buildTile(tile, cover, buildings, bike, markers = true) {
         this.disposeTile(tile.key);
         const group = new THREE.Group();
         group.name = `world-scenery-${tile.key}`;
@@ -668,17 +706,10 @@ class Scenery {
         held.boulders = stones.length;
         held.boulderTriangles = stones.length * 20;
 
-        // The marker stones along the drops of this tile, nearest the bike first
-        const posts = this.stoneSites(tile).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Scenery.STONE_CAP - (this.stoneCount || 0)));
-        if (posts.length) {
-            const lean = new THREE.Euler(0, 0, 0, 'YXZ');
-            this.instanced([Scenery.stonePart()], posts.map((q) => {
-                rotation.setFromEuler(lean.set(q.lean, q.turn, -q.lean));
-                position.set(q.x, q.y, q.z);
-                return new THREE.Matrix4().compose(position, rotation, scale.set(1, 1, 1));
-            }), 'stones', group);
-        }
-        held.stones = posts.length;
+        // The marker stones of this tile, where it is near enough to have them
+        held.stoneOn = markers;
+        held.stoneSites = markers ? this.plantStones(tile, group) : null;
+        held.stones = 0;
 
         // The tufts beside the ride, nearest the bike first
         const tufts = this.tuftSites(tile).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Math.min(Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP - (this.tuftCount || 0))));
@@ -687,7 +718,6 @@ class Scenery {
 
         if (!group.children.length) return null;
         this.boulderCount = (this.boulderCount || 0) + held.boulders;
-        this.stoneCount = (this.stoneCount || 0) + held.stones;
         this.tuftCount = (this.tuftCount || 0) + held.tufts;
         this.triangles += held.boulderTriangles;
         this.treeCount += held.trees;
@@ -695,7 +725,91 @@ class Scenery {
         this.houseTriangles += held.houseTriangles;
         this.triangles += held.treeTriangles + held.houseTriangles;
         this.perTile.set(tile.key, { group, walls: standing, ...held });
+        if (held.stoneSites && held.stoneSites.length) this.rankStones(bike, true);
         return group;
+    }
+
+    // Puts the marker stones of a tile and the kerb course under them into `group`: an instance for every stone of
+    // the tile and for every piece of kerb, none of them drawn until Scenery.rankStones chooses. Returns the sites
+    // (Scenery.stoneSites), each with its `matrix` and, where the kerb goes on from it, its `kerbMatrix`
+    plantStones(tile, group) {
+        const sites = this.stoneSites(tile);
+        if (!sites.length) return sites;
+        const rotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3();
+        const lean = new THREE.Euler(0, 0, 0, 'YXZ');
+        for (const q of sites) {
+            rotation.setFromEuler(lean.set(q.lean, q.turn, -q.lean));
+            q.matrix = new THREE.Matrix4().compose(position.set(q.x, q.y, q.z), rotation, scale.set(1, 1, 1));
+            if (!q.next) continue;
+            // The kerb course from the stone to the next of its row, on the ground at the two of them
+            const y = q.y + Scenery.STONE_SINK_M, dx = q.next.x - q.x, dy = q.next.y - y, dz = q.next.z - q.z, flat = Math.hypot(dx, dz);
+            rotation.setFromEuler(lean.set(-Math.atan2(dy, flat), Math.atan2(dx, dz), 0));
+            q.kerbMatrix = new THREE.Matrix4().compose(position.set(q.x + dx / 2, y + dy / 2, q.z + dz / 2), rotation, scale.set(1, 1, Math.hypot(flat, dy)));
+        }
+        this.instanced([Scenery.stonePart()], sites.map(q => q.matrix), 'stones', group);
+        const kerbs = sites.filter(q => q.next);
+        if (kerbs.length) this.instanced([Scenery.kerbPart()], kerbs.map(q => q.kerbMatrix), 'stone-kerbs', group);
+        return sites;
+    }
+
+    // Chooses the marker stones that are drawn: of the stones of every tile that has them, the STONE_CAP nearest the
+    // bike, so a window with more than the cap never leaves out the rows beside the rider. A piece of kerb is drawn
+    // from each of the KERB_CAP nearest of them, where the stone at its other end is drawn too. Read again when the
+    // tiles change (`force`) and for every STONE_RANK_M the bike moves
+    rankStones(bike, force = false) {
+        if (!bike) return;
+        const last = this.rankBike;
+        if (!force && last && Math.hypot(bike.x - last.x, bike.z - last.z) < Scenery.STONE_RANK_M) return;
+        this.rankBike = { x: bike.x, z: bike.z };
+        const far = q => Math.hypot(q.x - bike.x, q.z - bike.z);
+        const all = [];
+        for (const held of this.perTile.values()) for (const q of held.stoneSites || []) all.push(far(q));
+        all.sort((a, b) => a - b);
+        const reach = all.length > Scenery.STONE_CAP ? all[Scenery.STONE_CAP - 1] : Infinity;
+        const kerbReach = all.length > Scenery.KERB_CAP ? all[Scenery.KERB_CAP - 1] : Infinity;
+        this.stoneCount = 0;
+        this.kerbCount = 0;
+        for (const held of this.perTile.values()) {
+            if (!held.stoneSites || !held.stoneSites.length) continue;
+            const stones = held.group.children.find(o => o.name === 'stones'), kerbs = held.group.children.find(o => o.name === 'stone-kerbs');
+            let n = 0, k = 0;
+            for (const q of held.stoneSites) {
+                // (stones as far as the last one taken could pass the cap by one or two: the count holds it)
+                if (far(q) > reach || this.stoneCount + n >= Scenery.STONE_CAP) continue;
+                stones.setMatrixAt(n++, q.matrix);
+                if (q.next && far(q) <= kerbReach && far(q.next) <= reach && this.kerbCount + k < Scenery.KERB_CAP) kerbs.setMatrixAt(k++, q.kerbMatrix);
+            }
+            stones.count = n;
+            stones.instanceMatrix.needsUpdate = true;
+            if (kerbs) {
+                kerbs.count = k;
+                kerbs.instanceMatrix.needsUpdate = true;
+            }
+            held.stones = n;
+            this.stoneCount += n;
+            this.kerbCount += k;
+        }
+    }
+
+    // Puts up or takes down the marker stones of a tile whose scenery is drawn. A stone is smaller than a pixel from
+    // 700 m, and a whole pass with its hairpins is in the window at once: the stones stand on the tiles nearest the
+    // bike only (WorldEnvironment.buildScenery). Returns the meshes it added
+    setStones(tile, on, bike) {
+        const held = this.perTile.get(tile.key);
+        if (!held || !!held.stoneOn === on) return [];
+        held.stoneOn = on;
+        const before = held.group.children.length;
+        if (on) held.stoneSites = this.plantStones(tile, held.group);
+        else {
+            for (const mesh of held.group.children.filter(o => o.name === 'stones' || o.name === 'stone-kerbs')) {
+                held.group.remove(mesh);
+                mesh.dispose();
+            }
+            held.stoneSites = null;
+            held.stones = 0;
+        }
+        this.rankStones(bike, true);
+        return on ? held.group.children.slice(before) : [];
     }
 
     // The drawn house whose walls (x, z) is in or within `margin` of: its wall rect {x, z, heading, along, across}, or
@@ -756,9 +870,10 @@ class Scenery {
         this.houseTriangles -= held.houseTriangles;
         this.triangles -= held.treeTriangles + held.houseTriangles + (held.boulderTriangles || 0);
         this.boulderCount = (this.boulderCount || 0) - (held.boulders || 0);
-        this.stoneCount = (this.stoneCount || 0) - (held.stones || 0);
         this.tuftCount = (this.tuftCount || 0) - (held.tufts || 0);
         this.perTile.delete(key);
+        // The stones it gives up are another tile's to draw
+        if (held.stones) this.rankStones(this.rankBike, true);
     }
 
     // The chunks of the side roads round the junctions and the landmarks, which the fixtures are placed clear of:
@@ -799,14 +914,32 @@ class Scenery {
     }
 
     // Where a marker stone may stand at station k of the ride (the stations are STONE_GAP_M apart from the ride's
-    // start) on `side` (the sign of the lateral): {k, side, x, y, z, heading, drop}, or null. It may stand where the
-    // drawn ground falls sharply from the edge (STONE_RULE) and nothing else guards it: no bridge, tunnel or gallery,
-    // no retaining wall under the edge (its parapet is the guard), no stopping place, no roadworks site, no side road
-    // within mouthM. `y` is the drawn ground under its middle, within ROADSIDE_STEP_M of the road; `drop` the metres
-    // the ground reachM past the verge lies under the road; `index` the ride's row before it
+    // start) on `side` (the sign of the lateral): a place of Scenery.stoneSpot, or null. It may stand where the drawn
+    // ground falls sharply from the edge (STONE_RULE). A station on a hairpin's arc is the hairpin's row's to guard
     stonePlace(k, side) {
-        const rule = Scenery.STONE_RULE, ground = this.ground, route = ground.route, points = route.points;
         const s = k * Scenery.STONE_GAP_M;
+        for (const h of this.hairpins()) if (s >= h.s0 - Scenery.STONE_GAP_M && s <= h.s1 + Scenery.STONE_GAP_M) return null;
+        const place = this.stoneSpot(s, side);
+        if (!place || !(place.drop > Scenery.STONE_RULE.dropM)) return null;
+        place.k = place.seed = k;
+        return place;
+    }
+
+    // The ride's hairpins (WorldRoute.hairpins); none on a route that cannot tell
+    hairpins() {
+        const route = this.ground.route;
+        return typeof route.hairpins === 'function' ? route.hairpins() : [];
+    }
+
+    // Where a marker stone may stand at ride distance s on `side` (the sign of the lateral): {s, side, x, y, z, seat,
+    // heading, drop, index}, or null. Nothing else guards the edge there: no bridge, tunnel or gallery, no retaining
+    // wall under the edge (its parapet is the guard), no stopping place, no roadworks site, no side road within
+    // mouthM. `y` is the drawn ground under its middle, within ROADSIDE_STEP_M of the road; `seat` the height it
+    // stands at (KERB); `drop` the metres the
+    // ground reachM past the verge lies under the road (null where no land is there to read); `index` the ride's row
+    // before it
+    stoneSpot(s, side) {
+        const rule = Scenery.STONE_RULE, ground = this.ground, route = ground.route, points = route.points;
         if (!this.roads || s < 0 || s > route.length || points.length < 2) return null;
         for (const span of this.stoneShut || []) if (s >= span.s0 - rule.worksM && s <= span.s1 + rule.worksM) return null;
         const i = Math.min(points.length - 2, route.indexAt(s));
@@ -833,12 +966,13 @@ class Scenery {
         if (this.roads.clearanceOfSides(x, z, rule.mouthM) < rule.mouthM) return null;
         const y = this.footY(x, z, i, Scenery.ROADSIDE_STEP_M);
         if (y === null) return null;
+        // Its seat: the verge's edge beside it, or the ground at its own middle where that is higher
+        const brink = side * (edge - 0.1);
+        const seat = Math.max(y, ground.groundY(p.x + brink * cos, p.z - brink * sin, { start: i - 4, end: i + 4 }, false, this.stoneLoc || (this.stoneLoc = {})));
         const far = side * (edge + rule.reachM);
         const fx = p.x + far * cos, fz = p.z - far * sin;
-        if (ground.tileHeight(fx, fz) === null) return null;
-        const drop = p.y - ground.groundY(fx, fz, { start: i - 4, end: i + 4 }, false, this.stoneLoc || (this.stoneLoc = {}));
-        if (!(drop > rule.dropM)) return null;
-        return { k, side, x, y, z, heading: p.heading, drop, index: i };
+        const drop = ground.tileHeight(fx, fz) === null ? null : p.y - ground.groundY(fx, fz, { start: i - 4, end: i + 4 }, false, this.stoneLoc || (this.stoneLoc = {}));
+        return { s, side, x, y, z, seat: Number.isFinite(seat) ? seat : y, heading: p.heading, drop, index: i };
     }
 
     // The stretches of sharp drop in block `block` of the ride on `side`: [[place]] (Scenery.stonePlace), each a run of
@@ -862,10 +996,60 @@ class Scenery {
         return Scenery.hash(block, side, 80) < Scenery.STONE_RULE.share;
     }
 
-    // The marker stones of a tile: the stones of every stretch that has them (stoneRuns, stoneUsed) whose place is in
-    // the tile. Each stands in the drawn ground at its own place: its foot is STONE_SINK_M under the ground at its
-    // middle and its root goes on down (STONE_ROOT_M), so no corner hangs over the bank that falls from it; a stone
-    // the ground falls more than footM under, from its middle to a corner, is left out. [{x, y, z, turn, lean}]
+    // The row round the outside of hairpin `h` (WorldRoute.hairpins): [[place]] (Scenery.stoneSpot, each with `n`, its
+    // number in the row), the runs of places next to each other at least minM long. The places are STONE_GAP_M apart
+    // along the outer edge itself, over the arc, the row in the middle of it: on the centre line of a bend of 6 m
+    // the same stones would stand twice as far apart
+    hairpinRuns(h) {
+        const rule = Scenery.STONE_RULE, gap = Scenery.STONE_GAP_M, route = this.ground.route;
+        const side = -h.sign, least = Math.ceil(rule.minM / gap) + 1, at = {};
+        // The outer line of the arc, read every quarter metre of the ride: [s, metres along the line]
+        const line = [];
+        let far = 0, last = null;
+        for (let s = h.s0; ; s = Math.min(h.s1, s + 0.25)) {
+            const p = route.sample(s, at);
+            const o = side * (p.width / 2 + RoadClearance.verge() + Scenery.STONE_OUT_M + Scenery.STONE_RADIUS_M);
+            const x = p.x + o * Math.cos(p.heading), z = p.z - o * Math.sin(p.heading);
+            if (last) far += Math.hypot(x - last[0], z - last[1]);
+            last = [x, z];
+            line.push([s, far]);
+            if (s >= h.s1) break;
+        }
+        const count = Math.floor(far / gap) + 1, lead = (far - (count - 1) * gap) / 2;
+        const runs = [];
+        let run = [], j = 0;
+        for (let n = 0; n <= count; n++) {
+            let place = null;
+            if (n < count) {
+                const d = lead + n * gap;
+                while (j < line.length - 2 && line[j + 1][1] < d) j++;
+                const [s0, d0] = line[j], [s1, d1] = line[j + 1];
+                place = this.stoneSpot(s0 + (s1 - s0) * (d1 > d0 ? Math.min(1, Math.max(0, (d - d0) / (d1 - d0))) : 0), side);
+            }
+            if (place) {
+                place.n = n;
+                place.seed = 100000 + Math.round(place.s * 8);
+                run.push(place);
+                continue;
+            }
+            if (run.length >= least) runs.push(run);
+            run = [];
+        }
+        return runs;
+    }
+
+    // Whether a hairpin has its row: a share of them, the same on every load
+    static hairpinUsed(h) {
+        return Scenery.hash(Math.round(h.apex), h.sign, 81) < Scenery.STONE_RULE.hairpinShare;
+    }
+
+    // The marker stones of a tile: the stones of every stretch that has them (stoneRuns, stoneUsed) and of every
+    // hairpin's row that has them (hairpinRuns, hairpinUsed) whose place is in the tile. Each stands in the drawn
+    // ground at its own place: its foot is STONE_SINK_M under its seat (KERB) and its root goes on down
+    // (STONE_ROOT_M), so no corner hangs over the bank that falls from it; a stone the ground falls more than footM
+    // under, from its middle to a corner, is left out, and so is a stone that would then stand alone.
+    // [{x, y, z, turn, lean, next}]: `next` is the seat of the
+    // stone after it in its row, where both stand: the kerb course runs from one to the other
     stoneSites(tile) {
         const sites = [];
         if (!this.roads) return sites;
@@ -876,44 +1060,67 @@ class Scenery {
             if (Math.abs(p.x - (tile.tx + 0.5) * m) > m / 2 + p.width + 8 || Math.abs(p.z - (tile.tz + 0.5) * m) > m / 2 + p.width + 8) continue;
             for (let b = Math.floor(p.s / block); b <= Math.floor(points[i + 1].s / block); b++) blocks.add(b);
         }
-        for (const b of blocks) {
-            for (const side of [Route.RIGHT, Route.LEFT]) {
-                if (!Scenery.stoneUsed(b, side)) continue;
-                for (const run of this.stoneRuns(b, side)) {
-                    for (const q of run) {
-                        if (Math.floor(q.x / m) !== tile.tx || Math.floor(q.z / m) !== tile.tz) continue;
-                        const turn = q.heading + (Scenery.hash(q.k, q.side, 41) - 0.5) * 0.5;
-                        let low = q.y;
-                        for (const [a, c] of [[-half, -half], [half, -half], [half, half], [-half, half]]) {
-                            const x = q.x + a * Math.cos(turn) + c * Math.sin(turn), z = q.z - a * Math.sin(turn) + c * Math.cos(turn);
-                            if (this.ground.tileHeight(x, z) !== null) low = Math.min(low, this.ground.groundY(x, z, { start: q.index - 4, end: q.index + 4 }, false, loc));
-                        }
-                        if (q.y - low > Scenery.STONE_RULE.footM) continue;
-                        sites.push({ x: q.x, y: q.y - Scenery.STONE_SINK_M, z: q.z, turn, lean: (Scenery.hash(q.k, q.side, 42) - 0.5) * 0.1 });
-                    }
-                }
+        const runs = [];
+        for (const b of blocks) for (const side of [Route.RIGHT, Route.LEFT]) if (Scenery.stoneUsed(b, side)) runs.push(...this.stoneRuns(b, side));
+        // A hairpin whose arc has a place in the tile: its ends and its apex are within half its arc of each one
+        for (const h of this.hairpins()) {
+            if (!Scenery.hairpinUsed(h)) continue;
+            const p = this.ground.route.sample(h.apex, loc), reach = m / 2 + (h.s1 - h.s0) / 2 + p.width + 8;
+            if (Math.abs(p.x - (tile.tx + 0.5) * m) <= reach && Math.abs(p.z - (tile.tz + 0.5) * m) <= reach) runs.push(...this.hairpinRuns(h));
+        }
+        const inTile = q => Math.floor(q.x / m) === tile.tx && Math.floor(q.z / m) === tile.tz;
+        // A sawn block stands square to its kerb, a little off it
+        const stand = (q) => {
+            const turn = q.heading + (Scenery.hash(q.seed, q.side, 41) - 0.5) * 0.12;
+            let low = q.y;
+            for (const [a, c] of [[-half, -half], [half, -half], [half, half], [-half, half]]) {
+                const x = q.x + a * Math.cos(turn) + c * Math.sin(turn), z = q.z - a * Math.sin(turn) + c * Math.cos(turn);
+                if (this.ground.tileHeight(x, z) !== null) low = Math.min(low, this.ground.groundY(x, z, { start: q.index - 4, end: q.index + 4 }, false, loc));
             }
+            if (q.y - low > Scenery.STONE_RULE.footM) return null;
+            return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, turn, lean: (Scenery.hash(q.seed, q.side, 42) - 0.5) * 0.04, next: null };
+        };
+        for (const run of runs) {
+            if (!run.some(inTile)) continue;
+            const stood = run.map(stand);
+            // No stone stands alone: one whose neighbours are both left out goes with them
+            const stones = stood.map((q, i) => (q && (stood[i - 1] || stood[i + 1]) ? q : null));
+            run.forEach((q, i) => {
+                if (!stones[i] || !inTile(q)) return;
+                if (stones[i + 1]) stones[i].next = { x: run[i + 1].x, y: run[i + 1].seat, z: run[i + 1].z };
+                sites.push(stones[i]);
+            });
         }
         return sites;
     }
 
-    // A marker stone: a squared granite post, 0.75 m out of the ground and STONE_ROOT_M on into it. It has no
-    // underside (in the ground) and no face under its cap: 18 triangles
+    // A marker stone: a sawn granite block, STONE_HEIGHT_M over its seat and STONE_ROOT_M on under it. It has no
+    // underside (in the ground): 10 triangles
     static stonePart() {
         if (!Scenery.stone) {
             const out = { positions: [], shades: [] };
-            const low = [0.50, 0.49, 0.46], high = [0.66, 0.65, 0.62];
-            // RoadMesh.box lays the top and then the underside last: 18 numbers a face
-            const root = Scenery.STONE_ROOT_M;
-            RoadMesh.box(out, 0, (0.6 - root) / 2, 0, Scenery.STONE_WIDTH_M, 0.6 + root, Scenery.STONE_WIDTH_M, 0, low);
-            out.positions.length -= 36;
-            out.shades.length -= 36;
-            RoadMesh.box(out, 0, 0.75, 0, 0.26, 0.3, 0.26, 0, high);
+            // RoadMesh.box lays the underside last: 18 numbers a face
+            const root = Scenery.STONE_ROOT_M, top = Scenery.STONE_SINK_M + Scenery.STONE_HEIGHT_M;
+            RoadMesh.box(out, 0, (top - root) / 2, 0, Scenery.STONE_WIDTH_M, top + root, Scenery.STONE_WIDTH_M, 0, Scenery.STONE_COLORS.block);
             out.positions.length -= 18;
             out.shades.length -= 18;
             Scenery.stone = { geometry: RoadMesh.geometry(out.positions, out.shades), material: new THREE.MeshLambertMaterial({ vertexColors: true }) };
         }
         return Scenery.stone;
+    }
+
+    // A metre of the kerb course under a row of stones, along z from one stone to the next (an instance is as long as
+    // its two stones are apart): the top and the two sides, no ends (each is under a stone) and no underside, 6 triangles
+    static kerbPart() {
+        if (!Scenery.kerb) {
+            const out = { positions: [], shades: [] };
+            const K = Scenery.KERB;
+            // RoadMesh.box lays the two ends first and the underside last
+            RoadMesh.box(out, 0, (K.proudM - K.rootM) / 2, 0, K.widthM, K.proudM + K.rootM, 1, 0, Scenery.STONE_COLORS.kerb);
+            const positions = out.positions.slice(36, -18), shades = out.shades.slice(36, -18);
+            Scenery.kerb = { geometry: RoadMesh.geometry(positions, shades), material: RoadMesh.stoneMaterial() };
+        }
+        return Scenery.kerb;
     }
 
     // Tuft sites of a tile: [{x, y, z, size, turn, green}], TUFT_TRIES places for each side of each point of the ride

@@ -313,6 +313,10 @@ vec3 worldHaze(vec3 c, vec3 p) {
         return { ...model, meshes: new Map([...model.meshes].map(([name, parts]) => [name, LandShade.adopt(parts)])) };
     }
 
+    // Stone drawn as instances (the kerb course under the marker stones: Scenery.kerbPart) is read at each instance's
+    // own place in the world, so its courses run on from one piece to the next
+    static get INSTANCED() { return '\n#ifdef USE_INSTANCING\nvLandPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;\nvLandNormal = mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal;\n#endif'; }
+
     // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles,
     // `floor` scales the sky's floor (a structure's underside sees the light the land and the sky throw back)
     static patch(material, { curvature = false, detail = false, stone = false, floor = 1 } = {}) {
@@ -329,7 +333,7 @@ vec3 worldHaze(vec3 c, vec3 p) {
                 .replace('#include <begin_vertex>', curvature
                     ? `#include <begin_vertex>\n{ vec3 eye = -(transpose(mat3(viewMatrix)) * viewMatrix[3].xyz); vec2 d = (modelMatrix * vec4(transformed, 1.0)).xz - eye.xz; transformed.y -= dot(d, d) * uDrop; }`
                     : '#include <begin_vertex>')
-                .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${stone ? '\nvLandNormal = mat3(modelMatrix) * objectNormal;\nvWallFace = wallFace;' : ''}`);
+                .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>\nvLandPos = (modelMatrix * vec4(transformed, 1.0)).xyz;${stone ? '\nvLandNormal = mat3(modelMatrix) * objectNormal;\nvWallFace = wallFace;' : ''}${stone ? LandShade.INSTANCED : ''}`);
             shader.fragmentShader = shader.fragmentShader
                 .replace('#include <common>', `#include <common>
 uniform float uIndirect;

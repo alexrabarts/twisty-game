@@ -368,9 +368,17 @@ class WorldEnvironment {
             this.scenery.disposeTile(key);
             return;
         }
-        if (this.scenery.perTile.has(key)) return;
         const tile = this.data.tile(key);
         if (!tile) return;
+        // What stands is not built again when the tile's detail changes, but its marker stones stand on the nearest
+        // tiles only (Scenery.setStones)
+        if (this.scenery.perTile.has(key)) {
+            for (const mesh of this.scenery.setStones(tile, lod === 0, this.lastBike)) {
+                mesh.userData.skipCulling = true;
+                this.onMeshBuilt(mesh);
+            }
+            return;
+        }
         const [tx, tz] = key.split(',').map(Number);
         const m = WorldData.TILE_M;
         // The side roads on and round the tile first: what stands on it keeps clear of them (Scenery.clear). A tile that
@@ -394,7 +402,7 @@ class WorldEnvironment {
             return;
         }
         const houses = (this.data.buildings || []).filter(b => b.x >= tx * m && b.x < (tx + 1) * m && b.z >= tz * m && b.z < (tz + 1) * m);
-        const group = this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike);
+        const group = this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike, lod === 0);
         if (group) {
             group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
             this.sceneryGroup.add(group);
@@ -1610,6 +1618,7 @@ class WorldEnvironment {
             this.streamer.releasePlacing();
         }
         this.streamer.pump(budgetMs);
+        this.scenery.rankStones(position);
         if (state) this.guide.update(state);
     }
 

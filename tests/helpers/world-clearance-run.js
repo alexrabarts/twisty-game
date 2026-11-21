@@ -26,9 +26,8 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
     const seen = new Set();
     // Every tile's scenery as it is built (with the ground as it was then), not only the last window's
     const build = env.scenery.buildTile.bind(env.scenery);
-    env.scenery.buildTile = (tile, ...rest) => {
-        const group = build(tile, ...rest);
-        if (group) for (const t of sceneryOf(THREE, group)) {
+    const take = (group, tile) => {
+        for (const t of sceneryOf(THREE, group)) {
             const key = `${t.type}:${t.name}:${t.x.toFixed(2)},${t.z.toFixed(2)}`;
             if (seen.has(key)) continue;
             seen.add(key);
@@ -37,8 +36,12 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
             const gx = t.at ? t.at[0] : t.x, gz = t.at ? t.at[1] : t.z, loc = {};
             const under = env.ground.groundY(gx, gz, null, false, loc);
             const roofed = (loc.flags && (loc.flags.tunnel || loc.flags.gallery)) || env.scenery.roads.clearance(gx, gz, 20) >= 20;
-            things.push({ ...t, tile: tile.key, groundY: roofed ? env.ground.landY(gx, gz, under) : under });
+            things.push({ ...t, tile, groundY: roofed ? env.ground.landY(gx, gz, under) : under });
         }
+    };
+    env.scenery.buildTile = (tile, ...rest) => {
+        const group = build(tile, ...rest);
+        if (group) take(group, tile.key);
         return group;
     };
     for (let s = env.startS; s <= env.endS; s += stepM) {
@@ -48,6 +51,10 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
         // Time passes as it would on the ride, so what is left behind is let go and its share of the caps comes back
         env.streamClockMs += 2 * WorldStreamer.DISPOSE_AFTER_MS;
         await env.streamer.settle({ x: p.x, z: p.z }, s);
+        // The marker stones are put up on the nearest tiles and chosen nearest the bike first (Scenery.rankStones):
+        // those drawn now, as the bike is here
+        env.scenery.rankStones(env.lastBike);
+        for (const [key, held] of env.scenery.perTile) for (const mesh of held.group.children) if (mesh.name === 'stones') take(mesh, key);
     }
     // The fixtures: the landmarks
     for (const t of sceneryOf(THREE, env.group)) if (t.type === 'landmark') things.push(t);

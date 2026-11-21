@@ -52,9 +52,13 @@ describe('the Tremola slice: no scenery in a road', () => {
         for (const a of at) {
             expect(Math.abs(a.lateral)).toBeGreaterThan(a.width / 2 + RoadSurface.VERGE_M);
             expect(Math.abs(a.lateral)).toBeLessThan(a.width / 2 + RoadSurface.VERGE_M + 1.2);
-            // No stone stands alone: another of its row is one spacing along the same edge
-            expect(at.some(b => b !== a && Math.sign(b.lateral) === Math.sign(a.lateral) && Math.abs(Math.abs(b.s - a.s) - game.Scenery.STONE_GAP_M) < 0.3)).toBe(true);
         }
+        // No stone stands alone: another of its row is one spacing from it on the same edge, along the ride (a row at a
+        // drop) or along the edge itself (a row round the outside of a hairpin, where that is less of the ride's metres)
+        const gap = game.Scenery.STONE_GAP_M;
+        stones.forEach((stone, i) => {
+            expect(stones.some((other, j) => j !== i && Math.sign(at[j].lateral) === Math.sign(at[i].lateral) && (Math.abs(Math.abs(at[j].s - at[i].s) - gap) < 0.3 || Math.abs(Math.hypot(other.x - stone.x, other.z - stone.z) - gap) < 0.3))).toBe(true);
+        });
     });
 
     // The rule for every kind (Scenery.footY): a thing's height is read from the drawn ground at its own place. The

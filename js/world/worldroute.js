@@ -167,8 +167,10 @@ class WorldRoute extends PolylineRoute {
     // Both are then averaged over blendM of road, which is what makes a rider's pace change over a distance. A hairpin
     // first takes the most of its measure within blendM / 2, so the whole of it stays a hairpin and the road near it
     // is the blend. The hairpin has the first call on a place; the mountain takes what it leaves.
+    // arcShare is the share of a hairpin's swing left out at each end of its arc, and the arc ends where the road
+    // turns arcTurn or more inside arcSpanM (WorldRoute.hairpins).
     static get KIND() {
-        return { hairpinSpanM: 80, hairpinTurn: [110 * Math.PI / 180, 150 * Math.PI / 180], mountainSpanM: 200, grade: [0.03, 0.06], wind: [0.004, 0.012], cobbles: [0, 0.5], blendM: 60 };
+        return { hairpinSpanM: 80, hairpinTurn: [110 * Math.PI / 180, 150 * Math.PI / 180], arcShare: 0.1, arcTurn: 30 * Math.PI / 180, arcSpanM: 24, mountainSpanM: 200, grade: [0.03, 0.06], wind: [0.004, 0.012], cobbles: [0, 0.5], blendM: 60 };
     }
 
     kindAt(s, out = {}) {
@@ -218,6 +220,66 @@ class WorldRoute extends PolylineRoute {
             } else if (i > 0) mountain[i] = mountain[i - 1];
         }
         return { hairpin: this.blendAlong(this.blendAlong(hairpin, K.blendM, true), K.blendM), mountain: this.blendAlong(mountain, K.blendM) };
+    }
+
+    // The ride's hairpins by the measure of kindAt (the heading swings hairpinTurn[1] or more inside hairpinSpanM), in
+    // ride order: [{s0, s1, apex, sign, turn}]. `turn` is the whole swing in radians and `sign` its way (positive
+    // toward +lateral, so the outside of the bend is the side -sign). s0 to s1 is the arc: the road on which the
+    // swing goes from arcShare of itself to the rest of it less arcShare and the road bends (arcTurn inside
+    // arcSpanM), so the straights either side are not in it; `apex` is where half of it is made. Built once
+    hairpins() {
+        if (this.hairpinList) return this.hairpinList;
+        const K = WorldRoute.KIND, count = this.points.length, s = this.sArray;
+        const turn = new Float64Array(count);
+        for (let i = 1; i < count; i++) {
+            let d = this.points[i].heading - this.points[i - 1].heading;
+            d -= Math.round(d / (2 * Math.PI)) * 2 * Math.PI;
+            turn[i] = turn[i - 1] + d;
+        }
+        // The swing of each span that holds a hairpin, from its lowest heading to its highest; spans that share road
+        // and turn the same way are one hairpin
+        const found = [];
+        let a = 0, b = 0;
+        for (let i = 0; i < count; i++) {
+            while (s[a] < s[i] - K.hairpinSpanM / 2) a++;
+            while (b < count - 1 && s[b + 1] <= s[i] + K.hairpinSpanM / 2) b++;
+            let low = a, high = a;
+            for (let k = a; k <= b; k++) {
+                if (turn[k] < turn[low]) low = k;
+                if (turn[k] > turn[high]) high = k;
+            }
+            if (turn[high] - turn[low] < K.hairpinTurn[1]) continue;
+            const from = Math.min(low, high), to = Math.max(low, high), sign = high > low ? 1 : -1;
+            const last = found[found.length - 1];
+            if (last && last.sign === sign && from <= last.to) {
+                last.from = Math.min(last.from, from);
+                last.to = Math.max(last.to, to);
+            } else found.push({ from, to, sign });
+        }
+        this.hairpinList = found.map(({ from, to, sign }) => {
+            const whole = Math.abs(turn[to] - turn[from]);
+            // Where the swing first reaches a share of itself, between two samples
+            const at = share => {
+                for (let k = from + 1; k <= to; k++) {
+                    const before = Math.abs(turn[k - 1] - turn[from]), here = Math.abs(turn[k] - turn[from]);
+                    if (here >= share * whole) return s[k - 1] + (s[k] - s[k - 1]) * (here > before ? (share * whole - before) / (here - before) : 0);
+                }
+                return s[to];
+            };
+            // The swing at s, between two samples
+            const swing = (d) => {
+                const c = Math.max(s[0], Math.min(s[count - 1], d)), i = Math.min(count - 2, this.indexAt(c));
+                return turn[i] + (turn[i + 1] - turn[i]) * (s[i + 1] > s[i] ? (c - s[i]) / (s[i + 1] - s[i]) : 0);
+            };
+            // A long lead into the bend, or out of it, is no arc: each end comes in to where the road bends
+            const bends = d => Math.abs(swing(d + K.arcSpanM / 2) - swing(d - K.arcSpanM / 2)) >= K.arcTurn;
+            const apex = at(0.5);
+            let s0 = at(K.arcShare), s1 = at(1 - K.arcShare);
+            while (s0 < apex && !bends(s0)) s0 = Math.min(apex, s0 + 1);
+            while (s1 > apex && !bends(s1)) s1 = Math.max(apex, s1 - 1);
+            return { s0, s1, apex, sign, turn: whole };
+        });
+        return this.hairpinList;
     }
 
     // The mean of `values` over `span` metres of ride centred on each sample, or with `most` the greatest of them

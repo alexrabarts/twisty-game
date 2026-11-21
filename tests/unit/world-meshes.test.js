@@ -798,10 +798,17 @@ describe('Scenery', () => {
         const group = scenery.buildTile(fall.tile('0,0'), null, [], { x: 100, z: 100 });
         const stones = group.children.find(m => m.name === 'stones');
         expect(stones.isInstancedMesh).toBe(true);
+        // The kerb course under them: a piece from each stone to the next of its row, drawn as the walls are
+        const kerbs = group.children.find(m => m.name === 'stone-kerbs');
+        // (under the stones nearest the bike: Scenery.KERB_CAP)
+        expect(kerbs.count).toBeGreaterThan(Scenery.KERB_CAP * 0.8);
+        expect(kerbs.count).toBeLessThanOrEqual(Math.min(Scenery.KERB_CAP, stones.count - blocks.length));
+        expect(kerbs.geometry.attributes.position.count / 3).toBe(6);
+        expect(kerbs.material).toBe(RoadMesh.stoneMaterial());
         expect(stones.count).toBe(blocks.reduce((n, b) => n + stations(b), 0));
-        expect(stones.geometry.attributes.position.count / 3).toBe(18);
+        expect(stones.geometry.attributes.position.count / 3).toBe(10);
         stones.geometry.computeBoundingBox();
-        expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, 0.9].map(n => expect.closeTo(n, 5)));
+        expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, Scenery.STONE_SINK_M + Scenery.STONE_HEIGHT_M].map(n => expect.closeTo(n, 5)));
         const matrix = new THREE.Matrix4(), at = new THREE.Vector3();
         const along = [];
         for (let i = 0; i < stones.count; i++) {
@@ -809,9 +816,11 @@ describe('Scenery', () => {
             at.setFromMatrixPosition(matrix);
             expect(Math.sign(lateral(at))).toBe(down);
             expect(blocks).toContain(Math.floor(route.project(at.x, at.z, null, {}).s / rule.blockM + 1e-6));
-            // In the ground: sunk at its middle, and its root goes on under every corner of its foot
-            expect(ground.groundY(at.x, at.z, null) - at.y).toBeCloseTo(Scenery.STONE_SINK_M, 3);
-            for (const [a, c] of [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]]) expect(at.y + stones.geometry.boundingBox.min.y).toBeLessThan(ground.groundY(at.x + a, at.z + c, null));
+            // In the ground: sunk under its seat (the verge's edge beside it, at the road's height: the fill falls
+            // from there, and the ground at its own middle is under it), and its root goes on under every corner
+            expect(ground.groundY(at.x, at.z, null)).toBeLessThan(1000);
+            expect(1000 - at.y).toBeCloseTo(Scenery.STONE_SINK_M, 3);
+            for (const [a, c] of [[-0.3, -0.3], [0.3, -0.3], [0.3, 0.3], [-0.3, 0.3]]) expect(at.y + stones.geometry.boundingBox.min.y).toBeLessThan(ground.groundY(at.x + a, at.z + c, null));
             along.push(route.project(at.x, at.z, null, {}).s);
         }
         along.sort((a, b) => a - b);
