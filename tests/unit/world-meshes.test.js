@@ -726,45 +726,75 @@ describe('Scenery', () => {
         expect(group.children.filter(m => m.name === 'houses:plain_hut').reduce((n, m) => n + m.count, 0)).toBe(2);
     });
 
-    test('marker stones stand in a row before a junction, each on the ground at its own place', () => {
-        // A road along x = 100 at the land's own height, so both of its sides are in the tile
+    test('marker stones stand along a sharp drop, on the side it falls, each in the ground at its own place', () => {
+        // A road along x = 100 at the land's height. Past x = 106 the land falls 1 in 1: 8 m under the road 10 m past
+        // the verge on that side, and level on the other
+        const fall = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: x => (x > 106 ? 1000 - (x - 106) : 1000), zone: () => 0 });
         const route = new WorldRoute(samplesOf(straight(400, { y: 1000 }).map(q => ({ ...q, x: 100 }))), {});
-        const ground = new WorldGround(route, data);
-        const scenery = new Scenery(ground, data);
-        const junctions = [{ id: 7, passes: [{ inEdge: 1, sIn: 200 }, { inEdge: null, sIn: 300 }] }];
-        const rows = scenery.stoneRows(junctions, route);
-        // One row for the pass that comes in on an edge, offered on the rider's right first, then the left
-        expect(rows).toHaveLength(1);
-        expect(rows[0].sides).toHaveLength(2);
-        const p = route.sample(200 - Scenery.STONE_BEFORE_M[0], {});
+        const ground = new WorldGround(route, fall);
+        const scenery = new Scenery(ground, fall);
+        const rule = Scenery.STONE_RULE, each = Math.round(rule.blockM / Scenery.STONE_GAP_M);
+        const p = route.sample(100, {});
         const lateral = q => (q.x - p.x) * Math.cos(p.heading) - (q.z - p.z) * Math.sin(p.heading);
-        expect(Math.sign(lateral(rows[0].sides[0][0]))).toBe(Route.RIGHT);
-        for (const side of rows[0].sides) {
-            expect(side).toHaveLength(Scenery.STONE_ROW);
-            for (const q of side) expect(scenery.roads.clearance(q.x, q.z)).toBeGreaterThanOrEqual(Scenery.STONE_RADIUS_M + Scenery.CLEAR_M.stone - 1e-9);
-        }
-        scenery.stoneRowList = rows;
-        const group = scenery.buildTile(tile, null, [], { x: 100, z: 100 });
+        const down = Math.sign(lateral({ x: 110, z: p.z }));
+        // Every station of a block on the falling side may have a stone, none on the level side
+        expect(scenery.stoneRuns(1, down).map(run => run.length)).toEqual([each]);
+        expect(scenery.stoneRuns(1, -down)).toEqual([]);
+        const place = scenery.stonePlace(each + 3, down);
+        expect(place.drop).toBeGreaterThan(rule.dropM);
+        expect(Math.sign(lateral(place))).toBe(down);
+        expect(scenery.roads.clearance(place.x, place.z)).toBeGreaterThanOrEqual(Scenery.STONE_RADIUS_M + Scenery.CLEAR_M.stone - 1e-9);
+        // A share of the blocks has its stones, drawn from the block's number: the same every time, and not all of them
+        const all = [...Array(Math.ceil(route.length / rule.blockM)).keys()];
+        const blocks = all.filter(b => Scenery.stoneUsed(b, down));
+        expect(blocks.length).toBeGreaterThan(0);
+        expect(blocks.length).toBeLessThan(all.length);
+        // (the stations of a block that are on the ride: the last block is cut short by its end)
+        const stations = b => [...Array(each).keys()].filter(n => (b * each + n) * Scenery.STONE_GAP_M <= route.length).length;
+        const group = scenery.buildTile(fall.tile('0,0'), null, [], { x: 100, z: 100 });
         const stones = group.children.find(m => m.name === 'stones');
         expect(stones.isInstancedMesh).toBe(true);
-        expect(stones.count).toBe(Scenery.STONE_ROW);
+        expect(stones.count).toBe(blocks.reduce((n, b) => n + stations(b), 0));
+        expect(stones.geometry.attributes.position.count / 3).toBe(18);
+        stones.geometry.computeBoundingBox();
+        expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, 0.9].map(n => expect.closeTo(n, 5)));
         const matrix = new THREE.Matrix4(), at = new THREE.Vector3();
+        const along = [];
         for (let i = 0; i < stones.count; i++) {
             stones.getMatrixAt(i, matrix);
             at.setFromMatrixPosition(matrix);
-            expect(at.y).toBeCloseTo(ground.groundY(at.x, at.z, null) - Scenery.STONE_SINK_M, 3);
+            expect(Math.sign(lateral(at))).toBe(down);
+            expect(blocks).toContain(Math.floor(route.project(at.x, at.z, null, {}).s / rule.blockM + 1e-6));
+            // In the ground: sunk at its middle, and its root goes on under every corner of its foot
+            expect(ground.groundY(at.x, at.z, null) - at.y).toBeCloseTo(Scenery.STONE_SINK_M, 3);
+            for (const [a, c] of [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]]) expect(at.y + stones.geometry.boundingBox.min.y).toBeLessThan(ground.groundY(at.x + a, at.z + c, null));
+            along.push(route.project(at.x, at.z, null, {}).s);
         }
-        // Ground too far from the road's height on the right (the foot of a wall, the land under a bridge): the left
-        const stepped = new Scenery(ground, data);
-        stepped.stoneRowList = rows;
-        const footY = stepped.footY.bind(stepped);
-        stepped.footY = (x, z, index, step) => (Math.sign(lateral({ x, z })) === Route.RIGHT && step < Infinity ? null : footY(x, z, index, step));
-        const left = stepped.stoneSites(tile);
-        expect(left).toHaveLength(Scenery.STONE_ROW);
-        for (const q of left) expect(Math.sign(lateral(q))).toBe(Route.LEFT);
-        // And no ground on either side: no row, not a row in the air
-        stepped.footY = () => null;
-        expect(stepped.stoneSites(tile)).toEqual([]);
+        along.sort((a, b) => a - b);
+        for (let i = 1; i < along.length; i++) expect((along[i] - along[i - 1]) / Scenery.STONE_GAP_M).toBeCloseTo(Math.round((along[i] - along[i - 1]) / Scenery.STONE_GAP_M), 3);
+        // A run shorter than minM gets no stones: the drop on 5 m of the road only
+        const short = new Scenery(ground, fall);
+        const stonePlace = short.stonePlace.bind(short);
+        short.stonePlace = (k, side) => (k >= each && k <= each + 2 ? stonePlace(k, side) : null);
+        expect(short.stoneRuns(1, down)).toEqual([]);
+        // A level road has none, and nor has a drop the fill of a plain bank makes (1 in 1.5)
+        const level = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: () => 1000, zone: () => 0 });
+        expect(new Scenery(new WorldGround(route, level), level).stoneSites(level.tile('0,0'))).toEqual([]);
+        const bank = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: x => (x > 106 ? 1000 - (x - 106) / 1.5 : 1000), zone: () => 0 });
+        expect(new Scenery(new WorldGround(route, bank), bank).stoneSites(bank.tile('0,0'))).toEqual([]);
+        // Where a wall or a bridge guards the edge, where a rider stops and in a roadworks site: none
+        const walled = new Scenery(ground, fall);
+        ground.walledAt = () => true;
+        expect(walled.stoneRuns(1, down)).toEqual([]);
+        delete ground.walledAt;
+        const works = new Scenery(ground, fall);
+        works.stoneShut = [{ s0: 95, s1: 110 }];
+        expect(works.stoneRuns(1, down).flat().map(q => q.k * Scenery.STONE_GAP_M).filter(s => s >= 95 - rule.worksM && s <= 110 + rule.worksM)).toEqual([]);
+        expect(works.stoneRuns(1, down).flat().length).toBeGreaterThan(0);
+        // And no ground to stand on: no stone, not a stone in the air
+        const bare = new Scenery(ground, fall);
+        bare.footY = () => null;
+        expect(bare.stoneSites(fall.tile('0,0'))).toEqual([]);
     });
 
     test('tufts stand on the open strip beside the ride, clear of the road, each on the ground at its own place', () => {

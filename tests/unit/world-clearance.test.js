@@ -45,19 +45,15 @@ describe('the Tremola slice: no scenery in a road', () => {
         if (near.length) throw new Error(`${near.length} things within their margin of a road:\n${list(near)}`);
     });
 
-    test('the passes through the junctions have their marker stones, in rows beside the ride before the junction', () => {
+    test('the marker stones stand in rows on the ride\'s own edge, a spacing apart (their drops: world-stones.test.js)', () => {
         const env = gathered.env;
-        const passes = env.graph.junctions.flatMap(j => j.passes.filter(p => p.inEdge !== null));
-        const rows = env.scenery.stoneRowList;
         const stones = gathered.things.filter(t => t.type === 'stone');
-        // A row is left out only where the ground gives it no place (Scenery.footY): most passes have one
-        expect(rows.length).toBeGreaterThan(passes.length / 2);
-        expect(stones.length % game.Scenery.STONE_ROW).toBe(0);
-        expect(stones.length).toBeGreaterThan(rows.length * game.Scenery.STONE_ROW / 2);
-        for (const stone of stones) {
-            const at = env.route.project(stone.x, stone.z, null, {});
-            expect(Math.abs(at.lateral)).toBeLessThan(at.width / 2 + RoadSurface.VERGE_M + 1.2);
-            expect(passes.some(p => p.sIn - at.s > 0 && p.sIn - at.s < 55)).toBe(true);
+        const at = stones.map(stone => env.route.project(stone.x, stone.z, null, {}));
+        for (const a of at) {
+            expect(Math.abs(a.lateral)).toBeGreaterThan(a.width / 2 + RoadSurface.VERGE_M);
+            expect(Math.abs(a.lateral)).toBeLessThan(a.width / 2 + RoadSurface.VERGE_M + 1.2);
+            // No stone stands alone: another of its row is one spacing along the same edge
+            expect(at.some(b => b !== a && Math.sign(b.lateral) === Math.sign(a.lateral) && Math.abs(Math.abs(b.s - a.s) - game.Scenery.STONE_GAP_M) < 0.3)).toBe(true);
         }
     });
 

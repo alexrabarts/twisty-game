@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
@@ -5108,6 +5108,90 @@ function junctionChecks(results, failures) {
     }
 }
 
+// world-stones: the marker stones as they are drawn, in the page. The bike is put down every --every metres (200 by
+// default) and every stone drawn within STONE_NEAR_M of it, where the land is at full detail, is cast on against the
+// drawn ground (the tiles, the roads and the ground of the edge works; a wall, a deck or a parapet is a structure).
+// It fails on a stone with a corner of its foot over the drawn ground or its top under it, a stone with no sharp drop
+// drawn on its own side (Scenery.STONE_RULE: dropM within reachM of the verge, less STONE_DROP_TOL_M), a stone with a
+// wall or a parapet drawn at its edge, and a ride on which no stone was seen.
+//   node tools/terrain-check.mjs world-stones --world tremola --gpu [--every 200]
+const STONE_NEAR_M = 160;
+const STONE_FLOAT_M = 0.05;
+const STONE_DROP_TOL_M = 0.3;
+WORLD_PROBES.push('world-stones');
+WORLD['world-stones'] = page => page.evaluate(async (placeSource, every, nearM, floatM, tolM) => {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, rule = Scenery.STONE_RULE;
+    game.worldLinger = false;
+    const raycaster = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
+    const structure = h => h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2);
+    const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
+    const hits = (x, z, from) => { raycaster.set(new THREE.Vector3(x, from, z), down); return raycaster.intersectObjects(drawn, true); };
+    const groundY = (x, z, from) => { const hit = hits(x, z, from).find(h => !structure(h)); return hit ? hit.point.y : null; };
+    const seen = new Map();
+    const matrix = new THREE.Matrix4(), world = new THREE.Matrix4(), v = new THREE.Vector3();
+    let places = 0;
+    for (let s0 = Math.min(every / 2, route.length / 2); s0 < route.length; s0 += every) {
+        const bike = await placeAt(s0);
+        env.streamer.pump(Infinity);
+        env.group.updateMatrixWorld(true);
+        places++;
+        env.sceneryGroup.traverse(o => {
+            if (!o.isInstancedMesh || o.name !== 'stones') return;
+            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+            const box = o.geometry.boundingBox;
+            for (let i = 0; i < o.count; i++) {
+                o.getMatrixAt(i, matrix);
+                world.multiplyMatrices(o.matrixWorld, matrix);
+                const at = v.set(0, 0, 0).applyMatrix4(world).clone();
+                const key = `${at.x.toFixed(2)},${at.z.toFixed(2)}`;
+                if (seen.has(key) || Math.hypot(at.x - bike.x, at.z - bike.z) > nearM) continue;
+                const stone = { x: Math.round(at.x * 10) / 10, z: Math.round(at.z * 10) / 10 };
+                seen.set(key, stone);
+                const top = v.set(0, box.max.y, 0).applyMatrix4(world).y;
+                // The foot: its four corners, each against the drawn ground under it
+                let over = -Infinity;
+                for (const [cx, cz] of [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]]) {
+                    v.set(cx, box.min.y, cz).applyMatrix4(world);
+                    const y = groundY(v.x, v.z, top + 3);
+                    over = Math.max(over, y === null ? Infinity : v.y - y);
+                }
+                const middle = groundY(at.x, at.z, top + 3);
+                if (over > floatM) stone.floats = over === Infinity ? 'no ground drawn under it' : Math.round(over * 100) / 100;
+                if (middle !== null && top <= middle) stone.buried = Math.round((middle - top) * 100) / 100;
+                // Its own road, the side it stands on, and the drawn ground reachM past the verge there
+                const own = route.project(at.x, at.z, null, {});
+                const p = route.sample(own.s, {});
+                const side = Math.sign(own.lateral), edge = p.width / 2 + RoadSurface.VERGE_M;
+                stone.s = Math.round(own.s);
+                stone.side = side;
+                const out = d => [p.x + side * (edge + d) * Math.cos(p.heading), p.z - side * (edge + d) * Math.sin(p.heading)];
+                const far = groundY(...out(rule.reachM), p.y + 3);
+                stone.drop = far === null ? null : Math.round((p.y - far) * 100) / 100;
+                if (!(stone.drop > rule.dropM - tolM)) stone.flat = true;
+                // A wall, a deck or a parapet drawn at its edge, from a metre in from the verge's edge to a metre out
+                for (let d = -1; d <= 1; d += 0.25) if (hits(...out(d), p.y + 3).some(h => structure(h) && h.point.y > p.y - 1.5)) stone.guarded = true;
+            }
+        });
+    }
+    const stones = [...seen.values()];
+    const pick = key => stones.filter(t => t[key] !== undefined).slice(0, 12);
+    const drops = stones.map(t => t.drop).filter(Number.isFinite).sort((a, b) => a - b);
+    return {
+        places, stones: stones.length, rows: new Set(stones.map(t => `${Math.floor(t.s / rule.blockM)}:${t.side}`)).size,
+        dropM: rule.dropM, reachM: rule.reachM, leastDrop: drops[0] ?? null, medianDrop: drops[Math.floor(drops.length / 2)] ?? null,
+        floats: pick('floats'), buried: pick('buried'), flat: pick('flat'), guarded: pick('guarded')
+    };
+}, placeAt.toString(), Number(option('every') || 200), STONE_NEAR_M, STONE_FLOAT_M, STONE_DROP_TOL_M);
+
+function stoneChecks(results, failures) {
+    const stones = results['world-stones'];
+    if (!stones) return;
+    if (!(stones.stones > 0)) failures.push(`world-stones: no marker stone was seen at ${stones.places} places`);
+    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, guarded: 'stones where a wall or a parapet is drawn at the edge' };
+    for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
+}
+
 // A view for world-junctions, in the page: the frame alone (no HUD), as a PNG data URL
 async function junctionEye(placeSource, eye) {
     const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
@@ -5243,6 +5327,7 @@ function worldChecks(report) {
     vertexChecks(results, failures);
     wallChecks(results, failures);
     junctionChecks(results, failures);
+    stoneChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

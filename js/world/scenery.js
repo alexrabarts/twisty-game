@@ -130,7 +130,7 @@ class RoadClearance {
 //               modelled shapes of js/treemodels.js's files when they are loaded
 //   buildings   from buildings.bin, in the modelled houses of assets/village/houses.glb
 //   landmarks   the boxes of landmarks.json beside the road
-//   stones      a short row of granite marker stones beside the ride before each junction
+//   stones      rows of granite marker stones on the edge of the ride where the land drops sharply from it
 //   tufts       dry grass tussocks and low green clumps on the open strip beside the ride
 // Every one stands on the drawn ground: its height is read from the ground at its own place (Scenery.footY), never
 // from the road beside it, and where there is no ground to read it is left out.
@@ -140,7 +140,7 @@ class RoadClearance {
 // tile's scenery waits for the side roads round it (WorldEnvironment.buildScenery).
 // Counts are capped against the window budget of 1 400 instances,
 // nearest first (tiles are built nearest first): TREE_CAP trees, BUILDING_CAP
-// instances of house parts, and a few dozen marker stones and barriers.
+// instances of house parts, STONE_CAP marker stones and a few barriers.
 class Scenery {
     static get TREE_CAP() { return 1000; }
     static get BUILDING_CAP() { return 300; }
@@ -150,22 +150,45 @@ class Scenery {
     // km 4, where this cap is what holds the trees: world-budget)
     // (134 000 until the touring crew rode their own bikes: five riders at about 3 100 triangles each, 15 500, where
     // the window had counted four procedural bikes, 10 300, and stood 1 400 over at km 4 with a fifth)
-    static get TRIANGLE_CAP() { return 128000; }
+    // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
+    // where the rows before the junctions were 1 440)
+    static get TRIANGLE_CAP() { return 127000; }
     // Boulders on rock and scree, nearest first (20 triangles each)
     static get BOULDER_CAP() { return 160; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
     static get HOUSE_TRIANGLES() { return 80000; }
-    // Marker stones: STONE_ROW of them STONE_GAP_M apart along the ride before a junction, STONE_OUT_M past the verge,
-    // sunk STONE_SINK_M. Granite posts stand along the edge of the pass roads in the photos; no yellow sign does
-    static get STONE_ROW() { return 3; }
+    // Marker stones: STONE_GAP_M apart along the ride, STONE_OUT_M past the verge, sunk STONE_SINK_M. Granite posts
+    // stand along the edge of the pass roads in the photos; no yellow sign does
     static get STONE_GAP_M() { return 2.5; }
     static get STONE_OUT_M() { return 0.35; }
     static get STONE_RADIUS_M() { return 0.2; }
+    static get STONE_WIDTH_M() { return 0.3; }
     static get STONE_SINK_M() { return 0.15; }
-    static get STONE_CAP() { return 120; }
+    // A stone goes on this far under its foot, as a post set in the ground does: on a bank that falls from it no corner
+    // of it hangs in the air, and the drawn bank may lie a little under the ground the physics reads
+    static get STONE_ROOT_M() { return 0.9; }
+    // (120 at 24 triangles until the stone lost its hidden faces: the same 2 880 triangles at the most)
+    static get STONE_CAP() { return 160; }
     // A marker stone is road furniture: it stands only where the drawn ground at its foot is within this of the road
     // beside it (not at the foot of a retaining wall, not on the land under a bridge)
     static get ROADSIDE_STEP_M() { return 0.8; }
+    // Where the marker stones stand (Scenery.stonePlace, stoneRuns, stoneSites). On an old pass road the stones are the
+    // guard at a sharp drop: a row is seen only where the land falls away from the road's edge, on the side it falls,
+    // and not at every drop. So no stone stands on a level verge, on the uphill side, or where a wall's parapet, a
+    // bridge's or a barrier already guards the edge.
+    //   dropM, reachM   a sharp drop: the drawn ground reachM past the verge lies more than dropM under the road. A
+    //                   fill at the batter (RoadMesh.BATTER, 1:1.5) falls 6.7 m in 10, and the downhill edge of a
+    //                   mountain road stands on one for kilometres: 7 m takes only the banks that fall more steeply
+    //                   than a plain fill
+    //   blockM, share   not every drop has them: the ride is read in blocks of blockM from its start, and a share of
+    //                   the blocks' sides, drawn from the block's number, may have stones (a rule of the ride's own
+    //                   metres, so the order the tiles arrive in cannot change it)
+    //   minM            a row is at least this long: a shorter run of drop in a block gets none
+    //   mouthM          metres a stone keeps from every side road's band: a junction's mouth is not an edge to guard
+    //   worksM          metres a row keeps from the first and the last thing of a roadworks site
+    //   footM           the most the ground may fall under a stone's own foot, from its middle to its lowest corner:
+    //                   on more its root (STONE_ROOT_M) could show, so that stone of the row is left out
+    static get STONE_RULE() { return { dropM: 7, reachM: 10, blockM: 60, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.45 }; }
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
     // 3 or 4 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
@@ -181,8 +204,6 @@ class Scenery {
     // Metres past the edge of every road band (its drawn width and the verge, RoadClearance) that the plan footprint
     // of each kind keeps clear: a tree's crown or a boulder, a house, a marker stone, a tuft, a landmark
     static get CLEAR_M() { return { tree: 2, boulder: 2, house: 0, stone: 0.15, tuft: 0.2, landmark: 3 }; }
-    // Metres before a junction the last stone of a row may stand, nearest the junction first
-    static get STONE_BEFORE_M() { return [15, 20, 25, 30, 12, 35, 40]; }
     // Metres along the ride a gate frame may be drawn from its gate, to keep its posts off a side road
     static get GATE_SHIFT_M() { return 15; }
     static get BUILDING_REACH_M() { return 450; }
@@ -647,8 +668,8 @@ class Scenery {
         held.boulders = stones.length;
         held.boulderTriangles = stones.length * 20;
 
-        // The marker stones before the junctions of this tile
-        const posts = this.stoneSites(tile).slice(0, Math.max(0, Scenery.STONE_CAP - (this.stoneCount || 0)));
+        // The marker stones along the drops of this tile, nearest the bike first
+        const posts = this.stoneSites(tile).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Scenery.STONE_CAP - (this.stoneCount || 0)));
         if (posts.length) {
             const lean = new THREE.Euler(0, 0, 0, 'YXZ');
             this.instanced([Scenery.stonePart()], posts.map((q) => {
@@ -741,7 +762,7 @@ class Scenery {
     }
 
     // The chunks of the side roads round the junctions and the landmarks, which the fixtures are placed clear of:
-    // WorldEnvironment.load has them before it places the marker stone rows and the landmarks
+    // WorldEnvironment.load has them before it places the landmarks
     static fixtureChunks(data) {
         const wanted = new Set();
         for (const j of data.junctions || []) for (const k of data.chunksNear(data.nodes.x[j.node], data.nodes.z[j.node], 120)) wanted.add(k);
@@ -777,69 +798,119 @@ class Scenery {
         return Math.abs(y - loc.roadY) > step ? null : y;
     }
 
-    // Where the marker stones may stand: for each pass of the ride through a junction, a row of STONE_ROW places
-    // beside the ride, the last STONE_BEFORE_M before the junction, on the rider's right and on the left, each
-    // keeping CLEAR_M.stone of every road band. [{junctionId, sides: [[{x, z, heading}]]}], the right side first; a
-    // side with a place in a road is not offered, and a pass with no clear side gets no row. The heights come when
-    // the row's tile is built (Scenery.stoneSites)
-    stoneRows(junctions, route) {
-        const rows = [];
-        const p = {};
-        const radius = Scenery.STONE_RADIUS_M, margin = Scenery.CLEAR_M.stone;
-        for (const junction of junctions) {
-            for (const pass of junction.passes) {
-                if (pass.inEdge === null || pass.inEdge === undefined) continue;
-                for (const before of Scenery.STONE_BEFORE_M) {
-                    const sides = [];
-                    // The rider's right first (Route.RIGHT), where a Swiss road's furniture stands
-                    for (const side of [Route.RIGHT, Route.LEFT]) {
-                        const row = [];
-                        for (let k = 0; k < Scenery.STONE_ROW; k++) {
-                            const s = pass.sIn - before - k * Scenery.STONE_GAP_M;
-                            if (s < 0) break;
-                            route.sample(s, p);
-                            const o = side * (p.width / 2 + RoadClearance.verge() + Scenery.STONE_OUT_M + radius);
-                            const x = p.x + o * Math.cos(p.heading), z = p.z - o * Math.sin(p.heading);
-                            if (!this.clearOfRoad(x, z, radius, margin)) break;
-                            row.push({ x, z, heading: p.heading });
-                        }
-                        if (row.length === Scenery.STONE_ROW) sides.push(row);
-                    }
-                    if (sides.length) { rows.push({ junctionId: junction.id, sides }); break; }
-                }
-            }
+    // Where a marker stone may stand at station k of the ride (the stations are STONE_GAP_M apart from the ride's
+    // start) on `side` (the sign of the lateral): {k, side, x, y, z, heading, drop}, or null. It may stand where the
+    // drawn ground falls sharply from the edge (STONE_RULE) and nothing else guards it: no bridge, tunnel or gallery,
+    // no retaining wall under the edge (its parapet is the guard), no stopping place, no roadworks site, no side road
+    // within mouthM. `y` is the drawn ground under its middle, within ROADSIDE_STEP_M of the road; `drop` the metres
+    // the ground reachM past the verge lies under the road; `index` the ride's row before it
+    stonePlace(k, side) {
+        const rule = Scenery.STONE_RULE, ground = this.ground, route = ground.route, points = route.points;
+        const s = k * Scenery.STONE_GAP_M;
+        if (!this.roads || s < 0 || s > route.length || points.length < 2) return null;
+        for (const span of this.stoneShut || []) if (s >= span.s0 - rule.worksM && s <= span.s1 + rule.worksM) return null;
+        const i = Math.min(points.length - 2, route.indexAt(s));
+        // What guards the edge at the rows either side of it, or widens it: a stone is the guard of a bare edge only
+        const loc = { lateral: side, t: 0 };
+        for (let j = Math.max(0, i - 1); j <= Math.min(points.length - 1, i + 2); j++) {
+            const q = points[j];
+            if (q.flags && (q.flags.bridge || q.flags.tunnel || q.flags.gallery)) return null;
+            if (q[side > 0 ? 'safeP' : 'safeN']) return null;
+            loc.index = j;
+            loc.flags = q.flags;
+            if (ground.bridgeOrDrop(loc, q.width / 2)) return null;
         }
-        return rows;
+        const p = route.sample(s, this.stoneAt || (this.stoneAt = {}));
+        const cos = Math.cos(p.heading), sin = Math.sin(p.heading);
+        const edge = p.width / 2 + RoadClearance.verge(), radius = Scenery.STONE_RADIUS_M;
+        const o = side * (edge + Scenery.STONE_OUT_M + radius);
+        const x = p.x + o * cos, z = p.z - o * sin;
+        // Its own strand's edge: a place nearer to another strand of the ride is that strand's to guard
+        const near = this.stoneNear || (this.stoneNear = {});
+        near.segment = null;
+        if (this.roads.clearance(x, z, radius + Scenery.CLEAR_M.stone + 1, null, false, near) < radius + Scenery.CLEAR_M.stone) return null;
+        if (!near.segment || near.segment.edgeId !== null || near.segment.place || Math.abs(near.segment.index - i) > 6) return null;
+        if (this.roads.clearanceOfSides(x, z, rule.mouthM) < rule.mouthM) return null;
+        const y = this.footY(x, z, i, Scenery.ROADSIDE_STEP_M);
+        if (y === null) return null;
+        const far = side * (edge + rule.reachM);
+        const fx = p.x + far * cos, fz = p.z - far * sin;
+        if (ground.tileHeight(fx, fz) === null) return null;
+        const drop = p.y - ground.groundY(fx, fz, { start: i - 4, end: i + 4 }, false, this.stoneLoc || (this.stoneLoc = {}));
+        if (!(drop > rule.dropM)) return null;
+        return { k, side, x, y, z, heading: p.heading, drop, index: i };
     }
 
-    // The marker stones of a tile: the rows whose first place is in it, each on its first side where every stone
-    // has ground to stand on within ROADSIDE_STEP_M of the road (Scenery.footY). [{x, y, z, turn, lean}]
+    // The stretches of sharp drop in block `block` of the ride on `side`: [[place]] (Scenery.stonePlace), each a run of
+    // stations next to each other at least minM long. A block is blockM of the ride from its start
+    stoneRuns(block, side) {
+        const rule = Scenery.STONE_RULE, gap = Scenery.STONE_GAP_M;
+        const each = Math.round(rule.blockM / gap), least = Math.ceil(rule.minM / gap) + 1;
+        const runs = [];
+        let run = [];
+        for (let k = block * each; k <= (block + 1) * each; k++) {
+            const place = k < (block + 1) * each ? this.stonePlace(k, side) : null;
+            if (place) { run.push(place); continue; }
+            if (run.length >= least) runs.push(run);
+            run = [];
+        }
+        return runs;
+    }
+
+    // Whether the stretches of a block's side have their stones: a share of them, the same on every load
+    static stoneUsed(block, side) {
+        return Scenery.hash(block, side, 80) < Scenery.STONE_RULE.share;
+    }
+
+    // The marker stones of a tile: the stones of every stretch that has them (stoneRuns, stoneUsed) whose place is in
+    // the tile. Each stands in the drawn ground at its own place: its foot is STONE_SINK_M under the ground at its
+    // middle and its root goes on down (STONE_ROOT_M), so no corner hangs over the bank that falls from it; a stone
+    // the ground falls more than footM under, from its middle to a corner, is left out. [{x, y, z, turn, lean}]
     stoneSites(tile) {
         const sites = [];
-        const m = WorldData.TILE_M;
-        for (const [r, row] of (this.stoneRowList || []).entries()) {
-            const first = row.sides[0][0];
-            if (Math.floor(first.x / m) !== tile.tx || Math.floor(first.z / m) !== tile.tz) continue;
-            for (const side of row.sides) {
-                const feet = side.map(q => this.footY(q.x, q.z, null, Scenery.ROADSIDE_STEP_M));
-                if (feet.some(y => y === null)) continue;
-                side.forEach((q, k) => sites.push({
-                    x: q.x, y: feet[k] - Scenery.STONE_SINK_M, z: q.z,
-                    turn: q.heading + (Scenery.hash(r, k, 41) - 0.5) * 0.5, lean: (Scenery.hash(r, k, 42) - 0.5) * 0.1
-                }));
-                break;
+        if (!this.roads) return sites;
+        const m = WorldData.TILE_M, points = this.ground.route.points, block = Scenery.STONE_RULE.blockM;
+        const blocks = new Set(), loc = {}, half = Scenery.STONE_WIDTH_M / 2;
+        for (let i = 0; i + 1 < points.length; i++) {
+            const p = points[i];
+            if (Math.abs(p.x - (tile.tx + 0.5) * m) > m / 2 + p.width + 8 || Math.abs(p.z - (tile.tz + 0.5) * m) > m / 2 + p.width + 8) continue;
+            for (let b = Math.floor(p.s / block); b <= Math.floor(points[i + 1].s / block); b++) blocks.add(b);
+        }
+        for (const b of blocks) {
+            for (const side of [Route.RIGHT, Route.LEFT]) {
+                if (!Scenery.stoneUsed(b, side)) continue;
+                for (const run of this.stoneRuns(b, side)) {
+                    for (const q of run) {
+                        if (Math.floor(q.x / m) !== tile.tx || Math.floor(q.z / m) !== tile.tz) continue;
+                        const turn = q.heading + (Scenery.hash(q.k, q.side, 41) - 0.5) * 0.5;
+                        let low = q.y;
+                        for (const [a, c] of [[-half, -half], [half, -half], [half, half], [-half, half]]) {
+                            const x = q.x + a * Math.cos(turn) + c * Math.sin(turn), z = q.z - a * Math.sin(turn) + c * Math.cos(turn);
+                            if (this.ground.tileHeight(x, z) !== null) low = Math.min(low, this.ground.groundY(x, z, { start: q.index - 4, end: q.index + 4 }, false, loc));
+                        }
+                        if (q.y - low > Scenery.STONE_RULE.footM) continue;
+                        sites.push({ x: q.x, y: q.y - Scenery.STONE_SINK_M, z: q.z, turn, lean: (Scenery.hash(q.k, q.side, 42) - 0.5) * 0.1 });
+                    }
+                }
             }
         }
         return sites;
     }
 
-    // A marker stone: a squared granite post, 0.75 m out of the ground
+    // A marker stone: a squared granite post, 0.75 m out of the ground and STONE_ROOT_M on into it. It has no
+    // underside (in the ground) and no face under its cap: 18 triangles
     static stonePart() {
         if (!Scenery.stone) {
             const out = { positions: [], shades: [] };
             const low = [0.50, 0.49, 0.46], high = [0.66, 0.65, 0.62];
-            RoadMesh.box(out, 0, 0.3, 0, 0.3, 0.6, 0.3, 0, low);
+            // RoadMesh.box lays the top and then the underside last: 18 numbers a face
+            const root = Scenery.STONE_ROOT_M;
+            RoadMesh.box(out, 0, (0.6 - root) / 2, 0, Scenery.STONE_WIDTH_M, 0.6 + root, Scenery.STONE_WIDTH_M, 0, low);
+            out.positions.length -= 36;
+            out.shades.length -= 36;
             RoadMesh.box(out, 0, 0.75, 0, 0.26, 0.3, 0.26, 0, high);
+            out.positions.length -= 18;
+            out.shades.length -= 18;
             Scenery.stone = { geometry: RoadMesh.geometry(out.positions, out.shades), material: new THREE.MeshLambertMaterial({ vertexColors: true }) };
         }
         return Scenery.stone;
