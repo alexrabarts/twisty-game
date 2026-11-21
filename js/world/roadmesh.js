@@ -554,6 +554,8 @@ class RoadMesh {
     // A retaining wall is one piece: two runs of one edge closer than WALL_GAP_M are one run (the rows between them are
     // walled too), and a run shorter than WALL_RUN_M is no wall (its rows take the slope the land gives them)
     static get WALL_GAP_M() { return 12; }
+    // A far ribbon draws a wall no farther than this past the row its run ends on (RoadMesh.section)
+    static get WALL_PAST_M() { return 8; }
     static get WALL_RUN_M() { return 10; }
 
     // The outward direction of each side of a row's edge points
@@ -609,7 +611,8 @@ class RoadMesh {
             const end = sides.map(side => RoadMesh.wallEnd(side, key, foot, guard));
             const row = end.map(e => !!e && !e.blocked);
             // A wall goes on from its last row while the land still asks for one there (a side road's edge that stands
-            // over the land with no slope under it): it ends where the land meets the edge
+            // over the land with no slope under it: it ends where the land meets the edge; the ride's edge over the
+            // strip of a leg below that no bank down from the wall's end clears: round a hairpin's corner)
             for (const step of [1, -1]) {
                 for (let k = step > 0 ? 1 : n - 2; k >= 0 && k < n; k += step) {
                     if (row[k] || !row[k - step]) continue;
@@ -1329,6 +1332,31 @@ class RoadMesh {
         const group = new THREE.Group();
         group.name = 'world-road-section';
         const first = head, last = rows.length - 1 - tail;
+        // A row where a wall's run starts or ends is kept at every level of detail when the far ribbon would draw
+        // the wall more than WALL_PAST_M past it: the land is cut to the wall's line as the plan of all the rows
+        // gives it, and a far ribbon whose kept rows passed over the end drew the wall on to its next row, up to
+        // 16 m past the place the land was cut for
+        if (lod > 0 && plan) {
+            const walled = (key, i) => !!plan.seg[key][i - plan.base];
+            const marked = rows.map((row, i) => (i === first || i === last ? { ...row, keep: true } : row));
+            const kept = new Set(RoadMesh.decimate(marked).map(row => row.i));
+            const past = RoadMesh.WALL_PAST_M;
+            rows = rows.map((row, k) => {
+                for (const key of ['l', 'r']) {
+                    const before = walled(key, row.i - 1), after = walled(key, row.i);
+                    if (before === after) continue;
+                    // The ribbon carries the wall on from its end to the next kept row on the side with no wall
+                    const step = before ? 1 : -1;
+                    let run = 0;
+                    for (let j = k; j >= 0 && j < rows.length; j += step) {
+                        if (j !== k) run += Math.hypot(rows[j].x - rows[j - step].x, rows[j].z - rows[j - step].z);
+                        if (kept.has(rows[j].i)) break;
+                    }
+                    if (run > past) return { ...row, keep: true };
+                }
+                return row;
+            });
+        }
         const ribbon = RoadMesh.ribbon(rows, lod, null, false, [first, last]);
         ribbon.sides.draw = ribbon.draw;
         // The ride's walls stand where the plan of all its rows puts them, at every level of detail

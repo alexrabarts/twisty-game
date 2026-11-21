@@ -29,7 +29,7 @@
 // Returns {faces, measured, runs, buried, climbs, hangs, top, blocks, steps, open}: each a list, worst first, of
 // {s, x, z, ...} (s the metres of ride nearest to it).
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-walls.test.js says what each is)
-export const WALL_LIMITS = { buried: 4, climbs: 25, hangs: 0, top: 1, blocks: 1, steps: 0, open: 15 };
+export const WALL_LIMITS = { buried: 4, climbs: 6, hangs: 0, top: 1, blocks: 1, steps: 0, open: 15 };
 
 export function wallWindow(game, env, store, at, nearM = 350) {
     const { THREE } = game;

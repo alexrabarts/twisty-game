@@ -20,7 +20,7 @@
 // of {s, x, z, ...} (s the metres of ride nearest), and `km` the offenders counted by kilometre of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 179, setback: 354, bare: 0, ends: 0, overhangs: 69 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 64 };
 export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40 };
 
 export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40 }) {

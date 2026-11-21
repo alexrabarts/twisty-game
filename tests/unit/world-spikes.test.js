@@ -16,16 +16,26 @@
 // as they are wide, the spikes at km 7.8. And the land a wall levelled closed to the wall's top over its last 6 m
 // whatever its height: a tent against the stone.
 //
+// At 7bcc7cb 179 still stood beside the road and 69 overhangs. A wall's line took the first crossing of a triangle,
+// and at a hairpin that was its own run on past its start, which closes nothing: the triangle its later course stands
+// in was left whole, a ramp of land through the stone (the sand pyramid at the wall's end at km 7.9). And a wall
+// ended over the strip of the leg below, where no bank down from its end could stand. Now a wall's line cuts every
+// triangle its wall stands in, a wall goes on while a strip in front lies under the bank from its end
+// (WorldEnvironment.edgeFoot `stepped`), the land at a wall's foot rises along the wall as a bank (`cap`), and a far
+// ribbon ends its walls within 8 m of the rows the land is cut for.
+//
 // What still stands on the Tremola slice, held so it can only shrink:
-//   - 179 beside the road: 95 are whole cells with nodes of the strips of two legs of a road at two heights (the
-//     importer's own, which only a wall can hold: the bank between two legs at a hairpin's corner, 9 m in 8), 80 are
-//     parts of a triangle a wall cuts (where a wall ends over the strip of the leg below, the land in front cannot
-//     rise to its end as a bank, and it still closes over the wall's last 6 m; and side roads' walls), 4 are free land
+//   - 127 beside the road: 64 are whole cells of strip nodes (road, bench or drop: the importer's own). Most are a
+//     step between two legs that stands more than CUT_REACH_M from the upper road's edge, where no wall of that road
+//     reaches it; 23 are whole cells with free land in them; 40 are parts of a triangle a wall cuts (the land
+//     closing to a wall's top over its last 6 m, and side roads' walls)
 //   - 354 set back: 269 of free land, most the fall of the land under a road's fill where the importer's earthwork
 //     ends on the downhill side (left as it is: a road's fill is not undercut, LAY_HOLD), the rest a hillside
 //     steeper than the lay-back's slope for more than its reach; 85 with a node of a road's strip
-//   - 69 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
-//     slopes whose side stands over land that falls away beside them
+//   - 64 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
+//     slopes whose side stands over land that falls away beside them. A wall's end stands up to 2 m over the land
+//     beside it (the land between the nodes round the end lies under its top), and the slope laid on past the end
+//     has its side open there
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
@@ -121,6 +131,13 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
         if (there.length) throw new Error(`${there.length} stretched land triangles in the wedge at km 7.8:\n${list(there)}`);
     });
 
+    test('no land stands up at the end of the upper wall at the hairpin at km 7.9', () => {
+        // Where the wall of the leg above ended over the outside of the hairpin below: a whole triangle from the
+        // upper road's edge down to the lower road's bench (9 m in 8), under the wall's own line
+        const there = report.stretched.filter(o => Math.hypot(o.x + 1115, o.z - 9777) < 14);
+        if (there.length) throw new Error(`${there.length} stretched land triangles at the wall's end at km 7.9:\n${list(there)}`);
+    });
+
     test('no face of land closes a step with no stone in front of it, and every wall end is closed', () => {
         if (report.bare.length > SPIKE_LIMITS.bare) throw new Error(`${report.bare.length} bare closing faces:\n${list(report.bare)}`);
         if (report.ends.length > SPIKE_LIMITS.ends) throw new Error(`${report.ends.length} wall ends open, hanging or with an open flank:\n${list(report.ends)}`);
@@ -147,8 +164,8 @@ describe('the synthetic world: the same check', () => {
     // Its land is a made hillside steeper than the lay-back's slope from end to end: what is left is that hillside
     // (before: 283 beside, 2174 set back, 10 bare, 110 overhangs)
     test('what is left of its steep hillside can only shrink', () => {
-        expect(report.beside.length).toBeLessThanOrEqual(266);
+        expect(report.beside.length).toBeLessThanOrEqual(265);
         expect(report.setback.length).toBeLessThanOrEqual(2188);
-        expect(report.overhangs.length).toBeLessThanOrEqual(17);
+        expect(report.overhangs.length).toBeLessThanOrEqual(16);
     });
 });

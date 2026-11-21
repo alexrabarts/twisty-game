@@ -73,6 +73,8 @@ class WorldEnvironment {
     static get MEET_M() { return 0.25; }
     // The land lying this far under a slope at the batter at the end of its run asks for a wall instead
     static get WALL_OVER_M() { return 1.5; }
+    // A lower road's strip stands this far under a bank down from an edge point before a wall holds the step (edgeFoot `stepped`)
+    static get STEP_OVER_M() { return 1; }
     // A side road's wall, once begun, goes on while the land lies this far under its edge: it ends in the ground
     static get WALL_END_M() { return 0.5; }
     // The place in the build queue of what is built again once the rest has arrived (WorldStreamer.enqueue's distance)
@@ -884,7 +886,29 @@ class WorldEnvironment {
             for (const o of [0.5, 2, 4]) this.carriageways.each(x + ox * o, z + oz * o, 0, r => { if (r.depth >= 0 && Math.abs(r.y - y) < WorldEnvironment.DECK_UNDER_M) mouth = true; }, true);
             return mouth;
         };
-        // `on`: asked of a row beside a wall's end, where a side road's wall goes on until the land meets its edge
+        // Whether a road's strip (the nodes the importer carved for a road, which the lay-back never moves) lies in
+        // front of the edge point lower than a bank at TerrainMesh.CUT_BANK down from it: another leg at a hairpin's
+        // corner, too close under this one for land to stand between the two. A wall ends in the bank the land is
+        // cut to at its end (TerrainMesh.cuts `cone`, the same slope), so one that ended here ended over the lower
+        // strip, and the land in front closed to its top as a tent. Read from the nodes' own heights
+        const stepped = (x, y, z, ox, oz) => {
+            const c = WorldData.CELL_M, last = n - 1, reach = TerrainMesh.CUT_REACH_M, span = Math.ceil(reach / c), zones = WorldData.ZONE;
+            for (let gj = Math.round(z / c) - span; gj <= Math.round(z / c) + span; gj++) {
+                for (let gi = Math.round(x / c) - span; gi <= Math.round(x / c) + span; gi++) {
+                    const dx = gi * c - x, dz = gj * c - z, d = Math.hypot(dx, dz);
+                    if (dx * ox + dz * oz < 0.3 || d > reach) continue;
+                    const tx = Math.floor(gi / last), tz = Math.floor(gj / last);
+                    const tile = this.data.tile(`${tx},${tz}`);
+                    if (!tile) continue;
+                    const at = (gj - tz * last) * n + gi - tx * last, zone = tile.zones[at];
+                    if (zone !== zones.road && zone !== zones.bench && zone !== zones.drop) continue;
+                    if (y - tile.heights[at] > TerrainMesh.CUT_BANK * d + WorldEnvironment.STEP_OVER_M) return true;
+                }
+            }
+            return false;
+        };
+        // `on`: asked of a row beside a wall's end, where a side road's wall goes on until the land meets its edge, and
+        // the ride's until a bank down from its end clears the strip of the leg below (`stepped`)
         const wall = (x, y, z, ox, oz, on = false) => {
             // Over a lower road's band (stacked hairpin legs whose verges meet): the retaining wall stands down to that
             // road, as the real ones do. Never a deck: a road over a road off a bridge is not a structure the map has
@@ -927,6 +951,10 @@ class WorldEnvironment {
                 if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
                 if (lowerRoad(x + ox * o, z + oz * o, y) !== null) return { y: wallFoot(x, z, ox, oz, y, low) };
             }
+            // A wall goes on over a lower road's strip that no bank reaches: stone holds the step, round a hairpin's
+            // corner too. (Only on from a wall that stands: asked of every row, it built walls on open banks that
+            // stood well, and the land they levelled in front was a pit)
+            if (on && stepped(x, y, z, ox, oz)) return { y: wallFoot(x, z, ox, oz, y, low) };
             return null;
         };
         // `walled`: true where the road's wall plan put a wall (RoadMesh.wallPlan), false where it put none (the land

@@ -427,6 +427,9 @@ class TerrainMesh {
             const pad = 5 * c;
             if (x1 < baseX - pad || z1 < baseZ - pad || x0 > baseX + WorldData.TILE_M + pad || z0 > baseZ + WorldData.TILE_M + pad) continue;
             line.box = [x0, z0, x1, z1];
+            // Metres along the line at each of its points (cutTriangle gives each cut vertex its own, `u`)
+            line.along = [0];
+            for (let k = 1; k < line.length; k++) line.along.push(line.along[k - 1] + Math.hypot(line[k].x - line[k - 1].x, line[k].z - line[k - 1].z));
             lines.push(line);
         }
         if (!lines.length) return none();
@@ -557,9 +560,14 @@ class TerrainMesh {
             return weight ? sum / weight : null;
         };
         // The cells each line passes, and each of their two triangles cut by the part of the line inside it
+        // (and the cells up to G past the tile's edges, cut only to be read: the land at a wall's foot there bounds
+        // the land at its foot here, and two tiles bound the edge they share alike)
+        const G = W - 1, wide = cells + 2 * G;
+        const nodeNow = ([i, j]) => (low.has(slot(i, j)) ? low.get(slot(i, j)) : heightOf(i, j));
         for (const line of lines) {
             const seen = new Set();
             const ahead = frontAt(line);
+            const foot = [];
             for (let k = 0; k + 1 < line.length; k++) {
                 const a = line[k], b = line[k + 1];
                 if (a.tau >= 1 && b.tau >= 1) continue;
@@ -569,19 +577,38 @@ class TerrainMesh {
                     const ca = Math.floor((x - baseX) / c), cb = Math.floor((z - baseZ) / c);
                     for (let db = -1; db <= 1; db++) for (let da = -1; da <= 1; da++) {
                         const ia = ca + da, ib = cb + db;
-                        if (ia < 0 || ib < 0 || ia >= cells || ib >= cells) continue;
+                        if (ia < -G || ib < -G || ia >= cells + G || ib >= cells + G) continue;
+                        const inside = ia >= 0 && ib >= 0 && ia < cells && ib < cells;
                         for (let which = 0; which < 2; which++) {
+                            const mark = ((ib + G) * wide + ia + G) * 2 + which;
+                            if (seen.has(mark)) continue;
+                            seen.add(mark);
                             const id = (ib * cells + ia) * 2 + which;
-                            if (seen.has(id)) continue;
-                            seen.add(id);
-                            if (out.has(id)) continue;
+                            if (inside && out.has(id)) continue;
                             const nodes = which === 0 ? [[ia, ib], [ia, ib + 1], [ia + 1, ib]] : [[ia + 1, ib], [ia, ib + 1], [ia + 1, ib + 1]];
                             const record = TerrainMesh.cutTriangle(nodes.map(([i, j]) => [baseX + i * c, baseZ + j * c]), line, ahead);
-                            if (record) { record.nodes = nodes; out.set(id, record); }
+                            if (!record) continue;
+                            record.nodes = nodes;
+                            if (inside) out.set(id, record);
+                            for (const v of [record.chain[0], record.chain[record.chain.length - 1]]) {
+                                if (v.tau >= 1) continue;
+                                const y = v.fn >= 0 ? nodeNow(nodes[v.fn]) : v.f;
+                                // (`least`: a bank down from the node in front on its own edge to the wall)
+                                if (y !== null) foot.push({ v, u: v.u, y, least: y - v.lift });
+                            }
                         }
                     }
                 }
             }
+            // The land at a wall's foot rises along the wall no steeper than a bank (CUT_BANK). A vertex on the wall's
+            // line takes the height of the node in front on its own edge, and where the line passes close by a node
+            // behind it, two vertices a metre apart took the heights of two nodes 8 m apart: a tooth of land against
+            // the stone. Lowered only, and no lower than a bank down from its own node to the wall
+            foot.sort((p, r) => p.u - r.u);
+            const bank = TerrainMesh.CUT_BANK;
+            for (let k = 1; k < foot.length; k++) foot[k].y = Math.min(foot[k].y, foot[k - 1].y + bank * (foot[k].u - foot[k - 1].u));
+            for (let k = foot.length - 2; k >= 0; k--) foot[k].y = Math.min(foot[k].y, foot[k + 1].y + bank * (foot[k + 1].u - foot[k].u));
+            for (const p of foot) p.v.cap = Math.max(p.y, p.least);
         }
         if (!out.size && !lowered.size) return null;
         out.lowered = lowered;
@@ -611,15 +638,21 @@ class TerrainMesh {
                 if (part.length) return null;
                 continue;
             }
-            const at = t => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, nx: a.nx + (b.nx - a.nx) * t, nz: a.nz + (b.nz - a.nz) * t, tau: a.tau + (b.tau - a.tau) * t });
+            const at = t => ({ x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t, nx: a.nx + (b.nx - a.nx) * t, nz: a.nz + (b.nz - a.nz) * t, tau: a.tau + (b.tau - a.tau) * t, u: line.along ? line.along[k] + (line.along[k + 1] - line.along[k]) * t : 0 });
             if (!part.length) {
-                // The line starts inside the triangle only at its own first point, which lies far past the wall
-                if (e0 < 0) return null;
+                // The line starts inside the triangle only at its own first point, which lies far past the wall: no
+                // cut of that, and the line is read on
+                if (e0 < 0) continue;
                 entry = e0;
                 part.push(at(t0));
             }
             part.push(at(t1));
-            if (e1 >= 0) exit = e1;
+            if (e1 < 0) continue;
+            // A crossing that closes nothing (the line's run on past a wall's end) is no cut, and the line is read
+            // on: at a hairpin a wall's own line past its start crosses the triangles its later course stands in,
+            // and those were left whole, a ramp of land through the stone
+            if (part.every(p => p.tau >= 1 - 1e-6)) { part.length = 0; entry = -1; continue; }
+            exit = e1;
         }
         if (entry < 0 || exit < 0) return null;
         if (part.every(p => p.tau >= 1 - 1e-6)) return null;
@@ -636,7 +669,7 @@ class TerrainMesh {
         // (`cone`: the bank down from the wall's ends, which the land in front on the wall's line stands no lower
         // than; `lift`: the most it stands over the land in front of it for that, a bank from there to the wall)
         const coneAt = (x, z) => (line.ends ? Math.max(...line.ends.map(e => e.y - TerrainMesh.CUT_BANK * Math.hypot(x - e.x, z - e.z))) : -Infinity);
-        const chain = part.map(p => ({ x: p.x, z: p.z, node: -1, w: bary(p.x, p.z), tau: Math.min(1, Math.max(0, p.tau)), fn: -1, mix: null, f: null, nx: p.nx, nz: p.nz, cone: coneAt(p.x, p.z), lift: TerrainMesh.CUT_BANK * WorldData.CELL_M / 2 }));
+        const chain = part.map(p => ({ x: p.x, z: p.z, node: -1, w: bary(p.x, p.z), tau: Math.min(1, Math.max(0, p.tau)), fn: -1, mix: null, f: null, u: p.u, cap: Infinity, nx: p.nx, nz: p.nz, cone: coneAt(p.x, p.z), lift: TerrainMesh.CUT_BANK * WorldData.CELL_M / 2 }));
         // Where along the triangle's outline a point of edge e lies: e + its share of the edge
         const along = (e, p) => { const a = tri[e], b = tri[(e + 1) % 3]; return e + Math.hypot(p.x - a[0], p.z - a[1]) / Math.hypot(b[0] - a[0], b[1] - a[1]); };
         const pe = along(entry, part[0]), px = along(exit, part[part.length - 1]);
@@ -668,7 +701,9 @@ class TerrainMesh {
             if (inFront.has(a) !== inFront.has(b)) { v.fn = inFront.has(a) ? a : b; v.lift = TerrainMesh.CUT_BANK * Math.hypot(v.x - tri[v.fn][0], v.z - tri[v.fn][1]); }
             else v.f = frontAt(v.x, v.z);
         });
-        inner.forEach((v, k) => { v.mix = { a: first, b: last, t: run[k + 1] / length }; });
+        // (a vertex between the two ends rises with the bank as far as they do, by its place between them: with a
+        // lift of its own, it stood a step under the end beside it)
+        inner.forEach((v, k) => { v.mix = { a: first, b: last, t: run[k + 1] / length }; v.lift = first.lift + (last.lift - first.lift) * v.mix.t; });
         for (const v of [first, last]) if (v.fn < 0 && v.f === null) v.tau = 1;
         const shape = poly => {
             const verts = [];
@@ -717,14 +752,15 @@ class TerrainMesh {
         return which === 0 ? h00 + u * (h10 - h00) + v * (h01 - h00) : h11 + (1 - u) * (h01 - h11) + (1 - v) * (h10 - h11);
     }
 
-    // Where the land in front stands at a vertex on a cut, the three nodes at `nodeH`; null where it is not known
+    // Where the land in front stands at a vertex on a cut, the three nodes at `nodeH`; null where it is not known.
+    // No higher than the bank along the wall's foot allows (`cap`, TerrainMesh.cuts)
     static cutFrontY(vertex, nodeH, sink) {
-        if (vertex.fn >= 0) return nodeH[vertex.fn];
+        if (vertex.fn >= 0) return Math.min(nodeH[vertex.fn], vertex.cap - sink);
         if (vertex.mix) {
             const a = TerrainMesh.cutFrontY(vertex.mix.a, nodeH, sink), b = TerrainMesh.cutFrontY(vertex.mix.b, nodeH, sink);
             return a === null ? b : b === null ? a : a + (b - a) * vertex.mix.t;
         }
-        return vertex.f === null ? null : vertex.f - sink;
+        return vertex.f === null ? null : Math.min(vertex.f, vertex.cap) - sink;
     }
 
     // The height a tile's mesh (TerrainMesh.build) draws its land at over (x, z), on its own triangles: the nodes' two
