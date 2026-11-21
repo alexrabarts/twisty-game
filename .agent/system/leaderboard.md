@@ -26,6 +26,12 @@ The plan for long legs disagrees with itself here: its run-flow section speaks o
 
 `LeaderboardService.startRun(boardId, { protocol, gates })`: the client keeps the session only when the server states the same protocol and gate count. A reply without the fields counts as protocol 1 with 5 gates. On a mismatch (old server, table that disagrees, leg that built another gate count) `unsupported` is set, nothing is sent, no name form shows, and the finish card says the time is saved on this device.
 
+## Player names
+
+- The server owns the limit: `startRun` replies `nameMax: 5` on every board (`NAME_MAX` in `functions/lib/handlers.js`). `submitRun` trims, NFC-normalises, requires 1 to `NAME_MAX` characters, rejects control and format characters (`\p{C}`), and stores the name uppercased. The old 4-character rows stay valid.
+- `LeaderboardService.nameRule()` is the one client rule: `{ min: 1, max: nameMax }` when the reply stated an integer `nameMax` from 1 to 16, else `{ min: 4, max: 4 }` (a server that predates the change still rejects anything but 4). `submitRun` and the name form in `main.js` (`showLeaderboardEntryUI`: `maxLength`, placeholder, subtitle) both read it. `nameMax` is forgotten with the session.
+- The `protocol` field does not gate the name rule: a protocol 2 server can still demand exactly 4. Only `nameMax` does.
+
 ## Server
 
 - `functions/lib/boards.js`: the rules of a board from the table. `functions/lib/handlers.js`: the four handlers with the database, clock and error class injected, so they run without Firebase. `functions/index.js` only wires them.
@@ -36,4 +42,4 @@ The plan for long legs disagrees with itself here: its run-flow section speaks o
 ## Tests and probes
 
 - `tests/unit/functions-rules.test.js`, `tests/unit/leaderboard.test.js`, `tests/unit/board-contract.test.js`, `tests/unit/restart.test.js`, `tests/integration/leaderboard-flow.test.js`. None needs Firebase.
-- `node tools/terrain-check.mjs submit --legs <leg>` finishes a leg in the real page against a server it answers itself (nothing leaves the machine). `--reply new` adds `protocol` and `gates` for a board in the table; `--mutate ready-always` makes the handshake pass whatever the reply says, and must make the probe fail on a converted leg against an old reply.
+- `node tools/terrain-check.mjs submit --legs <leg>` finishes a leg in the real page against a server it answers itself (nothing leaves the machine). `--reply new` adds `protocol` and `gates` for a board in the table; `--reply names` adds `nameMax: 5` too; `--name <text>` is the name typed (default `TEST`) and the probe checks the form's `maxLength`, placeholder, subtitle and clipping against the rule; `--mutate names-always` forces a 1 to 5 rule on the client and must fail the probe against a reply without `nameMax`; `--mutate ready-always` makes the handshake pass whatever the reply says, and must make the probe fail on a converted leg against an old reply.

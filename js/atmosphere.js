@@ -18,6 +18,9 @@
 // A blend zone is this many segments (300 m) wide, centred on a part boundary
 const ATMOSPHERE_BLEND_SEGMENTS = 15;
 
+// Metres in one unit of a world's track
+const WORLD_ATMOSPHERE_UNIT = 100;
+
 const ATMOSPHERE_LOOK_DEFAULTS = {
     timeOfDay: 'golden',
     fogDensity: 0.0018,
@@ -72,19 +75,16 @@ class AtmosphereTrack {
         };
     }
 
-    // The lowest road height in [start, end], the base of the height fog
-    static lowestRoadHeight(roadPath, start, end) {
-        const last = Math.min(end, roadPath.length - 1);
-        let lowest = Infinity;
-        for (let i = start; i <= last; i++) lowest = Math.min(lowest, roadPath[i].y || 0);
-        return Number.isFinite(lowest) ? lowest : 0;
+    // The lowest road height over route units [start, end], the base of the height fog
+    static lowestRoadHeight(route, start, end) {
+        return route.heightRange(route.fromUnits(start), route.fromUnits(end)).min;
     }
 
     // `leg` is a tours.js entry, `config` its Terrain.legConfig, `environment`
-    // the built Environment (its road path gives the part base heights).
+    // the built Environment (its route gives the part base heights).
     // A converted leg carries `config.parts`; any other leg is one part.
     static forLeg(leg, config, environment) {
-        const path = environment.roadPath;
+        const route = environment.route;
         const render = config.render || {};
         if (config.parts) {
             // A course part spans [from, to) in the leg's own numbering; a track part spans [start, end]
@@ -97,7 +97,7 @@ class AtmosphereTrack {
                     weather: part.weather,
                     weatherIntensity: part.weatherIntensity,
                     fogDensity: config.look.fogDensity,
-                    baseY: AtmosphereTrack.lowestRoadHeight(path, spans[n].start, spans[n].end),
+                    baseY: AtmosphereTrack.lowestRoadHeight(route, spans[n].start, spans[n].end),
                     shadowSpan: render.shadowSpan,
                     ...part.look
                 }
@@ -115,10 +115,35 @@ class AtmosphereTrack {
                 heightFog: atmosphere.heightFog || null,
                 shafts: atmosphere.shafts || 0,
                 ring: render.ringRise ? [render.ringRise[0], render.ringRise[1]] : render.ring !== undefined ? render.ring : 1,
-                baseY: AtmosphereTrack.lowestRoadHeight(path, leg.startSegment, leg.endSegment),
+                baseY: AtmosphereTrack.lowestRoadHeight(route, leg.startSegment, leg.endSegment),
                 shadowSpan: render.shadowSpan
             }
         }]);
+    }
+
+    // Metres in one unit of a world's track
+    static get WORLD_UNIT_M() { return WORLD_ATMOSPHERE_UNIT; }
+
+    // One track for the whole ride of a world, in units of WORLD_ATMOSPHERE_UNIT metres, so a blend zone
+    // is 1.5 km of road. Each stage takes the parts of `looks[stage.id]` (or `looks.default`); a part
+    // spans `from` to `to`, shares of the stage's length. A part's baseY is the lowest road under it.
+    static forWorld(stages, route, looks) {
+        const unit = WORLD_ATMOSPHERE_UNIT;
+        const parts = [];
+        stages.forEach((stage) => {
+            const spec = looks[stage.id] || looks.default;
+            const length = stage.to - stage.from;
+            spec.forEach((part) => {
+                const s0 = stage.from + part.from * length;
+                const s1 = stage.from + part.to * length;
+                parts.push({
+                    startSegment: s0 / unit,
+                    endSegment: s1 / unit,
+                    look: { baseY: route.heightRange(s0, s1).min, ...part.look }
+                });
+            });
+        });
+        return AtmosphereTrack.build(parts);
     }
 
     // A one-part track from a literal look (the rider showcase)
@@ -170,6 +195,16 @@ class AtmosphereTrack {
         return Math.min(partA.endSegment, first);
     }
 
+    // The part boundaries strictly inside units (u0, u1) where the look changes its weather or its time of day:
+    // [{ at, from, to }], each look named `time/weather`. A world stage holds at least one (WorldLooks)
+    changesWithin(u0, u1) {
+        const name = look => `${look.timeOfDay}/${look.weather}`;
+        return this.boundaries
+            .map((at, i) => ({ at, a: this.parts[i].look, b: this.parts[i + 1].look }))
+            .filter(({ at, a, b }) => at > u0 && at < u1 && (a.weather !== b.weather || a.timeOfDay !== b.timeOfDay))
+            .map(({ at, a, b }) => ({ at, from: name(a), to: name(b) }));
+    }
+
     // Every non-clear weather in the track, in first-seen order: what the weather system prepares
     weatherTypes() {
         const seen = [];
@@ -184,6 +219,16 @@ class AtmosphereTrack {
     // t is exactly 0 and a === b. u is the progress through the nearer part;
     // ua and ub are the progress through each of the two. `out` is reused when given.
     sample(segment, out = {}) {
+        // The atmosphere's one way in: a non-finite segment (a NaN progress) reads the last finite one, logged once,
+        // so a fault upstream never reaches the fog, the sky or the lights
+        if (!Number.isFinite(segment)) {
+            if (!this.nonFiniteLogged) {
+                this.nonFiniteLogged = true;
+                console.error('AtmosphereTrack.sample: non-finite segment', segment, 'held at', this.lastSegment ?? 0);
+            }
+            segment = this.lastSegment ?? 0;
+        }
+        this.lastSegment = segment;
         const { parts, boundaries, half } = this;
         let index = 0;
         let t = 0;

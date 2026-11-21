@@ -1,5 +1,7 @@
 class TourSystem {
-    constructor() {
+    // `unlockAll` (debug mode, Game.debugEnabled): every leg and every rider is open, and nothing is saved as unlocked
+    constructor({ unlockAll = false } = {}) {
+        this.unlockAll = unlockAll;
         this.legs = [
             // Leg 1: Easy warm-up (70 segments = 1400m)
             {
@@ -104,7 +106,7 @@ class TourSystem {
 
         // Progression: legs unlock sequentially; riders unlock at completion
         // milestones. Everyone starts on Tim's scooter and works up.
-        this.characterUnlocks = { tim: 0, shane: 2, alex: 4, steve: 6 };
+        this.characterUnlocks = { tim: 0, shane: 2, lucy: 3, guy: 4, alex: 5, steve: 6 };
         let savedProgress = {};
         try {
             savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');
@@ -121,6 +123,119 @@ class TourSystem {
              CHARACTERS.some(c => c.id === savedCharacter) &&
              this.isCharacterUnlocked(savedCharacter))
                 ? savedCharacter : 'tim';
+        // Each rider's chosen bike, by character id (the rider select's
+        // picker); a rider with none saved rides their first
+        this.selectedBikes = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('twistyBikes') || '{}');
+            if (saved && typeof saved === 'object') this.selectedBikes = saved;
+        } catch (e) {
+            console.warn('TourSystem: the saved bike choices could not be read; every rider starts on their first bike:', e);
+        }
+        // How many of each rider's bikes are open, by character id (a rider with none saved has their first only):
+        // a rider's bikes open one by one, least powerful first (TourSystem.markRideFinished)
+        this.bikeUnlocks = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('twistyBikeUnlocks') || '{}');
+            if (saved && typeof saved === 'object') this.bikeUnlocks = saved;
+        } catch (e) {
+            console.warn('TourSystem: the saved bike unlocks could not be read; every rider starts with their first bike:', e);
+        }
+        // Each rider's chosen outfit, by character id; a rider with none
+        // saved wears their first
+        this.selectedOutfits = {};
+        try {
+            const saved = JSON.parse(localStorage.getItem('twistyOutfits') || '{}');
+            if (saved && typeof saved === 'object') this.selectedOutfits = saved;
+        } catch (e) {
+            console.warn('TourSystem: the saved outfit choices could not be read; every rider starts in their first outfit:', e);
+        }
+    }
+
+    // The bikes of a rider that are open, least powerful first: the first, and one more for each ride finished on
+    // the best open one (markRideFinished). Debug mode opens them all. A rider's own bikes only: swapping bikes
+    // between riders is not here
+    openBikes(characterId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || !Array.isArray(character.bikes)) return [];
+        if (this.unlockAll) return character.bikes.slice();
+        const open = Math.floor(Number(this.bikeUnlocks[characterId])) || 1;
+        return character.bikes.slice(0, Math.max(1, Math.min(character.bikes.length, open)));
+    }
+
+    isBikeUnlocked(characterId, bikeId) {
+        return this.openBikes(characterId).includes(bikeId);
+    }
+
+    // A ride finished by this rider on this bike. On the best bike the rider has open, it opens the next one:
+    // returns that bike ({ id, title, paint }) for the finish screen, or null. Debug mode saves nothing
+    markRideFinished(characterId, bikeId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || this.unlockAll) return null;
+        const open = this.openBikes(characterId);
+        if (open.length >= character.bikes.length || open[open.length - 1] !== bikeId) return null;
+        this.bikeUnlocks[characterId] = open.length + 1;
+        try {
+            localStorage.setItem('twistyBikeUnlocks', JSON.stringify(this.bikeUnlocks));
+        } catch (e) {
+            console.warn('TourSystem: the bike unlock could not be saved:', e);
+        }
+        const id = character.bikes[open.length];
+        const model = typeof BIKE_MODELS !== 'undefined' ? BIKE_MODELS[id] : null;
+        return { id, title: TourSystem.bikeTitle(id), paint: model ? model.paint : parseInt(character.bikeColor), rider: character.name };
+    }
+
+    // The bike a rider rides: the one chosen for them if they have it open, else their first
+    getSelectedBike(characterId) {
+        if (typeof CHARACTERS === 'undefined') return null;
+        const character = CHARACTERS.find(c => c.id === characterId);
+        if (!character || !Array.isArray(character.bikes) || !character.bikes.length) return null;
+        const chosen = this.selectedBikes[characterId];
+        return this.isBikeUnlocked(characterId, chosen) ? chosen : character.bikes[0];
+    }
+
+    // Chooses a bike for a rider and remembers it
+    selectBike(characterId, bikeId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || !this.isBikeUnlocked(characterId, bikeId)) return;
+        this.selectedBikes[characterId] = bikeId;
+        try {
+            localStorage.setItem('twistyBikes', JSON.stringify(this.selectedBikes));
+        } catch (e) {
+            console.warn('TourSystem: the bike choice could not be saved:', e);
+        }
+    }
+
+    // The outfit a rider wears, by id: the one chosen for them if they have it, else their first
+    getSelectedOutfit(characterId) {
+        if (typeof CHARACTERS === 'undefined') return null;
+        const character = CHARACTERS.find(c => c.id === characterId);
+        if (!character || !Array.isArray(character.outfits) || !character.outfits.length) return null;
+        const chosen = this.selectedOutfits[characterId];
+        return character.outfits.some(outfit => outfit.id === chosen) ? chosen : character.outfits[0].id;
+    }
+
+    // Chooses an outfit for a rider and remembers it
+    selectOutfit(characterId, outfitId) {
+        const character = typeof CHARACTERS !== 'undefined' ? CHARACTERS.find(c => c.id === characterId) : null;
+        if (!character || !Array.isArray(character.outfits) || !character.outfits.some(outfit => outfit.id === outfitId)) return;
+        this.selectedOutfits[characterId] = outfitId;
+        try {
+            localStorage.setItem('twistyOutfits', JSON.stringify(this.selectedOutfits));
+        } catch (e) {
+            console.warn('TourSystem: the outfit choice could not be saved:', e);
+        }
+    }
+
+    // The rider select's text for a bike: its descriptive name and year
+    static bikeTitle(bikeId) {
+        const bike = typeof BIKE_MODELS !== 'undefined' ? BIKE_MODELS[bikeId] : null;
+        return bike ? `${bike.name} (${bike.year})` : bikeId;
+    }
+
+    // The rider select's stars for a character on a bike, 1 to 5 a bar: the bike's part and the rider's (Vehicle.statsOf)
+    static statsOf(character, bikeId) {
+        return Vehicle.statsOf(character, bikeId);
     }
 
     // The id the leaderboard and the local best time are keyed by. A leg whose
@@ -157,14 +272,14 @@ class TourSystem {
     }
 
     isLegUnlocked(index) {
-        if (index <= 0) return true;
+        if (index <= 0 || this.unlockAll) return true;
         return this.isLegCompleted(this.legs[index - 1].id);
     }
 
     isCharacterUnlocked(characterId) {
         const required = this.characterUnlocks[characterId];
         if (required === undefined) return false;
-        return this.completedLegs.length >= required;
+        return this.unlockAll || this.completedLegs.length >= required;
     }
 
     // Records a completed leg; returns what it newly unlocked so the finish
@@ -251,6 +366,7 @@ class TourSystem {
                         <div style="color: #cc8833; margin-top: 6px; font-size: 10px;">
                             🔒 Complete ${required} leg${required === 1 ? '' : 's'} to unlock
                         </div>`;
+                    const stats = TourSystem.statsOf(c, this.getSelectedBike(c.id));
                     return `
                     <div class="rider-card ${c.id === this.selectedCharacterId ? 'selected' : ''} ${unlocked ? '' : 'locked'}" data-character-id="${c.id}" style="
                         background: rgba(10, 16, 32, 0.85);
@@ -269,10 +385,10 @@ class TourSystem {
                             <span style="color: white; font-weight: bold; font-size: 14px;">${unlocked ? '' : '🔒 '}${c.name}</span>
                         </div>
                         <div style="color: #8899bb; margin-bottom: 6px;">${c.bikeLabel}</div>
-                        <div>Speed&nbsp;&nbsp;&nbsp; ${statBar(c.stats.speed)}</div>
-                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.accel)}</div>
-                        <div>Handling ${statBar(c.stats.handling)}</div>
-                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(c.stats.jump)}</div>
+                        <div>Speed&nbsp;&nbsp;&nbsp; ${statBar(stats.speed)}</div>
+                        <div>Accel&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(stats.accel)}</div>
+                        <div>Handling ${statBar(stats.handling)}</div>
+                        <div>Jump&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${statBar(stats.jump)}</div>
                         ${lockHint}
                     </div>`;
                 }).join('')}
@@ -325,28 +441,31 @@ class TourSystem {
         return currentIndex === this.legs.length - 1;
     }
 
-    getStartingPosition(roadPath) {
+    getStartingPosition(route) {
         if (!this.currentLeg) {
             console.warn('No leg selected, using default start position');
-            return roadPath[0];
+            return route.sample(0);
         }
 
         // Spawn at the start line (5 segments into the leg) so the abrupt
         // edge where the rendered road begins is behind the camera
-        const startSegment = Math.min(this.currentLeg.startSegment + 5, roadPath.length - 1);
-        return roadPath[startSegment];
+        const startSegment = Math.min(this.currentLeg.startSegment + 5, route.unitCount - 1);
+        return route.sample(route.fromUnits(startSegment));
     }
 
     createLegSelector(container, onLegSelected) {
         // Rebuildable: lock states change as the player progresses
         this.onLegSelected = onLegSelected || this.onLegSelected;
         const existing = document.querySelector('.tour-selector-overlay');
-        if (existing) existing.remove();
-        if (this.keyboardHandler) {
-            document.removeEventListener('keydown', this.keyboardHandler);
+        if (existing) {
+            Modals.close(existing);
+            existing.remove();
         }
 
         const icon = name => (typeof UiIcons !== 'undefined' ? UiIcons.svg(name) : '');
+        // With a world to ride (Game.openRide sets onWorldSelected), the rider's primary button rides it and Classic
+        // legs goes to the leg screen; without one the rider goes on to the leg screen as before
+        const world = typeof this.onWorldSelected === 'function';
         const selectorHTML = `
             <div class="tour-selector-overlay showcase-mode">
                 <div class="tour-selector-panel showcase-panel">
@@ -361,8 +480,10 @@ class TourSystem {
                             <div class="showcase-info" id="riderInfoCard"></div>
                             <button class="carousel-arrow" id="riderNextBtn">›</button>
                         </div>
+                        <div class="showcase-mode" id="riderModeRow"></div>
                         <div class="showcase-actions">
-                            <button id="riderContinueBtn" class="showcase-continue">CONTINUE →</button>
+                            <button id="riderContinueBtn" class="showcase-continue">${world ? 'RIDE →' : 'CONTINUE →'}</button>
+                            ${world ? '<button id="riderClassicBtn" class="showcase-secondary">CLASSIC LEGS</button>' : ''}
                         </div>
                     </div>
 
@@ -370,7 +491,7 @@ class TourSystem {
                     <div class="track-select-screen" style="display: none;">
                         <div class="showcase-label">
                             <button id="backToRidersBtn" class="carousel-back">← RIDER</button>
-                            <span>CHOOSE YOUR LEG</span>
+                            <span>${world ? 'CHOOSE A CLASSIC LEG' : 'CHOOSE YOUR LEG'}</span>
                         </div>
                         <div class="showcase-spacer"></div>
                         <div class="showcase-controls">
@@ -389,6 +510,22 @@ class TourSystem {
 
         container.insertAdjacentHTML('beforeend', selectorHTML);
         document.body.classList.add('in-menu');
+        // The data credit of the real-map world lives in a Credits panel, not on screen (js/world/credits.js)
+        if (typeof WorldCredits !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(WorldCredits.button('showcase-secondary'));
+
+        // The rider mode (js/ridermodes.js): free on the menu, for the world ride and the classic legs alike. A choice
+        // gives the focus back to the primary button, so Enter still rides
+        if (typeof RiderModes !== 'undefined') {
+            const row = container.querySelector('#riderModeRow');
+            row.appendChild(RiderModes.control(document, { after: () => focusPrimary('riderContinueBtn') }));
+            if (RiderModes.note) {
+                const note = document.createElement('div');
+                note.className = 'mode-picker-note';
+                note.setAttribute('role', 'status');
+                note.textContent = RiderModes.note;
+                row.appendChild(note);
+            }
+        }
 
         // Carousel focus state
         const riderOrder = this.riderDisplayOrder();
@@ -418,21 +555,88 @@ class TourSystem {
             } else {
                 const fresh = this.isRiderFresh(c.id);
                 card.classList.toggle('fresh', fresh);
+                const bikes = Array.isArray(c.bikes) ? c.bikes : [];
+                const open = this.openBikes(c.id);
+                const bike = this.getSelectedBike(c.id);
+                const at = Math.max(0, bikes.indexOf(bike));
+                // The next bike opens with a ride finished on the best one open
+                const locked = open.length < bikes.length;
+                const hint = !locked ? '' : `<span class="bike-count bike-locked" id="bikeLockHint">${icon('lock')} ${at === open.length - 1 ? 'Finish a ride on this bike to open the next' : 'Finish a ride on the last open bike to open the next'}</span>`;
+                const picker = bikes.length > 1 ? `
+                    <div class="bike-picker" role="group" aria-label="Bike">
+                        <div class="bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}<span class="bike-count">${at + 1} / ${bikes.length}</span>${hint}</div>
+                        <div class="bike-arrows">
+                            <button class="bike-arrow" id="bikePrevBtn" aria-label="Previous bike"${at === 0 ? ' disabled' : ''}>▲</button>
+                            <button class="bike-arrow" id="bikeNextBtn" aria-label="Next bike"${at >= open.length - 1 ? ' disabled' : ''}>▼</button>
+                        </div>
+                    </div>` : `<div class="showcase-sub bike-name" id="bikeName">${TourSystem.bikeTitle(bike)}</div>`;
+                // The outfit row, under the bike row: the rider's own outfits, the first their usual one
+                const outfits = Array.isArray(c.outfits) ? c.outfits : [];
+                const worn = Math.max(0, outfits.findIndex(outfit => outfit.id === this.getSelectedOutfit(c.id)));
+                const wardrobe = outfits.length > 1 ? `
+                    <div class="bike-picker outfit-picker" role="group" aria-label="Outfit">
+                        <div class="bike-name" id="outfitName">${outfits[worn].name}<span class="bike-count">OUTFIT ${worn + 1} / ${outfits.length}</span></div>
+                        <div class="bike-arrows outfit-arrows">
+                            <button class="bike-arrow" id="outfitPrevBtn" aria-label="Previous outfit (Q)" title="Q"${worn === 0 ? ' disabled' : ''}>◀</button>
+                            <button class="bike-arrow" id="outfitNextBtn" aria-label="Next outfit (E)" title="E"${worn === outfits.length - 1 ? ' disabled' : ''}>▶</button>
+                        </div>
+                    </div>` : '';
+                // The stars are the rider on the bike in the row above, so they change as the row steps
+                const stats = TourSystem.statsOf(c, bike);
                 card.innerHTML = `
                     ${fresh ? '<div class="new-badge">NEW BIKE UNLOCKED</div>' : ''}
                     <div class="showcase-name">${c.name}</div>
-                    <div class="showcase-sub">${c.bikeLabel}</div>
+                    ${picker}
+                    ${wardrobe}
                     <div class="showcase-stats">
-                        <span>SPEED</span>${statBar(c.stats.speed)}
-                        <span>ACCEL</span>${statBar(c.stats.accel)}
-                        <span>HANDLING</span>${statBar(c.stats.handling)}
-                        <span>JUMP</span>${statBar(c.stats.jump)}
-                        <span>COMFORT</span>${statBar(c.stats.comfort)}
+                        <span>SPEED</span>${statBar(stats.speed)}
+                        <span>ACCEL</span>${statBar(stats.accel)}
+                        <span>HANDLING</span>${statBar(stats.handling)}
+                        <span>JUMP</span>${statBar(stats.jump)}
+                        <span>COMFORT</span>${statBar(stats.comfort)}
                     </div>`;
             }
             document.getElementById('riderContinueBtn').disabled = tier !== 'lit';
+            const classicButton = document.getElementById('riderClassicBtn');
+            if (classicButton) classicButton.disabled = tier !== 'lit';
+            const prev = document.getElementById('bikePrevBtn');
+            const next = document.getElementById('bikeNextBtn');
+            if (prev) prev.addEventListener('click', () => moveBikeFocus(-1));
+            if (next) next.addEventListener('click', () => moveBikeFocus(1));
+            const before = document.getElementById('outfitPrevBtn'), after = document.getElementById('outfitNextBtn');
+            if (before) before.addEventListener('click', () => moveOutfitFocus(-1));
+            if (after) after.addEventListener('click', () => moveOutfitFocus(1));
             if (this.onRiderShowcase) this.onRiderShowcase(c.id);
         };
+
+        // Steps the focused rider's bikes up or down their list, remembers the
+        // choice and puts that bike on the stage. The list has two ends (the
+        // least powerful bike first): it does not wrap round
+        const moveBikeFocus = (delta) => {
+            const c = riderOrder[this.riderFocusIndex];
+            if (this.riderTierFor(c.id) !== 'lit' || !Array.isArray(c.bikes) || c.bikes.length < 2) return;
+            const at = c.bikes.indexOf(this.getSelectedBike(c.id));
+            const to = Math.max(0, Math.min(this.openBikes(c.id).length - 1, at + delta));
+            if (to === at) return;
+            this.selectBike(c.id, c.bikes[to]);
+            renderRiderCard();
+            if (this.onBikeShowcase) this.onBikeShowcase(c.id);
+        };
+        this.moveBikeFocus = moveBikeFocus;
+
+        // Steps the focused rider's outfits, remembers the choice and dresses the rider on the stage. Two ends, as
+        // the bikes
+        const moveOutfitFocus = (delta) => {
+            const c = riderOrder[this.riderFocusIndex];
+            if (this.riderTierFor(c.id) !== 'lit' || !Array.isArray(c.outfits) || c.outfits.length < 2) return;
+            const at = c.outfits.findIndex(outfit => outfit.id === this.getSelectedOutfit(c.id));
+            const to = Math.max(0, Math.min(c.outfits.length - 1, at + delta));
+            if (to === at) return;
+            this.selectOutfit(c.id, c.outfits[to].id);
+            renderRiderCard();
+            if (this.onBikeShowcase) this.onBikeShowcase(c.id);
+        };
+        this.moveOutfitFocus = moveOutfitFocus;
 
         const renderLegCard = () => {
             const index = this.legFocusIndex;
@@ -461,11 +665,17 @@ class TourSystem {
         };
         this.renderLegCard = renderLegCard;
 
+        // Focus follows the screen, so Enter presses the screen's own primary button
+        const focusPrimary = (id) => {
+            const button = document.getElementById(id);
+            if (button && !button.disabled) button.focus({ preventScroll: true });
+        };
         const showTrackScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'none';
             document.querySelector('.track-select-screen').style.display = 'flex';
             this.menuScreen = 'track';
             renderLegCard();
+            focusPrimary('legStartBtn');
         };
         const showRiderScreen = () => {
             document.querySelector('.character-select-screen').style.display = 'flex';
@@ -473,6 +683,7 @@ class TourSystem {
             this.menuScreen = 'rider';
             if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
             renderRiderCard();
+            focusPrimary('riderContinueBtn');
         };
         this.showTrackScreen = showTrackScreen;
         this.showRiderScreen = showRiderScreen;
@@ -492,14 +703,28 @@ class TourSystem {
         document.getElementById('legNextBtn').addEventListener('click', () => moveLegFocus(1));
         document.getElementById('backToRidersBtn').addEventListener('click', showRiderScreen);
 
-        document.getElementById('riderContinueBtn').addEventListener('click', () => {
+        // Chooses the focused rider; false when it is locked
+        const chooseRider = () => {
             const c = riderOrder[this.riderFocusIndex];
-            if (!this.isCharacterUnlocked(c.id)) return;
+            if (!this.isCharacterUnlocked(c.id)) return false;
             this.selectCharacter(c.id);
             // Once chosen past, nothing is new any more
             this.freshRiders.clear();
-            showTrackScreen();
+            return true;
+        };
+
+        document.getElementById('riderContinueBtn').addEventListener('click', () => {
+            if (!chooseRider()) return;
+            if (!world) {
+                showTrackScreen();
+                return;
+            }
+            this.legSelectorActive = false;
+            this.onWorldSelected();
         });
+
+        const classic = document.getElementById('riderClassicBtn');
+        if (classic) classic.addEventListener('click', () => { if (chooseRider()) showTrackScreen(); });
 
         document.getElementById('legStartBtn').addEventListener('click', () => {
             const index = this.legFocusIndex;
@@ -517,40 +742,70 @@ class TourSystem {
             }
         });
 
-        // Keyboard navigation
+        // Keyboard navigation. The menu is the bottom of the dialog stack (js/modals.js), which hands it a key only
+        // while nothing (credits, best times) is open on it. Returns true when it used the key.
         this.keyboardHandler = (e) => {
-            if (!this.legSelectorActive) return;
-            // The best-times viewer sits on top of the menu
-            if (document.getElementById('leaderboardViewer')) return;
+            if (!this.legSelectorActive) return false;
 
             const isLeft = e.code === 'ArrowLeft' || e.code === 'KeyA';
             const isRight = e.code === 'ArrowRight' || e.code === 'KeyD';
+            const isUp = e.code === 'ArrowUp' || e.code === 'KeyW';
+            const isDown = e.code === 'ArrowDown' || e.code === 'KeyS';
             const isConfirm = e.code === 'Enter' || e.code === 'Space';
 
             if (this.menuScreen === 'rider') {
                 if (isLeft) { e.preventDefault(); moveRiderFocus(-1); }
                 else if (isRight) { e.preventDefault(); moveRiderFocus(1); }
+                else if (isUp) { e.preventDefault(); moveBikeFocus(-1); }
+                else if (isDown) { e.preventDefault(); moveBikeFocus(1); }
+                else if (e.code === 'KeyQ') { e.preventDefault(); moveOutfitFocus(-1); }
+                else if (e.code === 'KeyE') { e.preventDefault(); moveOutfitFocus(1); }
                 else if (isConfirm) {
                     e.preventDefault();
                     document.getElementById('riderContinueBtn').click();
                 }
-                return;
+                else return false;
+                return true;
             }
 
             if (isLeft) { e.preventDefault(); moveLegFocus(-1); }
             else if (isRight) { e.preventDefault(); moveLegFocus(1); }
-            else if (e.code === 'Escape') { e.preventDefault(); showRiderScreen(); }
             else if (isConfirm) {
                 e.preventDefault();
                 document.getElementById('legStartBtn').click();
             }
+            else return false;
+            return true;
         };
 
-        document.addEventListener('keydown', this.keyboardHandler);
+        // The overlay stays in view (the 3D showcase behind it) while credits or best times sit on it, and stays
+        // in the page when hidden for a ride. Escape goes back from the leg screen to the rider screen.
+        const overlay = container.querySelector('.tour-selector-overlay');
+        Modals.open(overlay, {
+            under: 'show',
+            keep: true,
+            focus: document.getElementById('riderContinueBtn'),
+            onKey: event => this.keyboardHandler(event),
+            cancel: () => { if (this.menuScreen === 'track') showRiderScreen(); }
+        });
 
         // Kick off the 3D rider showcase
         if (this.onRiderShowcaseStart) this.onRiderShowcaseStart(riderOrder[this.riderFocusIndex].id);
         renderRiderCard();
+    }
+
+    // A short line on the menu, under its title (the world's data failing to load, js/ridemode.js FALLBACK_NOTE)
+    showNotice(text) {
+        const panel = document.querySelector('.tour-selector-panel');
+        if (!panel) return;
+        let notice = panel.querySelector('.menu-notice');
+        if (!notice) {
+            notice = document.createElement('div');
+            notice.className = 'menu-notice';
+            notice.setAttribute('role', 'status');
+            panel.querySelector('.tour-title').insertAdjacentElement('afterend', notice);
+        }
+        notice.textContent = text;
     }
 
     firstPlayableLegIndex() {
@@ -570,14 +825,10 @@ class TourSystem {
         const overlay = document.querySelector('.tour-selector-overlay');
         if (overlay) {
             overlay.style.display = 'none';
+            Modals.close(overlay);
         }
         document.body.classList.remove('in-menu');
         this.legSelectorActive = false;
-
-        // Remove keyboard event listener
-        if (this.keyboardHandler) {
-            document.removeEventListener('keydown', this.keyboardHandler);
-        }
     }
 
     // After a bike unlocks: open the rider screen on the new bike

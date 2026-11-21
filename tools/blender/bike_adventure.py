@@ -30,11 +30,12 @@ def build():
     k.begin("disc_rear", (0.09, 0.3, -0.7))
     k.disc((0.075, 0.3, -0.7), 0.12)
     k.begin("disc_front", (0.09, 0.3, 0.7))
-    k.disc((0.062, 0.3, 0.7), 0.15)
-    k.disc((-0.062, 0.3, 0.7), 0.15)
+    # Inboard of the fork legs, whose inner faces are at x 0.066
+    k.disc((0.058, 0.3, 0.7), 0.15)
+    k.disc((-0.058, 0.3, 0.7), 0.15)
 
     # Long-travel forks under rubber gaiters
-    parts.forks(k, x=0.095, axle=(0.3, 0.7), top=(1.0, 0.5), radius=0.021, pivot=(0.09, 0.58, 0.68), caliper_radius=0.15, twin=True, disc_x=0.062, gaiters=True)
+    parts.forks(k, x=0.095, axle=(0.3, 0.7), top=(1.0, 0.5), radius=0.021, pivot=(0.09, 0.58, 0.68), caliper_radius=0.15, twin=True, disc_x=0.058, gaiters=True)
 
     k.begin("handlebar", (0, 1.18, 0.5))
     parts.bars(k, GRIP, clamp=(1.1, 0.47), rise=0.07, guard="paint")
@@ -134,7 +135,7 @@ def build():
     parts.can(k, (0.17, 0.36, -0.2), (0.215, 0.5, -0.78), 0.062, "steel", cap="dark_metal")
 
     parts.pegs(k, PEG, hanger=(0.56, -0.1), wide=0.06)
-    k.rod((-0.15, 0.32, 0.0), (-0.29, 0.03, 0.08), 0.011, "steel_dark", seg=6)
+    k.side_stand((-0.15, 0.32, 0.0), (-0.29, 0.03, 0.08), 0.011, "steel_dark", seg=6)
 
     k.finish(OUT, anchors={"grip": GRIP, "peg": PEG}, budget=12000, alone=("wheel_front", "wheel_rear", "disc_front", "disc_rear"))
     parts.preview(k, "adventure")

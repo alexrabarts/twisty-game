@@ -45,7 +45,7 @@ describe('rockfalls on the shared terrain model', () => {
     // Where the fall's rocks start: lateral of each, and their velocity along the right-hand normal
     function fall(rocks) {
         jest.spyOn(Math, 'random').mockImplementation(seeded());
-        const index = rocks.triggerFall({ currentRoadSegment: SEGMENT - 4 });
+        const index = rocks.triggerFall({ routeS: (SEGMENT - 4) * 20 });
         const found = {};
         return rocks.rocks.map(({ mesh, velocity }) => {
             // Lateral to the nearest point of the road, as the bike measures it

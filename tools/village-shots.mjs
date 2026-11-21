@@ -56,7 +56,7 @@ const port = server.address().port;
 
 const browser = await puppeteer.launch({
     executablePath: chrome || undefined,
-    headless: flag('gpu') ? false : 'new',
+    headless: 'new',
     args: flag('gpu') ? ['--window-size=1280,800'] : ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'],
 });
 let code = 0;

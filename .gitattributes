@@ -1,2 +1,3 @@
 tests/golden/*.json -diff linguist-generated
 tests/golden/amendments.json diff
+world/**/*.bin binary -diff

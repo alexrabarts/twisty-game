@@ -10,6 +10,18 @@
 //   node tools/terrain-check.mjs baseline-diff [--against <sha>]
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
+// World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones
+//   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
+//   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
+//   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
+//   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
+//   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
+//   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
+//   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
+//   world-hud rides the fixture of three stages tests/fixtures/world/mini (--world all) unless --worldData is given
+//   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
+//   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
 //   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
 // (`shortcuts` runs its own doubled-back control)
@@ -24,12 +36,15 @@
 // Never let a page reach production: cloudfunctions.net, firebasedatabase.app and firebaseio.com are aborted.
 // The `submit` probe is the one exception in kind, not in effect: it answers the callable requests itself, so none leaves the machine.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
+import { fairnessWindow, roadworksWindow } from '../tests/helpers/world-fairness.js';
+import { wallWindow, wallRuns, WALL_LIMITS } from '../tests/helpers/world-walls.js';
+import { junctionWindow, junctionReport, JUNCTION_LIMITS } from '../tests/helpers/world-junctions.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
@@ -131,12 +146,14 @@ function fulfilCallable(calls, request) {
     return request.respond({ status: 200, contentType: 'application/json', headers: CORS, body: JSON.stringify({ result }) });
 }
 
-async function openPage(browser, port, url = '/') {
+// `prepare(page)`, when given, runs before the page loads (a probe's evaluateOnNewDocument)
+async function openPage(browser, port, url = '/', seed = 1, prepare = null) {
     const page = await browser.newPage();
     await page.setViewport({ width: 960, height: 540, deviceScaleFactor: 1 });
     await page.setRequestInterception(true);
     page.on('request', request => {
         const target = new URL(request.url());
+        if (state.requests) state.requests.push(request.url());
         if (page.callables && target.hostname.endsWith('cloudfunctions.net')) {
             fulfilCallable(page.callables, request);
         } else if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
@@ -154,9 +171,9 @@ async function openPage(browser, port, url = '/') {
     });
     page.on('console', message => { if (message.type() === 'error') state.lastError = message.text().slice(0, 200); });
     page.on('pageerror', error => state.pageErrors.push(`${url}: ${error.message}`));
-    // One seeded generator, reset before each leg starts
-    await page.evaluateOnNewDocument(() => {
-        let seed = 1;
+    // One seeded generator, reset before each leg starts; `seed` is where a page starts it
+    await page.evaluateOnNewDocument((first) => {
+        let seed = first;
         window.__reseed = value => { seed = value; };
         Math.random = () => {
             seed = (seed + 0x6d2b79f5) | 0;
@@ -164,7 +181,8 @@ async function openPage(browser, port, url = '/') {
             t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         };
-    });
+    }, seed);
+    if (prepare) await prepare(page);
     await page.goto(`http://127.0.0.1:${port}${url}`, { waitUntil: 'load', timeout: 120000 });
     return page;
 }
@@ -1479,9 +1497,13 @@ const PROBES = {
             const leg = game.tourSystem.legs[i];
             return { id: leg.id, boardId: TourSystem.boardId(leg), row: Course.boardTable()[TourSystem.boardId(leg)] || null, last: i === game.tourSystem.legs.length - 1 };
         }, index);
-        // --fixture: leg 1 is the 3-gate fixture board; the default reply is an old server (no fields), --reply new states them
+        // --fixture: leg 1 is the 3-gate fixture board; the default reply is an old server (no fields), --reply new states
+        // protocol and gates, --reply names adds the name limit a server with the 1 to 5 character rule states
         const reply = { sessionId: 'probe-session', sessionToken: 'probe-token-not-a-secret' };
-        if (info.row && option('reply') === 'new') Object.assign(reply, { protocol: 2, gates: info.row.gates });
+        const replyMode = option('reply');
+        if (info.row && (replyMode === 'new' || replyMode === 'names')) Object.assign(reply, { protocol: 2, gates: info.row.gates });
+        if (replyMode === 'names') reply.nameMax = 5;
+        const typedName = option('name') || 'TEST';
         const calls = { reply };
         page.callables = calls;
         const errors = [];
@@ -1493,6 +1515,10 @@ const PROBES = {
                 const start = service.startRun.bind(service);
                 service.startRun = legId => start(legId, expected);
             }, { protocol: reply.protocol ?? 1, gates: reply.gates ?? 5 });
+        }
+        if (option('mutate') === 'names-always') {
+            // The form and the service take 1 to 5 characters whatever the server said
+            await page.evaluate(() => { game.leaderboardService.nameRule = () => ({ min: 1, max: 5 }); });
         }
         await page.evaluate(i => { window.__legIndex = i; }, index);
         const ridden = await page.evaluate(async () => {
@@ -1518,18 +1544,32 @@ const PROBES = {
         const startRunCalls = (calls.startRun || []).length;
         let nameFormShown = false;
         let submitState = 'none';
+        let form = null;
         if (ridden.finished && !info.last) {
             await page.evaluate(() => document.getElementById('nextLegBtn').click());
             nameFormShown = await page.waitForFunction("document.getElementById('leaderboardEntryOverlay').classList.contains('active')", { polling: 100, timeout: 2000 }).then(() => true, () => false);
             if (nameFormShown) {
-                await page.evaluate(() => {
+                form = await page.evaluate(name => {
                     const input = document.getElementById('leaderboardNameInput');
-                    input.value = 'TEST';
+                    input.value = name;
                     input.dispatchEvent(new Event('input'));
-                    document.getElementById('leaderboardSubmitBtn').click();
-                });
-                const done = await page.waitForFunction("document.getElementById('leaderboardResult').style.display === 'block' || document.getElementById('leaderboardError').style.display !== 'none'", { polling: 100, timeout: 5000 }).then(() => true, () => false);
-                submitState = done && await page.evaluate(() => document.getElementById('leaderboardResult').style.display === 'block') ? 'submitted' : 'failed';
+                    const button = document.getElementById('leaderboardSubmitBtn');
+                    const disabled = button.disabled;
+                    button.click();
+                    return {
+                        submitDisabled: disabled,
+                        maxLength: input.maxLength,
+                        placeholder: input.placeholder,
+                        subtitle: document.querySelector('#leaderboardEntryForm .leaderboard-entry-subtitle').textContent,
+                        clipped: input.scrollWidth > input.clientWidth
+                    };
+                }, typedName);
+                if (form.submitDisabled) {
+                    submitState = 'blocked';
+                } else {
+                    const done = await page.waitForFunction("document.getElementById('leaderboardResult').style.display === 'block' || document.getElementById('leaderboardError').style.display !== 'none'", { polling: 100, timeout: 5000 }).then(() => true, () => false);
+                    submitState = done && await page.evaluate(() => document.getElementById('leaderboardResult').style.display === 'block') ? 'submitted' : 'failed';
+                }
             } else if (ridden.unsupported) {
                 submitState = 'not-submitted';
             }
@@ -1541,7 +1581,10 @@ const PROBES = {
             submitCalls: (calls.submitRun || []).length,
             submitState,
             nameFormShown,
-            payload: submit ? { gates: submit.checkpointTimes.length, proofs: submit.proofChain.length, finish: submit.finishTime !== undefined } : null,
+            payload: submit ? { gates: submit.checkpointTimes.length, proofs: submit.proofChain.length, finish: submit.finishTime !== undefined, playerName: submit.playerName } : null,
+            form,
+            typedName,
+            nameMax: reply.nameMax,
             consoleErrors: errors.filter(text => /Incomplete run|Failed to submit|No active/.test(text)).length,
             expectedGates: info.row ? info.row.gates : 5,
             tableBoard: !!info.row,
@@ -1757,6 +1800,7 @@ async function main() {
         console.log(JSON.stringify(out, null, 1));
         return;
     }
+    if (probes.some(name => WORLD_PROBES.includes(name))) return worldMain();
     if (!probes.length) fail(2, 'Name a probe: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget mutate atmostate draws atmo | record-jest | record-frozen | baseline-diff');
 
     const executablePath = chromePath();
@@ -1764,7 +1808,7 @@ async function main() {
     const server = await startServer();
     const port = server.address().port;
     const args = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
-    const launch = () => puppeteer.launch({ protocolTimeout: 900000, executablePath, headless: gpu ? false : 'new', args: ['--no-sandbox', ...args] });
+    const launch = () => puppeteer.launch({ protocolTimeout: 900000, executablePath, headless: 'new', args: ['--no-sandbox', ...args] });
     // A fresh browser for each probe: a long run of game pages can exhaust one Chrome
     const withBrowser = async work => {
         const browser = await launch();
@@ -1842,11 +1886,21 @@ function finishChecks(report) {
             if (option('mutate') === 'ready-always' && !r.tableBoard) failures.push(`${id}: --mutate ready-always needs a table board; this leg has no guard to defeat`);
             // A board in the table is submitted only to a server that states its gate count
             const accepted = !r.tableBoard || r.replyFields.length === 2;
-            const expectedCalls = accepted ? 1 : 0;
+            // The name limit is the server's: 1 to nameMax when stated, exactly 4 when not
+            const nameOk = r.nameMax ? r.typedName.trim().length >= 1 && r.typedName.trim().length <= r.nameMax : r.typedName.trim().length === 4;
+            const expectedCalls = accepted && nameOk ? 1 : 0;
             if (r.startRunCalls !== 1) failures.push(`${id}: startRunCalls: ${r.startRunCalls}, expected 1`);
             if (r.submitCalls !== expectedCalls) failures.push(`${id}: submitCalls: ${r.submitCalls}, expected ${expectedCalls}`);
             if (accepted && r.payload && (r.payload.gates !== r.expectedGates || r.payload.proofs !== r.expectedGates)) failures.push(`${id}: payload ${JSON.stringify(r.payload)}, expected ${r.expectedGates} times and proofs`);
-            if (accepted && r.submitState !== 'submitted') failures.push(`${id}: submitState ${r.submitState}, expected submitted`);
+            if (accepted && r.nameFormShown && nameOk && r.submitState !== 'submitted') failures.push(`${id}: submitState ${r.submitState}, expected submitted`);
+            if (accepted && r.nameFormShown && !nameOk && (r.submitState !== 'blocked' || r.submitCalls !== 0)) failures.push(`${id}: name ${JSON.stringify(r.typedName)} gave submitState ${r.submitState} with ${r.submitCalls} submitRun calls, expected blocked and 0`);
+            if (r.form) {
+                const limit = r.nameMax || 4;
+                const letters = r.nameMax ? `1-${r.nameMax} letters` : '4 letters';
+                if (r.submitState === 'submitted' && r.payload.playerName !== r.typedName.trim().toUpperCase()) failures.push(`${id}: payload playerName ${JSON.stringify(r.payload.playerName)}, expected ${JSON.stringify(r.typedName.trim().toUpperCase())}`);
+                if (r.form.maxLength !== limit || r.form.placeholder !== '_'.repeat(limit) || r.form.subtitle !== `Enter your name (${letters})`) failures.push(`${id}: form shows ${JSON.stringify(r.form)}, expected maxLength ${limit} and "${letters}"`);
+                if (r.form.clipped) failures.push(`${id}: the name input clips a letter`);
+            }
             if (!accepted && (r.submitState !== 'not-submitted' || r.nameFormShown)) failures.push(`${id}: submitState ${r.submitState} with nameFormShown ${r.nameFormShown}, expected not-submitted and no form`);
             if (r.consoleErrors) failures.push(`${id}: ${r.consoleErrors} console errors from the submit path`);
         });
@@ -2091,6 +2145,3420 @@ function writeBaselines(report, fresh, frozen) {
     if (!failures.length) {
         writeJson(PARTS, stored);
         report.notes.push(`wrote ${PARTS}`);
+    }
+}
+
+// ---------------------------------------------------------------- world probes
+// The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
+// like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
+const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight', 'world-trees', 'world-haze'];
+// Hosts the page may reach besides itself: the script CDNs and the font host of index.html
+const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
+const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
+const WORLD_RESIDENT_TILES = 60;
+// The share of the mesh cap the window keeps free (world-budget reports each place's margin)
+const WORLD_MESH_MARGIN = 0.15;
+const WORLD_BIKE_TILE_M = 900;
+
+async function openWorld(browser, port, id, seed = 1, data = option('worldData')) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`, seed);
+        try {
+            // The vehicle is made before the first window settles; the ride state comes after it, so wait for that
+            await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 120000 });
+        } catch {
+            await page.close();
+            continue;
+        }
+        await page.evaluate(() => { window.game.adaptResolution = () => {}; });
+        await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+        return page;
+    }
+    return fail(2, `the world page did not start: ${state.pageErrors.join(' | ')} ${state.lastError}`);
+}
+
+// What the budget probe counts: every mesh drawn in the scene, and the instances in them
+function countScene() {
+    let meshes = 0, triangles = 0, instances = 0;
+    game.scene.traverse(o => {
+        if (!o.isMesh) return;
+        for (let n = o.parent; n; n = n.parent) if (!n.visible) return;
+        const pos = o.geometry.attributes.position;
+        const index = o.geometry.index;
+        meshes++;
+        triangles += (index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+        if (o.isInstancedMesh) instances += o.count;
+    });
+    return { meshes, triangles: Math.round(triangles), instances };
+}
+
+// Put the bike on the ride at s, build the ground round it and wait for the queue to drain
+async function placeAt(s) {
+    const env = game.environment;
+    const route = env.route;
+    const p = route.sample(s, {});
+    const v = game.vehicle;
+    v.position.set(p.x, p.y, p.z);
+    v.yawAngle = p.heading;
+    v.leanAngle = 0;
+    v.leanVelocity = 0;
+    v.speed = 0;
+    v.findNearestRoadSegment();
+    // A put-down is a resume, not a cut: progress starts again at s
+    game.worldRun.reset(s);
+    env.update(p, s, null, Infinity);
+    await env.streamer.settle(p, s);
+    // What the new place no longer holds goes after the streamer's 3 s of grace
+    if (game.worldLinger !== false) await new Promise(resolve => setTimeout(resolve, 3200));
+    await env.streamer.settle(p, s);
+    return p;
+}
+
+// The world pilot of tools/autopilot.js: pure pursuit, and a speed that takes each bend inside the lean cap. Installed in the page.
+function pilotWorld(game, cruise) {
+    twistyDev.autopilot({ speed: cruise });
+}
+
+// The model files the game can load, found on disk so a file added later is checked too
+function modelFiles(dir = join(root, 'assets')) {
+    return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) return modelFiles(full);
+        return entry.name.toLowerCase().endsWith('.glb') ? [relative(root, full).split(sep).join('/')] : [];
+    }).sort();
+}
+
+// Least share of the half screen the bike keeps from each edge on every frame of world-frustum
+const FRUSTUM_MARGIN = 0.1;
+
+// The ride's hairpins: s at the middle of each turn of 150 degrees or more inside 80 m, summed in 4 m steps
+function worldHairpins(route) {
+    const turnAt = s => {
+        let total = 0;
+        for (let d = -40; d < 40; d += 4) total += route.headingChange(s + d, s + d + 4);
+        return Math.abs(total);
+    };
+    const out = [];
+    let run = null;
+    for (let s = 40; s < route.length - 40; s += 4) {
+        const turn = turnAt(s);
+        if (turn >= 150 * Math.PI / 180) {
+            if (!run || s - run.last > 8) { run = { from: s, last: s, best: s, turn }; out.push(run); }
+            run.last = s;
+            if (turn > run.turn) { run.turn = turn; run.best = s; }
+        }
+    }
+    return out.map(r => r.best);
+}
+
+// Named views of the floating-road work: the chase camera behind the bike stopped at each s (uphill, the way the
+// slice is played).
+// 100 the straight at the start (a dark seam ran along both verges), 1300 a hairpin under the next leg (two seams, a
+// bare grey face, a dark band under the upper edge), 3600 the Autostrasse on its wall above the ride, 7800 and 7900 the sett hairpins whose legs overlapped and whose land
+// stood over the road, 7990 the underside of the next switchback seen from below, 9500 and 10900 two more stacked
+// switchbacks. --views s,s,... picks others.
+// 3257 and 4657: a pair of thin dark lines ran down the middle of the road (the longitudinal joint drawn on both sides).
+// 258, 1081, 6756 and 6930: land turned from the sun drew near black (LAND_BLACK_SHARE).
+// 1731, 5133, 6458, 6505 and 6533: the Gotthard road's bridges over the ride drew as black slabs (the structures'
+// near-black share, the same limit as the land's).
+const FLOATING_VIEWS = [100, 258, 1081, 1300, 1731, 3257, 3600, 4657, 5133, 6458, 6505, 6533, 6756, 6930, 7800, 7900, 7990, 9500, 10900];
+// The share of a view's land pixels that may be near black (luminance under 10 of 255), and of its structures' (under
+// 32: floatingCount's STRUCTURE_DARK)
+const LAND_BLACK_SHARE = 0.005;
+// Tolerances of world-floating: the drawn land may lie this far under a drawn road edge, and no land stands over the
+// road surface within UP_M over it
+const FLOAT_TOL_M = 0.3;
+const FLOAT_UP_M = 4;
+// The share of luminance profiles across the road edges of a view that may show a thin dark stripe (a stone, a shadow
+// edge or a tree crossing a profile reads as one now and then; a seam along the road reads on most of them)
+const FLOAT_SEAM_SHARE = 0.1;
+
+// world-floating, in the page: walks the slice every `every` metres and checks the drawn world round each place
+// (the LOD each tile and each road section is drawn at from there). Returns per-LOD counts and the worst cases.
+async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
+    const SIDE_FLOAT_M = sideFloatM;
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment;
+    const route = env.route;
+    const points = route.points;
+    const LIFT = RoadMesh.LIFT_M;
+    const VERGE = RoadSurface.VERGE_M;
+    const raycaster = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0), up = new THREE.Vector3(0, 1, 0);
+    // The drawn land at (x, z): the vertices of the tile mesh actually drawn there, on its own triangles
+    const drawnLand = (x, z) => {
+        const m = WorldData.TILE_M;
+        const tx = Math.floor(x / m), tz = Math.floor(z / m);
+        const held = env.tileMeshes.get(`${tx},${tz}`);
+        if (!held) return null;
+        const lod = Number(/lod(\d)/.exec(held.mesh.name)[1]);
+        // On the mesh's own triangles, the ones cut to the retaining walls included (TerrainMesh.drawnAt)
+        if (TerrainMesh.drawnAt && held.mesh.userData.lod !== undefined) return { y: TerrainMesh.drawnAt(held.mesh, x, z), lod };
+        const stride = 1 << lod, cell = WorldData.CELL_M * stride, side = (WorldData.TILE_N - 1) / stride + 1;
+        const pos = held.mesh.geometry.attributes.position.array;
+        const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
+        const i = Math.max(0, Math.min(side - 2, Math.floor(fx))), j = Math.max(0, Math.min(side - 2, Math.floor(fz)));
+        const u = fx - i, v = fz - j;
+        const Y = (a, b) => pos[((j + b) * side + i + a) * 3 + 1];
+        const y = u + v <= 1 ? Y(0, 0) + u * (Y(1, 0) - Y(0, 0)) + v * (Y(0, 1) - Y(0, 0)) : Y(1, 1) + (1 - u) * (Y(0, 1) - Y(1, 1)) + (1 - v) * (Y(1, 0) - Y(1, 1));
+        return { y, lod };
+    };
+    const meshes = (group, test) => { const out = []; group.traverse(o => { if (o.isMesh && test(o)) out.push(o); }); return out; };
+    const sectionOf = k => env.streamer.sections.find(sec => k >= sec.from && k <= sec.to);
+    const place = (p, o) => ({ x: p.x + o * Math.cos(p.heading), z: p.z - o * Math.sin(p.heading) });
+    const structureNear = (k, mask) => { for (let d = -2; d <= 2; d++) { const q = points[k + d]; if (q && (q.bits & mask)) return true; } return false; };
+    const edges = new Map(), ups = new Map(), physics = [];
+    const sideSeen = new Map(), horizonSeen = new Map();
+    let checked = 0, missing = 0, upChecked = 0;
+    const r2 = v => Math.round(v * 100) / 100;
+    for (let s0 = every / 2; s0 < route.length; s0 += every) {
+        const bike = await placeAt(s0);
+        const works = o => o.name === 'road-works';
+        const skirts = [...meshes(env.roadGroup, works), ...meshes(env.sideGroup, works)];
+        const roads = [...meshes(env.roadGroup, o => o.name === 'road-ribbon' || o.name === 'road-side'), ...meshes(env.sideGroup, o => o.name === 'road-ribbon' || o.name === 'road-side')];
+        const far = [env.horizon, ...(env.farLand || [])].filter(Boolean);
+        const bikeK = route.toUnits(s0);
+        // Side roads: every edge and centre point of a resident side ribbon more than SIDE_FLOAT_M over the drawn land
+        // must stand on a structure: a deck or another road within 1.5 m under it, or a wall across its edge
+        const structures = skirts.concat(roads);
+        for (const group of env.sideGroup.children) {
+            for (const road of group.children) {
+                for (const side of road.userData.sides || []) {
+                    const centre = [(side.l[0] + side.r[0]) / 2, (side.l[1] + side.r[1]) / 2, (side.l[2] + side.r[2]) / 2];
+                    for (const [what, pt] of [['l', side.l], ['c', centre], ['r', side.r]]) {
+                        const key = `${Math.round(pt[0] * 2)},${Math.round(pt[2] * 2)},${Math.round(pt[1])}`;
+                        if (sideSeen.has(key)) continue;
+                        const land = drawnLand(pt[0], pt[2]);
+                        if (!land) continue;
+                        const gap = pt[1] - land.y;
+                        let held = gap <= sideFloatM;
+                        const inward = what === 'l' ? [side.r[0] - side.l[0], side.r[2] - side.l[2]] : what === 'r' ? [side.l[0] - side.r[0], side.l[2] - side.r[2]] : [0, 0];
+                        const len = Math.hypot(inward[0], inward[1]) || 1;
+                        if (!held) {
+                            // An edge point is read 0.3 m inside the edge: a ray down the deck's side face grazes it
+                            raycaster.set(new THREE.Vector3(pt[0] + inward[0] / len * 0.3, pt[1] - 0.03, pt[2] + inward[1] / len * 0.3), down);
+                            raycaster.far = 1.5;
+                            held = raycaster.intersectObjects(structures, false).length > 0;
+                        }
+                        if (!held && what !== 'c') {
+                            const dir = new THREE.Vector3(-inward[0] / len, 0, -inward[1] / len);
+                            raycaster.set(new THREE.Vector3(pt[0] + inward[0] / len * 0.5, pt[1] - Math.min(gap, 3) * 0.5, pt[2] + inward[1] / len * 0.5), dir);
+                            raycaster.far = 1.2;
+                            held = raycaster.intersectObjects(skirts, false).length > 0;
+                        }
+                        sideSeen.set(key, { s: Math.round(s0), x: Math.round(pt[0]), z: Math.round(pt[2]), at: what, gapM: r2(gap), landLod: land.lod, held });
+                    }
+                }
+            }
+        }
+        // The far land: on a 16 m grid within 400 m of the bike, the horizon mesh drawn over the resident land
+        if (env.horizon) {
+            for (let dx = -400; dx <= 400; dx += 16) {
+                for (let dz = -400; dz <= 400; dz += 16) {
+                    if (dx * dx + dz * dz > 160000) continue;
+                    const x = Math.round((bike.x + dx) / 16) * 16, z = Math.round((bike.z + dz) / 16) * 16;
+                    const key = `${x},${z}`;
+                    if (horizonSeen.has(key)) continue;
+                    const land = drawnLand(x, z);
+                    if (!land) continue;
+                    raycaster.set(new THREE.Vector3(x, land.y + 400, z), down);
+                    raycaster.far = 800;
+                    const hit = raycaster.intersectObject(env.horizon, false)[0];
+                    const visible = !!hit;
+                    horizonSeen.set(key, { s: Math.round(s0), x, z, overM: visible ? r2(hit.point.y - land.y) : -1 });
+                }
+            }
+        }
+        for (const [index, held] of env.streamer.roads) {
+            const sec = env.streamer.sections[index];
+            // Beyond LOD0 the ribbon keeps only some rows (RoadMesh.decimate): its edge runs straight between them
+            const kept = held.lod === 0 ? null : new Set(RoadMesh.decimate(env.rowsOf(sec.from, Math.min(points.length - 1, sec.to + 1))).map(r => r.s));
+            for (let k = sec.from; k <= Math.min(points.length - 1, sec.to); k++) {
+                const p = points[k];
+                if (kept && !kept.has(p.s)) continue;
+                const a = points[Math.max(0, k - 1)], b = points[Math.min(points.length - 1, k + 1)];
+                let turn = b.heading - a.heading;
+                turn -= Math.round(turn / (2 * Math.PI)) * 2 * Math.PI;
+                const curve = turn / Math.max(1e-6, Math.hypot(b.x - a.x, b.z - a.z));
+                const h = p.width / 2;
+                const roadY = p.y + LIFT;
+                // Up: no land over the road surface across its width, unless roofed
+                if (!(p.bits & 5)) {
+                    for (const f of [-1, -0.5, 0, 0.5, 1]) {
+                        const at = place(p, f * h);
+                        const land = drawnLand(at.x, at.z);
+                        if (!land) continue;
+                        upChecked++;
+                        const over = land.y - roadY;
+                        if (over > 0 && over < upM) {
+                            const key = `${k}:${f}:${land.lod}`;
+                            if (!ups.has(key) || ups.get(key).overM < over) ups.set(key, { s: Math.round(p.s), lateral: r2(f * h), lod: land.lod, overM: r2(over), what: 'land' });
+                        }
+                    }
+                    if (k % 2 === 0 && far.length) {
+                        raycaster.set(new THREE.Vector3(p.x, roadY + 0.1, p.z), up);
+                        raycaster.far = upM;
+                        const hit = raycaster.intersectObjects(far, false)[0];
+                        if (hit) ups.set(`${k}:far`, { s: Math.round(p.s), lateral: 0, lod: 'far', overM: r2(hit.point.y - roadY), what: hit.object.name || 'far' });
+                    }
+                }
+                if (structureNear(k, 7)) continue;
+                // Down: the drawn land meets each drawn edge, or a skirt closes the gap
+                const offsets = RoadMesh.hold(held.lod === 0 ? [-h - VERGE, h + VERGE] : [-h, h], curve).offsets;
+                for (const [side, edge] of [[-1, offsets[0]], [1, offsets[1]]]) {
+                    const out = place(p, edge + side * 0.05);
+                    const land = drawnLand(out.x, out.z);
+                    if (!land) { missing++; continue; }
+                    checked++;
+                    const gap = roadY - land.y;
+                    let open = false;
+                    if (gap > tol) {
+                        // Another road drawn under the edge (a junction, a road below) is ground too
+                        raycaster.set(new THREE.Vector3(out.x, roadY + 0.3, out.z), down);
+                        raycaster.far = gap + 0.3;
+                        const under = raycaster.intersectObjects(roads, false).find(hit => hit.point.y < roadY - 0.01);
+                        const top = under ? Math.max(land.y, under.point.y) : land.y;
+                        if (roadY - top > tol) {
+                            // The edge works under the edge (an apron at the batter, a wall, a deck side): a ray from under
+                            // the road, out across the edge, at three heights of the gap, must meet them
+                            const from = place(p, edge - side * 0.5);
+                            const dir = new THREE.Vector3(Math.cos(p.heading) * side, 0, -Math.sin(p.heading) * side);
+                            raycaster.far = 0.6 + 1.6 * (roadY - top);
+                            open = [0.2, 0.5, 0.8].some(f => {
+                                raycaster.set(new THREE.Vector3(from.x, roadY - (roadY - top) * f, from.z), dir);
+                                return !raycaster.intersectObjects(skirts, false).length;
+                            });
+                        }
+                    }
+                    const key = `${k}:${side}:${held.lod}:${land.lod}`;
+                    const was = edges.get(key);
+                    // What the edge works were built on there (WorldEnvironment.edgeFoot), for an open edge
+                    let foot;
+                    if (open && env.edgeFoot) {
+                        const at = place(p, edge);
+                        const f = env.edgeFoot()(at.x, roadY, at.z, Math.cos(p.heading) * side, -Math.sin(p.heading) * side);
+                        foot = f ? { kind: f.kind, y: f.y !== undefined ? r2(f.y - roadY) : null } : null;
+                    }
+                    if (!was || was.gapM < gap) edges.set(key, { s: Math.round(p.s), side: side > 0 ? 'right' : 'left', roadLod: held.lod, landLod: land.lod, gapM: r2(gap), open, foot });
+                    // Physics: the ground the bike reads beside the road against the drawn land, where the land is drawn at LOD0
+                    if (land.lod === 0 && Math.abs(k - bikeK) < 120 && !open) {
+                        for (const o of [h + 0.3, h + VERGE]) {
+                            const q = place(p, side * o);
+                            const near = drawnLand(q.x, q.z);
+                            if (!near || near.lod !== 0) continue;
+                            const loc = {};
+                            const ground = env.ground.groundY(q.x, q.z, { start: k - 8, end: k + 8 }, true, loc);
+                            raycaster.set(new THREE.Vector3(q.x, roadY + 0.3, q.z), down);
+                            raycaster.far = 2;
+                            const road = raycaster.intersectObjects([...roads, ...skirts], false)[0];
+                            // A retaining wall or its parapet (works group 1 or 2) is not ground: the physics there is the wall
+                            if (road && road.object.name === 'road-works' && (road.face.materialIndex === 1 || road.face.materialIndex === 2)) continue;
+                            const drawn = road ? Math.max(near.y, road.point.y) : near.y;
+                            physics.push({ s: Math.round(p.s), side: side > 0 ? 'right' : 'left', offset: r2(o), deltaM: r2(ground - drawn) });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const list = [...edges.values()];
+    const byLod = {};
+    // Against the land drawn at LOD0 (a coarser tile lies lower than the land under the road: counted apart, as coarse)
+    const sideFloat = { vertices: 0, over: 0, open: 0, coarseOpen: 0, worstM: 0, worst: [] };
+    const horizonOver = { nodes: 0, over: 0, worstM: 0, worst: [] };
+    for (const v of sideSeen.values()) {
+        sideFloat.vertices++;
+        if (v.gapM <= SIDE_FLOAT_M) continue;
+        sideFloat.over++;
+        if (v.held) continue;
+        if (v.landLod !== 0) { sideFloat.coarseOpen++; continue; }
+        sideFloat.open++;
+        sideFloat.worstM = Math.max(sideFloat.worstM, v.gapM);
+        sideFloat.worst.push(v);
+    }
+    sideFloat.worst.sort((p, q) => q.gapM - p.gapM);
+    sideFloat.worst = sideFloat.worst.slice(0, 8);
+    for (const v of horizonSeen.values()) {
+        horizonOver.nodes++;
+        if (v.overM <= 0) continue;
+        horizonOver.over++;
+        horizonOver.worstM = Math.max(horizonOver.worstM, v.overM);
+        horizonOver.worst.push(v);
+    }
+    horizonOver.worst.sort((p, q) => q.overM - p.overM);
+    horizonOver.worst = horizonOver.worst.slice(0, 8);
+    for (const e of list) {
+        const key = `road${e.roadLod}-land${e.landLod}`;
+        const row = byLod[key] || (byLod[key] = { checked: 0, overTol: 0, open: 0, worstGapM: 0 });
+        row.checked++;
+        if (e.gapM > tol) row.overTol++;
+        if (e.open) row.open++;
+        row.worstGapM = Math.max(row.worstGapM, e.gapM);
+    }
+    const open = list.filter(e => e.open).sort((p, q) => q.gapM - p.gapM);
+    const raw = list.filter(e => e.gapM > tol).sort((p, q) => q.gapM - p.gapM);
+    const upList = [...ups.values()].sort((p, q) => q.overM - p.overM);
+    const badPhysics = physics.filter(p => Math.abs(p.deltaM) > tol).sort((p, q) => Math.abs(q.deltaM) - Math.abs(p.deltaM));
+    return {
+        every, tolM: tol, probes: checked, missing, edges: list.length, byLod,
+        overTol: raw.length, worstGapM: raw.length ? raw[0].gapM : 0, open: open.length, worstOpen: open.slice(0, 12), worstRaw: raw.slice(0, 6),
+        up: { checked: upChecked, hits: upList.length, worst: upList.slice(0, 12) },
+        physics: { checked: physics.length, over: badPhysics.length, worstM: badPhysics.length ? badPhysics[0].deltaM : 0, worst: badPhysics.slice(0, 8) },
+        sideFloat, horizonOver
+    };
+}
+
+// A view of the floating-road work, in the page: the chase camera behind the bike stopped at s, then the frame drawn again with every
+// road ribbon coloured by the side the camera sees (red: its underside) and everything else flat, and the pixels
+// counted. Returns {s, crashed, underside, top, pixels}.
+async function floatingView(placeSource, pilotSource, s) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle;
+    game.cameraMode = 2;
+    // Put down at s, and the chase camera eased in behind the stopped bike (as world-hairpin-shots' start view)
+    await placeAt(s);
+    // The walk may have ridden past the finish: its banner is not part of the view
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    v.speed = 0;
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 240; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    // A dark seam along the road: the frame drawn again and read at once, the land's luminance across each edge from
+    // the verge out to 8 m, on the rows 8 to 60 m ahead. A profile has a seam where one sample is under 0.6 of the
+    // profile's median while the samples either side of it are over 0.8 of it (a thin dark line, not a shadow)
+    const env = game.environment, route = env.route, renderer = game.graphics.renderer;
+    game.graphics.render(game.scene, game.camera);
+    const canvas = renderer.domElement;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width; copy.height = canvas.height;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const image = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    // The frame as drawn, for floatingCount's share of near-black land
+    window.floatFrame = { image, w: copy.width, h: copy.height };
+    const lum = (x, y, z) => {
+        const q = new THREE.Vector3(x, y, z).project(game.camera);
+        if (q.z > 1 || Math.abs(q.x) > 0.98 || Math.abs(q.y) > 0.98) return null;
+        const px = Math.round((q.x + 1) / 2 * (copy.width - 1)), py = Math.round((1 - q.y) / 2 * (copy.height - 1));
+        const at = (py * copy.width + px) * 4;
+        return 0.2126 * image[at] + 0.7152 * image[at + 1] + 0.0722 * image[at + 2];
+    };
+    const landY = (x, z, fallback) => { const g = env.ground.tileHeight(x, z); return g === null ? fallback : g - TerrainMesh.SINK_M; };
+    const offsets = [-0.5, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8];
+    let profiles = 0;
+    const seams = [];
+    for (let d = 8; d <= 60; d += 2) {
+        const p = route.sample(v.routeS + d, {});
+        if (p.flags.bridge || p.flags.tunnel || p.flags.gallery) continue;
+        const edge = p.width / 2 + RoadSurface.VERGE_M;
+        for (const side of [-1, 1]) {
+            const row = offsets.map(o => {
+                const lateral = side * (edge + o);
+                const x = p.x + lateral * Math.cos(p.heading), z = p.z - lateral * Math.sin(p.heading);
+                return lum(x, o <= 0 ? p.y + RoadMesh.LIFT_M : Math.max(landY(x, z, p.y), p.y - 30) + 0.02, z);
+            });
+            if (row.some(l => l === null)) continue;
+            profiles++;
+            const median = [...row].sort((a, b) => a - b)[Math.floor(row.length / 2)];
+            for (let k = 1; k + 1 < row.length; k++) {
+                if (row[k] < 0.6 * median && row[k - 1] > 0.8 * median && row[k + 1] > 0.8 * median) { seams.push({ ahead: d, side: side > 0 ? 'right' : 'left', offset: offsets[k], lum: Math.round(row[k]), median: Math.round(median) }); break; }
+            }
+        }
+    }
+    const lane = window.laneLines(game, s);
+    return { s: Math.round(v.routeS), crashed: v.crashed, seam: { profiles, seams: seams.length, worst: seams.slice(0, 6) }, lane };
+}
+
+// A thin dark line along the carriageway (a seam, a joint or a patch outline that reads as a tyre mark), in the page:
+// the roads alone in their own materials (the bike hidden) drawn by a camera where the chase camera rides, 6 m behind
+// s and 2.8 m up, looking 12 m ahead, at 1280 x 720 (seen from straight above the same lines did not show: they read
+// at a rider's grazing angle). Then the road from 3 m behind s to 20 m ahead is read across every 10 cm of road every
+// centimetre between the verges. A dip is a run at most 3 px wide more than 25% darker than the median of the 0.6 m
+// round it. A line is a chain of dips, each within 3 cm across of one on the row before (a gap of two rows allowed),
+// 3 m long or more. Returns {rows, dips, lines}.
+function laneLines(game, s0) {
+    const env = game.environment, route = env.route, renderer = game.graphics.renderer;
+    const at0 = route.sample(s0, {});
+    const fx = Math.sin(at0.heading), fz = Math.cos(at0.heading);
+    const W = 1280, H = 720;
+    const cam = new THREE.PerspectiveCamera(game.camera.fov, W / H, 0.1, 2000);
+    cam.position.set(at0.x - fx * 6, at0.y + 2.8, at0.z - fz * 6);
+    cam.lookAt(at0.x + fx * 12, at0.y, at0.z + fz * 12);
+    cam.updateMatrixWorld(true);
+    const target = new THREE.WebGLRenderTarget(W, H);
+    const hidden = [];
+    const hide = o => { if (o.visible) { hidden.push(o); o.visible = false; } };
+    game.scene.children.forEach(c => { if (c !== env.group && !c.isLight) hide(c); });
+    env.group.children.forEach(c => { if (c !== env.roadGroup && c !== env.sideGroup) hide(c); });
+    const fog = game.scene.fog;
+    game.scene.fog = null;
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const pixels = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+    renderer.setRenderTarget(null);
+    hidden.forEach(o => { o.visible = true; });
+    game.scene.fog = fog;
+    target.dispose();
+    const size = W;
+    const q = new THREE.Vector3();
+    const lum = (x, y, z) => {
+        q.set(x, y, z).project(cam);
+        if (q.z > 1 || q.z < -1) return null;
+        const px = Math.round((q.x + 1) / 2 * (W - 1)), py = Math.round((q.y + 1) / 2 * (H - 1));
+        if (px < 0 || py < 0 || px >= W || py >= H) return null;
+        const i = (py * W + px) * 4;
+        return pixels[i + 3] ? { l: 0.2126 * pixels[i] + 0.7152 * pixels[i + 1] + 0.0722 * pixels[i + 2], px, py } : null;
+    };
+    const rows = [];
+    for (let d = -3; d <= 20; d += 0.1) {
+        const p = route.sample(s0 + d, {});
+        if (p.flags.bridge || p.flags.tunnel || p.flags.gallery || p.flags.cobbles) { rows.push([]); continue; }
+        const h = p.width / 2 - 0.3, at = [];
+        let last = -1;
+        for (let o = -h; o <= h; o += 0.01) {
+            const hit = lum(p.x + o * Math.cos(p.heading), p.y + RoadMesh.LIFT_M, p.z - o * Math.sin(p.heading));
+            if (!hit || hit.py * W + hit.px === last) continue;
+            last = hit.py * W + hit.px;
+            at.push({ o, l: hit.l, px: hit.px });
+        }
+        const found = [];
+        for (let k = 0; k < at.length; k++) {
+            const round = [];
+            for (let j = 0; j < at.length; j++) if (Math.abs(at[j].o - at[k].o) <= 0.3) round.push(at[j].l);
+            round.sort((a, b) => a - b);
+            const median = round[Math.floor(round.length / 2)];
+            if (!(at[k].l < 0.75 * median)) continue;
+            let j = k;
+            while (j + 1 < at.length && at[j + 1].l < 0.75 * median) j++;
+            if (Math.abs(at[j].px - at[k].px) + 1 <= 3) found.push((at[k].o + at[j].o) / 2);
+            k = j;
+        }
+        rows.push(found);
+    }
+    const chains = [];
+    rows.forEach((found, r) => {
+        for (const o of found) {
+            const chain = chains.find(c => r - c.last <= 3 && r > c.last && Math.abs(c.o - o) <= 0.03);
+            if (chain) { chain.last = r; chain.o = o; chain.n++; } else chains.push({ first: r, last: r, o, n: 1 });
+        }
+    });
+    const lines = chains.filter(c => (c.last - c.first) * 0.1 >= 3).map(c => ({ at: Math.round(c.o * 100) / 100, fromM: Math.round(c.first) / 10 - 3, toM: Math.round(c.last) / 10 - 3 }));
+    return { rows: rows.filter(r => r).length, dips: rows.reduce((n, r) => n + r.length, 0), lines };
+}
+
+function floatingCount(STRUCTURE_DARK = 32) {
+    const env = game.environment;
+    const renderer = game.graphics.renderer;
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const target = new THREE.WebGLRenderTarget(size.x, size.y);
+    const flat = c => new THREE.MeshBasicMaterial({ color: c, side: THREE.DoubleSide, fog: false });
+    const land = flat(0x0000ff), other = flat(0x000000), structure = flat(0xffff00);
+    const ribbon = new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        vertexShader: 'varying vec3 vWorld; varying vec3 vN; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vWorld = w.xyz; vN = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }',
+        fragmentShader: 'varying vec3 vWorld; varying vec3 vN; void main() { vec3 n = vN.y < 0.0 ? -vN : vN; gl_FragColor = dot(cameraPosition - vWorld, n) < 0.0 ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.0, 0.0, 1.0); }'
+    });
+    const saved = new Map();
+    const hidden = [];
+    // The bike stays, drawn as `other`: it hides the land behind it in the frame as drawn too
+    const bike = game.vehicle && game.vehicle.group;
+    game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    if (bike) bike.traverse(o => { if (o.isMesh) { saved.set(o, o.material); o.material = other; } });
+    const inside = (o, group) => { for (let n = o; n; n = n.parent) if (n === group) return true; return false; };
+    env.group.traverse(o => {
+        if (!o.isMesh) return;
+        saved.set(o, o.material);
+        if (inside(o, env.tileGroup) || o === env.horizon || (env.farLand || []).includes(o)) o.material = land;
+        else if (o.name === 'road-ribbon' || o.name === 'road-side') o.material = ribbon;
+        else if (inside(o, env.roadGroup) || inside(o, env.sideGroup)) o.material = structure;
+        else o.material = other;
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, game.camera);
+    const pixels = new Uint8Array(size.x * size.y * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, size.x, size.y, pixels);
+    renderer.setRenderTarget(null);
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    game.scene.background = background;
+    game.scene.fog = fog;
+    target.dispose();
+    let underside = 0, top = 0, landPx = 0, black = 0, structurePx = 0, structureBlack = 0;
+    const frame = window.floatFrame && window.floatFrame.w === size.x && window.floatFrame.h === size.y ? window.floatFrame : null;
+    for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] > 200 && pixels[i + 1] < 50) underside++;
+        else if (pixels[i + 1] > 200 && pixels[i] < 50) top++;
+        else if (frame && pixels[i] > 200 && pixels[i + 1] > 200 && pixels[i + 2] < 50) {
+            // A structure (a deck, its soffit, a pier, a wall, a tube) near black in the frame as drawn: concrete and
+            // stone in shade stay over STRUCTURE_DARK (a soffit at 23 read as a black slab across the sky)
+            const p = i / 4, x = p % size.x, y = size.y - 1 - Math.floor(p / size.x), at = (y * size.x + x) * 4;
+            structurePx++;
+            if (0.2126 * frame.image[at] + 0.7152 * frame.image[at + 1] + 0.0722 * frame.image[at + 2] < STRUCTURE_DARK) structureBlack++;
+        } else if (frame && pixels[i + 2] > 200 && pixels[i] < 50 && pixels[i + 1] < 50) {
+            // Land (a tile or the far land): near black in the frame as drawn (the target's rows run bottom up)
+            const p = i / 4, x = p % size.x, y = size.y - 1 - Math.floor(p / size.x), at = (y * size.x + x) * 4;
+            landPx++;
+            if (0.2126 * frame.image[at] + 0.7152 * frame.image[at + 1] + 0.0722 * frame.image[at + 2] < 10) black++;
+        }
+    }
+    return { underside, top, pixels: size.x * size.y, land: landPx, blackLand: landPx ? Math.round((black / landPx) * 10000) / 10000 : 0, structure: structurePx, blackStructure: structurePx ? Math.round((structureBlack / structurePx) * 10000) / 10000 : 0 };
+}
+
+// world-haze's verdict (HAZE_BANDS, HAZE_SKY): each band of each view that holds enough of it, and every band somewhere
+function hazeChecks(haze, failures) {
+    const within = (v, range) => v >= range[0] && v <= range[1];
+    const judged = HAZE_BANDS.map(() => 0);
+    for (const view of haze.views) {
+        const where = `s ${view.s} turned ${view.turnDeg}`;
+        const sky = view.sky.px >= HAZE_MIN_PX ? view.sky : null;
+        if (view.bare.length) failures.push(`world-haze: at ${where} these are drawn without the haze: ${view.bare.join(', ')}`);
+        if (sky) {
+            for (const key of ['h', 's', 'v']) if (!within(sky[key], HAZE_SKY[key])) failures.push(`world-haze: at ${where} the sky near the horizon has ${key} ${sky[key]} (${sky.rgb}), outside the photos' ${HAZE_SKY[key].join(' to ')}`);
+        }
+        view.bands.forEach((band, i) => {
+            const want = HAZE_BANDS[i];
+            if (!(band.px >= HAZE_MIN_PX)) return;
+            judged[i]++;
+            for (const key of ['h', 's', 'v']) if (want[key] && !within(band[key], want[key])) failures.push(`world-haze: at ${where} the land at ${want.name} has ${key} ${band[key]} (${band.rgb}), outside the photos' ${want[key].join(' to ')}`);
+            if (want.blue && sky && band.greenOverBlue > sky.greenOverBlue + HAZE_GREEN_TOL + 1e-9) failures.push(`world-haze: at ${where} the land at ${want.name} is greener than the sky near the horizon (green less blue ${band.greenOverBlue} against ${sky.greenOverBlue})`);
+        });
+    }
+    HAZE_BANDS.forEach((want, i) => { if (!judged[i]) failures.push(`world-haze: no view holds ${HAZE_MIN_PX} px of land at ${want.name}`); });
+}
+
+// world-trees: the colour of the drawn trees against the photos (.agent/sop/photo-match.md) and against the land round
+// them. At each station the chase view, and the same place looking 70 degrees to either side over the slopes, are drawn
+// as the rider sees them; then drawn again with each tree kind and the land in an id colour and the view distance in
+// green, and each tree pixel read in the frame as drawn. TREE_BANDS are the photos' ranges by distance (HSV of the
+// display colour, 0 to 1); TREE_OVER_LAND is the most a band's trees may outshine the land round them (in 24 px cells
+// holding both, tree-weighted).
+// Stations: 0 and 400 the forest round Airolo, 1600 and 2000 the lower valley, 2800 the slopes at km 2 to 3; the rain
+// views (TREE_RAIN_VIEWS) take the climb's rain look at two of them. The rain's own stretch of road (s 7 km on) holds
+// few trees, and how many are resident there depends on the places visited before.
+const TREE_VIEWS = [0, 400, 1600, 2000, 2800];
+const TREE_RAIN_VIEWS = [0, 2800];
+const TREE_BANDS = [
+    { name: 'near', fromM: 0, toM: 60, s: [0.12, 0.58], v: [0.06, 0.4] },
+    { name: 'mid', fromM: 60, toM: 250, s: [0.12, 0.48], v: [0.1, 0.38] },
+    { name: 'far', fromM: 250, toM: 2040, s: [0.08, 0.48], v: [0.1, 0.38] }
+];
+const TREE_OVER_LAND = 0.03;
+// Metres over the road the turned views look from: over the verge's bank, so the slope and its trees show
+const TREE_EYE_M = 14;
+const TREE_MIN_PX = 400;
+
+// world-haze: the colour of distant land against the photos, by its distance. `node tools/world/photomatch.mjs haze`
+// measured the owner's photos (19 with a camera that can be trusted; only these numbers leave them): the mean display
+// colour of the land at 1 to 3 km (90, 95, 88: its own colour still), 3 to 8 km (76, 98, 121: hue 211, saturation
+// 0.37, value 0.47), from 8 km (92, 125, 170: hue 214, saturation 0.46, value 0.67), and of the sky 1 to 8% of the
+// picture's height over the skyline (188, 203, 224: hue 215, saturation 0.16, value 0.88). So distant land takes the
+// sky's hue, deeper and darker, and it is never greener than the sky: green less blue (0 to 1) is -0.09 and -0.17
+// for the land against -0.08 for the sky. HAZE_BANDS holds each band's mean colour to the spread of the photos' own
+// means (`h` degrees, `s`, `v`), and `blue` holds it no greener than the sky near the horizon in the same view.
+// Each view is drawn in clear air (the `dry` look) from HAZE_EYE_M over the road, then again with the view distance
+// in place of the colour; the sky is read over the drawn skyline. Every material the world draws must carry the haze. HAZE_VIEWS are `s:turn` (degrees from the road's
+// heading); a band a view holds less than HAZE_MIN_PX of is not judged there, and every band must be judged somewhere.
+const HAZE_BANDS = [
+    { name: '1 to 3 km', fromM: 1000, toM: 3000, s: [0, 0.6], v: [0.25, 0.65] },
+    { name: '3 to 8 km', fromM: 3000, toM: 8000, h: [195, 225], s: [0.12, 0.6], v: [0.3, 0.68], blue: true },
+    { name: '8 km on', fromM: 8000, toM: Infinity, h: [195, 225], s: [0.28, 0.6], v: [0.5, 0.83], blue: true }
+];
+// (`over`: the share of the frame's height over the skyline, and the most degrees over the level it is read at)
+const HAZE_SKY = { name: 'sky near the horizon', over: [0.01, 0.08, 16], h: [195, 225], s: [0, 0.33], v: [0.75, 1] };
+// The most a band may be greener than the sky near the horizon (green less blue of the mean colour, 0 to 1)
+const HAZE_GREEN_TOL = 0.02;
+const HAZE_VIEWS = ['400:180', '2800:180', '6600:180', '9500:180', '12800:0', '12800:180'];
+const HAZE_EYE_M = 14;
+const HAZE_MIN_PX = 1500;
+
+async function hazeView(placeSource, s, turnDeg, eyeM, bands, skyOver) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle;
+    const env = game.environment;
+    // Clear air from end to end: the stage's own look puts mist and rain on the upper road
+    if (!window.hazeTrack) window.hazeTrack = game.atmosphereTrack;
+    const dry = WorldLooks.variants.dry.tremola[0].look;
+    game.atmosphereTrack = AtmosphereTrack.forWorld(env.route.stages, env.route, Object.fromEntries(env.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: dry }]])));
+    game.cameraMode = 2;
+    await placeAt(s);
+    game.atmosphereWritten = null;
+    game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env, weatherSystem: game.weatherSystem });
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    v.speed = 0;
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 240; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const cam = game.camera;
+    cam.rotation.order = 'YXZ';
+    cam.rotation.y += turnDeg * Math.PI / 180;
+    cam.rotation.x = 0;
+    cam.rotation.z = 0;
+    cam.position.set(v.position.x, v.position.y + eyeM, v.position.z);
+    cam.updateMatrixWorld(true);
+    const renderer = game.graphics.renderer;
+    const bike = v.group, bikeShown = bike.visible;
+    bike.visible = false;
+    game.graphics.render(game.scene, cam);
+    const canvas = renderer.domElement;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width; copy.height = canvas.height;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const frame = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    const W = copy.width, H = copy.height;
+    // The distance frame: everything the world draws, its distance from the eye in 16 bits (to 65 km)
+    const material = new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        vertexShader: 'varying float vD; void main() { vec4 p = vec4(position, 1.0);\n#ifdef USE_INSTANCING\np = instanceMatrix * p;\n#endif\nvec4 mv = modelViewMatrix * p; vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: 'varying float vD; void main() { float d = min(vD, 65535.0); float hi = floor(d / 256.0); gl_FragColor = vec4(1.0, hi / 255.0, (d - hi * 256.0) / 255.0, 1.0); }'
+    });
+    const saved = new Map(), hidden = [];
+    game.scene.children.forEach(c => { if (c !== env.group && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    // One haze for everything a world draws: a drawn mesh whose material could take it and has not is named
+    const bare = new Set();
+    env.group.traverse(o => {
+        if (!o.isMesh) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (LandShade.hazeable(m) && !m.userData.haze) bare.add(o.name || m.name || m.type);
+        saved.set(o, o.material);
+        o.material = material;
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    const target = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const ids = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, ids);
+    renderer.setRenderTarget(null);
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    bike.visible = bikeShown;
+    game.scene.background = background;
+    game.scene.fog = fog;
+    target.dispose();
+    material.dispose();
+    const empty = () => ({ n: 0, r: 0, g: 0, b: 0 });
+    const land = bands.map(empty), sky = empty();
+    const focal = H / 2 / Math.tan(cam.fov * Math.PI / 360), skyUp = skyOver[2] * Math.PI / 180;
+    for (let x = 0; x < W; x++) {
+        let top = -1;
+        for (let y = 0; y < H; y++) {
+            const k = ((H - 1 - y) * W + x) * 4;
+            if (!ids[k]) continue;
+            if (top < 0) top = y;
+            const d = ids[k + 1] * 256 + ids[k + 2];
+            const band = bands.findIndex(b => d >= b.fromM && d < (b.toM === null ? Infinity : b.toM));
+            if (band < 0) continue;
+            const f = (y * W + x) * 4, acc = land[band];
+            acc.n++; acc.r += frame[f]; acc.g += frame[f + 1]; acc.b += frame[f + 2];
+        }
+        // The sky over this column's skyline (a column with no skyline in the frame has none)
+        if (top <= 0) continue;
+        for (let y = Math.max(0, Math.round(top - skyOver[1] * H)); y <= top - skyOver[0] * H; y++) {
+            // (only the sky near the horizon: over a slope that fills the view it is the mid sky, far up)
+            if (Math.atan((H / 2 - y) / focal) > skyUp) continue;
+            const f = (y * W + x) * 4;
+            sky.n++; sky.r += frame[f]; sky.g += frame[f + 1]; sky.b += frame[f + 2];
+        }
+    }
+    const round = n => Math.round(n * 100) / 100;
+    const read = a => {
+        if (!a.n) return { px: 0 };
+        const r = a.r / a.n, g = a.g / a.n, b = a.b / a.n, mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+        const h = d > 0 ? (mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4) * 60 : 0;
+        return { px: a.n, rgb: [r, g, b].map(Math.round), h: Math.round(h), s: round(mx ? d / mx : 0), v: round(mx / 255), greenOverBlue: round((g - b) / 255) };
+    };
+    return { s, turnDeg, size: [W, H], bare: [...bare], bands: land.map(read), sky: read(sky) };
+}
+
+async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle;
+    // A rain view: every stage takes the Tremola's rain look from end to end (the trees stand low, the rain falls high)
+    const env0 = game.environment;
+    if (!window.treeTrack) window.treeTrack = game.atmosphereTrack;
+    const rainPart = WorldLooks.tremola.find(part => part.look.weather === 'rain');
+    game.atmosphereTrack = rain ? AtmosphereTrack.forWorld(env0.route.stages, env0.route, Object.fromEntries(env0.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: rainPart.look }]]))) : window.treeTrack;
+    game.cameraMode = 2;
+    await placeAt(s);
+    game.atmosphereWritten = null;
+    game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env0, weatherSystem: game.weatherSystem });
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    v.speed = 0;
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 240; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const cam = game.camera;
+    if (turnDeg) {
+        // Over the slopes beside the road: turned about the vertical, from TREE_EYE_M over the road, looking down
+        cam.rotation.order = 'YXZ';
+        cam.rotation.y += turnDeg * Math.PI / 180;
+        cam.rotation.x = -0.2;
+        cam.rotation.z = 0;
+        cam.position.y = v.position.y + eyeM;
+        cam.updateMatrixWorld(true);
+    }
+    const env = game.environment, renderer = game.graphics.renderer;
+    game.graphics.render(game.scene, cam);
+    const canvas = renderer.domElement;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width; copy.height = canvas.height;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const frame = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    const W = copy.width, H = copy.height;
+    // The id frame: tree kinds and land, the view distance in green (8 m steps to 2040 m)
+    const KINDS = ['conifer', 'broadleaf', 'bush'];
+    const idMaterial = id => new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { uId: { value: id } },
+        vertexShader: 'varying float vD; void main() { vec4 p = vec4(position, 1.0);\n#ifdef USE_INSTANCING\np = instanceMatrix * p;\n#endif\nvec4 mv = modelViewMatrix * p; vD = -mv.z; gl_Position = projectionMatrix * mv; }',
+        fragmentShader: 'uniform float uId; varying float vD; void main() { gl_FragColor = vec4(uId, min(vD / 2040.0, 1.0), 0.0, 1.0); }'
+    });
+    const mats = { land: idMaterial(200 / 255), other: idMaterial(0), conifer: idMaterial(40 / 255), broadleaf: idMaterial(80 / 255), bush: idMaterial(120 / 255) };
+    const saved = new Map(), hidden = [];
+    const bike = v.group;
+    game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    const inside = (o, group) => { for (let n = o; n; n = n.parent) if (n === group) return true; return false; };
+    game.scene.traverse(o => {
+        if (!o.isMesh || !(inside(o, env.group) || inside(o, bike))) return;
+        saved.set(o, o.material);
+        const kind = /^trees:(conifer|broadleaf|bush|plain_conifer|plain_broadleaf|plain_bush)/.exec(o.name);
+        if (kind) o.material = mats[kind[1].replace('plain_', '')];
+        else if (inside(o, env.tileGroup) || o === env.horizon || (env.farLand || []).includes(o)) o.material = mats.land;
+        else o.material = mats.other;
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    const target = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const ids = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, ids);
+    renderer.setRenderTarget(null);
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    game.scene.background = background;
+    game.scene.fog = fog;
+    target.dispose();
+    Object.values(mats).forEach(m => m.dispose());
+    const bands = [{ to: 60 }, { to: 250 }, { to: 2041 }];
+    const empty = () => ({ n: 0, s: 0, v: 0, r: 0, g: 0, b: 0 });
+    const trees = bands.map(() => ({ all: empty(), conifer: empty(), broadleaf: empty(), bush: empty() }));
+    const land = bands.map(empty);
+    const CELL = 24, cw = Math.ceil(W / CELL), ch = Math.ceil(H / CELL);
+    const cells = Array.from({ length: cw * ch }, () => bands.map(() => ({ tn: 0, tv: 0, ln: 0, lv: 0 })));
+    const add = (acc, r, g, b, sat, val) => { acc.n++; acc.s += sat; acc.v += val; acc.r += r; acc.g += g; acc.b += b; };
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const k = ((H - 1 - y) * W + x) * 4, id = ids[k];
+            if (!id) continue;
+            const d = ids[k + 1] / 255 * 2040;
+            const band = d < 60 ? 0 : d < 250 ? 1 : 2;
+            const f = (y * W + x) * 4, r = frame[f], g = frame[f + 1], b = frame[f + 2];
+            const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+            const sat = mx ? (mx - mn) / mx : 0, val = mx / 255;
+            const cell = cells[Math.floor(y / CELL) * cw + Math.floor(x / CELL)][band];
+            if (id > 180) { add(land[band], r, g, b, sat, val); cell.ln++; cell.lv += val; }
+            else {
+                const kind = KINDS[Math.round(id / 40) - 1];
+                if (!kind) continue;
+                add(trees[band].all, r, g, b, sat, val);
+                add(trees[band][kind], r, g, b, sat, val);
+                cell.tn++; cell.tv += val;
+            }
+        }
+    }
+    const round = n => Math.round(n * 1000) / 1000;
+    const mean = a => a.n ? { px: a.n, s: round(a.s / a.n), v: round(a.v / a.n), rgb: [a.r, a.g, a.b].map(c => Math.round(c / a.n)) } : { px: 0 };
+    // Trees against the land round them: the cells of a band holding 8 px or more of each, weighted by tree pixels
+    const over = bands.map((_, band) => {
+        let w = 0, sum = 0, cellsUsed = 0;
+        for (const c of cells) {
+            const q = c[band];
+            if (q.tn < 8 || q.ln < 8) continue;
+            sum += (q.tv / q.tn - q.lv / q.ln) * q.tn; w += q.tn; cellsUsed++;
+        }
+        return w ? { px: w, cells: cellsUsed, vOverLand: round(sum / w) } : { px: 0 };
+    });
+    const look = game.graphics.grade ? { saturation: game.graphics.grade.saturation, contrast: game.graphics.grade.contrast } : null;
+    return {
+        s, turnDeg, rain: !!rain, size: [W, H], trees: env.scenery.treeCount, look, weather: game.weatherSystem ? game.weatherSystem.currentWeather : null,
+        bands: bands.map((_, band) => ({ trees: mean(trees[band].all), conifer: mean(trees[band].conifer), broadleaf: mean(trees[band].broadleaf), bush: mean(trees[band].bush), land: mean(land[band]), ...over[band] }))
+    };
+}
+
+// world-watertight: the drawn land is closed. From the helmet, the chase and the high camera at stations along the
+// slice, the land, the road and its edge works are drawn alone (each kind in its own colour, back faces marked) and
+// each pixel is read:
+//   holes      a pixel that shows nothing (the horizon and the far land are not drawn) although its ray passes under
+//              the drawn land before it leaves the drawn tiles (marched against each tile's own triangles at the LOD it
+//              is drawn at): the ray went through a gap in the land (a crack between tiles, an edge no skirt closes)
+//   backOpen   the underside of a land triangle seen through the land (its ray passed under the land before it)
+//   skirtOpen  a tile's skirt seen the same way (a skirt in plain view closes a step between two LODs and is counted
+//              as `skirt`, with the undersides as `backLand`, for information)
+// Then the edge works: the top edge of every retaining wall has its road's ribbon within 0.15 m beside it
+// (`jointOpen`), the feet of the aprons and retaining walls (the lowest outline edge of each triangle) must lie
+// on the land drawn at LOD0 under them or in it (`footOpen`; over coarser land `footCoarse`, for information), and no
+// corner or centre of one may stand over the ride's carriageway (`footOverRoad`: fill off an upper hairpin leg
+// reaching out over the lower one).
+const WATERTIGHT_EVERY_M = 50;
+const WATERTIGHT_MODES = [1, 2, 3];
+// Places the play-test found open: 400 to 500 the cut bank on the right (a crack along a tile edge), 2100 and 8700 a
+// fill slope off an upper hairpin leg ending in the air, 4600 a slab of land over a hollow, 6900 a folded cut face
+const WATERTIGHT_VIEWS = [400, 450, 500, 2100, 4600, 6900, 8700];
+// Metres a ray must pass under the drawn land, and a foot may stand over it, before it counts
+const WATERTIGHT_TOL_M = 0.3;
+async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    game.worldLinger = false;
+    const env = game.environment, route = env.route;
+    const renderer = game.graphics.renderer;
+    const W = 480, H = 270;
+    const target = new THREE.WebGLRenderTarget(W, H, { depthBuffer: true });
+    const pixels = new Uint8Array(W * H * 4);
+    // The kinds: land top 1, skirt 2, road 3, works 4, other drawn 5; the far kinds (horizon, far land) 6, nothing 0
+    const code = { land: 1, skirt: 2, road: 3, works: 4, other: 5, far: 6 };
+    const make = id => new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { id: { value: id } },
+        vertexShader: 'attribute float skirt; varying float vSkirt; void main(){ vSkirt = skirt; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        fragmentShader: 'uniform float id; varying float vSkirt; void main(){ float k = vSkirt > 1.5 ? 5.0 : vSkirt > 0.5 ? 2.0 : id; gl_FragColor = vec4(k / 255.0, gl_FrontFacing ? 0.0 : 1.0, 0.0, 1.0); }'
+    });
+    const mats = {};
+    const mat = id => mats[id] || (mats[id] = make(id));
+    const marked = new WeakSet();
+    // Every vertex of a tile mesh: 0 on the land, 1 on a skirt, 2 on a forest clump
+    // A tile cut to the retaining walls has more land past its grid's and its skirts' vertices (the cut triangles'
+    // parts), and the faces and skirts that close a cut (mesh.userData.closing), which are skirts here
+    const markSkirt = (mesh) => {
+        const geometry = mesh.geometry;
+        if (marked.has(geometry)) return;
+        marked.add(geometry);
+        const count = geometry.attributes.position.count;
+        const flags = new Float32Array(count);
+        const lod = /^world-terrain-.*-lod(\d)$/.exec(mesh.name);
+        if (lod) {
+            const side = (WorldData.TILE_N - 1) / (1 << Number(lod[1])) + 1, ground = side * side + side * 4;
+            const cut = !!mesh.userData.cuts;
+            for (let v = side * side; v < count; v++) flags[v] = v < ground ? 1 : cut ? 0 : 2;
+            if (cut) for (const v of mesh.userData.closing || []) flags[v] = 1;
+        }
+        geometry.setAttribute('skirt', new THREE.BufferAttribute(flags, 1));
+    };
+    const kindOf = o => {
+        const w = o.userData.world;
+        if (w === 'terrain') return code.land;
+        if (w === 'road' || w === 'barriers') return code.road;
+        if (w === 'works') return code.works;
+        // The horizon and the far land are left out: one standing over the land is world-floating's horizonOver
+        return null;
+    };
+    // The drawn land at (x, z): the tile mesh drawn there, on its own triangles at its LOD
+    const drawnLand = (x, z) => {
+        const m = WorldData.TILE_M;
+        const tx = Math.floor(x / m), tz = Math.floor(z / m);
+        const held = env.tileMeshes.get(`${tx},${tz}`);
+        if (!held) return null;
+        if (TerrainMesh.drawnAt && held.mesh.userData.lod !== undefined) return TerrainMesh.drawnAt(held.mesh, x, z);
+        const side = (WorldData.TILE_N - 1) / (1 << Number(/lod(\d)/.exec(held.mesh.name)[1])) + 1;
+        const cell = WorldData.TILE_M / (side - 1);
+        const pos = held.mesh.geometry.attributes.position.array;
+        const fx = (x - tx * m) / cell, fz = (z - tz * m) / cell;
+        const i = Math.max(0, Math.min(side - 2, Math.floor(fx))), j = Math.max(0, Math.min(side - 2, Math.floor(fz)));
+        const u = fx - i, v = fz - j;
+        const Y = (a, b) => pos[((j + b) * side + i + a) * 3 + 1];
+        return u + v <= 1 ? Y(0, 0) + u * (Y(1, 0) - Y(0, 0)) + v * (Y(0, 1) - Y(0, 0)) : Y(1, 1) + (1 - u) * (Y(0, 1) - Y(1, 1)) + (1 - v) * (Y(1, 0) - Y(1, 1));
+    };
+    // Whether a ray from `o` along unit `d` passes more than tol under the drawn land before it leaves the drawn tiles
+    const under = (o, d, limit = 2500) => {
+        for (let t = 1; t < limit; t += t < 200 ? 1 : 2) {
+            const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
+            const land = drawnLand(x, z);
+            if (land === null) return false;
+            if (y < land - tol) return { t: Math.round(t), x: Math.round(x), z: Math.round(z), key: `${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`, underM: Math.round((land - y) * 10) / 10 };
+        }
+        return null;
+    };
+    // The ride's carriageway under (x, z) and its height, or null
+    const near = {};
+    const carriageway = (x, z, inset = 0) => {
+        let best = null;
+        for (const i of route.cellSegments(x, z) || []) {
+            route.nearestSegment(x, z, i, i, near);
+            if (near.distance <= near.width / 2 - inset) best = best === null ? near.y : Math.max(best, near.y);
+        }
+        return best;
+    };
+    // Whether (x, z) lies in a road's band (the ride's carriageway and verge, a side road's) at about height y
+    const inBand = (x, z, y) => {
+        for (const i of route.cellSegments(x, z) || []) {
+            route.nearestSegment(x, z, i, i, near);
+            if (near.distance <= near.width / 2 + RoadSurface.VERGE_M + 0.05 && Math.abs(near.y - y) < 1.5) return true;
+        }
+        const side = env.ground.sideRoadY(x, z);
+        return side !== null && Math.abs(side - y) < 1.5;
+    };
+    const r2 = v => Math.round(v * 100) / 100;
+    const views = [], feetSeen = new Set();
+    const footOpen = [], footOverRoad = [];
+    let feet = 0, footCoarse = 0, joints = 0;
+    const jointOpen = [];
+    const lodAt = (x, z) => { const held = env.tileMeshes.get(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`); return held ? Number(/lod(\d)/.exec(held.mesh.name)[1]) : 0; };
+    const stations = [];
+    for (let s = from; s <= Math.min(to, route.length - 1); s += every) stations.push(Math.round(s));
+    for (const s of shotsAt) if (!stations.includes(s)) stations.push(s);
+    stations.sort((a, b) => a - b);
+    for (const s of stations) {
+        const p = route.sample(s, {});
+        if (p.flags.tunnel || p.flags.gallery) continue;
+        await placeAt(s);
+        const v = game.vehicle;
+        // The open edges of every edge works mesh drawn now: an edge of an apron or retaining wall triangle that no
+        // other triangle of the same part shares is the part's outline. Off a road's band (where the ribbon covers it)
+        // an outline edge must lie on the land or under it: over it, the apron's or wall's foot is open
+        env.group.traverse(o => {
+            if (!o.isMesh || o.userData.world !== 'works') return;
+            for (let q = o.parent; q; q = q.parent) if (!q.visible) return;
+            const g = o.geometry, pos = g.attributes.position.array;
+            // The top of every retaining wall hangs from a drawn road: the ribbon beside it (the meshes of its own
+            // group) lies within 0.15 m of each top edge on one side, at its height or under the parapet. A gap
+            // there (a wall at the verge's edge beside a ribbon drawn without a verge) shows the drop through it
+            const ribbons = [];
+            if (o.parent) o.parent.traverse(r => { if (r.isMesh && r.userData.world === 'road') ribbons.push(r); });
+            const down = new THREE.Raycaster();
+            const ribbonAt = (x, y, z) => {
+                down.set(new THREE.Vector3(x, y + 1, z), new THREE.Vector3(0, -1, 0));
+                down.far = 2.6;
+                return down.intersectObjects(ribbons, false).length > 0;
+            };
+            const vkey = v => `${Math.round(pos[v * 3] * 50)},${Math.round(pos[v * 3 + 1] * 50)},${Math.round(pos[v * 3 + 2] * 50)}`;
+            const ekey = (a, b) => { const ka = vkey(a), kb = vkey(b); return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`; };
+            for (const group of g.groups) {
+                if (group.materialIndex !== 2 || !ribbons.length) continue;
+                const uses = new Map();
+                for (let t = group.start; t < group.start + group.count; t += 3) for (const [a, b] of [[t, t + 1], [t + 1, t + 2], [t + 2, t]]) { const e = ekey(a, b); uses.set(e, (uses.get(e) || 0) + 1); }
+                for (let t = group.start; t < group.start + group.count; t += 3) {
+                    for (const [a, b, c] of [[t, t + 1, t + 2], [t + 1, t + 2, t], [t + 2, t, t + 1]]) {
+                        if (uses.get(ekey(a, b)) !== 1) continue;
+                        const third = pos[c * 3 + 1];
+                        if (!(third < pos[a * 3 + 1] - 0.05 && third < pos[b * 3 + 1] - 0.05)) continue;
+                        const ax = pos[a * 3], az = pos[a * 3 + 2], bx = pos[b * 3], bz = pos[b * 3 + 2];
+                        const len = Math.hypot(bx - ax, bz - az);
+                        if (len < 0.05) continue;
+                        // (a wing down the side of a slope is no wall's top: its top falls with the slope, and the
+                        // slope's ground lies beside it, not a road)
+                        if (Math.abs(pos[a * 3 + 1] - pos[b * 3 + 1]) > 0.4 * len) continue;
+                        const mx = (ax + bx) / 2, my = (pos[a * 3 + 1] + pos[b * 3 + 1]) / 2, mz = (az + bz) / 2;
+                        const seen = `top:${Math.round(mx * 4)},${Math.round(mz * 4)}`;
+                        if (feetSeen.has(seen)) continue;
+                        feetSeen.add(seen);
+                        joints++;
+                        const nx = -(bz - az) / len * 0.15, nz = (bx - ax) / len * 0.15;
+                        if (!ribbonAt(mx + nx, my, mz + nz) && !ribbonAt(mx - nx, my, mz - nz)) jointOpen.push({ s, x: r2(mx), z: r2(mz), y: r2(my), road: o.parent.name });
+                    }
+                }
+            }
+            for (const group of g.groups) {
+                if (group.materialIndex === 1) continue;
+                const kind = group.materialIndex === 0 || group.materialIndex === 3 ? 'apron' : 'wall';
+                // No piece of an apron or a wall stands over another road's carriageway (a tongue of fill off an
+                // upper hairpin leg reaching out over the lower one): its corners and its centre are read
+                for (let t = group.start; t < group.start + group.count; t += 3) {
+                    const pts = [0, 1, 2].map(k => [pos[(t + k) * 3], pos[(t + k) * 3 + 1], pos[(t + k) * 3 + 2]]);
+                    pts.push(pts[0].map((c, i) => (c + pts[1][i] + pts[2][i]) / 3));
+                    for (const [px, py, pz] of pts) {
+                        const road = carriageway(px, pz, 0.1);
+                        if (road === null || py < road + 0.3) continue;
+                        const seen = `over:${Math.round(px * 2)},${Math.round(pz * 2)}`;
+                        if (feetSeen.has(seen)) continue;
+                        feetSeen.add(seen);
+                        footOverRoad.push({ s, x: r2(px), z: r2(pz), y: r2(py), road: r2(road), kind });
+                    }
+                }
+                const count = new Map();
+                const key = v => `${Math.round(pos[v * 3] * 50)},${Math.round(pos[v * 3 + 1] * 50)},${Math.round(pos[v * 3 + 2] * 50)}`;
+                const edge = (a, b) => { const ka = key(a), kb = key(b); return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`; };
+                for (let t = group.start; t < group.start + group.count; t += 3) for (const [a, b] of [[t, t + 1], [t + 1, t + 2], [t + 2, t]]) { const e = edge(a, b); count.set(e, (count.get(e) || 0) + 1); }
+                for (let t = group.start; t < group.start + group.count; t += 3) {
+                    for (const [a, b, c] of [[t, t + 1, t + 2], [t + 1, t + 2, t], [t + 2, t, t + 1]]) {
+                        const e = edge(a, b);
+                        if (count.get(e) !== 1) continue;
+                        // A foot is the lowest edge of its triangle (its top edge hangs from the road, its sides end a run)
+                        const third = pos[c * 3 + 1];
+                        if (!(third > pos[a * 3 + 1] + 0.05 && third > pos[b * 3 + 1] + 0.05)) continue;
+                        if (Math.hypot(pos[a * 3] - pos[b * 3], pos[a * 3 + 2] - pos[b * 3 + 2]) < 0.05) continue;
+                        const seen = `${kind}:${e}`;
+                        if (feetSeen.has(seen)) continue;
+                        feetSeen.add(seen);
+                        feet++;
+                        const ax = pos[a * 3], ay = pos[a * 3 + 1], az = pos[a * 3 + 2], bx = pos[b * 3], by = pos[b * 3 + 1], bz = pos[b * 3 + 2];
+                        const mx = (ax + bx) / 2, my = (ay + by) / 2, mz = (az + bz) / 2;
+                        if (inBand(mx, mz, my)) continue;
+                        if (carriageway(mx, mz) !== null) continue;
+                        const la = drawnLand(ax, az), lb = drawnLand(bx, bz);
+                        if (la === null || lb === null) continue;
+                        const over = Math.min(ay - la, by - lb);
+                        if (!(over > tol)) continue;
+                        // Over a tile drawn at LOD1 or 2 (700 m off or more), whose coarse vertices are held under
+                        // the carved nodes within a stride, the works reach the land drawn near and are counted apart
+                        if (lodAt(mx, mz) > 0) footCoarse++;
+                        else footOpen.push({ s, x: r2(mx), z: r2(mz), overM: r2(over), kind });
+                    }
+                }
+            }
+        });
+        for (const mode of modes) {
+            game.cameraMode = mode;
+            game.worldCamera.reset(v.yawAngle);
+            v.speed = 0;
+            twistyDev.autopilot({ speed: 0 });
+            for (let i = 0; i < 120; i++) twistyDev.step(1);
+            env.streamer.pump(Infinity);
+            twistyDev.step(1);
+            const cam = game.camera;
+            cam.updateMatrixWorld();
+            if (drawnLand(cam.position.x, cam.position.z) > cam.position.y) { views.push({ s, mode, skipped: 'camera under the land' }); continue; }
+            const saved = [];
+            game.scene.traverse(o => {
+                // Rain, snow and other points, lines and sprites are not the land: they would paint over a pixel
+                if (o.isPoints || o.isLine || o.isSprite) { saved.push([o, o.material, o.visible]); o.visible = false; return; }
+                if (!o.isMesh) return;
+                const kind = kindOf(o);
+                saved.push([o, o.material, o.visible]);
+                if (kind === null || o.isInstancedMesh) { o.visible = false; return; }
+                markSkirt(o);
+                if (!o.geometry.attributes.skirt) o.geometry.setAttribute('skirt', new THREE.BufferAttribute(new Float32Array(o.geometry.attributes.position.count), 1));
+                o.material = mat(kind);
+            });
+            const bg = game.scene.background, fog = game.scene.fog;
+            game.scene.background = new THREE.Color(0, 0, 0);
+            game.scene.fog = null;
+            const aspect = cam.aspect;
+            renderer.setRenderTarget(target);
+            renderer.setClearColor(0x000000, 1);
+            renderer.clear();
+            renderer.render(game.scene, cam);
+            renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+            renderer.setRenderTarget(null);
+            saved.forEach(([o, m, vis]) => { o.material = m; o.visible = vis; });
+            game.scene.background = bg;
+            game.scene.fog = fog;
+            cam.aspect = aspect;
+            let holes = 0, backLand = 0, skirt = 0, land = 0;
+            const backAt = [], skirtAt = [];
+            const worst = [];
+            const ray = new THREE.Raycaster();
+            const ndc = new THREE.Vector2();
+            for (let y = 0; y < H; y += 2) {
+                for (let x = 0; x < W; x += 2) {
+                    const at = (y * W + x) * 4;
+                    const kind = pixels[at], back = pixels[at + 1] > 127;
+                    if (kind === code.land) { land++; if (back) { backLand++; if (backAt.length < 400) backAt.push([x, y]); } continue; }
+                    if (kind === code.skirt) { skirt++; if (skirtAt.length < 400) skirtAt.push([x, y]); continue; }
+                    if (kind !== 0 && kind !== code.far) continue;
+                    // Read back from the bottom row up
+                    ndc.set((x + 0.5) / W * 2 - 1, (y + 0.5) / H * 2 - 1);
+                    ray.setFromCamera(ndc, cam);
+                    if (ray.ray.direction.y > 0.2) continue;
+                    const gone = under(ray.ray.origin, ray.ray.direction);
+                    if (gone) { holes++; if (worst.length < 4 || (gone.t < worst[0].t && worst.length < 12)) worst.push({ px: [x, H - 1 - y], ...gone }); }
+                }
+            }
+            // An underside or a skirt in view is a gap only where its ray passed under the drawn land before it met
+            // it: at a ridge seen edge-on or a tile edge seen from afar the rasteriser gives a back face or a skirt a
+            // pixel now and then, with nothing open
+            const terrain = [];
+            env.tileGroup.traverse(o => { if (o.isMesh) terrain.push(o); });
+            const through = list => {
+                const out = [];
+                for (const [x, y] of list) {
+                    ndc.set((x + 0.5) / W * 2 - 1, (y + 0.5) / H * 2 - 1);
+                    ray.setFromCamera(ndc, cam);
+                    const hit = ray.intersectObjects(terrain, false)[0];
+                    if (!hit) continue;
+                    const gone = under(ray.ray.origin, ray.ray.direction, hit.distance - 0.5);
+                    if (gone) out.push({ px: [x, H - 1 - y], t: Math.round(hit.distance), tile: hit.object.name.slice(14), ...gone });
+                }
+                return out;
+            };
+            const backOpen = through(backAt), skirtOpen = through(skirtAt);
+            views.push({ s, mode, holes, backLand, skirt, land, worst, backOpen: backOpen.length, skirtOpen: skirtOpen.length, backAt: backOpen.slice(0, 4), skirtAt: skirtOpen.slice(0, 4) });
+        }
+    }
+    target.dispose();
+    const sum = key => views.reduce((n, w) => n + (w[key] || 0), 0);
+    const top = key => views.filter(w => w[key]).sort((a, b) => b[key] - a[key]).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, [key]: w[key], at: w.worst }));
+    return {
+        stations: stations.length, views: views.length, skipped: views.filter(w => w.skipped).length,
+        holes: sum('holes'), holeViews: views.filter(w => w.holes).length, worstHoles: top('holes'),
+        backLand: sum('backLand'), skirt: sum('skirt'),
+        backOpen: sum('backOpen'), backViews: views.filter(w => w.backOpen).length, worstBack: views.filter(w => w.backOpen).sort((a, b) => b.backOpen - a.backOpen).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, backOpen: w.backOpen, at: w.backAt })),
+        skirtOpen: sum('skirtOpen'), skirtViews: views.filter(w => w.skirtOpen).length, worstSkirt: views.filter(w => w.skirtOpen).sort((a, b) => b.skirtOpen - a.skirtOpen).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, skirtOpen: w.skirtOpen, at: w.skirtAt })),
+        joints, jointOpen: jointOpen.length, worstJointOpen: jointOpen.slice(0, 8),
+        worksEdges: feet, footCoarse, footOpen: footOpen.length, worstFootOpen: footOpen.sort((a, b) => b.overM - a.overM).slice(0, 8),
+        footOverRoad: footOverRoad.length, footOverRoadByKind: { apron: footOverRoad.filter(f => f.kind === 'apron').length, wall: footOverRoad.filter(f => f.kind === 'wall').length },
+        worstFootOverRoad: footOverRoad.sort((a, b) => (b.y - b.road) - (a.y - a.road)).slice(0, 8),
+        perView: views
+    };
+}
+
+const WORLD = {
+    // The drawn land is closed: holes, land undersides and skirts in view, and edge works whose outline stands over
+    // the land, from the helmet, chase and high cameras every --every metres (50) between --from and --to
+    // The drawn trees' colour against the photos' ranges and the land round them (treeColourView), at TREE_VIEWS
+    // (--views s,s,...); --out <dir> saves each view as drawn
+    'world-trees': async (page) => {
+        const out = option('out');
+        if (out) mkdirSync(out, { recursive: true });
+        // The saved views show the frame alone, without the HUD
+        if (out) await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        const tag = option('tag') || 'trees';
+        const views = [];
+        const rain = option('rain') ? option('rain').split(',').map(Number) : TREE_RAIN_VIEWS;
+        const list = (option('views') ? option('views').split(',').map(Number) : TREE_VIEWS).map(s => ({ s, rain: false })).concat(rain.map(s => ({ s, rain: true })));
+        for (const { s, rain: wet } of list) {
+            for (const turn of [0, -70, 70]) {
+                const at = await page.evaluate(treeColourView, placeAt.toString(), s, turn, TREE_EYE_M, wet);
+                if (out) await page.screenshot({ path: join(out, `${tag}-s${s}${wet ? '-rain' : ''}${turn ? `-turn${turn}` : ''}.png`) });
+                views.push(at);
+            }
+        }
+        return { bands: TREE_BANDS, overLand: TREE_OVER_LAND, minPx: TREE_MIN_PX, views };
+    },
+    // The colour of distant land by its distance, and of the sky near the horizon, against the photos (hazeView), at
+    // HAZE_VIEWS (--views s:turn,...); --out <dir> saves each view as drawn
+    'world-haze': async (page) => {
+        const out = option('out');
+        if (out) mkdirSync(out, { recursive: true });
+        if (out) await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        const tag = option('tag') || 'haze';
+        const views = [];
+        for (const view of (option('views') ? option('views').split(',') : HAZE_VIEWS)) {
+            const [s, turn] = view.split(':').map(Number);
+            // (JSON has no Infinity: the last band's end goes over as null)
+            const at = await page.evaluate(hazeView, placeAt.toString(), s, turn || 0, HAZE_EYE_M, HAZE_BANDS.map(b => ({ fromM: b.fromM, toM: Number.isFinite(b.toM) ? b.toM : null })), HAZE_SKY.over);
+            if (out) await page.screenshot({ path: join(out, `${tag}-s${s}-turn${turn || 0}.png`) });
+            views.push(at);
+        }
+        return { views };
+    },
+    'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), option('modes') ? option('modes').split(',').map(Number) : WATERTIGHT_MODES, WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
+    // Floating roads and land over the road, as drawn: floatingWalk over the whole slice (every --every metres, 500 by
+    // default), then the named views (FLOATING_VIEWS, or --views), each saved to --out when given
+    'world-floating': async (page) => {
+        const walk = await page.evaluate(floatingWalk, placeAt.toString(), Number(option('every') || 500), FLOAT_TOL_M, FLOAT_UP_M);
+        const out = option('out');
+        if (out) mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'floating';
+        const views = [];
+        for (const s of (option('views') ? option('views').split(',').map(Number) : FLOATING_VIEWS)) {
+            await page.evaluate(`window.laneLines = ${laneLines.toString()}`);
+            const at = await page.evaluate(floatingView, placeAt.toString(), pilotWorld.toString(), s);
+            let file = null;
+            if (out) {
+                file = join(out, `${tag}-s${s}.png`);
+                await page.screenshot({ path: file });
+            }
+            const count = await page.evaluate(floatingCount);
+            views.push({ want: s, ...at, ...count, file });
+        }
+        return { ...walk, views };
+    },
+    // The drawn window against the budgets, every `--every` metres of ride; the resident ride and tile counts too
+    'world-window': async page => {
+        const every = Number(option('every') || 1000);
+        const rows = await page.evaluate(async (step, bikeTileM, countSource, placeSource, meshCap) => {
+            const countScene = new Function(`return (${countSource})`)();
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const route = game.environment.route;
+            const out = [];
+            for (let s = 0; s <= route.length; s += step) {
+                const p = await placeAt(s);
+                const env = game.environment;
+                const near = [...env.streamer.refs.keys()].length;
+                const m = env.tileMeshes;
+                const bike = [...env.streamer.tilesNear(p.x, p.z, bikeTileM)];
+                const counted = countScene();
+                out.push({ s: Math.round(s), ...counted, meshMargin: meshCap - counted.meshes, tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+            }
+            return out;
+        }, every, WORLD_BIKE_TILE_M, countScene.toString(), placeAt.toString(), LEG_BUDGET.meshes);
+        return { every, rows, leastMeshMargin: Math.min(...rows.map(r => r.meshMargin)) };
+    },
+    'world-budget': page => WORLD['world-window'](page),
+    // Milliseconds to render one frame of the world (scene, post and a 1-pixel read-back that waits for the GPU) from the
+    // chase view at five points of the ride, after the window round each has settled. The median of `count` frames per
+    // point, the median of all of them and the worst frame. Read with --gpu: a software renderer measures nothing useful.
+    'world-frametime': async page => page.evaluate(async (placeSource, count) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const route = game.environment.route;
+        const gl = game.graphics.renderer.getContext();
+        const pixel = new Uint8Array(4);
+        const frame = () => {
+            const t0 = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            return performance.now() - t0;
+        };
+        const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+        const round = n => Math.round(n * 100) / 100;
+        const all = [];
+        const points = [];
+        for (const f of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+            const s = Math.round(f * route.length);
+            await placeAt(s);
+            game.cameraMode = 2;
+            game.worldCamera.reset(game.vehicle.yawAngle);
+            twistyDev.autopilot({ speed: 0 });
+            for (let i = 0; i < 240; i++) twistyDev.step(1);
+            game.environment.streamer.pump(Infinity);
+            for (let i = 0; i < 5; i++) frame();
+            const times = Array.from({ length: count }, frame);
+            all.push(...times);
+            points.push({ s, ms: round(median(times)), worst: round(Math.max(...times)) });
+        }
+        return { points, medianMs: round(median(all)), worstMs: round(Math.max(...all)), worstPointMs: Math.max(...points.map(p => p.ms)), renderer: gl.getParameter(gl.RENDERER) };
+    }, placeAt.toString(), Number(option('frames') || 30)),
+    // GPU pictures of the riding view: the chase camera at five points of the ride, ridden into for 140 m so the
+    // camera has its riding place. `--out <dir>` names the folder, `--tag` the file prefix.
+    'world-ride-shots': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'ride';
+        const length = await page.evaluate(() => game.environment.route.length);
+        const files = [];
+        for (const f of [0.05, 0.25, 0.45, 0.65, 0.85]) {
+            const s = Math.round(f * length);
+            const at = await page.evaluate(async (placeSource, pilotSource, s) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const v = game.vehicle;
+                game.cameraMode = 2;
+                await placeAt(Math.max(10, s - 140));
+                game.worldCamera.reset(v.yawAngle);
+                new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+                let ticks = 0;
+                while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, placeAt.toString(), pilotWorld.toString(), s);
+            const file = join(out, `${tag}-s${s}.png`);
+            await page.screenshot({ path: file });
+            files.push({ file, ...at });
+        }
+        return { files };
+    },
+    // The physics ground against the drawn ground: a ray down onto the drawn world meshes
+    'world-ground': async page => page.evaluate(async (placeSource, want) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const route = env.route;
+        // road: |drawn - physics| in the road band; land: the same within 300 m off the road;
+        // above: how far the drawn land stands over the road surface at each road point (P8: never)
+        const road = [], land = [], above = [];
+        const raycaster = new THREE.Raycaster();
+        const down = new THREE.Vector3(0, -1, 0);
+        // `from`: the height the ray starts at. A road point casts from 3 m over the physics ground, the ground under the
+        // rider, so a road that passes over the ride (a side road on its own bridge) is not read as the ride's surface
+        // A retaining wall, deck or parapet of the edge works is a structure, not ground (the physics treats it so)
+        const hitY = (x, z, groups, from = 4000) => {
+            raycaster.set(new THREE.Vector3(x, from, z), down);
+            const hit = raycaster.intersectObjects(groups, true).find(h => !(h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2)));
+            return hit ? hit.point.y : null;
+        };
+        const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
+        // The road's own surface, not the edge works of a leg overhanging it (a deck's soffit can lie within 3 m over it)
+        const surfacesNow = () => { const out = []; drawn.forEach(g => g.traverse(o => { if (o.isMesh && o.name !== 'road-works') out.push(o); })); return out; };
+        const stations = 12;
+        // Each station takes its share of what is still wanted, so the totals reach `want` unless candidates run out
+        const quota = (list, k) => Math.ceil((want - list.length) / (stations - k));
+        for (let k = 0; k < stations; k++) {
+            const s = (route.length * (k + 0.5)) / stations;
+            const p = await placeAt(s);
+            const w = p.width;
+            const surfaces = surfacesNow();
+            const roadWanted = road.length + quota(road, k);
+            for (let i = 0; i < 400 && road.length < roadWanted; i++) {
+                const a = ((i * 0.618) % 1) * 2 - 1;
+                const lateral = Math.sign(a || 1) * (0.4 + Math.abs(a) * (w / 2 - 1.4));
+                const along = ((i * 0.381966) % 1) * 160 - 80;
+                const q = route.sample(s + along, {});
+                const x = q.x + lateral * Math.cos(q.heading), z = q.z - lateral * Math.sin(q.heading);
+                const loc = {};
+                const ground = env.ground.groundY(x, z, { start: route.toUnits(s + along) - 12, end: route.toUnits(s + along) + 12 }, true, loc);
+                // A structure's deck or roof is not the carved road: the DEM may stand level with a short bridge (tunnels and bridges are P15's)
+                if (!(Math.abs(loc.lateral) < w / 2) || q.flags.bridge || q.flags.tunnel || q.flags.gallery) continue;
+                const hit = hitY(x, z, surfaces, ground + 3);
+                if (hit === null) continue;
+                road.push(Math.abs(hit - ground));
+                const tile = hitY(x, z, [env.tileGroup], ground + 3);
+                above.push(tile === null ? -Infinity : tile - ground);
+            }
+            const landWanted = land.length + quota(land, k);
+            for (let i = 0; i < 400 && land.length < landWanted; i++) {
+                const d = 20 + ((i * 0.377) % 1) * 280;
+                const a = (i * 2.399) + k;
+                const x = p.x + Math.cos(a) * d, z = p.z + Math.sin(a) * d;
+                const loc = {};
+                const q = route.project(x, z, null, {});
+                const ground = env.ground.groundY(x, z, { start: q.index - 12, end: q.index + 12 }, true, loc);
+                if (!(Math.abs(loc.lateral) > w / 2 + 6)) continue;
+                const hit = hitY(x, z, drawn);
+                if (hit !== null) land.push(Math.abs(hit - ground));
+            }
+        }
+        const sorted = list => list.slice().sort((a, b) => a - b);
+        const q = (list, f) => (list.length ? sorted(list)[Math.min(list.length - 1, Math.floor(list.length * f))] : null);
+        const r3 = v => Math.round(v * 1000) / 1000;
+        return {
+            want,
+            road: { n: road.length, max: r3(Math.max(...road)), p99: r3(q(road, 0.99)) },
+            land: { n: land.length, max: r3(Math.max(...land)), p99: r3(q(land, 0.99)) },
+            // The highest the drawn land stands over the road surface at a road point (negative: below it)
+            aboveRoad: { n: above.length, over: above.filter(d => d > 0).length, max: r3(Math.max(...above)) }
+        };
+    }, placeAt.toString(), Number(option('points') || 500)),
+    // Every pass of every ride junction: its barrier set stands, the open pair has none
+    'world-junction': async page => page.evaluate(async (placeSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const out = [];
+        for (const junction of env.graph.junctions) {
+            const passes = [];
+            for (const pass of junction.passes) {
+                if (pass.inEdge === null) continue;
+                await placeAt(Math.max(0, pass.sIn - 200));
+                const active = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => b.edgeId).sort((a, b) => a - b);
+                const expected = pass.barriers.map(b => b.edgeId).sort((a, b) => a - b);
+                // Where each barrier was placed (moved off the ride and the other roads: WorldGraph.barrierPose)
+                const walls = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => env.ground.zoneAt({ x: b.x, z: b.z, index: 0, lateral: 100 }, 5).kind);
+                passes.push({ sIn: pass.sIn, expected, active, walls, outClosed: expected.includes(pass.outEdge), mesh: env.barrierMesh.count });
+            }
+            if (passes.length) out.push({ id: junction.id, name: junction.name, passes });
+        }
+        return out;
+    }, placeAt.toString()),
+    // Off the ride line, backwards, and the ordinary ride between (the control)
+    'world-wrongway': async page => page.evaluate(async (placeSource, pilotSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const guide = env.guide;
+        const v = game.vehicle;
+        twistyDev.freeze();
+        let clock = 0;
+        const step = guide.step.bind(guide);
+        guide.step = state => { clock += state.dt; return step(state); };
+        const seen = () => ({ warnedAt: null, restartAt: null });
+        const run = async (name, s, hold, seconds) => {
+            const t = seen();
+            await placeAt(s);
+            const restarts = game.restarts;
+            clock = 0;
+            const base = v.update.bind(v);
+            const pin = { x: v.position.x, y: v.position.y, z: v.position.z };
+            v.update = (...args) => {
+                base(...args);
+                if (game.restarts === restarts) hold(pin);
+            };
+            for (let tick = 0; tick < seconds * 60; tick++) {
+                twistyDev.step(1);
+                if (t.warnedAt === null && guide.warning) t.warnedAt = clock;
+                if (t.restartAt === null && game.restarts > restarts) { t.restartAt = clock; break; }
+            }
+            v.update = base;
+            return { name, warnedAt: t.warnedAt, restartAt: t.restartAt, restarts: game.restarts - restarts };
+        };
+        const route = env.route;
+        const results = [];
+        // A place 50 m beside the ride with no other road within 45 m: the nearest ride point is then 50 m away
+        let site = null;
+        for (let s = 800; s < route.length && !site; s += 100) {
+            const p = route.sample(s, {});
+            for (const side of [1, -1]) {
+                const x = p.x + side * 50 * Math.cos(p.heading), z = p.z - side * 50 * Math.sin(p.heading);
+                if (route.project(x, z, null, {}).distance >= 49) { site = { s, side }; break; }
+            }
+        }
+        if (!site) return [{ name: 'off-route-50m', error: 'no place on the ride has 45 m of clear ground beside it' }];
+        results.push(await run('off-route-50m', site.s, pin => {
+            const p = route.sample(site.s, {});
+            v.position.set(p.x + site.side * 50 * Math.cos(p.heading), pin.y, p.z - site.side * 50 * Math.sin(p.heading));
+            v.speed = 0; v.crashed = false; v.offRoadTime = 0;
+        }, 14));
+        results[0].site = site.s;
+        guide.reset();
+        results.push(await run('backwards-10ms', 3000, () => {
+            const p = route.sample(3000, {});
+            v.position.set(p.x, p.y, p.z);
+            v.yawAngle = p.heading + Math.PI; v.speed = 10; v.crashed = false;
+        }, 20));
+        guide.reset();
+        game.restartLeg();
+        const pilot = new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`);
+        pilot(game, 20);
+        const crashes = [];
+        const log = console.log;
+        console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) crashes.push(String(args[0]) + ' ' + args.slice(1).join(' ')); log(...args); };
+        const restarts = game.restarts;
+        let warned = false;
+        for (let tick = 0; tick < 60 * 400 && v.routeS < env.startS + 2000; tick++) {
+            twistyDev.step(1);
+            if (guide.warning) warned = true;
+            if (v.crashed) break;
+        }
+        console.log = log;
+        results.push({ name: 'ride-2km', metres: Math.round(v.routeS - env.startS), crashed: v.crashed, crash: crashes[0] || null, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, warned, restarts: game.restarts - restarts });
+        return results;
+    }, placeAt.toString(), pilotWorld.toString()),
+    // The data credit is in Credits, not on screen: reachable from the pause panel of a ride, on the loading screen
+    // and from the main menu, with the manifest's credit and notice; nothing on screen names it during the ride
+    'world-credit': async (page, port) => {
+        const onScreen = () => {
+            const shown = [...document.body.querySelectorAll('*')].filter((el) => {
+                if (el.closest('#world-credits')) return false;
+                const text = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('');
+                if (!/swisstopo|Copernicus/.test(text)) return false;
+                const box = el.getBoundingClientRect();
+                return box.width > 0 && box.height > 0 && getComputedStyle(el).visibility !== 'hidden' && Number(getComputedStyle(el).opacity) > 0;
+            });
+            return shown.map(el => el.id || el.className || el.tagName);
+        };
+        const readPanel = async (target) => {
+            await target.waitForFunction(() => { const p = document.querySelector('#world-credits .world-credits-credit'); return p && p.textContent.length > 0; }, { timeout: 20000 });
+            return target.evaluate(() => ({ credit: document.querySelector('#world-credits .world-credits-credit').textContent, notice: document.querySelector('#world-credits .world-credits-notice').textContent }));
+        };
+        const manifest = await page.evaluate(() => ({ credit: game.environment.data.manifest.credit, notice: game.environment.data.manifest.notice || '' }));
+        const riding = await page.evaluate(onScreen);
+        await page.evaluate(() => game.pauseRace());
+        const pause = await page.evaluate(() => { const p = document.getElementById('world-pause'); const b = p && p.querySelector('[data-credits]'); if (b) b.click(); return { panel: !!p, button: !!b }; });
+        const fromPause = pause.button ? await readPanel(page) : null;
+        await page.evaluate(() => { WorldCredits.close(); game.resumeRace(); });
+        const afterResume = await page.evaluate(() => !!document.getElementById('world-pause'));
+        // The loading screen: watch #world-loading from the first moment of a fresh world page
+        const loadingPage = await openPage(page.browser(), port, '/?world=tremola', 1, p => p.evaluateOnNewDocument(() => {
+            window.__loadingCredit = '';
+            new MutationObserver(() => {
+                const c = document.querySelector('#world-loading .world-loading-credit');
+                if (c && c.textContent) window.__loadingCredit = c.textContent;
+            }).observe(document, { childList: true, subtree: true, characterData: true });
+        }));
+        await loadingPage.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.worldRun', { timeout: 120000 });
+        const loading = await loadingPage.evaluate(() => window.__loadingCredit);
+        await loadingPage.close();
+        // The main menu
+        const leg = await openPage(page.browser(), port, '/');
+        await leg.waitForFunction(() => document.querySelector('.tour-selector-overlay [data-credits]'), { timeout: 60000 });
+        const legScreen = await leg.evaluate(onScreen);
+        await leg.evaluate(() => document.querySelector('.tour-selector-overlay [data-credits]').click());
+        const fromMenu = await readPanel(leg);
+        await leg.close();
+        return { manifest, riding, pause, fromPause, afterResume, loading, legScreen, fromMenu };
+    },
+    // Every request the world page made, from load to a few seconds of riding
+    'world-net': async page => {
+        await page.evaluate(async () => { twistyDev.autopilot({ speed: 20 }); twistyDev.step(180); });
+        return { requests: [...new Set(state.requests)].length, list: [...new Set(state.requests)] };
+    },
+    // The autopilot rides the stage to the finish station, and the window is counted every `--every` metres on the way
+    'world-finish': async page => page.evaluate(async (pilotSource, cruise, countSource, every) => {
+        const countScene = new Function(`return (${countSource})`)();
+        const env = game.environment;
+        const v = game.vehicle;
+        twistyDev.freeze();
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+        const crashes = [];
+        const log = console.log;
+        console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) crashes.push(String(args[0]) + ' ' + args.slice(1).join(' ')); log(...args); };
+        let ticks = 0;
+        const rows = [];
+        let nextRow = 0;
+        let maxLateral = 0;
+        const limit = 60 * 60 * 40;
+        // The HUD's text, read every second of the ride: no number in it may be "Infinity", "NaN" or "∞"
+        const badHud = [];
+        const hudText = () => (document.getElementById('hud') || document.body).innerText;
+        while (!game.finished && !v.crashed && ticks < limit) {
+            twistyDev.step(1);
+            ticks++;
+            maxLateral = Math.max(maxLateral, Math.abs(v.projection.lateral));
+            if (ticks % 60 === 0 && badHud.length < 5) { const t = hudText(); if (/Infinity|NaN|\u221e/.test(t)) badHud.push({ s: Math.round(v.routeS), text: t.replace(/\s+/g, ' ').slice(0, 160) }); }
+            // Tile and cover fetches are asynchronous: a ride stepped with no pause would outrun them
+            if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+            if (v.routeS >= nextRow) {
+                nextRow += every;
+                env.streamer.pump(Infinity);
+                rows.push({ s: Math.round(v.routeS), ...countScene(), tiles: env.tileMeshes.size, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+            }
+        }
+        console.log = log;
+        const traffic = game.traffic ? { cars: game.traffic.cars.length, bikes: game.traffic.motorcycles.length } : null;
+        // The finish box's distance against the stage's length
+        const meta = document.querySelector('#finishBanner .finish-meta');
+        const shownM = meta ? Number(meta.textContent.replace(/[^0-9.]/g, '')) : null;
+        const stageM = env.stage ? env.stage.length || env.stage.to - env.stage.from : env.route.length;
+        return { badHud, shownM, stageM: Math.round(stageM), finished: game.finished, crashed: v.crashed, crash: crashes[0] || null, lowside: v.lowsideTimerMs, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, maxLateral: Math.round(maxLateral * 10) / 10, ticks, seconds: Math.round(ticks / 60), gates: game.checkpointsPassed, gateTotal: env.checkpoints.length, at: Math.round(v.routeS), length: Math.round(env.route.length), restarts: game.restarts, penaltyMs: game.penaltyMs, traffic, cones: !!game.cones, rockfalls: !!game.rockfalls, rows };
+    }, pilotWorld.toString(), Number(option('speed') || 20), countScene.toString(), Number(option('every') || 1000)),
+    // A restart is in place: from a key press the bike is put a few metres behind where it was (not on a station),
+    // at a standstill, +5 s, and the ride goes on to the next station. A crash opens no dialog: the fall plays, the
+    // call-out says the cause and the cost, and the game restarts the rider by itself within Game.WORLD_CRASH.mostS.
+    // An excursion that the guide ends costs one penalty, not two.
+    'world-restart': async page => page.evaluate(async (pilotSource) => {
+        const env = game.environment;
+        const v = game.vehicle;
+        const route = env.route;
+        twistyDev.freeze();
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
+        const ride = (until, limit = 60 * 600) => {
+            for (let tick = 0; tick < limit && !until() && !v.crashed; tick++) twistyDev.step(1);
+        };
+        ride(() => game.checkpointsPassed >= 2);
+        const station = env.stationGates[2];
+        ride(() => v.routeS >= station.s + 300);
+        const before = { passed: game.checkpointsPassed, elapsed: game.raceElapsed(), s: v.routeS, penaltyMs: game.penaltyMs };
+        game.restartFromCheckpoint('key');
+        const after = { s: v.projection.s, speed: v.speed, restarts: game.restarts, penaltyMs: game.penaltyMs, elapsedJump: game.raceElapsed() - before.elapsed, passed: game.checkpointsPassed, lastS: game.worldRun.lastS };
+        // A crash 150 m on: no dialog, the cause in a call-out, and the game puts the bike back by itself
+        ride(() => v.routeS >= before.s + 150);
+        const crashAt = { s: v.projection.s, elapsed: game.raceElapsed(), restarts: game.restarts, ticks: twistyDev.ticks };
+        v.crashed = true;
+        v.crashCause = 'Hit the probe';
+        twistyDev.step(1);
+        const callout = [...document.querySelectorAll('.hud-top *')].map(el => el.textContent).find(text => /Hit the probe/.test(text)) || null;
+        const dialogs = () => ['crashNotification', 'worldConfirm', 'world-pause'].filter(id => document.getElementById(id));
+        const during = { dialogs: dialogs(), restarts: game.restarts - crashAt.restarts, crashed: v.crashed };
+        for (let tick = 0; tick < 60 * 5 && game.restarts === crashAt.restarts; tick++) twistyDev.step(1);
+        const crash = { callout, during, dialogs: dialogs(), seconds: (twistyDev.ticks - crashAt.ticks) / 60, mostS: Game.WORLD_CRASH.mostS, backM: crashAt.s - v.projection.s, speed: v.speed, crashed: v.crashed,
+            restarts: game.restarts - crashAt.restarts, penaltyMs: game.penaltyMs - after.penaltyMs, lateral: v.projection.lateral, half: v.projection.width / 2 };
+        ride(() => game.checkpointsPassed >= 3);
+        const next = { passed: game.checkpointsPassed, restarts: game.restarts, crashed: v.crashed };
+        // The restart-the-ride box holds the race: real animate() frames run no physics and stop the clock, Escape
+        // answers CANCEL and the ride goes on, Enter answers YES. twistyDev.step unpauses each frame, so call animate itself.
+        const frames = n => {
+            const render = game.graphics.render;
+            game.graphics.render = () => {};
+            try { for (let i = 0; i < n; i++) { game.accumulatedTime = 0; game.animate(); } } finally { game.graphics.render = render; }
+        };
+        const key = code => document.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true }));
+        let proceeded = 0;
+        game.confirmWorldLeave(game.worldRestartAsk(), () => { proceeded++; });
+        const held0 = { ticks: twistyDev.ticks, s: v.routeS, elapsed: game.raceElapsed() };
+        frames(60);
+        const confirm = { held: { ticks: twistyDev.ticks - held0.ticks, moved: v.routeS - held0.s, clock: game.raceElapsed() - held0.elapsed, open: !!document.getElementById('worldConfirm') } };
+        key('Escape');
+        confirm.cancelled = { open: !!document.getElementById('worldConfirm'), paused: game.paused, proceeded };
+        const after0 = twistyDev.ticks;
+        frames(30);
+        confirm.cancelled.ticks = twistyDev.ticks - after0;
+        game.confirmWorldLeave(game.worldRestartAsk(), () => { proceeded++; });
+        key('Enter');
+        confirm.entered = { open: !!document.getElementById('worldConfirm'), paused: game.paused, proceeded };
+        // One excursion: 60 m off the road for longer than the guide waits
+        const p = route.sample(v.routeS + 40, {});
+        const at = { x: p.x + 60 * Math.cos(p.heading), z: p.z - 60 * Math.sin(p.heading) };
+        const restarts = game.restarts;
+        const base = v.update.bind(v);
+        v.update = (...args) => {
+            base(...args);
+            if (game.restarts === restarts) { v.position.x = at.x; v.position.z = at.z; v.speed = 0; v.crashed = false; v.offRoadTime = 0; }
+        };
+        for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) twistyDev.step(1);
+        v.update = base;
+        for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
+        return { station: 2, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
+    }, pilotWorld.toString()),
+    // The HUD of a world ride (.agent/system/ui.md), in stage 2 of the mini world (--worldData tests/fixtures/world/mini,
+    // --world all), at 1024x640, 1440x900 and 390x844 as a touch device. The checkpoints are shown once: a tick on the
+    // progress bar for each checkpoint of the stage and the count, and no pips. The stage text shows (the ride has more
+    // than one stage). With everything the HUD can show at once on the screen (a split, the wheelie meter, three
+    // call-outs, the turn prompt, the advised speed, the key hints, the FPS counter and the empty slots beside the
+    // gauge), no two boxes intersect and none leaves the screen.
+    'world-hud': async page => {
+        const read = () => page.evaluate(async (placeSource) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const env = game.environment;
+            const stage = env.route.stages[1];
+            if (!stage) return { error: 'the world has no second stage' };
+            await placeAt(stage.from + 300);
+            // Put down mid-ride, the stations behind the bike count as passed
+            const run = game.worldRun;
+            run.stationIndex = env.stationGates.filter(st => st.s <= stage.from + 300).length - 1;
+            run.stageIndex = run.stageOf(stage.from + 300);
+            const guide = env.guide;
+            guide.promptAt = () => 'Continue straight, 150 m · A road with a long name';
+            guide.adviceAt = () => ({ mph: 25, fast: true, distance: 60, left: true });
+            twistyDev.freeze();
+            for (let i = 0; i < 20; i++) twistyDev.step(1);
+            const hud = game.hud;
+            const gates = run.stageGates(1);
+            game.showSplit(0, 61234, 137);
+            const wheelie = document.getElementById('wheelieIndicator');
+            wheelie.classList.add('active');
+            for (const text of ['Jumped a red light +400 style', 'Speed streak +250', 'Rider mode: Sport']) hud.callout(text, 'info', 60000);
+            document.getElementById('hudHint').classList.remove('hidden');
+            const fpsWas = hud.fpsVisible;
+            hud.fpsVisible = true;
+            hud.applyFps();
+            // The cards fade in and a frozen game has no animation frames: read them as they end up
+            await new Promise(r => setTimeout(r, 80));
+            document.body.getBoundingClientRect();
+            document.getAnimations().forEach(animation => {
+                try {
+                    if (animation.effect && animation.effect.getTiming().iterations !== Infinity) animation.finish();
+                } catch { /* an animation that cannot end stays as it is */ }
+            });
+            const shown = el => {
+                if (!el || !el.isConnected) return false;
+                const r = el.getBoundingClientRect();
+                if (r.width < 1 || r.height < 1) return false;
+                for (let at = el; at && at.nodeType === 1; at = at.parentElement) {
+                    const style = getComputedStyle(at);
+                    if (style.display === 'none' || style.visibility !== 'visible' || parseFloat(style.opacity) < 0.05) return false;
+                }
+                return true;
+            };
+            const parts = { timer: '.hud-timer', split: '#splitPopup', wheelie: '#wheelieIndicator', prompt: '#hudPrompt', advice: '#hudAdvice', map: '#world-guide canvas', speed: '#hudSpeed', gear: '#hudGear', revs: '#hudRevs', mode: '#hudMode', hint: '#hudHint', fps: '#fps' };
+            const boxes = {};
+            const put = (name, el) => { if (shown(el)) { const r = el.getBoundingClientRect(); boxes[name] = { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; } };
+            Object.entries(parts).forEach(([name, selector]) => put(name, document.querySelector(selector)));
+            document.querySelectorAll('.callout').forEach((el, i) => put(`callout${i + 1}`, el));
+            const names = Object.keys(boxes);
+            const overlaps = [];
+            for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
+                const a = boxes[names[i]], b = boxes[names[j]];
+                if (a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5) overlaps.push([names[i], names[j]]);
+            }
+            const off = names.filter(n => boxes[n].left < -0.5 || boxes[n].top < -0.5 || boxes[n].right > innerWidth + 0.5 || boxes[n].bottom > innerHeight + 0.5);
+            const out = {
+                viewport: [innerWidth, innerHeight], boxes: names, missing: Object.keys(parts).filter(n => !boxes[n]), overlaps, off,
+                ticks: document.querySelectorAll('#hudProgressMarks i').length, gateTotal: gates.total, count: document.getElementById('hudProgressCount').textContent,
+                pipsShown: shown(document.getElementById('hudGates')), bars: document.querySelectorAll('.hud-progress-bar').length,
+                stageText: document.getElementById('hudStageText').textContent, stages: env.route.stages.length, stageIndex: run.stageIndex
+            };
+            hud.clearTransient();
+            wheelie.classList.remove('active');
+            hud.fpsVisible = fpsWas;
+            hud.applyFps();
+            return out;
+        }, placeAt.toString());
+        const out = {};
+        await page.setViewport({ width: 1024, height: 640 });
+        out.small = await read();
+        await page.setViewport({ width: 1440, height: 900 });
+        out.large = await read();
+        await page.setViewport({ width: 390, height: 844 });
+        await page.evaluate(() => document.body.classList.add('touch'));
+        out.touch = await read();
+        return out;
+    },
+    // The chase camera on hairpins (P38): the autopilot rides 12 m/s from several starts. Each frame, 4 points of the
+    // boom from the head to the camera are tested against the ground, and the road 30 m ahead is projected to the
+    // screen. A hairpin frame is a heading change of more than 115 degrees across +-40 m of road.
+    'world-camera': async (page) => page.evaluate(async (placeSource, pilotSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const v = game.vehicle;
+        const route = env.route;
+        const cam = game.camera;
+        twistyDev.freeze();
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 12);
+        const turnAround = s => {
+            let total = 0;
+            for (let d = -36; d <= 40; d += 4) total += route.headingChange(s + d - 4, s + d);
+            return Math.abs(total) * 180 / Math.PI;
+        };
+        const starts = [2900, 3900, 4400, 5000, 7400, 8000];
+        const runs = [];
+        const aim = new THREE.Vector3();
+        for (const start of starts) {
+            await placeAt(start);
+            v.speed = 12;
+            let frames = 0, under = 0, hairpin = 0, inView = 0, worst = Infinity, crashed = false;
+            for (let tick = 0; tick < 120 + 1380; tick++) {
+                twistyDev.step(1);
+                if (v.crashed) { crashed = true; break; }
+                if (tick < 120) continue;
+                frames++;
+                const index = Math.floor(route.toUnits(v.routeS));
+                const head = { x: v.position.x, y: v.position.y + 1.2, z: v.position.z };
+                for (let k = 1; k <= 4; k++) {
+                    const x = head.x + (cam.position.x - head.x) * k / 4, y = head.y + (cam.position.y - head.y) * k / 4, z = head.z + (cam.position.z - head.z) * k / 4;
+                    const clear = y - game.worldCamera.landY(x, z, index);
+                    worst = Math.min(worst, clear);
+                    if (clear < 0) { under++; break; }
+                }
+                if (turnAround(v.projection.s) > 115) {
+                    hairpin++;
+                    cam.updateMatrixWorld(true);
+                    const p = route.sample(v.projection.s + 30, {});
+                    aim.set(p.x, p.y, p.z).project(cam);
+                    if (Math.abs(aim.x) <= 1 && Math.abs(aim.y) <= 1 && aim.z < 1) inView++;
+                }
+            }
+            runs.push({ start, frames, boomUnderGround: under, worstClearance: Math.round(worst * 100) / 100, hairpinFrames: hairpin, inFrustum: inView, crashed });
+        }
+        const sum = key => runs.reduce((p, r) => p + r[key], 0);
+        return { runs, frames: sum('frames'), boomUnderGround: sum('boomUnderGround'), hairpinFrames: sum('hairpinFrames'), inFrustum: sum('inFrustum'), share: sum('hairpinFrames') ? Math.round(sum('inFrustum') / sum('hairpinFrames') * 1000) / 1000 : null };
+    }, placeAt.toString(), pilotWorld.toString()),
+    // The bike in view through every hairpin: the chase camera rides the whole ride behind the world pilot, and on
+    // every frame the bike (0.9 m over its origin) must project inside the screen with FRUSTUM_MARGIN of it left on
+    // each side, in front of the camera. Reports each hairpin's least margin; a hairpin is a turn of 150 degrees or
+    // more inside 80 m (tools/world/verify.mjs findHairpins).
+    'world-frustum': async (page) => page.evaluate(async (placeSource, pilotSource, hairpinSource, cruise, margin) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+        const env = game.environment;
+        const v = game.vehicle;
+        const route = env.route;
+        const cam = game.camera;
+        twistyDev.freeze();
+        game.cameraMode = 2;
+        const start = Math.max(20, hairpins[0] - 400);
+        await placeAt(start);
+        game.worldCamera.reset(v.yawAngle);
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+        const point = new THREE.Vector3();
+        const per = hairpins.map(s => ({ s: Math.round(s), frames: 0, out: 0, least: Infinity }));
+        let frames = 0, out = 0, least = Infinity, ticks = 0, worstAt = null;
+        const end = Math.min(route.length - 30, hairpins[hairpins.length - 1] + 200);
+        while (v.routeS < end && !v.crashed && !game.finished && ticks < 60 * 60 * 30) {
+            twistyDev.step(1);
+            ticks++;
+            if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+            if (ticks < 30) continue;
+            cam.updateProjectionMatrix();
+            cam.updateMatrixWorld(true);
+            point.set(v.position.x, v.position.y + 0.9, v.position.z).project(cam);
+            const inFront = point.z > -1 && point.z < 1;
+            const room = inFront ? 1 - Math.max(Math.abs(point.x), Math.abs(point.y)) : -1;
+            frames++;
+            if (room < least) { least = room; worstAt = Math.round(v.routeS); }
+            if (room < margin) out++;
+            const s = v.projection.s ?? v.routeS;
+            for (const h of per) {
+                if (Math.abs(s - h.s) > 60) continue;
+                h.frames++;
+                h.least = Math.min(h.least, room);
+                if (room < margin) h.out++;
+            }
+        }
+        per.forEach(h => { h.least = Math.round(h.least * 1000) / 1000; });
+        return { margin, cruise, start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, frames, out, least: Math.round(least * 1000) / 1000, worstAt, hairpins: per };
+    }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('speed') || 20), FRUSTUM_MARGIN),
+    // The chase camera's smoothness through every hairpin: the world-frustum ride, with the camera's shake held at
+    // zero (it is meant to be rough), recording each frame's camera position, look target, boom length over the
+    // ground, height over the bike, FOV and view yaw. Reports, over the frames within 60 m of a hairpin, the largest
+    // frame-to-frame step and second difference of each. --dump <file> writes every frame. --apex <s> rides only
+    // the hairpin nearest s.
+    'world-camera-smooth': async (page) => {
+        const result = await page.evaluate(async (placeSource, pilotSource, hairpinSource, cruise, onlyApex) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            let hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+            if (onlyApex) hairpins = [hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a))];
+            const v = game.vehicle;
+            const route = game.environment.route;
+            const cam = game.camera;
+            twistyDev.freeze();
+            game.cameraMode = 2;
+            const start = Math.max(20, hairpins[0] - (onlyApex ? 160 : 400));
+            await placeAt(start);
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, cruise);
+            // The shake is random on purpose: hold it at zero so what is measured is the camera's own motion
+            const update = game.updateCamera.bind(game);
+            game.updateCamera = (...args) => {
+                const random = Math.random;
+                Math.random = () => 0.5;
+                try { return update(...args); } finally { Math.random = random; }
+            };
+            const dir = new THREE.Vector3();
+            const rows = [];
+            let ticks = 0;
+            const end = Math.min(route.length - 30, hairpins[hairpins.length - 1] + (onlyApex ? 100 : 200));
+            try {
+                while (v.routeS < end && !v.crashed && !game.finished && ticks < 60 * 60 * 30) {
+                    twistyDev.step(1);
+                    ticks++;
+                    if (ticks % 120 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                    if (ticks < 30) continue;
+                    cam.getWorldDirection(dir);
+                    const c = cam.position, l = game.currentLookTarget, b = v.position;
+                    const wc = game.worldCamera;
+                    rows.push([v.projection.s ?? v.routeS, c.x, c.y, c.z, l.x, l.y, l.z, cam.fov, Math.hypot(c.x - b.x, c.z - b.z), c.y - b.y, Math.atan2(dir.x, dir.z), b.x, b.y, b.z, wc.pull ?? 0, wc.fraction ?? 1, v.speed, Math.asin(Math.max(-1, Math.min(1, dir.y))), wc.keep ?? 0]);
+                }
+            } finally {
+                game.updateCamera = update;
+            }
+            return { hairpins: hairpins.map(Math.round), crashed: v.crashed, reached: Math.round(v.routeS), end: Math.round(end), rows };
+        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('speed') || 20), Number(option('apex') || 0));
+        const dump = option('dump');
+        if (dump) writeJson(dump, result);
+        const { rows, hairpins } = result;
+        const near = rows.map(r => hairpins.some(h => Math.abs(r[0] - h) <= 60));
+        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+        // Each signal as [frame -> number[]]; the step and second difference are vector norms (angles wrapped)
+        const signals = {
+            position: r => [r[1], r[2], r[3]],
+            look: r => [r[4], r[5], r[6]],
+            distance: r => [r[8]],
+            height: r => [r[9]],
+            fov: r => [r[7]],
+            yaw: r => [r[10]],
+            pitch: r => [r[17]]
+        };
+        const stats = {};
+        for (const [name, get] of Object.entries(signals)) {
+            let step = 0, jerk = 0, stepAt = null, jerkAt = null;
+            for (let i = 2; i < rows.length; i++) {
+                if (!near[i] || !near[i - 1] || !near[i - 2]) continue;
+                const a = get(rows[i - 2]), b = get(rows[i - 1]), c = get(rows[i]);
+                const d1 = b.map((x, k) => (name === 'yaw' ? wrap(c[k] - x) : c[k] - x));
+                const d0 = a.map((x, k) => (name === 'yaw' ? wrap(b[k] - x) : b[k] - x));
+                const s = Math.hypot(...d1);
+                const j = Math.hypot(...d1.map((x, k) => x - d0[k]));
+                if (s > step) { step = s; stepAt = Math.round(rows[i][0]); }
+                if (j > jerk) { jerk = j; jerkAt = Math.round(rows[i][0]); }
+            }
+            const round = n => Math.round(n * 10000) / 10000;
+            stats[name] = { step: round(step), stepAt, jerk: round(jerk), jerkAt };
+        }
+        return { hairpins: hairpins.length, frames: rows.length, hairpinFrames: near.filter(Boolean).length, crashed: result.crashed, reached: result.reached, end: result.end, stats };
+    },
+    // A GPU frame sequence through one hairpin: the world pilot rides in from 140 m before the apex nearest --apex
+    // (default the first), then `--count` pictures (default 8), one every `--every` frames (default 4), from
+    // --from metres before the apex (default 20). The shake is held at zero. Needs --out <dir>; --tag names the files.
+    'world-camera-frames': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'frame';
+        const count = Number(option('count') || 8), every = Number(option('every') || 4), from = Number(option('from') || 20);
+        const apex = await page.evaluate(async (placeSource, pilotSource, hairpinSource, onlyApex, from) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+            const apex = onlyApex ? hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a)) : hairpins[0];
+            const v = game.vehicle;
+            game.cameraMode = 2;
+            await placeAt(apex - 140);
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
+            const update = game.updateCamera.bind(game);
+            game.updateCamera = (...args) => {
+                const random = Math.random;
+                Math.random = () => 0.5;
+                try { return update(...args); } finally { Math.random = random; }
+            };
+            let ticks = 0;
+            while (v.routeS < apex - from && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+            return Math.round(apex);
+        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('apex') || 0), from);
+        const files = [];
+        for (let k = 0; k < count; k++) {
+            const at = await page.evaluate((every) => {
+                if (every > 1) twistyDev.step(every - 1);
+                twistyDev.step(1, { render: true });
+                const c = game.camera.position, l = game.currentLookTarget;
+                return { s: Math.round(game.vehicle.routeS * 10) / 10, camera: [c.x, c.y, c.z].map(n => Math.round(n * 100) / 100), look: [l.x, l.y, l.z].map(n => Math.round(n * 100) / 100) };
+            }, every);
+            const file = join(out, `${tag}-${String(k + 1).padStart(2, '0')}.png`);
+            await page.screenshot({ path: file });
+            files.push({ file, ...at });
+        }
+        return { apex, files };
+    },
+    // The hairpin assist (WorldAssist) on every hairpin of the ride, at each level, with a simple scripted rider
+    // (not the pilot): the pilot rides the 40 m up to the bend at the bend's advised speed; from max(3, 0.4 v) m
+    // before the bend to 10 m after it the rider steers full into the bend while the curvature that far ahead is
+    // over 1/30 m and lets go once it is not, and throttles to the advised speed (braking only when 15% over it).
+    // Per level: crashes, run-wides (past the outside edge by 0.5 m) and cuts (past the inside edge by 0.5 m)
+    // from the hand-over to 20 m past the bend.
+    // --apex <s> rides only the hairpin nearest s and returns a trace of every 6th tick of each level.
+    'world-hairpin-assist': async (page) => page.evaluate(async (placeSource, hairpinSource, traceApex) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+        const env = game.environment;
+        const route = env.route;
+        const physics = env.physics;
+        const v = game.vehicle;
+        const input = game.input;
+        const tight = 1 / 30;
+        const k = s => route.curvatureAt(s, 4);
+        twistyDev.freeze();
+        game.worldLinger = false;
+        const bends = hairpins.map(apex => {
+            let from = apex, to = apex;
+            while (from > apex - 120 && Math.abs(k(from - 2)) > tight) from -= 2;
+            while (to < apex + 120 && Math.abs(k(to + 2)) > tight) to += 2;
+            const advice = WorldAssist.advice(route, physics, from, 4);
+            return { apex: Math.round(apex), from, to, advised: advice ? advice.speed : 8 };
+        }).filter((bend, i, all) => !traceApex || Math.abs(bend.apex - traceApex) === Math.min(...all.map(b => Math.abs(b.apex - traceApex))));
+        let rider = { target: 8, from: 0, to: 0 };
+        // The approach and the road after the hairpin are the pilot's, so a bend before it cannot spoil the test
+        twistyDev.autopilot({ speed: 15 });
+        const pilot = { steer: input.getSteeringInput, throttle: input.getThrottleInput, brake: input.getBrakeInput };
+        const lead = () => Math.max(3, 0.4 * v.speed);
+        const riding = () => {
+            const s = v.projection.s ?? v.routeS;
+            return s >= rider.from - lead() && s <= rider.to + 10;
+        };
+        input.getSteeringInput = () => {
+            if (!riding()) return pilot.steer();
+            if (rider.aim) {
+                // The aiming rider: full lock toward a point on the centreline 5 m on, straight once it lines up
+                const at = route.sample((v.projection.s ?? v.routeS) + 5, {});
+                const off = Math.atan2(at.x - v.position.x, at.z - v.position.z) - v.yawAngle;
+                const bearing = Math.atan2(Math.sin(off), Math.cos(off));
+                return Math.abs(bearing) > 0.05 ? Math.sign(bearing) : 0;
+            }
+            const ahead = k((v.projection.s ?? v.routeS) + lead());
+            return Math.abs(ahead) > tight ? Math.sign(ahead) : 0;
+        };
+        // The pilot slows for whatever the approach holds; the rider takes the bend at its advised speed
+        input.getThrottleInput = () => (riding() ? (v.speed < rider.target ? 1 : 0) : Math.min(pilot.throttle(), v.speed < rider.target ? 1 : 0));
+        input.getBrakeInput = () => (riding() ? (v.speed > rider.target * 1.15 ? 1 : 0) : pilot.brake());
+        input.getWheelieInput = () => 0;
+        const levels = {};
+        // The three levels at the advised speed, then the slow riders at about 4 m/s: one holds full lock while the
+        // bend is under the bike, the other aims full lock at the road 5 m on and straightens once lined up
+        const runs = [['off', 'off', 0], ['low', 'low', 0], ['normal', 'normal', 0], ['slow-off', 'off', 4], ['slow-normal', 'normal', 4],
+            ['aim-off', 'off', 4, true], ['aim-normal', 'normal', 4, true]];
+        for (const [name, level, slow, aim] of runs) {
+            const rows = [];
+            for (const bend of bends) {
+                v.reset();
+                v.assistLevel = level;
+                await placeAt(bend.from - 40);
+                v.resetHairpinAssist();
+                rider = { target: slow || bend.advised, from: bend.from, to: bend.to, aim: !!aim };
+                v.speed = rider.target;
+                const sign = Math.sign(k(bend.apex));
+                const row = { apex: bend.apex, crashed: false, wide: 0, cut: 0, step: 0, trace: traceApex ? [] : undefined };
+                let lastAssist = null;
+                for (let tick = 0; tick < 60 * 40 && !v.crashed; tick++) {
+                    twistyDev.step(1);
+                    const p = v.projection;
+                    if (p.s > bend.to + 20) break;
+                    if (p.s < bend.from - lead()) continue;
+                    // The assist's share of the lean rate this frame (rad/s), and its largest frame-to-frame step
+                    const assistRate = Number.isFinite(v.assistLeanRate) ? v.assistLeanRate : 0;
+                    if (lastAssist !== null) row.step = Math.max(row.step, Math.abs(assistRate - lastAssist));
+                    lastAssist = assistRate;
+                    const outside = -p.lateral * sign - p.width / 2;
+                    const inside = p.lateral * sign - p.width / 2;
+                    row.wide = Math.max(row.wide, outside);
+                    row.cut = Math.max(row.cut, inside);
+                    if (row.trace && tick % 6 === 0) row.trace.push([Math.round(p.s - bend.from), input.getSteeringInput(), Math.round(-p.lateral * sign * 100) / 100, Math.round(-v.leanAngle * sign * 573) / 10, Math.round(v.speed * 10) / 10, v.lineCaptured ? 1 : 0, Math.round(1 / Math.abs(WorldAssist.curvature(route, physics, p.s)))].join(' '));
+                    if (tick % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                row.crashed = v.crashed;
+                // Where and how it went down: metres from the bend's start, the lean, the speed, the bike's colour
+                if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.frame.material.color.getHexString(), radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
+                row.wide = Math.round(row.wide * 100) / 100;
+                row.cut = Math.round(row.cut * 100) / 100;
+                row.step = Math.round(row.step * 1000) / 1000;
+                rows.push(row);
+            }
+            levels[name] = {
+                hairpins: rows.length,
+                crashes: rows.filter(r => r.crashed).length,
+                runWide: rows.filter(r => r.wide > 0.5).length,
+                cut: rows.filter(r => r.cut > 0.5).length,
+                maxAssistStep: rows.reduce((m, r) => Math.max(m, r.step), 0),
+                bad: rows.filter(r => r.crashed || r.wide > 0.5 || r.cut > 0.5 || r.trace)
+            };
+        }
+        return { bends: bends.length, levels };
+    }, placeAt.toString(), worldHairpins.toString(), Number(option('apex') || 0)),
+    // Every model file (assets/**/*.glb, globbed here) through the page's own SceneAssets.loadModel: each mesh part
+    // must carry a unit normal at every vertex, colours the shader reads as linear, and sane material values
+    'world-models': async page => page.evaluate(async files => {
+        const rows = [];
+        for (const file of files) {
+            const row = { file, meshes: 0, parts: 0, noNormals: 0, badNormals: 0, colour: new Set(), srgbConverted: 0, metalness: [Infinity, -Infinity], roughness: [Infinity, -Infinity], error: null };
+            try {
+                const model = await SceneAssets.loadModel(file);
+                for (const parts of model.meshes.values()) {
+                    row.meshes++;
+                    for (const { geometry, material } of parts) {
+                        row.parts++;
+                        const normal = geometry.attributes.normal;
+                        if (!normal) { row.noNormals++; continue; }
+                        for (let i = 0; i < normal.count; i++) {
+                            const length = Math.hypot(normal.getX(i), normal.getY(i), normal.getZ(i));
+                            if (!(Math.abs(length - 1) <= 0.02)) row.badNormals++;
+                        }
+                        const color = geometry.attributes.color;
+                        row.colour.add(color ? `${color.array.constructor.name}x${color.itemSize}` : 'none');
+                        if (geometry.userData.srgb) row.srgbConverted++;
+                        row.metalness = [Math.min(row.metalness[0], material.metalness), Math.max(row.metalness[1], material.metalness)];
+                        row.roughness = [Math.min(row.roughness[0], material.roughness), Math.max(row.roughness[1], material.roughness)];
+                    }
+                }
+            } catch (error) {
+                row.error = String(error.message || error);
+            }
+            row.colour = [...row.colour].join(',');
+            rows.push(row);
+        }
+        return { rows };
+    }, modelFiles()),
+    // GPU pictures of the first three hairpins as the rider sees them: ridden into from 80 m before the apex behind
+    // the world pilot, one picture as the bike turns in and one at the apex. Needs --out <dir>.
+    'world-hairpin-shots': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'shot';
+        const apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).slice(0, 3).map(Math.round), worldHairpins.toString());
+        const files = [];
+        for (let k = 0; k < apexes.length; k++) {
+            const rooms = await page.evaluate(async (placeSource, pilotSource, apex) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const v = game.vehicle;
+                game.cameraMode = 2;
+                await placeAt(apex - 140);
+                game.worldCamera.reset(v.yawAngle);
+                new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
+                let ticks = 0;
+                while (v.routeS < apex - 25 && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, placeAt.toString(), pilotWorld.toString(), apexes[k]);
+            const turnIn = join(out, `${tag}-hairpin-${k + 1}-turn-in.png`);
+            await page.screenshot({ path: turnIn });
+            const apexRoom = await page.evaluate(async (apex) => {
+                const v = game.vehicle;
+                let ticks = 0;
+                while (v.routeS < apex && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, apexes[k]);
+            const atApex = join(out, `${tag}-hairpin-${k + 1}-apex.png`);
+            await page.screenshot({ path: atApex });
+            files.push({ apex: apexes[k], turnIn: { file: turnIn, ...rooms }, atApex: { file: atApex, ...apexRoom } });
+        }
+        // The start, with the village round it
+        const startView = await page.evaluate(async (placeSource) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            game.cameraMode = 2;
+            await placeAt(10);
+            game.worldCamera.reset(game.vehicle.yawAngle);
+            game.vehicle.speed = 0;
+            twistyDev.autopilot({ speed: 0 });
+            // The chase camera eases in from wherever the last picture left it, a kilometre back: long enough to arrive
+            for (let i = 0; i < 300; i++) twistyDev.step(1);
+            game.environment.streamer.pump(Infinity);
+            twistyDev.step(1, { render: true });
+            const v = game.vehicle.position, c = game.camera.position, l = game.currentLookTarget;
+            return { camera: [c.x - v.x, c.y - v.y, c.z - v.z].map(n => Math.round(n * 10) / 10), look: [l.x - v.x, l.y - v.y, l.z - v.z].map(n => Math.round(n * 10) / 10), pull: game.worldCamera.pull, fraction: game.worldCamera.fraction, speed: game.vehicle.speed, s: game.vehicle.routeS };
+        }, placeAt.toString());
+        files.push({ startView });
+        const startFile = join(out, `${tag}-start.png`);
+        await page.screenshot({ path: startFile });
+        files.push({ start: startFile });
+        return { files };
+    },
+    // Every drawn building against the road bands: each instance's model box, by its matrix, as an oriented
+    // rectangle on the ground, against the ride's band (route.project) and every side edge in residence (the
+    // ground's side segments). Rides the window along the ride every --every metres. None may stand on a band.
+    'world-buildings': async (page) => page.evaluate(async (placeSource, every) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const route = env.route;
+        const ground = env.ground;
+        const matrix = new THREE.Matrix4();
+        const corner = new THREE.Vector3();
+        const sample = {};
+        const seen = new Set();
+        const hits = [];
+        let checked = 0, least = Infinity;
+        // Distance from (x, z) past the edge of the nearest road band: negative over a band
+        const pastBand = (x, z) => {
+            let best = Infinity;
+            for (let s = 0; s < route.length; s += 2) {
+                route.sample(s, sample);
+                const d = Math.hypot(sample.x - x, sample.z - z);
+                if (d < 60) best = Math.min(best, d - sample.width / 2);
+                else s += Math.max(0, d - 62);
+            }
+            for (const g of ground.sideSegments) {
+                const dx = g.x1 - g.x0, dz = g.z1 - g.z0, run = dx * dx + dz * dz;
+                const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - g.x0) * dx + (z - g.z0) * dz) / run));
+                best = Math.min(best, Math.hypot(g.x0 + dx * t - x, g.z0 + dz * t - z) - (g.w0 + (g.w1 - g.w0) * t) / 2);
+            }
+            return best;
+        };
+        for (let s = 20; s < route.length; s += every) {
+            await placeAt(s);
+            env.streamer.pump(Infinity);
+            game.scene.traverse(o => {
+                if (!o.isInstancedMesh || !o.name.startsWith('houses:')) return;
+                o.geometry.computeBoundingBox();
+                const box = o.geometry.boundingBox;
+                for (let i = 0; i < o.count; i++) {
+                    o.getMatrixAt(i, matrix);
+                    const key = matrix.elements.map(e => e.toFixed(2)).join(',');
+                    if (seen.has(key)) continue;
+                    seen.add(key);
+                    checked++;
+                    // The footprint's edges, every metre
+                    let worst = Infinity;
+                    const c = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]].map(([x, z]) => corner.set(x, 0, z).applyMatrix4(matrix).clone());
+                    for (let e = 0; e < 4; e++) {
+                        const a = c[e], b = c[(e + 1) % 4];
+                        const n = Math.max(1, Math.ceil(a.distanceTo(b)));
+                        for (let k = 0; k <= n; k++) worst = Math.min(worst, pastBand(a.x + (b.x - a.x) * k / n, a.z + (b.z - a.z) * k / n));
+                    }
+                    least = Math.min(least, worst);
+                    if (worst < 0) hits.push({ name: o.name, x: Math.round(c[0].x), z: Math.round(c[0].z), pastBandM: Math.round(worst * 100) / 100 });
+                }
+            });
+        }
+        return { checked, least: Math.round(least * 100) / 100, hits: hits.slice(0, 20), onBand: hits.length };
+    }, placeAt.toString(), Number(option('every') || 600)),
+    // A cut across stacked road: the bike is put on a leg of the ladder far ahead in s but close in space. It restarts
+    // after cutConfirmMs, once. A flicker of a few frames and back restarts nothing.
+    'world-cut': async page => page.evaluate(async (placeSource, pilotSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        const v = game.vehicle;
+        const route = env.route;
+        const physics = env.physics;
+        const pts = route.points;
+        let pair = null;
+        for (let i = 100; i < pts.length - 200 && !pair; i++) {
+            for (let j = i + 36; j < Math.min(pts.length - 1, i + 80); j++) {
+                const gap = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z);
+                if (gap >= 14 && gap <= 28) { pair = { i, j, gap, ds: route.sArray[j] - route.sArray[i] }; break; }
+            }
+        }
+        if (!pair) return { error: 'no stacked pair of legs on the ride' };
+        twistyDev.freeze();
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 12);
+        const lower = route.sArray[pair.i];
+        await placeAt(lower - 60);
+        v.speed = 12;
+        for (let tick = 0; tick < 300 && v.projection.s < lower; tick++) twistyDev.step(1);
+        const control = { restarts: game.restarts, crashed: v.crashed };
+        const jumpTo = (k) => {
+            const p = pts[k];
+            v.position.set(p.x, p.y, p.z);
+            v.yawAngle = p.heading;
+        };
+        const frames = (n, until) => {
+            let tick = 0;
+            for (; tick < n && !until(); tick++) twistyDev.step(1);
+            return tick;
+        };
+        // A flicker: 5 frames on the upper leg, then back where the bike was
+        const back = { x: v.position.x, y: v.position.y, z: v.position.z, yaw: v.yawAngle };
+        const restartsBeforeFlicker = game.restarts;
+        jumpTo(pair.j);
+        frames(5, () => false);
+        v.position.set(back.x, back.y, back.z);
+        v.yawAngle = back.yaw;
+        frames(60, () => false);
+        const flicker = { restarts: game.restarts - restartsBeforeFlicker, pendingCutMs: game.worldRun.pendingCutMs };
+        // The cut: it stays there
+        const restartsBeforeCut = game.restarts;
+        const penaltyBefore = game.penaltyMs;
+        jumpTo(pair.j);
+        const frame = frames(120, () => game.restarts > restartsBeforeCut);
+        const cut = { frames: frame, ms: Math.round(frame * 1000 / 60), restarts: game.restarts - restartsBeforeCut, penaltyMs: game.penaltyMs - penaltyBefore, backAtS: Math.round(v.projection.s), lowerS: Math.round(lower) };
+        return { pair, cutConfirmMs: physics.cutConfirmMs, maxBankM: physics.maxBankM, control, flicker, cut };
+    }, placeAt.toString(), pilotWorld.toString()),
+    // GPU screenshots to --out: two hairpins, a junction barrier, and the minimap and HUD in each
+    'world-shots': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const sites = await page.evaluate(async () => {
+            const env = game.environment;
+            const route = env.route;
+            // The tightest bends, one per 1.5 km at most
+            const bends = [];
+            const a = {}, b = {};
+            for (let s = 100; s < route.length - 100; s += 4) {
+                route.sample(s, a); route.sample(s + 12, b);
+                let turn = b.heading - a.heading;
+                turn = Math.atan2(Math.sin(turn), Math.cos(turn));
+                bends.push({ s, turn: Math.abs(turn) });
+            }
+            bends.sort((p, q) => q.turn - p.turn);
+            const picked = [];
+            for (const bend of bends) if (picked.every(other => Math.abs(other.s - bend.s) > 1500) && picked.length < 2) picked.push(bend);
+            const junction = env.graph.junctions.find(j => j.passes.some(p => p.inEdge !== null && p.barriers.length));
+            const pass = junction ? junction.passes.find(p => p.inEdge !== null && p.barriers.length) : null;
+            return { hairpins: picked.map(p => Math.round(p.s - 30)), junction: pass ? { s: Math.round(pass.sIn - 25), name: junction.name || String(junction.id) } : null };
+        });
+        const files = [];
+        const shoot = async (name, s, mode) => {
+            await page.evaluate(async (placeSource, at, cameraMode) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                game.cameraMode = cameraMode;
+                await placeAt(at);
+                game.worldCamera.reset(game.vehicle.yawAngle);
+                game.vehicle.speed = 9;
+                game.currentCameraPos.copy(game.camera.position);
+                twistyDev.autopilot({ speed: 9 });
+                for (let i = 0; i < 40; i++) twistyDev.step(1, { render: i > 36 });
+                game.environment.streamer.pump(Infinity);
+                twistyDev.step(2, { render: true });
+            }, placeAt.toString(), s, mode);
+            const file = join(out, `${name}.png`);
+            await page.screenshot({ path: file });
+            files.push(file);
+        };
+        for (let k = 0; k < sites.hairpins.length; k++) await shoot(`hairpin-${k + 1}`, sites.hairpins[k], 2);
+        await shoot('hairpin-high-view', sites.hairpins[0], 3);
+        if (sites.junction) await shoot('junction-barrier', sites.junction.s, 2);
+        const hud = await page.evaluate(() => ({
+            guide: !!document.getElementById('world-guide'),
+            guideBox: (() => { const b = document.getElementById('world-guide').getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) }; })(),
+            progress: document.getElementById('hudProgress') ? document.getElementById('hudProgress').textContent.trim() : null,
+            renderer: game.graphics.renderer.getContext().getParameter(game.graphics.renderer.getContext().getExtension('WEBGL_debug_renderer_info') ? game.graphics.renderer.getContext().getExtension('WEBGL_debug_renderer_info').UNMASKED_RENDERER_WEBGL : 0x1F01)
+        }));
+        return { sites, files, hud };
+    }
+};
+
+// world-clearance: nothing drawn stands in a road. The slice is walked every --every metres (default 300); at each
+// place the drawn road bands round the bike (the ride within half a step either side, and every side road drawn) are
+// cast down on across their full drawn width, every CLEAR_STEP_M along and across, from HEADROOM_M over the surface to
+// just under it, against every scenery mesh: trees, boulders, houses, landmarks, marker stones, barriers and the gate
+// frames, instanced or not. Where a mesh's box reaches into a cell, the cell is cast on again every CLEAR_FINE_M, so a
+// pole or a board a few centimetres thick is not missed between rays. A ray is cast only inside the drawn width: the
+// cells at a road's edge reach half a step past it, and what stands on the verge there (a checkpoint's boards, 0.16 m
+// off the carriageway) is not over the road. A hit is a failure, except a barrier over the
+// side road it closes (it is there to close it, never on the ride) and a roadworks site's works in its own closed lane
+// (js/world/roadworks.js: the open lane beside it must stay clear); a station banner spans the ride above HEADROOM_M,
+// so no ray reaches it. --out <dir> saves a view of the worst offenders.
+//   node tools/terrain-check.mjs world-clearance --world tremola --gpu [--every 300] [--out <dir> --tag T --shots N]
+const CLEAR_HEADROOM_M = 4.5;
+const CLEAR_STEP_M = 0.5;
+const CLEAR_FINE_M = 0.04;
+WORLD_PROBES.push('world-clearance');
+
+async function clearanceWalk(placeSource, every, headroom, step, fine) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment;
+    const route = env.route;
+    const raycaster = new THREE.Raycaster();
+    const down = new THREE.Vector3(0, -1, 0);
+    const origin = new THREE.Vector3();
+    const probe = new THREE.Mesh();
+    const matrix = new THREE.Matrix4();
+    const box = new THREE.Box3();
+    const typeOf = (o) => {
+        const n = o.name || '';
+        if (n.startsWith('trees:')) return 'tree';
+        if (n === 'boulders') return 'boulder';
+        if (n.startsWith('houses:')) return 'house';
+        if (n.startsWith('landmark:')) return 'landmark';
+        // The tufts are one mesh for a whole tile, too slow to cast on from every cell: tests/unit/world-clearance.test.js
+        // measures each tuft's own footprint
+        if (n === 'stones') return 'stone';
+        if (n === 'world-barriers') return 'barrier';
+        if (n === 'world-gates') return 'gate';
+        // The roadworks at the checkpoints: their works stand in the closed lane, and nowhere else on a road
+        if (n.startsWith('roadworks:')) return 'roadworks';
+        return null;
+    };
+    // Whether a ride cell at (s, lat) lies in a roadworks site's closed half, between its first and last beacon
+    const closedLane = (s, lat) => {
+        for (const site of (env.roadworks && env.roadworks.closed) || []) if (s >= site.sa - 1 && s <= site.sd + 1 && lat * site.side >= 0) return true;
+        return false;
+    };
+    // The barrier instances, in the order placeBarriers set them (env.activeBarriers), with the side roads each closes
+    const closes = (b) => {
+        const out = new Set();
+        let edge = env.data.edges[b.edgeId], from = b.node, run = 0;
+        while (edge && !edge.onRide && !out.has(edge.id) && run < 80) {
+            out.add(edge.id);
+            run += edge.length;
+            const far = edge.a === from ? edge.b : edge.a;
+            if (env.data.nodes.degree[far] !== 2) break;
+            from = far;
+            const last = edge.id;
+            edge = env.data.edges.find(e => e.id !== last && (e.a === far || e.b === far));
+        }
+        return out;
+    };
+    const hits = new Map();
+    const seenSide = new Set();
+    let rays = 0, instancesSeen = 0, places = 0;
+    for (let s0 = Math.min(every / 2, route.length / 2); s0 < route.length; s0 += every) {
+        await placeAt(s0);
+        env.streamer.pump(Infinity);
+        places++;
+        env.group.updateMatrixWorld(true);
+        // Every drawn instance as a bounding sphere in a 16 m plan hash, so a ray tests only what is over it
+        const things = [];
+        const hash = new Map();
+        env.group.traverse((o) => {
+            if (!o.isMesh) return;
+            for (let n = o; n; n = n.parent) if (!n.visible) return;
+            const type = typeOf(o);
+            if (!type) return;
+            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+            // The gate frames and the checkpoint boards are each one mesh over the whole stage: a box round each gate instead of the mesh's own
+            if (type === 'gate') {
+                for (const st of env.stationGates || []) {
+                    const p = route.sample(st.s, {});
+                    const r = p.width / 2 + 3;
+                    const thing = { mesh: o, type, index: 0, world: o.matrixWorld.clone(), x: p.x, z: p.z, x0: p.x - r, x1: p.x + r, z0: p.z - r, z1: p.z + r, y0: p.y - 1, y1: p.y + 7, barrier: null };
+                    const ref = things.length;
+                    things.push(thing);
+                    for (let cx = Math.floor(thing.x0 / 16); cx <= Math.floor(thing.x1 / 16); cx++) {
+                        for (let cz = Math.floor(thing.z0 / 16); cz <= Math.floor(thing.z1 / 16); cz++) {
+                            const key = cx * 65536 + cz;
+                            if (!hash.has(key)) hash.set(key, []);
+                            hash.get(key).push(ref);
+                        }
+                    }
+                }
+                return;
+            }
+            const count = o.isInstancedMesh ? o.count : 1;
+            for (let i = 0; i < count; i++) {
+                const world = new THREE.Matrix4();
+                if (o.isInstancedMesh) { o.getMatrixAt(i, matrix); world.multiplyMatrices(o.matrixWorld, matrix); } else world.copy(o.matrixWorld);
+                box.copy(o.geometry.boundingBox).applyMatrix4(world);
+                const thing = { mesh: o, type, index: i, world, x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2, x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, y0: box.min.y, y1: box.max.y, barrier: type === 'barrier' ? env.activeBarriers[i] : null };
+                const ref = things.length;
+                things.push(thing);
+                for (let cx = Math.floor(thing.x0 / 16); cx <= Math.floor(thing.x1 / 16); cx++) {
+                    for (let cz = Math.floor(thing.z0 / 16); cz <= Math.floor(thing.z1 / 16); cz++) {
+                        const key = cx * 65536 + cz;
+                        if (!hash.has(key)) hash.set(key, []);
+                        hash.get(key).push(ref);
+                    }
+                }
+            }
+        });
+        instancesSeen += things.length;
+        // The road cell `step` square round (x, z), at road surface y: every thing whose box reaches into the cell and
+        // into the headroom over it is cast on, downward from `headroom` over the surface to just under it, every `fine`
+        const cast = (x, z, y, road) => {
+            rays++;
+            const list = hash.get(Math.floor(x / 16) * 65536 + Math.floor(z / 16));
+            if (!list) return;
+            const h = step / 2;
+            for (const ref of list) {
+                const t = things[ref];
+                if (t.x1 < x - h || t.x0 > x + h || t.z1 < z - h || t.z0 > z + h || t.y0 > y + headroom || t.y1 < y - 0.3) continue;
+                if (t.type === 'barrier' && road.edgeId !== null && t.barrier && closes(t.barrier).has(road.edgeId)) continue;
+                if (t.type === 'roadworks' && road.edgeId === null && closedLane(road.s, road.lat)) continue;
+                probe.geometry = t.mesh.geometry;
+                probe.material = t.mesh.material;
+                probe.matrixWorld.copy(t.world);
+                const found = [];
+                for (let fx = Math.max(x - h, t.x0); fx <= Math.min(x + h, t.x1) && !found.length; fx += fine) {
+                    for (let fz = Math.max(z - h, t.z0); fz <= Math.min(z + h, t.z1) && !found.length; fz += fine) {
+                        if (Math.abs(road.lat + (fx - x) * road.ax + (fz - z) * road.az) > road.half) continue;
+                        origin.set(fx, y + headroom, fz);
+                        raycaster.set(origin, down);
+                        raycaster.far = headroom + 0.3;
+                        probe.raycast(raycaster, found);
+                        rays++;
+                    }
+                }
+                if (!found.length) continue;
+                const over = headroom - found[0].distance;
+                const key = `${t.type}:${t.mesh.name}:${t.index}:${Math.round(t.x)},${Math.round(t.z)}`;
+                const held = hits.get(key);
+                const row = { type: t.type, name: t.mesh.name, x: Math.round(t.x * 10) / 10, z: Math.round(t.z * 10) / 10, road: road.edgeId === null ? 'ride' : 'side', edgeId: road.edgeId, s: road.s === null ? null : Math.round(road.s), overRoadM: Math.round(over * 100) / 100, hits: 1 };
+                if (held) held.hits++;
+                else hits.set(key, row);
+            }
+        };
+        // The ride: half a step either side of the place, every `step` along and across its drawn width
+        const sample = {};
+        for (let s = Math.max(0, s0 - every / 2); s < Math.min(route.length, s0 + every / 2); s += step) {
+            route.sample(s, sample);
+            const half = sample.width / 2;
+            for (let o = -half; o <= half + 1e-9; o += step) cast(sample.x + o * Math.cos(sample.heading), sample.z - o * Math.sin(sample.heading), sample.y, { edgeId: null, s, lat: o, half, ax: Math.cos(sample.heading), az: -Math.sin(sample.heading) });
+        }
+        // The side roads drawn from here (their chunk's ribbons are built), each once
+        for (const edge of env.data.edges) {
+            if (edge.onRide || seenSide.has(edge.id) || !env.sideMeshes.has(env.data.chunkOf(edge.first))) continue;
+            const e = env.graph.samples(edge.id);
+            if (!e) continue;
+            seenSide.add(edge.id);
+            for (let i = 0; i + 1 < e.x.length; i++) {
+                const len = Math.hypot(e.x[i + 1] - e.x[i], e.z[i + 1] - e.z[i]) || 1;
+                const fx = (e.x[i + 1] - e.x[i]) / len, fz = (e.z[i + 1] - e.z[i]) / len;
+                for (let a = 0; a < len; a += step) {
+                    const t = a / len;
+                    const x = e.x[i] + (e.x[i + 1] - e.x[i]) * t, z = e.z[i] + (e.z[i + 1] - e.z[i]) * t, y = e.y[i] + (e.y[i + 1] - e.y[i]) * t;
+                    const half = (e.width[i] + (e.width[i + 1] - e.width[i]) * t) / 2;
+                    for (let o = -half; o <= half + 1e-9; o += step) cast(x + o * fz, z - o * fx, y, { edgeId: edge.id, s: null, lat: o, half, ax: fz, az: -fx });
+                }
+            }
+        }
+    }
+    const rows = [...hits.values()].sort((p, q) => q.hits - p.hits);
+    const byType = {};
+    for (const r of rows) byType[r.type] = (byType[r.type] || 0) + 1;
+    return { places, rays, instancesSeen, headroomM: headroom, stepM: step, offenders: rows.length, byType, hits: rows.slice(0, 60) };
+}
+
+WORLD['world-clearance'] = async (page) => {
+    const result = await page.evaluate(clearanceWalk, placeAt.toString(), Number(option('every') || 300), CLEAR_HEADROOM_M, CLEAR_STEP_M, CLEAR_FINE_M);
+    const out = option('out');
+    if (out && result.hits.length) {
+        mkdirSync(out, { recursive: true });
+        result.files = [];
+        const tag = option('tag') || 'clearance';
+        // A still view of each of the worst offenders from the ride 25 m before it, 3 m up, the HUD left out
+        const worst = result.hits.slice().sort((p, q) => q.hits - p.hits).slice(0, Number(option('shots') || 4));
+        for (const [k, hit] of worst.entries()) {
+            const s = await page.evaluate(async (placeSource, h) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const env = game.environment;
+                const at = h.s !== null ? h.s : env.route.project(h.x, h.z, null, {}).s;
+                await placeAt(Math.max(5, at - 25));
+                env.streamer.pump(Infinity);
+                const eye = env.route.sample(Math.max(0, at - 25), {});
+                const target = env.route.sample(at, {});
+                game.camera.position.set(eye.x, eye.y + 3, eye.z);
+                game.camera.lookAt(h.x, target.y + 1.2, h.z);
+                game.camera.updateMatrixWorld(true);
+                game.graphics.renderer.render(game.scene, game.camera);
+                return Math.round(at);
+            }, placeAt.toString(), hit);
+            const canvas = await page.evaluateHandle(() => game.graphics.renderer.domElement);
+            const file = join(out, `${tag}-${k + 1}-${hit.type}-s${s}.png`);
+            await canvas.screenshot({ path: file });
+            result.files.push(file);
+        }
+    }
+    return result;
+};
+
+// Physics can only kill the rider where the rider can see why (tests/helpers/world-fairness.js, run in the page on
+// the meshes it draws): the whole ride every metre across the drawn road and verge, then the world pilot through
+// every hairpin at 5 and 7 m/s on the centre line and 2.5 m either side, counting crashes and restarts. --every sets the window streamed in at a time.
+// Then every roadworks site: its open lane clear of every drawn thing and physics zone (roadworksWindow), and the pilot
+// through it in the open lane at 8 and 14 m/s, stopping at its light.
+WORLD_PROBES.push('world-fairness');
+WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, placeSource, hairpinSource, every, worksSource) => {
+    const fairness = new Function(`return (${fairSource})`)();
+    const roadworks = new Function(`return (${worksSource})`)();
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment;
+    const route = env.route;
+    const v = game.vehicle;
+    twistyDev.freeze();
+    const sweep = { points: 0, widthCount: 0, solidCount: 0, runoffCount: 0, worstWidthM: 0, width: [], solid: [], runoff: [] };
+    const parts = { THREE, RoadSurface, TerrainMesh };
+    for (let s = env.startS; s < env.endS; s += every) {
+        const mid = Math.min(env.endS, s + every / 2);
+        const p = route.sample(mid, {});
+        env.update(p, mid, null, Infinity);
+        await env.streamer.settle(p, mid);
+        env.updateBarriers(mid);
+        const r = fairness(parts, env, v, { s0: s, s1: Math.min(env.endS, s + every - 1e-6), stepM: 1, acrossM: 0.25 });
+        for (const k of ['points', 'widthCount', 'solidCount', 'runoffCount']) sweep[k] += r[k];
+        sweep.worstWidthM = Math.max(sweep.worstWidthM, r.worstWidthM);
+        for (const k of ['width', 'solid', 'runoff']) sweep[k].push(...r[k].slice(0, 5));
+        await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    // The rides: from 90 m before each hairpin's middle to 70 m after it, the pilot holding `cruise`
+    const crashes = [], restarts = [];
+    const log = console.log;
+    console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) crashes.push({ s: Math.round(v.projection.s ?? v.routeS), line: args.join(' ') }); log.apply(console, args); };
+    const restart = game.restartFromCheckpoint.bind(game);
+    game.restartFromCheckpoint = (reason) => { restarts.push({ s: Math.round(v.projection.s ?? v.routeS), reason }); return restart(reason); };
+    game.worldLinger = false;
+    const hairpins = new Function(`return (${hairpinSource})`)()(route);
+    let rides = 0;
+    // The hairpin rides judge the road and the physics, on the centre line and to either side of it, the oncoming lane
+    // too: with the traffic on the road a ride there met a car now and then. The traffic is judged in the site rides
+    const traffic = game.traffic;
+    game.traffic = null;
+    try {
+        // The centre line and either side of it: off the centre, a sample's step in the old projection was a restart
+        for (const [cruise, lane] of [[5, 0], [7, 0], [5, -2.5], [7, 2.5]]) {
+            for (const h of hairpins) {
+                await placeAt(Math.max(env.startS, h - 90));
+                v.speed = cruise;
+                twistyDev.autopilot({ speed: cruise, lane });
+                const before = crashes.length + restarts.length;
+                let ticks = 0;
+                while (!v.crashed && crashes.length + restarts.length === before && (v.projection.s ?? v.routeS) < h + 70 && ticks < 60 * 90) {
+                    twistyDev.step(1);
+                    ticks++;
+                    if (ticks % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                rides++;
+                const last = crashes[crashes.length - 1] || restarts[restarts.length - 1];
+                if (crashes.length + restarts.length > before) last.ride = { hairpin: Math.round(h), cruise, lane };
+                if (v.crashed) { v.reset(); }
+            }
+        }
+    } finally {
+        console.log = log;
+        game.restartFromCheckpoint = restart;
+        game.traffic = traffic;
+    }
+    // The roadworks: the open lanes, then the pilot through each site in its open lane, waiting at a red
+    const works = roadworks({ Roadworks }, env);
+    const siteCrashes = [];
+    let siteRides = 0;
+    console.log = (...args) => { if (/CRASHED/.test(String(args[0]))) siteCrashes.push({ s: Math.round(v.projection.s ?? v.routeS), line: args.join(' ') }); log.apply(console, args); };
+    game.restartFromCheckpoint = (reason) => { siteCrashes.push({ s: Math.round(v.projection.s ?? v.routeS), reason }); return restart(reason); };
+    try {
+        for (const cruise of [8, 14]) {
+            for (const site of (env.roadworks ? env.roadworks.closed : [])) {
+                await placeAt(Math.max(env.startS, site.s0 - 60));
+                v.speed = cruise;
+                twistyDev.autopilot({ speed: cruise, lane: 0 });
+                const before = siteCrashes.length;
+                let ticks = 0;
+                // (time for a whole cycle of its lights at the stop line, then for the site's length at half the cruise)
+                const most = 60 * (60 + site.cycleS * 1.5 + (site.length + 70) / (cruise / 2));
+                while (!v.crashed && siteCrashes.length === before && (v.projection.s ?? v.routeS) < site.s1 + 10 && ticks < most) {
+                    twistyDev.step(1);
+                    ticks++;
+                    if (ticks % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                }
+                siteRides++;
+                if (siteCrashes.length > before) siteCrashes[siteCrashes.length - 1].site = { id: site.id, cruise };
+                else if ((v.projection.s ?? v.routeS) < site.s1 + 10) siteCrashes.push({ site: { id: site.id, cruise }, stuck: Math.round(v.projection.s ?? v.routeS) });
+                if (v.crashed) v.reset();
+            }
+        }
+    } finally {
+        console.log = log;
+        game.restartFromCheckpoint = restart;
+    }
+    return { every, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
+}, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100), roadworksWindow.toString());
+
+function fairnessChecks(results, failures) {
+    const fair = results['world-fairness'];
+    if (!fair) return;
+    if (!(fair.points > 500000)) failures.push(`world-fairness: only ${fair.points} points of the drawn road read`);
+    if (fair.widthCount) failures.push(`world-fairness: ${fair.widthCount} points where the physics band is over 0.1 m off the drawn ribbon (worst ${fair.worstWidthM} m): ${JSON.stringify(fair.width.slice(0, 10))}`);
+    if (fair.solidCount) failures.push(`world-fairness: ${fair.solidCount} wall or fall points on the drawn road with nothing drawn within 0.5 m: ${JSON.stringify(fair.solid.slice(0, 10))}`);
+    if (fair.runoffCount) failures.push(`world-fairness: ${fair.runoffCount} run-off points on the drawn carriageway: ${JSON.stringify(fair.runoff.slice(0, 10))}`);
+    if (!(fair.hairpins >= 20 && fair.rides === fair.hairpins * 4)) failures.push(`world-fairness: ${fair.rides} rides over ${fair.hairpins} hairpins`);
+    if (fair.crashes.length) failures.push(`world-fairness: ${fair.crashes.length} crashes in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.crashes.slice(0, 10))}`);
+    if (fair.restarts.length) failures.push(`world-fairness: ${fair.restarts.length} restarts in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.restarts.slice(0, 10))}`);
+    const works = fair.works || {};
+    if (!(works.sites > 0) || fair.siteRides !== works.sites * 2) failures.push(`world-fairness: ${fair.siteRides} rides through ${works.sites} roadworks sites`);
+    if ((works.narrow || []).length) failures.push(`world-fairness: open lanes under 3.2 m: ${JSON.stringify(works.narrow)}`);
+    if ((works.inOpen || []).length) failures.push(`world-fairness: roadworks in an open lane: ${JSON.stringify(works.inOpen.slice(0, 10))}`);
+    if ((works.drawnOff || []).length) failures.push(`world-fairness: roadworks whose physics box is not the drawn one: ${JSON.stringify(works.drawnOff.slice(0, 10))}`);
+    if ((fair.siteCrashes || []).length) failures.push(`world-fairness: ${fair.siteCrashes.length} rides ended in a roadworks site's open lane: ${JSON.stringify(fair.siteCrashes.slice(0, 10))}`);
+}
+
+function clearanceChecks(results, failures) {
+    const clear = results['world-clearance'];
+    if (!clear) return;
+    if (!(clear.rays > 0 && clear.instancesSeen > 0)) failures.push(`world-clearance: nothing was cast (${clear.rays} rays over ${clear.instancesSeen} drawn things)`);
+    if (clear.offenders) failures.push(`world-clearance: ${clear.offenders} drawn things stand in a road within ${clear.headroomM} m over it (${JSON.stringify(clear.byType)}): ${JSON.stringify(clear.hits.slice(0, 20))}`);
+}
+
+// Every road within the LOD0 radius looks like a road (tests/unit/world-road-look.test.js counts the triangles): the
+// chase view just past the finish (where the stage's road ended in flat grey) and at the start, and the view from a
+// side road, drawn as the game draws them but with the far (LOD1, flat) road material painted magenta and the near
+// (textured) one green where they lie within ROAD_LOOK_M of the bike (black beyond). A magenta pixel is a flat road
+// within the LOD0 radius (less the 5 m a ride section's box can lie inside its ribbon's edge, as the unit test reads
+// it). --out <dir> saves each view's colour-coded picture.
+//   node tools/terrain-check.mjs world-road-look --world tremola --gpu [--out <dir> --tag T]
+const ROAD_LOOK_M = 395;
+WORLD_PROBES.push('world-road-look');
+WORLD['world-road-look'] = async (page) => {
+    const views = await page.evaluate(async (placeSource, nearM) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, v = game.vehicle, renderer = game.graphics.renderer;
+        twistyDev.freeze();
+        const W = 480, H = 270;
+        const target = new THREE.WebGLRenderTarget(W, H);
+        // A road's colour within nearM of the bike (in plan), black beyond
+        const centre = { value: new THREE.Vector2() };
+        const painted = color => new THREE.ShaderMaterial({
+            side: THREE.DoubleSide, uniforms: { centre, color: { value: new THREE.Color(color) }, reach: { value: nearM } },
+            vertexShader: 'varying vec2 vPlan; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vPlan = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }',
+            fragmentShader: 'uniform vec2 centre; uniform vec3 color; uniform float reach; varying vec2 vPlan; void main() { gl_FragColor = vec4(distance(vPlan, centre) <= reach ? color : vec3(0.0), 1.0); }'
+        });
+        const paint = { far: painted(0xff00ff), near: painted(0x00ff00) };
+        // Chase views on the ride; the side road's view stands the bike on side edge 198, 120 m from its junction
+        const places = [['finish', env.route.length - 8, null], ['start', env.startS, null], ['side-198', null, [198, 30]]];
+        const out = [];
+        for (const [name, s, onSide] of places) {
+            game.cameraMode = 2;
+            if (onSide) {
+                await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
+                const sm = env.graph.samples(onSide[0]);
+                const i = Math.min(onSide[1], sm.x.length - 1);
+                const p = { x: sm.x[i], y: sm.y[i], z: sm.z[i] };
+                let best = Infinity, rideS = 0;
+                env.route.points.forEach((q, k) => { const d = Math.hypot(q.x - p.x, q.z - p.z); if (d < best) { best = d; rideS = env.route.sArray[k]; } });
+                env.update(p, rideS, null, Infinity);
+                await env.streamer.settle(p, rideS);
+                v.position.set(p.x, p.y + 0.3, p.z);
+                v.yawAngle = sm.heading[i];
+            } else {
+                await placeAt(s);
+            }
+            game.worldCamera.reset(v.yawAngle);
+            twistyDev.step(1, { render: true });
+            const camera = game.camera;
+            centre.value.set(v.position.x, v.position.z);
+            const swapped = [];
+            env.group.traverse(o => {
+                if (!o.isMesh) return;
+                const kind = o.material === RoadSurface.far ? 'far' : o.material === RoadSurface.near ? 'near' : null;
+                if (kind) { swapped.push([o, o.material]); o.material = paint[kind]; }
+            });
+            const fog = game.scene.fog;
+            game.scene.fog = null;
+            renderer.setRenderTarget(target);
+            renderer.render(game.scene, camera);
+            const pixels = new Uint8Array(W * H * 4);
+            renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+            renderer.setRenderTarget(null);
+            game.scene.fog = fog;
+            swapped.forEach(([o, m]) => { o.material = m; });
+            let flat = 0, near = 0;
+            for (let k = 0; k < W * H; k++) {
+                const r = pixels[k * 4], g = pixels[k * 4 + 1], b = pixels[k * 4 + 2];
+                if (r > 200 && g < 60 && b > 200) flat++;
+                else if (g > 200 && r < 60 && b < 60) near++;
+            }
+            // The picture, flipped to screen order, for --out
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const image = canvas.getContext('2d').createImageData(W, H);
+            for (let y = 0; y < H; y++) image.data.set(pixels.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+            canvas.getContext('2d').putImageData(image, 0, 0);
+            out.push({ name, s: Math.round(v.routeS || s || 0), flat, near, png: canvas.toDataURL('image/png') });
+        }
+        target.dispose();
+        return out;
+    }, placeAt.toString(), ROAD_LOOK_M);
+    const dir = option('out');
+    if (dir) mkdirSync(dir, { recursive: true });
+    const tag = option('tag') || 'road-look';
+    return {
+        views: views.map(({ png, ...view }) => {
+            if (dir) writeFileSync(join(dir, `${tag}-${view.name}.png`), Buffer.from(png.split(',')[1], 'base64'));
+            return view;
+        })
+    };
+};
+
+function roadLookChecks(results, failures) {
+    const look = results['world-road-look'];
+    if (!look) return;
+    for (const view of look.views) {
+        if (!(view.near > 1000)) failures.push(`world-road-look: the ${view.name} view shows ${view.near} pixels of textured road, want over 1000`);
+        if (view.flat) failures.push(`world-road-look: the ${view.name} view shows ${view.flat} pixels of flat (LOD1) road within ${ROAD_LOOK_M} m of the bike`);
+    }
+}
+
+// world-vertex: a bike put down at a ride vertex's exact s (a restart, a resume or a put-down: stations sit at sample s
+// values) takes finite physics and draws a lit frame. Such a put-down took a NaN height on its first step (0 / 0 in
+// Vehicle.updateElevation): the NaN reached the fog density through the weather's fogElevation and bloom spread it
+// over the whole frame, pure black. At each s the bike is put down at rest (placeAt) and stepped VERTEX_STEPS ticks;
+// the fog density, the camera and the bike must be finite, the physics guard must not have fired (Vehicle
+// nonFiniteSteps), under VERTEX_BLACK_SHARE of the frame may be black, and its luminance must vary by VERTEX_SPREAD or
+// more (a NaN camera drew one flat colour, the sky's, as often as black). --at s,s,... picks the places; the default
+// is the reported vertex, the start, every station and a dozen vertices spread along the ride.
+//   node tools/terrain-check.mjs world-vertex --world tremola --gpu [--at s,s,...] [--out <dir> --tag T]
+const VERTEX_STEPS = 3;
+const VERTEX_BLACK_SHARE = 0.5;
+const VERTEX_SPREAD = 5;
+const VERTEX_REPORTED_S = 6569.245793820582;
+WORLD_PROBES.push('world-vertex');
+WORLD['world-vertex'] = async (page) => {
+    const views = await page.evaluate(async (placeSource, list, steps, reported) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, route = env.route, v = game.vehicle, S = route.sArray;
+        let at = list;
+        if (!at.length) {
+            at = [reported, env.startS, ...(env.stationGates || []).map(g => g.s)];
+            for (let k = 1; k <= 12; k++) at.push(S[Math.round(k * (S.length - 1) / 13)]);
+        }
+        const finite = (...n) => n.every(Number.isFinite);
+        const out = [];
+        game.cameraMode = 2;
+        for (const s of at) {
+            await placeAt(s);
+            game.worldCamera.reset(v.yawAngle);
+            const held = v.nonFiniteSteps || 0;
+            twistyDev.step(steps - 1);
+            env.streamer.pump(Infinity);
+            twistyDev.step(1, { render: true });
+            // The frame as drawn, read in the same task as the render
+            const canvas = game.graphics.renderer.domElement;
+            const copy = document.createElement('canvas');
+            copy.width = canvas.width; copy.height = canvas.height;
+            const ctx = copy.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(canvas, 0, 0);
+            const image = ctx.getImageData(0, 0, copy.width, copy.height).data;
+            let black = 0, sum = 0, square = 0;
+            for (let i = 0; i < image.length; i += 4) {
+                const lum = 0.2126 * image[i] + 0.7152 * image[i + 1] + 0.0722 * image[i + 2];
+                sum += lum;
+                square += lum * lum;
+                if (lum < 2) black++;
+            }
+            const px = image.length / 4;
+            const mean = sum / px;
+            const c = game.camera.position, b = v.position, fog = game.scene.fog;
+            out.push({
+                s, vertex: S[route.indexAt(s)] === s,
+                fogDensity: fog ? fog.density : null,
+                fogFinite: !fog || fog.density === undefined || Number.isFinite(fog.density),
+                cameraFinite: finite(c.x, c.y, c.z) && game.camera.matrixWorld.elements.every(Number.isFinite),
+                bikeFinite: finite(b.x, b.y, b.z, v.speed, v.leanAngle, v.yawAngle),
+                held: (v.nonFiniteSteps || 0) - held,
+                blackShare: Math.round(black / px * 1000) / 1000,
+                meanLum: Math.round(mean * 10) / 10,
+                spread: Math.round(Math.sqrt(Math.max(0, square / px - mean * mean)) * 10) / 10,
+                png: copy.toDataURL('image/png')
+            });
+        }
+        return out;
+    }, placeAt.toString(), option('at') ? option('at').split(',').map(Number) : [], VERTEX_STEPS, VERTEX_REPORTED_S);
+    const dir = option('out');
+    if (dir) mkdirSync(dir, { recursive: true });
+    const tag = option('tag') || 'vertex';
+    return {
+        views: views.map(({ png, ...view }) => {
+            if (dir) writeFileSync(join(dir, `${tag}-s${view.s}.png`), Buffer.from(png.split(',')[1], 'base64'));
+            return view;
+        })
+    };
+};
+
+function vertexChecks(results, failures) {
+    const vertex = results['world-vertex'];
+    if (!vertex) return;
+    if (!vertex.views.some(view => view.s === VERTEX_REPORTED_S && view.vertex) && !option('at')) failures.push(`world-vertex: the reported vertex s ${VERTEX_REPORTED_S} was not read at a vertex`);
+    for (const view of vertex.views) {
+        const where = `world-vertex: at s ${view.s}${view.vertex ? ' (a vertex)' : ''}`;
+        if (!view.fogFinite) failures.push(`${where} the fog density is ${view.fogDensity}`);
+        if (!view.cameraFinite) failures.push(`${where} the camera is not finite`);
+        if (!view.bikeFinite) failures.push(`${where} the bike's state is not finite`);
+        if (view.held) failures.push(`${where} the physics guard held ${view.held} non-finite steps`);
+        if (!(view.blackShare < VERTEX_BLACK_SHARE)) failures.push(`${where} ${view.blackShare} of the frame is black (mean luminance ${view.meanLum})`);
+        if (!(view.spread >= VERTEX_SPREAD)) failures.push(`${where} the frame is one flat colour (luminance ${view.meanLum}, spread ${view.spread})`);
+    }
+}
+
+// world-walls: the retaining walls against the land drawn round them, in the page (tests/helpers/world-walls.js: the
+// bike is put down every --every metres, 300 by default, and every wall within 350 m is read from the drawn
+// triangles). It fails on land inside or in front of a wall (buried, climbs), a gap at a wall's top, at its foot or
+// past its end (top, hangs, open) and a wall in pieces (blocks, steps), over what WALL_LIMITS holds. Then the views:
+// --eyes s:lat:up:toS:toLat:toUp,... puts the eye beside the ride (metres of ride, metres right of the centre line,
+// metres over the road) and s@x:y:z:tx:ty:tz in the world's own metres; with --out each is saved, and so is a view of
+// the worst place of each kind the check found.
+//   node tools/terrain-check.mjs world-walls --world tremola --gpu [--every 300] [--eyes ...] [--out <dir> --tag T]
+WORLD_PROBES.push('world-walls');
+WORLD['world-walls'] = async (page) => {
+    const walls = await page.evaluate(async (windowSource, runsSource, placeSource, every) => {
+        const read = new Function(`return (${windowSource})`)(), runs = new Function(`return (${runsSource})`)();
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, store = {};
+        game.worldLinger = false;
+        for (let s = env.startS; s < env.endS; s += every) {
+            const p = await placeAt(Math.min(env.endS - 1, s + every / 2));
+            read({ THREE }, env, store, p);
+        }
+        const out = runs(store);
+        // Where each worst place is seen from: 14 m out from the wall's face, a little over its top
+        const eye = h => { const f = [...store.faces.values()].find(g => Math.abs((g.a.top[0] + g.b.top[0]) / 2 - h.x) < 0.2 && Math.abs((g.a.top[2] + g.b.top[2]) / 2 - h.z) < 0.2) || [...store.faces.values()].find(g => Math.hypot(g.a.top[0] - h.x, g.a.top[2] - h.z) < 0.2 || Math.hypot(g.b.top[0] - h.x, g.b.top[2] - h.z) < 0.2); return f ? { s: h.s, at: [h.x + f.ox * 14, f.a.top[1] + 3, h.z + f.oz * 14, h.x, f.a.top[1] - 2, h.z] } : null; };
+        out.worst = {};
+        for (const kind of ['buried', 'climbs', 'hangs', 'top', 'blocks', 'steps', 'open']) if (out[kind].length) out.worst[kind] = eye(out[kind][0]);
+        for (const kind of ['buried', 'climbs', 'hangs', 'top', 'blocks', 'steps', 'open']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 8) };
+        return out;
+    }, wallWindow.toString(), wallRuns.toString(), placeAt.toString(), Number(option('every') || 300));
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'walls';
+    const views = [];
+    const shoot = async (eye, name) => {
+        await page.evaluate(wallEye, placeAt.toString(), eye);
+        const file = out ? join(out, `${tag}-${name}.png`) : null;
+        if (file) await page.screenshot({ path: file });
+        views.push({ eye: name, file });
+    };
+    for (const spec of (option('eyes') ? option('eyes').split(',') : [])) {
+        // s:lat:up:toS:toLat:toUp along the ride, or s@x:y:z:tx:ty:tz in the world's own metres (the bike put down at s)
+        const eye = spec.includes('@') ? { s: Number(spec.split('@')[0]), at: spec.split('@')[1].split(':').map(Number) } : spec.split(':').map(Number);
+        await shoot(eye, spec.replace(/[:@]/g, '_'));
+    }
+    if (out) for (const [kind, eye] of Object.entries(walls.worst)) if (eye) await shoot(eye, `worst-${kind}`);
+    return { ...walls, views };
+};
+
+function wallChecks(results, failures) {
+    const walls = results['world-walls'];
+    if (!walls) return;
+    if (!(walls.faces > 500)) failures.push(`world-walls: only ${walls.faces} wall faces were read`);
+    const says = { buried: 'wall faces with the land in front at their top', climbs: 'wall faces the land climbs steeper than a fill stands', hangs: 'wall feet over the land', top: 'wall tops no road surface meets', blocks: 'runs of wall under 10 m', steps: 'pairs of runs under 12 m apart', open: 'wall ends past which the road\'s edge hangs open' };
+    for (const [kind, text] of Object.entries(says)) {
+        if (walls[kind].count > WALL_LIMITS[kind]) failures.push(`world-walls: ${walls[kind].count} ${text} (at most ${WALL_LIMITS[kind]}): ${JSON.stringify(walls[kind].worst.slice(0, 5))}`);
+    }
+}
+
+async function wallEye(placeSource, eye) {
+    const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle, route = game.environment.route;
+    game.cameraMode = 2;
+    await placeAt(s);
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 30; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const at = (s, lat, up) => { const p = route.sample(s, {}); return new THREE.Vector3(p.x + lat * Math.cos(p.heading), p.y + up, p.z - lat * Math.sin(p.heading)); };
+    if (Array.isArray(eye)) {
+        game.camera.position.copy(at(s, lat, up));
+        game.camera.lookAt(at(toS, toLat, toUp));
+    } else {
+        game.camera.position.set(eye.at[0], eye.at[1], eye.at[2]);
+        game.camera.lookAt(new THREE.Vector3(eye.at[3], eye.at[4], eye.at[5]));
+    }
+    game.camera.updateMatrixWorld(true);
+    game.graphics.render(game.scene, game.camera);
+}
+
+// world-junctions: every junction of the ride as it is drawn, in the page (tests/helpers/world-junctions.js: the bike
+// is put down at each junction and every side road that leaves it is read from the drawn triangles). It fails on a
+// step or a hole in a side road's surface from the junction out, land over it, a deck or parapet in its mouth and an
+// edge that hangs open there, over what JUNCTION_LIMITS holds. With --out, two views of every junction --at names
+// (all of them without it) are saved as the frame alone: from the ride before the junction, and from over the side
+// road looking back at it. --eyes s@x:y:z:tx:ty:tz adds views in the world's own metres.
+//   node tools/terrain-check.mjs world-junctions --world tremola --gpu [--at j7,j12] [--eyes ...] [--out <dir> --tag T]
+WORLD_PROBES.push('world-junctions');
+WORLD['world-junctions'] = async (page) => {
+    const only = option('at') ? option('at').split(',') : null;
+    const read = await page.evaluate(async (windowSource, reportSource, placeSource) => {
+        const window = new Function(`return (${windowSource})`)(), report = new Function(`return (${reportSource})`)();
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, store = {};
+        game.worldLinger = false;
+        for (const junction of env.graph.junctions) {
+            const p = await placeAt(Math.max(env.startS + 1, Math.min(env.endS - 1, junction.passes[0].sIn)));
+            window({ THREE }, env, store, p);
+        }
+        const out = report(store);
+        // Where each side road is seen from: over the road 22 m out looking back at the node, and from the ride
+        out.eyes = [...store.roads.values()].map(road => {
+            const { rows } = env.graph.chainFrom(road.edge, env.graph.junctions.find(j => j.id === road.junction).node, 24);
+            const node = rows[0], far = rows[rows.length - 1];
+            return { junction: road.junction, edge: road.edge, s: Math.max(env.startS + 1, road.s), back: [far.x, far.y + 7, far.z, node.x, node.y, node.z] };
+        });
+        for (const kind of ['steps', 'holes', 'sunk', 'decks', 'open']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 12) };
+        return out;
+    }, junctionWindow.toString(), junctionReport.toString(), placeAt.toString());
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'junction';
+    const views = [];
+    const shoot = async (eye, name) => {
+        const png = await page.evaluate(junctionEye, placeAt.toString(), eye);
+        const file = out ? join(out, `${tag}-${name}.png`) : null;
+        if (file) writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+        views.push({ eye: name, file });
+    };
+    if (out) {
+        for (const eye of read.eyes) {
+            if (only && !only.includes(eye.junction)) continue;
+            await shoot({ s: eye.s, at: eye.back }, `${eye.junction}-e${eye.edge}-back`);
+            await shoot([eye.s - 22, 0, 5, eye.s + 4, 0, 0], `${eye.junction}-e${eye.edge}-ride`);
+        }
+    }
+    for (const spec of (option('eyes') ? option('eyes').split(',') : [])) {
+        const eye = spec.includes('@') ? { s: Number(spec.split('@')[0]), at: spec.split('@')[1].split(':').map(Number) } : spec.split(':').map(Number);
+        await shoot(eye, spec.replace(/[:@]/g, '_'));
+    }
+    const { eyes, ...rest } = read;
+    return { ...rest, views };
+};
+
+function junctionChecks(results, failures) {
+    const junctions = results['world-junctions'];
+    if (!junctions) return;
+    if (!(junctions.roads >= 20)) failures.push(`world-junctions: only ${junctions.roads} side roads were read`);
+    const says = { steps: 'side roads with a step in their surface', holes: 'side roads with a hole in their surface', sunk: 'side roads with land over their surface', decks: 'side roads with a deck or parapet in their mouth', open: 'side roads whose edge hangs open in their mouth' };
+    for (const [kind, text] of Object.entries(says)) {
+        if (junctions[kind].count > JUNCTION_LIMITS[kind]) failures.push(`world-junctions: ${junctions[kind].count} ${text} (at most ${JUNCTION_LIMITS[kind]}): ${JSON.stringify(junctions[kind].worst.slice(0, 5))}`);
+    }
+}
+
+// world-stones: the marker stones as they are drawn, in the page. The bike is put down every --every metres (200 by
+// default) and every stone drawn within STONE_NEAR_M of it, where the land is at full detail, is cast on against the
+// drawn ground (the tiles, the roads and the ground of the edge works; a wall, a deck or a parapet is a structure).
+// It fails on a stone with a corner of its foot over the drawn ground or its top under it, a stone that is neither
+// at a sharp drop drawn on its own side (Scenery.STONE_RULE: dropM within reachM of the verge, less STONE_DROP_TOL_M)
+// nor on the outside of a hairpin (within STONE_HAIRPIN_M of a hairpin of worldHairpins, where the road turns
+// STONE_BEND_DEG or more inside STONE_BEND_M), a stone on the inside of a hairpin, a stone with a wall or a parapet
+// drawn at its edge, a piece of kerb with its foot over the drawn ground, a ride on which no stone was seen and a
+// ride with no row at a hairpin. It reports the stones by case and how many hairpins of the game's list have a row.
+//   node tools/terrain-check.mjs world-stones --world tremola --gpu [--every 200]
+const STONE_NEAR_M = 160;
+const STONE_FLOAT_M = 0.05;
+const STONE_DROP_TOL_M = 0.3;
+const STONE_HAIRPIN_M = 45;
+const STONE_BEND_M = 40;
+const STONE_BEND_DEG = 20;
+WORLD_PROBES.push('world-stones');
+WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource, every, nearM, floatM, tolM, hairpinM, bendM, bendDeg) => {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, rule = Scenery.STONE_RULE;
+    const apexes = new Function(`return (${hairpinSource})`)()(route);
+    // How far the road turns round s, in pieces (a hairpin turns more than half a circle inside the span)
+    const turnAt = s => { let turn = 0; for (let d = -bendM / 2; d < bendM / 2; d += 4) turn += route.headingChange(s + d, s + d + 4); return turn; };
+    const kerbs = new Map(), K = Scenery.KERB;
+    game.worldLinger = false;
+    const raycaster = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
+    const structure = h => h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2);
+    const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
+    const hits = (x, z, from) => { raycaster.set(new THREE.Vector3(x, from, z), down); return raycaster.intersectObjects(drawn, true); };
+    const groundY = (x, z, from) => { const hit = hits(x, z, from).find(h => !structure(h)); return hit ? hit.point.y : null; };
+    const seen = new Map();
+    const matrix = new THREE.Matrix4(), world = new THREE.Matrix4(), v = new THREE.Vector3();
+    let places = 0;
+    for (let s0 = Math.min(every / 2, route.length / 2); s0 < route.length; s0 += every) {
+        const bike = await placeAt(s0);
+        env.streamer.pump(Infinity);
+        env.group.updateMatrixWorld(true);
+        places++;
+        env.sceneryGroup.traverse(o => {
+            if (!o.isInstancedMesh || o.name !== 'stones') return;
+            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+            const box = o.geometry.boundingBox;
+            for (let i = 0; i < o.count; i++) {
+                o.getMatrixAt(i, matrix);
+                world.multiplyMatrices(o.matrixWorld, matrix);
+                const at = v.set(0, 0, 0).applyMatrix4(world).clone();
+                const key = `${at.x.toFixed(2)},${at.z.toFixed(2)}`;
+                if (seen.has(key) || Math.hypot(at.x - bike.x, at.z - bike.z) > nearM) continue;
+                const stone = { x: Math.round(at.x * 10) / 10, z: Math.round(at.z * 10) / 10 };
+                seen.set(key, stone);
+                const top = v.set(0, box.max.y, 0).applyMatrix4(world).y;
+                // The foot: its four corners, each against the drawn ground under it
+                let over = -Infinity;
+                for (const [cx, cz] of [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]]) {
+                    v.set(cx, box.min.y, cz).applyMatrix4(world);
+                    const y = groundY(v.x, v.z, top + 3);
+                    over = Math.max(over, y === null ? Infinity : v.y - y);
+                }
+                const middle = groundY(at.x, at.z, top + 3);
+                if (over > floatM) stone.floats = over === Infinity ? 'no ground drawn under it' : Math.round(over * 100) / 100;
+                if (middle !== null && top <= middle) stone.buried = Math.round((middle - top) * 100) / 100;
+                // Its own road, the side it stands on, and the drawn ground reachM past the verge there
+                const own = route.project(at.x, at.z, null, {});
+                const p = route.sample(own.s, {});
+                const side = Math.sign(own.lateral), edge = p.width / 2 + RoadSurface.VERGE_M;
+                stone.s = Math.round(own.s);
+                stone.side = side;
+                const out = d => [p.x + side * (edge + d) * Math.cos(p.heading), p.z - side * (edge + d) * Math.sin(p.heading)];
+                const far = groundY(...out(rule.reachM), p.y + 3);
+                stone.drop = far === null ? null : Math.round((p.y - far) * 100) / 100;
+                // Its case: on a hairpin where the road bends (then on the outside of it), or at a sharp drop
+                const turn = turnAt(own.s);
+                stone.hairpin = apexes.some(a => Math.abs(a - own.s) <= hairpinM) && Math.abs(turn) >= bendDeg * Math.PI / 180;
+                if (stone.hairpin && side !== -Math.sign(turn)) stone.inside = true;
+                if (!stone.hairpin && !(stone.drop > rule.dropM - tolM)) stone.flat = true;
+                // A wall, a deck or a parapet drawn at its edge, from a metre in from the verge's edge to a metre out
+                for (let d = -1; d <= 1; d += 0.25) if (hits(...out(d), p.y + 3).some(h => structure(h) && h.point.y > p.y - 1.5)) stone.guarded = true;
+            }
+        });
+        // The kerb under the rows: the foot of each piece, at its ends and its middle, against the drawn ground
+        env.sceneryGroup.traverse(o => {
+            if (!o.isInstancedMesh || o.name !== 'stone-kerbs') return;
+            for (let i = 0; i < o.count; i++) {
+                o.getMatrixAt(i, matrix);
+                world.multiplyMatrices(o.matrixWorld, matrix);
+                const at = v.set(0, 0, 0).applyMatrix4(world).clone();
+                const key = `${at.x.toFixed(2)},${at.z.toFixed(2)}`;
+                if (kerbs.has(key) || Math.hypot(at.x - bike.x, at.z - bike.z) > nearM) continue;
+                const kerb = { x: Math.round(at.x * 10) / 10, z: Math.round(at.z * 10) / 10 };
+                kerbs.set(key, kerb);
+                let over = -Infinity;
+                for (const along of [-0.5, 0, 0.5]) {
+                    v.set(0, -K.rootM, along).applyMatrix4(world);
+                    const y = groundY(v.x, v.z, v.y + K.rootM + 3);
+                    over = Math.max(over, y === null ? Infinity : v.y - y);
+                }
+                if (over > 0) kerb.floats = over === Infinity ? 'no ground drawn under it' : Math.round(over * 100) / 100;
+            }
+        });
+    }
+    const stones = [...seen.values()];
+    const pick = (key, list = stones) => list.filter(t => t[key] !== undefined).slice(0, 12);
+    const atDrop = stones.filter(t => !t.hairpin), atHairpin = stones.filter(t => t.hairpin);
+    const drops = atDrop.map(t => t.drop).filter(Number.isFinite).sort((a, b) => a - b);
+    // The hairpins of the game's own list (WorldRoute.hairpins) with a stone on their arc
+    const list = route.hairpins();
+    const withRow = list.filter(h => atHairpin.some(t => t.s >= h.s0 - 3 && t.s <= h.s1 + 3));
+    return {
+        places, stones: stones.length, atDrops: atDrop.length, atHairpins: atHairpin.length, kerbs: kerbs.size,
+        rows: new Set(atDrop.map(t => `${Math.floor(t.s / rule.blockM)}:${t.side}`)).size + withRow.length,
+        hairpins: list.length, hairpinsWithRow: withRow.length, hairpinsWithout: list.filter(h => !withRow.includes(h)).map(h => Math.round(h.apex)),
+        dropM: rule.dropM, reachM: rule.reachM, leastDrop: drops[0] ?? null, medianDrop: drops[Math.floor(drops.length / 2)] ?? null,
+        floats: pick('floats'), buried: pick('buried'), flat: pick('flat'), inside: pick('inside'), guarded: pick('guarded'), kerbFloats: pick('floats', [...kerbs.values()])
+    };
+}, placeAt.toString(), worldHairpins.toString(), Number(option('every') || 200), STONE_NEAR_M, STONE_FLOAT_M, STONE_DROP_TOL_M, STONE_HAIRPIN_M, STONE_BEND_M, STONE_BEND_DEG);
+
+function stoneChecks(results, failures) {
+    const stones = results['world-stones'];
+    if (!stones) return;
+    if (!(stones.stones > 0)) failures.push(`world-stones: no marker stone was seen at ${stones.places} places`);
+    if (!(stones.hairpinsWithRow > 0)) failures.push(`world-stones: no row of stones at any of the ${stones.hairpins} hairpins`);
+    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, inside: 'stones on the inside of a hairpin', guarded: 'stones where a wall or a parapet is drawn at the edge', kerbFloats: 'pieces of kerb with their foot over the drawn ground' };
+    for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
+}
+
+// A view for world-junctions, in the page: the frame alone (no HUD), as a PNG data URL
+async function junctionEye(placeSource, eye) {
+    const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle, route = game.environment.route;
+    game.cameraMode = 2;
+    await placeAt(s);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 30; i++) twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const at = (s, lat, up) => { const p = route.sample(s, {}); return new THREE.Vector3(p.x + lat * Math.cos(p.heading), p.y + up, p.z - lat * Math.sin(p.heading)); };
+    if (Array.isArray(eye)) {
+        game.camera.position.copy(at(s, lat, up));
+        game.camera.lookAt(at(toS, toLat, toUp));
+    } else {
+        game.camera.position.set(eye.at[0], eye.at[1], eye.at[2]);
+        game.camera.lookAt(new THREE.Vector3(eye.at[3], eye.at[4], eye.at[5]));
+    }
+    game.camera.updateMatrixWorld(true);
+    // The bike stands in the junction: out of the picture
+    const shown = v.group ? v.group.visible : null;
+    if (v.group) v.group.visible = false;
+    game.graphics.render(game.scene, game.camera);
+    const png = game.graphics.renderer.domElement.toDataURL('image/png');
+    if (v.group) v.group.visible = shown;
+    return png;
+}
+
+// The data world-hud rides when the run names no --worldData: the 6 km fixture of three stages
+const WORLD_HUD_DATA = 'tests/fixtures/world/mini';
+
+// The seeds world-finish rides: --seeds N rides N seeds from --seed (default 1); --seed S alone rides S once.
+// Neither: WORLD_FINISH_SEEDS seeds from 1, so one lucky draw of the traffic cannot pass the probe.
+const WORLD_FINISH_SEEDS = 5;
+function finishSeeds() {
+    const first = option('seed') !== undefined ? Number(option('seed')) : 1;
+    const count = option('seeds') !== undefined ? Number(option('seeds')) : option('seed') !== undefined ? 1 : WORLD_FINISH_SEEDS;
+    if (!Number.isInteger(first) || !Number.isInteger(count) || count < 1) fail(2, `--seed and --seeds take whole numbers, --seeds at least 1 (got ${option('seed')}, ${option('seeds')})`);
+    return Array.from({ length: count }, (_, i) => first + i);
+}
+
+async function worldMain() {
+    const executablePath = chromePath();
+    const gpu = flag('gpu');
+    const server = await startServer();
+    const port = server.address().port;
+    const args = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
+    const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath, headless: 'new', args: ['--no-sandbox', ...args] });
+    const id = option('world') || 'tremola';
+    const report = { chrome: executablePath, mode: gpu ? 'gpu' : 'headless', world: id, blocked: state.blocked, notFound: state.notFound, pageErrors: state.pageErrors, results: {}, failures: [], notes: [] };
+    let exit = 0;
+    try {
+        for (const name of probes) {
+            if (!WORLD[name]) { report.failures.push(`unknown probe ${name}`); continue; }
+            if (name === 'world-finish') {
+                // One ride per seed, each on a fresh page whose Math.random starts at that seed (traffic, the crew)
+                const rides = [];
+                for (const seed of finishSeeds()) {
+                    state.requests = [];
+                    const page = await openWorld(browser, port, id, seed);
+                    rides.push({ seed, ...(await WORLD[name](page, port)) });
+                    await page.close();
+                    state.requests = null;
+                }
+                report.results[name] = { seeds: rides.map(r => r.seed), finished: rides.filter(r => r.finished && !r.crashed).length, rides };
+                continue;
+            }
+            state.requests = [];
+            // The stage HUD needs a ride of two stages or more; the shipped data holds one, so without --worldData
+            // it rides the two-stage fixture
+            const page = name === 'world-hud' && !option('worldData')
+                ? await openWorld(browser, port, 'all', 1, WORLD_HUD_DATA)
+                : await openWorld(browser, port, id);
+            report.results[name] = await WORLD[name](page, port);
+            if (name === 'world-net') report.results[name].offHost = state.requests.filter(url => !isAllowedRequest(url, port));
+            await page.close();
+            state.requests = null;
+        }
+        worldChecks(report);
+    } catch (error) {
+        report.failures.push(String(error.stack || error));
+        exit = 2;
+    } finally {
+        await browser.close();
+        server.close();
+    }
+    if (state.pageErrors.length) report.failures.push(...state.pageErrors.map(e => `page error: ${e}`));
+    const missing = state.notFound.filter(u => !u.endsWith('/favicon.ico'));
+    if (missing.length) report.failures.push(...missing.map(u => `404: ${u}`));
+    report.failures.length && (exit = exit || 1);
+    console.log(JSON.stringify(report, null, 1));
+    process.exit(exit);
+}
+
+function isAllowedRequest(url, port) {
+    if (url.startsWith('data:') || url.startsWith('blob:')) return true;
+    const target = new URL(url);
+    if (target.host === `127.0.0.1:${port}`) return ALLOWED_PATHS.test(target.pathname);
+    return ALLOWED_HOSTS.some(host => target.hostname === host);
+}
+
+// world-trees: in a clear view each band with TREE_MIN_PX tree pixels or more keeps its mean saturation and value inside
+// the photos' range (TREE_BANDS), and in every view (rain too) a band's trees outshine the land round them by no more
+// than TREE_OVER_LAND
+function treeChecks(results, failures) {
+    const trees = results['world-trees'];
+    if (!trees) return;
+    let read = 0;
+    for (const view of trees.views) {
+        const where = `s ${view.s}${view.rain ? ' (rain)' : ''}${view.turnDeg ? ` turned ${view.turnDeg}` : ''}`;
+        view.bands.forEach((band, k) => {
+            const want = TREE_BANDS[k];
+            if (!(band.trees.px >= TREE_MIN_PX)) return;
+            read++;
+            if (!view.rain) {
+                if (band.trees.s < want.s[0] || band.trees.s > want.s[1]) failures.push(`world-trees: at ${where} the ${want.name} trees' mean saturation is ${band.trees.s}, outside the photos' ${want.s.join(' to ')}`);
+                if (band.trees.v < want.v[0] || band.trees.v > want.v[1]) failures.push(`world-trees: at ${where} the ${want.name} trees' mean value is ${band.trees.v}, outside the photos' ${want.v.join(' to ')}`);
+            }
+            if (band.vOverLand > TREE_OVER_LAND) failures.push(`world-trees: at ${where} the ${want.name} trees are ${band.vOverLand} brighter (HSV value) than the land round them, over ${TREE_OVER_LAND}`);
+        });
+    }
+    if (read < 5) failures.push(`world-trees: only ${read} view bands held ${TREE_MIN_PX} tree pixels or more, want 5`);
+}
+
+function worldChecks(report) {
+    const { results, failures } = report;
+    clearanceChecks(results, failures);
+    fairnessChecks(results, failures);
+    treeChecks(results, failures);
+    roadLookChecks(results, failures);
+    vertexChecks(results, failures);
+    wallChecks(results, failures);
+    junctionChecks(results, failures);
+    stoneChecks(results, failures);
+    const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
+    rows.forEach(r => {
+        Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
+        // Content grows: the window keeps WORLD_MESH_MARGIN of the mesh cap free everywhere
+        if (r.meshes > LEG_BUDGET.meshes * (1 - WORLD_MESH_MARGIN)) failures.push(`world at s ${r.s}: ${r.meshes} meshes leave ${LEG_BUDGET.meshes - r.meshes} of the cap of ${LEG_BUDGET.meshes} free, want ${LEG_BUDGET.meshes * WORLD_MESH_MARGIN} or more`);
+        if (r.tiles > WORLD_RESIDENT_TILES) failures.push(`world at s ${r.s}: ${r.tiles} resident tiles, over ${WORLD_RESIDENT_TILES}`);
+        if (r.bikeTilesMissing) failures.push(`world at s ${r.s}: ${r.bikeTilesMissing} tiles within ${WORLD_BIKE_TILE_M} m are not drawn`);
+        if (r.maxStepMs > 4 * 2) failures.push(`world at s ${r.s}: a build step took ${r.maxStepMs} ms`);
+    });
+    const ground = results['world-ground'];
+    if (ground) {
+        if (!(ground.road.n >= ground.want) || ground.road.max > 0.05) failures.push(`world-ground: road band ${JSON.stringify(ground.road)}, want ${ground.want} points with |delta| <= 0.05`);
+        if (!(ground.land.n >= ground.want) || ground.land.p99 > 0.35) failures.push(`world-ground: land ${JSON.stringify(ground.land)}, want ${ground.want} points with p99 <= 0.35`);
+        if (ground.aboveRoad.n !== ground.road.n || ground.aboveRoad.over) failures.push(`world-ground: the drawn land stands above the road surface at ${ground.aboveRoad.over} of ${ground.aboveRoad.n} road points (up to ${ground.aboveRoad.max} m), want none`);
+    }
+    (results['world-junction'] || []).forEach(j => j.passes.forEach(p => {
+        if (JSON.stringify(p.active) !== JSON.stringify(p.expected)) failures.push(`world-junction ${j.id} at ${p.sIn}: barriers ${JSON.stringify(p.active)}, want ${JSON.stringify(p.expected)}`);
+        if (p.walls.some(kind => kind !== 'wall')) failures.push(`world-junction ${j.id} at ${p.sIn}: a barrier does not give wall (${p.walls})`);
+        if (p.outClosed) failures.push(`world-junction ${j.id} at ${p.sIn}: the road out is closed`);
+    }));
+    const haze = results['world-haze'];
+    if (haze) hazeChecks(haze, failures);
+    const wrong = results['world-wrongway'];
+    if (wrong) {
+        const [off, back, ride] = wrong;
+        if (off.error) failures.push(`world-wrongway: ${off.error}`);
+        else {
+            if (!(off.warnedAt !== null && off.warnedAt <= 1) || !(Math.abs(off.restartAt - off.warnedAt - 10) <= 0.5)) failures.push(`world-wrongway off route: ${JSON.stringify(off)}, want the warning within 1 s and the restart 10 s later`);
+            if (!(Math.abs(back.warnedAt - 5) <= 0.5) || !(Math.abs(back.restartAt - back.warnedAt - 10) <= 0.5)) failures.push(`world-wrongway backwards: ${JSON.stringify(back)}, want the warning at 5 s and the restart 10 s later`);
+            if (ride.warned || ride.restarts || ride.crashed || ride.metres < 1900) failures.push(`world-wrongway control: ${JSON.stringify(ride)}, want neither a warning nor a restart over 2 km`);
+        }
+    }
+    const credit = results['world-credit'];
+    if (credit) {
+        const { manifest } = credit;
+        const full = panel => panel && panel.credit === manifest.credit && panel.credit.includes('© swisstopo') && (!manifest.notice || panel.notice === manifest.notice);
+        if (!manifest.credit || !manifest.credit.includes('© swisstopo')) failures.push(`world-credit: the manifest credit is missing or has no swisstopo: ${JSON.stringify(manifest.credit)}`);
+        if (credit.riding.length) failures.push(`world-credit: a credit is on screen during the ride: ${credit.riding.join(', ')}`);
+        if (!credit.pause.panel || !credit.pause.button || !full(credit.fromPause)) failures.push(`world-credit: Credits from the pause panel: ${JSON.stringify({ pause: credit.pause, panel: credit.fromPause })}`);
+        if (credit.afterResume) failures.push('world-credit: the pause panel stays after resume');
+        if (credit.loading !== manifest.credit) failures.push(`world-credit: the loading screen shows ${JSON.stringify(credit.loading)}`);
+        if (!full(credit.fromMenu)) failures.push(`world-credit: Credits from the main menu: ${JSON.stringify(credit.fromMenu)}`);
+        if (credit.legScreen.length) failures.push(`world-credit: a credit is on the menu screen itself: ${credit.legScreen.join(', ')}`);
+    }
+    const net = results['world-net'];
+    if (net) {
+        if (net.offHost.length) failures.push(`world-net: requests outside the allowed set: ${net.offHost.join(', ')}`);
+        if (report.blocked.length) failures.push(`world-net: ${report.blocked.length} attempts at production hosts: ${report.blocked.join(', ')}`);
+    }
+    const finishes = results['world-finish'];
+    if (finishes) {
+        if (finishes.finished !== finishes.seeds.length) failures.push(`world-finish: ${finishes.finished} of ${finishes.seeds.length} seeded rides finished, want all`);
+        for (const finish of finishes.rides) {
+            const { rows, seed, ...rest } = finish;
+            const at = `world-finish seed ${seed}`;
+            if (!finish.finished || finish.crashed || finish.gates !== finish.gateTotal || finish.restarts || finish.maxLateral > 5) failures.push(`${at}: ${JSON.stringify(rest)}`);
+            if (finish.badHud && finish.badHud.length) failures.push(`${at}: the HUD showed a number that is not one: ${JSON.stringify(finish.badHud)}`);
+            if (finish.finished && !finish.restarts && !(Math.abs(finish.shownM - finish.stageM) <= 0.02 * finish.stageM)) failures.push(`${at}: the finish box shows ${finish.shownM} m for a stage of ${finish.stageM} m`);
+            if (!finish.traffic || !finish.traffic.bikes || finish.cones || finish.rockfalls) failures.push(`${at}: traffic must ride and cones and rockfalls must be off: ${JSON.stringify({ traffic: finish.traffic, cones: finish.cones, rockfalls: finish.rockfalls })}`);
+            rows.forEach(r => {
+                Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`${at} at s ${r.s}: ${r[key]} ${key}, over ${most}`); });
+                if (r.tiles > WORLD_RESIDENT_TILES) failures.push(`${at} at s ${r.s}: ${r.tiles} resident tiles, over ${WORLD_RESIDENT_TILES}`);
+                if (r.maxStepMs > 4 * 2) failures.push(`${at} at s ${r.s}: a build step took ${r.maxStepMs} ms`);
+            });
+        }
+    }
+    const restart = results['world-restart'];
+    if (restart) {
+        const { before, after, crash, next, confirm, excursion, stationS, backM } = restart;
+        const { held, cancelled, entered } = confirm;
+        if (held.ticks !== 0 || held.moved !== 0 || held.clock !== 0 || !held.open) failures.push(`world-restart: the ride went on while the restart box was open: ${JSON.stringify(held)}`);
+        if (cancelled.open || cancelled.paused || cancelled.proceeded !== 0 || cancelled.ticks !== 30) failures.push(`world-restart: Escape must cancel and give the ride back: ${JSON.stringify(cancelled)}`);
+        if (entered.open || entered.paused || entered.proceeded !== 1) failures.push(`world-restart: Enter must answer yes: ${JSON.stringify(entered)}`);
+        // In place: a few metres behind where the bike was (300 m past the station, so not on it), at a standstill
+        if (!(before.s - after.s >= backM - 2 && before.s - after.s <= backM + 2) || Math.abs(after.s - stationS) < 100 || after.restarts !== 1 || after.penaltyMs !== 5000 || !(after.elapsedJump >= 5000 && after.elapsedJump < 5100) || after.speed !== 0 || after.passed !== before.passed) failures.push(`world-restart: ${JSON.stringify({ stationS, before, after })}`);
+        if (crash.during.dialogs.length || crash.dialogs.length || crash.during.restarts !== 0 || !crash.during.crashed) failures.push(`world-restart: a crash must open no dialog and play its fall first: ${JSON.stringify(crash)}`);
+        if (!crash.callout || !/Hit the probe\s+\+5 s/.test(crash.callout)) failures.push(`world-restart: the call-out must say the cause and the cost: ${JSON.stringify(crash.callout)}`);
+        if (crash.restarts !== 1 || crash.penaltyMs !== 5000 || crash.crashed || !(crash.seconds <= crash.mostS + 0.1) || !(crash.backM >= 0 && crash.backM <= backM + 25) || Math.abs(crash.lateral) > crash.half) failures.push(`world-restart: the game must restart a crashed rider in place by itself: ${JSON.stringify(crash)}`);
+        if (next.passed !== 3 || next.restarts !== 2 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
+        if (excursion.restarts !== 1 || excursion.penaltyMs !== 15000 || excursion.guideCause !== null || excursion.pendingCutMs !== 0) failures.push(`world-restart: an excursion must cost one penalty: ${JSON.stringify(excursion)}`);
+    }
+    const cut = results['world-cut'];
+    if (cut) {
+        if (cut.error) failures.push(`world-cut: ${cut.error}`);
+        else {
+            if (cut.control.restarts || cut.control.crashed) failures.push(`world-cut control: ${JSON.stringify(cut.control)}`);
+            if (cut.flicker.restarts) failures.push(`world-cut: a flicker restarted the ride: ${JSON.stringify(cut.flicker)}`);
+            if (cut.cut.restarts !== 1 || cut.cut.penaltyMs !== 5000 || !(cut.cut.ms >= cut.cutConfirmMs - 20 && cut.cut.ms <= cut.cutConfirmMs + 120) || cut.cut.backAtS > cut.cut.lowerS + 100 || cut.cut.lowerS - cut.cut.backAtS > 2100) failures.push(`world-cut: ${JSON.stringify(cut.cut)}, want one restart after about ${cut.cutConfirmMs} ms`);
+        }
+    }
+    const hud = results['world-hud'];
+    if (hud) {
+        for (const view of ['small', 'large', 'touch']) {
+            const h = hud[view];
+            if (h.error) { failures.push(`world-hud ${view}: ${h.error}`); continue; }
+            if (h.bars !== 1 || h.pipsShown) failures.push(`world-hud ${view}: the checkpoints must show once, on the progress bar: ${h.bars} bars, pips shown ${h.pipsShown}`);
+            if (h.ticks !== h.gateTotal || h.count !== `0/${h.gateTotal}`) failures.push(`world-hud ${view}: ${h.ticks} ticks and ${h.count} for a stage of ${h.gateTotal} checkpoints`);
+            if (!new RegExp(`^Stage 2/${h.stages} · `).test(h.stageText)) failures.push(`world-hud ${view}: the stage text reads ${JSON.stringify(h.stageText)}, want Stage 2/${h.stages}`);
+            if (h.missing.length) failures.push(`world-hud ${view}: not on the screen: ${h.missing.join(', ')}`);
+            if (h.overlaps.length) failures.push(`world-hud ${view}: boxes overlap: ${JSON.stringify(h.overlaps)}`);
+            if (h.off.length) failures.push(`world-hud ${view}: off the screen: ${h.off.join(', ')}`);
+        }
+    }
+    const camera = results['world-camera'];
+    if (camera) {
+        if (camera.boomUnderGround) failures.push(`world-camera: the boom went under the ground on ${camera.boomUnderGround} of ${camera.frames} frames`);
+        if (!(camera.hairpinFrames > 0) || !(camera.share >= 0.95)) failures.push(`world-camera: the road 30 m ahead is in view on ${camera.share} of ${camera.hairpinFrames} hairpin frames, want 0.95 or more: ${JSON.stringify(camera.runs)}`);
+        camera.runs.forEach(r => { if (r.crashed) failures.push(`world-camera: the ride from s ${r.start} crashed`); });
+    }
+    const frustum = results['world-frustum'];
+    if (frustum) {
+        if (frustum.crashed) failures.push(`world-frustum: the ride crashed at s ${frustum.reached}`);
+        if (frustum.reached < frustum.end) failures.push(`world-frustum: the ride stopped at s ${frustum.reached}, before ${frustum.end}`);
+        if (frustum.hairpins.length < 20) failures.push(`world-frustum: ${frustum.hairpins.length} hairpins found, want 20 or more`);
+        if (frustum.out) failures.push(`world-frustum: the bike was within ${frustum.margin} of the screen edge or out of view on ${frustum.out} of ${frustum.frames} frames (worst ${frustum.least} at s ${frustum.worstAt})`);
+        frustum.hairpins.forEach(h => { if (!(h.frames > 0)) failures.push(`world-frustum: no frames at the hairpin at s ${h.s}`); });
+    }
+    // The chase camera through the hairpins: the second difference a frame of its position (m), its look target (m)
+    // and its view yaw (rad). The camera before its springs went to 11.5, 11.0 and 0.19 where the boom met the land,
+    // and to 0.13, 1.0 and 0.015 elsewhere.
+    const smooth = results['world-camera-smooth'];
+    if (smooth) {
+        if (smooth.crashed) failures.push(`world-camera-smooth: the ride crashed at s ${smooth.reached}`);
+        const most = { position: 0.03, look: 0.3, yaw: 0.006 };
+        Object.entries(most).forEach(([key, limit]) => {
+            const got = smooth.stats[key];
+            if (!(got.jerk <= limit)) failures.push(`world-camera-smooth: the ${key} moved by a second difference of ${got.jerk} in one frame at s ${got.jerkAt}, want ${limit} or less`);
+        });
+    }
+    const assist = results['world-hairpin-assist'];
+    if (assist) {
+        const normal = assist.levels.normal;
+        if (assist.bends < 20) failures.push(`world-hairpin-assist: ${assist.bends} hairpins found, want 20 or more`);
+        if (normal.crashes) failures.push(`world-hairpin-assist: the scripted rider crashed on ${normal.crashes} hairpins with the assist at normal: ${JSON.stringify(normal.bad)}`);
+    }
+    const models = results['world-models'];
+    if (models) {
+        if (models.rows.length < 16) failures.push(`world-models: ${models.rows.length} model files found`);
+        models.rows.forEach(r => {
+            if (r.error) failures.push(`world-models: ${r.file} did not load: ${r.error}`);
+            if (r.noNormals || r.badNormals) failures.push(`world-models: ${r.file} has ${r.noNormals} parts with no normals and ${r.badNormals} bad normals`);
+            if (/Float32/.test(r.colour)) failures.push(`world-models: ${r.file} has float colours`);
+            if (r.metalness[0] < 0 || r.metalness[1] > 1 || r.roughness[0] < 0 || r.roughness[1] > 1) failures.push(`world-models: ${r.file} has metalness ${r.metalness} roughness ${r.roughness}`);
+        });
+    }
+    const placedHouses = results['world-buildings'];
+    if (placedHouses) {
+        if (!(placedHouses.checked > 0)) failures.push('world-buildings: no building was drawn');
+        if (placedHouses.onBand) failures.push(`world-buildings: ${placedHouses.onBand} drawn buildings stand on a road band: ${JSON.stringify(placedHouses.hits)}`);
+    }
+    const tight = results['world-watertight'];
+    if (tight) {
+        if (!(tight.views > 0)) failures.push('world-watertight: no view was read');
+        if (tight.holes) failures.push(`world-watertight: ${tight.holes} pixels in ${tight.holeViews} views look through the drawn land: ${JSON.stringify(tight.worstHoles)}`);
+        if (tight.backOpen) failures.push(`world-watertight: ${tight.backOpen} pixels in ${tight.backViews} views show a land triangle's underside through the land: ${JSON.stringify(tight.worstBack)}`);
+        if (tight.skirtOpen) failures.push(`world-watertight: ${tight.skirtOpen} pixels in ${tight.skirtViews} views show a tile skirt through the land: ${JSON.stringify(tight.worstSkirt)}`);
+        if (tight.jointOpen) failures.push(`world-watertight: ${tight.jointOpen} top edges of a retaining wall have no road drawn beside them: ${JSON.stringify(tight.worstJointOpen)}`);
+        if (tight.footOpen) failures.push(`world-watertight: ${tight.footOpen} edges of an apron or retaining wall stand over the drawn land: ${JSON.stringify(tight.worstFootOpen)}`);
+        if (tight.footOverRoad) failures.push(`world-watertight: ${tight.footOverRoad} edges of an apron or retaining wall stand over another road's carriageway: ${JSON.stringify(tight.worstFootOverRoad)}`);
+    }
+    const floating = results['world-floating'];
+    if (floating) {
+        if (!(floating.probes > 0)) failures.push('world-floating: no road edge was checked');
+        if (floating.open) failures.push(`world-floating: ${floating.open} drawn road edges stand more than ${floating.tolM} m over the drawn land with nothing under them (worst ${floating.worstOpen[0].gapM} m at s ${floating.worstOpen[0].s} ${floating.worstOpen[0].side}, road LOD${floating.worstOpen[0].roadLod}, land LOD${floating.worstOpen[0].landLod}): ${JSON.stringify(floating.worstOpen.slice(0, 5))}`);
+        if (floating.up.hits) failures.push(`world-floating: drawn land or far land stands within ${FLOAT_UP_M} m over the road surface at ${floating.up.hits} points (worst ${floating.up.worst[0].overM} m at s ${floating.up.worst[0].s}): ${JSON.stringify(floating.up.worst.slice(0, 5))}`);
+        const side = floating.sideFloat;
+        if (side && side.open) failures.push(`world-floating: ${side.open} of ${side.vertices} side-road points stand more than 3 m over the land drawn at LOD0 with no deck or wall under them (worst ${side.worstM} m): ${JSON.stringify(side.worst.slice(0, 5))}`);
+        const far = floating.horizonOver;
+        if (far && far.over) failures.push(`world-floating: the horizon mesh stands over the drawn land at ${far.over} of ${far.nodes} grid nodes within 400 m of the bike (worst ${far.worstM} m): ${JSON.stringify(far.worst.slice(0, 5))}`);
+        if (floating.physics.over) failures.push(`world-floating: the physics ground beside the road differs from the drawn ground by more than ${floating.tolM} m at ${floating.physics.over} of ${floating.physics.checked} points (worst ${floating.physics.worstM} m): ${JSON.stringify(floating.physics.worst.slice(0, 5))}`);
+        floating.views.forEach(v => {
+            if (v.crashed) failures.push(`world-floating: the ride into the view at s ${v.want} crashed`);
+            if (v.underside) failures.push(`world-floating: the view at s ${v.want} shows ${v.underside} pixels of a road's underside`);
+            if (v.blackStructure > LAND_BLACK_SHARE) failures.push(`world-floating: the view at s ${v.want} has ${(v.blackStructure * 100).toFixed(2)}% of its structures (${v.structure} px) near black (over ${LAND_BLACK_SHARE * 100}%)`);
+            if (v.blackLand > LAND_BLACK_SHARE) failures.push(`world-floating: the view at s ${v.want} has ${(v.blackLand * 100).toFixed(2)}% of its land near black (over ${LAND_BLACK_SHARE * 100}%)`);
+            if (v.lane && v.lane.lines.length) failures.push(`world-floating: the view at s ${v.want} has ${v.lane.lines.length} thin dark lines along the road (${JSON.stringify(v.lane.lines)} m across, rows of ${v.lane.rows})`);
+            if (v.seam && v.seam.profiles && v.seam.seams / v.seam.profiles > FLOAT_SEAM_SHARE) failures.push(`world-floating: the view at s ${v.want} has a dark seam beside the road on ${v.seam.seams} of ${v.seam.profiles} profiles: ${JSON.stringify(v.seam.worst)}`);
+        });
+    }
+    const shots = results['world-shots'];
+    if (shots) {
+        if (shots.error) failures.push(`world-shots: ${shots.error}`);
+        else {
+            if (!shots.sites.junction) failures.push('world-shots: no junction barrier on the ride to shoot');
+            if (!shots.hud.guide || !shots.hud.stage) failures.push(`world-shots: the HUD is missing: ${JSON.stringify(shots.hud)}`);
+            if (flag('gpu') && !/Apple|AMD|NVIDIA|Intel/.test(String(shots.hud.renderer))) failures.push(`world-shots: not a GPU renderer: ${shots.hud.renderer}`);
+        }
     }
 }
 

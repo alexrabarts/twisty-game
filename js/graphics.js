@@ -16,6 +16,12 @@ const SKY_PRESETS = {
         sunIntensity: 22, cloudLit: 0xffe2cc, cloudShadow: 0x8d6f8c, coverage: 0.46,
         stars: 0.0, mountain: 0x6b5873, saturation: 1.08, contrast: 1.04, tint: 0xfff4ea, bloom: 0.75
     },
+    // High sun, a clean blue sky: the world's valley and pass stages (R5). A new key, so no leg look changes
+    day: {
+        zenith: 0x2468c0, mid: 0x7ab6ee, glow: 0xffffff, glowStrength: 0.5,
+        sunIntensity: 34, cloudLit: 0xffffff, cloudShadow: 0x9aa8c0, coverage: 0.36,
+        stars: 0.0, mountain: 0x62789a, saturation: 1.08, contrast: 1.04, tint: 0xffffff, bloom: 0.5
+    },
     golden: {
         zenith: 0x1a4fa8, mid: 0x4f97e0, glow: 0xfff1d0, glowStrength: 0.8,
         sunIntensity: 30, cloudLit: 0xffffff, cloudShadow: 0x8496b3, coverage: 0.42,
@@ -103,6 +109,7 @@ const GFX_SKY_BAKE_FRAGMENT = `
     uniform vec3 uZenith;
     uniform vec3 uMid;
     uniform vec3 uHorizon;
+    uniform float uHorizonSpan;
     uniform vec3 uSunDir;
     uniform vec3 uGlowColor;
     uniform vec3 uCloudLit;
@@ -121,7 +128,7 @@ const GFX_SKY_BAKE_FRAGMENT = `
         float up = d.y;
 
         // Three-stop vertical gradient
-        vec3 sky = mix(uHorizon, uMid, smoothstep(0.0, 0.22, up));
+        vec3 sky = mix(uHorizon, uMid, smoothstep(0.0, uHorizonSpan, up));
         sky = mix(sky, uZenith, smoothstep(0.12, 0.75, up));
 
         float sunDot = max(dot(d, uSunDir), 0.0);
@@ -472,7 +479,10 @@ const GFX_COMPOSITE = `
         // Grade in display-referred space
         float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color = mix(vec3(luma), color, uSaturation);
-        color = (color - 0.5) * uContrast + 0.5;
+        // Contrast as a power about mid grey (0.18 linear): the old (c - 0.5) * k + 0.5 in linear light sent every
+        // value under 0.5 - 0.5 / k to zero (under sRGB 37 at k 1.04), so shaded land, dark forest and tyres crushed to
+        // black. A power never goes below zero and keeps the order of the darks
+        color = 0.18 * pow(max(color, vec3(0.0)) / 0.18, vec3(uContrast));
         color *= uTint;
 
         float vig = smoothstep(0.35, 0.95, radius);
@@ -635,6 +645,7 @@ class Graphics {
             uZenith: { value: new THREE.Color() },
             uMid: { value: new THREE.Color() },
             uHorizon: { value: new THREE.Color() },
+            uHorizonSpan: { value: Graphics.HORIZON_SPAN },
             uSunDir: { value: this.sunDirection.clone() },
             uSunColor: { value: new THREE.Color(1, 1, 1) },
             uGlowColor: { value: new THREE.Color() },
@@ -742,6 +753,17 @@ class Graphics {
         this.atmosphere = atmosphere && this.atmosphereSupported
             ? { heightFog: atmosphere.heightFog, shafts: atmosphere.shafts || 0, baseY }
             : null;
+    }
+
+    // How high the horizon's pale colour reaches up the sky before the mid colour takes over (the sine of the
+    // elevation): a leg's sky keeps it low; a world's is wider (WorldLooks.horizonSpan)
+    static get HORIZON_SPAN() { return 0.22; }
+
+    setHorizonSpan(value) {
+        if (!this.skyUniforms || this.skyUniforms.uHorizonSpan.value === value) return;
+        this.skyUniforms.uHorizonSpan.value = value;
+        // The panorama is baked with it
+        this.panoramaAge = Infinity;
     }
 
     // The far ring's strength, under whatever the weather leaves of it
@@ -949,7 +971,8 @@ class Graphics {
                 }
             }
             const geometry = obj.geometry;
-            if (geometry && geometry.attributes && geometry.attributes.color && !this.seenGeometries.has(geometry)) {
+            // A geometry built with linear colours (a world terrain tile) says so and is left alone
+            if (geometry && geometry.attributes && geometry.attributes.color && !geometry.userData.linearColors && !this.seenGeometries.has(geometry)) {
                 this.seenGeometries.add(geometry);
                 const attribute = geometry.attributes.color;
                 const array = attribute.array;

@@ -1,0 +1,17 @@
+{
+  "world-tremola-v1": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 13187,
+    "floorMs": 208315,
+    "gateFloorsMs": [
+      29222,
+      21738,
+      28260,
+      25487,
+      37028,
+      46842,
+      19738
+    ]
+  }
+}

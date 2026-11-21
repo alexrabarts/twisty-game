@@ -1,5 +1,6 @@
 /**
- * Rockfall hazard system.
+ * Rockfall hazard system. Leg-only: it reads the leg's terrain profile for
+ * its walls, so a world environment never builds one.
  * On later legs, rocks periodically break off the wall beside the road ahead of the
  * player, tumble down onto the road, bounce, roll across and settle briefly
  * before crumbling away. Hitting one (or being hit) crashes the bike.
@@ -94,7 +95,8 @@ class RockfallSystem {
                     // A rock still high on the wall is on a slope, not at rest: it
                     // goes on down toward the road and does not settle there (unless
                     // it has been tumbling for 10 s, so none sits there for good)
-                    const roadY = this.environment.roadPath[this.lastFallSegment || 0].y || 0;
+                    const route = this.environment.route;
+                    const roadY = route.sample(route.fromUnits(this.lastFallSegment || 0)).y || 0;
                     const highUp = rock.mesh.position.y - roadY > 3 && rock.age < 10;
                     if (!highUp) rock.bounces++;
                     if (!highUp && (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5)) {
@@ -130,19 +132,19 @@ class RockfallSystem {
     }
 
     triggerFall(vehicle) {
-        if (!this.environment || !this.environment.roadPath || !vehicle) return;
+        if (!this.environment || !this.environment.route || !vehicle) return;
 
-        const path = this.environment.roadPath;
+        const route = this.environment.route;
         // Land the fall 60-130m ahead of the player along the road
         const aheadSegments = 3 + Math.floor(Math.random() * 4);
         const segIdx = Math.min(
-            (vehicle.currentRoadSegment || 0) + aheadSegments,
-            path.length - 1
+            route.toUnits(vehicle.routeS || 0) + aheadSegments,
+            route.unitCount - 1
         );
         // No rock is aimed at a tunnel or a village, or at the
         // segment beside one: it spreads 12 m along the road and could land in it
         if (this.environment.inSetPiece && this.environment.inSetPiece(segIdx, 1)) return segIdx;
-        const seg = path[segIdx];
+        const seg = route.pointAtUnit(segIdx);
         const walls = Terrain.wallSignsAt(this.environment.terrain, segIdx);
         // On a converted leg only a part with a rate sheds rock, only off a wall,
         // and only in a section that is drawn
@@ -212,8 +214,8 @@ class RockfallSystem {
         const environment = this.environment;
         const last = this.lastFallSegment || 0;
         const from = Math.max(0, last - 12);
-        const to = Math.min(environment.roadPath.length - 1, last + 12);
-        return Terrain.groundY(environment.terrain, environment.terrainGeometry, x, z, from, to, true);
+        const to = Math.min(environment.route.unitCount - 1, last + 12);
+        return environment.ground.groundY(x, z, { start: from, end: to }, true);
     }
 
     // A checkpoint restart: no live rock stays on the spawn point, and the

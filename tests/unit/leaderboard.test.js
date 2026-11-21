@@ -11,7 +11,7 @@ import { TextEncoder } from 'util';
 // js/leaderboard.js is a classic browser script (no exports); evaluate it and
 // expose the class so the real implementation is under test.
 const leaderboardSource = readFileSync(new URL('../../js/leaderboard.js', import.meta.url), 'utf8');
-(0, eval)(`${leaderboardSource}\nglobalThis.LeaderboardService = LeaderboardService;`);
+(0, eval)(`${leaderboardSource}\nglobalThis.LeaderboardService = LeaderboardService; globalThis.RunSession = RunSession;`);
 
 // jsdom does not provide crypto.subtle or TextEncoder; use Node's implementations
 if (!globalThis.crypto?.subtle) {
@@ -222,18 +222,18 @@ describe('LeaderboardService', () => {
             expect(leaderboardService.proofChain).toEqual([]);
         });
 
-        test('should reject invalid player name (too short)', async () => {
+        test('a server that states no nameMax keeps the rule at exactly 4 (too short)', async () => {
             const result = await leaderboardService.submitRun('ABC');
 
             expect(result.success).toBe(false);
-            expect(result.error).toContain('4 characters');
+            expect(result.error).toContain('exactly 4 characters');
         });
 
-        test('should reject invalid player name (too long)', async () => {
+        test('a server that states no nameMax keeps the rule at exactly 4 (too long)', async () => {
             const result = await leaderboardService.submitRun('ABCDE');
 
             expect(result.success).toBe(false);
-            expect(result.error).toContain('4 characters');
+            expect(result.error).toContain('exactly 4 characters');
         });
 
         test('should reject incomplete run (not enough checkpoints)', async () => {
@@ -384,6 +384,62 @@ describe('LeaderboardService', () => {
             jest.spyOn(console, 'warn').mockImplementation(() => {});
         });
         afterEach(() => jest.restoreAllMocks());
+
+        describe('name rule', () => {
+            const submitName = async (reply, name) => {
+                const { service, calls } = serviceWith(reply);
+                await service.startRun('valley-run-v2');
+                await ride(service, 5);
+                const rule = service.nameRule();
+                const result = await service.submitRun(name);
+                return { service, calls, result, rule };
+            };
+
+            test('without nameMax the rule is exactly 4', async () => {
+                const { service, calls, result, rule } = await submitName({}, 'ABCDE');
+                expect(rule).toEqual({ min: 4, max: 4 });
+                expect(result).toMatchObject({ success: false, error: expect.stringContaining('exactly 4') });
+                expect((await service.submitRun('ABC')).success).toBe(false);
+                expect(calls.submitRun).toHaveLength(0);
+                expect((await service.submitRun('ALEX')).success).toBe(true);
+            });
+
+            test.each([['A', 'A'], ['abcde', 'ABCDE'], [' al ', 'AL']])('with nameMax 5, %j is sent as %j', async (name, sent) => {
+                const { calls, result, rule } = await submitName({ nameMax: 5 }, name);
+                expect(rule).toEqual({ min: 1, max: 5 });
+                expect(result.success).toBe(true);
+                expect(calls.submitRun[0].playerName).toBe(sent);
+            });
+
+            test.each([['ABCDEF'], [''], ['   ']])('with nameMax 5, %j is rejected naming the rule', async name => {
+                const { calls, result } = await submitName({ nameMax: 5 }, name);
+                expect(result).toMatchObject({ success: false, error: expect.stringContaining('1 to 5') });
+                expect(calls.submitRun).toHaveLength(0);
+            });
+
+            test.each([[0], [-1], [4.5], ['5'], [null], [Infinity]])('a nameMax of %j is ignored and the rule stays exactly 4', async stated => {
+                const { rule } = await submitName({ nameMax: stated }, 'ALEX');
+                expect(rule).toEqual({ min: 4, max: 4 });
+            });
+
+            test.each([[17], [24], [64]])('a nameMax of %j is the server\'s rule and is taken as stated', async stated => {
+                const { rule, result } = await submitName({ nameMax: stated }, 'A'.repeat(stated));
+                expect(rule).toEqual({ min: 1, max: stated });
+                expect(result.success).toBe(true);
+            });
+
+            test('a saved session holds only a nameMax the server could have stated', () => {
+                const saved = { boardId: 'b', checkpointTimes: [], checkpointIndices: [], proofChain: [] };
+                expect(RunSession.fromJSON({ ...saved, nameMax: 20 }, null, null).nameMax).toBe(20);
+                expect(RunSession.fromJSON({ ...saved, nameMax: '9' }, null, null).nameMax).toBeNull();
+                expect(RunSession.fromJSON({ ...saved }, null, null).nameMax).toBeNull();
+            });
+
+            test('the stated limit is forgotten with the session', async () => {
+                const { service } = await submitName({ nameMax: 5 }, 'ALEXR');
+                expect(service.nameRule()).toEqual({ min: 4, max: 4 });
+            });
+        });
 
         test('a converted leg on a server that states no gates: no session, no submit, no error', async () => {
             const { service, calls } = serviceWith({});

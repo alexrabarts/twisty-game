@@ -14,7 +14,7 @@ const BUDGET = { meshes: 800, triangles: 450000, instances: 1400, bytes: 3 * 102
 
 function loadWithAssets({ failing = [] } = {}) {
     const THREE = realThree();
-    const files = ['terrain.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js'];
+    const files = ['terrain.js', 'world/route.js', 'world/legroute.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js'];
     const source = files.map(loadScript).join('\n;\n');
     const log = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };

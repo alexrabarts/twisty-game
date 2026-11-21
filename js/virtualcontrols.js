@@ -48,9 +48,19 @@ class VirtualControls {
         this.bindTap(camera, 'KeyZ');
         this.buttons.KeyZ = camera;
 
+        // A touch screen has no P or Escape: this is its way to the pause panel, and from there to the menu
+        const pause = document.createElement('div');
+        pause.className = 'virtual-button-camera virtual-button-pause';
+        pause.setAttribute('role', 'button');
+        pause.setAttribute('aria-label', 'Pause');
+        pause.innerHTML = icon('pause');
+        this.bindTap(pause, 'KeyP');
+        this.buttons.KeyP = pause;
+
         document.body.appendChild(left);
         document.body.appendChild(right);
         document.body.appendChild(camera);
+        document.body.appendChild(pause);
         document.body.classList.add('touch');
     }
 
@@ -105,7 +115,7 @@ class VirtualControls {
     }
 
     destroy() {
-        document.querySelectorAll('.virtual-controls-left, .virtual-controls-right, .virtual-button-camera')
+        document.querySelectorAll('.virtual-controls-left, .virtual-controls-right, .virtual-button-camera, .virtual-button-pause')
             .forEach(el => el.remove());
         document.body.classList.remove('touch');
         this.buttons = {};
