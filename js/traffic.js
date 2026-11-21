@@ -645,7 +645,7 @@ class Traffic {
             const kick = closing * CONTACT.crash.throw;
             if (player.velocity && player.velocity.set) player.velocity.set(fx * bike.currentSpeed + nx * kick, 0, fz * bike.currentSpeed + nz * kick);
             player.isJumping = false;
-            player.worldCrash(`Rode into ${bike.riderName}`, 'lowside');
+            player.worldCrash(`Rode into ${bike.riderName}`, 'lowside', 'rider');
             bike.shakenS = CONTACT.crash.slowS;
             bike.shakeT = 0;
             bike.ghostS = CONTACT.crash.ghostS;

@@ -1383,7 +1383,8 @@ class Roadworks {
             const dx = pos.x - e.x, dz = pos.z - e.z, len = Math.hypot(dx, dz) || 1;
             vehicle.velocity.set(dx / len * vehicle.speed * 0.5, 2, dz / len * vehicle.speed * 0.5);
             vehicle.isJumping = false;
-            vehicle.worldCrash(`Hit the ${names[e.kind] || 'roadworks'}`);
+            vehicle.worldCrash(`Hit the ${names[e.kind] || 'roadworks'}`, null, 'obstacle');
+            if (vehicle.blockRider) vehicle.blockRider(e.x, e.z, Math.min(e.box.x1 - e.box.x0, e.box.z1 - e.box.z0) / 2);
             vehicle.roadworksSurface = null;
             return;
         }

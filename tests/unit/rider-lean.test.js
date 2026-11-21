@@ -100,7 +100,7 @@ describe('each rider leans into a turn as that rider does', () => {
         ends(v).forEach((end, i) => expect(end.distanceTo(ends(fresh)[i])).toBeLessThan(1e-9));
     });
 
-    test('less in the air, and none in a crash', () => {
+    test('less in the air; in a crash he comes off, and is back in line with the bike when it rides again', () => {
         const v = drawn(who('steve'), 0.6);
         const full = v.rider.rotation.z;
         v.isJumping = true;
@@ -108,8 +108,14 @@ describe('each rider leans into a turn as that rider does', () => {
         expect(v.rider.rotation.z).toBeGreaterThan(0);
         expect(v.rider.rotation.z).toBeLessThan(full);
         v.isJumping = false;
+        // A crashed bike's rider is not posed on it: his fall is his own (tests/unit/rider-fall.test.js)
         v.crashed = true;
         v.updateMesh();
+        expect(v.riderFall.on).toBe(true);
+        v.crashed = false;
+        v.leanAngle = 0;
+        v.updateMesh();
+        expect(v.riderFall.on).toBe(false);
         expect(v.rider.rotation.z).toBe(0);
         expect(v.rider.position.x).toBe(v.riderBasePos.x);
     });

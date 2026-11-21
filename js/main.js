@@ -3592,6 +3592,7 @@ class Game {
             const carOnDetour = collision && collision.car && collision.car.inDetour;
             if (collision && collision.hit && !this.vehicle.crashed && !inRoadworksZone && !carOnDetour) {
                 this.vehicle.crashed = true;
+                this.vehicle.crashWhy = 'car';
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 // The crash was set after vehicle.update(), so the generic
                 // "just crashed" check above never sees this one. (Not after
@@ -3605,6 +3606,8 @@ class Game {
                 
                 // Calculate impact direction based on car position
                 const car = collision.car;
+                // The rider who comes off stops against the car, not in it (Vehicle.stepRiderFall)
+                if (car && car.carGroup) this.vehicle.blockRider(car.carGroup.position.x, car.carGroup.position.z, 1.1);
                 if (car && car.carGroup) {
                     const impactDir = new THREE.Vector3(
                         this.vehicle.position.x - car.carGroup.position.x,
@@ -3650,6 +3653,8 @@ class Game {
             if (rockHit && rockHit.hit && !this.vehicle.crashed && !this.finished &&
                 !(rockHit.rock.settled && this.vehicle.attemptHop(rockHit.rock.radius))) {
                 this.vehicle.crashed = true;
+                this.vehicle.crashWhy = 'obstacle';
+                this.vehicle.blockRider(rockHit.rock.mesh.position.x, rockHit.rock.mesh.position.z, rockHit.rock.radius);
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 const rockPos = rockHit.rock.mesh.position;
                 const impactDir = new THREE.Vector3(

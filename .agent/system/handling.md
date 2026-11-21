@@ -136,3 +136,87 @@ What the drawn bike shows, with no change to the physics:
 - Any bike on the land from `landDustSpeed` throws a small dust puff every `landDustS` (`Game`).
 
 The classic legs keep `LEG_OFFROAD`: a leg has no land cover and no drawn slope to read.
+
+## The rider's fall
+
+In a crash the rider comes off the bike and falls by the kind of the crash. The bike's own crash, slide and restart are not changed: this is drawing, with a small motion of its own for the rider. The code is `Vehicle.beginRiderFall`, `stepRiderFall`, `holdRiderOut`, `riderGroundY` and `drawRiderFall`; the data is three tables at the end of `js/vehicle.js`.
+
+### The cause and the kind
+
+Whoever raises a crash names the class of its cause. No code reads the words of `crashCause`.
+
+- A world crash: the third argument of `Vehicle.worldCrash(cause, fall, why)`.
+- A crash set by hand: `crashWhy = '<class>'` within three lines of `crashed = true`.
+
+`Vehicle.CRASH_CAUSES` gives the kind for each class:
+
+| Class | Raised by | Kind |
+| --- | --- | --- |
+| `grip` | too much lean for the grip (world and leg) | `lowside` |
+| `steep`, `offroad`, `sunk` | a slope too steep to hold; too long off a leg's road; under a leg's surface | `lowside` |
+| `rear` | the rear came round in a power slide | `highside` |
+| `fast` | too fast over the land | `highside` |
+| `flip`, `landing` | a wheelie over the back; a jump landed badly | `highside` |
+| `wall`, `car`, `rider`, `building`, `obstacle` | rode into a wall or barrier, a car, a rider of the group, a building, a rock or a roadworks machine | `front` |
+| `drop`, `water`, `unmapped` | over an edge, into water, off the mapped land | `drop` |
+| `stall` | too slow to stay up | `tip` |
+
+Under `RIDER_FALL.tipSpeed` (4 m/s) every crash is the `tip` kind, whatever the cause. A crash with no class, or a class the table does not have, falls as `RIDER_FALL.fallback` (`lowside`).
+
+### The kinds
+
+`Vehicle.RIDER_FALLS` has one row for each kind:
+
+| Kind | What the rider does |
+| --- | --- |
+| `lowside` | Goes down on the low side onto hip and back with the arms out, and slides feet first beside and behind the bike. |
+| `highside` | Is thrown up and over the high side, rolls about the line of travel, and slides on the back. |
+| `front` | Goes over the bars in a forward roll, lands on the back, and slides or stops against the thing. He leaves with at most `most` m/s, so he lands near what the bike hit. |
+| `drop` | Falls with the bike with loose limbs (`withBike`): he has no slide of his own and stays `off` beside the bike. |
+| `tip` | Falls beside the bike on the low side and rolls onto the back. |
+
+The fields of a row:
+
+- `baseS`, `perSpeed`, `mostS`: the keys play over `baseS + perSpeed x speed` seconds, at most `mostS`. A world ride shows a fall for 1.5 to 2.2 s, so `mostS` is at most 1.5.
+- `keep`, `most`, `out`, `lift`, `liftPerSpeed`: the throw. He leaves with `keep` of the bike's speed (at most `most`), `out` m/s to the low side (negative: over the high side) and `lift + liftPerSpeed x speed` m/s upward.
+- `drag`, `scrub`, `bounce`: on the ground he loses `drag` of his speed and `scrub` m/s each second, so a faster crash slides further. `bounce` is the share of a hard landing he gets back.
+- `withBike`, `off`: no slide of his own; `off` is [to the low side, up, ahead] in metres from the bike.
+- `keys`: 3 to 5 poses in order. `at` is the share of the time, and the last is 1.
+- `sit`: the pose he sits up to when he lies still. With none he lies as the last key.
+
+A pose is `{ body, arms, legs }`, all in degrees:
+
+- `body` is `[pitch, roll, twist, yaw]`. `pitch` tips the spine forward from upright: 90 is face down and head first, -90 is on the back and feet first, more than 180 is a forward roll. `roll` turns him about the line of travel toward the low side. `twist` turns him about his own spine. `yaw` turns him about the world's up.
+- `arms` and `legs` are `[the low side's, the high side's]`, each `[swing, spread, bend]`. `swing` brings the limb forward from hanging along the spine: 90 is straight ahead of the chest, 180 is over the head. `spread` takes it out to its side. `bend` is 0 for straight and 1 for folded.
+
+The blend is a smoothstep from the pose he rode in to the first key, then key to key. The limbs are the rig's own (`Vehicle.rigLimb`): a pose gives each limb's end, and the elbow or knee falls where the limb's lengths put it. The same tables pose the stand-in rider and the modelled rider of every character.
+
+### The rules every kind shares
+
+- **His own place and velocity.** He starts where he sat with the speed and the heading the bike rode into the crash with (`rodeSpeed`, `rodeYaw`: a wall hit replaces the bike's own).
+- **On the ground.** The ground is the bike's own (`riderGroundY`: the road's height on the road and its verge, the land on the run-off, and past the edge of a drop the land a falling bike comes down on). Each frame the lowest of 11 points of his body (head, chest, pelvis, each limb's middle joint and end) is set on it, and no point is under the ground there.
+- **Out of what is solid** (`holdRiderOut`). A wall, a barrier or a parapet is the bike's own zone, read `RIDER_FALL.bodyM` nearer the wall than his middle. A drawn building stops him where he was (`Scenery.houseAt`). The thing the bike hit pushes him out of its circle: whoever raises that crash calls `vehicle.blockRider(x, z, radius)`.
+- **His own strand.** `riderProject` looks for him within `nearUnits` pieces of the road from where he was last. The bike's wider search goes over to the next strand in a stack of hairpins.
+- **The same crash is the same fall.** Every number comes from the crash. Nothing is drawn by chance, and nothing is allocated while he falls (`Vehicle.riderFallState` makes the vectors once for a bike).
+- **The restart.** `Vehicle.endFall` (from `reset`, and when a crashed bike rides again) puts him on the seat and calls `rest()` on each limb, which restores every piece exactly as it was built.
+
+### To add a cause
+
+1. Name its class where the crash is raised: the third argument of `worldCrash`, or `crashWhy` beside `crashed = true`.
+2. For a new class, add one line to `Vehicle.CRASH_CAUSES` with its kind.
+3. For a thing the rider must stop against, call `blockRider` there.
+
+`tests/unit/rider-fall.test.js` reads every script and fails on a crash with no class and on a class the table does not have.
+
+### To add a kind
+
+1. Add one row to `Vehicle.RIDER_FALLS`: the throw, the friction and 3 to 5 keys.
+2. Point a class at it in `Vehicle.CRASH_CAUSES`.
+
+No code names a kind (the tip-over under `tipSpeed` is the one exception, in `Vehicle.riderFallKind`). `tests/unit/rider-fall.test.js` checks the shape of every row, and `tests/unit/world-rider-fall.test.js` rides every kind over the real stage.
+
+### What it does not do
+
+- The group's riders do not fall: a rider that is hit hard shakes and rides on (`.agent/system/world.md`).
+- The chase camera follows the bike, not the rider.
+- In a stack of hairpins a bike that slides off at speed can go over to the strand above or below. The rider stays on the strand he fell on, so the two end apart. `STRAND_LIMIT` in `tests/unit/world-rider-fall.test.js` holds the count.

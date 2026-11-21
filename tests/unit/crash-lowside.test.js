@@ -3,8 +3,8 @@
  */
 // A lowside as it is drawn (Vehicle.drawFall, Vehicle.FALL). Before, the bike lay on its side in the frame the crash
 // was called, with the rider still in the seat. Now it goes down over time from the lean it had, turns into the bend
-// as it slides, and the rider comes off and drops behind it on the line of the slide. The crash, the slide of the
-// bike and the restart are the physics', unchanged. The real Vehicle on a flat plane.
+// as it slides, and the rider comes off (his fall is Vehicle.beginRiderFall: tests/unit/rider-fall.test.js). The
+// crash, the slide of the bike and the restart are the physics', unchanged. The real Vehicle on a flat plane.
 import { describe, test, expect } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 
@@ -69,16 +69,18 @@ describe('a lowside is drawn as it happens', () => {
         for (let i = 1; i < frames.length; i++) expect(Math.abs(frames[i].yaw - frames[i - 1].yaw)).toBeLessThan(0.05);
     });
 
-    test('the rider comes off and stops behind the bike on the line of the slide, on the ground, holding nothing', () => {
+    test('the rider comes off and stops beside or behind the bike, on the ground, holding nothing', () => {
         const { v, heading, frames } = crash('lowside');
         const last = frames[frames.length - 1];
+        // Not ahead of the bike, and no further back than a slide of this speed leaves him
         const behind = -ahead(last.rider, last.at, heading);
-        expect(behind).toBeGreaterThan(1);
-        expect(behind).toBeLessThanOrEqual(FALL.riderLagMax + 1.5);
+        expect(behind).toBeGreaterThan(0);
+        expect(behind).toBeLessThan(8);
         expect(Math.abs(last.rider.y - last.at.y)).toBeLessThan(0.8);
         // He leaves the seat as the bike goes down, with no step
         for (let i = 1; i < frames.length; i++) expect(frames[i].rider.distanceTo(frames[i - 1].rider)).toBeLessThan(20 * DT * 1.5 + 0.05);
-        for (const side of [-1, 1]) for (const limb of [v.arms[side], v.legs[side]]) expect(limb.at().distanceTo(limb.end)).toBe(0);
+        // No hand is where the grip was and no foot where the peg was
+        for (const side of [-1, 1]) for (const limb of [v.arms[side], v.legs[side]]) expect(limb.at().distanceTo(limb.end)).toBeGreaterThan(0.05);
     });
 
     test('the physics is the crash as it was: the same slide, frame for frame, as a crash drawn the old way', () => {
@@ -88,19 +90,21 @@ describe('a lowside is drawn as it happens', () => {
             expect(f.speed).toBe(plain.frames[i].speed);
         });
         expect(drawn.v.crashed).toBe(true);
-        // And any other crash still lies on its side at once, the rider in the seat
+        // And a bike with no drawn fall still lies on its side at once (its rider comes off all the same)
         expect(Math.abs(plain.frames[0].roll)).toBeCloseTo(Math.PI / 2, 9);
         expect(plain.frames[0].yaw).toBeCloseTo(0, 9);
-        expect(plain.v.rider.position.toArray()).toEqual(plain.v.riderBasePos.toArray());
+        expect(plain.v.riderFall.on).toBe(true);
     });
 
-    test('a fall at walking pace goes over more slowly, and the rider stays with the bike', () => {
+    test('a fall at walking pace goes over more slowly, and the rider lies beside the bike', () => {
         const { lean, frames } = crash('tip', { speed: 0.5, seconds: 2 });
         const side = Math.sign(lean) || 1;
         expect(frames[Math.round(FALL.downS / DT)].roll * side).toBeLessThan(Math.PI / 2 - 0.2);
         expect(frames[Math.ceil(FALL.tipS / DT)].roll * side).toBeCloseTo(Math.PI / 2, 6);
         const last = frames[frames.length - 1];
-        expect(last.rider.distanceTo(last.at)).toBeLessThan(1.6);
+        // Clear of the bike that lies on its side, and beside it
+        expect(last.rider.distanceTo(last.at)).toBeGreaterThan(1.2);
+        expect(last.rider.distanceTo(last.at)).toBeLessThan(2.6);
     });
 
     test('riding again, the rider is back on the seat and the bike is drawn as it rides', () => {

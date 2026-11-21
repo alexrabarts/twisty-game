@@ -688,6 +688,7 @@ class Vehicle {
         this.footDown = false; // At a crawl near upright: a foot down, no fall
         this.tipTimerS = 0; // Time under fallSpeed leaned past tipLeanDeg
         this.crashCause = null; // What the crash card says caused a world crash
+        this.crashWhy = null; // The class of the cause (Vehicle.CRASH_CAUSES): what the rider's fall is drawn by
         this.landFastS = 0; // Time on the land over landCrashSpeed
         this.landSteepS = 0; // Time on land steeper than landSteepSlope
         this.landAlong = 0; // The land's slope along the heading, and across it (rise over run)
@@ -2392,6 +2393,12 @@ class Vehicle {
         // Store inputs for use in updateMesh
         this.currentBrakeInput = brakeInput;
         this.currentDeltaTime = deltaTime;
+        // The way the bike rode into this tick: a crash replaces the speed and the velocity (a bounce off a wall),
+        // and the rider leaves the bike with what it had (Vehicle.beginRiderFall)
+        if (!this.crashed) {
+            this.rodeSpeed = this.speed;
+            this.rodeYaw = this.yawAngle;
+        }
 
         // Snapshot for render interpolation (fixed-timestep physics vs
         // variable-rate rendering: frames otherwise alternate between 1 and 2
@@ -2564,6 +2571,7 @@ class Vehicle {
             
             this.speed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
             if (this.fall) this.stepFall(deltaTime);
+            if (this.riderFall && this.riderFall.on) this.stepRiderFall(deltaTime);
             this.updateMesh();
             return;
         }
@@ -2628,6 +2636,7 @@ class Vehicle {
         // Check for low-speed fall (but not while jumping)
         if (!this.worldPhysics && !this.isJumping && this.speed < this.minSpeed) {
             this.crashed = true;
+            this.crashWhy = 'stall';
             this.crashAngle = this.leanAngle || 0.5; // Fall to the side
             console.log('CRASHED! Speed too low:', (this.speed * 2.237).toFixed(1) + ' mph');
         }
@@ -2659,6 +2668,8 @@ class Vehicle {
                     }
 
                     this.crashed = true;
+                    this.crashWhy = 'obstacle';
+                    this.blockRider(boulder.position.x, boulder.position.z, boulder.radius);
                     this.crashAngle = this.leanAngle || 0.5;
 
                     // Set crash velocity based on impact
@@ -2691,6 +2702,8 @@ class Vehicle {
 
                 if (distance < collisionDistance) {
                     this.crashed = true;
+                    this.crashWhy = 'obstacle';
+                    this.blockRider(this.position.x - dx, this.position.z - dz, collisionDistance - 1);
                     this.crashAngle = this.leanAngle || 0.5;
 
                     // Set crash velocity based on impact
@@ -2727,6 +2740,7 @@ class Vehicle {
                 // the road (a bank, an 8 m tile cell) faster than the height follows, and a wall is a zone
                 if (!this.crashed && !this.worldPhysics) {
                     this.crashed = true;
+                    this.crashWhy = 'sunk';
                     this.crashAngle = this.leanAngle || 0.5;
                 }
             }
@@ -2740,6 +2754,7 @@ class Vehicle {
         // Check for crash from excessive lean
         if (!this.worldPhysics && Math.abs(this.leanAngle) > this.tuned('maxLeanAngle')) {
             this.crashed = true;
+            this.crashWhy = 'grip';
             this.crashAngle = this.leanAngle;
             console.log('CRASHED! Lean angle exceeded:', (this.leanAngle * 180/Math.PI).toFixed(1) + '°');
         }
@@ -2927,6 +2942,7 @@ class Vehicle {
             if (angleDegrees >= crashAngleDegrees) {
                 // CRASHED! Went too far back
                 this.crashed = true;
+                this.crashWhy = 'flip';
                 this.isWheelie = false;
                 this.wheelieAngle = 0;
                 this.wheelieVelocity = 0;
@@ -3413,7 +3429,7 @@ class Vehicle {
             this.lowsideTimerMs += deltaTime * 1000;
             if (this.lowsideTimerMs >= world.lowsideMs) {
                 this.worldCrash(hold > 0 ? 'Slid too far: the rear came round on the grass'
-                    : this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip', 'lowside');
+                    : this.runoff ? 'Lost the front on the grass' : 'Lost the front: too much lean for the grip', 'lowside', hold > 0 ? 'rear' : 'grip');
             }
         } else {
             this.lowsideTimerMs = 0;
@@ -3424,7 +3440,7 @@ class Vehicle {
         const tip = world.tipLeanDeg * Math.PI / 180;
         if (v < world.fallSpeed && Math.abs(this.leanAngle) > tip) {
             this.tipTimerS += deltaTime;
-            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down', 'tip');
+            if (this.tipTimerS >= world.tipS) this.worldCrash('Fell over at walking pace: too much lean to put a foot down', 'tip', 'stall');
         } else {
             this.tipTimerS = 0;
             if (this.footDown || v < world.fallSpeed) this.leanAngle *= Math.exp(-world.footDownRight * deltaTime);
@@ -3432,10 +3448,13 @@ class Vehicle {
     }
 
     // A world crash with the cause the crash card shows. `fall` is how the bike is drawn going down (Vehicle.FALL):
-    // 'lowside' and 'tip' fall over time (Vehicle.drawFall); any other crash lies on its side at once, as before
-    worldCrash(cause, fall = null) {
+    // 'lowside' and 'tip' fall over time (Vehicle.drawFall); any other crash lies on its side at once, as before.
+    // `why` is the class of the cause (a key of Vehicle.CRASH_CAUSES), which says how the rider comes off: nothing
+    // reads the words of `cause`
+    worldCrash(cause, fall = null, why = null) {
         this.crashed = true;
-        this.fall = fall && { kind: fall, t: 0, from: this.leanAngle + (this.landRock || 0), heading: this.yawAngle, yaw: this.slideAngle, lag: 0, down: 0 };
+        this.crashWhy = why;
+        this.fall = fall && { kind: fall, t: 0, from: this.leanAngle + (this.landRock || 0), heading: this.yawAngle, yaw: this.slideAngle, down: 0 };
         this.slideAngle = 0;
         this.crashCause = cause;
         this.crashAngle = this.leanAngle || 0.5;
@@ -3702,14 +3721,20 @@ class Vehicle {
         this.rearWheel.rotation.x = this.wheelRotation + this.wheelSlip;
         this.rearDisc.rotation.x = this.wheelRotation + this.wheelSlip;
         this.steerFront(frontRotation, this.shownBar(this.currentDeltaTime));
-        if (this.fall && !this.crashed) this.endFall();
-        
+        if (!this.crashed) {
+            if (this.fall || (this.riderFall && this.riderFall.on)) this.endFall();
+        } else if (!(this.riderFall && this.riderFall.on)) {
+            // Before the bike is drawn down: the rider leaves from where he sat in the last frame
+            this.beginRiderFall();
+        }
+
         if (this.crashed) {
             if (this.fallingOffCliff && !this.hitGround && this.tumbleSpeed > 0) {
                 // Cartwheeling down the hillside
                 this.group.rotation.x = this.tumbleAngle;
                 this.group.rotation.z = this.tumbleRoll;
                 this.leanRider(0);
+                if (this.riderFall && this.riderFall.on) this.drawRiderFall();
                 this.previousSpeed = this.speed;
                 if (!this.meshBasePosition) {
                     this.meshBasePosition = new THREE.Vector3();
@@ -3915,9 +3940,8 @@ class Vehicle {
     // bike along the road and the restart are the physics', unchanged: this is only how the bike and the rider are
     // drawn from the moment the crash is called. The bike goes down from the lean it had to its side over `downS`
     // (`tipS` at walking pace), slowly at first as a falling thing does. While it slides its rear comes round, so it
-    // turns into the bend by `spin` rad for each metre slid, at most `spinMax`. The rider comes off: he stays on the
-    // line the bike slid along and drops behind it by `riderLag` of each metre, at most `riderLagMax`, on his side as
-    // he left the seat
+    // turns into the bend by `spin` rad for each metre slid, at most `spinMax`. The rider comes off by the kind of the
+    // crash (Vehicle.beginRiderFall)
     stepFall(deltaTime) {
         const f = Vehicle.FALL, fall = this.fall;
         const side = this.crashAngle > 0 ? 1 : -1;
@@ -3926,11 +3950,10 @@ class Vehicle {
         fall.down = x * x;
         // The bend turns the bike against the sign of its lean, and the rear steps out to the outside of it
         fall.yaw = Math.max(-f.spinMax, Math.min(f.spinMax, fall.yaw - side * f.spin * this.speed * deltaTime));
-        fall.lag = Math.min(f.riderLagMax, fall.lag + f.riderLag * this.speed * deltaTime * fall.down);
     }
 
-    // The bike and the rider drawn as the fall stands now (stepFall moves it on with the physics' own time, so it
-    // plays at one pace however often the bike is drawn)
+    // The bike drawn as the fall stands now (stepFall moves it on with the physics' own time, so it plays at one pace
+    // however often the bike is drawn)
     drawFall() {
         const fall = this.fall, down = fall.down;
         const side = this.crashAngle > 0 ? 1 : -1;
@@ -3938,28 +3961,300 @@ class Vehicle {
         this.group.rotation.set(this.group.rotation.x * (1 - down), fall.heading + fall.yaw, roll);
         // On its side the bike lies on its tyres' edges and its bar end, 0.3 m over its upright origin
         this.group.position.y = this.position.y + 0.3 * down;
-        const rider = this.rider;
-        if (!rider || !this.riderBasePos) return;
-        const s = this.fallScratch || (this.fallScratch = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), g: new THREE.Quaternion(), e: new THREE.Euler(), p: new THREE.Vector3(), one: new THREE.Vector3(1, 1, 1) });
-        // Where the rider would be on a bike that fell without turning, then back along the line of the slide
-        s.q.setFromEuler(s.e.set(0, fall.heading, roll));
-        s.m.compose(this.group.position, s.q, s.one);
-        s.p.copy(this.riderBasePos).applyMatrix4(s.m);
-        s.p.x -= Math.sin(fall.heading) * fall.lag;
-        s.p.z -= Math.cos(fall.heading) * fall.lag;
-        this.group.updateMatrixWorld(true);
-        rider.position.copy(this.group.worldToLocal(s.p));
-        s.g.setFromEuler(this.group.rotation).invert();
-        rider.quaternion.copy(s.g).multiply(s.q).multiply(s.q.setFromEuler(s.e.set(this.riderBaseRotX || 0, 0, 0)));
     }
 
-    // Riding again after a drawn fall: the rider is back on the seat
+    // Riding again after a crash: the rider is back on the seat in the riding pose, every limb as it was built
     endFall() {
         this.fall = null;
+        if (this.riderFall) this.riderFall.on = false;
+        if (this.riderBlock) this.riderBlock.on = false;
         if (this.rider && this.riderBasePos) {
             this.rider.position.copy(this.riderBasePos);
             this.rider.rotation.set(this.riderBaseRotX || 0, 0, 0);
         }
+        for (const limbs of [this.arms, this.legs]) for (const side of [-1, 1]) if (limbs && limbs[side]) limbs[side].rest();
+        if (this.steerRig) this.steerRig.held = false;
+        this.footPlaced = false;
+    }
+
+    // What the rider who comes off must stop against, beside the walls and the buildings: the thing the bike hit, as
+    // a circle on the ground (a car, a rock, a roadworks machine). Whoever raises the crash names it
+    blockRider(x, z, radius) {
+        const block = this.riderBlock || (this.riderBlock = { on: false, x: 0, z: 0, r: 0 });
+        block.on = true;
+        block.x = x;
+        block.z = z;
+        block.r = radius;
+    }
+
+    // The rider comes off the bike. The kind of the fall is the cause's (Vehicle.CRASH_CAUSES by this.crashWhy), or
+    // the tip-over under tipSpeed whatever the cause. He starts where he sat, in the pose he rode in, with the speed
+    // and the heading the bike rode into the crash with, and the kind's own throw (Vehicle.RIDER_FALLS: `keep` of the
+    // speed, at most `most`, `out` m/s to the low side, `lift` m/s and `liftPerSpeed` of the speed upwards). From here he has his own
+    // place and velocity (stepRiderFall) and his limbs go through the kind's keys (drawRiderFall). Every number comes
+    // from the crash itself, so the same crash is the same fall
+    beginRiderFall() {
+        const rider = this.rider;
+        if (!rider || !this.riderBasePos || !this.arms || !this.legs) return;
+        const rule = Vehicle.RIDER_FALL;
+        const rf = this.riderFall || (this.riderFall = Vehicle.riderFallState());
+        const speed = Math.abs(Number.isFinite(this.rodeSpeed) ? this.rodeSpeed : this.speed) || 0;
+        const heading = Number.isFinite(this.rodeYaw) ? this.rodeYaw : this.yawAngle;
+        const kind = Vehicle.riderFallKind(this.crashWhy, speed);
+        const k = Vehicle.RIDER_FALLS[kind];
+        rf.on = true;
+        rf.kind = kind;
+        rf.rule = k;
+        rf.t = 0;
+        rf.up = 0;
+        rf.slid = 0;
+        rf.speed = speed;
+        rf.heading = heading;
+        // The limbs' x sign on the side the bike went down to (a positive roll is to the right, which is -x)
+        rf.low = this.crashAngle > 0 ? -1 : 1;
+        rf.T = Math.min(k.mostS, k.baseS + k.perSpeed * speed);
+        rf.index = this.currentRoadSegment || 0;
+        rf.lean = (this.riderSpec && this.riderSpec.torsoLean || 0) + (this.riderBaseRotX || 0);
+        this.group.updateMatrixWorld(true);
+        rider.getWorldPosition(rf.p);
+        rider.getWorldQuaternion(rf.q0);
+        rf.q.copy(rf.q0);
+        let i = 0;
+        for (const limbs of [this.arms, this.legs]) for (const side of [-1, 1]) rf.from[i++].copy(limbs[side].at());
+        rf.p.y += this.riderProbes(rf.q0);
+        const sin = Math.sin(heading), cos = Math.cos(heading);
+        const along = Math.min(k.most, speed * k.keep), out = k.out * rf.low;
+        rf.v.set(sin * along + cos * out, k.lift + k.liftPerSpeed * speed, cos * along - sin * out);
+        rf.grounded = true;
+    }
+
+    // One step of the rider's own fall, on the physics' time. Gravity, then the ground under him; on the ground the
+    // slide loses `drag` of its speed and `scrub` m/s each second, so a faster crash slides further. He never goes
+    // into a wall, a barrier or a parapet (the bike's own zones, bodyM from his middle), a drawn building or the
+    // thing the bike hit (blockRider): he is put back to its face and loses the speed into it. A kind `withBike`
+    // (a drop, water) has no slide of its own: he stays `off` beside the bike wherever it falls
+    stepRiderFall(deltaTime) {
+        const rf = this.riderFall, k = rf.rule, rule = Vehicle.RIDER_FALL, p = rf.p, v = rf.v;
+        rf.t += deltaTime;
+        if (k.withBike) {
+            const x = Math.min(1, rf.t / rf.T), e = x * x * (3 - 2 * x);
+            const sin = Math.sin(rf.heading), cos = Math.cos(rf.heading);
+            const side = k.off[0] * rf.low * e, back = k.off[2] * e;
+            const fromX = p.x, fromZ = p.z;
+            p.set(this.position.x + cos * side + sin * back, this.position.y + k.off[1] * e, this.position.z - sin * side + cos * back);
+            v.copy(this.velocity);
+            // (he is on the bike's piece of the road, wherever the bike is put)
+            rf.index = this.currentRoadSegment || 0;
+            this.holdRiderOut(fromX, fromZ, deltaTime);
+            rf.grounded = false;
+            return;
+        }
+        v.y -= rule.gravity * deltaTime;
+        if (rf.grounded) {
+            const pace = Math.hypot(v.x, v.z);
+            if (pace > 0) {
+                const left = Math.max(0, pace - (k.drag * pace + k.scrub) * deltaTime) / pace;
+                v.x *= left;
+                v.z *= left;
+            }
+        }
+        const fromX = p.x, fromZ = p.z;
+        p.x += v.x * deltaTime;
+        p.z += v.z * deltaTime;
+        this.holdRiderOut(fromX, fromZ, deltaTime);
+        p.y += v.y * deltaTime;
+        const ground = this.riderGroundY(p.x, p.z);
+        if (p.y <= ground) {
+            p.y = ground;
+            v.y = v.y < -rule.bounceFrom ? -v.y * k.bounce : 0;
+            rf.grounded = true;
+        } else {
+            rf.grounded = p.y - ground < rule.touchM;
+        }
+        rf.slid += Math.hypot(p.x - fromX, p.z - fromZ);
+        // Lying still, he sits up (the kind's `sit` key) when there is time
+        if (rf.t > rf.T && rf.grounded && Math.hypot(v.x, v.z) < rule.stillSpeed) rf.up = Math.min(1, rf.up + deltaTime / rule.upS);
+    }
+
+    // The rider kept out of what is solid, after a step from (fromX, fromZ). A wall is the bike's own zone
+    // (checkWallCollision), read `bodyM` nearer the wall than his middle: he is moved back toward its face, no faster
+    // than pushSpeed (he may start against it, on a bike that hit it), and loses the speed into it. A building stops
+    // him where he was. The thing the bike hit pushes him out of its circle
+    holdRiderOut(fromX, fromZ, deltaTime) {
+        const rf = this.riderFall, rule = Vehicle.RIDER_FALL, p = rf.p, v = rf.v;
+        const environment = this.environment;
+        const block = this.riderBlock;
+        // The most he is moved out in a step: as far as he came in, and pushSpeed more
+        const reach = Math.hypot(p.x - fromX, p.z - fromZ) + rule.pushSpeed * deltaTime;
+        if (block && block.on) {
+            const dx = p.x - block.x, dz = p.z - block.z, gap = Math.hypot(dx, dz), clear = block.r + rule.bodyM;
+            if (gap < clear) {
+                const nx = gap > 1e-6 ? dx / gap : -Math.sin(rf.heading), nz = gap > 1e-6 ? dz / gap : -Math.cos(rf.heading);
+                const push = Math.min(clear - gap, reach);
+                p.x += nx * push;
+                p.z += nz * push;
+                const into = -(v.x * nx + v.z * nz);
+                if (into > 0) { v.x += nx * into; v.z += nz * into; }
+            }
+        }
+        if (!environment || !environment.route || !environment.ground || environment.route.unitCount === 0) return;
+        const scenery = environment.scenery;
+        if (scenery && typeof scenery.houseAt === 'function' && scenery.houseAt(p.x, p.z, rule.bodyM)) {
+            p.x = fromX;
+            p.z = fromZ;
+            v.x = 0;
+            v.z = 0;
+        }
+        const projection = this.riderProject(p.x, p.z);
+        if (!(projection.index >= 0)) return;
+        const sign = projection.lateral < 0 ? -1 : 1;
+        const located = rf.located;
+        located.index = projection.index;
+        located.lateral = projection.lateral + sign * rule.bodyM;
+        let zone = environment.ground.zoneAt(located, projection.width / 2);
+        if (this.worldPhysics) zone = this.worldZone(zone, located, projection.y);
+        if (zone.kind !== 'wall') return;
+        const perpX = Math.cos(projection.heading), perpZ = -Math.sin(projection.heading);
+        const deep = Math.abs(located.lateral) - zone.start;
+        // A barrier is solid where it stands (its zone begins where he is), and a wall he is deep in at once is one
+        // he did not slide up to (the next row's zone, which begins far behind him): he stays where he was, against it
+        if (deep <= 0 || deep > rule.bodyM + reach) {
+            p.x = fromX;
+            p.z = fromZ;
+            v.x = 0;
+            v.z = 0;
+            return;
+        }
+        const push = Math.min(deep, reach);
+        p.x -= sign * perpX * push;
+        p.z -= sign * perpZ * push;
+        const outward = (v.x * perpX + v.z * perpZ) * sign;
+        if (outward > 0) {
+            v.x -= outward * perpX * sign;
+            v.z -= outward * perpZ * sign;
+        }
+    }
+
+    // Where the rider is against the road: the nearest piece of it within nearUnits of the piece he was on last. He
+    // moves less than a metre a step, so this never loses him, and it keeps him on his own strand where a stack of
+    // hairpins has another strand nearer (the bike's wider search goes over to it, and its road is metres up or
+    // down: he would step that far in a frame)
+    riderProject(x, z) {
+        const rf = this.riderFall, route = this.environment.route, near = Vehicle.RIDER_FALL.nearUnits;
+        const out = rf.projection;
+        if (typeof route.nearestSegment === 'function' && route.points && route.points.length > 1) {
+            const last = route.points.length - 2;
+            route.nearestSegment(x, z, Math.max(0, Math.min(last, rf.index - near)), Math.max(0, Math.min(last, rf.index + near)), out);
+        } else {
+            rf.hint.index = rf.index;
+            route.project(x, z, rf.hint, out);
+        }
+        if (out.index >= 0) rf.index = out.index;
+        return out;
+    }
+
+    // The ground under the rider at (x, z): the bike's own (surfaceAt: the road's height on the road, its verge and
+    // against a wall, the land on the run-off), and past the edge of a drop the land he falls to, as the falling bike
+    // has it (getTerrainHeightAt). A ride with no ground has the plane the bike is on
+    riderGroundY(x, z) {
+        const environment = this.environment;
+        if (!environment || !environment.route || !environment.ground || environment.route.unitCount === 0) return this.position.y;
+        const rf = this.riderFall, ground = environment.ground;
+        // (on his own strand of the road: riderProject)
+        rf.range.start = Math.max(0, rf.index - Vehicle.RIDER_FALL.nearUnits);
+        rf.range.end = rf.index + Vehicle.RIDER_FALL.nearUnits;
+        const loc = ground.locate(x, z, rf.range, rf.loc);
+        if (!loc) return this.position.y;
+        let zone = ground.zoneAt(loc, ground.halfRoad(loc));
+        if (this.worldPhysics) zone = this.worldZone(zone, loc);
+        if (zone.kind === 'runoff') return ground.heightAt(loc, false);
+        if (zone.kind === 'fall') return Math.max(ground.heightAt(loc, false), ground.restY(loc));
+        return loc.roadY;
+    }
+
+    // The points of the rider's body that may touch the ground, as he is posed now and turned by `q` (his turn in
+    // the world): the head, the chest, the pelvis, and each limb's middle joint and end. Fills riderFall.probe with
+    // each point from his origin, in the world's axes, and returns how far under his origin the lowest one reaches
+    riderProbes(q) {
+        const rf = this.riderFall, rule = Vehicle.RIDER_FALL, probe = rf.probe, radius = rf.radius;
+        const helmet = this.helmet;
+        const sin = Math.sin(rf.lean), cos = Math.cos(rf.lean);
+        if (helmet) probe[0].copy(helmet.parent === this.rider ? helmet.position : helmet.parent.position);
+        else probe[0].set(0, cos * 0.4, sin * 0.4);
+        radius[0] = rule.headM;
+        probe[1].set(0, cos * rule.torsoHalfM, sin * rule.torsoHalfM);
+        probe[2].set(0, -cos * rule.torsoHalfM, -sin * rule.torsoHalfM);
+        radius[1] = radius[2] = rule.torsoM;
+        let i = 3;
+        for (const limbs of [this.arms, this.legs]) {
+            for (const side of [-1, 1]) {
+                const limb = limbs[side];
+                probe[i].copy(limb.mid());
+                radius[i++] = rule.limbM;
+                probe[i].copy(limb.at());
+                radius[i++] = Math.max(rule.limbM, limb.drop || 0);
+            }
+        }
+        let low = Infinity;
+        for (let n = 0; n < probe.length; n++) low = Math.min(low, probe[n].applyQuaternion(q).y - radius[n]);
+        return low;
+    }
+
+    // The rider drawn as his fall stands now. The pose is the kind's keys (Vehicle.RIDER_FALLS `keys`) at the share
+    // of the fall's time gone, blended smoothly: from the pose he rode in to the first key, then key to key, then
+    // from the last key to the `sit` key as he sits up. The body's turn is four angles and each limb's end is three
+    // (Vehicle.riderPose). Then he is set on the ground: his lowest point (riderProbes) rests at his own height
+    // (stepRiderFall), and no point of him is under the ground there
+    drawRiderFall() {
+        const rf = this.riderFall, k = rf.rule, rider = this.rider, pose = rf.pose;
+        const keys = k.keys;
+        const u = Math.min(1, rf.t / rf.T);
+        let n = 0;
+        while (n < keys.length - 1 && u > keys[n].at) n++;
+        const before = n > 0 ? keys[n - 1].at : 0;
+        const x = keys[n].at > before ? Math.max(0, Math.min(1, (u - before) / (keys[n].at - before))) : 1;
+        const e = x * x * (3 - 2 * x);
+        if (n === 0) Vehicle.riderPose(keys[0], keys[0], 0, pose);
+        else Vehicle.riderPose(keys[n - 1], keys[n], e, pose);
+        if (rf.up > 0 && k.sit) {
+            const s = rf.up * rf.up * (3 - 2 * rf.up);
+            Vehicle.riderPose(null, k.sit, s, pose);
+        }
+        // The body's turn: about the world's up by the heading, then the roll, the pitch and the twist about the spine
+        const low = rf.low, lean = rf.lean, d = Math.PI / 180;
+        rf.q.setFromEuler(rf.euler.set(0, rf.heading + low * pose[3] * d, 0));
+        rf.q.multiply(rf.turn.setFromEuler(rf.euler.set(0, 0, -low * pose[1] * d)));
+        rf.q.multiply(rf.turn.setFromEuler(rf.euler.set(pose[0] * d, 0, 0)));
+        rf.q.multiply(rf.turn.setFromEuler(rf.euler.set(0, low * pose[2] * d, 0)));
+        // (the riding lean is in the rider's own shape: his spine is `lean` forward of his y axis)
+        rf.q.multiply(rf.turn.setFromEuler(rf.euler.set(-lean, 0, 0)));
+        if (n === 0) rf.q.slerpQuaternions(rf.q0, rf.turn.copy(rf.q), e);
+        const sin = Math.sin(lean), cos = Math.cos(lean);
+        let i = 0;
+        for (const limbs of [this.arms, this.legs]) {
+            for (const side of [-1, 1]) {
+                const limb = limbs[side], end = rf.end[i];
+                // The low side's limb reads the first triple of its pair
+                const at = 4 + (i < 2 ? 0 : 6) + (side === low ? 0 : 3);
+                const swing = pose[at] * d, spread = pose[at + 1] * d, reach = limb.reach * (1 - Vehicle.RIDER_FALL.bend * pose[at + 2]);
+                const bx = side * Math.sin(spread), by = -Math.cos(spread) * Math.cos(swing), bz = Math.cos(spread) * Math.sin(swing);
+                end.set(limb.root.x + bx * reach, limb.root.y + (by * cos - bz * sin) * reach, limb.root.z + (by * sin + bz * cos) * reach);
+                if (n === 0) end.lerpVectors(rf.from[i], end, e);
+                limb.place(end, null);
+                i++;
+            }
+        }
+        const lowest = this.riderProbes(rf.q);
+        const p = rf.p;
+        let y = p.y - lowest;
+        for (let m = 0; m < rf.probe.length; m++) {
+            const o = rf.probe[m];
+            y = Math.max(y, this.riderGroundY(p.x + o.x, p.z + o.z) + rf.radius[m] - o.y);
+        }
+        rf.at.set(p.x, y, p.z);
+        this.group.updateMatrixWorld(true);
+        rider.position.copy(this.group.worldToLocal(rf.at));
+        rider.quaternion.copy(this.group.getWorldQuaternion(rf.turn).invert().multiply(rf.q));
     }
 
     // The hands stay on the grips and the feet on the pegs while the bar turns and the rider leans across the bike:
@@ -3968,10 +4263,10 @@ class Vehicle {
     holdRider() {
         const rig = this.steerRig, rider = this.rider, arms = this.arms, legs = this.legs;
         if (!rig || !rider || (!arms && !legs)) return;
-        // A rider who has come off (Vehicle.drawFall) holds nothing: the limbs go back to their own pose
-        if (this.fall) {
-            if (rig.held) for (const side of [-1, 1]) for (const limb of [arms && arms[side], legs && legs[side]]) if (limb) limb.place(limb.end, null);
+        // A rider who has come off holds nothing: the fall poses every limb (Vehicle.drawRiderFall)
+        if (this.riderFall && this.riderFall.on) {
             rig.held = false;
+            this.drawRiderFall();
             return;
         }
         const leaned = rider.rotation.z !== 0 || rider.position.x !== (this.riderBasePos ? this.riderBasePos.x : 0);
@@ -4103,7 +4398,7 @@ class Vehicle {
         this.leanAngle = 0;
         this.leanVelocity = 0;
         this.crashed = false;
-        if (this.fall) this.endFall();
+        this.endFall();
         this.barState = null;
         this.crashAngle = 0;
         this.isJumping = false;
@@ -4133,6 +4428,7 @@ class Vehicle {
         this.footT = 0; // The stop pose snaps off: a reset rides away
         this.tipTimerS = 0;
         this.crashCause = null;
+        this.crashWhy = null;
         this.contactWobble = 0;
         this.landFastS = 0;
         this.landSteepS = 0;
@@ -4459,6 +4755,7 @@ class Vehicle {
         // Hit a wall: crash with a bounce back toward the road
         if (zone.kind === 'wall' && !this.crashed) {
             this.crashed = true;
+            this.crashWhy = 'wall';
             this.fallingOffCliff = false; // Not falling, we hit a wall
             this.crashAngle = sign * Math.PI / 6; // Crash leaning into the wall
             // A world's crash says what it was (a leg's crash card has its own words)
@@ -4493,6 +4790,7 @@ class Vehicle {
             console.log(`=== FALLING OFF ${sideName.toUpperCase()} EDGE ===`);
             console.log(`CRASHED! Fell off the ${sideName} edge at`, (this.speed * 2.237).toFixed(1) + ' mph');
             this.crashed = true;
+            this.crashWhy = 'drop';
             if (world) this.crashCause = 'Went over the edge of a drop';
             this.fallingOffCliff = true;
             this.fallSide = sign;
@@ -4529,10 +4827,12 @@ class Vehicle {
         const water = environment.ground.waterLevel(loc);
         if (water !== null && ground <= water) {
             this.crashed = true;
+            this.crashWhy = 'water';
             this.crashAngle = this.leanAngle || 0.5;
             console.log('CRASHED! Rode into the water at', (this.speed * 2.237).toFixed(1) + ' mph');
         } else if (this.offRoadTime >= limit) {
             this.crashed = true;
+            this.crashWhy = 'offroad';
             this.crashAngle = this.leanAngle || 0.5;
             console.log('CRASHED! Off the road for', limit.toFixed(1), 's');
         }
@@ -4575,17 +4875,17 @@ class Vehicle {
         const here = ground.groundY(this.position.x, this.position.z, range, false, loc);
         const water = ground.waterLevel(loc);
         if (water !== null && here <= water) {
-            this.worldCrash('Rode into the water');
+            this.worldCrash('Rode into the water', null, 'water');
             return;
         }
         // Past the tiles the world has in detail the land is the far grid's, drawn coarse and with nothing on it
         if (typeof ground.mapped === 'function' && !ground.mapped(this.position.x, this.position.z)) {
-            this.worldCrash('Rode off the edge of the mapped land');
+            this.worldCrash('Rode off the edge of the mapped land', null, 'unmapped');
             return;
         }
         const scenery = this.environment.scenery;
         if (scenery && typeof scenery.houseAt === 'function' && scenery.houseAt(this.position.x, this.position.z, world.houseHitM || 0)) {
-            this.worldCrash('Rode into a building');
+            this.worldCrash('Rode into a building', null, 'building');
             return;
         }
         this.landCover = typeof ground.coverAt === 'function' ? ground.coverAt(this.position.x, this.position.z) : 0;
@@ -4604,10 +4904,10 @@ class Vehicle {
         this.landSteepS = steep > land.landSteepSlope ? this.landSteepS + deltaTime : 0;
         this.landFastS = this.speed > land.landCrashSpeed ? this.landFastS + deltaTime : 0;
         if (this.landSteepS >= world.landSteepS) {
-            this.worldCrash(this.landAlong < -land.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold');
+            this.worldCrash(this.landAlong < -land.landSteepSlope ? 'Went over the edge of a steep drop' : 'Rode onto a slope too steep to hold', null, this.landAlong < -land.landSteepSlope ? 'drop' : 'steep');
         } else if (this.landFastS >= world.landCrashS) {
             const cover = world.landCover ? world.landCover[this.landCover] || world.landCover[0] : null;
-            this.worldCrash(`Too fast ${cover ? cover.on : 'on the grass'}`);
+            this.worldCrash(`Too fast ${cover ? cover.on : 'on the grass'}`, null, 'fast');
         }
     }
 
@@ -4682,6 +4982,8 @@ class Vehicle {
         if (this.position.y - solid.position.y >= solid.height) return false;
 
         this.crashed = true;
+        this.crashWhy = 'obstacle';
+        this.blockRider(solid.position.x, solid.position.z, solid.radius);
         // Not left in the jump state, as the forced landing does
         this.isJumping = false;
         this.crashAngle = this.leanAngle || 0.5;
@@ -4778,6 +5080,7 @@ class Vehicle {
         // Safety check - if we've been jumping too long, force landing
         if (this.position.y < this.jumpStartHeight - 10) {
             this.crashed = true;
+            this.crashWhy = 'landing';
             this.isJumping = false;
             this.jumpRotation = 0;
             console.log('CRASHED! Bad landing from jump');
@@ -4812,6 +5115,7 @@ class Vehicle {
         } else {
             // Bad angle - crash
             this.crashed = true;
+            this.crashWhy = 'landing';
             this.crashAngle = this.jumpRotation > 0 ? Math.PI/2 : -Math.PI/2;
             console.log('CRASHED! Bad landing angle:', (landingAngle * 180 / Math.PI).toFixed(0) + '°');
         }
@@ -4882,10 +5186,159 @@ Vehicle.STEER_SHOWN = 0.5;
 // rate of 1.15 rad/s shows 8 degrees), at most counterMax; at most intoMax into the turn at a held lean; the roll rate
 // is smoothed over `lag` s; under directSpeed m/s the drawn bar goes over to the steering angle
 // A lowside or a fall at walking pace as it is drawn (Vehicle.drawFall): downS and tipS seconds for the bike to go
-// from its lean to its side; spin rad the sliding bike turns into the bend for each metre slid, at most spinMax; the
-// rider drops riderLag of each metre behind the bike, at most riderLagMax m; sparkS seconds between the sparks a bike
-// sliding on the carriageway throws, over sparkSpeed m/s (Game)
-Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, riderLag: 0.3, riderLagMax: 5, sparkS: 0.08, sparkSpeed: 4 });
+// from its lean to its side; spin rad the sliding bike turns into the bend for each metre slid, at most spinMax;
+// sparkS seconds between the sparks a bike sliding on the carriageway throws, over sparkSpeed m/s (Game)
+Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, sparkS: 0.08, sparkSpeed: 4 });
+
+// How the rider comes off, by what caused the crash. Whoever raises a crash names the class of its cause
+// (this.crashWhy: the third argument of worldCrash, or set beside `crashed = true`), and this one table gives the kind
+// of the rider's fall (a key of Vehicle.RIDER_FALLS). Nothing reads the words of a cause. A crash with no class, or
+// one this table does not have, falls as RIDER_FALL.fallback
+Vehicle.CRASH_CAUSES = Object.freeze({
+    // The front or the lean let go: too much lean for the grip, on the road or on the land
+    grip: 'lowside',
+    // A slope too steep to hold, too long off the road, under the surface
+    steep: 'lowside',
+    offroad: 'lowside',
+    sunk: 'lowside',
+    // The rear came round and gripped again, too fast over the land, a wheelie over the back, a jump landed badly
+    rear: 'highside',
+    fast: 'highside',
+    flip: 'highside',
+    landing: 'highside',
+    // Rode into something that stands: a wall or a barrier, a car, a rider, a building, a rock or a machine
+    wall: 'front',
+    car: 'front',
+    rider: 'front',
+    building: 'front',
+    obstacle: 'front',
+    // Nothing under the bike: over an edge, into water, off the mapped land
+    drop: 'drop',
+    water: 'drop',
+    unmapped: 'drop',
+    // Too slow to stay up
+    stall: 'tip'
+});
+
+// The rules every kind of fall shares. Under tipSpeed m/s any crash is the tip-over. gravity m/s2; a landing faster
+// than bounceFrom m/s bounces by the kind's `bounce`; within touchM of the ground some part of him is on it, and the
+// slide's friction acts (he leaves the seat that near it). bodyM is how near his middle comes to a wall, a building
+// or the thing the bike hit, and pushSpeed m/s the most he is moved out of one he starts in. nearUnits is how many
+// pieces of the road either side of his last one he is looked for in (riderProject). Lying under stillSpeed m/s he
+// sits up over upS s. `bend` is the share of a limb's reach a full bend takes. The radii of the points that touch the ground (riderProbes): headM, torsoM at torsoHalfM each way along the
+// spine, limbM
+Vehicle.RIDER_FALL = Object.freeze({
+    fallback: 'lowside', tipSpeed: 4, gravity: 14, bounceFrom: 3, touchM: 0.5, bodyM: 0.9, pushSpeed: 5, nearUnits: 3, stillSpeed: 0.6, upS: 0.5,
+    bend: 0.5, headM: 0.15, torsoM: 0.15, torsoHalfM: 0.15, limbM: 0.07
+});
+
+// The kinds of fall, one row each. A new kind is a row here and a class in CRASH_CAUSES; no code names a kind but
+// the tip-over (riderFallKind).
+//   baseS, perSpeed, mostS: the keys play over baseS + perSpeed x the crash speed seconds, at most mostS
+//   keep, most: the share of the bike's speed he leaves with, and the most (m/s: a rider over the bars lands near
+//   what the bike hit, however fast it was); out: m/s to the low side (negative: over the high side);
+//   lift, liftPerSpeed: m/s upwards, and more for each m/s of the crash
+//   drag, scrub: on the ground he loses drag of his speed and scrub m/s each second; bounce: the share a hard landing
+//   gives back
+//   withBike, off: he has no slide of his own and stays off [to the low side, up, ahead] m from the bike as it falls
+//   keys: the poses, in order. `at` is the share of the time (the last is 1). `body` is [pitch, roll, twist, yaw] in
+//   degrees: pitch tips the spine forward from upright (90 lies face down, head first; -90 on the back, feet
+//   first; more than 180 is a forward roll), roll turns him about the line of travel toward the low side, twist
+//   about his own spine toward the low side, yaw about the world's up toward the low side. `arms` and `legs` are
+//   [the low side's, the high side's], each [swing, spread, bend]: swing brings the limb forward from hanging along
+//   the spine (90 is straight ahead of the chest, 180 over the head), spread takes it out to its side, bend is 0
+//   straight to 1 folded
+//   sit: the pose he sits up to once he lies still (the same fields, no `at`); none and he lies as the last key
+Vehicle.RIDER_FALLS = Object.freeze({
+    // Off the low side onto hip and back, arms out; he slides feet first behind the bike
+    lowside: {
+        baseS: 0.75, perSpeed: 0.012, mostS: 1.25, keep: 1, most: 60, out: 1.6, lift: 0, liftPerSpeed: 0, drag: 1.35, scrub: 1.2, bounce: 0,
+        keys: [
+            { at: 0.22, body: [-5, 50, 0, 0], arms: [[35, 55, 0.3], [80, 30, 0.35]], legs: [[65, 20, 0.5], [55, 30, 0.45]] },
+            { at: 0.5, body: [-55, 60, 10, -10], arms: [[25, 80, 0.1], [70, 60, 0.15]], legs: [[40, 15, 0.3], [50, 28, 0.45]] },
+            { at: 0.78, body: [-80, 35, 5, 10], arms: [[20, 85, 0.1], [45, 80, 0.1]], legs: [[18, 14, 0.15], [38, 22, 0.4]] },
+            { at: 1, body: [-86, 12, 0, 28], arms: [[15, 75, 0.15], [30, 82, 0.15]], legs: [[8, 12, 0.05], [28, 18, 0.35]] }
+        ],
+        sit: { body: [-18, 0, 0, 28], arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] }
+    },
+    // Thrown over the high side: up and across, a roll about the line of travel, then a slide on the back. He is
+    // thrown on ahead of the sliding bike (less drag than it), where the chase view has him
+    highside: {
+        baseS: 0.95, perSpeed: 0.014, mostS: 1.45, keep: 0.8, most: 60, out: -2.6, lift: 3.8, liftPerSpeed: 0.03, drag: 1.3, scrub: 2, bounce: 0.25,
+        keys: [
+            { at: 0.16, body: [15, -50, 0, 0], arms: [[125, 40, 0.15], [110, 55, 0.15]], legs: [[40, 25, 0.3], [55, 32, 0.3]] },
+            { at: 0.4, body: [70, -180, 0, -8], arms: [[80, 35, 0.6], [75, 35, 0.6]], legs: [[85, 15, 0.7], [80, 18, 0.7]] },
+            { at: 0.68, body: [88, -360, 0, -16], arms: [[60, 70, 0.3], [130, 50, 0.2]], legs: [[45, 22, 0.45], [20, 25, 0.2]] },
+            { at: 1, body: [90, -540, 0, -24], arms: [[150, 60, 0.2], [120, 75, 0.2]], legs: [[10, 14, 0.1], [28, 22, 0.35]] }
+        ],
+        sit: { body: [90, -540, 0, -24], arms: [[95, 35, 0.55], [150, 50, 0.3]], legs: [[5, 12, 0.05], [60, 20, 0.7]] }
+    },
+    // Over the bars: a dive, a forward roll, onto the back feet first, and a slide or a stop against the thing
+    front: {
+        baseS: 0.85, perSpeed: 0.012, mostS: 1.3, keep: 0.8, most: 11, out: 0, lift: 3.2, liftPerSpeed: 0.05, drag: 1.7, scrub: 2.5, bounce: 0.2,
+        keys: [
+            { at: 0.18, body: [65, 0, 0, 0], arms: [[150, 20, 0.1], [150, 20, 0.1]], legs: [[5, 18, 0.2], [-10, 22, 0.3]] },
+            { at: 0.45, body: [165, 8, 0, 0], arms: [[95, 30, 0.55], [90, 30, 0.55]], legs: [[80, 14, 0.65], [70, 18, 0.65]] },
+            { at: 0.72, body: [255, 14, 0, 6], arms: [[60, 60, 0.3], [70, 55, 0.3]], legs: [[55, 16, 0.45], [35, 20, 0.3]] },
+            { at: 1, body: [274, 18, 0, 14], arms: [[20, 80, 0.1], [35, 82, 0.12]], legs: [[8, 12, 0.05], [30, 20, 0.35]] }
+        ],
+        sit: { body: [342, 0, 0, 14], arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] }
+    },
+    // Nothing under the bike: he falls with it, limbs loose, and has no slide of his own
+    drop: {
+        baseS: 0.8, perSpeed: 0.01, mostS: 1.2, keep: 1, most: 60, out: 0, lift: 0, liftPerSpeed: 0, drag: 0, scrub: 0, bounce: 0,
+        withBike: true, off: [1.1, 0.5, -0.4],
+        keys: [
+            { at: 0.25, body: [10, -15, 0, 0], arms: [[120, 50, 0.15], [140, 40, 0.1]], legs: [[45, 25, 0.35], [30, 30, 0.3]] },
+            { at: 0.6, body: [-35, 25, 15, 20], arms: [[60, 85, 0.2], [150, 55, 0.25]], legs: [[70, 20, 0.6], [15, 28, 0.2]] },
+            { at: 1, body: [-75, 40, 20, 45], arms: [[110, 70, 0.3], [40, 85, 0.1]], legs: [[20, 18, 0.2], [60, 26, 0.55]] }
+        ]
+    },
+    // Too slow to stay up: down beside the bike on the low side, and a short roll onto the back
+    tip: {
+        baseS: 0.85, perSpeed: 0.02, mostS: 0.95, keep: 1, most: 60, out: 4, lift: 0, liftPerSpeed: 0, drag: 1, scrub: 2, bounce: 0,
+        keys: [
+            { at: 0.35, body: [10, 45, 0, 0], arms: [[40, 70, 0.2], [80, 30, 0.4]], legs: [[50, 30, 0.3], [60, 25, 0.5]] },
+            { at: 0.7, body: [-25, 85, 10, 15], arms: [[30, 85, 0.25], [60, 50, 0.3]], legs: [[45, 18, 0.45], [50, 25, 0.5]] },
+            { at: 1, body: [-80, 20, 0, 35], arms: [[25, 70, 0.2], [35, 80, 0.15]], legs: [[15, 14, 0.15], [40, 22, 0.5]] }
+        ],
+        sit: { body: [-15, 0, 0, 35], arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] }
+    }
+});
+
+// The kind of the rider's fall for a cause class at a crash speed (m/s): the tip-over under tipSpeed, whatever the
+// cause; else the class's kind, or the fallback
+Vehicle.riderFallKind = (why, speed) => {
+    const rule = Vehicle.RIDER_FALL;
+    const kind = Vehicle.CRASH_CAUSES[why] || rule.fallback;
+    return speed < rule.tipSpeed && Vehicle.RIDER_FALLS.tip ? 'tip' : kind;
+};
+
+// A pose between two keys of a fall: `out` takes [pitch, roll, twist, yaw, then swing, spread, bend for the low arm,
+// the high arm, the low leg and the high leg], `share` of the way from key a to key b. With no `a` the pose `out`
+// holds is the start (the sit-up blends from whatever pose he lay in)
+Vehicle.riderPose = (a, b, share, out) => {
+    for (let i = 0; i < 16; i++) {
+        const limb = i < 4 ? null : i < 10 ? 'arms' : 'legs';
+        const j = i < 4 ? i : (i - 4) % 6;
+        const to = limb ? b[limb][j < 3 ? 0 : 1][j % 3] : b.body[i];
+        const from = !a ? out[i] : limb ? a[limb][j < 3 ? 0 : 1][j % 3] : a.body[i];
+        out[i] = from + (to - from) * share;
+    }
+    return out;
+};
+
+// What a rider's fall keeps from frame to frame, made once for a bike: his place and velocity, the turn he left the
+// seat with and the turn he is drawn with, and every vector the fall works in (nothing is made while he falls)
+Vehicle.riderFallState = () => ({
+    on: false, kind: null, rule: null, t: 0, T: 1, up: 0, slid: 0, speed: 0, heading: 0, low: 1, lean: 0, index: 0, grounded: false,
+    p: new THREE.Vector3(), v: new THREE.Vector3(), at: new THREE.Vector3(),
+    q0: new THREE.Quaternion(), q: new THREE.Quaternion(), turn: new THREE.Quaternion(), euler: new THREE.Euler(),
+    pose: new Float64Array(16), radius: new Float64Array(11),
+    from: [0, 1, 2, 3].map(() => new THREE.Vector3()), end: [0, 1, 2, 3].map(() => new THREE.Vector3()),
+    probe: Array.from({ length: 11 }, () => new THREE.Vector3()),
+    hint: { index: 0 }, projection: {}, located: {}, range: { start: 0, end: 0 }, loc: {}
+});
 // A wheelie by the bike (Vehicle.wheelieOf, popShare, liftShare), from two facts of its catalogue entry: `kg` and
 // `spare`. A bike of lightKg or less is wholly light and one of heavyKg or more not at all. Up to weightFrom m/s a pop
 // is lightPop of the usual on a wholly light bike and heavyPop on a heavy one, and from weightTo m/s the weight no
@@ -5001,8 +5454,10 @@ Vehicle.steerAxis = (group, forks) => {
 // lengths `a` and `b`, and the joint stands off the line between the ends
 // toward `toward`. A reach longer than the limb leaves it all but straight,
 // both parts stretched alike to span it.
-Vehicle.joint = (from, to, a, b, toward) => {
-    const line = new THREE.Vector3().subVectors(to, from);
+// `out` takes the answer with nothing allocated (a rider's fall places four limbs every frame: Vehicle.drawRiderFall).
+Vehicle.joint = (from, to, a, b, toward, out = null) => {
+    const scratch = out && (Vehicle.jointScratch || (Vehicle.jointScratch = { line: new THREE.Vector3(), bend: new THREE.Vector3() }));
+    const line = (scratch ? scratch.line : new THREE.Vector3()).subVectors(to, from);
     const reach = line.length();
     const stretch = Math.max(1, reach / ((a + b) * 0.995));
     a *= stretch;
@@ -5010,8 +5465,8 @@ Vehicle.joint = (from, to, a, b, toward) => {
     line.normalize();
     const along = (a * a - b * b + reach * reach) / (2 * reach);
     const off = Math.sqrt(Math.max(0, a * a - along * along));
-    const bend = toward.clone().addScaledVector(line, -toward.dot(line)).normalize();
-    return from.clone().addScaledVector(line, along).addScaledVector(bend, off);
+    const bend = (scratch ? scratch.bend.copy(toward) : toward.clone()).addScaledVector(line, -toward.dot(line)).normalize();
+    return (out ? out.copy(from) : from.clone()).addScaledVector(line, along).addScaledVector(bend, off);
 };
 
 // A rider's arm or leg as rigid pieces, for the poses Vehicle draws (the hands on a steered bar, the foot down at a
@@ -5024,11 +5479,11 @@ Vehicle.rigLimb = ({ rider, root, mid, end, pieces, carried }) => {
     const a = root.distanceTo(mid), b = mid.distanceTo(end);
     const toward = mid.clone().sub(root.clone().add(end).multiplyScalar(0.5));
     const held = pieces.map(([object, from, to]) => ({
-        object, from, to, along: rest[to].clone().sub(rest[from]),
-        quaternion: object.quaternion.clone(), scale: object.scale.y
+        object, from, to, along: rest[to].clone().sub(rest[from]), unit: rest[to].clone().sub(rest[from]).normalize(),
+        quaternion: object.quaternion.clone(), scale: object.scale.y, position: object.position.clone()
     }));
     const riding = Object.entries(carried).flatMap(([at, list]) => list.map(object => ({
-        object, at, offset: object.position.clone().sub(rest[at]), quaternion: object.quaternion.clone()
+        object, at, offset: object.position.clone().sub(rest[at]), quaternion: object.quaternion.clone(), position: object.position.clone()
     })));
     let drop = 0;
     if (rider) {
@@ -5050,17 +5505,34 @@ Vehicle.rigLimb = ({ rider, root, mid, end, pieces, carried }) => {
     }
     const turn = new THREE.Quaternion();
     const now = { root: rest.root };
+    const bent = new THREE.Vector3(), span = new THREE.Vector3(), unit = new THREE.Vector3();
     return {
         root: rest.root, end: rest.end, drop, reach: a + b,
-        // Where the end is drawn now
+        // Where the end and the middle joint are drawn now
         at: () => now.end || rest.end,
-        // The end to `to`, what it carries turned by `endTurn` about it (the rest pose for the rest end and no turn)
+        mid: () => now.mid || rest.mid,
+        // The limb exactly as it was built: every piece and what it carries, to the last bit
+        rest() {
+            now.end = undefined;
+            now.mid = undefined;
+            for (const piece of held) {
+                piece.object.quaternion.copy(piece.quaternion);
+                piece.object.position.copy(piece.position);
+                piece.object.scale.y = piece.scale;
+            }
+            for (const item of riding) {
+                item.object.position.copy(item.position);
+                item.object.quaternion.copy(item.quaternion);
+            }
+        },
+        // The end to `to`, what it carries turned by `endTurn` about it (the rest pose for the rest end and no turn).
+        // Nothing is allocated: a fall places every limb each frame
         place(to, endTurn) {
             now.end = to;
-            now.mid = Vehicle.joint(rest.root, to, a, b, toward);
+            now.mid = Vehicle.joint(rest.root, to, a, b, toward, bent);
             for (const piece of held) {
-                const along = now[piece.to].clone().sub(now[piece.from]);
-                turn.setFromUnitVectors(piece.along.clone().normalize(), along.clone().normalize());
+                const along = span.copy(now[piece.to]).sub(now[piece.from]);
+                turn.setFromUnitVectors(piece.unit, unit.copy(along).normalize());
                 piece.object.quaternion.copy(turn).multiply(piece.quaternion);
                 piece.object.position.addVectors(now[piece.from], now[piece.to]).multiplyScalar(0.5);
                 piece.object.scale.y = piece.scale * along.length() / piece.along.length();
