@@ -1,0 +1,154 @@
+/**
+ * @jest-environment node
+ */
+// No land stands up beside the ride as a spike or a tent, and no wall ends open (tests/helpers/world-spikes.js reads
+// the drawn triangles of the land, the stone and the ground the roads lay, every 300 m of the ride):
+//   1. `stretched`: a land triangle within 30 m of the ride steeper than 1.5 over more than 2.5 m of height, not under
+//      a road and not behind stone (`beside` within 10 m of the carriageway, `setback` farther)
+//   2. `bare`: a face of land that closes a cut's step with no stone in front of it
+//   3. `ends`: a wall's end with no face of stone across it, a foot over the ground, or an open flank
+//   4. `overhangs`: an edge of the ground a road lays more than 1 m over everything drawn outside it
+//
+// At 732d95c, before the land was laid back (TerrainMesh.laidBack) and banked to the walls' ends (CUT_BANK): 1084
+// stretched (245 beside, 839 set back, 14 of them in the wedge at km 7.8) and 149 overhangs. The importer gives a
+// node the height its nearest road asks for, so on the midline between two stacked legs, and where a road's
+// earthwork ends on a steep hillside, the land stepped 8 to 16 m in one 8 m cell: a row of triangles twice as steep
+// as they are wide, the spikes at km 7.8. And the land a wall levelled closed to the wall's top over its last 6 m
+// whatever its height: a tent against the stone.
+//
+// What still stands on the Tremola slice, held so it can only shrink:
+//   - 179 beside the road: 95 are whole cells with nodes of the strips of two legs of a road at two heights (the
+//     importer's own, which only a wall can hold: the bank between two legs at a hairpin's corner, 9 m in 8), 80 are
+//     parts of a triangle a wall cuts (where a wall ends over the strip of the leg below, the land in front cannot
+//     rise to its end as a bank, and it still closes over the wall's last 6 m; and side roads' walls), 4 are free land
+//   - 354 set back: 269 of free land, most the fall of the land under a road's fill where the importer's earthwork
+//     ends on the downhill side (left as it is: a road's fill is not undercut, LAY_HOLD), the rest a hillside
+//     steeper than the lay-back's slope for more than its reach; 85 with a node of a road's strip
+//   - 69 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
+//     slopes whose side stands over land that falls away beside them
+import { describe, test, expect, beforeAll } from '@jest/globals';
+import { loadGame } from '../helpers/load-game.js';
+import { diskFetch } from '../helpers/world-fetch.js';
+import { spikeWindow, spikeReport, SPIKE_LIMITS, SPIKE_RULES } from '../helpers/world-spikes.js';
+
+const game = loadGame(undefined, []);
+const { THREE, WorldEnvironment, WorldData, TerrainMesh } = game;
+
+const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
+
+// A world streamed along its ride, read every 300 m
+async function read(options) {
+    const { fetchFn } = diskFetch();
+    const env = await WorldEnvironment.load(new THREE.Scene(), { fetchFn, models: null, digest: async () => '0', ...options });
+    // Trees and houses are no land; their building is most of the streaming time
+    env.scenery.buildTile = () => null;
+    const store = {};
+    const W = 300;
+    for (let s = env.startS; s < env.endS; s += W) {
+        const p = env.route.sample(s + W / 2, {});
+        env.update(p, s, null, Infinity);
+        await env.streamer.settle(p, s + W / 2);
+        spikeWindow(game, env, store, p, 350, SPIKE_RULES);
+    }
+    return spikeReport(store, SPIKE_RULES.besideM);
+}
+
+describe('the land laid back (TerrainMesh.laidBack)', () => {
+    const n = WorldData.TILE_N, zones = WorldData.ZONE;
+    const tile = (tx, heightAt, zoneAt = () => zones.terrain) => {
+        const heights = new Float32Array(n * n), zone = new Uint8Array(n * n);
+        for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { heights[j * n + i] = heightAt(tx * (n - 1) + i, j); zone[j * n + i] = zoneAt(tx * (n - 1) + i, j); }
+        return { tx, tz: 0, key: `${tx},0`, heights, zones: zone };
+    };
+
+    test('a step of 16 m in one cell becomes a bank no steeper than LAY_SLOPE, by lowering only', () => {
+        const step = tile(0, i => (i < 30 ? 100 : 116));
+        const laid = TerrainMesh.laidBack(step, null);
+        const rise = TerrainMesh.LAY_SLOPE * WorldData.CELL_M;
+        for (let i = 1; i < n; i++) expect(laid.at(i, 20) - laid.at(i - 1, 20)).toBeLessThanOrEqual(rise + 1e-3);
+        for (let i = 0; i < n; i++) expect(laid.at(i, 20)).toBeLessThanOrEqual(step.heights[20 * n + i] + 1e-6);
+        expect(laid.at(30, 20)).toBeCloseTo(100 + rise, 3);
+        expect(laid.lowered.size).toBeGreaterThan(0);
+        // Land with no step is not touched
+        expect(TerrainMesh.laidBack(tile(0, i => 100 + i * 4), null).lowered.size).toBe(0);
+    });
+
+    test('a road\'s strip keeps its height, and holds the land beside it up', () => {
+        // A road at 116 over land at 100, 8 m away: the node beside the strip is free, and stays within LAY_SLOPE
+        // under the strip; the strip's own nodes do not move
+        const road = tile(0, i => (i < 30 ? 100 : 116), i => (i >= 31 ? zones.road : zones.terrain));
+        const laid = TerrainMesh.laidBack(road, null);
+        expect(laid.at(31, 20)).toBe(116);
+        expect(laid.at(30, 20)).toBeGreaterThanOrEqual(116 - TerrainMesh.LAY_SLOPE * WorldData.CELL_M - 1e-3);
+    });
+
+    test('two tiles lay the nodes they share alike', () => {
+        const height = i => (i < 60 ? 100 : i < 70 ? 118 : 100 + (i % 7) * 3);
+        const tiles = new Map([[`0,0`, tile(0, height)], [`1,0`, tile(1, height)]]);
+        const near = key => tiles.get(key) || null;
+        const a = TerrainMesh.laidBack(tiles.get('0,0'), near), b = TerrainMesh.laidBack(tiles.get('1,0'), near);
+        let shared = 0;
+        for (let j = 0; j < n; j++) {
+            expect(a.at(n - 1, j)).toBeCloseTo(b.at(0, j), 5);
+            if (a.lowered.has(j * n + n - 1)) shared++;
+        }
+        for (let j = 0; j < n; j++) expect(a.lowered.get(j * n + n - 1)).toBe(b.lowered.get(j * n));
+        expect(a.lowered.size + b.lowered.size).toBeGreaterThan(0);
+        expect(shared).toBeGreaterThanOrEqual(0);
+    });
+});
+
+describe('the Tremola slice: no spike of land beside the ride, no open wall end', () => {
+    let report;
+    beforeAll(async () => {
+        report = await read({ id: 'tremola' });
+        const km = Object.entries(report.km).sort((a, b) => a[0] - b[0]).map(([k, c]) => `${k}:${c.beside}/${c.setback}/${c.bare}/${c.ends}/${c.overhangs}`).join(' ');
+        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs\nby km (beside/setback/bare/ends/overhangs): ${km}`);
+    }, 3600000);
+
+    test('the land of the whole slice was read', () => {
+        expect(report.tiles).toBeGreaterThan(40);
+    });
+
+    test('no land triangle stands up beside the ride', () => {
+        if (report.beside.length > SPIKE_LIMITS.beside) throw new Error(`${report.beside.length} stretched land triangles within ${SPIKE_RULES.besideM} m of the ride (at most ${SPIKE_LIMITS.beside}):\n${list(report.beside)}`);
+        if (report.setback.length > SPIKE_LIMITS.setback) throw new Error(`${report.setback.length} stretched land triangles ${SPIKE_RULES.besideM} to ${SPIKE_RULES.rideM} m from the ride (at most ${SPIKE_LIMITS.setback}):\n${list(report.setback)}`);
+    });
+
+    test('the spikes between the stacked legs at km 7.8 and 7.9 are gone', () => {
+        // Between the wall of the leg above and the leg below (the wedge the owner's pictures show): 14 before
+        const there = report.stretched.filter(o => Math.hypot(o.x + 1040, o.z - 9806) < 22);
+        if (there.length) throw new Error(`${there.length} stretched land triangles in the wedge at km 7.8:\n${list(there)}`);
+    });
+
+    test('no face of land closes a step with no stone in front of it, and every wall end is closed', () => {
+        if (report.bare.length > SPIKE_LIMITS.bare) throw new Error(`${report.bare.length} bare closing faces:\n${list(report.bare)}`);
+        if (report.ends.length > SPIKE_LIMITS.ends) throw new Error(`${report.ends.length} wall ends open, hanging or with an open flank:\n${list(report.ends)}`);
+    });
+
+    test('no ground a road lays runs out over open air', () => {
+        if (report.overhangs.length > SPIKE_LIMITS.overhangs) throw new Error(`${report.overhangs.length} edges of laid ground over open air (at most ${SPIKE_LIMITS.overhangs}):\n${list(report.overhangs)}`);
+    });
+});
+
+describe('the synthetic world: the same check', () => {
+    let report;
+    beforeAll(async () => {
+        report = await read({ id: 'all', search: '?worldData=tests/fixtures/world/mini' });
+        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs`);
+    }, 3600000);
+
+    test('every wall end is closed and no closing face is bare', () => {
+        expect(report.tiles).toBeGreaterThan(10);
+        expect(report.bare).toEqual([]);
+        expect(report.ends).toEqual([]);
+    });
+
+    // Its land is a made hillside steeper than the lay-back's slope from end to end: what is left is that hillside
+    // (before: 283 beside, 2174 set back, 10 bare, 110 overhangs)
+    test('what is left of its steep hillside can only shrink', () => {
+        expect(report.beside.length).toBeLessThanOrEqual(266);
+        expect(report.setback.length).toBeLessThanOrEqual(2188);
+        expect(report.overhangs.length).toBeLessThanOrEqual(17);
+    });
+});

@@ -975,6 +975,8 @@ class WorldEnvironment {
             for (const o of [0.2, 1, 2]) { const land = landDrawn(x + ox * o, z + oz * o); if (land !== null && land < low) low = land; }
             return low - WorldEnvironment.WALL_UNDER_M;
         };
+        // The land as it is drawn at (x, z), for a slope's foot between two rows (RoadMesh.edgeWorks)
+        foot.land = landDrawn;
         if (aprons) foot.mouth = atMouth;
         // The far edge of a junction's paving from a point (x, y, z) of the ride's carriageway edge, out along (ox, oz):
         // the last place within SIDE_GORE_REACH_M that lies on a side road at about the ride's height (as the side

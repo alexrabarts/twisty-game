@@ -774,6 +774,11 @@ class RoadMesh {
         const plan = sides.plan ? (sides.plan.base !== undefined ? RoadMesh.planFor(sides, sides.plan, foot, guard) : sides.plan) : RoadMesh.wallPlan(sides, foot, guard);
         const colors = RoadMesh.COLORS;
         const rank = { apron: 1, wall: 2, deck: 3 };
+        // A slope's foot stands on the land at its own place (`foot.land`, the land as it is drawn): between two rows
+        // the foot is laid in strips, and one laid on the line from one row's foot to the next hung over the land
+        // where that falls away between them, a shelf past a wall's end with its underside to the rider
+        const landAt = foot && foot.land ? foot.land : null;
+        const seated = q => { const land = landAt ? landAt(q[0], q[2]) : null; return land !== null && q[1] > land + 0.05 ? [q[0], land - 0.2, q[2]] : q; };
         const W = RoadMesh.PARAPET_W_M, H = RoadMesh.PARAPET_H_M;
         // How deep the works of kind f standing at p (out along o) reach into another carriageway, or null where they
         // keep out of every one: the edge, the parapet's inner face and, for an apron, its slope out to its foot
@@ -959,7 +964,7 @@ class RoadMesh {
                     const rows = Math.max(1, Math.ceil(fall / (RoadMesh.APRON_STRIP_M * 4)));
                     for (let n = 0; n < strips; n++) {
                         const t0 = n / strips, t1 = (n + 1) / strips;
-                        const top0 = lerp(ta, tb, t0), top1 = lerp(ta, tb, t1), foot0 = lerp(fA, fB, t0), foot1 = lerp(fA, fB, t1);
+                        const top0 = lerp(ta, tb, t0), top1 = lerp(ta, tb, t1), foot0 = seated(lerp(fA, fB, t0)), foot1 = seated(lerp(fA, fB, t1));
                         const c0 = lerp(topColor(fa), topColor(fb), t0), c1 = lerp(topColor(fa), topColor(fb), t1), d0 = lerp(footColor(fa), footColor(fb), t0), d1 = lerp(footColor(fa), footColor(fb), t1);
                         for (let r = 0; r < rows; r++) {
                             const u0 = r / rows, u1 = (r + 1) / rows;

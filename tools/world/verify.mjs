@@ -1,6 +1,7 @@
 // Checks of the committed world data (P3, P4, P5, P17, P22, the stacked-leg gate and floating roads).
 //   node tools/world/verify.mjs <fidelity|hairpins|elevation|size|graph|stacked|stations|crests|buildings|water|floating|overlap|horizon|landmarks|places|dem|all> --stages <ids|all>
 //        [--world world] [--synthetic] [--cache <dir>]
+//   node tools/world/verify.mjs spikes --stages <id|all> [--synthetic] [--worst N]   (the drawn land and wall ends beside the ride, by kilometre)
 // dem reads the DEM from the cache; fidelity, elevation and graph rebuild the world from the cache and compare it with the files in --world.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -743,10 +744,43 @@ function inspectedCorridorEdges(opt) {
   try { return buildReport(gpkg, route).corridorEdges.total.count; } finally { gpkg.close(); }
 }
 
+// The drawn land and wall ends beside the ride (tests/helpers/world-spikes.js): the world is streamed in node as the
+// page streams it and read every 300 m of the ride. Not one of `all`: it builds every mesh, and it reads the folder
+// the page reads (the shipped `world/`, or the synthetic fixture), not --world. It fails on what the test holds at
+// nothing for any world (a bare closing face, an open wall end); the stretched triangles and overhangs it lists by
+// kilometre are held for the shipped slice by tests/unit/world-spikes.test.js
+export async function checkSpikes(opt) {
+  const { loadGame } = await import('../../tests/helpers/load-game.js');
+  const { diskFetch } = await import('../../tests/helpers/world-fetch.js');
+  const { spikeWindow, spikeReport, SPIKE_RULES } = await import('../../tests/helpers/world-spikes.js');
+  const game = loadGame(undefined, []);
+  const { fetchFn } = diskFetch();
+  const env = await game.WorldEnvironment.load(new game.THREE.Scene(), { id: opt.synthetic ? 'all' : (opt.stages ?? 'all'), search: opt.synthetic ? '?worldData=tests/fixtures/world/mini' : '', fetchFn, models: null, digest: async () => '0' });
+  env.scenery.buildTile = () => null;
+  const store = {};
+  for (let s = env.startS; s < env.endS; s += 300) {
+    const p = env.route.sample(s + 150, {});
+    env.update(p, s, null, Infinity);
+    await env.streamer.settle(p, s + 150);
+    spikeWindow(game, env, store, p, 350, SPIKE_RULES);
+  }
+  const report = spikeReport(store, SPIKE_RULES.besideM);
+  const problems = [];
+  if (report.bare.length) problems.push(`${report.bare.length} faces of land close a cut's step with no stone in front of them`);
+  if (report.ends.length) problems.push(`${report.ends.length} wall ends are open, hang or have an open flank`);
+  const worst = Number(opt.worst ?? 8);
+  return check('spikes', problems.length === 0, { tiles: report.tiles, stretched: report.stretched.length, beside: report.beside.length, setback: report.setback.length, bare: report.bare.length, ends: report.ends.length, overhangs: report.overhangs.length, byKm: report.km, worstBeside: report.beside.slice(0, worst), worstOverhangs: report.overhangs.slice(0, worst), worstEnds: report.ends.slice(0, worst), problems });
+}
+
 export async function main(argv) {
   const [cmd = 'all', ...rest] = argv;
   const opt = {};
   for (let i = 0; i < rest.length; i++) opt[rest[i].slice(2)] = rest[i] === '--synthetic' ? true : rest[++i];
+  if (cmd === 'spikes') {
+    const r = await checkSpikes(opt);
+    console.log(JSON.stringify({ ...r, ok: r.ok ? 'PASS' : 'FAIL' }));
+    return r.ok;
+  }
   const dir = path.resolve(opt.world ?? (opt.synthetic ? path.join(REPO_ROOT, 'tests', 'fixtures', 'world', 'mini') : path.join(REPO_ROOT, 'world')));
   const wanted = cmd === 'all' ? ['size', 'stations', 'hairpins', 'stacked', 'crests', 'buildings', 'water', 'floating', 'overlap', 'horizon', 'landmarks', 'places', 'dem', 'fidelity', 'elevation', 'graph'] : [cmd];
   const decoded = wanted.some(c => c !== 'size') ? decodeWorld(dir) : null;

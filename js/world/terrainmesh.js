@@ -261,6 +261,112 @@ class TerrainMesh {
     static get CUT_TAPER_M() { return 6; }
     // The nodes in front of a wall within this of a point on its foot set the land's height there
     static get CUT_REACH_M() { return 12.5; }
+    // The steepest the land in front of a wall rises to the wall's end and to the land past it (rise over run): a
+    // little steeper than a fill stands (RoadMesh.BATTER), so the bank takes less of the wall
+    static get CUT_BANK() { return 0.8; }
+
+    // The steepest the land drawn at full detail may stand between two nodes (rise over run): a bank, not a step. A
+    // triangle of nodes within it is no steeper than about 1.4
+    static get LAY_SLOPE() { return 1.3; }
+    // How many nodes a step is laid back over at the most
+    static get LAY_REACH() { return 8; }
+    // A road's strip holds the free nodes within this many nodes of it up at the batter (its own fill)
+    static get LAY_HOLD() { return 3; }
+
+    // The land laid back: a height grid cannot hold a step, and the importer leaves one wherever two rules meet (the
+    // midline between two legs too close for a slope at the batter, the end of a road's cut on a steep hillside):
+    // 8 to 16 m of height in one 8 m cell, drawn as a row of stretched triangles that stand up beside the road like
+    // spikes. So at full detail a free node (not a road's strip, not water) is lowered, never raised:
+    //   - between two roads: no higher than LAY_SLOPE up from a road's strip within LAY_REACH nodes (the bank over the
+    //     lower leg), and for that no lower than LAY_SLOPE down from a strip (the bank under the upper leg). Where the
+    //     two disagree it stands on the upper leg's bank: a gap no bank closes is a retaining wall's to hold
+    //   - then every free node no more than LAY_SLOPE up from any node beside it (LAY_REACH passes: a cut above a
+    //     road is laid back up the hillside), but for that never lower than a fill at the batter down from a strip
+    //     within LAY_HOLD nodes: a road's own fill is not undercut by a fall of the land below it
+    // A node is lowered by what lies within 2 x LAY_REACH + LAY_HOLD nodes of it only, read across the tile's edges
+    // (`near`), so two tiles lay the nodes they share alike.
+    // Returns {at(i, j)} the height of node (i, j) for i, j from -`margin` to 64 + `margin`, and `lowered`, a Map from
+    // a node of the tile (j * 65 + i) to its lowered height
+    static laidBack(tile, near = null, margin = 0) {
+        if (near && !near.ring) near = TerrainMesh.ring(tile, near);
+        const n = WorldData.TILE_N, cells = n - 1, c = WorldData.CELL_M, zones = WorldData.ZONE;
+        const K = TerrainMesh.LAY_REACH, S = TerrainMesh.LAY_SLOPE, hold = TerrainMesh.LAY_HOLD, batter = RoadMesh.BATTER;
+        const pad = margin + 2 * K + hold, span = cells + 2 * pad + 1, count = span * span;
+        const raw = new Float32Array(count), fixed = new Uint8Array(count);
+        const q = {};
+        for (let j = -pad; j <= cells + pad; j++) {
+            for (let i = -pad; i <= cells + pad; i++) {
+                const at = (j + pad) * span + i + pad;
+                TerrainMesh.node(tile, i, j, near, q);
+                raw[at] = q.h;
+                fixed[at] = q.zone === zones.road || q.zone === zones.bench || q.zone === zones.water ? 1 : 0;
+            }
+        }
+        const rise = [c * S, c * S * Math.SQRT2];
+        // Nothing to lay back where no node stands a step over the one beside it (most tiles away from the roads)
+        let steps = false;
+        for (let j = 0; j < span && !steps; j++) {
+            for (let i = 0; i + 1 < span; i++) {
+                const at = j * span + i;
+                if (Math.abs(raw[at] - raw[at + 1]) > rise[0] || (j + 1 < span && (Math.abs(raw[at] - raw[at + span]) > rise[0] || Math.abs(raw[at] - raw[at + span + 1]) > rise[1] || Math.abs(raw[at + 1] - raw[at + span]) > rise[1]))) { steps = true; break; }
+            }
+        }
+        const lowered = new Map();
+        if (!steps) return { at: (i, j) => raw[(j + pad) * span + i + pad], lowered };
+        // What the roads' strips ask of each node: the bank over a strip (`over`), the bank under one (`under`) and
+        // the fill under one (`fill`)
+        const over = new Float32Array(count).fill(Infinity), under = new Float32Array(count).fill(-Infinity), fill = new Float32Array(count).fill(-Infinity);
+        for (let j = 0; j < span; j++) {
+            for (let i = 0; i < span; i++) {
+                if (!fixed[j * span + i] ) continue;
+                const h = raw[j * span + i];
+                for (let b = Math.max(0, j - K); b <= Math.min(span - 1, j + K); b++) {
+                    for (let a = Math.max(0, i - K); a <= Math.min(span - 1, i + K); a++) {
+                        const at = b * span + a, d = c * Math.hypot(a - i, b - j);
+                        if (h + S * d < over[at]) over[at] = h + S * d;
+                        if (h - S * d > under[at]) under[at] = h - S * d;
+                        if (Math.abs(a - i) <= hold && Math.abs(b - j) <= hold && h - batter * d > fill[at]) fill[at] = h - batter * d;
+                    }
+                }
+            }
+        }
+        let now = new Float32Array(count), next = new Float32Array(count);
+        for (let at = 0; at < count; at++) now[at] = fixed[at] ? raw[at] : Math.min(raw[at], Math.max(over[at], under[at]));
+        for (let pass = 0; pass < K; pass++) {
+            let moved = false;
+            for (let j = 0; j < span; j++) {
+                for (let i = 0; i < span; i++) {
+                    const at = j * span + i;
+                    let y = now[at];
+                    if (!fixed[at]) {
+                        for (let b = -1; b <= 1; b++) {
+                            if (j + b < 0 || j + b >= span) continue;
+                            for (let a = -1; a <= 1; a++) {
+                                if ((!a && !b) || i + a < 0 || i + a >= span) continue;
+                                const top = now[at + b * span + a] + rise[a && b ? 1 : 0];
+                                if (top < y) y = top;
+                            }
+                        }
+                        // (held up by a strip's fill, but never over the height it has)
+                        if (y < fill[at]) y = Math.min(now[at], fill[at]);
+                    }
+                    next[at] = y;
+                    if (y !== now[at]) moved = true;
+                }
+            }
+            [now, next] = [next, now];
+            if (!moved) break;
+        }
+        // (a node moved by less than 5 cm keeps its own height, in its own tile and as its neighbours read it)
+        for (let at = 0; at < count; at++) if (now[at] >= raw[at] - 0.05) now[at] = raw[at];
+        for (let j = 0; j <= cells; j++) {
+            for (let i = 0; i <= cells; i++) {
+                const at = (j + pad) * span + i + pad;
+                if (now[at] < raw[at]) lowered.set(j * n + i, now[at]);
+            }
+        }
+        return { at: (i, j) => now[(j + pad) * span + i + pad], lowered };
+    }
 
     // The land of a tile cut to the retaining walls that cross it. A height grid of 8 m nodes cannot hold a wall: the
     // triangle from the last node in front of the wall to the first node behind it is a ramp through the wall's
@@ -284,8 +390,13 @@ class TerrainMesh {
     // `roadOver(ax, az, bx, bz)` gives the highest road surface between two points (or -Infinity): a node is never
     // lowered under a road that lies between it and the lower ground, so the land still meets that road's edge.
     static cuts(tile, runs, near = null, roadOver = null) {
-        if (!runs || !runs.length) return null;
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
+        const W = 4;
+        // The land the walls stand in is the land laid back (TerrainMesh.laidBack): what a wall's levelling reads and
+        // lowers further
+        const laid = TerrainMesh.laidBack(tile, near, W);
+        const none = () => { if (!laid.lowered.size) return null; const only = new Map(); only.lowered = laid.lowered; return only; };
+        if (!runs || !runs.length) return none();
         const n = WorldData.TILE_N, cells = n - 1, c = WorldData.CELL_M;
         const baseX = tile.tx * WorldData.TILE_M, baseZ = tile.tz * WorldData.TILE_M;
         const back = TerrainMesh.CUT_BACK_M, taper = TerrainMesh.CUT_TAPER_M, reach = TerrainMesh.CUT_REACH_M;
@@ -309,6 +420,8 @@ class TerrainMesh {
             };
             const head = extend(chain[0], chain[1]), tail = extend(chain[m - 1], chain[m - 2]);
             const line = [head[1], head[0], ...chain, tail[0], tail[1]];
+            // The wall's two ends, at its top: a node levelled in front stands no lower than a bank down from each (`cone`)
+            line.ends = [run.points[0], run.points[m - 1]].map((p, e) => ({ x: chain[e ? m - 1 : 0].x, y: p[1], z: chain[e ? m - 1 : 0].z }));
             let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
             for (const p of line) { x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
             const pad = 5 * c;
@@ -316,7 +429,7 @@ class TerrainMesh {
             line.box = [x0, z0, x1, z1];
             lines.push(line);
         }
-        if (!lines.length) return null;
+        if (!lines.length) return none();
         // Metres in front of a wall's line (negative behind it), read on the wall itself (not past its ends);
         // `ended` when the nearest of it is one of its ends
         const side = { d: 0, ended: false };
@@ -354,10 +467,9 @@ class TerrainMesh {
         };
         // The nodes in front of a wall within reach, a little past the tile's edges so two tiles lower the nodes they
         // share alike: each with the wall it is nearest in front of
-        const W = 4, span = cells + 2 * W + 1;
+        const span = cells + 2 * W + 1;
         const slot = (i, j) => (j + W) * span + i + W;
-        const raw = new Map();
-        const heightOf = (i, j) => { const k = slot(i, j); let h = raw.get(k); if (h === undefined) { h = TerrainMesh.node(tile, i, j, near, q).h; raw.set(k, h); } return h; };
+        const heightOf = (i, j) => laid.at(i, j);
         const front = new Map();
         for (const line of lines) {
             for (let k = 2; k + 3 < line.length; k++) {
@@ -376,9 +488,29 @@ class TerrainMesh {
                 }
             }
         }
-        const lowered = new Map();
+        const lowered = new Map(laid.lowered);
         const low = new Map();
         const batter = RoadMesh.BATTER;
+        // A levelled node keeps within CUT_BANK of the nodes past its wall's ends that no wall levels and no wall parts
+        // from it (the land past the end, the road's own height there): the land in front of a wall rises to its end
+        // as a bank. Levelled whatever stood beside it, the nodes by a wall's end stood a wall's height under the next
+        // ones, a tent of land against the stone
+        // and no lower than a bank at CUT_BANK down from each end of its wall, at the wall's top there: the land a
+        // wall levels rises to the wall's end as a cone of ground, and the wall ends in it. (Closed over the wall's
+        // last metres whatever its height, the land was a tent against the stone, 10 m of height in less than a cell)
+        const cone = (line, x, z) => Math.max(...line.ends.map(e => e.y - TerrainMesh.CUT_BANK * Math.hypot(x - e.x, z - e.z)));
+        const bank = (node, x, z) => {
+            let most = -Infinity;
+            for (let j = node.j - 2; j <= node.j + 2; j++) {
+                for (let i = node.i - 2; i <= node.i + 2; i++) {
+                    if ((i === node.i && j === node.j) || i < -W || j < -W || i > cells + W || j > cells + W || front.has(slot(i, j))) continue;
+                    const ox = baseX + i * c, oz = baseZ + j * c;
+                    const held = heightOf(i, j) - TerrainMesh.CUT_BANK * c * Math.hypot(i - node.i, j - node.j);
+                    if (held > most && sideOf(node.line, ox, oz).ended && !walled(x, z, ox, oz)) most = held;
+                }
+            }
+            return most;
+        };
         for (const node of [...front.values()].sort((p, r) => r.d - p.d || p.j - r.j || p.i - r.i)) {
             const x = baseX + node.i * c, z = baseZ + node.j * c;
             const own = heightOf(node.i, node.j);
@@ -388,19 +520,21 @@ class TerrainMesh {
                     if ((i === node.i && j === node.j) || i < -W || j < -W || i > cells + W || j > cells + W) continue;
                     let far = low.has(slot(i, j)) ? low.get(slot(i, j)) : heightOf(i, j);
                     const dist = Math.hypot(i - node.i, j - node.j) * c;
-                    if (far >= y || far + batter * dist >= own) continue;
+                    if (far + batter * dist >= own) continue;
                     // Farther from the wall than this node, with no wall between the two
                     const ox = baseX + i * c, oz = baseZ + j * c;
                     const at = sideOf(node.line, ox, oz);
                     if (at.d < node.d + 1 || walled(x, z, ox, oz)) continue;
                     // Not under a road that lies between: the land by that road stays at its edge
                     if (roadOver) far = Math.max(far, roadOver(x, z, ox, oz));
-                    if (far >= y || far + batter * dist >= own) continue;
-                    y = far;
+                    if (far + batter * dist >= own) continue;
+                    if (far < y) y = far;
                 }
             }
             // Less toward the wall's end, where the land in front rises to its top (the cut closes there)
             y = own - (own - y) * (1 - Math.min(1, Math.max(0, node.tau)));
+            // Toward a wall's end the land it levels rises as a bank (`bank`, `cone`)
+            if (y < own - 0.05) y = Math.min(own, Math.max(y, bank(node, x, z), cone(node.line, x, z)));
             if (y > own - 0.05) continue;
             low.set(slot(node.i, node.j), y);
             if (node.i >= 0 && node.j >= 0 && node.i <= cells && node.j <= cells) lowered.set(node.j * n + node.i, y);
@@ -499,7 +633,10 @@ class TerrainMesh {
             return [1 - w1 - w2, w1, w2];
         };
         const corner = e => ({ x: tri[e][0], z: tri[e][1], node: e, w: [e === 0 ? 1 : 0, e === 1 ? 1 : 0, e === 2 ? 1 : 0], tau: 1 });
-        const chain = part.map(p => ({ x: p.x, z: p.z, node: -1, w: bary(p.x, p.z), tau: Math.min(1, Math.max(0, p.tau)), fn: -1, mix: null, f: null, nx: p.nx, nz: p.nz }));
+        // (`cone`: the bank down from the wall's ends, which the land in front on the wall's line stands no lower
+        // than; `lift`: the most it stands over the land in front of it for that, a bank from there to the wall)
+        const coneAt = (x, z) => (line.ends ? Math.max(...line.ends.map(e => e.y - TerrainMesh.CUT_BANK * Math.hypot(x - e.x, z - e.z))) : -Infinity);
+        const chain = part.map(p => ({ x: p.x, z: p.z, node: -1, w: bary(p.x, p.z), tau: Math.min(1, Math.max(0, p.tau)), fn: -1, mix: null, f: null, nx: p.nx, nz: p.nz, cone: coneAt(p.x, p.z), lift: TerrainMesh.CUT_BANK * WorldData.CELL_M / 2 }));
         // Where along the triangle's outline a point of edge e lies: e + its share of the edge
         const along = (e, p) => { const a = tri[e], b = tri[(e + 1) % 3]; return e + Math.hypot(p.x - a[0], p.z - a[1]) / Math.hypot(b[0] - a[0], b[1] - a[1]); };
         const pe = along(entry, part[0]), px = along(exit, part[part.length - 1]);
@@ -528,7 +665,7 @@ class TerrainMesh {
         const inFront = new Set(frontIs.filter(v => v.node >= 0).map(v => v.node));
         [[first, entry], [last, exit]].forEach(([v, e]) => {
             const a = e, b = (e + 1) % 3;
-            if (inFront.has(a) !== inFront.has(b)) v.fn = inFront.has(a) ? a : b;
+            if (inFront.has(a) !== inFront.has(b)) { v.fn = inFront.has(a) ? a : b; v.lift = TerrainMesh.CUT_BANK * Math.hypot(v.x - tri[v.fn][0], v.z - tri[v.fn][1]); }
             else v.f = frontAt(v.x, v.z);
         });
         inner.forEach((v, k) => { v.mix = { a: first, b: last, t: run[k + 1] / length }; });
@@ -610,14 +747,15 @@ class TerrainMesh {
     }
 
     // The height of a vertex of a cut triangle whose three nodes stand at `nodeH`: in front of the wall the land in
-    // front's (a height of its own less `sink`), closing to the triangle's own plane by its tau; behind it the
-    // triangle's own plane
+    // front's (a height of its own less `sink`), closing to the triangle's own plane by its tau, and no lower than
+    // the bank down from the wall's ends (`cone`) where the land in front of it has risen with that bank (`lift`);
+    // behind it the triangle's own plane
     static cutVertexY(vertex, nodeH, front, sink = 0) {
         if (vertex.node >= 0) return nodeH[vertex.node];
         const plane = vertex.w[0] * nodeH[0] + vertex.w[1] * nodeH[1] + vertex.w[2] * nodeH[2];
         if (!front || vertex.tau >= 1) return plane;
         const f = TerrainMesh.cutFrontY(vertex, nodeH, sink);
-        return f === null ? plane : Math.min(plane, f + (plane - f) * vertex.tau);
+        return f === null ? plane : Math.min(plane, Math.max(f + (plane - f) * vertex.tau, Math.min(vertex.cone - sink, f + vertex.lift)));
     }
 
     // The height at (x, z) inside a cut triangle, or null where no part of it holds the point
@@ -756,11 +894,22 @@ class TerrainMesh {
         const last = n - 1;
         const lines = [m => [m, 0], m => [m, last], m => [0, m], m => [last, m]];
         const memo = new Map();
+        // A coarser tile's skirt reaches down to its edge as the tile beside it draws it laid back at full detail
+        // (TerrainMesh.laidBack lowers the same nodes there): hung from the nodes' own heights only, it ended over
+        // the lowered edge and the rider saw through the seam, 700 m off
+        const laidEdge = lod > 0 ? TerrainMesh.laidBack(tile, near).lowered : null;
         edges.forEach((edge, e) => {
             const first = side * side + e * side;
             for (let k = 0; k < side; k++) {
                 const from = edge(k);
-                const depth = TerrainMesh.skirtDepth(tile, lod, k * stride, lines[e], near, positions[from * 3 + 1], memo);
+                let depth = TerrainMesh.skirtDepth(tile, lod, k * stride, lines[e], near, positions[from * 3 + 1], memo);
+                if (laidEdge && laidEdge.size) {
+                    for (let m = Math.max(0, (k - 1) * stride); m <= Math.min(last, (k + 1) * stride); m++) {
+                        const [i, j] = lines[e](m);
+                        const low = laidEdge.get(j * n + i);
+                        if (low !== undefined) depth = Math.max(depth, positions[from * 3 + 1] - low + 0.5);
+                    }
+                }
                 copy(first + k, from, depth);
             }
             for (let k = 0; k + 1 < side; k++) {
@@ -859,6 +1008,9 @@ class TerrainMesh {
         mesh.userData.lod = lod;
         mesh.userData.cuts = cuts;
         mesh.userData.closing = extra.flat;
+        // Where each kind of triangle lies in the index: the land's own (from 0), then the tile's skirts, then the
+        // faces that close the cuts' steps with the cut edges' skirts ([start, count])
+        mesh.userData.parts = { land: landCount, faces: cuts ? [at - crowns.length * sides * 3 - extra.faces.length, extra.faces.length] : [0, 0] };
         return { mesh, triangles: indices.length / 3 };
     }
 }
