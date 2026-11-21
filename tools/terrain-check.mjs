@@ -5119,7 +5119,8 @@ function junctionChecks(results, failures) {
 // It fails on a stone with a corner of its foot over the drawn ground or its top under it, a stone that is neither
 // at a sharp drop drawn on its own side (Scenery.STONE_RULE: dropM within reachM of the verge, less STONE_DROP_TOL_M)
 // nor on the outside of a hairpin (within STONE_HAIRPIN_M of a hairpin of worldHairpins, where the road turns
-// STONE_BEND_DEG or more inside STONE_BEND_M), a stone on the inside of a hairpin, a stone with a wall or a parapet
+// STONE_BEND_DEG or more inside STONE_BEND_M), a stone on a hairpin with level or rising land behind it (no fall of
+// hairpinDropM, less the same tolerance), a stone on the inside of a hairpin, a stone with a wall or a parapet
 // drawn at its edge, a piece of kerb with its foot over the drawn ground, a ride on which no stone was seen and a
 // ride with no row at a hairpin. It reports the stones by case and how many hairpins of the game's list have a row.
 //   node tools/terrain-check.mjs world-stones --world tremola --gpu [--every 200]
@@ -5188,6 +5189,8 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
                 stone.hairpin = apexes.some(a => Math.abs(a - own.s) <= hairpinM) && Math.abs(turn) >= bendDeg * Math.PI / 180;
                 if (stone.hairpin && side !== -Math.sign(turn)) stone.inside = true;
                 if (!stone.hairpin && !(stone.drop > rule.dropM - tolM)) stone.flat = true;
+                // (a hairpin's row guards an edge: the land falls away behind it)
+                if (stone.hairpin && !(stone.drop > rule.hairpinDropM - tolM)) stone.noEdge = true;
                 // A wall, a deck or a parapet drawn at its edge, from a metre in from the verge's edge to a metre out
                 for (let d = -1; d <= 1; d += 0.25) if (hits(...out(d), p.y + 3).some(h => structure(h) && h.point.y > p.y - 1.5)) stone.guarded = true;
             }
@@ -5225,7 +5228,7 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
         rows: new Set(atDrop.map(t => `${Math.floor(t.s / rule.blockM)}:${t.side}`)).size + withRow.length,
         hairpins: list.length, hairpinsWithRow: withRow.length, hairpinsWithout: list.filter(h => !withRow.includes(h)).map(h => Math.round(h.apex)),
         dropM: rule.dropM, reachM: rule.reachM, leastDrop: drops[0] ?? null, medianDrop: drops[Math.floor(drops.length / 2)] ?? null,
-        floats: pick('floats'), buried: pick('buried'), flat: pick('flat'), inside: pick('inside'), guarded: pick('guarded'), kerbFloats: pick('floats', [...kerbs.values()])
+        floats: pick('floats'), buried: pick('buried'), flat: pick('flat'), noEdge: pick('noEdge'), hairpinDropM: rule.hairpinDropM, leastHairpinDrop: atHairpin.map(t => t.drop).filter(Number.isFinite).sort((a, b) => a - b)[0] ?? null, inside: pick('inside'), guarded: pick('guarded'), kerbFloats: pick('floats', [...kerbs.values()])
     };
 }, placeAt.toString(), worldHairpins.toString(), Number(option('every') || 200), STONE_NEAR_M, STONE_FLOAT_M, STONE_DROP_TOL_M, STONE_HAIRPIN_M, STONE_BEND_M, STONE_BEND_DEG);
 
@@ -5234,7 +5237,7 @@ function stoneChecks(results, failures) {
     if (!stones) return;
     if (!(stones.stones > 0)) failures.push(`world-stones: no marker stone was seen at ${stones.places} places`);
     if (!(stones.hairpinsWithRow > 0)) failures.push(`world-stones: no row of stones at any of the ${stones.hairpins} hairpins`);
-    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, inside: 'stones on the inside of a hairpin', guarded: 'stones where a wall or a parapet is drawn at the edge', kerbFloats: 'pieces of kerb with their foot over the drawn ground' };
+    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, noEdge: `stones on a hairpin with no fall of ${stones.hairpinDropM} m drawn within ${stones.reachM} m behind them`, inside: 'stones on the inside of a hairpin', guarded: 'stones where a wall or a parapet is drawn at the edge', kerbFloats: 'pieces of kerb with their foot over the drawn ground' };
     for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
 }
 

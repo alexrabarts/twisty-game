@@ -39,7 +39,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
 
     test('the world has stretches of sharp drop and hairpins, and stones on some of each', () => {
         expect(read.stretches.length).toBeGreaterThan(10);
-        expect(read.rows.length).toBeGreaterThan(world.id === 'tremola' ? 20 : 2);
+        expect(read.rows.length).toBeGreaterThan(world.id === 'tremola' ? 10 : 1);
         expect(read.stones.length).toBeGreaterThan(40);
         for (const set of [read.stretches, read.rows]) expect(read.stones.some(stone => set.some(t => t.places.some(q => near(q, stone))))).toBe(true);
     });
@@ -60,7 +60,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         if (faults.length) throw new Error(`${faults.length} places of the stones' stretches fail their own rule:\n${faults.slice(0, 30).join('\n')}`);
     });
 
-    test('every place of every hairpin\'s row is on the arc of a hairpin, on the outside of the bend, with no wall, parapet, bridge or solid edge there, out of every stopping place, roadworks site and junction mouth', () => {
+    test('every place of every hairpin\'s row is on the arc of a hairpin, on the outside of the bend, with the land falling away behind it, with no wall, parapet, bridge or solid edge there, out of every stopping place, roadworks site and junction mouth', () => {
         const faults = read.rows.flatMap(t => t.faults);
         if (faults.length) throw new Error(`${faults.length} places of the hairpins' rows fail their own rule:\n${faults.slice(0, 30).join('\n')}`);
         for (const t of read.rows) for (const q of t.places) {
@@ -68,6 +68,19 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
             expect(q.s).toBeGreaterThanOrEqual(t.hairpin.s0 - 1e-6);
             expect(q.s).toBeLessThanOrEqual(t.hairpin.s1 + 1e-6);
         }
+    });
+
+    test('a hairpin whose outside is no edge has no row: the land behind every place of a row lies more than hairpinDropM under the road, and the hairpin under the rising bank has none', () => {
+        expect(rule.hairpinDropM).toBeGreaterThan(0);
+        for (const t of read.rows) for (const q of t.places) expect(q.drop).toBeGreaterThan(rule.hairpinDropM);
+        // Some hairpins have no place at all: their outside is level, or the bank
+        expect(read.hairpins.some(h => h.places === 0)).toBe(true);
+        if (world.id !== 'tremola') return;
+        // (the owner's picture: the hairpin at 1.3 km turns under the bank that rises from its outside)
+        const bank = read.hairpins.find(h => Math.abs(h.apex - 1280) < 30);
+        expect(bank).toBeDefined();
+        expect(bank.places).toBe(0);
+        if (process.env.STONE_COUNTS) process.stderr.write(`COUNTS hairpins ${read.hairpins.length} open ${read.hairpins.filter(h => h.places > 0).length} with a row ${read.hairpins.filter(h => h.places > 0 && h.used).length} rows ${read.rows.length} stones ${read.stones.length} kerbs ${read.kerbs.length} at ${read.hairpins.filter(h => h.places > 0 && h.used).map(h => (h.apex / 1000).toFixed(2)).join(' ')}\n`);
     });
 
     test('a hairpin\'s arc is the hairpin\'s row\'s: no place of a stretch of drop is on one, on either side', () => {

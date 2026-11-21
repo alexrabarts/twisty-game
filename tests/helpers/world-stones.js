@@ -28,8 +28,8 @@ function frame(game, env, q) {
 
 // What a place {s, side, x, y, z} fails on the drawn ground: a wall or a structure that guards the edge, a foot off its
 // own road's edge, and by its case: at a drop, no sharp drop on its side or a rise on the way out; in a hairpin's row
-// (`spans`: hairpinSpans), a place outside every hairpin, on a road that does not bend there, or on the inside of the
-// bend. A list of words, empty when it stands well
+// (`spans`: hairpinSpans), a place outside every hairpin, on a road that does not bend there, on the inside of the
+// bend, or with no fall of the land behind it (hairpinDropM). A list of words, empty when it stands well
 export function groundFaults(game, env, q, spans = null) {
     const { Scenery } = game;
     const rule = Scenery.STONE_RULE, points = env.route.points;
@@ -44,6 +44,9 @@ export function groundFaults(game, env, q, spans = null) {
         if (!(Math.abs(turn) >= BEND_TURN)) bad.push(`the road turns ${(turn * 180 / Math.PI).toFixed(0)} degrees there`);
         // (a heading that grows turns toward +lateral: the outside is the other side)
         else if (q.side !== -Math.sign(turn)) bad.push('the inside of the bend');
+        // An edge: the land falls away behind the stone
+        const fall = p.y - groundAt(rule.reachM);
+        if (!(fall > rule.hairpinDropM)) bad.push(`no edge: the land ${fall.toFixed(2)} m under the road behind it`);
     } else {
         const fall = p.y - groundAt(rule.reachM);
         if (!(fall > rule.dropM)) bad.push(`drop ${fall.toFixed(2)} m`);

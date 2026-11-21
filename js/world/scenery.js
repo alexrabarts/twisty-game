@@ -205,9 +205,10 @@ class Scenery {
     static get ROADSIDE_STEP_M() { return 0.8; }
     // Where the marker stones stand (Scenery.stonePlace, stoneRuns, hairpinRuns, stoneSites). On an old pass road the
     // stones are the guard at a sharp drop: a row is seen only where the land falls away from the road's edge, on the
-    // side it falls, and not at every drop. A row also goes round the outside of a hairpin, over its arc, whether the
-    // land falls there or not. So no stone stands on a level verge of a straight, on the uphill side, on the inside
-    // of a hairpin, or where a wall's parapet, a bridge's or a barrier already guards the edge.
+    // side it falls, and not at every drop. A row also goes round the outside of a hairpin, over the part of its arc
+    // that is an edge: where the land falls away behind the stones. So no stone stands on a level verge, on the
+    // uphill side, round a hairpin whose outside is the bank that rises from it, on the inside of a hairpin, or
+    // where a wall's parapet, a bridge's or a barrier already guards the edge.
     //   dropM, reachM   a sharp drop: the drawn ground reachM past the verge lies more than dropM under the road. A
     //                   fill at the batter (RoadMesh.BATTER, 1:1.5) falls 6.7 m in 10, and the downhill edge of a
     //                   mountain road stands on one for kilometres: 7 m takes only the banks that fall more steeply
@@ -223,9 +224,14 @@ class Scenery {
     //                   it a stone that would then stand alone
     //   hairpinShare    the share of the hairpins (WorldRoute.hairpins) that have a row round their outside, drawn
     //                   from the metre of the hairpin's apex: most of them, not all. The row is on the arc only, its
-    //                   stones STONE_GAP_M apart along the outer edge itself, and every rule above but the drop
+    //                   stones STONE_GAP_M apart along the outer edge itself, and every rule above but dropM
     //                   holds for it. Along a hairpin's arc the drop rule places nothing, on either side
-    static get STONE_RULE() { return { dropM: 7, reachM: 10, blockM: 60, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75 }; }
+    //   hairpinDropM    a hairpin's outside is an edge where the drawn ground reachM past the verge lies more than
+    //                   this under the road: a row stands over that part of the arc only. The outside of a hairpin
+    //                   on a slope falls on one leg (a plain fill, 6 to 7 m in 10) and is the rising bank on the
+    //                   other (0 to -7 m), with a few metres of arc between them: 3 m takes the fill and leaves
+    //                   the level ground and the bank
+    static get STONE_RULE() { return { dropM: 7, reachM: 10, blockM: 60, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75, hairpinDropM: 3 }; }
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
     // 3 or 4 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
@@ -997,9 +1003,9 @@ class Scenery {
     }
 
     // The row round the outside of hairpin `h` (WorldRoute.hairpins): [[place]] (Scenery.stoneSpot, each with `n`, its
-    // number in the row), the runs of places next to each other at least minM long. The places are STONE_GAP_M apart
-    // along the outer edge itself, over the arc, the row in the middle of it: on the centre line of a bend of 6 m
-    // the same stones would stand twice as far apart
+    // number in the row), the runs of places next to each other at least minM long where the land falls away behind
+    // them (hairpinDropM). The places are STONE_GAP_M apart along the outer edge itself, over the arc, the row in
+    // the middle of it: on the centre line of a bend of 6 m the same stones would stand twice as far apart
     hairpinRuns(h) {
         const rule = Scenery.STONE_RULE, gap = Scenery.STONE_GAP_M, route = this.ground.route;
         const side = -h.sign, least = Math.ceil(rule.minM / gap) + 1, at = {};
@@ -1026,7 +1032,8 @@ class Scenery {
                 const [s0, d0] = line[j], [s1, d1] = line[j + 1];
                 place = this.stoneSpot(s0 + (s1 - s0) * (d1 > d0 ? Math.min(1, Math.max(0, (d - d0) / (d1 - d0))) : 0), side);
             }
-            if (place) {
+            // (an edge: a place with level land behind it, or the bank, has nothing to guard)
+            if (place && place.drop > rule.hairpinDropM) {
                 place.n = n;
                 place.seed = 100000 + Math.round(place.s * 8);
                 run.push(place);
