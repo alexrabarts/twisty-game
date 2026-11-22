@@ -132,6 +132,7 @@ class Hud {
             hint: byId('hudHint'),
             fps: byId('fps'),
             tuned: byId('hudTuned'),
+            quality: byId('hudQuality'),
             mode: byId('hudMode'),
             start: byId('startCard'),
             startLeg: byId('startLeg'),
@@ -407,6 +408,14 @@ class Hud {
     // The "tuned" tag: this ride had a tuning multiplier off 1 and submits no time (Game.watchTuning)
     setTuned(on) {
         if (this.el.tuned) this.el.tuned.hidden = !on;
+    }
+
+    // The graphics level's tag of debug mode (Game.showQuality); '' hides it
+    setQuality(text) {
+        const el = this.el.quality;
+        if (!el) return;
+        if (el.textContent !== text) el.textContent = text;
+        el.hidden = !text;
     }
 
     // The rider mode's tag in its slot beside the speed gauge (js/ridermodes.js); `tone` colours it, '' for none

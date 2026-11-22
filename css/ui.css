@@ -2471,6 +2471,20 @@ body.in-menu .virtual-button-camera {
     text-shadow: none;
 }
 
+/* The graphics level of debug mode (js/quality.js), under the tuned tag's place */
+.hud-quality {
+    position: absolute;
+    top: calc(var(--edge-top) + 48px);
+    left: var(--edge-left);
+    padding: 2px 8px;
+    border-radius: var(--r-sm);
+    background: var(--panel-bg);
+    font: 600 var(--fs-xs) / 1.4 var(--font-ui);
+    color: var(--c-text-dim);
+    text-shadow: none;
+}
+
+.hud-quality[hidden],
 .hud-tuned[hidden],
 .tuning-panel[hidden] {
     display: none;
@@ -2606,6 +2620,14 @@ body.in-menu .virtual-button-camera {
     cursor: default;
 }
 
+/* The graphics row's value stands where a slider's track is: a word, not a number */
+.tuning-quality-value {
+    font-family: var(--font-ui);
+    font-size: var(--fs-xs);
+    text-align: center;
+    white-space: nowrap;
+}
+
 .tuning-buttons {
     display: flex;
     gap: var(--sp-2);
@@ -2651,6 +2673,12 @@ body.touch .tuning-open {
 body.touch .hud-tuned {
     top: auto;
     bottom: calc(12px + 68px + var(--sp-2) + 22px + env(safe-area-inset-bottom, 0px));
+    left: calc(var(--edge-left) + 72px);
+}
+
+body.touch .hud-quality {
+    top: auto;
+    bottom: calc(12px + 68px + var(--sp-2) + 46px + env(safe-area-inset-bottom, 0px));
     left: calc(var(--edge-left) + 72px);
 }
 

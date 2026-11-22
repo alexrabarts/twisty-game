@@ -1077,6 +1077,16 @@ class Graphics {
         });
     }
 
+    // The quality ladder's share of the drawing (js/quality.js, Game.applyQuality): the samples of the HDR scene
+    // target and whether the bloom passes run. Without post-processing neither exists, so there is nothing to set
+    setQuality({ msaa = 4, bloom = true } = {}) {
+        this.bloomOn = bloom;
+        if (!this.postEnabled || this.sceneTarget.samples === msaa) return;
+        // A target's samples are read when its framebuffer is made: the old one goes, the next draw makes it again
+        this.sceneTarget.samples = msaa;
+        this.sceneTarget.dispose();
+    }
+
     resizeTargets() {
         this.renderer.getDrawingBufferSize(this.bufferSize);
         const width = Math.max(2, Math.floor(this.bufferSize.x));
@@ -1207,6 +1217,7 @@ class Graphics {
             this.renderer.setRenderTarget(null);
             this.renderer.render(scene, camera);
             if (fogColor) fogColor.copy(this.linearFogColor);
+            this.renderedAt = performance.now();
             return;
         }
 
@@ -1218,6 +1229,26 @@ class Graphics {
 
         // Bloom: threshold, blur down a mip chain, then add each level back up
         const targets = this.bloomTargets;
+        if (this.bloomOn !== false) this.renderBloom(targets);
+
+        const c = this.compositeMaterial.uniforms;
+        this.renderAtmosphere(scene, camera);
+        c.tScene.value = this.sceneTarget.texture;
+        c.tBloom.value = targets[0].texture;
+        c.uExposure.value = renderer.toneMappingExposure;
+        c.uBloom.value = this.bloomOn === false ? 0 : this.grade.bloom / this.bloomLevels * 1.6;
+        c.uSaturation.value = this.grade.saturation;
+        c.uContrast.value = this.grade.contrast;
+        c.uTint.value.copy(this.grade.tint);
+        c.uSpeed.value = Math.max(0, (this.speedRatio - 0.45) / 0.55);
+        c.uTime.value = this.time;
+        c.uFlash.value = this.flash;
+        this.renderPass(this.compositeMaterial, null);
+        this.renderedAt = performance.now();
+    }
+
+    renderBloom(targets) {
+        const renderer = this.renderer;
         this.prefilterMaterial.uniforms.tSource.value = this.sceneTarget.texture;
         this.prefilterMaterial.uniforms.uThreshold.value = this.grade.threshold;
         this.prefilterMaterial.uniforms.uTexel.value.set(1 / this.sceneTarget.width, 1 / this.sceneTarget.height);
@@ -1237,20 +1268,6 @@ class Graphics {
             this.renderPass(this.upMaterial, targets[i]);
         }
         renderer.autoClear = autoClear;
-
-        const c = this.compositeMaterial.uniforms;
-        this.renderAtmosphere(scene, camera);
-        c.tScene.value = this.sceneTarget.texture;
-        c.tBloom.value = targets[0].texture;
-        c.uExposure.value = renderer.toneMappingExposure;
-        c.uBloom.value = this.grade.bloom / this.bloomLevels * 1.6;
-        c.uSaturation.value = this.grade.saturation;
-        c.uContrast.value = this.grade.contrast;
-        c.uTint.value.copy(this.grade.tint);
-        c.uSpeed.value = Math.max(0, (this.speedRatio - 0.45) / 0.55);
-        c.uTime.value = this.time;
-        c.uFlash.value = this.flash;
-        this.renderPass(this.compositeMaterial, null);
     }
 }
 

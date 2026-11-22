@@ -297,3 +297,47 @@ describe('the "tuned" tag of the HUD', () => {
         expect(tag.hidden).toBe(true);
     });
 });
+
+describe('the graphics row', () => {
+    // A ladder as Game.qualityControl gives it: Auto (null) or a fixed level
+    const control = () => {
+        const state = { fixed: null, auto: 1 };
+        return {
+            state,
+            levels: ['Lowest', 'Middle', 'Top'],
+            get: () => state.fixed,
+            level: () => (state.fixed === null ? state.auto : state.fixed),
+            set: (level) => { state.fixed = level; }
+        };
+    };
+
+    test('there is no row without a ladder', () => {
+        Tuning.start({ debug: true, storage: window.localStorage });
+        panelOf();
+        expect(document.querySelector('[data-id="quality"]')).toBeNull();
+    });
+
+    test('− and + step through Auto and each level, and the value says which', () => {
+        Tuning.start({ debug: true, storage: window.localStorage });
+        const quality = control();
+        const panel = panelOf({ quality });
+        const row = document.querySelector('[data-id="quality"]');
+        const value = row.querySelector('output');
+        expect(value.textContent).toBe('Auto · Middle');
+        row.querySelector('[data-act="quality-more"]').click();
+        expect(quality.state.fixed).toBe(0);
+        expect(value.textContent).toBe('Lowest');
+        row.querySelector('[data-act="quality-more"]').click();
+        row.querySelector('[data-act="quality-more"]').click();
+        row.querySelector('[data-act="quality-more"]').click();
+        expect(quality.state.fixed).toBe(2);
+        expect(value.textContent).toBe('Top');
+        for (let i = 0; i < 5; i++) row.querySelector('[data-act="quality-less"]').click();
+        expect(quality.state.fixed).toBeNull();
+        expect(value.textContent).toBe('Auto · Middle');
+        // A graphics level is not a tuning: nothing to copy, and the ride keeps its time
+        expect(Tuning.values).toEqual({});
+        expect(panel.text.value).not.toMatch(/quality|graphics|level/i);
+        expect(Tuning.ride.tuned).toBe(false);
+    });
+});

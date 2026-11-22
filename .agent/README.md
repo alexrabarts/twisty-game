@@ -3,6 +3,7 @@
 Notes for people and AI agents who work on this repo.
 
 - `system/` - how the game is built.
+  - [graphics.md](system/graphics.md) - the quality ladder: the graphics levels, how the frame time steps them, the start level by device, what each part of a world frame costs on a phone-class page.
   - [rendering.md](system/rendering.md) - colour management, sky, lighting, post-processing, the modelled bikes and the modelled traffic cars.
   - [world.md](system/world.md) - the terrain model and the rules for scenery placement.
   - [world-data.md](system/world-data.md) - the swisstopo data gate: tools, real inspect values, gate outcomes, the world binary format.

@@ -223,6 +223,8 @@ class Game {
         this.soundManager = new SoundManager();
         this.soundManager.masterVolume = 0.3;
         this.hud = new Hud(document, window);
+        // The graphics level (js/quality.js) before the tuning panel, which shows its control
+        this.startQuality();
         // The tuning (js/tuning.js) reads its stored values in debug mode only, and only then is its panel built
         this.startTuning();
         this.startRiderModes();
@@ -337,7 +339,10 @@ class Game {
         this.beginTunedRide();
         this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
         this.environment = environment;
-        this.environment.onMeshBuilt = root => this.graphics.fixColorSpaces(root);
+        this.environment.onMeshBuilt = root => {
+            this.graphics.fixColorSpaces(root);
+            this.thinTrees(root);
+        };
         this.environment.applyLandscapeConfig(this.environment.config.look);
         this.applyShadowBox(this.environment.config.render);
         this.cones = null;
@@ -606,47 +611,106 @@ class Game {
         this.animationFrameId = requestAnimationFrame(() => this.animate());
     }
 
-    // Adaptive resolution: the game is fill-rate bound on high-DPI screens,
-    // so step the render resolution down when FPS sags below the 60fps target
-    // and back up when there's sustained headroom. Runs once per second from
-    // the FPS counter.
-    adaptResolution() {
-        if (!this.renderer || this.paused) return;
-        if (this.adaptGraceUntil && performance.now() < this.adaptGraceUntil) return;
+    // The quality ladder (js/quality.js, .agent/system/graphics.md): one table of graphics levels, the level chosen
+    // at the start from the device and then stepped by the frame time. A caller fixes a level or releases it to the
+    // frame time with this.quality.fix and this.quality.release (the tuning panel of debug mode does, and a graphics
+    // menu will)
+    startQuality() {
+        if (typeof QualityLadder === 'undefined') return;
+        const device = Quality.device(window);
+        this.quality = new QualityLadder({ start: Quality.startLevel(device), now: performance.now(), apply: (level, index, reason) => this.applyQuality(level, index, reason) });
+        this.quality.device = device;
+        this.showQuality();
+    }
 
-        if (!this.dprSteps) {
-            const maxDpr = Math.min(window.devicePixelRatio || 1, 2);
-            this.dprSteps = [maxDpr, maxDpr * 0.875, maxDpr * 0.75, maxDpr * 0.625, maxDpr * 0.5]
-                .filter(v => v >= 0.5);
-            this.dprIndex = 0;
-            this.headroomSeconds = 0;
+    // Puts a level's settings in force. Each is read where it is drawn, so a change takes effect on the next frame
+    applyQuality(level, index, reason) {
+        const renderer = this.renderer;
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, level.pixelRatio));
+        const shadows = level.shadowMap > 0;
+        if (renderer.shadowMap.enabled !== shadows) {
+            renderer.shadowMap.enabled = shadows;
+            // A program has the shadow chunks or not: every material compiles again, once for each change
+            this.scene.traverse(o => {
+                if (o.material) [].concat(o.material).forEach(m => { m.needsUpdate = true; });
+            });
         }
+        const light = this.directionalLight;
+        if (shadows && light && light.shadow.mapSize.x !== level.shadowMap) {
+            light.shadow.mapSize.set(level.shadowMap, level.shadowMap);
+            // The map is made again at its new size on the next shadow pass
+            if (light.shadow.map) {
+                light.shadow.map.dispose();
+                light.shadow.map = null;
+            }
+        }
+        if (this.graphics) this.graphics.setQuality({ msaa: level.msaa, bloom: level.bloom });
+        this.treeShare = level.treeShare;
+        if (this.environment && this.environment.isWorld) this.thinTrees(this.environment.sceneryGroup);
+        if (reason !== 'start') console.log(`Quality: ${Quality.describe(index, reason === 'fixed')} (${reason})`);
+        this.showQuality();
+    }
 
-        const nowSec = performance.now() / 1000;
-        if (this.fps < 52 && this.dprIndex < this.dprSteps.length - 1) {
-            // If we just stepped up and immediately sagged, stop retrying that
-            // level for a while - prevents visible up/down oscillation
-            if (this.lastStepUpTime && nowSec - this.lastStepUpTime < 6) {
-                this.stepUpBlockedUntil = nowSec + 90;
+    // A world tile's trees, nearest the bike first in each mesh (Scenery.buildTile), drawn to the level's share: the
+    // far ones go first. Only what is drawn changes; a tree is never solid
+    thinTrees(root) {
+        if (!root) return;
+        const share = this.treeShare === undefined ? 1 : this.treeShare;
+        root.traverse(o => {
+            if (!o.isInstancedMesh || !o.name.startsWith('trees:')) return;
+            if (o.userData.allTrees === undefined) o.userData.allTrees = o.count;
+            o.count = Math.ceil(o.userData.allTrees * share);
+        });
+    }
+
+    // The tuning panel's graphics row: Auto (the frame time) or one level fixed, to test a level by eye. A fixed level
+    // is not a tuning: it changes no handling and the ride keeps its time
+    qualityControl() {
+        return {
+            levels: Quality.LEVELS.map(l => l.label),
+            get: () => (this.quality.isFixed ? this.quality.level : null),
+            level: () => this.quality.level,
+            set: (level) => {
+                const now = performance.now();
+                if (level === null) this.quality.release(now);
+                else this.quality.fix(level, now);
+                this.showQuality();
             }
-            this.dprIndex++;
-            this.headroomSeconds = 0;
-            this.renderer.setPixelRatio(this.dprSteps[this.dprIndex]);
-            console.log(`Adaptive resolution: pixel ratio -> ${this.dprSteps[this.dprIndex].toFixed(2)} (fps ${this.fps})`);
-        } else if (this.fps >= 58 && this.dprIndex > 0) {
-            // Require sustained headroom before stepping back up
-            this.headroomSeconds++;
-            const blocked = this.stepUpBlockedUntil && nowSec < this.stepUpBlockedUntil;
-            if (this.headroomSeconds >= 10 && !blocked) {
-                this.dprIndex--;
-                this.headroomSeconds = 0;
-                this.lastStepUpTime = nowSec;
-                this.renderer.setPixelRatio(this.dprSteps[this.dprIndex]);
-                console.log(`Adaptive resolution: pixel ratio -> ${this.dprSteps[this.dprIndex].toFixed(2)} (fps ${this.fps})`);
-            }
-        } else {
-            this.headroomSeconds = 0;
+        };
+    }
+
+    // The level on the HUD of debug mode
+    showQuality() {
+        if (!this.hud || !this.quality || !this.hud.setQuality) return;
+        this.hud.setQuality(Game.debugEnabled(window.location.search) ? Quality.describe(this.quality.level, this.quality.isFixed) : '');
+        if (this.tuningPanel && this.tuningPanel.open) this.tuningPanel.refresh();
+    }
+
+    // The ladder holds still for `ms` (a ride's start compiles its shaders, a resume follows a pause)
+    holdQuality(ms) {
+        if (this.quality) this.quality.hold(performance.now(), ms);
+    }
+
+    // Every frame: the time since the last frame and the work of the last one (from its start to the end of its draw)
+    // go to the ladder. Not while paused, nor in the grace after a scene build, nor through a frame that built much
+    // of the world (a tile-load spike says nothing about the steady frame)
+    adaptResolution(now) {
+        const quality = this.quality;
+        const last = this.frameStartedAt;
+        this.frameStartedAt = now;
+        if (!quality || !this.renderer || this.paused || last === undefined) return;
+        if (this.adaptGraceUntil && now < this.adaptGraceUntil) {
+            quality.hold(now, this.adaptGraceUntil - now);
+            return;
         }
+        const streamer = this.environment && this.environment.streamer;
+        if (streamer && streamer.stats.frameBuildMs > Quality.RULES.buildMs) {
+            quality.hold(now);
+            return;
+        }
+        const drawn = this.graphics ? this.graphics.renderedAt : undefined;
+        const work = drawn !== undefined && drawn >= last ? drawn - last : null;
+        if (quality.sample(now - last, work, now)) this.showQuality();
     }
 
     // A converted leg draws new kinds of ground, water and dressing part by
@@ -1001,6 +1065,8 @@ class Game {
             this.startTime += this.now() - this.pauseStartedAt;
             this.pauseStartedAt = 0;
         }
+        // The first frames after a pause say nothing about the ride's frame rate
+        if (typeof Quality !== 'undefined') this.holdQuality(Quality.RULES.spikeGraceMs);
     }
 
     worldRestartAsk() {
@@ -3409,8 +3475,9 @@ class Game {
             this.frameCount = 0;
             this.lastTime = now;
             if (this.hud) this.hud.setFps(this.fps);
-            this.adaptResolution();
         }
+        // The graphics level reads every frame's time (Game.adaptResolution)
+        this.adaptResolution(now);
 
         // Get actual frame time and accumulate for fixed timestep
         const rawDeltaTime = Math.min(this.clock.getDelta(), 0.05); // Cap at 50ms
@@ -4301,7 +4368,7 @@ class Game {
             console.warn('Tuning: no storage, the values last for this page only:', error);
         }
         Tuning.start({ debug, storage });
-        if (debug && typeof TuningPanel !== 'undefined') this.tuningPanel = new TuningPanel(document, Tuning, { world: () => !this.environment || !!this.environment.isWorld });
+        if (debug && typeof TuningPanel !== 'undefined') this.tuningPanel = new TuningPanel(document, Tuning, { world: () => !this.environment || !!this.environment.isWorld, quality: this.quality ? this.qualityControl() : null });
     }
 
     // The rider mode (js/ridermodes.js): the stored choice is in force from the page's start, on a world ride and on

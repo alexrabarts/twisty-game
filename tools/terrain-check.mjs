@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
@@ -19,6 +19,7 @@
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
+//   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--measure [--rounds N]] [--out <dir>]   (each part of a world frame, or each graphics level: frame time and picture)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   world-hud rides the fixture of three stages tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
@@ -5487,6 +5488,231 @@ async function junctionEye(placeSource, eye) {
     const png = game.graphics.renderer.domElement.toDataURL('image/png');
     if (v.group) v.group.visible = shown;
     return png;
+}
+
+// world-quality: the cost of each part of a world frame, and the frame at each level of the quality ladder (js/quality.js),
+// at one place (--at s, QUALITY_AT_SHARE of the ride by default) from the chase view. --phone rides a phone-class page:
+// a 390 x 844 view at a device pixel ratio of 3, touch, and the CPU slowed QUALITY_THROTTLE times (--throttle N). A frame
+// is one step of the game without its draw (the update) and one draw with a 1-pixel read-back that waits for the GPU (the
+// render); each is the median of --frames frames. --measure turns each part off or down by itself against the full
+// frame (the order of the ladder comes from it); without it each level is set and timed, and --out <dir> saves its picture.
+//   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--throttle N] [--measure] [--at s] [--frames N] [--out <dir>]
+const QUALITY_AT_SHARE = 0.1;
+const QUALITY_THROTTLE = 4;
+const QUALITY_PHONE = { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true };
+WORLD_PROBES.push('world-quality');
+WORLD['world-quality'] = async (page) => {
+    const phone = flag('phone');
+    const throttle = Number(option('throttle') || (phone ? QUALITY_THROTTLE : 1));
+    if (phone) {
+        // A change to touch reloads the page: the world starts again as a phone opens it, as openWorld waits for it
+        await page.setViewport(QUALITY_PHONE);
+        await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 120000 });
+        await page.evaluate(() => { window.game.adaptResolution = () => {}; });
+        await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+    }
+    // The level the device was given at the start, before anything here fixes one
+    const startLevel = await page.evaluate(() => (game.quality ? { level: game.quality.level, id: Quality.LEVELS[game.quality.level].id, device: game.quality.device } : null));
+    const client = await page.target().createCDPSession();
+    const frames = Number(option('frames') || 40);
+    const at = await page.evaluate(async (placeSource, share, atS) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const s = Number.isFinite(atS) ? atS : Math.round(share * game.environment.route.length);
+        await placeAt(s);
+        game.cameraMode = 2;
+        game.worldCamera.reset(game.vehicle.yawAngle);
+        twistyDev.autopilot({ speed: 0 });
+        for (let i = 0; i < 240; i++) twistyDev.step(1);
+        game.environment.streamer.pump(Infinity);
+        return s;
+    }, placeAt.toString(), QUALITY_AT_SHARE, option('at') !== undefined ? Number(option('at')) : NaN);
+    // The timing runs slowed; the setting up and the pictures do not
+    const slow = rate => client.send('Emulation.setCPUThrottlingRate', { rate });
+    const time = () => page.evaluate(qualityFrames, frames);
+    const result = { at, phone, throttle, frames, startLevel, view: await page.evaluate(() => ({ css: [innerWidth, innerHeight], dpr: devicePixelRatio, buffer: [game.renderer.domElement.width, game.renderer.domElement.height] })) };
+    if (flag('measure')) {
+        // Each part against the full frame measured just before it, round after round: the machine's drift cancels
+        const parts = await page.evaluate(qualityParts);
+        const rounds = Number(option('rounds') || 3);
+        const keys = ['updateMs', 'submitMs', 'waitMs', 'renderMs', 'gpuMs', 'frameMs'];
+        const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
+        const rows = [];
+        let full = null;
+        // The same frame at full speed: what the throttle adds
+        const unthrottled = await time();
+        for (const name of parts) {
+            const runs = [];
+            for (let k = 0; k < rounds; k++) {
+                await slow(throttle);
+                const base = await time();
+                await slow(1);
+                await page.evaluate(qualityPart, name, true);
+                await page.evaluate(() => game.graphics.render(game.scene, game.camera));
+                await slow(throttle);
+                const off = await time();
+                await slow(1);
+                await page.evaluate(qualityPart, name, false);
+                runs.push({ base, off });
+                if (!full) full = base;
+            }
+            const row = { part: name, calls: runs[0].off.calls, triangles: runs[0].off.triangles, baseCalls: runs[0].base.calls, baseTriangles: runs[0].base.triangles };
+            for (const key of keys) {
+                if (runs[0].base[key] === null) continue;
+                row[key] = median(runs.map(r => r.off[key]));
+                row[`saved${key[0].toUpperCase()}${key.slice(1)}`] = Math.round(median(runs.map(r => r.base[key] - r.off[key])) * 100) / 100;
+            }
+            rows.push(row);
+        }
+        return { ...result, unthrottled, full, rows };
+    }
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    if (out) await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+    const count = await page.evaluate(() => Quality.LEVELS.length);
+    const levels = [];
+    for (let level = count - 1; level >= 0; level--) {
+        const set = await page.evaluate(lvl => {
+            game.quality.fix(lvl);
+            // A level's settings are in force from the next frame: one drawn frame compiles what it changed
+            game.graphics.render(game.scene, game.camera);
+            const L = Quality.LEVELS[lvl];
+            return { id: L.id, buffer: [game.renderer.domElement.width, game.renderer.domElement.height], shadow: game.renderer.shadowMap.enabled ? game.directionalLight.shadow.mapSize.x : 0, samples: game.graphics.sceneTarget ? game.graphics.sceneTarget.samples : null };
+        }, level);
+        await slow(throttle);
+        const timing = await time();
+        await slow(1);
+        if (out) {
+            await page.evaluate(() => game.graphics.render(game.scene, game.camera));
+            await page.screenshot({ path: join(out, `level-${level}-${set.id}.png`) });
+        }
+        levels.push({ level, ...set, ...timing });
+    }
+    await page.evaluate(() => game.quality.release());
+    return { ...result, levels };
+};
+
+// In the page: the median of `count` frames, after five unmeasured: the update (a game step without its draw), the
+// draw's CPU (submit), the wait for the GPU after it (a 1-pixel read-back), the GPU's own time where the browser has a
+// timer query (gpuMs, else null), the whole frame, and the draw calls and triangles of one frame
+async function qualityFrames(count) {
+    const renderer = game.graphics.renderer, gl = renderer.getContext();
+    const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    const pixel = new Uint8Array(4);
+    const median = list => (list.length ? [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)] : null);
+    const round = n => (n === null ? null : Math.round(n * 100) / 100);
+    const update = [], submit = [], wait = [], frame = [], queries = [];
+    renderer.info.autoReset = false;
+    let info = null;
+    // The updates first, then the draws of a scene that stands still (traffic moves with every update, and a car
+    // in view or out of it would count as a part of the frame); the frame is an update and a draw by their medians
+    for (let i = 0; i < count + 5; i++) {
+        const t0 = performance.now();
+        twistyDev.step(1);
+        if (i >= 5) update.push(performance.now() - t0);
+    }
+    for (let i = 0; i < count + 5; i++) {
+        const t1 = performance.now();
+        renderer.info.reset();
+        const query = timer && i >= 5 ? gl.createQuery() : null;
+        if (query) gl.beginQuery(timer.TIME_ELAPSED_EXT, query);
+        game.graphics.render(game.scene, game.camera);
+        if (query) { gl.endQuery(timer.TIME_ELAPSED_EXT); queries.push(query); }
+        const t2 = performance.now();
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+        const t3 = performance.now();
+        info = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
+        if (i < 5) continue;
+        submit.push(t2 - t1);
+        wait.push(t3 - t2);
+        frame.push(t3 - t1 + update[i - 5]);
+    }
+    renderer.info.autoReset = true;
+    const gpu = [];
+    for (let tries = 0; tries < 50 && queries.length; tries++) {
+        await new Promise(done => setTimeout(done, 20));
+        for (let k = queries.length - 1; k >= 0; k--) {
+            if (!gl.getQueryParameter(queries[k], gl.QUERY_RESULT_AVAILABLE)) continue;
+            if (!gl.getParameter(timer.GPU_DISJOINT_EXT)) gpu.push(gl.getQueryParameter(queries[k], gl.QUERY_RESULT) / 1e6);
+            gl.deleteQuery(queries[k]);
+            queries.splice(k, 1);
+        }
+    }
+    return { updateMs: round(median(update)), submitMs: round(median(submit)), waitMs: round(median(wait)), renderMs: round(median(submit.map((v, k) => v + wait[k]))), gpuMs: round(median(gpu)), frameMs: round(median(frame)), worstMs: round(Math.max(...frame)), ...info };
+}
+
+// In the page: the parts world-quality turns off or down, one at a time
+function qualityParts() {
+    return ['pixel-1.5', 'pixel-1', 'pixel-0.75', 'shadow-1024', 'shadow-512', 'shadow-none', 'msaa-0', 'bloom-none', 'haze-none', 'trees-none', 'houses-none', 'scenery-none', 'side-roads-none', 'far-land-none', 'land-none', 'traffic-none'];
+}
+
+// In the page: turns a part off (`on` true) or back as it was (`on` false). Everything it changes it keeps in
+// window.__qualitySaved, so the part after it starts from the full frame
+function qualityPart(name, on) {
+    const g = game.graphics, r = game.renderer, env = game.environment, light = game.directionalLight;
+    const saved = window.__qualitySaved || (window.__qualitySaved = {});
+    const materials = () => {
+        const all = new Set();
+        game.scene.traverse(o => { if (o.material) [].concat(o.material).forEach(m => all.add(m)); });
+        return all;
+    };
+    const hide = test => {
+        if (on) {
+            saved.hidden = [];
+            game.scene.traverse(o => { if (o.visible && test(o)) { o.visible = false; saved.hidden.push(o); } });
+        } else {
+            (saved.hidden || []).forEach(o => { o.visible = true; });
+        }
+    };
+    const shadowSize = size => {
+        if (on) saved.shadow = light.shadow.mapSize.x;
+        light.shadow.mapSize.set(on ? size : saved.shadow, on ? size : saved.shadow);
+        if (light.shadow.map) { light.shadow.map.dispose(); light.shadow.map = null; }
+    };
+    if (name === 'full') return;
+    if (name.startsWith('pixel-')) {
+        if (on) saved.pixel = r.getPixelRatio();
+        r.setPixelRatio(on ? Number(name.slice(6)) : saved.pixel);
+    } else if (name === 'shadow-1024') shadowSize(1024);
+    else if (name === 'shadow-512') shadowSize(512);
+    else if (name === 'shadow-none') {
+        r.shadowMap.enabled = !on;
+        materials().forEach(m => { m.needsUpdate = true; });
+    } else if (name === 'msaa-0') {
+        if (on) saved.samples = g.sceneTarget.samples;
+        g.sceneTarget.samples = on ? 0 : saved.samples;
+        g.sceneTarget.dispose();
+    } else if (name === 'bloom-none') {
+        if (on) {
+            saved.renderPass = g.renderPass;
+            const skip = new Set([g.prefilterMaterial, g.downMaterial, g.upMaterial]);
+            g.renderPass = function (material, target) { if (!skip.has(material)) saved.renderPass.call(this, material, target); };
+        } else {
+            g.renderPass = saved.renderPass;
+        }
+    } else if (name === 'haze-none') {
+        if (on) {
+            saved.hazeGlsl = Object.getOwnPropertyDescriptor(LandShade, 'HAZE_GLSL');
+            const keep = saved.hazeGlsl.get.call(LandShade).replace(/vec3 worldHaze\(vec3 c, vec3 p\) \{[\s\S]*\}$/, 'vec3 worldHaze(vec3 c, vec3 p) { return c; }');
+            Object.defineProperty(LandShade, 'HAZE_GLSL', { configurable: true, get: () => keep });
+            saved.keys = new Map();
+            materials().forEach(m => {
+                if (!m.onBeforeCompile || m.isShaderMaterial) return;
+                const key = m.customProgramCacheKey;
+                saved.keys.set(m, key);
+                m.customProgramCacheKey = () => `${key.call(m)}|no-haze`;
+                m.needsUpdate = true;
+            });
+        } else {
+            Object.defineProperty(LandShade, 'HAZE_GLSL', saved.hazeGlsl);
+            saved.keys.forEach((key, m) => { m.customProgramCacheKey = key; m.needsUpdate = true; });
+        }
+    } else if (name === 'trees-none') hide(o => /^trees:/.test(o.name));
+    else if (name === 'houses-none') hide(o => /^houses:/.test(o.name));
+    else if (name === 'scenery-none') hide(o => o === env.sceneryGroup);
+    else if (name === 'side-roads-none') hide(o => o === env.sideGroup);
+    else if (name === 'far-land-none') hide(o => o === env.horizon || (env.farLand || []).includes(o));
+    else if (name === 'land-none') hide(o => o === env.tileGroup);
+    else if (name === 'traffic-none') hide(o => !!game.traffic && [...(game.traffic.cars || []).map(c => c.carGroup), ...(game.traffic.motorcycles || []).map(m => m.bikeGroup)].includes(o));
 }
 
 // The data world-hud rides when the run names no --worldData: the 6 km fixture of three stages

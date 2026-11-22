@@ -11,10 +11,13 @@ class TuningPanel {
     static get KEY() { return 'KeyT'; }
 
     // options: `world()` says whether the ride is a world ride (the rows only a world reads are dimmed on a leg);
-    // `clipboard()` returns the clipboard to write to (navigator.clipboard by default)
+    // `clipboard()` returns the clipboard to write to (navigator.clipboard by default); `quality`, when given, adds the
+    // graphics row: { levels: [label], get() (the fixed level, null for Auto), level() (the level in force), set(level
+    // or null) } (Game.qualityControl). It is not a multiplier: it is not in the copied text and marks no ride tuned
     constructor(doc, tuning, options = {}) {
         this.doc = doc;
         this.tuning = tuning;
+        this.quality = options.quality || null;
         this.world = options.world || (() => true);
         this.clipboard = options.clipboard || (() => (typeof navigator !== 'undefined' ? navigator.clipboard : null));
         this.rows = {};
@@ -69,6 +72,7 @@ class TuningPanel {
             }
             list.appendChild(this.buildRow(row));
         }
+        if (this.quality) list.appendChild(this.buildQuality());
         this.el.appendChild(list);
 
         const buttons = this.make('div', 'tuning-buttons');
@@ -160,6 +164,40 @@ class TuningPanel {
         return el;
     }
 
+    // The graphics row: − and + step through Auto and each level, lowest to highest; the value says the choice and,
+    // under Auto, the level the frame time chose
+    buildQuality() {
+        const quality = this.quality;
+        const box = this.make('div', 'tuning-quality');
+        box.appendChild(this.make('h3', 'tuning-group', 'Graphics'));
+        const el = this.make('div', 'tuning-row');
+        el.dataset.id = 'quality';
+        const label = this.make('span', 'tuning-label', 'Level');
+        label.title = 'Auto: the frame time sets the graphics level. A fixed level holds whatever the frame time (js/quality.js)';
+        const less = this.make('button', 'tuning-step', '−');
+        const more = this.make('button', 'tuning-step', '+');
+        less.type = more.type = 'button';
+        less.dataset.act = 'quality-less';
+        more.dataset.act = 'quality-more';
+        less.setAttribute('aria-label', 'Graphics level: lower');
+        more.setAttribute('aria-label', 'Graphics level: higher');
+        // The choices in order: Auto (null) and then each level by index
+        const choices = [null, ...quality.levels.map((_, i) => i)];
+        const move = (by) => {
+            const at = choices.indexOf(quality.get());
+            const next = Math.max(0, Math.min(choices.length - 1, at + by));
+            quality.set(choices[next]);
+            this.refresh();
+        };
+        less.addEventListener('click', () => move(-1));
+        more.addEventListener('click', () => move(1));
+        const value = this.make('output', 'tuning-value tuning-quality-value', 'Auto');
+        el.append(label, less, value, more);
+        box.appendChild(el);
+        this.qualityValue = value;
+        return box;
+    }
+
     set(id, value) {
         this.tuning.set(id, value);
         this.say('');
@@ -183,6 +221,12 @@ class TuningPanel {
         }
         this.text.value = this.tuning.text();
         this.el.dataset.ride = this.world() ? 'world' : 'legs';
+        if (this.quality && this.qualityValue) {
+            const fixed = this.quality.get();
+            const levels = this.quality.levels;
+            const shown = fixed === null ? `Auto · ${levels[this.quality.level()]}` : levels[fixed];
+            if (this.qualityValue.textContent !== shown) this.qualityValue.textContent = shown;
+        }
     }
 
     // The changed values to the clipboard. The text box holds the same text, for when the clipboard is refused
