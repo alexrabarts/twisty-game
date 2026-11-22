@@ -18,7 +18,7 @@
 //
 // A wall ends in the ground: within `endM` of a run's end the land may stand to the wall's top and rise to it, so the
 // faces there are not held to `buried` and `climbs`. Past its end a wall's face goes on along the road's edge and
-// tapers to nothing (RoadMesh.edgeWorks `taper`: its top stands under the edge, where the ground under the verge ends). A taper's
+// tapers to nothing (RoadMesh.edgeWorks `taper`: a face drawn from its front only, `wallFace` 2, under its coping). A taper's
 // faces are part of the run but hold less and less: they are not held to `buried` and `climbs` either, their foot is
 // read on their own line (the slope starts at it), the wall's own end is the corner it shares with its taper, and an
 // end with no height is no end of a piece (`steps`); and farther along a high wall the land in front may stand as high
@@ -183,11 +183,10 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             // The parapet's inner face is a wall face's twin 0.3 m in: a face whose foot is its road's surface is no wall
             const id = [a, b].map(p => `${Math.round(p.top[0] * 100)},${Math.round(p.top[1] * 100)},${Math.round(p.top[2] * 100)}`).sort().join('|') + `|${owner}`;
             if (store.faces.has(id) || Math.hypot(mx - at.x, mz - at.z) > nearM) continue;
-            // A wall's face past its end, where it tapers to nothing (RoadMesh.edgeWorks `taper`): its top stands under
-            // the road's edge (APRON_UNDER_M). It holds less and less of the slope that starts at its foot, so
-            // it is not held to `buried` and `climbs`: the ground is meant to rise over it
-            // (at either end: its first strip starts at the wall's own corner, at the road's height)
-            const taper = [a, b].some(p => { const rim = nearOf(ribbons, p.top[0] - ox * 0.15, p.top[2] - oz * 0.15, p.top[1]); return rim !== null && rim - p.top[1] > 0.04 && rim - p.top[1] < 0.2; });
+            // A wall's face past its end, where it tapers to nothing (RoadMesh.edgeWorks `taper`, drawn from its front
+            // only: `wallFace` 2). It holds less and less of the slope that starts at its foot, so it is not held to
+            // `buried` and `climbs`: the ground is meant to rise over it
+            const taper = !!mesh.geometry.attributes.wallFace && Math.round(mesh.geometry.attributes.wallFace.getY(i)) === 2;
             const face = { owner, a, b, len, ox, oz, taper, s: rideS(mx, mz), buried: 0, climbs: 0, hangs: 0, top: 0, samples: 0, worstClimb: 0, worstHang: 0, ends: [], climbAt: [] };
             const n = Math.max(1, Math.round(len));
             for (let k = 0; k < n; k++) {

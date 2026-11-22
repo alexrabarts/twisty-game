@@ -3160,6 +3160,11 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                         if (uses.get(ekey(a, b)) !== 1) continue;
                         const third = pos[c * 3 + 1];
                         if (!(third < pos[a * 3 + 1] - 0.05 && third < pos[b * 3 + 1] - 0.05)) continue;
+                        // (a top is an upright face's: the edge across a coping that falls along its wall, a parapet's
+                        // ramp to its kerb or a taper's sinking into the ground, is no top of a wall)
+                        const ux = pos[b * 3] - pos[a * 3], uy = pos[b * 3 + 1] - pos[a * 3 + 1], uz = pos[b * 3 + 2] - pos[a * 3 + 2];
+                        const wx = pos[c * 3] - pos[a * 3], wy = third - pos[a * 3 + 1], wz = pos[c * 3 + 2] - pos[a * 3 + 2];
+                        if (Math.abs(uz * wx - ux * wz) > 0.5 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx)) continue;
                         const ax = pos[a * 3], az = pos[a * 3 + 2], bx = pos[b * 3], bz = pos[b * 3 + 2];
                         const len = Math.hypot(bx - ax, bz - az);
                         if (len < 0.05) continue;
