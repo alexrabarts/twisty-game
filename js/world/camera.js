@@ -12,6 +12,8 @@
 //     camera goes through under the deck with the bike, never over it
 //   - the legs' carving swing: the camera moves sideways with the lean and its look point leads into the corner,
 //     both lagged, in the boom's frame (not the bike's yaw); the land scales the sideways shift down (swingShare)
+//   - a wall beside the road (a retaining wall and its parapet, a wall's taper, a bridge's parapet, a house) ends the
+//     boom short of its face, and the swing gives way to it, so the camera never goes through one or sits behind it
 //
 // Everything the camera reads from the route is smooth: the Hermite centreline (WorldRoute.curveAt) and the
 // smoothed curvature profile (WorldRoute.smoothCurvatureAt), at the bike's smooth road position (Vehicle.roadFrame).
@@ -81,6 +83,31 @@ class WorldCamera {
         }));
     }
 
+    // The camera and the walls beside the road (wallShare), every number of the rule. A face is a wall's side as the
+    // road's builders and the physics have it (WorldEnvironment.cameraFaces): a line in plan with a top and a foot.
+    static get WALLS() {
+        return WorldCamera.walls || (WorldCamera.walls = Object.freeze({
+            // The boom ends clearM short of a face it closes on (the view's near plane reaches 0.46 m from the camera
+            // at its corners), eased; never nearer than hardM. With the bike itself nearer a face than that, the boom
+            // keeps nearShare of the bike's own distance
+            clearM: 0.8, hardM: 0.5, nearShare: 0.5,
+            // A boom passes over a face it clears by overM (hardOverM at the least); from overBandM more than that
+            // down to it the face draws the boom in, eased
+            overM: 0.4, hardOverM: 0.2, overBandM: 0.6,
+            // From outside, a wall with a road on it is not passed over at any height once that road is roadTo over
+            // the bike's (it is a road overhead from there, WorldEnvironment.OVERHEAD_FROM_M: the camera stays under
+            // it, so past the wall it would be in the hill), eased in from roadFrom
+            roadFrom: 1.5, roadTo: 2.5, roadUpM: 60,
+            // A boom that passes a face's end is drawn in from endBandM past it, eased, and held from hardM past it
+            endBandM: 3,
+            // A house is taken to stand houseM over the land under it
+            houseM: 12,
+            // The faces are listed within two booms of the bike and reachM more (in whole steps of reachM), and again
+            // when it has moved stepM
+            reachM: 12, stepM: 4
+        }));
+    }
+
     // The boom's height at a speed (m/s) for a view mode whose height is `base`: its own up to speedLowerFromMs, then
     // down by speedLowerShare of itself by speedLowerMs, eased at both ends. A high-speed thing: at the pace of the
     // bends the view is the mode's own, and on a fast straight the ride is seen from nearer the road (the first rule
@@ -97,11 +124,15 @@ class WorldCamera {
     static get LOOK_FOLLOW() { return 0.6; }
 
     // `overhead(x, z, y)`: the underside of the lowest road over (x, z) well above y, Infinity with open sky
-    // (WorldEnvironment.overheadY); with none given the camera knows no bridge
-    constructor(route, ground, overhead = null) {
+    // (WorldEnvironment.overheadY); with none given the camera knows no bridge.
+    // `faces(x, z, reach)`: the wall faces within `reach` of (x, z), {data, count} with FACE numbers a face
+    // (WorldEnvironment.cameraFaces); with none given the camera knows no wall
+    constructor(route, ground, overhead = null, faces = null) {
         this.route = route;
         this.ground = ground;
         this.overhead = overhead;
+        this.faces = faces;
+        this.walls = null;
         this.land = {};
         this.hint = { start: 0, end: 0 };
         this.curve = {};
@@ -247,7 +278,18 @@ class WorldCamera {
         const reach = WorldCamera.TUNING.hintUnits;
         this.hint.start = Math.max(0, index - reach);
         this.hint.end = index + reach;
-        return this.ground.groundY(x, z, this.hint, false, this.land);
+        const ground = this.ground;
+        const y = ground.groundY(x, z, this.hint, false, this.land);
+        // The ground beside the ride's band is a side road's surface where one lies there, on its bridge over the
+        // ride too: a deck roadTo or more over both the ride and the land under it is a road overhead (the roof
+        // rule's), not land in the boom's way. Read as land, a strip of it beside the band cut the boom short under
+        // every such bridge, in one frame
+        const over = WorldCamera.WALLS.roadTo;
+        if (y - this.land.roadY > over && typeof ground.sideRoadY === 'function' && ground.sideRoadY(x, z) === y) {
+            const under = ground.landY(x, z, this.land.roadY);
+            if (y - under > over) return under;
+        }
+        return y;
     }
 
     // The share of the boom from `head` to `want` (both {x, y, z}) that stays `clear` metres over the land: the boom
@@ -292,6 +334,67 @@ class WorldCamera {
             share = Math.min(share, at + (1 - at) * room * room * (3 - 2 * room));
         }
         return share;
+    }
+
+    // The numbers of a wall face: its two ends in plan (ax, az, bx, bz: the wall faces out to the right of a to b),
+    // its top and its foot at each (topA, topB, footA, footB), and 1 when a road stands on it
+    static get FACE() { return 9; }
+
+    // The share of the boom from `head` to `end` that keeps clear of every wall face listed (this.walls). A boom
+    // that closes on a face's plane, would come within the margin of it between the face's ends, and is not over its
+    // top there, ends the margin short of the plane. `soft` is the share the camera eases toward: the wider margin,
+    // and a face the boom nearly clears (over its top, or past its end) draws it in by a share, so the allowance
+    // moves smoothly as the boom sweeps onto a wall. Without it, the limit behind the spring. `roadY` is the bike's road
+    wallShare(head, end, roadY, soft) {
+        const walls = this.walls;
+        if (!walls || !walls.count) return 1;
+        const w = WorldCamera.WALLS, d = walls.data, n = walls.count * WorldCamera.FACE;
+        const dx = end.x - head.x, dy = end.y - head.y, dz = end.z - head.z;
+        const clear = soft ? w.clearM : w.hardM;
+        let share = 1;
+        for (let i = 0; i < n; i += WorldCamera.FACE) {
+            const ex = d[i + 2] - d[i], ez = d[i + 3] - d[i + 1];
+            const length = Math.hypot(ex, ez);
+            if (length < 1e-6) continue;
+            const px = head.x - d[i], pz = head.z - d[i + 1];
+            // Metres out from the face's plane at the head, and gained along the whole boom
+            const out = (px * ez - pz * ex) / length, gain = (dx * ez - dz * ex) / length;
+            if (out * gain >= 0) continue;
+            const gap = Math.abs(out), rate = Math.abs(gain);
+            if (gap - clear >= rate) continue;
+            const hit = Math.max(0, gap - Math.min(clear, gap * w.nearShare)) / rate;
+            if (hit >= share) continue;
+            // Where the boom meets the plane (or ends, short of it): how far along the face, and how high
+            const at = Math.min(1, gap / rate);
+            const along = (px * ex + pz * ez + (dx * ex + dz * ez) * at) / length;
+            const past = Math.max(0, -along, along - length);
+            if (past >= w.hardM + (soft ? w.endBandM : 0)) continue;
+            const u = Math.max(0, Math.min(1, along / length));
+            const y = head.y + dy * at;
+            if (y <= d[i + 6] + (d[i + 7] - d[i + 6]) * u) continue;
+            const top = d[i + 4] + (d[i + 5] - d[i + 4]) * u;
+            // (a wall with a road on it, met from outside: not passed over once that road is a road overhead)
+            let up = 0;
+            if (d[i + 8] && out > 0) {
+                const f = Math.max(0, Math.min(1, (top - roadY - w.roadFrom) / (w.roadTo - w.roadFrom)));
+                up = w.roadUpM * f * f * (3 - 2 * f);
+            }
+            const over = y - top - up;
+            if (!soft) {
+                if (over < w.hardOverM) share = hit;
+                continue;
+            }
+            const low = Math.max(0, Math.min(1, (w.overM + w.overBandM - over) / w.overBandM));
+            const inside = Math.max(0, Math.min(1, 1 - (past - w.hardM) / w.endBandM));
+            const weight = low * low * (3 - 2 * low) * inside * inside * (3 - 2 * inside);
+            share = Math.min(share, 1 - weight * (1 - hit));
+        }
+        return share;
+    }
+
+    // The share of a boom the camera eases toward: clear of the land (softShare) and of the walls (wallShare)
+    softReach(head, end, index, roadY) {
+        return Math.min(this.softShare(head, end, index), this.wallShare(head, end, roadY, true));
     }
 
     // The most the boom's end may stand over `anchorY` to pass roofClearM under every road over the boom from `head`
@@ -404,6 +507,11 @@ class WorldCamera {
         head.y = anchor.y + t.headM;
         head.z = anchor.z;
 
+        // The walls beside the road here: listed again only when the bike has moved on (the faces' owner sees to it)
+        // (the reach in whole steps, so a boom that grows a little asks for no new list)
+        const reachStep = WorldCamera.WALLS.reachM;
+        this.walls = this.faces ? this.faces(anchor.x, anchor.z, reachStep * Math.ceil(1 + 2 * sp.distance.x / reachStep)) : null;
+
         // The look target's offset from the anchor, toward the road ahead
         const ahead = this.lookTarget(s, bike.speed, bike.lift, this.ahead);
         const lx = ahead.x - anchor.x, ly = ahead.y - anchor.y, lz = ahead.z - anchor.z;
@@ -418,8 +526,8 @@ class WorldCamera {
             WorldCamera.spring(sp.lz, lz, t.lookRate, step, true, t.maxSpeedMs);
         }
 
-        // The swing gives way to the land and to the road ahead: the largest step of it whose boom the land shortens
-        // no more than the boom with no swing, and from whose end the road aheadM on is no nearer the side of the view
+        // The swing gives way to the land, the walls, a road overhead and the road ahead: the largest step of it whose
+        // boom the land and the walls shorten no more than the boom with no swing, that no deck brings lower, and from whose end the road aheadM on is no nearer the side of the view
         // than from the boom with no swing (or within roadKeep of the middle), eased. The boom tests below then hold
         // the camera clear of the land whatever the swing is, and aim() keeps the bike in view.
         let shareWant = 1;
@@ -440,13 +548,17 @@ class WorldCamera {
                 return Math.abs(angle) >= Math.PI / 2 ? Infinity : Math.abs(Math.tan(angle)) / half;
             };
             const bareEnd = boom(this.yaw, anchor, 0, this.bare);
-            const bare = this.softShare(head, bareEnd, bike.index) - t.swingSlack;
+            const bare = this.softReach(head, bareEnd, bike.index, bike.y) - t.swingSlack;
             const seen = Math.max(t.roadKeep, across(bareEnd));
+            // (and that a road overhead brings no lower than the boom with no swing: the roof's spring reads the road
+            // ahead, not a deck beside it, and a swing that carried the boom's end under one put the camera down
+            // under it at the hard limit, 14 m in one frame)
+            const roofed = this.overhead ? Math.min(sp.height.x, this.roofHeight(head, bareEnd, anchor.y, bike.y)) - t.swingSlack : -Infinity;
             shareWant = 0;
             for (const part of t.swingSteps) {
                 if (!part) break;
                 const end = boom(this.yaw, anchor, this.swing * part, this.want);
-                if (across(end) <= seen && this.softShare(head, end, bike.index) >= bare) {
+                if (across(end) <= seen && this.softReach(head, end, bike.index, bike.y) >= bare && (!this.overhead || this.roofHeight(head, end, anchor.y, bike.y) >= roofed)) {
                     shareWant = part;
                     break;
                 }
@@ -492,9 +604,10 @@ class WorldCamera {
         const laterWant = boom(this.yaw + sp.yaw.v * t.foreseeS, later, shift, this.aheadWant);
         later.y += t.headM;
 
-        // The land in the way: a spring toward the share clear of it now and foreseeS on, and never closer to it than hardClearM
-        const hard = this.clearShare(head, want, bike.index, t.hardClearM);
-        const soft = Math.min(this.softShare(head, want, bike.index), this.softShare(later, laterWant, bike.index));
+        // The land and the walls in the way: a spring toward the share clear of them now and foreseeS on, and never
+        // closer to the land than hardClearM, or to a wall than its own hard margin
+        const hard = Math.min(this.clearShare(head, want, bike.index, t.hardClearM), this.wallShare(head, want, bike.y, false));
+        const soft = Math.min(this.softReach(head, want, bike.index, bike.y), this.softReach(later, laterWant, bike.index, bike.y));
         if (fresh) WorldCamera.settle(sp.fraction, soft);
         else WorldCamera.spring(sp.fraction, soft, soft < sp.fraction.x ? t.fractionIn : t.fractionOut, step);
         if (sp.fraction.x > hard) {

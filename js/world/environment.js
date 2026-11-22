@@ -152,6 +152,8 @@ class WorldEnvironment {
         this.waitingOnTile = new Map();
         // The retaining walls of each ride section and of each side chunk, and the land's cuts to them by tile
         this.rideWallCache = new Map();
+        // Counts every change of what cameraFaces lists (the ride's wall plans, the sections drawn, the side roads' walls)
+        this.faceStamp = 0;
         this.sideWalls = new Map();
         this.cutCache = new Map();
         this.roadGroup = new THREE.Group();
@@ -357,6 +359,7 @@ class WorldEnvironment {
         const old = this.rideWallCache.get(index);
         if (!old) return;
         this.rideWallCache.delete(index);
+        this.faceStamp++;
         this.streamer.enqueue(`walls:${index}`, 0, () => {
             const sign = runs => runs.map(run => run.key + run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
             if (sign(this.rideWalls(index).runs) !== sign(old.runs)) this.dropCuts(this.streamer.sections[index].bbox);
@@ -531,6 +534,7 @@ class WorldEnvironment {
         for (const key of missing) (this.waitingOnTile.get(key) || this.waitingOnTile.set(key, new Set()).get(key)).add(`walls:${index}`);
         const out = { plan, runs, missing };
         this.rideWallCache.set(index, out);
+        this.faceStamp++;
         return out;
     }
 
@@ -580,6 +584,7 @@ class WorldEnvironment {
         this.roadGroup.add(group);
         this.onMeshBuilt(group);
         this.roadMeshes.set(section.index, group);
+        this.faceStamp++;
         this.triangleCount += group.userData.triangles;
     }
 
@@ -590,6 +595,7 @@ class WorldEnvironment {
         RoadMesh.dispose(old);
         this.triangleCount -= old.userData.triangles;
         this.roadMeshes.delete(section.index);
+        this.faceStamp++;
     }
 
     // Inside the ride's road band the ground is the ride's surface (WorldGround.heightAt). A side road that crosses
@@ -607,6 +613,101 @@ class WorldEnvironment {
         this.carriageways.each(x, z, reach, r => { if (r.depth >= -reach && r.y > y + WorldEnvironment.OVERHEAD_FROM_M && r.y - RoadMesh.DECK_M < low) low = r.y - RoadMesh.DECK_M; });
         return low;
     }
+
+    // The wall faces within `reach` of (x, z) that the chase camera's boom may not cross (WorldCamera.wallShare):
+    // {data, count}, WorldCamera.FACE numbers a face. Every one is read from what the road's builders and the physics
+    // already hold, so a new world needs no list of walls:
+    //   - the retaining walls of the ride's drawn sections and of the side roads (RoadMesh.wallRuns), with their parapets
+    //   - the face a wall goes on as past its end (taperAt), as deep as it holds the fill there
+    //   - the parapets of the ride's bridges (WorldGround.zoneAt's wall)
+    //   - the walls of the houses drawn (Scenery.houseAt's rects)
+    // The list is kept until the place has moved WALLS.stepM or one of those has changed (faceStamp, Scenery.stamp)
+    cameraFaces(x, z, reach) {
+        const W = WorldCamera.WALLS, N = WorldCamera.FACE;
+        const held = this.faceList || (this.faceList = { data: new Float64Array(N * 256), count: 0, x: Infinity, z: Infinity, reach: 0, stamp: -1, houses: -1 });
+        const houses = this.scenery ? this.scenery.stamp || 0 : 0;
+        if (held.stamp === this.faceStamp && held.houses === houses && held.reach >= reach && Math.hypot(x - held.x, z - held.z) < W.stepM) return held;
+        held.x = x;
+        held.z = z;
+        held.reach = reach;
+        held.houses = houses;
+        held.count = 0;
+        if (!this.streamer) return held;
+        const far = reach + W.stepM;
+        // One face from a to b, turned so that (ox, oz), the way it faces, is on the right of a to b
+        const face = (ax, az, bx, bz, topA, topB, footA, footB, ox, oz, road) => {
+            if (Math.min(Math.abs(ax - x), Math.abs(bx - x)) > far || Math.min(Math.abs(az - z), Math.abs(bz - z)) > far) return;
+            if (held.count * N >= held.data.length) {
+                const more = new Float64Array(held.data.length * 2);
+                more.set(held.data);
+                held.data = more;
+            }
+            const d = held.data, i = held.count++ * N;
+            const turned = (bz - az) * ox - (bx - ax) * oz < 0;
+            d[i] = turned ? bx : ax; d[i + 1] = turned ? bz : az; d[i + 2] = turned ? ax : bx; d[i + 3] = turned ? az : bz;
+            d[i + 4] = turned ? topB : topA; d[i + 5] = turned ? topA : topB; d[i + 6] = turned ? footB : footA; d[i + 7] = turned ? footA : footB;
+            d[i + 8] = road;
+        };
+        const near = box => box && box[2] >= x - far && box[0] <= x + far && box[3] >= z - far && box[1] <= z + far;
+        const drop = RoadMesh.PARAPET_DROP_M, H = RoadMesh.PARAPET_H_M;
+        const runs = list => {
+            for (const run of list) {
+                for (let k = 0; k + 1 < run.points.length; k++) {
+                    const a = run.points[k], b = run.points[k + 1], fa = Math.min(a[1], run.foot[k]), fb = Math.min(b[1], run.foot[k + 1]);
+                    // (a wall under PARAPET_DROP_M at both rows has no parapet, RoadMesh.edgeWorks)
+                    const rail = a[1] - fa >= drop || b[1] - fb >= drop ? H : 0;
+                    face(a[0], a[2], b[0], b[2], a[1] + rail, b[1] + rail, fa, fb, run.out[k][0], run.out[k][1], 1);
+                }
+            }
+        };
+        const points = this.route.points, ground = this.ground;
+        const edge = this.faceEdge || (this.faceEdge = [{}, {}]);
+        for (const index of this.roadMeshes.keys()) {
+            const section = this.streamer.sections[index];
+            if (!section || !near(section.bbox)) continue;
+            runs(this.rideWalls(index).runs);
+            for (let i = section.from; i < section.to && i + 1 < points.length; i++) {
+                const a = points[i], b = points[i + 1];
+                if (Math.min(Math.abs(a.x - x), Math.abs(b.x - x)) > far + 20 || Math.min(Math.abs(a.z - z), Math.abs(b.z - z)) > far + 20) continue;
+                const bridge = a.bits & b.bits & WorldRoute.FLAG.bridge;
+                for (const sign of [1, -1]) {
+                    const ox = sign * Math.cos(a.heading), oz = -sign * Math.sin(a.heading);
+                    if (bridge) {
+                        const p = WorldGround.pointAt(a, sign * (a.width / 2 + WorldGround.PARAPET_M), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + WorldGround.PARAPET_M), edge[1]);
+                        face(p.x, p.z, q.x, q.z, a.y + H, b.y + H, a.y - RoadMesh.DECK_M, b.y - RoadMesh.DECK_M, ox, oz, 1);
+                        continue;
+                    }
+                    if ((a.bits | b.bits) & 7) continue;
+                    const ha = this.taperAt(i, sign, 0), hb = this.taperAt(i, sign, 1);
+                    if (!(ha > 0 || hb > 0)) continue;
+                    const p = WorldGround.pointAt(a, sign * (a.width / 2 + ground.vergeAt(i, sign, 0)), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + ground.vergeAt(i, sign, 1)), edge[1]);
+                    // (as deep as the stone holds the fill's fall there, WorldGround.earthworkY)
+                    face(p.x, p.z, q.x, q.z, a.y, b.y, a.y - ha * Math.max(0, a.y - ground.landY(p.x, p.z, a.y)), b.y - hb * Math.max(0, b.y - ground.landY(q.x, q.z, b.y)), ox, oz, 1);
+                }
+            }
+        }
+        for (const list of this.sideWalls.values()) for (const run of list) if (near(run.box)) runs([run]);
+        if (this.scenery && this.scenery.perTile) {
+            for (const tile of this.scenery.perTile.values()) {
+                for (const w of tile.walls || []) {
+                    if (Math.abs(w.x - x) > far + w.along + w.across || Math.abs(w.z - z) > far + w.along + w.across) continue;
+                    const cos = Math.cos(w.heading), sin = Math.sin(w.heading), land = ground.landY(w.x, w.z, 0);
+                    // Its four walls: across along (cos, -sin), along along (sin, cos), as Scenery.houseAt reads the rect
+                    const at = (u, v, out) => { out.x = w.x + u * w.across / 2 * cos + v * w.along / 2 * sin; out.z = w.z - u * w.across / 2 * sin + v * w.along / 2 * cos; return out; };
+                    for (const [u0, v0, u1, v1] of WorldEnvironment.HOUSE_SIDES) {
+                        const p = at(u0, v0, edge[0]), q = at(u1, v1, edge[1]);
+                        face(p.x, p.z, q.x, q.z, land + W.houseM, land + W.houseM, land - W.houseM, land - W.houseM, (p.x + q.x) / 2 - w.x, (p.z + q.z) / 2 - w.z, 0);
+                    }
+                }
+            }
+        }
+        // (read last: a wall plan made for this list counts as seen)
+        held.stamp = this.faceStamp;
+        return held;
+    }
+
+    // The corners of a house's wall rect in turn, in halves of its size: the two ends of each of its four walls
+    static get HOUSE_SIDES() { return WorldEnvironment.houseSides || (WorldEnvironment.houseSides = [[-1, -1, 1, -1], [1, -1, 1, 1], [1, 1, -1, 1], [-1, 1, -1, -1]]); }
 
     // rideSurfaceAt: the ride surface under (x, z) when that is in the ride's band at about height y, or null
     rideSurfaceAt(x, z, y) {
@@ -1193,6 +1294,7 @@ class WorldEnvironment {
             for (const p of run.points) { run.box[0] = Math.min(run.box[0], p[0]); run.box[1] = Math.min(run.box[1], p[2]); run.box[2] = Math.max(run.box[2], p[0]); run.box[3] = Math.max(run.box[3], p[2]); }
         }
         if (sign(old) === sign(runs)) return;
+        this.faceStamp++;
         if (runs.length) this.sideWalls.set(k, runs);
         else this.sideWalls.delete(k);
         for (const run of old.concat(runs)) this.dropCuts(run.box);

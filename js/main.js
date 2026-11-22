@@ -377,7 +377,7 @@ class Game {
         this.prewarmWorldWeather();
 
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
-        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => this.environment.overheadY(x, z, y));
+        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => this.environment.overheadY(x, z, y), (x, z, reach) => this.environment.cameraFaces(x, z, reach));
         this.worldCamera.reset(start.heading);
 
         const normalCameraOffset = this.baseCameraOffset.clone();

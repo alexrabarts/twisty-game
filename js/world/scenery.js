@@ -731,6 +731,8 @@ class Scenery {
         this.houseTriangles += held.houseTriangles;
         this.triangles += held.treeTriangles + held.houseTriangles;
         this.perTile.set(tile.key, { group, walls: standing, ...held });
+        // (counts every change of the houses that stand: WorldEnvironment.cameraFaces lists their walls)
+        this.stamp = (this.stamp || 0) + 1;
         if (held.stoneSites && held.stoneSites.length) this.rankStones(bike, true);
         return group;
     }
@@ -878,6 +880,7 @@ class Scenery {
         this.boulderCount = (this.boulderCount || 0) - (held.boulders || 0);
         this.tuftCount = (this.tuftCount || 0) - (held.tufts || 0);
         this.perTile.delete(key);
+        this.stamp = (this.stamp || 0) + 1;
         // The stones it gives up are another tile's to draw
         if (held.stones) this.rankStones(this.rankBike, true);
     }

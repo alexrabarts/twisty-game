@@ -11,7 +11,8 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones
+//   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
@@ -130,7 +131,8 @@ function startServer() {
         res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream' });
         createReadStream(file).pipe(res);
     });
-    return new Promise(done => server.listen(0, '127.0.0.1', () => done(server)));
+    // (--port <n> serves on that port; an ephemeral one without it)
+    return new Promise(done => server.listen(Number(option('port') || 0), '127.0.0.1', () => done(server)));
 }
 
 const state = { blocked: [], notFound: [], pageErrors: [], lastError: '', injected: false };
@@ -5241,6 +5243,170 @@ function stoneChecks(results, failures) {
     for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
 }
 
+// world-camera-walls: nothing drawn stands between the chase camera and the bike. The world pilot rides every
+// hairpin (from CAMWALL_BEFORE_M before its apex to CAMWALL_AFTER_M past it) in the standard and the high view, and on
+// every frame a ray is cast from the camera to the bike and back (a face seen from behind counts too) at the meshes
+// drawn: the road works (retaining walls, parapets, decks, aprons), the land's tiles, the houses and the roads'
+// ribbons. It fails when one is met before the bike. It also casts along the four corners of the view's near plane
+// (`clipped`: a face that near is cut open by the near plane, the camera in a wall) and fails on those at a wall, a
+// house or the land.
+// --lane M rides M metres off the centre line, --swing K and --far K multiply the camera's swing and its boom as the
+// tuning rows camSwing and camDistance do, --apex s,s rides only the hairpins nearest those, and --off rides with
+// the rule switched off (the camera is given no wall faces), for the count before it.
+// --shots s,s,s --out <dir> takes two pictures at the hairpin nearest each s, in the mode and with the multipliers
+// given (the first of --modes): the worst frame of the ride with the rule off (<dir>/before) and the same tick of
+// the same ride with it on (<dir>/after). The bike's ride does not read the camera, so the two show one moment.
+//   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu
+const CAMWALL_BEFORE_M = 90;
+const CAMWALL_AFTER_M = 60;
+// (in the page) One hairpin ridden in one mode: {frames, ticks, works, land, house, road, clipped, worst}. With `until`
+// it stops at that tick and draws the frame
+async function camWallRide(placeSource, pilotSource, apex, mode, setup, beforeM, afterM, until) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, v = game.vehicle, cam = game.camera;
+    twistyDev.freeze();
+    game.cameraMode = mode;
+    const linger = game.worldLinger;
+    game.worldLinger = false;
+    // (a crash in the ride before is not carried into this one: placeAt leaves `crashed` as it was)
+    if (v.crashed) v.reset();
+    await placeAt(apex - beforeM);
+    game.worldLinger = linger;
+    v.speed = 6;
+    // The rule off: the camera is given no faces. The tuning rows' multipliers go in where Game applies them
+    if (!game.camWallFaces) game.camWallFaces = game.worldCamera.faces;
+    game.worldCamera.faces = setup.off ? null : game.camWallFaces;
+    game.worldCamera.reset(v.yawAngle);
+    if (!game.camWallInput) game.camWallInput = game.worldCameraInput;
+    game.worldCameraInput = (...args) => {
+        const input = game.camWallInput.apply(game, args);
+        input.offset.y *= setup.far; input.offset.z *= setup.far;
+        input.swing.x *= setup.swing; input.swing.look *= setup.swing;
+        return input;
+    };
+    twistyDev.autopilot({ speed: 20, lane: setup.lane });
+    // The shake is random on purpose: held at zero, so two rides of one hairpin are the same ride
+    const update = game.updateCamera.bind(game);
+    game.updateCamera = (...args) => {
+        const random = Math.random;
+        Math.random = () => 0.5;
+        try { return update(...args); } finally { Math.random = random; }
+    };
+    const ray = new THREE.Raycaster();
+    const from = new THREE.Vector3(), to = new THREE.Vector3(), dir = new THREE.Vector3(), corner = new THREE.Vector3();
+    const targets = [];
+    const collect = () => {
+        targets.length = 0;
+        const take = (kind, o) => { if (o.isMesh && o.visible) { o.userData.camWall = kind; targets.push(o); } };
+        for (const group of [env.roadGroup, env.sideGroup]) if (group) group.traverse(o => take(o.name === 'road-ribbon' || o.name === 'road-side' ? 'road' : 'works', o));
+        for (const held of env.tileMeshes.values()) take('land', held.mesh);
+        for (const held of env.scenery.perTile.values()) held.group.traverse(o => { if (String(o.name).startsWith('houses:')) take('house', o); });
+    };
+    // The first thing between a and b, from either side: its kind, or null
+    const between = (a, b, short) => {
+        const length = a.distanceTo(b) - short;
+        if (!(length > 0)) return null;
+        let best = null;
+        for (const [p, q] of [[a, b], [b, a]]) {
+            dir.copy(q).sub(p).normalize();
+            ray.set(p, dir);
+            ray.near = p === a ? 0 : short;
+            ray.far = p === a ? length : length + short;
+            const hit = ray.intersectObjects(targets, false)[0];
+            if (hit && (!best || (p === a ? hit.distance : length + short - hit.distance) < best.at)) best = { kind: hit.object.userData.camWall, at: p === a ? hit.distance : length + short - hit.distance };
+        }
+        return best;
+    };
+    const out = { apex: Math.round(apex), mode, frames: 0, ticks: 0, works: 0, land: 0, house: 0, road: 0, clipped: 0, worst: null, crashed: false };
+    let ticks = 0, score = 0;
+    try {
+        while (v.routeS < apex + afterM && !v.crashed && ticks < 60 * 90 && !(until && ticks >= until)) {
+            twistyDev.step(1, until && ticks === until - 1 ? { render: true } : {});
+            ticks++;
+            if (ticks < 20 || v.routeS < apex - 60) continue;
+            if (ticks % 30 === 0 || !targets.length) collect();
+            cam.updateMatrixWorld(true);
+            from.copy(cam.position);
+            to.set(v.position.x, v.position.y + 1, v.position.z);
+            out.frames++;
+            const block = between(from, to, 0.6);
+            if (block) out[block.kind]++;
+            // The near plane's corners: anything nearer the camera than they are is cut open
+            let cut = null;
+            for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+                corner.set(x, y, -1).unproject(cam);
+                const near = between(from, corner, 0);
+                if (near && near.kind !== 'road') cut = near.kind;
+            }
+            if (cut) out.clipped++;
+            // The worst frame: the camera farthest behind what it crossed
+            const depth = (block ? block.at : 0) + (cut ? 0.5 : 0);
+            if (depth > score) { score = depth; out.worst = { tick: ticks, s: Math.round(v.routeS * 10) / 10, kind: block ? block.kind : cut, behind: Math.round(depth * 100) / 100 }; }
+        }
+    } finally {
+        game.updateCamera = update;
+        game.worldCameraInput = game.camWallInput;
+        game.worldCamera.faces = game.camWallFaces;
+    }
+    out.ticks = ticks;
+    out.crashed = v.crashed;
+    if (v.crashed) out.cause = String(v.crashCause || v.crashReason || '');
+    out.started = Math.round((apex - beforeM) * 10) / 10;
+    out.s = Math.round(v.routeS * 10) / 10;
+    const c = cam.position;
+    out.camera = [c.x - v.position.x, c.y - v.position.y, c.z - v.position.z].map(n => Math.round(n * 100) / 100);
+    out.fraction = Math.round((game.worldCamera.fraction ?? 1) * 1000) / 1000;
+    out.swingShare = Math.round((game.worldCamera.swingShare ?? 1) * 100) / 100;
+    return out;
+}
+WORLD_PROBES.push('world-camera-walls');
+WORLD['world-camera-walls'] = async (page) => {
+    const modes = (option('modes') || '2,3').split(',').map(Number);
+    const setup = { lane: Number(option('lane') || 0), swing: Number(option('swing') || 1), far: Number(option('far') || 1), off: flag('off') };
+    let apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route), worldHairpins.toString());
+    const nearest = s => apexes.reduce((a, b) => (Math.abs(b - s) < Math.abs(a - s) ? b : a));
+    const ride = (apex, mode, how, until = 0) => page.evaluate(camWallRide, placeAt.toString(), pilotWorld.toString(), apex, mode, how, CAMWALL_BEFORE_M, CAMWALL_AFTER_M, until);
+    const shots = option('shots');
+    if (shots) {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        for (const dir of ['before', 'after']) mkdirSync(join(out, dir), { recursive: true });
+        const files = [];
+        for (const s of shots.split(',').map(Number)) {
+            const apex = nearest(s), mode = modes[0];
+            const scan = await ride(apex, mode, { ...setup, off: true });
+            // With nothing crossed, the frame at the apex
+            const tick = scan.worst ? scan.worst.tick : Math.round(scan.ticks * CAMWALL_BEFORE_M / (CAMWALL_BEFORE_M + CAMWALL_AFTER_M));
+            const pair = { apex: Math.round(apex), mode, tick, worst: scan.worst };
+            for (const [dir, off] of [['before', true], ['after', false]]) {
+                const at = await ride(apex, mode, { ...setup, off }, tick);
+                const file = join(out, dir, `apex-${Math.round(apex)}-mode-${mode}.png`);
+                await page.screenshot({ path: file });
+                pair[dir] = { file, s: at.s, camera: at.camera, fraction: at.fraction, swingShare: at.swingShare };
+            }
+            files.push(pair);
+        }
+        return { setup, files };
+    }
+    if (option('apex')) apexes = [...new Set(option('apex').split(',').map(Number).map(nearest))];
+    const rides = [];
+    for (const mode of modes) for (const apex of apexes) rides.push(await ride(apex, mode, setup));
+    const sum = key => rides.reduce((n, r) => n + r[key], 0);
+    const bad = rides.filter(r => r.works + r.land + r.house + r.road + r.clipped > 0);
+    return { setup, modes, hairpins: apexes.length, rides: rides.length, frames: sum('frames'), works: sum('works'), land: sum('land'), house: sum('house'), road: sum('road'), clipped: sum('clipped'), crashed: rides.filter(r => r.crashed).map(r => [r.apex, r.mode, r.s, r.cause]), short: rides.filter(r => !(r.frames > 100)).map(r => [r.apex, r.mode]), bad: bad.map(r => ({ apex: r.apex, mode: r.mode, frames: r.frames, works: r.works, land: r.land, house: r.house, road: r.road, clipped: r.clipped, worst: r.worst })) };
+};
+
+function camWallChecks(results, failures) {
+    const walls = results['world-camera-walls'];
+    if (!walls || walls.files) return;
+    if (walls.error) { failures.push(`world-camera-walls: ${walls.error}`); return; }
+    if (!(walls.frames > 0)) failures.push('world-camera-walls: no frame was read');
+    if (walls.short.length) failures.push(`world-camera-walls: under 100 frames at ${JSON.stringify(walls.short)}`);
+    const says = { works: 'a wall, a parapet or a deck', land: 'the land', house: 'a house', road: "a road's surface" };
+    for (const [kind, text] of Object.entries(says)) if (walls[kind]) failures.push(`world-camera-walls: ${text} stood between the camera and the bike on ${walls[kind]} of ${walls.frames} frames: ${JSON.stringify(walls.bad.filter(r => r[kind]).slice(0, 8))}`);
+    if (walls.clipped) failures.push(`world-camera-walls: the view's near plane cut a wall, a house or the land on ${walls.clipped} of ${walls.frames} frames: ${JSON.stringify(walls.bad.filter(r => r.clipped).slice(0, 8))}`);
+}
+
 // A view for world-junctions, in the page: the frame alone (no HUD), as a PNG data URL
 async function junctionEye(placeSource, eye) {
     const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
@@ -5371,6 +5537,7 @@ function worldChecks(report) {
     const { results, failures } = report;
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
+    camWallChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);
     vertexChecks(results, failures);
