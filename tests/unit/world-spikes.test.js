@@ -10,15 +10,17 @@
 //   4. `overhangs`: an edge of the ground a road lays more than 1 m over everything drawn outside it
 //   5. `flaps`: a wall's end with an open side beside it: an outer edge of the ground a road lays, within 3 m of the
 //      end, more than 0.15 m over what is drawn outside it with no stone across it
-//   6. `proud`: a wall's end that stands more than 0.5 m over the ground in front of it, a wall cut off at its
-//      height (`tapers`: the ends whose face has fallen to nothing; `low`: the ends in the ground; `joined`: the
-//      ends another road's wall goes on from)
+//   6. `proud`: a wall's end that is open or stands more than 0.25 m over the wall's least height (RoadMesh.
+//      WALL_MIN_UP_M over its road), a wall cut off at its full height (`closed`: the ends closed at about that
+//      height; `tapers`: the ends whose face has fallen to nothing, none may; `joined`: the ends another road's wall
+//      goes on from)
 //   7. `fins`: an upright face of stone whose top falls more than 0.4 a metre faster than its road
 //   8. `unfaced`: an upright face of stone, no parapet's, that is not laid and lit as its wall's face
 //   9. `thin`: a piece of wall thinner than the wall: a piece of wall (but a return) whose top has less stone over
 //      it than the wall's coping (RoadMesh.COPING_W_M: a marker stone and a margin either side), or any upright face of
 //      stone with nothing drawn at its top behind it
 //  10. `folds`: a piece of a wall's top (a coping, a parapet's top) folded over itself or over the piece beside it
+//  11. `low`: a wall's top less than RoadMesh.WALL_MIN_UP_M (0.5 m) over the road under it
 //
 // At 732d95c, before the land was laid back (TerrainMesh.laidBack) and banked to the walls' ends (CUT_BANK): 1084
 // stretched (245 beside, 839 set back, 14 of them in the wedge at km 7.8) and 149 overhangs. The importer gives a
@@ -43,14 +45,13 @@
 //   - 354 set back: 269 of free land, most the fall of the land under a road's fill where the importer's earthwork
 //     ends on the downhill side (left as it is: a road's fill is not undercut, LAY_HOLD), the rest a hillside
 //     steeper than the lay-back's slope for more than its reach; 85 with a node of a road's strip
-//   - 41 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
+//   - 9 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure, and
 //     slopes whose side stands over land that falls away beside them
-//   - 4 flaps: the ride's first row (two side roads' walls end there: the ground under the ride's verge ends with
-//     the ride, 3.3 m over the land), and the ground under a verge 0.15 m over a junction's paving at km 4.4 and
-//     0.16 m at km 2.3
-//   - 4 proud ends, none of the ride's own: the two side roads' walls at the ride's first row (the roads end there
-//     with the slice), a side road's wall that ends at its road's own end at km 1.7, and a side road's wall at the
-//     junction at km 2.3, where the paving takes the place of a slope
+//   - 3 flaps (one gap counts once, beside however many wall ends): the ride's first row (two side roads' walls end
+//     there: the ground under the ride's verge ends with the ride, 3.1 m over the land), and the ground under a verge
+//     0.15 m over a junction's paving at km 4.4 and 0.24 m at km 2.4
+//   - no proud end: the ends it counted (two side roads' walls at the ride's first row, one at its road's own end at
+//     km 1.7, one at the junction at km 2.3) are closed at the least height
 //
 // At 4590977 a flap stood at 98 of the 128 wall ends (33 of 38 on the synthetic world), and 64 overhangs. A wall's
 // end stands up to 2 m over the land in front of it (the land a wall levels lies under its top), and the slope laid
@@ -86,13 +87,23 @@
 // standing a hand from the piece that joins it to the ride's at km 2.4). Now a coping's pieces meet on one mitre at
 // each row (RoadMesh.copingDepths), a joining piece's coping never twists, and a wall's end that a piece joins has no
 // face past it
+//
+// At 2d1c6d3 every wall's top was its coping 3 cm over the road's edge, and past its end the wall sank to nothing:
+// 1 429 tops of stone stood less than 0.5 m over the road under them (442 on the synthetic world), and 101 ends tapered
+// to nothing (28). The owner asked for walls with a least height over the road, and for no wall to taper to nothing.
+// Now every wall stands RoadMesh.WALL_MIN_UP_M over the road's edge, its block closed (its side to the road and its
+// ends, `wallFace` 3), and past its end it keeps that height and ends closed. `proud` was a wall's end more than
+// 0.5 m over the ground in front of it, which every closed end now is: it is now an end that is open or stands well
+// over the least height over its own road (0 on both worlds, before and after: the 4 ends it counted on the Tremola
+// slice, 3 on the synthetic world, are closed ends at the least height). The ground beside the ends closed with the
+// wall too: 41 overhangs went to 9 (13 to 10)
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { spikeWindow, spikeReport, SPIKE_LIMITS, SPIKE_RULES } from '../helpers/world-spikes.js';
 
 const game = loadGame(undefined, []);
-const { THREE, WorldEnvironment, WorldData, TerrainMesh } = game;
+const { THREE, WorldEnvironment, WorldData, TerrainMesh, RoadMesh } = game;
 
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
 
@@ -163,7 +174,7 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
     beforeAll(async () => {
         report = await read({ id: 'tremola' });
         const km = Object.entries(report.km).sort((a, b) => a[0] - b[0]).map(([k, c]) => `${k}:${c.beside}/${c.setback}/${c.bare}/${c.ends}/${c.overhangs}`).join(' ');
-        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.low} low, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds\nby km (beside/setback/bare/ends/overhangs): ${km}`);
+        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.closed} closed, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds, ${report.low.length} low\nby km (beside/setback/bare/ends/overhangs): ${km}`);
     }, 3600000);
 
     test('the land of the whole slice was read', () => {
@@ -202,11 +213,15 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
         if (report.flaps.length > SPIKE_LIMITS.flaps) throw new Error(`${report.flaps.length} wall ends with an open side beside them (at most ${SPIKE_LIMITS.flaps}):\n${list(report.flaps)}`);
     });
 
-    test('no wall is cut off at its height: its face tapers to nothing or ends in the ground', () => {
-        if (report.proud.length > SPIKE_LIMITS.proud) throw new Error(`${report.proud.length} wall ends stand more than ${SPIKE_RULES.proudM} m over the ground in front of them (at most ${SPIKE_LIMITS.proud}):\n${list(report.proud)}`);
-        // (none of them the ride's own)
-        expect(report.proud.filter(o => o.owner === -1)).toEqual([]);
-        expect(report.tapers).toBeGreaterThan(90);
+    test('no wall is cut off at its full height and none tapers to nothing: every end is closed at the least height', () => {
+        if (report.proud.length > SPIKE_LIMITS.proud) throw new Error(`${report.proud.length} wall ends open or more than ${SPIKE_RULES.proudM} m over the least height (at most ${SPIKE_LIMITS.proud}):\n${list(report.proud)}`);
+        expect(report.tapers).toBe(0);
+        expect(report.closed).toBeGreaterThan(90);
+    });
+
+    test('every wall stands at least WALL_MIN_UP_M over the road', () => {
+        expect(SPIKE_RULES.minUpM).toBe(RoadMesh.WALL_MIN_UP_M);
+        if (report.low.length > SPIKE_LIMITS.low) throw new Error(`${report.low.length} tops of stone less than ${SPIKE_RULES.minUpM} m over the road (at most ${SPIKE_LIMITS.low}):\n${list(report.low)}`);
     });
 
     test('every upright face of stone is a wall\'s: none slanted out from a wall\'s end, none laid or lit apart from its wall', () => {
@@ -244,24 +259,25 @@ describe('the synthetic world: the same check', () => {
     let report;
     beforeAll(async () => {
         report = await read({ id: 'all', search: '?worldData=tests/fixtures/world/mini' });
-        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.low} low, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds`);
+        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.closed} closed, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds, ${report.low.length} low`);
     }, 3600000);
 
     test('every wall end is closed, with no open side beside it, and no closing face is bare', () => {
         expect(report.tiles).toBeGreaterThan(10);
         expect(report.bare).toEqual([]);
         expect(report.ends).toEqual([]);
-        expect(report.wallEnds).toBeGreaterThan(30);
+        // (24: walls whose ends past them would stand a few metres apart now go on as one, `bridged`)
+        expect(report.wallEnds).toBeGreaterThan(20);
         expect(report.flaps).toEqual([]);
         expect(report.unfaced).toEqual([]);
         expect(report.thin).toEqual([]);
         expect(report.folds).toEqual([]);
-        // (3 walls of its ride end at a structure 10 m and more over the land, where no slope goes on; 16 faces
-        // of two side roads' walls fall with roads steeper than 0.4, which the helper reads against the ride only.
-        // Before the taper: 36 proud ends, 111 fins)
-        expect(report.proud.length).toBeLessThanOrEqual(3);
+        // (16 faces of two side roads' walls fall with roads steeper than 0.4, which the helper reads against the ride
+        // only. Before the taper: 36 proud ends, 111 fins)
+        expect(report.proud).toEqual([]);
+        expect(report.low).toEqual([]);
         expect(report.fins.length).toBeLessThanOrEqual(16);
-        expect(report.tapers).toBeGreaterThan(20);
+        expect(report.tapers).toBe(0);
     });
 
     // Its land is a made hillside steeper than the lay-back's slope from end to end: what is left is that hillside
@@ -269,6 +285,6 @@ describe('the synthetic world: the same check', () => {
     test('what is left of its steep hillside can only shrink', () => {
         expect(report.beside.length).toBeLessThanOrEqual(265);
         expect(report.setback.length).toBeLessThanOrEqual(2188);
-        expect(report.overhangs.length).toBeLessThanOrEqual(13);
+        expect(report.overhangs.length).toBeLessThanOrEqual(10);
     });
 });

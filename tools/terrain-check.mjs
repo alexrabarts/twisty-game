@@ -2453,8 +2453,9 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                             if (!near || near.lod !== 0) continue;
                             const loc = {};
                             const ground = env.ground.groundY(q.x, q.z, { start: k - 8, end: k + 8 }, true, loc);
-                            raycaster.set(new THREE.Vector3(q.x, roadY + 0.3, q.z), down);
-                            raycaster.far = 2;
+                            // (from over a wall's coping, RoadMesh.COPING_UP_M over the road, so the ray meets the wall)
+                            raycaster.set(new THREE.Vector3(q.x, roadY + RoadMesh.COPING_UP_M + 0.3, q.z), down);
+                            raycaster.far = 2 + RoadMesh.COPING_UP_M;
                             const road = raycaster.intersectObjects([...roads, ...skirts], false)[0];
                             // A retaining wall or its parapet (works group 1 or 2) is not ground: the physics there is the wall
                             if (road && road.object.name === 'road-works' && (road.face.materialIndex === 1 || road.face.materialIndex === 2)) continue;
@@ -3119,7 +3120,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
     const r2 = v => Math.round(v * 100) / 100;
     const views = [], feetSeen = new Set();
     const footOpen = [], footOverRoad = [];
-    let feet = 0, footCoarse = 0, joints = 0;
+    let feet = 0, footCoarse = 0, overCoarse = 0, joints = 0;
     const jointOpen = [];
     const lodAt = (x, z) => { const held = env.tileMeshes.get(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`); return held ? Number(/lod(\d)/.exec(held.mesh.name)[1]) : 0; };
     const stations = [];
@@ -3197,6 +3198,9 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                         const seen = `over:${Math.round(px * 2)},${Math.round(pz * 2)}`;
                         if (feetSeen.has(seen)) continue;
                         feetSeen.add(seen);
+                        // (a far section's rows lie 16 m apart and its wall's top cuts across the bend's inside, where
+                        // the carriageway is read as it is: counted apart, as a foot over coarse land is)
+                        if (lodAt(px, pz) > 0) { overCoarse++; continue; }
                         footOverRoad.push({ s, x: r2(px), z: r2(pz), y: r2(py), road: r2(road), kind });
                     }
                 }
@@ -3226,6 +3230,8 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                         const mx = (ax + bx) / 2, my = (ay + by) / 2, mz = (az + bz) / 2;
                         if (inBand(mx, mz, my)) continue;
                         if (carriageway(mx, mz) !== null) continue;
+                        // (a wall's side to the road stands on the ground the road lays under its verge)
+                        if (kind === 'wall' && ribbonAt(mx, my, mz)) continue;
                         // (a parapet stands on its wall's coping: a foot on stone is no foot over the land)
                         if (kind === 'wall') {
                             down.set(new THREE.Vector3(mx, my + 0.05, mz), new THREE.Vector3(0, -1, 0));
@@ -3332,7 +3338,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
         backOpen: sum('backOpen'), backViews: views.filter(w => w.backOpen).length, worstBack: views.filter(w => w.backOpen).sort((a, b) => b.backOpen - a.backOpen).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, backOpen: w.backOpen, at: w.backAt })),
         skirtOpen: sum('skirtOpen'), skirtViews: views.filter(w => w.skirtOpen).length, worstSkirt: views.filter(w => w.skirtOpen).sort((a, b) => b.skirtOpen - a.skirtOpen).slice(0, 8).map(w => ({ s: w.s, mode: w.mode, skirtOpen: w.skirtOpen, at: w.skirtAt })),
         joints, jointOpen: jointOpen.length, worstJointOpen: jointOpen.slice(0, 8),
-        worksEdges: feet, footCoarse, footOpen: footOpen.length, worstFootOpen: footOpen.sort((a, b) => b.overM - a.overM).slice(0, 8),
+        worksEdges: feet, footCoarse, overCoarse, footOpen: footOpen.length, worstFootOpen: footOpen.sort((a, b) => b.overM - a.overM).slice(0, 8),
         footOverRoad: footOverRoad.length, footOverRoadByKind: { apron: footOverRoad.filter(f => f.kind === 'apron').length, wall: footOverRoad.filter(f => f.kind === 'wall').length },
         worstFootOverRoad: footOverRoad.sort((a, b) => (b.y - b.road) - (a.y - a.road)).slice(0, 8),
         perView: views

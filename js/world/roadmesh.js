@@ -66,16 +66,21 @@ class RoadMesh {
     // Metres between a deck's piers, and how far past a road's verge a pier keeps
     static get PIER_EVERY_M() { return 24; }
     static get PIER_CLEAR_M() { return 0.3; }
-    // How far a retaining wall's end returns under the road (under its coping, which closes its top)
+    // How far a retaining wall's end returns under the road where it has no coping of its own over it
     static get WALL_RETURN_M() { return 0.6; }
-    // Past its end a retaining wall's face goes on along the road's edge and falls to nothing over this many metres
-    // (RoadMesh.edgeWorks `taper`), and stands this deep under the slope that starts at its foot
+    // Past its end a retaining wall's face goes on along the road's edge and holds less and less of the fill over
+    // this many metres (RoadMesh.edgeWorks `taper`), and stands this deep under the slope that starts at its foot
     static get TAPER_M() { return 12; }
     static get TAPER_UNDER_M() { return 0.8; }
-    // Every retaining wall's top is a level coping this far over the road's edge, so the road meets it, and as wide
-    // as a marker stone (Scenery.STONE_WIDTH_M) with COPING_MARGIN_M either side: the stone stands on it
-    // (Scenery.wallRuns), and a wall's end and the wall that goes on past it (`taper`) keep the same thickness
-    static get COPING_UP_M() { return 0.03; }
+    // Every retaining wall stands at least this far over the road's edge, the wall that goes on past its end
+    // (`taper`) too, to its closed end: a rider who leaves the road at the verge meets a wall, not a strip of stone
+    // level with the road, and no wall falls to nothing
+    static get WALL_MIN_UP_M() { return 0.5; }
+    // Every retaining wall's top is a level coping at that height over the road's edge, as wide as a marker stone
+    // (Scenery.STONE_WIDTH_M) with COPING_MARGIN_M either side: the stone stands on it (Scenery.wallRuns), and a wall's
+    // end and the wall that goes on past it keep the same thickness. Its side to the road is a face of stone down to
+    // the verge, and its ends are closed (`wallFace` 3)
+    static get COPING_UP_M() { return RoadMesh.WALL_MIN_UP_M; }
     static get COPING_MARGIN_M() { return 0.1; }
     static get COPING_W_M() { return Scenery.STONE_WIDTH_M + 2 * RoadMesh.COPING_MARGIN_M; }
 
@@ -126,6 +131,26 @@ class RoadMesh {
 
     // The deepest a coping's mitre goes, in widths of the coping: on a sharper turn its point is cut back
     static get MITRE_MAX() { return 2; }
+
+    // A side of a wall's block of stone that is not its face (`wallFace` 3: drawn from the side it faces only, lit by
+    // the way given, its courses laid along the metres given): `out` the stone ({positions, shades, face})
+
+    // Its end, across it from its face's top corner `a` to the coping's inner corner `q`, down to `d`, facing `away`
+    // (along the road, out of the wall); its courses go on from the face's (`u` at `a`, on along the road by `turn`)
+    static endFace(out, a, q, d, away, u, turn, color) {
+        while (out.face.length < (out.positions.length / 3) * 4) out.face.push(0, 0, 0, 0);
+        RoadMesh.quad(out, a, q, [q[0], d, q[2]], [a[0], d, a[2]], color);
+        const v = u + turn * Math.hypot(q[0] - a[0], q[2] - a[2]);
+        for (const m of [u, v, v, u, v, u]) out.face.push(m, 3, away[0], away[1]);
+    }
+
+    // Its side to the road, from the coping's inner edge `ta` to `tb` down to `ya` and `yb` (under the verge), facing
+    // the road (`na`, `nb`: the wall's outward there, so it faces their opposite), its courses along `ua` to `ub`
+    static innerFace(out, ta, tb, ya, yb, na, nb, ua, ub, color) {
+        while (out.face.length < (out.positions.length / 3) * 4) out.face.push(0, 0, 0, 0);
+        RoadMesh.quad(out, tb, ta, [ta[0], ya, ta[2]], [tb[0], yb, tb[2]], color);
+        for (const [m, n] of [[ub, nb], [ua, na], [ua, na], [ub, nb], [ua, na], [ub, nb]]) out.face.push(m, 3, -n[0], -n[1]);
+    }
     // A retaining wall's face and its parapet's stand this far out from the road's edge, so the ribbon's own edge
     // (lifted LIFT_M over the wall's top) lies behind the stone and never shows as a line across it
     static get STONE_PROUD_M() { return 0.03; }
@@ -1073,17 +1098,16 @@ class RoadMesh {
                 const pa = fa ? fa.at : sides[k][key], pb = fb ? fb.at : sides[k + 1][key];
                 const o = (fa || fb).out;
                 const low = (f, p) => (f ? f.y : p[1] - 0.05);
-                // The end of a face of stone returns under the road (WALL_RETURN_M) from the face's own corner
-                // (STONE_PROUD_M out, along the row's outward): a solid end down to its foot and not a sheet seen
-                // edge-on, laid and lit as the wall's own face, whose courses turn the corner with it
-                const cap = (p, d, row) => {
+                // The end of a retaining wall is closed across its whole thickness: from the face's own corner
+                // (STONE_PROUD_M out, along the row's outward) to the coping's inner edge, from the coping's top
+                // down to the wall's foot, a solid end and not a sheet seen edge-on. Its courses turn the corner with
+                // the face's; lit by its own way out (`wallFace` 3, `away`: along the road, out of the wall)
+                const cap = (p, d, row, away) => {
                     const out = RoadMesh.outward(sides[row])[key], P = sides[row].bits & 7 ? 0 : RoadMesh.STONE_PROUD_M;
-                    const a = [p[0] + out[0] * P, p[1], p[2] + out[1] * P];
-                    const q = [p[0] - out[0] * RoadMesh.WALL_RETURN_M, p[1], p[2] - out[1] * RoadMesh.WALL_RETURN_M];
-                    while (stoneOut.face.length < (stoneOut.positions.length / 3) * 4) stoneOut.face.push(0, 0, 0, 0);
-                    RoadMesh.quad(stoneOut, a, q, [q[0], d, q[2]], [a[0], d, a[2]], colors.stone);
-                    const u = alongOf(row, key), turn = u + (row === k ? -1 : 1) * (RoadMesh.WALL_RETURN_M + P);
-                    for (const m of [u, turn, turn, u, turn, u]) stoneOut.face.push(m, 1, out[0], out[1]);
+                    const top = p[1] + RoadMesh.COPING_UP_M, back = coping[key][row] - P;
+                    const a = [p[0] + out[0] * P, top, p[2] + out[1] * P];
+                    const q = [p[0] - out[0] * back, top, p[2] - out[1] * back];
+                    RoadMesh.endFace(stoneOut, a, q, d, away, alongOf(row, key), row === k ? -1 : 1, colors.stone);
                 };
                 if (kind === 'apron') {
                     // Coloured as the land it lies on (linear, WorldEnvironment.edgeFoot): at its top as the land by
@@ -1139,6 +1163,10 @@ class RoadMesh {
                     const planned = [!!past && Number.isFinite(past[1][1]) && !Number.isFinite(past[0][1]), !!past && Number.isFinite(past[0][0]) && !Number.isFinite(past[1][0])];
                     const stops = [planned[0] || mouthRow(k) || (kindOf(k - 1, key) !== 'wall' && !slopes(k - 1)), planned[1] || mouthRow(k + 1) || (kindOf(k + 1, key) !== 'wall' && !slopes(k + 1))];
                     const share = t => Math.max(part(0, t), part(1, t)) * (stops[0] ? t : 1) * (stops[1] ? 1 - t : 1);
+                    // (between two walls of this edge whose faces past their ends would end under WALL_GAP_M apart, it goes
+                    // on to the next at its height however little it holds: two closed ends a few metres apart were two
+                    // walls that stopped short, round the inside of a hairpin)
+                    const bridged = from[0] && from[1] && !stops[0] && !stops[1] && past[0][0] + length + past[1][1] < 2 * RoadMesh.TAPER_M + RoadMesh.WALL_GAP_M;
                     // (and how far under the edge its foot stands for the wall's own foot at its end: the foot rises
                     // from there along the taper, so no step shows under the wall's corner where the land in front
                     // is drawn lower than the slope's own foot)
@@ -1148,24 +1176,35 @@ class RoadMesh {
                     // The stone's top at t along the segment: its face on the wall's line, proud of the edge, with the
                     // wall's coping over it (`inner`: its inner edge, COPING_W_M in from the face over the verge). Level
                     // across, so it takes one light all round a bend (tilted to the road, its pieces showed as facets
-                    // round a hairpin). Where the wall ends (`end`) it has sunk into the ground, as deep as the ground
-                    // under the verge and the slope's top there, so the wall dies with no height and no end of its own
-                    const crest = (t, end = false) => {
+                    // round a hairpin), and as high as the wall's, WALL_MIN_UP_M over the edge, all the way to its end:
+                    // the wall gets lower only as the ground in front of it rises, and no wall falls to nothing
+                    const crest = t => {
                         const edge = lerp(pa, pb, t), n = [oa[0] + (ob[0] - oa[0]) * t, oa[1] + (ob[1] - oa[1]) * t], P = RoadMesh.STONE_PROUD_M, C = coping[key][k] + (coping[key][k + 1] - coping[key][k]) * t - P;
-                        const up = end ? -RoadMesh.APRON_UNDER_M : RoadMesh.COPING_UP_M;
+                        const up = RoadMesh.COPING_UP_M;
                         return { edge, n, face: [edge[0] + n[0] * P, edge[1] + up, edge[2] + n[1] * P], inner: [edge[0] - n[0] * C, edge[1] + up, edge[2] - n[1] * C] };
                     };
                     // One place along the segment: the slope's top and foot there, and the stone over it
                     const at = (t, low = lerp(fA, fB, t)) => {
                         const edge = lerp(pa, pb, t);
                         const fall = edge[1] - low[1], held = fall * share(t);
-                        if (held < 0.1) return { top: under(edge), foot: seated(low), stone: null };
+                        if (held < 0.1) {
+                            if (!bridged) return { top: under(edge), foot: seated(low), stone: null };
+                            // (bridging a gap where it holds next to nothing, or the land stands higher: the slope as
+                            // it is, the stone on the edge with its foot in the ground under the slope's top)
+                            const c = crest(t);
+                            let deep = edge[1] - RoadMesh.APRON_UNDER_M - RoadMesh.TAPER_UNDER_M;
+                            if (sink) deep = Math.min(deep, sink(c.face[0], edge[1], c.face[2], c.n[0], c.n[1]));
+                            return { top: under(edge), foot: seated(low), stone: { face: c.face, inner: c.inner, deep, u: ua + (ub - ua) * t, n: c.n } };
+                        }
                         // The slope starts at the stone's foot and keeps its batter: its foot stands that much nearer
                         const left = 1 - held / fall;
                         const foot = left > 1e-3 ? seated([edge[0] + (low[0] - edge[0]) * left, low[1], edge[2] + (low[2] - edge[2]) * left]) : null;
                         // (it goes on from the wall's own corner on the wall's line, its top a coping as wide as the
                         // wall's: as a face alone it read from above as a sheet of no thickness standing on the land)
                         const { n, face, inner } = crest(t);
+                        // (a side road's none in another road's carriageway: its wall past its end at a junction stood
+                        // half a metre high in the ride's road. The ride's keeps out of a side road's mouth by its plan)
+                        if (guard && guard.owner >= 0 && [face, inner].some(q => guard.depth(q[0], q[2], edge[1] - 1, q[1]) !== null)) return { top: under(edge), foot: seated(low), stone: null };
                         // (and it stands in the land drawn in front of it: a slope with little run left stands on land
                         // that falls away under the stone's foot)
                         let deep = Math.min(edge[1] - held - RoadMesh.TAPER_UNDER_M, edge[1] - sunk(t));
@@ -1205,9 +1244,17 @@ class RoadMesh {
                             RoadMesh.quad(apronOut, lerp(top0, foot0, u0), lerp(top1, foot1, u0), lerp(top1, foot1, u1), lerp(top0, foot0, u1), [lerp(c0, d0, u0), lerp(c1, d1, u0), lerp(c1, d1, u1), lerp(c0, d0, u1)]);
                         }
                         if (a.stone || b.stone) {
-                            // Where the taper ends inside the strip its face and its coping, as wide as before, sink
-                            // to nothing in the ground there
-                            const point = (e, t) => e.stone || { ...crest(t, true), deep: lerp(pa, pb, t)[1] - RoadMesh.APRON_UNDER_M, u: ua + (ub - ua) * t, end: true };
+                            // Where the taper ends inside the strip it ends there at its full height, its foot in the
+                            // ground under the slope's top, with a closed end (`end`)
+                            // (and in the land drawn in front of it, as along the taper)
+                            const point = (e, t) => {
+                                if (e.stone) return e.stone;
+                                const c = crest(t);
+                                let deep = c.edge[1] - RoadMesh.APRON_UNDER_M - RoadMesh.TAPER_UNDER_M;
+                                if (sink) deep = Math.min(deep, sink(c.face[0], c.edge[1], c.face[2], c.n[0], c.n[1]));
+                                else if (landAt) { const land = landAt(c.face[0] + c.n[0] * 0.2, c.face[2] + c.n[1] * 0.2); if (land !== null) deep = Math.min(deep, land - RoadMesh.TAPER_UNDER_M); }
+                                return { ...c, deep, u: ua + (ub - ua) * t, end: true };
+                            };
                             pieces.push([point(a, t0), point(b, t1)]);
                         }
                         a = b;
@@ -1238,6 +1285,11 @@ class RoadMesh {
                         // The coping, lit by its own slope as the parapet's is (`face` 0)
                         RoadMesh.quad(stoneOut, A.face, B.face, B.inner, A.inner, colors.stone);
                         for (let v = 0; v < 6; v++) stoneOut.face.push(0, 0, 0, 0);
+                        // its side to the road, and at an end where it stops, that end closed across its thickness
+                        RoadMesh.innerFace(stoneOut, A.inner, B.inner, A.inner[1] - RoadMesh.COPING_UP_M - RoadMesh.APRON_UNDER_M, B.inner[1] - RoadMesh.COPING_UP_M - RoadMesh.APRON_UNDER_M, A.n, B.n, A.u, B.u, colors.stone);
+                        const len = Math.hypot(B.face[0] - A.face[0], B.face[2] - A.face[2]) || 1, along = [(B.face[0] - A.face[0]) / len, (B.face[2] - A.face[2]) / len];
+                        if (A.end) RoadMesh.endFace(stoneOut, A.face, A.inner, A.deep, [-along[0], -along[1]], A.u, -1, colors.stone);
+                        if (B.end) RoadMesh.endFace(stoneOut, B.face, B.inner, B.deep, along, B.u, 1, colors.stone);
                     }
                     continue;
                 }
@@ -1285,8 +1337,11 @@ class RoadMesh {
                     const ua = alongOf(k, key), ub = alongOf(k + 1, key);
                     for (const [u, n] of [[ua, oa], [ub, ob], [ub, ob], [ua, oa], [ub, ob], [ua, oa]]) stoneOut.face.push(u, 1, n[0], n[1]);
                     const ca = coping[key][k], cb = coping[key][k + 1];
-                    RoadMesh.quad(stoneOut, qa, qb, [qb[0] - ob[0] * cb, qb[1], qb[2] - ob[1] * cb], [qa[0] - oa[0] * ca, qa[1], qa[2] - oa[1] * ca], colors.stone);
+                    const ia = [qa[0] - oa[0] * ca, qa[1], qa[2] - oa[1] * ca], ib = [qb[0] - ob[0] * cb, qb[1], qb[2] - ob[1] * cb];
+                    RoadMesh.quad(stoneOut, qa, qb, ib, ia, colors.stone);
                     for (let v = 0; v < 6; v++) stoneOut.face.push(0, 0, 0, 0);
+                    // and its side to the road, from the coping down under the verge
+                    RoadMesh.innerFace(stoneOut, ia, ib, pa[1] - RoadMesh.APRON_UNDER_M, pb[1] - RoadMesh.APRON_UNDER_M, oa, ob, ua, ub, colors.stone);
                 } else RoadMesh.quad(out, pa, pb, [pb[0], depth(fb, pb), pb[2]], [pa[0], depth(fa, pa), pa[2]], kind === 'deck' ? colors.deck : colors.stone);
                 // Each end of a retaining wall's run returns under the road (`cap`)
                 const ended = [false, false];
@@ -1296,8 +1351,9 @@ class RoadMesh {
                     const goesOn = p => !!(foot && foot.joined && foot.joined(p[0], p[1], p[2]));
                     ended[0] = kindOf(k - 1, key) !== 'wall' && !goesOn(pa);
                     ended[1] = kindOf(k + 1, key) !== 'wall' && !goesOn(pb);
-                    if (ended[0]) cap(pa, depth(fa, pa), k);
-                    if (ended[1]) cap(pb, depth(fb, pb), k + 1);
+                    const len = Math.hypot(pb[0] - pa[0], pb[2] - pa[2]) || 1, along = [(pb[0] - pa[0]) / len, (pb[2] - pa[2]) / len];
+                    if (ended[0]) cap(pa, depth(fa, pa), k, [-along[0], -along[1]]);
+                    if (ended[1]) cap(pb, depth(fb, pb), k + 1, along);
                 }
                 // (none on the segment that ends at a structure's row: the structure's own parapet ends there, a hand
                 // from where this one would, and the two made a step)
@@ -1452,6 +1508,8 @@ class RoadMesh {
         const [ia, ib] = inner(...ways);
         RoadMesh.quad(out, qa, qb, ib, ia, colors.stone);
         for (let v = 0; v < 6; v++) face.push(0, 0, 0, 0);
+        // (and its side to the road, from the coping down under the verge)
+        RoadMesh.innerFace({ positions: out.positions, shades: out.shades, face }, ia, ib, a[1] - RoadMesh.APRON_UNDER_M, b[1] - RoadMesh.APRON_UNDER_M, ways[0], ways[1], 0, len, colors.stone);
         if (parapet) RoadMesh.rail({ positions: out.positions, shades: out.shades, face }, [[a[0], a[1] + up, a[2]], [b[0], b[1] + up, b[2]]], ways, RoadMesh.PARAPET_W_M, RoadMesh.PARAPET_H_M, colors.stone, [false, false], [0, len], P);
         while (face.length < (out.positions.length / 3) * 4) face.push(0, 0, 0, 0);
     }

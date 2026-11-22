@@ -126,6 +126,7 @@ class WorldEnvironment {
         // and a retaining wall where the ride's wall plan draws one (rideWalls)
         this.ground.walledAt = (index, sign) => this.walledAt(index, sign);
         this.ground.taperAt = (index, sign, t) => this.taperAt(index, sign, t);
+        this.ground.bridgedAt = (index, sign) => this.bridgedAt(index, sign);
         this.ground.wallTop = (index, sign) => this.wallTop(index, sign);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
@@ -553,6 +554,19 @@ class WorldEnvironment {
         return share(a) + (share(b) - share(a)) * u;
     }
 
+    // Whether the wall past a wall's end goes on from row `index` to the next, on the right (sign > 0) or the left, to the
+    // next wall of that edge however little it holds there (RoadMesh.edgeWorks `bridged`: the two walls' faces past
+    // their ends would end under WALL_GAP_M apart)
+    bridgedAt(index, sign) {
+        if (this.walledAt(index, sign) !== false) return false;
+        const walls = this.rideWalls(this.rowSection[Math.max(0, Math.min(this.rowSection.length - 1, index))]);
+        const past = walls.plan.past && walls.plan.past[sign > 0 ? 'r' : 'l'];
+        const a = past && past[index - walls.plan.base], b = past && past[index + 1 - walls.plan.base];
+        if (!a || !b || !Number.isFinite(a[0]) || !Number.isFinite(b[1])) return false;
+        const p = this.route.points[index], q = this.route.points[index + 1];
+        return a[0] + Math.hypot(q.x - p.x, q.z - p.z) + b[1] < 2 * RoadMesh.TAPER_M + RoadMesh.WALL_GAP_M;
+    }
+
     // The retaining wall under the ride's edge from row `index` to the next, on the right (sign > 0) or the left, from
     // the plan the stone is drawn from: {a, b, oa, ob, railed, heights}, its top line's two ends (the road's edge),
     // the way it faces at each, whether it carries a parapet (RoadMesh.railed, the drawn rule) and how far its face
@@ -642,7 +656,7 @@ class WorldEnvironment {
     // {data, count}, WorldCamera.FACE numbers a face. Every one is read from what the road's builders and the physics
     // already hold, so a new world needs no list of walls:
     //   - the retaining walls of the ride's drawn sections and of the side roads (RoadMesh.wallRuns), with their parapets
-    //   - the face a wall goes on as past its end (taperAt), as deep as it holds the fill there
+    //   - the face a wall goes on as past its end (taperAt), as high as the wall, as deep as it holds the fill there
     //   - the parapets of the ride's bridges (WorldGround.zoneAt's wall)
     //   - the walls of the houses drawn (Scenery.houseAt's rects)
     // The list is kept until the place has moved WALLS.stepM or one of those has changed (faceStamp, Scenery.stamp)
@@ -673,14 +687,15 @@ class WorldEnvironment {
             d[i + 8] = road;
         };
         const near = box => box && box[2] >= x - far && box[0] <= x + far && box[3] >= z - far && box[1] <= z + far;
-        const drop = RoadMesh.PARAPET_DROP_M, H = RoadMesh.PARAPET_H_M;
+        // (a retaining wall's top is its coping, WALL_MIN_UP_M over the edge, its parapet over that)
+        const drop = RoadMesh.PARAPET_DROP_M, H = RoadMesh.PARAPET_H_M, up = RoadMesh.COPING_UP_M;
         const runs = list => {
             for (const run of list) {
                 for (let k = 0; k + 1 < run.points.length; k++) {
                     const a = run.points[k], b = run.points[k + 1], fa = Math.min(a[1], run.foot[k]), fb = Math.min(b[1], run.foot[k + 1]);
                     // (a wall under PARAPET_DROP_M at both rows has no parapet, RoadMesh.edgeWorks)
                     const rail = a[1] - fa >= drop || b[1] - fb >= drop ? H : 0;
-                    face(a[0], a[2], b[0], b[2], a[1] + rail, b[1] + rail, fa, fb, run.out[k][0], run.out[k][1], 1);
+                    face(a[0], a[2], b[0], b[2], a[1] + up + rail, b[1] + up + rail, fa, fb, run.out[k][0], run.out[k][1], 1);
                 }
             }
         };
@@ -706,7 +721,7 @@ class WorldEnvironment {
                     if (!(ha > 0 || hb > 0)) continue;
                     const p = WorldGround.pointAt(a, sign * (a.width / 2 + ground.vergeAt(i, sign, 0)), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + ground.vergeAt(i, sign, 1)), edge[1]);
                     // (as deep as the stone holds the fill's fall there, WorldGround.earthworkY)
-                    face(p.x, p.z, q.x, q.z, a.y, b.y, a.y - ha * Math.max(0, a.y - ground.landY(p.x, p.z, a.y)), b.y - hb * Math.max(0, b.y - ground.landY(q.x, q.z, b.y)), ox, oz, 1);
+                    face(p.x, p.z, q.x, q.z, a.y + up, b.y + up, a.y - ha * Math.max(0, a.y - ground.landY(p.x, p.z, a.y)), b.y - hb * Math.max(0, b.y - ground.landY(q.x, q.z, b.y)), ox, oz, 1);
                 }
             }
         }

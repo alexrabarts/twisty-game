@@ -228,7 +228,12 @@ class WorldGround extends Ground {
         const side = this.sideRoadY(at.x, at.z);
         if (side !== null) return side + lift;
         const land = this.landY(at.x, at.z, loc.roadY);
+        // On a retaining wall of the ride's plan, or the wall that goes on past its end, the verge is the ribbon's up to
+        // the wall's side to the road; over the wall's thickness its coping, WALL_MIN_UP_M over the road (wallBand)
+        const band = this.wallBand(loc, half);
+        if (band && reach >= band.from && reach <= band.to) return loc.roadY + RoadMesh.COPING_UP_M + lift;
         if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach, lift));
+        if (band) return reach < band.from ? loc.roadY + lift : land;
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
         // parapet stands on the last PARAPET_W_M of the verge)
         return !(loc.flags && loc.flags.bridge) && reach < half + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M ? loc.roadY + lift : land;
@@ -238,6 +243,31 @@ class WorldGround extends Ground {
     // the fill and the land on their triangles (what a wheel or a foot stands on: Vehicle.groundPose)
     drawnY(loc) {
         return this.heightAt(loc, false, RoadMesh.LIFT_M);
+    }
+
+    // Where a retaining wall of the ride's plan stands at loc's side (WorldEnvironment.walledAt), or the wall that goes
+    // on past its end (taperAt): {from, to}, the reach from the centre line of its side to the road (the coping's inner
+    // edge, COPING_W_M in from its face, which stands STONE_PROUD_M out from the verge's edge) and of its face. Null
+    // where none stands or the plan is not known
+    wallBand(loc, half) {
+        if (loc.flags && loc.flags.bridge) return null;
+        const sign = Math.sign(loc.lateral || 1);
+        const walled = this.walledAt ? this.walledAt(loc.index, sign) : undefined;
+        if (walled === undefined) return null;
+        const face = half + this.vergeAt(loc.index, loc.lateral, loc.t) + RoadMesh.STONE_PROUD_M;
+        if (!walled) {
+            // (the wall past an end stands where it holds 0.1 m of the fill's fall or more, as it is drawn, or where
+            // it goes on to the next wall)
+            const share = this.taperAt ? this.taperAt(loc.index, sign, loc.t) : 0;
+            if (!(this.bridgedAt && this.bridgedAt(loc.index, sign))) {
+                if (!(share > 0)) return null;
+                const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
+                const at = WorldGround.pointAt(point, sign * (face - RoadMesh.STONE_PROUD_M), this.scratchBand || (this.scratchBand = {}));
+                if ((loc.roadY - this.landY(at.x, at.z, loc.roadY)) * share < 0.1) return null;
+            }
+        }
+        // (never on the carriageway itself: where a verge narrows by a junction the coping reaches over its edge)
+        return { from: Math.max(half, face - RoadMesh.COPING_W_M), to: face };
     }
 
     // The fill RoadMesh draws beside the road (edgeWorks' apron): the verge at the road's height, then a slope at the
@@ -319,6 +349,15 @@ class WorldGround extends Ground {
         // Where the road's edge stands on a retaining wall (the importer's drop node just past the verge, where RoadMesh
         // draws the wall and its parapet instead of the fill): the verge is drawn at the road's height up to the
         // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall
+        // A retaining wall of the ride's plan, and the wall past its end, stand WALL_MIN_UP_M over the road from the
+        // coping's inner edge: a rider who leaves the road there meets the wall's side, that high. Its parapet, where it
+        // has one (as RoadMesh.railed: a drop of PARAPET_DROP_M or more), stands on the coping's outer PARAPET_W_M,
+        // half a metre further out than the side the tyres meet
+        const band = this.wallBand(loc, halfRoad);
+        if (band) {
+            const railed = this.onRetainingWall(loc, halfRoad);
+            return reach > band.from ? { kind: 'wall', side: this.wallSide, sign, start: band.from, parapet: railed, line: true, height: RoadMesh.COPING_UP_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
+        }
         if (this.onRetainingWall(loc, halfRoad)) {
             const parapet = halfRoad + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M;
             return reach > parapet ? { kind: 'wall', side: this.wallSide, sign, start: parapet, parapet: true, line: true, height: RoadMesh.PARAPET_H_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };

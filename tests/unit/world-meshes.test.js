@@ -449,7 +449,7 @@ describe('RoadMesh', () => {
         expect(group.children.map(c => c.name)).toEqual(['road-ribbon', 'road-works']);
     });
 
-    test('past its end a wall goes on along the edge, as thick as the wall, and tapers to nothing; the slope starts at its foot', () => {
+    test('past its end a wall goes on along the edge, as thick and as high as the wall, and ends closed; the slope starts at its foot', () => {
         // A wall along the first 20 m (asked for at the rows to 16 m: a segment is a wall when either row is), then a
         // slope 3 m down; the land in front of the wall 2 m under the edge
         const rows = line(10);
@@ -485,19 +485,21 @@ describe('RoadMesh', () => {
             // A segment the stone holds whole is one piece of face and one of coping: none stands at the strip
             // between two rows
             expect(stone.filter(q => own(q) && Math.abs(q[2] - (20 + T / 6)) < 1e-6)).toEqual([]);
-            // Where it ends its face and its coping, as wide as before, have sunk into the ground: as deep as the
-            // ground under the verge and the slope's top there, with no height left
-            const tip = 20 + T;
-            expect(has(stone, [corner[0], edge[1] - RoadMesh.APRON_UNDER_M, tip])).toBe(true);
-            expect(has(stone, [edge[0] - sign * W, edge[1] - RoadMesh.APRON_UNDER_M, tip])).toBe(true);
-            expect(stone.filter(q => own(q) && Math.abs(q[2] - tip) < 1e-6 && q[1] < edge[1] - RoadMesh.APRON_UNDER_M - 1e-4)).toEqual([]);
+            // Where it ends it still stands WALL_MIN_UP_M over the edge, its coping as wide as before, and its end is
+            // closed across its thickness from the coping down to its foot in the ground under the slope's top
+            // (its foot in the land drawn in front of it, as along the taper)
+            const tip = 20 + T, deep = Math.min(edge[1] - RoadMesh.APRON_UNDER_M - RoadMesh.TAPER_UNDER_M, land - RoadMesh.TAPER_UNDER_M);
+            expect(RoadMesh.COPING_UP_M).toBe(RoadMesh.WALL_MIN_UP_M);
+            expect(RoadMesh.WALL_MIN_UP_M).toBeGreaterThanOrEqual(0.5);
+            for (const p of [[corner[0], edge[1] + RoadMesh.COPING_UP_M], [edge[0] - sign * W, edge[1] + RoadMesh.COPING_UP_M], [corner[0], deep], [edge[0] - sign * W, deep]]) expect(has(stone, [p[0], p[1], tip])).toBe(true);
+            expect(stone.filter(q => own(q) && Math.abs(q[2] - tip) < 1e-6 && q[1] < deep - 1e-4)).toEqual([]);
             expect(Math.abs(corner[0] - (edge[0] - sign * W))).toBeCloseTo(W + P, 6);
             // Past it there is no stone, and the slope starts at the edge as any slope does
             expect(stone.filter(q => own(q) && q[2] > 20 + T + 1e-6)).toEqual([]);
             expect(has(apron, [edge[0], edge[1] - RoadMesh.APRON_UNDER_M, 20 + T])).toBe(true);
         }
-        // Every upright face of it is laid and lit as the wall's own face (`face`: 1, or 2 where it is drawn from its
-        // front only), with the wall's metres; the rest is its coping, lit by its own slope as a parapet's is, near
+        // Every upright face of it is laid and lit as the wall's own face (`face`: 1, 2 where it is drawn from its
+        // front only, 3 its side to the road and its closed end), with the wall's metres; the rest is its coping, lit by its own slope as a parapet's is, near
         // level and as wide as the wall's coping all along
         const face = works.stone.face;
         let faces = 0, copings = 0;

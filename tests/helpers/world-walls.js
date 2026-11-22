@@ -38,6 +38,8 @@ export const WALL_LIMITS = { buried: 4, climbs: 6, hangs: 0, top: 1, blocks: 1, 
 export function wallWindow(game, env, store, at, nearM = 350) {
     const { THREE } = game;
     const BATTER = 1 / 1.5, PARAPET = 0.8, KERB = 0.3;
+    // (a wall's top is its coping, this far over its road's edge: RoadMesh.COPING_UP_M, the wall's least height)
+    const UP = game.RoadMesh ? game.RoadMesh.COPING_UP_M : 0.03;
     store.faces = store.faces || new Map();
     store.grids = store.grids || new Map();
     const v = new THREE.Vector3();
@@ -169,6 +171,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             const len = Math.hypot(b.top[0] - a.top[0], b.top[2] - a.top[2]);
             // Not a wall end's return or a parapet's end (short), nor a parapet's face (PARAPET high at both ends)
             if (len < 0.7) continue;
+            // nor a side of a wall's block that is not its face (its side to the road, its closed end: `wallFace` 3)
+            if (mesh.geometry.attributes.wallFace && Math.round(mesh.geometry.attributes.wallFace.getY(i)) === 3) continue;
             // nor a sheet whose top falls faster than a road does (tests/helpers/world-spikes.js counts those as `fins`)
             if (Math.abs(a.top[1] - b.top[1]) > 0.4 * len) continue;
             // (or the kerb it falls to at a wall's end, RoadMesh.PARAPET_END_M)
@@ -203,9 +207,10 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                 const under = taper ? groundTop(x + ox * 0.03, z + oz * 0.03) ?? hf : hf;
                 if (foot > under + 0.02) { face.hangs++; face.worstHang = Math.max(face.worstHang, r3(foot - under)); }
                 // (the surface nearest the top's own height: a viaduct 30 m over a side road's wall is not its road)
-                const behind = nearOf([...ribbons, ...aprons], x - ox * 0.15, z - oz * 0.15, y);
-                // (the top is the wall's coping, which stands COPING_UP_M over the road's edge: RoadMesh.edgeWorks)
-                if (behind === null || Math.abs(behind - y) > 0.13) { face.top++; face.worstTop = behind === null ? null : r3(behind - y); }
+                // (the top is the wall's coping, which stands UP over the road's edge: RoadMesh.edgeWorks; the road
+                // goes on under it to the face)
+                const road = nearOf([...ribbons, ...aprons], x - ox * 0.15, z - oz * 0.15, y - UP);
+                if (road === null || Math.abs(road - (y - UP)) > 0.13) { face.top++; face.worstTop = road === null ? null : r3(road - y); }
             }
             // Past each end, along the road's edge: whether the edge hangs over the ground with nothing under it
             for (const [end, dir] of [[a, -1], [b, 1]]) {
@@ -216,8 +221,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                     if (g === null) continue;
                     // On a structure (a deck's side, a bridge) the edge does not hang
                     if ([0.3, 0.8, 1.5].some(inM => { const deck = topOf(decks, x - ox * inM, z - oz * inM); return deck !== null && deck > end.top[1] - 2; })) continue;
-                    // (from the road's edge: the wall's top is its coping, COPING_UP_M over it)
-                    const drop = end.top[1] - 0.03 - g - d * 0.15;
+                    // (from the road's edge: the wall's top is its coping, UP over it)
+                    const drop = end.top[1] - UP - g - d * 0.15;
                     if (drop > 1) { open++; worst = Math.max(worst, r3(drop)); }
                 }
                 // The flank of what lies past the end: the ground in front of the wall just before its end against the
