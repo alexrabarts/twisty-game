@@ -44,6 +44,8 @@ const Tuning = {
         { id: 'lowside', label: 'Lowside room', hint: 'How far over the grip the lean may ask before the bike lowsides', group: 'Grip', min: 0.9, max: 1.3, step: 0.01, world: true, scales: [{ on: 'world', field: 'lowsideMargin' }] },
 
         { id: 'assist', label: 'Assist', hint: 'The hairpin assist: the line, the edge and the advised braking', group: 'Assist', min: 0, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'lineStrength' }, { on: 'world', field: 'edgeLeanRate' }, { on: 'world', field: 'adviceBrake' }] },
+        // Up to 1.2 only: 1 + extra must stay under lowsideMargin (WorldPhysics.edgeLean)
+        { id: 'edgeLean', label: 'Edge lean', hint: 'The extra lean a bike gets when it runs wide, near the outside edge of its turn', group: 'Assist', min: 0, max: 1.2, step: 0.01, world: true, scales: [{ on: 'world', field: 'edgeLean.extra' }] },
 
         { id: 'wheeliePop', label: 'Wheelie pop', hint: 'How hard the wheelie key lifts the front', group: 'Wheelie', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'wheeliePopMult' }] },
         { id: 'wheelieLift', label: 'Wheelie lift', hint: 'How much the throttle holds the front up', group: 'Wheelie', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'wheelieThrottleMult' }] },

@@ -130,7 +130,7 @@ describe('the rider falls on the real stage', () => {
     }, 600000);
 
     test('beside a wall: a bike ridden into it throws the rider over the bars, and he stops against it', async () => {
-        const bad = [], seen = { hits: 0 };
+        const bad = [], seen = { hits: 0, brushed: 0 };
         // Two stretches with a wall close beside the road: found by the bike's own zones
         const stretches = [];
         for (let s = env.startS + 100; s < env.endS - 100 && stretches.length < 2; s += 10) {
@@ -147,6 +147,13 @@ describe('the rider falls on the real stage', () => {
                 const v = bikeOn(p, { toward: sign * 0.3, speed });
                 let ticks = 0;
                 while (!v.crashed && ticks++ < 300) { v.speed = speed; v.leanAngle = 0; v.update(DT, 0, 0, 0, 0); }
+                // Under the closing bound an upright bike only brushes a wall that is lower than its bars (a parapet:
+                // WorldPhysics.wallBrush), and rides on: no fall to watch
+                if (speed * Math.sin(0.3) < env.physics.wallBrush.closeMax && !v.crashed) {
+                    expect([`wall at ${s} at ${speed} m/s`, v.brushes > 0]).toEqual([`wall at ${s} at ${speed} m/s`, true]);
+                    seen.brushed++;
+                    continue;
+                }
                 const tag = `wall at ${s} at ${speed} m/s`;
                 expect([tag, v.crashWhy]).toEqual([tag, 'wall']);
                 seen.hits++;
@@ -178,7 +185,9 @@ describe('the rider falls on the real stage', () => {
             }
         }
         if (bad.length) throw new Error(list(bad));
-        expect(seen.hits).toBe(6);
+        // Every ride met the wall: a crash, or at 8 m/s a brush where the wall is a low parapet (4 crashes at the least)
+        expect(seen.hits + seen.brushed).toBe(6);
+        expect(seen.hits).toBeGreaterThanOrEqual(4);
         console.log(`beside a wall: his middle at most ${seen.deepest.toFixed(4)} m into it`);
     }, 600000);
 

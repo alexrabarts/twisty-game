@@ -76,6 +76,8 @@ class RoadMesh {
     // (lifted LIFT_M over the wall's top) lies behind the stone and never shows as a line across it
     static get STONE_PROUD_M() { return 0.03; }
     static get PARAPET_H_M() { return 0.8; }
+    // Metres to the top of a road-closed barrier's posts (barrierGeometry): what a bike that touches it can meet
+    static get BARRIER_H_M() { return 1.2; }
     // Where its wall's run ends a parapet falls to a kerb of PARAPET_END_M over its last segment: the wall's top
     // comes down to the road's edge, where its face goes on and tapers out (edgeWorks `taper`). It is still drawn to
     // the wall's end, where the physics still stops the bike
@@ -1601,7 +1603,7 @@ class RoadMesh {
     static barrierGeometry() {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
-        for (const x of [-0.46, 0.46]) RoadMesh.box(out, x, 0.6, 0, 0.08, 1.2, 0.08, 0, colors.barrierWhite);
+        for (const x of [-0.46, 0.46]) RoadMesh.box(out, x, RoadMesh.BARRIER_H_M / 2, 0, 0.08, RoadMesh.BARRIER_H_M, 0.08, 0, colors.barrierWhite);
         const stripes = 8;
         for (const [y, flip] of [[1.0, 0], [0.62, 1]]) {
             for (let k = 0; k < stripes; k++) {

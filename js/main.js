@@ -3531,6 +3531,8 @@ class Game {
             this.showCrashNotification(this.vehicle.crashCause || undefined);
         }
 
+        this.sayBrush();
+
         if (this.environment.isWorld) this.updateWorldCrash(deltaTime);
 
         // Show wheelie help when over halfway round the course
@@ -4207,6 +4209,16 @@ class Game {
         showCallout(touch ? 'Tip: tap Wheelie' : 'Tip: Space for a wheelie', 'gold', 3000);
     }
 
+    // A wall brushed with the tyres and ridden on from (Vehicle.brush): said once for each contact, with the tyre's
+    // screech. A touch that ended as a crash says the crash
+    sayBrush() {
+        if (!this.vehicle.brushNew) return;
+        this.vehicle.brushNew = false;
+        if (this.vehicle.crashed || this.finished) return;
+        this.soundManager.playTireScreech();
+        showCallout(Game.BRUSH_TEXT, 'warn', Game.CALLOUT_MS.brush);
+    }
+
     showConeHitNotification(points) {
         showCallout(`Cone hit ${HudRules.number(points, { sign: true })}`, 'warn', 1000);
     }
@@ -4473,7 +4485,10 @@ Game.WORLD_CRASH = { mostS: 2.2, leastS: 1.5, stillMs: 0.5, stillS: 0.4, quickS:
 
 // How long a call-out that tells the rider what went wrong stays up (ms). These outlast the fall itself: the rider
 // reads the cause after the bike is back on the road, where the first half was spent watching the crash
-Game.CALLOUT_MS = { crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400 };
+Game.CALLOUT_MS = { crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400, brush: 1500 };
+
+// What the rider is told when the tyres brush a wall and the bike rides on (Vehicle.wallTouch)
+Game.BRUSH_TEXT = 'Brushed the wall';
 
 // What a world restart tells the rider, by reason (a crash says its own cause during the fall: beginWorldCrash)
 Game.WORLD_RESTART_TEXT = {

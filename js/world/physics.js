@@ -205,6 +205,37 @@ const WorldPhysics = Object.freeze({
     wallRiseM: 1,
     dropDepthM: 2.5,
 
+    // A touch on a wall (Vehicle.wallTouch, brush). The bike meets a wall with its tyres (its place is the line of its
+    // tyres), and what stands over them is further in or further out by the lean: a part `half` to the side and
+    // `height` up on the upright bike stands half x cos(a) - height x sin(a) toward the wall and
+    // height x cos(a) + half x sin(a) high, with `a` the lean away from the wall. A touch is a crash when a part
+    // stands further toward the wall than tyreM and the wall is as high as the part (a wall with no height given is),
+    // when the bike closes on the wall at over closeMax (the speed into the wall of every touch of one contact,
+    // summed: a wall turns a bike that grazes it, it does not carry one round a bend), when its heading is over
+    // glanceDeg off the wall's face, when it has been against the wall for mostS, or when it is found over deepM
+    // into the wall (it did not touch the face). Else it is a brush: the bike is held skinM off the face (a wall
+    // with a line of its own and a building are met a step ahead, so the bike is never in them), loses the speed it
+    // had into the wall and `scrub` of its speed each second for holdS after each touch (a touch within holdS of
+    // the last is the same contact), and its heading is turned kickDeg off the wall. `scrub` is no brake worth
+    // riding into a wall for: at 16 m/s it is 6.4 m/s^2, under the brake a bike has at full lean (6.6 before the
+    // rider's multiplier). One rule for every wall (a retaining wall's parapet, a bridge's, a rock face, a barrier,
+    // a building); one set of parts for every bike (the catalogue has no widths)
+    wallBrush: Object.freeze({
+        tyreM: 0.09,
+        parts: Object.freeze([
+            Object.freeze({ name: 'bar', half: 0.38, height: 1.05 }),
+            Object.freeze({ name: 'shoulder', half: 0.24, height: 1.35 })
+        ]),
+        closeMax: 3,       // m/s along the wall's normal
+        glanceDeg: 35,
+        mostS: 0.8,
+        holdS: 0.2,
+        scrub: 0.4,        // 1/s
+        kickDeg: 2,
+        skinM: 0.02,
+        deepM: 0.3
+    }),
+
     // Hairpin assist (WorldAssist in js/world/run.js). The level (off, low, normal) scales every assist by
     // assistLevels; each assist has one tuning value, and the rest only says where a bend counts as tight.
     assistLevels: Object.freeze({ off: 0, low: 0.5, normal: 1 }),
@@ -236,6 +267,19 @@ const WorldPhysics = Object.freeze({
     edgeBarrierM: 12,
     // The line capture and the edge assist reach the lean rate as one contribution, low-passed over this
     assistSmoothing: 0.1,  // s
+    // 4. Edge lean (Vehicle.edgeLean): a bike that runs wide gets more lean to tighten its line with. On the carriageway
+    //    within fromM of the edge on the outside of its turn (the edge it leans away from), the grip the lean reads
+    //    rises by `extra` x the level's share, by a smoothstep that is whole from fullM to the edge. The lean limit,
+    //    the grip cap and the lowside read that one number, so they move together, and the tightest turn (radiusFloor)
+    //    is divided by the same share: in a hairpin under about 8 m/s the lean limit is the lean of that turn, and
+    //    more grip alone would change nothing there. None on the inside edge (a lean
+    //    toward the edge), past the edge, or at level off. It is whole for holdS of use and gone fadeS later (the time
+    //    counts by the share in use, and starts again in the middle half of the road), so a rider cannot ride the
+    //    outside metre of a long bend on it. `extra` is a share of the grip (the tangent of the lean), about 3
+    //    degrees at the limit, for two reasons: 1 + extra is under lowsideMargin, so a bike at the raised limit that
+    //    loses it is never over the lowside, and the most daring rider's lean with it (59.9 degrees) is under
+    //    floorLeanDeg (tests/unit/world-edge-lean.test.js holds both)
+    edgeLean: Object.freeze({ fromM: 1.5, fullM: 0.5, extra: 0.12, holdS: 1.5, fadeS: 1 }),
 
     // Used by the run layer (R3) and the restart (R3), kept here with the rest
     restartSpeedMax: 15,

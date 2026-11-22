@@ -162,13 +162,18 @@ class WorldGround extends Ground {
     }
 
     inBarrier(x, z) {
+        return this.barrierAt(x, z) !== null;
+    }
+
+    // The barrier box (x, z) is in, or null
+    barrierAt(x, z) {
         for (const b of this.barriers) {
             const dx = x - b.x, dz = z - b.z;
             const along = dx * b.sin + dz * b.cos;
             const across = dx * b.cos - dz * b.sin;
-            if (Math.abs(along) <= WorldGround.BARRIER_DEPTH_M && Math.abs(across) <= b.half) return true;
+            if (Math.abs(along) <= WorldGround.BARRIER_DEPTH_M && Math.abs(across) <= b.half) return b;
         }
-        return false;
+        return null;
     }
 
     locate(x, z, hint, out = {}) {
@@ -283,27 +288,32 @@ class WorldGround extends Ground {
     }
 
     // What the ground is at loc.lateral: {kind, side, sign, start}. `start` is how far
-    // from the centre line the zone begins, the face the bike is put back to on a wall.
+    // from the centre line the zone begins, the face the bike is put back to on a wall. A wall that is drawn to a
+    // height has it (`height`, metres over the road: a parapet, a barrier); a wall whose face is a line along the
+    // road at `start` says so (`line`: a parapet, the rock beside a tunnel's road; a rock face of the land is read
+    // from the 8 m zone layer and has none); a barrier has its box (`box`), whose faces are not along the road.
+    // Vehicle.brushWall reads all three
     zoneAt(loc, halfRoad) {
         const sign = loc.lateral < 0 ? -1 : 1;
         const reach = Math.abs(loc.lateral);
         const at = this.position(loc);
         // A barrier is solid where it stands: the bike is stopped where it is, not moved onto the road
-        if (this.barriers.length && this.inBarrier(at.x, at.z)) return { kind: 'wall', side: this.wallSide, sign, start: reach };
+        const box = this.barriers.length ? this.barrierAt(at.x, at.z) : null;
+        if (box) return { kind: 'wall', side: this.wallSide, sign, start: reach, box, height: RoadMesh.BARRIER_H_M };
         if (reach <= halfRoad) return { kind: 'road', side: this.roadSide, sign, start: 0 };
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         if (point.bits & (WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery)) {
             // Rock beside a tunnel or gallery: a wall just past the kerb
-            return { kind: reach <= halfRoad + WorldGround.BENCH_M ? 'shoulder' : 'wall', side: this.benchSide, sign, start: reach <= halfRoad + WorldGround.BENCH_M ? halfRoad : halfRoad + WorldGround.BENCH_M };
+            return { kind: reach <= halfRoad + WorldGround.BENCH_M ? 'shoulder' : 'wall', side: this.benchSide, sign, start: reach <= halfRoad + WorldGround.BENCH_M ? halfRoad : halfRoad + WorldGround.BENCH_M, line: true };
         }
         // A bridge has its parapet at the edge of the deck: past it there is no ground to ride or fall to
-        if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + WorldGround.PARAPET_M };
+        if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + WorldGround.PARAPET_M, line: true, height: RoadMesh.PARAPET_H_M };
         // Where the road's edge stands on a retaining wall (the importer's drop node just past the verge, where RoadMesh
         // draws the wall and its parapet instead of the fill): the verge is drawn at the road's height up to the
         // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall
         if (this.onRetainingWall(loc, halfRoad)) {
             const parapet = halfRoad + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M;
-            return reach > parapet ? { kind: 'wall', side: this.wallSide, sign, start: parapet, parapet: true } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
+            return reach > parapet ? { kind: 'wall', side: this.wallSide, sign, start: parapet, parapet: true, line: true, height: RoadMesh.PARAPET_H_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
         }
         const kind = this.kindAt(at.x, at.z);
         // Where the zone began: step back toward the road while the kind holds

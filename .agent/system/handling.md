@@ -38,6 +38,7 @@ The rows:
 | `gripDry`, `gripWet` | the lean's grip (`lateralFriction`), dry or wet | both |
 | `lowside` | `lowsideMargin` (how far over the grip the lean may ask before the bike lowsides) | world |
 | `assist` | `lineStrength`, `edgeLeanRate`, `adviceBrake` | world |
+| `edgeLean` | `edgeLean.extra` (the grip a bike that runs wide gains near the outside edge; 0 to 1.2 only, "The edge lean") | world |
 | `wheeliePop`, `wheelieLift` | the rider's `wheeliePop` and `wheelieThrottle`, over `Vehicle.popShare` and `liftShare` | both |
 | `offroadPace` | `landCapSpeed`, of the world, of `offroad` and of `offroad.top` | world |
 | `bar` | `Vehicle.BAR` `counter`, `counterMax`, `intoMax` (drawn only) | both |
@@ -133,7 +134,7 @@ Before the trait every rider held 18.71 m/s dry and 15.66 wet (50 degrees). Wet 
 - **The stars.** The handling bar's rider part is the mean of `hairpins` and `daring` (`STAT_BARS`). No star of a shipped rider moved.
 - **The crew** read `CREW_PACES` (`corner`, by the `hairpins` trait) and not this table: their cornering pace by daring is the group ride's job.
 - **The drawn body lean** (`bodyLean`) is another thing and did not change.
-- **The board floors.** The most lean a ride can have is 59.3 degrees (daring 5 in Track), so the floors are worked out at `WorldPhysics.floorLeanDeg` (60), not at the bike's 50. A new rider mode or a wider `RIDER_LEAN` that passes 60 fails `tests/unit/tuning-defaults.test.js`: raise `floorLeanDeg` and import again. `.agent/system/world-data.md`, "The floors and the rider's lean", has the rule and the check.
+- **The board floors.** The most lean a ride can have is 59.9 degrees (daring 5 in Rain or Road, at the outside edge with the edge lean; 59.3 in Track, which has none), so the floors are worked out at `WorldPhysics.floorLeanDeg` (60), not at the bike's 50. A new rider mode or a wider `RIDER_LEAN` that passes 60 fails `tests/unit/tuning-defaults.test.js`, and a larger `edgeLean.extra` that does fails `tests/unit/world-edge-lean.test.js`: raise `floorLeanDeg` and import again. `.agent/system/world-data.md`, "The floors and the rider's lean", has the rule and the check.
 
 ## The rider modes
 
@@ -142,6 +143,7 @@ Before the trait every rider held 18.71 m/s dry and 15.66 wet (50 degrees). Wet 
 | | Rain | Road | Sport | Track |
 | --- | --- | --- | --- | --- |
 | hairpin assist | `normal` (1) | `normal` (1) | `low` (0.5) | `off` (0) |
+| the edge lean's grip at the outside edge ("The edge lean") | 1.12 | 1.12 | 1.06 | 1 |
 | `topSpeed` | 0.85 | 1 | 1 | 1 |
 | `accel` | 0.8 | 1 | 1 | 1 |
 | `throttle` | 0.7 | 1 | 1.25 | 1.5 |
@@ -179,6 +181,77 @@ Rules:
 - **The group's riders** have their own pace (`Traffic.PACES`) and read no mode.
 
 To add a mode: add one row to `RiderModes.MODES`. Use only ids of `Tuning.PARAMS`, each in its row's range, and a key of `WorldPhysics.assistLevels`. For a new `tone`, add its colour to `.hud-mode[data-tone]` and `.mode-btn.on[data-tone]` in `css/ui.css`. The control, the key, the tag and the storage need no change. If a mode needs a number that has no row, add the row to `Tuning.PARAMS` with its measure (above), not a special case.
+
+## The edge lean
+
+The owner: "how about we allow the max lean angle to increase as you reach the edge of the road? that would add a slight assist and i think make it a little more playable".
+
+A bike that runs wide has a little more lean to tighten its line with. The data is one row of the world physics table, `WorldPhysics.edgeLean`: `{ fromM: 1.5, fullM: 0.5, extra: 0.12, holdS: 1.5, fadeS: 1 }`. The code is `Vehicle.edgeLean`, read once a tick in `updateWorldPhysics`.
+
+- **Where.** On the carriageway, within `fromM` of the edge the bike leans away from: the outside edge of its turn. The share is a smoothstep of the distance to that edge: 0 at `fromM`, whole from `fullM` to the edge. A lean toward the near edge (the inside of the turn) gets none, and so does a bike past the edge: it never helps a cut.
+- **What rises.** The grip the lean reads (the tangent of the lean), by `extra` x the share. The lean limit, the grip cap and the lowside read that one number, so they move together. The tightest turn (`radiusFloor`) is divided by the same share. Under about 8 m/s the lean limit is the lean of that turn and not the grip's, so in a hairpin more grip alone changes nothing.
+- **How much.** `extra` is a share of the grip, not of the angle. At the edge the lean limit is about 3 degrees more:
+
+| `daring` | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| lean limit in a world, dry (degrees) | 51 | 52.5 | 54 | 55.5 | 57 |
+| at the outside edge, Rain and Road | 54.13 | 55.58 | 57.03 | 58.46 | 59.89 |
+| at the outside edge, Sport | 52.62 | 54.10 | 55.57 | 57.04 | 58.51 |
+
+- **By the rider mode.** It is an assist: the mode's hairpin assist level scales it (`WorldPhysics.assistLevels`). Rain and Road have all of it, Sport half, Track none. The rider's daring is in the limit it multiplies, so it stays on top.
+- **It never drops the bike.** 1 + `extra` (1.12) is under `lowsideMargin` (1.15). A bike at the raised limit that loses the extra at once is not over the lowside. The lean comes back to the plain limit with the steering held (`limitReturn`).
+- **It is not a rail.** The time in use counts by the share (`edgeLeanUsedS`). The extra is whole for `holdS` of use and gone `fadeS` later. The count starts again when the bike is in the middle half of the road. So a rider cannot ride the outside of a long bend on it.
+- **The board floors hold.** With it the most lean of any ride is 59.89 degrees, under `floorLeanDeg` (60). The floors need no new import.
+- **The tuning row** is `edgeLean`, 0 to 1.2: at 1.2 the gain is 1.144, still under the lowside margin. 0 is the bike without it.
+- **Road is still the bike with no mode.** The edge lean is in the bike with no mode too: the test that rides Road against no mode and no tuning (`tests/unit/rider-modes.test.js`) passes unchanged.
+- **Classic legs** have none: a leg has no world physics.
+
+What it is worth, measured (`tests/unit/world-edge-lean.test.js`). A scripted rider comes into every hairpin of a world over the advised speed, holds that speed, steers for the centre line and leans as far as the bike lets it:
+
+- 1 m/s over the advised speed nobody runs off, with the edge lean or without it. The advice is a lean of 35 degrees, and the limit is 51 to 57.
+- The speed over the advice at which the rider first puts a wheel past the edge is 3.48 m/s without it and 3.55 m/s with it, the mean of the 35 hairpins of the shipped stage (to 1/16 m/s). The gain is 0 to 0.19 m/s by the hairpin, and no hairpin is worse.
+- The reason: a bike at its limit drifts wide through the whole bend. In the last 1.5 m a turn 12% tighter moves the line by about 0.1 m. With the same 12% over the whole outer side of the road the gain is 0.45 m/s (0.25 to 0.75), and with a zone of 3.5 m it is 0.17 m/s.
+
+So it is a slight assist, as asked. A larger one needs a wider zone, which is a rule about the whole road and not about its edge, or a larger `extra`, which needs a higher `floorLeanDeg` (a new import) and a lowside that waits for the lean to come back.
+
+## A brush against a wall
+
+The owner: "also, if we're banked and it's only the tires that contact the wall, i don't think that should cause a crash".
+
+A world's bike meets a wall with its tyres: its place is the line of its tyres. What stands over them is further in or further out by the lean. The data is `WorldPhysics.wallBrush`; the code is `Vehicle.wallTouch` (the verdict), `brush` (what a brush does), `brushStep`, `brushWall`, `brushZone` and `brushHouse`.
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `tyreM` | 0.09 | Half the tyre's width: what may touch the wall. |
+| `parts` | bar: half 0.38, height 1.05; shoulder: half 0.24, height 1.35 | What may not. Metres on the upright bike. One set for every bike: the catalogue has no widths. |
+| `closeMax` | 3 m/s | The most speed into the wall, along its normal, over all the touches of one contact. |
+| `glanceDeg` | 35 | The most the heading may be off the wall's face. |
+| `mostS` | 0.8 s | The longest contact. |
+| `holdS` | 0.2 s | A touch lasts this long. A touch within it is the same contact. |
+| `scrub` | 0.4 /s | The share of the speed lost each second of a contact. |
+| `kickDeg` | 2 | The heading is turned this far off the face. |
+| `skinM` | 0.02 | The bike is held this far before the face. |
+| `deepM` | 0.3 | A bike found further into a wall than this did not touch its face: the crash it was. |
+
+The rule:
+
+- **The shape.** With the bike leaned `a` away from the wall, a part `half` to the side and `height` up stands `half x cos(a) - height x sin(a)` toward the wall and `height x cos(a) + half x sin(a)` high. A part that stands further toward the wall than `tyreM` is in the wall when the tyres touch it. From 15.3 degrees of lean away every part is inside the line of the tyres.
+- **The wall's height.** A part meets only a wall as high as the part. A wall with a drawn height has it in its zone (`WorldGround.zoneAt` `height`): a parapet is `RoadMesh.PARAPET_H_M` (0.8 m), a barrier `RoadMesh.BARRIER_H_M` (1.2 m). A parapet is under the bars of an upright bike, so the tyres alone meet it. The rock beside a tunnel's road, a rock face of the land and a building have no height: they are as high as the rider.
+- **A crash**, with the class it had (`wall`, or `building`): a part meets the wall (upright or leaned toward a high wall); the speed into the wall is over `closeMax`; the heading is over `glanceDeg` off the face; the contact has lasted `mostS`; or the bike is found over `deepM` into the wall (the ride's projection came over from another strand of a ladder, so it did not touch the face).
+- **A brush** otherwise. The bike is held `skinM` before the face. It loses the speed it had into the wall, and `scrub` of its speed each second for `holdS` after each touch. Its heading is turned along the face and `kickDeg` off it. The game says "Brushed the wall" once for each contact, in the warn tone for `Game.CALLOUT_MS.brush`, with the tyre's screech (`Game.sayBrush`).
+- **Never in a drawn wall with a line.** A wall whose face is a line along the road (`zone.line`: a parapet, the rock beside a tunnel's road) and a building are looked for one step ahead: the place the bike reaches at its heading, and `skinM` more. A brush stops the bike before the face. Nothing is looked for while that place is on the carriageway, so a ride on the road costs nothing more.
+- **A barrier and a rock face of the land are met where the crash was.** Their zone is read on the bike's piece of the ride, and a place one step ahead can be in one the bike never comes to. So the bike is in them for one step, 5 cm at the most (`closeMax` x the step), and is then put back.
+- **A brush only takes the place of a crash.** A ride that did not crash before rides as before, to the last bit (`tests/unit/tuning-defaults.test.js` rides the stage that way). The one exception: a bike that passed within `skinM` of a wall with a line now brushes it.
+- **One rule for every wall.** A wall zone of the ride (a retaining wall's parapet, a bridge's, tunnel rock, a rock face of the land) has its face along the road. A barrier's face is its box's (`zone.box`). A building's is the nearest side of its wall rect (`Scenery.houseAt`).
+- **A wall is no berm and no brake.** The speed into the wall counts over the whole contact, so a wall turns a bike that grazes it and does not carry one round a bend. Under 16 m/s the scrub (6.4 m/s^2 there) is under the brake a bike has at full lean (6.6 in Road, before the rider's multiplier).
+- **Classic legs** keep their wall crash: the rule reads the world physics.
+
+Measured (`tests/unit/world-wall-brush.test.js`):
+
+- Leaned 20, 35 and 45 degrees away at 15 m/s, 6 degrees into the wall (1.6 m/s): a brush against every kind of wall, at least 0.96 m/s lost, the bike never past the face.
+- Upright or leaned 35 degrees toward a high wall: the crash. Upright at a parapet: a brush. At 16 degrees into the wall (4.1 m/s): a crash at every lean.
+- Round the outside rock of a 12 m bend, leaned 50 degrees into the bend: at 17 to 22 m/s the bike brushes 1 to 3 times and rides on at about 9 m/s; at 25 and 30 m/s it crashes.
+- The shipped stage: 15 of the 35 hairpins have a wall within 4 m of the outside edge, 14 of them a parapet 0.9 m past the edge. Ridden wide at the advised speed, 13 brush the wall once and ride on (the lean is 7 to 21 degrees), 2 never reach the wall, and none crashes. The fixture world has 2 such hairpins: one brush, and one ride that ends in a roadworks board on the wide line.
 
 ## A wheelie by the bike
 
@@ -271,7 +344,7 @@ Whoever raises a crash names the class of its cause. No code reads the words of 
 | `rear` | the rear came round in a power slide | `highside` |
 | `fast` | too fast over the land | `highside` |
 | `flip`, `landing` | a wheelie over the back; a jump landed badly | `highside` |
-| `wall`, `car`, `rider`, `building`, `obstacle` | rode into a wall or barrier, a car, a rider of the group, a building, a rock or a roadworks machine | `front` |
+| `wall`, `car`, `rider`, `building`, `obstacle` | rode into a wall or barrier, a car, a rider of the group, a building, a rock or a roadworks machine. A world's wall or building touched by the tyres alone is no crash ("A brush against a wall") | `front` |
 | `drop`, `water`, `unmapped` | over an edge, into water, off the mapped land | `drop` |
 | `stall` | too slow to stay up | `tip` |
 

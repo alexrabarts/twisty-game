@@ -683,6 +683,10 @@ class Vehicle {
         this.worldThrottle = 0; // The world's throttle opening, 0 to 1 (it follows the input over throttleRiseS)
         this.lastDemand = 0; // Grip demand of the last world tick (v^2 * kappa / g)
         this.lowsideTimerMs = 0; // Time the demand has been over the lowside limit
+        this.brushS = 0; // Seconds against a wall in this contact (wallTouch, brushStep)
+        this.brushLeftS = 0; // Seconds the contact still lasts after the last touch
+        this.brushInto = 0; // m/s the bike has lost into the wall in this contact, over all its touches
+        this.brushNew = false; // A contact with a wall began: the game says so and clears it
         this.worldBrake = 0; // The brake input of the last world tick, 0 to 1
         this.slideAngle = 0; // Power slide: how far the drawn bike heads into the turn past its path (rad, signed as the yaw)
         this.wheelSlip = 0; // The drawn rear wheel's turn over the front's, from the slide
@@ -3356,13 +3360,18 @@ class Vehicle {
         const lean = this.leanAngle;
         this.steeringAngle = steeringInput * 0.3;
 
+        // The edge lean: running wide, the lean has a little more grip to tighten the line with, and the tightest turn
+        // is tighter by the same share (under about 8 m/s the lean limit is the lean of that turn, not the grip's).
+        // 0 anywhere else, and then every number here is the plain one to the last bit
+        const wide = this.edgeLean(deltaTime);
+        const tightest = wide > 0 ? world.radiusFloor / (1 + wide) : world.radiusFloor;
         const handlebarShare = this.lowSpeedShare(v);
         const radiusFloor = handlebarShare > 0
-            ? world.lockRadius + (world.radiusFloor - world.lockRadius) * (1 - handlebarShare)
-            : world.radiusFloor;
+            ? world.lockRadius + (tightest - world.lockRadius) * (1 - handlebarShare)
+            : tightest;
 
         const grip = Math.max(0.01, this.worldMultipliers().lateralFriction);
-        const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * grip);
+        const capEff = Math.atan(Math.tan(world.leanCapDeg * Math.PI / 180) * (wide > 0 ? grip * (1 + wide) : grip));
         // An off-road bike on the land (not the verge, which has the road's grip) with the throttle open steps its
         // rear out past the grip instead of falling: hold is how much of that this bike has now, 0 for a road bike,
         // on the carriageway, with the throttle shut or the brake on hard
@@ -3536,6 +3545,8 @@ class Vehicle {
         this.assistLeanRate = 0; // rad/s, the assist's low-passed share of the lean rate
         this.edgeUsedS = 0; // seconds the edge assist has acted since the bike was last near the road centre
         this.edgeShare = 0; // the edge assist's strength this frame, 0 to 1
+        this.edgeLeanShare = 0; // the edge lean's share this frame, 0 to the assist's share
+        this.edgeLeanUsedS = 0; // seconds the edge lean has been in use (by its share) since the bike was last near the road centre
         this.edgeSide = 0;
         this.hairpinAdvice = null;
     }
@@ -3685,6 +3696,32 @@ class Vehicle {
         this.edgeShare = share * close * sharp * budget;
         this.edgeSide = side;
         return side * world.edgeLeanRate * this.edgeShare;
+    }
+
+    // 4. Edge lean: the share of grip the lean gains now (WorldPhysics.edgeLean), 0 to extra x the assist's share.
+    // Only for a bike on the carriageway that leans away from the edge it is near (it has run wide and turns back
+    // in): a smoothstep of the distance to that edge, 0 at fromM and whole from fullM out. A lean toward the near
+    // edge (the inside of the turn) and a bike past the edge get none, so it never helps a cut. The time it is in
+    // use counts by its share (edgeLeanUsedS): whole for holdS, gone fadeS later, and new in the middle half of the
+    // road, as the edge assist's budget is
+    edgeLean(deltaTime = 0) {
+        const world = this.worldPhysics;
+        const rule = world.edgeLean;
+        const p = this.projection;
+        this.edgeLeanShare = 0; // the share in force this tick, 0 to the assist's (read by the tests)
+        if (!rule || !(rule.extra > 0) || this.crashed || !p || !(p.index >= 0) || !Number.isFinite(p.lateral)) return 0;
+        const half = p.width / 2;
+        const gap = half - Math.abs(p.lateral);
+        if (gap >= half * 0.5) this.edgeLeanUsedS = 0;
+        if (gap < 0 || gap >= rule.fromM || !(this.leanAngle * p.lateral > 0)) return 0;
+        const share = this.assistShare();
+        if (share <= 0) return 0;
+        const x = Math.min(1, (rule.fromM - gap) / (rule.fromM - rule.fullM));
+        const near = x * x * (3 - 2 * x);
+        const left = Math.max(0, Math.min(1, (rule.holdS + rule.fadeS - this.edgeLeanUsedS) / rule.fadeS));
+        this.edgeLeanUsedS += deltaTime * near;
+        this.edgeLeanShare = share * near * left;
+        return rule.extra * this.edgeLeanShare;
     }
 
     // In a tunnel or gallery, or within edgeBarrierM of a junction barrier: the wall response handles the edge
@@ -4450,6 +4487,10 @@ class Vehicle {
         this.worldThrottle = 0;
         this.lastDemand = 0;
         this.lowsideTimerMs = 0;
+        this.brushS = 0;
+        this.brushLeftS = 0;
+        this.brushInto = 0;
+        this.brushNew = false;
         this.worldBrake = 0;
         this.slideAngle = 0;
         this.footDown = false;
@@ -4780,8 +4821,12 @@ class Vehicle {
         // The road resets the clock; a shoulder in between neither adds nor clears it
         if (zone.kind === 'road') this.offRoadTime = 0;
 
+        // A world's wall touched by the tyres alone, at a glance, is a brush (wallTouch): the bike is held at the face
+        if (world && !this.crashed) this.brushStep(deltaTime);
+        const brushed = world && !this.crashed && this.brushWall(zone, projection, halfRoadWidth, deltaTime);
+
         // Hit a wall: crash with a bounce back toward the road
-        if (zone.kind === 'wall' && !this.crashed) {
+        if (zone.kind === 'wall' && !this.crashed && !brushed) {
             this.crashed = true;
             this.crashWhy = 'wall';
             this.fallingOffCliff = false; // Not falling, we hit a wall
@@ -4833,6 +4878,159 @@ class Vehicle {
             // Continue forward momentum but start falling
             this.velocity.y = -8; // Start falling downward
         }
+    }
+
+    // What a touch on a wall is: true for a brush (the tyres alone, at a glance), false for a crash. (nx, nz) is the
+    // wall's normal, out of the wall toward the bike's side; `height` the wall's top over the road, undefined for a
+    // wall as high as the rider. The rule and its numbers are WorldPhysics.wallBrush. Nothing is changed here
+    wallTouch(nx, nz, height) {
+        const rule = this.worldPhysics && this.worldPhysics.wallBrush;
+        if (!rule) return false;
+        const sin = Math.sin(this.yawAngle), cos = Math.cos(this.yawAngle);
+        // The share of the heading that goes into the wall: 0 along it, 1 head-on
+        const into = -(sin * nx + cos * nz);
+        // The speed into the wall counts over the whole contact: a wall may turn a bike that grazes it, not carry it
+        // round a bend
+        if (this.brushInto + this.speed * Math.max(0, into) > rule.closeMax || into > Math.sin(rule.glanceDeg * Math.PI / 180)) return false;
+        if (this.brushS >= rule.mostS) return false;
+        // The lean away from the wall: a lean of the sign of the side the wall is on leans the bike off it
+        const away = Math.asin(Math.max(-1, Math.min(1, -Math.sin(this.leanAngle) * (cos * nx - sin * nz))));
+        for (const part of rule.parts) {
+            const out = part.half * Math.cos(away) - part.height * Math.sin(away);
+            const high = part.height * Math.cos(away) + part.half * Math.sin(away);
+            if (out > rule.tyreM && !(high > height)) return false;
+        }
+        return true;
+    }
+
+    // A brush against a wall whose normal is (nx, nz): the bike has been put at the face. It loses the speed it had
+    // into the wall, its heading is turned kickDeg off the face (a heading further off stays), and the contact
+    // begins or goes on for holdS (brushStep). `brushNew` tells the game of a new contact, once
+    brush(nx, nz) {
+        const rule = this.worldPhysics.wallBrush;
+        const sin = Math.sin(this.yawAngle), cos = Math.cos(this.yawAngle);
+        const into = -(sin * nx + cos * nz);
+        const kick = rule.kickDeg * Math.PI / 180;
+        if (into > -Math.sin(kick)) {
+            // Along the face, the way the bike travels, then kickDeg toward the road
+            const tx = sin + into * nx, tz = cos + into * nz;
+            const length = Math.hypot(tx, tz) || 1;
+            const x = tx / length * Math.cos(kick) + nx * Math.sin(kick), z = tz / length * Math.cos(kick) + nz * Math.sin(kick);
+            const turn = Math.atan2(x, z) - this.yawAngle;
+            // The heading is not wrapped anywhere: the turn is the short way round
+            this.yawAngle += Math.atan2(Math.sin(turn), Math.cos(turn));
+            if (into > 0) {
+                this.brushInto += this.speed * into;
+                this.speed *= Math.sqrt(Math.max(0, 1 - into * into));
+            }
+        }
+        if (!(this.brushLeftS > 0)) this.brushNew = true;
+        this.brushLeftS = rule.holdS;
+        this.brushes = (this.brushes || 0) + 1;
+    }
+
+    // The contact with a wall, once a tick: for holdS after each touch the wall scrubs speed and the time against it
+    // counts (wallTouch ends a contact of mostS as a crash); after that the contact is over
+    brushStep(deltaTime) {
+        if (!(this.brushLeftS > 0)) {
+            this.brushS = 0;
+            this.brushInto = 0;
+            return;
+        }
+        this.speed -= this.worldPhysics.wallBrush.scrub * this.speed * deltaTime;
+        this.brushS += deltaTime;
+        this.brushLeftS -= deltaTime;
+    }
+
+    // The wall of the ride the bike is in: true when the touch is a brush. A wall whose face is a line along the road
+    // (a parapet, tunnel rock) is met a step ahead as well: at the place the bike reaches at its heading, and skinM
+    // more, so a brush stops the bike before the face and it is never in that wall. A barrier and a rock face of the
+    // land are met only where a crash was (the zone is read on the bike's piece of the ride, and a place a step
+    // ahead can be in one the bike never comes to): the bike is in those for one step, closeMax x the step at the
+    // most. Nothing is looked for while the step ends on the carriageway
+    brushWall(zone, projection, halfRoad, deltaTime) {
+        const rule = this.worldPhysics.wallBrush;
+        if (!rule) return false;
+        if (zone.kind === 'wall') return this.brushZone(zone, projection, halfRoad);
+        const lateral = projection.lateral;
+        const sign = lateral < 0 ? -1 : 1;
+        const reach = Math.abs(lateral) + this.speed * deltaTime * Math.sin(this.yawAngle - projection.heading) * sign + rule.skinM;
+        if (!(reach > halfRoad) || !(reach > Math.abs(lateral) + rule.skinM)) return false;
+        const located = this.located;
+        located.lateral = sign * reach;
+        const next = this.environment.ground.zoneAt(located, halfRoad);
+        located.lateral = lateral;
+        return next.kind === 'wall' && next.line === true && !next.box && this.brushZone(next, projection, halfRoad);
+    }
+
+    // A wall zone met by the bike (brushWall): true when the touch is a brush, with the bike put skinM before the
+    // face when it is past that. A bike found over deepM into a wall did not touch its face (the ride's projection
+    // came over from another strand): the crash it was. A barrier's face is its box's, across its side road. Any
+    // other wall's is along the road: the zone's own start for a wall with a line, else the first place back toward
+    // the road that is no wall, looked for in steps of FACE_STEP_M
+    brushZone(zone, projection, halfRoad) {
+        const rule = this.worldPhysics.wallBrush;
+        const ground = this.environment.ground;
+        const sign = zone.sign;
+        const lateral = projection.lateral;
+        const reach = Math.abs(lateral);
+        const perpX = Math.cos(projection.heading), perpZ = -Math.sin(projection.heading);
+        const located = this.located;
+        located.lateral = lateral;
+        if (zone.box) {
+            // Where the zone was read: the bike's lateral on its piece of the ride (WorldGround.position)
+            const b = zone.box;
+            const at = ground.position(located);
+            const along = (at.x - b.x) * b.sin + (at.z - b.z) * b.cos;
+            const side = along < 0 ? -1 : 1;
+            if (!this.wallTouch(side * b.sin, side * b.cos, zone.height)) return false;
+            const push = WorldGround.BARRIER_DEPTH_M + rule.skinM - Math.abs(along);
+            if (push > 0) {
+                this.position.x += side * b.sin * push;
+                this.position.z += side * b.cos * push;
+            }
+            this.brush(side * b.sin, side * b.cos);
+            return true;
+        }
+        if (zone.line && reach - zone.start > rule.deepM) return false;
+        if (!this.wallTouch(-sign * perpX, -sign * perpZ, zone.height)) return false;
+        let free = zone.line ? zone.start - rule.skinM : -1;
+        for (let d = reach - Vehicle.FACE_STEP_M; free < 0 && d > 0 && reach - d <= rule.deepM + Vehicle.FACE_STEP_M; d -= Vehicle.FACE_STEP_M) {
+            located.lateral = sign * d;
+            if (this.worldZone(ground.zoneAt(located, halfRoad), located, projection.y).kind !== 'wall') free = d;
+        }
+        located.lateral = lateral;
+        if (free < 0) return false;
+        if (reach > free) {
+            this.position.x += perpX * sign * (free - reach);
+            this.position.z += perpZ * sign * (free - reach);
+        }
+        this.brush(-sign * perpX, -sign * perpZ);
+        return true;
+    }
+
+    // A drawn building met on the land (worldLand) at (x, z), the bike's place or the place its step reaches: true
+    // when the touch is a brush, with the bike put skinM off that face of the walls `w` ({x, z, heading, along,
+    // across}, solid to `margin` past them) when it is past that
+    brushHouse(w, margin, x = this.position.x, z = this.position.z) {
+        const rule = this.worldPhysics.wallBrush;
+        if (!rule) return false;
+        const cos = Math.cos(w.heading), sin = Math.sin(w.heading);
+        const a = (x - w.x) * cos - (z - w.z) * sin, b = (x - w.x) * sin + (z - w.z) * cos;
+        // The face nearest that place, and its normal out of the walls
+        const side = w.across / 2 + margin - Math.abs(a) < w.along / 2 + margin - Math.abs(b);
+        const nx = side ? Math.sign(a || 1) * cos : Math.sign(b || 1) * sin;
+        const nz = side ? -Math.sign(a || 1) * sin : Math.sign(b || 1) * cos;
+        const out = (this.position.x - w.x) * nx + (this.position.z - w.z) * nz;
+        const push = (side ? w.across : w.along) / 2 + margin + rule.skinM - out;
+        // Over deepM into the walls the bike did not touch a face: the crash it was
+        if (push - rule.skinM > rule.deepM || !this.wallTouch(nx, nz, undefined)) return false;
+        if (push > 0) {
+            this.position.x += nx * push;
+            this.position.z += nz * push;
+        }
+        this.brush(nx, nz);
+        return true;
     }
 
     // Run-off: loose ground beside the road. It drags the bike down to a floor
@@ -4912,9 +5110,19 @@ class Vehicle {
             return;
         }
         const scenery = this.environment.scenery;
-        if (scenery && typeof scenery.houseAt === 'function' && scenery.houseAt(this.position.x, this.position.z, world.houseHitM || 0)) {
+        const house = scenery && typeof scenery.houseAt === 'function' ? scenery.houseAt(this.position.x, this.position.z, world.houseHitM || 0) : null;
+        if (house) {
+            // A building's face is a wall as any other: the tyres alone at a glance brush it (wallTouch)
+            if (house !== true && this.brushHouse(house, world.houseHitM || 0)) return;
             this.worldCrash('Rode into a building', null, 'building');
             return;
+        }
+        // And before the bike is in it: the place this step reaches, and skinM more (as brushWall)
+        if (scenery && typeof scenery.houseAt === 'function' && world.wallBrush && this.speed > 0) {
+            const step = this.speed * deltaTime + world.wallBrush.skinM;
+            const x = this.position.x + Math.sin(this.yawAngle) * step, z = this.position.z + Math.cos(this.yawAngle) * step;
+            const next = scenery.houseAt(x, z, world.houseHitM || 0);
+            if (next && next !== true) this.brushHouse(next, world.houseHitM || 0, x, z);
         }
         this.landCover = typeof ground.coverAt === 'function' ? ground.coverAt(this.position.x, this.position.z) : 0;
         // The slope on the drawn ground: ahead (where the bike is going, so a drop edge counts before it is under the
@@ -5409,6 +5617,9 @@ Vehicle.AXLE = new THREE.Vector3(1, 0, 0);
 Vehicle.BODY = Object.freeze({ roll: 0.35, shift: 0.16, full: 0.87, usual: 0.57 });
 // The stop pose (Vehicle.updateFooting): under STOP_SPEED (m/s) the bike leans FOOT_LEAN (radians) to its left and the
 // left foot goes down, FOOT_OUT (m) out from the bike's centre plane and FOOT_AHEAD (m) ahead of the peg, over FOOT_S
+// A wall with no line of its own (a rock face of the land): the face is looked for back toward the road in steps of
+// FACE_STEP_M, as far as WorldPhysics.wallBrush.deepM; none found is a crash
+Vehicle.FACE_STEP_M = 0.05;
 Vehicle.STOP_SPEED = 0.3;
 Vehicle.FOOT_LEAN = 6.5 * Math.PI / 180;
 Vehicle.FOOT_OUT = 0.34;

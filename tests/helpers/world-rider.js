@@ -1,19 +1,20 @@
 // A careful rider on a world slice in node: the real Vehicle and WorldRun on the streamed world, as Game runs them a
 // fixed step at a time. `rider` is 'pilot' (the world autopilot of tools/autopilot.js: pure pursuit and a lean held by
 // a proportional input) or 'keys' (a keyboard: full key or none past a deadband, a 0.15 s reaction, the key held to
-// full lock in a hairpin, then the input ramp of js/input.js). `lane` is metres right of the centre line, or 'inside'
-// (the inside of each bend, 1.2 m from the edge); through a roadworks site the rider takes the open lane, as the
+// full lock in a hairpin, then the input ramp of js/input.js). `lane` is metres right of the centre line, 'inside'
+// (the inside of each bend, 1.2 m from the edge), or a function of the ride distance and the vehicle that gives the metres; through a roadworks site the rider takes the open lane, as the
 // autopilot does (Roadworks.pilotLane). The speed is held at `speed` with the throttle and brake; `speed` may be a
 // function of the ride distance and the vehicle (advisedPace below). The lean the rider plans with is the bike's own limit (the vehicle's worldPhysics: the
 // rider's daring, the mode and the tuning are in it). `character` and `bike` choose who rides (the first character on
-// their first bike unless given), and `watch(vehicle, tick)` is called after every step.
+// their first bike unless given), and `watch(vehicle, tick)` is called after every step. `wide` is a rider who uses the
+// edge lean (WorldPhysics.edgeLean): the lean planned with is the bike's limit as it is now, near the outside edge too.
 // Returns {crashed, cut, cause, s, lateral, half, speed, ticks, stations}: the first crash or cut-rule restart, or a
 // clean ride; `ticks` the steps of 1/60 s ridden and `stations` the tick at which each station was passed. `most` is
 // the most steps (300 s unless given: a whole stage needs more).
 const DT = 1 / 60, G = 9.81;
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 
-export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, assist = 'normal', lane = 0, log = null, most = 60 * 300, character = null, bike = null, watch = null }) {
+export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, assist = 'normal', lane = 0, log = null, most = 60 * 300, character = null, bike = null, watch = null, wide = false }) {
     const { THREE, Vehicle, WorldRun } = game;
     const route = env.route, world = env.physics;
     const v = new Vehicle(new THREE.Scene(), null, character, bike);
@@ -30,7 +31,9 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
     const run = new WorldRun(route, env.stationGates, world);
     run.begin(s0);
     const aim = {};
-    const capTan = () => Math.tan(Math.atan(Math.tan(v.worldPhysics.leanCapDeg * Math.PI / 180) * Math.max(0.01, v.worldMultipliers().lateralFriction)));
+    // With `wide` the rider leans as far as the bike lets it now: the edge lean of a bike that runs wide is in the plan
+    const more = () => (wide && v.edgeLeanShare > 0 ? 1 + v.worldPhysics.edgeLean.extra * v.edgeLeanShare : 1);
+    const capTan = () => Math.tan(Math.atan(Math.tan(v.worldPhysics.leanCapDeg * Math.PI / 180) * Math.max(0.01, v.worldMultipliers().lateralFriction))) * more();
     const reaction = [];
     let smooth = 0, settled = s0, ticks = 0;
     const stations = [];
@@ -44,12 +47,12 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
         env.updateBarriers(s);
         const reach = Math.max(5, Math.min(30, 3 + 0.7 * v.speed));
         route.sample(s + reach, aim);
-        const own = lane === 'inside' ? Math.sign(route.curvatureAt(s + 2, 8)) * Math.max(0, aim.width / 2 - 1.2) : offset;
+        const own = typeof lane === 'function' ? lane(s, v) : lane === 'inside' ? Math.sign(route.curvatureAt(s + 2, 8)) * Math.max(0, aim.width / 2 - 1.2) : offset;
         // A careful rider does not ride into the closed lane of a roadworks site: its plant is solid
         const side = env.roadworks ? env.roadworks.pilotLane(s + reach, own) : own;
         const tx = aim.x + Math.cos(aim.heading) * side, tz = aim.z - Math.sin(aim.heading) * side;
         const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
-        const most = Math.min(1 / world.radiusFloor, G * capTan() / Math.max(1, v.speed * v.speed));
+        const most = Math.min(more() / world.radiusFloor, G * capTan() / Math.max(1, v.speed * v.speed));
         const wanted = Math.max(-most, Math.min(most, 2 * Math.sin(err) / reach));
         const lean = -Math.sign(wanted) * Math.atan(v.speed * v.speed * Math.abs(wanted) / G);
         let input = Math.max(-1, Math.min(1, (v.leanAngle - lean) * 8));

@@ -215,6 +215,17 @@ const MEASURES = {
             return Math.max(...rates);
         }
     },
+    // The grip the lean gains 10 cm from the edge of a 10 m road, leaned to turn back in
+    edgeLean: {
+        way: 1,
+        of: () => {
+            const v = onRoad(game, 4.9);
+            v.assistLevel = 'normal';
+            v.speed = 15;
+            v.leanAngle = 0.5;
+            return v.edgeLean();
+        }
+    },
     wheeliePop: {
         way: 1,
         of: () => {
