@@ -92,8 +92,8 @@ describe('every crash has a kind of fall', () => {
     test('every class gives a kind the table of falls has, and the fallback is one too', () => {
         for (const [name, kind] of Object.entries(CAUSES)) expect([name, kind, !!FALLS[kind]]).toEqual([name, kind, true]);
         expect(FALLS[RULE.fallback]).toBeTruthy();
-        // The five kinds are all reached
-        expect([...new Set(Object.values(CAUSES))].sort()).toEqual(Object.keys(FALLS).sort());
+        // The five kinds are all reached (a kind's own row has no `of`; its variants are tests/unit/rider-fall-scale.test.js)
+        expect([...new Set(Object.values(CAUSES))].sort()).toEqual(Object.keys(FALLS).filter(name => !FALLS[name].of).sort());
     });
 
     test('no code reads the words of a cause', () => {
@@ -107,7 +107,7 @@ describe('every crash has a kind of fall', () => {
         const triple = (t) => Array.isArray(t) && t.length === 3 && t.every(Number.isFinite);
         const pose = (key) => key.body.length === 4 && key.body.every(Number.isFinite) && [key.arms, key.legs].every(pair => pair.length === 2 && pair.every(triple));
         for (const [kind, k] of Object.entries(FALLS)) {
-            for (const field of ['baseS', 'perSpeed', 'mostS', 'keep', 'most', 'out', 'lift', 'liftPerSpeed', 'drag', 'scrub', 'bounce']) expect([kind, field, Number.isFinite(k[field])]).toEqual([kind, field, true]);
+            for (const field of ['slowS', 'fastS', 'fullSpeed', 'keep', 'most', 'out', 'lift', 'liftPerSpeed', 'stop', 'away', 'topple', 'drag', 'scrub', 'bounce']) expect([kind, field, Number.isFinite(k[field])]).toEqual([kind, field, true]);
             expect(k.keys.length).toBeGreaterThanOrEqual(3);
             expect(k.keys.length).toBeLessThanOrEqual(5);
             let last = 0;
@@ -122,20 +122,25 @@ describe('every crash has a kind of fall', () => {
             if (k.sit) expect([kind, pose(k.sit)]).toEqual([kind, true]);
             if (k.withBike) expect(k.off.length).toBe(3);
             // The whole of it plays inside the shortest time a world ride shows a fall
-            expect(k.mostS).toBeLessThanOrEqual(1.5);
+            expect(Math.max(k.slowS, k.fastS)).toBeLessThanOrEqual(1.5);
         }
     });
 
-    test('under the low speed any cause is the tip-over; over it the cause decides', () => {
-        for (const name of [...Object.keys(CAUSES), 'no such class', null]) {
-            expect(Vehicle.riderFallKind(name, RULE.tipSpeed - 0.01)).toBe('tip');
-            expect(Vehicle.riderFallKind(name, RULE.tipSpeed)).toBe(CAUSES[name] || RULE.fallback);
-        }
+    test('the cause decides the kind at every speed; a slow crash is mostly its calm row (the tip-over), with no step', () => {
+        for (const name of [...Object.keys(CAUSES), 'no such class', null]) expect(Vehicle.riderFallKind(name)).toBe(CAUSES[name] || RULE.fallback);
         for (const [kind, name] of Object.entries(CLASS)) {
-            const slow = crashAndWatch(game, bikeAt(game, { speed: 2 }), { why: name, seconds: 0.2 });
-            expect(slow[0].kind).toBe('tip');
-            const fast = crashAndWatch(game, bikeAt(game, { speed: 15 }), { why: name, seconds: 0.2 });
-            expect(fast[0].kind).toBe(kind);
+            for (const speed of [2, 3.9, 4.1, 15]) {
+                const frames = crashAndWatch(game, bikeAt(game, { speed }), { why: name, seconds: 0.2 });
+                expect([name, speed, frames[0].kind]).toEqual([name, speed, kind]);
+            }
+            const calm = (speed) => {
+                const v = bikeAt(game, { speed });
+                crashAndWatch(game, v, { why: name, seconds: 0.05 });
+                return v.riderFall.fall.calm;
+            };
+            // All tip-over at walking pace (but a fall with the bike, which has no calm row), none of it from calmTo
+            expect([kind, calm(RULE.calmFrom)]).toEqual([kind, FALLS[kind].calm === false ? 0 : 1]);
+            expect([kind, calm(RULE.calmTo)]).toEqual([kind, 0]);
         }
     });
 });

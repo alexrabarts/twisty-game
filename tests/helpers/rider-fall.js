@@ -105,16 +105,16 @@ export function wallDepth(v, x, z, index, y = null) {
     return least;
 }
 
-// Crashes the bike now with the cause class `why` (a key of Vehicle.CRASH_CAUSES), leaned to `side` (1: its right),
-// and steps it for `seconds`. One frame for each step, read from what is drawn
-export function crashAndWatch(game, v, { why, side = 1, seconds = 2.2, fall = null, each = null } = {}) {
+// Crashes the bike now with the cause class `why` (a key of Vehicle.CRASH_CAUSES), leaned `lean` rad to `side` (1: its
+// right), and steps it for `seconds`. One frame for each step, read from what is drawn
+export function crashAndWatch(game, v, { why, side = 1, lean = 0.5, seconds = 2.2, fall = null, each = null } = {}) {
     const { THREE } = game;
     // One riding step, so the bike is drawn where it stands and has a speed to leave with
     const speed = v.speed;
     v.update(DT, 0, 0, 0, 0);
     v.speed = speed;
     v.rodeSpeed = speed;
-    v.leanAngle = side * 0.5;
+    v.leanAngle = side * lean;
     v.worldCrash('test', fall, why);
     const frames = [];
     const at = new THREE.Vector3();

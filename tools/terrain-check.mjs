@@ -11,8 +11,9 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
+//   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
@@ -5534,6 +5535,91 @@ WORLD['world-camera-walls'] = async (page) => {
     const sum = key => rides.reduce((n, r) => n + r[key], 0);
     const bad = rides.filter(r => r.works + r.land + r.house + r.road + r.clipped > 0);
     return { setup, modes, hairpins: apexes.length, rides: rides.length, frames: sum('frames'), works: sum('works'), land: sum('land'), house: sum('house'), road: sum('road'), clipped: sum('clipped'), crashed: rides.filter(r => r.crashed).map(r => [r.apex, r.mode, r.s, r.cause]), short: rides.filter(r => !(r.frames > 100)).map(r => [r.apex, r.mode]), bad: bad.map(r => ({ apex: r.apex, mode: r.mode, frames: r.frames, works: r.works, land: r.land, house: r.house, road: r.road, clipped: r.clipped, worst: r.worst })) };
+};
+
+// world-fall-shots: the rider's fall of each kind (Vehicle.RIDER_FALLS) at three speeds, three moments each, from a
+// camera beside him. The bike is put down on a straight, given the speed and a lean, and crashed with the kind's
+// cause class; a front hit has a thing 2.5 m ahead (blockRider, hitFrom; it is not drawn). Each picture is the frame
+// alone (no HUD), from the side he falls to, looking between him and the bike. --out <dir> saves the PNG files
+//   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2] [--tag T]
+const FALL_SHOTS = {
+    at: 900,
+    speeds: [6, 14, 28],
+    moments: [0.15, 0.5, 1.2],
+    // kind: [cause class, the bike's lean in rad, how the bike is drawn going down]
+    kinds: { lowside: ['grip', 0.6, 'lowside'], highside: ['rear', 0.35, null], front: ['wall', 0.05, null], drop: ['drop', 0.3, null], tip: ['stall', 0.4, 'tip'] }
+};
+async function fallShot(placeSource, at, kind, cls, lean, fall, speed, moments) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const v = game.vehicle;
+    game.cameraMode = 2;
+    game.worldLinger = false;
+    if (v.crashed) v.reset();
+    // Each fall is a crash of its own: the last one's clock (Game.updateWorldCrash) would restart this one early
+    game.worldCrash = null;
+    game.worldSinceRestartS = Infinity;
+    await placeAt(at);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    twistyDev.step(1);
+    game.environment.streamer.pump(Infinity);
+    const sin = Math.sin(v.yawAngle), cos = Math.cos(v.yawAngle);
+    v.speed = speed;
+    v.rodeSpeed = speed;
+    v.rodeYaw = v.yawAngle;
+    v.velocity.set(sin * speed, 0, cos * speed);
+    v.leanAngle = lean;
+    v.updateMesh();
+    if (kind === 'front') {
+        v.blockRider(v.position.x + sin * 2.5, v.position.z + cos * 2.5, 1);
+        v.hitFrom(-sin, -cos);
+    }
+    v.worldCrash('Probe', fall, cls);
+    const shots = [];
+    let t = 0;
+    const rider = new THREE.Vector3();
+    for (const moment of moments) {
+        while (t < moment - 1e-9) { twistyDev.step(1); t += 1 / 60; }
+        twistyDev.step(1, { render: true });
+        t += 1 / 60;
+        v.group.updateMatrixWorld(true);
+        v.rider.getWorldPosition(rider);
+        // On the side he falls to (the low side; a highside's the high side), a little back and up, looking between
+        // him and the bike, and further off the further apart they are
+        const rf = v.riderFall, side = (rf ? rf.low : 1) * (kind === 'highside' ? -1 : 1);
+        const mx = (rider.x + v.position.x) / 2, my = (rider.y + v.position.y) / 2 + 0.3, mz = (rider.z + v.position.z) / 2;
+        const off = 4.5 + 0.6 * Math.hypot(rider.x - v.position.x, rider.z - v.position.z);
+        const cam = game.camera;
+        cam.position.set(mx + cos * side * off - sin * 1.5, my + 1.4, mz - sin * side * off - cos * 1.5);
+        cam.lookAt(mx, my, mz);
+        cam.updateMatrixWorld(true);
+        game.graphics.render(game.scene, cam);
+        shots.push({ t: Math.round(t * 100) / 100, png: game.graphics.renderer.domElement.toDataURL('image/png'), row: rf && rf.row, kind: rf && rf.kind, rider: [rider.x - v.position.x, rider.y - v.position.y, rider.z - v.position.z].map(n => Math.round(n * 100) / 100) });
+    }
+    v.reset();
+    return shots;
+}
+WORLD_PROBES.push('world-fall-shots');
+WORLD['world-fall-shots'] = async (page) => {
+    const out = option('out');
+    if (!out) return { error: 'name a folder with --out <dir>' };
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'fall';
+    const at = Number(option('at') || FALL_SHOTS.at);
+    const speeds = option('speeds') ? option('speeds').split(',').map(Number) : FALL_SHOTS.speeds;
+    const moments = option('moments') ? option('moments').split(',').map(Number) : FALL_SHOTS.moments;
+    const files = [];
+    for (const [kind, [cls, lean, fall]] of Object.entries(FALL_SHOTS.kinds)) {
+        for (const speed of speeds) {
+            const shots = await page.evaluate(fallShot, placeAt.toString(), at, kind, cls, lean, fall, speed, moments);
+            shots.forEach((shot, i) => {
+                const file = join(out, `${tag}-${kind}-${speed}-${i + 1}.png`);
+                writeFileSync(file, Buffer.from(shot.png.split(',')[1], 'base64'));
+                files.push({ kind, speed, t: shot.t, row: shot.row, rider: shot.rider, file });
+            });
+        }
+    }
+    return { files };
 };
 
 function camWallChecks(results, failures) {

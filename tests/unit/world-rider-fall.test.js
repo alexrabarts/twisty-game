@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
-import { DT, bikeAt, crashAndWatch, sidesAt, wallDepth } from '../helpers/rider-fall.js';
+import { DT, bikeAt, crashAndWatch, groundAt, sidesAt, wallDepth } from '../helpers/rider-fall.js';
 import { decodeWorld } from '../../tools/world/encode.mjs';
 import { rideSamples } from '../../tools/world/stations.mjs';
 import { findHairpins } from '../../tools/world/verify.mjs';
@@ -37,6 +37,9 @@ const STRAND_LIMIT = 31;
 // A cause class for each kind, as the game raises it
 const CLASS = { lowside: 'grip', highside: 'rear', front: 'wall', drop: 'drop', tip: 'stall' };
 const SPEEDS = [8, 16, 28];
+// The rule of a hit, as Vehicle.RIDER_FALLS has it: a glance under this share of the heading into the face, over the
+// bars from this closing speed
+const GLANCE = Vehicle.RIDER_FALLS.glance.when.into[1], SQUARE = Vehicle.RIDER_FALLS.slump.when.closing[1];
 const list = (items, n = 14) => items.slice(0, n).join('\n') + (items.length > n ? `\n... ${items.length} in all` : '');
 
 describe('the rider falls on the real stage', () => {
@@ -129,8 +132,8 @@ describe('the rider falls on the real stage', () => {
         console.log(`stage sweep: ${seen.runs} falls, worst ${seen.under.toExponential(1)} m under the ground, a point ${seen.limb.toFixed(2)} m into a wall, ${(seen.gap).toFixed(1)} m over ${NEAR_PER_SPEED} m per m/s from the bike, ${seen.strand} where the bike changed strand`);
     }, 600000);
 
-    test('beside a wall: a bike ridden into it throws the rider over the bars, and he stops against it', async () => {
-        const bad = [], seen = { hits: 0, brushed: 0 };
+    test('beside a wall: a bike ridden into it square and fast throws the rider over the bars, a glance or a slow hit keeps him low, and he stops against it', async () => {
+        const bad = [], seen = { hits: 0, brushed: 0, before: 0, rows: {} };
         // Two stretches with a wall close beside the road: found by the bike's own zones
         const stretches = [];
         for (let s = env.startS + 100; s < env.endS - 100 && stretches.length < 2; s += 10) {
@@ -142,19 +145,21 @@ describe('the rider falls on the real stage', () => {
         }
         expect(stretches.length).toBe(2);
         for (const { s, sign } of stretches) {
-            for (const speed of SPEEDS) {
+            for (const [speed, toward] of SPEEDS.flatMap(speed => [[speed, 0.3], [speed, 0.6]])) {
                 const p = await settle(s);
-                const v = bikeOn(p, { toward: sign * 0.3, speed });
+                const v = bikeOn(p, { toward: sign * toward, speed });
                 let ticks = 0;
                 while (!v.crashed && ticks++ < 300) { v.speed = speed; v.leanAngle = 0; v.update(DT, 0, 0, 0, 0); }
                 // Under the closing bound an upright bike only brushes a wall that is lower than its bars (a parapet:
                 // WorldPhysics.wallBrush), and rides on: no fall to watch
-                if (speed * Math.sin(0.3) < env.physics.wallBrush.closeMax && !v.crashed) {
+                if (speed * Math.sin(toward) < env.physics.wallBrush.closeMax && !v.crashed) {
                     expect([`wall at ${s} at ${speed} m/s`, v.brushes > 0]).toEqual([`wall at ${s} at ${speed} m/s`, true]);
                     seen.brushed++;
                     continue;
                 }
-                const tag = `wall at ${s} at ${speed} m/s`;
+                const tag = `wall at ${s} at ${speed} m/s, ${toward} rad to it`;
+                // Turned further toward it, the bike can meet the land in front of the wall first (a slope too steep)
+                if (toward > 0.3 && v.crashWhy !== 'wall') { seen.before++; continue; }
                 expect([tag, v.crashWhy]).toEqual([tag, 'wall']);
                 seen.hits++;
                 // The measure sees this wall: a metre past its face, beside the bike that stands against it, is in it
@@ -163,7 +168,7 @@ describe('the rider falls on the real stage', () => {
                 expect(past).toBeGreaterThan(0.7);
                 expect(past).toBeLessThan(1.6);
                 const at = new THREE.Vector3();
-                let index = v.currentRoadSegment, peak = -Infinity, deepest = -Infinity;
+                let index = v.currentRoadSegment, peak = -Infinity, deepest = -Infinity, seat = 0, high = -Infinity;
                 const from = v.position.clone();
                 for (let i = 0; i < 132; i++) {
                     v.update(DT, 0, 0, 0, 0);
@@ -174,21 +179,38 @@ describe('the rider falls on the real stage', () => {
                     if (depth > (i * DT < FACE_S ? FACE_M : 0)) bad.push(`${tag}: his middle ${depth.toFixed(3)} m into the wall at ${(i * DT).toFixed(2)} s`);
                     deepest = Math.max(deepest, depth);
                     peak = Math.max(peak, at.y - v.position.y);
+                    // (over the ground under him: the road climbs and falls under a long slide)
+                    const over = at.y - groundAt(v, at.x, at.z, index);
+                    if (i === 0) seat = over;
+                    high = Math.max(high, over);
                 }
                 expect([tag, v.riderFall.kind]).toEqual([tag, 'front']);
-                // Over the bars: he rose over the seat's height, and went on past where the bike stopped
-                expect(peak).toBeGreaterThan(1.1);
+                // The row by the rule of the hit: a glance under GLANCE of the heading into the wall, else over the bars
+                // only at a closing speed of SQUARE m/s or more (Vehicle.RIDER_FALLS glance, slump)
+                const crash = v.riderFall.crash, row = v.riderFall.row;
+                expect([tag, crash.hit]).toEqual([tag, true]);
+                const want = crash.into < GLANCE ? 'glance' : crash.closing < SQUARE ? 'slump' : 'front';
+                expect([tag, row]).toEqual([tag, want]);
+                seen.rows[row] = (seen.rows[row] || 0) + 1;
                 const on = Math.hypot(at.x - from.x, at.z - from.z);
-                expect(on).toBeGreaterThan(0.5);
                 expect(on).toBeLessThan(NEAR_M + NEAR_PER_SPEED * speed);
+                // Over the bars: he rose over the seat's height, and went on past where the bike stopped. Else he never
+                // rises far over where he sat (the slide along a face is tests/unit/rider-fall-scale.test.js: a wall
+                // the bike stops dead against stops him too)
+                if (row === 'front') {
+                    expect([tag, peak > 1.1]).toEqual([tag, true]);
+                    expect(on).toBeGreaterThan(0.5);
+                } else expect([tag, high < seat + 0.15]).toEqual([tag, true]);
                 seen.deepest = Math.max(seen.deepest || -Infinity, deepest);
             }
         }
         if (bad.length) throw new Error(list(bad));
-        // Every ride met the wall: a crash, or at 8 m/s a brush where the wall is a low parapet (4 crashes at the least)
-        expect(seen.hits + seen.brushed).toBe(6);
+        // Every ride met the wall: a crash, at 8 m/s a brush where the wall is a low parapet, or turned further to it the
+        // land before it (4 crashes at the least, a glance among them)
+        expect(seen.hits + seen.brushed + seen.before).toBe(12);
         expect(seen.hits).toBeGreaterThanOrEqual(4);
-        console.log(`beside a wall: his middle at most ${seen.deepest.toFixed(4)} m into it`);
+        expect(seen.rows.glance).toBeGreaterThan(0);
+        console.log(`beside a wall: his middle at most ${seen.deepest.toFixed(4)} m into it; rows ${JSON.stringify(seen.rows)}`);
     }, 600000);
 
     test('beside a drop in the land: every kind stays on the ground there, and the drop kind goes down with the bike', async () => {

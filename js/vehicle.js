@@ -4048,6 +4048,7 @@ class Vehicle {
         this.fall = null;
         if (this.riderFall) this.riderFall.on = false;
         if (this.riderBlock) this.riderBlock.on = false;
+        if (this.riderHit) this.riderHit.on = false;
         if (this.rider && this.riderBasePos) {
             this.rider.position.copy(this.riderBasePos);
             this.rider.rotation.set(this.riderBaseRotX || 0, 0, 0);
@@ -4058,7 +4059,8 @@ class Vehicle {
     }
 
     // What the rider who comes off must stop against, beside the walls and the buildings: the thing the bike hit, as
-    // a circle on the ground (a car, a rock, a roadworks machine). Whoever raises the crash names it
+    // a circle on the ground (a car, a rock, a roadworks machine). Whoever raises the crash names it. With no hitFrom,
+    // the line from its middle to the bike is the face he meets
     blockRider(x, z, radius) {
         const block = this.riderBlock || (this.riderBlock = { on: false, x: 0, z: 0, r: 0 });
         block.on = true;
@@ -4067,33 +4069,88 @@ class Vehicle {
         block.r = radius;
     }
 
-    // The rider comes off the bike. The kind of the fall is the cause's (Vehicle.CRASH_CAUSES by this.crashWhy), or
-    // the tip-over under tipSpeed whatever the cause. He starts where he sat, in the pose he rode in, with the speed
-    // and the heading the bike rode into the crash with, and the kind's own throw (Vehicle.RIDER_FALLS: `keep` of the
-    // speed, at most `most`, `out` m/s to the low side, `lift` m/s and `liftPerSpeed` of the speed upwards). From here he has his own
-    // place and velocity (stepRiderFall) and his limbs go through the kind's keys (drawRiderFall). Every number comes
+    // The face the bike hit: its normal (nx, nz), out of the thing toward the bike, and the thing's own velocity (vx,
+    // vz m/s; a wall stands). Whoever raises the crash names it where it is known; the rider's fall reads from it how
+    // fast and how square he went into it (Vehicle.riderCrash)
+    hitFrom(nx, nz, vx = 0, vz = 0) {
+        const hit = this.riderHit || (this.riderHit = { on: false, nx: 0, nz: 0, vx: 0, vz: 0 });
+        const length = Math.hypot(nx, nz);
+        if (!(length > 0)) return;
+        hit.on = true;
+        hit.nx = nx / length;
+        hit.nz = nz / length;
+        hit.vx = vx;
+        hit.vz = vz;
+    }
+
+    // The crash's own numbers, into `out`, as the rider's fall reads them (Vehicle.RIDER_FALLS `when`,
+    // riderFallNumbers): the speed and the heading he rode in with, the lean in degrees, the closing speed into what
+    // was hit and the share of the heading that went into it (from hitFrom, else from the circle of blockRider, else
+    // head-on), and the land round the bike: its fall away toward the low side (`low`: the limbs' x sign of that side)
+    // and toward the high side, and its grade along the way
+    riderCrash(out, speed, heading, low) {
+        const rule = Vehicle.RIDER_FALL;
+        const sin = Math.sin(heading), cos = Math.cos(heading);
+        out.speed = speed;
+        out.lean = Math.abs(this.leanAngle || 0) * 180 / Math.PI;
+        const hit = this.riderHit, block = this.riderBlock;
+        out.hit = false;
+        let ovx = 0, ovz = 0;
+        if (hit && hit.on) {
+            out.hit = true;
+            out.nx = hit.nx;
+            out.nz = hit.nz;
+            ovx = hit.vx;
+            ovz = hit.vz;
+        } else if (block && block.on) {
+            const dx = this.position.x - block.x, dz = this.position.z - block.z, gap = Math.hypot(dx, dz);
+            out.hit = true;
+            out.nx = gap > 1e-6 ? dx / gap : -sin;
+            out.nz = gap > 1e-6 ? dz / gap : -cos;
+        }
+        out.closing = out.hit ? -((speed * sin - ovx) * out.nx + (speed * cos - ovz) * out.nz) : speed;
+        out.into = out.hit ? Math.max(0, -(sin * out.nx + cos * out.nz)) : 1;
+        // (the low side is the limbs' x side: x of the bike's left is cos, -sin of the heading)
+        const lx = cos * low, lz = -sin * low, x = this.position.x, z = this.position.z;
+        const fallAway = (side) => (this.riderGroundY(x + side * lx * rule.bankNearM, z + side * lz * rule.bankNearM)
+            - this.riderGroundY(x + side * lx * rule.bankFarM, z + side * lz * rule.bankFarM)) / (rule.bankFarM - rule.bankNearM);
+        out.bank = fallAway(1);
+        out.highBank = fallAway(-1);
+        out.grade = (this.riderGroundY(x + sin * rule.gradeM, z + cos * rule.gradeM) - this.riderGroundY(x - sin * rule.gradeM, z - cos * rule.gradeM)) / (2 * rule.gradeM);
+        return out;
+    }
+
+    // The rider comes off the bike. The kind of the fall is the cause's (Vehicle.CRASH_CAUSES by this.crashWhy), and
+    // its row the first variant of that kind that the crash's numbers fit (Vehicle.riderFallRow by riderCrash). The
+    // row's numbers are blended with its calm row's (the tip-over) by the speed (Vehicle.riderFallNumbers). He starts
+    // where he sat, in the pose he rode in, with `along` m/s of the bike's way, `out` to the low side and `lift`
+    // upward; against what was hit he loses `stop` of his speed into it and goes `away` off it. From here he has his
+    // own place and velocity (stepRiderFall) and his limbs go through the keys (drawRiderFall). Every number comes
     // from the crash itself, so the same crash is the same fall
     beginRiderFall() {
         const rider = this.rider;
         if (!rider || !this.riderBasePos || !this.arms || !this.legs) return;
-        const rule = Vehicle.RIDER_FALL;
         const rf = this.riderFall || (this.riderFall = Vehicle.riderFallState());
         const speed = Math.abs(Number.isFinite(this.rodeSpeed) ? this.rodeSpeed : this.speed) || 0;
         const heading = Number.isFinite(this.rodeYaw) ? this.rodeYaw : this.yawAngle;
-        const kind = Vehicle.riderFallKind(this.crashWhy, speed);
-        const k = Vehicle.RIDER_FALLS[kind];
+        const kind = Vehicle.riderFallKind(this.crashWhy);
         rf.on = true;
         rf.kind = kind;
-        rf.rule = k;
         rf.t = 0;
         rf.up = 0;
         rf.slid = 0;
+        rf.toppled = 0;
         rf.speed = speed;
         rf.heading = heading;
         // The limbs' x sign on the side the bike went down to (a positive roll is to the right, which is -x)
         rf.low = this.crashAngle > 0 ? -1 : 1;
-        rf.T = Math.min(k.mostS, k.baseS + k.perSpeed * speed);
         rf.index = this.currentRoadSegment || 0;
+        const crash = this.riderCrash(rf.crash, speed, heading, rf.low);
+        rf.row = Vehicle.riderFallRow(kind, crash);
+        rf.rule = Vehicle.RIDER_FALLS[rf.row];
+        rf.calmRule = rf.rule.calm ? Vehicle.RIDER_FALLS[Vehicle.riderFallRow(rf.rule.calm, crash)] : null;
+        const fall = Vehicle.riderFallNumbers(rf.rule, rf.calmRule, crash, rf.fall);
+        rf.T = fall.T;
         rf.lean = (this.riderSpec && this.riderSpec.torsoLean || 0) + (this.riderBaseRotX || 0);
         this.group.updateMatrixWorld(true);
         rider.getWorldPosition(rf.p);
@@ -4102,26 +4159,38 @@ class Vehicle {
         let i = 0;
         for (const limbs of [this.arms, this.legs]) for (const side of [-1, 1]) rf.from[i++].copy(limbs[side].at());
         rf.p.y += this.riderProbes(rf.q0);
+        rf.seat.subVectors(rf.p, this.position);
         const sin = Math.sin(heading), cos = Math.cos(heading);
-        const along = Math.min(k.most, speed * k.keep), out = k.out * rf.low;
-        rf.v.set(sin * along + cos * out, k.lift + k.liftPerSpeed * speed, cos * along - sin * out);
+        rf.lowX = cos * rf.low;
+        rf.lowZ = -sin * rf.low;
+        rf.v.set(sin * fall.along + rf.lowX * fall.out, fall.lift, cos * fall.along + rf.lowZ * fall.out);
+        if (crash.hit) {
+            const into = rf.v.x * crash.nx + rf.v.z * crash.nz;
+            const lose = into < 0 ? into * fall.stop : 0;
+            rf.v.x += crash.nx * (fall.away - lose);
+            rf.v.z += crash.nz * (fall.away - lose);
+        }
+        rf.ground = this.riderGroundY(rf.p.x, rf.p.z);
         rf.grounded = true;
     }
 
     // One step of the rider's own fall, on the physics' time. Gravity, then the ground under him; on the ground the
-    // slide loses `drag` of its speed and `scrub` m/s each second, so a faster crash slides further. He never goes
-    // into a wall, a barrier or a parapet (the bike's own zones, bodyM from his middle), a drawn building or the
-    // thing the bike hit (blockRider): he is put back to its face and loses the speed into it. A kind `withBike`
-    // (a drop, water) has no slide of its own: he stays `off` beside the bike wherever it falls
+    // slope pulls him downhill (RIDER_FALL slopeGrade, slopeMost) and the slide loses `drag` of its speed and `scrub`
+    // m/s each second, so a faster crash slides further. Over the keys his middle goes `topple` m to the low side. He
+    // never goes into a wall, a barrier or a parapet (the bike's own zones, bodyM from his middle), a drawn building
+    // or the thing the bike hit (blockRider): he is put back to its face and loses the speed into it. A row
+    // `withBike` (a drop, water) has no slide of its own: he goes from the seat to `off` beside the bike wherever it
+    // falls
     stepRiderFall(deltaTime) {
-        const rf = this.riderFall, k = rf.rule, rule = Vehicle.RIDER_FALL, p = rf.p, v = rf.v;
+        const rf = this.riderFall, k = rf.rule, fall = rf.fall, rule = Vehicle.RIDER_FALL, p = rf.p, v = rf.v;
         rf.t += deltaTime;
+        const x = Math.min(1, rf.t / rf.T), e = x * x * (3 - 2 * x);
         if (k.withBike) {
-            const x = Math.min(1, rf.t / rf.T), e = x * x * (3 - 2 * x);
             const sin = Math.sin(rf.heading), cos = Math.cos(rf.heading);
-            const side = k.off[0] * rf.low * e, back = k.off[2] * e;
+            const side = k.off[0] * rf.low * e, back = k.off[2] * e, seat = 1 - e;
             const fromX = p.x, fromZ = p.z;
-            p.set(this.position.x + cos * side + sin * back, this.position.y + k.off[1] * e, this.position.z - sin * side + cos * back);
+            p.set(this.position.x + rf.seat.x * seat + cos * side + sin * back, this.position.y + rf.seat.y * seat + k.off[1] * e,
+                this.position.z + rf.seat.z * seat - sin * side + cos * back);
             v.copy(this.velocity);
             // (he is on the bike's piece of the road, wherever the bike is put)
             rf.index = this.currentRoadSegment || 0;
@@ -4131,28 +4200,41 @@ class Vehicle {
         }
         v.y -= rule.gravity * deltaTime;
         if (rf.grounded) {
+            // Downhill by the ground's gradient where he is, at most slopeMost. A gradient over slopeGrade is an edge or
+            // a step, not a slope: it pulls nobody over
+            const reach = 0.5, ground = rf.ground;
+            const gx = (this.riderGroundY(p.x + reach, p.z) - ground) / reach, gz = (this.riderGroundY(p.x, p.z + reach) - ground) / reach;
+            const steep = Math.hypot(gx, gz);
+            if (steep > 0 && steep <= rule.slopeGrade) {
+                const pull = Math.min(rule.slopeMost, rule.gravity * steep / Math.sqrt(1 + steep * steep)) / steep;
+                v.x -= gx * pull * deltaTime;
+                v.z -= gz * pull * deltaTime;
+            }
             const pace = Math.hypot(v.x, v.z);
             if (pace > 0) {
-                const left = Math.max(0, pace - (k.drag * pace + k.scrub) * deltaTime) / pace;
+                const left = Math.max(0, pace - (fall.drag * pace + fall.scrub) * deltaTime) / pace;
                 v.x *= left;
                 v.z *= left;
             }
         }
         const fromX = p.x, fromZ = p.z;
-        p.x += v.x * deltaTime;
-        p.z += v.z * deltaTime;
+        const topple = (e - rf.toppled) * fall.topple;
+        rf.toppled = e;
+        p.x += v.x * deltaTime + rf.lowX * topple;
+        p.z += v.z * deltaTime + rf.lowZ * topple;
         this.holdRiderOut(fromX, fromZ, deltaTime);
         p.y += v.y * deltaTime;
         const ground = this.riderGroundY(p.x, p.z);
+        rf.ground = ground;
         if (p.y <= ground) {
             p.y = ground;
-            v.y = v.y < -rule.bounceFrom ? -v.y * k.bounce : 0;
+            v.y = v.y < -rule.bounceFrom ? -v.y * fall.bounce : 0;
             rf.grounded = true;
         } else {
             rf.grounded = p.y - ground < rule.touchM;
         }
         rf.slid += Math.hypot(p.x - fromX, p.z - fromZ);
-        // Lying still, he sits up (the kind's `sit` key) when there is time
+        // Lying still, he sits up (the row's `sit` key) when there is time
         if (rf.t > rf.T && rf.grounded && Math.hypot(v.x, v.z) < rule.stillSpeed) rf.up = Math.min(1, rf.up + deltaTime / rule.upS);
     }
 
@@ -4280,25 +4362,21 @@ class Vehicle {
         return low;
     }
 
-    // The rider drawn as his fall stands now. The pose is the kind's keys (Vehicle.RIDER_FALLS `keys`) at the share
-    // of the fall's time gone, blended smoothly: from the pose he rode in to the first key, then key to key, then
-    // from the last key to the `sit` key as he sits up. The body's turn is four angles and each limb's end is three
+    // The rider drawn as his fall stands now. The pose is the row's keys (Vehicle.RIDER_FALLS `keys`) at the share
+    // of the fall's time gone (Vehicle.riderKeyed), and as much of the calm row's as the speed gives it
+    // (riderFallNumbers `calm`), angle by angle: from the pose he rode in to the first key, then key to key, then from
+    // the last key to the `sit` key as he sits up. The body's turn is four angles and each limb's end is three
     // (Vehicle.riderPose). Then he is set on the ground: his lowest point (riderProbes) rests at his own height
     // (stepRiderFall), and no point of him is under the ground there
     drawRiderFall() {
-        const rf = this.riderFall, k = rf.rule, rider = this.rider, pose = rf.pose;
-        const keys = k.keys;
-        const u = Math.min(1, rf.t / rf.T);
-        let n = 0;
-        while (n < keys.length - 1 && u > keys[n].at) n++;
-        const before = n > 0 ? keys[n - 1].at : 0;
-        const x = keys[n].at > before ? Math.max(0, Math.min(1, (u - before) / (keys[n].at - before))) : 1;
-        const e = x * x * (3 - 2 * x);
-        if (n === 0) Vehicle.riderPose(keys[0], keys[0], 0, pose);
-        else Vehicle.riderPose(keys[n - 1], keys[n], e, pose);
-        if (rf.up > 0 && k.sit) {
-            const s = rf.up * rf.up * (3 - 2 * rf.up);
-            Vehicle.riderPose(null, k.sit, s, pose);
+        const rf = this.riderFall, rider = this.rider, pose = rf.pose;
+        const u = Math.min(1, rf.t / rf.T), calm = rf.fall.calm;
+        // `e` is how far he is from the pose he rode in toward the keys: under 1 until the first key
+        let e = Vehicle.riderKeyed(rf.rule, u, rf.up, pose);
+        if (calm > 0 && rf.calmRule) {
+            const other = rf.calmPose, from = Vehicle.riderKeyed(rf.calmRule, u, rf.up, other);
+            for (let i = 0; i < 16; i++) pose[i] += (other[i] - pose[i]) * calm;
+            e += (from - e) * calm;
         }
         // The body's turn: about the world's up by the heading, then the roll, the pitch and the twist about the spine
         const low = rf.low, lean = rf.lean, d = Math.PI / 180;
@@ -4308,7 +4386,7 @@ class Vehicle {
         rf.q.multiply(rf.turn.setFromEuler(rf.euler.set(0, low * pose[2] * d, 0)));
         // (the riding lean is in the rider's own shape: his spine is `lean` forward of his y axis)
         rf.q.multiply(rf.turn.setFromEuler(rf.euler.set(-lean, 0, 0)));
-        if (n === 0) rf.q.slerpQuaternions(rf.q0, rf.turn.copy(rf.q), e);
+        if (e < 1) rf.q.slerpQuaternions(rf.q0, rf.turn.copy(rf.q), e);
         const sin = Math.sin(lean), cos = Math.cos(lean);
         let i = 0;
         for (const limbs of [this.arms, this.legs]) {
@@ -4319,7 +4397,7 @@ class Vehicle {
                 const swing = pose[at] * d, spread = pose[at + 1] * d, reach = limb.reach * (1 - Vehicle.RIDER_FALL.bend * pose[at + 2]);
                 const bx = side * Math.sin(spread), by = -Math.cos(spread) * Math.cos(swing), bz = Math.cos(spread) * Math.sin(swing);
                 end.set(limb.root.x + bx * reach, limb.root.y + (by * cos - bz * sin) * reach, limb.root.z + (by * sin + bz * cos) * reach);
-                if (n === 0) end.lerpVectors(rf.from[i], end, e);
+                if (e < 1) end.lerpVectors(rf.from[i], end, e);
                 limb.place(end, null);
                 i++;
             }
@@ -4968,6 +5046,8 @@ class Vehicle {
         if (zone.kind === 'wall' && !this.crashed && !brushed) {
             this.crashed = true;
             this.crashWhy = 'wall';
+            // The wall's face, out of it toward the road, for how the rider meets it (Vehicle.riderCrash)
+            this.hitFrom(-sign * perpX, -sign * perpZ);
             this.fallingOffCliff = false; // Not falling, we hit a wall
             this.crashAngle = sign * Math.PI / 6; // Crash leaning into the wall
             // A world's crash says what it was (a leg's crash card has its own words)
@@ -5595,51 +5675,101 @@ Vehicle.CRASH_CAUSES = Object.freeze({
     stall: 'tip'
 });
 
-// The rules every kind of fall shares. Under tipSpeed m/s any crash is the tip-over. gravity m/s2; a landing faster
-// than bounceFrom m/s bounces by the kind's `bounce`; within touchM of the ground some part of him is on it, and the
-// slide's friction acts (he leaves the seat that near it). bodyM is how near his middle comes to a wall, a building
-// or the thing the bike hit, and pushSpeed m/s the most he is moved out of one he starts in. nearUnits is how many
-// pieces of the road either side of his last one he is looked for in (riderProject). Lying under stillSpeed m/s he
-// sits up over upS s. `bend` is the share of a limb's reach a full bend takes. The radii of the points that touch the ground (riderProbes): headM, torsoM at torsoHalfM each way along the
-// spine, limbM
+// The rules every kind of fall shares. A fall goes over from its row's `calm` row (the tip-over) at calmFrom m/s and
+// under to its own row from calmTo m/s, a smoothstep between: no step at any speed. Its throw is nothing at walkSpeed
+// m/s and the row's whole throw from the row's fullSpeed. A lean of leanFrom degrees or less is the row as it stands,
+// and one of leanTo or more takes the whole of the row's `lean` multipliers. Where he leaves the bike the land's fall
+// toward each side is read from bankNearM to bankFarM out (rise per metre; positive: it falls away), and the grade
+// along the way he goes gradeM ahead and behind (positive: uphill). On the ground the slope pulls him downhill by
+// gravity x its sine, at most slopeMost m/s2 (less than any row's scrub, so he never slides on for ever); a gradient
+// over slopeGrade is an edge, which pulls nobody. gravity m/s2; a landing faster than bounceFrom m/s bounces by the row's
+// `bounce`; within touchM of the ground some part of him is on it, and the slide's friction acts (he leaves the seat
+// that near it). bodyM is how near his middle comes to a wall, a building or the thing the bike hit, and pushSpeed m/s
+// the most he is moved out of one he starts in. nearUnits is how many pieces of the road either side of his last one
+// he is looked for in (riderProject). Lying under stillSpeed m/s he sits up over upS s. `bend` is the share of a
+// limb's reach a full bend takes. The radii of the points that touch the ground (riderProbes): headM, torsoM at
+// torsoHalfM each way along the spine, limbM
 Vehicle.RIDER_FALL = Object.freeze({
-    fallback: 'lowside', tipSpeed: 4, gravity: 14, bounceFrom: 3, touchM: 0.5, bodyM: 0.9, pushSpeed: 5, nearUnits: 3, stillSpeed: 0.6, upS: 0.5,
+    fallback: 'lowside', calmFrom: 1.5, calmTo: 7, walkSpeed: 1.5, leanFrom: 20, leanTo: 45, bankNearM: 1, bankFarM: 4, gradeM: 2,
+    slopeGrade: 0.5, slopeMost: 1, gravity: 14, bounceFrom: 3, touchM: 0.5, bodyM: 0.9, pushSpeed: 5, nearUnits: 3, stillSpeed: 0.6, upS: 0.5,
     bend: 0.5, headM: 0.15, torsoM: 0.15, torsoHalfM: 0.15, limbM: 0.07
 });
 
-// The kinds of fall, one row each. A new kind is a row here and a class in CRASH_CAUSES; no code names a kind but
-// the tip-over (riderFallKind).
-//   baseS, perSpeed, mostS: the keys play over baseS + perSpeed x the crash speed seconds, at most mostS
+// The rows of falls. A row with no `of` is a kind's own; a row with `of` is a variant of that kind, taken when the
+// crash's numbers are all inside its `when` (the first such row, in this order). No code names a row.
+//   when: { field: [from, under] } over the crash's numbers (Vehicle.riderCrash): speed m/s, lean degrees, closing
+//   m/s (the speed into what was hit), into (the share of the heading that went into it: 0 along, 1 head-on), bank and
+//   highBank (the land's fall away toward the low and the high side) and grade (RIDER_FALL)
+//   calm: the row a slow crash of this one is (the tip-over); false: none, the row at every speed
+//   slowS, fastS: the keys play over slowS seconds at walking pace and fastS from fullSpeed m/s (a slow crash is a
+//   slow topple)
 //   keep, most: the share of the bike's speed he leaves with, and the most (m/s: a rider over the bars lands near
 //   what the bike hit, however fast it was); out: m/s to the low side (negative: over the high side);
-//   lift, liftPerSpeed: m/s upwards, and more for each m/s of the crash
+//   lift, liftPerSpeed: m/s upwards, and more for each m/s of the crash. out and lift grow from nothing at walking
+//   pace to the whole of them at fullSpeed
+//   stop: the share of his speed into what was hit that he loses at once (0: he goes on over it); away: m/s off its
+//   face (at fullSpeed)
+//   topple: metres to the low side (negative: the high side) his middle goes over the keys, at any speed
 //   drag, scrub: on the ground he loses drag of his speed and scrub m/s each second; bounce: the share a hard landing
 //   gives back
-//   withBike, off: he has no slide of his own and stays off [to the low side, up, ahead] m from the bike as it falls
+//   lean: multipliers on out, topple, drag, scrub and T (the keys' time) at a lean of leanTo
+//   withBike, off: he has no slide of his own and goes off [to the low side, up, ahead] m from the bike as it falls
 //   keys: the poses, in order. `at` is the share of the time (the last is 1). `body` is [pitch, roll, twist, yaw] in
 //   degrees: pitch tips the spine forward from upright (90 lies face down, head first; -90 on the back, feet
-//   first; more than 180 is a forward roll), roll turns him about the line of travel toward the low side, twist
-//   about his own spine toward the low side, yaw about the world's up toward the low side. `arms` and `legs` are
-//   [the low side's, the high side's], each [swing, spread, bend]: swing brings the limb forward from hanging along
-//   the spine (90 is straight ahead of the chest, 180 over the head), spread takes it out to its side, bend is 0
-//   straight to 1 folded
+//   first; more than 180 is a forward roll), roll turns him about the line of travel toward the low side (with the
+//   spine along it, a roll over and over), twist about his own spine toward the low side, yaw about the world's up
+//   toward the low side. `arms` and `legs` are [the low side's, the high side's], each [swing, spread, bend]: swing
+//   brings the limb forward from hanging along the spine (90 is straight ahead of the chest, 180 over the head),
+//   spread takes it out to its side, bend is 0 straight to 1 folded
 //   sit: the pose he sits up to once he lies still (the same fields, no `at`); none and he lies as the last key
+// A row and its calm row are blended pose by pose, so the two keep their turns within a half turn of each other
+const RIDER_SIT_BACK = { arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] };
 Vehicle.RIDER_FALLS = Object.freeze({
-    // Off the low side onto hip and back, arms out; he slides feet first behind the bike
+    // Off the low side onto hip and back, arms out; he slides feet first behind the bike. Leaned far over he is near
+    // the ground already: a short drop and a long slide
     lowside: {
-        baseS: 0.75, perSpeed: 0.012, mostS: 1.25, keep: 1, most: 60, out: 1.6, lift: 0, liftPerSpeed: 0, drag: 1.35, scrub: 1.2, bounce: 0,
+        calm: 'tip', slowS: 1.2, fastS: 0.85, fullSpeed: 12, keep: 1, most: 60, out: 1.6, lift: 0, liftPerSpeed: 0, stop: 0, away: 0, topple: 0.35,
+        drag: 1.35, scrub: 1.2, bounce: 0, lean: { out: 0.35, topple: 0.5, drag: 0.8, scrub: 0.85, T: 0.8 },
         keys: [
             { at: 0.22, body: [-5, 50, 0, 0], arms: [[35, 55, 0.3], [80, 30, 0.35]], legs: [[65, 20, 0.5], [55, 30, 0.45]] },
             { at: 0.5, body: [-55, 60, 10, -10], arms: [[25, 80, 0.1], [70, 60, 0.15]], legs: [[40, 15, 0.3], [50, 28, 0.45]] },
             { at: 0.78, body: [-80, 35, 5, 10], arms: [[20, 85, 0.1], [45, 80, 0.1]], legs: [[18, 14, 0.15], [38, 22, 0.4]] },
             { at: 1, body: [-86, 12, 0, 28], arms: [[15, 75, 0.15], [30, 82, 0.15]], legs: [[8, 12, 0.05], [28, 18, 0.35]] }
         ],
-        sit: { body: [-18, 0, 0, 28], arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] }
+        sit: { body: [-18, 0, 0, 28], ...RIDER_SIT_BACK }
+    },
+    // The land falls away steeply on the low side: down onto the hip, and over and over down the bank, arms in
+    lowsideRoll: {
+        of: 'lowside', when: { bank: [0.35, Infinity] },
+        calm: 'tipRoll', slowS: 1.3, fastS: 1.1, fullSpeed: 12, keep: 1, most: 60, out: 2.2, lift: 0, liftPerSpeed: 0, stop: 0, away: 0, topple: 0.6,
+        drag: 1.2, scrub: 1.4, bounce: 0,
+        keys: [
+            { at: 0.2, body: [-5, 50, 0, 0], arms: [[35, 55, 0.3], [80, 30, 0.35]], legs: [[65, 20, 0.5], [55, 30, 0.45]] },
+            { at: 0.45, body: [-70, 120, 0, -5], arms: [[110, 25, 0.7], [110, 25, 0.7]], legs: [[15, 10, 0.15], [15, 12, 0.15]] },
+            { at: 0.72, body: [-86, 235, 0, 0], arms: [[105, 20, 0.75], [105, 20, 0.75]], legs: [[10, 8, 0.1], [12, 10, 0.1]] },
+            { at: 1, body: [-88, 340, 0, 8], arms: [[60, 60, 0.3], [70, 55, 0.3]], legs: [[10, 12, 0.1], [25, 16, 0.3]] }
+        ],
+        sit: { body: [-18, 360, 0, 20], ...RIDER_SIT_BACK }
+    },
+    // Fast and barely leaned: more of a fall. He comes down hard, bounces, goes over onto his front and slides face
+    // down, feet first
+    lowsideTumble: {
+        of: 'lowside', when: { speed: [18, Infinity], lean: [0, 28] },
+        calm: 'tip', slowS: 1.3, fastS: 1.1, fullSpeed: 18, keep: 1, most: 60, out: 2.4, lift: 1.4, liftPerSpeed: 0, stop: 0, away: 0, topple: 0.3,
+        drag: 1.3, scrub: 1.2, bounce: 0.3,
+        keys: [
+            { at: 0.15, body: [-5, 55, 0, 0], arms: [[60, 70, 0.2], [110, 40, 0.2]], legs: [[50, 25, 0.4], [40, 30, 0.35]] },
+            { at: 0.4, body: [-40, 115, 10, -10], arms: [[150, 50, 0.2], [120, 60, 0.3]], legs: [[30, 25, 0.3], [60, 30, 0.6]] },
+            { at: 0.7, body: [-80, 170, 5, -5], arms: [[160, 45, 0.25], [150, 50, 0.25]], legs: [[15, 20, 0.15], [35, 25, 0.4]] },
+            { at: 1, body: [-88, 182, 0, 6], arms: [[165, 40, 0.3], [160, 45, 0.3]], legs: [[10, 18, 0.1], [30, 22, 0.35]] }
+        ],
+        sit: { body: [-18, 360, 0, 20], ...RIDER_SIT_BACK }
     },
     // Thrown over the high side: up and across, a roll about the line of travel, then a slide on the back. He is
     // thrown on ahead of the sliding bike (less drag than it), where the chase view has him
     highside: {
-        baseS: 0.95, perSpeed: 0.014, mostS: 1.45, keep: 0.8, most: 60, out: -2.6, lift: 3.8, liftPerSpeed: 0.03, drag: 1.3, scrub: 2, bounce: 0.25,
+        calm: 'tip', slowS: 1.45, fastS: 1.2, fullSpeed: 18, keep: 0.8, most: 60, out: -2.6, lift: 3.8, liftPerSpeed: 0.03, stop: 0, away: 0, topple: 0,
+        drag: 1.3, scrub: 2, bounce: 0.25,
         keys: [
             { at: 0.16, body: [15, -50, 0, 0], arms: [[125, 40, 0.15], [110, 55, 0.15]], legs: [[40, 25, 0.3], [55, 32, 0.3]] },
             { at: 0.4, body: [70, -180, 0, -8], arms: [[80, 35, 0.6], [75, 35, 0.6]], legs: [[85, 15, 0.7], [80, 18, 0.7]] },
@@ -5648,45 +5778,165 @@ Vehicle.RIDER_FALLS = Object.freeze({
         ],
         sit: { body: [90, -540, 0, -24], arms: [[95, 35, 0.55], [150, 50, 0.3]], legs: [[5, 12, 0.05], [60, 20, 0.7]] }
     },
-    // Over the bars: a dive, a forward roll, onto the back feet first, and a slide or a stop against the thing
+    // Fast, with the land falling away on the high side: thrown down the bank, and rolling on there
+    highsideRoll: {
+        of: 'highside', when: { speed: [14, Infinity], highBank: [0.35, Infinity] },
+        calm: 'tip', slowS: 1.5, fastS: 1.45, fullSpeed: 18, keep: 0.8, most: 60, out: -3.2, lift: 3.4, liftPerSpeed: 0.03, stop: 0, away: 0, topple: -0.4,
+        drag: 1.2, scrub: 1.6, bounce: 0.25,
+        keys: [
+            { at: 0.14, body: [15, -50, 0, 0], arms: [[125, 40, 0.15], [110, 55, 0.15]], legs: [[40, 25, 0.3], [55, 32, 0.3]] },
+            { at: 0.38, body: [70, -200, 0, -8], arms: [[100, 20, 0.7], [100, 20, 0.7]], legs: [[20, 12, 0.2], [25, 14, 0.25]] },
+            { at: 0.68, body: [88, -450, 0, -16], arms: [[100, 20, 0.75], [100, 20, 0.75]], legs: [[10, 10, 0.1], [15, 12, 0.15]] },
+            { at: 1, body: [90, -720, 0, -24], arms: [[140, 60, 0.25], [120, 70, 0.2]], legs: [[10, 14, 0.1], [28, 22, 0.35]] }
+        ]
+    },
+    // Under the speed of a real highside: up a little and over the high side onto the hip, then a half turn onto the
+    // back and a short slide
+    highsideShort: {
+        of: 'highside', when: { speed: [-Infinity, 14] },
+        calm: 'tip', slowS: 1.5, fastS: 1.15, fullSpeed: 14, keep: 0.8, most: 60, out: -2, lift: 2.4, liftPerSpeed: 0.03, stop: 0, away: 0, topple: -0.4,
+        drag: 1.3, scrub: 2, bounce: 0.2,
+        keys: [
+            { at: 0.2, body: [10, -45, 0, 0], arms: [[120, 40, 0.15], [100, 55, 0.15]], legs: [[40, 25, 0.3], [55, 32, 0.3]] },
+            { at: 0.5, body: [-30, -95, 10, -10], arms: [[90, 70, 0.2], [60, 80, 0.2]], legs: [[45, 20, 0.4], [30, 25, 0.3]] },
+            { at: 0.78, body: [-75, -50, 5, -20], arms: [[30, 80, 0.1], [45, 80, 0.1]], legs: [[20, 14, 0.15], [35, 22, 0.4]] },
+            { at: 1, body: [-86, -15, 0, -28], arms: [[15, 75, 0.15], [30, 82, 0.15]], legs: [[8, 12, 0.05], [28, 18, 0.35]] }
+        ],
+        sit: { body: [-18, 0, 0, -28], ...RIDER_SIT_BACK }
+    },
+    // Over the bars: a dive, a forward roll, onto the back feet first, and a slide or a stop against the thing. Only
+    // into it fast (slump under that)
     front: {
-        baseS: 0.85, perSpeed: 0.012, mostS: 1.3, keep: 0.8, most: 11, out: 0, lift: 3.2, liftPerSpeed: 0.05, drag: 1.7, scrub: 2.5, bounce: 0.2,
+        calm: 'tip', slowS: 1.3, fastS: 1, fullSpeed: 10, keep: 0.8, most: 11, out: 0, lift: 3.2, liftPerSpeed: 0.05, stop: 0, away: 0, topple: 0,
+        drag: 1.7, scrub: 2.5, bounce: 0.2,
         keys: [
             { at: 0.18, body: [65, 0, 0, 0], arms: [[150, 20, 0.1], [150, 20, 0.1]], legs: [[5, 18, 0.2], [-10, 22, 0.3]] },
             { at: 0.45, body: [165, 8, 0, 0], arms: [[95, 30, 0.55], [90, 30, 0.55]], legs: [[80, 14, 0.65], [70, 18, 0.65]] },
             { at: 0.72, body: [255, 14, 0, 6], arms: [[60, 60, 0.3], [70, 55, 0.3]], legs: [[55, 16, 0.45], [35, 20, 0.3]] },
             { at: 1, body: [274, 18, 0, 14], arms: [[20, 80, 0.1], [35, 82, 0.12]], legs: [[8, 12, 0.05], [30, 20, 0.35]] }
         ],
-        sit: { body: [342, 0, 0, 14], arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] }
+        sit: { body: [342, 0, 0, 14], ...RIDER_SIT_BACK }
+    },
+    // A glancing hit: down on the side and on along the face of the thing, held off it, onto the back
+    glance: {
+        of: 'front', when: { into: [0, 0.45] },
+        calm: 'tip', slowS: 1.25, fastS: 0.95, fullSpeed: 10, keep: 0.9, most: 60, out: 0, lift: 0.6, liftPerSpeed: 0, stop: 1, away: 1.2, topple: 0.3,
+        drag: 1.4, scrub: 1.6, bounce: 0,
+        keys: [
+            { at: 0.2, body: [10, 35, 0, 0], arms: [[80, 70, 0.3], [100, 40, 0.3]], legs: [[60, 22, 0.5], [55, 30, 0.45]] },
+            { at: 0.5, body: [-50, 65, 10, -5], arms: [[60, 85, 0.15], [70, 60, 0.15]], legs: [[40, 15, 0.3], [50, 28, 0.45]] },
+            { at: 0.78, body: [-80, 40, 5, 5], arms: [[20, 85, 0.1], [45, 80, 0.1]], legs: [[18, 14, 0.15], [38, 22, 0.4]] },
+            { at: 1, body: [-86, 15, 0, 12], arms: [[15, 75, 0.15], [30, 82, 0.15]], legs: [[8, 12, 0.05], [28, 18, 0.35]] }
+        ],
+        sit: { body: [-18, 0, 0, 12], ...RIDER_SIT_BACK }
+    },
+    // Into the thing slower than it takes to go over the bars: forward onto the tank, then off to the low side
+    slump: {
+        of: 'front', when: { closing: [-Infinity, 7] },
+        calm: 'tip', slowS: 1.4, fastS: 1.15, fullSpeed: 7, keep: 0.75, most: 5, out: 0.8, lift: 0.3, liftPerSpeed: 0, stop: 1, away: 0.3, topple: 0.9,
+        drag: 1.5, scrub: 2.2, bounce: 0,
+        keys: [
+            { at: 0.25, body: [55, 10, 0, 0], arms: [[70, 25, 0.6], [70, 25, 0.6]], legs: [[60, 25, 0.6], [60, 25, 0.6]] },
+            { at: 0.55, body: [30, 60, 10, 10], arms: [[40, 70, 0.3], [90, 40, 0.4]], legs: [[50, 25, 0.4], [60, 25, 0.5]] },
+            { at: 0.8, body: [-30, 80, 10, 20], arms: [[30, 85, 0.25], [60, 50, 0.3]], legs: [[45, 18, 0.45], [50, 25, 0.5]] },
+            { at: 1, body: [-80, 22, 0, 32], arms: [[25, 70, 0.2], [35, 80, 0.15]], legs: [[15, 14, 0.15], [40, 22, 0.5]] }
+        ],
+        sit: { body: [-15, 0, 0, 32], ...RIDER_SIT_BACK }
     },
     // Nothing under the bike: he falls with it, limbs loose, and has no slide of his own
     drop: {
-        baseS: 0.8, perSpeed: 0.01, mostS: 1.2, keep: 1, most: 60, out: 0, lift: 0, liftPerSpeed: 0, drag: 0, scrub: 0, bounce: 0,
-        withBike: true, off: [1.1, 0.5, -0.4],
+        calm: false, slowS: 1.2, fastS: 0.9, fullSpeed: 14, keep: 1, most: 60, out: 0, lift: 0, liftPerSpeed: 0, stop: 0, away: 0, topple: 0,
+        drag: 0, scrub: 0, bounce: 0, withBike: true, off: [1.1, 0.5, -0.4],
         keys: [
             { at: 0.25, body: [10, -15, 0, 0], arms: [[120, 50, 0.15], [140, 40, 0.1]], legs: [[45, 25, 0.35], [30, 30, 0.3]] },
             { at: 0.6, body: [-35, 25, 15, 20], arms: [[60, 85, 0.2], [150, 55, 0.25]], legs: [[70, 20, 0.6], [15, 28, 0.2]] },
             { at: 1, body: [-75, 40, 20, 45], arms: [[110, 70, 0.3], [40, 85, 0.1]], legs: [[20, 18, 0.2], [60, 26, 0.55]] }
         ]
     },
-    // Too slow to stay up: down beside the bike on the low side, and a short roll onto the back
+    // Over the edge slowly: he goes down feet first beside the bike, arms up
+    dropFeet: {
+        of: 'drop', when: { speed: [-Infinity, 10] },
+        calm: false, slowS: 1.3, fastS: 1, fullSpeed: 10, keep: 1, most: 60, out: 0, lift: 0, liftPerSpeed: 0, stop: 0, away: 0, topple: 0,
+        drag: 0, scrub: 0, bounce: 0, withBike: true, off: [0.9, 0.6, -0.2],
+        keys: [
+            { at: 0.3, body: [-10, 10, 0, 0], arms: [[150, 45, 0.2], [150, 45, 0.2]], legs: [[25, 20, 0.3], [30, 22, 0.3]] },
+            { at: 0.65, body: [-30, 20, 10, 15], arms: [[120, 70, 0.2], [140, 55, 0.25]], legs: [[45, 18, 0.5], [20, 25, 0.25]] },
+            { at: 1, body: [-60, 30, 15, 30], arms: [[100, 75, 0.3], [60, 85, 0.15]], legs: [[30, 16, 0.3], [55, 24, 0.5]] }
+        ]
+    },
+    // Too slow to stay up: down beside the bike on the low side, and a short roll onto the back. Every slow crash is
+    // this row, and goes over to its own by calmTo
     tip: {
-        baseS: 0.85, perSpeed: 0.02, mostS: 0.95, keep: 1, most: 60, out: 4, lift: 0, liftPerSpeed: 0, drag: 1, scrub: 2, bounce: 0,
+        calm: false, slowS: 1.3, fastS: 0.95, fullSpeed: 6, keep: 1, most: 60, out: 0.5, lift: 0, liftPerSpeed: 0, stop: 0, away: 0, topple: 1.2,
+        drag: 1, scrub: 2, bounce: 0, lean: { topple: 0.7, T: 0.85 },
         keys: [
             { at: 0.35, body: [10, 45, 0, 0], arms: [[40, 70, 0.2], [80, 30, 0.4]], legs: [[50, 30, 0.3], [60, 25, 0.5]] },
             { at: 0.7, body: [-25, 85, 10, 15], arms: [[30, 85, 0.25], [60, 50, 0.3]], legs: [[45, 18, 0.45], [50, 25, 0.5]] },
             { at: 1, body: [-80, 20, 0, 35], arms: [[25, 70, 0.2], [35, 80, 0.15]], legs: [[15, 14, 0.15], [40, 22, 0.5]] }
         ],
-        sit: { body: [-15, 0, 0, 35], arms: [[-35, 25, 0.1], [-35, 25, 0.1]], legs: [[80, 12, 0.3], [70, 16, 0.5]] }
+        sit: { body: [-15, 0, 0, 35], ...RIDER_SIT_BACK }
+    },
+    // Too slow to stay up with the land falling away on the low side: down, and rolling over down the bank
+    tipRoll: {
+        of: 'tip', when: { bank: [0.35, Infinity] },
+        calm: false, slowS: 1.45, fastS: 1.2, fullSpeed: 6, keep: 1, most: 60, out: 0.8, lift: 0, liftPerSpeed: 0, stop: 0, away: 0, topple: 1.5,
+        drag: 1, scrub: 1.4, bounce: 0,
+        keys: [
+            { at: 0.3, body: [10, 45, 0, 0], arms: [[40, 70, 0.2], [80, 30, 0.4]], legs: [[50, 30, 0.3], [60, 25, 0.5]] },
+            { at: 0.55, body: [-60, 100, 0, 15], arms: [[110, 25, 0.7], [110, 25, 0.7]], legs: [[15, 10, 0.15], [15, 12, 0.15]] },
+            { at: 0.8, body: [-86, 220, 0, 20], arms: [[105, 20, 0.75], [105, 20, 0.75]], legs: [[10, 8, 0.1], [12, 10, 0.1]] },
+            { at: 1, body: [-88, 335, 0, 25], arms: [[60, 60, 0.3], [70, 55, 0.3]], legs: [[10, 12, 0.1], [25, 16, 0.3]] }
+        ],
+        sit: { body: [-18, 360, 0, 25], ...RIDER_SIT_BACK }
     }
 });
 
-// The kind of the rider's fall for a cause class at a crash speed (m/s): the tip-over under tipSpeed, whatever the
-// cause; else the class's kind, or the fallback
-Vehicle.riderFallKind = (why, speed) => {
-    const rule = Vehicle.RIDER_FALL;
-    const kind = Vehicle.CRASH_CAUSES[why] || rule.fallback;
-    return speed < rule.tipSpeed && Vehicle.RIDER_FALLS.tip ? 'tip' : kind;
+// The kind of the rider's fall for a cause class: the class's kind, or the fallback
+Vehicle.riderFallKind = (why) => Vehicle.CRASH_CAUSES[why] || Vehicle.RIDER_FALL.fallback;
+
+// The row of a kind for a crash's numbers (Vehicle.riderCrash): the first variant of the kind whose `when` holds
+// them all, else the kind's own row
+Vehicle.riderFallRow = (kind, crash) => {
+    const falls = Vehicle.RIDER_FALLS;
+    for (const name in falls) {
+        const row = falls[name];
+        if (row.of !== kind) continue;
+        let holds = true;
+        for (const field in row.when) {
+            const range = row.when[field], x = crash[field];
+            if (!(x >= range[0] && x < range[1])) holds = false;
+        }
+        if (holds) return name;
+    }
+    return kind;
+};
+
+// The numbers of a fall from its row `k`, its calm row and the crash's numbers, into `out`: calm (the share of the
+// calm row), T (the keys' time), along, out, lift, stop, away (the throw, m/s), topple (m), drag, scrub, bounce.
+// Every one is a smooth function of the speed and the lean, so two crashes that differ a little fall a little apart
+Vehicle.riderFallNumbers = (k, calm, crash, out) => {
+    const rule = Vehicle.RIDER_FALL, speed = crash.speed;
+    const ramp = (x) => { const u = Math.max(0, Math.min(1, x)); return u * u * (3 - 2 * u); };
+    const share = calm ? 1 - ramp((speed - rule.calmFrom) / (rule.calmTo - rule.calmFrom)) : 0;
+    const deep = ramp((crash.lean - rule.leanFrom) / (rule.leanTo - rule.leanFrom));
+    const leaned = (row, field) => (row.lean && Number.isFinite(row.lean[field]) ? 1 + (row.lean[field] - 1) * deep : 1);
+    const of = (row, field) => row[field] * leaned(row, field);
+    const mix = (field) => (share > 0 ? of(k, field) + (of(calm, field) - of(k, field)) * share : of(k, field));
+    const full = mix('fullSpeed');
+    const thrown = ramp((speed - rule.walkSpeed) / (full - rule.walkSpeed));
+    const time = (row) => (row.slowS + (row.fastS - row.slowS) * thrown) * leaned(row, 'T');
+    out.calm = share;
+    out.T = share > 0 ? time(k) + (time(calm) - time(k)) * share : time(k);
+    out.along = Math.min(mix('most'), mix('keep') * speed);
+    out.out = mix('out') * thrown;
+    out.lift = (mix('lift') + mix('liftPerSpeed') * speed) * thrown;
+    out.stop = mix('stop');
+    out.away = mix('away') * thrown;
+    out.topple = mix('topple');
+    out.drag = mix('drag');
+    out.scrub = mix('scrub');
+    out.bounce = mix('bounce');
+    return out;
 };
 
 // A pose between two keys of a fall: `out` takes [pitch, roll, twist, yaw, then swing, spread, bend for the low arm,
@@ -5703,11 +5953,30 @@ Vehicle.riderPose = (a, b, share, out) => {
     return out;
 };
 
+// The pose of a row's keys at `u`, the share of its time gone, into `out` (as Vehicle.riderPose fills it), and
+// then `up` of the way to its `sit` key. Returns how far he is from the pose he rode in toward the keys: the
+// smoothstep to the first key, then 1
+Vehicle.riderKeyed = (row, u, up, out) => {
+    const keys = row.keys;
+    let n = 0;
+    while (n < keys.length - 1 && u > keys[n].at) n++;
+    const before = n > 0 ? keys[n - 1].at : 0;
+    const x = keys[n].at > before ? Math.max(0, Math.min(1, (u - before) / (keys[n].at - before))) : 1;
+    const e = x * x * (3 - 2 * x);
+    if (n === 0) Vehicle.riderPose(keys[0], keys[0], 0, out);
+    else Vehicle.riderPose(keys[n - 1], keys[n], e, out);
+    if (up > 0 && row.sit) Vehicle.riderPose(null, row.sit, up * up * (3 - 2 * up), out);
+    return n === 0 ? e : 1;
+};
+
 // What a rider's fall keeps from frame to frame, made once for a bike: his place and velocity, the turn he left the
 // seat with and the turn he is drawn with, and every vector the fall works in (nothing is made while he falls)
 Vehicle.riderFallState = () => ({
-    on: false, kind: null, rule: null, t: 0, T: 1, up: 0, slid: 0, speed: 0, heading: 0, low: 1, lean: 0, index: 0, grounded: false,
-    p: new THREE.Vector3(), v: new THREE.Vector3(), at: new THREE.Vector3(),
+    on: false, kind: null, row: null, rule: null, calmRule: null, t: 0, T: 1, up: 0, slid: 0, speed: 0, heading: 0, low: 1, lean: 0, index: 0,
+    grounded: false, toppled: 0, lowX: 0, lowZ: 0, ground: 0,
+    crash: { speed: 0, lean: 0, closing: 0, into: 1, bank: 0, highBank: 0, grade: 0, hit: false, nx: 0, nz: 0 },
+    fall: { calm: 0, T: 1, along: 0, out: 0, lift: 0, stop: 0, away: 0, topple: 0, drag: 0, scrub: 0, bounce: 0 },
+    p: new THREE.Vector3(), v: new THREE.Vector3(), at: new THREE.Vector3(), seat: new THREE.Vector3(), calmPose: new Float64Array(16),
     q0: new THREE.Quaternion(), q: new THREE.Quaternion(), turn: new THREE.Quaternion(), euler: new THREE.Euler(),
     pose: new Float64Array(16), radius: new Float64Array(11),
     from: [0, 1, 2, 3].map(() => new THREE.Vector3()), end: [0, 1, 2, 3].map(() => new THREE.Vector3()),

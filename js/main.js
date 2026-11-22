@@ -3678,6 +3678,11 @@ class Game {
                 const car = collision.car;
                 // The rider who comes off stops against the car, not in it (Vehicle.stepRiderFall)
                 if (car && car.carGroup) this.vehicle.blockRider(car.carGroup.position.x, car.carGroup.position.z, 1.1);
+                // And meets it as it comes: its middle toward the bike, and its own way (Vehicle.riderCrash)
+                if (car && car.carGroup) {
+                    const way = car.carGroup.rotation.y, pace = car.currentSpeed || 0;
+                    this.vehicle.hitFrom(this.vehicle.position.x - car.carGroup.position.x, this.vehicle.position.z - car.carGroup.position.z, Math.sin(way) * pace, Math.cos(way) * pace);
+                }
                 if (car && car.carGroup) {
                     const impactDir = new THREE.Vector3(
                         this.vehicle.position.x - car.carGroup.position.x,

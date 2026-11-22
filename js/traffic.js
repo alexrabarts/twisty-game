@@ -646,6 +646,8 @@ class Traffic {
             if (player.velocity && player.velocity.set) player.velocity.set(fx * bike.currentSpeed + nx * kick, 0, fz * bike.currentSpeed + nz * kick);
             player.isJumping = false;
             player.worldCrash(`Rode into ${bike.riderName}`, 'lowside', 'rider');
+            // The line of the contact and the other rider's way, for how the player's rider meets it (Vehicle.riderCrash)
+            if (player.hitFrom) player.hitFrom(nx, nz, fx * bike.currentSpeed, fz * bike.currentSpeed);
             bike.shakenS = CONTACT.crash.slowS;
             bike.shakeT = 0;
             bike.ghostS = CONTACT.crash.ghostS;
