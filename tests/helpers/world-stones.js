@@ -1,5 +1,6 @@
-// Rides a world slice in node and reads the marker stones: every stretch of sharp drop the rule finds (Scenery.stoneRuns),
-// every row round the outside of a hairpin (Scenery.hairpinRuns) and every stone and piece of kerb as it is drawn.
+// Rides a world slice in node and reads the marker stones: every stretch of sharp drop the rule finds
+// (Scenery.stoneStretches), every row round the outside of a hairpin (Scenery.hairpinRuns), every row on a wall's top
+// (Scenery.wallRuns) and every stone and piece of kerb as it is drawn.
 // Each place of each stretch and row is measured again here, by this file's own measures: the drop or the bend and
 // the guard on the ground as it is drawn while the bike is there (groundFaults), the stopping places, the roadworks
 // sites and the side roads from their own records once every chunk is here (recordFaults).
@@ -29,7 +30,7 @@ function frame(game, env, q) {
 // What a place {s, side, x, y, z} fails on the drawn ground: a wall or a structure that guards the edge, a foot off its
 // own road's edge, and by its case: at a drop, no sharp drop on its side or a rise on the way out; in a hairpin's row
 // (`spans`: hairpinSpans), a place outside every hairpin, on a road that does not bend there, on the inside of the
-// bend, or with no fall of the land behind it (hairpinDropM). A list of words, empty when it stands well
+// bend, or with no drop behind it (dropM, as at a stretch). A list of words, empty when it stands well
 export function groundFaults(game, env, q, spans = null) {
     const { Scenery } = game;
     const rule = Scenery.STONE_RULE, points = env.route.points;
@@ -44,9 +45,9 @@ export function groundFaults(game, env, q, spans = null) {
         if (!(Math.abs(turn) >= BEND_TURN)) bad.push(`the road turns ${(turn * 180 / Math.PI).toFixed(0)} degrees there`);
         // (a heading that grows turns toward +lateral: the outside is the other side)
         else if (q.side !== -Math.sign(turn)) bad.push('the inside of the bend');
-        // An edge: the land falls away behind the stone
+        // A drop: the land falls away behind the stone as far as at a stretch
         const fall = p.y - groundAt(rule.reachM);
-        if (!(fall > rule.hairpinDropM)) bad.push(`no edge: the land ${fall.toFixed(2)} m under the road behind it`);
+        if (!(fall > rule.dropM)) bad.push(`no drop: the land ${fall.toFixed(2)} m under the road behind it`);
     } else {
         const fall = p.y - groundAt(rule.reachM);
         if (!(fall > rule.dropM)) bad.push(`drop ${fall.toFixed(2)} m`);
@@ -68,6 +69,27 @@ export function groundFaults(game, env, q, spans = null) {
     return bad;
 }
 
+// What a place on a wall's top fails: no wall under the road's edge there, a wall with a parapet, one that does not
+// hold the road up (its face drops less than wallLowM), or a stone off the middle of the wall's coping (its seat is
+// the coping's top, COPING_UP_M over the edge, and it stands COPING_W_M / 2 in from the face). A list of words
+export function wallFaults(game, env, q) {
+    const { Scenery, RoadMesh } = game;
+    const rule = Scenery.STONE_RULE;
+    const { p, i, edge } = frame(game, env, q);
+    const bad = [];
+    const top = [i - 1, i, i + 1].map(j => env.ground.wallTop(j, q.side)).filter(Boolean);
+    if (!top.length) bad.push('no wall under the edge');
+    if (top.some(t => t.railed)) bad.push('a wall with a parapet');
+    if (top.some(t => Math.min(...t.heights) < rule.wallLowM)) bad.push('a wall that does not hold the road up');
+    const own = env.route.project(q.x, q.z, { start: i - 4, end: i + 5 }, {});
+    const want = edge + RoadMesh.STONE_PROUD_M - RoadMesh.COPING_W_M / 2;
+    if (Math.sign(own.lateral) !== q.side || Math.abs(Math.abs(own.lateral) - want) > 0.15) bad.push(`${own.lateral.toFixed(2)} m from the centre line, not on the middle of the coping (${want.toFixed(2)})`);
+    if (Math.abs(q.seat - (p.y + RoadMesh.COPING_UP_M)) > 0.3) bad.push(`seated ${(q.seat - p.y).toFixed(2)} m over the road, not on the coping`);
+    // (a stone and a margin either side fit on the coping)
+    if (RoadMesh.COPING_W_M < Scenery.STONE_WIDTH_M + 2 * RoadMesh.COPING_MARGIN_M - 1e-9) bad.push('a coping narrower than a stone and its margins');
+    return bad;
+}
+
 // What a place fails by the records: a stopping place on its side, a roadworks site, a side road's band near it
 export function recordFaults(game, env, bands, q) {
     const { Scenery } = game;
@@ -85,10 +107,11 @@ export function recordFaults(game, env, bands, q) {
     return bad;
 }
 
-// {env, stretches, rows, hairpins, spans, stones, kerbs, windows, most}.
-// A stretch of drop: {block, side, used, places, faults: [words], mirror: [words]} (`mirror`: what its first stone
+// {env, stretches, rows, walls, hairpins, spans, stones, kerbs, sites, windows, most}.
+// A stretch of drop: {start, side, used, places, faults: [words], mirror: [words]} (`start` its first station; `mirror`: what its first stone
 // fails when it is planted on the other side of the road). A hairpin's row: {hairpin, side, used, places, faults,
-// mirror} (`mirror`: its first stone on the inside of the bend); `hairpins`: every hairpin of the game's list with
+// mirror} (`mirror`: its first stone on the inside of the bend). A wall's row: {start, side, used, places, faults}.
+// `sites`: every stone a tile holds, {x, z, kind, next}; `hairpins`: every hairpin of the game's list with
 // {used, places} (the places of its row, 0 where every place is guarded). A stone: {x, z, y0, y1, low, middle}, `low`
 // the lowest drawn ground under the corners of its foot, `middle` the ground under its middle. A piece of kerb:
 // {a, b, top, foot, ground}: its two ends in plan, its top and its foot at each end and at its middle and the drawn
@@ -97,7 +120,7 @@ export function recordFaults(game, env, bands, q) {
 export async function rideStones(game, { id = 'tremola', search = '', fetchFn, stepM = 100 } = {}) {
     const { THREE, WorldEnvironment, WorldStreamer, Scenery, RoadSurface } = game;
     const env = await WorldEnvironment.load(new THREE.Scene(), { id, search, fetchFn, models: null, digest: async () => '0' });
-    const stones = new Map(), kerbs = new Map(), windows = [];
+    const stones = new Map(), kerbs = new Map(), sites = new Map(), windows = [];
     let most = 0;
     const matrix = new THREE.Matrix4(), v = new THREE.Vector3();
     // What is drawn now: the stones and the kerb of every tile, and which stones the cap took
@@ -107,6 +130,7 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
         // (a drawn stone is where its matrix says, in 32-bit numbers: matched to its site by place, not by text)
         const shown = [];
         let sites = 0, hidden = Infinity, far = 0;
+        const all = siteMap;
         for (const held of env.scenery.perTile.values()) {
             for (const mesh of held.group.children) {
                 if (mesh.name === 'stones') for (const t of sceneryOf(THREE, mesh)) {
@@ -130,18 +154,19 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
             }
             for (const q of held.stoneSites || []) {
                 sites++;
+                const key = `${q.x.toFixed(2)},${q.z.toFixed(2)}`;
+                if (!all.has(key)) all.set(key, { x: q.x, z: q.z, kind: q.kind, next: q.next });
                 if (!shown.some(([x, z]) => Math.abs(x - q.x) < 0.02 && Math.abs(z - q.z) < 0.02)) hidden = Math.min(hidden, Math.hypot(q.x - bike.x, q.z - bike.z));
             }
         }
         windows.push({ s, shown: shown.length, sites, kerbs: env.scenery.kerbCount || 0, farthestShown: far, nearestHidden: hidden });
     };
-    const rule = Scenery.STONE_RULE;
-    const stretches = [], rows = [];
-    const blocks = Math.ceil(env.route.length / rule.blockM);
+    const siteMap = sites;
+    const stretches = [], rows = [], walls = [], found = new Set();
+    const gap = Scenery.STONE_GAP_M, points = env.route.points;
     const spans = hairpinSpans(env);
     const hairpins = env.route.hairpins().map(h => ({ ...h, used: Scenery.hairpinUsed(h), places: 0, read: false }));
     const words = (q, list) => list.map(f => `s ${q.s.toFixed(1)} side ${q.side}: ${f}`);
-    let next = 0;
     for (let s = env.startS; s <= env.endS + stepM; s += stepM) {
         const p = env.route.sample(Math.min(s, env.endS), {});
         env.lastBike = { x: p.x, z: p.z };
@@ -150,15 +175,28 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
         env.streamClockMs += 2 * WorldStreamer.DISPOSE_AFTER_MS;
         await env.streamer.settle({ x: p.x, z: p.z }, s);
         look(s, env.lastBike);
-        // The blocks the bike has reached, read while their land is here
-        for (; next < blocks && (next + 0.5) * rule.blockM <= s + stepM / 2; next++) {
-            for (const side of [-1, 1]) for (const run of env.scenery.stoneRuns(next, side)) {
+        // The stretches and the walls by the bike, read while their land is here, each once (read whole, on past the
+        // bike to its ends)
+        const at = Math.min(s, env.endS), k0 = Math.floor((at - stepM / 2) / gap), k1 = Math.ceil((at + stepM / 2) / gap);
+        for (const side of [-1, 1]) {
+            for (const run of env.scenery.stoneStretches(k0, k1, side)) {
+                const id = `drop:${side}:${run[0].k}`;
+                if (found.has(id)) continue;
+                found.add(id);
                 const places = run.map(q => ({ ...q }));
                 // The same stone planted on the other side of the road, for the check that the measures can fail
                 const first = places[0], across = env.route.project(first.x, first.z, { start: first.index - 4, end: first.index + 4 }, {});
                 const m = env.route.sample(first.s, {});
                 const mirror = { ...first, side: -side, x: m.x - across.lateral * Math.cos(m.heading), z: m.z + across.lateral * Math.sin(m.heading) };
-                stretches.push({ block: next, side, used: Scenery.stoneUsed(next, side), places, faults: places.flatMap(q => words(q, groundFaults(game, env, q))), mirror: groundFaults(game, env, mirror) });
+                stretches.push({ start: run[0].k, side, used: Scenery.stoneUsed(run[0].k, side), places, faults: places.flatMap(q => words(q, groundFaults(game, env, q))), mirror: groundFaults(game, env, mirror) });
+            }
+            const i0 = env.route.indexAt(Math.max(0, at - stepM / 2)), i1 = env.route.indexAt(Math.min(env.route.length, at + stepM / 2));
+            for (const run of env.scenery.wallRuns(i0, i1, side)) {
+                const id = `wall:${side}:${run.start}`;
+                if (found.has(id)) continue;
+                found.add(id);
+                const places = run.map(q => ({ ...q }));
+                walls.push({ start: run.start, side, used: Scenery.wallUsed(run.start, side), places, faults: places.flatMap(q => words(q, wallFaults(game, env, q))) });
             }
         }
         // And the hairpins it has reached
@@ -177,6 +215,8 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
     }
     await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
     const bands = roadBands(env, RoadSurface.VERGE_M);
-    for (const stretch of stretches.concat(rows)) stretch.faults.push(...stretch.places.flatMap(q => words(q, recordFaults(game, env, bands, q))));
-    return { env, stretches, rows, hairpins, spans, stones: [...stones.values()], kerbs: [...kerbs.values()], windows, most };
+    for (const stretch of stretches.concat(rows, walls)) stretch.faults.push(...stretch.places.flatMap(q => words(q, recordFaults(game, env, bands, q))));
+    stretches.sort((a, b) => a.places[0].s - b.places[0].s || a.side - b.side);
+    walls.sort((a, b) => a.start - b.start || a.side - b.side);
+    return { env, stretches, rows, walls, hairpins, spans, stones: [...stones.values()], kerbs: [...kerbs.values()], sites: [...sites.values()], windows, most };
 }

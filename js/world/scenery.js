@@ -203,20 +203,24 @@ class Scenery {
     // A marker stone is road furniture: it stands only where the drawn ground at its foot is within this of the road
     // beside it (not at the foot of a retaining wall, not on the land under a bridge)
     static get ROADSIDE_STEP_M() { return 0.8; }
-    // Where the marker stones stand (Scenery.stonePlace, stoneRuns, hairpinRuns, stoneSites). On an old pass road the
-    // stones are the guard at a sharp drop: a row is seen only where the land falls away from the road's edge, on the
-    // side it falls, and not at every drop. A row also goes round the outside of a hairpin, over the part of its arc
-    // that is an edge: where the land falls away behind the stones. So no stone stands on a level verge, on the
-    // uphill side, round a hairpin whose outside is the bank that rises from it, on the inside of a hairpin, or
-    // where a wall's parapet, a bridge's or a barrier already guards the edge.
+    // Where the marker stones stand (Scenery.stonePlace, stoneStretches, hairpinRuns, wallRuns, stoneSites). On an old
+    // pass road the stones are the guard of an edge: a row is seen only where the land falls away from the road's
+    // edge, on the side it falls, and not at every one. A row also goes round the outside of a hairpin, over the part
+    // of its arc that is a drop. And a row stands on the top of a retaining wall that holds the road up and has no
+    // parapet: the wall's coping is the stones' seat (RoadMesh.COPING_W_M holds a stone and a margin either side). So
+    // no stone stands on a level verge, on the uphill side, round a hairpin whose outside is level or the bank that
+    // rises from it, on the inside of a hairpin, on a wall that carries a parapet (the parapet is the guard), or where
+    // a bridge or a barrier already guards the edge. Only a hairpin's row stands on a kerb course (KERB): at a drop
+    // and on a wall the blocks stand alone, each in the ground or on the wall's top.
     //   dropM, reachM   a sharp drop: the drawn ground reachM past the verge lies more than dropM under the road. A
     //                   fill at the batter (RoadMesh.BATTER, 1:1.5) falls 6.7 m in 10, and the downhill edge of a
     //                   mountain road stands on one for kilometres: 7 m takes only the banks that fall more steeply
-    //                   than a plain fill
-    //   blockM, share   not every drop has them: the ride is read in blocks of blockM from its start, and a share of
-    //                   the blocks' sides, drawn from the block's number, may have stones (a rule of the ride's own
-    //                   metres, so the order the tiles arrive in cannot change it)
-    //   minM            a row is at least this long: a shorter run of drop in a block gets none
+    //                   than a plain fill. One measure for a stretch and a hairpin's row
+    //   share           not every drop has them: a stretch is the whole run of stations next to each other that stand
+    //                   at a drop, and a share of the stretches, drawn from the stretch's first station and its side,
+    //                   have stones over all of it (a rule of the ride's own metres: the order the tiles arrive in
+    //                   cannot change it). A stretch ends only where a station is no place for a stone at a drop
+    //   minM            a row is at least this long: a shorter stretch gets none
     //   mouthM          metres a stone keeps from every side road's band: a junction's mouth is not an edge to guard
     //   worksM          metres a row keeps from the first and the last thing of a roadworks site
     //   footM           the most the ground may fall under a stone's own foot, from its middle to its lowest corner:
@@ -224,14 +228,14 @@ class Scenery {
     //                   it a stone that would then stand alone
     //   hairpinShare    the share of the hairpins (WorldRoute.hairpins) that have a row round their outside, drawn
     //                   from the metre of the hairpin's apex: most of them, not all. The row is on the arc only, its
-    //                   stones STONE_GAP_M apart along the outer edge itself, and every rule above but dropM
-    //                   holds for it. Along a hairpin's arc the drop rule places nothing, on either side
-    //   hairpinDropM    a hairpin's outside is an edge where the drawn ground reachM past the verge lies more than
-    //                   this under the road: a row stands over that part of the arc only. The outside of a hairpin
-    //                   on a slope falls on one leg (a plain fill, 6 to 7 m in 10) and is the rising bank on the
-    //                   other (0 to -7 m), with a few metres of arc between them: 3 m takes the fill and leaves
-    //                   the level ground and the bank
-    static get STONE_RULE() { return { dropM: 7, reachM: 10, blockM: 60, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75, hairpinDropM: 3 }; }
+    //                   stones STONE_GAP_M apart along the outer edge itself, over the part of the arc that is a drop
+    //                   (dropM), all of it or none, and every rule above holds for it. Along a hairpin's arc the drop
+    //                   rule places nothing, on either side
+    //   wallShare       the share of the walls under the ride's edge that have a row on their top, drawn from the
+    //                   metre of the wall's first row and its side: a chosen wall has stones over all of it or none.
+    //                   Only a wall that holds the road up (its face drops wallLowM or more from the edge all along)
+    //                   and has no parapet anywhere along it
+    static get STONE_RULE() { return { dropM: 7, reachM: 10, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75, wallShare: 0.6, wallLowM: 0.3 }; }
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
     // 3 or 4 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
@@ -942,7 +946,7 @@ class Scenery {
 
     // Where a marker stone may stand at ride distance s on `side` (the sign of the lateral): {s, side, x, y, z, seat,
     // heading, drop, index}, or null. Nothing else guards the edge there: no bridge, tunnel or gallery, no retaining
-    // wall under the edge (its parapet is the guard), no stopping place, no roadworks site, no side road within
+    // wall under the edge (its parapet is the guard, or its top is its own row's) and none going on past its end, no stopping place, no roadworks site, no side road within
     // mouthM. `y` is the drawn ground under its middle, within ROADSIDE_STEP_M of the road; `seat` the height it
     // stands at (KERB); `drop` the metres the
     // ground reachM past the verge lies under the road (null where no land is there to read); `index` the ride's row
@@ -961,6 +965,8 @@ class Scenery {
             loc.index = j;
             loc.flags = q.flags;
             if (ground.bridgeOrDrop(loc, q.width / 2)) return null;
+            // (nor beside a wall that goes on past its end, lower, with its coping: WorldEnvironment.taperAt)
+            if (typeof ground.taperAt === 'function' && (ground.taperAt(j, side, 0) > 0 || ground.taperAt(j, side, 1) > 0)) return null;
         }
         const p = route.sample(s, this.stoneAt || (this.stoneAt = {}));
         const cos = Math.cos(p.heading), sin = Math.sin(p.heading);
@@ -984,15 +990,20 @@ class Scenery {
         return { s, side, x, y, z, seat: Number.isFinite(seat) ? seat : y, heading: p.heading, drop, index: i };
     }
 
-    // The stretches of sharp drop in block `block` of the ride on `side`: [[place]] (Scenery.stonePlace), each a run of
-    // stations next to each other at least minM long. A block is blockM of the ride from its start
-    stoneRuns(block, side) {
-        const rule = Scenery.STONE_RULE, gap = Scenery.STONE_GAP_M;
-        const each = Math.round(rule.blockM / gap), least = Math.ceil(rule.minM / gap) + 1;
+    // The stretches of sharp drop on `side` that have a station from k0 to k1: [[place]] (Scenery.stonePlace), each the
+    // whole run of stations next to each other where a stone may stand at a drop, read on past k0 and k1 to its ends,
+    // at least minM long. A stretch is chosen or not as one (stoneUsed, from its first station)
+    stoneStretches(k0, k1, side) {
+        const rule = Scenery.STONE_RULE, least = Math.ceil(rule.minM / Scenery.STONE_GAP_M) + 1;
+        const last = Math.floor(this.ground.route.length / Scenery.STONE_GAP_M);
+        const memo = new Map(), at = k => (memo.has(k) ? memo.get(k) : memo.set(k, k >= 0 && k <= last ? this.stonePlace(k, side) : null).get(k));
+        let a = Math.max(0, k0), b = Math.min(last, k1);
+        while (a > 0 && at(a) && at(a - 1)) a--;
+        while (b < last && at(b) && at(b + 1)) b++;
         const runs = [];
         let run = [];
-        for (let k = block * each; k <= (block + 1) * each; k++) {
-            const place = k < (block + 1) * each ? this.stonePlace(k, side) : null;
+        for (let k = a; k <= b + 1; k++) {
+            const place = k <= b ? at(k) : null;
             if (place) { run.push(place); continue; }
             if (run.length >= least) runs.push(run);
             run = [];
@@ -1000,14 +1011,14 @@ class Scenery {
         return runs;
     }
 
-    // Whether the stretches of a block's side have their stones: a share of them, the same on every load
-    static stoneUsed(block, side) {
-        return Scenery.hash(block, side, 80) < Scenery.STONE_RULE.share;
+    // Whether a stretch has its stones: a share of them, from its first station and its side, the same on every load
+    static stoneUsed(first, side) {
+        return Scenery.hash(first, side, 80) < Scenery.STONE_RULE.share;
     }
 
     // The row round the outside of hairpin `h` (WorldRoute.hairpins): [[place]] (Scenery.stoneSpot, each with `n`, its
-    // number in the row), the runs of places next to each other at least minM long where the land falls away behind
-    // them (hairpinDropM). The places are STONE_GAP_M apart along the outer edge itself, over the arc, the row in
+    // number in the row), the runs of places next to each other at least minM long at a drop (dropM, as a stretch's),
+    // each on a kerb course (`kerb`). The places are STONE_GAP_M apart along the outer edge itself, over the arc, the row in
     // the middle of it: on the centre line of a bend of 6 m the same stones would stand twice as far apart
     hairpinRuns(h) {
         const rule = Scenery.STONE_RULE, gap = Scenery.STONE_GAP_M, route = this.ground.route;
@@ -1035,17 +1046,75 @@ class Scenery {
                 const [s0, d0] = line[j], [s1, d1] = line[j + 1];
                 place = this.stoneSpot(s0 + (s1 - s0) * (d1 > d0 ? Math.min(1, Math.max(0, (d - d0) / (d1 - d0))) : 0), side);
             }
-            // (an edge: a place with level land behind it, or the bank, has nothing to guard)
-            if (place && place.drop > rule.hairpinDropM) {
+            // (a drop, as at a stretch: a place with level land behind it, or the bank, has nothing to guard)
+            if (place && place.drop > rule.dropM) {
                 place.n = n;
                 place.seed = 100000 + Math.round(place.s * 8);
                 run.push(place);
                 continue;
             }
-            if (run.length >= least) runs.push(run);
+            if (run.length >= least) runs.push(Object.assign(run, { kerb: true }));
             run = [];
         }
         return runs;
+    }
+
+    // The rows on the top of the walls under the ride's edge on `side` that have a segment from row i0 to i1:
+    // [[place]], each the whole wall read on past i0 and i1 to its ends (WorldGround.wallTop), with its `start` (the
+    // metre of its first row). A wall that carries a parapet anywhere, or does not hold the road up all along
+    // (wallLowM), has none, and so has one where a stone would stand in a carriageway, a stopping place, a roadworks
+    // site or a side road's mouth: a wall is stoned over all of it or not at all. The stones stand STONE_GAP_M apart
+    // along the middle of its coping (RoadMesh.COPING_W_M from its face), the row in the middle of the wall
+    wallRuns(i0, i1, side) {
+        const ground = this.ground, route = ground.route, points = route.points, rule = Scenery.STONE_RULE;
+        if (typeof ground.wallTop !== 'function' || !this.roads) return [];
+        const memo = new Map(), top = i => (memo.has(i) ? memo.get(i) : memo.set(i, i >= 0 && i + 1 < points.length ? ground.wallTop(i, side) : null).get(i));
+        const runs = [], seen = new Set();
+        for (let i = Math.max(0, i0); i <= Math.min(points.length - 2, i1); i++) {
+            if (!top(i) || seen.has(i)) continue;
+            let a = i, b = i;
+            while (top(a - 1)) a--;
+            while (top(b + 1)) b++;
+            for (let j = a; j <= b; j++) seen.add(j);
+            const segs = [];
+            for (let j = a; j <= b; j++) segs.push(top(j));
+            if (segs.some(t => t.railed || Math.min(...t.heights) < rule.wallLowM)) continue;
+            // The middle of the coping, along the wall: its face stands STONE_PROUD_M out from the edge
+            const inward = RoadMesh.STONE_PROUD_M - RoadMesh.COPING_W_M / 2;
+            const line = [];
+            for (const t of segs) {
+                const ca = [t.a[0] + t.oa[0] * inward, t.a[1], t.a[2] + t.oa[1] * inward], cb = [t.b[0] + t.ob[0] * inward, t.b[1], t.b[2] + t.ob[1] * inward];
+                if (!line.length) line.push({ p: ca, d: 0 });
+                line.push({ p: cb, d: line[line.length - 1].d + Math.hypot(cb[0] - ca[0], cb[2] - ca[2]) });
+            }
+            const far = line[line.length - 1].d, gap = Scenery.STONE_GAP_M;
+            if (far < rule.minM) continue;
+            const count = Math.floor(far / gap) + 1, lead = (far - (count - 1) * gap) / 2, start = Math.round(points[a].s);
+            const run = [];
+            let ok = true;
+            for (let n = 0, j = 0; n < count && ok; n++) {
+                const d = lead + n * gap;
+                while (j < line.length - 2 && line[j + 1].d < d) j++;
+                const u = line[j + 1].d > line[j].d ? Math.min(1, Math.max(0, (d - line[j].d) / (line[j + 1].d - line[j].d))) : 0;
+                const A = line[j].p, B = line[j + 1].p;
+                const x = A[0] + (B[0] - A[0]) * u, y = A[1] + (B[1] - A[1]) * u, z = A[2] + (B[2] - A[2]) * u;
+                const own = route.project(x, z, { start: a + j - 4, end: a + j + 5 }, this.stoneLoc || (this.stoneLoc = {}));
+                const index = Math.min(points.length - 2, route.indexAt(own.s));
+                // (out of the carriageway, a stopping place, a roadworks site and a side road's mouth)
+                const clear = Math.abs(own.lateral) - points[index].width / 2 >= Scenery.STONE_RADIUS_M + Scenery.CLEAR_M.stone;
+                const shut = (this.stoneShut || []).some(span => own.s >= span.s0 - rule.worksM && own.s <= span.s1 + rule.worksM);
+                const stop = points[index][side > 0 ? 'safeP' : 'safeN'] || points[index + 1][side > 0 ? 'safeP' : 'safeN'];
+                if (!clear || shut || stop || this.roads.clearanceOfSides(x, z, rule.mouthM) < rule.mouthM) { ok = false; break; }
+                run.push({ s: own.s, side, x, y: y + RoadMesh.COPING_UP_M, z, seat: y + RoadMesh.COPING_UP_M, heading: Math.atan2(B[0] - A[0], B[2] - A[2]), index, n, wall: true, seed: 200000 + start * 4 + n, drop: null });
+            }
+            if (ok && run.length) runs.push(Object.assign(run, { start, side, wall: true }));
+        }
+        return runs;
+    }
+
+    // Whether a wall has its row: a share of them, from its first row's metre and its side, the same on every load
+    static wallUsed(start, side) {
+        return Scenery.hash(start, side, 82) < Scenery.STONE_RULE.wallShare;
     }
 
     // Whether a hairpin has its row: a share of them, the same on every load
@@ -1053,25 +1122,34 @@ class Scenery {
         return Scenery.hash(Math.round(h.apex), h.sign, 81) < Scenery.STONE_RULE.hairpinShare;
     }
 
-    // The marker stones of a tile: the stones of every stretch that has them (stoneRuns, stoneUsed) and of every
-    // hairpin's row that has them (hairpinRuns, hairpinUsed) whose place is in the tile. Each stands in the drawn
-    // ground at its own place: its foot is STONE_SINK_M under its seat (KERB) and its root goes on down
-    // (STONE_ROOT_M), so no corner hangs over the bank that falls from it; a stone the ground falls more than footM
-    // under, from its middle to a corner, is left out, and so is a stone that would then stand alone.
-    // [{x, y, z, turn, lean, next}]: `next` is the seat of the
-    // stone after it in its row, where both stand: the kerb course runs from one to the other
+    // The marker stones of a tile: the stones of every stretch that has them (stoneStretches, stoneUsed), of every
+    // hairpin's row that has them (hairpinRuns, hairpinUsed) and of every wall's row that has them (wallRuns,
+    // wallUsed) whose place is in the tile. Each stands in the drawn ground at its own place: its foot is
+    // STONE_SINK_M under its seat and its root goes on down (STONE_ROOT_M), so no corner hangs over the bank that falls
+    // from it; a stone the ground falls more than footM under, from its middle to a corner, is left out, and so is a
+    // stone that would then stand alone. A stone on a wall is seated on the wall's coping.
+    // [{x, y, z, turn, lean, next, kind}]: `kind` is 'drop', 'hairpin' or 'wall'; `next` is the seat of the stone
+    // after it in a hairpin's row, where both stand: the kerb course runs from one to the other
     stoneSites(tile) {
         const sites = [];
         if (!this.roads) return sites;
-        const m = WorldData.TILE_M, points = this.ground.route.points, block = Scenery.STONE_RULE.blockM;
-        const blocks = new Set(), loc = {}, half = Scenery.STONE_WIDTH_M / 2;
+        const m = WorldData.TILE_M, points = this.ground.route.points, gap = Scenery.STONE_GAP_M;
+        const loc = {}, half = Scenery.STONE_WIDTH_M / 2;
+        // The ride's rows near the tile, in spans of rows next to each other
+        const spans = [];
         for (let i = 0; i + 1 < points.length; i++) {
             const p = points[i];
             if (Math.abs(p.x - (tile.tx + 0.5) * m) > m / 2 + p.width + 8 || Math.abs(p.z - (tile.tz + 0.5) * m) > m / 2 + p.width + 8) continue;
-            for (let b = Math.floor(p.s / block); b <= Math.floor(points[i + 1].s / block); b++) blocks.add(b);
+            const span = spans[spans.length - 1];
+            if (span && span[1] === i - 1) span[1] = i; else spans.push([i, i]);
         }
         const runs = [];
-        for (const b of blocks) for (const side of [Route.RIGHT, Route.LEFT]) if (Scenery.stoneUsed(b, side)) runs.push(...this.stoneRuns(b, side));
+        for (const [i0, i1] of spans) {
+            for (const side of [Route.RIGHT, Route.LEFT]) {
+                for (const run of this.stoneStretches(Math.floor(points[i0].s / gap), Math.ceil(points[i1 + 1].s / gap), side)) if (Scenery.stoneUsed(run[0].k, side)) runs.push(run);
+                for (const run of this.wallRuns(i0, i1, side)) if (Scenery.wallUsed(run.start, side)) runs.push(run);
+            }
+        }
         // A hairpin whose arc has a place in the tile: its ends and its apex are within half its arc of each one
         for (const h of this.hairpins()) {
             if (!Scenery.hairpinUsed(h)) continue;
@@ -1079,25 +1157,32 @@ class Scenery {
             if (Math.abs(p.x - (tile.tx + 0.5) * m) <= reach && Math.abs(p.z - (tile.tz + 0.5) * m) <= reach) runs.push(...this.hairpinRuns(h));
         }
         const inTile = q => Math.floor(q.x / m) === tile.tx && Math.floor(q.z / m) === tile.tz;
+        // (a run read from two spans of rows is one run)
+        const taken = new Set();
         // A sawn block stands square to its kerb, a little off it
         const stand = (q) => {
             const turn = q.heading + (Scenery.hash(q.seed, q.side, 41) - 0.5) * 0.12;
+            // (on a wall's coping the stone is seated on stone)
+            if (q.wall) return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, turn, lean: 0, next: null, kind: 'wall' };
             let low = q.y;
             for (const [a, c] of [[-half, -half], [half, -half], [half, half], [-half, half]]) {
                 const x = q.x + a * Math.cos(turn) + c * Math.sin(turn), z = q.z - a * Math.sin(turn) + c * Math.cos(turn);
                 if (this.ground.tileHeight(x, z) !== null) low = Math.min(low, this.ground.groundY(x, z, { start: q.index - 4, end: q.index + 4 }, false, loc));
             }
             if (q.y - low > Scenery.STONE_RULE.footM) return null;
-            return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, turn, lean: (Scenery.hash(q.seed, q.side, 42) - 0.5) * 0.04, next: null };
+            return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, turn, lean: (Scenery.hash(q.seed, q.side, 42) - 0.5) * 0.04, next: null, kind: q.n === undefined ? 'drop' : 'hairpin' };
         };
         for (const run of runs) {
-            if (!run.some(inTile)) continue;
+            const id = `${run[0].side}:${run[0].x.toFixed(2)},${run[0].z.toFixed(2)}`;
+            if (taken.has(id) || !run.some(inTile)) continue;
+            taken.add(id);
             const stood = run.map(stand);
             // No stone stands alone: one whose neighbours are both left out goes with them
             const stones = stood.map((q, i) => (q && (stood[i - 1] || stood[i + 1]) ? q : null));
             run.forEach((q, i) => {
                 if (!stones[i] || !inTile(q)) return;
-                if (stones[i + 1]) stones[i].next = { x: run[i + 1].x, y: run[i + 1].seat, z: run[i + 1].z };
+                // (the kerb course under a hairpin's row only: at a drop and on a wall the blocks stand alone)
+                if (run.kerb && stones[i + 1]) stones[i].next = { x: run[i + 1].x, y: run[i + 1].seat, z: run[i + 1].z };
                 sites.push(stones[i]);
             });
         }

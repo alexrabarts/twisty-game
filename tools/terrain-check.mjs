@@ -3208,6 +3208,12 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                         // A foot is the lowest edge of its triangle (its top edge hangs from the road, its sides end a run)
                         const third = pos[c * 3 + 1];
                         if (!(third > pos[a * 3 + 1] + 0.05 && third > pos[b * 3 + 1] + 0.05)) continue;
+                        // (of a face or a slope: a wall's coping, a top that rises along its wall, has none)
+                        if (kind === 'wall') {
+                            const ux = pos[b * 3] - pos[a * 3], uy = pos[b * 3 + 1] - pos[a * 3 + 1], uz = pos[b * 3 + 2] - pos[a * 3 + 2];
+                            const wx = pos[c * 3] - pos[a * 3], wy = third - pos[a * 3 + 1], wz = pos[c * 3 + 2] - pos[a * 3 + 2];
+                            if (Math.abs(uz * wx - ux * wz) > 0.95 * Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx)) continue;
+                        }
                         if (Math.hypot(pos[a * 3] - pos[b * 3], pos[a * 3 + 2] - pos[b * 3 + 2]) < 0.05) continue;
                         const seen = `${kind}:${e}`;
                         if (feetSeen.has(seen)) continue;
@@ -3217,6 +3223,12 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
                         const mx = (ax + bx) / 2, my = (ay + by) / 2, mz = (az + bz) / 2;
                         if (inBand(mx, mz, my)) continue;
                         if (carriageway(mx, mz) !== null) continue;
+                        // (a parapet stands on its wall's coping: a foot on stone is no foot over the land)
+                        if (kind === 'wall') {
+                            down.set(new THREE.Vector3(mx, my + 0.05, mz), new THREE.Vector3(0, -1, 0));
+                            down.far = 0.12;
+                            if (down.intersectObject(o, false).some(h => h.face.materialIndex === 2 && h.face.normal.y > 0.9)) continue;
+                        }
                         const la = drawnLand(ax, az), lb = drawnLand(bx, bz);
                         if (la === null || lb === null) continue;
                         const over = Math.min(ay - la, by - lb);
@@ -5123,13 +5135,16 @@ function junctionChecks(results, failures) {
 // world-stones: the marker stones as they are drawn, in the page. The bike is put down every --every metres (200 by
 // default) and every stone drawn within STONE_NEAR_M of it, where the land is at full detail, is cast on against the
 // drawn ground (the tiles, the roads and the ground of the edge works; a wall, a deck or a parapet is a structure).
-// It fails on a stone with a corner of its foot over the drawn ground or its top under it, a stone that is neither
-// at a sharp drop drawn on its own side (Scenery.STONE_RULE: dropM within reachM of the verge, less STONE_DROP_TOL_M)
-// nor on the outside of a hairpin (within STONE_HAIRPIN_M of a hairpin of worldHairpins, where the road turns
-// STONE_BEND_DEG or more inside STONE_BEND_M), a stone on a hairpin with level or rising land behind it (no fall of
-// hairpinDropM, less the same tolerance), a stone on the inside of a hairpin, a stone with a wall or a parapet
-// drawn at its edge, a piece of kerb with its foot over the drawn ground, a ride on which no stone was seen and a
-// ride with no row at a hairpin. It reports the stones by case and how many hairpins of the game's list have a row.
+// A stone seated on the coping of a wall (stone drawn under it at its seat) is a wall's stone. It fails on a stone
+// with a corner of its foot over the drawn ground or its top under it; a stone that is neither on a wall, nor at a
+// sharp drop drawn on its own side (Scenery.STONE_RULE: dropM within reachM of the verge, less STONE_DROP_TOL_M), nor
+// on the outside of a hairpin (within STONE_HAIRPIN_M of a hairpin of worldHairpins, where the road turns
+// STONE_BEND_DEG or more inside STONE_BEND_M); a stone on a hairpin with no drop of dropM behind it (less the same
+// tolerance); a stone on the inside of a hairpin; a stone off a wall with a wall or a parapet drawn at its edge; a
+// stone on a wall with a parapet drawn beside it or a corner of its foot off the coping; a piece of kerb with its foot
+// over the drawn ground or away from every hairpin (the kerb is a hairpin's row's only); a ride on which no stone was
+// seen and a ride with no row at a hairpin. It reports the stones by case and how many hairpins of the game's list
+// have a row.
 //   node tools/terrain-check.mjs world-stones --world tremola --gpu [--every 200]
 const STONE_NEAR_M = 160;
 const STONE_FLOAT_M = 0.05;
@@ -5180,6 +5195,20 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
                     over = Math.max(over, y === null ? Infinity : v.y - y);
                 }
                 const middle = groundY(at.x, at.z, top + 3);
+                // On a wall's coping: stone drawn under each corner of its foot at its seat (its matrix stands STONE_SINK_M
+                // under the seat)
+                const seat = at.y + Scenery.STONE_SINK_M;
+                const coping = (x, z) => hits(x, z, top + 3).some(h => structure(h) && Math.abs(h.point.y - seat) < 0.08);
+                stone.wall = coping(at.x, at.z) || undefined;
+                if (stone.wall) {
+                    const corners = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]].map(([cx, cz]) => v.set(cx, 0, cz).applyMatrix4(world).clone());
+                    if (!corners.every(c => coping(c.x, c.z))) stone.offTop = true;
+                    // (a parapet beside it: stone drawn a metre about it higher than the stone's own seat)
+                    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) if (hits(at.x + dx, at.z + dz, top + 3).some(h => structure(h) && h.point.y > seat + 0.4)) stone.railed = true;
+                    seen.set(key, stone);
+                    stone.s = Math.round(route.project(at.x, at.z, null, {}).s);
+                    continue;
+                }
                 if (over > floatM) stone.floats = over === Infinity ? 'no ground drawn under it' : Math.round(over * 100) / 100;
                 if (middle !== null && top <= middle) stone.buried = Math.round((middle - top) * 100) / 100;
                 // Its own road, the side it stands on, and the drawn ground reachM past the verge there
@@ -5196,8 +5225,8 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
                 stone.hairpin = apexes.some(a => Math.abs(a - own.s) <= hairpinM) && Math.abs(turn) >= bendDeg * Math.PI / 180;
                 if (stone.hairpin && side !== -Math.sign(turn)) stone.inside = true;
                 if (!stone.hairpin && !(stone.drop > rule.dropM - tolM)) stone.flat = true;
-                // (a hairpin's row guards an edge: the land falls away behind it)
-                if (stone.hairpin && !(stone.drop > rule.hairpinDropM - tolM)) stone.noEdge = true;
+                // (a hairpin's row guards a drop, as a stretch does: the land falls away behind it)
+                if (stone.hairpin && !(stone.drop > rule.dropM - tolM)) stone.noEdge = true;
                 // A wall, a deck or a parapet drawn at its edge, from a metre in from the verge's edge to a metre out
                 for (let d = -1; d <= 1; d += 0.25) if (hits(...out(d), p.y + 3).some(h => structure(h) && h.point.y > p.y - 1.5)) stone.guarded = true;
             }
@@ -5220,22 +5249,24 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
                     over = Math.max(over, y === null ? Infinity : v.y - y);
                 }
                 if (over > 0) kerb.floats = over === Infinity ? 'no ground drawn under it' : Math.round(over * 100) / 100;
+                // (the kerb course is a hairpin's row's only)
+                const along = route.project(at.x, at.z, null, {}).s;
+                if (!apexes.some(a => Math.abs(a - along) <= hairpinM)) kerb.stray = Math.round(along);
             }
         });
     }
     const stones = [...seen.values()];
     const pick = (key, list = stones) => list.filter(t => t[key] !== undefined).slice(0, 12);
-    const atDrop = stones.filter(t => !t.hairpin), atHairpin = stones.filter(t => t.hairpin);
+    const atWall = stones.filter(t => t.wall), atDrop = stones.filter(t => !t.hairpin && !t.wall), atHairpin = stones.filter(t => t.hairpin && !t.wall);
     const drops = atDrop.map(t => t.drop).filter(Number.isFinite).sort((a, b) => a - b);
     // The hairpins of the game's own list (WorldRoute.hairpins) with a stone on their arc
     const list = route.hairpins();
     const withRow = list.filter(h => atHairpin.some(t => t.s >= h.s0 - 3 && t.s <= h.s1 + 3));
     return {
-        places, stones: stones.length, atDrops: atDrop.length, atHairpins: atHairpin.length, kerbs: kerbs.size,
-        rows: new Set(atDrop.map(t => `${Math.floor(t.s / rule.blockM)}:${t.side}`)).size + withRow.length,
+        places, stones: stones.length, atDrops: atDrop.length, atHairpins: atHairpin.length, atWalls: atWall.length, kerbs: kerbs.size,
         hairpins: list.length, hairpinsWithRow: withRow.length, hairpinsWithout: list.filter(h => !withRow.includes(h)).map(h => Math.round(h.apex)),
         dropM: rule.dropM, reachM: rule.reachM, leastDrop: drops[0] ?? null, medianDrop: drops[Math.floor(drops.length / 2)] ?? null,
-        floats: pick('floats'), buried: pick('buried'), flat: pick('flat'), noEdge: pick('noEdge'), hairpinDropM: rule.hairpinDropM, leastHairpinDrop: atHairpin.map(t => t.drop).filter(Number.isFinite).sort((a, b) => a - b)[0] ?? null, inside: pick('inside'), guarded: pick('guarded'), kerbFloats: pick('floats', [...kerbs.values()])
+        floats: pick('floats'), buried: pick('buried'), flat: pick('flat'), noEdge: pick('noEdge'), leastHairpinDrop: atHairpin.map(t => t.drop).filter(Number.isFinite).sort((a, b) => a - b)[0] ?? null, inside: pick('inside'), guarded: pick('guarded'), offTop: pick('offTop'), railed: pick('railed'), kerbFloats: pick('floats', [...kerbs.values()]), kerbStray: pick('stray', [...kerbs.values()])
     };
 }, placeAt.toString(), worldHairpins.toString(), Number(option('every') || 200), STONE_NEAR_M, STONE_FLOAT_M, STONE_DROP_TOL_M, STONE_HAIRPIN_M, STONE_BEND_M, STONE_BEND_DEG);
 
@@ -5244,7 +5275,7 @@ function stoneChecks(results, failures) {
     if (!stones) return;
     if (!(stones.stones > 0)) failures.push(`world-stones: no marker stone was seen at ${stones.places} places`);
     if (!(stones.hairpinsWithRow > 0)) failures.push(`world-stones: no row of stones at any of the ${stones.hairpins} hairpins`);
-    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, noEdge: `stones on a hairpin with no fall of ${stones.hairpinDropM} m drawn within ${stones.reachM} m behind them`, inside: 'stones on the inside of a hairpin', guarded: 'stones where a wall or a parapet is drawn at the edge', kerbFloats: 'pieces of kerb with their foot over the drawn ground' };
+    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, noEdge: `stones on a hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m behind them`, inside: 'stones on the inside of a hairpin', guarded: 'stones off a wall where a wall or a parapet is drawn at the edge', offTop: 'stones on a wall with a corner off its coping', railed: 'stones on a wall with a parapet', kerbFloats: 'pieces of kerb with their foot over the drawn ground', kerbStray: 'pieces of kerb away from every hairpin' };
     for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
 }
 

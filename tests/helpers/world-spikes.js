@@ -31,20 +31,24 @@
 //     does: a slanted sheet standing out from a wall's end, which no mason builds
 //   - unfaced: an upright face of stone that is no parapet's and is not laid and lit as its wall's face (no
 //     `wallFace`): it shows paler or darker than the wall it closes
-//   - thin: a piece of wall thinner than the wall: a piece past a wall's end (`wallFace` 2, RoadMesh.edgeWorks
-//     `taper`) whose top has less stone over it than the wall's coping (`copingM`, a parapet's width) at its own
-//     height on either side (`coping`), or any upright face of stone, no parapet's, with nothing drawn at its top on
-//     either side (`sheet`): seen from above a face alone reads as a wall of no thickness standing on the land
+//   - thin: a piece of wall thinner than the wall: an upright face of stone, no parapet's (a wall's face, the piece
+//     that joins two roads' walls, its face past its end; a return, shorter than `copingM`, needs only its top), whose top has less stone over it than the
+//     wall's coping (`copingM`: RoadMesh.COPING_W_M, a marker stone and a margin either side) at its own height on
+//     either side (`coping`), or with nothing drawn at its top on either side (`sheet`): seen from above a face
+//     alone reads as a wall of no thickness standing on the land
+//   - folds: a piece of a wall's top (a coping or a parapet's top: a level quad of stone) that is folded (its inner
+//     edge runs against its outer edge, or the two cross) or overlaps a neighbouring piece by more than `foldM2` in
+//     plan: on a tight curve the pieces of a top laid square to each segment crumpled over one another
 // spikeReport(store) gives {tiles, stretched, beside, setback, bare, ends, overhangs, flaps, proud, fins, unfaced,
-// thin, tapers, low, joined, wallEnds, km}: each a list, worst first, of {s, x, z, ...} (s the metres of ride nearest),
+// thin, folds, tapers, low, joined, wallEnds, km}: each a list, worst first, of {s, x, z, ...} (s the metres of ride nearest),
 // `tapers`, `low` and `joined` counts, `wallEnds` the wall ends read, and `km` the offenders counted by kilometre
 // of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 41, flaps: 4, proud: 4, fins: 0, unfaced: 0, thin: 0 };
-export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.5, copingM: 0.3 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 41, flaps: 4, proud: 4, fins: 0, unfaced: 0, thin: 0, folds: 0 };
+export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.5, copingM: 0.8, foldM2: 0.005 };
 
-export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.5, copingM: 0.3 }) {
+export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.5, copingM: 0.8, foldM2: 0.005 }) {
     const { THREE } = game;
     store.tiles = store.tiles || new Map();
     store.works = store.works || new Map();
@@ -231,8 +235,77 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     store.flaps = store.flaps || new Map();
     store.looks = store.looks || new Map();
     store.stones = store.stones || new Map();
+    // The tops of the walls: every flat quad of stone (RoadMesh.quad lays a b c, a c d; a coping is laid with its
+    // outer edge a b and its inner edge c d), once for a geometry, read for a fold and for overlap with the pieces
+    // it shares a corner with (in place: a parapet's top over the coping it stands on is no neighbour of it)
+    store.folds = store.folds || new Map();
+    const loop = pts => { let a = 0; for (let k = 0; k < pts.length; k++) { const p = pts[k], n = pts[(k + 1) % pts.length]; a += p[0] * n[2] - n[0] * p[2]; } return a / 2; };
+    const crossing = (a, b, c, d) => {
+        const o = (p, q, r) => (q[0] - p[0]) * (r[2] - p[2]) - (q[2] - p[2]) * (r[0] - p[0]);
+        return o(a, b, c) * o(a, b, d) < 0 && o(c, d, a) * o(c, d, b) < 0;
+    };
+    // (the area two convex quads share in plan: the one clipped by the other)
+    const shared = (A, B) => {
+        const sign = Math.sign(loop(B));
+        let poly = A.map(c => [c[0], c[2]]);
+        for (let k = 0; k < B.length && poly.length; k++) {
+            const p = [B[k][0], B[k][2]], n = [B[(k + 1) % B.length][0], B[(k + 1) % B.length][2]];
+            const inside = c => sign * ((n[0] - p[0]) * (c[1] - p[1]) - (n[1] - p[1]) * (c[0] - p[0])) >= -1e-9;
+            const out = [];
+            for (let j = 0; j < poly.length; j++) {
+                const c = poly[j], d = poly[(j + 1) % poly.length], ci = inside(c), di = inside(d);
+                if (ci) out.push(c);
+                if (ci !== di) {
+                    const dx = d[0] - c[0], dy = d[1] - c[1], ex = n[0] - p[0], ey = n[1] - p[1], den = dx * ey - dy * ex;
+                    if (Math.abs(den) > 1e-12) { const t = ((p[0] - c[0]) * ey - (p[1] - c[1]) * ex) / den; out.push([c[0] + dx * t, c[1] + dy * t]); }
+                }
+            }
+            poly = out;
+        }
+        let a = 0;
+        for (let k = 0; k < poly.length; k++) a += poly[k][0] * poly[(k + 1) % poly.length][1] - poly[(k + 1) % poly.length][0] * poly[k][1];
+        return Math.abs(a) / 2;
+    };
+    for (const part of stone) {
+        const id = `${part.mesh.geometry.uuid}:${part.start}`;
+        if (store.folds.has(id)) continue;
+        const record = [];
+        store.folds.set(id, record);
+        part.mesh.updateMatrixWorld(true);
+        const pos = part.mesh.geometry.attributes.position, owners = part.mesh.geometry.userData.owners;
+        const tops = [];
+        for (let i = part.start; i + 5 < part.start + part.count; i += 6) {
+            const q = [0, 1, 2, 5].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(part.mesh.matrixWorld); return [v.x, v.y, v.z]; });
+            // (a top lies flat: a taper's coping falls along its length as it sinks, and is a top all the same)
+            const [a, b, c] = q, u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+            const nx = u[1] * w[2] - u[2] * w[1], ny = u[2] * w[0] - u[0] * w[2], nz = u[0] * w[1] - u[1] * w[0];
+            if (Math.abs(ny) < 0.9 * Math.hypot(nx, ny, nz) || Math.abs(loop(q)) < 1e-4) continue;
+            tops.push({ q, owner: owners ? owners[i / 3] : -1, keys: q.map(c => `${Math.round(c[0] * 50)},${Math.round(c[1] * 50)},${Math.round(c[2] * 50)}`) });
+        }
+        const byKey = new Map();
+        tops.forEach((t, n) => { for (const k of t.keys) (byKey.get(k) || byKey.set(k, []).get(k)).push(n); });
+        tops.forEach((t, n) => {
+            const [a, b, c, d] = t.q;
+            const mx = (a[0] + b[0] + c[0] + d[0]) / 4, mz = (a[2] + b[2] + c[2] + d[2]) / 4;
+            if (!nearRide(mx, mz, rules.endsNearM)) return;
+            let worst = null;
+            // Folded: its inner edge runs against its outer one, or its sides cross
+            if ((c[0] - d[0]) * (b[0] - a[0]) + (c[2] - d[2]) * (b[2] - a[2]) <= 0 || crossing(a, d, b, c) || crossing(a, b, c, d)) worst = { kind: 'fold', areaM2: null };
+            else {
+                const met = new Set();
+                for (const k of t.keys) for (const m of byKey.get(k) || []) {
+                    if (m === n || met.has(m) || tops[m].owner !== t.owner) continue;
+                    met.add(m);
+                    const area = shared(t.q, tops[m].q);
+                    if (area > rules.foldM2 && (!worst || area > worst.areaM2)) worst = { kind: 'overlap', areaM2: r2(area) };
+                }
+            }
+            if (worst) record.push({ s: rideS(mx, mz), owner: t.owner, x: r2(mx), z: r2(mz), y: r2(a[1]), ...worst });
+        });
+    }
+
     // How thick a piece of stone is at its top: from three places along its top, out to either side, what is drawn
-    // at its height. A piece past a wall's end needs stone at its height over the wall's coping on one side
+    // at its height. A piece needs stone at its height over the wall's coping on one side
     // (`coping`, with the width it has); any face needs something drawn at its top on one side (`sheet`)
     const stoneTop = (x, z) => topOf(tops, x, z);
     const anyTop = (x, z) => { const a = drawnTop(x, z), b = stoneTop(x, z); return a === null ? b : b === null ? a : Math.max(a, b); };
@@ -246,7 +319,9 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             if ([1, -1].every(way => { const y = topOf(ribbons, x + nx * way * 0.15, z + nz * way * 0.15); return y !== null && y >= top - 0.05; })) continue;
             const backed = way => [rules.copingM / 3, (rules.copingM * 2) / 3].every(d => { const y = anyTop(x + nx * way * d, z + nz * way * d); return y !== null && y >= top - 0.1; });
             if (!backed(1) && !backed(-1)) return { kind: 'sheet', widthM: 0, y: r2(my) };
-            if (!q.past) continue;
+            // (a piece shorter than the coping is deep is a wall's end turning under the road: the coping runs along
+            // the wall, square to it)
+            if (q.len < rules.copingM) continue;
             const width = Math.max(...[1, -1].map(way => {
                 let most = 0;
                 for (let d = 0.025; d < rules.copingM; d += 0.025) { const y = stoneTop(x + nx * way * d, z + nz * way * d); if (y === null || y < top - 0.08) break; most = d + 0.025; }
@@ -430,7 +505,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
 }
 
 export function spikeReport(store, besideM = 10) {
-    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], thin: [], tapers: 0, low: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
+    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], thin: [], folds: [], tapers: 0, low: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
     // (an end another road's wall goes on from is no end: the two walls meet at a junction, `joined`)
     const looks = [...(store.looks || new Map()).values()];
     for (const look of looks) {
@@ -442,6 +517,9 @@ export function spikeReport(store, besideM = 10) {
     out.proud.sort((a, b) => b.standsM - a.standsM);
     for (const record of (store.stones || new Map()).values()) { out.fins.push(...record.fins); out.unfaced.push(...record.unfaced); }
     for (const record of (store.thin || new Map()).values()) if (record) out.thin.push(record);
+    // (one place is drawn by one geometry at a time: a section built again leaves its old geometry's list behind)
+    const placed = new Set();
+    for (const list of (store.folds || new Map()).values()) for (const o of list) { const id = `${o.x},${o.z}`; if (!placed.has(id)) { placed.add(id); out.folds.push(o); } }
     for (const record of (store.flaps || new Map()).values()) if (record) out.flaps.push(record);
     out.flaps.sort((a, b) => b.gapM - a.gapM);
     for (const record of (store.tiles || new Map()).values()) { out.stretched.push(...record.stretched); out.bare.push(...record.bare); }
@@ -455,10 +533,10 @@ export function spikeReport(store, besideM = 10) {
     out.ends.sort((a, b) => b.heightM - a.heightM);
     out.overhangs.sort((a, b) => b.airM - a.airM);
     out.thin.sort((a, b) => a.widthM - b.widthM);
-    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin']) {
+    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds']) {
         for (const o of out[kind]) {
             const km = (Math.round(o.s / 100) / 10).toFixed(1);
-            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0, thin: 0 };
+            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0 };
             out.km[km][kind]++;
         }
     }

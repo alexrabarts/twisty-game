@@ -204,7 +204,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                 if (foot > under + 0.02) { face.hangs++; face.worstHang = Math.max(face.worstHang, r3(foot - under)); }
                 // (the surface nearest the top's own height: a viaduct 30 m over a side road's wall is not its road)
                 const behind = nearOf([...ribbons, ...aprons], x - ox * 0.15, z - oz * 0.15, y);
-                if (behind === null || Math.abs(behind - y) > 0.1) { face.top++; face.worstTop = behind === null ? null : r3(behind - y); }
+                // (the top is the wall's coping, which stands COPING_UP_M over the road's edge: RoadMesh.edgeWorks)
+                if (behind === null || Math.abs(behind - y) > 0.13) { face.top++; face.worstTop = behind === null ? null : r3(behind - y); }
             }
             // Past each end, along the road's edge: whether the edge hangs over the ground with nothing under it
             for (const [end, dir] of [[a, -1], [b, 1]]) {
@@ -215,7 +216,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                     if (g === null) continue;
                     // On a structure (a deck's side, a bridge) the edge does not hang
                     if ([0.3, 0.8, 1.5].some(inM => { const deck = topOf(decks, x - ox * inM, z - oz * inM); return deck !== null && deck > end.top[1] - 2; })) continue;
-                    const drop = end.top[1] - g - d * 0.15;
+                    // (from the road's edge: the wall's top is its coping, COPING_UP_M over it)
+                    const drop = end.top[1] - 0.03 - g - d * 0.15;
                     if (drop > 1) { open++; worst = Math.max(worst, r3(drop)); }
                 }
                 // The flank of what lies past the end: the ground in front of the wall just before its end against the

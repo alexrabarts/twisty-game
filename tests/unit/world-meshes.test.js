@@ -421,16 +421,26 @@ describe('RoadMesh', () => {
         expect(pavedGroup.children[0].material[3].map).toBe(RoadSurface.textures().asphalt.map);
         expect(pavedGroup.children[0].geometry.attributes.uv.count).toBe(pavedGroup.children[0].geometry.attributes.position.count);
         expect(Math.min(...ys(wall.stone))).toBeCloseTo(edgeY - 6, 4);
-        expect(Math.max(...ys(wall.stone))).toBeCloseTo(edgeY + RoadMesh.PARAPET_H_M, 4);
-        // A step lower than PARAPET_DROP_M has no parapet (the physics rides off it, as WorldPhysics.dropDepthM says)
+        // (its parapet stands on its coping)
+        expect(Math.max(...ys(wall.stone))).toBeCloseTo(edgeY + RoadMesh.COPING_UP_M + RoadMesh.PARAPET_H_M, 4);
+        // A step lower than PARAPET_DROP_M has no parapet (the physics rides off it, as WorldPhysics.dropDepthM says):
+        // its top is its coping, COPING_UP_M over the edge and COPING_W_M deep from its face, wide enough for a marker
+        // stone and a margin either side
         const step = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'wall', y: edgeY - 1.5 }));
-        expect(Math.max(...ys(step.stone))).toBeCloseTo(edgeY, 4);
+        expect(Math.max(...ys(step.stone))).toBeCloseTo(edgeY + RoadMesh.COPING_UP_M, 4);
+        const tops = xs(step.stone).filter((x, i) => Math.abs(ys(step.stone)[i] - edgeY - RoadMesh.COPING_UP_M) < 1e-4 && x > 0);
+        expect(Math.max(...tops) - Math.min(...tops)).toBeCloseTo(RoadMesh.COPING_W_M, 4);
+        expect(RoadMesh.COPING_W_M).toBeCloseTo(Scenery.STONE_WIDTH_M + 2 * RoadMesh.COPING_MARGIN_M, 6);
+        expect(RoadMesh.COPING_MARGIN_M).toBeGreaterThan(0);
         expect(RoadMesh.PARAPET_DROP_M).toBe(WorldPhysics.dropDepthM);
         // A deck hangs DECK_M with a soffit under the road
         const deck = RoadMesh.edgeWorks(near.sides, () => ({ kind: 'deck' }));
         expect(Math.min(...ys(deck.wall))).toBeCloseTo(edgeY - RoadMesh.DECK_M, 4);
         expect(deck.stone.positions).toHaveLength(0);
-        expect(deck.wall.positions.length).toBeGreaterThan(wall.stone.positions.length);
+        // (its soffit runs under the road from one edge to the other)
+        const under = xs(deck.wall).filter((x, i) => Math.abs(ys(deck.wall)[i] - (edgeY - RoadMesh.DECK_M)) < 1e-4);
+        expect(Math.min(...under)).toBeLessThan(0);
+        expect(Math.max(...under)).toBeGreaterThan(0);
         expect(RoadMesh.edgeWorks(near.sides, () => null).apron.positions).toHaveLength(0);
         const roofed = RoadMesh.ribbon(rows.map(r => ({ ...r, bits: 2 })), 0);
         const none = RoadMesh.edgeWorks(roofed.sides, () => ({ kind: 'wall', y: 0 }));
@@ -455,18 +465,18 @@ describe('RoadMesh', () => {
         const T = RoadMesh.TAPER_M;
         for (const key of ['l', 'r']) {
             const edge = near.sides[5][key], sign = Math.sign(edge[0]), own = q => Math.sign(q[0]) === sign;
-            // At the wall's end the face goes on from the wall's own top corner (STONE_PROUD_M out), and the parapet
-            // has come down to its kerb there
-            const corner = [edge[0] + sign * RoadMesh.STONE_PROUD_M, edge[1], 20];
+            // At the wall's end the face goes on from the wall's own top corner (STONE_PROUD_M out, at its coping), and
+            // the parapet has come down to its kerb there
+            const corner = [edge[0] + sign * RoadMesh.STONE_PROUD_M, edge[1] + RoadMesh.COPING_UP_M, 20];
             expect(stone.filter(q => Math.hypot(q[0] - corner[0], q[1] - corner[1], q[2] - corner[2]) < 1e-4).length).toBeGreaterThan(3);
-            expect(has(stone, [corner[0], edge[1] + RoadMesh.PARAPET_END_M, 20])).toBe(true);
-            expect(has(stone, [corner[0], near.sides[4][key][1] + RoadMesh.PARAPET_H_M, 16])).toBe(true);
+            expect(has(stone, [corner[0], corner[1] + RoadMesh.PARAPET_END_M, 20])).toBe(true);
+            expect(has(stone, [corner[0], near.sides[4][key][1] + RoadMesh.COPING_UP_M + RoadMesh.PARAPET_H_M, 16])).toBe(true);
             // and the slope has no width there: no ground of this side stands out from the edge at the wall's last row
             expect(apron.filter(q => own(q) && Math.abs(q[2] - 20) < 1e-6 && Math.abs(q[0]) > Math.abs(edge[0]) + 0.01)).toEqual([]);
             // A third of the way along the taper (the next row) the stone holds two thirds of the 3 m the slope
-            // falls: its face stands on the wall's line, its top a level coping PARAPET_W_M wide over the edge, and
-            // the slope starts 2 m under the edge
-            const row = 20 + T / 3, P = RoadMesh.STONE_PROUD_M, W = RoadMesh.PARAPET_W_M;
+            // falls: its face stands on the wall's line, its top the wall's level coping over the edge, and the slope
+            // starts 2 m under the edge
+            const row = 20 + T / 3, P = RoadMesh.STONE_PROUD_M, W = RoadMesh.COPING_W_M - P;
             expect(has(stone, [corner[0], edge[1] + RoadMesh.COPING_UP_M, row])).toBe(true);
             expect(has(stone, [edge[0] - sign * W, edge[1] + RoadMesh.COPING_UP_M, row])).toBe(true);
             // (its foot no higher than the wall's own, 6 m under the edge at its end, carried on and rising along it)
@@ -504,7 +514,7 @@ describe('RoadMesh', () => {
             for (let v = i; v < i + 3; v++) expect(face[v * 4 + 1]).toBe(0);
             expect(Math.max(...t.map(q => q[1])) - Math.min(...t.map(q => q[1]))).toBeLessThan(0.1);
             const xs = t.map(q => Math.abs(q[0]));
-            expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(RoadMesh.PARAPET_W_M + RoadMesh.STONE_PROUD_M, 4);
+            expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(RoadMesh.COPING_W_M, 4);
         }
         expect(faces).toBeGreaterThan(8);
         expect(copings).toBeGreaterThan(8);
@@ -817,35 +827,43 @@ describe('Scenery', () => {
         const route = new WorldRoute(samplesOf(straight(400, { y: 1000 }).map(q => ({ ...q, x: 100 }))), {});
         const ground = new WorldGround(route, fall);
         const scenery = new Scenery(ground, fall);
-        const rule = Scenery.STONE_RULE, each = Math.round(rule.blockM / Scenery.STONE_GAP_M);
+        const rule = Scenery.STONE_RULE, gap = Scenery.STONE_GAP_M, each = 24, last = Math.floor(route.length / gap);
         const p = route.sample(100, {});
         const lateral = q => (q.x - p.x) * Math.cos(p.heading) - (q.z - p.z) * Math.sin(p.heading);
         const down = Math.sign(lateral({ x: 110, z: p.z }));
-        // Every station of a block on the falling side may have a stone, none on the level side
-        expect(scenery.stoneRuns(1, down).map(run => run.length)).toEqual([each]);
-        expect(scenery.stoneRuns(1, -down)).toEqual([]);
+        // The whole drop is one stretch on the falling side, read on past the stations asked for to its ends; none on
+        // the level side
+        const stretches = scenery.stoneStretches(each, each + 2, down);
+        expect(stretches).toHaveLength(1);
+        const stretch = stretches[0];
+        expect(stretch[0].k).toBeLessThan(each);
+        expect(stretch[stretch.length - 1].k).toBeGreaterThan(each + 2);
+        for (let i = 1; i < stretch.length; i++) expect(stretch[i].k - stretch[i - 1].k).toBe(1);
+        expect(scenery.stoneStretches(0, last, down).map(run => run.map(q => q.k))).toEqual([stretch.map(q => q.k)]);
+        expect(scenery.stoneStretches(0, last, -down)).toEqual([]);
         const place = scenery.stonePlace(each + 3, down);
         expect(place.drop).toBeGreaterThan(rule.dropM);
         expect(Math.sign(lateral(place))).toBe(down);
         expect(scenery.roads.clearance(place.x, place.z)).toBeGreaterThanOrEqual(Scenery.STONE_RADIUS_M + Scenery.CLEAR_M.stone - 1e-9);
-        // A share of the blocks has its stones, drawn from the block's number: the same every time, and not all of them
-        const all = [...Array(Math.ceil(route.length / rule.blockM)).keys()];
-        const blocks = all.filter(b => Scenery.stoneUsed(b, down));
-        expect(blocks.length).toBeGreaterThan(0);
-        expect(blocks.length).toBeLessThan(all.length);
-        // (the stations of a block that are on the ride: the last block is cut short by its end)
-        const stations = b => [...Array(each).keys()].filter(n => (b * each + n) * Scenery.STONE_GAP_M <= route.length).length;
+        // A share of the stretches has its stones, drawn from the stretch's first station and side: the same every
+        // time, and not all of them
+        const firsts = [...Array(400).keys()];
+        const chosen = firsts.filter(k => Scenery.stoneUsed(k, down));
+        expect(chosen.length).toBeGreaterThan(400 * (rule.share - 0.1));
+        expect(chosen.length).toBeLessThan(400 * (rule.share + 0.1));
+        expect(firsts.filter(k => Scenery.stoneUsed(k, down))).toEqual(chosen);
+        // A chosen stretch has a stone at every station of it, and no kerb course under them: a drop's row is its blocks
+        const used = Scenery.stoneUsed;
+        Scenery.stoneUsed = () => true;
         const group = scenery.buildTile(fall.tile('0,0'), null, [], { x: 100, z: 100 });
+        Scenery.stoneUsed = () => false;
+        const none = scenery.stoneSites(fall.tile('0,0'));
+        Scenery.stoneUsed = used;
+        expect(none).toEqual([]);
         const stones = group.children.find(m => m.name === 'stones');
         expect(stones.isInstancedMesh).toBe(true);
-        // The kerb course under them: a piece from each stone to the next of its row, drawn as the walls are
-        const kerbs = group.children.find(m => m.name === 'stone-kerbs');
-        // (under the stones nearest the bike: Scenery.KERB_CAP)
-        expect(kerbs.count).toBeGreaterThan(Scenery.KERB_CAP * 0.8);
-        expect(kerbs.count).toBeLessThanOrEqual(Math.min(Scenery.KERB_CAP, stones.count - blocks.length));
-        expect(kerbs.geometry.attributes.position.count / 3).toBe(6);
-        expect(kerbs.material).toBe(RoadMesh.stoneMaterial());
-        expect(stones.count).toBe(blocks.reduce((n, b) => n + stations(b), 0));
+        expect(group.children.find(m => m.name === 'stone-kerbs')).toBeUndefined();
+        expect(stones.count).toBe(Math.min(stretch.length, Scenery.STONE_CAP));
         expect(stones.geometry.attributes.position.count / 3).toBe(10);
         stones.geometry.computeBoundingBox();
         expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, Scenery.STONE_SINK_M + Scenery.STONE_HEIGHT_M].map(n => expect.closeTo(n, 5)));
@@ -855,7 +873,6 @@ describe('Scenery', () => {
             stones.getMatrixAt(i, matrix);
             at.setFromMatrixPosition(matrix);
             expect(Math.sign(lateral(at))).toBe(down);
-            expect(blocks).toContain(Math.floor(route.project(at.x, at.z, null, {}).s / rule.blockM + 1e-6));
             // In the ground: sunk under its seat (the verge's edge beside it, at the road's height: the fill falls
             // from there, and the ground at its own middle is under it), and its root goes on under every corner
             expect(ground.groundY(at.x, at.z, null)).toBeLessThan(1000);
@@ -864,30 +881,90 @@ describe('Scenery', () => {
             along.push(route.project(at.x, at.z, null, {}).s);
         }
         along.sort((a, b) => a - b);
-        for (let i = 1; i < along.length; i++) expect((along[i] - along[i - 1]) / Scenery.STONE_GAP_M).toBeCloseTo(Math.round((along[i] - along[i - 1]) / Scenery.STONE_GAP_M), 3);
-        // A run shorter than minM gets no stones: the drop on 5 m of the road only
+        for (let i = 1; i < along.length; i++) expect((along[i] - along[i - 1]) / gap).toBeCloseTo(Math.round((along[i] - along[i - 1]) / gap), 3);
+        // A stretch shorter than minM gets no stones: the drop on 5 m of the road only
         const short = new Scenery(ground, fall);
         const stonePlace = short.stonePlace.bind(short);
         short.stonePlace = (k, side) => (k >= each && k <= each + 2 ? stonePlace(k, side) : null);
-        expect(short.stoneRuns(1, down)).toEqual([]);
+        expect(short.stoneStretches(0, last, down)).toEqual([]);
         // A level road has none, and nor has a drop the fill of a plain bank makes (1 in 1.5)
         const level = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: () => 1000, zone: () => 0 });
         expect(new Scenery(new WorldGround(route, level), level).stoneSites(level.tile('0,0'))).toEqual([]);
         const bank = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: x => (x > 106 ? 1000 - (x - 106) / 1.5 : 1000), zone: () => 0 });
         expect(new Scenery(new WorldGround(route, bank), bank).stoneSites(bank.tile('0,0'))).toEqual([]);
-        // Where a wall or a bridge guards the edge, where a rider stops and in a roadworks site: none
+        // Where a wall or a bridge guards the edge, where a rider stops and in a roadworks site: none at a drop
         const walled = new Scenery(ground, fall);
         ground.walledAt = () => true;
-        expect(walled.stoneRuns(1, down)).toEqual([]);
+        expect(walled.stoneStretches(0, last, down)).toEqual([]);
         delete ground.walledAt;
         const works = new Scenery(ground, fall);
         works.stoneShut = [{ s0: 95, s1: 110 }];
-        expect(works.stoneRuns(1, down).flat().map(q => q.k * Scenery.STONE_GAP_M).filter(s => s >= 95 - rule.worksM && s <= 110 + rule.worksM)).toEqual([]);
-        expect(works.stoneRuns(1, down).flat().length).toBeGreaterThan(0);
+        expect(works.stoneStretches(0, last, down).flat().map(q => q.k * gap).filter(s => s >= 95 - rule.worksM && s <= 110 + rule.worksM)).toEqual([]);
+        expect(works.stoneStretches(0, last, down).flat().length).toBeGreaterThan(0);
         // And no ground to stand on: no stone, not a stone in the air
         const bare = new Scenery(ground, fall);
         bare.footY = () => null;
         expect(bare.stoneSites(fall.tile('0,0'))).toEqual([]);
+    });
+
+    test('marker stones stand on the top of a wall that holds the road up, on the middle of its coping, over all of it, and none on a wall with a parapet', () => {
+        // A road along x = 100 on level land, and a wall under its edge on one side from 150 m to 250 m (as
+        // WorldEnvironment.wallTop gives it from the wall plan)
+        const flat = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: () => 1000, zone: () => 0 });
+        const route = new WorldRoute(samplesOf(straight(400, { y: 1000 }).map(q => ({ ...q, x: 100 }))), {});
+        const ground = new WorldGround(route, flat);
+        const scenery = new Scenery(ground, flat);
+        const points = route.points, side = 1;
+        const edge = i => { const q = points[i], o = side * (q.width / 2 + RoadSurface.VERGE_M); return [q.x + o * Math.cos(q.heading), q.y, q.z - o * Math.sin(q.heading)]; };
+        const out = i => [side * Math.cos(points[i].heading), -side * Math.sin(points[i].heading)];
+        let railed = false, heights = [1.5, 1.6];
+        ground.wallTop = (i, sign) => (sign === side && points[i].s >= 150 && points[i + 1].s <= 250 ? { a: edge(i), b: edge(i + 1), oa: out(i), ob: out(i + 1), railed, heights } : null);
+        const runs = scenery.wallRuns(0, points.length - 2, side);
+        expect(runs).toHaveLength(1);
+        const run = runs[0];
+        expect(run.start).toBe(Math.round(points.find(q => q.s >= 150).s));
+        // The whole wall, STONE_GAP_M apart along it, each on the middle of the coping (COPING_W_M from the face, which
+        // stands STONE_PROUD_M out from the edge), seated on its top
+        expect(run.length).toBe(Math.floor((run[run.length - 1].s - run[0].s) / Scenery.STONE_GAP_M + 1e-6) + 1);
+        expect(run[0].s).toBeLessThan(150 + Scenery.STONE_GAP_M + 1);
+        expect(run[run.length - 1].s).toBeGreaterThan(250 - Scenery.STONE_GAP_M - 1);
+        const half = points[0].width / 2 + RoadSurface.VERGE_M + RoadMesh.STONE_PROUD_M - RoadMesh.COPING_W_M / 2;
+        for (const q of run) {
+            expect(q.wall).toBe(true);
+            expect(Math.abs(route.project(q.x, q.z, null, {}).lateral)).toBeCloseTo(half, 3);
+            expect(q.seat).toBeCloseTo(1000 + RoadMesh.COPING_UP_M, 3);
+        }
+        // The coping holds the stone and a margin either side
+        expect(RoadMesh.COPING_W_M - Scenery.STONE_WIDTH_M).toBeCloseTo(2 * RoadMesh.COPING_MARGIN_M, 6);
+        // Drawn when the wall is chosen, each block alone (no kerb course on a wall's top), on the coping
+        const used = Scenery.wallUsed;
+        Scenery.wallUsed = () => true;
+        const sites = scenery.stoneSites(flat.tile('0,0'));
+        Scenery.wallUsed = used;
+        expect(sites).toHaveLength(run.length);
+        for (const q of sites) {
+            expect(q.kind).toBe('wall');
+            expect(q.next).toBeNull();
+            expect(q.y).toBeCloseTo(1000 + RoadMesh.COPING_UP_M - Scenery.STONE_SINK_M, 3);
+        }
+        // A share of the walls has its row, from the wall's first row and side
+        const starts = [...Array(400).keys()];
+        const chosen = starts.filter(k => Scenery.wallUsed(k, side)).length;
+        expect(chosen).toBeGreaterThan(400 * (Scenery.STONE_RULE.wallShare - 0.1));
+        expect(chosen).toBeLessThan(400 * (Scenery.STONE_RULE.wallShare + 0.1));
+        // None on a wall with a parapet anywhere along it, nor on one that does not hold the road up
+        railed = true;
+        expect(new Scenery(ground, flat).wallRuns(0, points.length - 2, side)).toEqual([]);
+        railed = false;
+        heights = [0.1, 1.5];
+        expect(new Scenery(ground, flat).wallRuns(0, points.length - 2, side)).toEqual([]);
+        heights = [1.5, 1.6];
+        // nor on one where a stone would stand in a stopping place or a roadworks site: all of the wall or none
+        const works = new Scenery(ground, flat);
+        works.stoneShut = [{ s0: 200, s1: 205 }];
+        expect(works.wallRuns(0, points.length - 2, side)).toEqual([]);
+        // and the drop rule leaves the wall to its own row
+        expect(new Scenery(ground, flat).stoneStretches(0, Math.floor(route.length / Scenery.STONE_GAP_M), side)).toEqual([]);
     });
 
     test('tufts stand on the open strip beside the ride, clear of the road, each on the ground at its own place', () => {
@@ -1149,5 +1226,58 @@ describe('RoadSurface', () => {
         expect(shader.fragmentShader).toContain('textureGrad(roadSettMap');
         expect(shader.fragmentShader).not.toContain('#include <map_fragment>');
         expect(shader.vertexShader).toContain('attribute vec4 road;');
+    });
+});
+
+describe('a coping round a bend (RoadMesh.copingDepths)', () => {
+    // A face line and each point's way in: the inner edge at point i is face[i] + inward[i] * depth[i]
+    const inner = (face, inward, depth) => face.map((p, i) => [p[0] + inward[i][0] * depth[i], p[2] + inward[i][1] * depth[i]]);
+    const runsOn = (face, ins) => face.slice(1).every((p, i) => (ins[i + 1][0] - ins[i][0]) * (p[0] - face[i][0]) + (ins[i + 1][1] - ins[i][1]) * (p[2] - face[i][2]) > 0);
+
+    test('a straight wall\'s coping is COPING_W_M deep at every row', () => {
+        const face = [0, 1, 2, 3].map(i => [i * 3, 0, 0]), inward = face.map(() => [0, 1]);
+        for (const d of RoadMesh.copingDepths(face, inward)) expect(d).toBeCloseTo(RoadMesh.COPING_W_M, 6);
+    });
+
+    test('at a corner the two pieces meet on one mitre, COPING_W_M square to each', () => {
+        // A right angle, the road inside it: the mitre halves the turn
+        const face = [[-3, 0, 0], [0, 0, 0], [0, 0, 3]], h = Math.SQRT1_2;
+        const depths = RoadMesh.copingDepths(face, [[0, 1], [-h, h], [-1, 0]]);
+        expect(depths[1]).toBeCloseTo(RoadMesh.COPING_W_M * Math.SQRT2, 6);
+        expect(depths[0]).toBeCloseTo(RoadMesh.COPING_W_M, 6);
+        expect(depths[2]).toBeCloseTo(RoadMesh.COPING_W_M, 6);
+    });
+
+    test('round a bend tighter than the coping is deep, the coping narrows and never folds, to no less than its floor', () => {
+        // Half a circle 0.6 m across, the road inside it: laid COPING_W_M deep, each piece's inner edge ran back
+        const face = [], inward = [];
+        for (let i = 0; i <= 8; i++) {
+            const a = Math.PI * i / 8;
+            face.push([0.6 * Math.cos(a), 0, 0.6 * Math.sin(a)]);
+            inward.push([-Math.cos(a), -Math.sin(a)]);
+        }
+        const full = face.map(() => RoadMesh.COPING_W_M);
+        expect(runsOn(face, inner(face, inward, full))).toBe(false);
+        const depths = RoadMesh.copingDepths(face, inward);
+        expect(runsOn(face, inner(face, inward, depths))).toBe(true);
+        for (const d of depths) expect(d).toBeGreaterThanOrEqual(RoadMesh.PARAPET_W_M - 1e-9);
+        expect(Math.min(...depths)).toBeLessThan(RoadMesh.COPING_W_M);
+        // (where a marker stone may stand, never narrower than the stone and its margins)
+        for (const d of RoadMesh.copingDepths(face, inward, () => RoadMesh.COPING_W_M)) expect(d).toBeGreaterThanOrEqual(RoadMesh.COPING_W_M - 1e-9);
+    });
+
+    test('the piece that joins two roads\' walls keeps its coping on its own side, however the runs face at its ends', () => {
+        // One run faces the piece's own way and the other into the road: laid along each, the coping crossed its face
+        const out = { positions: [], shades: [] }, face = [];
+        RoadMesh.wallJoin(out, face, { a: [0, 10, 0], b: [4, 10, 0], footA: 4, footB: 4, outA: [0.6, 0.8], outB: [0, -1], o: [0, -1], parapet: false });
+        const p = out.positions, tops = [];
+        for (let i = 0; i + 17 < p.length; i += 18) {
+            const q = [0, 1, 2, 5].map(k => [p[i + k * 3], p[i + k * 3 + 1], p[i + k * 3 + 2]]);
+            if (q.every(c => Math.abs(c[1] - q[0][1]) < 1e-6)) tops.push(q);
+        }
+        expect(tops).toHaveLength(1);
+        const [a, b, c, d] = tops[0];
+        expect((c[0] - d[0]) * (b[0] - a[0]) + (c[2] - d[2]) * (b[2] - a[2])).toBeGreaterThan(0);
+        expect(Math.min(c[2], d[2])).toBeGreaterThan(0);
     });
 });

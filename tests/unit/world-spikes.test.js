@@ -15,8 +15,10 @@
 //      ends another road's wall goes on from)
 //   7. `fins`: an upright face of stone whose top falls more than 0.4 a metre faster than its road
 //   8. `unfaced`: an upright face of stone, no parapet's, that is not laid and lit as its wall's face
-//   9. `thin`: a piece of wall thinner than the wall: a piece past a wall's end whose top has less stone over it
-//      than the wall's coping (a parapet's width), or any upright face of stone with nothing drawn at its top behind it
+//   9. `thin`: a piece of wall thinner than the wall: a piece of wall (but a return) whose top has less stone over
+//      it than the wall's coping (RoadMesh.COPING_W_M: a marker stone and a margin either side), or any upright face of
+//      stone with nothing drawn at its top behind it
+//  10. `folds`: a piece of a wall's top (a coping, a parapet's top) folded over itself or over the piece beside it
 //
 // At 732d95c, before the land was laid back (TerrainMesh.laidBack) and banked to the walls' ends (CUT_BANK): 1084
 // stretched (245 beside, 839 set back, 14 of them in the wedge at km 7.8) and 149 overhangs. The importer gives a
@@ -73,6 +75,17 @@
 // the land round the apex of the hairpin at km 2.0. Now the wall that goes on past its end keeps its coping: a top
 // of stone PARAPET_W_M wide over its face, the road meeting it on the inside, and a face across its end where it
 // dies into the ground (RoadMesh.COPING_UP_M)
+//
+// At 6d78a4e every wall's top was the road's edge with only a parapet, where it had one, for its coping: read for a
+// coping wide enough to hold a marker stone (0.8 m), 1 427 pieces of wall were thinner than that (525 on the
+// synthetic world). Now every retaining wall's top is a level coping RoadMesh.COPING_W_M deep
+//
+// At 6d78a4e one piece of wall's top was folded (the piece that joins a side road's wall to the ride's at km 2.3,
+// its coping laid along each run's own way and twisted across its face); with the copings RoadMesh.COPING_W_M deep,
+// each piece laid square to its own segment, 4 more overlapped the piece beside them (a side road's wall past its end
+// standing a hand from the piece that joins it to the ride's at km 2.4). Now a coping's pieces meet on one mitre at
+// each row (RoadMesh.copingDepths), a joining piece's coping never twists, and a wall's end that a piece joins has no
+// face past it
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
@@ -150,7 +163,7 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
     beforeAll(async () => {
         report = await read({ id: 'tremola' });
         const km = Object.entries(report.km).sort((a, b) => a[0] - b[0]).map(([k, c]) => `${k}:${c.beside}/${c.setback}/${c.bare}/${c.ends}/${c.overhangs}`).join(' ');
-        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.low} low, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin\nby km (beside/setback/bare/ends/overhangs): ${km}`);
+        console.log(`spikes: ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.low} low, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds\nby km (beside/setback/bare/ends/overhangs): ${km}`);
     }, 3600000);
 
     test('the land of the whole slice was read', () => {
@@ -207,6 +220,10 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
         expect(report.thin.filter(o => Math.hypot(o.x - 507.7, o.z - 11048.3) < 25)).toEqual([]);
     });
 
+    test('no piece of a wall\'s top folds over itself or the piece beside it', () => {
+        if (report.folds.length > SPIKE_LIMITS.folds) throw new Error(`${report.folds.length} pieces of a wall's top folded or over the piece beside them (at most ${SPIKE_LIMITS.folds}):\n${list(report.folds)}`);
+    });
+
     test('the wall inside the hairpin at km 2.4 goes on round the bend and dies into the ground', () => {
         // Where the wall of the leg above started at its full height at the hairpin's apex, a pale fin past it (the
         // owner's picture): no end of a wall stands there now, and the run ends back round the bend with no height
@@ -227,7 +244,7 @@ describe('the synthetic world: the same check', () => {
     let report;
     beforeAll(async () => {
         report = await read({ id: 'all', search: '?worldData=tests/fixtures/world/mini' });
-        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.low} low, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin`);
+        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.low} low, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds`);
     }, 3600000);
 
     test('every wall end is closed, with no open side beside it, and no closing face is bare', () => {
@@ -238,6 +255,7 @@ describe('the synthetic world: the same check', () => {
         expect(report.flaps).toEqual([]);
         expect(report.unfaced).toEqual([]);
         expect(report.thin).toEqual([]);
+        expect(report.folds).toEqual([]);
         // (3 walls of its ride end at a structure 10 m and more over the land, where no slope goes on; 16 faces
         // of two side roads' walls fall with roads steeper than 0.4, which the helper reads against the ride only.
         // Before the taper: 36 proud ends, 111 fins)

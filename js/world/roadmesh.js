@@ -66,15 +66,66 @@ class RoadMesh {
     // Metres between a deck's piers, and how far past a road's verge a pier keeps
     static get PIER_EVERY_M() { return 24; }
     static get PIER_CLEAR_M() { return 0.3; }
-    // How far a retaining wall's end returns under the road
+    // How far a retaining wall's end returns under the road (under its coping, which closes its top)
     static get WALL_RETURN_M() { return 0.6; }
     // Past its end a retaining wall's face goes on along the road's edge and falls to nothing over this many metres
     // (RoadMesh.edgeWorks `taper`), and stands this deep under the slope that starts at its foot
     static get TAPER_M() { return 12; }
     static get TAPER_UNDER_M() { return 0.8; }
-    // The wall that goes on past its end keeps the wall's thickness: a level coping PARAPET_W_M wide on its face, this
-    // far over the road's edge, so the road meets its top
+    // Every retaining wall's top is a level coping this far over the road's edge, so the road meets it, and as wide
+    // as a marker stone (Scenery.STONE_WIDTH_M) with COPING_MARGIN_M either side: the stone stands on it
+    // (Scenery.wallRuns), and a wall's end and the wall that goes on past it (`taper`) keep the same thickness
     static get COPING_UP_M() { return 0.03; }
+    static get COPING_MARGIN_M() { return 0.1; }
+    static get COPING_W_M() { return Scenery.STONE_WIDTH_M + 2 * RoadMesh.COPING_MARGIN_M; }
+
+    // How far in along a row's outward `n` a coping's inner edge stands from the face of a segment from a to b, so it
+    // is COPING_W_M deep square to that face (the piece that joins two roads' walls)
+    static copingIn(n, a, b) {
+        const dx = b[0] - a[0], dz = b[2] - a[2], len = Math.hypot(dx, dz) || 1;
+        const square = Math.abs(n[0] * dz - n[1] * dx) / len;
+        return RoadMesh.COPING_W_M / Math.max(0.5, square);
+    }
+
+    // How deep a coping is at each point of a wall's face line `face` ([x, y, z], in order), laid in along each
+    // point's own way into the road `inward` ([x, z], unit): one depth for each point, shared by the two pieces that
+    // meet there, so they join on one line with no overlap and no gap. A point's depth makes the coping COPING_W_M
+    // square to both its pieces (at most MITRE_MAX times that on a sharp turn). Where the face turns toward the road
+    // so tightly that a piece's inner edge would run back on itself, or be cut to nothing, the coping is narrowed at
+    // that piece's ends until its inner edge runs on, to no less than `floor(i)` square to the face at point i
+    static copingDepths(face, inward, floor = () => RoadMesh.PARAPET_W_M) {
+        const n = face.length, C = RoadMesh.COPING_W_M;
+        const piece = i => { const a = face[i], b = face[i + 1], dx = b[0] - a[0], dz = b[2] - a[2], len = Math.hypot(dx, dz); return len > 1e-6 ? [dx / len, dz / len] : null; };
+        const pieces = [];
+        for (let i = 0; i + 1 < n; i++) pieces.push(piece(i));
+        // (how square a point's way in stands to a piece: the coping's depth there is its width over this)
+        const square = (i, d) => (d ? Math.abs(inward[i][0] * d[1] - inward[i][1] * d[0]) : 1);
+        const scale = [];
+        for (let i = 0; i < n; i++) scale.push(1 / Math.max(1 / RoadMesh.MITRE_MAX, Math.min(1, ...[pieces[i - 1], pieces[i]].filter(Boolean).map(d => square(i, d)))));
+        const width = face.map(() => C);
+        // (a piece's inner edge must run along its face for at least a tenth of the face's length)
+        const runs = i => {
+            const a = face[i], b = face[i + 1], da = width[i] * scale[i], db = width[i + 1] * scale[i + 1];
+            const dx = b[0] + inward[i + 1][0] * db - a[0] - inward[i][0] * da, dz = b[2] + inward[i + 1][1] * db - a[2] - inward[i][1] * da;
+            const fx = b[0] - a[0], fz = b[2] - a[2];
+            return dx * fx + dz * fz >= 0.1 * (fx * fx + fz * fz);
+        };
+        for (let pass = 0; pass < 12; pass++) {
+            let changed = false;
+            for (let i = 0; i + 1 < n; i++) {
+                if (!pieces[i] || runs(i)) continue;
+                for (const j of [i, i + 1]) {
+                    const next = Math.max(Math.min(floor(j), C), width[j] * 0.8);
+                    if (next < width[j] - 1e-6) { width[j] = next; changed = true; }
+                }
+            }
+            if (!changed) break;
+        }
+        return width.map((w, i) => w * scale[i]);
+    }
+
+    // The deepest a coping's mitre goes, in widths of the coping: on a sharper turn its point is cut back
+    static get MITRE_MAX() { return 2; }
     // A retaining wall's face and its parapet's stand this far out from the road's edge, so the ribbon's own edge
     // (lifted LIFT_M over the wall's top) lies behind the stone and never shows as a line across it
     static get STONE_PROUD_M() { return 0.03; }
@@ -88,6 +139,18 @@ class RoadMesh {
     // A retaining wall carries its parapet only where it drops this far (WorldPhysics.dropDepthM: the physics makes
     // a drop solid from the same depth, so what is drawn and what is solid agree); a lower step is ridden off
     static get PARAPET_DROP_M() { return 2.5; }
+
+    // How deep a wall's face goes at edge point p: to its own foot `f` (or the run's, `low`), no deeper than DROP_MAX_M,
+    // and into the land drawn in front of it (`reach` at p, `between` at the middle of its segment)
+    static wallDepth(f, p, low, reach, between) {
+        return Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(f ? f.y : low, p[1] - RoadMesh.DECK_M, reach, between));
+    }
+
+    // Whether a wall's segment from edge point pa to pb, its face down to da and db, carries a parapet. One rule for
+    // the stone that is drawn and for what may stand on the wall's top (WorldEnvironment.wallTop, Scenery.wallRuns)
+    static railed(pa, pb, da, db) {
+        return Math.max(pa[1] - da, pb[1] - db) >= RoadMesh.PARAPET_DROP_M;
+    }
     // The highest retaining wall that holds up a side road along a hillside (RoadMesh.sideStructures)
     static get SIDE_WALL_M() { return 9; }
     // How far behind a piece of wall that joins two roads' walls the ground is laid (RoadMesh.addEdgeWorks)
@@ -113,10 +176,12 @@ class RoadMesh {
     }
 
     // A retaining wall and its parapet: the land's lighting with dry-stone courses drawn in the shader (LandShade
-    // `stone`), so the wall reads as the Tremola's granite masonry and not as a grey slab, at no cost in triangles
+    // `stone`), so the wall reads as the Tremola's granite masonry and not as a grey slab, at no cost in triangles.
+    // A fixed depth offset only, as the near road has: with one scaled by its slope to the view, a wall's coping seen
+    // edge-on from its own height was drawn in front of the wall's face as a line across it
     static stoneMaterial() {
         if (!RoadMesh.sharedStone) {
-            RoadMesh.sharedStone = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }), { stone: true });
+            RoadMesh.sharedStone = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -4 }), { stone: true });
         }
         return RoadMesh.sharedStone;
     }
@@ -966,6 +1031,15 @@ class RoadMesh {
         // Rows outside `sides.draw` belong to the neighbouring sections: read for the runs, drawn by those sections
         const [drawFrom, drawTo] = sides.draw || [0, sides.length - 1];
         const junk = { positions: [], shades: [], face: [] };
+        // How deep each row's coping is along its own way in, on either side: one line along the whole edge, so the
+        // pieces of a coping meet on one mitre and none folds over the next round a tight bend (RoadMesh.copingDepths).
+        // Narrowed there no less than a marker stone and its margins (COPING_W_M) where one may stand on it, and than a
+        // parapet (PARAPET_W_M) where the wall falls far enough to carry one (as RoadMesh.railed reads its foot)
+        const coping = {};
+        for (const key of ['l', 'r']) {
+            const floor = j => { const e = plan.end[key][j]; return e && Number.isFinite(e.y) && sides[j][key][1] - e.y >= RoadMesh.PARAPET_DROP_M ? RoadMesh.PARAPET_W_M : RoadMesh.COPING_W_M; };
+            coping[key] = RoadMesh.copingDepths(sides.map(side => side[key]), sides.map(side => { const o = RoadMesh.outward(side)[key]; return [-o[0], -o[1]]; }), floor);
+        }
         for (let k = 0; k + 1 < sides.length; k++) {
             const ea = ends[k], eb = ends[k + 1];
             if (!ea || !eb) continue;
@@ -1072,15 +1146,14 @@ class RoadMesh {
                     const oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
                     const ua = alongOf(k, key), ub = alongOf(k + 1, key);
                     // The stone's top at t along the segment: its face on the wall's line, proud of the edge, with the
-                    // coping over it (`inner`: its inner edge, PARAPET_W_M in over the verge). Level across, so it takes
-                    // one light all round a bend (tilted to the road, its pieces showed as facets round a hairpin).
-                    // It starts at the wall's own top corner and rises to COPING_UP_M within half a pace; where the
-                    // wall ends (`end`) it has sunk into the ground, as deep as the ground under the verge and the
-                    // slope's top there, so the wall dies with no height and no end of its own to close
+                    // wall's coping over it (`inner`: its inner edge, COPING_W_M in from the face over the verge). Level
+                    // across, so it takes one light all round a bend (tilted to the road, its pieces showed as facets
+                    // round a hairpin). Where the wall ends (`end`) it has sunk into the ground, as deep as the ground
+                    // under the verge and the slope's top there, so the wall dies with no height and no end of its own
                     const crest = (t, end = false) => {
-                        const edge = lerp(pa, pb, t), n = [oa[0] + (ob[0] - oa[0]) * t, oa[1] + (ob[1] - oa[1]) * t], P = RoadMesh.STONE_PROUD_M;
-                        const up = end ? -RoadMesh.APRON_UNDER_M : RoadMesh.COPING_UP_M * Math.min(1, (1 - share(t)) * RoadMesh.TAPER_M * 2);
-                        return { edge, n, face: [edge[0] + n[0] * P, edge[1] + up, edge[2] + n[1] * P], inner: [edge[0] - n[0] * W, edge[1] + up, edge[2] - n[1] * W] };
+                        const edge = lerp(pa, pb, t), n = [oa[0] + (ob[0] - oa[0]) * t, oa[1] + (ob[1] - oa[1]) * t], P = RoadMesh.STONE_PROUD_M, C = coping[key][k] + (coping[key][k + 1] - coping[key][k]) * t - P;
+                        const up = end ? -RoadMesh.APRON_UNDER_M : RoadMesh.COPING_UP_M;
+                        return { edge, n, face: [edge[0] + n[0] * P, edge[1] + up, edge[2] + n[1] * P], inner: [edge[0] - n[0] * C, edge[1] + up, edge[2] - n[1] * C] };
                     };
                     // One place along the segment: the slope's top and foot there, and the stone over it
                     const at = (t, low = lerp(fA, fB, t)) => {
@@ -1191,7 +1264,7 @@ class RoadMesh {
                 // rows and between them
                 const reach = p => (kind === 'wall' && foot && foot.under ? foot.under(p[0], p[1], p[2], o[0], o[1]) : Infinity);
                 const between = reach([(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2]);
-                const depth = (f, p) => (kind === 'deck' ? p[1] - RoadMesh.DECK_M : Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(f && f.kind === kind ? f.y : runFoot, p[1] - RoadMesh.DECK_M, reach(p), between)));
+                const depth = (f, p) => (kind === 'deck' ? p[1] - RoadMesh.DECK_M : RoadMesh.wallDepth(f && f.kind === kind ? f : null, p, runFoot, reach(p), between));
                 // The wall's face follows the road's grade at the top and the land (or the lower road) at the foot
                 const out = kind === 'deck' ? wallOut : stoneOut;
                 if (kind === 'wall') {
@@ -1203,11 +1276,17 @@ class RoadMesh {
                     const oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
                     // (at a structure's row the face stands at the deck's own corner, not proud of it)
                     const Pa = sides[k].bits & 7 ? 0 : P, Pb = sides[k + 1].bits & 7 ? 0 : P;
-                    const qa = [pa[0] + oa[0] * Pa, pa[1], pa[2] + oa[1] * Pa], qb = [pb[0] + ob[0] * Pb, pb[1], pb[2] + ob[1] * Pb];
+                    // (its top a level coping COPING_UP_M over the edge and COPING_W_M deep: the wall's thickness, seen from
+                    // above and from the road, where a marker stone can stand)
+                    const up = RoadMesh.COPING_UP_M;
+                    const qa = [pa[0] + oa[0] * Pa, pa[1] + up, pa[2] + oa[1] * Pa], qb = [pb[0] + ob[0] * Pb, pb[1] + up, pb[2] + ob[1] * Pb];
                     while (stoneOut.face.length < (stoneOut.positions.length / 3) * 4) stoneOut.face.push(0, 0, 0, 0);
                     RoadMesh.quad(stoneOut, qa, qb, [qb[0], depth(fb, pb), qb[2]], [qa[0], depth(fa, pa), qa[2]], colors.stone);
                     const ua = alongOf(k, key), ub = alongOf(k + 1, key);
                     for (const [u, n] of [[ua, oa], [ub, ob], [ub, ob], [ua, oa], [ub, ob], [ua, oa]]) stoneOut.face.push(u, 1, n[0], n[1]);
+                    const ca = coping[key][k], cb = coping[key][k + 1];
+                    RoadMesh.quad(stoneOut, qa, qb, [qb[0] - ob[0] * cb, qb[1], qb[2] - ob[1] * cb], [qa[0] - oa[0] * ca, qa[1], qa[2] - oa[1] * ca], colors.stone);
+                    for (let v = 0; v < 6; v++) stoneOut.face.push(0, 0, 0, 0);
                 } else RoadMesh.quad(out, pa, pb, [pb[0], depth(fb, pb), pb[2]], [pa[0], depth(fa, pa), pa[2]], kind === 'deck' ? colors.deck : colors.stone);
                 // Each end of a retaining wall's run returns under the road (`cap`)
                 const ended = [false, false];
@@ -1223,7 +1302,10 @@ class RoadMesh {
                 // (none on the segment that ends at a structure's row: the structure's own parapet ends there, a hand
                 // from where this one would, and the two made a step)
                 const abuts = kind === 'wall' && ((sides[k].bits | sides[k + 1].bits) & 7);
-                if (kind === 'deck' || (!abuts && Math.max(pa[1] - depth(fa, pa), pb[1] - depth(fb, pb)) >= RoadMesh.PARAPET_DROP_M)) rails[kind === 'deck' ? 'wall' : 'stone'][key].push({ k, pa, pb, o, drawn, oa: RoadMesh.outward(sides[k])[key], ob: RoadMesh.outward(sides[k + 1])[key], ua: kind === 'wall' ? alongOf(k, key) : NaN, ub: kind === 'wall' ? alongOf(k + 1, key) : NaN, endA: ended[0], endB: ended[1] });
+                // (a wall's parapet stands on its coping, COPING_UP_M over the edge: its face goes on from the wall's own
+                // and the two share their edge)
+                const seat = p => (kind === 'wall' ? [p[0], p[1] + RoadMesh.COPING_UP_M, p[2]] : p);
+                if (kind === 'deck' || (!abuts && RoadMesh.railed(pa, pb, depth(fa, pa), depth(fb, pb)))) rails[kind === 'deck' ? 'wall' : 'stone'][key].push({ k, pa: seat(pa), pb: seat(pb), o, drawn, oa: RoadMesh.outward(sides[k])[key], ob: RoadMesh.outward(sides[k + 1])[key], ua: kind === 'wall' ? alongOf(k, key) : NaN, ub: kind === 'wall' ? alongOf(k + 1, key) : NaN, endA: ended[0], endB: ended[1] });
                 if (kind === 'deck') soffit = true;
             }
             // Under an overhanging edge: the soffit, from one edge to the other at the deck's depth
@@ -1345,16 +1427,32 @@ class RoadMesh {
     }
 
     // A piece of retaining wall from the end of one run (`a`, its top corner, `outA` the way that run faces there,
-    // `footA` its foot) to the end of another (`b`, `outB`, `footB`), facing `o`: its face shares both runs' own
-    // corners, and it takes a parapet where both runs have one. `out` is the stone ({positions, shades}), `face` its
+    // `footA` its foot) to the end of another (`b`, `outB`, `footB`),
+    // facing `o`: its face shares both runs' own corners, and it takes a parapet where both runs have one. `out` is the stone ({positions, shades}), `face` its
     // face data (four numbers a vertex, as edgeWorks lays it)
     static wallJoin(out, face, { a, b, footA, footB, outA, outB, o, parapet }) {
         const P = RoadMesh.STONE_PROUD_M, colors = RoadMesh.COLORS;
         const len = Math.hypot(b[0] - a[0], b[2] - a[2]);
-        const qa = [a[0] + outA[0] * P, a[1], a[2] + outA[1] * P], qb = [b[0] + outB[0] * P, b[1], b[2] + outB[1] * P];
+        const up = RoadMesh.COPING_UP_M;
+        const qa = [a[0] + outA[0] * P, a[1] + up, a[2] + outA[1] * P], qb = [b[0] + outB[0] * P, b[1] + up, b[2] + outB[1] * P];
         RoadMesh.quad(out, qa, qb, [qb[0], footB, qb[2]], [qa[0], footA, qa[2]], colors.stone);
         for (const u of [0, len, len, 0, len, 0]) face.push(u, 1, o[0], o[1]);
-        if (parapet) RoadMesh.rail({ positions: out.positions, shades: out.shades, face }, [a, b], [outA, outB], RoadMesh.PARAPET_W_M, RoadMesh.PARAPET_H_M, colors.stone, [false, false], [0, len], P);
+        // (its coping, as every wall's, laid in along each run's own way at its end, so it meets that run's coping; but
+        // where those two ways would twist it, its inner edge running against its face or across it, along the
+        // piece's own square way)
+        const square = [-(qb[2] - qa[2]) / (len || 1), (qb[0] - qa[0]) / (len || 1)], sign = square[0] * o[0] + square[1] * o[1] < 0 ? -1 : 1;
+        const own = [square[0] * sign, square[1] * sign];
+        const inner = (wa, wb) => { const ca = RoadMesh.copingIn(wa, qa, qb), cb = RoadMesh.copingIn(wb, qa, qb); return [[qa[0] - wa[0] * ca, qa[1], qa[2] - wa[1] * ca], [qb[0] - wb[0] * cb, qb[1], qb[2] - wb[1] * cb]]; };
+        const twisted = ([ia, ib]) => {
+            const side = p => (qb[0] - qa[0]) * (p[2] - qa[2]) - (qb[2] - qa[2]) * (p[0] - qa[0]);
+            return (ib[0] - ia[0]) * (qb[0] - qa[0]) + (ib[2] - ia[2]) * (qb[2] - qa[2]) <= 0 || side(ia) * side(ib) <= 0;
+        };
+        let ways = [outA, outB];
+        if (twisted(inner(...ways))) ways = [own, own];
+        const [ia, ib] = inner(...ways);
+        RoadMesh.quad(out, qa, qb, ib, ia, colors.stone);
+        for (let v = 0; v < 6; v++) face.push(0, 0, 0, 0);
+        if (parapet) RoadMesh.rail({ positions: out.positions, shades: out.shades, face }, [[a[0], a[1] + up, a[2]], [b[0], b[1] + up, b[2]]], ways, RoadMesh.PARAPET_W_M, RoadMesh.PARAPET_H_M, colors.stone, [false, false], [0, len], P);
         while (face.length < (out.positions.length / 3) * 4) face.push(0, 0, 0, 0);
     }
 

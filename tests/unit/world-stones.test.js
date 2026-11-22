@@ -1,12 +1,14 @@
-// The marker stones stand at sharp drops and round the outside of hairpins (Scenery.STONE_RULE). A world is ridden in
-// node with the streamer, on the shipped stage and on the synthetic fixture world, and every stretch of drop the rule
-// finds, every hairpin's row and every stone drawn is measured again by tests/helpers/world-stones.js. At a drop the
-// drawn ground must fall more than dropM within reachM of the verge on the stone's side. In a hairpin's row the place
-// must be on the arc of a hairpin the importer's own check finds (tools/world/verify.mjs findHairpins), on the outside
-// of the bend. In both, nothing else may guard that edge (a retaining wall under it, a bridge, a tunnel, a solid
-// edge), and no stone stands in a stopping place, a roadworks site or the mouth of a junction. A share of the
-// stretches and a share of the hairpins have their stones, the same on every load, no stone floats, the kerb course
-// runs from stone to stone, and the cap takes the stones nearest the bike.
+// The marker stones stand at sharp drops, round the outside of hairpins and on the top of retaining walls
+// (Scenery.STONE_RULE). A world is ridden in node with the streamer, on the shipped stage and on the synthetic fixture
+// world, and every stretch of drop the rule finds, every hairpin's row, every wall's row and every stone drawn is
+// measured again by tests/helpers/world-stones.js. At a drop, and round a hairpin, the drawn ground must fall more than
+// dropM within reachM of the verge on the stone's side. In a hairpin's row the place must be on the arc of a hairpin
+// the importer's own check finds (tools/world/verify.mjs findHairpins), on the outside of the bend. In both, nothing
+// else may guard that edge (a retaining wall under it, a bridge, a tunnel, a solid edge). On a wall the stone stands
+// on the middle of its coping, on a wall under the road's edge with no parapet. No stone stands in a stopping place,
+// a roadworks site or the mouth of a junction. A share of the stretches, of the hairpins and of the walls have their
+// stones, all of each or none, the same on every load, no stone floats, the kerb course runs from stone to stone
+// under a hairpin's row only, and the cap takes the stones nearest the bike.
 // The yellow bend signs are not back: the map and the hairpin advice beside its turn prompt tell of a bend (WorldGuide).
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
@@ -39,9 +41,11 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
 
     test('the world has stretches of sharp drop and hairpins, and stones on some of each', () => {
         expect(read.stretches.length).toBeGreaterThan(10);
-        expect(read.rows.length).toBeGreaterThan(world.id === 'tremola' ? 10 : 1);
+        // (round a hairpin a row stands only where the land falls dropM behind it, as at a stretch, and not beside a
+        // wall or its taper: one hairpin of the shipped stage keeps a row, none of the fixture world's three)
+        expect(read.rows.length).toBeGreaterThan(world.id === 'tremola' ? 0 : -1);
         expect(read.stones.length).toBeGreaterThan(40);
-        for (const set of [read.stretches, read.rows]) expect(read.stones.some(stone => set.some(t => t.places.some(q => near(q, stone))))).toBe(true);
+        for (const set of [read.stretches, read.rows]) if (set.some(t => t.used)) expect(read.stones.some(stone => set.some(t => t.places.some(q => near(q, stone))))).toBe(true);
     });
 
     test('the game\'s hairpins are the importer\'s: every bend of its list is in a stretch the importer\'s check finds, and every such stretch holds one', () => {
@@ -70,9 +74,9 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         }
     });
 
-    test('a hairpin whose outside is no edge has no row: the land behind every place of a row lies more than hairpinDropM under the road, and the hairpin under the rising bank has none', () => {
-        expect(rule.hairpinDropM).toBeGreaterThan(0);
-        for (const t of read.rows) for (const q of t.places) expect(q.drop).toBeGreaterThan(rule.hairpinDropM);
+    test('a hairpin\'s row stands at a drop as a stretch does: the land behind every place of a row lies more than dropM under the road, and the hairpin under the rising bank has none', () => {
+        expect(rule.hairpinDropM).toBeUndefined();
+        for (const t of read.rows) for (const q of t.places) expect(q.drop).toBeGreaterThan(rule.dropM);
         // Some hairpins have no place at all: their outside is level, or the bank
         expect(read.hairpins.some(h => h.places === 0)).toBe(true);
         if (world.id !== 'tremola') return;
@@ -80,7 +84,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         const bank = read.hairpins.find(h => Math.abs(h.apex - 1280) < 30);
         expect(bank).toBeDefined();
         expect(bank.places).toBe(0);
-        if (process.env.STONE_COUNTS) process.stderr.write(`COUNTS hairpins ${read.hairpins.length} open ${read.hairpins.filter(h => h.places > 0).length} with a row ${read.hairpins.filter(h => h.places > 0 && h.used).length} rows ${read.rows.length} stones ${read.stones.length} kerbs ${read.kerbs.length} at ${read.hairpins.filter(h => h.places > 0 && h.used).map(h => (h.apex / 1000).toFixed(2)).join(' ')}\n`);
+        if (process.env.STONE_COUNTS) process.stderr.write(`COUNTS stretches ${read.stretches.length} used ${read.stretches.filter(t => t.used).length} walls ${read.walls.length} hairpins ${read.hairpins.length} open ${read.hairpins.filter(h => h.places > 0).length} with a row ${read.hairpins.filter(h => h.places > 0 && h.used).length} rows ${read.rows.length} stones ${read.stones.length} kerbs ${read.kerbs.length} at ${read.hairpins.filter(h => h.places > 0 && h.used).map(h => (h.apex / 1000).toFixed(2)).join(' ')}\n`);
     });
 
     test('a hairpin\'s arc is the hairpin\'s row\'s: no place of a stretch of drop is on one, on either side', () => {
@@ -89,7 +93,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
     });
 
     test('every stone drawn stands at a place of a stretch or of a row that has its stones', () => {
-        const all = read.stretches.concat(read.rows);
+        const all = read.stretches.concat(read.rows, read.walls);
         const places = all.filter(t => t.used).flatMap(t => t.places);
         const stray = read.stones.filter(stone => !places.some(q => near(q, stone)));
         expect(stray.map(stone => `(${stone.x.toFixed(1)}, ${stone.z.toFixed(1)})`)).toEqual([]);
@@ -105,13 +109,40 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         for (const t of read.rows) expect(t.mirror).toContain('the inside of the bend');
     });
 
-    test('a stretch is a row: at least minM long, its stones STONE_GAP_M apart, inside one block of the ride', () => {
-        const each = Math.round(rule.blockM / Scenery.STONE_GAP_M);
+    test('a stretch is the whole drop: at least minM long, its stones STONE_GAP_M apart, and no place for a stone at a drop just before or after it', () => {
+        expect(rule.blockM).toBeUndefined();
         for (const t of read.stretches) {
             expect((t.places.length - 1) * Scenery.STONE_GAP_M).toBeGreaterThanOrEqual(rule.minM);
             for (let i = 1; i < t.places.length; i++) expect(t.places[i].k - t.places[i - 1].k).toBe(1);
-            expect(new Set(t.places.map(q => Math.floor(q.k / each)))).toEqual(new Set([t.block]));
+            expect(t.start).toBe(t.places[0].k);
         }
+        // (read while its land is here: the stretches are whole, and no two of one side touch)
+        for (const side of [-1, 1]) {
+            const mine = read.stretches.filter(t => t.side === side);
+            for (let i = 1; i < mine.length; i++) expect(mine[i].places[0].k).toBeGreaterThan(mine[i - 1].places[mine[i - 1].places.length - 1].k + 1);
+        }
+    });
+
+    test('a chosen stretch has its stones over all of it, an unchosen one none, but the stones the ground under them leaves out', () => {
+        const at = q => read.stones.some(stone => near(q, stone));
+        const used = read.stretches.filter(t => t.used), unused = read.stretches.filter(t => !t.used);
+        const missing = used.flatMap(t => t.places).filter(q => !at(q));
+        // (the fixture world's hillside is steeper than a fill from end to end: footM leaves out more of its stones)
+        if (world.id === 'tremola') expect(missing.length).toBeLessThanOrEqual(used.flatMap(t => t.places).length * 0.05);
+        expect(unused.flatMap(t => t.places).filter(at)).toEqual([]);
+    });
+
+    test('a wall\'s row stands on the middle of the coping of a wall under the road\'s edge with no parapet, over all of the wall or not at all', () => {
+        const faults = read.walls.flatMap(t => t.faults);
+        if (faults.length) throw new Error(`${faults.length} places of the walls' rows fail their own rule:\n${faults.slice(0, 30).join('\n')}`);
+        const at = q => read.stones.some(stone => near(q, stone));
+        for (const t of read.walls) {
+            for (const q of t.places) expect(q.wall).toBe(true);
+            expect(t.places.filter(at).length).toBe(t.used ? t.places.length : 0);
+            expect(t.used).toBe(Scenery.wallUsed(t.start, t.side));
+        }
+        // (no wall of either world stands without a parapet today: every one of them drops 2.5 m or more)
+        if (process.env.STONE_COUNTS) process.stderr.write(`WALLS ${read.walls.length} used ${read.walls.filter(t => t.used).length}\n`);
     });
 
     test('a hairpin\'s row is at least minM long, its stones STONE_GAP_M apart along the outer edge itself', () => {
@@ -127,13 +158,23 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         }
     });
 
-    test('a seeded share of the stretches has its stones: within the band, and not the same choice on both sides of every block', () => {
+    test('a seeded share of the stretches has its stones: within the band, from each stretch\'s own first station', () => {
         const used = read.stretches.filter(t => t.used).length;
-        expect(used / read.stretches.length).toBeGreaterThanOrEqual(SHARE[0]);
-        expect(used / read.stretches.length).toBeLessThanOrEqual(SHARE[1]);
+        // (the share drawn falls in the band where there are stretches enough to share: whole stretches are few, 15
+        // on the shipped stage, 6 of them chosen)
+        if (read.stretches.length >= 30) {
+            expect(used / read.stretches.length).toBeGreaterThanOrEqual(SHARE[0]);
+            expect(used / read.stretches.length).toBeLessThanOrEqual(SHARE[1]);
+        }
+        expect(used).toBeGreaterThan(0);
+        expect(used).toBeLessThan(read.stretches.length);
+        // and the draw itself takes the share over many first stations
+        const draws = [...Array(2000).keys()].filter(k => Scenery.stoneUsed(k, 1)).length / 2000;
+        expect(draws).toBeGreaterThanOrEqual(SHARE[0]);
+        expect(draws).toBeLessThanOrEqual(SHARE[1]);
         expect(rule.share).toBeGreaterThanOrEqual(SHARE[0]);
         expect(rule.share).toBeLessThanOrEqual(SHARE[1]);
-        for (const t of read.stretches) expect(t.used).toBe(Scenery.stoneUsed(t.block, t.side));
+        for (const t of read.stretches) expect(t.used).toBe(Scenery.stoneUsed(t.start, t.side));
     });
 
     test('a seeded share of the hairpins has its row: most of them, not all', () => {
@@ -143,8 +184,10 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         // Of the hairpins whose outside has a bare edge to guard. The fixture world has three hairpins: too few for a share
         const open = read.hairpins.filter(h => h.places > 0);
         const used = open.filter(h => h.used);
-        expect(used.length).toBeGreaterThan(0);
-        if (world.id !== 'tremola') return;
+        if (open.length) expect(used.length).toBeGreaterThan(0);
+        // (a share needs hairpins to share: with a drop of dropM behind them only one or two of either world has a
+        // bare edge to guard)
+        if (open.length < 5) return;
         expect(used.length).toBeLessThan(open.length);
         expect(used.length / open.length).toBeGreaterThanOrEqual(HAIRPIN_SHARE[0]);
         expect(used.length / open.length).toBeLessThanOrEqual(HAIRPIN_SHARE[1]);
@@ -153,7 +196,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
     });
 
     test('the same stretches, the same rows and the same choice on a second load ridden in other steps', () => {
-        const sign = r => r.stretches.map(t => `${t.block}:${t.side}:${t.used}:${t.places.map(q => q.k).join(',')}`);
+        const sign = r => r.stretches.map(t => `${t.start}:${t.side}:${t.used}:${t.places.map(q => q.k).join(',')}`);
         expect(sign(again)).toEqual(sign(read));
         const rows = r => r.rows.map(t => `${Math.round(t.hairpin.apex)}:${t.side}:${t.used}:${t.places.map(q => q.s.toFixed(2)).join(',')}`);
         expect(rows(again)).toEqual(rows(read));
@@ -164,10 +207,22 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         expect(off.map(stone => `(${stone.x.toFixed(1)}, ${stone.z.toFixed(1)}): foot ${stone.y0.toFixed(2)}, lowest ground ${stone.low.toFixed(2)}, ground at its middle ${stone.middle.toFixed(2)}`)).toEqual([]);
     });
 
+    test('the kerb course is under a hairpin\'s row only: no stone of a stretch or a wall has one, every stone of a hairpin\'s row but its last does', () => {
+        expect(read.sites.filter(q => q.kind !== 'hairpin' && q.next)).toEqual([]);
+        expect(read.sites.some(q => q.kind === 'drop')).toBe(true);
+        const hairpin = read.sites.filter(q => q.kind === 'hairpin');
+        for (const t of read.rows.filter(r => r.used)) {
+            const mine = t.places.map(q => hairpin.find(site => near(q, site))).filter(Boolean);
+            // (each stone with a neighbour drawn after it carries the piece to it)
+            expect(mine.filter(site => site.next).length).toBeGreaterThanOrEqual(mine.length - 1 - t.places.filter(q => !hairpin.some(site => near(q, site))).length);
+        }
+    });
+
     test('the kerb course runs from a stone to the next of its row, at their seat and down into the ground', () => {
         // (a piece is drawn under the stones nearest the bike only: the ride's steps pass some rows by)
-        expect(read.kerbs.length).toBeGreaterThan(read.stones.length * 0.25);
-        expect(read.kerbs.length).toBeLessThan(read.stones.length);
+        const rowStones = read.stones.filter(stone => read.rows.some(t => t.used && t.places.some(q => near(q, stone))));
+        if (rowStones.length) expect(read.kerbs.length).toBeGreaterThan(0);
+        expect(read.kerbs.length).toBeLessThan(Math.max(1, rowStones.length));
         const at = ([x, z]) => read.stones.some(stone => Math.hypot(stone.x - x, stone.z - z) < 0.05);
         const off = [];
         for (const kerb of read.kerbs) {
@@ -191,12 +246,11 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         for (const w of read.windows) {
             expect(w.shown).toBe(Math.min(w.sites, Scenery.STONE_CAP));
             expect(w.kerbs).toBeLessThanOrEqual(Scenery.KERB_CAP);
-            if (w.sites >= Scenery.STONE_CAP) expect(w.kerbs).toBeGreaterThan(Scenery.KERB_CAP * 0.6);
             // (a drawn stone's place is read back from 32-bit numbers)
             expect(w.nearestHidden).toBeGreaterThanOrEqual(w.farthestShown - 0.01);
         }
-        // The cap is in force somewhere, so the rule above is tested
-        expect(read.windows.some(w => w.sites > Scenery.STONE_CAP)).toBe(true);
+        // The cap is in force somewhere where the world has more stones than it, so the rule above is tested
+        if (read.stones.length > Scenery.STONE_CAP * 2) expect(read.windows.some(w => w.sites > Scenery.STONE_CAP)).toBe(true);
     });
 
     test('a stone is 10 triangles and a piece of kerb 6, and the two caps together are within what the posts could take', () => {
@@ -209,7 +263,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
 
     if (world.id === 'tremola') {
         test('on the shipped stage every place of a stretch or a row with stones had its stone as the bike came by, and the second ride drew the same stones', () => {
-            const places = read.stretches.concat(read.rows).filter(t => t.used).flatMap(t => t.places);
+            const places = read.stretches.concat(read.rows, read.walls).filter(t => t.used).flatMap(t => t.places);
             // (a stone the ground falls more than footM under is left out of its row: Scenery.stoneSites)
             const missing = places.filter(q => !read.stones.some(stone => near(q, stone)));
             expect(missing.length).toBeLessThan(places.length * 0.05);

@@ -126,6 +126,7 @@ class WorldEnvironment {
         // and a retaining wall where the ride's wall plan draws one (rideWalls)
         this.ground.walledAt = (index, sign) => this.walledAt(index, sign);
         this.ground.taperAt = (index, sign, t) => this.taperAt(index, sign, t);
+        this.ground.wallTop = (index, sign) => this.wallTop(index, sign);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
         this.physics = WorldPhysics;
@@ -550,6 +551,29 @@ class WorldEnvironment {
         const share = p => Math.max(0, 1 - Math.min(p[0], p[1]) / RoadMesh.TAPER_M);
         const u = Math.max(0, Math.min(1, t || 0));
         return share(a) + (share(b) - share(a)) * u;
+    }
+
+    // The retaining wall under the ride's edge from row `index` to the next, on the right (sign > 0) or the left, from
+    // the plan the stone is drawn from: {a, b, oa, ob, railed, heights}, its top line's two ends (the road's edge),
+    // the way it faces at each, whether it carries a parapet (RoadMesh.railed, the drawn rule) and how far its face
+    // drops at each end; null where no wall stands. What may stand on its top reads this (Scenery.wallRuns)
+    wallTop(index, sign) {
+        if (!this.walledAt(index, sign)) return null;
+        const points = this.route.points;
+        if (index < 0 || index + 1 >= points.length) return null;
+        const walls = this.rideWalls(this.rowSection[index]), key = sign > 0 ? 'r' : 'l';
+        const k = index - walls.plan.base, fa = walls.plan.end[key][k] || null, fb = walls.plan.end[key][k + 1] || null;
+        if (!fa && !fb) return null;
+        const sides = RoadMesh.vergeSides(this.rowsOf(index, index + 1), null, true);
+        const pa = fa ? fa.at : sides[0][key], pb = fb ? fb.at : sides[1][key];
+        const o = (fa || fb).out;
+        // (as RoadMesh.edgeWorks reads it: the foot of each end or the run's, and the land drawn in front)
+        const foot = this.wallFoot || (this.wallFoot = this.edgeFoot());
+        const reach = p => (foot.under ? foot.under(p[0], p[1], p[2], o[0], o[1]) : Infinity);
+        const low = Math.min(...[fa, fb].filter(Boolean).map(f => f.y)), between = reach([(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2]);
+        const da = RoadMesh.wallDepth(fa, pa, low, reach(pa), between), db = RoadMesh.wallDepth(fb, pb, low, reach(pb), between);
+        const abuts = (points[index].bits | points[index + 1].bits) & 7;
+        return { a: pa, b: pb, oa: RoadMesh.outward(sides[0])[key], ob: RoadMesh.outward(sides[1])[key], railed: !!abuts || RoadMesh.railed(pa, pb, da, db), heights: [pa[1] - da, pb[1] - db] };
     }
 
     // Whether the ride's edge from row `index` to the next, on the right (sign > 0) or the left, stands on a retaining wall
@@ -1607,7 +1631,12 @@ class WorldEnvironment {
         // a tile under them arrives
         // (and where one of their walls ends beside the end of one of the ride's, the two are joined: wallJoins)
         const box = this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox;
-        triangles += RoadMesh.addEdgeWorks(group, sides, this.edgeFoot(missing, { aprons: false }), structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
+        // (a wall's end that wallJoins joins to one of the ride's goes on in that piece: no face past it and no return,
+        // `foot.joined` as the ride's own; a face past it stood beside the piece, two walls a hand apart)
+        const foot = this.edgeFoot(missing, { aprons: false });
+        const ends = box ? this.rideWallEnds(box, WorldEnvironment.WALL_JOIN_M + 60, missing) : [];
+        foot.joined = (x, y, z) => ends.some(end => { const d = Math.hypot(end.p[0] - x, end.p[2] - z); return d < WorldEnvironment.WALL_JOIN_M && d > 0.05 && Math.abs(end.p[1] - y) <= 1; });
+        triangles += RoadMesh.addEdgeWorks(group, sides, foot, structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
         // The land is cut to their walls (setSideWalls)
         this.setSideWalls(k, group.userData.walls || []);
         group.userData.roads = roads;
