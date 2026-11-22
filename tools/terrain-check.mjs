@@ -20,6 +20,7 @@
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--measure [--rounds N]] [--out <dir>]   (each part of a world frame, or each graphics level: frame time and picture)
+//   node tools/terrain-check.mjs world-ground-shots --world tremola --gpu --out <dir> [--tag T] [--at s,...]   (the bike stopped on the steepest grade, up, down and across, chase and side views)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   world-hud rides the fixture of three stages tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
@@ -4913,6 +4914,92 @@ function roadLookChecks(results, failures) {
         if (view.flat) failures.push(`world-road-look: the ${view.name} view shows ${view.flat} pixels of flat (LOD1) road within ${ROAD_LOOK_M} m of the bike`);
     }
 }
+
+// world-ground-shots: GPU pictures of the bike on the drawn ground (Vehicle.groundPose; .agent/system/handling.md, "The
+// bike stands on the ground"). The bike is stopped on the steepest grade of the ride (over 10 m, off the structures; or
+// at each s of --at), facing up it, down it and across it, with the foot down, and each is drawn from the chase camera and
+// from the side, 4.5 m to the bike's right at its middle. --out <dir> names the folder, --tag the file prefix.
+//   node tools/terrain-check.mjs world-ground-shots --world tremola --gpu --out <dir> [--tag T] [--at s,s,...]
+WORLD_PROBES.push('world-ground-shots');
+WORLD['world-ground-shots'] = async (page) => {
+    const dir = option('out');
+    if (!dir) return { error: 'name a folder with --out <dir>' };
+    mkdirSync(dir, { recursive: true });
+    const tag = option('tag') || 'ground';
+    const at = option('at') ? String(option('at')).split(',').map(Number) : null;
+    const views = await page.evaluate(async (placeSource, at) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, route = env.route, v = game.vehicle, renderer = game.graphics.renderer;
+        game.worldLinger = false;
+        const gradeAt = s => (route.sample(s + 5, {}).y - route.sample(s - 5, {}).y) / 10;
+        let list = at;
+        if (!list) {
+            let best = null;
+            for (let s = env.startS + 60; s < env.endS - 60; s += 2) {
+                const p = route.sample(s, {});
+                if (p.flags && (p.flags.tunnel || p.flags.bridge || p.flags.gallery)) continue;
+                const grade = gradeAt(s);
+                if (Math.abs(grade - p.grade) > 0.03) continue;
+                if (!best || Math.abs(grade) > Math.abs(best.grade)) best = { s, grade };
+            }
+            list = [best.s];
+        }
+        const W = 960, H = 540;
+        const target = new THREE.WebGLRenderTarget(W, H);
+        const side = new THREE.PerspectiveCamera(40, W / H, 0.1, 3000);
+        const shot = camera => {
+            renderer.setRenderTarget(target);
+            renderer.render(game.scene, camera);
+            const pixels = new Uint8Array(W * H * 4);
+            renderer.readRenderTargetPixels(target, 0, 0, W, H, pixels);
+            renderer.setRenderTarget(null);
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const image = canvas.getContext('2d').createImageData(W, H);
+            for (let y = 0; y < H; y++) image.data.set(pixels.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+            canvas.getContext('2d').putImageData(image, 0, 0);
+            return canvas.toDataURL('image/png');
+        };
+        const out = [];
+        for (const s of list) {
+            const p = await placeAt(s);
+            const grade = gradeAt(s);
+            const up = grade > 0 ? p.heading : p.heading + Math.PI;
+            for (const [way, heading] of [['uphill', up], ['downhill', up + Math.PI], ['across', up + Math.PI / 2]]) {
+                v.position.set(p.x, p.y, p.z);
+                v.yawAngle = heading;
+                v.leanAngle = 0;
+                v.speed = 0;
+                v.findNearestRoadSegment();
+                game.cameraMode = 2;
+                game.worldCamera.reset(v.yawAngle);
+                // No input: the rider stops and puts a foot down (Vehicle.updateWorldSpeed, updateFooting)
+                twistyDev.autopilot({ speed: 0, on: false });
+                for (let i = 0; i < 120; i++) twistyDev.step(1);
+                env.streamer.pump(Infinity);
+                twistyDev.step(1, { render: true });
+                const g = v.group.position;
+                const sin = Math.sin(v.yawAngle), cos = Math.cos(v.yawAngle);
+                side.position.set(g.x - cos * 4.5, g.y + 0.9, g.z + sin * 4.5);
+                side.lookAt(g.x, g.y + 0.55, g.z);
+                side.updateMatrixWorld(true);
+                const r3 = x => Math.round(x * 1000) / 1000;
+                const facts = { s: Math.round(s), grade: r3(grade), way, pitch: r3(v.group.rotation.x), roll: r3(v.group.rotation.z), y: r3(g.y - p.y), crashed: v.crashed, foot: !!v.footPlaced };
+                out.push({ ...facts, view: 'chase', png: shot(game.camera) });
+                out.push({ ...facts, view: 'side', png: shot(side) });
+            }
+        }
+        target.dispose();
+        return out;
+    }, placeAt.toString(), at);
+    return {
+        views: views.map(({ png, ...view }) => {
+            const file = join(dir, `${tag}-s${view.s}-${view.way}-${view.view}.png`);
+            writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+            return { file, ...view };
+        })
+    };
+};
 
 // world-vertex: a bike put down at a ride vertex's exact s (a restart, a resume or a put-down: stations sit at sample s
 // values) takes finite physics and draws a lit frame. Such a put-down took a NaN height on its first step (0 / 0 in

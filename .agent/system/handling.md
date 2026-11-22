@@ -278,6 +278,28 @@ The results, which `tests/unit/wheelie-pop.test.js` holds over the real catalogu
 
 The classic legs and a world ride use the same rule: both call `Vehicle.updateWheelie`. The scoring and the flip crash do not read the facts. The riders of the group do not wheelie. The rider select has no wheelie bar (`STAT_BARS`), so no star reads the facts.
 
+## The bike stands on the ground
+
+The owner: "the player body (and bike?) should remain normal to the ground so they are correctly orientated on a slope and don't sink into the ground".
+
+Before, on a world ride, the drawn bike took its pitch from the route's grade at its station (`-atan(worldGrade)`), whichever way the bike faced. On the land it took the slope from the middle of the bike to a point 1.5 m ahead. It took its height from one point under its middle, eased toward it. The lean was measured from the vertical. So a bike that faced down a grade was pitched as if it faced up it, and a bike across a grade was pitched and not rolled. On the steepest grade of the shipped stage (11%), a bike stopped facing down it had its rear tyre 0.20 m in the road and was 14 degrees off the road; across it, 7 degrees in pitch and 7 in roll. On the fixture world's steepest grade (120%, at a junction), the tyres went up to 1.6 m into the road.
+
+The rule now (`Vehicle.groundPose`, the numbers in `Vehicle.GROUND`: `acrossM`, `segments`, `footM`, `steepMost`), on any world, on the road, on the verge and on the land, moving and stopped:
+
+- **The ground is the drawn ground.** `WorldGround.drawnY` is `heightAt` with the ribbon and the verge `RoadMesh.LIFT_M` (2 cm) over the road's height, as `RoadMesh` draws them, and the fill and the land on their triangles. Each place is located within `segments` route segments of the bike's own, so a stack of hairpins reads the bike's own leg.
+- **Both tyres touch it.** Each tyre's contact point is under its axle by its own radius (`axles`, from the model). The ground is read at each contact's own place. The bike is pitched to the line between the two, and set down so the rear contact is on the ground. The places are where the last frame's pitch put them, which moves them by millimetres.
+- **The lean is measured from the ground's normal.** The ground is read `acrossM` (0.4 m) either side of the middle between the contacts, square to the heading. The roll that lays the bike's across axis in the ground's plane (`groundTilt`) is added under the lean, the land's rock, the wobbles and the stop pose's lean.
+- **A face is not ground.** A reading steeper than `steepMost` (1.6, rise over run) from the ground under the bike's middle is a face beside it: a parapet, a wall, the rock by a tunnel, the lip of a drop or a bridge's edge. The line goes on from the middle instead (for a contact, for either side across, and for the foot). Without it, a bike at a bridge's edge was rolled 89 degrees toward the land 40 m under it.
+- **The rider follows the bike.** The rider is a child of the bike, so the body takes its pitch and roll.
+- **A wheelie** pitches over the ground's pitch, about the rear axle where the ground puts it.
+- **A bob on the land only lifts.** The land's bob (`landBumpM`) was up and down; down, it put the tyres into the land.
+- **A foot put down** lies on the ground's own plane at its place: the ground is read there and `footM` (0.15 m) ahead and beside it. The ankle stands off that plane along its normal, and rises by as much as the deepest corner of the boot or its sole is under the plane. The leg stretches or bends to reach it.
+- **Not changed:** the physics (the bike's position, its speed, every crash rule, `worldGrade` for gravity), a roadworks ramp or heap (the old rule, with the ramp's pitch), a jump, a crash and the fall, and the classic legs.
+
+The procedural bike's front tyre is 0.28 m on an axle 0.3 m up, so it stands 2 cm over the ground. On the land, the drawn tile lies up to `TerrainMesh.SINK_M` (0.12 m) under the land the physics reads beside a node the importer carved for a road, so a tyre or a foot can stand that much over the drawn land there. Nothing is ever under it.
+
+Proofs: `tests/unit/world-ground-contact.test.js` (on `tests/helpers/ground-contact.js`) rides the steepest grade of each world's road and the steepest open land beside it that a bike can stand on, up, down and across, moving and stopped, and a wheelie there; and stands a bike at a bridge deck's edge. It reads the ground by a ray down onto the drawn meshes and the tyres and the boot from their own vertices: no point more than 1 cm in the ground, each tyre within 4 cm of it (16 cm on the land), the bike's axes within 1 degree of the ground's, and the foot down on the ground. Measured now: no tyre point more than 0.3 cm in the drawn ground, the axes within 0.8 degrees of it, the foot on it within 0.2 cm. `node tools/terrain-check.mjs world-ground-shots --world tremola --gpu --out <dir>` takes pictures of the bike stopped on the steepest grade, from the chase camera and from the side.
+
 ## Degrees of off-road capability
 
 One fact of a bike says how much of an off-road bike it is on a world's land: `offroad`, 0 to 1, in the catalogue entry (`BIKE_MODELS`) and in each procedural kind (`Vehicle.BIKES`). No code names a bike. A new entry gets its capability from that number alone.

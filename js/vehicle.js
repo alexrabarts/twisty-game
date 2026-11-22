@@ -3742,16 +3742,22 @@ class Vehicle {
 
     updateMesh() {
         this.group.position.copy(this.position);
-        // The world's land is rough: the drawn bike bobs and rocks, more with speed (the physics is untouched)
+        // The world's land is rough: the drawn bike bobs and rocks, more with speed (the physics is untouched). On the
+        // drawn ground (groundPose) a bob only lifts it: down, the wheels went into the land
         const world = this.worldPhysics;
         this.landRock = 0;
+        this.landBob = 0;
+        const grounded = !!world && !this.roadworksSurface && this.standsOnGround();
         if (world && this.runoff && !this.crashed) {
             const d = this.distanceTraveled;
             const land = this.landValues();
             const rough = Math.min(1, this.speed / land.landCapSpeed);
-            this.group.position.y += land.landBumpM * rough * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
+            const bob = land.landBumpM * rough * Math.sin(d * 2.3) * Math.sin(d * 0.9 + 1);
+            this.landBob = grounded ? Math.abs(bob) : bob;
+            this.group.position.y += this.landBob;
             this.landRock = land.landWobbleDeg * Math.PI / 180 * rough * Math.sin(d * 1.7) * Math.sin(d * 0.6 + 2);
         }
+        this.groundTilt = 0;
         // In a power slide the drawn bike heads into the turn past the way it travels
         this.group.rotation.y = this.yawAngle + this.slideAngle;
         this.meshNeedsBaseCapture = true;
@@ -3826,43 +3832,49 @@ class Vehicle {
             this.group.rotation.z = this.leanAngle * 0.5; // Reduce lean while jumping
             this.leanRider(0.5);
         } else if (this.isWheelie) {
-            // Wheelie animation - pivot around center of rear wheel
-            // Rear wheel centre is at this.axles.rear in local space
-            // Bike origin is at CG height (0.6m) above ground
+            if (grounded) {
+                // On a world's ground the wheelie pitches over the ground's own pitch, about the rear axle where the
+                // ground puts it (groundPose)
+                this.group.rotation.z = this.groundPose(this.wheelieAngle) + this.leanAngle * 0.3;
+            } else {
+                // Wheelie animation - pivot around center of rear wheel
+                // Rear wheel centre is at this.axles.rear in local space
+                // Bike origin is at CG height (0.6m) above ground
             
-            // Apply the rotation first
-            this.group.rotation.x = -this.wheelieAngle; // Negative for wheelie (front up)
+                // Apply the rotation first
+                this.group.rotation.x = -this.wheelieAngle; // Negative for wheelie (front up)
             
-            // Calculate translation needed to keep rear wheel center fixed
-            // Vector from bike origin to rear wheel center
-            // Rear wheel center Y: 0.3 (above ground)
-            // Bike origin Y: 0.6 (CG height above ground)
-            // So offset from bike origin to wheel center: 0.3 - 0.6 = -0.3
+                // Calculate translation needed to keep rear wheel center fixed
+                // Vector from bike origin to rear wheel center
+                // Rear wheel center Y: 0.3 (above ground)
+                // Bike origin Y: 0.6 (CG height above ground)
+                // So offset from bike origin to wheel center: 0.3 - 0.6 = -0.3
             
-            const angle = -this.wheelieAngle;
-            const cosTheta = Math.cos(angle);
-            const sinTheta = Math.sin(angle);
+                const angle = -this.wheelieAngle;
+                const cosTheta = Math.cos(angle);
+                const sinTheta = Math.sin(angle);
             
-            // Original vector from origin to pivot point (rear wheel center)
-            const pivotX = 0;
-            const pivotY = this.axles.rear[0]; // Rear axle height: the model origin is on the ground, not at the CG
-            const pivotZ = this.axles.rear[1]; // and how far behind the centre
+                // Original vector from origin to pivot point (rear wheel center)
+                const pivotX = 0;
+                const pivotY = this.axles.rear[0]; // Rear axle height: the model origin is on the ground, not at the CG
+                const pivotZ = this.axles.rear[1]; // and how far behind the centre
             
-            // After rotation, this vector becomes:
-            const rotatedY = pivotY * cosTheta - pivotZ * sinTheta;
-            const rotatedZ = pivotY * sinTheta + pivotZ * cosTheta;
+                // After rotation, this vector becomes:
+                const rotatedY = pivotY * cosTheta - pivotZ * sinTheta;
+                const rotatedZ = pivotY * sinTheta + pivotZ * cosTheta;
             
-            // Translation needed to keep pivot point fixed. The offset is in
-            // bike-local axes; rotate it into world space by the heading
-            // (applying it raw to world z shoved the bike sideways on any
-            // non-axis-aligned heading)
-            const localZOffset = pivotZ - rotatedZ;
-            this.group.position.y = this.position.y + (pivotY - rotatedY);
-            this.group.position.x = this.position.x + Math.sin(this.yawAngle) * localZOffset;
-            this.group.position.z = this.position.z + Math.cos(this.yawAngle) * localZOffset;
+                // Translation needed to keep pivot point fixed. The offset is in
+                // bike-local axes; rotate it into world space by the heading
+                // (applying it raw to world z shoved the bike sideways on any
+                // non-axis-aligned heading)
+                const localZOffset = pivotZ - rotatedZ;
+                this.group.position.y = this.position.y + (pivotY - rotatedY);
+                this.group.position.x = this.position.x + Math.sin(this.yawAngle) * localZOffset;
+                this.group.position.z = this.position.z + Math.cos(this.yawAngle) * localZOffset;
             
-            // Apply lean (reduced during wheelie)
-            this.group.rotation.z = this.leanAngle * 0.3; // Reduce lean during wheelie
+                // Apply lean (reduced during wheelie)
+                this.group.rotation.z = this.leanAngle * 0.3; // Reduce lean during wheelie
+            }
             this.leanRider(0.5);
             
             // Simple visual feedback - bike gets brighter during wheelie,
@@ -3879,8 +3891,11 @@ class Vehicle {
             // The world pitches the bike to the road; a leg stays level
             // On a roadworks ramp the bike pitches to its slope; a knocked beacon or cone leaves a wobble (Roadworks.ride)
             // (and a bump against a rider of the crew: Traffic.touch)
-            this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) - (this.roadworksSurface ? this.rampPitch || 0 : 0) : 0;
-            this.group.rotation.z = this.worldPhysics ? this.leanAngle + (this.landRock || 0) + (this.roadworksWobble || 0) + (this.contactWobble || 0) : this.leanAngle;
+            // On a world's drawn ground the bike stands on it (groundPose): pitched to the ground under its two wheels and
+            // its lean measured from the ground's normal across it
+            if (grounded) this.groundPose(0);
+            else this.group.rotation.x = this.worldPhysics ? -Math.atan(this.worldGrade) - (this.roadworksSurface ? this.rampPitch || 0 : 0) : 0;
+            this.group.rotation.z = this.worldPhysics ? this.groundTilt + this.leanAngle + (this.landRock || 0) + (this.roadworksWobble || 0) + (this.contactWobble || 0) : this.leanAngle;
             // The rider's body goes into the turn as that rider does (CHARACTERS bodyLean)
             this.leanRider(1);
 
@@ -4363,8 +4378,78 @@ class Vehicle {
         }
     }
 
-    // The ground the rider's foot comes down on at (x, z): the ride's own ground, or the plane the bike stands on
+    // Whether the bike is drawn on a world's drawn ground (groundPose): a world's ground that reads it, and a route
+    standsOnGround() {
+        const environment = this.environment;
+        return !!(environment && environment.ground && typeof environment.ground.drawnY === 'function' && environment.route && environment.route.unitCount > 0);
+    }
+
+    // The drawn ground at (x, z) (WorldGround.drawnY), located within Vehicle.GROUND.segments of the bike's own segment
+    // so a stack of hairpins reads the bike's own strand. Nothing is allocated
+    drawnGroundY(x, z) {
+        const scratch = this.groundScratch || (this.groundScratch = { pitch: 0, hint: { start: 0, end: 0 }, loc: {} });
+        const reach = Vehicle.GROUND.segments, last = this.environment.route.unitCount - 1;
+        scratch.hint.start = Math.max(0, this.currentRoadSegment - reach);
+        scratch.hint.end = Math.min(last, this.currentRoadSegment + reach);
+        const ground = this.environment.ground;
+        ground.locate(x, z, scratch.hint, scratch.loc);
+        const y = ground.drawnY(scratch.loc);
+        return Number.isFinite(y) ? y : this.position.y;
+    }
+
+    // The drawn bike stands on the world's drawn ground (Vehicle.GROUND; .agent/system/handling.md, "The bike stands on
+    // the ground"): both tyres' contact points on the ground at their own places, the bike pitched to the line between
+    // them, and `extra` (a wheelie) more about the rear axle where that puts it. Sets the group's pitch and height and
+    // returns the ground's tilt across the bike (radians, a positive one higher on its left), which the lean is drawn
+    // over (groundTilt). The contacts are read where the last frame's pitch put them; a frame's change of pitch moves
+    // them by millimetres
+    groundPose(extra = 0) {
+        const group = this.group;
+        const scratch = this.groundScratch || (this.groundScratch = { pitch: 0, hint: { start: 0, end: 0 }, loc: {} });
+        const rear = this.axles.rear, front = this.axles.front;
+        const ry = rear[0], rz = rear[1], fz = front[1];
+        // Each contact point in the bike's axes: under its axle, by its own wheel's radius
+        const yr = ry - rear[2], yf = front[0] - front[2];
+        const was = scratch.pitch, ws = Math.sin(was), wc = Math.cos(was);
+        const hr = rz * wc - yr * ws, hf = fz * wc - yf * ws;
+        const sin = Math.sin(group.rotation.y), cos = Math.cos(group.rotation.y);
+        const x = group.position.x, z = group.position.z;
+        const hm = (hr + hf) / 2, mx = x + sin * hm, mz = z + cos * hm;
+        const steep = Vehicle.GROUND.steepMost;
+        let gr = this.drawnGroundY(x + sin * hr, z + cos * hr), gf = this.drawnGroundY(x + sin * hf, z + cos * hf);
+        const gm = this.drawnGroundY(mx, mz);
+        // A contact that reads the ground steeper than steepMost from the middle is against a face (a wall, a parapet,
+        // the rock beside a tunnel, the lip of a drop), not under the tyre: the line goes on from the middle instead
+        const rearOn = Math.abs(gm - gr) <= steep * (hm - hr), frontOn = Math.abs(gf - gm) <= steep * (hf - hm);
+        const rise = rearOn && frontOn ? (gf - gr) / (hf - hr) : rearOn ? (gm - gr) / (hm - hr) : frontOn ? (gf - gm) / (hf - hm) : 0;
+        if (!rearOn) gr = gm - rise * (hm - hr);
+        if (!frontOn) gf = gm + rise * (hf - hm);
+        const pitch = Math.atan(rise) - Math.atan2(yf - yr, fz - rz);
+        scratch.pitch = pitch;
+        // Across: either side of the middle, square to the heading (+x is the bike's left), by the same rule
+        const w = Vehicle.GROUND.acrossM;
+        const left = this.drawnGroundY(mx + cos * w, mz - sin * w), right = this.drawnGroundY(mx - cos * w, mz + sin * w);
+        const leftOn = Math.abs(left - gm) <= steep * w, rightOn = Math.abs(gm - right) <= steep * w;
+        const across = leftOn && rightOn ? (left - right) / (2 * w) : leftOn ? (left - gm) / w : rightOn ? (gm - right) / w : 0;
+        // The roll that lays the bike's across axis in the ground's plane, pitched as it is
+        this.groundTilt = Math.atan(across * Math.cos(pitch));
+        const s = Math.sin(pitch), k = Math.cos(pitch);
+        let y = gr - (yr * k + rz * s), shift = 0;
+        if (extra) {
+            const a = pitch + extra, sa = Math.sin(a), ka = Math.cos(a);
+            const axleY = y + ry * k + rz * s, axleAlong = rz * k - ry * s;
+            y = axleY - (ry * ka + rz * sa);
+            shift = axleAlong - (rz * ka - ry * sa);
+        }
+        group.rotation.x = -(pitch + extra);
+        group.position.set(x + sin * shift, y + this.landBob, z + cos * shift);
+        return this.groundTilt;
+    }
+
+    // The ground the rider's foot comes down on at (x, z): a world's drawn ground, else the ride's own ground, or the
+    // plane the bike stands on
     footGroundY(x, z) {
+        if (this.worldPhysics && this.standsOnGround()) return this.drawnGroundY(x, z);
         return this.environment && this.environment.ground ? this.surfaceAt(x, z) : this.position.y;
     }
 
@@ -4399,17 +4484,71 @@ class Vehicle {
         const out = Vehicle.LEFT * Vehicle.FOOT_OUT, ahead = rider.position.z + leg.end.z + Vehicle.FOOT_AHEAD;
         const gx = this.group.position.x + cos * out + sin * ahead;
         const gz = this.group.position.z - sin * out + cos * ahead;
-        scratch.ground.set(gx, this.footGroundY(gx, gz), gz);
+        const world = this.worldPhysics && this.standsOnGround();
+        let groundY = this.footGroundY(gx, gz);
+        // On a world, ground read steeper than steepMost from the bike's own is a face beside it (a wall, a parapet):
+        // the foot comes down on the bike's ground plane there instead
+        const base = this.group.position.y - (this.landBob || 0);
+        const face = world && Math.abs(groundY - base) > Vehicle.GROUND.steepMost * Math.hypot(out, ahead);
+        if (face) groundY = base + Math.tan(this.groundTilt || 0) * out - Math.tan(this.group.rotation.x) * ahead;
+        scratch.ground.set(gx, groundY, gz);
         rider.worldToLocal(scratch.ground);
-        // World up and the ground's own level, in the rider's axes: the sole sits flat on the ground
+        // World up and the ground's own level, in the rider's axes: the sole sits flat on the ground. On a world's drawn
+        // ground the level is the ground's own at the foot (Vehicle.GROUND footM ahead of it and beside it), and the
+        // ankle stands off the ground along its normal
         rider.getWorldQuaternion(scratch.q).invert();
-        scratch.up.set(0, 1, 0).applyQuaternion(scratch.q);
-        scratch.euler.set(this.group.rotation.x, this.group.rotation.y, 0);
-        scratch.level.setFromEuler(scratch.euler).premultiply(scratch.q);
+        if (face) {
+            scratch.euler.set(this.group.rotation.x, this.group.rotation.y, this.groundTilt || 0);
+        } else if (world) {
+            const m = Vehicle.GROUND.footM;
+            const along = Math.atan((this.footGroundY(gx + sin * m, gz + cos * m) - groundY) / m);
+            const across = (this.footGroundY(gx + cos * m, gz - sin * m) - groundY) / m;
+            scratch.euler.set(-along, this.group.rotation.y, Math.atan(across * Math.cos(along)));
+        } else {
+            scratch.euler.set(this.group.rotation.x, this.group.rotation.y, 0);
+        }
+        scratch.level.setFromEuler(scratch.euler);
+        scratch.up.set(0, 1, 0);
+        if (world) scratch.up.applyQuaternion(scratch.level);
+        scratch.up.applyQuaternion(scratch.q);
+        scratch.level.premultiply(scratch.q);
         const ankle = scratch.ground.addScaledVector(scratch.up, leg.drop);
         ankle.lerpVectors(leg.end, ankle, ease);
-        leg.place(ankle.clone(), scratch.boot.identity().slerp(scratch.level, ease));
+        const turn = scratch.boot.identity().slerp(scratch.level, ease);
+        const at = scratch.ankle || (scratch.ankle = new THREE.Vector3());
+        leg.place(at.copy(ankle), turn);
+        // No corner of the boot or its sole goes under the ground's plane at the foot: the ankle rises along the
+        // normal by as much as the deepest one is under it (the boot's rest pose is not square to the sole)
+        if (world && leg.ends) {
+            const lift = this.footUnder(leg.ends, gx, groundY, gz, scratch);
+            if (lift > 0) leg.place(at.addScaledVector(scratch.up, lift), turn);
+        }
         this.footPlaced = true;
+    }
+
+    // How far the deepest corner of `objects` (the boot and its sole, children of the rider, as placed) is under the plane
+    // through (x, y, z) square to the foot's ground normal (scratch.level's up, in the world): metres along the normal,
+    // 0 or less where none is under. Nothing is allocated
+    footUnder(objects, x, y, z, scratch) {
+        const rider = this.rider;
+        const n = scratch.normal || (scratch.normal = new THREE.Vector3());
+        const corner = scratch.corner || (scratch.corner = new THREE.Vector3());
+        const m = scratch.matrix || (scratch.matrix = new THREE.Matrix4());
+        n.set(0, 1, 0).applyQuaternion(scratch.level).applyQuaternion(rider.getWorldQuaternion(scratch.q));
+        let deepest = -Infinity;
+        for (const object of objects) {
+            const geometry = object.geometry;
+            if (!geometry) continue;
+            if (!geometry.boundingBox) geometry.computeBoundingBox();
+            const box = geometry.boundingBox;
+            object.updateMatrix();
+            m.multiplyMatrices(rider.matrixWorld, object.matrix);
+            for (let k = 0; k < 8; k++) {
+                corner.set(k & 1 ? box.max.x : box.min.x, k & 2 ? box.max.y : box.min.y, k & 4 ? box.max.z : box.min.z).applyMatrix4(m);
+                deepest = Math.max(deepest, (x - corner.x) * n.x + (y - corner.y) * n.y + (z - corner.z) * n.z);
+            }
+        }
+        return deepest;
     }
 
     // Called once per rendered frame with the leftover fixed-timestep
@@ -5625,6 +5764,12 @@ Vehicle.FOOT_LEAN = 6.5 * Math.PI / 180;
 Vehicle.FOOT_OUT = 0.34;
 Vehicle.FOOT_AHEAD = 0.08;
 Vehicle.FOOT_S = 0.4;
+// The bike on a world's drawn ground (Vehicle.groundPose): the ground across the bike is read `acrossM` (m) either side
+// of the middle between its wheels, and every place is located within `segments` route segments of the bike's own; a
+// foot put down lies on the ground's plane read `footM` (m) ahead of it and beside it. Ground read steeper than
+// `steepMost` (rise over run) from the bike's middle is a face beside it, not ground under it: steeper than the steepest
+// land a bike stands on (WorldPhysics offroad.top landSteepSlope, 1.5)
+Vehicle.GROUND = Object.freeze({ acrossM: 0.4, segments: 10, footM: 0.15, steepMost: 1.6 });
 
 // The steering axis of a bike in its own axes: the line of its fork legs, in the bike's centre plane, pointing up. A
 // leg turned by its own rotation (the procedural forks, stood at their rake) gives it directly. A modelled leg is
@@ -5747,6 +5892,8 @@ Vehicle.rigLimb = ({ rider, root, mid, end, pieces, carried }) => {
     const bent = new THREE.Vector3(), span = new THREE.Vector3(), unit = new THREE.Vector3();
     return {
         root: rest.root, end: rest.end, drop, reach: a + b,
+        // What the end carries (the glove; the boot and its sole)
+        ends: riding.filter(item => item.at === 'end').map(item => item.object),
         // Where the end and the middle joint are drawn now
         at: () => now.end || rest.end,
         mid: () => now.mid || rest.mid,

@@ -217,19 +217,27 @@ class WorldGround extends Ground {
         return this.heightAt(loc, exact);
     }
 
-    heightAt(loc, exact = false) {
+    // `lift` is added where the answer is a road's ribbon or its verge (a side road's too): RoadMesh.LIFT_M gives the
+    // surface as it is drawn (WorldGround.drawnY), 0 the height the physics rides
+    heightAt(loc, exact = false, lift = 0) {
         const half = loc.width !== undefined ? loc.width / 2 : this.halfRoad(loc);
         const reach = Math.abs(loc.lateral);
         const roofed = loc.flags ? loc.flags.tunnel || loc.flags.gallery : false;
-        if (reach <= half || (roofed && reach <= half + WorldGround.BENCH_M + 1)) return loc.roadY;
+        if (reach <= half || (roofed && reach <= half + WorldGround.BENCH_M + 1)) return loc.roadY + lift;
         const at = this.position(loc);
         const side = this.sideRoadY(at.x, at.z);
-        if (side !== null) return side;
+        if (side !== null) return side + lift;
         const land = this.landY(at.x, at.z, loc.roadY);
-        if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach));
+        if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach, lift));
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
         // parapet stands on the last PARAPET_W_M of the verge)
-        return !(loc.flags && loc.flags.bridge) && reach < half + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M ? loc.roadY : land;
+        return !(loc.flags && loc.flags.bridge) && reach < half + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M ? loc.roadY + lift : land;
+    }
+
+    // The ground at a located point as it is drawn: the ribbon and the verge RoadMesh.LIFT_M over the road's height,
+    // the fill and the land on their triangles (what a wheel or a foot stands on: Vehicle.groundPose)
+    drawnY(loc) {
+        return this.heightAt(loc, false, RoadMesh.LIFT_M);
     }
 
     // The fill RoadMesh draws beside the road (edgeWorks' apron): the verge at the road's height, then a slope at the
@@ -237,9 +245,9 @@ class WorldGround extends Ground {
     // It runs out only as far as it takes to fall from the edge to the land at the edge (as the apron is drawn); where
     // that is further than WorldEnvironment.APRON_RUN_M, the apron's foot stands on the land there and its slope is
     // steeper than the batter (WorldEnvironment.edgeFoot)
-    earthworkY(loc, half, reach) {
+    earthworkY(loc, half, reach, lift = 0) {
         const edge = half + this.vergeAt(loc.index, loc.lateral, loc.t);
-        if (reach <= edge) return loc.roadY;
+        if (reach <= edge) return loc.roadY + lift;
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         const side = Math.sign(loc.lateral || 1);
         const at = WorldGround.pointAt(point, side * edge, this.scratchEdge || (this.scratchEdge = {}));

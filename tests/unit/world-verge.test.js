@@ -229,13 +229,16 @@ describe('real obstacles still crash', () => {
 });
 
 describe('the rough land moves only the drawn bike', () => {
-    test('on the grass the mesh bobs around the physics height, within landBumpM, and rocks within landWobbleDeg', () => {
+    // The drawn bike stands on the drawn ground (Vehicle.groundPose), so the bob is its lift off that ground (landBob):
+    // up only, as a bob down put the tyres into the land
+    test('on the grass the mesh bobs up off the drawn ground, within landBumpM, and rocks within landWobbleDeg', () => {
         const vehicle = place(game.Vehicle, WORLDS.grass(), { speed: 11, angle: 6 });
         let bobbed = 0;
         for (let tick = 0; tick < 300; tick++) {
             vehicle.update(DT, 0, 0, 0);
-            const bob = vehicle.group.position.y - vehicle.position.y;
-            expect(Math.abs(bob)).toBeLessThanOrEqual(WorldPhysics.landBumpM + 1e-9);
+            const bob = vehicle.landBob;
+            expect(bob).toBeGreaterThanOrEqual(0);
+            expect(bob).toBeLessThanOrEqual(WorldPhysics.landBumpM + 1e-9);
             expect(Math.abs(vehicle.landRock)).toBeLessThanOrEqual(WorldPhysics.landWobbleDeg * Math.PI / 180 + 1e-9);
             if (vehicle.runoff) bobbed = Math.max(bobbed, Math.abs(bob));
             else { expect(bob).toBe(0); expect(vehicle.landRock).toBe(0); }
