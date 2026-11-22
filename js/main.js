@@ -1432,7 +1432,7 @@ class Game {
             ambientIntensity: config.ambientIntensity,
             hemisphereTop: config.hemisphereTop,
             hemisphereBottom: config.hemisphereBottom,
-            hemisphereIntensity: config.hemisphereIntensity * (overcast ? 1.35 : hazy ? 1.15 : 1),
+            hemisphereIntensity: config.hemisphereIntensity * (overcast ? (world ? Game.WORLD_OVERCAST_SKY : 1.35) : hazy ? 1.15 : 1),
             sunColor: config.sunColor,
             sunIntensity: config.sunIntensity * direct,
             distantIntensity: config.sunIntensity * 0.25 * direct,
@@ -4468,9 +4468,11 @@ class Game {
 }
 
 // The headlight a world rider rides with in rain or snow (the share of the night's beam), and the share of the sun
-// (and of the fill light) that comes through a world's rain cloud
+// (and of the fill light) that comes through a world's rain cloud, and the sky light under it: lifted so the rain
+// darkens a world about a third less than it did (the owner found it too dark), still darker and greyer than dry
 Game.WORLD_OVERCAST_HEADLIGHT = 0.5;
-Game.WORLD_OVERCAST_SUN = 0.1;
+Game.WORLD_OVERCAST_SUN = 0.2;
+Game.WORLD_OVERCAST_SKY = 2.2;
 
 // Debug mode's N puts the bike this far before the next station
 Game.DEBUG_SKIP_BEFORE_M = 40;

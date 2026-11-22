@@ -3462,8 +3462,10 @@ const WORLD = {
         const tag = option('tag') || 'ride';
         const length = await page.evaluate(() => game.environment.route.length);
         const files = [];
-        for (const f of [0.05, 0.25, 0.45, 0.65, 0.85]) {
-            const s = Math.round(f * length);
+        // --at names the stations to shoot; --luma 1 hides the HUD and gives each frame's mean luminance (0 to 1)
+        const stations = option('at') ? option('at').split(',').map(Number) : [0.05, 0.25, 0.45, 0.65, 0.85].map(f => Math.round(f * length));
+        if (option('luma')) await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        for (const s of stations) {
             const at = await page.evaluate(async (placeSource, pilotSource, s) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
@@ -3478,8 +3480,22 @@ const WORLD = {
                 return { s: Math.round(v.routeS), crashed: v.crashed };
             }, placeAt.toString(), pilotWorld.toString(), s);
             const file = join(out, `${tag}-s${s}.png`);
-            await page.screenshot({ path: file });
-            files.push({ file, ...at });
+            const png = await page.screenshot({ encoding: 'base64' });
+            writeFileSync(file, Buffer.from(png, 'base64'));
+            const luma = option('luma') ? await page.evaluate(async data => {
+                const image = new Image();
+                image.src = `data:image/png;base64,${data}`;
+                await image.decode();
+                const canvas = document.createElement('canvas');
+                canvas.width = image.width; canvas.height = image.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, 0, 0);
+                const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                let sum = 0;
+                for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+                return Math.round(sum / (d.length / 4) / 255 * 1000) / 1000;
+            }, png) : undefined;
+            files.push({ file, ...at, luma });
         }
         return { files };
     },
