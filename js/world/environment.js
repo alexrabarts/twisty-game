@@ -1168,10 +1168,15 @@ class WorldEnvironment {
             // The apron runs out at the batter until it meets the land drawn near (8 m triangles, cut to the walls),
             // never on over a valley beyond, and never into another road's band (the other leg of a hairpin, a side
             // road): it stops at the band's edge
-            let run = 0;
+            let run = 0, meets = null;
             for (let o = 0.5; o <= WorldEnvironment.APRON_RUN_M; o += 0.5) {
                 const px = x + ox * o, pz = z + oz * o;
-                if (inBand(px, pz)) break;
+                if (inBand(px, pz)) {
+                    // (in a mouth, a side road drawn there under the edge: the slope ends on its surface, under its ribbon)
+                    const side = this.ground.sideRoadY(px, pz);
+                    if (side !== null && side < y && side > y - WorldEnvironment.SIDE_PASS_M && atMouth(x, y, z, ox, oz)) { meets = side; run = o; }
+                    break;
+                }
                 run = o;
                 const land = landDrawn(px, pz);
                 if (land === null || y - RoadMesh.APRON_UNDER_M - o * RoadMesh.BATTER <= land) break;
@@ -1183,10 +1188,14 @@ class WorldEnvironment {
             let footY = y - RoadMesh.APRON_UNDER_M - run * RoadMesh.BATTER - 0.2;
             const footLand = landDrawn(x + ox * run, z + oz * run);
             if (run > 0 && footLand !== null && footY > footLand + WorldEnvironment.MEET_M) footY = footLand - 0.2;
+            // Where it meets a side road beside the ride (a shallow junction, the side road a little under the ride's
+            // verge) its foot stands under that road's surface, not on the land under the gap: dropped to the land
+            // there, the slope stood as a trench between the two roads with its dark side to the rider (km 2.3)
+            if (meets !== null) footY = Math.max(footY, meets - RoadMesh.APRON_UNDER_M);
             // Without the tile under the foot yet, the apron is built again when it comes
             if (footLand === null && missing) missing.add(`${Math.floor((x + ox * run) / m)},${Math.floor((z + oz * run) / m)}`);
             // Coloured as the land at its top and at its foot (RoadMesh.edgeWorks blends them), not one sample
-            return { kind: 'apron', y: footY, run, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
+            return { kind: 'apron', y: footY, run, meets: meets !== null, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
         };
         // How deep one of the ride's walls must stand to reach the land in front of it as it is drawn (cut and
         // levelled to the walls): asked when the wall is drawn, after every wall's line is known. A side road's wall
@@ -1199,6 +1208,15 @@ class WorldEnvironment {
         // The land as it is drawn at (x, z), for a slope's foot between two rows (RoadMesh.edgeWorks)
         foot.land = landDrawn;
         if (aprons) foot.mouth = atMouth;
+        // Whether a side road's edge point stands in the ride's carriageway or its verge, with its coping over the
+        // ride's surface there: the side road's walls keep out of the ride's road (RoadMesh.atMouth). Where a side road
+        // leaves beside the ride, its wall stood in the ride's verge with its coping 0.28 to 0.38 m over it
+        // (the ride's height there, or null)
+        if (!aprons) foot.inRide = (x, y, z) => {
+            let ride = null;
+            this.carriageways.each(x, z, RoadSurface.VERGE_M, r => { if (r.road === -1 && r.depth >= -RoadSurface.VERGE_M && y + RoadMesh.COPING_UP_M > r.y + Carriageways.LOW_M && y < r.y + Carriageways.HEADROOM_M && (ride === null || r.y > ride)) ride = r.y; });
+            return ride;
+        };
         // The far edge of a junction's paving from a point (x, y, z) of the ride's carriageway edge, out along (ox, oz):
         // the last place within SIDE_GORE_REACH_M that lies on a side road at about the ride's height (as the side
         // road is drawn: WorldGround.sideRoadY), found without a gap wider than SIDE_GORE_M, or null with none. The

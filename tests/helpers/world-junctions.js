@@ -23,11 +23,17 @@
 //     triangles): a place on the side road beside the ride where the ride's wall band makes a wall, so a rider who turns
 //     off is stopped at the mouth
 //
-// junctionReport(store) returns {junctions, roads, steps, holes, sunk, decks, open}: each a list, worst first, of
+//   - cliffs: the ground a road lays in the mouth (a slope, the ground under a verge) standing as a face: a triangle
+//     steeper than `cliffSlope` that falls more than `openM` (a slope's foot dropped to the land under the gap between
+//     the ride and a side road beside it a little under the ride: a dark face between the two roads, seen from the ride)
+//
+// junctionReport(store) returns {junctions, roads, steps, holes, sunk, decks, open, walls, blocked, cliffs}: each a list, worst first, of
 // {s, junction, edge, ...} (s the metres of ride at the junction).
-export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0, walls: 0, blocked: 0 };
+// (cliffs: at d2c4527 eight on the Tremola slice, the km 2.3 mouth worst, a slope's foot 3 m down in the gap between
+// the ride and the side road; three stand, at km 5.2, 5.3 and 6.1, 0.66 to 1.01 m, not of that kind; none on the fixture)
+export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0, walls: 0, blocked: 0, cliffs: 3 };
 
-export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40, stepM = 0.5, stepTolM = 0.2, mouthM = 12, openM = 0.6, wallUpM = 0.15 } = {}) {
+export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40, stepM = 0.5, stepTolM = 0.2, mouthM = 12, openM = 0.6, wallUpM = 0.15, cliffSlope = 3 } = {}) {
     const { THREE } = game;
     store.roads = store.roads || new Map();
     store.grids = store.grids || new Map();
@@ -91,7 +97,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
         return faces;
     };
 
-    const land = [], aprons = [], ribbons = [], built = [], upright = [], stone = [];
+    const land = [], aprons = [], ribbons = [], built = [], upright = [], stone = [], laid = [], rideRibbons = [], sideRibbons = [];
     for (const tile of env.tileMeshes.values()) {
         const mesh = tile.mesh || tile;
         if (!mesh || !mesh.isMesh || !/lod0$/.test(mesh.name)) continue;
@@ -106,13 +112,18 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                 const owners = o.geometry.userData.owners;
                 for (const g of o.geometry.groups) {
                     if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(o, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
+                    if (g.materialIndex === 0) laid.push({ mesh: o, start: g.start, count: g.count, ride: rideGroups.has(group) });
                     // The concrete (decks, soffits, piers, tubes and their parapets) of the side roads, by its road
                     else if (g.materialIndex === 1) built.push({ mesh: o, start: g.start, count: g.count, owners });
                     if (g.materialIndex === 1 || g.materialIndex === 2) upright.push(facesOf(o, g.start, g.count, `faces${g.materialIndex}`));
                     // (the ride's own stone, its walls and their copings: a top in plan over a side road shuts it)
                     if (g.materialIndex === 2 && rideGroups.has(group)) stone.push(gridOf(o, g.start, g.count, 4, 'stone'));
                 }
-            } else if (o.name === 'road-ribbon' || o.name === 'road-side') ribbons.push(gridOf(o, 0, whole, 4, 'ribbon'));
+            } else if (o.name === 'road-ribbon' || o.name === 'road-side') {
+                const grid = gridOf(o, 0, whole, 4, 'ribbon');
+                ribbons.push(grid);
+                (rideGroups.has(group) ? rideRibbons : sideRibbons).push(grid);
+            }
         });
     }
     const all = (grids, x, z) => { const out = []; for (const g of grids) g.ys(x, z, out); return out; };
@@ -140,7 +151,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
             if (Math.hypot(rows[0].x - at.x, rows[0].z - at.z) > nearM) continue;
             const width = env.graph.stubWidth(edgeId);
             const chain = new Set(rows.map(r => r.edgeId));
-            const road = { junction: junction.id, name: junction.name, edge: edgeId, s: Math.round(pass.sIn), width: r2(width), lengthM: r2(rows[rows.length - 1].run), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], samples: 0 };
+            const road = { junction: junction.id, name: junction.name, edge: edgeId, s: Math.round(pass.sIn), width: r2(width), lengthM: r2(rows[rows.length - 1].run), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], cliffs: [], samples: 0 };
             // The place `d` metres along the side road and `lat` metres right of its centre line
             let k = 0;
             const place = (d, lat) => {
@@ -230,6 +241,37 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     road.open.push({ d: r2(d), side, dropM: r2(y - g), x: r2(out.x), z: r2(out.z) });
                 }
             }
+            // The ground the roads lay in the mouth that stands as a face: a triangle steeper than `cliffSlope` that
+            // falls more than `openM` (a slope whose foot was dropped to the land under the gap between the ride and a
+            // side road a little under it: a dark face between the two roads, seen from the ride)
+            for (const part of laid) {
+                const pos = part.mesh.geometry.attributes.position, index = part.mesh.geometry.index;
+                for (let i = part.start; i + 2 < part.start + part.count; i += 3) {
+                    const t = [];
+                    for (let c = 0; c < 3; c++) { v.fromBufferAttribute(pos, index ? index.getX(i + c) : i + c).applyMatrix4(part.mesh.matrixWorld); t.push([v.x, v.y, v.z]); }
+                    const cx = (t[0][0] + t[1][0] + t[2][0]) / 3, cz = (t[0][2] + t[1][2] + t[2][2]) / 3;
+                    if (Math.hypot(cx - rows[0].x, cz - rows[0].z) > edgeD + mouthM + width) continue;
+                    const span = Math.max(t[0][1], t[1][1], t[2][1]) - Math.min(t[0][1], t[1][1], t[2][1]);
+                    if (span <= openM) continue;
+                    const ux = t[1][0] - t[0][0], uy = t[1][1] - t[0][1], uz = t[1][2] - t[0][2], wx = t[2][0] - t[0][0], wy = t[2][1] - t[0][1], wz = t[2][2] - t[0][2];
+                    const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+                    if (Math.hypot(nx, nz) <= cliffSlope * Math.abs(ny)) continue;
+                    // (seen beside the other road, not under it: a corner of it lies past every ribbon, and the other
+                    // road's surface, the side road's beside the ride's ground or the ride's beside a side road's,
+                    // within `openM` of that corner stands more than `openM` over the face's foot)
+                    const lowY = Math.min(t[0][1], t[1][1], t[2][1]);
+                    const bare = t.filter(q => { const a = [q[0] + (cx - q[0]) * 0.1, q[2] + (cz - q[2]) * 0.1]; return all(ribbons, a[0], a[1]).every(h => h < q[1] - 0.05); });
+                    if (!bare.length) continue;
+                    let over = -Infinity;
+                    const other = part.ride ? sideRibbons : rideRibbons;
+                    for (const q of bare) for (const [dx, dz] of [[openM, 0], [-openM, 0], [0, openM], [0, -openM]]) for (const h of all(other, q[0] + dx, q[2] + dz)) if (h > over && h - q[1] < 3) over = h;
+                    if (over - lowY <= openM) continue;
+                    let best = Infinity, bestD = 0;
+                    for (let d = 0; d <= Math.min(reachM, road.lengthM); d += 1) { const p = place(d, 0); const far = Math.hypot(p.x - cx, p.z - cz); if (far < best) { best = far; bestD = d; } }
+                    if (bestD > edgeD + mouthM || best > width / 2 + 3) continue;
+                    road.cliffs.push({ d: bestD, dropM: r2(span), x: r2(cx), z: r2(cz) });
+                }
+            }
             env.route.project(rows[0].x, rows[0].z, null, near);
             store.roads.set(id, road);
             fresh++;
@@ -240,7 +282,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
 
 export function junctionReport(store) {
     const roads = [...(store.roads || new Map()).values()];
-    const out = { junctions: new Set(roads.map(r => r.junction)).size, roads: roads.length, samples: roads.reduce((n, r) => n + r.samples, 0), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [] };
+    const out = { junctions: new Set(roads.map(r => r.junction)).size, roads: roads.length, samples: roads.reduce((n, r) => n + r.samples, 0), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], cliffs: [] };
     for (const road of roads) {
         const where = { s: road.s, junction: road.junction, edge: road.edge };
         if (road.steps.length) { const worst = road.steps.reduce((a, b) => (Math.abs(b.stepM) > Math.abs(a.stepM) ? b : a)); out.steps.push({ ...where, places: road.steps.length, worstM: worst.stepM, d: worst.d, x: worst.x, z: worst.z }); }
@@ -249,9 +291,10 @@ export function junctionReport(store) {
         if (road.decks.length) out.decks.push({ ...where, triangles: road.decks.length, d: Math.min(...road.decks.map(p => p.d)), x: road.decks[0].x, z: road.decks[0].z });
         if (road.open.length) { const worst = road.open.reduce((a, b) => (b.dropM > a.dropM ? b : a)); out.open.push({ ...where, places: road.open.length, worstM: worst.dropM, d: worst.d, x: worst.x, z: worst.z }); }
         if (road.walls.length) { const worst = road.walls.reduce((a, b) => (b.upM > a.upM ? b : a)); out.walls.push({ ...where, places: road.walls.length, worstM: worst.upM, d: worst.d, x: worst.x, z: worst.z }); }
+        if (road.cliffs.length) { const worst = road.cliffs.reduce((a, b) => (b.dropM > a.dropM ? b : a)); out.cliffs.push({ ...where, triangles: road.cliffs.length, worstM: worst.dropM, d: worst.d, x: worst.x, z: worst.z }); }
         if (road.blocked.length) out.blocked.push({ ...where, places: road.blocked.length, worstM: Math.min(...road.blocked.map(b => b.d)), d: road.blocked[0].d, rideS: road.blocked[0].s, x: road.blocked[0].x, z: road.blocked[0].z });
     }
-    for (const kind of ['steps', 'holes', 'sunk', 'open', 'walls', 'blocked']) out[kind].sort((a, b) => Math.abs(b.worstM) - Math.abs(a.worstM));
+    for (const kind of ['steps', 'holes', 'sunk', 'open', 'walls', 'blocked', 'cliffs']) out[kind].sort((a, b) => Math.abs(b.worstM) - Math.abs(a.worstM));
     out.decks.sort((a, b) => b.triangles - a.triangles);
     return out;
 }

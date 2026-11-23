@@ -29,7 +29,9 @@
 //     may), and `joined` the ends another road's wall goes on from. `standsM` is how far it stands over the ground in
 //     front of it, `upM` over its road
 //   - low: a top of stone (a coping, a parapet's top) whose middle stands less than `minUpM` (with 5 cm for the
-//     ribbon's facets) over the road under it: a wall that reads as a strip level with the road
+//     ribbon's facets) over the road under it: a wall that reads as a strip level with the road. Each top is read
+//     when first drawn and again in every window over the ride's ribbon wherever a section of it is at LOD0: a side
+//     road's coping first read while the ride beside it was far stood over the far ribbon only
 //   - fins: an upright face of stone, 0.7 m or longer, whose top falls more than 0.4 a metre faster than its road
 //     does: a slanted sheet standing out from a wall's end, which no mason builds
 //   - unfaced: an upright face of stone that is no parapet's and is not laid and lit as its wall's face (no
@@ -271,15 +273,17 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         return Math.abs(a) / 2;
     };
     store.low = store.low || new Map();
+    store.middles = store.middles || new Map();
     store.topCorners = store.topCorners || new Map();
     store.shortTops = store.shortTops || new Map();
     store.joints = store.joints || new Map();
     for (const part of stone) {
         const id = `${part.mesh.geometry.uuid}:${part.start}`;
         if (store.folds.has(id)) continue;
-        const record = [], low = [];
+        const record = [], low = [], middles = [];
         store.folds.set(id, record);
         store.low.set(id, low);
+        store.middles.set(id, middles);
         part.mesh.updateMatrixWorld(true);
         const pos = part.mesh.geometry.attributes.position, owners = part.mesh.geometry.userData.owners;
         const tops = [];
@@ -331,8 +335,27 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             // the ribbon under it; a road far over or under it is another road's)
             // (both read at its middle: a top along a road's grade rises along its length as the road does)
             const top = (a[1] + b[1] + c[1] + d[1]) / 4, road = topOf(ribbons, mx, mz, top + 0.1);
+            middles.push({ mx, mz, top, owner: t.owner });
             if (road !== null && top - road > -0.1 && top - road < rules.minUpM - 0.05) low.push({ s: rideS(mx, mz), owner: t.owner, x: r2(mx), z: r2(mz), y: r2(top), upM: r2(top - road) });
         });
+    }
+    // Every top drawn now, read again over the ride's ribbon wherever a section of it is drawn at LOD0: a side road's
+    // coping first read while the ride's section beside it was far stood over the far ribbon only, and over the near
+    // one (its verge across a mouth) it stood 0.28 m
+    const near = [];
+    for (const [index, group] of env.roadMeshes) {
+        const held = env.streamer && env.streamer.roads.get(index);
+        if (!held || held.lod !== 0) continue;
+        group.traverse(o => { if (o.isMesh && o.name === 'road-ribbon') near.push(gridOf(o, 0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count, 4, 'ribbon')); });
+    }
+    if (near.length) {
+        for (const part of stone) {
+            const id = `${part.mesh.geometry.uuid}:${part.start}`, low = store.low.get(id);
+            for (const m of store.middles.get(id) || []) {
+                const road = topOf(near, m.mx, m.mz, m.top + 0.1);
+                if (road !== null && m.top - road > -0.1 && m.top - road < rules.minUpM - 0.05) low.push({ s: rideS(m.mx, m.mz), owner: m.owner, x: r2(m.mx), z: r2(m.mz), y: r2(m.top), upM: r2(m.top - road) });
+            }
+        }
     }
 
     // How thick a piece of stone is at its top: from three places along its top, out to either side, what is drawn
@@ -602,8 +625,10 @@ export function spikeReport(store, besideM = 10, { jogM = 2, jogDeg = 35, jogPie
     // (one place is drawn by one geometry at a time: a section built again leaves its old geometry's list behind)
     const placed = new Set();
     for (const list of (store.folds || new Map()).values()) for (const o of list) { const id = `${o.x},${o.z}`; if (!placed.has(id)) { placed.add(id); out.folds.push(o); } }
-    const lowAt = new Set();
-    for (const list of (store.low || new Map()).values()) for (const o of list) { const id = `${o.x},${o.z}`; if (!lowAt.has(id)) { lowAt.add(id); out.low.push(o); } }
+    // (a top read again over a near ribbon counts once, at the least it stood over a road)
+    const lowAt = new Map();
+    for (const list of (store.low || new Map()).values()) for (const o of list) { const id = `${o.x},${o.z}`, held = lowAt.get(id); if (!held || o.upM < held.upM) lowAt.set(id, o); }
+    out.low.push(...lowAt.values());
     out.low.sort((a, b) => a.upM - b.upM);
     // (one gap is one flap, beside however many wall ends it lies)
     const gaps = new Set();

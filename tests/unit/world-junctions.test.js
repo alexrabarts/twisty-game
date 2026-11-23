@@ -79,6 +79,10 @@ describe('the Tremola slice: every side road meets the ride', () => {
         if (found.open.length > JUNCTION_LIMITS.open) throw new Error(`${found.open.length} side roads whose edge hangs open in their mouth:\n${list(found.open)}`);
     });
 
+    test('no ground a road lays stands as a face beside the other road in a mouth', () => {
+        if (found.cliffs.length > JUNCTION_LIMITS.cliffs) throw new Error(`${found.cliffs.length} side roads with a face of laid ground beside the other road in their mouth:\n${list(found.cliffs)}`);
+    });
+
     test('no wall of the ride stands across a side road\'s mouth, drawn or in the physics', () => {
         if (found.walls.length > JUNCTION_LIMITS.walls) throw new Error(`${found.walls.length} side roads with the ride's wall drawn across their mouth:\n${list(found.walls)}`);
         if (found.blocked.length > JUNCTION_LIMITS.blocked) throw new Error(`${found.blocked.length} side roads whose mouth the physics shuts with the ride's wall:\n${list(found.blocked)}`);
@@ -110,5 +114,6 @@ describe('the synthetic fixture world: no wall of the ride stands across a side 
         expect(found.roads).toBeGreaterThan(0);
         expect(found.walls).toEqual([]);
         expect(found.blocked).toEqual([]);
+        expect(found.cliffs).toEqual([]);
     });
 });

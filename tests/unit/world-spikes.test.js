@@ -28,6 +28,11 @@
 //      at a joint of two roads' walls: a wedge of coping toward the road), or a piece of a wall's top shorter than the
 //      coping is deep (0.8 m) that shares no corner with any other top
 //
+// At d2c4527 `low` read each top once, when first drawn, and three side roads' copings at a mouth (km 1.8, 2.3, 4.5)
+// were first drawn while the ride's section beside them was far: over its LOD0 ribbon they stood 0.28 to 0.38 m over
+// the ride's verge. The check now reads every top again over the ride's ribbon at LOD0, and a side road's wall starts
+// where its edge leaves the ride's verge (RoadMesh.atMouth, `foot.inRide`), at the ride's height
+//
 // At 91af7da the junction at km 1.3 had one of each: the ride's wall ran on into the side road's mouth and the piece
 // that joins it to the side road's wall stood across between the two walls, 3.4 m long at 44 degrees, its coping's
 // inner corner 0.36 m out of the ride's (the owner's picture: "glitch in the wall at the junction"). The ride's wall
