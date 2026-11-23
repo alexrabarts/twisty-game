@@ -102,7 +102,7 @@ const GROUP = {
     // takes its bends, gathers speed and plans its braking for them at the square of it (LANE_DRIVE.bike), so the speed
     // it rides every bend at is this share too. Its hard braking (LANE_DRIVE.bike.brake, which the following rule reads
     // for the vehicle ahead) is not raised. Its `least` and `most` are shares of this pace
-    pace: 1.15,
+    pace: 1.3,
     // The row a character without `group` rides by
     rider: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: null, passPerS: 0.2, stop: null },
     // The line: a rider keeps its time gap (at its own speed, and no less than gapMinM) to whoever is next ahead of it on

@@ -135,8 +135,10 @@ describe('a rider too far ahead of the player', () => {
                     if (r.ride.state !== 'ride' && r.ride.state !== 'out') bad.push({ t, name: r.riderName, state: r.ride.state, why: r.ride.why });
                     if (!r.ride.easing) { r.easedS = 0; continue; }
                     easing++;
+                    // It has slowed to the player's pace once it could at a firm 5 m/s^2 from the speed it started to ease at
+                    if (!r.easedS) r.settleS = Math.max(3, (r.currentSpeed - proxy.currentSpeed) / 5);
                     r.easedS = (r.easedS || 0) + 1 / 60;
-                    if (r.easedS > 3 && r.currentSpeed > proxy.currentSpeed + 0.3) bad.push({ t, name: r.riderName, speed: r.currentSpeed, player: proxy.currentSpeed });
+                    if (r.easedS > r.settleS && r.currentSpeed > proxy.currentSpeed + 0.3) bad.push({ t, name: r.riderName, speed: r.currentSpeed, player: proxy.currentSpeed });
                 }
             }, 300);
         } finally { env.places.next = next; }
