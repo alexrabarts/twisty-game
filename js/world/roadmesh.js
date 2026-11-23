@@ -1102,6 +1102,34 @@ class RoadMesh {
                 for (let k = from; k <= to; k++) seg[k] = false;
                 for (let k = from; k <= to + 1; k++) if (!(seg[k - 1] || seg[k])) row[k] = false;
             }
+            // A side road's wall is left out where its edge faces the ride's wall across a cleft (`foot.facesRide`,
+            // WorldEnvironment.cleftAt): the ride's wall is the one face between the two roads, and the side road's
+            // surface runs on to its foot over the ground that closes the cleft. (Two walls there, the side road's with
+            // its parapet, read as a trench.) After the runs are judged, so what is left of a run stands as it did
+            if (foot.facesRide) {
+                const faces = sides.map(side => { const o = RoadMesh.outward(side)[key], p = side[key]; return !(side.bits & 7) && !!foot.facesRide(p[0], p[1], p[2], o[0], o[1]); });
+                const cut = [];
+                // (and every 2 m between them: a side road's rows lie up to 16 m apart, and the cleft can end between two)
+                const facesAll = k => {
+                    const a = sides[k][key], b = sides[k + 1][key], oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
+                    const parts = Math.ceil(Math.hypot(b[0] - a[0], b[2] - a[2]) / 2);
+                    for (let j = 1; j < parts; j++) {
+                        const t = j / parts, ox = oa[0] + (ob[0] - oa[0]) * t, oz = oa[1] + (ob[1] - oa[1]) * t, len = Math.hypot(ox, oz) || 1;
+                        if (!foot.facesRide(a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, ox / len, oz / len)) return false;
+                    }
+                    return true;
+                };
+                for (let k = 0; k + 1 < n; k++) if (seg[k] && faces[k] && faces[k + 1] && facesAll(k)) { seg[k] = false; cut[k] = true; }
+                // (and a piece of such a run left shorter than WALL_RUN_M is none, as any run that short: two stubs of
+                // wall either side of the ride's, where the roads meet and part)
+                for (const [from, to] of runsOf(seg)) {
+                    if (!(cut[from - 1] || cut[to + 1])) continue;
+                    let length = 0;
+                    for (let k = from; k <= to; k++) length += step(k);
+                    if (length < RoadMesh.WALL_RUN_M) for (let k = from; k <= to; k++) seg[k] = false;
+                }
+                for (let k = 0; k < n; k++) if (row[k] && !seg[k - 1] && !seg[k]) row[k] = false;
+            }
             plan.row[key] = row;
             plan.seg[key] = seg;
             plan.end[key] = end.map((e, k) => (row[k] ? e : null));
@@ -1382,6 +1410,9 @@ class RoadMesh {
             } else if (ea && eb && (ea[key] || eb[key]) && !(ea[key] && ea[key].blocked) && !(eb[key] && eb[key].blocked) && between(k, key)) {
                 kind = [ea[key], eb[key]].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
             }
+            // (no slope on a side road's segment with an end by the ride's wall across a cleft: the ground that closes
+            // the cleft lies there, and a slope from the next row stood down from that end as a face)
+            if (kind === 'apron' && foot && foot.byRideWall && [k, k + 1].some(j => { const p = sides[j][key], o = RoadMesh.outward(sides[j])[key]; return !(sides[j].bits & 7) && foot.byRideWall(p[0], p[1], p[2], o[0], o[1]); })) kind = null;
             kinds[key][k] = kind;
             return kind;
         };
@@ -1526,8 +1557,12 @@ class RoadMesh {
                 const fa = ca || down(k, cb), fb = cb || down(k + 1, ca);
                 if (!fa || !fb) continue;
                 const na = [sides[k][key][0], fa.y, sides[k][key][2]], nb = [sides[k + 1][key][0], fb.y, sides[k + 1][key][2]];
-                const tint = RoadMesh.APRON_LINEAR;
-                RoadMesh.quad(apronOut, na, nb, fb.at, fa.at, [tint, tint, tint, tint]);
+                const ta = (ca || cb).color || RoadMesh.APRON_LINEAR, tb = (cb || ca).color || RoadMesh.APRON_LINEAR;
+                RoadMesh.quad(apronOut, na, nb, fb.at, fa.at, [ta, tb, tb, ta]);
+                // (and from its far edge, under the side road's verge, down to the land: the side road has no wall there,
+                // and the edge hung over the land)
+                const la = landAt ? landAt(fa.at[0], fa.at[2]) : null, lb = landAt ? landAt(fb.at[0], fb.at[2]) : null;
+                if (la !== null && lb !== null && (la < fa.at[1] - 0.05 || lb < fb.at[1] - 0.05)) RoadMesh.quad(apronOut, fa.at, fb.at, [fb.at[0], Math.min(fb.at[1], lb - 0.2), fb.at[2]], [fa.at[0], Math.min(fa.at[1], la - 0.2), fa.at[2]], [ta, tb, tb, ta]);
             }
             for (const key of ['l', 'r']) {
                 const kind = kindOf(k, key);

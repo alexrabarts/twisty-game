@@ -68,8 +68,8 @@ class WorldEnvironment {
     static get CLEFT_GAP_M() { return 2.5; }
     static get CLEFT_DIP_M() { return 0.25; }
     static get CLEFT_TUCK_M() { return 0.3; }
-    // and only where the side road's own wall stands there, within this of where its band starts
-    static get CLEFT_WALL_M() { return 1; }
+    static get RIDE_NEAR_M() { return 0.5; }
+    static get CLEFT_ROWS() { return 4; }
     static get CLEFT_STEP_M() { return 3; }
     // The paving lies this far under the roads' surfaces: under the deepest side ribbon in the band (sideHold)
     static get SIDE_GORE_UNDER_M() { return 0.13; }
@@ -562,6 +562,13 @@ class WorldEnvironment {
     // where a point of it would stand in a carriageway (Carriageways, as world-structures reads them). RoadMesh.edgeWorks
     // lays it and the physics reads it (WorldGround.heightAt), both from here. Kept for each row until the side roads in
     // residence change
+    // Whether the ride's wall stands by row `index` on side `sign`: on the segment from it, the one before or the one
+    // after (the row where the wall starts beside a cleft is the last of a junction's mouth, where the ride has none)
+    rideWalledAt(index, sign) {
+        for (const j of [index - 1, index, index + 1]) if (j >= 0 && j + 1 < this.route.points.length && this.walledAt(j, sign)) return true;
+        return false;
+    }
+
     cleftAt(index, sign) {
         const p = this.route.points[index];
         if (!p || p.bits & 7) return null;
@@ -581,22 +588,10 @@ class WorldEnvironment {
                 if (land !== null) low = Math.min(low, land);
             }
             if (!hit) return null;
-            // (only against the side road's own wall: a side road on a bank or level with the land beside the ride
-            // has a slope or land there, not a cleft between two walls)
-            const hx = x + ox * hit.t, hz = z + oz * hit.t;
-            let walled = false;
-            for (const runs of this.sideWalls.values()) {
-                for (const run of runs) {
-                    const r = WorldEnvironment.CLEFT_WALL_M;
-                    if (walled || hx < run.box[0] - r || hx > run.box[2] + r || hz < run.box[1] - r || hz > run.box[3] + r) continue;
-                    for (let i = 0; i + 1 < run.points.length && !walled; i++) {
-                        const a = run.points[i], b = run.points[i + 1], dx = b[0] - a[0], dz = b[2] - a[2], len = dx * dx + dz * dz;
-                        const u = len > 0 ? Math.max(0, Math.min(1, ((hx - a[0]) * dx + (hz - a[2]) * dz) / len)) : 0;
-                        walled = Math.hypot(a[0] + dx * u - hx, a[2] + dz * u - hz) <= r;
-                    }
-                }
-            }
-            if (!walled) return null;
+            // (only where the ride's own wall holds it up on that side, on the segment either side of the row: a side
+            // road beside the ride's slope or level with it has a slope or land there, not a cleft. The side road has
+            // no wall on that side, edgeFoot `facesRideWall`: the ride's wall is the one face between the two)
+            if (!this.rideWalledAt(index, sign)) return null;
             // (the side road the lower of the two, by no more than CLEFT_STEP_M: the fill lies at its height and the
             // ride's wall stands over it; a side road over the ride holds its own fill)
             if (hit.side > y + RoadMesh.APRON_UNDER_M || hit.side < y - WorldEnvironment.CLEFT_STEP_M) return null;
@@ -607,7 +602,16 @@ class WorldEnvironment {
             const fy = Math.min(y - RoadMesh.APRON_UNDER_M, hit.side - RoadMesh.SIDE_GROUND_UNDER_M), run = hit.t + WorldEnvironment.CLEFT_TUCK_M;
             const guard = this.carriageways.guard(-1);
             for (let t = 0; t <= run + 1e-9; t += 0.25) if (!guard.clear(x + ox * t, z + oz * t, fy - 0.05, fy)) return null;
-            return { y: fy, run, at: [x + ox * run, fy, z + oz * run] };
+            // (coloured as the land at its middle, as the ground under a verge is: TerrainMesh.colours)
+            const mx = x + ox * run / 2, mz = z + oz * run / 2, m = WorldData.TILE_M, n = WorldData.TILE_N;
+            const tx = Math.floor(mx / m), tz = Math.floor(mz / m), tile = this.data.tile(`${tx},${tz}`);
+            let color = null;
+            if (tile) {
+                const grid = TerrainMesh.colours(tile, this.data.cover(`${tx},${tz}`));
+                const at = (Math.max(0, Math.min(n - 1, Math.round((mz - tz * m) / WorldData.CELL_M))) * n + Math.max(0, Math.min(n - 1, Math.round((mx - tx * m) / WorldData.CELL_M)))) * 3;
+                color = [grid[at], grid[at + 1], grid[at + 2]];
+            }
+            return { y: fy, run, at: [x + ox * run, fy, z + oz * run], color };
         })();
         this.cleftRows.set(key, out);
         return out;
@@ -1696,7 +1700,36 @@ class WorldEnvironment {
         };
         // `on`: asked of a row beside a wall's end, where a side road's wall goes on until the land meets its edge, and
         // the ride's until a bank down from its end clears the strip of the leg below (`stepped`)
-        const wall = (x, y, z, ox, oz, on = false) => {
+        // A side road's edge that faces the ride's wall across a cleft (cleftAt, as the ride reads it from its side): the
+        // ride lies within CLEFT_GAP_M out from the edge, over it by no more than CLEFT_STEP_M, and the land between
+        // lies more than CLEFT_DIP_M under the edge. The side road has no wall there: its surface runs on to the foot of
+        // the ride's wall over the ground that closes the cleft, and the ride's wall face is the one face between them
+        // (as two walls, a parapet and a coping stood across the gap from the ride's wall and read as a trench, km 2.3)
+        const facesRideWall = (x, y, z, ox, oz) => {
+            if (aprons) return false;
+            let low = landNear(x + ox * 0.1, z + oz * 0.1) ?? Infinity;
+            // (the nearest of the ride's segments at about this height: the leg beside the side road)
+            const ride = (px, pz) => {
+                let best = null;
+                for (const i of this.route.cellSegments(px, pz) || []) {
+                    this.route.nearestSegment(px, pz, i, i, near);
+                    if (near.y > y + 0.1 && near.y <= y + WorldEnvironment.CLEFT_STEP_M && (best === null || near.distance < best.distance)) best = { distance: near.distance, width: near.width, index: near.index, lateral: near.lateral };
+                }
+                return best;
+            };
+            // (an edge already in the ride's band is the side road's far edge where it leaves: no cleft lies out from it)
+            const own = ride(x, z);
+            if (own && own.distance <= own.width / 2 + RoadSurface.VERGE_M) return false;
+            for (let t = 0.25; t <= WorldEnvironment.CLEFT_GAP_M + 1e-9; t += 0.25) {
+                const px = x + ox * t, pz = z + oz * t;
+                const best = ride(px, pz);
+                if (best && best.distance <= best.width / 2 + RoadSurface.VERGE_M) return low < y - WorldEnvironment.CLEFT_DIP_M && this.rideWalledAt(best.index, Math.sign(best.lateral || 1));
+                const land = landNear(px, pz);
+                if (land !== null) low = Math.min(low, land);
+            }
+            return false;
+        };
+        const wallOf = (x, y, z, ox, oz, on = false) => {
             // Over a lower road's band (stacked hairpin legs whose verges meet): the retaining wall stands down to that
             // road, as the real ones do. Never a deck: a road over a road off a bridge is not a structure the map has
             const under = lowerRoad(x, z, y);
@@ -1744,6 +1777,23 @@ class WorldEnvironment {
             if (on && stepped(x, y, z, ox, oz)) return { y: wallFoot(x, z, ox, oz, y, low) };
             return null;
         };
+        const wall = wallOf;
+        // A side road's edge point by the ride's verge where the ride's wall stands: where the side road leaves the ride
+        // beside a cleft, its edge lies on the ride's ground and the fill, with no slope from it
+        const byRideWall = (x, y, z) => {
+            if (aprons) return false;
+            let best = null;
+            for (const i of this.route.cellSegments(x, z) || []) {
+                this.route.nearestSegment(x, z, i, i, near);
+                if (Math.abs(near.y - y) <= WorldEnvironment.CLEFT_STEP_M && (best === null || near.distance < best.distance)) best = { distance: near.distance, width: near.width, index: near.index, lateral: near.lateral };
+            }
+            if (!best || best.distance > best.width / 2 + RoadSurface.VERGE_M + WorldEnvironment.RIDE_NEAR_M) return false;
+            // (by a cleft the ride closes, within CLEFT_ROWS of its rows)
+            const sign = Math.sign(best.lateral || 1);
+            if (!this.rideWalledAt(best.index, sign)) return false;
+            for (let j = best.index - WorldEnvironment.CLEFT_ROWS; j <= best.index + WorldEnvironment.CLEFT_ROWS; j++) if (this.cleftAt(j, sign)) return true;
+            return false;
+        };
         // `walled`: true where the road's wall plan put a wall (RoadMesh.wallPlan), false where it put none (the land
         // then gives a slope or nothing), undefined to let the land decide (no plan)
         // `fill`: a side road's row in a junction's mouth (WorldEnvironment.holdSide), which stands on a slope down to
@@ -1756,6 +1806,8 @@ class WorldEnvironment {
                 if (walled) return { kind: 'wall', y: wallFoot(x, z, ox, oz, y, landLow(x + ox * 0.1, z + oz * 0.1)) };
             }
             if (!aprons && !fill) return null;
+            // (nor a slope from a side road's edge into the cleft by the ride's wall: the ground that closes it lies there)
+            if (!aprons && (facesRideWall(x, y, z, ox, oz) || byRideWall(x, y, z))) return null;
             const low = landLow(x + ox * 0.1, z + oz * 0.1);
             if (low === null) return { kind: 'apron', y: y - WorldEnvironment.APRON_M };
             if (low >= y - WorldEnvironment.MEET_M) return null;
@@ -1816,6 +1868,13 @@ class WorldEnvironment {
             return low;
         };
         if (aprons) foot.mouth = atMouth;
+        // A side road's edge that faces the ride's wall across a cleft: its wall plan leaves the wall out there
+        // (RoadMesh.wallPlan), after its runs are judged, so the wall's other runs stand as they did
+        if (!aprons) foot.facesRide = facesRideWall;
+        // and one with no slope from it: that, or an edge by the ride's verge beside the ride's wall (byRideWall)
+        if (!aprons) foot.byRideWall = (x, y, z, ox, oz) => facesRideWall(x, y, z, ox, oz) || byRideWall(x, y, z);
+
+        // Where a side road's wall would stand, before the rule that leaves it out across a cleft (cleftAt reads it)
         // The ground that closes a narrow gap between the ride's row i and a side road beside it (cleftAt)
         if (aprons) foot.cleft = (i, sign) => this.cleftAt(i, sign);
         // Whether a side road's edge point stands in the ride's carriageway or its verge, with its coping over the
