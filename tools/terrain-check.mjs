@@ -3833,7 +3833,16 @@ const WORLD = {
     // call-outs, the turn prompt, the advised speed, the key hints, the FPS counter and the empty slots beside the
     // gauge), no two boxes intersect and none leaves the screen.
     'world-hud': async page => {
+        // With --out <dir>, a picture of each view as the boxes were read: the page waits on a binding the probe
+        // answers with the screenshot
+        const out = option('out');
+        let view = '';
+        if (out) {
+            mkdirSync(out, { recursive: true });
+            await page.exposeFunction('twistyHudShot', () => page.screenshot({ path: join(out, `world-hud-${view}.png`) }).then(() => true));
+        }
         const read = () => page.evaluate(async (placeSource) => {
+            const shoot = typeof window.twistyHudShot === 'function' ? window.twistyHudShot : null;
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const env = game.environment;
             const stage = env.route.stages[1];
@@ -3858,6 +3867,17 @@ const WORLD = {
             const fpsWas = hud.fpsVisible;
             hud.fpsVisible = true;
             hud.applyFps();
+            // The gear and its rev bar at the shift light (js/sound.js Gearbox), and debug mode's tags and button, which
+            // stand in the same corners: each must keep clear of the others
+            // (a stepped bike: its number is wider than a scooter's D)
+            const box = new Gearbox('bike07_mt09');
+            box.gear = 4;
+            box.revs = 0.9;
+            hud.setGear(box);
+            hud.setTuned(true);
+            hud.setQuality('Graphics: high · auto');
+            const tuningWas = !!document.getElementById('tuningOpen');
+            if (!tuningWas && typeof TuningPanel !== 'undefined') game.tuningPanel = new TuningPanel(document, Tuning, { world: () => true });
             // The cards fade in and a frozen game has no animation frames: read them as they end up
             await new Promise(r => setTimeout(r, 80));
             document.body.getBoundingClientRect();
@@ -3876,7 +3896,7 @@ const WORLD = {
                 }
                 return true;
             };
-            const parts = { timer: '.hud-timer', split: '#splitPopup', wheelie: '#wheelieIndicator', prompt: '#hudPrompt', advice: '#hudAdvice', map: '#world-guide canvas', speed: '#hudSpeed', gear: '#hudGear', revs: '#hudRevs', mode: '#hudMode', hint: '#hudHint', fps: '#fps' };
+            const parts = { timer: '.hud-timer', split: '#splitPopup', wheelie: '#wheelieIndicator', prompt: '#hudPrompt', advice: '#hudAdvice', map: '#world-guide canvas', speed: '#hudSpeed', gear: '#hudGear', revs: '#hudRevs', mode: '#hudMode', hint: '#hudHint', fps: '#fps', tuned: '#hudTuned', quality: '#hudQuality', tune: '#tuningOpen' };
             const boxes = {};
             const put = (name, el) => { if (shown(el)) { const r = el.getBoundingClientRect(); boxes[name] = { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; } };
             Object.entries(parts).forEach(([name, selector]) => put(name, document.querySelector(selector)));
@@ -3892,23 +3912,36 @@ const WORLD = {
                 viewport: [innerWidth, innerHeight], boxes: names, missing: Object.keys(parts).filter(n => !boxes[n]), overlaps, off,
                 ticks: document.querySelectorAll('#hudProgressMarks i').length, gateTotal: gates.total, count: document.getElementById('hudProgressCount').textContent,
                 pipsShown: shown(document.getElementById('hudGates')), bars: document.querySelectorAll('.hud-progress-bar').length,
-                stageText: document.getElementById('hudStageText').textContent, stages: env.route.stages.length, stageIndex: run.stageIndex
+                stageText: document.getElementById('hudStageText').textContent, stages: env.route.stages.length, stageIndex: run.stageIndex,
+                gear: document.getElementById('hudGear').textContent, revLight: document.getElementById('hudRevs').dataset.light || ''
             };
+            if (shoot) await shoot();
             hud.clearTransient();
+            hud.setGear(null);
+            hud.setTuned(false);
+            hud.setQuality('');
+            if (!tuningWas && game.tuningPanel) {
+                game.tuningPanel.button.remove();
+                game.tuningPanel.el.remove();
+                game.tuningPanel = null;
+            }
             wheelie.classList.remove('active');
             hud.fpsVisible = fpsWas;
             hud.applyFps();
             return out;
         }, placeAt.toString());
-        const out = {};
+        const views = {};
         await page.setViewport({ width: 1024, height: 640 });
-        out.small = await read();
+        view = 'small';
+        views.small = await read();
         await page.setViewport({ width: 1440, height: 900 });
-        out.large = await read();
+        view = 'large';
+        views.large = await read();
         await page.setViewport({ width: 390, height: 844 });
         await page.evaluate(() => document.body.classList.add('touch'));
-        out.touch = await read();
-        return out;
+        view = 'touch';
+        views.touch = await read();
+        return views;
     },
     // The chase camera on hairpins (P38): the autopilot rides 12 m/s from several starts. Each frame, 4 points of the
     // boom from the head to the camera are tested against the ground, and the road 30 m ahead is projected to the

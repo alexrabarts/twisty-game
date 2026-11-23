@@ -99,6 +99,23 @@ const HudRules = {
             .map(station => HudRules.stageShare(station.s, from, to));
     },
 
+    // The gear's text in its slot (js/sound.js Gearbox): the number, "N" with the engine off (a crash, the finish),
+    // "D" for a twist-and-go, nothing without a gearbox
+    gearText(box) {
+        if (!box) return '';
+        if (box.neutral) return 'N';
+        if (box.auto) return 'D';
+        return Number.isInteger(box.gear) && box.gear > 0 ? String(box.gear) : '';
+    },
+
+    // The rev bar's light: 'limit' at the limiter, 'shift' near the upshift of a gear that has one above it, else ''
+    revLight(box) {
+        if (!box || box.neutral || !box.rules) return '';
+        if (box.revs >= box.rules.limit) return 'limit';
+        if (!box.auto && box.gear < box.top && box.revs >= box.rules.light) return 'shift';
+        return '';
+    },
+
     // -1 stopped, 0 too slow, 1 slow, 2 at pace
     speedBand(mph) {
         return mph <= 0 ? -1 : mph < 20 ? 0 : mph < 40 ? 1 : 2;
@@ -134,6 +151,8 @@ class Hud {
             tuned: byId('hudTuned'),
             quality: byId('hudQuality'),
             mode: byId('hudMode'),
+            gear: byId('hudGear'),
+            revs: byId('hudRevs'),
             start: byId('startCard'),
             startLeg: byId('startLeg'),
             progress: byId('hudProgress'),
@@ -212,6 +231,31 @@ class Hud {
             this.el.speedBox.dataset.band = String(band);
         }
         if (this.el.speedFill) this.el.speedFill.style.strokeDashoffset = String(HudRules.gaugeOffset(shown, maxMph));
+    }
+
+    // The gear and the rev bar in their slots beside the speed gauge, from the gearbox of the sound (js/sound.js); null
+    // empties both. Only a changed value touches the DOM: the bar moves by whole percent
+    setGear(box) {
+        this.setText(this.el.gear, HudRules.gearText(box));
+        const revs = this.el.revs;
+        if (!revs) return;
+        const share = box ? Math.round(Math.min(1, Math.max(0, box.revs)) * 100) : -1;
+        if (this.shown.revs !== share) {
+            this.shown.revs = share;
+            if (share < 0) {
+                delete revs.dataset.on;
+                revs.style.removeProperty('--revs');
+            } else {
+                revs.dataset.on = '';
+                revs.style.setProperty('--revs', `${share}%`);
+            }
+        }
+        const light = HudRules.revLight(box);
+        if (this.shown.revLight !== light) {
+            this.shown.revLight = light;
+            if (light) revs.dataset.light = light;
+            else delete revs.dataset.light;
+        }
     }
 
     // Checkpoints passed, of how many. One display holds them: the progress bar of a world ride (its ticks and

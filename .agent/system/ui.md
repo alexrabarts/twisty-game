@@ -30,8 +30,10 @@
   | Slot | For | Wide screen | Touch |
   | --- | --- | --- | --- |
   | `#hudMode` (`.hud-mode`) | the rider mode's tag (filled: `Hud.setMode`) | left of the gauge, top row, 18 px high | under the gauge, right of the gear, 16 px high |
-  | `#hudGear` (`.hud-gear`) | a gear number | left of the gauge, middle row, in the display font at 0.3 of `--speed-size` | under the gauge, left, 16 px |
-  | `#hudRevs` (`.hud-revs`) | a rev bar | left of the gauge, bottom row, `--bike-side` (72 px) wide, 6 px high | directly under the gauge, its width, 4 px high |
+  | `#hudGear` (`.hud-gear`) | the gear (filled: `Hud.setGear`) | left of the gauge, middle row, in the display font at 0.3 of `--speed-size` | under the gauge, left, 22 px |
+  | `#hudRevs` (`.hud-revs`) | the rev bar (filled: `Hud.setGear`) | left of the gauge, bottom row, `--bike-side` (72 px) wide, 6 px high | directly under the gauge, its width, 4 px high |
+
+- The gear and the rev bar come from the gearbox of the sound, never the physics (`.agent/system/sound.md`, "The gear indicator"): the number, D for a scooter, N with the engine off, nothing without a gearbox. The bar is the revs over a dim track, amber near an upshift, red at the limiter. On touch the gear's row is 22 px, so `--top-row` is the gauge and 30 px.
 
 - The tuning panel (`js/tuningpanel.js`, `.tuning-panel`) exists only in debug mode (`Game.startTuning`). The table it draws and the rules are in `.agent/system/handling.md`, "The tuning".
   - T opens and closes it (`TuningPanel.KEY`). A small button (`#tuningOpen`, "T · Tune") does the same and is the way in on touch; the panel's × closes it there. The ride goes on: the panel is not a dialog of `js/modals.js` and pauses nothing.
@@ -39,7 +41,7 @@
   - Each row: the label (its `title` holds the hint and the fields), a step down, the track with a mark at 1.00, a step up, the number. A double click on the number puts the row back to 1.00. A changed row is in the warn colour. On a classic leg the rows that only a world ride reads are dimmed.
   - Reset puts every row at 1.00. Copy values puts the text on the clipboard; the text box under the buttons always holds the same text, for a browser that refuses the clipboard.
   - Its place: the left edge, from the top edge to the bottom edge, 268 px wide, over the FPS counter and the key hints while it is open. On touch it ends over the steering buttons, so the thumbs keep them; on a phone held upright it also covers the map and most of the timer while it is open. `body.in-menu`, `body.run-over` and the world's loading screen hide it.
-  - The "tuned" tag (`#hudTuned`, `Hud.setTuned`) stands under the FPS counter while the ride is a tuned one, and the button under the tag. On touch the two share one row, the button first, over the FPS counter and under the key hints. The tag is not the `#hudMode` slot.
+  - The "tuned" tag (`#hudTuned`, `Hud.setTuned`) stands under the FPS counter while the ride is a tuned one, and the button under the tag, and the graphics level's tag (`#hudQuality`) under the button. On touch the three share one row, the button first, then the tuned tag, then the level's tag, over the FPS counter and under the key hints (which take two lines on a phone held upright). The tag is not the `#hudMode` slot. `world-hud` shows all three with the gear and fails when one meets another thing of the HUD.
 - Call a message with `showCallout(text, tone, ms)`; tones are `info`, `good`, `bad`, `warn` and `gold`. At most three show at once. A long one takes a second line; it does not grow past the column.
 - The key hints fade after `HudRules.HINT_MS` (6 s), or 2.5 s after the first input. The pause panel brings them back for as long as it is open (`Hud.recallHint`, called by `Game.pauseRace` and `resumeRace`).
 - In-game panels do not use `backdrop-filter`: blurring the live canvas costs GPU time every frame.

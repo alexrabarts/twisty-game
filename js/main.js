@@ -220,8 +220,8 @@ class Game {
 
         // Initialize input handler and sound manager (independent of environment)
         this.input = new InputHandler();
+        // The sound (js/sound.js): its settings are its own (Sound.SETTINGS), kept in localStorage
         this.soundManager = new SoundManager();
-        this.soundManager.masterVolume = 0.3;
         this.hud = new Hud(document, window);
         // The graphics level (js/quality.js) before the tuning panel, which shows its control
         this.startQuality();
@@ -233,7 +233,7 @@ class Game {
         // silence the engine drone
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
-                this.soundManager.stopEngineSound();
+                this.soundManager.sleep();
             }
         });
 
@@ -2269,6 +2269,7 @@ class Game {
         // The HUD writes only when the shown speed changes
         if (this.hud) {
             this.hud.setSpeed(this.vehicle.getSpeed(), this.vehicle.maxSpeed * 2.237);
+            this.hud.setGear(this.gearbox);
             this.hud.update(this.raceElapsed(), this.firstInputAt);
             if (this.environment.isWorld) this.updateWorldHud();
         }
@@ -3493,6 +3494,7 @@ class Game {
 
         // Skip all game logic if paused, but continue rendering
         if (this.paused) {
+            this.soundManager.stopEngineSound();
             this.graphics.render(this.scene, this.camera);
             return;
         }
@@ -3765,13 +3767,9 @@ class Game {
         // frame rate (frames otherwise alternate 1/2 physics steps and judder)
         this.vehicle.applyRenderInterpolation(this.accumulatedTime / this.fixedTimeStep);
 
-        // Update engine sound based on speed
-        if (!this.vehicle.crashed && !this.finished) {
-            const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            this.soundManager.playEngineSound(speedRatio, throttleInput);
-        } else {
-            this.soundManager.stopEngineSound();
-        }
+        // The gearbox of the sound and the HUD, then the sound of this frame
+        this.updateGearbox(rawDeltaTime, throttleInput, brakeInput);
+        this.soundManager.update(this.soundFrame(rawDeltaTime, throttleInput, brakeInput));
 
         this.updateRacePosition();
         this.updateCamera(rawDeltaTime);
@@ -4370,6 +4368,44 @@ class Game {
         if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
     }
 
+    // The gearbox (js/sound.js Gearbox, .agent/system/sound.md) is for the sound and the HUD only: it reads the bike's
+    // speed and the rider's hands and changes nothing the physics reads. A crash or the finish leaves it in neutral,
+    // and the ride after it starts again in first
+    updateGearbox(dt, throttle, brake) {
+        const vehicle = this.vehicle;
+        if (!vehicle || typeof Gearbox === 'undefined') return null;
+        if (!this.gearbox || this.gearbox.bike !== vehicle.model) this.gearbox = new Gearbox(vehicle.model);
+        const off = !!(vehicle.crashed || this.finished);
+        if (this.gearbox.neutral && !off) this.gearbox.reset();
+        this.gearbox.neutral = off;
+        return this.gearbox.update(dt, vehicle.speed / vehicle.maxSpeed, throttle, brake);
+    }
+
+    // What the sound reads this frame, in one object kept from frame to frame
+    soundFrame(dt, throttle, brake) {
+        const vehicle = this.vehicle;
+        const frame = this.soundState || (this.soundState = { dt: 0, gearbox: null, engine: null, throttle: 0, brake: 0, speed: 0, maxSpeed: 0, crashed: false, surface: 'asphalt', wet: false, slide: 0, others: null, x: 0, z: 0, heading: 0 });
+        frame.dt = dt;
+        frame.gearbox = this.gearbox;
+        frame.engine = typeof Sound !== 'undefined' ? Sound.engineOf(vehicle.model) : null;
+        frame.throttle = throttle;
+        frame.brake = brake;
+        // (a bike down slides on: its speed is the scrape's)
+        frame.speed = vehicle.crashed && vehicle.velocity ? Math.hypot(vehicle.velocity.x, vehicle.velocity.z) : vehicle.speed;
+        frame.maxSpeed = vehicle.maxSpeed;
+        frame.crashed = !!vehicle.crashed;
+        frame.engineOff = !!this.finished;
+        frame.surface = typeof Sound !== 'undefined' ? Sound.surfaceOf(vehicle) : 'asphalt';
+        const weather = this.weatherSystem;
+        frame.wet = !!weather && typeof weather.weatherPhysics === 'function' && weather.weatherPhysics().lateralFriction < 1;
+        frame.slide = vehicle.slideAngle || 0;
+        frame.others = this.traffic || null;
+        frame.x = vehicle.position.x;
+        frame.z = vehicle.position.z;
+        frame.heading = vehicle.yawAngle || 0;
+        return frame;
+    }
+
     // The tuning (js/tuning.js, .agent/system/handling.md): multipliers over the handling's numbers, moved with the
     // panel of debug mode (js/tuningpanel.js; T opens it and the ride goes on). Outside debug mode nothing stored is
     // read and no panel is built
@@ -4606,273 +4642,6 @@ function showCallout(text, tone = 'info', durationMs = 1000) {
         return;
     }
     hud.callout(text, tone, durationMs);
-}
-
-class SoundManager {
-    constructor() {
-        this.audioContext = null;
-        this.masterVolume = 0.3;
-        this.enabled = false; // Start muted by default
-
-        // Initialize audio context on user interaction
-        this.initAudioContext();
-
-        // Sound effect caches
-        this.sounds = {};
-    }
-
-    initAudioContext() {
-        try {
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        } catch (e) {
-            console.warn('Web Audio API not supported');
-            this.enabled = false;
-        }
-    }
-
-    // Create a simple beep sound
-    createBeep(frequency = 440, duration = 0.2, type = 'sine') {
-        if (!this.enabled || !this.audioContext) return;
-
-        // Resume audio context if suspended (required by Web Audio API)
-        if (this.audioContext.state === 'suspended') {
-            this.audioContext.resume();
-        }
-
-        const oscillator = this.audioContext.createOscillator();
-        const gainNode = this.audioContext.createGain();
-
-        oscillator.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
-
-        oscillator.frequency.setValueAtTime(frequency, this.audioContext.currentTime);
-        oscillator.type = type;
-
-        gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
-        gainNode.gain.linearRampToValueAtTime(this.masterVolume * 0.5, this.audioContext.currentTime + 0.01);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + duration);
-
-        oscillator.start(this.audioContext.currentTime);
-        oscillator.stop(this.audioContext.currentTime + duration);
-    }
-
-    // Engine sound (continuous)
-    playEngineSound(speed = 0, throttle = 0) {
-        if (!this.enabled || !this.audioContext) return;
-
-        // Resume audio context if suspended (required by Web Audio API)
-        if (this.audioContext.state === 'suspended') {
-            this.audioContext.resume();
-        }
-
-        const now = this.audioContext.currentTime;
-        // Engine revs track speed; throttle adds an extra rev rise + volume
-        const baseFreq = 70 + speed * 55 + throttle * 18;
-
-        // This is called every frame: keep one persistent oscillator graph and
-        // ramp its parameters instead of rebuilding nodes per call
-        if (!this.engineSound) {
-            const gainNode = this.audioContext.createGain();
-            gainNode.connect(this.audioContext.destination);
-            gainNode.gain.setValueAtTime(this.masterVolume * 0.18, now);
-
-            const filter = this.audioContext.createBiquadFilter();
-            filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(220 + speed * 900, now);
-            filter.Q.value = 1.2;
-            filter.connect(gainNode);
-
-            // Main "cylinder" pair: two slightly detuned saws beat against
-            // each other for a throatier engine note than a single oscillator
-            const oscillator = this.audioContext.createOscillator();
-            oscillator.type = 'sawtooth';
-            oscillator.frequency.setValueAtTime(baseFreq, now);
-            oscillator.connect(filter);
-
-            const detuneOsc = this.audioContext.createOscillator();
-            detuneOsc.type = 'sawtooth';
-            detuneOsc.frequency.setValueAtTime(baseFreq, now);
-            detuneOsc.detune.setValueAtTime(12, now); // ~12 cents sharp
-            const detuneGain = this.audioContext.createGain();
-            detuneGain.gain.value = 0.6;
-            detuneOsc.connect(detuneGain);
-            detuneGain.connect(filter);
-
-            // Sub-octave thump for low-end weight
-            const subOsc = this.audioContext.createOscillator();
-            subOsc.type = 'triangle';
-            subOsc.frequency.setValueAtTime(baseFreq / 2, now);
-            const subGain = this.audioContext.createGain();
-            subGain.gain.value = 0.8;
-            subOsc.connect(subGain);
-            subGain.connect(filter);
-
-            // Upper harmonic rasp
-            const harmonicOsc = this.audioContext.createOscillator();
-            harmonicOsc.type = 'square';
-            harmonicOsc.frequency.setValueAtTime(baseFreq * 2, now);
-            const harmonicGain = this.audioContext.createGain();
-            harmonicGain.gain.value = 0.25;
-            harmonicOsc.connect(harmonicGain);
-            harmonicGain.connect(filter);
-
-            // Wind noise: looping white noise through a bandpass, swelling
-            // with speed - the main sensation of velocity on a bike
-            const noiseLength = this.audioContext.sampleRate * 2;
-            const noiseBuffer = this.audioContext.createBuffer(1, noiseLength, this.audioContext.sampleRate);
-            const noiseData = noiseBuffer.getChannelData(0);
-            for (let i = 0; i < noiseLength; i++) {
-                noiseData[i] = Math.random() * 2 - 1;
-            }
-            const windSource = this.audioContext.createBufferSource();
-            windSource.buffer = noiseBuffer;
-            windSource.loop = true;
-            const windFilter = this.audioContext.createBiquadFilter();
-            windFilter.type = 'bandpass';
-            windFilter.frequency.setValueAtTime(700, now);
-            windFilter.Q.value = 0.6;
-            const windGain = this.audioContext.createGain();
-            windGain.gain.setValueAtTime(0, now);
-            windSource.connect(windFilter);
-            windFilter.connect(windGain);
-            windGain.connect(this.audioContext.destination);
-
-            oscillator.start();
-            detuneOsc.start();
-            subOsc.start();
-            harmonicOsc.start();
-            windSource.start();
-
-            this.engineSound = {
-                oscillator,
-                detuneOsc,
-                subOsc,
-                harmonicOsc,
-                gainNode,
-                filter,
-                windSource,
-                windFilter,
-                windGain,
-                stop: () => {
-                    try {
-                        oscillator.stop();
-                        detuneOsc.stop();
-                        subOsc.stop();
-                        harmonicOsc.stop();
-                        windSource.stop();
-                    } catch (e) {}
-                }
-            };
-        } else {
-            // Smoothly track the current speed and throttle
-            const ramp = 0.06;
-            const e = this.engineSound;
-            e.oscillator.frequency.linearRampToValueAtTime(baseFreq, now + ramp);
-            e.detuneOsc.frequency.linearRampToValueAtTime(baseFreq, now + ramp);
-            e.subOsc.frequency.linearRampToValueAtTime(baseFreq / 2, now + ramp);
-            e.harmonicOsc.frequency.linearRampToValueAtTime(baseFreq * 2, now + ramp);
-            // Filter opens with speed and throttle - brighter under load
-            e.filter.frequency.linearRampToValueAtTime(220 + speed * 900 + throttle * 350, now + ramp);
-            // Volume swells with throttle, idles back when coasting
-            const engineLevel = this.masterVolume * (0.12 + throttle * 0.14 + speed * 0.05);
-            e.gainNode.gain.linearRampToValueAtTime(engineLevel, now + ramp);
-            // Wind builds with the square of speed, pitch rises slightly
-            const windLevel = this.masterVolume * speed * speed * 0.5;
-            e.windGain.gain.linearRampToValueAtTime(windLevel, now + ramp);
-            e.windFilter.frequency.linearRampToValueAtTime(600 + speed * 700, now + ramp);
-        }
-    }
-
-    stopEngineSound() {
-        if (this.engineSound) {
-            this.engineSound.stop();
-            this.engineSound = null;
-        }
-    }
-
-    // Checkpoint pass sound
-    playCheckpointSound() {
-        // Ascending chime
-        setTimeout(() => this.createBeep(523, 0.15), 0);   // C5
-        setTimeout(() => this.createBeep(659, 0.15), 100); // E5
-        setTimeout(() => this.createBeep(784, 0.15), 200); // G5
-    }
-
-    // Cone hit sound
-    playConeHitSound() {
-        // Descending thud
-        this.createBeep(220, 0.1, 'sawtooth'); // A3
-        setTimeout(() => this.createBeep(165, 0.1, 'sawtooth'), 50); // E3
-    }
-
-    // Jump sound
-    playJumpSound() {
-        // Quick ascending whoosh
-        this.createBeep(330, 0.08); // E4
-        setTimeout(() => this.createBeep(440, 0.08), 40); // A4
-        setTimeout(() => this.createBeep(554, 0.08), 80); // C#5
-    }
-
-    // Crash sound
-    playCrashSound() {
-        // Chaotic noise burst
-        for (let i = 0; i < 5; i++) {
-            setTimeout(() => {
-                const freq = 100 + Math.random() * 200;
-                this.createBeep(freq, 0.05 + Math.random() * 0.1, 'sawtooth');
-            }, i * 20);
-        }
-    }
-
-    // Tire screech
-    playTireScreech() {
-        if (!this.enabled || !this.audioContext) return;
-
-        const oscillator = this.audioContext.createOscillator();
-        const gainNode = this.audioContext.createGain();
-        const filter = this.audioContext.createBiquadFilter();
-
-        oscillator.connect(filter);
-        filter.connect(gainNode);
-        gainNode.connect(this.audioContext.destination);
-
-        oscillator.frequency.setValueAtTime(800, this.audioContext.currentTime);
-        oscillator.frequency.exponentialRampToValueAtTime(200, this.audioContext.currentTime + 0.3);
-        oscillator.type = 'sawtooth';
-
-        filter.type = 'highpass';
-        filter.frequency.setValueAtTime(500, this.audioContext.currentTime);
-
-        gainNode.gain.setValueAtTime(0, this.audioContext.currentTime);
-        gainNode.gain.linearRampToValueAtTime(this.masterVolume * 0.4, this.audioContext.currentTime + 0.05);
-        gainNode.gain.exponentialRampToValueAtTime(0.001, this.audioContext.currentTime + 0.3);
-
-        oscillator.start();
-        oscillator.stop(this.audioContext.currentTime + 0.3);
-    }
-
-    // Brake sound
-    playBrakeSound() {
-        this.createBeep(150, 0.1, 'sawtooth');
-    }
-
-    // Toggle sound on/off
-    toggleSound() {
-        this.enabled = !this.enabled;
-        if (!this.enabled) {
-            this.stopEngineSound();
-        }
-
-        // Show sound toggle notification
-        this.showSoundToggleNotification(this.enabled);
-
-        console.log('Sound ' + (this.enabled ? 'enabled' : 'disabled'));
-    }
-
-    showSoundToggleNotification(enabled) {
-        showCallout(`Sound ${enabled ? 'on' : 'off'}`, enabled ? 'good' : 'info', 1000);
-    }
-
 }
 
 // Debug key events

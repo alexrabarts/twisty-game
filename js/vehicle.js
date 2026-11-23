@@ -520,25 +520,27 @@ const LEG_OFFROAD = { drag: 0.15, grip: 0.7, floorSpeed: 10 };
 // `leanMaxDeg` is the most the bike itself leans, in a world's degrees, before something under it grounds (a
 // scooter's floorboards and centre stand): no rider, mode or tuning leans it further (Vehicle.leanMostOf). A bike
 // without it is held by the grip and the rider's daring alone.
+// `engine` is the engine's kind (single, parallel-twin, v-twin, triple, four, v4): the voice the sound gives it
+// (js/sound.js Sound.ENGINES, .agent/system/sound.md).
 const BIKE_MODELS = {
-    bike01_z650: { kind: 'naked', cls: 'naked', kg: 187, spare: 0.33, name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
-    bike02_speed_triple: { kind: 'naked', cls: 'naked', kg: 214, spare: 0.66, name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
-    bike03_duke390: { kind: 'naked', cls: 'naked', light: true, kg: 154, spare: 0.24, name: 'Light naked single', year: 2016, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.2 } },
-    bike04_scrambler: { kind: 'naked', cls: 'retro', offroad: 0.2, kg: 186, spare: 0.35, name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
-    bike05_g310gs: { kind: 'adventure', cls: 'adventure', light: true, offroad: 0.75, kg: 170, spare: 0.14, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
-    bike06_z750: { kind: 'naked', cls: 'naked', kg: 226, spare: 0.45, name: 'Naked four, gloss black', year: 2010, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.818, -0.2], pose: { torsoLean: 0.24 } },
-    bike07_mt09: { kind: 'naked', cls: 'naked', kg: 189, spare: 0.57, name: 'Naked triple, dark grey', year: 2021, paint: 0x08090b, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
-    bike07_mt09_black: { kind: 'naked', cls: 'naked', kg: 189, spare: 0.57, name: 'Naked triple, blacked out', year: 2021, paint: 0x020202, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
-    bike08_xsr900: { kind: 'sport', cls: 'retro', kg: 193, spare: 0.57, name: 'Retro sports triple', year: 2023, paint: 0x021b74, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
-    bike09_duke890: { kind: 'naked', cls: 'naked', kg: 183, spare: 0.57, name: 'Naked twin, white and orange', year: 2020, paint: 0xcfcfc9, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
-    bike10_tiger900: { kind: 'adventure', cls: 'adventure', offroad: 0.6, kg: 220, spare: 0.42, name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
-    bike11_duke990: { kind: 'naked', cls: 'naked', kg: 190, spare: 0.59, name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
-    bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', kg: 220, spare: 0.51, name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
-    bike13_panigale: { kind: 'sport', cls: 'supersport', kg: 198, spare: 1, name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike13_panigale_black: { kind: 'sport', cls: 'supersport', kg: 198, spare: 1, name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike14_forza: { kind: 'scooter', cls: 'scooter', kg: 182, spare: 0, leanMaxDeg: 45, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
-    bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, kg: 146, spare: 0.1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
-    bike16_superadv: { kind: 'adventure', cls: 'adventure', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
+    bike01_z650: { kind: 'naked', cls: 'naked', engine: 'parallel-twin', kg: 187, spare: 0.33, name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
+    bike02_speed_triple: { kind: 'naked', cls: 'naked', engine: 'triple', kg: 214, spare: 0.66, name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
+    bike03_duke390: { kind: 'naked', cls: 'naked', engine: 'single', light: true, kg: 154, spare: 0.24, name: 'Light naked single', year: 2016, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.2 } },
+    bike04_scrambler: { kind: 'naked', cls: 'retro', engine: 'v-twin', offroad: 0.2, kg: 186, spare: 0.35, name: 'Retro scrambler twin', year: 2017, paint: 0x750102, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.817, -0.15], pose: { torsoLean: 0.12 } },
+    bike05_g310gs: { kind: 'adventure', cls: 'adventure', engine: 'single', light: true, offroad: 0.75, kg: 170, spare: 0.14, name: 'Small adventure single', year: 2018, paint: 0x8c0105, mirror: true, rearBrake: 'right', drive: 'chain', seat: [0.842, -0.17], pose: { torsoLean: 0.12, style: 'adv' } },
+    bike06_z750: { kind: 'naked', cls: 'naked', engine: 'four', kg: 226, spare: 0.45, name: 'Naked four, gloss black', year: 2010, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, seat: [0.818, -0.2], pose: { torsoLean: 0.24 } },
+    bike07_mt09: { kind: 'naked', cls: 'naked', engine: 'triple', kg: 189, spare: 0.57, name: 'Naked triple, dark grey', year: 2021, paint: 0x08090b, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
+    bike07_mt09_black: { kind: 'naked', cls: 'naked', engine: 'triple', kg: 189, spare: 0.57, name: 'Naked triple, blacked out', year: 2021, paint: 0x020202, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.24 } },
+    bike08_xsr900: { kind: 'sport', cls: 'retro', engine: 'triple', kg: 193, spare: 0.57, name: 'Retro sports triple', year: 2023, paint: 0x021b74, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
+    bike09_duke890: { kind: 'naked', cls: 'naked', engine: 'parallel-twin', kg: 183, spare: 0.57, name: 'Naked twin, white and orange', year: 2020, paint: 0xcfcfc9, mirror: true, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.26 } },
+    bike10_tiger900: { kind: 'adventure', cls: 'adventure', engine: 'triple', offroad: 0.6, kg: 220, spare: 0.42, name: 'Adventure triple, khaki', year: 2022, paint: 0x655c46, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.12, style: 'adv' } },
+    bike11_duke990: { kind: 'naked', cls: 'naked', engine: 'parallel-twin', kg: 190, spare: 0.59, name: 'Big naked twin, orange', year: 2024, paint: 0xde2401, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.28 } },
+    bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', engine: 'triple', kg: 220, spare: 0.51, name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
+    bike13_panigale: { kind: 'sport', cls: 'supersport', engine: 'v4', kg: 198, spare: 1, name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike13_panigale_black: { kind: 'sport', cls: 'supersport', engine: 'v4', kg: 198, spare: 1, name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
+    bike14_forza: { kind: 'scooter', cls: 'scooter', engine: 'single', kg: 182, spare: 0, leanMaxDeg: 45, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
+    bike15_crf250: { kind: 'dirt', cls: 'adventure', engine: 'single', light: true, offroad: 1, kg: 146, spare: 0.1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
+    bike16_superadv: { kind: 'adventure', cls: 'adventure', engine: 'v-twin', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
 };
 // `far` is the bike as the touring crew ride it, a light file of its own made from the detail file (tools/blender/far.py)
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, far: `assets/bikes/far/${id}.glb`, keepFileColours: true }));
@@ -5691,13 +5693,13 @@ class Vehicle {
 // how far its rider rises off the seat over a jump (motocross riders stand
 // tall, a scooter rider barely lifts). `offroad` is the trait of a bike that
 // is the kind itself (BIKE_MODELS `offroad`); a detailed bike keeps its own,
-// whatever kind stands in for it
+// whatever kind stands in for it. `engine` is the voice a kind is heard with (js/sound.js)
 Vehicle.BIKES = {
-    sport: { build: 'buildSportBike', kg: 198, spare: 0.8, stand: 0.16, seat: { y: 1.06, z: -0.08, torsoLean: 0.72, style: 'race', hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05], elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13 } },
-    adventure: { build: 'buildAdventureBike', kg: 220, spare: 0.42, stand: 0.16, offroad: 0.6, seat: { y: 1.22, z: -0.12, torsoLean: 0.18, style: 'adv', hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06], elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2 } },
-    scooter: { build: 'buildScooter', kg: 182, spare: 0, leanMaxDeg: 45, stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
-    dirt: { build: 'buildDirtBike', kg: 146, spare: 0.1, stand: 0.24, offroad: 1, seat: { y: 1.22, z: -0.02, torsoLean: 0.45, style: 'mx', hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06], elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22 } },
-    naked: { build: 'buildNakedBike', kg: 189, spare: 0.57, stand: 0.16, seat: { y: 1.12, z: -0.12, torsoLean: 0.22, style: 'road', hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0], elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18 } }
+    sport: { build: 'buildSportBike', engine: 'four', kg: 198, spare: 0.8, stand: 0.16, seat: { y: 1.06, z: -0.08, torsoLean: 0.72, style: 'race', hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05], elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13 } },
+    adventure: { build: 'buildAdventureBike', engine: 'parallel-twin', kg: 220, spare: 0.42, stand: 0.16, offroad: 0.6, seat: { y: 1.22, z: -0.12, torsoLean: 0.18, style: 'adv', hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06], elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2 } },
+    scooter: { build: 'buildScooter', engine: 'single', kg: 182, spare: 0, leanMaxDeg: 45, stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
+    dirt: { build: 'buildDirtBike', engine: 'single', kg: 146, spare: 0.1, stand: 0.24, offroad: 1, seat: { y: 1.22, z: -0.02, torsoLean: 0.45, style: 'mx', hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06], elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22 } },
+    naked: { build: 'buildNakedBike', engine: 'triple', kg: 189, spare: 0.57, stand: 0.16, seat: { y: 1.12, z: -0.12, torsoLean: 0.22, style: 'road', hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0], elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18 } }
 };
 
 // A rider's pose and colours for the modelled rider (js/bikemodels.js) from a kind's `seat` or a builder's own

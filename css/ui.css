@@ -656,6 +656,20 @@ body.world-ride .hud-guide {
     border-radius: 3px;
 }
 
+/* The rev bar (Hud.setGear): the revs as a share of the redline over a dim track, amber near an upshift and red at
+   the limiter. The gear over it is the gearbox of the sound (js/sound.js), never the physics' */
+.hud-revs[data-on] {
+    background: linear-gradient(to right, var(--c-go) 0 var(--revs, 0%), rgba(255, 255, 255, 0.16) var(--revs, 0%) 100%);
+}
+
+.hud-revs[data-light="shift"] {
+    background: linear-gradient(to right, var(--c-warn) 0 var(--revs, 0%), rgba(255, 255, 255, 0.16) var(--revs, 0%) 100%);
+}
+
+.hud-revs[data-light="limit"] {
+    background: linear-gradient(to right, var(--c-bad) 0 var(--revs, 0%), rgba(255, 255, 255, 0.16) var(--revs, 0%) 100%);
+}
+
 /* Speed: a compact gauge */
 .hud-speed {
     position: relative;
@@ -775,8 +789,8 @@ body.touch {
     --map-size: 96px;
     --side-w: clamp(var(--map-size), 22vw, 260px);
     --col-w: min(440px, calc(100vw - 2 * (var(--edge) + var(--side-w) + var(--sp-3))));
-    /* The gauge and the 24 px of its slots */
-    --top-row: calc(var(--speed-size) + 24px);
+    /* The gauge and the 30 px of its slots */
+    --top-row: calc(var(--speed-size) + 30px);
 }
 
 body.touch .hud-bike {
@@ -788,7 +802,7 @@ body.touch .hud-bike {
 }
 
 body.touch .hud-bike-side {
-    grid-template: "revs revs" 4px "gear mode" 16px / auto 1fr;
+    grid-template: "revs revs" 4px "gear mode" 22px / auto 1fr;
     gap: 2px;
     width: var(--speed-size);
 }
@@ -802,15 +816,17 @@ body.touch .hud-gear {
     justify-self: stretch;
 }
 
+/* The gear is the largest thing the row holds: read at a glance under the gauge */
 body.touch .hud-gear {
     min-width: 16px;
-    font-size: 16px;
+    font-size: 22px;
+    line-height: 22px;
     text-align: left;
 }
 
 body.touch .hud-mode {
     font-size: 9px;
-    line-height: 16px;
+    line-height: 22px;
 }
 
 body.touch .world-guide {
@@ -2677,10 +2693,11 @@ body.touch .hud-tuned {
     left: calc(var(--edge-left) + 72px);
 }
 
+/* On the button's row after the tag: over it the key hints take two lines on a phone held upright */
 body.touch .hud-quality {
     top: auto;
-    bottom: calc(12px + 68px + var(--sp-2) + 46px + env(safe-area-inset-bottom, 0px));
-    left: calc(var(--edge-left) + 72px);
+    bottom: calc(12px + 68px + var(--sp-2) + 22px + env(safe-area-inset-bottom, 0px));
+    left: calc(var(--edge-left) + 136px);
 }
 
 body.touch .tuning-panel {
