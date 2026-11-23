@@ -62,6 +62,15 @@ class WorldEnvironment {
     static get SIDE_GORE_REACH_M() { return 16; }
     static get SIDE_GORE_STEP_M() { return 0.25; }
     static get SIDE_GORE_RISE_M() { return 0.5; }
+    // A side road beside the ride with its band (carriageway and verge) within CLEFT_GAP_M of the ride's verge, and the
+    // land between the two more than CLEFT_DIP_M under the lower of them, has the gap closed by ground at the lower
+    // road's height (cleftAt), laid CLEFT_TUCK_M on into the side road's band, where the side road stands on a wall
+    static get CLEFT_GAP_M() { return 2.5; }
+    static get CLEFT_DIP_M() { return 0.25; }
+    static get CLEFT_TUCK_M() { return 0.3; }
+    // and only where the side road's own wall stands there, within this of where its band starts
+    static get CLEFT_WALL_M() { return 1; }
+    static get CLEFT_STEP_M() { return 3; }
     // The paving lies this far under the roads' surfaces: under the deepest side ribbon in the band (sideHold)
     static get SIDE_GORE_UNDER_M() { return 0.13; }
     // A side road within this of the ride's height under the ride's verge keeps the ground the ride lays there under it
@@ -139,6 +148,8 @@ class WorldEnvironment {
         this.ground.taperAt = (index, sign, t) => this.taperAt(index, sign, t);
         this.ground.bridgedAt = (index, sign) => this.bridgedAt(index, sign);
         this.ground.wallTop = (index, sign) => this.wallTop(index, sign);
+        // and the ground that closes a narrow gap between the ride and a side road beside it (cleftAt)
+        this.ground.cleftAt = (index, sign) => this.cleftAt(index, sign);
         // and a row of marker stones where it takes a low wall's parapet's place (wallStoned)
         this.ground.wallStoned = (index, sign) => this.wallStoned(index, sign);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
@@ -536,6 +547,68 @@ class WorldEnvironment {
         if (!inner && !outer) return null;
         const a = inner || outer, b = outer || inner;
         return [a[0], b[0], a[1], b[1]];
+    }
+
+    // The ground that closes a narrow gap between the ride and a side road beside it, at ride row `index` on side
+    // `sign` (-1 the -lateral side): {y, run, at} (its height, how far it runs out from the verge's edge, and its far
+    // point), or null. Where a side road runs on beside the ride, each on a wall of its own and at their own heights,
+    // the two walls stood 0.5 to 1.5 m apart with the land 4 m down between them, a cleft beside the ride (km 2.3). Now
+    // where the side road's band (its carriageway and its verge, as drawn: WorldGround.sideRoadY) starts within
+    // CLEFT_GAP_M of the ride's verge, and the land between lies more than CLEFT_DIP_M under the lower of the two
+    // roads, ground at that lower road's height (as deep under it as the ground under a verge) runs from the ride's verge to CLEFT_TUCK_M into
+    // the side road's band, behind its wall's face: the two walls stand in one fill, the higher road's over it. None
+    // where a point of it would stand in a carriageway (Carriageways, as world-structures reads them). RoadMesh.edgeWorks
+    // lays it and the physics reads it (WorldGround.heightAt), both from here. Kept for each row until the side roads in
+    // residence change
+    cleftAt(index, sign) {
+        const p = this.route.points[index];
+        if (!p || p.bits & 7) return null;
+        if (!this.cleftRows) this.cleftRows = new Map();
+        const key = index * 2 + (sign > 0 ? 1 : 0);
+        if (this.cleftRows.has(key)) return this.cleftRows.get(key);
+        const [vn, vp] = RoadMesh.verges(p);
+        const reach = p.width / 2 + (sign > 0 ? vp : vn);
+        const ox = sign * Math.cos(p.heading), oz = -sign * Math.sin(p.heading);
+        const x = p.x + ox * reach, z = p.z + oz * reach, y = p.y + RoadMesh.LIFT_M;
+        const out = (() => {
+            let hit = null, low = Infinity;
+            for (let t = 0; t <= WorldEnvironment.CLEFT_GAP_M + 1e-9; t += 0.25) {
+                const side = t > 0 ? this.ground.sideRoadY(x + ox * t, z + oz * t, RoadSurface.VERGE_M) : null;
+                if (side !== null) { hit = { t, side }; break; }
+                const land = this.ground.tileHeight(x + ox * t, z + oz * t);
+                if (land !== null) low = Math.min(low, land);
+            }
+            if (!hit) return null;
+            // (only against the side road's own wall: a side road on a bank or level with the land beside the ride
+            // has a slope or land there, not a cleft between two walls)
+            const hx = x + ox * hit.t, hz = z + oz * hit.t;
+            let walled = false;
+            for (const runs of this.sideWalls.values()) {
+                for (const run of runs) {
+                    const r = WorldEnvironment.CLEFT_WALL_M;
+                    if (walled || hx < run.box[0] - r || hx > run.box[2] + r || hz < run.box[1] - r || hz > run.box[3] + r) continue;
+                    for (let i = 0; i + 1 < run.points.length && !walled; i++) {
+                        const a = run.points[i], b = run.points[i + 1], dx = b[0] - a[0], dz = b[2] - a[2], len = dx * dx + dz * dz;
+                        const u = len > 0 ? Math.max(0, Math.min(1, ((hx - a[0]) * dx + (hz - a[2]) * dz) / len)) : 0;
+                        walled = Math.hypot(a[0] + dx * u - hx, a[2] + dz * u - hz) <= r;
+                    }
+                }
+            }
+            if (!walled) return null;
+            // (the side road the lower of the two, by no more than CLEFT_STEP_M: the fill lies at its height and the
+            // ride's wall stands over it; a side road over the ride holds its own fill)
+            if (hit.side > y + RoadMesh.APRON_UNDER_M || hit.side < y - WorldEnvironment.CLEFT_STEP_M) return null;
+            const top = Math.min(y, hit.side);
+            if (!(low < top - WorldEnvironment.CLEFT_DIP_M)) return null;
+            // (under the side road's centre line as far as the ground under the ride's verge lies: its edge is held a
+            // little lower, RoadMesh.SIDE_GROUND_UNDER_M)
+            const fy = Math.min(y - RoadMesh.APRON_UNDER_M, hit.side - RoadMesh.SIDE_GROUND_UNDER_M), run = hit.t + WorldEnvironment.CLEFT_TUCK_M;
+            const guard = this.carriageways.guard(-1);
+            for (let t = 0; t <= run + 1e-9; t += 0.25) if (!guard.clear(x + ox * t, z + oz * t, fy - 0.05, fy)) return null;
+            return { y: fy, run, at: [x + ox * run, fy, z + oz * run] };
+        })();
+        this.cleftRows.set(key, out);
+        return out;
     }
 
     // The markings of every ride row, made once: the rules of RoadSurface.styles on the real road's class, then each
@@ -1629,6 +1702,8 @@ class WorldEnvironment {
             return low;
         };
         if (aprons) foot.mouth = atMouth;
+        // The ground that closes a narrow gap between the ride's row i and a side road beside it (cleftAt)
+        if (aprons) foot.cleft = (i, sign) => this.cleftAt(i, sign);
         // Whether a side road's edge point stands in the ride's carriageway or its verge, with its coping over the
         // ride's surface there: the side road's walls keep out of the ride's road (RoadMesh.atMouth). Where a side road
         // leaves beside the ride, its wall stood in the ride's verge with its coping 0.28 to 0.38 m over it
@@ -1805,6 +1880,7 @@ class WorldEnvironment {
         }
         if (sign(old) === sign(runs)) return;
         this.faceStamp++;
+        if (this.cleftRows) this.cleftRows.clear();
         if (runs.length) this.sideWalls.set(k, runs);
         else this.sideWalls.delete(k);
         for (const run of old.concat(runs)) this.dropCuts(run.box);
@@ -2140,6 +2216,7 @@ class WorldEnvironment {
         this.sideEdges.set(k, edgesHere);
         this.triangleCount += triangles;
         if (this.goreRows) this.goreRows.clear();
+        if (this.cleftRows) this.cleftRows.clear();
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
         // The ride sections built before this chunk's roads were known keep out of them now
         this.rebuildWaiting(`chunk:${k}`);
@@ -2214,6 +2291,7 @@ class WorldEnvironment {
         this.sideMeshes.delete(k);
         this.sideEdges.delete(k);
         if (this.goreRows) this.goreRows.clear();
+        if (this.cleftRows) this.cleftRows.clear();
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
     }
 

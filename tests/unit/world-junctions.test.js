@@ -86,6 +86,7 @@ describe('the Tremola slice: every side road meets the ride', () => {
         const faults = [];
         if (found.strips.length > JUNCTION_LIMITS.strips) faults.push(`${found.strips.length} side roads with land, laid ground or the ride's verge drawn over them in their mouth:\n${list(found.strips)}`);
         if (found.pits.length > JUNCTION_LIMITS.pits) faults.push(`${found.pits.length} side roads with a gap under the line between them and the ride beside them:\n${list(found.pits)}`);
+        if (found.clefts.length > JUNCTION_LIMITS.clefts) faults.push(`${found.clefts.length} side roads with a narrow gap open to the land between them and the ride beside them:\n${list(found.clefts)}`);
         if (faults.length) throw new Error(faults.join('\n'));
     });
 
@@ -125,5 +126,6 @@ describe('the synthetic fixture world: no wall of the ride stands across a side 
         expect(found.walls).toEqual([]);
         expect(found.blocked).toEqual([]);
         expect(found.cliffs).toEqual([]);
+        expect(found.clefts).toEqual([]);
     });
 });

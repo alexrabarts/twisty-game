@@ -1451,6 +1451,25 @@ class RoadMesh {
                     for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) RoadMesh.quad(pavingOut, at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1), [c, c, c, c]);
                 }
             }
+            // The ground that closes a narrow gap between the ride and a side road beside it (WorldEnvironment.cleftAt),
+            // between two rows that both have it, from the verge's edge out at the lower road's height
+            for (const key of ['l', 'r']) {
+                if (sides.owner >= 0 || !foot || !foot.cleft || !Number.isFinite(sides[k].i) || !Number.isFinite(sides[k + 1].i)) continue;
+                const sign = key === 'r' ? 1 : -1, ca = foot.cleft(sides[k].i, sign), cb = foot.cleft(sides[k + 1].i, sign);
+                if (!ca && !cb) continue;
+                // (at the end of a run the fill comes down to the land at the next row, over the same run: ended level
+                // at that row, its side stood open over the land metres down)
+                const down = (j, c) => {
+                    const p = sides[j][key], o = RoadMesh.outward(sides[j])[key], q = [p[0] + o[0] * c.run, 0, p[2] + o[1] * c.run];
+                    const lp = landAt ? landAt(p[0], p[2]) : null, lq = landAt ? landAt(q[0], q[2]) : null;
+                    return lp === null || lq === null ? null : { y: Math.min(c.y, lp), at: [q[0], Math.min(c.y, lq), q[2]] };
+                };
+                const fa = ca || down(k, cb), fb = cb || down(k + 1, ca);
+                if (!fa || !fb) continue;
+                const na = [sides[k][key][0], fa.y, sides[k][key][2]], nb = [sides[k + 1][key][0], fb.y, sides[k + 1][key][2]];
+                const tint = RoadMesh.APRON_LINEAR;
+                RoadMesh.quad(apronOut, na, nb, fb.at, fa.at, [tint, tint, tint, tint]);
+            }
             for (const key of ['l', 'r']) {
                 const kind = kindOf(k, key);
                 if (!kind) continue;

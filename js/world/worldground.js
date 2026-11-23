@@ -213,6 +213,15 @@ class WorldGround extends Ground {
         // the wall's side to the road; over the wall's thickness its coping, WALL_MIN_UP_M over the road (wallBand)
         const band = this.wallBand(loc, half);
         if (band && reach >= band.from && reach <= band.to) return loc.roadY + (coping ? RoadMesh.COPING_UP_M : 0) + lift;
+        // Past the verge, the ground that closes a narrow gap between the ride and a side road beside it, as it is
+        // drawn between two rows that both have it (WorldEnvironment.cleftAt)
+        if (this.cleftAt && loc.index >= 0) {
+            const sign = Math.sign(loc.lateral || 1), a = this.cleftAt(loc.index, sign), b = this.cleftAt(loc.index + 1, sign);
+            const edge = half + this.vergeAt(loc.index, loc.lateral, loc.t), t = Math.max(0, Math.min(1, loc.t || 0));
+            // (and at the end of a run, coming down to the land at the next row)
+            const run = a ? (b ? a.run + (b.run - a.run) * t : a.run) : b ? b.run : 0;
+            if ((a || b) && reach > edge && reach - edge <= run) return Math.max(land, a && b ? a.y + (b.y - a.y) * t : a ? a.y + (Math.min(a.y, land) - a.y) * t : b.y + (Math.min(b.y, land) - b.y) * (1 - t));
+        }
         if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach, lift));
         if (band) return reach < band.from ? loc.roadY + lift : land;
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the

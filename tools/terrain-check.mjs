@@ -5389,7 +5389,8 @@ async function wallEye(placeSource, eye) {
 // step or a hole in a side road's surface from the junction out, land over it, a deck or parapet in its mouth, an
 // edge that hangs open there, the ride's wall, coping or parapet drawn across its mouth, a mouth the physics
 // shuts with the ride's wall band, land, laid ground or the ride's verge drawn over it in its mouth (`strips`) and a
-// gap between it and the ride beside it at one height (`pits`), over what JUNCTION_LIMITS holds. With --out, two views of every junction --at names
+// gap between it and the ride beside it at one height (`pits`) or a narrow one open to the land at any heights
+// (`clefts`), over what JUNCTION_LIMITS holds. With --out, two views of every junction --at names
 // (all of them without it) are saved as the frame alone: from the ride before the junction, and from over the side
 // road looking back at it. --eyes s@x:y:z:tx:ty:tz adds views in the world's own metres.
 //   node tools/terrain-check.mjs world-junctions --world tremola --gpu [--at j7,j12] [--eyes ...] [--out <dir> --tag T]
@@ -5412,7 +5413,7 @@ WORLD['world-junctions'] = async (page) => {
             const node = rows[0], far = rows[rows.length - 1];
             return { junction: road.junction, edge: road.edge, s: Math.max(env.startS + 1, road.s), back: [far.x, far.y + 7, far.z, node.x, node.y, node.z] };
         });
-        for (const kind of ['steps', 'holes', 'sunk', 'decks', 'open', 'walls', 'blocked', 'cliffs', 'strips', 'pits']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 12) };
+        for (const kind of ['steps', 'holes', 'sunk', 'decks', 'open', 'walls', 'blocked', 'cliffs', 'strips', 'pits', 'clefts']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 12) };
         return out;
     }, junctionWindow.toString(), junctionReport.toString(), placeAt.toString());
     const out = option('out');
@@ -5444,7 +5445,7 @@ function junctionChecks(results, failures) {
     const junctions = results['world-junctions'];
     if (!junctions) return;
     if (!(junctions.roads >= 20)) failures.push(`world-junctions: only ${junctions.roads} side roads were read`);
-    const says = { steps: 'side roads with a step in their surface', holes: 'side roads with a hole in their surface', sunk: 'side roads with land over their surface', decks: 'side roads with a deck or parapet in their mouth', open: 'side roads whose edge hangs open in their mouth', walls: 'side roads with a wall of the ride drawn across their mouth', blocked: 'side roads whose mouth the physics shuts with the ride\'s wall', cliffs: 'side roads with a face of laid ground beside the other road in their mouth', strips: 'side roads with land, laid ground or the ride\'s verge drawn over them in their mouth', pits: 'side roads with a gap under the line between them and the ride beside them' };
+    const says = { steps: 'side roads with a step in their surface', holes: 'side roads with a hole in their surface', sunk: 'side roads with land over their surface', decks: 'side roads with a deck or parapet in their mouth', open: 'side roads whose edge hangs open in their mouth', walls: 'side roads with a wall of the ride drawn across their mouth', blocked: 'side roads whose mouth the physics shuts with the ride\'s wall', cliffs: 'side roads with a face of laid ground beside the other road in their mouth', strips: 'side roads with land, laid ground or the ride\'s verge drawn over them in their mouth', pits: 'side roads with a gap under the line between them and the ride beside them', clefts: 'side roads with a narrow gap open to the land between them and the ride beside them' };
     for (const [kind, text] of Object.entries(says)) {
         if (junctions[kind].count > JUNCTION_LIMITS[kind]) failures.push(`world-junctions: ${junctions[kind].count} ${text} (at most ${JUNCTION_LIMITS[kind]}): ${JSON.stringify(junctions[kind].worst.slice(0, 5))}`);
     }
