@@ -109,8 +109,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
         for (const g of mesh.geometry.groups) {
             if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(mesh, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
             // The decks, soffits and tubes (and their parapets): a road that goes on over a structure hangs over nothing
-            // (a viaduct's stone, group 4, is a structure as a deck is)
-            if (g.materialIndex === 1 || g.materialIndex === 4) decks.push(gridOf(mesh, g.start, g.count, 4, `deck${g.materialIndex}`));
+            // (a viaduct's stone, groups 4 and 5, is a structure as a deck is)
+            if (g.materialIndex === 1 || g.materialIndex >= 4) decks.push(gridOf(mesh, g.start, g.count, 4, `deck${g.materialIndex}`));
             if (g.materialIndex === 2) stone.push({ mesh, start: g.start, count: g.count, owners });
         }
     };

@@ -114,8 +114,8 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(o, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
                     if (g.materialIndex === 0) laid.push({ mesh: o, start: g.start, count: g.count, ride: rideGroups.has(group) });
                     // The concrete (decks, soffits, piers, tubes and their parapets) of the side roads, by its road
-                    else if (g.materialIndex === 1 || g.materialIndex === 4) built.push({ mesh: o, start: g.start, count: g.count, owners });
-                    if (g.materialIndex === 1 || g.materialIndex === 2 || g.materialIndex === 4) upright.push(facesOf(o, g.start, g.count, `faces${g.materialIndex}`));
+                    else if (g.materialIndex === 1 || g.materialIndex >= 4) built.push({ mesh: o, start: g.start, count: g.count, owners });
+                    if (g.materialIndex === 1 || g.materialIndex === 2 || g.materialIndex >= 4) upright.push(facesOf(o, g.start, g.count, `faces${g.materialIndex}`));
                     // (the ride's own stone, its walls and their copings: a top in plan over a side road shuts it)
                     if (g.materialIndex === 2 && rideGroups.has(group)) stone.push(gridOf(o, g.start, g.count, 4, 'stone'));
                 }

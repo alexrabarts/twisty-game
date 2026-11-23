@@ -122,8 +122,8 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             if (o.name === 'road-works') {
                 for (const g of o.geometry.groups) {
                     if (g.materialIndex === 0 || g.materialIndex === 3) { laid.push(gridOf(o, g.start, g.count, 4, `laid${g.materialIndex}`)); ground.push({ mesh: o, start: g.start, count: g.count }); }
-                    // (a viaduct's stone, group 4, is a structure as a deck is)
-                    if (g.materialIndex === 1 || g.materialIndex === 4) decks.push(gridOf(o, g.start, g.count, 4, `deck${g.materialIndex}`));
+                    // (a viaduct's stone, groups 4 and 5, is a structure as a deck is)
+                    if (g.materialIndex === 1 || g.materialIndex >= 4) decks.push(gridOf(o, g.start, g.count, 4, `deck${g.materialIndex}`));
                     if (g.materialIndex === 2) { stone.push({ mesh: o, start: g.start, count: g.count }); tops.push(gridOf(o, g.start, g.count, 4, 'stone')); }
                 }
                 if (o.geometry.userData.viaduct) arches.push(o);
@@ -200,12 +200,13 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         return false;
     };
 
-    // A viaduct's upright stone (its faces, its arches' sides: group 4) hides the land behind it as a wall's does
+    // A viaduct's upright stone (its faces: group 4; its arches' sides and a blind face's back: group 5) hides the land
+    // behind it as a wall's does
     const archQuads = [];
     for (const mesh of arches) {
         const pos = mesh.geometry.attributes.position;
         for (const g of mesh.geometry.groups) {
-            if (g.materialIndex !== 4) continue;
+            if (g.materialIndex < 4) continue;
             for (let i = g.start; i + 5 < g.start + g.count; i += 6) {
                 const q = [0, 1, 2, 5].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(mesh.matrixWorld); return [v.x, v.y, v.z]; });
                 const ys = q.map(c => c[1]), plan = Math.abs((q[1][0] - q[0][0]) * (q[2][2] - q[0][2]) - (q[2][0] - q[0][0]) * (q[1][2] - q[0][2]));

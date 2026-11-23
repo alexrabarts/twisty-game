@@ -9,6 +9,8 @@
 //      layout, no wall stands on them and walls stand under both edges into its ends, its bays are whole, no land stands
 //      over an arch's intrados inside its bay and no land round it is wound upside down, the physics' parapet is its own, and the chase camera has its faces (down to
 //      the ground, as the walls' were) and its arches' sides
+//   4. its stone is a retaining wall's: the same material, its faces laid and lit as a wall's face, the stone under its
+//      deck lit as its arch's face turned down, never more than that face
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
@@ -183,6 +185,50 @@ function holds(env) {
     }
 }
 
+// A viaduct's stone is a retaining wall's: the same material, its faces laid and lit as a wall's face (`wallFace` 1,
+// a level normal), and the stone under its deck (vaults, arches' sides, a blind face's back: group 5, the same
+// material) lit as the face its arch opens in, turned down VAULT_TILT: for any sun above the horizon no more light falls
+// on it than on that face. Lit by their own way, the arches' insides glowed white in the rain at km 7.9
+function stone(env) {
+    let meshes = 0, faces = 0, under = 0;
+    const tilt = RoadMesh.VAULT_TILT;
+    expect(tilt).toBeGreaterThan(0);
+    env.group.traverse(o => {
+        if (!o.isMesh || o.name !== 'road-works') return;
+        const g = o.geometry, group = g.groups.find(x => x.materialIndex === 4);
+        if (!group) return;
+        meshes++;
+        expect(o.material[4]).toBe(o.material[2]);
+        expect(o.material[5]).toBe(o.material[2]);
+        const normal = g.attributes.normal, face = g.attributes.wallFace, pos = g.attributes.position;
+        for (let v = group.start; v < group.start + group.count; v++) if (face.getY(v) === 1) {
+            faces++;
+            expect(Math.abs(normal.getY(v))).toBeLessThan(1e-6);
+        }
+        const vault = g.groups.find(x => x.materialIndex === 5);
+        for (const [start, count] of g.userData.viaduct.soffits) for (let v = start; v < start + count; v++) expect(v >= vault.start && v < vault.start + vault.count).toBe(true);
+        for (let v = vault.start; v < vault.start + vault.count; v++) {
+            under++;
+            const nx = normal.getX(v), ny = normal.getY(v), nz = normal.getZ(v);
+            expect([v, ny]).toEqual([v, expect.closeTo(-Math.sin(tilt), 6)]);
+            expect(Math.hypot(nx, nz)).toBeCloseTo(Math.cos(tilt), 6);
+            // (its level part is the outward of an open face of the viaduct it is under: the nearest one's)
+            const x = pos.getX(v), z = pos.getZ(v);
+            let best = null;
+            for (const via of env.viaducts) for (let i = via.from; i <= via.to; i++) {
+                const p = env.route.points[i], d = Math.hypot(p.x - x, p.z - z);
+                if (!best || d < best.d) best = { d, p, via };
+            }
+            const ox = Math.cos(best.p.heading), oz = -Math.sin(best.p.heading), along = Math.abs(nx * ox + nz * oz) / Math.cos(tilt);
+            expect(along).toBeGreaterThan(0.9);
+            expect(face.getY(v)).toBe(1);
+        }
+    });
+    expect(meshes).toBeGreaterThan(0);
+    expect(faces).toBeGreaterThan(0);
+    expect(under).toBeGreaterThan(0);
+}
+
 describe('the shipped stage', () => {
     let env;
     beforeAll(async () => {
@@ -195,6 +241,8 @@ describe('the shipped stage', () => {
     });
 
     test('every viaduct holds to the rules', () => holds(env));
+
+    test('its stone is a retaining wall\'s, and its vaults face down', () => stone(env));
 });
 
 describe('the synthetic world', () => {
@@ -205,6 +253,8 @@ describe('the synthetic world', () => {
     }, 1800000);
 
     test('every viaduct holds to the rules', () => holds(env));
+
+    test('its stone is a retaining wall\'s, and its vaults face down', () => stone(env));
 
     test('the stretch over the ride\'s own lower leg has none: no pier can stand clear of it', () => {
         expect(env.viaducts.filter(v => v.s1 > 1659 && v.s0 < 1735)).toEqual([]);

@@ -2508,7 +2508,7 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                             raycaster.far = 2 + RoadMesh.COPING_UP_M;
                             const road = raycaster.intersectObjects([...roads, ...skirts], false)[0];
                             // A retaining wall or its parapet (works group 1 or 2), a viaduct's stone (4), is not ground: the physics there is the wall
-                            if (road && road.object.name === 'road-works' && (road.face.materialIndex === 1 || road.face.materialIndex === 2 || road.face.materialIndex === 4)) continue;
+                            if (road && road.object.name === 'road-works' && (road.face.materialIndex === 1 || road.face.materialIndex === 2 || road.face.materialIndex >= 4)) continue;
                             const drawn = road ? Math.max(near.y, road.point.y) : near.y;
                             physics.push({ s: Math.round(p.s), side: side > 0 ? 'right' : 'left', offset: r2(o), deltaM: r2(ground - drawn) });
                         }
@@ -3236,7 +3236,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
             }
             for (const group of g.groups) {
                 // (decks and a viaduct's stone are structures, read as such elsewhere)
-                if (group.materialIndex === 1 || group.materialIndex === 4) continue;
+                if (group.materialIndex === 1 || group.materialIndex >= 4) continue;
                 const kind = group.materialIndex === 0 || group.materialIndex === 3 ? 'apron' : 'wall';
                 // No piece of an apron or a wall stands over another road's carriageway (a tongue of fill off an
                 // upper hairpin leg reaching out over the lower one): its corners and its centre are read
@@ -3649,7 +3649,7 @@ const WORLD = {
         // A retaining wall, deck or parapet of the edge works is a structure, not ground (the physics treats it so)
         const hitY = (x, z, groups, from = 4000) => {
             raycaster.set(new THREE.Vector3(x, from, z), down);
-            const hit = raycaster.intersectObjects(groups, true).find(h => !(h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2 || h.face.materialIndex === 4)));
+            const hit = raycaster.intersectObjects(groups, true).find(h => !(h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2 || h.face.materialIndex >= 4)));
             return hit ? hit.point.y : null;
         };
         const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
@@ -5434,7 +5434,7 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
     const kerbs = new Map(), K = Scenery.KERB;
     game.worldLinger = false;
     const raycaster = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
-    const structure = h => h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2 || h.face.materialIndex === 4);
+    const structure = h => h.object.name === 'road-works' && (h.face.materialIndex === 1 || h.face.materialIndex === 2 || h.face.materialIndex >= 4);
     const drawn = [env.tileGroup, env.roadGroup, env.sideGroup];
     const hits = (x, z, from) => { raycaster.set(new THREE.Vector3(x, from, z), down); return raycaster.intersectObjects(drawn, true); };
     const groundY = (x, z, from) => { const hit = hits(x, z, from).find(h => !structure(h)); return hit ? hit.point.y : null; };
