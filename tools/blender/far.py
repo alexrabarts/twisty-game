@@ -213,23 +213,27 @@ def tyre(shape, axle):
     x0, x1 = min(xs), max(xs)
     bead = min(radius(shape.points[i]) for i in on)
     step = (x1 - x0) / (TYRE_STATIONS - 1)
-    profile = [(x0 + (x1 - x0) * 0.12, bead)]
+    # The bead sits flush with the side, so each sidewall is a flat ring facing out along the axle: a bead set in
+    # tilted it towards the axle, and on a tall narrow tyre most of the tyre then faced into the wheel
+    profile = [(x0, bead)]
     for n in range(TYRE_STATIONS):
         x = x0 + step * n
         near = [radius(shape.points[i]) for i in on if abs(shape.points[i][0] - x) <= step / 2]
         profile.append((x, max(near) if near else bead))
-    profile.append((x1 - (x1 - x0) * 0.12, bead))
+    profile.append((x1, bead))
     count = len(profile)
     points = []
     for s in range(TYRE_SEGMENTS):
         t = 2 * math.pi * s / TYRE_SEGMENTS
         points += [(x, axle[0] + r * math.cos(t), axle[1] + r * math.sin(t)) for x, r in profile]
+    # The profile runs +x along the tread and the segments turn the right way about +x, so a face wound
+    # n, m then the next segment would face the axle: the tread is wound the other way round, to face out
     tris = []
     for s in range(TYRE_SEGMENTS):
         a, b = s * count, ((s + 1) % TYRE_SEGMENTS) * count
         for n in range(count):
             m = (n + 1) % count
-            for face in ((a + n, a + m, b + m), (a + n, b + m, b + n)):
+            for face in ((a + n, b + m, a + m), (a + n, b + n, b + m)):
                 tris.append((rubber, [(points[i], 1.0) for i in face]))
     rest = shape.keep([name != rubber for name in shape.names])
     return tris, rest, shape.keep([name == rubber for name in shape.names])
