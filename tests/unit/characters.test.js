@@ -95,13 +95,16 @@ describe('the roster', () => {
 });
 
 describe('the physics of a rider on a bike', () => {
-    test.each(game.CHARACTERS.map(c => [c.id, c]))('%s rides their first bike on their own physics, unchanged', (id, character) => {
+    test.each(game.CHARACTERS.map(c => [c.id, c]))('%s rides their first bike on their own physics, unchanged but for the mass of the two', (id, character) => {
         const vehicle = ride(id);
         const physics = character.physics;
+        // The rider's weight moves the pull, the brake and the lean rate by the rule (RIDER_MASS,
+        // tests/unit/rider-mass.test.js), and nothing else
+        const mass = field => game.Vehicle.massScale(character, character.bikes[0], field);
         expect(vehicle.maxSpeed).toBe(68 * physics.maxSpeed);
-        expect(vehicle.acceleration).toBe(15 * physics.acceleration);
-        expect(vehicle.brakeForce).toBe(14 * physics.brakeForce);
-        expect(vehicle.steeringForce).toBe(14.25 * physics.steeringForce);
+        expect(vehicle.acceleration).toBe(15 * (mass('acceleration') === 1 ? physics.acceleration : physics.acceleration * mass('acceleration')));
+        expect(vehicle.brakeForce).toBe(14 * (mass('brakeForce') === 1 ? physics.brakeForce : physics.brakeForce * mass('brakeForce')));
+        expect(vehicle.steeringForce).toBe(14.25 * (mass('steeringForce') === 1 ? physics.steeringForce : physics.steeringForce * mass('steeringForce')));
         expect(vehicle.comfortShake).toBe(physics.comfortShake);
         expect(game.Vehicle.physicsOf(character, character.bikes[0])).toEqual(physics);
     });
@@ -585,7 +588,9 @@ const CARD = {
     lucy: { speed: 2, accel: 3, handling: 5, jump: 3, comfort: 4 },
     guy: { speed: 3, accel: 3, handling: 4, jump: 3, comfort: 4 }
 };
-const DIFFERS = { steve: ['speed', 'comfort'], alex: ['jump'], lucy: ['jump'], guy: ['speed', 'handling'] };
+// (since the rider's weight the acceleration and handling bars are the pair's, Vehicle.pairOf and RIDER_MASS: the two
+// heaviest riders' acceleration and handling on their first bikes and the scooter rider's handling moved a star)
+const DIFFERS = { steve: ['speed', 'accel', 'handling', 'comfort'], alex: ['jump'], tim: ['handling'], shane: ['accel', 'handling'], lucy: ['jump'], guy: ['speed', 'handling'] };
 
 // Vehicle.physicsOf for every rider on every bike of theirs, as it was before the traits (commit 411016e), to six
 // places: the traits set the stars and the crew's pace, and none of these multipliers. (Of the player's physics the

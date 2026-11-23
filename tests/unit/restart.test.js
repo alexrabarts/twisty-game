@@ -461,7 +461,7 @@ describe('a world crash restarts in place by itself', () => {
     test('a call-out for a crash or a restart stays up twice as long as the fall is watched', () => {
         const rule = Game.WORLD_CRASH;
         expect(Game.CALLOUT_MS.crash).toBe(2 * rule.mostS * 1000);
-        expect(Game.CALLOUT_MS).toEqual({ crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400, brush: 1500 });
+        expect(Game.CALLOUT_MS).toEqual({ crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400, brush: 1500, foot: 2000 });
         const game = worldGame();
         shown.length = 0;
         game.beginWorldCrash('Hit the wall');

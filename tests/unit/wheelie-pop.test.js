@@ -89,7 +89,8 @@ describe('the two facts of a bike', () => {
         for (const character of CHARACTERS) {
             for (const id of character.bikes) {
                 const v = new Vehicle(new game.THREE.Scene(), null, character, id, { model: false });
-                expect(v.wheelieBike).toEqual(Vehicle.wheelieOf(id));
+                // With the real rider (Vehicle.wheelieOf, the rider's weight: tests/unit/rider-mass.test.js)
+                expect(v.wheelieBike).toEqual(Vehicle.wheelieOf(id, Vehicle.riderKgOf(character)));
             }
         }
         expect(Vehicle.wheelieOf('no such bike')).toEqual(Vehicle.wheelieOf(RULE.usual));

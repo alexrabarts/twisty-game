@@ -23,6 +23,10 @@ import { landBike, landTick, paceOn, steepest, sustained, crashSpeed, capability
 
 const DT = 1 / 60;
 const game = loadGame();
+// The rides here are held against commits from before the rider's weight (RIDER_MASS, Vehicle.pairOf), or measure
+// the bike alone: every character rides at the reference weight, at which that rule moves nothing to the last bit
+// (tests/unit/rider-mass.test.js holds the rule itself)
+for (const character of game.CHARACTERS) delete character.kg;
 const world = game.WorldPhysics;
 const rad = d => d * Math.PI / 180;
 const TRAIL = ['lucy', 'bike15_crf250'], SINGLE = ['guy', 'bike05_g310gs'], TRIPLE = ['alex', 'bike10_tiger900'], SCRAMBLER = ['guy', 'bike04_scrambler'];
@@ -273,7 +277,8 @@ describe('a bike with no trait is unchanged', () => {
     test('every bike without the trait reads the world\'s own land values, and never slides', () => {
         for (const who of ROAD_BIKES) {
             const v = bike(who, 8, true);
-            expect(v.landValues()).toBe(world);
+            // (the world's own, as this bike reads the world: a bike with a lean limit of its own has that in it)
+            expect(v.landValues()).toBe(v.worldPhysics);
             expect(turn(who, true, { speed: 9, leanDeg: 42, seconds: 2 })).toMatchObject({ crashed: true, at: 0.2, cause: 'Lost the front on the grass', slide: 0 });
         }
     });
@@ -479,7 +484,8 @@ describe('degrees of off-road capability', () => {
         for (const who of plain) {
             for (const cover of [5, 4, 1]) expect([who[1], cover, paceOn(game, who, cover)]).toEqual([who[1], cover, paceOn(before, who, cover)]);
             expect(crashSpeed(game, who)).toBe(crashSpeed(before, who));
-            expect(landBike(game, who).landValues()).toBe(world);
+            const own = landBike(game, who);
+            expect(own.landValues()).toBe(own.worldPhysics);
             // The same ride, step for step: 6 s from 20 m/s on the land at full throttle, on rock, up a slope of 0.3
             const a = landBike(before, who, { speed: 20, slope: 0.3, cover: 3 }), b = landBike(game, who, { speed: 20, slope: 0.3, cover: 3 });
             // The numbers of the owner's tuning (2026-11-21) are today's in both: the comparison is of the land's rule

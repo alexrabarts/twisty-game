@@ -12,6 +12,10 @@ import { samplesOf, fakeData, allTiles, straight } from '../helpers/world-synthe
 
 const DT = 1 / 60;
 const game = loadGame();
+// The rides here are held against commits from before the rider's weight (RIDER_MASS, Vehicle.pairOf), or measure
+// the bike alone: every character rides at the reference weight, at which that rule moves nothing to the last bit
+// (tests/unit/rider-mass.test.js holds the rule itself)
+for (const character of game.CHARACTERS) delete character.kg;
 const { THREE, WorldRoute, WorldGround, WorldPhysics, WorldData } = game;
 const BEFORE = 'de5a931';
 const quiet = { log() {}, warn() {}, error() {} };

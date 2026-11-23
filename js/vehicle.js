@@ -254,9 +254,16 @@ const OUTFITS = {
 // shoulders, the hips and the girth), which the game applies to the one mesh.
 // `bodyLean` (0 to 1) is how far the rider's body goes into a turn past the bike's
 // own lean: drawn only, for the player and for a rider of the group alike.
+// `kg` is the rider's weight: with the bike's own it is the mass the handling
+// reads (RIDER_MASS, Vehicle.pairOf); a character without it weighs the 80 kg
+// the bikes' numbers were set for. `footSlopeDeg` is the steepest ground on
+// which the rider reaches it with a foot at a stop: on steeper ground the bike
+// tips over (FOOT_REACH, Vehicle.footReach); without it the rider reaches the
+// ground anywhere.
 const CHARACTERS = [
     {
         id: 'steve',
+        kg: 100,
         name: 'Steve',
         bikeLabel: 'Retro sports triple',
         bikeColor: '0x021b74', // Deep blue tank, gold wheels
@@ -286,6 +293,7 @@ const CHARACTERS = [
     },
     {
         id: 'alex',
+        kg: 90,
         name: 'Alex',
         bikeLabel: 'Naked triple',
         bikeColor: '0x020202', // Matt black, red pinstripes
@@ -314,6 +322,7 @@ const CHARACTERS = [
     },
     {
         id: 'tim',
+        kg: 90,
         name: 'Tim',
         bikeLabel: 'Sports scooter',
         bikeColor: '0x030925', // Deep blue over silver and black
@@ -344,6 +353,7 @@ const CHARACTERS = [
     },
     {
         id: 'shane',
+        kg: 100,
         name: 'Shane',
         bikeLabel: 'Light naked single',
         bikeColor: '0x010101', // Black, white shrouds, orange frame
@@ -374,6 +384,8 @@ const CHARACTERS = [
     },
     {
         id: 'lucy',
+        kg: 55,
+        footSlopeDeg: 5,
         name: 'Lucy',
         bikeLabel: 'Trail single',
         bikeColor: '0xa00102', // Red, white and black blocks
@@ -411,6 +423,7 @@ const CHARACTERS = [
     },
     {
         id: 'guy',
+        kg: 80,
         name: 'Guy',
         bikeLabel: 'Retro scrambler',
         bikeColor: '0x750102', // Red tank, black side panels
@@ -490,6 +503,9 @@ const LEG_OFFROAD = { drag: 0.15, grip: 0.7, floorSpeed: 10 };
 // is the bike's weight ready to ride, and `spare` (0 to 1) the power it has to spare at speed, about 1.75 x its peak
 // kW for each kg of bike and an 80 kg rider, at most 1; 0 for a bike with no clutch to slip and a belt that varies
 // its own gearing, which can snap no drive to the wheel. .agent/system/handling.md has the rule.
+// `leanMaxDeg` is the most the bike itself leans, in a world's degrees, before something under it grounds (a
+// scooter's floorboards and centre stand): no rider, mode or tuning leans it further (Vehicle.leanMostOf). A bike
+// without it is held by the grip and the rider's daring alone.
 const BIKE_MODELS = {
     bike01_z650: { kind: 'naked', cls: 'naked', kg: 187, spare: 0.33, name: 'Middleweight naked twin', year: 2020, paint: 0x010101, mirror: true, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.24 } },
     bike02_speed_triple: { kind: 'naked', cls: 'naked', kg: 214, spare: 0.66, name: 'Naked triple, matt black', year: 2018, paint: 0x020202, mirror: true, rearBrake: 'left', drive: 'chain', luggage: true, pose: { torsoLean: 0.3 } },
@@ -506,7 +522,7 @@ const BIKE_MODELS = {
     bike12_tracer9gt: { kind: 'adventure', cls: 'tourer', kg: 220, spare: 0.51, name: 'Sports tourer triple, silver', year: 2022, paint: 0x636770, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.16 } },
     bike13_panigale: { kind: 'sport', cls: 'supersport', kg: 198, spare: 1, name: 'V4 superbike, red', year: 2020, paint: 0x930106, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike13_panigale_black: { kind: 'sport', cls: 'supersport', kg: 198, spare: 1, name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
-    bike14_forza: { kind: 'scooter', cls: 'scooter', kg: 182, spare: 0, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
+    bike14_forza: { kind: 'scooter', cls: 'scooter', kg: 182, spare: 0, leanMaxDeg: 45, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
     bike15_crf250: { kind: 'dirt', cls: 'adventure', light: true, offroad: 1, kg: 146, spare: 0.1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
     bike16_superadv: { kind: 'adventure', cls: 'adventure', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
 };
@@ -592,8 +608,11 @@ class Vehicle {
         this.outfit = Vehicle.outfitOf(this.character, options.outfit);
         this.bike = Vehicle.kindOf(this.model);
         this.offroad = Vehicle.offroadOf(this.model);
-        // How light the bike is and the power it has to spare, which shape its wheelie (Vehicle.popShare, liftShare)
-        this.wheelieBike = Vehicle.wheelieOf(this.model);
+        // The rider's weight, which with the bike's is the mass the handling reads (RIDER_MASS, Vehicle.pairOf)
+        this.riderKg = Vehicle.riderKgOf(this.character);
+        // How light the bike and its rider are and the power they have to spare, which shape the wheelie
+        // (Vehicle.popShare, liftShare)
+        this.wheelieBike = Vehicle.wheelieOf(this.model, this.riderKg);
         // Where the wheels turn and how big they are, [y, z, radius] in the
         // bike's axes: the procedural bike's, until a modelled bike brings
         // its own (BikeModels). Only the drawing reads them; the handling
@@ -692,6 +711,16 @@ class Vehicle {
         this.wheelSlip = 0; // The drawn rear wheel's turn over the front's, from the slide
         this.footDown = false; // At a crawl near upright: a foot down, no fall
         this.tipTimerS = 0; // Time under fallSpeed leaned past tipLeanDeg
+        // The rider's reach at a stop (FOOT_REACH, Vehicle.footReach): the steepest ground a foot reaches, as rise over
+        // run (Infinity for a rider who reaches it anywhere); whether the bike has moved off since the last reset; how
+        // long it has stood on steeper ground; whether the hint may be given (the bike has been over its band since
+        // the last), and the frame it is
+        this.footSlope = Vehicle.footSlopeOf(this.character);
+        this.footArmed = false;
+        this.footStillS = 0;
+        this.footHint = false;
+        this.footWarnNew = false;
+        this.worldHeading = 0; // The route's heading under the bike (syncWorldSurface): the way its grade rises
         this.crashCause = null; // What the crash card says caused a world crash
         this.crashWhy = null; // The class of the cause (Vehicle.CRASH_CAUSES): what the rider's fall is drawn by
         this.landFastS = 0; // Time on the land over landCrashSpeed
@@ -714,10 +743,19 @@ class Vehicle {
         // How far this rider dares to lean, over the bike's own limit: in the leg's limit here, in a world's by riderWorld
         this.leanDare = Vehicle.leanOf(this.character);
         this.maxLeanAngle *= this.leanDare;
+        // The most the bike itself leans (BIKE_MODELS leanMaxDeg, Vehicle.leanMostOf), over every rider, mode and
+        // tuning: in a world's radians, and as a leg's lean (BIKE_LEAN legPerWorld). Infinity for a bike with none
+        this.leanMostDeg = Vehicle.leanMostOf(this.model);
+        this.leanMostRad = this.leanMostDeg * Math.PI / 180;
+        this.leanMostLeg = this.leanMostRad * BIKE_LEAN.legPerWorld;
+        // The lean rate by the mass of the bike and its rider (RIDER_MASS): a world's lean rate reads it here, a leg's in
+        // steeringForce (Vehicle.pairOf)
+        this.leanMass = Vehicle.massScale(this.character, this.model, 'steeringForce');
 
         // Apply per-character stat multipliers to the baseline physics,
-        // scaled for a bike other than the character's first
-        const charPhysics = Vehicle.physicsOf(this.character, this.model);
+        // scaled for a bike other than the character's first, and by the
+        // mass of the bike and its rider (Vehicle.pairOf)
+        const charPhysics = Vehicle.pairOf(this.character, this.model);
         this.maxSpeed *= charPhysics.maxSpeed || 1;
         this.acceleration *= charPhysics.acceleration || 1;
         this.brakeForce *= charPhysics.brakeForce || 1;
@@ -2760,7 +2798,7 @@ class Vehicle {
         this.updatePhysics(deltaTime, steeringInput);
         
         // Check for crash from excessive lean
-        if (!this.worldPhysics && Math.abs(this.leanAngle) > this.tuned('maxLeanAngle')) {
+        if (!this.worldPhysics && Math.abs(this.leanAngle) > this.legLeanLimit()) {
             this.crashed = true;
             this.crashWhy = 'grip';
             this.crashAngle = this.leanAngle;
@@ -3061,7 +3099,7 @@ class Vehicle {
             steeringTorque *= 1.5; // 50% more responsive when counter-steering to upright
         }
         
-        steeringTorque *= (1 - Math.abs(this.leanAngle) / this.tuned('maxLeanAngle'));
+        steeringTorque *= (1 - Math.abs(this.leanAngle) / this.legLeanLimit());
         
         // 2. GRAVITY TORQUE: Always tries to increase lean (destabilizing)
         // Once leaning, gravity pulls the bike further over
@@ -3131,7 +3169,23 @@ class Vehicle {
         if (!world) return null;
         const own = this.riderWorld(world);
         // As the tuning has them (js/tuning.js): the same object while no multiplier over a world field is off 1
-        return typeof Tuning !== 'undefined' ? Tuning.view('world', own) : own;
+        return this.leanHeld(typeof Tuning !== 'undefined' ? Tuning.view('world', own) : own);
+    }
+
+    // The world's numbers with the lean limit held to the bike's own (leanMostDeg): the object itself when it is under
+    // it (every bike with none), else a frozen copy, kept for the object it was made from
+    leanHeld(world) {
+        if (!(world.leanCapDeg > this.leanMostDeg)) return world;
+        const kept = this.leanHeldKept;
+        if (kept && kept.base === world) return kept.out;
+        const out = Object.freeze({ ...world, leanCapDeg: this.leanMostDeg });
+        this.leanHeldKept = { base: world, out };
+        return out;
+    }
+
+    // A classic leg's lean limit (the lean at which the bike falls) as the tuning has it, held to the bike's own
+    legLeanLimit() {
+        return Math.min(this.tuned('maxLeanAngle'), this.leanMostLeg);
     }
 
     // The world's numbers as this rider has them: the lean limit by how daring the rider is (Vehicle.leanOf). The grip
@@ -3171,6 +3225,7 @@ class Vehicle {
         this.worldGrade = this.runoff && Number.isFinite(this.landAlong) ? this.landAlong
             : sample && Number.isFinite(sample.grade) ? sample.grade : 0;
         this.worldSurfaceGrip = sample && sample.flags && sample.flags.cobbles ? world.cobbleGrip : 1;
+        this.worldHeading = sample && Number.isFinite(sample.heading) ? sample.heading : this.yawAngle;
         if (this.weatherSystem) this.weatherSystem.surfaceGrip = this.worldSurfaceGrip;
     }
 
@@ -3380,11 +3435,12 @@ class Vehicle {
         const capLean = hold > 0 ? Math.atan(Math.tan(capEff) * (1 + world.slideLean * hold)) : capEff;
         // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg
         const low = this.lowLeanShare(v);
-        const leanLimit = Math.min(capLean, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
+        // (and never past what the bike itself leans: leanMostRad, Infinity for a bike held by the grip alone)
+        const leanLimit = Math.min(capLean, this.leanMostRad, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
-        const character = (this.character.physics && this.character.physics.steeringForce) || 1;
+        const character = ((this.character.physics && this.character.physics.steeringForce) || 1) * this.leanMass;
         let rate = -u * world.leanRate * speedFactor * character;
         if (u !== 0 && Math.sign(u) === Math.sign(lean)) rate *= world.pickUpBoost;
 
@@ -3433,6 +3489,11 @@ class Vehicle {
         const released = 1 - Math.abs(u);
         const righting = -released * released * world.selfRighting * lean;
         this.leanAngle += (this.leanVelocity + righting) * deltaTime;
+        // Past what the bike itself leans something under it grounds: the lean stops there
+        if (Math.abs(this.leanAngle) > this.leanMostRad) {
+            this.leanAngle = Math.sign(this.leanAngle) * this.leanMostRad;
+            if (this.leanVelocity * this.leanAngle > 0) this.leanVelocity = 0;
+        }
 
         const tanLean = Math.tan(Math.abs(this.leanAngle));
         let curvature = v2 > 1e-6 ? Math.min(1 / radiusFloor, g * tanLean / v2) : 0;
@@ -3480,6 +3541,37 @@ class Vehicle {
             this.tipTimerS = 0;
             if (this.footDown || v < world.fallSpeed) this.leanAngle *= Math.exp(-world.footDownRight * deltaTime);
         }
+        if (!this.crashed) this.footReach(deltaTime);
+    }
+
+    // The rider's reach at a stop (FOOT_REACH; .agent/system/handling.md, "A rider who cannot reach the ground"). A
+    // rider with a footSlopeDeg cannot put a foot down on ground steeper than it: a stop there, under stopSpeed for
+    // stopS, tips the bike over to the downhill side. The slope is the physics' ground under the bike: the road's grade
+    // (the road is level across), or the land's whole slope. It arms only once the bike has moved off since the last
+    // reset, so a restart that stands the bike on a slope never tips it before the rider rides away. Slowing under
+    // hintSpeed on such ground the game tells the rider (footWarnNew), once until the bike is over hintSpeed + hintBand
+    // again, so pulling away says nothing
+    footReach(deltaTime) {
+        if (!(this.footSlope < Infinity)) return;
+        const rule = FOOT_REACH;
+        if (this.speed > rule.armSpeed) this.footArmed = true;
+        if (this.speed > rule.hintSpeed + rule.hintBand) this.footHint = true;
+        const slope = this.runoff ? this.landSteep : Math.abs(this.worldGrade);
+        const steep = this.footArmed && !this.isJumping && slope > this.footSlope;
+        if (steep && this.footHint && this.speed < rule.hintSpeed) {
+            this.footHint = false;
+            this.footWarnNew = true;
+        }
+        this.footStillS = steep && this.speed < rule.stopSpeed ? this.footStillS + deltaTime : 0;
+        if (this.footStillS < rule.stopS) return;
+        // The ground's rise toward the bike's left: on the road the grade along the ride, by the angle between the ride
+        // and the bike; on the land the land's own. A bike that faces up or down the slope goes over to the side of the
+        // foot the rider reaches for (the stop pose's: Vehicle.LEFT)
+        const across = this.runoff ? this.landAcross : this.worldGrade * Math.sin(this.worldHeading - this.yawAngle);
+        const side = Math.abs(across) > rule.sideShare * slope ? Math.sign(across) : -Vehicle.LEFT;
+        this.worldCrash(rule.cause, 'tip', 'foot');
+        // A positive roll is the bike's right: the downhill side when the ground rises to its left
+        this.crashAngle = side * Math.max(rule.leastRoll, Math.abs(this.leanAngle));
     }
 
     // A world crash with the cause the crash card shows. `fall` is how the bike is drawn going down (Vehicle.FALL):
@@ -4713,6 +4805,11 @@ class Vehicle {
         this.footDown = false;
         this.footT = 0; // The stop pose snaps off: a reset rides away
         this.tipTimerS = 0;
+        // A reset stands the bike still: the rider's reach arms again once it moves off (footReach)
+        this.footArmed = false;
+        this.footStillS = 0;
+        this.footHint = false;
+        this.footWarnNew = false;
         this.crashCause = null;
         this.crashWhy = null;
         this.contactWobble = 0;
@@ -5584,7 +5681,7 @@ class Vehicle {
 Vehicle.BIKES = {
     sport: { build: 'buildSportBike', kg: 198, spare: 0.8, stand: 0.16, seat: { y: 1.06, z: -0.08, torsoLean: 0.72, style: 'race', hand: [0.19, -0.06, 0.68], foot: [0.21, -0.63, -0.05], elbowOut: 0.05, kneeOut: 0.06, kneeForward: 0.13 } },
     adventure: { build: 'buildAdventureBike', kg: 220, spare: 0.42, stand: 0.16, offroad: 0.6, seat: { y: 1.22, z: -0.12, torsoLean: 0.18, style: 'adv', hand: [0.24, -0.03, 0.6], foot: [0.2, -0.74, 0.06], elbowOut: 0.08, kneeOut: 0.04, kneeForward: 0.2 } },
-    scooter: { build: 'buildScooter', kg: 182, spare: 0, stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
+    scooter: { build: 'buildScooter', kg: 182, spare: 0, leanMaxDeg: 45, stand: 0.08, seat: { y: 1.16, z: -0.18, torsoLean: 0.08, style: 'commuter', hand: [0.21, -0.05, 0.71], foot: [0.13, -0.72, 0.42], elbowOut: 0.06, kneeOut: 0.03, kneeForward: 0.3 } },
     dirt: { build: 'buildDirtBike', kg: 146, spare: 0.1, stand: 0.24, offroad: 1, seat: { y: 1.22, z: -0.02, torsoLean: 0.45, style: 'mx', hand: [0.27, -0.09, 0.53], foot: [0.19, -0.79, -0.06], elbowOut: 0.08, kneeOut: 0.05, kneeForward: 0.22 } },
     naked: { build: 'buildNakedBike', kg: 189, spare: 0.57, stand: 0.16, seat: { y: 1.12, z: -0.12, torsoLean: 0.22, style: 'road', hand: [0.3, -0.06, 0.52], foot: [0.2, -0.7, 0.0], elbowOut: 0.07, kneeOut: 0.05, kneeForward: 0.18 } }
 };
@@ -5672,7 +5769,9 @@ Vehicle.CRASH_CAUSES = Object.freeze({
     water: 'drop',
     unmapped: 'drop',
     // Too slow to stay up
-    stall: 'tip'
+    stall: 'tip',
+    // Stopped on ground too steep for the rider's foot to reach (FOOT_REACH)
+    foot: 'tip'
 });
 
 // The rules every kind of fall shares. A fall goes over from its row's `calm` row (the tip-over) at calmFrom m/s and
@@ -5991,12 +6090,20 @@ Vehicle.riderFallState = () => ({
 // pop that is the rider's pull on the bars and needs no drive. `usual` stands in for a bike that names no facts.
 Vehicle.WHEELIE = Object.freeze({ lightKg: 145, heavyKg: 250, lightPop: 1.15, heavyPop: 0.8, weightFrom: 10, weightTo: 30, fadeSpeed: 68, tug: 0.1, usual: Object.freeze({ kg: 190, spare: 0.55 }) });
 // The two facts of a bike as a wheelie reads them, each 0 to 1: `light` and `spare`. `bike` is a catalogue id, a
-// procedural kind, or an entry itself ({ kg, spare }), so a new bike needs nothing but its two numbers
-Vehicle.wheelieOf = (bike) => {
+// procedural kind, or an entry itself ({ kg, spare }), so a new bike needs nothing but its two numbers. The facts are
+// set for a rider of RIDER_MASS.referenceKg; `riderKg` is the real rider: the weight is the bike's and the rider's over
+// the reference rider's (lightKg and heavyKg stand for those bikes with that rider), and the power to spare is for each
+// kg of both (spare x the reference total over the real one). A rider of the reference weight changes nothing
+Vehicle.wheelieOf = (bike, riderKg = RIDER_MASS.referenceKg) => {
     const rule = Vehicle.WHEELIE;
     const entry = (bike && typeof bike === 'object' ? bike : (BIKE_MODELS[bike] || Vehicle.BIKES[bike])) || rule.usual;
-    const kg = Number.isFinite(entry.kg) ? entry.kg : rule.usual.kg;
-    const spare = Number.isFinite(entry.spare) ? entry.spare : rule.usual.spare;
+    let kg = Number.isFinite(entry.kg) ? entry.kg : rule.usual.kg;
+    let spare = Number.isFinite(entry.spare) ? entry.spare : rule.usual.spare;
+    const more = Number.isFinite(riderKg) ? riderKg - RIDER_MASS.referenceKg : 0;
+    if (more !== 0) {
+        spare *= (kg + RIDER_MASS.referenceKg) / (kg + riderKg);
+        kg += more;
+    }
     const unit = (x) => Math.max(0, Math.min(1, x));
     return { light: unit((rule.heavyKg - kg) / (rule.heavyKg - rule.lightKg)), spare: unit(spare) };
 };
@@ -6321,9 +6428,94 @@ Vehicle.traitOf = (character, name) => {
 Vehicle.leanOf = (character) => RIDER_LEAN.least + (RIDER_LEAN.most - RIDER_LEAN.least) * (Vehicle.traitOf(character, RIDER_LEAN.trait) - 1) / 4;
 Vehicle.RIDER_LEAN = RIDER_LEAN;
 
+// The mass of the bike and its rider in the handling (.agent/system/handling.md, "The rider's weight"). The bikes'
+// numbers were set for a rider of referenceKg. Each number in `power` moves by (reference / total) ^ power, where total
+// is the bike's kg and the rider's (CHARACTERS `kg`) and reference the bike's kg and referenceKg. The acceleration is
+// power to weight (1). The lean rate, in and out, is slower with more to roll (0.5). The brake a little: the same tyres
+// hold a heavier load nearly as well, and only the lever and the pads do not grow with it (0.2). The top speed not at
+// all: the air holds it, not the mass. The wheelie reads the total too (Vehicle.wheelieOf). A rider of referenceKg, and
+// a character with no kg, moves nothing, to the last bit; a weight outside leastKg to mostKg is held to it
+const RIDER_MASS = Object.freeze({
+    referenceKg: 80, leastKg: 40, mostKg: 150,
+    power: Object.freeze({ acceleration: 1, steeringForce: 0.5, brakeForce: 0.2, maxSpeed: 0 })
+});
+Vehicle.RIDER_MASS = RIDER_MASS;
+
+// A character's weight in kg: their own `kg` held to the table's range, else the reference rider's
+Vehicle.riderKgOf = (character) => {
+    const kg = character ? character.kg : undefined;
+    return Number.isFinite(kg) ? Math.max(RIDER_MASS.leastKg, Math.min(RIDER_MASS.mostKg, kg)) : RIDER_MASS.referenceKg;
+};
+
+// A bike's own kg: the catalogue entry's, or its procedural kind's, or the usual bike's (Vehicle.WHEELIE)
+Vehicle.bikeKgOf = (id) => {
+    const entry = BIKE_MODELS[id] || Vehicle.BIKES[id] || Vehicle.BIKES[Vehicle.kindOf(id)];
+    return entry && Number.isFinite(entry.kg) ? entry.kg : Vehicle.WHEELIE.usual.kg;
+};
+
+// The reference mass over the real one for a character on a bike: 1 exactly for a rider of referenceKg
+Vehicle.massShare = (character, id) => {
+    const rider = Vehicle.riderKgOf(character);
+    if (rider === RIDER_MASS.referenceKg) return 1;
+    const bike = Vehicle.bikeKgOf(id);
+    return (bike + RIDER_MASS.referenceKg) / (bike + rider);
+};
+
+// The multiplier of one number of Vehicle.physicsOf by the mass (RIDER_MASS power): 1 exactly for a field the mass
+// does not move or a rider of referenceKg
+Vehicle.massScale = (character, id, field) => {
+    const power = RIDER_MASS.power[field] || 0;
+    const share = power === 0 ? 1 : Vehicle.massShare(character, id);
+    return share === 1 ? 1 : Math.pow(share, power);
+};
+
+// The multipliers of a character on a bike as the handling reads them: Vehicle.physicsOf (the rider's own, scaled by
+// the bike's class) times the mass of the two (Vehicle.massScale). A field is written only where the mass moves it
+Vehicle.pairOf = (character, id) => {
+    const physics = Vehicle.physicsOf(character, id);
+    for (const field of Object.keys(RIDER_MASS.power)) {
+        const scale = Vehicle.massScale(character, id, field);
+        if (scale !== 1) physics[field] = (physics[field] !== undefined ? physics[field] : 1) * scale;
+    }
+    return physics;
+};
+
+// The most a bike itself leans before something under it grounds (BIKE_MODELS `field`), in a world's degrees:
+// no rider's daring, rider mode or tuning leans it further. `legPerWorld` turns it into a classic leg's lean, whose
+// base limit (the lean at which a leg's bike falls, PI / 2.7) stands where a world's leanCapDeg (50) stands
+const BIKE_LEAN = Object.freeze({ field: 'leanMaxDeg', legPerWorld: (180 / 2.7) / 50 });
+Vehicle.BIKE_LEAN = BIKE_LEAN;
+
+// A bike's own lean limit in degrees, Infinity for a bike held by the grip and the rider alone
+Vehicle.leanMostOf = (id) => {
+    const entry = BIKE_MODELS[id] || Vehicle.BIKES[id];
+    const deg = entry ? entry[BIKE_LEAN.field] : undefined;
+    return Number.isFinite(deg) && deg > 0 ? deg : Infinity;
+};
+
+// A rider who cannot put a foot down on a slope (CHARACTERS `trait`, Vehicle.footReach). Once the bike has moved off
+// (over armSpeed m/s since the ride began or the last restart), a stop (under stopSpeed m/s) for stopS on ground
+// steeper than the rider's angle tips the bike over to the downhill side, with `cause` and the class `foot`. Slowing
+// under hintSpeed m/s on that ground the game tells the rider once (Game.sayFoot), and again only after the bike has
+// been over hintSpeed + hintBand. The slope across the bike picks the side when it is more than sideShare of the
+// whole; a bike that faces up or down the slope goes over to the side of the foot the rider reaches for. `leastRoll`
+// (rad) gives a bike that stood upright a side to start its fall to
+const FOOT_REACH = Object.freeze({
+    trait: 'footSlopeDeg', armSpeed: 2, stopSpeed: 0.5, stopS: 0.5, hintSpeed: 3, hintBand: 1, sideShare: 0.1, leastRoll: 0.05,
+    cause: 'Could not reach the ground on the slope'
+});
+Vehicle.FOOT_REACH = FOOT_REACH;
+
+// The steepest ground a character's foot reaches at a stop, as rise over run: Infinity for a character without the trait
+Vehicle.footSlopeOf = (character) => {
+    const deg = character ? character[FOOT_REACH.trait] : undefined;
+    return Number.isFinite(deg) && deg >= 0 && deg < 90 ? Math.tan(deg * Math.PI / 180) : Infinity;
+};
+
+// A bar reads the pair: the rider's own multipliers on this bike and the mass of the two (Vehicle.pairOf)
 Vehicle.statsOf = (character, id) => {
     const ridden = id || Vehicle.bikeOf(character);
-    const physics = Vehicle.physicsOf(character, ridden);
+    const physics = Vehicle.pairOf(character, ridden);
     const offroad = Vehicle.offroadOf(ridden);
     const stars = {};
     for (const [name, bar] of Object.entries(STAT_BARS)) {

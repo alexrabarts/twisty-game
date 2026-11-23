@@ -48,6 +48,10 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const show = file => execFileSync('git', ['show', `${BEFORE}:js/${file}`], { cwd: REPO, encoding: 'utf8', maxBuffer: 1 << 26 });
 
 const game = loadGame();
+// The rides here are held against commits from before the rider's weight (RIDER_MASS, Vehicle.pairOf), or measure
+// the bike alone: every character rides at the reference weight, at which that rule moves nothing to the last bit
+// (tests/unit/rider-mass.test.js holds the rule itself)
+for (const character of game.CHARACTERS) delete character.kg;
 const before = loadGame(undefined, [], { 'vehicle.js': show('vehicle.js'), 'world/physics.js': show('world/physics.js') });
 const { THREE, Tuning, Vehicle, WorldPhysics, WorldAssist, WorldEnvironment, CHARACTERS, BIKE_MODELS } = game;
 const RiderModes = new Function('Tuning', 'WorldAssist', 'console', `${loadScript('ridermodes.js')}\nreturn RiderModes;`)(Tuning, WorldAssist, console);
@@ -60,6 +64,8 @@ const bikeOf = (G0, [who, id]) => new G0.Vehicle(new G0.THREE.Scene(), null, rid
 // A rider with no multiplier of their own and the middle of every trait, on the first bike of the catalogue's first
 // rider: the bike's numbers and nothing else
 const plain = G0 => ({ ...G0.CHARACTERS[0], physics: {}, traits: { country: 3, mountain: 3, hairpins: 3, daring: 3 } });
+// A rider's first bike with no lean limit of its own (BIKE_MODELS leanMaxDeg, which came after the block)
+const firstFree = character => character.bikes.find(id => game.Vehicle.leanMostOf(id) === Infinity);
 
 // The block as the debug panel has it, in the game of the commit before. `lean` is the lean row's value for a rider
 // whose daring is not the middle
@@ -132,7 +138,8 @@ describe('the block', () => {
             const now = bikeOf(game, ride), was = bikeOf(before, ride);
             const dare = Vehicle.leanOf(riderOf(game, ride[0]));
             expect(now.maxLeanAngle).toBe(was.maxLeanAngle * dare);
-            expect(onPlane(now).worldPhysics.leanCapDeg).toBe(before.WorldPhysics.leanCapDeg * dare);
+            // A bike with a lean limit of its own is held to it over the rider's (tests/unit/rider-mass.test.js)
+            expect(onPlane(now).worldPhysics.leanCapDeg).toBe(Math.min(before.WorldPhysics.leanCapDeg * dare, Vehicle.leanMostOf(ride[1])));
         }
     });
 
@@ -223,8 +230,10 @@ describe('the ride before with the block set is the ride now with every multipli
         let most = -1;
         for (const character of CHARACTERS) {
             tuneBefore(Vehicle.leanOf(character));
-            const was = await world(before, envBefore, riderOf(before, character.id));
-            const now = await world(game, env, character);
+            // (on their first bike with no lean limit of its own: that limit came after the block)
+            const ride = firstFree(character);
+            const was = await world(before, envBefore, riderOf(before, character.id), ride);
+            const now = await world(game, env, character, ride);
             expect([character.id, now.out.crashed, now.out.cut]).toEqual([character.id, false, false]);
             const gap = apart(was.rows, now.rows);
             most = Math.max(most, gap);
@@ -244,7 +253,8 @@ describe('the ride before with the block set is the ride now with every multipli
         let most = -1;
         for (const character of CHARACTERS) {
             tuneBefore(Vehicle.leanOf(character));
-            const a = leg(before, riderOf(before, character.id)), b = leg(game, character);
+            const ride = firstFree(character);
+            const a = leg(before, riderOf(before, character.id), ride), b = leg(game, character, ride);
             const gap = apart(a.rows, b.rows);
             most = Math.max(most, gap);
             expect([character.id, gap < TOLERANCE]).toEqual([character.id, true]);
@@ -305,8 +315,11 @@ describe('the lean limit by how daring the rider is', () => {
     });
 
     // Full steering held at a speed: the lean the bike settles at and the radius it turns
+    // The rider's first bike with no lean limit of its own: a bike's own limit is not the rider's
+    // (tests/unit/rider-mass.test.js)
+    const freeBike = character => character.bikes.find(id => Vehicle.leanMostOf(id) === Infinity);
     function held(character, speed, weather) {
-        const v = onPlane(new Vehicle(new THREE.Scene(), null, character, character.bikes[0], { model: false }), game, { weather });
+        const v = onPlane(new Vehicle(new THREE.Scene(), null, character, freeBike(character), { model: false }), game, { weather });
         let yaw = 0;
         for (let i = 0; i < 360 && !v.crashed; i++) {
             v.speed = speed;
@@ -318,10 +331,10 @@ describe('the lean limit by how daring the rider is', () => {
     }
     // The lean, as a share of the rider's grip limit, from which the bike lowsides with the steering held
     function lowsideAt(character, weather) {
-        const probe = onPlane(new Vehicle(new THREE.Scene(), null, character, character.bikes[0], { model: false }), game, { weather });
+        const probe = onPlane(new Vehicle(new THREE.Scene(), null, character, freeBike(character), { model: false }), game, { weather });
         const cap = Math.tan(probe.worldPhysics.leanCapDeg * Math.PI / 180) * probe.worldMultipliers().lateralFriction;
         for (let k = 1; k < 2; k += 0.01) {
-            const v = onPlane(new Vehicle(new THREE.Scene(), null, character, character.bikes[0], { model: false }), game, { weather });
+            const v = onPlane(new Vehicle(new THREE.Scene(), null, character, freeBike(character), { model: false }), game, { weather });
             v.leanAngle = -Math.atan(k * cap);
             for (let i = 0; i < 30 && !v.crashed; i++) {
                 v.speed = 30;

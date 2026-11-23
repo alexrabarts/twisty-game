@@ -3599,6 +3599,7 @@ class Game {
         }
 
         this.sayBrush();
+        this.sayFoot();
 
         if (this.environment.isWorld) this.updateWorldCrash(deltaTime);
 
@@ -4291,6 +4292,15 @@ class Game {
         showCallout(Game.BRUSH_TEXT, 'warn', Game.CALLOUT_MS.brush);
     }
 
+    // A rider who cannot reach the ground on a slope (Vehicle.footReach) is nearly stopped on one: said once each time,
+    // so the fall that a stop there brings is never a surprise
+    sayFoot() {
+        if (!this.vehicle.footWarnNew) return;
+        this.vehicle.footWarnNew = false;
+        if (this.vehicle.crashed || this.finished) return;
+        showCallout(Game.FOOT_TEXT, 'warn', Game.CALLOUT_MS.foot);
+    }
+
     showConeHitNotification(points) {
         showCallout(`Cone hit ${HudRules.number(points, { sign: true })}`, 'warn', 1000);
     }
@@ -4559,10 +4569,13 @@ Game.WORLD_CRASH = { mostS: 2.2, leastS: 1.5, stillMs: 0.5, stillS: 0.4, quickS:
 
 // How long a call-out that tells the rider what went wrong stays up (ms). These outlast the fall itself: the rider
 // reads the cause after the bike is back on the road, where the first half was spent watching the crash
-Game.CALLOUT_MS = { crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400, brush: 1500 };
+Game.CALLOUT_MS = { crash: 4400, restart: 4000, warning: 5000, collision: 3000, bump: 2400, brush: 1500, foot: 2000 };
 
 // What the rider is told when the tyres brush a wall and the bike rides on (Vehicle.wallTouch)
 Game.BRUSH_TEXT = 'Brushed the wall';
+
+// What a rider who cannot reach the ground on a slope is told, nearly stopped on one (Vehicle.footReach)
+Game.FOOT_TEXT = 'Too steep for a foot down: keep rolling';
 
 // What a world restart tells the rider, by reason (a crash says its own cause during the fall: beginWorldCrash)
 Game.WORLD_RESTART_TEXT = {

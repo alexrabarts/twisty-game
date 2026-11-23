@@ -12,7 +12,7 @@ A row is `{ id, label, hint, group, min, max, step, scales }`. `scales` lists th
 | --- | --- | --- |
 | `world` | A field of `WorldPhysics`; a path for a nested one (`steerKeys.keyS`, `offroad.top.landCapSpeed`). | `Vehicle.worldPhysics` is `Tuning.view('world', ...)`. A row needs no other code. |
 | `bar`, `body` | A field of `Vehicle.BAR`, `Vehicle.BODY`. | `Vehicle.barRule()`, `Vehicle.bodyRule()` (the same `Tuning.view`). |
-| `bike` | One of the bike's own numbers (`maxSpeed`, `acceleration`, `brakeForce`, `steeringForce`, `maxLeanAngle`, `wheeliePopMult`, `wheelieThrottleMult`). | `this.tuned(field)` where the number is used. The character's and the bike's multipliers are in the number already, so they stay on top. |
+| `bike` | One of the bike's own numbers (`maxSpeed`, `acceleration`, `brakeForce`, `steeringForce`, `maxLeanAngle`, `wheeliePopMult`, `wheelieThrottleMult`). | `this.tuned(field)` where the number is used. The character's and the bike's multipliers and the mass of the two ("The rider's weight") are in the number already, so they stay on top. |
 | `grip` | `dry` or `wet`: the lean's grip. Wet is any weather that takes grip. | `Vehicle.gripTune()`. |
 | `camera` | `distance` or `swing` of the chase camera. | `Game.tune('camera', field, value)`. |
 
@@ -131,10 +131,103 @@ Before the trait every rider held 18.71 m/s dry and 15.66 wet (50 degrees). Wet 
 - **Where it acts.** The multiplier is on the bike's own limit, under the rider mode and the debug panel: `maxLeanAngle` in the constructor (a leg), and `leanCapDeg` in the rider's view of the world (`Vehicle.riderWorld`, a frozen copy that `Vehicle.worldPhysics` hands to `Tuning.view`). `WorldPhysics.leanCapDeg` itself stays 50.
 - **The lowside moves with it.** The grip cap, the lean limit and the lowside all read `leanCapDeg`. A rider holds full steering at their own limit, and falls from the same share over it (about 1.3 with the steering held) whatever the daring. With full steering held, a step in grip lowsides only below 0.78 for every rider in every mode (0.78 before), so the hairpin grip bound of `WorldLooks` (0.80) holds.
 - **No code names a rider.** A character without the trait is the middle (1.08). A new character gets its limit from the trait alone.
+- **A bike with a limit of its own** (the scooter, "The bike's own lean limit") holds every rider to it, the most daring too: the daring multiplies up to the bike's limit and no further.
 - **The stars.** The handling bar's rider part is the mean of `hairpins` and `daring` (`STAT_BARS`). No star of a shipped rider moved.
 - **The crew** read `CREW_PACES` (`corner`, by the `hairpins` trait) and not this table: their cornering pace by daring is the group ride's job.
 - **The drawn body lean** (`bodyLean`) is another thing and did not change.
 - **The board floors.** The most lean a ride can have is 59.9 degrees (daring 5 in Rain or Road, at the outside edge with the edge lean; 59.3 in Track, which has none), so the floors are worked out at `WorldPhysics.floorLeanDeg` (60), not at the bike's 50. A new rider mode or a wider `RIDER_LEAN` that passes 60 fails `tests/unit/tuning-defaults.test.js`, and a larger `edgeLean.extra` that does fails `tests/unit/world-edge-lean.test.js`: raise `floorLeanDeg` and import again. `.agent/system/world-data.md`, "The floors and the rider's lean", has the rule and the check.
+
+## The rider's weight
+
+The owner: "take rider weight into account. it ought to make Lucy's track bike the fastest", and "lean rate should be linked to bike + rider weight (also change other metrics from only bike to bike + rider)".
+
+Each character has `kg` (CHARACTERS): the rider's weight as a game number. The bikes' numbers were set for an 80 kg rider. One table holds the rule, `RIDER_MASS` in `js/vehicle.js`: `{ referenceKg: 80, leastKg: 40, mostKg: 150, power: { acceleration: 1, steeringForce: 0.5, brakeForce: 0.2, maxSpeed: 0 } }`. With total = the bike's kg + the rider's kg and reference = the bike's kg + 80, each number moves by (reference / total) ^ power (`Vehicle.massScale`). `Vehicle.pairOf(character, bike)` is `Vehicle.physicsOf` with the mass on it, and the `Vehicle` constructor reads it.
+
+Every number of the handling that a mass changes, and what it reads:
+
+| Number | Reads | Why |
+| --- | --- | --- |
+| acceleration (`acceleration`, world and leg) | total, power 1 | Power to weight: the same engine pulls less mass harder. A light rider on a light, strong bike gains most; on a heavy tourer the rider is a smaller share. |
+| lean rate, in and out (a world's `leanRate` x the rider through `Vehicle.leanMass`; a leg's `steeringForce`) | total, power 0.5 | More mass to roll is slower to roll. The pick-up (`pickUpBoost`) multiplies the same rate, so it follows. Half the power keeps it moderate. |
+| brake (`brakeForce`, world and leg) | total, power 0.2 | Decided: a little. The tyres hold a heavier load nearly as well, so most of the mass cancels; the lever, the pads and the rider's hand do not grow with the load. A fifth of power to weight. |
+| wheelie: the weight part of the pop and `spare` | total | The real rider in both facts (`Vehicle.wheelieOf`, above): a light rider lifts the front more easily and has more power to spare. |
+| top speed (`maxSpeed`) | the bike's own | The air holds the top speed, not the mass. So the server's floor speed (`FLOOR_SPEED`) and the board floors stay above every pair. |
+| off-road trait, the land's crash speed and slope limits (`offroad`) | the bike's own | Tyres, wheels and travel. |
+| jump power, comfort | the rider's and the bike's class | Suspension, not mass. |
+| lowside, the crash slide, the rider's fall, a brush and a contact with a car or a rider | no mass | They read the speed, the lean and the grip demand (v^2 kappa / g), none of which has a mass in it. No code read a mass there before (`this.mass` is not read). |
+
+The rule on three bikes, for two made-up riders of 60 and 110 kg (the riders' own weights are only on their CHARACTERS entries):
+
+| Rider kg | Bike kg | Total | Reference / total | Acceleration x | Lean rate x | Brake x |
+| --- | --- | --- | --- | --- | --- | --- |
+| 60 | 198 (supersport) | 258 | 1.078 | 1.078 | 1.038 | 1.015 |
+| 110 | 198 (supersport) | 308 | 0.903 | 0.903 | 0.950 | 0.980 |
+| 60 | 146 (trail single) | 206 | 1.097 | 1.097 | 1.047 | 1.019 |
+| 110 | 146 (trail single) | 256 | 0.883 | 0.883 | 0.940 | 0.975 |
+| 60 | 245 (big adventure) | 305 | 1.066 | 1.066 | 1.032 | 1.013 |
+| 110 | 245 (big adventure) | 355 | 0.915 | 0.915 | 0.957 | 0.982 |
+| 80 | any | | 1 | 1 | 1 | 1 |
+
+A light rider gains most on a light bike: the rider is a larger share of the total. On a heavy tourer the rider matters less.
+
+The outcome (`tests/unit/rider-mass.test.js`, which prints it). Every rider's best bike, Road mode (0 to 40 m/s at full throttle on the flat):
+
+| The rider's best bike | 0 to 40 m/s, s | Before the rule | The shipped stage on one line, s |
+| --- | --- | --- | --- |
+| the black supersport, of the lightest rider | 6.08 | 6.65 | 585.07 |
+| a naked twin | 6.45 | 6.02 | 589.07 |
+| the red supersport | 6.50 | 6.07 | 588.58 |
+| the blacked-out naked triple | 6.65 | 6.65 | 591.05 |
+| the naked four | 6.98 | 6.77 | 594.45 |
+| the matt black naked triple | 7.53 | 7.30 | 599.20 |
+
+The line is the same for every pair: every bend at the speed of the advice's lean (35 degrees), braked for with 0.8 of the bike's own upright brake, the bike's own top speed between. The pull, the brake, the top speed and the lean rate are the pair's. The rides are in a plain node process (`tests/helpers/stage-pairs.mjs`): the whole stage under jest takes ten times as long. The lightest rider's naked twin and triple are next after her superbike (6.17 s, 586.4 s): the class table gives a naked bike nearly a supersport's pull (1.08 against 1.1).
+
+- **No code names a rider or a bike.** The rule reads `kg` from the entries. A character without `kg` weighs 80 and rides as before the rule, to the last bit (`tests/unit/rider-mass.test.js`; `tests/unit/tuning-defaults.test.js` rides its old commit with that character).
+- **The rider modes** multiply on top, as on every other number ("The rider modes", "How it stacks").
+- **The daring lean** did not change: the mass moves the lean rate, not the lean limit.
+- **The stars.** The rider select's bars read `Vehicle.pairOf`, so the acceleration bar (and the handling bar, which reads `steeringForce`) is the pair's.
+- **The board floors** assume a rider who accelerates and brakes without limit and read only the lean and the top speed (`tools/world/floors.mjs`). The mass moves neither, so the floors hold and need no new import. The fastest pair's links on the shipped stage are well over 1.5 times their floors.
+- **The crew** ride their own pace (`CREW_PACES`, `LANE_DRIVE`); `AIMotorcycle` reads no bike acceleration, so it has no mass rule.
+
+## The bike's own lean limit
+
+The owner: "Tim's scooter should have a lower max lean angle."
+
+A bike can have `leanMaxDeg` in its catalogue entry (`BIKE_MODELS`, and the procedural kind in `Vehicle.BIKES`): the most the bike itself leans, in a world's degrees, before something under it grounds. `Vehicle.leanMostOf` reads it; a bike without it has none (Infinity), and nothing about it changes. The scooter has 45.
+
+- **Why 45.** A scooter grounds its floorboards and its centre stand at about 40 to 45 degrees. 45 is the top of that: it is the least that keeps the tightest turn the game makes at hairpin pace open to the scooter (the floor radius, 5 m, at `turnBlendSpeed`, 7 m/s, needs 44.97 degrees). At 42 a scripted ride of the stage at the advice's speed ran wide into a wall in a 5 m hairpin at 7.4 m/s. Against the riders' own limits (51 to 57 degrees dry) it is a clear loss in a bend: a 30 m bend dry holds 17.15 m/s on the scooter against 19.06 to 21.29.
+- **The last word.** The cap is over everything: the rider's daring, the rider mode (Track's `leanMax` 1.04) and the debug panel. In a world `Vehicle.leanHeld` holds `leanCapDeg` to it (a frozen copy, kept, so nothing is allocated a frame), so the grip cap, the soft limit and the lowside read it; the lean limit is held to it too, with the edge lean's extra grip, and the lean itself stops there (the floorboards are down). On a classic leg the limit is the lean at which the bike falls: `legLeanLimit` holds it to the cap x `BIKE_LEAN.legPerWorld` (a leg's base 66.7 degrees stands where a world's 50 stands: 60 degrees for the scooter).
+- **A daring rider on it** still has the bike's limit, never more. A rider whose own limit is under the cap keeps their own.
+- **The board floors** are worked out at 60 degrees; the cap is under it, so they hold.
+- **The advice** is a lean of 35 degrees, under the cap: the advised speeds hold for the scooter.
+
+`tests/unit/rider-mass.test.js` holds the cap with every rider in every mode, held hard over at 4 to 30 m/s, in a world and on a leg.
+
+## A rider who cannot reach the ground
+
+The owner: "lucy has short legs. make her fall over if she stops on any above a 5 degree incline."
+
+A character can have `footSlopeDeg` (CHARACTERS): the steepest ground on which the rider reaches it with a foot at a stop. One character has it, at 5 degrees (8.7%). A character without it reaches the ground anywhere. The rule is `FOOT_REACH` in `js/vehicle.js` and `Vehicle.footReach`, run once a tick at the end of `updateWorldPhysics`:
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `armSpeed` | 2 m/s | The rule arms once the bike has been over this since the ride began or the last restart. |
+| `stopSpeed`, `stopS` | 0.5 m/s, 0.5 s | A stop: under `stopSpeed` for `stopS`. A world's foot down sets the speed to 0, so a stop with the brake or with the throttle shut is one. |
+| `hintSpeed`, `hintBand` | 3 m/s, 1 m/s | Slowing under `hintSpeed` on such ground the game says it once, and again only after the bike has been over `hintSpeed + hintBand`: pulling away says nothing. |
+| `sideShare` | 0.1 | The slope across the bike picks the side when it is more than this share of the whole slope. |
+| `cause` | "Could not reach the ground on the slope" | The crash's cause. Its class is `foot`, the kind `tip` (the slow tip-over). |
+
+- **The incline.** Decided: the total slope of the physics' ground under the bike, not only the slope across it. On the road that is the route's grade: the physics' road is level across (`WorldGround.heightAt` gives the road's height at any lateral), so its whole slope is the grade, whichever way the bike faces. On the land it is the land's own slope (`landSteep`: along and across the heading). Both are read by the physics, never from the drawing.
+- **The side.** Downhill across the bike: the grade x sin(the ride's heading - the bike's) on the road, the land's slope across the heading on the land. A bike that faces up or down the slope (the usual stop) goes over to the side of the foot the rider reaches for, the left, the stop pose's (`Vehicle.LEFT`).
+- **A restart in place** stands the bike still at the place (`Game.restartInPlace`, `Vehicle.reset`): the rule is not armed until the bike has moved off, so it never tips a bike before it moves, and a restart on a slope is no loop. The fall costs what every crash costs: the restart in place and 5 s, with the cause in the call-out.
+- **The hint.** "Too steep for a foot down: keep rolling" in the warn tone for `Game.CALLOUT_MS.foot` (2 s), once each time the bike slows under `hintSpeed` on such ground from over `hintSpeed + hintBand` (`Vehicle.footWarnNew`, `Game.sayFoot`).
+- **A crawl is possible.** Over `stopSpeed` nothing tips: with the throttle on under 1.6 m/s and the brake over 2.4 m/s the bike crawls up an 8 degree road for 20 s and never tips (`tests/unit/rider-foot.test.js`). With the throttle shut under `footDownSpeed` (1 m/s) the world's bike puts a foot down and stops, so a crawl needs a little throttle.
+- **The roadworks lights and a queue.** Decided: the rule applies there too. That is the joke and the cost of the character: she keeps rolling slowly, picks her stop, or jumps the light. On the shipped stage no stop line is over 5 degrees: 0 of 6 on the rider's way (4.15 to 4.61 degrees at the line) and 0 of 6 the other way (up to 4.83). One site has ground over 5 degrees within 40 m before its line (5.06 degrees at the most), where a queue behind a rider of the group would stop her. The count is printed by `tests/unit/rider-foot.test.js`.
+- **The stopping places** are all on ground she reaches: the steepest grade along any place of the shipped stage is 4.96 degrees. `tests/unit/rider-foot.test.js` fails on a place over the least `footSlopeDeg` of any character, so a new world, a new place or the stop scenes to come must put the bike on ground that level.
+- **The crew** riders do not fall, so the character in the crew does not either.
+- **Classic legs** have no such rule: a leg has no world physics.
+- **No code names a rider.** A made-up character with the trait at 8 degrees stays up at 6 and tips at 10 (the test).
 
 ## The rider modes
 
@@ -172,7 +265,7 @@ Rules:
 
 - **Road is the bike as it is.** Its `tune` is empty and its assist is the assist's own default, so a ride in Road is the ride with no mode and no tuning loaded, to the last bit. The test rides the same script both ways. Do not give Road a multiplier.
 - **Two doors to the physics.** `RiderModes.apply` calls `Tuning.setMode(row.tune)` and `WorldAssist.setLevel(row.assist)`. No code names a mode, and the physics knows nothing of modes.
-- **How it stacks.** A number the physics reads is: the rider's own multiplier x the bike's class and weight (both in the number already, `Vehicle.physicsOf`) x the mode's multiplier x the debug panel's multiplier (`Tuning.of`). The lean limit has the rider's daring in it the same way ("The lean limit by the rider"). The mode does not change the stars on the rider card.
+- **How it stacks.** A number the physics reads is: the rider's own multiplier x the bike's class (`Vehicle.physicsOf`) x the mass of the bike and its rider (`Vehicle.pairOf`, "The rider's weight") x the mode's multiplier x the debug panel's multiplier (`Tuning.of`). The lean limit has the rider's daring in it the same way ("The lean limit by the rider"), and is then held to the bike's own ("The bike's own lean limit"). The mode does not change the stars on the rider card.
 - **One board.** A mode never flags the ride (`Tuning.ride.tuned` rises only with a debug multiplier), and a board is not told the mode. For that reason no mode has `topSpeed` or `accel` over 1: the server's time floor is a speed (`functions/lib/boards.js` `FLOOR_SPEED`), and the fastest bike is close under it.
 - **Classic legs.** The mode is in force on a classic leg too. A leg reads the rows marked "both" in the table above (`topSpeed`, `accel`, `brake`, `steerRate`, `leanMax`, the wheelie rows). The rows marked "world" and the hairpin assist do nothing there.
 - **Margin.** `leanMax` does not make the lowside further away on a world ride: the lean limit and the lowside limit move together. `lowside` does (Rain). On a classic leg `leanMax` is the lean at which the bike falls, so Rain does not lower it.
@@ -262,7 +355,7 @@ Two facts of each bike shape its wheelie. They are in the catalogue entry (`BIKE
 | `kg` | The weight of the bike, ready to ride. | The real figure. 145 kg or less is wholly light, 250 kg or more is wholly heavy. |
 | `spare` | The power the bike has to spare at speed, 0 to 1. | About 1.75 x the peak kW for each kg of the bike and an 80 kg rider, at most 1. Use 0 for a bike with no clutch and a belt that varies its own gearing (the scooter). |
 
-A bike that names no facts gets `Vehicle.WHEELIE.usual`.
+A bike that names no facts gets `Vehicle.WHEELIE.usual`. Both facts are set for an 80 kg rider; the real rider moves them (`Vehicle.wheelieOf(bike, riderKg)`, "The rider's weight"): the weight part reads the bike's kg plus the rider's over 80, and `spare` is for each kg of both (x (bike + 80) / (bike + rider), at most 1). An 80 kg rider changes nothing.
 
 The rule (`Vehicle.wheelieOf`, `Vehicle.liftShare`, `Vehicle.popShare`; the numbers are in `Vehicle.WHEELIE`):
 
