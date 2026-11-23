@@ -48,10 +48,10 @@
 // of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 9, flaps: 3, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0 };
-export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 10, flaps: 2, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0 };
+export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8 };
 
-export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5 }) {
+export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8 }) {
     const { THREE } = game;
     store.tiles = store.tiles || new Map();
     store.works = store.works || new Map();
@@ -271,6 +271,9 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         return Math.abs(a) / 2;
     };
     store.low = store.low || new Map();
+    store.topCorners = store.topCorners || new Map();
+    store.shortTops = store.shortTops || new Map();
+    store.joints = store.joints || new Map();
     for (const part of stone) {
         const id = `${part.mesh.geometry.uuid}:${part.start}`;
         if (store.folds.has(id)) continue;
@@ -287,6 +290,23 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             const nx = u[1] * w[2] - u[2] * w[1], ny = u[2] * w[0] - u[0] * w[2], nz = u[0] * w[1] - u[1] * w[0];
             if (Math.abs(ny) < 0.9 * Math.hypot(nx, ny, nz) || Math.abs(loop(q)) < 1e-4) continue;
             tops.push({ q, owner: owners ? owners[i / 3] : -1, keys: q.map(c => `${Math.round(c[0] * 50)},${Math.round(c[1] * 50)},${Math.round(c[2] * 50)}`) });
+        }
+        // (every top's corners, of every part, for a short piece that stands alone: `strays`)
+        for (const t of tops) {
+            // (by its place: the same piece drawn again by another geometry is the same piece)
+            const sign = t.q.map(c => `${Math.round(c[0] * 20)},${Math.round(c[2] * 20)}`).sort().join('|');
+            for (const c of t.q) { const k = `${Math.round(c[0] * 20)},${Math.round(c[1] * 20)},${Math.round(c[2] * 20)}`; (store.topCorners.get(k) || store.topCorners.set(k, new Set()).get(k)).add(sign); }
+            // (each outer corner, a b, with the piece's other outer corner and its own inner corner, d and c: where two
+            // roads' walls meet, `jogs` and `strays` read the joint)
+            const [qa, qb, qc, qd] = t.q, mid = [(qa[0] + qb[0]) / 2, (qa[2] + qb[2]) / 2];
+            if (!nearRide(mid[0], mid[1], rules.endsNearM)) continue;
+            for (const [at, other, inner] of [[qa, qb, qd], [qb, qa, qc]]) {
+                const k = `${Math.round(at[0] * 20)},${Math.round(at[1] * 10)},${Math.round(at[2] * 20)}`;
+                const list = store.joints.get(k) || store.joints.set(k, []).get(k);
+                if (!list.some(j => j.sign === sign)) list.push({ sign, owner: t.owner, at, other, inner, s: rideS(at[0], at[2]) });
+            }
+            const [a, b, c, d] = t.q, mx = (a[0] + b[0] + c[0] + d[0]) / 4, mz = (a[2] + b[2] + c[2] + d[2]) / 4;
+            if (Math.max(Math.hypot(b[0] - a[0], b[2] - a[2]), Math.hypot(c[0] - d[0], c[2] - d[2])) < rules.strayM && nearRide(mx, mz, rules.endsNearM)) store.shortTops.set(`${Math.round(mx * 20)},${Math.round(mz * 20)}`, { s: rideS(mx, mz), owner: t.owner, x: r2(mx), y: r2(a[1]), z: r2(mz), q: t.q });
         }
         const byKey = new Map();
         tops.forEach((t, n) => { for (const k of t.keys) (byKey.get(k) || byKey.set(k, []).get(k)).push(n); });
@@ -322,6 +342,8 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     const anyTop = (x, z) => { const a = drawnTop(x, z), b = stoneTop(x, z); return a === null ? b : b === null ? a : Math.max(a, b); };
     const thinAt = q => {
         if (q.len < 0.05) return null;
+        // (a coping that narrows to meet a bridge's parapet at the deck's corner, where the wall meets the structure)
+        if ([q.a, q.b].some(p => { const deck = topOf(decks, p.x, p.z); return deck !== null && Math.abs(deck - p.top) < 2.5; }) || [q.a, q.b].some(p => [[0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4]].some(([dx, dz]) => { const deck = topOf(decks, p.x + dx, p.z + dz); return deck !== null && Math.abs(deck - p.top) < 2.5; }))) return null;
         const nx = -(q.b.z - q.a.z) / q.len, nz = (q.b.x - q.a.x) / q.len, my = (q.a.top + q.b.top) / 2;
         let worst = null;
         for (const u of [0.25, 0.5, 0.75]) {
@@ -423,7 +445,19 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             // (how high it stands over its own road: under the coping, a hand in from the face, the road goes on)
             const road = topOf(ribbons, end.x - ux * 0.3 - ox * 0.4, end.z - uz * 0.3 - oz * 0.4, end.top + 0.1);
             const upM = road === null ? null : r2(end.top - road);
-            store.looks.set(id, { s: record.s, owner: f.owner, x: r2(end.x), z: r2(end.z), kind: died ? 'taper' : !across || (upM !== null && upM > rules.minUpM + rules.proudM) ? 'proud' : 'closed', standsM: died ? 0 : standsM, upM, open: !across });
+            // (how near another road's wall stands to it: its face within jogM of the end, at about its height, and
+            // not the wall it goes on as)
+            let faceM = null;
+            for (const ref of qhash.get(Math.floor(end.x / 8) * 65536 + Math.floor(end.z / 8)) || []) {
+                const q = quads[ref];
+                if (q === f || q.parapet || q.side || q.owner === f.owner || q.len < 0.05) continue;
+                if ([q.a, q.b].some(p => Math.hypot(p.x - end.x, p.z - end.z) < 0.05)) continue;
+                const dx = q.b.x - q.a.x, dz = q.b.z - q.a.z, t = Math.max(0, Math.min(1, ((end.x - q.a.x) * dx + (end.z - q.a.z) * dz) / (q.len * q.len)));
+                if (Math.abs(q.a.top + (q.b.top - q.a.top) * t - end.top) > 1.5) continue;
+                const d = Math.hypot(q.a.x + dx * t - end.x, q.a.z + dz * t - end.z);
+                if (faceM === null || d < faceM) faceM = d;
+            }
+            store.looks.set(id, { s: record.s, owner: f.owner, x: r2(end.x), z: r2(end.z), top: end.top, kind: died ? 'taper' : !across || (upM !== null && upM > rules.minUpM + rules.proudM) ? 'proud' : 'closed', standsM: died ? 0 : standsM, upM, open: !across, faceM: faceM === null ? null : r2(faceM) });
             // (a wall that tapers to nothing has no end face to close: the ground must meet it there)
             // (a wall that has tapered to nothing has no end face to close and no foot to hang)
             if (died) { store.ends.set(id, null); continue; }
@@ -523,15 +557,45 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     return { tiles: store.tiles.size };
 }
 
-export function spikeReport(store, besideM = 10) {
-    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], thin: [], folds: [], low: [], died: [], tapers: 0, closed: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
+export function spikeReport(store, besideM = 10, { jogM = 2, jogDeg = 35, jogPieceM = 4, strayM = 0.8 } = {}) {
+    const r2 = n => Math.round(n * 100) / 100;
+    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], thin: [], folds: [], low: [], jogs: [], strays: [], died: [], tapers: 0, closed: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
     // (an end another road's wall goes on from is no end: the two walls meet at a junction, `joined`)
     const looks = [...(store.looks || new Map()).values()];
+    const joinedTo = look => looks.some(other => other.owner !== look.owner && Math.hypot(other.x - look.x, other.z - look.z) < 0.75);
     for (const look of looks) {
-        if (look.kind === 'taper') { out.tapers++; out.died.push(look); } else if (looks.some(other => other.owner !== look.owner && Math.hypot(other.x - look.x, other.z - look.z) < 0.75)) out.joined++;
+        if (look.kind === 'taper') { out.tapers++; out.died.push(look); } else if (joinedTo(look)) out.joined++;
         else if (look.kind === 'closed') out.closed++;
         else out.proud.push(look);
+        // Two walls side by side where one should go on: an end that no wall goes on from, with another road's wall
+        // face or another end within jogM of it (a closed end beside the next wall's, the coping jogging in plan)
+        if (look.kind === 'taper' || joinedTo(look)) continue;
+        const end = looks.find(other => other !== look && !joinedTo(other) && other.kind !== 'taper' && Math.abs((other.top ?? 0) - (look.top ?? 0)) < 1.5 && Math.hypot(other.x - look.x, other.z - look.z) >= 0.75 && Math.hypot(other.x - look.x, other.z - look.z) < jogM);
+        if ((look.faceM !== null && look.faceM !== undefined && look.faceM < jogM) || end) out.jogs.push({ s: look.s, owner: look.owner, x: look.x, z: look.z, faceM: look.faceM, endM: end ? r2(Math.hypot(end.x - look.x, end.z - look.z)) : null });
     }
+    // Where two roads' walls meet (a piece of one's top shares its outer corner with a piece of the other's): a
+    // coping that jogs (the two turn more than jogDeg there and one of them is shorter than jogPieceM: the short
+    // piece stands across between two walls that run side by side), and a coping corner that stands out of the other's
+    // (their inner corners more than strayM / 5 apart: a wedge of coping toward the road)
+    const seenJog = new Set(), seenStray = new Set();
+    for (const list of (store.joints || new Map()).values()) {
+        for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+            const A = list[i], B = list[j];
+            if (A.owner === B.owner) continue;
+            const ua = [A.other[0] - A.at[0], A.other[2] - A.at[2]], ub = [B.other[0] - B.at[0], B.other[2] - B.at[2]];
+            const la = Math.hypot(...ua), lb = Math.hypot(...ub);
+            if (la < 1e-3 || lb < 1e-3) continue;
+            const turn = 180 - (Math.acos(Math.max(-1, Math.min(1, (ua[0] * ub[0] + ua[1] * ub[1]) / (la * lb)))) * 180) / Math.PI;
+            // (once for a place: the coping and the parapet on it meet at the same joint)
+            const place = `${Math.round(A.at[0] * 2)},${Math.round(A.at[2] * 2)}`;
+            if (turn > jogDeg && Math.min(la, lb) < jogPieceM && !seenJog.has(place) && seenJog.add(place)) out.jogs.push({ s: A.s, owner: A.owner, other: B.owner, x: r2(A.at[0]), z: r2(A.at[2]), turnDeg: Math.round(turn), pieceM: r2(Math.min(la, lb)) });
+            const apart = Math.hypot(A.inner[0] - B.inner[0], A.inner[2] - B.inner[2]);
+            if (apart > strayM / 5 && !seenStray.has(place) && seenStray.add(place)) out.strays.push({ s: A.s, owner: A.owner, other: B.owner, x: r2(A.at[0]), z: r2(A.at[2]), apartM: r2(apart) });
+        }
+    }
+    // A short piece of a wall's top that shares no corner with any other top: a coping piece standing alone
+    const cornerKey = c => `${Math.round(c[0] * 20)},${Math.round(c[1] * 20)},${Math.round(c[2] * 20)}`;
+    for (const t of (store.shortTops || new Map()).values()) if (t.q.every(c => (store.topCorners.get(cornerKey(c)) || new Set()).size <= 1)) out.strays.push({ s: t.s, owner: t.owner, x: t.x, y: t.y, z: t.z });
     out.proud.sort((a, b) => b.standsM - a.standsM);
     for (const record of (store.stones || new Map()).values()) { out.fins.push(...record.fins); out.unfaced.push(...record.unfaced); }
     for (const record of (store.thin || new Map()).values()) if (record) out.thin.push(record);
@@ -556,10 +620,10 @@ export function spikeReport(store, besideM = 10) {
     out.ends.sort((a, b) => b.heightM - a.heightM);
     out.overhangs.sort((a, b) => b.airM - a.airM);
     out.thin.sort((a, b) => a.widthM - b.widthM);
-    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low']) {
+    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays']) {
         for (const o of out[kind]) {
             const km = (Math.round(o.s / 100) / 10).toFixed(1);
-            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0 };
+            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0 };
             out.km[km][kind]++;
         }
     }

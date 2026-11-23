@@ -30,7 +30,7 @@ function frame(game, env, q) {
 // What a place {s, side, x, y, z} fails on the drawn ground: a wall or a structure that guards the edge, a foot off its
 // own road's edge, and by its case: at a drop, no sharp drop on its side or a rise on the way out; in a hairpin's row
 // (`spans`: hairpinSpans), a place outside every hairpin, on a road that does not bend there, on the inside of the
-// bend, or with no drop behind it (dropM, as at a stretch). A list of words, empty when it stands well
+// bend, or with no drop of hairpinDropM behind it (by a stretch's measure). A list of words, empty when it stands well
 export function groundFaults(game, env, q, spans = null) {
     const { Scenery } = game;
     const rule = Scenery.STONE_RULE, points = env.route.points;
@@ -45,9 +45,9 @@ export function groundFaults(game, env, q, spans = null) {
         if (!(Math.abs(turn) >= BEND_TURN)) bad.push(`the road turns ${(turn * 180 / Math.PI).toFixed(0)} degrees there`);
         // (a heading that grows turns toward +lateral: the outside is the other side)
         else if (q.side !== -Math.sign(turn)) bad.push('the inside of the bend');
-        // A drop: the land falls away behind the stone as far as at a stretch
+        // A drop: the land falls away behind the stone, by a stretch's measure, hairpinDropM or more
         const fall = p.y - groundAt(rule.reachM);
-        if (!(fall > rule.dropM)) bad.push(`no drop: the land ${fall.toFixed(2)} m under the road behind it`);
+        if (!(fall > rule.hairpinDropM)) bad.push(`no drop: the land ${fall.toFixed(2)} m under the road behind it`);
     } else {
         const fall = p.y - groundAt(rule.reachM);
         if (!(fall > rule.dropM)) bad.push(`drop ${fall.toFixed(2)} m`);
@@ -69,9 +69,10 @@ export function groundFaults(game, env, q, spans = null) {
     return bad;
 }
 
-// What a place on a wall's top fails: no wall under the road's edge there, a wall with a parapet, one that does not
-// hold the road up (its face drops less than wallLowM), or a stone off the middle of the wall's coping (its seat is
-// the coping's top, COPING_UP_M over the edge, and it stands COPING_W_M / 2 in from the face). A list of words
+// What a place on a wall's top fails: no wall under the road's edge there, a wall that is not low (its face drops
+// wallMaxM or more), one that meets a structure, one that does not hold the road up (its face drops less than
+// wallLowM), or a stone off the middle of the wall's coping (its seat is the coping's top, COPING_UP_M over the edge,
+// and it stands COPING_W_M / 2 in from the face). A list of words
 export function wallFaults(game, env, q) {
     const { Scenery, RoadMesh } = game;
     const rule = Scenery.STONE_RULE;
@@ -79,7 +80,8 @@ export function wallFaults(game, env, q) {
     const bad = [];
     const top = [i - 1, i, i + 1].map(j => env.ground.wallTop(j, q.side)).filter(Boolean);
     if (!top.length) bad.push('no wall under the edge');
-    if (top.some(t => t.railed)) bad.push('a wall with a parapet');
+    if (top.some(t => Math.max(...t.heights) >= rule.wallMaxM)) bad.push(`a wall that drops ${Math.max(...top.flatMap(t => t.heights)).toFixed(2)} m, not under wallMaxM`);
+    if (top.some(t => t.abuts)) bad.push('a wall that meets a structure');
     if (top.some(t => Math.min(...t.heights) < rule.wallLowM)) bad.push('a wall that does not hold the road up');
     const own = env.route.project(q.x, q.z, { start: i - 4, end: i + 5 }, {});
     const want = edge + RoadMesh.STONE_PROUD_M - RoadMesh.COPING_W_M / 2;
@@ -219,4 +221,52 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
     stretches.sort((a, b) => a.places[0].s - b.places[0].s || a.side - b.side);
     walls.sort((a, b) => a.start - b.start || a.side - b.side);
     return { env, stretches, rows, walls, hairpins, spans, stones: [...stones.values()], kerbs: [...kerbs.values()], sites: [...sites.values()], windows, most };
+}
+
+// What a low wall's row (Scenery.wallRuns) fails where it is drawn, the bike by it: the answer of
+// WorldEnvironment.wallStoned against the share (wallUsed) at every row of the wall, and at each of its places the
+// parapet drawn over the coping's outer edge (stone of the road's works more than 0.2 m over the coping), the solid
+// edge of the physics (WorldGround.zoneAt: a wall that holds as a parapet does) and the face the chase camera may not
+// cross (WorldEnvironment.cameraFaces: as high as a stone over the coping). A stoned wall has no parapet, a solid
+// edge and the stones' face; a wall the share leaves out keeps its parapet where it drops PARAPET_DROP_M or more.
+// A list of words
+export function lowWallFaults(game, env, run) {
+    const { THREE, Scenery, RoadMesh } = game;
+    const bad = [], side = run.side, used = Scenery.wallUsed(run.start, side);
+    for (let i = run.a; i <= run.b; i++) if (env.wallStoned(i, side) !== used) bad.push(`row ${i}: stoned ${env.wallStoned(i, side)}, the share says ${used}`);
+    const ray = new THREE.Raycaster(), down = new THREE.Vector3(0, -1, 0);
+    env.roadGroup.updateMatrixWorld(true);
+    const stoneOver = (x, z, from) => {
+        ray.set(new THREE.Vector3(x, from, z), down);
+        const hits = ray.intersectObjects([env.roadGroup], true).filter(h => h.object.name === 'road-works' && h.face.materialIndex === 2);
+        return hits.length ? Math.max(...hits.map(h => h.point.y)) : null;
+    };
+    const tall = [];
+    for (const q of run) {
+        const p = env.route.sample(q.s, {}), ox = side * Math.cos(p.heading), oz = -side * Math.sin(p.heading);
+        // (the parapet stands on the coping's outer PARAPET_W_M: read half of it in from the face)
+        const out = RoadMesh.COPING_W_M / 2 - RoadMesh.PARAPET_W_M / 2;
+        const top = stoneOver(q.x + ox * out, q.z + oz * out, q.seat + 3);
+        if (top !== null && top > q.seat + 0.2) tall.push(q);
+        const loc = env.ground.locate(q.x, q.z, { start: q.index - 4, end: q.index + 4 }, {});
+        const zone = env.ground.zoneAt(loc, loc.width / 2);
+        if (used && !(zone.kind === 'wall' && zone.parapet)) bad.push(`s ${q.s.toFixed(1)}: the physics edge is ${zone.kind}${zone.parapet ? '' : ' with no parapet'}`);
+        const faces = env.cameraFaces(q.x, q.z, 6), N = game.WorldCamera.FACE;
+        let near = false;
+        for (let f = 0; f < faces.count; f++) {
+            const d = faces.data, k = f * N;
+            const ax = d[k], az = d[k + 1], bx = d[k + 2], bz = d[k + 3];
+            const len = Math.hypot(bx - ax, bz - az) || 1, u = Math.max(0, Math.min(1, ((q.x - ax) * (bx - ax) + (q.z - az) * (bz - az)) / (len * len)));
+            if (Math.hypot(ax + (bx - ax) * u - q.x, az + (bz - az) * u - q.z) > 0.6) continue;
+            const y = d[k + 4] + (d[k + 5] - d[k + 4]) * u;
+            if (Math.abs(y - (q.seat + (used ? Scenery.STONE_HEIGHT_M : 0))) < 0.3 || (!used && y > q.seat + 0.3)) near = true;
+        }
+        if (used && !near) bad.push(`s ${q.s.toFixed(1)}: no camera face as high as a stone over the coping`);
+    }
+    if (used && tall.length) bad.push(`${tall.length} places of a stoned wall with a parapet drawn over them, first at s ${tall[0].s.toFixed(1)}`);
+    const tops = [];
+    for (let i = run.a; i <= run.b; i++) tops.push(...(env.ground.wallTop(i, side) || { heights: [] }).heights);
+    const high = Math.max(0, ...tops);
+    if (!used && high >= RoadMesh.PARAPET_DROP_M && tall.length < run.length / 2) bad.push(`a wall left out by the share with its parapet at ${tall.length} of ${run.length} places`);
+    return bad;
 }

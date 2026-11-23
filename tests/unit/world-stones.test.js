@@ -1,11 +1,13 @@
 // The marker stones stand at sharp drops, round the outside of hairpins and on the top of retaining walls
 // (Scenery.STONE_RULE). A world is ridden in node with the streamer, on the shipped stage and on the synthetic fixture
 // world, and every stretch of drop the rule finds, every hairpin's row, every wall's row and every stone drawn is
-// measured again by tests/helpers/world-stones.js. At a drop, and round a hairpin, the drawn ground must fall more than
-// dropM within reachM of the verge on the stone's side. In a hairpin's row the place must be on the arc of a hairpin
+// measured again by tests/helpers/world-stones.js. At a drop the drawn ground must fall more than dropM within reachM
+// of the verge on the stone's side, round a hairpin more than hairpinDropM. In a hairpin's row the place must be on the arc of a hairpin
 // the importer's own check finds (tools/world/verify.mjs findHairpins), on the outside of the bend. In both, nothing
 // else may guard that edge (a retaining wall under it, a bridge, a tunnel, a solid edge). On a wall the stone stands
-// on the middle of its coping, on a wall under the road's edge with no parapet. No stone stands in a stopping place,
+// on the middle of its coping, on a low wall (its face drops less than wallMaxM all along), and on such a wall the
+// row takes the parapet's place: none is drawn there, and the physics and the chase camera read the stones where they
+// read a parapet. No stone stands in a stopping place,
 // a roadworks site or the mouth of a junction. A share of the stretches, of the hairpins and of the walls have their
 // stones, all of each or none, the same on every load, no stone floats, the kerb course runs from stone to stone
 // under a hairpin's row only, and the cap takes the stones nearest the bike.
@@ -13,7 +15,7 @@
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
-import { rideStones } from '../helpers/world-stones.js';
+import { rideStones, lowWallFaults } from '../helpers/world-stones.js';
 
 const game = loadGame();
 const { Scenery } = game;
@@ -41,9 +43,9 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
 
     test('the world has stretches of sharp drop and hairpins, and stones on some of each', () => {
         expect(read.stretches.length).toBeGreaterThan(10);
-        // (round a hairpin a row stands only where the land falls dropM behind it, as at a stretch, and not beside a
-        // wall or its taper: one hairpin of the shipped stage keeps a row, none of the fixture world's three)
-        expect(read.rows.length).toBeGreaterThan(world.id === 'tremola' ? 0 : -1);
+        // (round a hairpin a row stands only where the land falls hairpinDropM behind it, and not beside a wall or its
+        // taper: 8 hairpins of the shipped stage have a row, 1 of the fixture world's three)
+        expect(read.rows.length).toBeGreaterThan(world.id === 'tremola' ? 5 : 0);
         expect(read.stones.length).toBeGreaterThan(40);
         for (const set of [read.stretches, read.rows]) if (set.some(t => t.used)) expect(read.stones.some(stone => set.some(t => t.places.some(q => near(q, stone))))).toBe(true);
     });
@@ -74,9 +76,11 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         }
     });
 
-    test('a hairpin\'s row stands at a drop as a stretch does: the land behind every place of a row lies more than dropM under the road, and the hairpin under the rising bank has none', () => {
-        expect(rule.hairpinDropM).toBeUndefined();
-        for (const t of read.rows) for (const q of t.places) expect(q.drop).toBeGreaterThan(rule.dropM);
+    test('a hairpin\'s row stands at a drop: the land behind every place of a row lies more than hairpinDropM under the road (less than a stretch\'s dropM), and the hairpin under the rising bank has none', () => {
+        expect(rule.hairpinDropM).toBeLessThan(rule.dropM);
+        for (const t of read.rows) for (const q of t.places) expect(q.drop).toBeGreaterThan(rule.hairpinDropM);
+        // (and a hairpin's row needs no more: some place of a row has less than a stretch's drop behind it)
+        if (world.id === 'tremola') expect(read.rows.some(t => t.places.some(q => q.drop <= rule.dropM))).toBe(true);
         // Some hairpins have no place at all: their outside is level, or the bank
         expect(read.hairpins.some(h => h.places === 0)).toBe(true);
         if (world.id !== 'tremola') return;
@@ -132,7 +136,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         expect(unused.flatMap(t => t.places).filter(at)).toEqual([]);
     });
 
-    test('a wall\'s row stands on the middle of the coping of a wall under the road\'s edge with no parapet, over all of the wall or not at all', () => {
+    test('a wall\'s row stands on the middle of the coping of a low wall under the road\'s edge, over all of the wall or not at all', () => {
         const faults = read.walls.flatMap(t => t.faults);
         if (faults.length) throw new Error(`${faults.length} places of the walls' rows fail their own rule:\n${faults.slice(0, 30).join('\n')}`);
         const at = q => read.stones.some(stone => near(q, stone));
@@ -141,7 +145,8 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
             expect(t.places.filter(at).length).toBe(t.used ? t.places.length : 0);
             expect(t.used).toBe(Scenery.wallUsed(t.start, t.side));
         }
-        // (no wall of either world stands without a parapet today: every one of them drops 2.5 m or more)
+        // (no wall of either world is low today: the least drop of a wall's face anywhere is 5.8 m on the shipped
+        // stage, and the lowest whole wall drops 7.3 m)
         if (process.env.STONE_COUNTS) process.stderr.write(`WALLS ${read.walls.length} used ${read.walls.filter(t => t.used).length}\n`);
     });
 
@@ -185,8 +190,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         const open = read.hairpins.filter(h => h.places > 0);
         const used = open.filter(h => h.used);
         if (open.length) expect(used.length).toBeGreaterThan(0);
-        // (a share needs hairpins to share: with a drop of dropM behind them only one or two of either world has a
-        // bare edge to guard)
+        // (a share needs hairpins to share: the fixture world has three hairpins)
         if (open.length < 5) return;
         expect(used.length).toBeLessThan(open.length);
         expect(used.length / open.length).toBeGreaterThanOrEqual(HAIRPIN_SHARE[0]);
@@ -271,4 +275,55 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
             expect(sign(again)).toEqual(sign(read));
         });
     }
+});
+
+// A low wall's row takes its parapet's place. No wall of either world is low enough by the shipped rule, so the rule is
+// read here with wallMaxM raised over the lowest walls (the share and every other number as shipped): every wall that
+// qualifies then is stoned or not as a whole, as the share says, with no parapet drawn over a stoned wall, a solid edge
+// in the physics and the stones' face for the chase camera, and a wall the share leaves out keeps its parapet
+describe.each(worlds)('a low wall\'s row of stones on %s, with wallMaxM raised to 12 m', (name, world) => {
+    const raised = loadGame(undefined, []);
+    const shipped = raised.Scenery.STONE_RULE;
+    Object.defineProperty(raised.Scenery, 'STONE_RULE', { get: () => ({ ...shipped, wallMaxM: 12 }), configurable: true });
+    let env;
+    const walls = [];
+    beforeAll(async () => {
+        env = await raised.WorldEnvironment.load(new raised.THREE.Scene(), { ...world, fetchFn: diskFetch().fetchFn, models: null, digest: async () => '0' });
+        env.scenery.buildTile = () => null;
+        const seen = new Set();
+        for (let s = env.startS; s <= env.endS; s += 150) {
+            const p = env.route.sample(s, {});
+            env.update(p, s, null, Infinity);
+            await env.streamer.settle(p, s);
+            for (const side of [-1, 1]) {
+                for (const run of env.scenery.wallRuns(env.route.indexAt(Math.max(0, s - 75)), env.route.indexAt(s + 75), side)) {
+                    const id = `${side}:${run.start}`;
+                    if (seen.has(id)) continue;
+                    seen.add(id);
+                    // (read with the wall's own section drawn: the bike is put down at its middle)
+                    const q = run[Math.floor(run.length / 2)], at = env.route.sample(q.s, {});
+                    env.update(at, q.s, null, Infinity);
+                    await env.streamer.settle(at, q.s);
+                    walls.push({ run, faults: lowWallFaults(raised, env, run) });
+                }
+            }
+        }
+    }, 900000);
+
+    test('some walls qualify, the share takes some and not all, and each is stoned whole with no parapet, a solid edge and a face for the camera', () => {
+        expect(walls.length).toBeGreaterThan(0);
+        if (world.id === 'tremola') {
+            expect(walls.some(w => raised.Scenery.wallUsed(w.run.start, w.run.side))).toBe(true);
+            expect(walls.some(w => !raised.Scenery.wallUsed(w.run.start, w.run.side))).toBe(true);
+        }
+        const faults = walls.flatMap(w => w.faults.map(f => `wall at ${w.run.start} side ${w.run.side}: ${f}`));
+        if (faults.length) throw new Error(`${faults.length} faults of the low walls' rows:\n${faults.slice(0, 30).join('\n')}`);
+    });
+
+    test('a qualifying wall drops less than wallMaxM all along, and with the shipped rule none of them qualifies', () => {
+        for (const { run } of walls) {
+            for (let i = run.a; i <= run.b; i++) expect(Math.max(...env.ground.wallTop(i, run.side).heights)).toBeLessThan(12);
+            expect(Math.max(...[...Array(run.b - run.a + 1).keys()].flatMap(k => env.ground.wallTop(run.a + k, run.side).heights))).toBeGreaterThanOrEqual(shipped.wallMaxM);
+        }
+    });
 });

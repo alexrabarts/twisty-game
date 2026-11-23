@@ -79,8 +79,36 @@ describe('the Tremola slice: every side road meets the ride', () => {
         if (found.open.length > JUNCTION_LIMITS.open) throw new Error(`${found.open.length} side roads whose edge hangs open in their mouth:\n${list(found.open)}`);
     });
 
+    test('no wall of the ride stands across a side road\'s mouth, drawn or in the physics', () => {
+        if (found.walls.length > JUNCTION_LIMITS.walls) throw new Error(`${found.walls.length} side roads with the ride's wall drawn across their mouth:\n${list(found.walls)}`);
+        if (found.blocked.length > JUNCTION_LIMITS.blocked) throw new Error(`${found.blocked.length} side roads whose mouth the physics shuts with the ride's wall:\n${list(found.blocked)}`);
+    });
+
     test('the physics ground has no step along a side road either', () => {
         if (physics.length) throw new Error(`${physics.length} steps in the physics ground along a side road:\n${list(physics)}`);
         expect(WorldGround).toBeDefined();
+    });
+});
+
+describe('the synthetic fixture world: no wall of the ride stands across a side road\'s mouth', () => {
+    let found;
+    beforeAll(async () => {
+        const env = await WorldEnvironment.load(new THREE.Scene(), { id: 'all', search: '?worldData=tests/fixtures/world/mini', fetchFn: diskFetch().fetchFn, models: null, digest: async () => '0' });
+        env.scenery.buildTile = () => null;
+        const store = {};
+        for (const junction of env.graph.junctions) {
+            const s = Math.max(env.startS + 1, Math.min(env.endS - 1, junction.passes[0].sIn));
+            const p = env.route.sample(s, {});
+            env.update(p, s, null, Infinity);
+            await env.streamer.settle(p, s);
+            junctionWindow(game, env, store, p, { nearM: 80 });
+        }
+        found = junctionReport(store);
+    }, 3600000);
+
+    test('its side roads were read, and none is shut by the ride\'s wall, drawn or in the physics', () => {
+        expect(found.roads).toBeGreaterThan(0);
+        expect(found.walls).toEqual([]);
+        expect(found.blocked).toEqual([]);
     });
 });

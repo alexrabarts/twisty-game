@@ -35,6 +35,10 @@ class WorldGround extends Ground {
     // Metres past the road edge that a bridge parapet stands (RoadMesh draws it there)
     static get PARAPET_M() { return 0.35; }
 
+    // A side road past a wall's face within this of the ride's height runs on beside the ride (zoneAt): not a lower
+    // road at the wall's foot
+    static get SIDE_BESIDE_M() { return 1.5; }
+
     // Metres a fall below the road ends
     static get FALL_M() { return 30; }
 
@@ -356,9 +360,13 @@ class WorldGround extends Ground {
         // coping's inner edge: a rider who leaves the road there meets the wall's side, that high. Its parapet, where it
         // has one (as RoadMesh.railed: a drop of PARAPET_DROP_M or more), stands on the coping's outer PARAPET_W_M,
         // half a metre further out than the side the tyres meet
+        // A row of marker stones on a low wall stands where its parapet would (Scenery.wallRuns, WorldEnvironment.wallStoned)
         const band = this.wallBand(loc, halfRoad);
         if (band) {
-            const railed = this.onRetainingWall(loc, halfRoad);
+            // (past the wall's face a side road that runs on beside the ride is that road: a rider on it meets no wall)
+            const beside = reach > band.to ? this.sideRoadY(at.x, at.z) : null;
+            if (beside !== null && Math.abs(beside - loc.roadY) < WorldGround.SIDE_BESIDE_M) return { kind: 'road', side: this.roadSide, sign, start: band.to };
+            const railed = this.onRetainingWall(loc, halfRoad) || !!(this.wallStoned && this.wallStoned(loc.index, sign));
             return reach > band.from ? { kind: 'wall', side: this.wallSide, sign, start: band.from, parapet: railed, line: true, height: RoadMesh.COPING_UP_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
         }
         if (this.onRetainingWall(loc, halfRoad)) {

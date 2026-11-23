@@ -909,7 +909,7 @@ describe('Scenery', () => {
         expect(bare.stoneSites(fall.tile('0,0'))).toEqual([]);
     });
 
-    test('marker stones stand on the top of a wall that holds the road up, on the middle of its coping, over all of it, and none on a wall with a parapet', () => {
+    test('marker stones stand on the top of a low wall that holds the road up, on the middle of its coping, over all of it, and none on a wall that drops wallMaxM or more', () => {
         // A road along x = 100 on level land, and a wall under its edge on one side from 150 m to 250 m (as
         // WorldEnvironment.wallTop gives it from the wall plan)
         const flat = fakeData({ tiles: allTiles(0, 0, 0, 0), shape: () => 1000, zone: () => 0 });
@@ -919,8 +919,8 @@ describe('Scenery', () => {
         const points = route.points, side = 1;
         const edge = i => { const q = points[i], o = side * (q.width / 2 + RoadSurface.VERGE_M); return [q.x + o * Math.cos(q.heading), q.y, q.z - o * Math.sin(q.heading)]; };
         const out = i => [side * Math.cos(points[i].heading), -side * Math.sin(points[i].heading)];
-        let railed = false, heights = [1.5, 1.6];
-        ground.wallTop = (i, sign) => (sign === side && points[i].s >= 150 && points[i + 1].s <= 250 ? { a: edge(i), b: edge(i + 1), oa: out(i), ob: out(i + 1), railed, heights } : null);
+        let abuts = false, heights = [1.5, 1.6];
+        ground.wallTop = (i, sign) => (sign === side && points[i].s >= 150 && points[i + 1].s <= 250 ? { a: edge(i), b: edge(i + 1), oa: out(i), ob: out(i + 1), abuts, railed: abuts || Math.max(...heights) >= RoadMesh.PARAPET_DROP_M, heights } : null);
         const runs = scenery.wallRuns(0, points.length - 2, side);
         expect(runs).toHaveLength(1);
         const run = runs[0];
@@ -954,10 +954,17 @@ describe('Scenery', () => {
         const chosen = starts.filter(k => Scenery.wallUsed(k, side)).length;
         expect(chosen).toBeGreaterThan(400 * (Scenery.STONE_RULE.wallShare - 0.1));
         expect(chosen).toBeLessThan(400 * (Scenery.STONE_RULE.wallShare + 0.1));
-        // None on a wall with a parapet anywhere along it, nor on one that does not hold the road up
-        railed = true;
+        // A wall high enough for a parapet but under wallMaxM is low: its row takes the parapet's place
+        heights = [Scenery.STONE_RULE.wallMaxM - 0.5, RoadMesh.PARAPET_DROP_M + 0.1];
+        expect(new Scenery(ground, flat).wallRuns(0, points.length - 2, side)).toHaveLength(1);
+        // None on a wall that drops wallMaxM or more anywhere along it, that meets a structure, or that does not hold
+        // the road up
+        heights = [1.5, Scenery.STONE_RULE.wallMaxM];
         expect(new Scenery(ground, flat).wallRuns(0, points.length - 2, side)).toEqual([]);
-        railed = false;
+        heights = [1.5, 1.6];
+        abuts = true;
+        expect(new Scenery(ground, flat).wallRuns(0, points.length - 2, side)).toEqual([]);
+        abuts = false;
         heights = [0.1, 1.5];
         expect(new Scenery(ground, flat).wallRuns(0, points.length - 2, side)).toEqual([]);
         heights = [1.5, 1.6];

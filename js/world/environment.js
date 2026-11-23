@@ -128,6 +128,8 @@ class WorldEnvironment {
         this.ground.taperAt = (index, sign, t) => this.taperAt(index, sign, t);
         this.ground.bridgedAt = (index, sign) => this.bridgedAt(index, sign);
         this.ground.wallTop = (index, sign) => this.wallTop(index, sign);
+        // and a row of marker stones where it takes a low wall's parapet's place (wallStoned)
+        this.ground.wallStoned = (index, sign) => this.wallStoned(index, sign);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
         this.physics = WorldPhysics;
@@ -527,8 +529,11 @@ class WorldEnvironment {
         const base = Math.max(0, section.from - 1), top = Math.min(last, section.to + 1);
         const cut = list => list.slice(base - a, top - a + 1);
         const plan = { base, row: { l: cut(all.row.l), r: cut(all.row.r) }, seg: { l: cut(all.seg.l), r: cut(all.seg.r) }, end: { l: cut(all.end.l), r: cut(all.end.r) }, past: { l: cut(all.past.l), r: cut(all.past.r) } };
-        // Its own segments: from its first row to its last
-        const runs = RoadMesh.wallRuns(sides, all, section.from - a, section.to - a).map(run => Object.assign(run, { owner: -1 }));
+        // (whether the wall from a ride row on carries a row of stones in place of its parapet: read when it is drawn,
+        // as the whole wall may reach into the plans of other sections)
+        plan.stoned = (i, key) => this.wallStoned(i, key === 'r' ? 1 : -1);
+        // Its own segments: from its first row to its last, each segment named by the ride's row it starts at
+        const runs = RoadMesh.wallRuns(sides, all, section.from - a, section.to - a).map(run => Object.assign(run, { owner: -1, rows: run.rows.map(k => k + a) }));
         if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
             const [x0, z0, x1, z1] = section.bbox;
             for (const k of this.data.chunksNear((x0 + x1) / 2, (z0 + z1) / 2, Math.hypot(x1 - x0, z1 - z0) / 2 + 20)) if (!this.data.chunks.has(k)) missing.add(`chunk:${k}`);
@@ -587,7 +592,27 @@ class WorldEnvironment {
         const low = Math.min(...[fa, fb].filter(Boolean).map(f => f.y)), between = reach([(pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2, (pa[2] + pb[2]) / 2]);
         const da = RoadMesh.wallDepth(fa, pa, low, reach(pa), between), db = RoadMesh.wallDepth(fb, pb, low, reach(pb), between);
         const abuts = (points[index].bits | points[index + 1].bits) & 7;
-        return { a: pa, b: pb, oa: RoadMesh.outward(sides[0])[key], ob: RoadMesh.outward(sides[1])[key], railed: !!abuts || RoadMesh.railed(pa, pb, da, db), heights: [pa[1] - da, pb[1] - db] };
+        return { a: pa, b: pb, oa: RoadMesh.outward(sides[0])[key], ob: RoadMesh.outward(sides[1])[key], abuts: !!abuts, railed: !!abuts || RoadMesh.railed(pa, pb, da, db), heights: [pa[1] - da, pb[1] - db] };
+    }
+
+    // Whether the retaining wall under the ride's edge from row `index` to the next, on the right (sign > 0) or the
+    // left, carries a row of marker stones in place of its parapet: a low wall the stones' rule chooses whole
+    // (Scenery.wallRuns, wallUsed). One answer for the stone drawn (RoadMesh.edgeWorks), the stones (Scenery.stoneSites),
+    // the physics (WorldGround.zoneAt) and the camera (cameraFaces). Kept for every row of the wall until a wall plan
+    // changes (faceStamp)
+    wallStoned(index, sign) {
+        if (!this.scenery || !this.walledAt(index, sign)) return false;
+        const held = this.stonedRows || (this.stonedRows = { stamp: -1, rows: new Map() });
+        if (held.stamp !== this.faceStamp) { held.stamp = this.faceStamp; held.rows.clear(); }
+        const key = sign * (index + 1);
+        if (held.rows.has(key)) return held.rows.get(key);
+        const span = this.scenery.wallSpan(index, sign);
+        const run = span ? this.scenery.wallRow(span) : null;
+        const stoned = !!run && Scenery.wallUsed(run.start, sign);
+        // (the plans read for the span may have moved the stamp: the answer holds for the wall as it is now)
+        if (held.stamp !== this.faceStamp) { held.stamp = this.faceStamp; held.rows.clear(); }
+        if (span) for (let i = span.a; i <= span.b; i++) held.rows.set(sign * (i + 1), stoned);
+        return stoned;
     }
 
     // Whether the ride's edge from row `index` to the next, on the right (sign > 0) or the left, stands on a retaining wall
@@ -693,8 +718,10 @@ class WorldEnvironment {
             for (const run of list) {
                 for (let k = 0; k + 1 < run.points.length; k++) {
                     const a = run.points[k], b = run.points[k + 1], fa = Math.min(a[1], run.foot[k]), fb = Math.min(b[1], run.foot[k + 1]);
-                    // (a wall under PARAPET_DROP_M at both rows has no parapet, RoadMesh.edgeWorks)
-                    const rail = a[1] - fa >= drop || b[1] - fb >= drop ? H : 0;
+                    // (a wall under PARAPET_DROP_M at both rows has no parapet, RoadMesh.edgeWorks; on a low wall a row
+                    // of marker stones stands where the parapet would, as high as a stone)
+                    const stoned = run.owner === -1 && run.rows && this.wallStoned(run.rows[k], run.key === 'r' ? 1 : -1);
+                    const rail = stoned ? Scenery.STONE_HEIGHT_M : a[1] - fa >= drop || b[1] - fb >= drop ? H : 0;
                     face(a[0], a[2], b[0], b[2], a[1] + up + rail, b[1] + up + rail, fa, fb, run.out[k][0], run.out[k][1], 1);
                 }
             }

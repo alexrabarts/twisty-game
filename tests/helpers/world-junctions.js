@@ -16,12 +16,18 @@
 //     junction: grey concrete on the ride's edge, a dark underside over the bank)
 //   - open: the side road's drawn edge hangs more than `openM` over the ground with nothing drawn under it (no wall,
 //     no deck's side)
+//   - walls: the ride's own stone (a retaining wall, its coping, its parapet, a wall past its end or one that bridges a
+//     gap) drawn over the side road's centre line or wheel lines, from the junction's node to `mouthM` past the ride's
+//     edge, more than `wallUpM` over the road's surface: the side road is shut by a wall
+//   - blocked: the same lines as the physics meets them (WorldGround.zoneAt and wallBand, the one exception to the drawn
+//     triangles): a place on the side road beside the ride where the ride's wall band makes a wall, so a rider who turns
+//     off is stopped at the mouth
 //
 // junctionReport(store) returns {junctions, roads, steps, holes, sunk, decks, open}: each a list, worst first, of
 // {s, junction, edge, ...} (s the metres of ride at the junction).
-export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0 };
+export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0, walls: 0, blocked: 0 };
 
-export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40, stepM = 0.5, stepTolM = 0.2, mouthM = 12, openM = 0.6 } = {}) {
+export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40, stepM = 0.5, stepTolM = 0.2, mouthM = 12, openM = 0.6, wallUpM = 0.15 } = {}) {
     const { THREE } = game;
     store.roads = store.roads || new Map();
     store.grids = store.grids || new Map();
@@ -85,12 +91,13 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
         return faces;
     };
 
-    const land = [], aprons = [], ribbons = [], built = [], upright = [];
+    const land = [], aprons = [], ribbons = [], built = [], upright = [], stone = [];
     for (const tile of env.tileMeshes.values()) {
         const mesh = tile.mesh || tile;
         if (!mesh || !mesh.isMesh || !/lod0$/.test(mesh.name)) continue;
         land.push(gridOf(mesh, 0, mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.attributes.position.count, 8, 'land'));
     }
+    const rideGroups = new Set(env.roadMeshes.values());
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
         group.traverse(o => {
             if (!o.isMesh) return;
@@ -102,6 +109,8 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     // The concrete (decks, soffits, piers, tubes and their parapets) of the side roads, by its road
                     else if (g.materialIndex === 1) built.push({ mesh: o, start: g.start, count: g.count, owners });
                     if (g.materialIndex === 1 || g.materialIndex === 2) upright.push(facesOf(o, g.start, g.count, `faces${g.materialIndex}`));
+                    // (the ride's own stone, its walls and their copings: a top in plan over a side road shuts it)
+                    if (g.materialIndex === 2 && rideGroups.has(group)) stone.push(gridOf(o, g.start, g.count, 4, 'stone'));
                 }
             } else if (o.name === 'road-ribbon' || o.name === 'road-side') ribbons.push(gridOf(o, 0, whole, 4, 'ribbon'));
         });
@@ -131,7 +140,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
             if (Math.hypot(rows[0].x - at.x, rows[0].z - at.z) > nearM) continue;
             const width = env.graph.stubWidth(edgeId);
             const chain = new Set(rows.map(r => r.edgeId));
-            const road = { junction: junction.id, name: junction.name, edge: edgeId, s: Math.round(pass.sIn), width: r2(width), lengthM: r2(rows[rows.length - 1].run), steps: [], holes: [], sunk: [], decks: [], open: [], samples: 0 };
+            const road = { junction: junction.id, name: junction.name, edge: edgeId, s: Math.round(pass.sIn), width: r2(width), lengthM: r2(rows[rows.length - 1].run), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], samples: 0 };
             // The place `d` metres along the side road and `lat` metres right of its centre line
             let k = 0;
             const place = (d, lat) => {
@@ -167,6 +176,21 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     last = { y };
                     const g = groundAt(p.x, p.z);
                     if (g !== null && g > y + 0.05) road.sunk.push({ d: r2(d), lat: r2(lat), overM: r2(g - y), x: r2(p.x), z: r2(p.z) });
+                }
+            }
+            // The ride's stone over the side road in its mouth, drawn and as the physics meets it
+            const locate = {}, hint = { start: env.route.indexAt(road.s) - 12, end: env.route.indexAt(road.s) + 12 };
+            for (const lat of [0, -0.35 * width, 0.35 * width]) {
+                for (let d = 0; d <= Math.min(edgeD + mouthM, road.lengthM) + 1e-9; d += stepM) {
+                    const p = place(d, lat);
+                    const y = roadAt(p.x, p.z, p.y) ?? p.y;
+                    const over = all(stone, p.x, p.z).filter(h => h > y + wallUpM && h < y + 3);
+                    if (over.length) road.walls.push({ d: r2(d), lat: r2(lat), upM: r2(Math.max(...over) - y), x: r2(p.x), z: r2(p.z) });
+                    const loc = env.ground.locate(p.x, p.z, hint, locate);
+                    const half = loc.width / 2, reach = Math.abs(loc.lateral);
+                    if (reach <= half || Math.abs(loc.roadY - y) > 1.5 || typeof env.ground.wallBand !== 'function') continue;
+                    const band = env.ground.wallBand(loc, half);
+                    if (band && reach >= band.from && env.ground.zoneAt(loc, half).kind === 'wall') road.blocked.push({ d: r2(d), lat: r2(lat), s: Math.round(env.route.points[loc.index].s), reachM: r2(reach), x: r2(p.x), z: r2(p.z) });
                 }
             }
             // The side road's own concrete in the mouth: the plan of each triangle's centre against the road's first metres
@@ -216,7 +240,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
 
 export function junctionReport(store) {
     const roads = [...(store.roads || new Map()).values()];
-    const out = { junctions: new Set(roads.map(r => r.junction)).size, roads: roads.length, samples: roads.reduce((n, r) => n + r.samples, 0), steps: [], holes: [], sunk: [], decks: [], open: [] };
+    const out = { junctions: new Set(roads.map(r => r.junction)).size, roads: roads.length, samples: roads.reduce((n, r) => n + r.samples, 0), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [] };
     for (const road of roads) {
         const where = { s: road.s, junction: road.junction, edge: road.edge };
         if (road.steps.length) { const worst = road.steps.reduce((a, b) => (Math.abs(b.stepM) > Math.abs(a.stepM) ? b : a)); out.steps.push({ ...where, places: road.steps.length, worstM: worst.stepM, d: worst.d, x: worst.x, z: worst.z }); }
@@ -224,8 +248,10 @@ export function junctionReport(store) {
         if (road.sunk.length) { const worst = road.sunk.reduce((a, b) => (b.overM > a.overM ? b : a)); out.sunk.push({ ...where, places: road.sunk.length, worstM: worst.overM, d: worst.d, x: worst.x, z: worst.z }); }
         if (road.decks.length) out.decks.push({ ...where, triangles: road.decks.length, d: Math.min(...road.decks.map(p => p.d)), x: road.decks[0].x, z: road.decks[0].z });
         if (road.open.length) { const worst = road.open.reduce((a, b) => (b.dropM > a.dropM ? b : a)); out.open.push({ ...where, places: road.open.length, worstM: worst.dropM, d: worst.d, x: worst.x, z: worst.z }); }
+        if (road.walls.length) { const worst = road.walls.reduce((a, b) => (b.upM > a.upM ? b : a)); out.walls.push({ ...where, places: road.walls.length, worstM: worst.upM, d: worst.d, x: worst.x, z: worst.z }); }
+        if (road.blocked.length) out.blocked.push({ ...where, places: road.blocked.length, worstM: Math.min(...road.blocked.map(b => b.d)), d: road.blocked[0].d, rideS: road.blocked[0].s, x: road.blocked[0].x, z: road.blocked[0].z });
     }
-    for (const kind of ['steps', 'holes', 'sunk', 'open']) out[kind].sort((a, b) => Math.abs(b.worstM) - Math.abs(a.worstM));
+    for (const kind of ['steps', 'holes', 'sunk', 'open', 'walls', 'blocked']) out[kind].sort((a, b) => Math.abs(b.worstM) - Math.abs(a.worstM));
     out.decks.sort((a, b) => b.triangles - a.triangles);
     return out;
 }

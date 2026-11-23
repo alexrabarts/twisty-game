@@ -5,7 +5,8 @@
 //
 // solidsOf(game, env) lists the walls and houses standing now (the caller streams the place in first):
 //   - walls: a vertical face from each run's top line (the road's edge) down to its foot, and up by the parapet where
-//     the run has one (RoadMesh.PARAPET_DROP_M of wall or more)
+//     the run has one (RoadMesh.PARAPET_DROP_M of wall or more), or by a marker stone where a row of them stands in its
+//     place (WorldEnvironment.wallStoned)
 //   - houses: the wall rect of every house drawn, from the land under it up to HOUSE_H_M
 // sightBlock(game, env, solids, from, to, index) is the first thing the segment from `from` to `to` meets:
 // {kind: 'wall' | 'house' | 'land', share}, or null with a clear line.
@@ -44,7 +45,7 @@ export function hairpinsOf(route, beforeM = 70, afterM = 60) {
 
 // `near`: {x, z, reach} keeps only what stands within `reach` of the place
 export function solidsOf(game, env, near = null) {
-    const { RoadMesh } = game;
+    const { RoadMesh, Scenery } = game;
     const walls = [], houses = [];
     const seen = new Set();
     const far = (x, z) => near && Math.hypot(x - near.x, z - near.z) > near.reach;
@@ -56,7 +57,8 @@ export function solidsOf(game, env, near = null) {
             if (seen.has(id)) continue;
             seen.add(id);
             const fa = run.foot ? run.foot[k] : a[1], fb = run.foot ? run.foot[k + 1] : b[1];
-            const rail = a[1] - fa >= RoadMesh.PARAPET_DROP_M || b[1] - fb >= RoadMesh.PARAPET_DROP_M ? RoadMesh.PARAPET_H_M : 0;
+            const stoned = run.owner === -1 && run.rows && env.wallStoned(run.rows[k], run.key === 'r' ? 1 : -1);
+            const rail = stoned ? Scenery.STONE_HEIGHT_M : a[1] - fa >= RoadMesh.PARAPET_DROP_M || b[1] - fb >= RoadMesh.PARAPET_DROP_M ? RoadMesh.PARAPET_H_M : 0;
             // (mx, mz, half: its middle and half its length, to pass by a wall that is nowhere near)
             walls.push({ ax: a[0], az: a[2], bx: b[0], bz: b[2], topA: a[1] + rail, topB: b[1] + rail, footA: Math.min(fa, a[1]), footB: Math.min(fb, b[1]), mx: (a[0] + b[0]) / 2, mz: (a[2] + b[2]) / 2, half: Math.hypot(b[0] - a[0], b[2] - a[2]) / 2 });
         }
