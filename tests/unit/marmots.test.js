@@ -5,7 +5,8 @@
 //   - no colony on low land or with no water near
 //   - a crossing starts only where the road runs straight before it, and only while the animal clears the road at
 //     least CROSSING.marginS before the bike gets there at its speed
-//   - an animal runs home and is gone when the bike comes near, and comes back after the bike has gone on
+//   - an animal sits up facing the bike as it comes, runs home and is gone when it is near, and comes back after the
+//     bike has gone on
 // The browser probe world-marmots (tools/terrain-check.mjs) checks the shipped stage as drawn.
 import { describe, test, expect } from '@jest/globals';
 import { loadGame, loadScript, realThree } from '../helpers/load-game.js';
@@ -112,6 +113,19 @@ describe('a marmot crossing the road', () => {
 });
 
 describe('a marmot near the bike', () => {
+    test('sits up facing the bike as it comes, and keeps still', () => {
+        const m = Object.create(Marmots.prototype);
+        m.seed(5);
+        const a = { id: 'a', x: 0, y: 0, z: 0, look: { x: 3, y: 0, z: 0 }, turn: 0 };
+        const life = m.life(a, { id: 'c' });
+        Object.assign(life, { mode: 'walk', target: a.look, bike: { x: 0, z: 30 } });
+        const L = Marmots.LIFE;
+        for (let k = 0; k < 300; k++) m.step(life, 1 / 60, L.alertM - 10, null);
+        expect(life.mode).toBe('sit');
+        expect(life.alert).toBe(true);
+        expect(life.heading).toBeCloseTo(Math.atan2(0 - life.x, 30 - life.z), 6);
+    });
+
     test('runs home and is gone, then comes back once the bike has gone on', () => {
         const m = Object.create(Marmots.prototype);
         m.seed(5);

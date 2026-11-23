@@ -4,8 +4,8 @@
 //
 //   where     MarmotRule.colonies(tile, cover, ctx): on grass, rock or scree at RULE.minY or higher, within RULE.lakeM of
 //             water (a water node or water cover), on ground no steeper than RULE.steep (1 - cos of the slope: 0.14 is
-//             about 30 degrees), RULE.rideMinM to RULE.rideMaxM
-//             past every road band (RoadClearance), at most one colony to a RULE.cellM cell, 2 to 5 animals within
+//             about 30 degrees), RULE.rideMinM past every road band (RoadClearance) and within RULE.rideMaxM of the
+//             ride's own (where a rider sees them: a colony by a side road alone is not seen), at most one colony to a RULE.cellM cell, 2 to 5 animals within
 //             RULE.spreadM. Each cell is chosen by a hash of its own place: the same world gives the same colonies in
 //             any order its tiles arrive
 //   life      each animal sits up and looks out, drops to all fours and scuttles a few metres to another point of its
@@ -18,7 +18,8 @@
 //
 // Nothing here is in the physics. No THREE in MarmotRule (node tests read it).
 const MarmotRule = {
-    RULE: Object.freeze({ minY: 2000, lakeM: 140, waterMinM: 4, steep: 0.14, rideMinM: 15, rideMaxM: 120, cellM: 128, share: 0.55, tries: 14, least: 2, most: 5, spreadM: 20, apartM: 2.5, lookM: [2, 5] }),
+    // sight: the eye height over the ride and how far back along it (m) a colony is looked for; seen from two of three
+    RULE: Object.freeze({ minY: 2000, lakeM: 140, waterMinM: 4, steep: 0.06, rideMinM: 6, rideMaxM: 35, riseM: 4, eyeM: 2, sightBackM: [30, 50, 70], cellM: 128, share: 0.7, tries: 14, least: 2, most: 5, spreadM: 20, apartM: 2.5, lookM: [2, 5] }),
     // Cover classes of tools/world/landcover.mjs a marmot lives on (none, rock, scree, grass) and the water class
     COVERS: Object.freeze([0, 3, 4, 5]),
     WATER_COVER: 7,
@@ -74,11 +75,16 @@ const MarmotRule = {
             }
             if (near > R.lakeM || near < R.waterMinM) return null;
         }
+        // Clear of every road by rideMinM, and near enough the ride itself to be seen from it (a side road does not count)
         const past = ctx.clearance(x, z, R.rideMaxM + 1);
-        if (past < R.rideMinM || past > R.rideMaxM) return null;
+        if (past < R.rideMinM) return null;
+        const ride = ctx.rideClearance ? ctx.rideClearance(x, z, R.rideMaxM + 1) : past;
+        if (ride > R.rideMaxM) return null;
         out.y = ctx.landY ? ctx.landY(x, z) : h;
         if (!Number.isFinite(out.y)) return null;
-        out.past = past;
+        // On the side a rider coming up the ride sees: no bank or cut between the road behind and the animal
+        if (ctx.seen && !ctx.seen(x, out.y, z)) return null;
+        out.past = ride;
         return out;
     },
 
@@ -143,7 +149,9 @@ const MarmotRule = {
 
 // The life of the colonies round the bike: one instanced mesh per pose, the animals near the camera in it
 class Marmots {
-    static get LIFE() { return Object.freeze({ drawM: 260, hideM: 25, backM: 60, backS: 6, sit: [2.5, 7], walk: 1.1, run: 4.2, reachM: 900, most: 48 }); }
+    // alertM: within it an animal sits up facing the bike and keeps still; hideM: within it, it bolts; scale over the
+    // model's real size, so one reads from the saddle
+    static get LIFE() { return Object.freeze({ drawM: 260, alertM: 60, hideM: 8, scale: 1.3, backM: 60, backS: 6, sit: [2.5, 7], walk: 1.1, run: 4.2, reachM: 900, most: 48 }); }
     // speed m/s; leadM the run from where it shows to the road's edge; edgeM past each edge of the band; marginS the
     // least time between it leaving the road and the bike arriving; chance one ride in so many has one
     static get CROSSING() { return Object.freeze({ chance: 0.25, sightM: 150, turnDeg: 12, speed: 4.5, leadM: 8, edgeM: 2, marginS: 1, aheadM: 400 }); }
@@ -192,7 +200,7 @@ class Marmots {
         const env = this.env, m = WorldData.TILE_M, L = Marmots.LIFE;
         const roads = env.scenery && env.scenery.roads;
         if (!roads) return;
-        const ctx = { clearance: (x, z, reach) => roads.clearance(x, z, reach), landY: (x, z) => env.ground.tileHeight(x, z) };
+        const ctx = { clearance: (x, z, reach) => roads.clearance(x, z, reach), rideClearance: (x, z, reach) => roads.clearance(x, z, reach, () => true), landY: (x, z) => env.ground.tileHeight(x, z), seen: (x, y, z) => this.seen(x, y, z) };
         for (let tz = Math.floor((bike.z - L.reachM) / m); tz <= Math.floor((bike.z + L.reachM) / m); tz++) {
             for (let tx = Math.floor((bike.x - L.reachM) / m); tx <= Math.floor((bike.x + L.reachM) / m); tx++) {
                 const key = `${tx},${tz}`;
@@ -204,6 +212,29 @@ class Marmots {
                 for (const colony of list) for (const a of colony.animals) this.animals.set(a.id, this.life(a, colony));
             }
         }
+    }
+
+    // Whether a rider coming up the ride sees (x, y, z): the ground there within RULE.riseM of the ride's height beside it,
+    // and the line from RULE.eyeM over the ride RULE.sightBackM behind clear of the land, from two of the three
+    seen(x, y, z) {
+        const R = MarmotRule.RULE, env = this.env, route = env.route, roads = env.scenery.roads;
+        const near = {};
+        roads.clearance(x, z, R.rideMaxM + 1, () => true, false, near);
+        if (!near.segment || near.segment.edgeId !== null) return false;
+        const s = route.sArray[near.segment.index], at = route.sample(s, this.scratch || (this.scratch = {}));
+        if (Math.abs(y - at.y) > R.riseM) return false;
+        let clear = 0;
+        for (const back of R.sightBackM) {
+            if (s - back < 0) continue;
+            const p = route.sample(s - back, this.scratch), ey = p.y + R.eyeM;
+            let open = true;
+            for (let k = 1; k < 12 && open; k++) {
+                const t = k / 12, g = env.ground.tileHeight(p.x + (x - p.x) * t, p.z + (z - p.z) * t);
+                if (g !== null && g > ey + (y + 0.3 - ey) * t - 0.1) open = false;
+            }
+            if (open) clear++;
+        }
+        return clear >= 2;
     }
 
     life(a, colony) {
@@ -220,11 +251,12 @@ class Marmots {
         const counts = [0, 0, 0];
         const matrix = Marmots.matrix || (Marmots.matrix = new THREE.Matrix4());
         const q = Marmots.quat || (Marmots.quat = new THREE.Quaternion()), p = Marmots.pos || (Marmots.pos = new THREE.Vector3());
-        const one = Marmots.one || (Marmots.one = new THREE.Vector3(1, 1, 1)), up = Marmots.up || (Marmots.up = new THREE.Vector3(0, 1, 0));
+        const one = Marmots.one || (Marmots.one = new THREE.Vector3(L.scale, L.scale, L.scale)), up = Marmots.up || (Marmots.up = new THREE.Vector3(0, 1, 0));
         for (const life of this.animals.values()) {
             const near = Math.hypot(life.x - camera.x, life.z - camera.z);
             if (near > L.drawM && life !== (this.crossing && this.crossing.life)) continue;
-            if (!(this.crossing && this.crossing.life === life)) this.step(life, dt, Math.hypot(life.a.x - bike.x, life.a.z - bike.z), sound);
+            life.bike = bike;
+            if (!(this.crossing && this.crossing.life === life)) this.step(life, dt, Math.hypot(life.x - bike.x, life.z - bike.z), sound);
             if (life.mode === 'gone') continue;
             const pose = life.mode === 'sit' ? 0 : life.mode === 'walk' ? 1 : 2;
             if (counts[pose] >= L.most) continue;
@@ -247,6 +279,13 @@ class Marmots {
             } else life.goneSince = 0;
             return;
         }
+        // The bike coming: sit up on the spot, turned to it, and watch
+        if (bikeM < L.alertM && bikeM >= L.hideM && life.mode !== 'run') {
+            if (life.mode !== 'sit' || !life.alert) Object.assign(life, { mode: 'sit', alert: true, t: 0, until: Infinity });
+            if (life.bike) life.heading = Math.atan2(life.bike.x - life.x, life.bike.z - life.z);
+            return;
+        }
+        if (life.alert && bikeM >= L.alertM) Object.assign(life, { alert: false, t: 0, until: L.sit[0] });
         if (bikeM < L.hideM && life.mode !== 'run') {
             life.mode = 'run';
             life.target = a;

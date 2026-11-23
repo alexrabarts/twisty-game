@@ -5275,6 +5275,42 @@ WORLD['world-marmots'] = async (page) => {
         colonies.sort((p, q) => p.s - q.s);
         return { colonies, animals: colonies.reduce((n, c) => n + c.animals, 0), failures, loaded: !!marmots.meshes };
     }, placeAt.toString(), Number(option('every') || 400));
+    // --ride: the game's own frames ride the summit from --from at --speed in the chase view; how many marmots are drawn
+    // and the nearest drawn one to the camera, every half second, and a picture where one is nearest (--out)
+    if (flag('ride')) result.ride = await page.evaluate(async (placeSource, from, cruise) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, marmots = env.marmots, v = game.vehicle;
+        await placeAt(from);
+        game.cameraMode = 2;
+        game.worldCamera.reset(v.yawAngle);
+        twistyDev.autopilot({ speed: cruise });
+        const rows = [], shots = [];
+        let best = null;
+        for (let frame = 0; frame < 60 * 120 && v.routeS < env.route.length - 50; frame++) {
+            twistyDev.step(1, { render: frame % 30 === 0 });
+            if (frame % 30) continue;
+            const cam = game.camera.position;
+            let drawn = 0, near = Infinity;
+            for (const life of marmots.animals.values()) {
+                if (life.mode === 'gone') continue;
+                const d = Math.hypot(life.x - cam.x, life.z - cam.z);
+                if (d <= Marmots.LIFE.drawM) { drawn++; near = Math.min(near, d); }
+            }
+            rows.push({ s: Math.round(v.routeS), drawn, near: Math.round(near), counts: marmots.meshes ? marmots.meshes.map(m => m.count) : null, gone: [...marmots.animals.values()].filter(l => l.mode === 'gone').length });
+            // (read in the same task as the draw: the canvas keeps no frame once it is shown)
+            if (drawn && near < 70) shots.push({ near: Math.round(near), s: Math.round(v.routeS), png: game.graphics.renderer.domElement.toDataURL('image/png').split(',')[1] });
+            if (drawn && (!best || near < best.near)) best = { near, s: Math.round(v.routeS) };
+            await new Promise(done => setTimeout(done, 0));
+        }
+        shots.sort((p, q) => p.near - q.near);
+        shots.splice(6);
+        return { rows, best, shots };
+    }, placeAt.toString(), Number(option('from') || 11800), Number(option('speed') || 15));
+    if (result.ride && option('out')) {
+        mkdirSync(option('out'), { recursive: true });
+        for (const shot of result.ride.shots) writeFileSync(join(option('out'), `marmots-ride-s${shot.s}-${shot.near}m.png`), Buffer.from(shot.png, 'base64'));
+    }
+    if (result.ride) result.ride.shots = result.ride.shots.map(shot => ({ s: shot.s, near: shot.near }));
     // --crossing: the ride is given its one crossing and ridden through the colonies by the autopilot from --from
     // (default 11000) at --speed (default 20 m/s): the crossing must start where the rule allows, and the animal must be
     // off the road when the bike passes its place
