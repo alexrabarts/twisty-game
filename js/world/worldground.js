@@ -20,6 +20,9 @@ class WorldGround extends Ground {
     // Metres of bench beside the road band that the importer carves flat
     static get BENCH_M() { return 2; }
 
+    // How far past a retaining wall's face its parapet is still solid (zoneAt)
+    static get WALL_BACK_M() { return 0.5; }
+
     // Metres past the road edge that a bridge parapet stands (RoadMesh draws it there)
     static get PARAPET_M() { return 0.35; }
 
@@ -253,7 +256,9 @@ class WorldGround extends Ground {
             // (the wall past an end stands where it holds 0.1 m of the fill's fall or more, as it is drawn, or where
             // it goes on to the next wall)
             const share = this.taperAt ? this.taperAt(loc.index, sign, loc.t) : 0;
-            if (!(this.bridgedAt && this.bridgedAt(loc.index, sign))) {
+            // (and wherever its parapet is drawn, WorldEnvironment.parapetAt: the stone under it is)
+            const railed = this.parapetAt && this.parapetAt(loc.index, sign, loc.t ?? 0);
+            if (!railed && !(this.bridgedAt && this.bridgedAt(loc.index, sign))) {
                 if (!(share > 0)) return null;
                 const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
                 const at = WorldGround.pointAt(point, sign * (face - RoadMesh.STONE_PROUD_M), this.scratchBand || (this.scratchBand = {}));
@@ -340,6 +345,8 @@ class WorldGround extends Ground {
     // height has it (`height`, metres over the road: a parapet, a wall's coping); a wall whose face is a line along the
     // road at `start` says so (`line`: a parapet, the rock beside a tunnel's road; a rock face of the land is read
     // from the 8 m zone layer and has none). Vehicle.brushWall reads both
+    // `loc.t` is how far along its piece loc is: a parapet past a wall's end can start part of the way along one
+    // (WorldEnvironment.parapetAt)
     zoneAt(loc, halfRoad) {
         const sign = loc.lateral < 0 ? -1 : 1;
         const reach = Math.abs(loc.lateral);
@@ -359,8 +366,9 @@ class WorldGround extends Ground {
         // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall
         // A retaining wall of the ride's plan, and the wall past its end, stand WALL_MIN_UP_M over the road from the
         // coping's inner edge: a rider who leaves the road there meets the wall's side, that high. Its parapet, where it
-        // has one (as RoadMesh.railed: a drop of PARAPET_DROP_M or more), stands on the coping's outer PARAPET_W_M,
-        // half a metre further out than the side the tyres meet
+        // has one (as it is drawn, WorldEnvironment.parapetAt: along the whole of a wall with a drop of PARAPET_DROP_M
+        // or more and on past its end to the wall's closed end), stands on the coping's outer PARAPET_W_M, half a metre
+        // further out than the side the tyres meet
         // A row of marker stones on a low wall stands where its parapet would (Scenery.wallRuns, WorldEnvironment.wallStoned)
         const band = works ? this.wallBand(loc, halfRoad) : null;
         if (band) {
@@ -368,7 +376,10 @@ class WorldGround extends Ground {
             // ride is stopped at the coping, a wall's width before the face. Held to the ride's height within 1.5 m, a
             // side road that ran down behind the wall at two junctions was a wall to the rider on it)
             if (reach > band.to && this.sideRoadY(at.x, at.z) !== null) return { kind: 'road', side: this.roadSide, sign, start: band.to };
-            const railed = this.onRetainingWall(loc, halfRoad) || !!(this.wallStoned && this.wallStoned(loc.index, sign));
+            // (the parapet as drawn is solid over the wall's thickness and WALL_BACK_M past its face, so a sliding bike or
+            // a falling rider is not through it in a step; farther out is the land the wall stands over: read as a wall
+            // all the way out, a bike cutting across that land met a solid parapet several metres from the one drawn)
+            const railed = this.onRetainingWall(loc, halfRoad) || !!(this.wallStoned && this.wallStoned(loc.index, sign)) || (reach <= band.to + WorldGround.WALL_BACK_M && !!(this.parapetAt && this.parapetAt(loc.index, sign, loc.t ?? 0)));
             return reach > band.from ? { kind: 'wall', side: this.wallSide, sign, start: band.from, parapet: railed, line: true, height: RoadMesh.COPING_UP_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
         }
         if (works && this.onRetainingWall(loc, halfRoad)) {

@@ -4373,7 +4373,29 @@ class Vehicle {
         located.lateral = projection.lateral + sign * rule.bodyM;
         let zone = environment.ground.zoneAt(located, projection.width / 2);
         if (this.worldPhysics) zone = this.worldZone(zone, located, projection.y);
-        if (zone.kind !== 'wall') return;
+        if (zone.kind !== 'wall') {
+            // His middle in a wall where bodyM out is not, or bodyM along the road from it: he came into it end on (a
+            // parapet that starts part of the way along a piece) or through it (a parapet is solid only near its
+            // wall, WorldGround.WALL_BACK_M). He stays where he was, against it. (A world's only: a leg's zones have
+            // no parapets)
+            if (!this.worldPhysics) return;
+            const route = environment.route, a = route.points && route.points[projection.index], b = route.points && route.points[projection.index + 1];
+            const span = a && b ? rule.bodyM / Math.max(rule.bodyM, Math.hypot(b.x - a.x, b.z - a.z)) : 0;
+            let solid = false;
+            for (const shift of [0, span, -span]) {
+                located.lateral = projection.lateral;
+                located.t = Math.max(0, Math.min(1, (projection.along || 0) + shift));
+                zone = environment.ground.zoneAt(located, projection.width / 2);
+                if (this.worldPhysics) zone = this.worldZone(zone, located, projection.y);
+                if (zone.kind === 'wall') { solid = true; break; }
+            }
+            if (!solid) return;
+            p.x = fromX;
+            p.z = fromZ;
+            v.x = 0;
+            v.z = 0;
+            return;
+        }
         const perpX = Math.cos(projection.heading), perpZ = -Math.sin(projection.heading);
         const deep = Math.abs(located.lateral) - zone.start;
         // A wall whose zone begins where he is, or one he is deep in at once, is one he did not slide up to (the next

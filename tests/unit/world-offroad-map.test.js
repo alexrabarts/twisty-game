@@ -82,6 +82,8 @@ describe('the top off-road bike over the map', () => {
                 // One stay off the road is one restart at the most, with its 5 s, and a crash names its cause
                 expect([hairpin.s0, mode, r.restarts <= 1, r.penaltyMs === r.restarts * penalty]).toEqual([hairpin.s0, mode, true, true]);
                 for (const cause of r.crashes) expect([hairpin.s0, typeof cause === 'string' && cause.length > 8]).toEqual([hairpin.s0, true]);
+                // (a crash into a parapet is into one drawn there: a retaining wall's parapet is solid where it is drawn)
+                for (const hit of r.hits) if (hit.parapet) expect([hairpin.s0, mode, hit.s, hit.drawn]).toEqual([hairpin.s0, mode, hit.s, true]);
                 // Never counted: the run's progress stays short of the road past the hairpin unless the game put the bike back
                 // (a loop that brings the bike back onto the road where it left it is a rider who turned back: free, and it rides on)
                 if (r.restarts === 0) expect([hairpin.s0, mode, r.wentBack || r.countedS < r.apexS]).toEqual([hairpin.s0, mode, true]);
@@ -95,7 +97,9 @@ describe('the top off-road bike over the map', () => {
             }
         }
         console.log(`a hairpin cut, then more metres on the land:\n${lines.join('\n')}\n${cuts} cuts, ${paid} of them after more metres on the land than road skipped`);
-        expect(cuts).toBeGreaterThanOrEqual(10);
+        // 22 were cuts before the parapets ran to their walls' ends (2026-11); the 16 lost each crash into a parapet
+        // drawn there (checked above), 6 remain
+        expect(cuts).toBeGreaterThanOrEqual(6);
         expect(paid).toBeGreaterThanOrEqual(1);
     }, 1200000);
 

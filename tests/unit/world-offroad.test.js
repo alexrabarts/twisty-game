@@ -159,8 +159,16 @@ describe('the Tremola slice off the road', () => {
         expect(rides.length).toBeGreaterThan(300);
         const bad = judgeCuts(rides);
         if (bad.length) throw new Error(`${bad.length} rides:\n${bad.join('\n')}`);
-        // The rule is not idle: with the pace the bike now has, many of these lines reach the road ahead and are cuts
-        expect(ended('cut').length).toBeGreaterThan(40);
+        // A line the land lets through is a cut; one a retaining wall's parapet stops crashes into a parapet that is
+        // drawn there (a parapet is solid where it is drawn: along its whole wall and on past its end,
+        // WorldEnvironment.parapetAt), never into one the rider cannot see. (A wall of the land's own zone layer, a rock
+        // face, has no parapet and nothing of the road's works drawn: 7 lines end there, as they did before)
+        const blind = ended('crash').filter(x => x.r.hit && x.r.hit.parapet && !x.r.hit.drawn);
+        if (blind.length) throw new Error(`${blind.length} crashes into a parapet with nothing drawn there:\n${blind.map(x => `${x.line} at ${JSON.stringify(x.r.hit)}`).join('\n')}`);
+        // The rule is not idle: with the pace the bike now has, lines reach the road ahead and are cuts. 76 were
+        // before the parapets ran to their walls' ends (2026-11); the 61 lost each crash into a parapet drawn there
+        // (a wall's low stretch or its face past its end, where no parapet had stood), 15 remain
+        expect(ended('cut').length).toBeGreaterThanOrEqual(15);
         // And the hairpins are still ridden: a line that keeps to the road and its verge is counted
         expect(counted.length).toBeGreaterThan(60);
     }, 3600000);

@@ -38,7 +38,7 @@ export const WALL_LIMITS = { buried: 4, climbs: 6, hangs: 0, top: 1, blocks: 1, 
 
 export function wallWindow(game, env, store, at, nearM = 350) {
     const { THREE } = game;
-    const BATTER = 1 / 1.5, PARAPET = 0.8, KERB = 0.3;
+    const BATTER = 1 / 1.5, PARAPET = 0.8;
     // (a wall's top is its coping, this far over its road's edge: RoadMesh.COPING_UP_M, the wall's least height)
     const UP = game.RoadMesh ? game.RoadMesh.COPING_UP_M : 0.03;
     store.faces = store.faces || new Map();
@@ -177,8 +177,7 @@ export function wallWindow(game, env, store, at, nearM = 350) {
             if (mesh.geometry.attributes.wallFace && Math.round(mesh.geometry.attributes.wallFace.getY(i)) === 3) continue;
             // nor a sheet whose top falls faster than a road does (tests/helpers/world-spikes.js counts those as `fins`)
             if (Math.abs(a.top[1] - b.top[1]) > 0.4 * len) continue;
-            // (or the kerb it falls to at a wall's end, RoadMesh.PARAPET_END_M)
-            if ([a, b].every(p => Math.abs(p.top[1] - p.foot - PARAPET) < 2e-3 || Math.abs(p.top[1] - p.foot - KERB) < 2e-3)) continue;
+            if ([a, b].every(p => Math.abs(p.top[1] - p.foot - PARAPET) < 2e-3)) continue;
             const owner = part.owners ? part.owners[i / 3] : -1;
             const ux = (b.top[0] - a.top[0]) / len, uz = (b.top[2] - a.top[2]) / len;
             const mx = (a.top[0] + b.top[0]) / 2, mz = (a.top[2] + b.top[2]) / 2;

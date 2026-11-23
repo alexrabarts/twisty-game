@@ -449,7 +449,7 @@ describe('RoadMesh', () => {
         expect(group.children.map(c => c.name)).toEqual(['road-ribbon', 'road-works']);
     });
 
-    test('past its end a wall goes on along the edge, as thick and as high as the wall, and ends closed; the slope starts at its foot', () => {
+    test('past its end a wall goes on along the edge, as thick and as high as the wall, with its parapet, and ends closed; the slope starts at its foot', () => {
         // A wall along the first 20 m (asked for at the rows to 16 m: a segment is a wall when either row is), then a
         // slope 3 m down; the land in front of the wall 2 m under the edge
         const rows = line(10);
@@ -466,11 +466,13 @@ describe('RoadMesh', () => {
         for (const key of ['l', 'r']) {
             const edge = near.sides[5][key], sign = Math.sign(edge[0]), own = q => Math.sign(q[0]) === sign;
             // At the wall's end the face goes on from the wall's own top corner (STONE_PROUD_M out, at its coping), and
-            // the parapet has come down to its kerb there
+            // the parapet goes on over it at its full height: no kerb, and no end of it there
             const corner = [edge[0] + sign * RoadMesh.STONE_PROUD_M, edge[1] + RoadMesh.COPING_UP_M, 20];
+            const rail = RoadMesh.COPING_UP_M + RoadMesh.PARAPET_H_M;
             expect(stone.filter(q => Math.hypot(q[0] - corner[0], q[1] - corner[1], q[2] - corner[2]) < 1e-4).length).toBeGreaterThan(3);
-            expect(has(stone, [corner[0], corner[1] + RoadMesh.PARAPET_END_M, 20])).toBe(true);
-            expect(has(stone, [corner[0], near.sides[4][key][1] + RoadMesh.COPING_UP_M + RoadMesh.PARAPET_H_M, 16])).toBe(true);
+            expect(has(stone, [corner[0], edge[1] + rail, 20])).toBe(true);
+            expect(has(stone, [corner[0], near.sides[4][key][1] + rail, 16])).toBe(true);
+            expect(stone.filter(q => own(q) && Math.abs(q[2] - 20) < 1e-6 && q[1] > corner[1] + 1e-4 && q[1] < edge[1] + rail - 1e-4)).toEqual([]);
             // and the slope has no width there: no ground of this side stands out from the edge at the wall's last row
             expect(apron.filter(q => own(q) && Math.abs(q[2] - 20) < 1e-6 && Math.abs(q[0]) > Math.abs(edge[0]) + 0.01)).toEqual([]);
             // A third of the way along the taper (the next row) the stone holds two thirds of the 3 m the slope
@@ -494,6 +496,10 @@ describe('RoadMesh', () => {
             for (const p of [[corner[0], edge[1] + RoadMesh.COPING_UP_M], [edge[0] - sign * W, edge[1] + RoadMesh.COPING_UP_M], [corner[0], deep], [edge[0] - sign * W, deep]]) expect(has(stone, [p[0], p[1], tip])).toBe(true);
             expect(stone.filter(q => own(q) && Math.abs(q[2] - tip) < 1e-6 && q[1] < deep - 1e-4)).toEqual([]);
             expect(Math.abs(corner[0] - (edge[0] - sign * W))).toBeCloseTo(W + P, 6);
+            // and its parapet ends there with it, at its full height, flush with the wall's closed end and closed across
+            // its own end (from the stone's face in by PARAPET_W_M)
+            const inside = edge[0] - sign * RoadMesh.PARAPET_W_M;
+            for (const p of [[corner[0], edge[1] + rail], [inside, edge[1] + rail], [inside, edge[1] + RoadMesh.COPING_UP_M]]) expect(has(stone, [p[0], p[1], tip])).toBe(true);
             // Past it there is no stone, and the slope starts at the edge as any slope does
             expect(stone.filter(q => own(q) && q[2] > 20 + T + 1e-6)).toEqual([]);
             expect(has(apron, [edge[0], edge[1] - RoadMesh.APRON_UNDER_M, 20 + T])).toBe(true);
@@ -506,6 +512,8 @@ describe('RoadMesh', () => {
         for (let i = 0; i + 2 < stone.length; i += 3) {
             const t = [stone[i], stone[i + 1], stone[i + 2]];
             if (!t.every(q => q[2] > 20 - 1e-6) || t.every(q => Math.abs(q[2] - 20) < 1e-6)) continue;
+            // (not its parapet's, which stands over the coping)
+            if (t.some(q => q[1] > edgeY + RoadMesh.COPING_UP_M + 1e-3)) continue;
             const plan = Math.abs((t[1][0] - t[0][0]) * (t[2][2] - t[0][2]) - (t[2][0] - t[0][0]) * (t[1][2] - t[0][2]));
             if (plan < 1e-3) {
                 faces++;

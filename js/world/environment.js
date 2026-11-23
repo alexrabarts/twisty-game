@@ -152,6 +152,8 @@ class WorldEnvironment {
         this.ground.cleftAt = (index, sign) => this.cleftAt(index, sign);
         // and a row of marker stones where it takes a low wall's parapet's place (wallStoned)
         this.ground.wallStoned = (index, sign) => this.wallStoned(index, sign);
+        // and the parapet where it is drawn, along the whole wall and on past its end (parapetAt)
+        this.ground.parapetAt = (index, sign, t) => this.parapetAt(index, sign, t);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
         this.physics = WorldPhysics;
@@ -665,6 +667,9 @@ class WorldEnvironment {
         // (whether the wall from a ride row on carries a row of stones in place of its parapet: read when it is drawn,
         // as the whole wall may reach into the plans of other sections)
         plan.stoned = (i, key) => this.wallStoned(i, key === 'r' ? 1 : -1);
+        // (and whether the whole wall carries a parapet, and the wall a stretch past an end goes on from: wallRailed)
+        plan.railed = (i, key) => this.wallRailed(i, key === 'r' ? 1 : -1);
+        plan.railedPast = (i, key, way) => this.railedPast(i, key === 'r' ? 1 : -1, way);
         // Its own segments: from its first row to its last, each segment named by the ride's row it starts at
         const runs = RoadMesh.wallRuns(sides, all, section.from - a, section.to - a).map(run => Object.assign(run, { owner: -1, rows: run.rows.map(k => k + a) }));
         if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
@@ -1066,6 +1071,112 @@ class WorldEnvironment {
         return stoned;
     }
 
+    // Whether the whole retaining wall under the ride's edge that stands from row `index` to the next, on the right
+    // (sign > 0) or the left, carries a parapet: one segment of it that drops PARAPET_DROP_M or more (RoadMesh.railed)
+    // gives the whole wall one, to its ends, and a wall whose marker stones take the
+    // parapet's place (wallStoned) has none. A parapet that stopped where the wall's drop fell under PARAPET_DROP_M left
+    // the wall's last metres a bare coping. One answer for every row of the wall (RoadMesh.edgeWorks, the physics and
+    // the camera read it), kept until a wall plan changes (faceStamp)
+    wallRailed(index, sign) {
+        if (!this.walledAt(index, sign)) return false;
+        const held = this.railedRows || (this.railedRows = { stamp: -1, rows: new Map() });
+        if (held.stamp !== this.faceStamp) { held.stamp = this.faceStamp; held.rows.clear(); }
+        const key = sign * (index + 1);
+        if (held.rows.has(key)) return held.rows.get(key);
+        const last = this.route.points.length - 2;
+        let a = index, b = index;
+        while (a > 0 && this.walledAt(a - 1, sign)) a--;
+        while (b < last && this.walledAt(b + 1, sign)) b++;
+        let railed = false;
+        if (!this.wallStoned(index, sign)) for (let i = a; i <= b && !railed; i++) { const top = this.wallTop(i, sign); railed = !!top && Math.max(...top.heights) >= RoadMesh.PARAPET_DROP_M; }
+        // (the plans read for the wall may have moved the stamp: the answer holds for the wall as it is now)
+        if (held.stamp !== this.faceStamp) { held.stamp = this.faceStamp; held.rows.clear(); }
+        for (let i = a; i <= b; i++) held.rows.set(sign * (i + 1), railed);
+        return railed;
+    }
+
+    // Whether the wall that a stretch past a wall's end goes on from carries a parapet (wallRailed): the nearest walled
+    // segment that ends at or before row `index` (way < 0) or starts at or after it (way > 0), on the right (sign > 0)
+    // or the left. The stretch is TAPER_M along the edge at most, but on the inside of a hairpin a metre of the edge is
+    // several of the ride's: read RAILED_PAST_M of the ride's metres (a far ribbon's parapet past a wall's end on the
+    // inside of a hairpin found no wall within 24 m and stopped 1.5 m short of its stone)
+    railedPast(index, sign, way) {
+        const S = this.route.sArray, last = this.route.points.length - 2, reach = WorldEnvironment.RAILED_PAST_M;
+        const step = way < 0 ? -1 : 1;
+        for (let j = way < 0 ? index - 1 : index; j >= 0 && j <= last && (way < 0 ? S[index] - S[j + 1] : S[j] - S[index]) <= reach; j += step) {
+            if (this.walledAt(j, sign)) return this.wallRailed(j, sign);
+        }
+        return false;
+    }
+
+    // Whether the physics and the camera count a parapet over the ride's edge from row `index` to the next, `t` of the
+    // way along (null: anywhere on the segment), on the right (sign > 0) or the left, as RoadMesh.edgeWorks draws it:
+    // on a wall that carries one (wallRailed), and past a wall's end on the face the wall goes on as (taperAt): a
+    // parapet runs its wall's whole length. None on a wall's segment that meets a structure, nor on a structure's own
+    // rows (the structure's own parapet is there)
+    parapetAt(index, sign, t = null) {
+        const walled = this.walledAt(index, sign);
+        if (walled === undefined || index < 0 || index + 1 >= this.route.points.length) return false;
+        const points = this.route.points;
+        // (a structure's row that the structure goes on from, away from the wall: RoadMesh.edgeWorks `abutsAt`)
+        const built = j => j < 0 || j >= points.length || !!(points[j].bits & 7);
+        if (walled) return !((points[index].bits & 7 && built(index - 1)) || (points[index + 1].bits & 7 && built(index + 2))) && this.wallRailed(index, sign);
+        if ((points[index].bits | points[index + 1].bits) & 7) return false;
+        const walls = this.rideWalls(this.rowSection[Math.max(0, Math.min(this.rowSection.length - 1, index))]);
+        const past = walls.plan.past && walls.plan.past[sign > 0 ? 'r' : 'l'];
+        const a = past && past[index - walls.plan.base], b = past && past[index + 1 - walls.plan.base];
+        if (!a || !b) return false;
+        if (this.bridgedAt(index, sign)) return this.railedPast(index, sign, -1) || this.railedPast(index + 1, sign, 1);
+        // As RoadMesh.edgeWorks lays it (`at`, `part`, `held`): the face holds `part` of the fill's fall from each wall
+        // (way 0 behind, way 1 ahead), the fall read from the edge point to the slope's foot (`edgeFoot`) at each row,
+        // and the stone is laid in strips of APRON_STRIP_M, each whole where it holds 0.1 m at either of its ends; the
+        // parapet stands on a strip where the wall it goes on from has one. Read from the physics' own land at the
+        // edge, a parapet stood on the verge with nothing drawn there (world-fairness), and one read a segment late let
+        // a bike sliding across a row go 0.7 m into the parapet drawn there (world-rider-fall)
+        const ends = this.taperEnds(index, sign);
+        if (!ends) return false;
+        const part = (way, u) => (Number.isFinite(a[way]) && Number.isFinite(b[way]) ? Math.max(0, 1 - (a[way] + (b[way] - a[way]) * u) / RoadMesh.TAPER_M) : 0);
+        const held = u => Math.max(part(0, u), part(1, u)) * (ends.fall[0] + (ends.fall[1] - ends.fall[0]) * u) >= 0.1;
+        const railed = [null, null];
+        const railOn = u => (part(0, u) > 0 && (railed[0] ?? (railed[0] = this.railedPast(index, sign, -1)))) || (part(1, u) > 0 && (railed[1] ?? (railed[1] = this.railedPast(index + 1, sign, 1))));
+        const strips = Math.max(1, Math.ceil(ends.length / RoadMesh.APRON_STRIP_M));
+        const strip = k => { const t0 = k / strips, t1 = (k + 1) / strips; return (held(t0) || held(t1)) && (railOn(t0) || railOn(t1)); };
+        if (t !== null) return strip(Math.min(strips - 1, Math.floor(Math.max(0, Math.min(1, t)) * strips)));
+        for (let k = 0; k < strips; k++) if (strip(k)) return true;
+        return false;
+    }
+
+    // The ride's edge from row `index` to the next on the right (sign > 0) or the left as RoadMesh.edgeWorks lays a
+    // slope there: {length, fall}, the edge's length and the fall from the edge to the slope's foot at each row
+    // (`edgeFoot`, as `at` reads `fA`), or null where no slope is laid. Kept until a wall plan changes (faceStamp)
+    taperEnds(index, sign) {
+        const held = this.taperHeld || (this.taperHeld = { stamp: -1, rows: new Map() });
+        if (held.stamp !== this.faceStamp) { held.stamp = this.faceStamp; held.rows.clear(); }
+        const id = sign * (index + 1);
+        if (held.rows.has(id)) return held.rows.get(id);
+        const key = sign > 0 ? 'r' : 'l';
+        const sides = RoadMesh.vergeSides(this.rowsOf(index, index + 1), null, true);
+        const foot = this.wallFoot || (this.wallFoot = this.edgeFoot());
+        const fall = side => {
+            const p = side[key], o = RoadMesh.outward(side)[key];
+            const f = foot(p[0], p[1], p[2], o[0], o[1], false, !!side.fill);
+            if (!f) return 0;
+            const y = Number.isFinite(f.y) ? Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.y)) : p[1] - RoadMesh.DECK_M;
+            return p[1] - Math.min(y, p[1] - RoadMesh.APRON_UNDER_M);
+        };
+        const a = sides[0][key], b = sides[1][key];
+        const out = { length: Math.hypot(b[0] - a[0], b[2] - a[2]), fall: [fall(sides[0]), fall(sides[1])] };
+        held.rows.set(id, out);
+        return out;
+    }
+
+    // Whether a retaining wall's run (RoadMesh.wallRuns) carries a parapet on its segment k: the ride's as parapetAt
+    // reads its rows, a side road's as its edge works drew it (`rail`)
+    runParapet(run, k) {
+        if (run.owner === -1 && run.rows) return this.parapetAt(run.rows[k], run.key === 'r' ? 1 : -1);
+        return !!(run.rail && run.rail[k]);
+    }
+
     // Whether the ride's edge from row `index` to the next, on the right (sign > 0) or the left, stands on a retaining wall
     walledAt(index, sign) {
         if (!this.streamer) return undefined;
@@ -1132,7 +1243,8 @@ class WorldEnvironment {
     // {data, count}, WorldCamera.FACE numbers a face. Every one is read from what the road's builders and the physics
     // already hold, so a new world needs no list of walls:
     //   - the retaining walls of the ride's drawn sections and of the side roads (RoadMesh.wallRuns), with their parapets
-    //   - the face a wall goes on as past its end (taperAt), as high as the wall, as deep as it holds the fill there
+    //   - the face a wall goes on as past its end (taperAt), as high as the wall and its parapet, as deep as it holds
+    //     the fill there
     //   - the parapets of the ride's bridges (WorldGround.zoneAt's wall)
     //   - a viaduct's faces down to the ground, and its arches' sides (viaductFaces)
     //   - the walls of the houses drawn (Scenery.houseAt's rects)
@@ -1165,15 +1277,15 @@ class WorldEnvironment {
         };
         const near = box => box && box[2] >= x - far && box[0] <= x + far && box[3] >= z - far && box[1] <= z + far;
         // (a retaining wall's top is its coping, WALL_MIN_UP_M over the edge, its parapet over that)
-        const drop = RoadMesh.PARAPET_DROP_M, H = RoadMesh.PARAPET_H_M, up = RoadMesh.COPING_UP_M;
+        const H = RoadMesh.PARAPET_H_M, up = RoadMesh.COPING_UP_M;
         const runs = list => {
             for (const run of list) {
                 for (let k = 0; k + 1 < run.points.length; k++) {
                     const a = run.points[k], b = run.points[k + 1], fa = Math.min(a[1], run.foot[k]), fb = Math.min(b[1], run.foot[k + 1]);
-                    // (a wall under PARAPET_DROP_M at both rows has no parapet, RoadMesh.edgeWorks; on a low wall a row
-                    // of marker stones stands where the parapet would, as high as a stone)
+                    // (its parapet where one is drawn, runParapet; on a low wall a row of marker stones stands where
+                    // the parapet would, as high as a stone)
                     const stoned = run.owner === -1 && run.rows && this.wallStoned(run.rows[k], run.key === 'r' ? 1 : -1);
-                    const rail = stoned ? Scenery.STONE_HEIGHT_M : a[1] - fa >= drop || b[1] - fb >= drop ? H : 0;
+                    const rail = stoned ? Scenery.STONE_HEIGHT_M : this.runParapet(run, k) ? H : 0;
                     face(a[0], a[2], b[0], b[2], a[1] + up + rail, b[1] + up + rail, fa, fb, run.out[k][0], run.out[k][1], 1);
                 }
             }
@@ -1201,8 +1313,10 @@ class WorldEnvironment {
                     const ha = this.taperAt(i, sign, 0), hb = this.taperAt(i, sign, 1);
                     if (!(ha > 0 || hb > 0)) continue;
                     const p = WorldGround.pointAt(a, sign * (a.width / 2 + ground.vergeAt(i, sign, 0)), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + ground.vergeAt(i, sign, 1)), edge[1]);
-                    // (as deep as the stone holds the fill's fall there, WorldGround.earthworkY)
-                    face(p.x, p.z, q.x, q.z, a.y + up, b.y + up, a.y - ha * Math.max(0, a.y - ground.landY(p.x, p.z, a.y)), b.y - hb * Math.max(0, b.y - ground.landY(q.x, q.z, b.y)), ox, oz, 1);
+                    // (as deep as the stone holds the fill's fall there, WorldGround.earthworkY), with the wall's
+                    // parapet on it where the wall has one (parapetAt)
+                    const rail = this.parapetAt(i, sign) ? H : 0;
+                    face(p.x, p.z, q.x, q.z, a.y + up + rail, b.y + up + rail, a.y - ha * Math.max(0, a.y - ground.landY(p.x, p.z, a.y)), b.y - hb * Math.max(0, b.y - ground.landY(q.x, q.z, b.y)), ox, oz, 1);
                 }
             }
         }
@@ -1816,8 +1930,9 @@ class WorldEnvironment {
         return out;
     }
 
-    // The ends of the ride's retaining walls within `reach` of a box ([x0, z0, x1, z1]): [{p, foot, out}], a run that
-    // goes on from one section into the next read as one. The keys its plans were made without go into `missing`
+    // The ends of the ride's retaining walls within `reach` of a box ([x0, z0, x1, z1]): [{p, foot, out, run, seg}] (`seg`
+    // the run's segment at that end), a run that goes on from one section into the next read as one. The keys its plans
+    // were made without go into `missing`
     rideWallEnds(box, reach, missing = null) {
         if (!this.streamer || !box) return [];
         const at = p => `${Math.round(p[0] * 1000)},${Math.round(p[2] * 1000)}`;
@@ -1832,7 +1947,7 @@ class WorldEnvironment {
                     const id = `${run.key}|${at(run.points[i])}`;
                     // Two runs' ends at one place are one wall that goes on
                     if (ends.has(id)) ends.set(id, null);
-                    else ends.set(id, { p: run.points[i], foot: run.foot[i], out: run.out[i] });
+                    else ends.set(id, { p: run.points[i], foot: run.foot[i], out: run.out[i], run, seg: i ? i - 1 : 0 });
                 }
             }
         }
@@ -1863,8 +1978,8 @@ class WorldEnvironment {
                 const dx = best.p[0] - a[0], dz = best.p[2] - a[2];
                 const mx = run.out[i][0] + best.out[0], mz = run.out[i][1] + best.out[1];
                 const side = -dz * mx + dx * mz >= 0 ? 1 : -1;
-                const drop = RoadMesh.PARAPET_DROP_M;
-                out.push({ a, b: best.p, footA: run.foot[i], footB: best.foot, outA: run.out[i], outB: best.out, o: [(-dz * side) / bestD, (dx * side) / bestD], parapet: a[1] - run.foot[i] >= drop && best.p[1] - best.foot >= drop, owner: run.owner });
+                // (with a parapet where both walls carry theirs to the ends it joins: RoadMesh.edgeWorks, parapetAt)
+                out.push({ a, b: best.p, footA: run.foot[i], footB: best.foot, outA: run.out[i], outB: best.out, o: [(-dz * side) / bestD, (dx * side) / bestD], parapet: this.runParapet(run, i ? i - 1 : 0) && this.runParapet(best.run, best.seg), owner: run.owner });
             }
         }
         return out;
@@ -2065,6 +2180,8 @@ class WorldEnvironment {
     // A ride section's wall plan reads this far past its ends, so a run that crosses into the next section is one
     // run in both (RoadMesh.WALL_GAP_M, WALL_RUN_M)
     static get WALL_PLAN_M() { return 36; }
+    // How far along the ride a stretch past a wall's end looks for the wall it goes on from (railedPast)
+    static get RAILED_PAST_M() { return 120; }
 
     // The ride's two ends where the road goes on through the node (no junction there): {node: {s, width}}
     rideEnds() {

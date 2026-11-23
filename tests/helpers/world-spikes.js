@@ -148,7 +148,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
 
     // The stone: every upright quad of a wall (RoadMesh.quad lays six vertices: a b c, a c d), as a plan segment with
     // its heights. `faces` are a wall's own faces (0.7 m or longer, not a parapet's); `all` holds the returns too
-    // (a parapet's face stands 0.8 m high, or falls to its 0.3 m kerb at a wall's end: RoadMesh.PARAPET_END_M)
+    // (a parapet's face stands 0.8 m high, RoadMesh.PARAPET_H_M, to its wall's end)
     const quads = [];
     for (const part of stone) {
         const id = `${part.mesh.geometry.uuid}`;
@@ -171,7 +171,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
                 }
                 if (pairs.length !== 2) continue;
                 const [a, b] = pairs;
-                held.push({ a, b, len: Math.hypot(b.x - a.x, b.z - a.z), owner: owners ? owners[i / 3] : -1, parapet: [a, b].every(p => Math.abs(p.top - p.foot - 0.8) < 2e-3 || Math.abs(p.top - p.foot - 0.3) < 2e-3), faced: !flag || flag.getY(i) > 0.5, past: !!flag && Math.round(flag.getY(i)) === 2, side: !!flag && Math.round(flag.getY(i)) === 3 });
+                held.push({ a, b, len: Math.hypot(b.x - a.x, b.z - a.z), owner: owners ? owners[i / 3] : -1, parapet: [a, b].every(p => Math.abs(p.top - p.foot - 0.8) < 2e-3), faced: !flag || flag.getY(i) > 0.5, past: !!flag && Math.round(flag.getY(i)) === 2, side: !!flag && Math.round(flag.getY(i)) === 3 });
             }
             store.works.set(id, held);
         }

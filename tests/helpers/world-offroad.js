@@ -193,7 +193,8 @@ export function hairpinApex(route, hairpin) {
 // straight at the exit from the start. Returns {time, end, cause, landS, skipM, landSkipM, netSkipM}: the time to the exit as the run counts it (held CONFIRM_S, so a
 // cut rule or a crash just after it counts), or how the ride ended, the seconds spent past the drawn verge, and
 // the road skipped: skipM over a stay off the carriageway, landSkipM over a stay on the land (the ride distance
-// gained less the metres ridden)
+// gained less the metres ridden), and after a crash `hit`: {s, lateral, parapet, drawn} where it was, whether the wall
+// there is a parapet (parapetAt) and whether a barrier is drawn there (drawnBarrierNear)
 export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'normal', log = null, rider = null, seconds = 120 }) {
     const route = env.route, world = env.physics;
     const s0 = Math.max(env.startS, hairpin.s0 - 40), s1 = hairpin.s1 + 15;
@@ -267,12 +268,56 @@ export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'n
             held = 0; peak = 0; offFrom = null;
             landHeld = 0; landPeak = 0; landFrom = null;
         }
-        if (end) return done({ time: Math.round(time * 100) / 100, end, cause: end === 'crash' ? crashCause(v, log) : end });
+        // (where a crash was, and whether a barrier is drawn there: drawnBarrierNear)
+        if (end) return done({ time: Math.round(time * 100) / 100, end, cause: end === 'crash' ? crashCause(v, log) : end, hit: end === 'crash' ? { s: Math.round(v.projection.s), lateral: Math.round(v.projection.lateral * 100) / 100, parapet: parapetAt(env, v), drawn: drawnBarrierNear(game, env, v.position.x, v.position.z, v.projection.y) } : null });
     }
     return done({ time: null, end: 'timeout', cause: null });
 }
 
 export const CUTS = [6, 9, 12, 15, 20, 30, Infinity];
+
+// Whether something is drawn that a bike at (x, z) on a road at height y can hit: a triangle of a road's works (a
+// retaining wall and its parapet, a deck and its parapet, a viaduct's stone) within `reachM` in plan that stands
+// between 0.2 m and 1.5 m over y, as world-fairness reads it. A crash into a wall names a barrier the rider can see
+// `parapetAt(env, v)`: whether the wall where the bike is is a retaining wall's parapet (WorldGround.zoneAt `parapet`)
+export function parapetAt(env, v) {
+    const q = v.projection;
+    if (!(q.index >= 0)) return false;
+    return !!env.ground.zoneAt({ index: q.index, lateral: q.lateral, t: q.along }, q.width / 2).parapet;
+}
+
+export function drawnBarrierNear(game, env, x, z, y, reachM = 0.5) {
+    const v = new game.THREE.Vector3();
+    const cache = env.drawnBarrierTris || (env.drawnBarrierTris = new Map());
+    const gap = (a, b) => { const dx = b[0] - a[0], dz = b[2] - a[2], r = dx * dx + dz * dz, t = r ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[2]) * dz) / r)) : 0; return Math.hypot(a[0] + dx * t - x, a[2] + dz * t - z); };
+    let found = false;
+    for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
+        group.traverse(o => {
+            if (found || !o.isMesh || o.name !== 'road-works') return;
+            let tris = cache.get(o.geometry.uuid);
+            if (!tris) {
+                tris = [];
+                o.updateMatrixWorld(true);
+                const pos = o.geometry.attributes.position;
+                for (const part of o.geometry.groups) {
+                    if (part.materialIndex !== 1 && part.materialIndex !== 2 && part.materialIndex !== 4) continue;
+                    for (let i = part.start; i + 2 < part.start + part.count; i += 3) {
+                        const t = [];
+                        for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, i + k).applyMatrix4(o.matrixWorld); t.push([v.x, v.y, v.z]); }
+                        tris.push(t);
+                    }
+                }
+                cache.set(o.geometry.uuid, tris);
+            }
+            for (const t of tris) {
+                if (Math.max(t[0][1], t[1][1], t[2][1]) < y + 0.2 || Math.min(t[0][1], t[1][1], t[2][1]) > y + 1.5) continue;
+                if (Math.min(gap(t[0], t[1]), gap(t[1], t[2]), gap(t[2], t[0])) <= reachM) { found = true; return; }
+            }
+        });
+        if (found) break;
+    }
+    return found;
+}
 
 // The road lines a cut is measured against: the centre and the inside lane, at a 35 and a 45 degree lean
 export const ROAD_LINES = [{ line: 'centre' }, { line: 'inside' }, { line: 'centre', lean: 45 }, { line: 'inside', lean: 45 }];

@@ -10,6 +10,7 @@
 //   leg and along it. Returns {crashes: [cause], cuts, restarts, penaltyMs, callouts, leftS, joinedS, backS, landS,
 //   landM, most}: what ended on the far leg's carriageway, and where the game put the bike after
 import { readFileSync } from 'node:fs';
+import { drawnBarrierNear, parapetAt } from './world-offroad.js';
 
 const DT = 1 / 60, G = 9.81;
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -277,7 +278,7 @@ export async function cutThenWander(game, env, hairpin, { rider, speed = 10, L =
     const far = route.sample(apex + L, {});
     const lat = inside * Math.max(0, far.width / 2 - 1.2);
     const tx = far.x + Math.cos(far.heading) * lat, tz = far.z - Math.sin(far.heading) * lat;
-    const out = { skipped: 0, wanderM: 0, joinedS: null, wentBack: false, crashes: [], cuts: 0, restarts: 0, penaltyMs: 0, callouts, leftS: null, backS: null };
+    const out = { skipped: 0, wanderM: 0, joinedS: null, wentBack: false, crashes: [], hits: [], cuts: 0, restarts: 0, penaltyMs: 0, callouts, leftS: null, backS: null };
     const aim = {};
     let phase = 0, sum = 0, last = null, done = 0, weave = 0;
     for (let tick = 0; tick < seconds * 60; tick++) {
@@ -307,7 +308,11 @@ export async function cutThenWander(game, env, hairpin, { rider, speed = 10, L =
         const x0 = v.position.x, z0 = v.position.z;
         if (!v.crashed) {
             v.update(DT, steer, v.speed < want ? 1 : 0, v.speed > want + 1 ? 0.6 : 0, 0);
-            if (v.crashed) out.crashes.push(v.crashCause);
+            if (v.crashed) {
+                out.crashes.push(v.crashCause);
+                // (and where, and whether a barrier is drawn there: drawnBarrierNear)
+                out.hits.push({ s: Math.round(v.projection.s), lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.crashCause, parapet: parapetAt(env, v), drawn: drawnBarrierNear(game, env, v.position.x, v.position.z, v.projection.y) });
+            }
         }
         const moved = Math.hypot(v.position.x - x0, v.position.z - z0);
         if (!v.crashed && v.projection.index >= 0) {
