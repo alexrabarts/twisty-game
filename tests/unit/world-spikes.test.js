@@ -56,9 +56,12 @@
 //   - 354 set back: 269 of free land, most the fall of the land under a road's fill where the importer's earthwork
 //     ends on the downhill side (left as it is: a road's fill is not undercut, LAY_HOLD), the rest a hillside
 //     steeper than the lay-back's slope for more than its reach; 85 with a node of a road's strip
-//   - 10 overhangs: the end of the ground under a verge where a wall ends at a junction's mouth or a structure (one
-//     more, 1.8 m, since the wall ends before the mouth at km 2.4 and no longer stands across it), and slopes whose
-//     side stands over land that falls away beside them
+//   - 6 overhangs: the end of the ground under a verge where a wall ends at a structure, and slopes whose side stands
+//     over land that falls away beside them. At 0019860 there were 10: four were a far ribbon at a side road's mouth
+//     (km 0.0, 2.4, 5.2, 5.3). It kept a row every 16 m and passed over the mouth's rows, so the wall ran on into the
+//     mouth to its full height (planFor walls a segment when any segment it spans is), and the slope laid from the
+//     mouth's row stood open beside the wall's end, 1.8 m over the land levelled in front of the wall at km 2.4. Now
+//     a far ribbon keeps a mouth's rows and the row either side of them (RoadMesh.section)
 //   - 2 flaps (one gap counts once, beside however many wall ends): the ride's first row (two side roads' walls end
 //     there: the ground under the ride's verge ends with the ride, 3.1 m over the land), and the ground under a verge
 //     0.15 m over a junction's paving at km 4.4 (the one at km 2.4 went with the wall across that mouth)
@@ -302,8 +305,13 @@ describe('the synthetic world: the same check', () => {
     // Its land is a made hillside steeper than the lay-back's slope from end to end: what is left is that hillside
     // (before: 283 beside, 2174 set back, 10 bare, 110 overhangs; 16 overhangs before the slopes' sides were closed).
     // 13 of its overhangs are the mouth of its one junction (s 4296), which the ride's walls stood across on both sides
-    // until they ended before every mouth: its two side roads fall 3.3 m a metre down the made cliff, and the ground
-    // under the ride's verge at the mouth stands over that fall
+    // until they ended before every mouth. 12 are the same at every level of detail: the ride falls and climbs about
+    // 1 m a metre through the junction and its two side roads fall 3.3 m a metre down the made cliff (12.8 m in their
+    // first 3.9 m: holdSide's ramp keeps that grade), so the sides of the ride's slopes at the mouth stand 1.9 to 12.4 m
+    // over the land carved down beside them. That is the data, not a rule: no real road falls 3.3 m a metre. The other
+    // was a far ribbon's wall run on into the mouth (kept whole now, RoadMesh.section); keeping the mouth's rows shows
+    // one more on the far ribbon, which draws no verge and has no ground laid under one at a mouth: the end of the
+    // ground under the verge at the mouth's last row, over the side road's fall
     test('what is left of its steep hillside can only shrink', () => {
         expect(report.beside.length).toBeLessThanOrEqual(265);
         expect(report.setback.length).toBeLessThanOrEqual(2188);

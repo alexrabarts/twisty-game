@@ -1719,6 +1719,12 @@ class RoadMesh {
         // 16 m past the place the land was cut for
         if (lod > 0 && plan) {
             const walled = (key, i) => !!plan.seg[key][i - plan.base];
+            // A side road's mouth is kept whole at every level of detail, with the row either side of it. A segment
+            // between two kept rows is a wall when any segment of the plan of all the rows it spans is (planFor), so a
+            // far ribbon that passed over the mouth drew the wall on into it: the wall's end at its full height on the
+            // mouth's row, the slope laid from there open beside it over the land levelled in front of the wall
+            const mouth = k => !!rows[k] && !!(rows[k].mouthL || rows[k].mouthR);
+            rows = rows.map((row, k) => (mouth(k - 1) || mouth(k) || mouth(k + 1) ? { ...row, keep: true } : row));
             const marked = rows.map((row, i) => (i === first || i === last ? { ...row, keep: true } : row));
             const kept = new Set(RoadMesh.decimate(marked).map(row => row.i));
             const past = RoadMesh.WALL_PAST_M;

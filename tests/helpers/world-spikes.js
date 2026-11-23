@@ -48,7 +48,7 @@
 // of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 10, flaps: 2, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 6, flaps: 2, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0 };
 export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8 };
 
 export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8 }) {
