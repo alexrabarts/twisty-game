@@ -97,6 +97,8 @@ const MarmotRule = {
         const water = MarmotRule.waterOf(tile, cover);
         if (!water.length) return [];
         const out = [], cells = Math.round(m / R.cellM), spot = {};
+        // The rule for an animal's second point: the same ground, without the sight line
+        const near = Object.assign({}, ctx, { seen: null });
         for (let cz = 0; cz < cells; cz++) {
             for (let cx = 0; cx < cells; cx++) {
                 const gx = tile.tx * cells + cx, gz = tile.tz * cells + cz;
@@ -115,10 +117,16 @@ const MarmotRule = {
                     if (animals.some(o => Math.hypot(o.x - x, o.z - z) < R.apartM)) continue;
                     if (!MarmotRule.standAt(tile, cover, x, z, null, ctx, spot)) continue;
                     const y = spot.y;
-                    // A second point of its own a few metres off, where it scuttles to and looks out from
-                    const la = MarmotRule.hash(gx, gz, 300 + k) * Math.PI * 2, lr = R.lookM[0] + (R.lookM[1] - R.lookM[0]) * MarmotRule.hash(gx, gz, 400 + k);
-                    const lx = x + Math.cos(la) * lr, lz = z + Math.sin(la) * lr;
-                    const look = MarmotRule.standAt(tile, cover, lx, lz, null, ctx, {}) ? { x: lx, y: ctx.landY ? ctx.landY(lx, lz) : y, z: lz } : { x, y, z };
+                    // A second point of its own a few metres off, where it scuttles to and looks out from: tried in a few
+                    // directions (it need not be seen from the ride: the animal is seen on its way); without one it
+                    // would scuttle on the spot and read as a still figure
+                    let look = null;
+                    for (let t = 0; t < 6 && !look; t++) {
+                        const la = MarmotRule.hash(gx, gz, 300 + k) * Math.PI * 2 + t * Math.PI / 3, lr = R.lookM[0] + (R.lookM[1] - R.lookM[0]) * MarmotRule.hash(gx, gz, 400 + k);
+                        const lx = x + Math.cos(la) * lr, lz = z + Math.sin(la) * lr;
+                        if (MarmotRule.standAt(tile, cover, lx, lz, null, near, {})) look = { x: lx, y: ctx.landY ? ctx.landY(lx, lz) : y, z: lz };
+                    }
+                    if (!look) continue;
                     animals.push({ id: `${gx},${gz},${animals.length}`, x, y, z, look, turn: MarmotRule.hash(gx, gz, 500 + k) * Math.PI * 2 });
                 }
                 if (animals.length >= R.least) out.push({ id: `${gx},${gz}`, x: centre.x, z: centre.z, past: spot.past, animals });
@@ -149,9 +157,9 @@ const MarmotRule = {
 
 // The life of the colonies round the bike: one instanced mesh per pose, the animals near the camera in it
 class Marmots {
-    // alertM: within it an animal sits up facing the bike and keeps still; hideM: within it, it bolts; scale over the
+    // alertM: within it a colony's sentinel sits up facing the bike and keeps still; hideM: within it, it bolts; scale over the
     // model's real size, so one reads from the saddle
-    static get LIFE() { return Object.freeze({ drawM: 260, alertM: 60, hideM: 8, scale: 1.3, backM: 60, backS: 6, sit: [2.5, 7], walk: 1.1, run: 4.2, reachM: 900, most: 48 }); }
+    static get LIFE() { return Object.freeze({ drawM: 260, alertM: 60, hideM: 8, scale: 1.3, backM: 60, backS: 6, sit: [1.5, 4.5], walk: 1.1, run: 4.2, reachM: 900, most: 48 }); }
     // speed m/s; leadM the run from where it shows to the road's edge; edgeM past each edge of the band; marginS the
     // least time between it leaving the road and the bike arriving; chance one ride in so many has one
     static get CROSSING() { return Object.freeze({ chance: 0.25, sightM: 150, turnDeg: 12, speed: 4.5, leadM: 8, edgeM: 2, marginS: 1, aheadM: 400 }); }
@@ -279,8 +287,9 @@ class Marmots {
             } else life.goneSince = 0;
             return;
         }
-        // The bike coming: sit up on the spot, turned to it, and watch
-        if (bikeM < L.alertM && bikeM >= L.hideM && life.mode !== 'run') {
+        // The bike coming: the colony's sentinel (its first animal) sits up on the spot, turned to it, and watches; the
+        // others go on feeding and scuttling until it is near, so a colony is never a row of still figures
+        if (life.colony.animals && life.a === life.colony.animals[0] && bikeM < L.alertM && bikeM >= L.hideM && life.mode !== 'run') {
             if (life.mode !== 'sit' || !life.alert) Object.assign(life, { mode: 'sit', alert: true, t: 0, until: Infinity });
             if (life.bike) life.heading = Math.atan2(life.bike.x - life.x, life.bike.z - life.z);
             return;

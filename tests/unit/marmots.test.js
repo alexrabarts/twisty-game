@@ -113,17 +113,27 @@ describe('a marmot crossing the road', () => {
 });
 
 describe('a marmot near the bike', () => {
-    test('sits up facing the bike as it comes, and keeps still', () => {
+    test('the sentinel sits up facing the bike as it comes; the others go on moving', () => {
         const m = Object.create(Marmots.prototype);
         m.seed(5);
         const a = { id: 'a', x: 0, y: 0, z: 0, look: { x: 3, y: 0, z: 0 }, turn: 0 };
-        const life = m.life(a, { id: 'c' });
+        const b = { id: 'b', x: 6, y: 0, z: 0, look: { x: 9, y: 0, z: 0 }, turn: 0 };
+        const colony = { id: 'c', animals: [a, b] };
+        const life = m.life(a, colony), other = m.life(b, colony);
         Object.assign(life, { mode: 'walk', target: a.look, bike: { x: 0, z: 30 } });
+        Object.assign(other, { bike: { x: 0, z: 30 } });
         const L = Marmots.LIFE;
-        for (let k = 0; k < 300; k++) m.step(life, 1 / 60, L.alertM - 10, null);
+        const places = new Set();
+        for (let k = 0; k < 600; k++) {
+            m.step(life, 1 / 60, L.alertM - 10, null);
+            m.step(other, 1 / 60, L.alertM - 10, null);
+            places.add(`${other.x.toFixed(2)},${other.z.toFixed(2)}`);
+        }
+        // The sentinel sits up facing the bike; the other goes on moving
         expect(life.mode).toBe('sit');
         expect(life.alert).toBe(true);
         expect(life.heading).toBeCloseTo(Math.atan2(0 - life.x, 30 - life.z), 6);
+        expect(places.size).toBeGreaterThan(20);
     });
 
     test('runs home and is gone, then comes back once the bike has gone on', () => {

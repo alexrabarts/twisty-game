@@ -5275,6 +5275,37 @@ WORLD['world-marmots'] = async (page) => {
         colonies.sort((p, q) => p.s - q.s);
         return { colonies, animals: colonies.reduce((n, c) => n + c.animals, 0), failures, loaded: !!marmots.meshes };
     }, placeAt.toString(), Number(option('every') || 400));
+    // --watch: the bike stands still beside each colony (on the ride, --near m from its first animal: default 40) for 10 s
+    // of the game's own frames; how far each animal moved and the modes it went through. A colony must not stand still
+    if (flag('watch')) result.watch = await page.evaluate(async (placeSource, nearM) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, marmots = env.marmots, v = game.vehicle, out = [];
+        for (const colony of [...marmots.colonies.values()].flat()) {
+            const a0 = colony.animals[0], loc = env.ground.locate(a0.x, a0.z, null, {});
+            // Back along the ride until the bike stands nearM from the first animal
+            let s = env.route.sArray[loc.index];
+            for (let k = 0; k < 400; k++) { const p = env.route.sample(s, {}); if (Math.hypot(p.x - a0.x, p.z - a0.z) >= nearM) break; s -= 1; }
+            await placeAt(s);
+            twistyDev.autopilot({ speed: 0 });
+            const start = colony.animals.map(a => { const l = marmots.animals.get(a.id); return { x: l.x, z: l.z }; });
+            const travelled = colony.animals.map(() => 0), modes = colony.animals.map(() => new Set());
+            const last = start.map(p => ({ ...p }));
+            for (let f = 0; f < 600; f++) {
+                twistyDev.step(1);
+                colony.animals.forEach((a, k) => {
+                    const l = marmots.animals.get(a.id);
+                    travelled[k] += Math.hypot(l.x - last[k].x, l.z - last[k].z);
+                    last[k].x = l.x; last[k].z = l.z;
+                    modes[k].add(l.alert ? 'alert' : l.mode);
+                });
+                if (f % 60 === 0) await new Promise(done => setTimeout(done, 0));
+            }
+            const bikeM = Math.round(Math.hypot(v.position.x - a0.x, v.position.z - a0.z));
+            out.push({ id: colony.id, bikeM, travelled: travelled.map(t => Math.round(t * 10) / 10), modes: modes.map(m => [...m].join('/')) });
+        }
+        return out;
+    }, placeAt.toString(), Number(option('near') || 40));
+    if (result.watch) for (const w of result.watch) if (!w.travelled.some(t => t > 1)) result.failures.push(`colony ${w.id} stood still for 10 s with the bike ${w.bikeM} m off`);
     // --ride: the game's own frames ride the summit from --from at --speed in the chase view; how many marmots are drawn
     // and the nearest drawn one to the camera, every half second, and a picture where one is nearest (--out)
     if (flag('ride')) result.ride = await page.evaluate(async (placeSource, from, cruise) => {
