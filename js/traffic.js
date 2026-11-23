@@ -101,8 +101,11 @@ const GROUP = {
     // The group's pace: every rider of a world's group rides this share of the pace its traits give it (CREW_PACES), and
     // takes its bends, gathers speed and plans its braking for them at the square of it (LANE_DRIVE.bike), so the speed
     // it rides every bend at is this share too. Its hard braking (LANE_DRIVE.bike.brake, which the following rule reads
-    // for the vehicle ahead) is not raised. Its `least` and `most` are shares of this pace
-    pace: 1.3,
+    // for the vehicle ahead) is not raised. Its `least` and `most` are shares of this pace. The square is held at
+    // gripMost, about 0.8 g in a bend (LANE_DRIVE.bike lateral 4 m/s^2 times it): a quicker pace is quicker on the
+    // straights and holds its bends at that
+    pace: 1.5,
+    gripMost: 1.96,
     // The row a character without `group` rides by
     rider: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: null, passPerS: 0.2, stop: null },
     // The line: a rider keeps its time gap (at its own speed, and no less than gapMinM) to whoever is next ahead of it on
@@ -2780,7 +2783,7 @@ class AIMotorcycle {
         const kind = route.kindAt(route.fromUnits(this.currentSegment + this.segmentProgress), this.kindSample || (this.kindSample = {}));
         const pace = Traffic.paceOf(Traffic.roadTrait(this.character, kind), this.paceSample || (this.paceSample = {}));
         // (a rider of a world's group rides at the group's pace, GROUP.pace)
-        const group = this.ride ? GROUP.pace : 1, grip = group * group;
+        const group = this.ride ? GROUP.pace : 1, grip = Math.min(group * group, this.ride ? GROUP.gripMost : 1);
         this.baseSpeed = (pace.speed + this.pace.luck * pace.spread) * this.pace.scale * group;
         if (!this.drive) this.drive = { ...LANE_DRIVE.bike };
         this.drive.plan = LANE_DRIVE.bike.plan * grip;

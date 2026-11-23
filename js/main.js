@@ -4638,11 +4638,12 @@ class Game {
 }
 
 // The headlight a world rider rides with in rain or snow (the share of the night's beam), and the share of the sun
-// (and of the fill light) that comes through a world's rain cloud, and the sky light under it: lifted so the rain
-// darkens a world about a third less than it did (the owner found it too dark), still darker and greyer than dry
+// (and of the fill light) that comes through a world's rain cloud, and the sky light under it. The owner found the
+// rain too dark twice: the sky light now halves the darkening of the first rain (mean luminance 0.40 against 0.46 dry),
+// still darker and greyer than dry, and the sun stays at 0.2 (at 0.25 it glinted on the wet road)
 Game.WORLD_OVERCAST_HEADLIGHT = 0.5;
 Game.WORLD_OVERCAST_SUN = 0.2;
-Game.WORLD_OVERCAST_SKY = 2.2;
+Game.WORLD_OVERCAST_SKY = 3.6;
 
 // Debug mode's N puts the bike this far before the next station
 Game.DEBUG_SKIP_BEFORE_M = 40;

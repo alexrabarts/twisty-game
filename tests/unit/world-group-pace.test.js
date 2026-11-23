@@ -72,16 +72,18 @@ describe('the group\'s pace', () => {
         expect(b.overlaps).toEqual([]);
     }, 900000);
 
-    test('every rider of the group rides the group\'s pace: its traits\' pace times GROUP.pace, its bends at the square of it', () => {
+    test('every rider of the group rides the group\'s pace: its traits\' pace times GROUP.pace, its bends at the square of it, held at gripMost', () => {
         expect(G.pace).toBeGreaterThan(1);
+        const grip = Math.min(G.pace * G.pace, G.gripMost);
+        expect(4 * grip).toBeLessThanOrEqual(8);
         const ride = groupRide(game, env, { rider: byPlace(6), at: IN_PLACE, seconds: 5 });
         for (const r of ride.riders) {
             const kind = route.kindAt(sOf(r), {});
             const pace = Traffic.paceOf(Traffic.roadTrait(r.character, kind));
             expect(r.baseSpeed).toBeCloseTo((pace.speed + r.pace.luck * pace.spread) * r.pace.scale * G.pace, 2);
-            expect(r.drive.plan).toBeCloseTo(3 * G.pace * G.pace, 6);
+            expect(r.drive.plan).toBeCloseTo(3 * grip, 6);
             expect(r.drive.brake).toBe(6);
-            expect(r.drive.lateral).toBeLessThanOrEqual(4 * G.pace * G.pace + 1e-9);
+            expect(r.drive.lateral).toBeLessThanOrEqual(4 * grip + 1e-9);
         }
     }, 300000);
 });

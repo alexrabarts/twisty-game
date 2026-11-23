@@ -138,7 +138,7 @@ describe('the line', () => {
 describe('the player\'s pace', () => {
     // The player is the rider of place 1, so every rider's place is behind it and nobody passes it. It takes its bends
     // as a rider of the group does at the group's pace (GROUP.pace)
-    const grip = G.pace * G.pace;
+    const grip = Math.min(G.pace * G.pace, G.gripMost);
     const behind = (pace) => {
         const shares = new Map(), over = [], near = [];
         let passedPlayer = 0;
@@ -208,7 +208,9 @@ describe('a player who stops', () => {
         const aheadRiders = at50.filter(x => x.s > STOP_S);
         expect(behindRiders.length).toBe(2);
         expect(aheadRiders.length).toBe(3);
-        let front = STOP_S;
+        // (the gaps run from where the player stands, which a quicker group's proxy reaches a little past STOP_S)
+        let front = ride.traffic.group.standS;
+        expect(Math.abs(front - STOP_S)).toBeLessThan(1);
         for (const x of behindRiders) {
             expect(x.state).toBe('hold');
             expect(x.speed).toBeLessThan(0.05);
@@ -354,12 +356,13 @@ describe('the same ride', () => {
             rider: byPlace(6), cars: true, at: REVERSE, seconds: 1300,
             onFrame: ({ t, riders }) => {
                 for (const r of riders) {
+                    // (past the line by more than the 1 cm Roadworks.stopDistance itself allows: a rider standing on the line is held)
                     const front = sOf(r) + Roadworks.BIKE_HALF_M;
                     const before = prev.get(r);
                     prev.set(r, front);
                     if (before === undefined) continue;
                     for (const site of works.closed) {
-                        if (before < site.stopIn && front >= site.stopIn && works.light(site, 1) === 'red' && r.roadworksCommit !== site.id) bad.push({ t, name: r.riderName, site: site.id });
+                        if (before < site.stopIn + 0.01 && front > site.stopIn + 0.01 && works.light(site, 1) === 'red' && r.roadworksCommit !== site.id) bad.push({ t, name: r.riderName, site: site.id });
                     }
                 }
             },
