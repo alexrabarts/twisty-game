@@ -561,3 +561,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: by the owner's word, the ground cover prototype is merged but off. It adds grass tufts and small stones as instances within 45 m of the camera, and a near pattern of clumps, soil and stones in the land shader. The effect `groundCover` is off by default and in every preset. It stands beside the per-pixel ground texture; with both on, the two stack.
 - Check: off draws the land as without it, to the bit (`world-cover-off`, km 1.6 and 2.6, with the ground texture at Medium). modal-check 0 of 48. 10 suites, 113 tests, pass: groundcover, groundtex, effects, quality, world-haze, the pinned four, world-tile-retry. GPU world-haze with both on: nothing undrawn by the haze. Earlier on its own base: world-fairness `--every 400` with it on passes, and it costs 1.0 to 1.3 ms at 2880x1800 and about 165,000 triangles.
 - Left: not tuned against the ground texture; the tufts read as dark spikes.
+
+## Far bikes' tyres face out
+
+- Job: the final checks found model-surfaces failing 18 tests: the far bikes' wheels faced inward since the crew models. `tools/blender/far.py` `tyre()` wound its faces toward the axle and set the bead in, so each sidewall leaned in. The faces are wound the other way and the bead sits flush; the 18 far files are rebuilt with the same triangle counts.
+- Check: model-surfaces 60/60, crew 91/91, bikemodels 170/170, characters 64/64.
