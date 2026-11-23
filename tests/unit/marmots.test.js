@@ -136,14 +136,18 @@ describe('a marmot near the bike', () => {
         expect(places.size).toBeGreaterThan(20);
     });
 
-    test('runs home and is gone, then comes back once the bike has gone on', () => {
+    test('runs home and goes down its burrow, then comes up once the bike has gone on', () => {
         const m = Object.create(Marmots.prototype);
         m.seed(5);
         const a = { id: 'a', x: 0, y: 0, z: 0, look: { x: 3, y: 0, z: 0 }, turn: 0 };
         const life = m.life(a, { id: 'c' });
         Object.assign(life, { mode: 'sit', x: 3, z: 0, at: 'look' });
         const L = Marmots.LIFE;
-        for (let k = 0; k < 120; k++) m.step(life, 1 / 60, L.hideM - 1, null);
+        // It bolts while the bike is still LIFE.hideM off, and goes down into its burrow before it is gone
+        let sank = false;
+        for (let k = 0; k < 120; k++) { m.step(life, 1 / 60, L.hideM - 1, null); sank = sank || life.mode === 'sink'; }
+        expect(L.hideM).toBeGreaterThanOrEqual(25);
+        expect(sank).toBe(true);
         expect(life.mode).toBe('gone');
         expect(life.x).toBe(0);
         // Still gone while the bike is near, and for backS after it has gone
@@ -152,6 +156,20 @@ describe('a marmot near the bike', () => {
         for (let k = 0; k < L.backS * 60 - 2; k++) m.step(life, 1 / 60, L.backM + 1, null);
         expect(life.mode).toBe('gone');
         for (let k = 0; k < 4; k++) m.step(life, 1 / 60, L.backM + 1, null);
+        // Up out of its burrow, from under the ground to where it sat
+        expect(life.mode).toBe('rise');
+        expect(life.y).toBeLessThan(0);
+        for (let k = 0; k < L.riseS * 60 + 2; k++) m.step(life, 1 / 60, L.backM + 1, null);
         expect(life.mode).toBe('sit');
+        expect(life.y).toBe(0);
+    });
+
+    test('a burrow is a mound round a hole that goes down into the ground', () => {
+        const g = Marmots.burrowGeometry(), pos = g.attributes.position;
+        let low = Infinity, high = -Infinity;
+        for (let i = 0; i < pos.count; i++) { low = Math.min(low, pos.getY(i)); high = Math.max(high, pos.getY(i)); }
+        expect(low).toBeLessThan(-0.1);
+        expect(high).toBeLessThanOrEqual(0.1);
+        expect(pos.count / 3).toBeLessThanOrEqual(60);
     });
 });

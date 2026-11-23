@@ -9,8 +9,9 @@
 //             RULE.spreadM. Each cell is chosen by a hash of its own place: the same world gives the same colonies in
 //             any order its tiles arrive
 //   life      each animal sits up and looks out, drops to all fours and scuttles a few metres to another point of its
-//             own, and sits again; when the bike comes within LIFE.hideM it runs to its burrow and is gone, with a
-//             whistle, and it comes out again LIFE.backS after the bike is LIFE.backM away. Drawn within LIFE.drawM
+//             own, and sits again; when the bike comes within LIFE.hideM it runs to its burrow (a mound and a hole,
+//             drawn at its home) and goes down into it, with a whistle, and it comes up again LIFE.backS after the bike
+//             is LIFE.backM away. Drawn within LIFE.drawM
 //   crossing  very rarely one runs across the road ahead (CROSSING): at most one in a ride, only where the road runs
 //             straight for CROSSING.sightM before the place (no blind bend or hairpin), and only while it clears the
 //             road at least CROSSING.marginS before the bike gets there. A marmot is never solid: it cannot make the bike
@@ -159,7 +160,10 @@ const MarmotRule = {
 class Marmots {
     // alertM: within it a colony's sentinel sits up facing the bike and keeps still; hideM: within it, it bolts; scale over the
     // model's real size, so one reads from the saddle
-    static get LIFE() { return Object.freeze({ drawM: 260, alertM: 60, hideM: 8, scale: 1.3, backM: 60, backS: 6, sit: [1.5, 4.5], walk: 1.1, run: 4.2, reachM: 900, most: 48 }); }
+    // sinkS, riseS: the time it takes to go down into its burrow (sinkM deep) and to come up again
+    static get LIFE() { return Object.freeze({ drawM: 260, alertM: 80, hideM: 30, scale: 1.3, backM: 60, backS: 6, sit: [1.5, 4.5], walk: 1.1, run: 4.2, sinkS: 0.4, riseS: 0.6, sinkM: 0.5, reachM: 900, most: 48, burrows: 96 }); }
+    // The burrow at each animal's home: a low mound of bare earth round a dark hole (sRGB)
+    static get BURROW() { return Object.freeze({ hole: 0.16, mound: 0.45, rise: 0.06, deep: 0.16, sides: 10, earth: 0x7a6a50, lip: 0x5c4f3c, dark: 0x16130f }); }
     // speed m/s; leadM the run from where it shows to the road's edge; edgeM past each edge of the band; marginS the
     // least time between it leaving the road and the bike arriving; chance one ride in so many has one
     static get CROSSING() { return Object.freeze({ chance: 0.25, sightM: 150, turnDeg: 12, speed: 4.5, leadM: 8, edgeM: 2, marginS: 1, aheadM: 400 }); }
@@ -201,6 +205,37 @@ class Marmots {
             this.group.add(mesh);
             return mesh;
         });
+        this.burrows = new THREE.InstancedMesh(Marmots.burrowGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }), Marmots.LIFE.burrows);
+        if (typeof LandShade !== 'undefined') LandShade.haze(this.burrows.material);
+        Object.assign(this.burrows, { name: 'marmot-burrows', count: 0, frustumCulled: false, receiveShadow: true });
+        this.burrows.userData.skipCulling = true;
+        this.burrows.userData.world = 'scenery';
+        this.group.add(this.burrows);
+    }
+
+    // A burrow: a low ring of earth rising to a lip round a hole that falls away dark into the ground; colours linear
+    static burrowGeometry() {
+        const B = Marmots.BURROW, positions = [], colours = [];
+        const lin = hex => [16, 8, 0].map(k => { const c = ((hex >> k) & 255) / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+        const earth = lin(B.earth), lip = lin(B.lip), dark = lin(B.dark);
+        const ring = (r, y) => Array.from({ length: B.sides }, (_, k) => { const a = (k / B.sides) * Math.PI * 2; return [Math.cos(a) * r, y, Math.sin(a) * r]; });
+        const outer = ring(B.mound, -0.02), top = ring(B.hole * 1.25, B.rise), rim = ring(B.hole, B.rise * 0.6);
+        const tri = (a, ca, b, cb, c, cc) => { positions.push(...a, ...b, ...c); colours.push(...ca, ...cb, ...cc); };
+        for (let k = 0; k < B.sides; k++) {
+            const n = (k + 1) % B.sides;
+            // Wound to face up: the mound, the lip, and the hole's throat down to its dark bottom
+            tri(outer[k], earth, top[n], lip, outer[n], earth);
+            tri(outer[k], earth, top[k], lip, top[n], lip);
+            tri(top[k], lip, rim[n], dark, top[n], lip);
+            tri(top[k], lip, rim[k], dark, rim[n], dark);
+            tri(rim[k], dark, [0, -B.deep, 0], dark, rim[n], dark);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+        geometry.userData.linearColors = true;
+        geometry.computeVertexNormals();
+        return geometry;
     }
 
     // The colonies of the tiles round the bike, made once a tile's data is here
@@ -257,6 +292,7 @@ class Marmots {
         this.gather(bike);
         this.updateCrossing(dt, bike, speed);
         const counts = [0, 0, 0];
+        let burrowCount = 0;
         const matrix = Marmots.matrix || (Marmots.matrix = new THREE.Matrix4());
         const q = Marmots.quat || (Marmots.quat = new THREE.Quaternion()), p = Marmots.pos || (Marmots.pos = new THREE.Vector3());
         const one = Marmots.one || (Marmots.one = new THREE.Vector3(L.scale, L.scale, L.scale)), up = Marmots.up || (Marmots.up = new THREE.Vector3(0, 1, 0));
@@ -265,8 +301,12 @@ class Marmots {
             if (near > L.drawM && life !== (this.crossing && this.crossing.life)) continue;
             life.bike = bike;
             if (!(this.crossing && this.crossing.life === life)) this.step(life, dt, Math.hypot(life.x - bike.x, life.z - bike.z), sound);
+            if (burrowCount < L.burrows && life.a.id !== 'crossing') {
+                matrix.compose(p.set(life.a.x, life.a.y, life.a.z), q.setFromAxisAngle(up, life.a.turn), one);
+                this.burrows.setMatrixAt(burrowCount++, matrix);
+            }
             if (life.mode === 'gone') continue;
-            const pose = life.mode === 'sit' ? 0 : life.mode === 'walk' ? 1 : 2;
+            const pose = life.mode === 'sit' ? 0 : life.mode === 'run' ? 2 : 1;
             if (counts[pose] >= L.most) continue;
             matrix.compose(p.set(life.x, life.y, life.z), q.setFromAxisAngle(up, life.heading), one);
             this.meshes[pose].setMatrixAt(counts[pose]++, matrix);
@@ -275,6 +315,8 @@ class Marmots {
             mesh.count = counts[k];
             mesh.instanceMatrix.needsUpdate = true;
         });
+        this.burrows.count = burrowCount;
+        this.burrows.instanceMatrix.needsUpdate = true;
     }
 
     // One animal's life for dt: sit and look out, scuttle between its two points, run home and vanish near the bike
@@ -283,8 +325,23 @@ class Marmots {
         if (life.mode === 'gone') {
             if (bikeM > L.backM) {
                 life.goneSince += dt;
-                if (life.goneSince >= L.backS) Object.assign(life, { mode: 'sit', t: 0, until: L.sit[0], x: a.x, y: a.y, z: a.z, at: 'home', goneSince: null });
+                // Up out of the burrow again, slowly
+                if (life.goneSince >= L.backS) Object.assign(life, { mode: 'rise', t: 0, x: a.x, y: a.y - L.sinkM, z: a.z, at: 'home', goneSince: null });
             } else life.goneSince = 0;
+            return;
+        }
+        // Down into the burrow: it drops through the hole, and the land hides it
+        if (life.mode === 'sink') {
+            life.t += dt;
+            life.y = a.y - L.sinkM * Math.min(1, life.t / L.sinkS);
+            if (life.t >= L.sinkS) Object.assign(life, { mode: 'gone', goneSince: 0 });
+            return;
+        }
+        if (life.mode === 'rise') {
+            if (bikeM < L.hideM) { Object.assign(life, { mode: 'sink', t: L.sinkS * (1 - (a.y - life.y) / L.sinkM) }); return; }
+            life.t += dt;
+            life.y = a.y - L.sinkM * Math.max(0, 1 - life.t / L.riseS);
+            if (life.t >= L.riseS) Object.assign(life, { mode: 'sit', y: a.y, t: 0, until: L.sit[0] });
             return;
         }
         // The bike coming: the colony's sentinel (its first animal) sits up on the spot, turned to it, and watches; the
@@ -312,8 +369,7 @@ class Marmots {
             if (d <= stepM) {
                 life.x = to.x; life.y = to.y; life.z = to.z;
                 if (life.mode === 'run') {
-                    life.mode = 'gone';
-                    life.goneSince = 0;
+                    Object.assign(life, { mode: 'sink', t: 0 });
                     life.colony.warned = bikeM < L.backM;
                 } else {
                     life.mode = 'sit';
@@ -388,6 +444,7 @@ class Marmots {
     dispose() {
         if (this.group.parent) this.group.parent.remove(this.group);
         if (this.meshes) this.meshes.forEach(mesh => mesh.dispose());
+        if (this.burrows) { this.burrows.geometry.dispose(); this.burrows.material.dispose(); this.burrows.dispose(); }
     }
 }
 
