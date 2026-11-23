@@ -17,6 +17,9 @@
 //     only when its set of LOD0 pieces changes.
 //   - Builds go through a queue, nearest first, at most BUDGET_MS a frame
 //     (one step at least, so a queue always drains).
+//   - A tile whose data does not come (a failed fetch, a server gone, a network that drops) is asked for again after
+//     each wait of FETCH_RETRY_MS, then given up as lost. landState says what the rider is told: the land near the
+//     bike missing, the bike's own tile missing, or lost.
 //
 // The streamer builds nothing itself; `hooks` hold the builders. No THREE.
 class WorldStreamer {
@@ -42,6 +45,13 @@ class WorldStreamer {
     static get SIDE_STILL_M() { return 4; }
     // The same for a terrain tile: LOD0 at 8 m, LOD1 at 16 m, LOD2 at 32 m
     static get TILE_LOD_M() { return [700, 2000]; }
+    // A tile's data that did not come is asked for again after each of these waits (ms on the streamer's clock): five
+    // more tries over about 20 s, then the tile is lost
+    static get FETCH_RETRY_MS() { return [1000, 2000, 4000, 6000, 7000]; }
+    // The land the rider sees round the bike, and how long a tile of it may wait for its data before the rider is told
+    // (a fetch that failed tells at once)
+    static get NEAR_LAND_M() { return 300; }
+    static get NOTE_AFTER_MS() { return 1500; }
 
     constructor({ data, route, hooks, now = null, clock = null }) {
         this.data = data;
@@ -59,6 +69,10 @@ class WorldStreamer {
         this.queue = [];
         this.queued = new Set();
         this.loading = new Set();
+        // key -> {tries, nextAt, lost}: the tiles whose data did not come; key -> when the land near the bike first
+        // missed it (landState)
+        this.failed = new Map();
+        this.missingSince = new Map();
         this.sections = this.planSections();
         this.rideKey = null;
         this.stats = { maxStepMs: 0, maxStepByKind: {}, frameBuildMs: 0, maxFrameBuildMs: 0, builds: 0, disposes: 0 };
@@ -171,7 +185,7 @@ class WorldStreamer {
         for (const [key] of this.refs) {
             const held = this.tiles.get(key);
             if (held) held.zeroSince = null;
-            if (!this.data.tile(key) && !this.loading.has(`t${key}`)) this.fetchTile(key);
+            if (!this.data.tile(key) && !this.loading.has(`t${key}`) && this.mayFetch(key, time)) this.fetchTile(key);
             if (!this.data.tile(key)) continue;
             const lod = this.tileLod(key, bike);
             if (!held || held.lod !== lod) this.enqueue(`tile:${key}`, this.tileDistance(key, bike), () => this.buildTile(key, this.tileLod(key, bike)));
@@ -190,9 +204,60 @@ class WorldStreamer {
     fetchTile(key) {
         const tag = `t${key}`;
         this.loading.add(tag);
+        // The heights are what the land needs: a tile whose heights came is here, whatever its cover did
         Promise.all([this.data.ensureTile(key), this.data.ensureCover(key)])
             .catch(error => console.warn(`world tile ${key}: ${error.message}`))
+            .then(() => {
+                if (this.data.tile(key)) this.failed.delete(key);
+                else this.fetchFailed(key);
+            })
             .finally(() => this.loading.delete(tag));
+    }
+
+    // A fetch of the tile's data failed: the next try after the next wait of FETCH_RETRY_MS, or lost after the last
+    fetchFailed(key) {
+        const waits = WorldStreamer.FETCH_RETRY_MS;
+        const record = this.failed.get(key) || { tries: 0, nextAt: 0, lost: false };
+        record.tries++;
+        if (record.tries > waits.length) record.lost = true;
+        else record.nextAt = this.clock() + waits[record.tries - 1];
+        this.failed.set(key, record);
+    }
+
+    // Whether the tile's data may be asked for now: never failed, or its wait is over and it is not lost
+    mayFetch(key, time = this.clock()) {
+        const record = this.failed.get(key);
+        return !record || (!record.lost && time >= record.nextAt);
+    }
+
+    // The land round the bike as the rider is told it (out, filled again): `missing` while a tile of the data within
+    // NEAR_LAND_M has no data after a failed fetch or NOTE_AFTER_MS of waiting, `under` while the bike's own tile has
+    // none, `lost` once one of them has failed every try since it came near. A tile given up while it was far (the
+    // ride window reaches 3 km ahead) gets a new round of tries when it comes near: the server may be back by then. A
+    // tile the world has no data for (past its edge) is not land that is missing
+    landState(bike, time = this.clock(), out = {}) {
+        out.missing = false;
+        out.under = false;
+        out.lost = false;
+        const m = WorldData.TILE_M, own = `${Math.floor(bike.x / m)},${Math.floor(bike.z / m)}`;
+        const near = this.tilesNear(bike.x, bike.z, WorldStreamer.NEAR_LAND_M, new Set());
+        for (const key of this.missingSince.keys()) if (!near.has(key)) this.missingSince.delete(key);
+        for (const key of near) {
+            if (this.data.tile(key)) {
+                this.missingSince.delete(key);
+                continue;
+            }
+            if (!this.missingSince.has(key)) this.missingSince.set(key, time);
+            const record = this.failed.get(key);
+            if (record && !record.near) {
+                record.near = true;
+                if (record.lost) Object.assign(record, { tries: 0, nextAt: time, lost: false });
+            }
+            if (record && record.lost) out.lost = true;
+            if (record || time - this.missingSince.get(key) >= WorldStreamer.NOTE_AFTER_MS) out.missing = true;
+            if (key === own) out.under = true;
+        }
+        return out;
     }
 
     buildTile(key, lod) {

@@ -421,6 +421,14 @@ class Hud {
         return item;
     }
 
+    // Takes down a call-out before its time (Hud.callout's item)
+    dismiss(item) {
+        if (!item || !item.isConnected || item.classList.contains('leaving')) return;
+        clearTimeout(item.hudTimer);
+        item.classList.add('leaving');
+        item.hudTimer = setTimeout(() => item.remove(), 240);
+    }
+
     clearTransient() {
         this.pendingStart = null;
         clearTimeout(this.timers.start);

@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
+//   world-toggle-ride world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
@@ -21,6 +21,7 @@
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--measure [--rounds N]] [--out <dir>]   (each part of a world frame, or each graphics level: frame time and picture)
+//   node tools/terrain-check.mjs world-toggle-ride --world tremola --gpu [--to s] [--camera N] [--toggle id] [--every N] [--levels] [--skip N] [--drop-after s [--restore-ms N]] [--out <dir>]   (a ride switching an effect, or losing its tile data: the near land drawn, or the land's rule kept)
 // Every world probe takes --effects off|default|high|id=level,... (the effects of js/effects.js in force, the ladder held
 //   at its top so Auto caps none; `off` and a list start from every effect off), --desk (a 1440 x 900 view at a device
 //   pixel ratio of 2, as the owner's screen) and --night (the light and sky of night, Game.setTimeOfDay)
@@ -4870,6 +4871,165 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
     for (const r of rows) byType[r.type] = (byType[r.type] || 0) + 1;
     return { places, rays, instancesSeen, headroomM: headroom, stepM: step, offenders: rows.length, byType, hits: rows.slice(0, 60) };
 }
+
+// world-toggle-ride: rides from the start to --to (default 7600) in the view --camera (default 3, the high view), and
+// every --every frames (default 240; 0 never) switches --toggle (default landDetail) on or off the way the settings
+// dialog does (EffectSettings.set, then Game.applyGraphicsSettings), the ladder held at its top so Auto caps nothing.
+// Every --check frames (default 20) it draws the frame and checks that every land tile within 300 m of the bike is in
+// the scene, visible, drawn with the land's material and a compiled program, and that the bike's own tile is resident.
+// --levels steps the graphics level at each switch too. Every fifth check the bike's tile is built again and compared
+// with what is drawn. Fails on the first frames that break it (up to 20 are kept), on a program that did not compile,
+// and on any error the game throws.
+// --drop-after S: from ride distance S on, the server answers no request for a tile's heights or cover, as a page whose
+// server has stopped; the tile checks are then off, and the land's own rule is checked instead (Game.watchLand,
+// WorldStreamer.landState). With --restore-ms N the server answers again N ms of ride time after the land near the bike
+// is first missing: the land must come back, the bike ride on to --to, and no note be left up. Without it the data
+// never comes back: the ride must end with the legs open and RideMode.LAND_LOST_NOTE shown. Either way the bike must not
+// move up or down by more than half a metre while it is held
+WORLD_PROBES.push('world-toggle-ride');
+WORLD['world-toggle-ride'] = async (page) => {
+    const result = await page.evaluate(async (placeSource, to, every, check, id, camera, levels, skip, dropAfter, restoreMs) => {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, v = game.vehicle, r = game.renderer;
+    game.quality.fix(Quality.LEVELS.length - 1);
+    game.cameraMode = camera;
+    await placeAt(10);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 22 });
+    // --drop-after S: from ride distance S on, the server answers no request for a tile's heights or cover (as a page
+    // whose server has stopped)
+    const drop = { restored: false, missingAt: null, refused: 0, noteFrames: 0, heldFrames: 0, heldMoveM: 0, ended: false };
+    if (dropAfter) {
+        const fetchFn = env.data.fetchFn;
+        env.data.fetchFn = url => {
+            if (v.routeS > dropAfter && !drop.restored && /\/(height|cover)\//.test(url)) {
+                drop.refused++;
+                return Promise.reject(new TypeError('Failed to fetch'));
+            }
+            return fetchFn(url);
+        };
+    }
+    let heldY = null;
+    const failures = [], seen = { byLod: {}, toggles: 0, checks: 0, frames: 0, errors: 0 };
+    const m = WorldData.TILE_M;
+    let on = game.effectLevels && game.effectLevels[id] === 'on', skippedAt = -1e9;
+    for (let frame = 0; frame < 60 * 60 * 12 && v.routeS < to; frame++) {
+        try {
+            twistyDev.step(1);
+        } catch (error) {
+            seen.errors++;
+            if (failures.length < 20) failures.push(`s ${Math.round(v.routeS)}: step threw ${error.message}`);
+        }
+        seen.frames++;
+        if (game.environment !== env) { drop.ended = true; break; }
+        if (v.crashed) { v.crashed = false; }
+        if (dropAfter) {
+            const land = game.landState || {};
+            if (land.missing && drop.missingAt === null) { drop.missingAt = frame; drop.missingS = Math.round(v.routeS); }
+            if (restoreMs && drop.missingAt !== null && !drop.restored && (frame - drop.missingAt) * 1000 / 60 >= restoreMs) { drop.restored = true; drop.restoredS = Math.round(v.routeS); }
+            if (game.landNote && game.landNote.isConnected && !game.landNote.classList.contains('leaving')) drop.noteFrames++;
+            if (game.landHeld) {
+                drop.heldFrames++;
+                if (heldY === null) heldY = v.position.y;
+                drop.heldMoveM = Math.max(drop.heldMoveM, Math.abs(v.position.y - heldY));
+            } else heldY = null;
+        }
+        // --skip N: every N frames the bike goes on to before the next station (Game.debugSkipToNextGate, N in debug)
+        if (skip && frame % skip === skip - 1 && game.debugSkipToNextGate()) { seen.skips = (seen.skips || 0) + 1; skippedAt = frame; }
+        if (every && frame % every === every - 1) {
+            on = !on;
+            game.effects.set(id, on ? 'on' : 'off');
+            game.applyGraphicsSettings();
+            // --levels: the ladder steps to the next level as well, as Auto does when the frame time moves
+            if (levels) game.quality.fix(seen.toggles % Quality.LEVELS.length);
+            seen.toggles++;
+        }
+        if (frame % check) continue;
+        // The page's own tasks run between checks, as they do between a game's frames: a tile's data arrives by fetch
+        await new Promise(done => setTimeout(done, 0));
+        if (game.environment !== env) { drop.ended = true; break; }
+        if (dropAfter) continue;
+        game.graphics.render(game.scene, game.camera);
+        seen.checks++;
+        const bx = v.position.x, bz = v.position.z;
+        const own = `${Math.floor(bx / m)},${Math.floor(bz / m)}`;
+        const bad = [];
+        for (const program of r.info.programs || []) if (program.diagnostics && !program.diagnostics.runnable) bad.push(`program ${program.name} ${program.cacheKey.slice(0, 40)} failed: ${(program.diagnostics.fragmentShader.log || program.diagnostics.vertexShader.log || program.diagnostics.programLog || '').slice(0, 300)}`);
+        if (!env.tileMeshes.has(own) && frame - skippedAt > 300) {
+            const st = env.streamer;
+            bad.push(`own tile ${own} not resident (data ${env.hasTileData(own)}, loaded ${!!env.data.tile(own)}, held ${st.refs.has(own)}, built ${JSON.stringify(st.tiles.get(own) || null)}, loading ${st.loading.has(`t${own}`)}, queue ${st.queue.length})`);
+        }
+        for (const [key, held] of env.tileMeshes) {
+            const [tx, tz] = key.split(',').map(Number);
+            const dx = Math.max(tx * m - bx, 0, bx - (tx + 1) * m), dz = Math.max(tz * m - bz, 0, bz - (tz + 1) * m);
+            if (Math.hypot(dx, dz) > 300) continue;
+            const mesh = held.mesh;
+            const lod = mesh.userData.lod;
+            seen.byLod[lod] = (seen.byLod[lod] || 0) + 1;
+            let shown = mesh.visible;
+            for (let o = mesh.parent; o; o = o.parent) shown = shown && o.visible;
+            if (lod !== 0 && frame - skippedAt > 300) bad.push(`${key} at lod ${lod}`);
+            if (mesh.parent !== env.tileGroup) bad.push(`${key} lod ${lod} not in the tile group`);
+            if (!shown) bad.push(`${key} lod ${lod} hidden`);
+            if (mesh.material !== TerrainMesh.sharedMaterial) bad.push(`${key} lod ${lod} other material`);
+            const props = r.properties.get(mesh.material);
+            if (!props.currentProgram) bad.push(`${key} lod ${lod} no program`);
+            else if (props.currentProgram.diagnostics && !props.currentProgram.diagnostics.runnable) bad.push(`${key} lod ${lod} program not runnable`);
+            const pos = mesh.geometry.attributes.position;
+            if (!pos || !pos.count || !mesh.geometry.index || !mesh.geometry.index.count) bad.push(`${key} lod ${lod} empty geometry`);
+        }
+        // Every fifth check the bike's tile is built again from nothing (its cuts too) and compared with what is drawn:
+        // land drawn from a stale cut or plan stands apart from it
+        if (seen.checks % 5 === 0 && env.tileMeshes.has(own)) {
+            const held = env.tileMeshes.get(own), tile = env.data.tile(own), lod = held.mesh.userData.lod;
+            const kept = env.cutCache.has(own), was = env.cutCache.get(own);
+            env.cutCache.delete(own);
+            const cuts = lod === 0 ? env.cutsOf(own) : null;
+            if (kept) env.cutCache.set(own, was); else env.cutCache.delete(own);
+            const fresh = TerrainMesh.build(tile, env.data.cover(own), lod, (x, y, z) => {
+                const low = env.rideSurfaceAt(x, z, y);
+                return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
+            }, env.nearTile, cuts);
+            const a = held.mesh.geometry.attributes.position.array, b = fresh.mesh.geometry.attributes.position.array;
+            let worst = 0, at = -1;
+            const n = Math.min(a.length, b.length);
+            for (let i = 1; i < n; i += 3) { const d = Math.abs(a[i] - b[i]); if (d > worst) { worst = d; at = i; } }
+            seen.rebuilt = (seen.rebuilt || 0) + 1;
+            if (a.length !== b.length || worst > 0.05) bad.push(`${own} drawn apart from a fresh build: ${a.length} vs ${b.length} floats, ${worst.toFixed(2)} m at (${a[at - 1] && a[at - 1].toFixed(0)}, ${a[at + 1] && a[at + 1].toFixed(0)})`);
+            fresh.mesh.geometry.dispose();
+        }
+        if (bad.length && failures.length < 20) failures.push(`s ${Math.round(v.routeS)} (${id} ${game.effectLevels[id]}): ${bad.slice(0, 6).join('; ')}`);
+    }
+    // (the world is torn down a task after the loss is found)
+    for (let k = 0; k < 5 && game.environment === env; k++) await new Promise(done => setTimeout(done, 0));
+    if (game.environment !== env) drop.ended = true;
+    if (dropAfter) {
+        const notice = document.body.innerText.includes(RideMode.LAND_LOST_NOTE);
+        const noteUp = !!(game.landNote && game.landNote.isConnected && !game.landNote.classList.contains('leaving'));
+        Object.assign(drop, { notice, noteUp, legs: game.rideMode && game.rideMode.kind });
+        if (drop.missingAt === null) failures.push('the land near the bike was never missing: nothing was proved');
+        if (drop.heldMoveM > 0.5) failures.push(`the held bike moved ${drop.heldMoveM.toFixed(2)} m up or down`);
+        if (restoreMs) {
+            if (drop.ended) failures.push('the ride ended although the data came back');
+            if (noteUp) failures.push('the note is still up after the land came back');
+            if (game.landState && (game.landState.missing || game.landState.under)) failures.push('land near the bike is still missing at the end');
+            if (v.routeS < to) failures.push(`the bike stopped at s ${Math.round(v.routeS)}, short of ${to}`);
+            if (!drop.noteFrames) failures.push('the note never showed while the land was missing');
+        } else {
+            if (!drop.ended) failures.push(`the ride did not end with the data gone (at s ${Math.round(v.routeS)})`);
+            if (!notice) failures.push('the legs did not open with the note that the land stopped loading');
+        }
+    } else game.graphics.render(game.scene, game.camera);
+    return { s: Math.round(v.routeS), ...seen, inForce: game.effectLevels ? game.effectLevels[id] : null, drop: dropAfter ? drop : undefined, failures };
+    }, placeAt.toString(), Number(option('to') || 7600), Number(option('every') ?? 240), Number(option('check') || 20), option('toggle') || 'landDetail', Number(option('camera') || 3), flag('levels'), Number(option('skip') || 0), Number(option('drop-after') || 0), Number(option('restore-ms') || 0));
+    // --out <dir>: the last frame
+    if (option('out')) {
+        mkdirSync(option('out'), { recursive: true });
+        await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+        await page.screenshot({ path: join(option('out'), `toggle-ride-s${result.s}.png`) });
+    }
+    return result;
+};
 
 WORLD['world-clearance'] = async (page) => {
     const result = await page.evaluate(clearanceWalk, placeAt.toString(), Number(option('every') || 300), CLEAR_HEADROOM_M, CLEAR_STEP_M, CLEAR_FINE_M);

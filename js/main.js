@@ -312,7 +312,7 @@ class Game {
     // The world's data did not load (a fetch error, a status other than 200, data not in the world format: the live
     // host is not yet proven to serve world/*.bin). The legs take over with a note on the leg screen, and the rider
     // screen stops offering the world for the rest of the page
-    fallBackToLegs(error) {
+    fallBackToLegs(error, notice = RideMode.FALLBACK_NOTE) {
         console.error('Failed to load the world; the classic legs take over:', error);
         const note = document.getElementById('world-loading');
         if (note) note.remove();
@@ -330,7 +330,45 @@ class Game {
         this.tourSystem.onWorldSelected = null;
         this.tourSystem.createLegSelector(document.body, (leg) => this.initializeGameWithLeg(leg));
         this.tourSystem.showTrackScreen();
-        this.tourSystem.showNotice(RideMode.FALLBACK_NOTE);
+        this.tourSystem.showNotice(notice);
+    }
+
+    // The land round the bike in a world ride (WorldStreamer.landState), once a frame: the rider is told while land near
+    // the bike is still loading (the far land is drawn there meanwhile, and the road over it), the bike is held while
+    // its own tile has no data, and land that never comes ends the ride the way a world that cannot load at the start
+    // does: the classic legs take over with a note. A ride that has finished is left alone
+    watchLand() {
+        const environment = this.environment, vehicle = this.vehicle;
+        if (!environment || !environment.isWorld || !environment.streamer || !vehicle || this.finished) {
+            this.landHeld = false;
+            this.setLandNote(false);
+            return;
+        }
+        const land = environment.streamer.landState(vehicle.position, undefined, this.landState || (this.landState = {}));
+        this.landHeld = land.under;
+        this.setLandNote(land.missing || land.under);
+        if (land.lost && !this.landLostPending) {
+            this.landLostPending = true;
+            // After this frame: the world is torn down outside the loop that draws it
+            setTimeout(() => {
+                this.landLostPending = false;
+                if (this.environment !== environment) return;
+                this.landHeld = false;
+                this.setLandNote(false);
+                this.fallBackToLegs(new Error('the world\'s land stopped loading'), RideMode.LAND_LOST_NOTE);
+            }, 0);
+        }
+    }
+
+    // The call-out that says the land is still loading, up while `on` (Hud.callout, Hud.dismiss)
+    setLandNote(on) {
+        const hud = this.hud;
+        if (on) {
+            if (hud && !(this.landNote && this.landNote.isConnected && !this.landNote.classList.contains('leaving'))) this.landNote = hud.callout(Game.LAND_NOTE, 'warn', Game.LAND_NOTE_MS);
+            return;
+        }
+        if (this.landNote && hud && hud.dismiss) hud.dismiss(this.landNote);
+        this.landNote = null;
     }
 
     // The game on a world: no cones or rockfalls are built (they are leg systems), traffic rides the
@@ -3642,7 +3680,14 @@ class Game {
         // Check for crash (before updating vehicle)
         const wasCrashed = this.vehicle.crashed;
 
-         this.vehicle.update(deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput);
+        // While the land under the bike has no data (Game.watchLand), the bike is held where it stands: the ground there
+        // would be the far grid's, which the land may come back above
+        const held = this.landHeld ? (this.landHoldAt || (this.landHoldAt = new THREE.Vector3())).copy(this.vehicle.position) : null;
+         this.vehicle.update(deltaTime, held ? 0 : steeringInput, held ? 0 : throttleInput, held ? 1 : brakeInput, held ? 0 : wheelieInput);
+        if (held) {
+            this.vehicle.position.copy(held);
+            this.vehicle.speed = 0;
+        }
 
          // Play crash sound if we just crashed (but not if finished)
         if (!wasCrashed && this.vehicle.crashed && !this.finished) {
@@ -3840,6 +3885,7 @@ class Game {
         if (this.environment && this.environment.isWorld && this.vehicle) {
             // (the ride distance it streams by is the accepted progress, not the raw projection)
             this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
+            this.watchLand();
         }
 
         // Distance-cull far scenery (throttled internally)
@@ -4662,6 +4708,11 @@ Game.CALLOUT_MS = { crash: 4400, restart: 4000, warning: 5000, collision: 3000, 
 
 // What the rider is told when the tyres brush a wall and the bike rides on (Vehicle.wallTouch)
 Game.BRUSH_TEXT = 'Brushed the wall';
+
+// What the rider is told while the land near the bike is still loading (Game.watchLand), and how long the call-out may
+// stay up with nothing to take it down (it is taken down when the land comes)
+Game.LAND_NOTE = 'Land is still loading';
+Game.LAND_NOTE_MS = 10 * 60 * 1000;
 
 // What a rider who cannot reach the ground on a slope is told, nearly stopped on one (Vehicle.footReach)
 Game.FOOT_TEXT = 'Too steep for a foot down: keep rolling';

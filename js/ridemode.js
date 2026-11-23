@@ -11,6 +11,9 @@ const RideMode = {
 
     // What the menu says when the world's data could not load and the legs took over
     FALLBACK_NOTE: 'The Andermatt road could not load here, so the classic legs are open instead.',
+    // What the menu says when a world's land stopped loading during a ride (WorldStreamer.landState lost) and the legs
+    // took over
+    LAND_LOST_NOTE: 'The land beside the road stopped loading, so the ride has ended and the classic legs are open instead.',
 
     // { kind: 'world' | 'legs', world: the stage id or 'all' (null for the legs), direct: start without the menu }
     resolve(search) {
