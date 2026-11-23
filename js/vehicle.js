@@ -259,7 +259,15 @@ const OUTFITS = {
 // the bikes' numbers were set for. `footSlopeDeg` is the steepest ground on
 // which the rider reaches it with a foot at a stop: on steeper ground the bike
 // tips over (FOOT_REACH, Vehicle.footReach); without it the rider reaches the
-// ground anywhere.
+// ground anywhere. `group` is how the rider rides in a world's group (the rules
+// are Traffic.GROUP's, .agent/system/group.md): `gapS` the time gap it keeps to
+// whoever is ahead and `gapSpread` how far that wanders; `least` and `most` the
+// shares of its own pace it eases to and rises to (its limit); `wander` the
+// noise on its pace; `spurt` the chance a kilometre of a spell `gain` faster for
+// `seconds`, weighted by the kind of road; `passPerS` the chance a second of
+// safe road that it passes one whose place is behind its own; `stop` the chance it pulls in at a stopping place it comes
+// to, and how long it waits there. A character without it rides the middle row
+// (Traffic.GROUP.rider).
 const CHARACTERS = [
     {
         id: 'steve',
@@ -280,6 +288,7 @@ const CHARACTERS = [
         traits: { country: 5, mountain: 5, hairpins: 4, daring: 3 },
         // Often in front, and navigates
         place: 1,
+        group: { gapS: 1.6, gapSpread: 0.4, least: 0.85, most: 1.2, wander: 0.04, spurt: null, passPerS: 0.5, stop: null },
         physics: {
             comfortShake: 1.25,     // Race-firm - you feel everything
             maxSpeed: 1.10,        // 74.8 m/s top end
@@ -309,6 +318,7 @@ const CHARACTERS = [
         traits: { country: 2, mountain: 4, hairpins: 3, daring: 2 },
         // Leads and navigates most of the time
         place: 2,
+        group: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.2, wander: 0.05, spurt: { perKm: 0.5, seconds: 15, gain: 1.12, country: 0, mountain: 1, hairpin: 0.3 }, passPerS: 0.35, stop: null },
         physics: {
             comfortShake: 0.55,     // Long-travel suspension soaks it up
             maxSpeed: 1.0,         // 68 m/s
@@ -340,6 +350,7 @@ const CHARACTERS = [
         traits: { country: 2, mountain: 2, hairpins: 2, daring: 1 },
         // Toward the back, sometimes last, at a distance from the others
         place: 5,
+        group: { gapS: 4.5, gapSpread: 0.6, least: 0.8, most: 1.2, wander: 0.06, spurt: { perKm: 0.25, seconds: 25, gain: 1.15, country: 1, mountain: 1, hairpin: 1 }, passPerS: 0.1, stop: { chance: 0.04, waitS: [15, 40] } },
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
             maxSpeed: 0.75,        // 51 m/s
@@ -371,6 +382,7 @@ const CHARACTERS = [
         traits: { country: 2, mountain: 4, hairpins: 5, daring: 5 },
         // In the middle, with bursts
         place: 4,
+        group: { gapS: 1.4, gapSpread: 0.5, least: 0.85, most: 1.25, wander: 0.06, spurt: { perKm: 0.6, seconds: 20, gain: 1.18, country: 0.1, mountain: 1, hairpin: 1 }, passPerS: 0.45, stop: null },
         physics: {
             comfortShake: 0.85,     // Stiff MX setup but a standing-friendly ride
             maxSpeed: 0.85,        // 57.8 m/s
@@ -410,6 +422,7 @@ const CHARACTERS = [
         traits: { country: 3, mountain: 3, hairpins: 3, daring: 3 },
         // Near the front, never leading
         place: 3,
+        group: { gapS: 1.8, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: { perKm: 0.15, seconds: 8, gain: 1.08, country: 1, mountain: 1, hairpin: 1 }, passPerS: 0.25, stop: null },
         physics: {
             comfortShake: 0.8 * (0.55 * 1.1) / 0.8,     // 0.605 - long travel
             maxSpeed: 0.9 * (1.0 * 0.85) / 0.95,        // 0.805: 54.8 m/s
@@ -442,6 +455,7 @@ const CHARACTERS = [
         traits: { country: 1, mountain: 1, hairpins: 1, daring: 1 },
         // Last, and stops often
         place: 6,
+        group: { gapS: 3, gapSpread: 0.5, least: 0.85, most: 1.15, wander: 0.04, spurt: null, passPerS: 0.05, stop: { chance: 0.3, waitS: [25, 70] } },
         physics: {
             comfortShake: 0.7,
             maxSpeed: 0.92,        // 62.6 m/s

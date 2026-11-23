@@ -347,7 +347,7 @@ Proofs: `tests/unit/world-stones.test.js` rides the shipped stage and the fixtur
 
 ## Stopping places
 
-A world tells the game where a rider can pull in and wait: `environment.places` (`WorldPlaces`, `js/world/places.js`), from `manifest.places` (the importer's rules and what the map holds are in `world-data.md`, "Stopping places"). No place is named in code. The group ride that uses them is a later job; nothing reads them yet.
+A world tells the game where a rider can pull in and wait: `environment.places` (`WorldPlaces`, `js/world/places.js`), from `manifest.places` (the importer's rules and what the map holds are in `world-data.md`, "Stopping places"). No place is named in code. The group ride waits in them (`group.md`): a rider takes a slot with `places.next` and `places.stopAt`.
 
 - **What the game is told.** `places.list` is the open places in order: `{ id, kind, source, s, side, length, depth, taper, surface, name, slots }`. `places.next(s, side)` is the first that starts at or after ride distance `s` (on one side when asked). `places.stopAt(place, slot, ground)` is where the rider in that slot stops: a point clear of the carriageway (1.2 m or more past its edge, in the middle of the strip), facing along the ride, at the ground's own height there. Slot 0 is the far end; each next rider stops 2.6 m behind. `places.at(s, lateral)` is the open place a point is in. `places.all` holds the closed ones too.
 - **Two sources.** A `map` place is a mapped car park or rest area along the ride. A `found` place is a stretch of level verge where the map has none. They are never mixed: `source` says which.
@@ -369,7 +369,7 @@ One convention, defined in `Route` (`js/world/route.js`): lateral runs along `(c
 
 ### The crew's pace
 
-Each character has `traits` in `CHARACTERS` (js/vehicle.js), 1 to 5: the pace on `country` roads, on `mountain` roads and round `hairpins`, and how `daring` over a jump. `place` is the rider's home place in the group, 1 at the front; nothing reads it yet (the group ride is a later job). Of the player's physics the traits touch one number: `daring` sets the lean limit (`Vehicle.leanOf`; `.agent/system/handling.md`, "The lean limit by the rider"). The multipliers of `Vehicle.physicsOf` do not read them (`tests/unit/characters.test.js` pins those of every rider on every bike).
+Each character has `traits` in `CHARACTERS` (js/vehicle.js), 1 to 5: the pace on `country` roads, on `mountain` roads and round `hairpins`, and how `daring` over a jump. `place` is the rider's home place in the group, 1 at the front; the group ride reads it (`group.md`). Of the player's physics the traits touch one number: `daring` sets the lean limit (`Vehicle.leanOf`; `.agent/system/handling.md`, "The lean limit by the rider"). The multipliers of `Vehicle.physicsOf` do not read them (`tests/unit/characters.test.js` pins those of every rider on every bike).
 
 A trait gives a pace by one table, `Traffic.PACES` (`CREW_PACES` in js/traffic.js). A trait between two rows takes a pace between them (`Traffic.paceOf`).
 
@@ -390,7 +390,7 @@ Rows 5, 4, 3 and 1 are the old paces by seat (expert, fast, average, slow); row 
   - `country`: the rest.
   - Both measures are averaged over 60 m of road, so the pace changes over a distance. A hairpin first takes the most of its measure within 30 m, so the whole hairpin is one and the 60 m before and after it are the blend.
 - The Tremola slice is 62 % mountain, 30 % hairpin and 8 % country (its two ends).
-- The start order, the passes and the pack rules are as before; the spacing is the following rule of "Contact". The crew do not stop, wait or regroup.
+- In a world the crew rides as a group (`group.md`): it grids in the order of its places, keeps its gaps, passes toward its places, and stops and waits by the group's rules, on top of the following rule of "Contact". On a leg the start order, the passes and the pack rules are as before.
 - The pace draws nothing from `Math.random` after the start, and the start draws as before: one draw a rider for the pace, one for the start segment.
 
 A new character with `traits` and a new world need no code: a character without traits rides the middle of the scale (3), and `kindAt` reads only the route's samples. `tests/unit/crew-pace.test.js` holds the table, the kinds on made roads and on the Tremola slice, the order of the riders on each kind of road, and that neither the speed nor the heading has a step.

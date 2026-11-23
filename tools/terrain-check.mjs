@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
@@ -5634,6 +5634,137 @@ WORLD['world-fall-shots'] = async (page) => {
     }
     return { files };
 };
+
+// world-group-shots: the group ride (CrewGroup, .agent/system/group.md) in pictures: the crew at the start, in line on a
+// straight, round a hairpin (from the chase view and from above), and waiting in a stopping place for a player who
+// stopped (from the chase view and from across the road). Each picture comes with where each rider is and what it does.
+//   node tools/terrain-check.mjs world-group-shots --world tremola --gpu [--out <dir>] [--tag <name>]
+const GROUP_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/group-shots');
+WORLD_PROBES.push('world-group-shots');
+WORLD['world-group-shots'] = async (page) => {
+    const out = option('out') || GROUP_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'group';
+    const files = [];
+    const save = (name, png) => {
+        const file = join(out, `${tag}-${name}.png`);
+        writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+        return file;
+    };
+    const shoot = async (name) => {
+        const file = join(out, `${tag}-${name}.png`);
+        await page.screenshot({ path: file });
+        return file;
+    };
+    // The start, as the ride begins
+    const start = await page.evaluate(groupScene, placeAt.toString(), 'start');
+    files.push({ shot: 'start', file: await shoot('start'), ...start });
+    for (const kind of ['straight', 'hairpin', 'waiting']) {
+        const info = await page.evaluate(groupScene, placeAt.toString(), kind);
+        files.push({ shot: kind, file: await shoot(kind), ...info });
+        if (kind !== 'straight') {
+            const view = await page.evaluate(groupEye, kind);
+            files.push({ shot: `${kind}-view`, file: save(`${kind}-view`, view.png), eye: view.eye });
+        }
+    }
+    return { out, files };
+};
+
+// In the page: the crew put in line by place before the bike (or, for 'start', the ride as it begins), ridden on with the
+// autopilot, and the frame drawn. Returns where each rider is and what it does
+async function groupScene(placeSource, kind) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, traffic = game.traffic, group = traffic.group;
+    const v = game.vehicle;
+    const sOf = b => route.fromUnits(b.currentSegment + b.segmentProgress);
+    const put = (bike, s) => {
+        const u = route.toUnits(s);
+        bike.currentSegment = Math.floor(u);
+        bike.segmentProgress = u - Math.floor(u);
+        bike.laneMoving = false;
+        if (group && bike.ride) group.placed(bike.ride);
+        bike.updatePosition();
+    };
+    const byPlace = () => traffic.motorcycles.slice().sort((a, b) => a.character.place - b.character.place);
+    const settle = () => { if (group) { group.halted = group.standing = false; group.stoppedS = 0; } };
+    game.cameraMode = 2;
+    let note = null;
+    if (kind === 'start') {
+        twistyDev.autopilot({ speed: 0 });
+        for (let i = 0; i < 90; i++) twistyDev.step(1);
+    } else if (kind === 'straight') {
+        let s0 = 2400;
+        while (s0 < route.length - 400 && !(group && group.straight(s0, 220))) s0 += 10;
+        await placeAt(s0);
+        game.worldCamera.reset(v.yawAngle);
+        settle();
+        byPlace().forEach((bike, k) => put(bike, s0 + 70 - k * 13));
+        twistyDev.autopilot({ speed: 14 });
+        for (let i = 0; i < 120; i++) twistyDev.step(1);
+        note = { straightFrom: s0 };
+    } else if (kind === 'hairpin') {
+        const h = route.hairpins().find(p => p.s0 > 2200) || route.hairpins()[0];
+        await placeAt(h.s0 - 150);
+        game.worldCamera.reset(v.yawAngle);
+        settle();
+        byPlace().forEach((bike, k) => put(bike, h.s0 - 70 - k * 12));
+        twistyDev.autopilot({ speed: 12 });
+        let ticks = 0;
+        while (sOf(byPlace()[0]) < h.apex && ticks < 3600) { twistyDev.step(1); ticks++; }
+        note = { hairpin: { s0: Math.round(h.s0), apex: Math.round(h.apex), s1: Math.round(h.s1) } };
+        window.groupEyeAt = { s: h.apex };
+    } else if (kind === 'waiting') {
+        // A stopping place on the riders' own side; the bike stops 250 m before it with the crew just ahead
+        const side = Route.keepRight(1);
+        const place = env.places.list.find(p => p.side === side && p.s > 3000);
+        await placeAt(place.s - 260);
+        game.worldCamera.reset(v.yawAngle);
+        settle();
+        byPlace().forEach((bike, k) => put(bike, place.s - 200 - k * 12));
+        // The bike held on its brake: the player has stopped
+        twistyDev.autopilot({ speed: 0 });
+        game.input.getThrottleInput = () => 0;
+        game.input.getBrakeInput = () => 1;
+        v.speed = 0;
+        let ticks = 0;
+        while (traffic.motorcycles.some(b => b.ride.state !== 'wait') && ticks < 60 * 180) { twistyDev.step(1); ticks++; }
+        // The bike put down just short of the place, still standing: the riders wait on
+        await placeAt(place.s - 30);
+        game.worldCamera.reset(v.yawAngle);
+        for (let i = 0; i < 60; i++) twistyDev.step(1);
+        note = { place: { id: place.id, s: place.s, length: place.length, side: place.side, kind: place.kind }, waitedS: Math.round(ticks / 60), halted: group.halted };
+        window.groupEyeAt = { s: place.s + place.length / 2, place };
+    }
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const riders = traffic.motorcycles.map(b => {
+        const g = b.bikeGroup.position, p = route.project(g.x, g.z, null, {});
+        return { place: b.character.place, s: Math.round(sOf(b) * 10) / 10, state: b.ride ? b.ride.state : null, speed: Math.round(b.currentSpeed * 10) / 10, lateral: Math.round(p.lateral * 100) / 100, half: Math.round(p.width / 2 * 100) / 100, off: b.ride ? Math.round(b.ride.off * 100) / 100 : 0, visible: b.bikeGroup.visible };
+    });
+    return { kind, playerS: Math.round(v.routeS), note, events: group ? { ...group.events } : null, riders };
+}
+
+// In the page: a view of the last scene from a camera of its own, the frame alone (no HUD), as a PNG data URL. 'hairpin'
+// from 45 m over the apex; 'waiting' from the far side of the road, across the place
+function groupEye(kind) {
+    const env = game.environment, route = env.route, at = window.groupEyeAt;
+    const p = route.sample(at.s, {});
+    const point = (s, lat, up) => { const q = route.sample(s, {}); return new THREE.Vector3(q.x + lat * Math.cos(q.heading), q.y + up, q.z - lat * Math.sin(q.heading)); };
+    let eye, look;
+    if (kind === 'hairpin') {
+        eye = point(at.s - 30, 0, 45);
+        look = point(at.s, 0, 0);
+    } else {
+        const side = at.place.side;
+        eye = point(at.s - 22, -side * (p.width / 2 + 3), 3.2);
+        look = point(at.s + 4, side * (p.width / 2 + 1.5), 0.6);
+    }
+    game.camera.position.copy(eye);
+    game.camera.lookAt(look);
+    game.camera.updateMatrixWorld(true);
+    game.graphics.render(game.scene, game.camera);
+    return { png: game.graphics.renderer.domElement.toDataURL('image/png'), eye: [eye.x, eye.y, eye.z].map(n => Math.round(n)) };
+}
 
 function camWallChecks(results, failures) {
     const walls = results['world-camera-walls'];

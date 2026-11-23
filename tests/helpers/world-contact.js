@@ -112,7 +112,8 @@ export function packRide(game, env, { metres = Infinity, seconds = 3600, place =
             let hold = works ? works.stopDistance(proxy, s, 1, Roadworks.BIKE_HALF_M, proxy.currentSpeed, 5.4) : Infinity;
             if (hold < 3 && proxy.currentSpeed < 0.1) stats.redWaits++;
             for (const other of riders) {
-                if (!other.bikeGroup.visible) continue;
+                // (a rider of the group standing off the road, in a stopping place, is not in its way: CrewGroup)
+                if (!other.bikeGroup.visible || (other.ride && other.ride.aside)) continue;
                 const ahead = sOf(route, other) - s;
                 if (ahead > 0) hold = Math.min(hold, ahead - 2 * Roadworks.BIKE_HALF_M - Roadworks.QUEUE_GAP_M);
             }
