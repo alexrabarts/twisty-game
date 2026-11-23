@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-toggle-ride world-ground-flip world-ground-scan world-ground-off world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
+//   world-near-ground world-cover-off world-toggle-ride world-ground-flip world-ground-scan world-ground-off world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
@@ -21,6 +21,8 @@
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--measure [--rounds N]] [--out <dir>]   (each part of a world frame, or each graphics level: frame time and picture)
+//   node tools/terrain-check.mjs world-near-ground --world tremola --gpu --desk [--at s,s] [--camera N] [--specs "a;b"] [--ride-cost] [--out <dir>]   (the near land by distance: luma, fine contrast, change against the first spec)
+//   node tools/terrain-check.mjs world-cover-off --world tremola --gpu [--at s,s]   (the ground cover off draws the land as without it, to the bit)
 //   node tools/terrain-check.mjs world-toggle-ride --world tremola --gpu [--to s] [--camera N] [--toggle id] [--every N] [--levels] [--skip N] [--drop-after s [--restore-ms N]] [--out <dir>]   (a ride switching an effect, or losing its tile data: the near land drawn, or the land's rule kept)
 //   node tools/terrain-check.mjs world-ground-scan --world tremola --gpu --desk [--at s,s] [--camera N] [--specs "a;b"] [--straight] [--bins] [--out <dir>]   (the near land by distance: luma, fine contrast, change against the first spec and its steps)
 //   node tools/terrain-check.mjs world-ground-off --world tremola --gpu [--at s,s]   (the ground texture off draws the land as without it, to the bit)
@@ -4890,6 +4892,194 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
     for (const r of rows) byType[r.type] = (byType[r.type] || 0) + 1;
     return { places, rays, instancesSeen, headroomM: headroom, stepM: step, offenders: rows.length, byType, hits: rows.slice(0, 60) };
 }
+
+// world-near-ground: how much the near land changes between effect specs, by distance from the camera. At each station
+// of --at the view rides there as world-effect-shots does (--camera N, default 2 the chase view), then for each spec of
+// --specs the frame is drawn and read, and one more pass draws the camera's distance to the land (and nothing for
+// anything else in front of it). For each band of distance (2-5, 5-15, 15-30, 30-60 m) it gives the land's share of the
+// frame, its mean luma, its fine contrast (the mean absolute difference of a pixel from the mean of its 3 x 3, at full
+// resolution: a smear scores near 0) and, against the first spec, the mean absolute change of luma (0 to 255)
+WORLD_PROBES.push('world-near-ground');
+WORLD['world-near-ground'] = async (page) => {
+    const specs = (option('specs') || 'default;off').split(';');
+    const stations = option('at') ? option('at').split(',').map(Number) : [1600];
+    const camera = Number(option('camera') || 2);
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+    const rows = [];
+    for (const s of stations) {
+        const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const v = game.vehicle;
+            game.cameraMode = camera;
+            await placeAt(Math.max(10, s - 140));
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+            let ticks = 0;
+            while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+            return { s: Math.round(v.routeS), crashed: v.crashed, speed: v.speed, speedRatio: game.graphics.speedRatio };
+        }, placeAt.toString(), pilotWorld.toString(), s, camera);
+        // The land's distance under each pixel: land tiles draw their view distance, all else draws -1
+        const mask = await page.evaluate(() => {
+            const g = game.graphics, r = g.renderer;
+            const size = r.getDrawingBufferSize(new THREE.Vector2());
+            const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.FloatType });
+            const vertex = '#include <common>\nvarying vec3 vView;\nvoid main() {\n#include <begin_vertex>\n#include <project_vertex>\nvView = mvPosition.xyz;\n}';
+            const make = land => new THREE.ShaderMaterial({ side: THREE.DoubleSide, vertexShader: vertex, fragmentShader: `varying vec3 vView;\nvoid main() { gl_FragColor = vec4(${land ? 'length(vView)' : '-1.0'}, 0.0, 0.0, 1.0); }` });
+            const landMat = make(true), other = make(false);
+            const swapped = [], hidden = [];
+            game.scene.traverse(o => {
+                if ((o.isPoints || o.isLine || o.isSprite) && o.visible) { hidden.push(o); o.visible = false; return; }
+                if (!o.isMesh) return;
+                if (o.isSkinnedMesh) return;
+                swapped.push([o, o.material]);
+                o.material = o.material === TerrainMesh.sharedMaterial ? landMat : other;
+            });
+            const background = game.scene.background, fog = game.scene.fog;
+            game.scene.background = null; game.scene.fog = null;
+            r.setRenderTarget(target);
+            r.setClearColor(0x000000, 1);
+            r.clear();
+            r.render(game.scene, game.camera);
+            r.setRenderTarget(null);
+            game.scene.background = background; game.scene.fog = fog;
+            swapped.forEach(([o, m]) => { o.material = m; });
+            hidden.forEach(o => { o.visible = true; });
+            const data = new Float32Array(size.x * size.y * 4);
+            r.readRenderTargetPixels(target, 0, 0, size.x, size.y, data);
+            target.dispose();
+            const out = new Array(size.x * size.y);
+            // Flip to the screen's rows
+            for (let y = 0; y < size.y; y++) for (let x = 0; x < size.x; x++) out[(size.y - 1 - y) * size.x + x] = Math.round(data[(y * size.x + x) * 4] * 100) / 100;
+            window.__ngMask = { w: size.x, h: size.y, d: out };
+            return { w: size.x, h: size.y };
+        });
+        let first = null;
+        for (const spec of specs) {
+            const set = await page.evaluate(effectsSpec, spec);
+            if (set.error) return { error: `${spec}: ${set.error}` };
+            await page.evaluate(() => { game.graphics.render(game.scene, game.camera); game.graphics.render(game.scene, game.camera); });
+            const png = await page.screenshot({ encoding: 'base64' });
+            const result = await page.evaluate(async (data, keep) => {
+                const image = new Image();
+                image.src = `data:image/png;base64,${data}`;
+                await image.decode();
+                const { w, h, d: dist } = window.__ngMask;
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, 0, 0, w, h);
+                const px = ctx.getImageData(0, 0, w, h).data;
+                const luma = new Float32Array(w * h);
+                for (let i = 0; i < w * h; i++) luma[i] = 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
+                const bands = [[2, 5], [5, 15], [15, 30], [30, 60]];
+                const stats = bands.map(([a, b]) => ({ band: `${a}-${b}`, n: 0, luma: 0, fine: 0, change: 0 }));
+                const before = window.__ngFirst;
+                for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+                    const i = y * w + x, m = dist[i];
+                    if (!(m >= 2 && m < 60)) continue;
+                    const k = m < 5 ? 0 : m < 15 ? 1 : m < 30 ? 2 : 3;
+                    let sum = 0;
+                    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += luma[i + dy * w + dx];
+                    const st = stats[k];
+                    st.n++; st.luma += luma[i]; st.fine += Math.abs(luma[i] - sum / 9);
+                    if (before) st.change += Math.abs(luma[i] - before[i]);
+                }
+                if (keep) window.__ngFirst = luma;
+                return stats.map(st => ({ band: st.band, share: Math.round(st.n / (w * h) * 1000) / 1000, luma: st.n ? Math.round(st.luma / st.n * 10) / 10 : null, fine: st.n ? Math.round(st.fine / st.n * 100) / 100 : null, change: st.n && before ? Math.round(st.change / st.n * 100) / 100 : null }));
+            }, png, first === null);
+            if (first === null) first = spec;
+            const out = option('out');
+            if (out) { mkdirSync(out, { recursive: true }); writeFileSync(join(out, `ng-s${s}-c${camera}-${spec.replace(/[^a-z0-9=,]+/gi, '').replace(/[=,]/g, '-')}.png`), Buffer.from(png, 'base64')); }
+            // With the ground cover on: its instances, and the time to make every chunk round the camera again from nothing
+            const cover = await page.evaluate(() => {
+                if (typeof GroundCover === 'undefined' || !GroundCover.scatter) return null;
+                GroundCover.scatter.chunks.clear();
+                const t0 = performance.now();
+                GroundCover.frame(game);
+                const ms = performance.now() - t0, s = GroundCover.scatter;
+                return { tufts: s.tufts.count, stones: s.stones.count, chunks: s.chunks.size, buildMs: Math.round(ms), perChunkMs: Math.round(ms / s.chunks.size * 10) / 10 };
+            });
+            // --ride-cost: the ground cover's share of each frame over 10 s ridden at 30 m/s from here (then put back)
+            if (cover && flag('ride-cost')) cover.ride = await page.evaluate(() => {
+                const v = game.vehicle, from = v.routeS, frame = GroundCover.frame, times = [];
+                GroundCover.frame = g => { const t = performance.now(); frame.call(GroundCover, g); times.push(performance.now() - t); };
+                twistyDev.autopilot({ speed: 30 });
+                for (let i = 0; i < 600 && !v.crashed; i++) twistyDev.step(1);
+                GroundCover.frame = frame;
+                times.sort((a, b) => a - b);
+                const at = q => Math.round(times[Math.floor(q * (times.length - 1))] * 100) / 100;
+                return { metres: Math.round(v.routeS - from), frames: times.length, medianMs: at(0.5), p95Ms: at(0.95), worstMs: at(1) };
+            });
+            rows.push({ s, camera, spec, ...at, cover, stats: result });
+        }
+        await page.evaluate(() => { delete window.__ngFirst; delete window.__ngMask; });
+    }
+    return { rows };
+};
+
+// world-cover-off: the ground cover effect off draws the frame the game drew before it, to the bit. At each station
+// of --at (default 1600) the view rides there; the default effects are put in force with groundCover turned on and off
+// again (so its textures and scatter were made and dropped), the frame is read, then the land's program is compiled
+// again without the ground cover's code at all (GroundCover.bare) and the frame read again: the two must be the same
+WORLD_PROBES.push('world-cover-off');
+WORLD['world-cover-off'] = async (page) => {
+    const stations = option('at') ? option('at').split(',').map(Number) : [1600];
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+    const failures = [], rows = [];
+    for (const s of stations) {
+        await page.evaluate(async (placeSource, pilotSource, s) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const v = game.vehicle;
+            game.cameraMode = 2;
+            await placeAt(Math.max(10, s - 140));
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+            let ticks = 0;
+            while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+        }, placeAt.toString(), pilotWorld.toString(), s);
+        const shot = async (bare) => {
+            const inScene = await page.evaluate((bare) => {
+                GroundCover.bare = bare;
+                TerrainMesh.sharedMaterial.needsUpdate = true;
+                game.graphics.render(game.scene, game.camera);
+                game.graphics.render(game.scene, game.camera);
+                let found = false;
+                game.scene.traverse(o => { if (o.name === 'ground-cover') found = true; });
+                return found;
+            }, bare);
+            return { png: await page.screenshot({ encoding: 'base64' }), inScene };
+        };
+        let set = await page.evaluate(effectsSpec, 'ao=low,landDetail,shadows,reflections,grade,streaks,edgeBlur,groundCover');
+        if (set.error) return { error: set.error };
+        await page.evaluate(() => { game.graphics.render(game.scene, game.camera); });
+        set = await page.evaluate(effectsSpec, 'default');
+        const off = await shot(false);
+        const bare = await shot(true);
+        await page.evaluate(() => { GroundCover.bare = false; TerrainMesh.sharedMaterial.needsUpdate = true; });
+        const diff = await page.evaluate(async (a, b) => {
+            const read = async data => {
+                const image = new Image();
+                image.src = `data:image/png;base64,${data}`;
+                await image.decode();
+                const canvas = document.createElement('canvas');
+                canvas.width = image.width; canvas.height = image.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, 0, 0);
+                return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            };
+            const p = await read(a), q = await read(b);
+            let differ = 0, most = 0;
+            for (let i = 0; i < p.length; i++) if (p[i] !== q[i]) { differ++; most = Math.max(most, Math.abs(p[i] - q[i])); }
+            return { bytes: p.length, differ, most };
+        }, off.png, bare.png);
+        rows.push({ s, inForce: set.inForce.groundCover, scatterInScene: off.inScene, ...diff });
+        if (diff.differ) failures.push(`s ${s}: ${diff.differ} bytes differ (most ${diff.most}) between the ground cover off and the land without it`);
+        if (off.inScene) failures.push(`s ${s}: the ground cover's scatter is in the scene with the effect off`);
+    }
+    return { rows, failures };
+};
 
 // world-toggle-ride: rides from the start to --to (default 7600) in the view --camera (default 3, the high view), and
 // every --every frames (default 240; 0 never) switches --toggle (default landDetail) on or off the way the settings

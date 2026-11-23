@@ -59,6 +59,16 @@ const Effects = {
             apply: (game, level) => { if (typeof GroundTex !== 'undefined') GroundTex.set(game, level); }
         },
         {
+            // A prototype: off in every preset until the owner has seen it. cpu: the draw submit; making the chunks as the
+            // bike moves takes up to GroundCover.BUDGET_MS of a frame's update besides
+            id: 'groundCover', name: 'Ground cover', group: 2,
+            hint: 'Close by, grass clumps, soil and small stones on the ground, and tufts and stones standing on it',
+            levels: ['off', 'on'], default: 'off', presets: { low: 'off', balanced: 'off', high: 'off' },
+            cost: { on: 1.3 }, cpu: 0.1, needs: null,
+            switch: 'GroundCover.set(game, on): a uniform the land tiles read (LandShade.patch, detail), and the instanced tufts and stones round the camera (GroundCover.frame); no material compiles again',
+            apply: (game, level) => { if (typeof GroundCover !== 'undefined') GroundCover.set(game, level === 'on'); }
+        },
+        {
             id: 'shadows', name: 'Sun shadows', group: 3,
             hint: 'Two cascades: sharp near the bike, soft far off; trees, walls and houses throw shadows',
             levels: ['off', 'on'], default: 'on', presets: { low: 'off', balanced: 'off', high: 'on' },
@@ -215,6 +225,7 @@ const Effects = {
     frame(game) {
         const levels = game.effectLevels || {};
         if (levels.reflections === 'on') Effects.coatVehicles(game);
+        if (levels.groundCover === 'on' && typeof GroundCover !== 'undefined') GroundCover.frame(game);
         const g = game.graphics;
         if (!g || !g.setGlare) return;
         // The glare and the wet road by the night and the rain (WeatherSystem.mix, RoadSurface.wetness on a world)
