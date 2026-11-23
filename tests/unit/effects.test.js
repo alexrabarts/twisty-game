@@ -75,10 +75,21 @@ describe('the ladder and the effects', () => {
     const inForce = level => Effects.resolve(Object.fromEntries(Effects.LIST.map(e => [e.id, e.levels[e.levels.length - 1]])), Quality.LEVELS[level].effectMs);
     const cost = levels => Effects.LIST.map(e => Effects.costOf(e, levels[e.id]));
 
-    test('no effect in force costs more than its level\'s share', () => {
+    test('no effect in force costs more than its level\'s share, but a level a row keeps by name', () => {
         for (let level = 0; level <= top; level++) {
-            for (const c of cost(inForce(level))) expect(c).toBeLessThanOrEqual(Quality.LEVELS[level].effectMs);
+            const levels = inForce(level);
+            for (const effect of Effects.LIST) {
+                const at = levels[effect.id];
+                expect(Effects.keepOf(effect, at)).toBeLessThanOrEqual(Quality.LEVELS[level].effectMs);
+                // Kept past its cost only where the row says so, and never under the cost of a level below it
+                if (Effects.costOf(effect, at) > Quality.LEVELS[level].effectMs) expect(effect.keep[at]).toBeDefined();
+            }
         }
+        // The ground texture's Medium is the one kept past its cost: on to the Rich level, off the Full one
+        const rich = Quality.LEVELS.findIndex(l => l.id === 'rich'), full = Quality.LEVELS.findIndex(l => l.id === 'full');
+        expect(inForce(rich).groundTex).toBe('medium');
+        expect(inForce(full).groundTex).toBe('low');
+        expect(inForce(full - 1).groundTex).toBe('off');
     });
 
     test('a step down never turns an effect on, and the top holds every effect at its highest', () => {

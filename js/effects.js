@@ -22,7 +22,7 @@ const Effects = {
     DEFAULT_PRESET: 'auto',
 
     // The level names a row may use, in order of cost, and how the dialog writes them
-    LABELS: { off: 'Off', on: 'On', low: 'Low', high: 'High' },
+    LABELS: { off: 'Off', on: 'On', low: 'Low', medium: 'Medium', high: 'High' },
 
     // cost: the ms each level adds to the drawing of a world frame (the draw and the wait for the GPU), the most of three
     // places: `node tools/terrain-check.mjs world-quality --world tremola --gpu --desk --measure --effects high` at
@@ -45,6 +45,18 @@ const Effects = {
             cost: { on: 0.1 }, cpu: 0, needs: null,
             switch: 'LandDetail.set(on): a uniform the land tiles read (LandShade.patch, detail); no material compiles again',
             apply: (game, level) => { if (typeof LandDetail !== 'undefined') LandDetail.set(level === 'on'); }
+        },
+        {
+            id: 'groundTex', name: 'Ground texture', group: 2,
+            hint: 'Fields of soil, stones and dry grass (Low), grass, soil, scree and rock textures (Medium), and their relief near the bike (High)',
+            levels: ['off', 'low', 'medium', 'high'], default: 'medium', presets: { low: 'off', balanced: 'medium', high: 'high' },
+            cost: { low: 0.3, medium: 1.7, high: 2.3 }, cpu: 0, needs: null,
+            // Auto keeps Medium to the Rich level, not by its cost alone: it is the most look for its time of any effect
+            // (.agent/system/graphics.md, "The effects on the ladder")
+            keep: { medium: 0.7 },
+            switch: 'GroundTex.set(game, level): a uniform the land tiles read (LandShade.patch, detail); the textures are made once, in a worker, as the settings are read; no material compiles again',
+            prepare: (game, level) => { if (level !== 'off' && typeof GroundTex !== 'undefined') GroundTex.prepare(game); },
+            apply: (game, level) => { if (typeof GroundTex !== 'undefined') GroundTex.set(game, level); }
         },
         {
             id: 'shadows', name: 'Sun shadows', group: 3,
@@ -113,6 +125,24 @@ const Effects = {
         return level === 'off' ? 0 : Number(effect.cost[level]) || 0;
     },
 
+    // The ms a level counts as on the ladder: its cost, or its `keep` where a row keeps a level longer than its cost
+    // alone would (the look it gives for its time); never less than the cost of the level under it
+    keepOf(effect, level) {
+        return effect.keep && effect.keep[level] !== undefined ? effect.keep[level] : Effects.costOf(effect, level);
+    },
+
+    // Before any level is in force: what a row must make for the level chosen (textures, in the background)
+    prepare(game, chosen) {
+        for (const effect of Effects.LIST) {
+            if (typeof effect.prepare !== 'function') continue;
+            try {
+                effect.prepare(game, chosen[effect.id] || effect.default);
+            } catch (error) {
+                console.error(`Effects: ${effect.id} could not prepare:`, error);
+            }
+        }
+    },
+
     // The problems of one row as a list of text, empty for a valid row
     problems(effect) {
         const out = [];
@@ -126,6 +156,11 @@ const Effects = {
         }
         for (const level of (levels || []).slice(1)) {
             if (!effect.cost || !(Number(effect.cost[level]) >= 0)) out.push(`${effect.id}: no measured cost for ${level}`);
+        }
+        // A level kept longer than its cost must still cost the ladder more than the level under it
+        for (const [k, level] of (levels || []).entries()) {
+            if (k > 1 && Effects.keepOf(effect, level) < Effects.keepOf(effect, levels[k - 1])) out.push(`${effect.id}: ${level} is kept for less than the level under it`);
+            if (effect.keep && effect.keep[level] !== undefined && effect.keep[level] > Effects.costOf(effect, level)) out.push(`${effect.id}: ${level} is kept for more than it costs`);
         }
         if (typeof effect.apply !== 'function') out.push(`${effect.id}: no apply`);
         if (typeof effect.switch !== 'string' || !effect.switch) out.push(`${effect.id}: no text of how it is switched`);
@@ -148,7 +183,7 @@ const Effects = {
         const out = {};
         for (const effect of Effects.LIST) {
             let at = Math.max(0, effect.levels.indexOf(chosen[effect.id] || effect.default));
-            while (at > 0 && Effects.costOf(effect, effect.levels[at]) > effectMs) at--;
+            while (at > 0 && Effects.keepOf(effect, effect.levels[at]) > effectMs) at--;
             out[effect.id] = supported(effect) ? effect.levels[at] : 'off';
         }
         return out;

@@ -721,6 +721,8 @@ class Game {
     // Each effect at its level in force: under Auto no effect costs more than the ladder level's effectMs
     applyEffects() {
         if (!this.effects || !this.quality || !this.graphics || typeof Effects === 'undefined') return;
+        // What the chosen levels need is made first (in the background), so the ladder never waits for it
+        Effects.prepare(this, this.effects.chosen);
         Effects.apply(this, this.effectsInForce());
     }
 

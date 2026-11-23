@@ -32,7 +32,14 @@ const LandDetail = {
             u.tLandGrass.value = LandDetail.texture(LandDetail.grass());
             u.tLandRock.value = LandDetail.texture(LandDetail.rock());
         }
-        u.uLandDetail.value = on ? 1 : 0;
+        LandDetail.on = on;
+        u.uLandDetail.value = on && !LandDetail.held ? 1 : 0;
+    },
+
+    // Held off while another effect draws the near ground at this scale (GroundTex's texture set), and back after
+    hold(held) {
+        LandDetail.held = held;
+        LandDetail.uniforms.uLandDetail.value = LandDetail.on && !held ? 1 : 0;
     },
 
     // A seeded generator (mulberry32), so the textures are the same on every page

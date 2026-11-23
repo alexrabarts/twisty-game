@@ -402,9 +402,12 @@ reflectedLight.indirectDiffuse *= uIndirect;
             LandShade.injectHaze(shader);
             // The near grain of the land detail effect (js/world/landdetail.js), read only while it is on
             if (detail && typeof LandDetail !== 'undefined') LandDetail.inject(shader);
+            // The near ground of the ground texture effect (js/world/groundtex.js), read only while it is on
+            if (detail && typeof GroundTex !== 'undefined' && !GroundTex.bare) GroundTex.inject(shader);
         };
         const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${floor === 1 ? '' : `-${floor}`}${detail && typeof LandDetail !== 'undefined' ? '-grain' : ''}`;
-        material.customProgramCacheKey = () => key;
+        // Read at each compile: GroundTex.bare leaves the ground texture out (a probe's check that off is the old land)
+        material.customProgramCacheKey = () => `${key}${detail && typeof GroundTex !== 'undefined' && !GroundTex.bare ? '-ground' : ''}`;
         material.needsUpdate = true;
         return material;
     }

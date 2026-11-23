@@ -30,6 +30,8 @@ To add a setting, add a column to every level and a row to `Quality.FIELDS`, the
 
 The effects (`js/effects.js`, rules in [rendering.md](rendering.md), "Effects") are not columns of the levels: each effect carries its own measured cost, and a level carries `effectMs`. `Game.applyEffects` puts in force, for each effect, the highest level up to the player's choice that costs no more than `effectMs` of the level in force (Auto only). So as the frame time steps the ladder down, the step to Rich gives up the effects over 0.7 ms (the high occlusion and the edge smoothing), the step to Full those over 0.4 ms (the shadow cascades and the low occlusion), and only the step from Full to High loses pixel ratio; there only the effects of 0.2 ms or less are left (land detail, reflections, grade, glare, speed blur).
 
+A row may keep a level longer than its cost (`keep` in `Effects.LIST`, read by `Effects.keepOf`): that level counts as `keep` ms on the ladder. Only the ground texture does: its Medium (1.7 ms) counts as 0.7, because it is the most look for its time of any effect. So the ground texture goes down in three steps: the step to Rich gives up its High (the relief, 0.6 ms, hard to see) with the high occlusion and the edge smoothing; the step to Full gives up Medium for Low (1.4 ms, the largest saving there) with the shadow cascades and the low occlusion; the step from Full to High turns Low (0.3 ms) off with the pixel ratio. A step is a uniform: the land's program is the same at every level, the textures are made once in a worker as the settings are read (`Effects.prepare`), so a step never compiles or makes a texture. The ladder's own rules (two slow windows down, eight good windows up, the grace and the retry block) are the hysteresis; the ground texture adds none. `world-ground-flip` rides 2.2 km in the high view while the dialog and the ladder flip it 480 times: no land tile is lost or left undrawn, the land always has a program, and the only frames over 50 ms are the ones that compile (the first change of the cascades).
+
 ## What the effects cost
 
 Measured with `node tools/terrain-check.mjs world-quality --world tremola --gpu --desk --measure --rounds 3 --effects high` (and `--effects edgeBlur,ao=low` for the low occlusion) on the Mac mini (`heavy -c browser`, an Apple M-series GPU) at a 1440 x 900 view at a device pixel ratio of 2 (2880 x 1800 pixels, as the owner's screen), in the chase view at s 1319 by day, at s 7900 in the rain (`--at 7900`) and at night (`--night`). Each effect in force is turned off against the frame with every effect on (`fx-<id>`). The number is the draw's time (submit and the wait for the GPU, `savedRenderMs`); the browser's GPU timer read up to eight times as much on that machine and its sums did not add up, so it is not used. Runs drift by about 0.2 ms.
@@ -45,15 +47,18 @@ Measured with `node tools/terrain-check.mjs world-quality --world tremola --gpu 
 | Colour grade | 0 | 0 | 0.2 | 0.2 |
 | Land detail | 0.1 | 0 | 0 | 0.1 |
 | Reflections | 0.1 | 0 | 0.1 | 0.1 |
+| Ground texture low / medium / high (`world-quality --desk --measure --parts fx-groundTex` at s 1319, 1600 and 2600 by day, the most of the three; at the Balanced preset's 2160 x 1350 Medium is 0.7 to 1.0) | 0.3 / 1.7 / 2.3 | | | 0.3 / 1.7 / 2.3 (Medium kept as 0.7) |
 
 The whole frame with every effect on drew in 11.6 ms by day. For scale: the pixel ratio from 2 to 1.5 saved 3.4 ms, the samples 1.9 ms, the shadows 1.5 ms.
 
-The defaults (the occlusion low, land detail, the cascades, reflections, grade, glare and speed blur on; edge smoothing off, since the 4 samples already smooth the edges) and the frame time (`world-frametime`, the median of five places, on the mini):
+The defaults (the occlusion low, land detail, the cascades, reflections, grade, glare and speed blur on, the ground texture at Medium; edge smoothing off, since the 4 samples already smooth the edges) and the frame time (`world-frametime`, the median of five places, on the mini):
 
 | View | Before the effects | With the defaults |
 |---|---|---|
 | 960 x 540 | 4.3 and 4.4 ms (worst 6.6, 5.9) | 5.0 and 5.3 ms (worst 6.9, 7.1) |
 | 2880 x 1800 (`--desk`) | 14.2 and 13.7 ms (worst 20.7, 18.8) | 15.7 and 15.4 ms (worst 21.3, 17.9) |
+
+With the ground texture at Medium (the default since it came in) the 2880 x 1800 median was 17.3 ms (worst 22.5) against 16.2 ms (worst 20.4) with it off, one run after the other on the mini. That is over the 16.7 ms budget but under the 20.8 ms that steps the ladder down, so on that machine Auto holds the top level. A slower GPU steps down to Rich and then Full, where Medium and then the textures go first.
 
 Two pairs, each taken one after the other on the same machine. So the defaults keep the owner's size of frame inside the 16.7 ms budget on that GPU, and Auto takes the dearer ones off first where it is slower. No effect adds a triangle to the scene: `world-budget` counted 457,633 before and 457,722 with the defaults at s 2000 (the window was over 450,000 there before the effects too; a third run from another folder counted 532,892 with the game before the effects, so the count moves with the order the models load in). `tests/unit/effects.test.js` holds that no effect in force costs more than its level's share, that a step down never turns an effect on, and that the three dearest effects are off at every level under the full pixel ratio.
 

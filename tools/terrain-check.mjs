@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-toggle-ride world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
+//   world-toggle-ride world-ground-flip world-ground-scan world-ground-off world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
@@ -22,6 +22,9 @@
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--measure [--rounds N]] [--out <dir>]   (each part of a world frame, or each graphics level: frame time and picture)
 //   node tools/terrain-check.mjs world-toggle-ride --world tremola --gpu [--to s] [--camera N] [--toggle id] [--every N] [--levels] [--skip N] [--drop-after s [--restore-ms N]] [--out <dir>]   (a ride switching an effect, or losing its tile data: the near land drawn, or the land's rule kept)
+//   node tools/terrain-check.mjs world-ground-scan --world tremola --gpu --desk [--at s,s] [--camera N] [--specs "a;b"] [--straight] [--bins] [--out <dir>]   (the near land by distance: luma, fine contrast, change against the first spec and its steps)
+//   node tools/terrain-check.mjs world-ground-off --world tremola --gpu [--at s,s]   (the ground texture off draws the land as without it, to the bit)
+//   node tools/terrain-check.mjs world-ground-flip --world tremola --gpu [--from s] [--metres m] [--camera N] [--every frames] [--reach m]   (the land stays whole while the ground texture and the ladder level flip mid-ride)
 // Every world probe takes --effects off|default|high|id=level,... (the effects of js/effects.js in force, the ladder held
 //   at its top so Auto caps none; `off` and a list start from every effect off), --desk (a 1440 x 900 view at a device
 //   pixel ratio of 2, as the owner's screen) and --night (the light and sky of night, Game.setTimeOfDay)
@@ -2214,6 +2217,20 @@ async function pageLook(page) {
 function effectsSpec(spec) {
     if (typeof Effects === 'undefined' || !game.effects) return { error: 'this page has no effects (js/effects.js)' };
     const settings = game.effects;
+    // preset:<id>[,id=level...]: a preset as the dialog sets it (a fixed one holds its ladder level), then those effects
+    if (spec.startsWith('preset:')) {
+        const [head, ...pairs] = spec.split(',');
+        try {
+            settings.setPreset(head.slice(7));
+            pairs.forEach(pair => { const [id, level] = pair.split('='); settings.set(id, level || 'on'); });
+        } catch (error) {
+            return { error: error.message };
+        }
+        game.applyGraphicsSettings();
+        Effects.frame(game);
+        game.graphics.easeEffects(10);
+        return { preset: settings.preset, level: Quality.LEVELS[game.quality.level].id, inForce: { ...game.effectLevels } };
+    }
     try {
         if (spec === 'high') settings.setPreset('high');
         else {
@@ -3577,13 +3594,15 @@ const WORLD = {
         const tag = option('tag') || 'fx';
         const specs = (option('specs') || 'off;high').split(';');
         const stations = option('at') ? option('at').split(',').map(Number) : [150];
+        // --camera N: the view mode (Game.cameraModes; 1 the helmet, 2 the chase view, the default)
+        const camera = Number(option('camera') || 2);
         await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
         const files = [];
         for (const s of stations) {
-            const at = await page.evaluate(async (placeSource, pilotSource, s) => {
+            const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = 2;
+                game.cameraMode = camera;
                 await placeAt(Math.max(10, s - 140));
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -3591,7 +3610,7 @@ const WORLD = {
                 while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
                 game.environment.streamer.pump(Infinity);
                 return { s: Math.round(v.routeS), crashed: v.crashed };
-            }, placeAt.toString(), pilotWorld.toString(), s);
+            }, placeAt.toString(), pilotWorld.toString(), s, camera);
             // --car: a car with its lamps on stands --car m ahead in the other lane, facing the bike (the glare's subject)
             if (option('car')) await page.evaluate((ahead) => {
                 const car = game.traffic && game.traffic.cars && game.traffic.cars.find(c => c.carGroup && c.carGroup.parent);
@@ -3612,7 +3631,7 @@ const WORLD = {
                 // Two draws: the first compiles what the spec changed and draws the far shadow map
                 await page.evaluate(() => { game.graphics.render(game.scene, game.camera); game.graphics.render(game.scene, game.camera); });
                 const name = spec.replace(/[^a-z0-9=,]+/gi, '').replace(/[=,]/g, '-');
-                const file = join(out, `${tag}-s${s}-${name}.png`);
+                const file = join(out, `${tag}-s${s}${camera === 2 ? '' : `-c${camera}`}-${name}.png`);
                 await page.screenshot({ path: file });
                 files.push({ file, spec, ...at, inForce: set.inForce });
                 // --ao-buffer: the occlusion itself (white open, black closed), from the blurred half-resolution target
@@ -6273,6 +6292,344 @@ async function junctionEye(placeSource, eye) {
     return png;
 }
 
+// world-ground-scan: the near land by distance, for the ground texture effect (js/world/groundtex.js). At each station of
+// --at the view rides there (--camera N, default 2 the chase view), one pass draws the camera's distance to the land
+// (nothing for anything in front of it), then for each spec of --specs the frame is drawn and read. In bins of 2 m
+// from 2 to 120 m it gives the land's mean luma and fine contrast (the mean absolute difference of a pixel from the
+// mean of its 3 x 3: a smear scores near 0), and against the first spec the mean change of luma and of contrast. A
+// line that moves with the bike is a step in that change at one distance: `steps` is the largest jump of the change
+// of luma and of contrast between two bins next to each other (bins of 3000 pixels or more). --straight also gives
+// the straightest 400 m of the ride. --out saves the frames
+WORLD_PROBES.push('world-ground-scan');
+WORLD['world-ground-scan'] = async (page) => {
+    const specs = (option('specs') || 'default;off').split(';');
+    const stations = option('at') ? option('at').split(',').map(Number) : [1600];
+    const camera = Number(option('camera') || 2);
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+    const rows = [];
+    const straight = flag('straight') ? await page.evaluate(() => {
+        const route = game.environment.route, every = 10, span = 400, heads = [];
+        for (let s = 0; s < route.length; s += every) heads.push(route.sample(s, {}).heading);
+        const turn = heads.slice(1).map((h, i) => Math.abs(Math.atan2(Math.sin(h - heads[i]), Math.cos(h - heads[i]))));
+        const n = span / every;
+        let best = null;
+        for (let i = 0; i + n <= turn.length; i++) {
+            let sum = 0;
+            for (let k = i; k < i + n; k++) sum += turn[k];
+            if (!best || sum < best.turnDeg) best = { from: i * every, to: i * every + span, turnDeg: sum };
+        }
+        best.turnDeg = Math.round(best.turnDeg * 180 / Math.PI * 10) / 10;
+        return best;
+    }) : null;
+    for (const s of stations) {
+        const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const v = game.vehicle;
+            game.cameraMode = camera;
+            await placeAt(Math.max(10, s - 140));
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+            let ticks = 0;
+            while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+            return { s: Math.round(v.routeS), crashed: v.crashed };
+        }, placeAt.toString(), pilotWorld.toString(), s, camera);
+        await page.evaluate(() => {
+            const r = game.graphics.renderer;
+            const size = r.getDrawingBufferSize(new THREE.Vector2());
+            const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.FloatType });
+            const vertex = '#include <common>\nvarying vec3 vView;\nvoid main() {\n#include <begin_vertex>\n#include <project_vertex>\nvView = mvPosition.xyz;\n}';
+            const make = land => new THREE.ShaderMaterial({ side: THREE.DoubleSide, vertexShader: vertex, fragmentShader: `varying vec3 vView;\nvoid main() { gl_FragColor = vec4(${land ? 'length(vView)' : '-1.0'}, 0.0, 0.0, 1.0); }` });
+            const landMat = make(true), other = make(false);
+            const swapped = [], hidden = [];
+            game.scene.traverse(o => {
+                if ((o.isPoints || o.isLine || o.isSprite) && o.visible) { hidden.push(o); o.visible = false; return; }
+                if (!o.isMesh || o.isSkinnedMesh) return;
+                swapped.push([o, o.material]);
+                o.material = o.material === TerrainMesh.sharedMaterial ? landMat : other;
+            });
+            const background = game.scene.background, fog = game.scene.fog;
+            game.scene.background = null; game.scene.fog = null;
+            r.setRenderTarget(target);
+            r.setClearColor(0x000000, 1);
+            r.clear();
+            r.render(game.scene, game.camera);
+            r.setRenderTarget(null);
+            game.scene.background = background; game.scene.fog = fog;
+            swapped.forEach(([o, m]) => { o.material = m; });
+            hidden.forEach(o => { o.visible = true; });
+            const data = new Float32Array(size.x * size.y * 4);
+            r.readRenderTargetPixels(target, 0, 0, size.x, size.y, data);
+            target.dispose();
+            const out = new Float32Array(size.x * size.y);
+            for (let y = 0; y < size.y; y++) for (let x = 0; x < size.x; x++) out[(size.y - 1 - y) * size.x + x] = data[(y * size.x + x) * 4];
+            window.__gsMask = { w: size.x, h: size.y, d: out };
+        });
+        for (const spec of specs) {
+            const set = await page.evaluate(effectsSpec, spec);
+            if (set.error) return { error: `${spec}: ${set.error}` };
+            await page.evaluate(() => { game.graphics.render(game.scene, game.camera); game.graphics.render(game.scene, game.camera); });
+            const png = await page.screenshot({ encoding: 'base64' });
+            const result = await page.evaluate(async (data, first) => {
+                const image = new Image();
+                image.src = `data:image/png;base64,${data}`;
+                await image.decode();
+                const { w, h, d: dist } = window.__gsMask;
+                const canvas = document.createElement('canvas');
+                canvas.width = w; canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, 0, 0, w, h);
+                const px = ctx.getImageData(0, 0, w, h).data;
+                const luma = new Float32Array(w * h);
+                for (let i = 0; i < w * h; i++) luma[i] = 0.2126 * px[i * 4] + 0.7152 * px[i * 4 + 1] + 0.0722 * px[i * 4 + 2];
+                const fine = new Float32Array(w * h);
+                for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+                    const i = y * w + x;
+                    let sum = 0;
+                    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) sum += luma[i + dy * w + dx];
+                    fine[i] = Math.abs(luma[i] - sum / 9);
+                }
+                const bins = Array.from({ length: 59 }, (_, k) => ({ from: 2 + 2 * k, n: 0, luma: 0, fine: 0, dLuma: 0, dFine: 0 }));
+                const before = first ? null : window.__gsFirst;
+                for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+                    const i = y * w + x, m = dist[i];
+                    if (!(m >= 2 && m < 120)) continue;
+                    const b = bins[Math.floor((m - 2) / 2)];
+                    b.n++; b.luma += luma[i]; b.fine += fine[i];
+                    if (before) { b.dLuma += luma[i] - before.luma[i]; b.dFine += fine[i] - before.fine[i]; }
+                }
+                if (first) window.__gsFirst = { luma, fine };
+                const out = bins.filter(b => b.n > 0).map(b => ({ from: b.from, n: b.n, luma: Math.round(b.luma / b.n * 10) / 10, fine: Math.round(b.fine / b.n * 100) / 100, dLuma: before ? Math.round(b.dLuma / b.n * 100) / 100 : null, dFine: before ? Math.round(b.dFine / b.n * 100) / 100 : null }));
+                const big = out.filter(b => b.n >= 3000);
+                let stepLuma = 0, stepFine = 0, stepAt = null;
+                for (let k = 1; k < big.length; k++) {
+                    if (big[k].from !== big[k - 1].from + 2 || !before) continue;
+                    const dl = Math.abs(big[k].dLuma - big[k - 1].dLuma), df = Math.abs(big[k].dFine - big[k - 1].dFine);
+                    if (dl > stepLuma) { stepLuma = dl; stepAt = big[k].from; }
+                    stepFine = Math.max(stepFine, df);
+                }
+                // Bands, for the table
+                const bands = [[2, 5], [5, 15], [15, 30], [30, 60], [60, 120]].map(([a, z]) => {
+                    const inBand = out.filter(b => b.from >= a - 1 && b.from < z);
+                    const n = inBand.reduce((t, b) => t + b.n, 0);
+                    const avg = key => (n && inBand[0][key] !== null ? Math.round(inBand.reduce((t, b) => t + b[key] * b.n, 0) / n * 100) / 100 : null);
+                    return { band: `${a}-${z}`, n, luma: avg('luma'), fine: avg('fine'), dLuma: avg('dLuma'), dFine: avg('dFine') };
+                });
+                return { bands, steps: before ? { luma: Math.round(stepLuma * 100) / 100, fine: Math.round(stepFine * 100) / 100, lumaAtM: stepAt } : null, bins: out };
+            }, png, rows.filter(r => r.s === at.s && r.camera === camera).length === 0);
+            const out = option('out');
+            if (out) mkdirSync(out, { recursive: true });
+            if (out && !flag('no-frames')) { writeFileSync(join(out, `gs-s${s}-c${camera}-${spec.replace(/[^a-z0-9=,]+/gi, '').replace(/[=,]/g, '-')}.png`), Buffer.from(png, 'base64')); }
+            rows.push({ s: at.s, station: s, camera, spec, crashed: at.crashed, ...result, bins: flag('bins') ? result.bins : undefined });
+        }
+        await page.evaluate(() => { delete window.__gsFirst; delete window.__gsMask; });
+    }
+    const memory = await page.evaluate(() => (typeof GroundTex !== 'undefined' ? { bytes: GroundTex.bytes(), madeMs: Math.round(GroundTex.madeMs || 0) } : null));
+    // The bins are long: with --out the whole result is written there too, as scan.json
+    if (option('out')) writeFileSync(join(option('out'), 'scan.json'), JSON.stringify({ straight, memory, rows }));
+    return { straight, memory, rows: rows.map(row => ({ ...row, bins: undefined })) };
+};
+
+// world-ground-off: the ground texture effect off draws the frame the game drew before it, to the bit. At each station
+// of --at (default 1600) the default effects are put in force with groundTex at high and then off again (the others
+// at their defaults) (so its
+// textures were made), the frame is read, then the land's program is compiled again without the effect's code at all
+// (GroundTex.bare) and the frame is read again: the two must be the same
+WORLD_PROBES.push('world-ground-off');
+WORLD['world-ground-off'] = async (page) => {
+    const stations = option('at') ? option('at').split(',').map(Number) : [1600];
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+    const failures = [], rows = [];
+    for (const s of stations) {
+        await page.evaluate(async (placeSource, pilotSource, s) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const v = game.vehicle;
+            game.cameraMode = 2;
+            await placeAt(Math.max(10, s - 140));
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+            let ticks = 0;
+            while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+        }, placeAt.toString(), pilotWorld.toString(), s);
+        const shot = async (bare) => {
+            await page.evaluate((bare) => {
+                GroundTex.bare = bare;
+                TerrainMesh.sharedMaterial.needsUpdate = true;
+                game.graphics.render(game.scene, game.camera);
+                game.graphics.render(game.scene, game.camera);
+            }, bare);
+            return page.screenshot({ encoding: 'base64' });
+        };
+        let set = await page.evaluate(effectsSpec, 'ao=low,landDetail,shadows,reflections,grade,streaks,edgeBlur,groundTex=high');
+        if (set.error) return { error: set.error };
+        await page.evaluate(() => { game.graphics.render(game.scene, game.camera); });
+        // The defaults but the ground texture off
+        set = await page.evaluate(effectsSpec, 'ao=low,landDetail,shadows,reflections,grade,streaks,edgeBlur,groundTex=off');
+        // Drawn until two frames in a row are the same: just after a change the scene still settles (an eased grade,
+        // a sky bake), and that is not the effect's code
+        let off = await shot(false), settled = false;
+        for (let k = 0; k < 8 && !settled; k++) {
+            const next = await shot(false);
+            settled = next === off;
+            off = next;
+        }
+        const bare = await shot(true);
+        // The same frame again with the effect's code, to tell a change of the scene between draws from the code's
+        const again = await shot(false);
+        await page.evaluate(() => { GroundTex.bare = false; TerrainMesh.sharedMaterial.needsUpdate = true; });
+        const compare = (a, b) => page.evaluate(async (a, b) => {
+            const read = async data => {
+                const image = new Image();
+                image.src = `data:image/png;base64,${data}`;
+                await image.decode();
+                const canvas = document.createElement('canvas');
+                canvas.width = image.width; canvas.height = image.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(image, 0, 0);
+                return ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            };
+            const p = await read(a), q = await read(b);
+            let differ = 0, most = 0;
+            for (let i = 0; i < p.length; i++) if (p[i] !== q[i]) { differ++; most = Math.max(most, Math.abs(p[i] - q[i])); }
+            return { bytes: p.length, differ, most };
+        }, a, b);
+        const diff = await compare(off, bare), drift = await compare(off, again);
+        rows.push({ s, inForce: set.inForce.groundTex, landDetail: set.inForce.landDetail, settled, ...diff, sameCodeDiffer: drift.differ });
+        if (diff.differ) failures.push(`s ${s}: ${diff.differ} bytes differ (most ${diff.most}) between the ground texture off and the land without it`);
+    }
+    return { rows, failures };
+};
+
+// world-ground-flip: the land is drawn whole while the graphics change under it. The bike rides --metres (default 2200)
+// from --from (default 300) in the view of --camera (default 3, the high view) while, every --every frames (default
+// 15), the ground texture is set as the settings dialog sets it (each level in turn) or the ladder is fixed at another
+// level and released as Auto does (Rich, Full, High, Ultra: the shadows, the occlusion and the ground texture all
+// change). Each frame is an update and a draw, and then every land tile (TerrainMesh's material) is read:
+//   gone      a point on a 16 m grid within --reach m (default 300) that a visible land tile in the scene covered on
+//             the frame before and none covers now
+//   undrawn   a visible land tile in the scene within --reach m whose bounds the camera sees and that was not drawn
+//   program   the land's material has no program, or one that did not compile, after the draw
+//   stalls    frames over 50 ms after the first, with the programs compiled in that frame (a level that turns the
+//             cascades on or off compiles every material again; that is the ladder's, not the ground's)
+WORLD_PROBES.push('world-ground-flip');
+WORLD['world-ground-flip'] = async (page) => {
+    const from = Number(option('from') || 300), metres = Number(option('metres') || 2200);
+    const camera = Number(option('camera') || 3), every = Number(option('every') || 15), reach = Number(option('reach') || 300);
+    const result = await page.evaluate(async (placeSource, from, metres, camera, every, reach) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const v = game.vehicle, r = game.renderer, gl = r.getContext(), pixel = new Uint8Array(4);
+        game.cameraMode = camera;
+        await placeAt(from);
+        game.worldCamera.reset(v.yawAngle);
+        twistyDev.autopilot({ speed: 22 });
+        const land = TerrainMesh.material();
+        const drawn = new Set();
+        const hooked = new WeakSet();
+        const hook = mesh => {
+            if (hooked.has(mesh)) return;
+            hooked.add(mesh);
+            const before = mesh.onBeforeRender;
+            mesh.onBeforeRender = function (...args) { drawn.add(this); return before.apply(this, args); };
+        };
+        const levels = ['off', 'low', 'medium', 'high'];
+        const ladder = ['rich', 'full', 'high', 'ultra'];
+        let flips = 0, dialogFlips = 0, autoFlips = 0;
+        const flip = k => {
+            flips++;
+            if (k % 2 === 0) {
+                game.effects.set('groundTex', levels[(k / 2) % levels.length]);
+                game.applyGraphicsSettings();
+                dialogFlips++;
+            } else {
+                const id = ladder[((k - 1) / 2) % ladder.length];
+                if (id === 'ultra') game.quality.release(performance.now());
+                else game.quality.fix(id, performance.now());
+                game.applyEffects();
+                autoFlips++;
+            }
+        };
+        const failures = [], stalls = [], frames = [];
+        let covered = null, frame = 0, gone = 0, undrawn = 0, programs = 0, landTilesSeen = 0;
+        const frustum = new THREE.Frustum(), m = new THREE.Matrix4(), box = new THREE.Box3();
+        const start = v.routeS;
+        while (v.routeS < start + metres && frame < 20000 && !v.crashed) {
+            const levelsBefore = { ...game.effectLevels }, ladderBefore = game.quality.level;
+            const kind = frame > 0 && frame % every === 0 ? ((frame / every) % 2 === 0 ? 'dialog' : 'ladder') : null;
+            if (kind) flip(frame / every);
+            const changed = Object.keys(game.effectLevels).filter(id => game.effectLevels[id] !== levelsBefore[id]).map(id => `${id} ${levelsBefore[id]}>${game.effectLevels[id]}`);
+            if (game.quality.level !== ladderBefore) changed.unshift(`ladder ${ladderBefore}>${game.quality.level}`);
+            const programsBefore = r.info.programs.length;
+            drawn.clear();
+            const t0 = performance.now();
+            twistyDev.step(1);
+            // Every land tile is watched before the draw, a tile the step streamed in too (a cheap walk of the scene)
+            game.scene.traverse(o => { if (o.isMesh && o.material === land) hook(o); });
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+            const ms = performance.now() - t0;
+            const compiled = r.info.programs.length - programsBefore;
+            frames.push(ms);
+            if (frame > 0 && ms > 50) stalls.push({ frame, s: Math.round(v.routeS), ms: Math.round(ms), compiled, kind, changed, ground: game.effectLevels.groundTex });
+            // The land tiles in the scene
+            const tiles = [];
+            game.scene.traverse(o => { if (o.isMesh && o.material === land) tiles.push(o); });
+            tiles.forEach(hook);
+            const shown = tiles.filter(o => { for (let n = o; n; n = n.parent) if (!n.visible) return false; return true; });
+            const p = v.position;
+            m.multiplyMatrices(game.camera.projectionMatrix, game.camera.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(m);
+            const near = [];
+            for (const o of shown) {
+                if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+                box.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld);
+                const dx = Math.max(box.min.x - p.x, 0, p.x - box.max.x), dz = Math.max(box.min.z - p.z, 0, p.z - box.max.z);
+                if (Math.hypot(dx, dz) > reach) continue;
+                near.push({ o, min: box.min.clone(), max: box.max.clone() });
+                if (frustum.intersectsBox(box) && !drawn.has(o)) {
+                    undrawn++;
+                    if (failures.length < 30) failures.push(`frame ${frame} s ${Math.round(v.routeS)}: ${o.name} is shown and in view but was not drawn`);
+                }
+            }
+            landTilesSeen = Math.max(landTilesSeen, near.length);
+            // Coverage of a 16 m grid round the bike
+            const now = new Set();
+            const gx = Math.round(p.x / 16), gz = Math.round(p.z / 16), cells = Math.ceil(reach / 16);
+            for (let i = -cells; i <= cells; i++) for (let j = -cells; j <= cells; j++) {
+                if (Math.hypot(i, j) * 16 > reach - 16) continue;
+                const x = (gx + i) * 16, z = (gz + j) * 16;
+                if (near.some(t => x >= t.min.x && x <= t.max.x && z >= t.min.z && z <= t.max.z)) now.add(`${gx + i},${gz + j}`);
+            }
+            if (covered) for (const key of covered) {
+                const [i, j] = key.split(',').map(Number);
+                if (Math.hypot(i * 16 - p.x, j * 16 - p.z) > reach - 32) continue;
+                if (!now.has(key)) {
+                    gone++;
+                    if (failures.length < 30) failures.push(`frame ${frame} s ${Math.round(v.routeS)}: the land at ${i * 16}, ${j * 16} was drawn on the frame before and is not now`);
+                }
+            }
+            covered = now;
+            const props = r.properties.get(land);
+            const program = props && props.currentProgram;
+            if (!program || (program.diagnostics && program.diagnostics.runnable === false)) {
+                programs++;
+                if (failures.length < 30) failures.push(`frame ${frame}: the land has no program that runs`);
+            }
+            frame++;
+        }
+        frames.sort((a, b) => a - b);
+        const q = k => Math.round(frames[Math.floor(k * (frames.length - 1))] * 10) / 10;
+        game.quality.release(performance.now());
+        return { from: Math.round(start), to: Math.round(v.routeS), crashed: v.crashed, frames: frame, flips, dialogFlips, autoFlips, landTilesSeen, gone, undrawn, programs, stallsOver50: stalls.length, stallsWithoutCompile: stalls.filter(s => s.compiled === 0).length, stallsOnLadderSteps: stalls.filter(s => s.changed.some(c => c.startsWith('ladder'))).length, stallsOther: stalls.filter(s => s.compiled === 0 && !s.changed.some(c => c.startsWith('ladder'))).length, groundStalls: stalls.filter(s => s.compiled === 0 && s.changed.length && s.changed.every(c => c.startsWith('groundTex'))).length, stalls: stalls.slice(0, 40), medianMs: q(0.5), p95Ms: q(0.95), worstMs: q(1), ready: typeof GroundTex !== 'undefined' ? GroundTex.state : null, failures };
+    }, placeAt.toString(), from, metres, camera, every, reach);
+    const failures = [...(result.failures || [])];
+    // A ladder step that resizes the targets is the ladder's own cost (reported, not failed); any other frame over
+    // 50 ms that compiles nothing is a fault, and one where only the ground texture changed is this effect's
+    if (result.stallsOther) failures.push(`${result.stallsOther} frames over 50 ms with no program compiled and no ladder step`);
+    if (result.groundStalls) failures.push(`${result.groundStalls} frames over 50 ms where only the ground texture changed`);
+    return { ...result, failures };
+};
+
 // world-quality: the cost of each part of a world frame, and the frame at each level of the quality ladder (js/quality.js),
 // at one place (--at s, QUALITY_AT_SHARE of the ride by default) from the chase view. --phone rides a phone-class page:
 // a 390 x 844 view at a device pixel ratio of 3, touch, and the CPU slowed QUALITY_THROTTLE times (--throttle N). A frame
@@ -6295,7 +6652,7 @@ WORLD['world-quality'] = async (page) => {
         await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
     }
     // The level the device was given at the start, before anything here fixes one
-    const startLevel = await page.evaluate(() => (game.quality ? { level: game.quality.level, id: Quality.LEVELS[game.quality.level].id, device: game.quality.device } : null));
+    const startLevel = await page.evaluate(() => (game.quality ? { level: game.quality.level, id: Quality.LEVELS[game.quality.level].id, device: game.quality.device, groundTex: (game.effectLevels || {}).groundTex } : null));
     const client = await page.target().createCDPSession();
     const frames = Number(option('frames') || 40);
     const at = await page.evaluate(async (placeSource, share, atS) => {
@@ -6315,7 +6672,8 @@ WORLD['world-quality'] = async (page) => {
     const result = { at, phone, throttle, frames, startLevel, view: await page.evaluate(() => ({ css: [innerWidth, innerHeight], dpr: devicePixelRatio, buffer: [game.renderer.domElement.width, game.renderer.domElement.height] })) };
     if (flag('measure')) {
         // Each part against the full frame measured just before it, round after round: the machine's drift cancels
-        const parts = await page.evaluate(qualityParts);
+        // --parts a,b: only those parts (fx-<id> for an effect)
+        const parts = option('parts') ? option('parts').split(',') : await page.evaluate(qualityParts);
         const rounds = Number(option('rounds') || 3);
         const keys = ['updateMs', 'submitMs', 'waitMs', 'renderMs', 'gpuMs', 'frameMs'];
         const median = list => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)];
@@ -6359,7 +6717,8 @@ WORLD['world-quality'] = async (page) => {
             // A level's settings are in force from the next frame: one drawn frame compiles what it changed
             game.graphics.render(game.scene, game.camera);
             const L = Quality.LEVELS[lvl];
-            return { id: L.id, buffer: [game.renderer.domElement.width, game.renderer.domElement.height], shadow: game.renderer.shadowMap.enabled ? game.directionalLight.shadow.mapSize.x : 0, samples: game.graphics.sceneTarget ? game.graphics.sceneTarget.samples : null };
+            game.applyEffects();
+            return { id: L.id, groundTex: (game.effectLevels || {}).groundTex, buffer: [game.renderer.domElement.width, game.renderer.domElement.height], shadow: game.renderer.shadowMap.enabled ? game.directionalLight.shadow.mapSize.x : 0, samples: game.graphics.sceneTarget ? game.graphics.sceneTarget.samples : null };
         }, level);
         await slow(throttle);
         const timing = await time();
