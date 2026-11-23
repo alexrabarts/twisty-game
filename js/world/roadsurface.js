@@ -602,19 +602,25 @@ attribute float roadBase;
 attribute vec3 roadArc;
 attribute vec2 roadPlane;
 attribute vec3 roadPad;
+attribute vec4 roadCutL;
+attribute vec4 roadCutR;
 varying vec3 vRoadPad;
 varying vec4 vRoad;
 varying vec4 vEdge;
 varying float vRoadBase;
 varying vec3 vRoadArc;
-varying vec2 vRoadPlane;`);
+varying vec2 vRoadPlane;
+varying vec4 vRoadCutL;
+varying vec4 vRoadCutR;`);
         shader.vertexShader = RoadSurface.swap(shader.vertexShader, '#include <uv_vertex>', `#include <uv_vertex>
 vRoad = road;
 vEdge = edge;
 vRoadBase = roadBase;
 vRoadArc = roadArc;
 vRoadPlane = roadPlane;
-vRoadPad = roadPad;`);
+vRoadPad = roadPad;
+vRoadCutL = roadCutL;
+vRoadCutR = roadCutR;`);
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <common>', `#include <common>
 uniform sampler2D roadSettMap;
 uniform sampler2D roadSettNormal;
@@ -635,6 +641,8 @@ varying float vRoadBase;
 varying vec3 vRoadArc;
 varying vec2 vRoadPlane;
 varying vec3 vRoadPad;
+varying vec4 vRoadCutL;
+varying vec4 vRoadCutR;
 // RoadSurface.footprint: metres of texture a pixel covers once the anisotropic filter has done what it can
 float roadFootprint(vec2 gx, vec2 gy) {
     float a = length(gx), b = length(gy);
@@ -900,10 +908,20 @@ if (roadWet > 0.0) {
 }
 
 // The edge of the carriageway: ragged, a lighter worn strip, then gravel, then grass thinning out over the ground.
-// Where a side road leaves (vEdge.z, w) or the road is on a bridge or in a tunnel (vRoad.w), the verge is not drawn
-// or is hard
+// Where a junction's paving lies beside the road (vEdge.z, w) or the road is on a bridge or in a tunnel (vRoad.w), the
+// verge is not drawn or is hard
 float roadMouth = roadSide < 0.0 ? vEdge.z : vEdge.w;
-float roadRag = (landNoise(vec2(roadS * 1.3, roadSide * 13.0)) - 0.5) * 0.22 + (landNoise(vec2(roadS * 7.0, roadSide * 7.0)) - 0.5) * 0.08;
+// Where a side road crosses the verge (vRoadCutL, R: the metres along it covers at the carriageway's edge, x to z, and
+// at the verge's outer edge, y to w) the verge is not drawn and the edge is not ragged: the side road's surface drawn
+// under it meets the carriageway, and between the two lines the cut runs as a mitre from the side road's carriageway
+// to its verge's outer edge, so the two verges' gravel meets at the corner
+vec4 roadCut = roadSide < 0.0 ? vRoadCutL : vRoadCutR;
+float roadCutT = clamp((abs(roadLat) - roadHalf) / ${f(RoadSurface.VERGE_M)}, 0.0, 1.0);
+float roadCutLo = mix(roadCut.x, roadCut.y, roadCutT), roadCutHi = mix(roadCut.z, roadCut.w, roadCutT);
+float roadCutFw = max(roadFwAlong, 0.001);
+float roadCutIn = step(roadCutLo, roadCutHi - 0.001) * smoothstep(roadCutLo - roadCutFw, roadCutLo + roadCutFw, roadAlong) * (1.0 - smoothstep(roadCutHi - roadCutFw, roadCutHi + roadCutFw, roadAlong));
+roadMouth = max(roadMouth, roadCutIn);
+float roadRag = ((landNoise(vec2(roadS * 1.3, roadSide * 13.0)) - 0.5) * 0.22 + (landNoise(vec2(roadS * 7.0, roadSide * 7.0)) - 0.5) * 0.08) * (1.0 - roadCutIn);
 float roadOut = abs(roadLat) - roadHalf - roadRag * (1.0 - vRoad.w);
 float roadWorn = smoothstep(-0.5, 0.0, roadOut) * (1.0 - step(0.0, roadOut));
 roadAlbedo = mix(roadAlbedo, roadAlbedo * 1.12 + roadGravel * 0.08, roadWorn * (1.0 - roadSett) * 0.7);

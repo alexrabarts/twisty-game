@@ -77,8 +77,9 @@ class WorldGround extends Ground {
         }
     }
 
-    // The road height of a side road whose band holds (x, z), or null
-    sideRoadY(x, z) {
+    // The road height of a side road whose band holds (x, z), or null; `more` metres past each carriageway edge count as
+    // inside (its verge)
+    sideRoadY(x, z, more = 0) {
         if (!this.sideSegments.length) return null;
         const list = this.sideHash.get(Math.floor(x / WorldGround.SIDE_HASH_M) * 65536 + Math.floor(z / WorldGround.SIDE_HASH_M));
         if (!list) return null;
@@ -90,7 +91,7 @@ class WorldGround extends Ground {
             const run = dx * dx + dz * dz;
             const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - g.x0) * dx + (z - g.z0) * dz) / run));
             const d = Math.hypot(g.x0 + dx * t - x, g.z0 + dz * t - z);
-            if (d <= (g.w0 + (g.w1 - g.w0) * t) / 2 && d < bestD) {
+            if (d <= (g.w0 + (g.w1 - g.w0) * t) / 2 + more && d < bestD) {
                 bestD = d;
                 best = g.y0 + (g.y1 - g.y0) * t;
             }

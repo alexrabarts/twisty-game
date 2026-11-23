@@ -54,12 +54,26 @@ class WorldEnvironment {
     static get SIDE_ROW_MIN_M() { return 1.5; }
     // A side road's wall that ends this near the end of one of the ride's is joined to it (wallJoins)
     static get WALL_JOIN_M() { return 8; }
-    // A junction's paving reaches from the ride's edge to the side roads over gaps no wider than this (edgeFoot `gore`)
+    // A junction's paving reaches from the ride's edge to the side roads over gaps no wider than this (edgeFoot `gore`),
+    // while the side road stands no more than SIDE_GORE_STEP_M under the ride's height and SIDE_GORE_RISE_M over it: it
+    // ramps up to a side road that climbs away beside the ride (held to SIDE_GORE_STEP_M either way, a side road that
+    // climbs away left a dip of land between the two, 0.3 m under both, where the junction is one surface)
     static get SIDE_GORE_M() { return 4.5; }
     static get SIDE_GORE_REACH_M() { return 16; }
     static get SIDE_GORE_STEP_M() { return 0.25; }
+    static get SIDE_GORE_RISE_M() { return 0.5; }
     // The paving lies this far under the roads' surfaces: under the deepest side ribbon in the band (sideHold)
     static get SIDE_GORE_UNDER_M() { return 0.13; }
+    // A side road within this of the ride's height under the ride's verge keeps the ground the ride lays there under it
+    // (edgeFoot `sideUnder`)
+    static get SIDE_UNDER_NEAR_M() { return 0.5; }
+    // The ride's verge where a side road crosses it (mouthCut): read on a grid of this many metres, for the rows within
+    // MOUTH_CUT_ROWS of a mouth the junction's record names, each row carrying the crossings within MOUTH_CUT_PAD_M of
+    // it (more than the longest gap between two rows), each read whole up to MOUTH_CUT_REACH_M past that
+    static get MOUTH_CUT_STEP_M() { return 0.1; }
+    static get MOUTH_CUT_ROWS() { return 4; }
+    static get MOUTH_CUT_PAD_M() { return 8; }
+    static get MOUTH_CUT_REACH_M() { return 24; }
     // A side road that crosses over the ride is lifted to stand this far over the ride's surface (a deck's soffit at
     // Carriageways.HEADROOM_M over the ride, the deck under it, a hand's breadth spare), ramped in over at most
     // SIDE_RAMP_M either side and never past its own edge's ends, so it meets its neighbours where it did
@@ -445,6 +459,9 @@ class WorldEnvironment {
         if (!this.goreRows) this.goreRows = new Map();
         const points = this.route.points;
         // (kept for each row until the side roads in residence change: setSideEdges)
+        // (and the stretch of its verge a side road crosses, mouthCut: read near a junction's mouth, by the junction's
+        // record within a few rows, or where the paving lies)
+        const near = (i, flag) => { for (let j = Math.max(0, i - WorldEnvironment.MOUTH_CUT_ROWS); j <= Math.min(points.length - 1, i + WorldEnvironment.MOUTH_CUT_ROWS); j++) if (styles[j][flag]) return true; return false; };
         const goreAt = i => {
             const p = points[i];
             if (!p || p.bits & 7) return null;
@@ -453,6 +470,7 @@ class WorldEnvironment {
                 const cos = Math.cos(p.heading), sin = Math.sin(p.heading), half = p.width / 2;
                 const edges = { l: [p.x - half * cos, p.y, p.z + half * sin, -cos, sin], r: [p.x + half * cos, p.y, p.z - half * sin, cos, -sin] };
                 held = { l: !!foot.gore(...edges.l), r: !!foot.gore(...edges.r), edges };
+                held.cut = { l: held.l || near(i, 'mouthL') ? this.mouthCut(i, -1) : null, r: held.r || near(i, 'mouthR') ? this.mouthCut(i, 1) : null };
                 this.goreRows.set(i, held);
             }
             return held;
@@ -469,19 +487,59 @@ class WorldEnvironment {
             else if ([points[from + i - 1], points[from + i + 1]].some(q => q && (q.padN || q.padP))) row.keep = true;
             const held = goreAt(from + i);
             if (!held) return row;
-            for (const [key, flag] of [['l', 'mouthL'], ['r', 'mouthR']]) {
+            for (const [key, flag, paved, cut] of [['l', 'mouthL', 'pavedL', 'cutL'], ['r', 'mouthR', 'pavedR', 'cutR']]) {
                 // The row before or after the paving, where the ride's wall ends and turns to join the side road's
                 // (`joined`), has no verge either: the corner behind the join is paved, and a verge over paving was a
                 // pale slab in the junction's corner
                 const next = [goreAt(from + i - 1), goreAt(from + i + 1)].some(n => n && n[key]);
-                if (held[key] || (next && foot.joined && foot.joined(held.edges[key][0], held.edges[key][1], held.edges[key][2]))) row[flag] = true;
+                if (held[key] || (next && foot.joined && foot.joined(held.edges[key][0], held.edges[key][1], held.edges[key][2]))) row[flag] = row[paved] = true;
+                if (held.cut[key]) row[cut] = held.cut[key];
             }
             return row;
         });
     }
 
+    // The stretch of the ride's verge on side `sign` (-1 the -lateral side, the rows' `l`) that the side roads cross near
+    // row i, as they are drawn (WorldGround.sideRoadY, at about the ride's height): [a0, a1, b0, b1] in the ride's
+    // metres, their carriageway from a0 to b0 just past the carriageway's edge, and their carriageway and verge from a1
+    // to b1 at the verge's outer edge; or null. The ride's verge is not drawn over it (RoadSurface's `roadCut`): drawn
+    // across a mouth to the rows the junction's record names, the verge lay over the side road as a strip of gravel and
+    // grass, and left out by whole rows it showed the ground beside the side road. Each crossing is read whole on a
+    // fixed grid of metres (MOUTH_CUT_STEP_M), so every row near one mouth carries the same stretch and the cut between
+    // two rows is one line
+    mouthCut(i, sign) {
+        const s = this.route.sArray[i], step = WorldEnvironment.MOUTH_CUT_STEP_M, pad = WorldEnvironment.MOUTH_CUT_PAD_M, reach = WorldEnvironment.MOUTH_CUT_REACH_M;
+        const at = {};
+        // The runs of metres along the ride where a side road lies `out` past the carriageway's edge (its carriageway,
+        // and `more` past its edges), the union of those within `pad` of the row
+        const runs = (out, more) => {
+            const list = [];
+            let open = null;
+            for (let g = Math.floor((s - pad - reach) / step); g <= Math.ceil((s + pad + reach) / step); g++) {
+                const t = g * step;
+                let hit = false;
+                if (t >= 0 && t <= this.route.length) {
+                    this.route.sample(t, at);
+                    const o = sign * (at.width / 2 + out);
+                    const side = this.ground.sideRoadY(at.x + o * Math.cos(at.heading), at.z - o * Math.sin(at.heading), more);
+                    hit = side !== null && Math.abs(side - at.y) <= WorldEnvironment.SIDE_UNDER_NEAR_M;
+                }
+                if (hit) { if (open) open[1] = t; else open = [t, t]; }
+                else if (open) { list.push(open); open = null; }
+            }
+            if (open) list.push(open);
+            const kept = list.filter(r => r[1] >= s - pad && r[0] <= s + pad);
+            return kept.length ? [Math.min(...kept.map(r => r[0])) - step / 2, Math.max(...kept.map(r => r[1])) + step / 2] : null;
+        };
+        const V = RoadSurface.VERGE_M;
+        const inner = runs(0.02, 0), outer = runs(V - 0.02, V);
+        if (!inner && !outer) return null;
+        const a = inner || outer, b = outer || inner;
+        return [a[0], b[0], a[1], b[1]];
+    }
+
     // The markings of every ride row, made once: the rules of RoadSurface.styles on the real road's class, then each
-    // side road's mouth, where the edge line on that side is broken and the verge is left out
+    // side road's mouth, where the edge line on that side is broken
     roadStyles() {
         if (this.styles) return this.styles;
         const points = this.route.points;
@@ -1219,19 +1277,45 @@ class WorldEnvironment {
                 out[i] = { ...out[i], own, y: out[i].y + delta * share, keep: true, ...(d <= WorldEnvironment.SIDE_FILL_M ? { fill: true } : {}) };
             }
         });
-        // A `fill` row whose carriageway edge lies within SIDE_GORE_M of the ride's has no verge on that side
-        // (`mouthL`, `mouthR`, as at any mouth): the junction's paving lies there, not a strip of grass
+        // A `fill` row whose carriageway edge faces the ride's within SIDE_GORE_M has no verge on that side (`mouthL`,
+        // `mouthR`, as at any mouth): the junction's paving lies there, not a strip of grass. Faces it: out from the edge
+        // square to the side road the ride's carriageway lies within SIDE_GORE_M (a road that leaves at a shallow angle
+        // runs beside the ride). An edge only near the ride is no such side: a road that leaves square to the ride has
+        // the ride along its edges, not in front of them, and its verge goes on round the corner to the ride's (left out
+        // within SIDE_GORE_M of the ride's edge, it stopped short of the ride with a straight cut). An edge in the ride's
+        // carriageway is under the ride and keeps its verge too
         const near = this.sideNear || (this.sideNear = {});
-        return out.map(row => {
-            if (!row.fill) return row;
+        const inRide = (x, z, y) => {
+            for (const i of this.route.hashCandidates(x, z, 1)) {
+                this.route.nearestSegment(x, z, i, i, near);
+                if (near.distance <= near.width / 2 && Math.abs(near.y - y) <= 1.5) return true;
+            }
+            return false;
+        };
+        // (an edge in the ride's carriageway takes the way of the nearest fill row whose edge is clear of it: a road
+        // that leaves at a shallow angle has no verge toward the ride from the node on, and one that leaves square
+        // keeps it; read row by row, the verge faded in over the row from the node and lay across the junction as a
+        // pale strip)
+        const faces = out.map(row => {
+            if (!row.fill) return null;
             const flags = {};
             for (const [key, sign] of [['mouthL', -1], ['mouthR', 1]]) {
-                const x = row.x + sign * (row.width / 2) * Math.cos(row.heading), z = row.z - sign * (row.width / 2) * Math.sin(row.heading);
-                for (const i of this.route.hashCandidates(x, z, 1)) {
-                    this.route.nearestSegment(x, z, i, i, near);
-                    if (near.distance - near.width / 2 <= WorldEnvironment.SIDE_GORE_M && Math.abs(near.y - row.y) <= 1.5) { flags[key] = true; break; }
-                }
+                const ox = sign * Math.cos(row.heading), oz = -sign * Math.sin(row.heading);
+                const x = row.x + ox * row.width / 2, z = row.z + oz * row.width / 2;
+                if (inRide(x, z, row.y)) { flags[key] = null; continue; }
+                flags[key] = false;
+                for (let d = 0.5; d <= WorldEnvironment.SIDE_GORE_M; d += 0.5) if (inRide(x + ox * d, z + oz * d, row.y)) { flags[key] = true; break; }
             }
+            return flags;
+        });
+        const clear = (i, key) => {
+            for (let d = 1; d < out.length; d++) for (const j of [i - d, i + d]) if (faces[j] && faces[j][key] !== null) return faces[j][key];
+            return false;
+        };
+        return out.map((row, i) => {
+            if (!faces[i]) return row;
+            const flags = {};
+            for (const key of ['mouthL', 'mouthR']) if (faces[i][key] === null ? clear(i, key) : faces[i][key]) flags[key] = true;
             return flags.mouthL || flags.mouthR ? { ...row, ...flags } : row;
         });
     }
@@ -1530,6 +1614,20 @@ class WorldEnvironment {
         };
         // The land as it is drawn at (x, z), for a slope's foot between two rows (RoadMesh.edgeWorks)
         foot.land = landDrawn;
+        // The lowest side road surface as drawn (WorldGround.sideRoadY: its carriageway, and `more` past its edges) within
+        // `r` of (x, z), at about the ride's height y there, or null: the ground the ride lays under its verge stays
+        // under it (RoadMesh.edgeWorks). A side road in a mouth is held a few centimetres under the ride (sideHold), and
+        // the ground under the ride's verge, at its own depth under the ride, stood over it as a strip of grass
+        if (aprons) foot.sideUnder = (x, y, z, r, more = 0) => {
+            let low = null;
+            for (const share of [0, 0.5, 1]) {
+                for (let a = 0; a < (share ? 8 : 1); a++) {
+                    const side = this.ground.sideRoadY(x + r * share * Math.cos(a * Math.PI / 4), z + r * share * Math.sin(a * Math.PI / 4), more);
+                    if (side !== null && side < y + WorldEnvironment.SIDE_UNDER_NEAR_M && side > y - WorldEnvironment.SIDE_UNDER_NEAR_M && (low === null || side < low)) low = side;
+                }
+            }
+            return low;
+        };
         if (aprons) foot.mouth = atMouth;
         // Whether a side road's edge point stands in the ride's carriageway or its verge, with its coping over the
         // ride's surface there: the side road's walls keep out of the ride's road (RoadMesh.atMouth). Where a side road
@@ -1555,14 +1653,17 @@ class WorldEnvironment {
                 if (side === null) continue;
                 // Only while the side road stands at the ride's height (in the band and at the foot of its ramp): past
                 // that the two are two roads again, each with its own edge
-                if (Math.abs(side - y) > WorldEnvironment.SIDE_GORE_STEP_M) break;
+                if (y - side > WorldEnvironment.SIDE_GORE_STEP_M || side - y > WorldEnvironment.SIDE_GORE_RISE_M) break;
                 last = d;
                 lastY = lastY === null ? side : Math.min(lastY, side);
                 // (under the importer's own height for that road too, where it lies lower: the structures' guard
                 // reads a side road there, Carriageways)
                 this.carriageways.each(px, pz, 0, r => { if (r.depth >= 0 && Math.abs(r.y - y) <= 1.5 && r.y < lastY) lastY = r.y; }, true);
             }
-            return lastY === null ? null : [x + ox * last, Math.min(lastY, y) - WorldEnvironment.SIDE_GORE_UNDER_M, z + oz * last];
+            // (under the side road where it stands over the ride: held at the ride's height, the paving lay under a side
+            // road that climbs away beside the ride by up to SIDE_GORE_STEP_M more than its own depth, a dip between the
+            // two roads)
+            return lastY === null ? null : [x + ox * last, lastY - WorldEnvironment.SIDE_GORE_UNDER_M, z + oz * last];
         };
         // Whether a side road's wall ends within reach of the place (x, y, z), the end of one of the ride's walls: the
         // two are joined there (wallJoins), and the ride lays no slope from its wall's end into the mouth
@@ -1844,6 +1945,9 @@ class WorldEnvironment {
             if (others.length < 2) continue;
             const at = rows[first];
             for (const other of others) {
+                // (not the ride: where a side road leaves it, the ride's verge is left out over the side road's, and the
+                // side road's verge goes on to the ride's carriageway: RoadSurface's `roadCut`)
+                if (other.onRide) continue;
                 const samples = this.graph.samples(other.id);
                 if (!samples || samples.x.length < 2) continue;
                 // The way the other road leaves the node

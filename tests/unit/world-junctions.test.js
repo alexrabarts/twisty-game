@@ -6,6 +6,9 @@
 //   1. the side road meets the ride: no step and no hole in its surface from the node out to 40 m, no land over it
 //   2. no deck or parapet of the side road in its mouth (the first 12 m past the ride's edge)
 //   3. no edge of the side road hangs open over the ground in its mouth
+//   4. the side road and the ride are one surface in the mouth: nothing drawn over the side road (the ground under the
+//      ride's verge, the ride's verge where its shader draws it, the land), and no gap under the line between the two
+//      where they lie beside each other at one height
 //
 // Before the side roads were made to meet the ride (8fa83fe): 8 of the 26 side roads had a step of 0.23 to 0.81 m
 // where they left the ride's band, 2 had land over them there, 3 left the ride on a deck and 13 had an open edge.
@@ -77,6 +80,13 @@ describe('the Tremola slice: every side road meets the ride', () => {
 
     test('no edge of a side road hangs open in its mouth', () => {
         if (found.open.length > JUNCTION_LIMITS.open) throw new Error(`${found.open.length} side roads whose edge hangs open in their mouth:\n${list(found.open)}`);
+    });
+
+    test('the side road and the ride are one surface in the mouth: nothing drawn over the side road, no gap between the two', () => {
+        const faults = [];
+        if (found.strips.length > JUNCTION_LIMITS.strips) faults.push(`${found.strips.length} side roads with land, laid ground or the ride's verge drawn over them in their mouth:\n${list(found.strips)}`);
+        if (found.pits.length > JUNCTION_LIMITS.pits) faults.push(`${found.pits.length} side roads with a gap under the line between them and the ride beside them:\n${list(found.pits)}`);
+        if (faults.length) throw new Error(faults.join('\n'));
     });
 
     test('no ground a road lays stands as a face beside the other road in a mouth', () => {

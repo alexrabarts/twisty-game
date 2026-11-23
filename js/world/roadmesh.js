@@ -58,6 +58,12 @@ class RoadMesh {
     static get APRON_UNDER_M() { return 0.06; }
     // The longest an apron strip runs along the edge (a far ribbon's rows are up to 16 m apart)
     static get APRON_STRIP_M() { return 2; }
+    // Near a side road the ground under the verge is laid in pieces this long, each held under that road (edgeWorks)
+    static get SIDE_UNDER_PIECE_M() { return 1; }
+    // and this far under that road's centre line (its surface is held to the ride's at each of its own points, so it
+    // lies a few centimetres lower toward an edge than on its centre: WorldEnvironment.sideHold)
+    static get SIDE_GROUND_UNDER_M() { return 0.12; }
+    static get SIDE_UNDER_REACH_M() { return 0.3; }
     static get PARAPET_W_M() { return 0.3; }
     // A side road's pier: width across the road, depth along it, and how far its foot goes into the land
     static get PIER_W_M() { return 1.6; }
@@ -374,6 +380,7 @@ class RoadMesh {
         const road = new Float32Array(n * W * 4);
         const edge = new Float32Array(n * W * 4);
         const pad = new Float32Array(n * W * 3);
+        const cutL = new Float32Array(n * W * 4), cutR = new Float32Array(n * W * 4);
         let clamped = 0;
         const sides = [];
         const sett = RoadMesh.feather(rows, along, row => (row.bits & 8) !== 0);
@@ -398,9 +405,15 @@ class RoadMesh {
                 plane.set([p.x - origin[0], p.z - origin[1]], at * 2);
                 road.set([h, sett[k], row.centre ?? C.none, built[k]], at * 4);
                 pad.set([row.padN || 0, row.padP || 0, padKind], at * 3);
-                // Across a side road's mouth a continuous edge line is broken (RoadSurface.MARKINGS.mouth)
+                // Across a side road's mouth a continuous edge line is broken (RoadSurface.MARKINGS.mouth). The ride's
+                // verge is left out where a junction's paving lies beside the row (`pavedL`, `pavedR`) and where a side
+                // road crosses it (`cutL`, `cutR`: the ride's metres it covers, WorldEnvironment.rowsOf, in this ribbon's
+                // metres); a side road's at the mouths its rows name (`mouthL`, `mouthR`)
                 const brokenAt = (line, mouth) => (mouth && line === RoadSurface.EDGE.solid ? RoadSurface.EDGE.broken : line ?? 0);
-                edge.set([brokenAt(row.left, row.mouthL), brokenAt(row.right, row.mouthR), row.mouthL ? 1 : 0, row.mouthR ? 1 : 0], at * 4);
+                const bare = side ? [row.mouthL, row.mouthR] : [row.pavedL, row.pavedR];
+                edge.set([brokenAt(row.left, row.mouthL), brokenAt(row.right, row.mouthR), bare[0] ? 1 : 0, bare[1] ? 1 : 0], at * 4);
+                if (row.cutL) cutL.set(row.cutL.map(m => m - base * period), at * 4);
+                if (row.cutR) cutR.set(row.cutR.map(m => m - base * period), at * 4);
             });
             const l = k * W * 3, r = (k * W + W - 1) * 3;
             const at = c => [positions[c], positions[c + 1], positions[c + 2]];
@@ -424,6 +437,8 @@ class RoadMesh {
         geometry.setAttribute('road', new THREE.BufferAttribute(road, 4));
         geometry.setAttribute('edge', new THREE.BufferAttribute(edge, 4));
         geometry.setAttribute('roadPad', new THREE.BufferAttribute(pad, 3));
+        geometry.setAttribute('roadCutL', new THREE.BufferAttribute(cutL, 4));
+        geometry.setAttribute('roadCutR', new THREE.BufferAttribute(cutR, 4));
         geometry.setAttribute('roadBase', new THREE.BufferAttribute(new Float32Array(n * W).fill(base), 1));
         geometry.setIndex(index);
         geometry.computeVertexNormals();
@@ -1230,6 +1245,30 @@ class RoadMesh {
         // two roads it stood as a dark face down into it, seen from the ride)
         let onRoad = false;
         const seated = q => { if (onRoad) return q; const land = landAt ? landAt(q[0], q[2]) : null; return land !== null && q[1] > land + 0.05 ? [q[0], land - 0.2, q[2]] : q; };
+        // The ground under the verge lies APRON_UNDER_M under the road, SIDE_GROUND_UNDER_M under any side road's
+        // carriageway that lies there and APRON_UNDER_M under its verge (as drawn: `foot.sideUnder`, the lowest within
+        // `r`). A side road in a mouth is held a few centimetres under the ride, and ground at the ride's own depth stood
+        // over it as a strip of grass across the mouth (held as deep under the side road's verge, it lay a groove between
+        // the two roads where that verge is left out). Near one the ground is laid in pieces of SIDE_UNDER_PIECE_M along the edge, shorter
+        // than a side road's verge is wide, so a piece that runs from the ride's depth down to the side road's does so
+        // over the side road's verge, never over its carriageway (each corner read within SIDE_UNDER_REACH_M: read over a
+        // whole piece, the ground beside a side road lay 0.3 m under the ride's edge where the verge is left out)
+        const sideUnder = foot && foot.sideUnder ? foot.sideUnder : null;
+        const underAt = (p, r = RoadMesh.SIDE_UNDER_REACH_M) => {
+            const road = sideUnder ? sideUnder(p[0], p[1], p[2], r) : null, verge = sideUnder ? sideUnder(p[0], p[1], p[2], r, RoadSurface.VERGE_M) : null;
+            return [p[0], Math.min(p[1] - RoadMesh.APRON_UNDER_M, road === null ? Infinity : road - RoadMesh.SIDE_GROUND_UNDER_M, verge === null ? Infinity : verge - RoadMesh.APRON_UNDER_M), p[2]];
+        };
+        const groundUnder = (out, ca, cb, pb, pa, ta, tb) => {
+            const near = !!sideUnder && [ca, cb, pa, pb].some(p => sideUnder(p[0], p[1], p[2], 2 * RoadMesh.SIDE_UNDER_PIECE_M, RoadSurface.VERGE_M) !== null);
+            if (!near) { const down = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]]; RoadMesh.quad(out, down(ca), down(cb), down(pb), down(pa), [ta, tb, tb, ta]); return; }
+            const mix = (u, v, t) => u.map((c, i) => c + (v[i] - c) * t);
+            const n = Math.max(1, Math.ceil(Math.max(Math.hypot(cb[0] - ca[0], cb[2] - ca[2]), Math.hypot(pb[0] - pa[0], pb[2] - pa[2])) / RoadMesh.SIDE_UNDER_PIECE_M));
+            for (let i = 0; i < n; i++) {
+                const c0 = mix(ca, cb, i / n), c1 = mix(ca, cb, (i + 1) / n), p0 = mix(pa, pb, i / n), p1 = mix(pa, pb, (i + 1) / n);
+                const t0 = mix(ta, tb, i / n), t1 = mix(ta, tb, (i + 1) / n);
+                RoadMesh.quad(out, underAt(c0), underAt(c1), underAt(p1), underAt(p0), [t0, t1, t1, t0]);
+            }
+        };
         const W = RoadMesh.PARAPET_W_M, H = RoadMesh.PARAPET_H_M;
         // How deep the works of kind f standing at p (out along o) reach into another carriageway, or null where they
         // keep out of every one: the edge, the parapet's inner face and, for an apron, its slope out to its foot
@@ -1391,11 +1430,16 @@ class RoadMesh {
             const apronOut = drawn ? apron : junk, wallOut = drawn ? wall : junk, stoneOut = drawn ? stone : junk, pavingOut = drawn ? paving : junk;
             let soffit = false;
             for (const key of ['l', 'r']) {
-                const ga = paved[k] && paved[k][key], gb = paved[k + 1] && paved[k + 1][key];
+                // (none from a lone paved row, with no paved row either side: where a side road that leaves at an angle
+                // crosses the gore's line at one row, it laid a triangle of paving into the corner beside the side road
+                // either way, a dark triangle in the mouth at km 1.8)
+                const lone = j => !(paved[j - 1] && paved[j - 1][key]) && !(paved[j + 1] && paved[j + 1][key]);
+                const ga = paved[k] && paved[k][key] && !lone(k) ? paved[k][key] : null, gb = paved[k + 1] && paved[k + 1][key] && !lone(k + 1) ? paved[k + 1][key] : null;
                 if (ga || gb) {
-                    // (level with its far edge where that lies lower: never over a side road that falls away)
-                    const low = Math.min(ga ? ga[1] : Infinity, gb ? gb[1] : Infinity);
-                    const edge = j => { const c = sides[j][key + 'c']; return [c[0], Math.min(c[1] - RoadMesh.PAVING_UNDER_M, low), c[2]]; };
+                    // (each row's edge level with its own far edge where that lies lower, never over a side road that
+                    // falls away; level with the lower of the two rows', a row's paving lay under the ride's edge where
+                    // the two roads part)
+                    const edge = j => { const c = sides[j][key + 'c'], g = (j === k ? ga : gb) || ga || gb; return [c[0], Math.min(c[1] - RoadMesh.PAVING_UNDER_M, g[1]), c[2]]; };
                     const c = RoadMesh.PAVING_LINEAR;
                     // In pieces no longer than PAVING_PIECE_M either way (a far ribbon's rows are 16 m apart): no
                     // large flat face
@@ -1436,7 +1480,7 @@ class RoadMesh {
                     const fallback = (fa && fa.color) || (fb && fb.color) || RoadMesh.APRON_LINEAR;
                     const footColor = f => (f && f.color) || fallback;
                     const topColor = f => (f && (f.top || f.color)) || fallback;
-                    const under = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]];
+                    const under = p => underAt(p);
                     // Under the verge the land at the road's height: the verge thins out over the ground, and over a
                     // hollow it showed the dark under the ribbon as a seam
                     const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
@@ -1447,10 +1491,10 @@ class RoadMesh {
                     // The slope from the verge's edge has no place there either: it stood in the side road as a sliver
                     // of land, a dark line along the junction
                     if (paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key]) continue;
-                    if (ca && cb && !overOther) RoadMesh.quad(apronOut, under(ca), under(cb), under(pb), under(pa), [topColor(fa), topColor(fb), topColor(fb), topColor(fa)]);
+                    if (ca && cb && !overOther) groundUnder(apronOut, ca, cb, pb, pa, topColor(fa), topColor(fb));
                     // Then from the verge's edge out and down at the batter to the land's height, in strips no longer
                     // than APRON_STRIP_M along the edge, so no apron triangle grows into a large flat face
-                    const foot = (f, p, way = o) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + way[0] * run, Math.min(y, p[1] - RoadMesh.APRON_UNDER_M), p[2] + way[1] * run]; };
+                    const foot = (f, p, way = o) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + way[0] * run, Math.min(y, under(p)[1]), p[2] + way[1] * run]; };
                     const ta = under(pa), tb = under(pb), fA = foot(fa, pa), fB = foot(fb, pb);
                     onRoad = !!(fa && fa.meets) || !!(fb && fb.meets);
                     const strips = Math.max(1, Math.ceil(Math.hypot(tb[0] - ta[0], tb[2] - ta[2]) / RoadMesh.APRON_STRIP_M));
@@ -1619,7 +1663,6 @@ class RoadMesh {
                 // rider saw through the verge to the bank below
                 if (kind === 'wall') {
                     const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
-                    const under = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]];
                     // (paving in a junction, where the rows have no verge)
                     const inPaving = paved[k] && paved[k][key] || paved[k + 1] && paved[k + 1][key];
                     const tint = f => (inPaving ? RoadMesh.PAVING_LINEAR : (f && (f.top || f.color)) || RoadMesh.APRON_LINEAR);
@@ -1630,7 +1673,7 @@ class RoadMesh {
                     const lerp3 = (u, v, t) => [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t, u[2] + (v[2] - u[2]) * t];
                     let over = false;
                     for (let i = 0; guard && ca && cb && i <= 4 && !over; i++) for (let j = 0; j <= 2 && !over; j++) { const q = lerp3(lerp3(ca, cb, i / 4), lerp3(va, vb, i / 4), j / 2); over = guard.any(q[0], q[2], q[1] - 0.2, q[1] - RoadMesh.APRON_UNDER_M) !== null; }
-                    if (ca && cb && !over) RoadMesh.quad(inPaving ? pavingOut : apronOut, under(ca), under(cb), under(vb), under(va), [tint(fa), tint(fb), tint(fb), tint(fa)]);
+                    if (ca && cb && !over) groundUnder(inPaving ? pavingOut : apronOut, ca, cb, vb, va, tint(fa), tint(fb));
                 }
                 // A wall's end with no wall foot of its own takes the run's: it reaches the land (buried in it where
                 // the land meets the edge) and never ends hanging over the drop

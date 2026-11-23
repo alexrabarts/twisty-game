@@ -26,14 +26,27 @@
 //   - cliffs: the ground a road lays in the mouth (a slope, the ground under a verge) standing as a face: a triangle
 //     steeper than `cliffSlope` that falls more than `openM` (a slope's foot dropped to the land under the gap between
 //     the ride and a side road beside it a little under the ride: a dark face between the two roads, seen from the ride)
+//   - strips: on the side road's centre line, wheel lines and carriageway edges, from the ride's carriageway edge out
+//     to `mouthM` past it, something drawn over the side road's own surface: the ground a road lays (under a verge, a
+//     slope) or the ride's verge where the shader shows it (`shown`, its gravel and grass), or the land more than 5 cm
+//     over it on the centre and wheel lines (as `sunk`): a strip of grass across the mouth, the side road stopping short
+//     of the ride
+//   - pits: between the ride's carriageway edge and a side road's beside it at about the same height (within `pitStepM`,
+//     no more than `pitReachM` apart, the widest gap the junction's paving closes), read square to the side road from
+//     its edges and square to the ride from the ride's edge within `pitRideM` of the node, the top of what is drawn
+//     more than `pitM` under the line from one edge to the other, or nothing drawn: a gap between two roads that should
+//     be one surface
 //
-// junctionReport(store) returns {junctions, roads, steps, holes, sunk, decks, open, walls, blocked, cliffs}: each a list, worst first, of
+// junctionReport(store) returns {junctions, roads, steps, holes, sunk, decks, open, walls, blocked, cliffs, strips, pits}: each a list, worst first, of
 // {s, junction, edge, ...} (s the metres of ride at the junction).
 // (cliffs: at d2c4527 eight on the Tremola slice, the km 2.3 mouth worst, a slope's foot 3 m down in the gap between
 // the ride and the side road; three stand, at km 5.2, 5.3 and 6.1, 0.66 to 1.01 m, not of that kind; none on the fixture)
-export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0, walls: 0, blocked: 0, cliffs: 3 };
+// (strips and pits: before the ride's verge was cut over the side roads and nothing it lays stood over them, 11 and 3
+// on the Tremola slice, the ground under the ride's verge 1 to 6 cm over the side road, and the paving 0.3 to 0.7 m
+// under both roads)
+export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0, walls: 0, blocked: 0, cliffs: 3, strips: 0, pits: 0 };
 
-export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40, stepM = 0.5, stepTolM = 0.2, mouthM = 12, openM = 0.6, wallUpM = 0.15, cliffSlope = 3 } = {}) {
+export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40, stepM = 0.5, stepTolM = 0.2, mouthM = 12, openM = 0.6, wallUpM = 0.15, cliffSlope = 3, vergeM = 1.1, pitM = 0.25, pitStepM = 0.25, pitReachM = 4.5, pitRideM = 30 } = {}) {
     const { THREE } = game;
     store.roads = store.roads || new Map();
     store.grids = store.grids || new Map();
@@ -42,18 +55,20 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
 
     // The triangles of a mesh from `start` for `count` vertices, hashed in plan: ys(x, z) is the height of each over
     // (x, z). `pick(i)` leaves a triangle out. Made once for a geometry
-    const gridOf = (mesh, start, count, cell, key, pick = null) => {
+    // `attrs(vertex)` gives each vertex an array of numbers, and hits(x, z) the height and the attributes there
+    const gridOf = (mesh, start, count, cell, key, pick = null, attrs = null) => {
         const id = `${mesh.geometry.uuid}:${key}`;
         if (store.grids.has(id)) return store.grids.get(id);
         mesh.updateMatrixWorld(true);
         const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
-        const tris = [], hash = new Map();
+        const tris = [], hash = new Map(), values = [];
         for (let i = start; i + 2 < start + count; i += 3) {
             if (pick && !pick(i / 3)) continue;
             const t = new Float64Array(9);
             for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, index ? index.getX(i + k) : i + k).applyMatrix4(mesh.matrixWorld); t[k * 3] = v.x; t[k * 3 + 1] = v.y; t[k * 3 + 2] = v.z; }
             if (Math.abs((t[3] - t[0]) * (t[8] - t[2]) - (t[6] - t[0]) * (t[5] - t[2])) < 1e-6) continue;
             const ref = tris.push(t) - 1;
+            if (attrs) values[ref] = [0, 1, 2].map(k => attrs(index ? index.getX(i + k) : i + k));
             for (let cx = Math.floor(Math.min(t[0], t[3], t[6]) / cell); cx <= Math.floor(Math.max(t[0], t[3], t[6]) / cell); cx++) {
                 for (let cz = Math.floor(Math.min(t[2], t[5], t[8]) / cell); cz <= Math.floor(Math.max(t[2], t[5], t[8]) / cell); cz++) {
                     const h = cx * 65536 + cz;
@@ -69,6 +84,17 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     const a = ((t[5] - t[8]) * (x - t[6]) + (t[6] - t[3]) * (z - t[8])) / d, b = ((t[8] - t[2]) * (x - t[6]) + (t[0] - t[6]) * (z - t[8])) / d, c = 1 - a - b;
                     if (a < -1e-9 || b < -1e-9 || c < -1e-9) continue;
                     out.push(a * t[1] + b * t[4] + c * t[7]);
+                }
+                return out;
+            },
+            hits(x, z, out = []) {
+                for (const ref of hash.get(Math.floor(x / cell) * 65536 + Math.floor(z / cell)) || []) {
+                    const t = tris[ref];
+                    const d = (t[5] - t[8]) * (t[0] - t[6]) + (t[6] - t[3]) * (t[2] - t[8]);
+                    const a = ((t[5] - t[8]) * (x - t[6]) + (t[6] - t[3]) * (z - t[8])) / d, b = ((t[8] - t[2]) * (x - t[6]) + (t[0] - t[6]) * (z - t[8])) / d, c = 1 - a - b;
+                    if (a < -1e-9 || b < -1e-9 || c < -1e-9) continue;
+                    const w = values[ref];
+                    out.push({ y: a * t[1] + b * t[4] + c * t[7], a: w ? w[0].map((_, j) => a * w[0][j] + b * w[1][j] + c * w[2][j]) : null });
                 }
                 return out;
             }
@@ -98,6 +124,9 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
     };
 
     const land = [], aprons = [], ribbons = [], built = [], upright = [], stone = [], laid = [], rideRibbons = [], sideRibbons = [];
+    // (the ground a road lays and the junction's paving apart, every road's stone and concrete, and the ride's near
+    // ribbon with what its shader reads to draw the verge: `shown`)
+    const grounds = [], pavings = [], tops = [], rideSkins = [];
     for (const tile of env.tileMeshes.values()) {
         const mesh = tile.mesh || tile;
         if (!mesh || !mesh.isMesh || !/lod0$/.test(mesh.name)) continue;
@@ -111,7 +140,11 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
             if (o.name === 'road-works') {
                 const owners = o.geometry.userData.owners;
                 for (const g of o.geometry.groups) {
-                    if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(o, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
+                    if (g.materialIndex === 0 || g.materialIndex === 3) {
+                        const grid = gridOf(o, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron');
+                        aprons.push(grid);
+                        (g.materialIndex ? pavings : grounds).push(grid);
+                    } else tops.push(gridOf(o, g.start, g.count, 4, `top${g.materialIndex}`));
                     if (g.materialIndex === 0) laid.push({ mesh: o, start: g.start, count: g.count, ride: rideGroups.has(group) });
                     // The concrete (decks, soffits, piers, tubes and their parapets) of the side roads, by its road
                     else if (g.materialIndex === 1 || g.materialIndex >= 4) built.push({ mesh: o, start: g.start, count: g.count, owners });
@@ -123,6 +156,11 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                 const grid = gridOf(o, 0, whole, 4, 'ribbon');
                 ribbons.push(grid);
                 (rideGroups.has(group) ? rideRibbons : sideRibbons).push(grid);
+                const { uv, road, edge, roadArc, roadCutL, roadCutR } = o.geometry.attributes;
+                if (rideGroups.has(group) && uv && road && edge && roadArc) {
+                    const cut = (attr, i) => (attr ? [attr.getX(i), attr.getY(i), attr.getZ(i), attr.getW(i)] : [0, 0, 0, 0]);
+                    rideSkins.push(gridOf(o, 0, whole, 4, 'skin', null, i => [uv.getX(i), road.getX(i), edge.getZ(i), edge.getW(i), roadArc.getX(i), roadArc.getZ(i), ...cut(roadCutL, i), ...cut(roadCutR, i)]));
+                }
             }
         });
     }
@@ -135,6 +173,30 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
         return best;
     };
     const groundAt = (x, z) => { const hs = [...all(land, x, z), ...all(aprons, x, z)]; return hs.length ? Math.max(...hs) : null; };
+    // How opaque the ride's near ribbon draws a place as its shader does (RoadSurface's verge): the carriageway whole,
+    // the verge thinning out from 0.3 m past the edge to `vergeM`, and none of it where a side road's mouth leaves it
+    // out (the row's `mouthL`/`mouthR`, and the stretch `roadCutL`/`roadCutR` names at each metre out: from its first
+    // two numbers to its last two, in the ribbon's metres along). {verge: metres past the carriageway, alpha}
+    const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const shown = h => {
+        const [lat, half, mouthL, mouthR, arcX, arcZ, ...cuts] = h.a;
+        const out = Math.abs(lat) - half;
+        if (out < 0) return { verge: out, alpha: 1 };
+        const c = cuts.slice(lat < 0 ? 0 : 4, lat < 0 ? 4 : 8), t = Math.max(0, Math.min(1, out / vergeM)), along = arcX / (arcZ || 1);
+        const lo = c[0] + (c[1] - c[0]) * t, hi = c[2] + (c[3] - c[2]) * t;
+        const cut = hi > lo && along >= lo && along <= hi ? 1 : 0;
+        return { verge: out, alpha: (1 - smooth(0.3, 1.0, out)) * (1 - Math.max(lat < 0 ? mouthL : mouthR, cut)) };
+    };
+    // The top of everything drawn at (x, z) within 3 m of y: the ride's near ribbon where it is drawn (`shown`)
+    const topAt = (x, z, y) => {
+        let top = null;
+        const take = h => { if (Math.abs(h - y) <= 3 && (top === null || h > top)) top = h; };
+        for (const grids of [sideRibbons, pavings, grounds, land, tops]) for (const h of all(grids, x, z)) take(h);
+        for (const g of rideSkins) for (const h of g.hits(x, z)) if (shown(h).alpha >= 0.5) take(h.y);
+        // (a far ribbon of the ride has no verge)
+        if (!rideSkins.length) for (const h of all(rideRibbons, x, z)) take(h);
+        return top;
+    };
     const near = {};
 
     let fresh = 0;
@@ -151,7 +213,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
             if (Math.hypot(rows[0].x - at.x, rows[0].z - at.z) > nearM) continue;
             const width = env.graph.stubWidth(edgeId);
             const chain = new Set(rows.map(r => r.edgeId));
-            const road = { junction: junction.id, name: junction.name, edge: edgeId, s: Math.round(pass.sIn), width: r2(width), lengthM: r2(rows[rows.length - 1].run), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], cliffs: [], samples: 0 };
+            const road = { junction: junction.id, name: junction.name, edge: edgeId, s: Math.round(pass.sIn), width: r2(width), lengthM: r2(rows[rows.length - 1].run), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], cliffs: [], strips: [], pits: [], samples: 0 };
             // The place `d` metres along the side road and `lat` metres right of its centre line
             let k = 0;
             const place = (d, lat) => {
@@ -272,6 +334,84 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     road.cliffs.push({ d: bestD, dropM: r2(span), x: r2(cx), z: r2(cz) });
                 }
             }
+            // What is drawn over the side road's own surface (its ribbon or the junction's paving) from the ride's
+            // carriageway edge out: the land, the ground a road lays, or the ride's verge where it is drawn
+            const rideAt = (x, z, y, tol) => { let inside = false; env.carriageways.each(x, z, 0, r => { if (r.road === -1 && r.depth >= 0 && Math.abs(r.y - y) < tol) inside = true; }); return inside; };
+            for (const lat of [0, -0.35 * width, 0.35 * width, -(width / 2 - 0.25), width / 2 - 0.25]) {
+                for (let d = 0; d <= Math.min(edgeD + mouthM, road.lengthM) + 1e-9; d += stepM) {
+                    const p = place(d, lat);
+                    if (rideAt(p.x, p.z, p.y, 3)) continue;
+                    let own = null;
+                    for (const h of [...all(sideRibbons, p.x, p.z), ...all(pavings, p.x, p.z)]) if (Math.abs(h - p.y) <= 3 && (own === null || h > own)) own = h;
+                    if (own === null) continue;
+                    let worst = null;
+                    const over = (y, kind) => { if (y > own + 0.01 && y < own + 1.5 && (worst === null || y - own > worst.overM)) worst = { kind, overM: y - own }; };
+                    // (the land as `sunk` reads it, on the centre and wheel lines only, 5 cm over: a road's edge in a
+                    // cutting meets the land there)
+                    if (Math.abs(lat) < width / 2 - 0.3) for (const h of all(land, p.x, p.z)) if (h > own + 0.05) over(h, 'land');
+                    for (const h of all(grounds, p.x, p.z)) over(h, 'ground');
+                    for (const g of rideSkins) for (const h of g.hits(p.x, p.z)) { const look = shown(h); if (look.verge >= 0.02 && look.alpha >= 0.5) over(h.y, 'verge'); }
+                    if (worst) road.strips.push({ d: r2(d), lat: r2(lat), kind: worst.kind, overM: r2(worst.overM), x: r2(p.x), z: r2(p.z) });
+                }
+            }
+            // Between the side road's carriageway edge and the ride's beside it (out square to the side road, no more
+            // than `pitReachM`), with the two at about one height: the top of what is drawn on the line between them
+            const sideTop = (x, z, y) => { let best = null; for (const h of all(sideRibbons, x, z)) if (Math.abs(h - y) <= 3 && (best === null || h > best)) best = h; return best; };
+            const rideTop = (x, z, y) => { let best = null; for (const h of all(rideRibbons, x, z)) if (Math.abs(h - y) <= 1 && (best === null || h > best)) best = h; return best; };
+            for (const sign of [-1, 1]) {
+                for (let d = 0; d <= Math.min(reachM, road.lengthM) + 1e-9; d += 1) {
+                    const e = place(d, sign * width / 2), f = place(d, sign * (width / 2 + 1));
+                    const ox = f.x - e.x, oz = f.z - e.z;
+                    if (rideAt(e.x, e.z, e.y, 3)) continue;
+                    const ey = sideTop(e.x, e.z, e.y);
+                    if (ey === null) continue;
+                    let reach = null;
+                    for (let t = 0.25; t <= pitReachM + 1e-9; t += 0.25) if (rideAt(e.x + ox * t, e.z + oz * t, ey, 1.5)) { reach = t; break; }
+                    if (reach === null || reach < 0.5) continue;
+                    const ry = rideTop(e.x + ox * reach, e.z + oz * reach, ey);
+                    if (ry === null || Math.abs(ry - ey) > pitStepM) continue;
+                    let worst = null;
+                    for (let t = 0.25; t < reach - 1e-9; t += 0.25) {
+                        const x = e.x + ox * t, z = e.z + oz * t, line = ey + (ry - ey) * (t / reach);
+                        // (the side road's own carriageway, where it bends back across the line, is road)
+                        let own = false;
+                        env.carriageways.each(x, z, 0, r => { if (r.road === edgeId && r.depth >= 0) own = true; }, true);
+                        if (own) continue;
+                        const top = topAt(x, z, line);
+                        const deep = top === null ? 9.99 : line - top;
+                        if (deep > pitM && (worst === null || deep > worst.depthM)) worst = { t, depthM: deep, x, z };
+                    }
+                    if (worst) road.pits.push({ d, side: sign, gapM: r2(reach), at: r2(worst.t), depthM: r2(worst.depthM), x: r2(worst.x), z: r2(worst.z) });
+                }
+            }
+            // and from the ride's carriageway edge out square to the ride, as the junction's paving is laid
+            const onSide = (x, z, y) => { let on = false; env.carriageways.each(x, z, 0, r => { if (chain.has(r.road) && r.depth >= 0 && Math.abs(r.y - y) < 3) on = true; }, true); return on; };
+            const ride = {};
+            for (let rs = Math.max(env.startS, pass.sIn - pitRideM); rs <= Math.min(env.endS, pass.sIn + pitRideM) + 1e-9; rs += 1) {
+                env.route.sample(rs, ride);
+                for (const sign of [-1, 1]) {
+                    const ox = sign * Math.cos(ride.heading), oz = -sign * Math.sin(ride.heading);
+                    const ex = ride.x + ox * ride.width / 2, ez = ride.z + oz * ride.width / 2;
+                    const ry = rideTop(ex - ox * 0.1, ez - oz * 0.1, ride.y);
+                    if (ry === null) continue;
+                    let reach = null;
+                    for (let t = 0.25; t <= pitReachM + 1e-9; t += 0.25) {
+                        if (rideAt(ex + ox * t, ez + oz * t, ry, 1.5)) break;
+                        if (onSide(ex + ox * t, ez + oz * t, ry)) { reach = t; break; }
+                    }
+                    if (reach === null || reach < 0.5) continue;
+                    const ey = sideTop(ex + ox * (reach + 0.1), ez + oz * (reach + 0.1), ry);
+                    if (ey === null || Math.abs(ry - ey) > pitStepM) continue;
+                    let worst = null;
+                    for (let t = 0.25; t < reach - 1e-9; t += 0.25) {
+                        const x = ex + ox * t, z = ez + oz * t, line = ry + (ey - ry) * (t / reach);
+                        const top = topAt(x, z, line);
+                        const deep = top === null ? 9.99 : line - top;
+                        if (deep > pitM && (worst === null || deep > worst.depthM)) worst = { t, depthM: deep, x, z };
+                    }
+                    if (worst) road.pits.push({ d: null, rideS: Math.round(rs), side: sign, gapM: r2(reach), at: r2(worst.t), depthM: r2(worst.depthM), x: r2(worst.x), z: r2(worst.z) });
+                }
+            }
             env.route.project(rows[0].x, rows[0].z, null, near);
             store.roads.set(id, road);
             fresh++;
@@ -282,7 +422,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
 
 export function junctionReport(store) {
     const roads = [...(store.roads || new Map()).values()];
-    const out = { junctions: new Set(roads.map(r => r.junction)).size, roads: roads.length, samples: roads.reduce((n, r) => n + r.samples, 0), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], cliffs: [] };
+    const out = { junctions: new Set(roads.map(r => r.junction)).size, roads: roads.length, samples: roads.reduce((n, r) => n + r.samples, 0), steps: [], holes: [], sunk: [], decks: [], open: [], walls: [], blocked: [], cliffs: [], strips: [], pits: [] };
     for (const road of roads) {
         const where = { s: road.s, junction: road.junction, edge: road.edge };
         if (road.steps.length) { const worst = road.steps.reduce((a, b) => (Math.abs(b.stepM) > Math.abs(a.stepM) ? b : a)); out.steps.push({ ...where, places: road.steps.length, worstM: worst.stepM, d: worst.d, x: worst.x, z: worst.z }); }
@@ -292,9 +432,11 @@ export function junctionReport(store) {
         if (road.open.length) { const worst = road.open.reduce((a, b) => (b.dropM > a.dropM ? b : a)); out.open.push({ ...where, places: road.open.length, worstM: worst.dropM, d: worst.d, x: worst.x, z: worst.z }); }
         if (road.walls.length) { const worst = road.walls.reduce((a, b) => (b.upM > a.upM ? b : a)); out.walls.push({ ...where, places: road.walls.length, worstM: worst.upM, d: worst.d, x: worst.x, z: worst.z }); }
         if (road.cliffs.length) { const worst = road.cliffs.reduce((a, b) => (b.dropM > a.dropM ? b : a)); out.cliffs.push({ ...where, triangles: road.cliffs.length, worstM: worst.dropM, d: worst.d, x: worst.x, z: worst.z }); }
+        if (road.strips && road.strips.length) { const worst = road.strips.reduce((a, b) => (b.overM > a.overM ? b : a)); out.strips.push({ ...where, places: road.strips.length, kinds: [...new Set(road.strips.map(p => p.kind))].join(','), worstM: worst.overM, d: worst.d, lat: worst.lat, x: worst.x, z: worst.z }); }
+        if (road.pits && road.pits.length) { const worst = road.pits.reduce((a, b) => (b.depthM > a.depthM ? b : a)); out.pits.push({ ...where, places: road.pits.length, worstM: worst.depthM, d: worst.d, rideS: worst.rideS, side: worst.side, gapM: worst.gapM, x: worst.x, z: worst.z }); }
         if (road.blocked.length) out.blocked.push({ ...where, places: road.blocked.length, worstM: Math.min(...road.blocked.map(b => b.d)), d: road.blocked[0].d, rideS: road.blocked[0].s, x: road.blocked[0].x, z: road.blocked[0].z });
     }
-    for (const kind of ['steps', 'holes', 'sunk', 'open', 'walls', 'blocked', 'cliffs']) out[kind].sort((a, b) => Math.abs(b.worstM) - Math.abs(a.worstM));
+    for (const kind of ['steps', 'holes', 'sunk', 'open', 'walls', 'blocked', 'cliffs', 'strips', 'pits']) out[kind].sort((a, b) => Math.abs(b.worstM) - Math.abs(a.worstM));
     out.decks.sort((a, b) => b.triangles - a.triangles);
     return out;
 }
