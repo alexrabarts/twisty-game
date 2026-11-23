@@ -156,6 +156,9 @@ class Roadworks {
     // How far before a single lane the traffic starts to read the rider as one of the queue (Roadworks.riderEntry)
     static get RIDER_QUEUE_M() { return 60; }
     static get RIDER_IN_M() { return 1; }
+    // How far a vehicle's front may stand over a stop line and still be held at it, not in the lane: a vehicle braked
+    // to the line stops on it to within float error, and counted in the lane it held both lights red for ever
+    static get LINE_SLACK_M() { return 0.01; }
     static get COMMIT_SPEED_MS() { return 2; }
     // The lane traffic drives through a site blends to the open lane over BLEND_M in from each stop line, inside the
     // site: a vehicle that waits at a light stands in its own lane, and one that leaves is back in its own lane at the
@@ -592,7 +595,8 @@ class Roadworks {
                 // (the rider only once past a stop line by RIDER_IN_M: a rider who waits with the wheel on the line is
                 // not in the lane, and counted there held its own light red for ever)
                 const half = v.rider ? -Roadworks.RIDER_IN_M : v.half;
-                if (v.s + half > site.stopIn && v.s - half < site.stopOut) n++;
+                const slack = Roadworks.LINE_SLACK_M;
+                if (v.s + half > site.stopIn + slack && v.s - half < site.stopOut - slack) n++;
             }
             this.occupied.set(site.id, n);
         }
@@ -606,7 +610,7 @@ class Roadworks {
         for (const site of this.closed) {
             const line = direction > 0 ? site.stopIn : site.stopOut;
             const d = (line - (s + direction * half)) * direction;
-            if (d < -0.01 || d > 200) {
+            if (d < -Roadworks.LINE_SLACK_M || d > 200) {
                 if (vehicle.roadworksCommit === site.id && d > 200) vehicle.roadworksCommit = null;
                 continue;
             }

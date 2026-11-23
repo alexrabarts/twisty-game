@@ -146,6 +146,20 @@ describe('the traffic lights and the traffic', () => {
         works.reset();
     });
 
+    test('a vehicle braked to a stop line stands on it, held, and is not in the lane: the light still turns green', () => {
+        const site = works.closed[0];
+        const slack = Roadworks.LINE_SLACK_M, half = Roadworks.BIKE_HALF_M;
+        // Its front within the slack over each line, from each side: held at the line, nobody in the lane
+        works.occupy([{ s: site.stopIn - half + slack / 2, direction: 1, half }, { s: site.stopOut + half - slack / 2, direction: -1, half }]);
+        expect(works.occupied.get(site.id)).toBe(0);
+        const vehicle = {};
+        expect(works.stopDistance(vehicle, site.stopIn - half + slack / 2, 1, half, 0, 6)).not.toBe(Infinity);
+        // Past it by more than the slack: in the lane
+        works.occupy([{ s: site.stopIn - half + 2 * slack, direction: 1, half }]);
+        expect(works.occupied.get(site.id)).toBe(1);
+        works.reset();
+    });
+
     test('the all-red phase is long enough for the slowest car to clear the lane from its stop line', () => {
         for (const site of works.closed) {
             const lane = site.stopOut - site.stopIn + 2 * Roadworks.CAR_HALF_M;

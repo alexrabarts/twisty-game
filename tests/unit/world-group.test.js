@@ -356,13 +356,13 @@ describe('the same ride', () => {
             rider: byPlace(6), cars: true, at: REVERSE, seconds: 1300,
             onFrame: ({ t, riders }) => {
                 for (const r of riders) {
-                    // (past the line by more than the 1 cm Roadworks.stopDistance itself allows: a rider standing on the line is held)
+                    // (past the line by more than Roadworks.LINE_SLACK_M: a rider standing on the line is held there, not in the lane)
                     const front = sOf(r) + Roadworks.BIKE_HALF_M;
                     const before = prev.get(r);
                     prev.set(r, front);
                     if (before === undefined) continue;
                     for (const site of works.closed) {
-                        if (before < site.stopIn + 0.01 && front > site.stopIn + 0.01 && works.light(site, 1) === 'red' && r.roadworksCommit !== site.id) bad.push({ t, name: r.riderName, site: site.id });
+                        if (before < site.stopIn + Roadworks.LINE_SLACK_M && front > site.stopIn + Roadworks.LINE_SLACK_M && works.light(site, 1) === 'red' && r.roadworksCommit !== site.id) bad.push({ t, name: r.riderName, site: site.id });
                     }
                 }
             },

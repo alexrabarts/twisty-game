@@ -183,6 +183,12 @@ describe('the player and one rider', () => {
     });
 
     test('drifting sideways into a rider at 0.8 m/s is a bump: no crash, the boxes apart after it, a little speed lost once, and the rider gives way and comes back', () => {
+        // Its twin: the same rider from the same place over the same five seconds with no player near. At the group's
+        // pace the rider reaches the bend past the straight within them, so it keeps the pace its twin keeps
+        const twin = crewOf([STRAIGHT_S]);
+        const far = new THREE.Vector3(1e6, 0, 1e6);
+        for (let f = 0; f < 60 * 5; f++) twin.update(DT, far, null, null);
+        const pace = twin.motorcycles[0].currentSpeed;
         for (const from of [1.5, -1.1]) {
             const traffic = crewOf([STRAIGHT_S]);
             const bike = traffic.motorcycles[0];
@@ -220,7 +226,7 @@ describe('the player and one rider', () => {
             // The rider moved away from the player, not far, and kept its pace
             expect(pushed * toward).toBeGreaterThan(0.1);
             expect(pushed * toward).toBeLessThanOrEqual(C.nudge.mostM + 1e-9);
-            expect(bike.currentSpeed).toBeGreaterThan(before - 0.5);
+            expect(bike.currentSpeed).toBeGreaterThan(pace - 0.5);
             // With the player gone it comes back to its line, and the wobble has gone
             v.position.set(1e6, 0, 1e6);
             route.project(1e6, 1e6, null, v.projection);
