@@ -44,7 +44,6 @@ export async function rideSpan(game, env, { s0, s1, rider = 'pilot', speed = 6, 
         const s = p.index >= 0 ? p.s : s0;
         if (s >= s1) break;
         if (Math.abs(s - settled) > 100) { await env.streamer.settle({ x: v.position.x, z: v.position.z }, s); settled = s; }
-        env.updateBarriers(s);
         const reach = Math.max(5, Math.min(30, 3 + 0.7 * v.speed));
         route.sample(s + reach, aim);
         const own = typeof lane === 'function' ? lane(s, v) : lane === 'inside' ? Math.sign(route.curvatureAt(s + 2, 8)) * Math.max(0, aim.width / 2 - 1.2) : offset;

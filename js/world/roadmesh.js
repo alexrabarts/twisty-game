@@ -17,7 +17,7 @@
 //                        edge is paved to the end (the apron), with no verge
 //   tunnels, galleries:  a tube round the road with a portal frame at each end
 //   bridges:             a deck, parapets and piers
-//   side roads:          a 60 m stub that ends in a road-closed barrier, and beyond it the same LOD0 ribbon within
+//   side roads:          a 60 m stub from the ride's junction, and beyond it the same LOD0 ribbon within
 //                        400 m of the bike (WorldStreamer.sideNear), with the markings of its swissTLM3D class and its
 //                        verge, and LOD1 beyond (D7 c); the road past the ride's finish and before its start is a side
 //                        road too, so the world goes on past the line (WorldEnvironment.fromRideEnd)
@@ -39,7 +39,7 @@ class RoadMesh {
         const mean = RoadSurface.means();
         return {
             asphalt: mean.asphalt, cobbles: mean.setts, sideAsphalt: [0.37, 0.37, 0.37], concrete: [0.50, 0.50, 0.48],
-            tunnel: [0.32, 0.31, 0.30], deck: [0.38, 0.37, 0.36], wall: [0.66, 0.63, 0.57], stone: [0.58, 0.56, 0.52], apron: [0.30, 0.33, 0.20], barrierRed: [0.78, 0.12, 0.10], barrierWhite: [0.92, 0.92, 0.90]
+            tunnel: [0.32, 0.31, 0.30], deck: [0.38, 0.37, 0.36], wall: [0.66, 0.63, 0.57], stone: [0.58, 0.56, 0.52], apron: [0.30, 0.33, 0.20]
         };
     }
 
@@ -155,8 +155,6 @@ class RoadMesh {
     // (lifted LIFT_M over the wall's top) lies behind the stone and never shows as a line across it
     static get STONE_PROUD_M() { return 0.03; }
     static get PARAPET_H_M() { return 0.8; }
-    // Metres to the top of a road-closed barrier's posts (barrierGeometry): what a bike that touches it can meet
-    static get BARRIER_H_M() { return 1.2; }
     // Where its wall's run ends a parapet falls to a kerb of PARAPET_END_M over its last segment: the wall's top
     // comes down to the road's edge, where its face goes on and tapers out (edgeWorks `taper`). It is still drawn to
     // the wall's end, where the physics still stops the bike
@@ -529,7 +527,7 @@ class RoadMesh {
         const hx = sx / 2, hy = sy / 2, hz = sz / 2;
         const v = [at(-hx, -hy, -hz), at(hx, -hy, -hz), at(hx, hy, -hz), at(-hx, hy, -hz), at(-hx, -hy, hz), at(hx, -hy, hz), at(hx, hy, hz), at(-hx, hy, hz)];
         // Each face wound counter-clockwise seen from outside, so its normal points away from the centre and a
-        // front-side material (marker stones, barriers) lights the face the viewer sees
+        // front-side material (marker stones) lights the face the viewer sees
         for (const f of [[0, 1, 2, 3], [5, 4, 7, 6], [4, 0, 3, 7], [1, 5, 6, 2], [3, 2, 6, 7], [4, 5, 1, 0]]) RoadMesh.quad(out, v[f[3]], v[f[2]], v[f[1]], v[f[0]], color);
     }
 
@@ -2171,53 +2169,6 @@ class RoadMesh {
         return out;
     }
 
-    // The road-closed barrier, one unit wide: two posts and two striped boards
-    static barrierGeometry() {
-        const out = { positions: [], shades: [] };
-        const colors = RoadMesh.COLORS;
-        for (const x of [-0.46, 0.46]) RoadMesh.box(out, x, RoadMesh.BARRIER_H_M / 2, 0, 0.08, RoadMesh.BARRIER_H_M, 0.08, 0, colors.barrierWhite);
-        const stripes = 8;
-        for (const [y, flip] of [[1.0, 0], [0.62, 1]]) {
-            for (let k = 0; k < stripes; k++) {
-                const c = (k + flip) % 2 === 0 ? colors.barrierRed : colors.barrierWhite;
-                RoadMesh.box(out, -0.5 + (k + 0.5) / stripes, y, 0, 1 / stripes, 0.22, 0.05, 0, c);
-            }
-        }
-        return RoadMesh.geometry(out.positions, out.shades);
-    }
-
-    // An instanced mesh of road-closed barriers, `capacity` at most; place() sets them
-    static barriers(capacity = 32) {
-        const mesh = new THREE.InstancedMesh(RoadMesh.barrierGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }), capacity);
-        mesh.name = 'world-barriers';
-        mesh.count = 0;
-        mesh.frustumCulled = false;
-        mesh.userData.world = 'barriers';
-        return mesh;
-    }
-
-    // Puts `poses` ({x, y, z, heading, width}) into the instanced mesh
-    static placeBarriers(mesh, poses) {
-        const matrix = new THREE.Matrix4();
-        const rotation = new THREE.Quaternion();
-        const up = new THREE.Vector3(0, 1, 0);
-        const scale = new THREE.Vector3();
-        const position = new THREE.Vector3();
-        const count = Math.min(poses.length, mesh.instanceMatrix.count);
-        for (let i = 0; i < count; i++) {
-            const p = poses[i];
-            rotation.setFromAxisAngle(up, p.heading);
-            // As wide as the box the physics stops the bike at (WorldGround.barrierHalf): what is solid is drawn
-            scale.set(2 * WorldGround.barrierHalf(p.width), 1, 1);
-            position.set(p.x, p.y, p.z);
-            matrix.compose(position, rotation, scale);
-            mesh.setMatrixAt(i, matrix);
-        }
-        mesh.count = count;
-        mesh.instanceMatrix.needsUpdate = true;
-        return count;
-    }
-
     static dispose(object) {
         object.traverse(child => {
             if (child.geometry) child.geometry.dispose();
@@ -2229,7 +2180,7 @@ class RoadMesh {
 // in its ribbon frame (WorldRoute.nearestSegment: the drawn column to the centimetre); each side edge from its samples,
 // added the first time its chunk is resident and kept after (the data never changes), so a structure built before a
 // side road's mesh still knows where that road runs. No structure of any road (deck, pier, parapet, retaining wall, its
-// end, apron, barrier) may stand in another road's carriageway: RoadMesh's builders ask standsIn() before they lay one.
+// end, apron) may stand in another road's carriageway: RoadMesh's builders ask standsIn() before they lay one.
 // No THREE.
 class Carriageways {
     static get HASH_M() { return 16; }

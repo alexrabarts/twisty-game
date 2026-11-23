@@ -4,8 +4,8 @@
 // Physics can only kill the rider where the rider can see why. The Tremola slice is streamed in node and read every
 // metre across the drawn carriageway and verge (tests/helpers/world-fairness.js): the physics road band must be the
 // drawn one, no wall or fall stands on the drawn road without something drawn there to hit, and no run-off (the
-// off-road timer) lies on the drawn carriageway. Every barrier's solid box is the drawn barrier. Then careful riders
-// take every hairpin at hairpin speed, with the assist on and off: no crash and no cut-rule restart.
+// off-road timer) lies on the drawn carriageway. Then careful riders take every hairpin at hairpin speed, with the
+// assist on and off: no crash and no cut-rule restart.
 //
 // Before the ribbon-frame projection (WorldRoute.nearestSegment) the physics read the road from the chords between
 // samples while the ribbon is drawn along each row's normal: the band sat up to 0.47 m off the drawn edge (8776
@@ -26,7 +26,7 @@ import { findHairpins } from '../../tools/world/verify.mjs';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const log = [];
 const game = loadGame(undefined, log);
-const { THREE, WorldEnvironment, WorldGround, Vehicle } = game;
+const { THREE, WorldEnvironment, Vehicle } = game;
 
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
 
@@ -52,7 +52,6 @@ describe('the Tremola slice: what the physics solid is, is drawn', () => {
             const p = env.route.sample(s + W / 2, {});
             env.update(p, s, null, Infinity);
             await env.streamer.settle(p, s + W / 2);
-            env.updateBarriers(s + W / 2);
             const r = fairnessWindow(game, env, vehicle, { s0: s, s1: Math.min(env.endS, s + W - 1e-6), stepM: 1, acrossM: 0.25 });
             for (const k of ['points', 'widthCount', 'solidCount', 'runoffCount']) sweep[k] += r[k];
             sweep.worstWidthM = Math.max(sweep.worstWidthM, r.worstWidthM);
@@ -69,39 +68,12 @@ describe('the Tremola slice: what the physics solid is, is drawn', () => {
         expect(sweep.worstWidthM).toBeLessThanOrEqual(0.1);
     });
 
-    test('no wall or fall on the drawn road without a drawn wall, parapet, structure, barrier or bank within 0.5 m', () => {
+    test('no wall or fall on the drawn road without a drawn wall, parapet, structure or bank within 0.5 m', () => {
         if (sweep.solidCount) throw new Error(`${sweep.solidCount} solid points with nothing drawn to hit:\n${list(sweep.solid)}`);
     });
 
     test('no run-off (the off-road timer) on the drawn carriageway', () => {
         if (sweep.runoffCount) throw new Error(`${sweep.runoffCount} run-off points on the drawn carriageway:\n${list(sweep.runoff)}`);
-    });
-
-    test('every barrier stops the bike only where it is drawn: its box within 0.5 m of the drawn fence', () => {
-        const mesh = env.barrierMesh;
-        mesh.geometry.computeBoundingBox();
-        const box = mesh.geometry.boundingBox;
-        const m = new THREE.Matrix4(), q = new THREE.Quaternion(), pos = new THREE.Vector3(), scale = new THREE.Vector3();
-        const bad = [];
-        let seen = 0;
-        for (const junction of env.graph.junctions) {
-            for (const pass of junction.passes) {
-                env.barrierStep = null;
-                env.updateBarriers(pass.sIn);
-                env.activeBarriers.forEach((b, i) => {
-                    seen++;
-                    mesh.getMatrixAt(i, m);
-                    m.decompose(pos, q, scale);
-                    const drawnHalf = Math.max(Math.abs(box.min.x), Math.abs(box.max.x)) * scale.x;
-                    const drawnDepth = Math.max(Math.abs(box.min.z), Math.abs(box.max.z)) * scale.z;
-                    // The box the physics stops the bike in (WorldGround.setBarriers)
-                    const half = env.ground.barriers[i].half;
-                    if (half > drawnHalf + 0.5 || WorldGround.BARRIER_DEPTH_M > drawnDepth + 0.5 || Math.hypot(pos.x - b.x, pos.z - b.z) > 0.01) bad.push({ junction: junction.id, edge: b.edgeId, half, drawnHalf, depth: WorldGround.BARRIER_DEPTH_M, drawnDepth });
-                });
-            }
-        }
-        expect(seen).toBeGreaterThan(0);
-        if (bad.length) throw new Error(`${bad.length} barriers solid past their drawn fence:\n${list(bad)}`);
     });
 });
 

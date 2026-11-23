@@ -1,6 +1,6 @@
 // WorldGraph: the corridor road graph in memory (D7 a). Nodes, edges, the ride
-// as a path through them, the ride junctions with their per-pass barriers, and
-// the edge samples of whatever chunks are resident. No THREE and no DOM.
+// as a path through them, the ride junctions and the side roads that leave them,
+// and the edge samples of whatever chunks are resident. No THREE and no DOM.
 //
 // The ride's samples are built here from the edges, exactly as the importer
 // builds them (tools/world/stations.mjs rideSamples): one run, the join sample
@@ -9,10 +9,6 @@
 class WorldGraph {
     // Metres of a side edge that is built beside a junction as a stub
     static get STUB_M() { return 60; }
-    // A barrier stands at STUB_M where that is clear of every other road, else as far out as is, moved back toward the
-    // junction in BARRIER_STEP_M steps, never nearer than BARRIER_MIN_M; never on the ride's band
-    static get BARRIER_STEP_M() { return 1; }
-    static get BARRIER_MIN_M() { return 6; }
 
     constructor(data) {
         this.data = data;
@@ -22,7 +18,6 @@ class WorldGraph {
         this.junctionById = new Map(this.junctions.map(j => [j.id, j]));
         this.rideEdgeIds = new Set(data.ride.path.map(use => use.edgeId));
         this.samplesCache = new Map();
-        this.barrierCache = new Map();
     }
 
     edge(id) { return this.edges[id]; }
@@ -72,34 +67,16 @@ class WorldGraph {
         return out;
     }
 
-    // The junction pass nearest the s the rider has reached (the high-water
-    // mark), for each junction within `range` metres of it
-    nearestPasses(s, range) {
-        const out = [];
-        for (const junction of this.junctions) {
-            let best = null;
-            junction.passes.forEach((pass, index) => {
-                const d = Math.abs(pass.sIn - s);
-                if (!best || d < best.d) best = { junction, pass, index, d };
-            });
-            if (best && best.d <= range) out.push(best);
-        }
-        return out;
-    }
-
-    // Barrier poses of the passes the rider is at: each is {edgeId, x, z, heading, junctionId, width}. With `roads`
-    // (a RoadClearance, js/world/scenery.js) each pose is moved off every other road band (barrierPose), and a barrier
-    // with no place clear of the ride's band is left out.
-    barriersFor(s, range = 1000, roads = null) {
-        const out = [];
-        for (const { junction, pass } of this.nearestPasses(s, range)) {
-            for (const barrier of pass.barriers) {
-                const width = this.stubWidth(barrier.edgeId);
-                const pose = roads ? this.barrierPose(junction, barrier, width, roads) : barrier;
-                if (pose) out.push({ ...barrier, x: pose.x, z: pose.z, ...(Number.isFinite(pose.y) ? { y: pose.y } : {}), heading: pose.heading, junctionId: junction.id, node: junction.node, width });
+    // The side roads that leave the ride at its junctions: edge id to the junction's node. Each is drawn from the node
+    // as a stub (stub), the rest of its edge on from the stub's end; a rider may ride any of them (nothing closes one)
+    sideStubs() {
+        if (!this.stubNodes) {
+            this.stubNodes = new Map();
+            for (const junction of this.junctions) {
+                for (const { edgeId } of junction.incident) if (!this.rideEdgeIds.has(edgeId)) this.stubNodes.set(edgeId, junction.node);
             }
         }
-        return out;
+        return this.stubNodes;
     }
 
     // The node's other edge where the road only goes on through it (degree 2), or null
@@ -140,53 +117,7 @@ class WorldGraph {
         return { rows, complete: true };
     }
 
-    // Where a barrier stands: {x, z, y, heading} on its own side road (y its surface) (and the road it goes on as), the whole box the
-    // ground makes a wall of (WorldGround.setBarriers) clear of every other road band, as near STUB_M out as that
-    // allows; else, of the places clear of the ride's band, the one that keeps furthest from the other roads (a short
-    // side road between two junctions); null when no place is clear of the ride's band, and null
-    // while the side road is not resident (the importer's pose can stand on the ride: a side road shorter than STUB_M
-    // puts it at the far node). Kept once the roads round it are resident too.
-    barrierPose(junction, barrier, width, roads) {
-        const key = `${junction.id}:${barrier.edgeId}`;
-        if (this.barrierCache.has(key)) return this.barrierCache.get(key);
-        const { rows, complete } = this.chainFrom(barrier.edgeId, junction.node, WorldGraph.STUB_M);
-        if (!complete || rows.length < 2) return null;
-        const chain = new Set(rows.map(r => r.edgeId));
-        const others = id => chain.has(id);
-        const sides = () => true;
-        const ground = typeof WorldGround !== 'undefined' ? WorldGround : null;
-        const across = ground ? ground.barrierHalf(width) : width / 2 + 1.5;
-        const along = ground ? ground.BARRIER_DEPTH_M : 1.2;
-        // The least clearance of the box's points from the bands `skip` leaves in
-        const clearOf = (x, z, heading, skip) => {
-            const fx = Math.sin(heading), fz = Math.cos(heading), lx = Math.cos(heading), lz = -Math.sin(heading);
-            let least = Infinity;
-            for (const a of [-along, 0, along]) {
-                for (let c = -across; c <= across + 1e-9; c += 0.5) least = Math.min(least, roads.clearance(x + a * fx + c * lx, z + a * fz + c * lz, 4, skip));
-            }
-            return least;
-        };
-        const end = rows[rows.length - 1].run;
-        let chosen = null, best = null;
-        let k = rows.length - 2;
-        for (let d = Math.min(WorldGraph.STUB_M, end); d >= WorldGraph.BARRIER_MIN_M; d -= WorldGraph.BARRIER_STEP_M) {
-            while (k > 0 && rows[k].run > d) k--;
-            const p = rows[k], q = rows[k + 1];
-            const t = q.run > p.run ? Math.max(0, Math.min(1, (d - p.run) / (q.run - p.run))) : 0;
-            const x = p.x + (q.x - p.x) * t, z = p.z + (q.z - p.z) * t, y = p.y + (q.y - p.y) * t;
-            const heading = Math.atan2(q.x - p.x, q.z - p.z);
-            if (clearOf(x, z, heading, sides) < 0) continue;
-            const past = clearOf(x, z, heading, others);
-            if (past >= 0) { chosen = { x, z, y, heading }; break; }
-            if (!best || past > best.past) best = { x, z, y, heading, past };
-        }
-        const pose = chosen || (best && { x: best.x, z: best.z, y: best.y, heading: best.heading });
-        const data = roads.data;
-        const settled = !pose || !data || !data.chunksNear || data.chunksNear(pose.x, pose.z, 40).every(k => data.chunks.has(k));
-        if (settled) this.barrierCache.set(key, pose);
-        return pose;
-    }
-
+    // The mean width of an edge, 6 m while it is not resident
     stubWidth(edgeId) {
         const e = this.samples(edgeId);
         if (!e) return 6;

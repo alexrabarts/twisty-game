@@ -102,7 +102,6 @@ export async function rideAcross(game, env, place, { rider, speed = 12, seconds 
     for (let tick = 0; tick < seconds * 60; tick++) {
         const q = v.projection;
         const s = q.index >= 0 ? q.s : s0;
-        env.updateBarriers(s);
         const onRoad = Math.abs(q.lateral) <= q.width / 2;
         if (phase === 0 && s >= place.s - 8) phase = 1;
         if (phase === 1 && !onRoad && out.leftS === null) out.leftS = s;
@@ -218,7 +217,6 @@ export async function rideAt(game, env, place, { rider, speed = 12, seconds = 30
     for (let tick = 0; tick < seconds * 60; tick++) {
         const q = v.projection;
         const s = q.index >= 0 ? q.s : s0;
-        env.updateBarriers(s);
         if (phase === 0 && s >= place.s - Math.max(8, v.speed * 0.8)) phase = 1;
         let steer;
         if (phase === 1) steer = pursue(v, world, tx, tz, Math.max(6, Math.hypot(tx - v.position.x, tz - v.position.z)));
@@ -285,7 +283,6 @@ export async function cutThenWander(game, env, hairpin, { rider, speed = 10, L =
     for (let tick = 0; tick < seconds * 60; tick++) {
         const q = v.projection;
         const s = q.index >= 0 ? q.s : s0;
-        env.updateBarriers(s);
         const onRoad = Math.abs(q.lateral) <= q.width / 2;
         if (phase === 0 && s >= apex - L) phase = 1;
         if (phase === 1 && !onRoad && out.leftS === null) out.leftS = s;

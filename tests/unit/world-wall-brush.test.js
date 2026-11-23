@@ -6,7 +6,7 @@
 // contact the wall, i don't think that should cause a crash".
 //
 // Held here on the real Vehicle, against every kind of wall a world has (a rock face beside a tunnel's road, a
-// bridge's parapet, a rock face of the land, a road-closed barrier, a building):
+// bridge's parapet, a rock face of the land, a building):
 //   - leaned away from the wall at a glance: no crash, speed lost, and the bike is never in the wall
 //   - upright or leaned toward a wall as high as the rider: the crash it was, with its class
 //   - a wall lower than the bars is met by the tyres alone when the bike is upright too
@@ -124,8 +124,6 @@ describe('the table', () => {
         expect(rule.mostS).toBeGreaterThan(rule.holdS);
         expect(rule.scrub).toBeGreaterThan(0);
         expect(rule.kickDeg).toBeGreaterThan(0);
-        // The barrier's height is the drawn posts'
-        expect(RoadMesh.BARRIER_H_M).toBeGreaterThan(rule.parts[0].height);
     });
 });
 
@@ -187,30 +185,6 @@ describe.each(Object.entries(WALLS))('%s', (name, make) => {
         expect(4 * Math.sin(angle / DEG)).toBeLessThan(rule.closeMax);
         const r = touch(make, { away: 20, angle, speed: 4, gap: 0.1 });
         expect(r.crashed).toBe(true);
-    });
-});
-
-describe('a road-closed barrier', () => {
-    // A barrier across a side road that leaves along +x at z = 60: its face is along the ride, 6 m off the centre line
-    const make = () => {
-        const env = roadOf(0);
-        env.ground.setBarriers([{ x: HALF + 1 + WorldGround.BARRIER_DEPTH_M, z: 60, heading: Math.PI / 2, width: 60 }]);
-        return { env, face: HALF + 1, height: RoadMesh.BARRIER_H_M };
-    };
-
-    test.each([20, 35, 45])('leaned %i degrees away at a glance: a brush', (away) => {
-        const r = touch(make, { away });
-        expect(r.crashed).toBe(false);
-        expect(r.brushes).toBeGreaterThan(0);
-        // Met where the crash was: in the box for one step, the closing speed x the step at the most
-        expect(r.deep).toBeLessThanOrEqual(rule.closeMax * DT);
-        expect(r.lost).toBeGreaterThan(SCRUBBED);
-    });
-
-    test('upright, toward it, and over the closing bound: a crash', () => {
-        expect(touch(make, { away: 0 }).crashed).toBe(true);
-        expect(touch(make, { away: -35 }).crashed).toBe(true);
-        expect(touch(make, { away: 35, angle: 16, gap: 0.2 }).crashed).toBe(true);
     });
 });
 
@@ -330,7 +304,6 @@ describe.each(worlds)('the hairpins of %s with a wall on the outside, ridden wid
         for (const h of env.route.hairpins()) {
             env.route.sample(h.apex, p);
             await env.streamer.settle({ x: p.x, z: p.z }, h.apex);
-            env.updateBarriers(h.apex);
             // The outside of the bend is the side the road turns away from
             const side = -h.sign;
             // The longest run of the arc with a wall there: {from, to, face, past, height, parapet}, the face as near

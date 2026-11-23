@@ -201,7 +201,7 @@ const WorldPhysics = Object.freeze({
 
     // A wall or drop in the tile's zone layer (a face between stacked strands, on the 8 m grid) is solid only where
     // the land at the bike shows it: wallRiseM above the road, or dropDepthM below it. Elsewhere it is run-off.
-    // Barriers, tunnel and gallery rock, and bridge parapets are always solid.
+    // Tunnel and gallery rock, and bridge parapets are always solid.
     wallRiseM: 1,
     dropDepthM: 2.5,
 
@@ -218,8 +218,8 @@ const WorldPhysics = Object.freeze({
     // had into the wall and `scrub` of its speed each second for holdS after each touch (a touch within holdS of
     // the last is the same contact), and its heading is turned kickDeg off the wall. `scrub` is no brake worth
     // riding into a wall for: at 16 m/s it is 6.4 m/s^2, under the brake a bike has at full lean (6.6 before the
-    // rider's multiplier). One rule for every wall (a retaining wall's parapet, a bridge's, a rock face, a barrier,
-    // a building); one set of parts for every bike (the catalogue has no widths)
+    // rider's multiplier). One rule for every wall (a retaining wall's parapet, a bridge's, a rock face, a
+    // building); one set of parts for every bike (the catalogue has no widths)
     wallBrush: Object.freeze({
         tyreM: 0.09,
         parts: Object.freeze([
@@ -258,13 +258,12 @@ const WorldPhysics = Object.freeze({
     //    edge back toward it, is gone: it acted where nothing drawn explained it.)
     // 3. Edge assist: on the carriageway within edgeZoneM of an edge and heading further off, a lean-rate nudge back
     //    toward the road's direction, full at the edge and at a heading edgeAngleDeg or more off the road. None while
-    //    the rider steers back, in a tunnel or gallery, or within edgeBarrierM of a junction barrier; it fades out over
-    //    edgeBudgetS of use (refilled in the middle half of the road)
+    //    the rider steers back, or in a tunnel or gallery; it fades out over edgeBudgetS of use (refilled in the middle
+    //    half of the road)
     edgeLeanRate: 1.5,     // rad/s at level normal
     edgeZoneM: 1,
     edgeAngleDeg: 5,
     edgeBudgetS: 1.5,
-    edgeBarrierM: 12,
     // The line capture and the edge assist reach the lean rate as one contribution, low-passed over this
     assistSmoothing: 0.1,  // s
     // 4. Edge lean (Vehicle.edgeLean): a bike that runs wide gets more lean to tighten its line with. On the carriageway

@@ -24,7 +24,6 @@ describe('every row of falls is reached on the real stage', () => {
         const p = env.route.sample(s, {});
         env.update(p, s, null, Infinity);
         await env.streamer.settle(p, s);
-        env.updateBarriers(s);
         return p;
     };
     // A bike on the ride at s, `lateral` m off the centre line (bikeAt's x: + is to the left of the way), turned

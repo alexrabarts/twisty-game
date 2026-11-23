@@ -193,10 +193,11 @@ describe('the Tremola slice', () => {
         }
     });
 
-    test('the horizon, the gates and the barriers are in the scene', () => {
+    test('the horizon and the gates are in the scene, and no side road is closed by a barrier', () => {
         const names = [];
         env.group.traverse(o => names.push(o.name));
-        for (const name of ['world-horizon', 'world-gates', 'world-barriers']) expect(names).toContain(name);
+        for (const name of ['world-horizon', 'world-gates']) expect(names).toContain(name);
+        expect(names.filter(name => /barrier/i.test(name))).toEqual([]);
         expect(scene.children).toContain(env.group);
     });
 
@@ -214,23 +215,18 @@ describe('the Tremola slice', () => {
         }
     });
 
-    test('the junction the rider reaches closes its other branches, and only that junction', () => {
-        const junction = env.graph.junctions.find(j => j.passes.some(p => p.inEdge !== null && p.barriers.length));
-        const pass = junction.passes.find(p => p.inEdge !== null && p.barriers.length);
-        const p = env.route.sample(Math.max(0, pass.sIn - 150), {});
-        env.update(p, pass.sIn - 150);
-        const active = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => b.edgeId).sort((a, b) => a - b);
-        expect(active).toEqual(pass.barriers.map(b => b.edgeId).sort((a, b) => a - b));
-        expect(active).not.toContain(pass.outEdge);
-        expect(env.barrierMesh.count).toBe(env.activeBarriers.length);
-        // Where each barrier was placed (moved off the ride and the other roads: WorldGraph.barrierPose) is a wall
-        for (const b of env.activeBarriers.filter(x => x.junctionId === junction.id)) {
-            const loc = { x: b.x, z: b.z, index: 0, lateral: 100 };
-            expect(env.ground.zoneAt(loc, 5).kind).toBe('wall');
+    test('every side road the rider reaches is drawn open: its stub from the junction, at full detail', () => {
+        const junction = env.graph.junctions.find(j => j.passes.some(p => p.inEdge !== null));
+        const pass = junction.passes.find(p => p.inEdge !== null);
+        const p = env.route.sample(pass.sIn, {});
+        env.update(p, pass.sIn);
+        const stubs = [];
+        for (const group of env.sideMeshes.values()) for (const road of group.userData.roads || []) if (road.userData.stub) stubs.push(road.userData.edge);
+        for (const { edgeId } of junction.incident) {
+            if (env.graph.rideEdgeIds.has(edgeId)) continue;
+            expect(env.graph.sideStubs().get(edgeId)).toBe(junction.node);
+            expect(stubs).toContain(edgeId);
         }
-        // Far down the ride the junction's barriers are gone
-        env.update(env.route.sample(env.route.length - 10, {}), env.route.length - 10);
-        expect(env.activeBarriers.filter(b => b.junctionId === junction.id)).toEqual([]);
     });
 
     test('update builds within the frame budget and the guide runs from the state it is given', () => {
@@ -356,7 +352,7 @@ describe('WorldGuide', () => {
         const guide = new WorldGuide(environment);
         const reasons = [];
         guide.onRestart = reason => reasons.push(reason);
-        const events = run(guide, 12, frame({ ...onRoad, lateral: 50 }));
+        const events = run(guide, 12, frame({ ...onRoad, lateral: 50, distance: 50 }));
         expect(events[0][1]).toBe('Wrong way');
         const fired = events.find(e => e[2] === 'restart');
         expect(fired[0]).toBeGreaterThan(9.9);
@@ -378,6 +374,21 @@ describe('WorldGuide', () => {
         expect(reasons).toEqual(['wrong-way']);
     });
 
+    test('a rider who goes from the wrong way to off the line is restarted 10 s after the first warning', () => {
+        const guide = new WorldGuide(environment);
+        const reasons = [];
+        guide.onRestart = reason => reasons.push(reason);
+        const back = run(guide, 8, frame(onRoad, { speed: 10, yaw: Math.PI }));
+        const warned = back.find(e => e[1]);
+        // (back along a side road, then out past Route.OFF_ROUTE_M)
+        const off = run(guide, 10, frame({ ...onRoad, lateral: 50, distance: 50 }, { speed: 10, yaw: Math.PI }));
+        const fired = off.findIndex(e => e[2] === 'restart');
+        expect(fired).toBeGreaterThan(-1);
+        expect(8 + fired / 60 - warned[0]).toBeGreaterThan(9.9);
+        expect(8 + fired / 60 - warned[0]).toBeLessThan(10.1);
+        expect(reasons).toEqual(['off-route']);
+    });
+
     test('riding the road normally never warns (the control)', () => {
         const guide = new WorldGuide(environment);
         guide.onRestart = () => { throw new Error('restart'); };
@@ -395,13 +406,13 @@ describe('WorldGuide', () => {
         const guide = new WorldGuide(environment);
         let restarts = 0;
         guide.onRestart = () => { restarts++; };
-        run(guide, 8, frame({ ...onRoad, lateral: 60 }));
+        run(guide, 8, frame({ ...onRoad, lateral: 60, distance: 60 }));
         guide.reset();
         // Still off route after the reset: a new 10 s must run before the next restart
-        const events = run(guide, 9, frame({ ...onRoad, lateral: 60 }));
+        const events = run(guide, 9, frame({ ...onRoad, lateral: 60, distance: 60 }));
         expect(restarts).toBe(0);
         expect(events.some(e => e[2] === 'restart')).toBe(false);
-        run(guide, 2, frame({ ...onRoad, lateral: 60 }));
+        run(guide, 2, frame({ ...onRoad, lateral: 60, distance: 60 }));
         expect(restarts).toBe(1);
     });
 
@@ -409,17 +420,17 @@ describe('WorldGuide', () => {
         const guide = new WorldGuide(environment);
         let restarts = 0;
         guide.onRestart = () => { restarts++; };
-        run(guide, 6, frame({ ...onRoad, lateral: 60 }));
+        run(guide, 6, frame({ ...onRoad, lateral: 60, distance: 60 }));
         expect(guide.warning).toBe('Wrong way');
         run(guide, 1, frame(onRoad));
         expect(guide.warning).toBeNull();
-        run(guide, 6, frame({ ...onRoad, lateral: 60 }));
+        run(guide, 6, frame({ ...onRoad, lateral: 60, distance: 60 }));
         expect(restarts).toBe(0);
     });
 
     test('the prompt names the next junction, its distance and the way to go', () => {
         const graph = {
-            junctions: [{ id: 'j', name: 'Via Gottardo', node: 0, incident: [{ edgeId: 1, heading: Math.PI }, { edgeId: 2, heading: 0.6 }], passes: [{ sIn: 400, inEdge: 1, outEdge: 2, barriers: [] }] }]
+            junctions: [{ id: 'j', name: 'Via Gottardo', node: 0, incident: [{ edgeId: 1, heading: Math.PI }, { edgeId: 2, heading: 0.6 }], passes: [{ sIn: 400, inEdge: 1, outEdge: 2 }] }]
         };
         const guide = new WorldGuide({ ...environment, route: new WorldRoute(samplesOf(straight(2000)), { graph }) });
         expect(guide.promptAt(100)).toBe('Keep left, 300 m · Via Gottardo');

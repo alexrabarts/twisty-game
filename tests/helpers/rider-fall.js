@@ -70,13 +70,13 @@ export function groundAt(v, x, z, index) {
     return loc.roadY;
 }
 
-// How far (x, z) is into a wall, a barrier or a parapet, in metres past its face (-Infinity: not in one), by the
+// How far (x, z) is into a wall or a parapet, in metres past its face (-Infinity: not in one), by the
 // zones the bike is stopped by (Vehicle.checkWallCollision). The zones are the road's own rows, 4 m apart, each a
 // band from a face outward, so the point is read on the row `index` (the one the rider's middle is on) and on the
 // row nearest to the point itself, and is in a wall only where both have one: a hand past the end of the next row's
 // wall is not in it. The face is where the zone stops being a wall on the way back to the road, looked for every
 // 0.1 m up to 3 m back (land that stands high enough to be a wall is one only from where it does). Land that is a
-// wall by its height alone (no parapet, bridge side, tunnel rock or barrier) has a top: a point at height `y` that
+// wall by its height alone (no parapet, bridge side or tunnel rock) has a top: a point at height `y` that
 // lies on that land, not under it, is on the bank and not in it
 export function wallDepth(v, x, z, index, y = null) {
     const environment = v.environment;
@@ -88,7 +88,8 @@ export function wallDepth(v, x, z, index, y = null) {
         const loc = ground.locate(x, z, { start: row, end: row }, {});
         const sign = loc.lateral < 0 ? -1 : 1;
         const zoneAt = (lateral) => {
-            const located = { index: loc.index, lateral };
+            // (between the rows as the physics reads it: WorldGround.framePoint)
+            const located = { index: loc.index, t: loc.t, lateral };
             const zone = ground.zoneAt(located, ground.halfRoad(loc));
             return v.worldPhysics ? v.worldZone(zone, located, loc.roadY) : zone;
         };
@@ -96,7 +97,7 @@ export function wallDepth(v, x, z, index, y = null) {
         const zone = zoneAt(loc.lateral);
         if (zone.kind !== 'wall') return -Infinity;
         const flags = loc.flags || {};
-        const built = zone.parapet || flags.tunnel || flags.gallery || flags.bridge || (ground.barriers && ground.barriers.length && ground.inBarrier(x, z));
+        const built = zone.parapet || flags.tunnel || flags.gallery || flags.bridge;
         if (!built && y !== null && typeof ground.heightAt === 'function' && y >= ground.heightAt(loc, false) - 0.1) return -Infinity;
         let depth = 3;
         for (let back = 0.1; back <= 3; back += 0.1) if (!wallAt(loc.lateral - sign * back)) { depth = back; break; }

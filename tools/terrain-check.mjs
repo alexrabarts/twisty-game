@@ -28,7 +28,7 @@
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   world-hud rides the fixture of three stages tests/fixtures/world/mini (--world all) unless --worldData is given
 //   node tools/terrain-check.mjs world-finish --world tremola --gpu [--seed S] [--seeds N]   (N rides from seed S; default 5 rides from 1, all must finish)
-//   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction barrier and the minimap, as PNG files in <dir>)
+//   node tools/terrain-check.mjs world-shots --world tremola --gpu --out <dir>   (hairpins, a junction and the minimap, as PNG files in <dir>)
 // submit: finishes each leg and types a name into the form, against a server answered locally. --reply old|new picks the startRun reply
 //   (new adds protocol and gates for a board in Course.boardTable()); --mutate ready-always makes the client's handshake pass whatever the reply says
 // (`shortcuts` runs its own doubled-back control)
@@ -2283,6 +2283,10 @@ function modelFiles(dir = join(root, 'assets')) {
     }).sort();
 }
 
+// world-wrongway rides into the side road of the ride junction nearest this ride distance (one that leaves on the left
+// by the lake at km 12.5)
+const WRONGWAY_SIDE_S = 12529;
+
 // Least share of the half screen the bike keeps from each edge on every frame of world-frustum
 const FRUSTUM_MARGIN = 0.1;
 
@@ -3117,7 +3121,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
     const kindOf = o => {
         const w = o.userData.world;
         if (w === 'terrain') return code.land;
-        if (w === 'road' || w === 'barriers') return code.road;
+        if (w === 'road') return code.road;
         if (w === 'works') return code.works;
         // The horizon and the far land are left out: one standing over the land is world-floating's horizonOver
         return null;
@@ -3704,7 +3708,8 @@ const WORLD = {
             aboveRoad: { n: above.length, over: above.filter(d => d > 0).length, max: r3(Math.max(...above)) }
         };
     }, placeAt.toString(), Number(option('points') || 500)),
-    // Every pass of every ride junction: its barrier set stands, the open pair has none
+    // Every pass of every ride junction: no barrier is drawn, every side road that leaves it is drawn as its stub, and
+    // the physics makes no wall and no fall across a stub's carriageway, read where the bike reads it (the point itself)
     'world-junction': async page => page.evaluate(async (placeSource) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment;
@@ -3712,20 +3717,35 @@ const WORLD = {
         for (const junction of env.graph.junctions) {
             const passes = [];
             for (const pass of junction.passes) {
-                if (pass.inEdge === null) continue;
-                await placeAt(Math.max(0, pass.sIn - 200));
-                const active = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => b.edgeId).sort((a, b) => a - b);
-                const expected = pass.barriers.map(b => b.edgeId).sort((a, b) => a - b);
-                // Where each barrier was placed (moved off the ride and the other roads: WorldGraph.barrierPose)
-                const walls = env.activeBarriers.filter(b => b.junctionId === junction.id).map(b => env.ground.zoneAt({ x: b.x, z: b.z, index: 0, lateral: 100 }, 5).kind);
-                passes.push({ sIn: pass.sIn, expected, active, walls, outClosed: expected.includes(pass.outEdge), mesh: env.barrierMesh.count });
+                await placeAt(pass.sIn);
+                env.streamer.pump(Infinity);
+                const barriers = [];
+                env.group.traverse(o => { if (/barrier/i.test(o.name || '') || /barrier/i.test(String(o.userData.world || ''))) barriers.push(o.name); });
+                const drawn = new Set();
+                for (const group of env.sideMeshes.values()) for (const road of group.userData.roads || []) if (road.userData.stub) drawn.add(road.userData.edge);
+                const stubs = [], missing = [], solid = [];
+                for (const { edgeId } of junction.incident) {
+                    if (env.graph.rideEdgeIds.has(edgeId)) continue;
+                    stubs.push(edgeId);
+                    if (!drawn.has(edgeId)) missing.push(edgeId);
+                    for (const r of env.graph.stub(edgeId, junction.node) || []) {
+                        for (let c = -r.width / 2 + 0.05; c <= r.width / 2 - 0.05 + 1e-9; c += 0.25) {
+                            const x = r.x + c * Math.cos(r.heading), z = r.z - c * Math.sin(r.heading);
+                            const q = env.route.project(x, z, null, {});
+                            if (q.distance <= q.width / 2) continue;
+                            const zone = env.ground.zoneAt({ index: q.index, t: q.along, lateral: q.lateral, x, z, roadY: q.y }, q.width / 2);
+                            if ((zone.kind === 'wall' || zone.kind === 'fall') && solid.length < 10) solid.push({ edge: edgeId, kind: zone.kind, s: Math.round(q.s), lateral: Math.round(q.lateral * 100) / 100 });
+                        }
+                    }
+                }
+                passes.push({ sIn: pass.sIn, stubs, missing, solid, barriers });
             }
             if (passes.length) out.push({ id: junction.id, name: junction.name, passes });
         }
         return out;
     }, placeAt.toString()),
     // Off the ride line, backwards, and the ordinary ride between (the control)
-    'world-wrongway': async page => page.evaluate(async (placeSource, pilotSource) => {
+    'world-wrongway': async page => page.evaluate(async (placeSource, pilotSource, sideS) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment;
         const guide = env.guide;
@@ -3794,8 +3814,53 @@ const WORLD = {
         }
         console.log = log;
         results.push({ name: 'ride-2km', metres: Math.round(v.routeS - env.startS), crashed: v.crashed, crash: crashes[0] || null, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 10) / 10, warned, restarts: game.restarts - restarts });
+        // Into the side road of the junction nearest WRONGWAY_SIDE_S at 10 m/s, as a rider steers (nothing closes it):
+        // the warning, then the restart 10 s later and what the call-outs said
+        const pick = env.graph.junctions.flatMap(j => j.passes.map(pass => ({ j, pass }))).filter(({ j }) => j.incident.some(i => !env.graph.rideEdgeIds.has(i.edgeId)))
+            .sort((a, b) => Math.abs(a.pass.sIn - sideS) - Math.abs(b.pass.sIn - sideS))[0];
+        const sideEdge = pick.j.incident.find(i => !env.graph.rideEdgeIds.has(i.edgeId)).edgeId;
+        guide.reset();
+        await placeAt(pick.pass.sIn - 40);
+        env.streamer.pump(Infinity);
+        const way = [];
+        for (let s = pick.pass.sIn - 40; s < pick.pass.sIn; s += 2) { const p = route.sample(s, {}); way.push({ x: p.x, z: p.z, m: s - pick.pass.sIn }); }
+        for (const r of env.graph.chainFrom(sideEdge, pick.j.node, 600).rows) way.push({ x: r.x, z: r.z, m: r.run });
+        const last = way[way.length - 1], prior = way[way.length - 2], ahead = Math.atan2(last.x - prior.x, last.z - prior.z);
+        for (let d = 4; d <= 400; d += 4) way.push({ x: last.x + d * Math.sin(ahead), z: last.z + d * Math.cos(ahead), m: last.m + d });
+        let k = 0;
+        const nearest = () => { for (let j = k; j < Math.min(way.length, k + 60); j++) if (Math.hypot(way[j].x - v.position.x, way[j].z - v.position.z) < Math.hypot(way[k].x - v.position.x, way[k].z - v.position.z)) k = j; return way[k].m; };
+        const input = game.input;
+        const wrapped = a => Math.atan2(Math.sin(a), Math.cos(a));
+        input.getSteeringInput = () => {
+            const m = nearest(), reach = Math.max(5, Math.min(30, 3 + 0.7 * v.speed));
+            let t = k;
+            while (t < way.length - 1 && way[t].m - m < reach) t++;
+            const err = wrapped(Math.atan2(way[t].x - v.position.x, way[t].z - v.position.z) - v.yawAngle);
+            const most = Math.min(1 / env.physics.radiusFloor, 9.81 * Math.tan(v.worldPhysics.leanCapDeg * Math.PI / 180) / Math.max(1, v.speed * v.speed));
+            const wanted = Math.max(-most, Math.min(most, 2 * Math.sin(err) / reach));
+            const lean = -Math.sign(wanted) * Math.atan(v.speed * v.speed * Math.abs(wanted) / 9.81);
+            return Math.max(-1, Math.min(1, (v.leanAngle - lean) * 8));
+        };
+        input.getThrottleInput = () => (v.speed < 10 ? 1 : 0);
+        input.getBrakeInput = () => (v.speed > 11 ? 1 : 0);
+        v.speed = 10;
+        const said = [];
+        const callout = window.showCallout;
+        window.showCallout = (text, ...rest) => { said.push(text); return callout(text, ...rest); };
+        const before = game.restarts;
+        const side = { name: 'side-road-10ms', s: Math.round(pick.pass.sIn), warnedAt: null, warnedM: null, restartAt: null, restartM: null, crashed: false, said };
+        clock = 0;
+        for (let tick = 0; tick < 60 * 40; tick++) {
+            const m = nearest();
+            twistyDev.step(1);
+            if (side.warnedAt === null && guide.warning) Object.assign(side, { warnedAt: clock, warnedM: Math.round(m) });
+            if (game.restarts > before) { Object.assign(side, { restartAt: clock, restartM: Math.round(m) }); break; }
+            if (v.crashed) { side.crashed = true; break; }
+        }
+        window.showCallout = callout;
+        results.push(side);
         return results;
-    }, placeAt.toString(), pilotWorld.toString()),
+    }, placeAt.toString(), pilotWorld.toString(), WRONGWAY_SIDE_S),
     // The data credit is in Credits, not on screen: reachable from the pause panel of a ride, on the loading screen
     // and from the main menu, with the manifest's credit and notice; nothing on screen names it during the ride
     'world-credit': async (page, port) => {
@@ -4588,7 +4653,7 @@ const WORLD = {
         const cut = { frames: frame, ms: Math.round(frame * 1000 / 60), restarts: game.restarts - restartsBeforeCut, penaltyMs: game.penaltyMs - penaltyBefore, backAtS: Math.round(v.projection.s), lowerS: Math.round(lower) };
         return { pair, cutConfirmMs: physics.cutConfirmMs, maxBankM: physics.maxBankM, control, flicker, cut };
     }, placeAt.toString(), pilotWorld.toString()),
-    // GPU screenshots to --out: two hairpins, a junction barrier, and the minimap and HUD in each
+    // GPU screenshots to --out: two hairpins, a junction, and the minimap and HUD in each
     'world-shots': async (page) => {
         const out = option('out');
         if (!out) return { error: 'name a folder with --out <dir>' };
@@ -4608,8 +4673,8 @@ const WORLD = {
             bends.sort((p, q) => q.turn - p.turn);
             const picked = [];
             for (const bend of bends) if (picked.every(other => Math.abs(other.s - bend.s) > 1500) && picked.length < 2) picked.push(bend);
-            const junction = env.graph.junctions.find(j => j.passes.some(p => p.inEdge !== null && p.barriers.length));
-            const pass = junction ? junction.passes.find(p => p.inEdge !== null && p.barriers.length) : null;
+            const junction = env.graph.junctions.find(j => j.passes.some(p => p.inEdge !== null));
+            const pass = junction ? junction.passes.find(p => p.inEdge !== null) : null;
             return { hairpins: picked.map(p => Math.round(p.s - 30)), junction: pass ? { s: Math.round(pass.sIn - 25), name: junction.name || String(junction.id) } : null };
         });
         const files = [];
@@ -4632,7 +4697,7 @@ const WORLD = {
         };
         for (let k = 0; k < sites.hairpins.length; k++) await shoot(`hairpin-${k + 1}`, sites.hairpins[k], 2);
         await shoot('hairpin-high-view', sites.hairpins[0], 3);
-        if (sites.junction) await shoot('junction-barrier', sites.junction.s, 2);
+        if (sites.junction) await shoot('junction', sites.junction.s, 2);
         const hud = await page.evaluate(() => ({
             guide: !!document.getElementById('world-guide'),
             guideBox: (() => { const b = document.getElementById('world-guide').getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) }; })(),
@@ -4646,12 +4711,11 @@ const WORLD = {
 // world-clearance: nothing drawn stands in a road. The slice is walked every --every metres (default 300); at each
 // place the drawn road bands round the bike (the ride within half a step either side, and every side road drawn) are
 // cast down on across their full drawn width, every CLEAR_STEP_M along and across, from HEADROOM_M over the surface to
-// just under it, against every scenery mesh: trees, boulders, houses, landmarks, marker stones, barriers and the gate
+// just under it, against every scenery mesh: trees, boulders, houses, landmarks, marker stones and the gate
 // frames, instanced or not. Where a mesh's box reaches into a cell, the cell is cast on again every CLEAR_FINE_M, so a
 // pole or a board a few centimetres thick is not missed between rays. A ray is cast only inside the drawn width: the
 // cells at a road's edge reach half a step past it, and what stands on the verge there (a checkpoint's boards, 0.16 m
-// off the carriageway) is not over the road. A hit is a failure, except a barrier over the
-// side road it closes (it is there to close it, never on the ride) and a roadworks site's works in its own closed lane
+// off the carriageway) is not over the road. A hit is a failure, except a roadworks site's works in its own closed lane
 // (js/world/roadworks.js: the open lane beside it must stay clear); a station banner spans the ride above HEADROOM_M,
 // so no ray reaches it. --out <dir> saves a view of the worst offenders.
 //   node tools/terrain-check.mjs world-clearance --world tremola --gpu [--every 300] [--out <dir> --tag T --shots N]
@@ -4679,7 +4743,6 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
         // The tufts are one mesh for a whole tile, too slow to cast on from every cell: tests/unit/world-clearance.test.js
         // measures each tuft's own footprint
         if (n === 'stones') return 'stone';
-        if (n === 'world-barriers') return 'barrier';
         if (n === 'world-gates') return 'gate';
         // The roadworks at the checkpoints: their works stand in the closed lane, and nowhere else on a road
         if (n.startsWith('roadworks:')) return 'roadworks';
@@ -4689,21 +4752,6 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
     const closedLane = (s, lat) => {
         for (const site of (env.roadworks && env.roadworks.closed) || []) if (s >= site.sa - 1 && s <= site.sd + 1 && lat * site.side >= 0) return true;
         return false;
-    };
-    // The barrier instances, in the order placeBarriers set them (env.activeBarriers), with the side roads each closes
-    const closes = (b) => {
-        const out = new Set();
-        let edge = env.data.edges[b.edgeId], from = b.node, run = 0;
-        while (edge && !edge.onRide && !out.has(edge.id) && run < 80) {
-            out.add(edge.id);
-            run += edge.length;
-            const far = edge.a === from ? edge.b : edge.a;
-            if (env.data.nodes.degree[far] !== 2) break;
-            from = far;
-            const last = edge.id;
-            edge = env.data.edges.find(e => e.id !== last && (e.a === far || e.b === far));
-        }
-        return out;
     };
     const hits = new Map();
     const seenSide = new Set();
@@ -4727,7 +4775,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
                 for (const st of env.stationGates || []) {
                     const p = route.sample(st.s, {});
                     const r = p.width / 2 + 3;
-                    const thing = { mesh: o, type, index: 0, world: o.matrixWorld.clone(), x: p.x, z: p.z, x0: p.x - r, x1: p.x + r, z0: p.z - r, z1: p.z + r, y0: p.y - 1, y1: p.y + 7, barrier: null };
+                    const thing = { mesh: o, type, index: 0, world: o.matrixWorld.clone(), x: p.x, z: p.z, x0: p.x - r, x1: p.x + r, z0: p.z - r, z1: p.z + r, y0: p.y - 1, y1: p.y + 7 };
                     const ref = things.length;
                     things.push(thing);
                     for (let cx = Math.floor(thing.x0 / 16); cx <= Math.floor(thing.x1 / 16); cx++) {
@@ -4745,7 +4793,7 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
                 const world = new THREE.Matrix4();
                 if (o.isInstancedMesh) { o.getMatrixAt(i, matrix); world.multiplyMatrices(o.matrixWorld, matrix); } else world.copy(o.matrixWorld);
                 box.copy(o.geometry.boundingBox).applyMatrix4(world);
-                const thing = { mesh: o, type, index: i, world, x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2, x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, y0: box.min.y, y1: box.max.y, barrier: type === 'barrier' ? env.activeBarriers[i] : null };
+                const thing = { mesh: o, type, index: i, world, x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2, x0: box.min.x, x1: box.max.x, z0: box.min.z, z1: box.max.z, y0: box.min.y, y1: box.max.y };
                 const ref = things.length;
                 things.push(thing);
                 for (let cx = Math.floor(thing.x0 / 16); cx <= Math.floor(thing.x1 / 16); cx++) {
@@ -4768,7 +4816,6 @@ async function clearanceWalk(placeSource, every, headroom, step, fine) {
             for (const ref of list) {
                 const t = things[ref];
                 if (t.x1 < x - h || t.x0 > x + h || t.z1 < z - h || t.z0 > z + h || t.y0 > y + headroom || t.y1 < y - 0.3) continue;
-                if (t.type === 'barrier' && road.edgeId !== null && t.barrier && closes(t.barrier).has(road.edgeId)) continue;
                 if (t.type === 'roadworks' && road.edgeId === null && closedLane(road.s, road.lat)) continue;
                 probe.geometry = t.mesh.geometry;
                 probe.material = t.mesh.material;
@@ -4878,7 +4925,6 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
         const p = route.sample(mid, {});
         env.update(p, mid, null, Infinity);
         await env.streamer.settle(p, mid);
-        env.updateBarriers(mid);
         const r = fairness(parts, env, v, { s0: s, s1: Math.min(env.endS, s + every - 1e-6), stepM: 1, acrossM: 0.25 });
         for (const k of ['points', 'widthCount', 'solidCount', 'runoffCount']) sweep[k] += r[k];
         sweep.worstWidthM = Math.max(sweep.worstWidthM, r.worstWidthM);
@@ -6423,20 +6469,23 @@ function worldChecks(report) {
         if (ground.aboveRoad.n !== ground.road.n || ground.aboveRoad.over) failures.push(`world-ground: the drawn land stands above the road surface at ${ground.aboveRoad.over} of ${ground.aboveRoad.n} road points (up to ${ground.aboveRoad.max} m), want none`);
     }
     (results['world-junction'] || []).forEach(j => j.passes.forEach(p => {
-        if (JSON.stringify(p.active) !== JSON.stringify(p.expected)) failures.push(`world-junction ${j.id} at ${p.sIn}: barriers ${JSON.stringify(p.active)}, want ${JSON.stringify(p.expected)}`);
-        if (p.walls.some(kind => kind !== 'wall')) failures.push(`world-junction ${j.id} at ${p.sIn}: a barrier does not give wall (${p.walls})`);
-        if (p.outClosed) failures.push(`world-junction ${j.id} at ${p.sIn}: the road out is closed`);
+        if (p.barriers.length) failures.push(`world-junction ${j.id} at ${p.sIn}: a barrier is drawn (${p.barriers.join(', ')})`);
+        if (p.missing.length) failures.push(`world-junction ${j.id} at ${p.sIn}: side roads ${JSON.stringify(p.missing)} are not drawn as stubs`);
+        if (p.solid.length) failures.push(`world-junction ${j.id} at ${p.sIn}: the physics makes a wall or a fall on a stub: ${JSON.stringify(p.solid)}`);
     }));
     const haze = results['world-haze'];
     if (haze) hazeChecks(haze, failures);
     const wrong = results['world-wrongway'];
     if (wrong) {
-        const [off, back, ride] = wrong;
+        const [off, back, ride, side] = wrong;
         if (off.error) failures.push(`world-wrongway: ${off.error}`);
         else {
             if (!(off.warnedAt !== null && off.warnedAt <= 1) || !(Math.abs(off.restartAt - off.warnedAt - 10) <= 0.5)) failures.push(`world-wrongway off route: ${JSON.stringify(off)}, want the warning within 1 s and the restart 10 s later`);
             if (!(Math.abs(back.warnedAt - 5) <= 0.5) || !(Math.abs(back.restartAt - back.warnedAt - 10) <= 0.5)) failures.push(`world-wrongway backwards: ${JSON.stringify(back)}, want the warning at 5 s and the restart 10 s later`);
             if (ride.warned || ride.restarts || ride.crashed || ride.metres < 1900) failures.push(`world-wrongway control: ${JSON.stringify(ride)}, want neither a warning nor a restart over 2 km`);
+            const sideOk = side && !side.crashed && side.warnedAt !== null && Math.abs(side.restartAt - side.warnedAt - 10) <= 0.5 && side.restartM <= 250
+                && side.said.includes('Wrong way') && side.said.some(text => text.startsWith('Off route, back on the road'));
+            if (!sideOk) failures.push(`world-wrongway side road: ${JSON.stringify(side)}, want "Wrong way", then "Off route, back on the road" 10 s later within 250 m`);
         }
     }
     const credit = results['world-credit'];
@@ -6590,7 +6639,7 @@ function worldChecks(report) {
     if (shots) {
         if (shots.error) failures.push(`world-shots: ${shots.error}`);
         else {
-            if (!shots.sites.junction) failures.push('world-shots: no junction barrier on the ride to shoot');
+            if (!shots.sites.junction) failures.push('world-shots: no junction on the ride to shoot');
             if (!shots.hud.guide || !shots.hud.stage) failures.push(`world-shots: the HUD is missing: ${JSON.stringify(shots.hud)}`);
             if (flag('gpu') && !/Apple|AMD|NVIDIA|Intel/.test(String(shots.hud.renderer))) failures.push(`world-shots: not a GPU renderer: ${shots.hud.renderer}`);
         }

@@ -8,7 +8,9 @@
 //   - the off-route rule: more than Route.OFF_ROUTE_M from the ride line, or riding
 //     against the route at over REVERSE_SPEED for REVERSE_WARN_S, shows "Wrong way";
 //     RESTART_AFTER_S later (still wrong) it calls `onRestart`, the same path as the
-//     C key, with the reason. Any restart resets both timers through reset().
+//     C key, with the reason. Any restart resets both timers through reset(). The
+//     clock runs from the first warning: a rider who goes on from one cause to the
+//     other (back along a side road, then more than 40 m out) is not given 10 s more.
 // The rule is a pure state machine (`step`), so it runs in the node harness; the
 // canvas and the prompt are built only when there is a document.
 class WorldGuide {
@@ -64,10 +66,8 @@ class WorldGuide {
             this.warnedS = null;
             return null;
         }
-        if (this.cause !== cause) {
-            this.cause = cause;
-            this.warnedS = 0;
-        } else this.warnedS += dt;
+        this.warnedS = this.cause ? this.warnedS + dt : 0;
+        this.cause = cause;
         if (this.warnedS >= WorldGuide.RESTART_AFTER_S) {
             const reason = cause;
             this.reset();

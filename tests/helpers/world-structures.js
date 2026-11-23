@@ -4,16 +4,17 @@
 //
 // structureWindow(game, env, {seen, depthM, headroomM}) reads every structure drawn now: the road works of the ride's
 // sections and of the side chunks (aprons, retaining walls, parapets, decks, soffits, piers, wall ends, tunnels,
-// bridges), and the road-closed barriers as the physics boxes them. Every triangle is tested against the drawn
+// bridges). Every triangle is tested against the drawn
 // carriageway of every road (the ride's in its ribbon frame, WorldRoute.nearestSegment; each side edge's from its
 // samples) at the points where it can stand deepest in one (its corners, and where its edges and face pass nearest a
 // centre line), each with the heights the face spans there: inside a carriageway by more than `depthM` and standing over
 // that road's surface by more than `depthM` and less than `headroomM` intrudes. A road's own
 // carriageway does not count against its own works (a side road's parapet stands on its own edge), nor does a side
-// road it goes on as (an edge joined to it through a node of degree 2); a barrier counts against no edge of the side
-// road it closes. A deck that passes over a road with full headroom is over it, not in it.
-// Then the physics: a point the rider can reach on a side road's stub (from the ride's carriageway to the barrier)
-// whose zone is a wall the barrier does not make, and a barrier box reaching into the ride's carriageway.
+// road it goes on as (an edge joined to it through a node of degree 2). A deck that passes over a road with full
+// headroom is over it, not in it.
+// Then the physics: a point of a side road's stub (WorldGraph.sideStubs, the first STUB_M from the ride's junction,
+// across its carriageway) whose zone is a wall or a fall, read where the bike reads it (Vehicle.checkWallCollision:
+// the point itself). Nothing closes a side road, so a rider on one meets nothing the road does not draw.
 // `seen` (a Set) carries the triangles already counted across calls, so a sweep counts each once.
 // Returns {triangles, intrusions, worst: [...], physics: [...]}: worst holds the deepest DETAIL intrusions.
 // `done` (a Set of geometry ids) carries the meshes already read across calls: a mesh still resident is not read again.
@@ -90,13 +91,13 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
     const out = { triangles: 0, intrusions: 0, worst: [], physics: [], byKind: {} };
     const hits = [];
     const v = new THREE.Vector3();
-    // One structure triangle (9 numbers), owned by `owner` (-1 the ride, a side edge id, or a Set of edges for a barrier)
+    // One structure triangle (9 numbers), owned by `owner` (-1 the ride, or a side edge id)
     const test = (tri, owner, kind, source) => {
         const key = `${source}:${kind}:${tri.map(c => Math.round(c * 50)).join(',')}`;
         if (seen.has(key)) return;
         seen.add(key);
         out.triangles++;
-        const own = owner instanceof Set ? owner : owner >= 0 ? chainOf(owner) : null;
+        const own = owner >= 0 ? chainOf(owner) : null;
         // An apron is land laid APRON_UNDER_M (6 cm) under the ribbon's edge and drawn behind it (polygon offset): it
         // counts only where it rises 10 cm over a road
         lowM = kind === 'apron' ? 0.1 : depthM;
@@ -210,44 +211,25 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
     };
     for (const group of env.roadMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'road-ribbon') meshTriangles(o, 'ride', -1); });
     for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'road-side') meshTriangles(o, 'side', null); });
-    // The barriers as the physics boxes them (WorldGround.setBarriers: the drawn fence and BARRIER_DEPTH_M either side)
-    const barriers = env.activeBarriers || [];
-    barriers.forEach((b, i) => {
-        const box = ground.barriers[i];
-        if (!box) return;
-        const chain = chainOf(b.edgeId);
-        const y = Number.isFinite(b.y) ? b.y : ground.landY(b.x, b.z, 0);
-        const along = game.WorldGround.BARRIER_DEPTH_M;
-        const corner = (a, c) => [b.x + a * box.sin + c * box.cos, y + 0.6, b.z + a * box.cos - c * box.sin];
-        const p00 = corner(-along, -box.half), p10 = corner(along, -box.half), p11 = corner(along, box.half), p01 = corner(-along, box.half);
-        test([...p00, ...p10, ...p11], chain, 'barrier', 'barrier');
-        test([...p00, ...p11, ...p01], chain, 'barrier', 'barrier');
-    });
-    // The physics on each stub the rider can reach: from the ride's carriageway to the barrier, across the side road
+    // The physics on each stub, from the ride's carriageway out, across the side road
     const graph = env.graph, located = {}, proj = {};
-    barriers.forEach(b => {
-        const stub = graph.stub(b.edgeId, b.node);
-        if (!stub) return;
-        const reachM = Math.hypot(b.x - stub[0].x, b.z - stub[0].z);
-        for (let k = 0; k < stub.length; k++) {
-            const r = stub[k];
-            if (Math.hypot(r.x - stub[0].x, r.z - stub[0].z) > reachM - 1) break;
+    for (const [edgeId, node] of graph.sideStubs()) {
+        const stub = graph.stub(edgeId, node);
+        if (!stub) continue;
+        for (const r of stub) {
             for (let c = -r.width / 2 + depthM; c <= r.width / 2 - depthM + 1e-9; c += SAMPLE_M) {
                 const x = r.x + c * Math.cos(r.heading), z = r.z - c * Math.sin(r.heading);
                 route.project(x, z, null, proj);
-                if (proj.distance <= proj.width / 2 || Math.abs(proj.y - r.y) > 2) continue;
+                if (proj.distance <= proj.width / 2) continue;
                 const key = `phys:${Math.round(x * 4)},${Math.round(z * 4)}`;
                 if (seen.has(key)) continue;
                 seen.add(key);
-                located.index = proj.index;
-                located.lateral = proj.lateral;
-                located.x = x;
-                located.z = z;
+                Object.assign(located, { index: proj.index, t: proj.along, lateral: proj.lateral, x, z, roadY: proj.y });
                 const zone = ground.zoneAt(located, proj.width / 2);
-                if (zone.kind === 'wall' && !ground.inBarrier(x, z) && out.physics.length < detail) out.physics.push({ edge: b.edgeId, s: Math.round(proj.s), lateral: Math.round(proj.lateral * 100) / 100, parapet: !!zone.parapet });
+                if ((zone.kind === 'wall' || zone.kind === 'fall') && out.physics.length < detail) out.physics.push({ edge: edgeId, kind: zone.kind, s: Math.round(proj.s), lateral: Math.round(proj.lateral * 100) / 100, parapet: !!zone.parapet });
             }
         }
-    });
+    }
     hits.sort((a, b) => b.depthM - a.depthM);
     out.worst = hits.slice(0, detail);
     out.all = hits;

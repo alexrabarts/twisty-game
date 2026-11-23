@@ -3838,7 +3838,7 @@ class Game {
         }
         // A world streams by place round the bike, and guides the rider
         if (this.environment && this.environment.isWorld && this.vehicle) {
-            // The barrier set follows accepted progress, so a flicker of the projection cannot swap it at a junction used twice
+            // (the ride distance it streams by is the accepted progress, not the raw projection)
             this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
         }
 

@@ -141,7 +141,7 @@ class RoadClearance {
 // Counts are capped against the window budget of 1 400 instances,
 // nearest first (tiles are built nearest first): TREE_CAP trees, BUILDING_CAP
 // instances of house parts, STONE_CAP marker stones (the nearest to the bike, chosen
-// again as it moves: Scenery.rankStones) and a few barriers.
+// again as it moves: Scenery.rankStones).
 class Scenery {
     static get TREE_CAP() { return 1000; }
     static get BUILDING_CAP() { return 300; }
@@ -210,7 +210,7 @@ class Scenery {
     // parapet: the wall's coping is the stones' seat (RoadMesh.COPING_W_M holds a stone and a margin either side). So
     // no stone stands on a level verge, on the uphill side, round a hairpin whose outside is level or the bank that
     // rises from it, on the inside of a hairpin, on a wall that carries a parapet (the parapet is the guard), or where
-    // a bridge or a barrier already guards the edge. Only a hairpin's row stands on a kerb course (KERB): at a drop
+    // a bridge already guards the edge. Only a hairpin's row stands on a kerb course (KERB): at a drop
     // and on a wall the blocks stand alone, each in the ground or on the wall's top.
     //   dropM, reachM   a sharp drop: the drawn ground reachM past the verge lies more than dropM under the road. A
     //                   fill at the batter (RoadMesh.BATTER, 1:1.5) falls 6.7 m in 10, and the downhill edge of a

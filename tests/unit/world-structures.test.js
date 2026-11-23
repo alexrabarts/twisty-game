@@ -4,9 +4,9 @@
 // No road's structures stand in a carriageway, and every structure is one continuous surface that no other surface
 // shares a plane with. The Tremola slice is streamed in node and every structure drawn in each window is read
 // (tests/helpers/world-structures.js):
-//   - a deck, pier, parapet, retaining wall, wall end, apron or barrier box of one road standing in the drawn
-//     carriageway of another (or of the ride) by more than 5 cm, between 5 cm and the headroom over that road's surface;
-//     and a wall the physics makes on a side road's stub that no barrier makes there
+//   - a deck, pier, parapet, retaining wall, wall end or apron of one road standing in the drawn carriageway of
+//     another (or of the ride) by more than 5 cm, between 5 cm and the headroom over that road's surface; and a wall
+//     or a fall the physics makes on a side road's stub, which nothing closes (the barriers are gone)
 //   - two corners of one road's structures more than 2.5 cm and less than 25 cm apart: a step or a gap where two pieces
 //     laid per segment meet instead of one swept surface
 //   - two drawn triangles (road ribbons and structures) in one plane, within 2 cm, overlapping: z-fighting
@@ -15,7 +15,7 @@
 // metres, which lie on the ride's carriageway at a junction, and structures stood in a carriageway everywhere (a
 // side road's wall ends and parapets across the ride at the Bedrína junction, km 1.3; a pier of the Gotthard road's
 // bridge on the ride's centre line at km 5.1). Its parapets were level boxes, one a segment, stepping on every grade,
-// and a side road with a road-closed stub was drawn twice over the stub's 60 m, deck and parapets included.
+// and a side road with a stub was drawn twice over the stub's 60 m, deck and parapets included.
 //
 // What still stands, and is held here so it can only shrink (the committed head before the fix, 78aeeec: 3781
 // intrusions, 3477 seams, 8258 coplanar pairs):
@@ -57,8 +57,6 @@ describe('the Tremola slice: structures keep out of every carriageway and are co
             const p = env.route.sample(s + W / 2, {});
             env.update(p, s, null, Infinity);
             await env.streamer.settle(p, s + W / 2);
-            env.barrierStep = null;
-            env.updateBarriers(s + W / 2);
             const r = structureWindow(game, env, { seen: seen.structures, done: done.structures });
             sweep.triangles += r.triangles;
             sweep.intrusions.push(...r.all);
@@ -82,8 +80,8 @@ describe('the Tremola slice: structures keep out of every carriageway and are co
         if (sweep.intrusions.length > LIMIT.intrusions) throw new Error(`${sweep.intrusions.length} structure triangles in a carriageway (at most ${LIMIT.intrusions}), deepest first:\n${list(sweep.intrusions)}`);
     });
 
-    test('no wall the physics makes stands on a side road\'s stub but its barrier', () => {
-        if (sweep.physics.length > LIMIT.physics) throw new Error(`${sweep.physics.length} wall points on a stub (at most ${LIMIT.physics}):\n${list(sweep.physics)}`);
+    test('the physics makes no wall and no fall on a side road\'s stub', () => {
+        if (sweep.physics.length > LIMIT.physics) throw new Error(`${sweep.physics.length} wall or fall points on a stub (at most ${LIMIT.physics}):\n${list(sweep.physics)}`);
     });
 
     test('every deck, parapet and wall is one swept surface: no step or gap between its segments', () => {

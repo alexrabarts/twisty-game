@@ -58,7 +58,7 @@ export function groundFaults(game, env, q, spans = null) {
         const flags = points[Math.max(0, j)].flags || {};
         if (flags.bridge || flags.tunnel || flags.gallery) bad.push(`a structure at row ${j}`);
     }
-    // The physics has nothing solid at the edge either (a parapet, a barrier)
+    // The physics has nothing solid at the edge either (a parapet)
     const zone = env.ground.zoneAt({ index: i, lateral: q.side * (edge + 0.5), t: 0, roadY: p.y, flags: points[i].flags }, p.width / 2);
     if (zone.kind === 'wall') bad.push('a solid edge');
     const own = env.route.project(q.x, q.z, hint, {});

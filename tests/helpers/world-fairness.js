@@ -9,7 +9,7 @@
 // It returns {points, width, solid, runoff}:
 //   - width: the physics lateral or half width more than WIDTH_M off the drawn column offset or half width
 //   - solid: a wall or a fall on the drawn ribbon with nothing drawn within VISIBLE_M of it that the rider could hit
-//     (a retaining wall, parapet, deck side, tunnel or bridge part of the road works, a barrier) and, for a wall, no
+//     (a retaining wall, parapet, deck side, tunnel or bridge part of the road works) and, for a wall, no
 //     drawn land standing wallRiseM over the road there
 //   - runoff: run-off (the off-road timer) on the drawn carriageway
 export function fairnessWindow(game, env, vehicle, { s0, s1, stepM = 1, acrossM = 0.25 }) {
@@ -57,18 +57,6 @@ export function fairnessWindow(game, env, vehicle, { s0, s1, stepM = 1, acrossM 
             }
         });
     }
-    // The barriers as drawn: the instanced mesh's own matrices on its geometry's box
-    const barriers = [];
-    const mesh = env.barrierMesh;
-    if (mesh && mesh.count) {
-        mesh.geometry.computeBoundingBox();
-        const box = mesh.geometry.boundingBox, m = new THREE.Matrix4();
-        for (let i = 0; i < mesh.count; i++) {
-            mesh.getMatrixAt(i, m);
-            const corners = [[box.min.x, box.min.z], [box.max.x, box.min.z], [box.max.x, box.max.z], [box.min.x, box.max.z]].map(([x, z]) => new THREE.Vector3(x, box.min.y, z).applyMatrix4(m));
-            barriers.push({ poly: corners.map(c => [c.x, c.z]), y0: corners[0].y, y1: corners[0].y + (box.max.y - box.min.y) });
-        }
-    }
     const segGap = (px, pz, ax, az, bx, bz) => {
         const dx = bx - ax, dz = bz - az, run = dx * dx + dz * dz;
         const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / run));
@@ -104,14 +92,6 @@ export function fairnessWindow(game, env, vehicle, { s0, s1, stepM = 1, acrossM 
             if (bary(tri, x, z)) return true;
             if (segGap(x, z, tri[0], tri[2], tri[3], tri[5]) <= VISIBLE_M || segGap(x, z, tri[3], tri[5], tri[6], tri[8]) <= VISIBLE_M || segGap(x, z, tri[6], tri[8], tri[0], tri[2]) <= VISIBLE_M) return true;
         }
-        for (const b of barriers) {
-            if (b.y1 < y + 0.2 || b.y0 > y + 1.5) continue;
-            const p = b.poly;
-            let inside = false;
-            for (let i = 0, j = p.length - 1; i < p.length; j = i++) if ((p[i][1] > z) !== (p[j][1] > z) && x < ((p[j][0] - p[i][0]) * (z - p[i][1])) / (p[j][1] - p[i][1]) + p[i][0]) inside = !inside;
-            if (inside) return true;
-            for (let i = 0; i < p.length; i++) if (segGap(x, z, p[i][0], p[i][1], p[(i + 1) % p.length][0], p[(i + 1) % p.length][1]) <= VISIBLE_M) return true;
-        }
         return false;
     };
     const out = { points: 0, width: [], solid: [], runoff: [], widthCount: 0, solidCount: 0, runoffCount: 0, worstWidthM: 0 };
@@ -136,10 +116,12 @@ export function fairnessWindow(game, env, vehicle, { s0, s1, stepM = 1, acrossM 
                 out.widthCount++;
                 note(out.width, { ...at, physicsLateral: Math.round(proj.lateral * 100) / 100, drawnOffset: Math.round(drawn.offset * 100) / 100, physicsHalf: Math.round(proj.width / 2 * 100) / 100, drawnHalf: Math.round(drawn.half * 100) / 100 });
             }
+            // (where the bike reads it: Vehicle.checkWallCollision gives the zone its own place)
             located.index = proj.index;
+            located.t = proj.along;
             located.lateral = proj.lateral;
-            located.x = undefined;
-            located.z = undefined;
+            located.x = x;
+            located.z = z;
             const zone = vehicle.worldZone(ground.zoneAt(located, proj.width / 2), located, proj.y);
             if (zone.kind === 'runoff' && Math.abs(drawn.offset) <= drawn.half - WIDTH_M) {
                 out.runoffCount++;

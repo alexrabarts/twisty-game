@@ -46,7 +46,6 @@ async function loadWorld(id, search) {
         const p = env.route.sample(s, {});
         env.update(p, s, null, Infinity);
         await env.streamer.settle(p, s);
-        env.updateBarriers(s);
         return p;
     };
     return { scene, env, settle };

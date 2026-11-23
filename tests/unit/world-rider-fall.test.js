@@ -7,7 +7,7 @@
 // speeds, leaned to each side, along the road and turned 0.5 rad toward its edge. Every frame is read from what is
 // drawn (tests/helpers/rider-fall.js):
 //   - no point of the rider's body is more than GROUND_M under the ground the bike's own physics has there
-//   - his middle is never in a wall, a barrier or a parapet, and no point of him is more than LIMB_M into one
+//   - his middle is never in a wall or a parapet, and no point of him is more than LIMB_M into one
 //   - he ends within NEAR_M + NEAR_PER_SPEED x the crash speed of the bike
 // A drawn building and the thing the bike hit stop him too. The flat-plane rules are tests/unit/rider-fall.test.js.
 import { describe, test, expect, beforeAll } from '@jest/globals';
@@ -48,7 +48,6 @@ describe('the rider falls on the real stage', () => {
         const p = env.route.sample(s, {});
         env.update(p, s, null, Infinity);
         await env.streamer.settle(p, s);
-        env.updateBarriers(s);
         return p;
     };
     // A bike on the ride at s, `lateral` m right of the centre line, turned `toward` rad to its right

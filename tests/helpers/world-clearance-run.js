@@ -1,25 +1,9 @@
 // Rides a world slice in node and gathers every scenery placement as it is built, for the clearance audit
-import { roadBands, sceneryOf, footprint } from './world-clearance.js';
-
-// The edges of the side road a barrier closes: its edge from the junction, and on through every node the road only
-// passes (degree 2) while it is a side road, to STUB_M and a little more
-export function sideRoadOf(data, edgeId, nodeId, lengthM = 80) {
-    const out = [];
-    let edge = data.edges[edgeId], from = nodeId, run = 0;
-    while (edge && !edge.onRide && !out.includes(edge.id) && run < lengthM) {
-        out.push(edge.id);
-        run += edge.length;
-        const far = edge.a === from ? edge.b : edge.a;
-        if (data.nodes.degree[far] !== 2) break;
-        from = far;
-        edge = data.edges.find(e => e.id !== out[out.length - 1] && (e.a === far || e.b === far));
-    }
-    return out;
-}
+import { roadBands, sceneryOf } from './world-clearance.js';
 
 // Loads the stage, rides it in `stepM` steps with the streamer settled at each, and returns the bands and the things
 export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn, stepM = 200, models = null } = {}) {
-    const { THREE, WorldEnvironment, WorldStreamer, RoadSurface, RoadMesh } = game;
+    const { THREE, WorldEnvironment, WorldStreamer, RoadSurface } = game;
     const scene = new THREE.Scene();
     const env = await WorldEnvironment.load(scene, { id, search, fetchFn, models, digest: async () => '0' });
     const things = [];
@@ -61,26 +45,5 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
     // Every chunk, so the bands hold every side road
     await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
     const bands = roadBands(env, RoadSurface.VERGE_M);
-    // Every barrier of every pass, where the game puts it (WorldEnvironment.updateBarriers), on its own side edge
-    const box = RoadMesh.barrierGeometry();
-    box.computeBoundingBox();
-    const matrix = new THREE.Matrix4(), rotation = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0);
-    const placed = new Set();
-    for (const junction of env.graph.junctions) {
-        for (const pass of junction.passes) {
-            env.barrierStep = null;
-            env.updateBarriers(pass.sIn);
-            for (const b of env.activeBarriers) {
-                const key = `${b.junctionId}:${b.edgeId}:${b.x.toFixed(2)}:${b.z.toFixed(2)}`;
-                if (placed.has(key)) continue;
-                placed.add(key);
-                rotation.setFromAxisAngle(up, b.heading);
-                const y = (Number.isFinite(b.y) ? b.y : env.ground.landY(b.x, b.z, 0)) - 0.1;
-                matrix.compose(new THREE.Vector3(b.x, y, b.z), rotation, new THREE.Vector3(2 * game.WorldGround.barrierHalf(b.width), 1, 1));
-                const chain = sideRoadOf(env.data, b.edgeId, b.node);
-                things.push({ type: 'barrier', name: `barrier:${b.junctionId}:${b.edgeId}`, edgeId: b.edgeId, chain, junctionId: b.junctionId, ...footprint(THREE, box.boundingBox, matrix), x: b.x, z: b.z });
-            }
-        }
-    }
     return { env, scene, bands, things };
 }

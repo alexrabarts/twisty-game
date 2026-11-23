@@ -1,5 +1,5 @@
 // Nothing the world places stands in a road. The Tremola slice is ridden in node with the streamer, every tree,
-// boulder, house, marker stone, tuft, landmark and barrier is gathered as it is built, and each one's footprint (its geometry's
+// boulder, house, marker stone, tuft and landmark is gathered as it is built, and each one's footprint (its geometry's
 // box under its matrix) is measured against every road band rebuilt from the samples: the ride and every side edge,
 // each sample's own width plus the verge. The trees and houses are boxes the size of their .glb models
 // (tests/helpers/world-clearance.js modelStandIns), so the footprints are the drawn ones.
@@ -13,7 +13,7 @@ import { rideAndGather } from '../helpers/world-clearance-run.js';
 
 const root = new URL('../../', import.meta.url);
 const game = loadGame();
-const { THREE, WorldGround, WorldGraph, RoadClearance, RoadSurface } = game;
+const { THREE, RoadClearance, RoadSurface } = game;
 // The most a thing's lowest point may stand over the drawn ground under its middle
 const FLOAT_M = 0.1;
 
@@ -31,11 +31,11 @@ describe('the Tremola slice: no scenery in a road', () => {
     test('every kind of scenery was placed and measured', () => {
         const counts = {};
         for (const t of gathered.things) counts[t.type] = (counts[t.type] || 0) + 1;
-        for (const type of ['tree', 'boulder', 'house', 'stone', 'tuft', 'landmark', 'barrier']) expect(counts[type] || 0).toBeGreaterThan(0);
+        for (const type of ['tree', 'boulder', 'house', 'stone', 'tuft', 'landmark']) expect(counts[type] || 0).toBeGreaterThan(0);
         expect(counts.tree).toBeGreaterThan(1500);
     });
 
-    test('no footprint reaches into a road band (a barrier only into the side road it closes)', () => {
+    test('no footprint reaches into a road band', () => {
         const fails = offenders.filter(o => o.level === 'fail');
         if (fails.length) throw new Error(`${fails.length} things stand in a road:\n${list(fails)}`);
     });
@@ -129,53 +129,6 @@ describe('the gate frames', () => {
         }
         if (bad.length) throw new Error(`roadworks in a side road:\n${bad.join('\n')}`);
     }, 60000);
-});
-
-describe('the barriers close side roads and never the ride', () => {
-    let env, bands, things;
-    beforeAll(async () => {
-        const { fetchFn } = diskFetch();
-        ({ env, bands, things } = await rideAndGather(game, { fetchFn, stepM: 2000 }));
-    }, 120000);
-
-    test('every barrier of every pass is placed', () => {
-        const want = env.graph.junctions.reduce((n, j) => n + j.passes.reduce((m, p) => m + p.barriers.length, 0), 0);
-        expect(things.filter(t => t.type === 'barrier')).toHaveLength(want);
-    });
-
-    test('the wall a barrier makes (WorldGround.setBarriers) stays off the ride band, every metre across it', () => {
-        const on = [];
-        for (const junction of env.graph.junctions) {
-            for (const pass of junction.passes) {
-                for (const b of env.graph.barriersFor(pass.sIn, 1, env.scenery.roads).filter(x => x.junctionId === junction.id)) {
-                    const half = WorldGround.barrierHalf(b.width), depth = WorldGround.BARRIER_DEPTH_M;
-                    const f = [Math.sin(b.heading), Math.cos(b.heading)], l = [Math.cos(b.heading), -Math.sin(b.heading)];
-                    const poly = [[-depth, -half], [depth, -half], [depth, half], [-depth, half]].map(([a, c]) => [b.x + a * f[0] + c * l[0], b.z + a * f[1] + c * l[1]]);
-                    const near = clearanceOf(bands, poly, -Infinity, Infinity, g => g.kind === 'side');
-                    if (near.clearance < 0) on.push(`${junction.id} edge ${b.edgeId} at (${b.x.toFixed(1)}, ${b.z.toFixed(1)}): ${near.clearance.toFixed(2)} m past the ride band at s ${Math.round(near.s)}`);
-                }
-            }
-        }
-        if (on.length) throw new Error(`barriers on the ride:\n${on.join('\n')}`);
-    });
-
-    test('a barrier stands across its own side road', () => {
-        for (const t of things.filter(x => x.type === 'barrier')) {
-            const near = clearanceOf(bands, t.poly, t.y0, t.y1, g => !(g.kind === 'side' && t.chain.includes(g.edgeId)));
-            expect(near.clearance).toBeLessThan(0);
-            // On the road's surface, not left at the height of a tile that was not here yet
-            expect(Math.abs(t.y0 - (near.roadY - 0.1))).toBeLessThan(0.5);
-        }
-    });
-
-    test('the importer pose of a side road shorter than the stub is moved off the far junction', () => {
-        // j68's edge 140 is 19 m long: the importer put its barrier on the node where edges 139 and 141 meet
-        const junction = env.graph.junctions.find(j => j.id === 'j68');
-        const barrier = junction.passes[0].barriers[0];
-        expect(env.data.edges[barrier.edgeId].length).toBeLessThan(WorldGraph.STUB_M);
-        const placed = env.graph.barrierPose(junction, barrier, env.graph.stubWidth(barrier.edgeId), env.scenery.roads);
-        expect(Math.hypot(placed.x - barrier.x, placed.z - barrier.z)).toBeGreaterThan(1);
-    });
 });
 
 describe('RoadClearance', () => {

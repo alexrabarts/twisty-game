@@ -8,7 +8,7 @@
 //   - elsewhere it is the height of the 512 m / 8 m tile on its drawn triangles, then the
 //     100 m far grid, then the route height under the nearest ride sample
 // The zone beside the road is the tile's zone layer (road, bench, wall, drop,
-// water, terrain), and any active barrier box beats it with `wall`.
+// water, terrain).
 //
 // A "located point" (`loc`) is {index, lateral, roadY, along, x, z}: the same
 // shape Terrain.locate fills for a leg. zoneAt() is given only index and
@@ -20,18 +20,6 @@ class WorldGround extends Ground {
     // Metres of bench beside the road band that the importer carves flat
     static get BENCH_M() { return 2; }
 
-    // Metres a barrier box reaches along the road, and beyond the road edge across it. The box is what RoadMesh draws
-    // (placeBarriers spans barrierHalf each side), so the bike stops at the barrier it sees: the drawn barrier is a
-    // fence of a few centimetres, and the box reaches half a metre along the road either side of it (1.2 m stopped the
-    // bike over a metre short of the fence), enough that a bike under 60 m/s cannot step through it in one frame
-    static get BARRIER_DEPTH_M() { return 0.5; }
-    static get BARRIER_MARGIN_M() { return 1.5; }
-
-    // Metres from a barrier's centre to each end of it, drawn and solid: the side road's half width and the margin
-    static barrierHalf(width) {
-        return Math.max(3, width / 2 + WorldGround.BARRIER_MARGIN_M);
-    }
-
     // Metres past the road edge that a bridge parapet stands (RoadMesh draws it there)
     static get PARAPET_M() { return 0.35; }
 
@@ -40,9 +28,12 @@ class WorldGround extends Ground {
         return RoadMesh.VIADUCT_FACE_M - RoadMesh.VIADUCT.parapetW;
     }
 
-    // A side road past a wall's face within this of the ride's height runs on beside the ride (zoneAt): not a lower
-    // road at the wall's foot
-    static get SIDE_BESIDE_M() { return 1.5; }
+    // Metres past the ride's carriageway within which its works make the zone (tunnel rock, a bridge's parapet, a
+    // retaining wall and its parapet). Every face of them stands within the verge (a stopping place's 5 m of hard
+    // standing included), but a rider thrown in a stack of hairpins reads the strand he fell on (Vehicle.riderProject)
+    // up to 12 m out, where the wall between two legs holds him: at 8 m one went through it. Past it the zone is the
+    // land's or a side road's: read without a bound, a rider on a side road 88 m from the ride met the ride's wall
+    static get WORKS_REACH_M() { return 20; }
 
     // Metres a fall below the road ends
     static get FALL_M() { return 30; }
@@ -53,7 +44,6 @@ class WorldGround extends Ground {
         super();
         this.route = route;
         this.data = data;
-        this.barriers = [];
         this.sideHash = new Map();
         this.sideSegments = [];
         this.scratch = {};
@@ -61,11 +51,6 @@ class WorldGround extends Ground {
         this.roadSide = Object.freeze({ flat: 0, runoff: null, lipDepth: 8 });
         this.benchSide = Object.freeze({ flat: WorldGround.BENCH_M, runoff: null, lipDepth: 8 });
         this.openSide = Object.freeze({ flat: WorldGround.BENCH_M, runoff: WorldGround.RUNOFF, lipDepth: 8 });
-    }
-
-    // The barrier boxes in force: [{x, z, heading, width}]
-    setBarriers(list) {
-        this.barriers = list.map(b => ({ x: b.x, z: b.z, sin: Math.sin(b.heading), cos: Math.cos(b.heading), half: WorldGround.barrierHalf(b.width) }));
     }
 
     // Side roads in residence: [{x, z, y, width}] typed arrays per edge. They give the height and the road zone inside their band.
@@ -168,21 +153,6 @@ class WorldGround extends Ground {
         out.x = point.x + lateral * Math.cos(point.heading);
         out.z = point.z - lateral * Math.sin(point.heading);
         return out;
-    }
-
-    inBarrier(x, z) {
-        return this.barrierAt(x, z) !== null;
-    }
-
-    // The barrier box (x, z) is in, or null
-    barrierAt(x, z) {
-        for (const b of this.barriers) {
-            const dx = x - b.x, dz = z - b.z;
-            const along = dx * b.sin + dz * b.cos;
-            const across = dx * b.cos - dz * b.sin;
-            if (Math.abs(along) <= WorldGround.BARRIER_DEPTH_M && Math.abs(across) <= b.half) return b;
-        }
-        return null;
     }
 
     locate(x, z, hint, out = {}) {
@@ -335,32 +305,45 @@ class WorldGround extends Ground {
     // (x, z) of a located point; the point itself when it carries one
     position(loc) {
         if (loc.x !== undefined && loc.z !== undefined) return loc;
-        const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
-        return WorldGround.pointAt(point, loc.lateral, this.scratchPoint || (this.scratchPoint = {}));
+        return this.framePoint(loc.index, loc.t, loc.lateral, this.scratchPoint || (this.scratchPoint = {}));
+    }
+
+    // The point `lateral` from the ride at share t of the way from row `index` to the next, in the ribbon's own frame
+    // (WorldRoute.frame, where the projection measures it): the rows' points and normals, each lerped. Read at the
+    // row alone, a point 30 m out on a bend stood up to 7 m from where the bike was (off a side road, over a drop)
+    framePoint(index, t, lateral, out) {
+        const points = this.route.points, last = points.length - 1;
+        const i = Math.max(0, Math.min(last, index));
+        const a = points[i];
+        const u = i < last && t > 0 ? Math.min(1, t) : 0;
+        if (u === 0) return WorldGround.pointAt(a, lateral, out);
+        const b = points[i + 1];
+        const nx = Math.cos(a.heading) + u * (Math.cos(b.heading) - Math.cos(a.heading));
+        const nz = -Math.sin(a.heading) - u * (Math.sin(b.heading) - Math.sin(a.heading));
+        out.x = a.x + (b.x - a.x) * u + lateral * nx;
+        out.z = a.z + (b.z - a.z) * u + lateral * nz;
+        return out;
     }
 
     // What the ground is at loc.lateral: {kind, side, sign, start}. `start` is how far
     // from the centre line the zone begins, the face the bike is put back to on a wall. A wall that is drawn to a
-    // height has it (`height`, metres over the road: a parapet, a barrier); a wall whose face is a line along the
+    // height has it (`height`, metres over the road: a parapet, a wall's coping); a wall whose face is a line along the
     // road at `start` says so (`line`: a parapet, the rock beside a tunnel's road; a rock face of the land is read
-    // from the 8 m zone layer and has none); a barrier has its box (`box`), whose faces are not along the road.
-    // Vehicle.brushWall reads all three
+    // from the 8 m zone layer and has none). Vehicle.brushWall reads both
     zoneAt(loc, halfRoad) {
         const sign = loc.lateral < 0 ? -1 : 1;
         const reach = Math.abs(loc.lateral);
         const at = this.position(loc);
-        // A barrier is solid where it stands: the bike is stopped where it is, not moved onto the road
-        const box = this.barriers.length ? this.barrierAt(at.x, at.z) : null;
-        if (box) return { kind: 'wall', side: this.wallSide, sign, start: reach, box, height: RoadMesh.BARRIER_H_M };
         if (reach <= halfRoad) return { kind: 'road', side: this.roadSide, sign, start: 0 };
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
-        if (point.bits & (WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery)) {
+        const works = reach <= halfRoad + WorldGround.WORKS_REACH_M;
+        if (works && point.bits & (WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery)) {
             // Rock beside a tunnel or gallery: a wall just past the kerb
             return { kind: reach <= halfRoad + WorldGround.BENCH_M ? 'shoulder' : 'wall', side: this.benchSide, sign, start: reach <= halfRoad + WorldGround.BENCH_M ? halfRoad : halfRoad + WorldGround.BENCH_M, line: true };
         }
         // A bridge has its parapet at the edge of the deck: past it there is no ground to ride or fall to (a viaduct's
         // stands on its face, at the verge's edge: RoadMesh.viaduct)
-        if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + (point.viaduct ? WorldGround.viaductParapet() : WorldGround.PARAPET_M), line: true, height: RoadMesh.PARAPET_H_M };
+        if (works && point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + (point.viaduct ? WorldGround.viaductParapet() : WorldGround.PARAPET_M), line: true, height: RoadMesh.PARAPET_H_M };
         // Where the road's edge stands on a retaining wall (the importer's drop node just past the verge, where RoadMesh
         // draws the wall and its parapet instead of the fill): the verge is drawn at the road's height up to the
         // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall
@@ -369,15 +352,16 @@ class WorldGround extends Ground {
         // has one (as RoadMesh.railed: a drop of PARAPET_DROP_M or more), stands on the coping's outer PARAPET_W_M,
         // half a metre further out than the side the tyres meet
         // A row of marker stones on a low wall stands where its parapet would (Scenery.wallRuns, WorldEnvironment.wallStoned)
-        const band = this.wallBand(loc, halfRoad);
+        const band = works ? this.wallBand(loc, halfRoad) : null;
         if (band) {
-            // (past the wall's face a side road that runs on beside the ride is that road: a rider on it meets no wall)
-            const beside = reach > band.to ? this.sideRoadY(at.x, at.z) : null;
-            if (beside !== null && Math.abs(beside - loc.roadY) < WorldGround.SIDE_BESIDE_M) return { kind: 'road', side: this.roadSide, sign, start: band.to };
+            // (past the wall's face a side road is that road, at any height: a rider on it came along it, since one on the
+            // ride is stopped at the coping, a wall's width before the face. Held to the ride's height within 1.5 m, a
+            // side road that ran down behind the wall at two junctions was a wall to the rider on it)
+            if (reach > band.to && this.sideRoadY(at.x, at.z) !== null) return { kind: 'road', side: this.roadSide, sign, start: band.to };
             const railed = this.onRetainingWall(loc, halfRoad) || !!(this.wallStoned && this.wallStoned(loc.index, sign));
             return reach > band.from ? { kind: 'wall', side: this.wallSide, sign, start: band.from, parapet: railed, line: true, height: RoadMesh.COPING_UP_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
         }
-        if (this.onRetainingWall(loc, halfRoad)) {
+        if (works && this.onRetainingWall(loc, halfRoad)) {
             const parapet = halfRoad + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M;
             return reach > parapet ? { kind: 'wall', side: this.wallSide, sign, start: parapet, parapet: true, line: true, height: RoadMesh.PARAPET_H_M } : { kind: 'shoulder', side: this.benchSide, sign, start: halfRoad };
         }
@@ -386,7 +370,7 @@ class WorldGround extends Ground {
         let start = reach;
         const probe = {};
         for (let d = reach - 0.5; d > halfRoad; d -= 0.5) {
-            WorldGround.pointAt(point, sign * d, probe);
+            this.framePoint(loc.index, loc.t, sign * d, probe);
             if (this.kindAt(probe.x, probe.z) !== kind) break;
             start = d;
         }

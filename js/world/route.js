@@ -46,7 +46,7 @@ class Route {
     // widths away is looked up over the whole route
     static get COLD_LOOKUP_WIDTHS() { return 1; }
 
-    // |lateral| beyond this many metres is off the route
+    // Metres from the ride line beyond which a rider is off the route
     static get OFF_ROUTE_M() { return 40; }
 
     // Half the width of a traffic car's body (js/traffic.js builds it 2 x this wide); a lane keeps the car inside the road
@@ -98,7 +98,9 @@ class Route {
     // Junctions within `distance` ahead of s, for turn prompts
     junctionsAhead() { return []; }
 
-    offRoute(projection) { return Math.abs(projection.lateral) > Route.OFF_ROUTE_M; }
+    // The distance from the ride where the projection has one: past the route's ends the lateral is measured along
+    // the last row's normal, and a rider who rode on past the finish along a side road stayed 290 m "on route"
+    offRoute(projection) { return Math.abs(Number.isFinite(projection.distance) ? projection.distance : projection.lateral) > Route.OFF_ROUTE_M; }
 }
 
 // A route over evenly spaced samples {x, y, z, heading, width}. It holds the

@@ -4,7 +4,7 @@
 // Plain ESM with no jest dependency, so the audit in the scratch runner and the unit test share it.
 
 // Margins past the band's edge inside which a thing is too close (a warning, not a failure), by kind
-export const MARGIN_M = { tree: 2, boulder: 2, house: 3, landmark: 3, stone: 0.15, tuft: 0.2, barrier: 1.5, gate: 1.5 };
+export const MARGIN_M = { tree: 2, boulder: 2, house: 3, landmark: 3, stone: 0.15, tuft: 0.2, gate: 1.5 };
 // Height over the road under which a thing stands in the rider's way (a station banner is above it)
 export const HEADROOM_M = 4.5;
 // A thing whose top is this far under the road is under it (a road on a bridge or a viaduct), not in it
@@ -90,7 +90,7 @@ function polygonGap(poly, g) {
 // The clearance of a footprint (a convex polygon in plan, [[x, z]...], standing from y0 to y1) from the road bands:
 // {clearance, kind, edgeId, s, roadY} for the nearest band it shares height with, the clearance in metres past the
 // band's edge (negative: inside the band). A band the footprint stands wholly over (HEADROOM_M) or under is skipped.
-// `skip(segment)` leaves bands out (a barrier's own side edge).
+// `skip(segment)` leaves bands out.
 export function clearanceOf(bands, poly, y0, y1, skip = null) {
     let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
     for (const [x, z] of poly) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); }
@@ -179,19 +179,14 @@ export function typeOf(mesh) {
     if (name.startsWith('landmark:')) return 'landmark';
     if (name === 'stones') return 'stone';
     if (name === 'tufts') return 'tuft';
-    if (name === 'world-barriers') return 'barrier';
     return null;
 }
 
 // Classifies each thing: 'fail' (in a band), 'warn' (within its margin of a band's edge), or null (clear).
-// Allowed: a barrier on its own side road (`chain`, the edges it closes: it is there to close them), never on the
-// ride's band.
 export function audit(bands, things) {
     const offenders = [];
     for (const t of things) {
-        const own = t.type === 'barrier' ? new Set(t.chain || [t.edgeId]) : null;
-        const skip = own ? (g) => g.kind === 'side' && own.has(g.edgeId) : null;
-        const near = clearanceOf(bands, t.poly, t.y0, t.y1, skip);
+        const near = clearanceOf(bands, t.poly, t.y0, t.y1);
         const margin = MARGIN_M[t.type] ?? 2;
         const level = near.clearance < 0 ? 'fail' : near.clearance < margin ? 'warn' : null;
         if (level) offenders.push({ level, type: t.type, name: t.name, ...(t.tile ? { tile: t.tile } : {}), x: Math.round(t.x * 10) / 10, z: Math.round(t.z * 10) / 10, clearance: Math.round(near.clearance * 100) / 100, road: near.kind, edgeId: near.edgeId, s: near.s === null ? null : Math.round(near.s) });

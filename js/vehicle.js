@@ -3775,8 +3775,7 @@ class Vehicle {
     // 3. Edge assist: anywhere on the ride, a bike on the carriageway within edgeZoneM of either road edge whose
     // heading points further off the road gets a lean-rate nudge back toward the road's
     // direction, scaled by how close it is to the edge (full from half the zone out) and how sharply it heads off. It does nothing while the
-    // rider steers back toward the road, in a tunnel or gallery, or near a junction barrier (the wall response
-    // has those), and it fades out over edgeBudgetS of use, so it cannot hold a bike against the edge like a
+    // rider steers back toward the road, or in a tunnel or gallery (the wall response has those), and it fades out over edgeBudgetS of use, so it cannot hold a bike against the edge like a
     // rail; the budget refills once the bike is back in the middle half of the road. Returns the rate (rad/s).
     edgeAssistRate(u, deltaTime) {
         this.edgeShare = 0;
@@ -3832,20 +3831,10 @@ class Vehicle {
         return rule.extra * this.edgeLeanShare;
     }
 
-    // In a tunnel or gallery, or within edgeBarrierM of a junction barrier: the wall response handles the edge
+    // In a tunnel or gallery: the wall response handles the edge
     edgeBlocked(s) {
-        const route = this.environment.route;
-        const sample = route.sample(s, this.edgeScratch || (this.edgeScratch = {}));
-        if (sample.flags && (sample.flags.tunnel || sample.flags.gallery)) return true;
-        const ground = this.environment.ground;
-        const reach = this.worldPhysics.edgeBarrierM;
-        if (ground && ground.barriers) {
-            for (const b of ground.barriers) {
-                const dx = this.position.x - b.x, dz = this.position.z - b.z;
-                if (dx * dx + dz * dz < (reach + b.half) * (reach + b.half)) return true;
-            }
-        }
-        return false;
+        const sample = this.environment.route.sample(s, this.edgeScratch || (this.edgeScratch = {}));
+        return !!(sample.flags && (sample.flags.tunnel || sample.flags.gallery));
     }
 
     updateMesh() {
@@ -4285,7 +4274,7 @@ class Vehicle {
     // One step of the rider's own fall, on the physics' time. Gravity, then the ground under him; on the ground the
     // slope pulls him downhill (RIDER_FALL slopeGrade, slopeMost) and the slide loses `drag` of its speed and `scrub`
     // m/s each second, so a faster crash slides further. Over the keys his middle goes `topple` m to the low side. He
-    // never goes into a wall, a barrier or a parapet (the bike's own zones, bodyM from his middle), a drawn building
+    // never goes into a wall or a parapet (the bike's own zones, bodyM from his middle), a drawn building
     // or the thing the bike hit (blockRider): he is put back to its face and loses the speed into it. A row
     // `withBike` (a drop, water) has no slide of its own: he goes from the seat to `off` beside the bike wherever it
     // falls
@@ -4380,14 +4369,15 @@ class Vehicle {
         const sign = projection.lateral < 0 ? -1 : 1;
         const located = rf.located;
         located.index = projection.index;
+        located.t = projection.along;
         located.lateral = projection.lateral + sign * rule.bodyM;
         let zone = environment.ground.zoneAt(located, projection.width / 2);
         if (this.worldPhysics) zone = this.worldZone(zone, located, projection.y);
         if (zone.kind !== 'wall') return;
         const perpX = Math.cos(projection.heading), perpZ = -Math.sin(projection.heading);
         const deep = Math.abs(located.lateral) - zone.start;
-        // A barrier is solid where it stands (its zone begins where he is), and a wall he is deep in at once is one
-        // he did not slide up to (the next row's zone, which begins far behind him): he stays where he was, against it
+        // A wall whose zone begins where he is, or one he is deep in at once, is one he did not slide up to (the next
+        // row's zone, which begins far behind him): he stays where he was, against it
         if (deep <= 0 || deep > rule.bodyM + reach) {
             p.x = fromX;
             p.z = fromZ;
@@ -5117,6 +5107,7 @@ class Vehicle {
         const ground = this.environment.ground;
         const located = this.located;
         located.index = projection.index;
+        located.t = projection.along;
 
         // Where the bike is, by the profile's bands. Hysteresis pulls the
         // edges in by half a unit once the bike has been past the road edge,
@@ -5126,12 +5117,28 @@ class Vehicle {
         const hysteresisBuffer = 0.5;
         const bias = this.wasNearEdge ? hysteresisBuffer : 0;
         const world = this.worldPhysics;
+        // A world's zones are read where the bike is: rebuilt from the row and the lateral, a place on a side road 10 to
+        // 30 m from the ride stood up to 7 m from the bike, off that road or over a drop
+        if (world) {
+            located.x = this.position.x;
+            located.z = this.position.z;
+        }
         located.lateral = perpDistance;
         let zone = ground.zoneAt(located, halfRoadWidth);
         if (world) zone = this.worldZone(zone, located, projection.y);
+        // A bike on a side road's carriageway past the ride's band is on road where it is: the hysteresis is the ride
+        // edge's, and half a unit along the ride's normal there is anywhere about the side road, off its edge too
+        const onSide = !!world && zone.kind === 'road' && Math.abs(perpDistance) > halfRoadWidth;
         located.lateral = perpDistance + sign * bias;
-        let edgeZone = ground.zoneAt(located, halfRoadWidth);
-        if (world) edgeZone = this.worldZone(edgeZone, located, projection.y);
+        if (world) {
+            located.x = this.position.x + sign * bias * perpX;
+            located.z = this.position.z + sign * bias * perpZ;
+        }
+        let edgeZone = onSide ? zone : ground.zoneAt(located, halfRoadWidth);
+        if (world && !onSide) edgeZone = this.worldZone(edgeZone, located, projection.y);
+        // (the reads after these, a brush's, rebuild their place from the lateral they ask about)
+        located.x = undefined;
+        located.z = undefined;
         const reach = Math.abs(perpDistance) + bias;
 
         // Update hysteresis state
@@ -5276,9 +5283,9 @@ class Vehicle {
 
     // The wall of the ride the bike is in: true when the touch is a brush. A wall whose face is a line along the road
     // (a parapet, tunnel rock) is met a step ahead as well: at the place the bike reaches at its heading, and skinM
-    // more, so a brush stops the bike before the face and it is never in that wall. A barrier and a rock face of the
-    // land are met only where a crash was (the zone is read on the bike's piece of the ride, and a place a step
-    // ahead can be in one the bike never comes to): the bike is in those for one step, closeMax x the step at the
+    // more, so a brush stops the bike before the face and it is never in that wall. A rock face of the
+    // land is met only where a crash was (the zone is read on the bike's piece of the ride, and a place a step
+    // ahead can be in one the bike never comes to): the bike is in it for one step, closeMax x the step at the
     // most. Nothing is looked for while the step ends on the carriageway
     brushWall(zone, projection, halfRoad, deltaTime) {
         const rule = this.worldPhysics.wallBrush;
@@ -5292,14 +5299,13 @@ class Vehicle {
         located.lateral = sign * reach;
         const next = this.environment.ground.zoneAt(located, halfRoad);
         located.lateral = lateral;
-        return next.kind === 'wall' && next.line === true && !next.box && this.brushZone(next, projection, halfRoad);
+        return next.kind === 'wall' && next.line === true && this.brushZone(next, projection, halfRoad);
     }
 
     // A wall zone met by the bike (brushWall): true when the touch is a brush, with the bike put skinM before the
     // face when it is past that. A bike found over deepM into a wall did not touch its face (the ride's projection
-    // came over from another strand): the crash it was. A barrier's face is its box's, across its side road. Any
-    // other wall's is along the road: the zone's own start for a wall with a line, else the first place back toward
-    // the road that is no wall, looked for in steps of FACE_STEP_M
+    // came over from another strand): the crash it was. A wall's face is along the road: the zone's own start for a
+    // wall with a line, else the first place back toward the road that is no wall, looked for in steps of FACE_STEP_M
     brushZone(zone, projection, halfRoad) {
         const rule = this.worldPhysics.wallBrush;
         const ground = this.environment.ground;
@@ -5309,21 +5315,6 @@ class Vehicle {
         const perpX = Math.cos(projection.heading), perpZ = -Math.sin(projection.heading);
         const located = this.located;
         located.lateral = lateral;
-        if (zone.box) {
-            // Where the zone was read: the bike's lateral on its piece of the ride (WorldGround.position)
-            const b = zone.box;
-            const at = ground.position(located);
-            const along = (at.x - b.x) * b.sin + (at.z - b.z) * b.cos;
-            const side = along < 0 ? -1 : 1;
-            if (!this.wallTouch(side * b.sin, side * b.cos, zone.height)) return false;
-            const push = WorldGround.BARRIER_DEPTH_M + rule.skinM - Math.abs(along);
-            if (push > 0) {
-                this.position.x += side * b.sin * push;
-                this.position.z += side * b.cos * push;
-            }
-            this.brush(side * b.sin, side * b.cos);
-            return true;
-        }
         if (zone.line && reach - zone.start > rule.deepM) return false;
         if (!this.wallTouch(-sign * perpX, -sign * perpZ, zone.height)) return false;
         let free = zone.line ? zone.start - rule.skinM : -1;
@@ -5483,7 +5474,7 @@ class Vehicle {
     // A world zone as the bike meets it. A wall or a drop from the tile's zone layer is solid only where the land
     // at loc shows it (WorldPhysics wallRiseM, dropDepthM against the road height roadY); elsewhere it is run-off.
     // The layer is an 8 m grid read at the nearest node, so a face between stacked strands reaches up to 4 m
-    // toward the road, onto flat verge. Barriers, tunnel and gallery rock, bridge parapets and the parapets of
+    // toward the road, onto flat verge. Tunnel and gallery rock, bridge parapets and the parapets of
     // retaining walls stay solid.
     worldZone(zone, loc, roadY = loc.roadY) {
         if (zone.kind !== 'wall' && zone.kind !== 'fall') return this.worldSurface(zone, loc);
@@ -5505,7 +5496,6 @@ class Vehicle {
         const at = ground.position(loc);
         scratch.x = at.x;
         scratch.z = at.z;
-        if (ground.barriers && ground.barriers.length && ground.inBarrier(at.x, at.z)) return zone;
         const land = ground.heightAt(scratch);
         if (zone.kind === 'wall' ? land - roadY >= world.wallRiseM : roadY - land >= world.dropDepthM) return zone;
         const soft = this.worldSoftZone || (this.worldSoftZone = {});
@@ -5775,7 +5765,7 @@ Vehicle.CRASH_CAUSES = Object.freeze({
     fast: 'highside',
     flip: 'highside',
     landing: 'highside',
-    // Rode into something that stands: a wall or a barrier, a car, a rider, a building, a rock or a machine
+    // Rode into something that stands: a wall, a car, a rider, a building, a rock or a machine
     wall: 'front',
     car: 'front',
     rider: 'front',

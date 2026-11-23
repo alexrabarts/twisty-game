@@ -88,9 +88,6 @@ class WorldEnvironment {
     // Metres from the bike within which a landmark is drawn
     static get LANDMARK_REACH_M() { return 3000; }
 
-    // The ride progress the barrier set is chosen by is rounded to this many metres
-    static get BARRIER_STEP_M() { return 20; }
-
     static async load(scene, { id = 'all', search = '', fetchFn = null, models = undefined, digest = null } = {}) {
         const resolved = WorldData.resolveBase(new URLSearchParams(search).get('worldData'));
         if (resolved.error) throw new Error(resolved.error);
@@ -176,9 +173,6 @@ class WorldEnvironment {
         this.sidePieceCache = new Map();
         this.scenery = new Scenery(this.ground, data, models);
         this.scenery.landmarkModels = landmarks;
-        this.barrierMesh = RoadMesh.barriers();
-        this.group.add(this.barrierMesh);
-        this.barrierKey = '';
         this.triangleCount = 0;
         this.lastBike = { x: this.route.sample(this.startS, {}).x, z: this.route.sample(this.startS, {}).z };
 
@@ -1931,7 +1925,7 @@ class WorldEnvironment {
         return { rows: out, s0: end.s };
     }
 
-    // The side roads whose first sample is in chunk k: stubs at LOD0 beside a barrier, and each road's rows in the
+    // The side roads whose first sample is in chunk k: stubs at LOD0 where they leave the ride, and each road's rows in the
     // pieces `near` names (WorldStreamer.sideNear: their indices in sidePieces, joined) at LOD0, the rest at LOD1
     // (drawSideRibbons)
     buildSide(k, near = '') {
@@ -1945,10 +1939,7 @@ class WorldEnvironment {
         const group = new THREE.Group();
         group.name = `world-side-${k}`;
         const edgesHere = [];
-        const barrierEdges = new Map();
-        for (const junction of this.graph.junctions) {
-            for (const pass of junction.passes) for (const b of pass.barriers) barrierEdges.set(b.edgeId, junction.node);
-        }
+        const stubEdges = this.graph.sideStubs();
         let triangles = 0;
         const missing = new Set();
         const sides = [], structures = [];
@@ -1986,7 +1977,7 @@ class WorldEnvironment {
             if (plain.length < 2) return;
             plain = this.sideMouths(edge, plain);
             const { rows, s0 } = this.fromRideEnd(edge, plain);
-            const node = barrierEdges.get(edge.id);
+            const node = stubEdges.get(edge.id);
             const guard = this.carriageways.guard(edge.id);
             let far = this.liftSide(rows);
             let farS = s0;
@@ -2122,23 +2113,6 @@ class WorldEnvironment {
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
     }
 
-    // The barrier set of the passes the rider is at (the high-water progress, not the raw projection)
-    updateBarriers(progressS) {
-        const step = Math.floor(progressS / WorldEnvironment.BARRIER_STEP_M);
-        if (step === this.barrierStep) return;
-        this.barrierStep = step;
-        // Each barrier on its own side road, clear of the ride and every other road (WorldGraph.barrierPose)
-        const list = this.graph.barriersFor(progressS, 1000, this.scenery.roads);
-        // The pose is part of the key: a barrier's place is measured once its side road is here (WorldGraph.barrierPose)
-        const key = list.map(b => `${b.junctionId}:${b.edgeId}:${Math.round(b.x)}:${Math.round(b.z)}`).join('|');
-        if (key === this.barrierKey) return;
-        this.barrierKey = key;
-        this.activeBarriers = list;
-        this.ground.setBarriers(list);
-        // On the side road's own surface where that is known: the tile under it need not be here yet
-        RoadMesh.placeBarriers(this.barrierMesh, list.map(b => ({ x: b.x, y: (Number.isFinite(b.y) ? b.y : this.ground.landY(b.x, b.z, 0)) - 0.1, z: b.z, heading: b.heading, width: b.width })));
-    }
-
     // Streams the world round the bike and builds what the 4 ms budget allows.
     // position: {x, z}; s: the ride progress; state: what the guide reads, see WorldGuide.update;
     // dtSec: the simulated time since the last update (0 for a call that is not a step of the ride)
@@ -2149,7 +2123,6 @@ class WorldEnvironment {
         if (this.roadworks) this.roadworks.update(position, Number.isFinite(dtSec) ? dtSec : 0);
         if (this.placeMesh) this.placeMesh.update(position);
         if (Number.isFinite(dtSec) && dtSec > 0) this.streamClockMs += dtSec * 1000;
-        this.updateBarriers(s);
         this.streamer.update(position, s);
         if (this.placed) {
             this.placed = false;

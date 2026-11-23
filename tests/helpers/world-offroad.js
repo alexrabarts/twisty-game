@@ -142,7 +142,6 @@ export async function leaveRoad(game, env, place, { speed, mode = 'exit', assist
         const s = q.index >= 0 ? q.s : place.s;
         if (s >= env.endS - 5) break;
         if (Math.abs(s - settled) > 100) { await env.streamer.settle({ x: v.position.x, z: v.position.z }, s); settled = s; }
-        env.updateBarriers(s);
         let steer = 0;
         if (mode === 'along') {
             const reach = Math.max(6, Math.min(30, 3 + 0.7 * v.speed));
@@ -224,7 +223,6 @@ export async function rideHairpin(game, env, hairpin, plan, { speed, assist = 'n
         // The exit is reached when the run counts it: progress the cut rule has accepted
         if (reached === null && run.lastS >= s1) reached = time;
         if (reached !== null && time - reached >= CONFIRM_S) return done({ time: Math.round(reached * 100) / 100, end: 'exit', cause: null });
-        env.updateBarriers(s);
         let steer, want;
         const d = Math.hypot(tx - v.position.x, tz - v.position.z);
         if (phase === 0 && s >= from) phase = 1;

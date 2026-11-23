@@ -223,13 +223,6 @@ describe('real obstacles still crash', () => {
         expect(vehicle.position.y).toBeGreaterThan(99);
     });
 
-    test('a barrier is solid wherever it stands', () => {
-        const env = WORLDS.grass();
-        env.ground.setBarriers([{ x: 7, z: 52, heading: 0, width: 4 }]);
-        const out = ride(place(game.Vehicle, env, { speed: 25, angle: 8 }), { seconds: 3 });
-        expect(out.crashed).toBe(true);
-        expect(out.falling).toBe(false);
-    });
 });
 
 describe('the rough land moves only the drawn bike', () => {

@@ -352,7 +352,7 @@ describe('RoadMesh', () => {
         expect(byZ.get(zs[zs.length - 1])).toBeCloseTo(1, 5);
     });
 
-    // Every face of a box faces out: wound inward, a front-side material (the marker stones, the barriers) culled the faces
+    // Every face of a box faces out: wound inward, a front-side material (the marker stones) culled the faces
     // toward the viewer and lit the far ones from inside
     test('every face of a box has its normal pointing away from the box centre, at any heading', () => {
         for (const heading of [0, 0.7, Math.PI / 2, 2.5, -1.2]) {
@@ -533,23 +533,6 @@ describe('RoadMesh', () => {
         // Asked for at two rows (12 m), it stands, and goes on
         const long = { wall: (x, y, z, ox, oz, forced, on) => (z === 12 || z === 16 || (on && z === 20) ? { y: y - 6 } : null) };
         expect(RoadMesh.wallPlan(sides, long).seg.l.filter(Boolean)).toHaveLength(4);
-    });
-
-    test('barriers are placed across the road they close, as wide as it is', () => {
-        const mesh = RoadMesh.barriers(4);
-        const placed = RoadMesh.placeBarriers(mesh, [{ x: 10, y: 5, z: 20, heading: 0, width: 6 }, { x: 0, y: 0, z: 0, heading: Math.PI / 2, width: 12 }]);
-        expect(placed).toBe(2);
-        expect(mesh.count).toBe(2);
-        const matrix = new THREE.Matrix4();
-        mesh.getMatrixAt(0, matrix);
-        expect(new THREE.Vector3().setFromMatrixPosition(matrix).toArray()).toEqual([10, 5, 20]);
-        // As wide as the box the physics stops the bike in (WorldGround.barrierHalf)
-        expect(new THREE.Vector3().setFromMatrixScale(matrix).x).toBe(2 * WorldGround.barrierHalf(6));
-        expect(2 * WorldGround.barrierHalf(6)).toBe(9);
-        // Heading 0: the barrier's width runs along +x, across a road that runs along +z
-        const across = new THREE.Vector3(1, 0, 0).applyMatrix4(matrix.clone().setPosition(0, 0, 0)).normalize();
-        expect(across.x).toBeCloseTo(1, 6);
-        expect(RoadMesh.placeBarriers(mesh, Array.from({ length: 9 }, () => ({ x: 0, y: 0, z: 0, heading: 0, width: 6 })))).toBe(4);
     });
 });
 

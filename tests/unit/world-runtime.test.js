@@ -107,6 +107,12 @@ describe('WorldRoute', () => {
         expect(out.forwardDot).toBeCloseTo(-1, 6);
         expect(route.offRoute({ lateral: 39 })).toBe(false);
         expect(route.offRoute({ lateral: -41 })).toBe(true);
+        // Past the route's end the distance from the ride is the measure: the lateral there is along the last normal
+        const line = new WorldRoute(samplesOf(straight(400, { y: 0 })), {});
+        const end = line.sample(line.length, {});
+        const past = line.project(end.x + 60 * Math.sin(end.heading), end.z + 60 * Math.cos(end.heading), null, {});
+        expect(Math.abs(past.lateral)).toBeLessThan(1);
+        expect(line.offRoute(past)).toBe(true);
     });
 
     test('heightRange covers the samples and the ends', () => {
@@ -157,37 +163,21 @@ describe('junctionsAhead', () => {
     });
 });
 
-describe('WorldGraph barriers', () => {
-    // Andermatt-like: one junction used twice. Each pass closes the other branch.
+describe('WorldGraph side roads', () => {
+    // One junction on the ride (edges 1 and 2) with two side roads (3 and 4) leaving it
     const junction = {
-        id: 'ja', node: 5, name: 'Andermatt',
-        incident: [{ edgeId: 1, heading: 0 }, { edgeId: 2, heading: 1 }, { edgeId: 3, heading: 2 }],
-        passes: [
-            { sIn: 1000, inEdge: 1, outEdge: 2, barriers: [{ edgeId: 3, x: 1, z: 1, heading: 0 }] },
-            { sIn: 9000, inEdge: 3, outEdge: 1, barriers: [{ edgeId: 2, x: 2, z: 2, heading: 0 }] }
-        ]
+        id: 'ja', node: 5, name: 'Junction',
+        incident: [{ edgeId: 1, heading: 0 }, { edgeId: 2, heading: 1 }, { edgeId: 3, heading: 2 }, { edgeId: 4, heading: 3 }],
+        passes: [{ sIn: 1000, inEdge: 1, outEdge: 2 }]
     };
     const data = {
-        edges: [], nodes: {}, junctions: [junction], ride: { path: [] },
+        edges: [], nodes: {}, junctions: [junction], ride: { path: [{ edgeId: 1, dir: 1 }, { edgeId: 2, dir: 1 }] },
         edgeSamples: () => null
     };
     const graph = new WorldGraph(data);
 
-    test('the pass nearest the rider decides the barriers', () => {
-        expect(graph.barriersFor(900).map(b => b.edgeId)).toEqual([3]);
-        expect(graph.barriersFor(8800).map(b => b.edgeId)).toEqual([2]);
-    });
-
-    test('a junction more than the range away has none', () => {
-        expect(graph.barriersFor(5000, 1000)).toEqual([]);
-    });
-
-    test('the first pass and the second differ, and each leaves its own way out open', () => {
-        const first = graph.barriersFor(1000).map(b => b.edgeId);
-        const second = graph.barriersFor(9000).map(b => b.edgeId);
-        expect(first).not.toEqual(second);
-        expect(first).not.toContain(junction.passes[0].outEdge);
-        expect(second).not.toContain(junction.passes[1].outEdge);
+    test('every side road that leaves a ride junction is a stub from its node, and no ride edge is', () => {
+        expect([...graph.sideStubs()]).toEqual([[3, 5], [4, 5]]);
     });
 
     test('turnOf is the angle from arrival to departure', () => {
@@ -266,12 +256,22 @@ describe('WorldGround', () => {
         expect(ground.waterLevel({ x: 30, z: 100, index: 25, lateral: 30 })).toBeNull();
     });
 
-    test('an active barrier is a wall where it stands, with the bike left where it is', () => {
-        ground.setBarriers([{ x: 30, z: 100, heading: 0, width: 8 }]);
-        expect(ground.zoneAt({ index: 25, lateral: 30 }, 5)).toMatchObject({ kind: 'wall', start: 30 });
-        expect(ground.zoneAt({ index: 25, lateral: 40 }, 5).kind).not.toBe('wall');
-        ground.setBarriers([]);
-        expect(ground.zoneAt({ index: 25, lateral: 30 }, 5).kind).toBe('runoff');
+    test('a located point is rebuilt in the ribbon frame the projection measures it in', () => {
+        const curved = new WorldRoute(samplesOf(eight()), {});
+        const g = new WorldGround(curved, data);
+        let framed = 0;
+        for (let s = 40; s < curved.length - 40; s += 37) {
+            const p = curved.sample(s, {});
+            for (const lateral of [-30, -12, 7, 25]) {
+                const x = p.x + lateral * Math.cos(p.heading), z = p.z - lateral * Math.sin(p.heading);
+                const q = curved.project(x, z, { index: curved.indexAt(s) }, {});
+                if (Math.abs(q.distance - Math.abs(q.lateral)) > 1e-6) continue;
+                framed++;
+                const at = g.position({ index: q.index, t: q.along, lateral: q.lateral });
+                expect(Math.hypot(at.x - x, at.z - z)).toBeLessThan(0.01);
+            }
+        }
+        expect(framed).toBeGreaterThan(20);
     });
 
     test('a side road gives its own height and the road zone inside its band', () => {
@@ -298,7 +298,9 @@ describe('WorldGround', () => {
         const g = new WorldGround(bridged, data);
         expect(g.zoneAt({ index: 25, lateral: 3 }, 5).kind).toBe('road');
         expect(g.zoneAt({ index: 25, lateral: 6 }, 5)).toMatchObject({ kind: 'wall', start: 5.35 });
-        expect(g.zoneAt({ index: 25, lateral: -20 }, 5)).toMatchObject({ kind: 'wall', sign: -1 });
+        expect(g.zoneAt({ index: 25, lateral: -12 }, 5)).toMatchObject({ kind: 'wall', sign: -1 });
+        // Past WorldGround.WORKS_REACH_M from the edge the zone is the land's under the bridge, not its parapet
+        expect(g.zoneAt({ index: 25, lateral: -(5 + WorldGround.WORKS_REACH_M + 1) }, 5).kind).not.toBe('wall');
     });
 
     test('a fall ends a fixed depth under the road', () => {

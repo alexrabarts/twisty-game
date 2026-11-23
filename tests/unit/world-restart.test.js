@@ -191,7 +191,6 @@ describe('a bike at the place', () => {
             const place = run.restartPlace(works);
             const at = pointOf(place);
             await env.streamer.settle({ x: at.x, z: at.z }, place.s);
-            env.updateBarriers(place.s);
             const v = putDown(place);
             for (let f = 0; f < 120; f++) v.update(DT, 0, 0, 0, 0);
             if (v.crashed) { bad.push(`${spot.name}: crashed standing (${v.crashCause})`); continue; }
