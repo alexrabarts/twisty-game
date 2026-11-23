@@ -42,8 +42,10 @@ class WorldCamera {
             // offset from the bike moves at lookRate.
             lookBaseM: 8, lookPerMs: 0.6, lookBendM: 30, bendSpanM: 50, bendFrom: 0.35, bendTo: 1.0, lookRate: 4,
             // The look target gives way to the bike until the bike is within keepIn of the screen's middle (1 is the
-            // edge), at keepRate; never further out than keepHard
-            keepIn: 0.55, keepHard: 0.75, keepRate: 16,
+            // edge), at keepRate; never further out than keepHard. That hold eases in over keepBlend of the share: as a
+            // plain limit it caught a spring lagging a quickly growing give-way in one frame, and the view's turn
+            // changed rate there
+            keepIn: 0.55, keepHard: 0.75, keepRate: 16, keepBlend: 0.1,
             // The boom's height comes down by speedLowerShare of itself between speedLowerFromMs and speedLowerMs
             // (WorldCamera.speedHeight)
             speedLowerShare: 0.5, speedLowerFromMs: 22, speedLowerMs: 45,
@@ -60,7 +62,9 @@ class WorldCamera {
             // never comes within roofHardM of it. The road is read roofAheadS of riding ahead (roofAheadMinM at the
             // least) at roofPoints points, and the boom's height comes down at roofIn, which settles in about that
             // time, and goes back up at roofOut: both slow, so the height changes over the approach and after
-            roofClearM: 0.35, roofFastM: 0.7, roofFastFrom: 10, roofFastTo: 28, roofHardM: 0.15, roofIn: 1.8, roofOut: 1.2, roofPoints: 12, roofAheadS: 2.6, roofAheadMinM: 30,
+            // The boom's height meets that limit over roofBlendM (WorldCamera.softCeiling): taken as the lesser of the
+            // two, the camera's climb stopped in one frame where the rising boom met a falling limit
+            roofClearM: 0.35, roofFastM: 0.7, roofFastFrom: 10, roofFastTo: 28, roofHardM: 0.15, roofIn: 1.8, roofOut: 1.2, roofPoints: 12, roofAheadS: 2.6, roofAheadMinM: 30, roofBlendM: 0.5,
             // The hard limit tests the boom at marchPoints points and narrows the first hit down by marchRefine halvings.
             // The soft share tests it at softPoints points: a point that the land comes within clearM + softBandM of
             // (at the camera end; less toward the head, which rides 1.2 m over the road) starts to draw the boom in,
@@ -415,6 +419,14 @@ class WorldCamera {
     // The boom's height with open sky, as the roof spring reads it (well over any boom)
     static get OPEN_M() { return 40; }
 
+    // The lesser of `y` and `ceiling`, rounded over roofBlendM where they meet: never over either, and its rate has
+    // no step as y passes the ceiling (a polynomial smooth minimum, at most roofBlendM / 4 under the lesser)
+    static softCeiling(y, ceiling) {
+        const band = WorldCamera.TUNING.roofBlendM;
+        const h = Math.max(0, band - Math.abs(y - ceiling)) / band;
+        return Math.min(y, ceiling) - h * h * band / 4;
+    }
+
     // The least y at or over `floor` that eases to `y` once y is floorBandM over it: a smooth max, so the camera
     // rises over a crest without a kink
     static softFloor(y, floor) {
@@ -498,7 +510,7 @@ class WorldCamera {
             const ox = bike.offset.x + shift, oz = -sp.distance.x;
             out.x = from.x + ox * cos + oz * sin;
             // (under a road overhead no higher than the roof allows: this.roof)
-            out.y = from.y + Math.min(sp.height.x, this.roof === undefined ? Infinity : this.roof);
+            out.y = from.y + (this.roof === undefined ? sp.height.x : WorldCamera.softCeiling(sp.height.x, this.roof));
             out.z = from.z - ox * sin + oz * cos;
             return out;
         };
@@ -578,7 +590,7 @@ class WorldCamera {
             // The room kept under a deck: more at speed
             const fast = Math.max(0, Math.min(1, (bike.speed - t.roofFastFrom) / (t.roofFastTo - t.roofFastFrom)));
             const clear = this.roofClear = t.roofClearM + t.roofFastM * fast * fast * (3 - 2 * fast);
-            let roofWant = Math.min(sp.height.x, this.roofHeight(head, open, anchor.y, bike.y));
+            let roofWant = Math.min(sp.height.x + t.roofBlendM, this.roofHeight(head, open, anchor.y, bike.y));
             const reach = Math.max(t.roofAheadMinM, bike.speed * t.roofAheadS);
             const at = this.roofAt || (this.roofAt = {});
             for (let k = 1; k <= t.roofPoints; k++) {
@@ -590,7 +602,8 @@ class WorldCamera {
                 const then = this.centre(s + reach * k / t.roofPoints + sp.distance.x, this.roofThen || (this.roofThen = {})).y;
                 roofWant = Math.min(roofWant, under - clear - Math.max(p.y, then));
             }
-            // (with open sky the limit rests at the boom's own height, so it comes back up at roofOut and not at once)
+            // (with open sky the limit rests roofBlendM over the boom's own height, where softCeiling leaves it whole,
+            // so it comes back up at roofOut and not at once)
             if (fresh) WorldCamera.settle(sp.roof, roofWant);
             else WorldCamera.spring(sp.roof, roofWant, roofWant < sp.roof.x ? t.roofIn : t.roofOut, step);
             // (never under the head's own height: the boom goes level at the lowest)
@@ -648,12 +661,17 @@ class WorldCamera {
         WorldCamera.spring(sp.keep, want, t.keepRate, this.step || 1 / 60);
         let share = Math.max(0, Math.min(1, sp.keep.x));
         this.held = false;
-        if (share < want) {
+        // (want is 0 only with the bike within keepIn, and so within keepHard, at no give-way: nothing to hold)
+        if (want > 0) {
             const least = this.giveWay(camera, look, bike, probe, t.keepHard);
-            if (share < least) {
-                share = least;
-                sp.keep.x = least;
-                sp.keep.v = Math.max(0, sp.keep.v);
+            // The hold eases in over keepBlend (no wider than the hold itself, so a hold of nothing lifts nothing). It
+            // lifts the share drawn and leaves the spring alone: a spring put at the hold and stopped there set off
+            // again at a step of rate when the hold let go
+            const band = Math.min(t.keepBlend, least);
+            const h = band > 0 ? Math.max(0, band - Math.abs(share - least)) / band : 0;
+            const held = Math.max(share, least) + h * h * band / 4;
+            if (held > share) {
+                share = Math.min(1, held);
                 this.held = true;
             }
         }
