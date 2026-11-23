@@ -496,3 +496,15 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner: "make the group ride faster". `Traffic.GROUP.pace` 1.15 to 1.3 (bends at its square, about 0.7 g).
 - Check: moving speed 14.29 to 16.17 m/s (place 6 out) and 13.30 to 14.66 m/s (place 1 out), no rider past its `most`, no overlap. The too-far-ahead test failed on a fixed 3 s window: a rider from 24 m/s needs 3.07 s at its 6 m/s^2; the window now comes from the speed it starts to ease at, at 5 m/s^2. world-group, world-group-pace, world-places: 49 tests pass; GPU world-fairness `--every 400` no failures.
 - Left: not ridden by a person.
+
+## The viaduct in the walls' stone, with no glow
+
+- Job: the owner at km 7.9 in the rain: "the viaducts didn't get the improved brick faces i saw in the photos ... i don't think this version is as good as the plain brick faces - swap it over", and a vault glowed white. The material and colour were already the walls'; the faces were laid by the world's level, not along the ride as a wall's face is. Now every face, abutment, wing and parapet carries the walls' course data. The stone under the deck faced the sun along the road with no shadow from the deck, and the bloom spread it over the wet road: it is lit as the face its arch opens in, turned 15 degrees down (`VAULT_TILT`). The "improved faces" were the vaults drawn as long striped bands by the earlier lighting override, now removed.
+- Check: `world-viaduct.test.js` holds the walls' material object, the course data and the under-deck normals (fails on the old code). On the branch 10 suites, 154 tests pass; world-floating at s 7900 0 underside pixels, 0.03% near black; watertight, haze and spikes unchanged. Pictures in ~/Library/Caches/twisty-world/viaduct-shots/stone/.
+- Left: a vault's underside shows long level stripes (the stone courses follow world height); the time of day cannot be changed in a world ride, so the no-glow claim at other times rests on the normals.
+
+## The group at 1.5, and a lighter rain
+
+- Job: the owner: "make the group ride faster and the rain section not so dark". `GROUP.pace` 1.3 to 1.5, its square held at `GROUP.gripMost` 1.96 (about 0.8 g in a bend). `Game.WORLD_OVERCAST_SKY` 2.2 to 3.6; the sun stays at 0.2.
+- Check: moving speed 16.17 to 19.97 m/s (place 6 out) and 14.66 to 18.70 (place 1 out), no rider past its `most`. Mean luminance at s 7900 0.331 to 0.403, s 9200 0.330 to 0.396, dry 0.455 (3.0 gave 0.372). Two tests were bound to the slower pace and now measure what they mean: the held riders' gaps from where the player stands (its stand-in rolls 0.6 m past STOP_S), and a red light crossed only past the 1 cm `Roadworks.stopDistance` allows. 13 suites, 208 tests pass; GPU world-fairness `--every 400` and world-haze no failures. Pictures in ~/Library/Caches/twisty-world/rain-shots/sky30 and sky36.
+- Left: not ridden by a person; more speed from here means later braking and more lean, the owner's call.
