@@ -4,8 +4,10 @@
 //           ride. The game's road is wider than the mapped one, so the area's own width across is laid from the game's
 //           carriageway edge outward: the ride's verge is that much wider there (the bencher carves the land to it and
 //           RoadMesh draws it), `depth` metres past the usual verge, tapered over `taper` metres at each end.
-//   found   where the map has no place for FOUND_GAP_M: a stretch of straight road whose drawn verge and the land
-//           beside it are level, clear of every other road, junction and structure. Nothing is carved or drawn for it.
+//   found   where the map has no place for foundGapM: a stretch of straight road whose verge and the land beside it are
+//           level (a `layby`), or where the land under it is a low fill and falls away past it (a `viewpoint`), clear of
+//           every other road, junction, structure and retaining wall. It is carved and drawn as a map place is: a pad
+//           foundDepthM past the verge, tapered over foundTaperM at each end.
 //
 // A place: { id, kind, source, s, side, length, depth, taper, surface, name }. `s` is where it starts along the ride
 // and `length` how far it runs; `side` is Route's (+1 the rider's left, the +lateral side; -1 the rider's right).
@@ -15,7 +17,8 @@ import { VERGE_M, ZONE, TILE_M, CELL_M, TILE_N, BATTER, segmentIndex } from './b
 
 // swissTLM3D area classes that are public places to stop, and the kind each one is
 export const AREA_KINDS = Object.freeze({ 'Oeffentliches Parkplatzareal': 'carpark', Rastplatzareal: 'layby' });
-export const SURFACE = Object.freeze({ carpark: 'asphalt', layby: 'gravel', verge: null });
+// (`verge` is the found place of the first imports: level verge, neither carved nor drawn)
+export const SURFACE = Object.freeze({ carpark: 'asphalt', layby: 'gravel', viewpoint: 'asphalt', verge: null });
 
 export const PLACE = Object.freeze({
   // An area counts when its near side is within this of the game's carriageway edge (or inside the carriageway)
@@ -27,12 +30,22 @@ export const PLACE = Object.freeze({
   // Kept clear of a side road's mouth on its own side, and of a bend tighter than this
   mouthClearM: 16, radiusMinM: 40,
   rayStepM: 0.25, rayReachM: 40,
-  // found places: one where no place lies within foundGapM, on road straighter than foundRadiusM, clear of every
-  // junction by foundJunctionM, with land within foundLevelM of the road out to foundDepthM past the verge
-  foundGapM: 600, foundRadiusM: 60, foundJunctionM: 30, foundLevelM: 0.25, foundDepthM: 2, foundLengthM: 16, foundLengthMaxM: 24, foundStepM: 40, foundGradeMax: 0.12,
+  // found places: one where no place lies within foundGapM, on road straighter than foundRadiusM, no steeper than
+  // foundGradeMax, clear of every junction by foundJunctionM. Its pad is foundDepthM past the verge (3.7 m past the
+  // carriageway's edge: a waiting bike stands with its middle 1.85 m out, WorldPlaces.stopAt, so its 0.8 m stand clear
+  // of the carriageway by 1.45 m with as much hard standing behind it), foundLengthM to foundLengthMaxM long with
+  // foundTaperM at each end (4 to 7 bikes nose to tail: WorldPlaces.slotsOf), one every foundStepM along a long run.
+  // A layby: the land within foundLevelM of the road out to foundLevelDepthM past the verge, and no more than
+  // foundCutM over it across the pad (the bank the bencher cuts behind it)
+  foundGapM: 600, foundRadiusM: 60, foundJunctionM: 30, foundLevelM: 0.25, foundLevelDepthM: 2, foundCutM: 1.5, foundDepthM: 2.6, foundTaperM: 6, foundLengthM: 24, foundLengthMaxM: 32, foundStepM: 40, foundGradeMax: 0.12,
+  // A viewpoint: the land under its pad no more than fillM under the road and nowhere over it by more than
+  // foundLevelM, and past the earthwork, from fromM to toM past the carriageway's edge (every stepM), everywhere at
+  // least dropM under the road at every sample of the place: the land falls away on that side
+  view: Object.freeze({ fillM: 2, fromM: 22, toM: 46, stepM: 4, dropM: 6 }),
   // and no retaining wall at its edge or within wallClearM along the road: the runtime stands the edge on a wall where
   // the land within wallRunM past the verge lies wallUnderM under a slope at the batter (WorldEnvironment.edgeFoot:
-  // WALL_OVER_M 1.5 over 6 m; here with 0.3 m to spare), and joins two walls less than 12 m apart into one
+  // WALL_OVER_M 1.5 over 6 m; here with 0.3 m to spare), and joins two walls less than 12 m apart into one. For a
+  // found place the slope is measured from its pad's edge, where the carved verge ends
   wallRunM: 6, wallUnderM: 1.2, wallClearM: 16,
   // A checkpoint's roadworks run on from its station (the importer hands the span: stations.mjs siteReach), and the
   // runtime closes a place within this of one (WorldPlaces.WORKS_CLEAR_M): a found place stands outside where it can
@@ -147,7 +160,7 @@ export function mapPlaces(areas, samples, mouths, edges) {
 // side) and e.padN, metres a sample. The bencher carves the land to the wider strip. An edge the ride rides against
 // its own direction has the ride's left on its -lateral side.
 export function applyPads(edges, ride, places) {
-  const drawn = places.filter(p => p.source === 'map');
+  const drawn = places.filter(p => p.surface);
   if (!drawn.length) return 0;
   let s = 0, set = 0, last = null;
   ride.forEach(use => {
@@ -187,7 +200,7 @@ function tileAt(tiles, x, z) {
 
 // The most the land stands off the road's height across a found place's strip at sample i, or Infinity where it is
 // not ground to stand on (a wall, a drop, water, no tile)
-export function levelOff(tiles, samples, i, side, depth = PLACE.foundDepthM) {
+export function levelOff(tiles, samples, i, side, depth = PLACE.foundLevelDepthM) {
   const cos = Math.cos(samples.heading[i]), sin = Math.sin(samples.heading[i]);
   const half = samples.width[i] / 2;
   let worst = 0;
@@ -202,7 +215,8 @@ export function levelOff(tiles, samples, i, side, depth = PLACE.foundDepthM) {
 
 // Whether the runtime may stand the road's edge on a retaining wall at sample i: a wall or drop node, or land well
 // under a slope at the batter, within wallRunM past the verge. The land is cut down in front of a wall, so the strip
-// beside it is no ground to stand on
+// beside it is no ground to stand on. (Read on the land before a found place's pad is carved: the bencher then fills
+// from the pad's edge at the batter, so land that keeps to the batter from the verge's edge keeps to it from there)
 export function wallRisk(tiles, samples, i, side) {
   const cos = Math.cos(samples.heading[i]), sin = Math.sin(samples.heading[i]);
   const half = samples.width[i] / 2;
@@ -215,16 +229,55 @@ export function wallRisk(tiles, samples, i, side) {
   return false;
 }
 
+// The lowest and the highest the land stands off the road's height from the verge's edge out to `depth` past it at
+// sample i ({lo, hi}), or null where it is not ground to stand on (a wall, a drop, water, no tile)
+export function landRange(tiles, samples, i, side, depth) {
+  const cos = Math.cos(samples.heading[i]), sin = Math.sin(samples.heading[i]);
+  const half = samples.width[i] / 2;
+  let lo = Infinity, hi = -Infinity;
+  for (let d = 0; d <= depth + 1e-9; d += 0.5) {
+    const o = side * (half + VERGE_M + d);
+    const g = tileAt(tiles, samples.x[i] + o * cos, samples.z[i] - o * sin);
+    if (!g || g.zone === ZONE.wall || g.zone === ZONE.drop || g.zone === ZONE.water) return null;
+    lo = Math.min(lo, g.y - samples.y[i]);
+    hi = Math.max(hi, g.y - samples.y[i]);
+  }
+  return { lo, hi };
+}
+
+// Whether the land falls away on `side` at sample i: from view.fromM to view.toM past the carriageway's edge it lies
+// everywhere at least view.dropM under the road (no tile there counts as no view)
+export function fallsAway(tiles, samples, i, side, view = PLACE.view) {
+  const cos = Math.cos(samples.heading[i]), sin = Math.sin(samples.heading[i]);
+  const half = samples.width[i] / 2;
+  for (let d = view.fromM; d <= view.toM + 1e-9; d += view.stepM) {
+    const o = side * (half + d);
+    const g = tileAt(tiles, samples.x[i] + o * cos, samples.z[i] - o * sin);
+    if (!g || g.y > samples.y[i] - view.dropM) return false;
+  }
+  return true;
+}
+
+// The kind of found place sample i offers on `side`: 'layby', 'viewpoint' or null (its pad is foundDepthM deep)
+export function groundKind(tiles, samples, i, side, P = PLACE) {
+  const near = landRange(tiles, samples, i, side, P.foundLevelDepthM), pad = landRange(tiles, samples, i, side, P.foundDepthM);
+  if (!near || !pad) return null;
+  const falls = fallsAway(tiles, samples, i, side, P.view);
+  if (falls && pad.lo >= -P.view.fillM && pad.hi <= P.foundLevelM) return 'viewpoint';
+  if (Math.max(Math.abs(near.lo), Math.abs(near.hi)) <= P.foundLevelM && pad.lo >= -P.foundLevelM && pad.hi <= P.foundCutM) return falls ? 'viewpoint' : 'layby';
+  return null;
+}
+
 // Standing places where the map has none: `taken` are the places already there. One in each stretch of foundGapM with
-// no place, the rider's right first (traffic keeps right, so a rider pulls in without crossing the road). `works` are
-// the spans [{ s0, s1 }] of the checkpoints' roadworks: a candidate clear of them is taken before one that is not
-export function foundPlaces(samples, tiles, mouths, edges, taken = [], works = []) {
-  const P = PLACE;
+// no place, the rider's right first (traffic keeps right, so a rider pulls in without crossing the road), a viewpoint
+// before a layby on that side. `works` are the spans [{ s0, s1 }] of the checkpoints' roadworks: a candidate clear of
+// them is taken before one that is not
+export function foundPlaces(samples, tiles, mouths, edges, taken = [], works = [], P = PLACE) {
   const index = segmentIndex(edges, VERGE_M + 1);
   const n = samples.s.length;
   const candidates = [];
   for (const side of [-1, 1]) {
-    const ok = new Array(n).fill(false);
+    const kinds = new Array(n).fill(null);
     const walled = [];
     for (let i = 0; i < n; i++) if (wallRisk(tiles, samples, i, side)) walled.push(samples.s[i]);
     for (let i = 1; i + 1 < n; i++) {
@@ -232,17 +285,23 @@ export function foundPlaces(samples, tiles, mouths, edges, taken = [], works = [
       if (samples.flags[i] & (ROOFED | FLAG.bridge) || samples.radius[i] < P.foundRadiusM) continue;
       if (Math.abs(samples.y[i + 1] - samples.y[i - 1]) / Math.max(1e-6, samples.s[i + 1] - samples.s[i - 1]) > P.foundGradeMax) continue;
       if (mouths.some(m => Math.abs(m.s - samples.s[i]) < P.foundJunctionM)) continue;
-      if (levelOff(tiles, samples, i, side) > P.foundLevelM) continue;
-      ok[i] = clearOfRoads(index, samples, i, side, P.foundDepthM);
+      const kind = groundKind(tiles, samples, i, side, P);
+      if (kind && clearOfRoads(index, samples, i, side, P.foundDepthM)) kinds[i] = kind;
     }
-    for (const [first, last] of runsOf(ok)) {
+    for (const [first, last] of runsOf(kinds.map(k => k !== null))) {
       const run = samples.s[last] - samples.s[first];
       if (run < P.foundLengthM) continue;
-      // A long level stretch offers a place every foundStepM along it, a short one its middle
+      // A long stretch offers a place every foundStepM along it, a short one its middle
       const length = Math.min(run, P.foundLengthMaxM);
       const count = Math.max(1, Math.floor((run - length) / P.foundStepM) + 1);
       const lead = (run - length - (count - 1) * P.foundStepM) / 2;
-      for (let k = 0; k < count; k++) candidates.push({ s: samples.s[first] + lead + k * P.foundStepM, side, length });
+      for (let k = 0; k < count; k++) {
+        const s = samples.s[first] + lead + k * P.foundStepM;
+        // A viewpoint where every sample of it looks out over falling land
+        let view = true;
+        for (let i = first; i <= last; i++) if (samples.s[i] >= s && samples.s[i] <= s + length && kinds[i] !== 'viewpoint') view = false;
+        candidates.push({ s, side, length, kind: view ? 'viewpoint' : 'layby' });
+      }
     }
   }
   candidates.sort((p, q) => p.s - q.s || p.side - q.side);
@@ -265,14 +324,15 @@ export function foundPlaces(samples, tiles, mouths, edges, taken = [], works = [
     const atWorks = c => works.some(w => c.s + c.length > w.s0 - P.worksClearM && c.s < w.s1 + P.worksClearM);
     const free = open.filter(c => !atWorks(c)), freeInGap = inGap.filter(c => !atWorks(c));
     // (one clear of the works up to half a gap beyond the gap is better than one in the works inside it)
-    const pick = freeInGap.findLast(c => c.side === -1) ?? freeInGap.at(-1) ?? free.find(c => c.s <= from + 1.5 * P.foundGapM)
-      ?? inGap.findLast(c => c.side === -1) ?? inGap.at(-1) ?? open[0];
+    const right = c => c.side === -1, view = c => right(c) && c.kind === 'viewpoint';
+    const pick = freeInGap.findLast(view) ?? freeInGap.findLast(right) ?? freeInGap.at(-1) ?? free.find(c => c.s <= from + 1.5 * P.foundGapM)
+      ?? inGap.findLast(right) ?? inGap.at(-1) ?? open[0];
     if (!pick) {
       if (!next) break;
       from = next.e;
       continue;
     }
-    const place = { kind: 'verge', source: 'found', s: r1(pick.s), side: pick.side, length: r1(pick.length), depth: P.foundDepthM, taper: 0, surface: SURFACE.verge, name: null };
+    const place = { kind: pick.kind, source: 'found', s: r1(pick.s), side: pick.side, length: r1(pick.length), depth: P.foundDepthM, taper: P.foundTaperM, surface: SURFACE[pick.kind], name: null };
     out.push(place);
     held.push({ s: place.s, e: place.s + place.length });
     held.sort((p, q) => p.s - q.s);

@@ -830,8 +830,11 @@ class Scenery {
     }
 
     // The drawn house whose walls (x, z) is in or within `margin` of: its wall rect {x, z, heading, along, across}, or
-    // null. Only the houses drawn now count (a house the caps left out is not there to hit)
+    // null. Only the houses drawn now count (a house the caps left out is not there to hit). A stopping place's props
+    // (PlaceMesh, `props`) are solid the same way, with their `label`
     houseAt(x, z, margin = 0) {
+        const prop = this.props ? this.props.at(x, z, margin) : null;
+        if (prop) return prop;
         for (const held of this.perTile.values()) {
             for (const w of held.walls || []) {
                 const dx = x - w.x, dz = z - w.z;

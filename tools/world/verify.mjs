@@ -22,7 +22,7 @@ import { resolveCacheDir } from './cache.mjs';
 import { sampleGrid, bandHalf, minRideWidth, RIDE_WIDTH_M, END_JOIN_M, JUNCTION_M } from './widths.mjs';
 import { drawnTileLow, horizonDrawnAt } from './farland.mjs';
 import { COVER, COVER_CELL_M, COVER_N } from './landcover.mjs';
-import { PLACE, AREA_KINDS, padOf, mouthsOf, levelOff, wallRisk } from './places.mjs';
+import { PLACE, AREA_KINDS, SURFACE, padOf, mouthsOf, levelOff, wallRisk, fallsAway } from './places.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -673,11 +673,13 @@ export function checkLandmarks(decoded, repoRoot = REPO_ROOT) {
 }
 
 // The stopping places beside the ride (places.mjs), on the committed data: in order along the ride, each inside it,
-// of a known kind, clear of structures, tight bends and the side roads' mouths on its side. No land stands over a map
-// place's widened verge (PLACES.above), and under it the land lies no further down than the fill RoadMesh draws from
-// the verge's edge closes (PLACES.below: as under any verge, the 8 m triangle across the strip's edge falls toward
-// the ground); beside a found place the land is level out to its depth (PLACE.foundLevelM, and the heights' 0.1 m
-// storage). Reports how many of each source and the gaps between them along the ride.
+// of a known kind with its kind's surface, clear of structures, tight bends and the side roads' mouths on its side.
+// No land stands over a drawn place's widened verge (a map place, a found layby or viewpoint: PLACES.above), and under
+// it the land lies no further down than the fill RoadMesh draws from the verge's edge closes (PLACES.below: as under
+// any verge, the 8 m triangle across the strip's edge falls toward the ground); a found place has no retaining wall at
+// its edge, and a viewpoint looks out over falling land (places.mjs fallsAway) at every sample; beside a found place
+// of the first imports (`verge`, not drawn) the land is level out to its depth (PLACE.foundLevelM, and the heights'
+// 0.1 m storage). Reports how many of each source and kind, and the gaps between them along the ride.
 export const PLACES = Object.freeze({ below: 2, above: 0.15, storageM: 0.1 });
 export function checkPlaces(decoded) {
   const places = decoded.manifest.places ?? [];
@@ -692,6 +694,7 @@ export function checkPlaces(decoded) {
     if (k && places[k - 1].s > p.s) say('is out of order');
     if (!(p.s >= 0 && p.s + p.length <= length)) say('lies outside the ride');
     if (!kinds.has(p.kind) || !['map', 'found'].includes(p.source) || ![1, -1].includes(p.side)) say(`has kind ${p.kind}, source ${p.source}, side ${p.side}`);
+    if ((p.surface ?? null) !== (SURFACE[p.kind] ?? null)) say(`has surface ${p.surface}, not its kind's ${SURFACE[p.kind]}`);
     if (!(p.depth > 0 && p.length >= PLACE.lengthMinM)) say(`is ${p.length} m long and ${p.depth} m deep`);
     const radiusMin = p.source === 'map' ? PLACE.radiusMinM : PLACE.foundRadiusM;
     for (let i = 0; i < samples.s.length; i++) {
@@ -700,7 +703,7 @@ export function checkPlaces(decoded) {
       if (samples.flags[i] & (ROOFED | 2)) say(`is on a structure at s ${s.toFixed(0)}`);
       if (samples.radius[i] < radiusMin) say(`is in a bend of ${samples.radius[i].toFixed(0)} m radius at s ${s.toFixed(0)}`);
       const cos = Math.cos(samples.heading[i]), sin = Math.sin(samples.heading[i]), half = samples.width[i] / 2;
-      if (p.source === 'map') {
+      if (p.surface) {
         const pad = padOf(p, s);
         for (let d = 0; d <= VERGE_M + pad + 1e-9; d += 0.5) {
           const o = p.side * (half + d);
@@ -709,10 +712,9 @@ export function checkPlaces(decoded) {
           worstUnder = Math.max(worstUnder, samples.y[i] - land);
           worstOver = Math.max(worstOver, land - samples.y[i]);
         }
-      } else {
-        worstLevel = Math.max(worstLevel, levelOff(decoded.tiles, samples, i, p.side, p.depth));
-        if (wallRisk(decoded.tiles, samples, i, p.side)) say(`has the land falling away at its edge at s ${s.toFixed(0)} (a retaining wall would stand there)`);
-      }
+      } else worstLevel = Math.max(worstLevel, levelOff(decoded.tiles, samples, i, p.side, p.depth));
+      if (p.source === 'found' && wallRisk(decoded.tiles, samples, i, p.side)) say(`has the land falling away at its edge at s ${s.toFixed(0)} (a retaining wall would stand there)`);
+      if (p.kind === 'viewpoint' && !fallsAway(decoded.tiles, samples, i, p.side)) say(`is a viewpoint with no fall of the land at s ${s.toFixed(0)}`);
     }
     const clear = p.source === 'map' ? PLACE.mouthClearM : PLACE.foundJunctionM;
     if (mouths.some(m => (p.source === 'found' || m.side !== -p.side) && m.s > p.s - clear + 4 && m.s < p.s + p.length + clear - 4)) say('is at a side road mouth');
@@ -725,6 +727,7 @@ export function checkPlaces(decoded) {
   const r2 = v => Math.round(v * 100) / 100;
   return check('places', problems.length === 0, {
     places: places.length, map: places.filter(p => p.source === 'map').length, found: places.filter(p => p.source === 'found').length,
+    kinds: places.reduce((n, p) => ({ ...n, [p.kind]: (n[p.kind] || 0) + 1 }), {}),
     maxGapM: Math.max(...gaps), gapsM: gaps, landUnderM: r2(worstUnder), landOverM: r2(worstOver), foundLevelM: worstLevel === Infinity ? null : r2(worstLevel), problems
   });
 }

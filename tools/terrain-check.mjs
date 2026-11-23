@@ -11,7 +11,7 @@
 //
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
-//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots
+//   world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
@@ -5918,6 +5918,105 @@ function groupEye(kind) {
         eye = point(at.s - 22, -side * (p.width / 2 + 3), 3.2);
         look = point(at.s + 4, side * (p.width / 2 + 1.5), 0.6);
     }
+    game.camera.position.copy(eye);
+    game.camera.lookAt(look);
+    game.camera.updateMatrixWorld(true);
+    game.graphics.render(game.scene, game.camera);
+    return { png: game.graphics.renderer.domElement.toDataURL('image/png'), eye: [eye.x, eye.y, eye.z].map(n => Math.round(n)) };
+}
+
+// world-place-shots: the stopping places (WorldPlaces, PlaceMesh; .agent/system/world.md, "Stopping places") in
+// pictures. For each place named (--ids p3,p7 or all; by default the first open layby, viewpoint and car park on the
+// riders' side): the player stops 260 m before it with the crew just ahead, so the riders go to wait in it (a place on
+// the other side has no riders: they wait only on their own side), then the bike stands 8 m short of it and the chase
+// view is taken (`<tag>-<id>-chase.png`), and a view from across the road and over it (`<tag>-<id>-wait.png`). Writes
+// index.json in the folder: each place's id, kind, s, side, depth, slots, the riders waiting in it and the two files.
+//   node tools/terrain-check.mjs world-place-shots --world tremola --gpu [--out <dir>] [--tag <name>] [--ids <ids|all>]
+const PLACE_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/places-shots');
+WORLD_PROBES.push('world-place-shots');
+WORLD['world-place-shots'] = async (page) => {
+    const out = option('out') || PLACE_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'place';
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+    const ids = await page.evaluate((want) => {
+        const list = game.environment.places.list, side = Route.keepRight(1);
+        if (want === 'all') return list.map(p => p.id);
+        if (want) return want.split(',');
+        // (past the first 3 km, as world-group-shots: the start's grid is not a stop)
+        return ['layby', 'viewpoint', 'carpark'].map(kind => (list.find(p => p.kind === kind && p.side === side && p.s > 3000) || list.find(p => p.kind === kind) || {}).id).filter(Boolean);
+    }, option('ids') || '');
+    const index = [];
+    for (const id of ids) {
+        const info = await page.evaluate(placeScene, placeAt.toString(), id);
+        if (info.error) { index.push({ id, error: info.error }); continue; }
+        const chase = join(out, `${tag}-${id}-chase.png`);
+        await page.screenshot({ path: chase });
+        const view = await page.evaluate(placeEye, id);
+        const wait = join(out, `${tag}-${id}-wait.png`);
+        writeFileSync(wait, Buffer.from(view.png.split(',')[1], 'base64'));
+        index.push({ ...info, chase, wait, eye: view.eye });
+    }
+    writeFileSync(join(out, 'index.json'), JSON.stringify(index, null, 1));
+    return { out, places: index.length, index };
+};
+
+// In the page: the crew sent to wait in place `id` by a player who stopped before it, then the bike put down 8 m short
+// of the place, standing, and the chase view drawn
+async function placeScene(placeSource, id) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, traffic = game.traffic, group = traffic.group;
+    const place = env.places.list.find(p => p.id === id);
+    if (!place) return { error: `no open place ${id}` };
+    const v = game.vehicle;
+    const sOf = b => route.fromUnits(b.currentSegment + b.segmentProgress);
+    const put = (bike, s) => {
+        const u = route.toUnits(s);
+        bike.currentSegment = Math.floor(u);
+        bike.segmentProgress = u - Math.floor(u);
+        bike.laneMoving = false;
+        if (group && bike.ride) group.placed(bike.ride);
+        bike.updatePosition();
+    };
+    const input = window.placeInput || (window.placeInput = { throttle: game.input.getThrottleInput, brake: game.input.getBrakeInput });
+    game.input.getThrottleInput = input.throttle;
+    game.input.getBrakeInput = input.brake;
+    game.cameraMode = 2;
+    const byPlace = traffic.motorcycles.slice().sort((a, b) => a.character.place - b.character.place);
+    await placeAt(Math.max(10, place.s - 260));
+    game.worldCamera.reset(v.yawAngle);
+    if (group) { group.halted = group.standing = false; group.stoppedS = 0; }
+    const own = place.side === Route.keepRight(1);
+    // The crew just ahead of the stopped player (or, for a place on the far side, behind it, out of the picture)
+    byPlace.forEach((bike, k) => put(bike, own ? place.s - 200 - k * 12 : Math.max(5, place.s - 330 - k * 12)));
+    twistyDev.autopilot({ speed: 0 });
+    game.input.getThrottleInput = () => 0;
+    game.input.getBrakeInput = () => 1;
+    v.speed = 0;
+    let ticks = 0;
+    while (own && traffic.motorcycles.some(b => b.ride && b.ride.state !== 'wait') && ticks < 60 * 180) { twistyDev.step(1); ticks++; }
+    await placeAt(place.s - 8);
+    game.worldCamera.reset(v.yawAngle);
+    v.speed = 0;
+    for (let i = 0; i < 60; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const waiting = traffic.motorcycles.filter(b => b.ride && b.ride.state === 'wait' && b.ride.at.place === place).map(b => {
+        const g = b.bikeGroup.position, p = route.project(g.x, g.z, null, {});
+        return { place: b.character.place, s: Math.round(sOf(b) * 10) / 10, slot: b.ride.at.slot, past: Math.round((Math.abs(p.lateral) - p.width / 2) * 100) / 100 };
+    });
+    const part = env.placeMesh && env.placeMesh.parts.find(q => q.place === id);
+    const drawn = !!(env.placeMesh && env.placeMesh.mesh && env.placeMesh.mesh.userData.places.includes(id));
+    return { id, kind: place.kind, s: place.s, side: place.side, length: place.length, depth: place.depth, slots: place.slots, waitedS: Math.round(ticks / 60), waiting, props: part ? { triangles: part.triangles, drawn, near: env.placeMesh.triangles } : null };
+}
+
+// In the page: place `id` from across the road and over it, the frame alone (no HUD), as a PNG data URL
+function placeEye(id) {
+    const env = game.environment, route = env.route, place = env.places.list.find(p => p.id === id);
+    const mid = place.s + place.length / 2, p = route.sample(mid, {});
+    const point = (s, lat, up) => { const q = route.sample(s, {}); return new THREE.Vector3(q.x + lat * Math.cos(q.heading), q.y + up, q.z - lat * Math.sin(q.heading)); };
+    const eye = point(mid - 16, -place.side * (p.width / 2 + 1.5), 4.5);
+    const look = point(mid + 3, place.side * (p.width / 2 + 2.5), 0.4);
     game.camera.position.copy(eye);
     game.camera.lookAt(look);
     game.camera.updateMatrixWorld(true);

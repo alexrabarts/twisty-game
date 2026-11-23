@@ -1,11 +1,14 @@
 // WorldPlaces: the stopping places beside the ride (manifest.places, made by tools/world/places.mjs), where a rider
 // can pull in and wait clear of the carriageway. No THREE.
 //
-//   map     a mapped car park or rest area along the ride. The ride's verge is `depth` metres wider on that side for
-//           the place's length (tapered over `taper` at each end): the importer carved the land to it, RoadMesh draws
-//           it as hard standing and WorldGround gives it the road's height. It is ground, not scenery.
-//   found   a stretch where the drawn verge and the land beside it are level, where the map has no place. Nothing is
-//           drawn or carved for it.
+//   map     a mapped car park or rest area along the ride.
+//   found   a stretch the importer found where the map has no place: a `layby` (level verge) or a `viewpoint` (the
+//           land falls away past it).
+//
+// A place with a `surface` is drawn: the ride's verge is `depth` metres wider on that side for the place's length
+// (tapered over `taper` at each end), the importer carved the land to it, RoadMesh draws it as hard standing in its
+// surface and WorldGround gives it the road's height. It is ground, not scenery; PlaceMesh adds its few props. A found
+// `verge` of the first imports has no surface: nothing is drawn or carved for it.
 //
 // In a place of either kind the strip from the carriageway's edge out to the verge and `depth` past it is the verge to
 // the physics (Vehicle.worldSurface): no land drag, no speed cap and no land crash. Nothing is planted there
@@ -50,7 +53,7 @@ class WorldPlaces {
     apply() {
         const points = this.route.points;
         for (const place of this.all) {
-            const drawn = place.source === 'map';
+            const drawn = WorldPlaces.drawn(place);
             const key = place.side > 0 ? 'P' : 'N';
             for (let i = this.route.indexAt(Math.max(0, place.s)); i < points.length && points[i].s <= place.s + place.length; i++) {
                 const p = points[i];
@@ -59,7 +62,7 @@ class WorldPlaces {
                     p[`pad${key}`] = Math.max(p[`pad${key}`] || 0, pad);
                     p.padSurface = place.surface;
                 }
-                // A found place has no taper: its strip runs from its first point to its last
+                // A place that is not drawn has no taper: its strip runs from its first point to its last
                 const safe = drawn ? pad : p.s >= place.s ? place.depth : 0;
                 if (safe > 0) p[`safe${key}`] = Math.max(p[`safe${key}`] || 0, safe);
             }
@@ -109,4 +112,7 @@ class WorldPlaces {
     }
 
     static verge() { return typeof RoadSurface !== 'undefined' ? RoadSurface.VERGE_M : 1.1; }
+
+    // Whether a place is drawn and carved: it has a surface
+    static drawn(place) { return !!place.surface; }
 }

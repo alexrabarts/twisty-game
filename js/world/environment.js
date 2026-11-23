@@ -260,6 +260,10 @@ class WorldEnvironment {
         if (this.roadworks.group) this.group.add(this.roadworks.group);
         // No rider waits in the works or under a gate: the places there are closed (WorldPlaces.close)
         this.places.close([...(this.roadworks.sites || []).map(site => ({ s0: site.s0, s1: site.s1 })), { s0: this.startS, s1: this.startS }, { s0: this.endS, s1: this.endS }]);
+        // What makes each open place read as a stop (its props), solid to the bike as a house's walls are
+        this.placeMesh = new PlaceMesh(this.places, this.route);
+        this.group.add(this.placeMesh.group);
+        this.scenery.props = this.placeMesh;
         const out = { positions: [], shades: [] };
         const post = [0.55, 0.55, 0.58];
         for (const st of ends) {
@@ -2143,6 +2147,7 @@ class WorldEnvironment {
         // A landmark is drawn within LANDMARK_REACH_M: beyond, it is a few pixels and costs the window its triangles
         if (this.landmarkGroup) for (const node of this.landmarkGroup.children) node.visible = Math.hypot(node.position.x - position.x, node.position.z - position.z) < WorldEnvironment.LANDMARK_REACH_M;
         if (this.roadworks) this.roadworks.update(position, Number.isFinite(dtSec) ? dtSec : 0);
+        if (this.placeMesh) this.placeMesh.update(position);
         if (Number.isFinite(dtSec) && dtSec > 0) this.streamClockMs += dtSec * 1000;
         this.updateBarriers(s);
         this.streamer.update(position, s);
@@ -2177,7 +2182,9 @@ class WorldEnvironment {
             meshes++;
             if (o.isInstancedMesh) instances += o.count;
         });
-        return { meshes, triangles: Math.round(this.triangleCount + this.scenery.triangles), instances, tiles: this.tileMeshes.size, roads: this.roadMeshes.size, sides: this.sideMeshes.size, trees: this.scenery.treeCount, queue: this.streamer.queue.length };
+        // (a stopping place's props are drawn near the bike only: PlaceMesh.triangles is what is drawn now)
+        const props = this.placeMesh ? this.placeMesh.triangles : 0;
+        return { meshes, triangles: Math.round(this.triangleCount + this.scenery.triangles + props), instances, tiles: this.tileMeshes.size, roads: this.roadMeshes.size, sides: this.sideMeshes.size, trees: this.scenery.treeCount, queue: this.streamer.queue.length };
     }
 
     // Fog is the one landscape setting a world takes from the page

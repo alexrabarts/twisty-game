@@ -6,6 +6,7 @@ In a world the crew rides as a group: `CrewGroup` in `js/traffic.js`. A leg has 
 - **Each rider's own numbers** are its `group` entry in `CHARACTERS` (`js/vehicle.js`). A character without one rides `GROUP.rider`.
 - **The rules read `place` and the numbers, never a name.** `tests/unit/world-group.test.js` fails if a character's name is in the rules' source.
 - **The pace by road kind** is the crew's pace as before: the traits by `WorldRoute.kindAt` (`world.md`, "The crew's pace"). The group sets a share of that pace (`ride.factor`) and the least speed of a pass (`ride.floorMs`). The following rule ("Contact") still keeps each rider off the back of what is ahead.
+- **The group's pace** is one number, `GROUP.pace` (1.15). A rider of the group rides that share of its traits' pace (`AIMotorcycle.takePace`). It takes its bends, gathers speed and plans its braking for a bend at the square of it (`LANE_DRIVE.bike` lateral, accel, plan and turnIn times 1.32), so it rides every bend at 1.15 times the speed too. Its hard braking (6 m/s^2, which the following rule reads for the vehicle ahead) is not raised. `least` and `most` are shares of this pace, so `most` stays the limit. A leg's crew does not read it. Measured on the Tremola slice (the crew from its places, no player, `world-group-pace.test.js`): the riders' mean moving speed rose from 12.25 to 14.29 m/s with place 6 out of the crew and from 10.74 to 13.30 m/s with place 1 out (+17 % and +24 %; with the stops, 8.84 to 12.34 and 8.43 to 10.81 m/s, as the line now waits far less), no rider past its `most`. 1.10 gave +13 % and +14 %: 1.15 is clearly quicker and the bends still hold every rider under its limit.
 
 ## A rider's numbers
 
@@ -50,7 +51,9 @@ All with `GROUP` numbers.
    - A rider moves off its lane into the place over the last 25 m, eased by distance (a smootherstep), so its heading has no step. In a place it stands on the place's ground.
    - The player rides again once it is faster than 3 m/s.
    - The riders that wait pull out once the player is 12 m past their place. They also need: the riders in front of them in the place have gone, every vehicle behind is further off than 20 m plus 4 s of its speed, and nobody is within 12 m ahead. So they fall in behind the player.
-   - A rider more than 700 m ahead of the back of the line waits the same way for the back, a rider for 240 s at most. It pulls out ahead of the first rider whose place is behind its own once that is within 300 m, so the line keeps its order.
+   - A rider more than 700 m ahead of the last rider of the line waits the same way for it, for 240 s at most, when the player is not behind that rider (then the next rule holds). It pulls out ahead of the first rider whose place is behind its own once that is within 300 m, so the line keeps its order.
+   - **Too far ahead of the player** (`GROUP.ahead`). A rider more than 350 m (`aheadM`) up the road from a riding player pulls in at the next stopping place on its own side within 600 m (`reachM`, past the room it needs to stop), in the next free slot, and waits there. It pulls out once the player is 12 m past it (or after 300 s, `maxS`, if the player never comes), with the same clear road as above, so it falls in behind the player and later passes back toward its place (rule 4). Where no place is in reach it does not wait on the carriageway: it rides no faster than the player (`ride.easing`) and looks again each second, until it is back within 350 m or a place comes in reach. 350 m: at the group's pace (about 14 m/s moving on the Tremola slice) it is 25 s of road, two to three legs of a hairpin flight, about as far as the player sees a rider on most of the slice; the leader already eases to 0.7 of its pace as the back drops from 150 m to 450 m behind it (rule 1), so a rider at 350 m is one that got away.
+   - A rider that waits on the roadside (no place in reach) stands on the carriageway's edge: it stays in the line and in traffic's queue, so what comes up behind it follows it and stops. (Before, every waiting rider counted as off the road, and a rider that came up behind a roadside wait rode into it: an overlap of 0.8 m in a whole ride of the crew.)
 4. **Passes back toward their places.** A rider passes the vehicle next ahead of it (a rider or the player) only when all of these hold:
    - its own place is ahead of that one's (the player's place is its character's `place`);
    - it can ride 2 m/s faster than it within its `most`;
@@ -69,6 +72,8 @@ Each rider has its own stream (mulberry32), seeded from the world's `groupSeed` 
 
 ## Proofs
 
+- `tests/unit/world-group-pace.test.js` rides the slice with no player from the riders' places and prints each rider's mean speed (PACE), holds that no rider rides past its `most` and that none overlaps, that every rider's pace is its traits' times `GROUP.pace`, and the too-far-ahead rule: with a player at 6 m/s, riders more than 350 m ahead pull in at a place on their own side, off the carriageway, and pull out only once the player is past, behind it; with no place in reach they ride at the player's pace and none waits on the road.
+
 - `tests/unit/world-group.test.js` rides the real Tremola slice at 60 frames a second:
   - the numbers;
   - the line forming from the reverse of the places, and holding near place order;
@@ -85,5 +90,7 @@ Each rider has its own stream (mulberry32), seeded from the world's `groupSeed` 
 ## What it does not do
 
 - A rider waits only on its own side of the road. It never crosses the oncoming lane to a place on the far side.
+- The pace and the too-far-ahead distance are the same on every road: a world with longer sight lines does not give its riders more room.
+- The slowest rider's catch-up after its own stop is slow where the leader's ease (0.7 of its pace) is about the slowest rider's `most`: after a stop at s 10 693 on the Tremola slice it was still 438 m behind the next rider 205 s later (466 m when it rode on). The line only waits for it from 700 m.
 - The roadside wait is on the carriageway's edge, not off it. A player passes it on its own line.
 - A pass is always on the centre line's side. Two riders never pass at once within 120 m.

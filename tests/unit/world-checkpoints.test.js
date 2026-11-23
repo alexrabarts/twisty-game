@@ -72,13 +72,27 @@ describe('the shipped stage', () => {
         again.forEach((s, i) => expect(Math.abs(s - shipped[i])).toBeLessThan(0.5));
     });
 
-    test('only the station files of world/ differ from the data before: every other file is the same bytes', () => {
+    test('only the station files of world/ differ from the data before, and the land under the found places carved since: every other file is the same bytes', () => {
         const sums = text => new Map(text.trim().split('\n').map(line => { const [hash, file] = line.trim().split(/\s+/); return [file, hash]; }));
         const before = sums(execFileSync('git', ['show', `${BEFORE}:world/SHA256SUMS`], { cwd: REPO, encoding: 'utf8', maxBuffer: 1 << 26 }));
         const now = sums(readFileSync(path.join(REPO, 'world', 'SHA256SUMS'), 'utf8'));
         expect([...now.keys()].sort()).toEqual([...before.keys()].sort());
         const changed = [...now.keys()].filter(file => now.get(file) !== before.get(file)).sort();
-        expect(changed).toEqual(['manifest.json', 'ride.json']);
+        // (the found places are carved since: the height tiles their pads and its earthwork reach may differ)
+        const tile = n => (n < 0 ? `m${-n}` : `${n}`);
+        const carved = new Set();
+        for (const p of world.manifest.places || []) {
+            if (p.source !== 'found' || !p.surface) continue;
+            for (let i = 0; i < samples.s.length; i++) {
+                if (samples.s[i] < p.s - 30 || samples.s[i] > p.s + p.length + 30) continue;
+                for (const out of [0, samples.width[i] / 2 + 1.1 + p.depth + 24]) {
+                    const x = samples.x[i] + p.side * out * Math.cos(samples.heading[i]), z = samples.z[i] - p.side * out * Math.sin(samples.heading[i]);
+                    for (const [dx, dz] of [[0, 0], [8, 0], [-8, 0], [0, 8], [0, -8]]) carved.add(`height/h-${tile(Math.floor((x + dx) / 512))}_${tile(Math.floor((z + dz) / 512))}.bin`);
+                }
+            }
+        }
+        expect(changed).toEqual(expect.arrayContaining(['manifest.json', 'ride.json']));
+        expect(changed.filter(file => !['manifest.json', 'ride.json'].includes(file) && !carved.has(file))).toEqual([]);
     });
 
     test('the board of the stage keeps its id: the row has the new gates and floors under the same key', () => {

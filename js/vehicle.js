@@ -5446,7 +5446,8 @@ class Vehicle {
         if (house) {
             // A building's face is a wall as any other: the tyres alone at a glance brush it (wallTouch)
             if (house !== true && this.brushHouse(house, world.houseHitM || 0)) return;
-            this.worldCrash('Rode into a building', null, 'building');
+            // (a stopping place's props name themselves: PlaceMesh)
+            this.worldCrash(house.label ? `Rode into a ${house.label}` : 'Rode into a building', null, 'building');
             return;
         }
         // And before the bike is in it: the place this step reaches, and skinM more (as brushWall)

@@ -333,7 +333,8 @@ describe('the synthetic world: the same check', () => {
     // ground under the verge at the mouth's last row, over the side road's fall
     test('what is left of its steep hillside can only shrink', () => {
         expect(report.beside.length).toBeLessThanOrEqual(265);
-        expect(report.setback.length).toBeLessThanOrEqual(2188);
+        // (2 194 since its five found viewpoints were carved: the fill under their pads, 2 188 before)
+        expect(report.setback.length).toBeLessThanOrEqual(2194);
         expect(report.overhangs.length).toBeLessThanOrEqual(23);
     });
 });

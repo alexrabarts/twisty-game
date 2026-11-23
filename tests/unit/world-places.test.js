@@ -10,7 +10,7 @@ import { sceneryOf } from '../helpers/world-clearance.js';
 
 const DT = 1 / 60;
 const game = loadGame();
-const { THREE, WorldRoute, WorldGround, WorldPhysics, WorldPlaces, WorldEnvironment, RoadMesh, RoadSurface, RoadClearance, Vehicle, Route } = game;
+const { THREE, WorldRoute, WorldGround, WorldPhysics, WorldPlaces, PlaceMesh, WorldEnvironment, RoadMesh, RoadSurface, RoadClearance, Vehicle, Route } = game;
 const V = RoadSurface.VERGE_M;
 
 // A 10 m road along +z at height 100 on flat land, with a drawn car park on the rider's right and a found place on the left
@@ -165,7 +165,7 @@ describe('the places of the Tremola slice', () => {
         env = await WorldEnvironment.load(new THREE.Scene(), { id: 'tremola', fetchFn, models: null, digest: async () => '0' });
     }, 120000);
 
-    test('the data holds the summit car park from the map and found places for the rest, no gap over 1050 m', () => {
+    test('the data holds the summit car park from the map and found laybys and viewpoints for the rest, no gap over 1050 m', () => {
         const all = env.places.all;
         const map = all.filter(p => p.source === 'map'), found = all.filter(p => p.source === 'found');
         expect(map).toHaveLength(1);
@@ -173,7 +173,18 @@ describe('the places of the Tremola slice', () => {
         expect(map[0].s).toBeGreaterThan(12500);
         expect(map[0].s + map[0].length).toBeLessThan(12640);
         expect(found.length).toBeGreaterThanOrEqual(15);
-        for (const p of found) expect(p).toMatchObject({ kind: 'verge', surface: null, name: null, depth: 2 });
+        // A found place is a pull-in 3.7 m past the carriageway's edge with a taper at each end, gravel or asphalt by kind
+        const surface = { layby: 'gravel', viewpoint: 'asphalt' };
+        for (const p of found) {
+            expect(['layby', 'viewpoint']).toContain(p.kind);
+            expect(p).toMatchObject({ surface: surface[p.kind], name: null, depth: 2.6, taper: 6 });
+            expect(WorldPlaces.drawn(p)).toBe(true);
+            expect(p.slots).toBeGreaterThanOrEqual(4);
+        }
+        const kinds = all.reduce((n, p) => ({ ...n, [p.kind]: (n[p.kind] || 0) + 1 }), {});
+        console.log(`places of the Tremola slice by kind: ${JSON.stringify(kinds)}; open ${env.places.list.length}`);
+        expect(kinds.viewpoint).toBeGreaterThanOrEqual(2);
+        expect(kinds.layby).toBeGreaterThanOrEqual(5);
         const at = [0, ...all.map(p => p.s), env.route.length];
         // (1 049 m from s 8 166 to 9 214: the ride has no level, unwalled verge between)
         for (let k = 1; k < at.length; k++) expect(at[k] - at[k - 1]).toBeLessThanOrEqual(1050);
@@ -186,10 +197,11 @@ describe('the places of the Tremola slice', () => {
             for (const site of sites) expect(place.s > site.s1 + WorldPlaces.WORKS_CLEAR_M || place.s + place.length < site.s0 - WorldPlaces.WORKS_CLEAR_M).toBe(true);
         }
         expect(env.places.list.some(p => p.source === 'map')).toBe(true);
-        // The works close a few: the open ones are still no more than 1 500 m apart
+        // The works close a few: the open ones are still no more than 1 700 m apart (1 660 m from s 8 182 to 9 842,
+        // over the stacked hairpins, where the only place, at s 9 210, is in a site)
         expect(env.places.list.length).toBeGreaterThanOrEqual(15);
         const open = [env.startS, ...env.places.list.map(p => p.s), env.endS];
-        for (let k = 1; k < open.length; k++) expect(open[k] - open[k - 1]).toBeLessThanOrEqual(1500);
+        for (let k = 1; k < open.length; k++) expect(open[k] - open[k - 1]).toBeLessThanOrEqual(1700);
         let s = 0, seen = 0;
         for (let place = env.places.next(s); place; place = env.places.next(s)) { seen++; s = place.s + 0.01; }
         expect(seen).toBe(env.places.list.length);
@@ -208,9 +220,11 @@ describe('the places of the Tremola slice', () => {
                 const loc = {};
                 const y = env.ground.groundY(stop.x, stop.z, null, false, loc);
                 if (Math.abs(loc.lateral) - p.width / 2 < WorldPlaces.STAND_MIN_M - 0.05) say(`slot ${k} is ${(Math.abs(loc.lateral) - p.width / 2).toFixed(2)} m from the carriageway`);
-                // A map place is the road's own surface; a found one is the verge and the level land beside it
+                // A drawn place is the road's own surface (a layby cut into a bank has the 8 m land triangles up to
+                // 0.05 m over it near its back: verify.mjs places holds them under 0.15); a found verge of the first
+                // imports the verge and the level land beside it
                 const off = Math.abs(y - loc.roadY);
-                if (off > (place.source === 'map' ? 0.02 : 0.5)) say(`slot ${k} stands ${off.toFixed(2)} m off the road's height`);
+                if (off > (WorldPlaces.drawn(place) ? 0.05 : 0.5)) say(`slot ${k} stands ${off.toFixed(2)} m off the road's height`);
                 const zone = env.ground.zoneAt(loc, p.width / 2);
                 if (zone.kind === 'wall' || zone.kind === 'fall') say(`slot ${k} is a ${zone.kind}`);
                 const v = bikeAt(env, stop.lateral, stop.s, 0);
@@ -237,8 +251,9 @@ describe('the places of the Tremola slice', () => {
         if (problems.length) throw new Error(problems.join('\n'));
     }, 600000);
 
-    test('the car park is drawn: the ribbon reaches its edge, the ground under a bike is the ribbon, and no land stands over it', async () => {
-        const place = env.places.all.find(p => p.source === 'map');
+    test.each(['carpark', 'layby', 'viewpoint'])('a %s is drawn: the ribbon reaches its edge, the ground under a bike is the ribbon, and no land stands over it', async (kind) => {
+        const place = env.places.all.find(p => p.kind === kind);
+        expect(place).toBeTruthy();
         const mid = env.route.sample(place.s + place.length / 2, {});
         await env.streamer.settle({ x: mid.x, z: mid.z }, place.s);
         const from = env.route.indexAt(place.s) - 1, to = env.route.indexAt(place.s + place.length) + 2;
@@ -256,7 +271,7 @@ describe('the places of the Tremola slice', () => {
             // Across the place: the physics ground is the ribbon's height, and the land is not over it
             for (const share of [0.25, 0.5, 0.75, 0.97]) {
                 const x = side[inner][0] + (side[key][0] - side[inner][0]) * share, z = side[inner][2] + (side[key][2] - side[inner][2]) * share;
-                expect(Math.abs(env.ground.groundY(x, z) - (side[key][1] - RoadMesh.LIFT_M))).toBeLessThan(0.03);
+                expect(Math.abs(env.ground.groundY(x, z) - (side[key][1] - RoadMesh.LIFT_M))).toBeLessThan(0.05);
                 const land = env.ground.tileHeight(x, z);
                 expect(land).not.toBeNull();
                 expect(land - row.y).toBeLessThan(0.15);
@@ -266,4 +281,58 @@ describe('the places of the Tremola slice', () => {
         // The same rows without the place draw the same number of triangles
         expect(RoadMesh.nearRibbon(rows.map(r => ({ ...r, padN: 0, padP: 0 }))).triangles).toBe(ribbon.triangles);
     }, 120000);
+
+    test('a car park\'s bay lines lie on its hard standing, never on the verge\'s gravel or grass', () => {
+        const parks = env.places.list.filter(p => p.kind === 'carpark');
+        expect(parks.length).toBeGreaterThan(0);
+        for (const place of parks) {
+            const lines = env.placeMesh.bayLines(place);
+            expect(lines.length).toBeGreaterThan(1);
+            for (const line of lines) {
+                const half = env.route.sample(line.s, {}).width / 2;
+                expect(line.inner).toBeGreaterThan(half);
+                expect(line.outer).toBeLessThanOrEqual(half + WorldPlaces.padOf(place, line.s));
+            }
+        }
+    });
+
+    test('every open place has its props, off the carriageway and clear of the slots the riders wait in, solid to the bike, for a few triangles', () => {
+        const props = env.placeMesh;
+        expect(props).toBeInstanceOf(PlaceMesh);
+        const byPlace = new Map(props.parts.map(part => [part.place, part]));
+        const want = { viewpoint: ['stone edge', 'bench'], layby: ['marker post', 'waste bin'], carpark: ['waste bin'] };
+        const problems = [];
+        for (const place of env.places.list) {
+            const say = m => problems.push(`${place.id} (${place.kind}) at s ${place.s}: ${m}`);
+            if (!byPlace.has(place.id)) { say('has no props'); continue; }
+            const mine = props.solids.filter(w => { const at = env.route.project(w.x, w.z, null, {}); return at.s >= place.s - 1 && at.s <= place.s + place.length + 1 && Math.sign(at.lateral) === place.side; });
+            for (const label of want[place.kind]) if (!mine.some(w => w.label === label)) say(`has no ${label}`);
+            // The slots: a waiting bike's box reaches this far out (WorldPlaces.stopAt, 0.8 m wide)
+            const stop = env.places.stopAt(place, 0, null, {});
+            const slotOut = Math.abs(stop.lateral) + 0.4;
+            for (const w of mine) {
+                const at = env.route.project(w.x, w.z, null, {});
+                const inner = Math.abs(at.lateral) - w.across / 2;
+                if (inner < at.width / 2 + V) say(`its ${w.label} reaches ${(inner - at.width / 2).toFixed(2)} m from the carriageway's edge`);
+                if (inner < slotOut + 0.2 && at.s > stop.s - 2 - WorldPlaces.SLOT_M * (place.slots - 1) && at.s < stop.s + 2) say(`its ${w.label} stands in the slots`);
+                // Solid: the bike's own test of a house's walls finds it
+                if (env.scenery.houseAt(w.x, w.z, 0) !== w) say(`its ${w.label} is not solid`);
+            }
+        }
+        if (problems.length) throw new Error(problems.join('\n'));
+        // A bike riding into a bench crashes and the cause names it
+        const bench = props.solids.find(w => w.label === 'bench');
+        if (bench) expect(env.scenery.houseAt(bench.x, bench.z, 0.3).label).toBe('bench');
+        console.log(`place props: ${props.parts.length} places, ${props.total} triangles, ${props.solids.length} solid things`);
+        expect(props.total).toBeLessThan(15000);
+        expect(props.total / props.parts.length).toBeLessThan(800);
+        // Drawn as one mesh of the places near the bike: at a place, a few places' triangles
+        const place = env.places.list.find(p => p.kind === 'viewpoint');
+        const at = env.route.sample(place.s, {});
+        props.update({ x: at.x, z: at.z });
+        expect(props.mesh).toBeTruthy();
+        expect(props.mesh.userData.places).toContain(place.id);
+        expect(props.triangles).toBeLessThan(2000);
+        expect(props.mesh.geometry.attributes.position.count / 3).toBe(props.triangles);
+    });
 });

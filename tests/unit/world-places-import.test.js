@@ -2,12 +2,13 @@
  * @jest-environment node
  */
 // The importer's stopping places (tools/world/places.mjs): a mapped parking area along the ride becomes a place whose
-// verge the bencher carves the land to, and where the map has none a level stretch of verge is found by rule. On
-// made-up roads, on the synthetic world and on the committed Tremola slice. No cache and no network.
+// verge the bencher carves the land to, and where the map has none a lay-by (level verge) or a viewpoint (the land
+// falls away past it) is found by rule and carved the same way. On made-up roads, on the synthetic world and on the
+// committed Tremola slice. No cache and no network.
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PLACE, AREA_KINDS, padOf, mapPlaces, foundPlaces, applyPads, mouthsOf, numberPlaces, levelOff, wallRisk } from '../../tools/world/places.mjs';
+import { PLACE, AREA_KINDS, SURFACE, padOf, mapPlaces, foundPlaces, applyPads, mouthsOf, numberPlaces, levelOff, wallRisk, fallsAway, groundKind } from '../../tools/world/places.mjs';
 import { createBencher, ZONE, TILE_N, TILE_M, CELL_M, VERGE_M, BATTER } from '../../tools/world/bench.mjs';
 import { rideSamples } from '../../tools/world/stations.mjs';
 import { buildWorld } from '../../tools/world/import.mjs';
@@ -85,13 +86,14 @@ describe('a mapped area along the ride is a place', () => {
     });
 
     test('the pad is the depth, tapered at each end, and is written on the side of the edge the ride has it on', () => {
-        const place = { source: 'map', s: 100, side: -1, length: 40, depth: 4, taper: 6 };
+        const place = { source: 'map', s: 100, side: -1, length: 40, depth: 4, taper: 6, surface: 'asphalt' };
         expect(padOf(place, 99)).toBe(0);
         expect(padOf(place, 103)).toBeCloseTo(2, 6);
         expect(padOf(place, 120)).toBe(4);
         expect(padOf(place, 138)).toBeCloseTo(4 / 3, 6);
         const with_ = edge(0, 1000, 100);
-        applyPads([with_], ride, [place, { ...place, source: 'found', s: 300 }]);
+        // (a place with no surface, a found verge of the first imports, is not carved)
+        applyPads([with_], ride, [place, { ...place, source: 'found', s: 300, surface: null }]);
         expect(with_.padP).toBeUndefined();
         expect(with_.padN[30]).toBe(4);
         expect(with_.padN[25]).toBe(0);
@@ -109,7 +111,7 @@ describe('the bencher carves the land to a place', () => {
         // The road at x = 4, 10 m over the ground: the node at x = -8 lies 12 m from the centre line, 5.9 m past the verge
         const plain = edge(4, 1010);
         const padded = edge(4, 1010);
-        applyPads([padded], ride, [{ source: 'map', s: 20, side: -1, length: 120, depth: 7, taper: 6 }]);
+        applyPads([padded], ride, [{ source: 'map', s: 20, side: -1, length: 120, depth: 7, taper: 6, surface: 'asphalt' }]);
         const a = createBencher({ edges: [plain], demAt: () => 1000 }), b = createBencher({ edges: [padded], demAt: () => 1000 });
         expect(a.node(-1, 10).y).toBeLessThan(1010 - 3);
         expect(b.node(-1, 10).y).toBeCloseTo(1010, 6);
@@ -134,7 +136,30 @@ describe('found places: where the map has none', () => {
         const at = [0, ...places.map(p => p.s), samples.s[samples.s.length - 1]];
         expect(places[0].s).toBeGreaterThanOrEqual(PLACE.foundGapM / 2);
         for (let k = 1; k < at.length - 1; k++) expect(at[k] - at[k - 1]).toBeLessThanOrEqual(PLACE.foundGapM + PLACE.foundLengthMaxM);
-        for (const p of places) expect(p).toMatchObject({ kind: 'verge', source: 'found', side: -1, depth: PLACE.foundDepthM, taper: 0, surface: null, name: null });
+        for (const p of places) expect(p).toMatchObject({ kind: 'layby', source: 'found', side: -1, depth: PLACE.foundDepthM, taper: PLACE.foundTaperM, surface: 'gravel', name: null });
+        for (const p of places) expect(p.length).toBeGreaterThanOrEqual(PLACE.foundLengthM);
+        // The pad reaches 3.5 to 4 m past the carriageway's edge, and a layby holds four bikes at the least
+        expect(VERGE_M + PLACE.foundDepthM).toBeGreaterThanOrEqual(3.5);
+        expect(VERGE_M + PLACE.foundDepthM).toBeLessThanOrEqual(4);
+        expect(Math.floor((PLACE.foundLengthM - 2 * PLACE.foundTaperM - 4) / 2.6) + 1).toBeGreaterThanOrEqual(4);
+    });
+
+    test('where the land falls away past a level or low-filled pad on the right, the place there is a viewpoint', () => {
+        // The ride's centre line is at x = 96: the land on the right (x < 96) is level to 10.1 m out, then falls 1 in 2
+        const down = x => (x < 96 ? 1000 - Math.max(0, 96 - x - 10.1) * 0.5 : 1000);
+        const tiles = tilesOf(down);
+        expect(fallsAway(tiles, samples, 50, -1)).toBe(true);
+        expect(fallsAway(tiles, samples, 50, 1)).toBe(false);
+        expect(groundKind(tiles, samples, 50, -1)).toBe('viewpoint');
+        expect(groundKind(tiles, samples, 50, 1)).toBe('layby');
+        const places = foundPlaces(samples, tiles, [], [e]);
+        expect(places.length).toBeGreaterThanOrEqual(3);
+        for (const p of places) expect(p).toMatchObject({ kind: 'viewpoint', side: -1, surface: SURFACE.viewpoint, depth: PLACE.foundDepthM });
+        // A fall the drop rule does not reach is a layby; a pad that would stand on more fill than view.fillM is none
+        const gentle = x => (x < 96 ? 1000 - Math.max(0, 96 - x - 10.1) * 0.1 : 1000);
+        expect(groundKind(tilesOf(gentle), samples, 50, -1)).toBe('layby');
+        const fill = x => (x < 96 ? 1000 - Math.max(0, 96 - x - 6.1) * (PLACE.view.fillM + 0.5) / PLACE.foundDepthM * 1.2 : 1000);
+        expect(groundKind(tilesOf(fill), samples, 50, -1)).toBeNull();
     });
 
     test('where the right falls away the place is on the left; where both do, or a wall stands there, there is none', () => {
@@ -189,16 +214,18 @@ describe('the worlds the importer makes', () => {
     let world;
     beforeAll(async () => { world = await buildWorld(syntheticSource(), { stationSpacingM: 1000 }); }, 120000);
 
-    test('the synthetic world has its car park, in the manifest and under the data check', () => {
-        expect(world.places).toHaveLength(1);
+    test('the synthetic world has its car park and the viewpoints its falling land gives, in the manifest and under the data check', () => {
         expect(world.places[0]).toMatchObject({ id: 'p0', kind: 'carpark', source: 'map', side: -1, depth: PLACE.depthMaxM, surface: 'asphalt' });
+        const found = world.places.filter(p => p.source === 'found');
+        expect(found.length).toBeGreaterThanOrEqual(3);
+        for (const p of found) expect(['layby', 'viewpoint']).toContain(p.kind);
         expect(world.places[0].s).toBeGreaterThan(295);
         expect(world.places[0].s + world.places[0].length).toBeLessThan(345);
         const manifest = JSON.parse(encodeFiles(world).get('manifest.json').toString());
         expect(manifest.places).toEqual(world.places);
         const mini = checkPlaces(decodeWorld(path.join(REPO, 'tests', 'fixtures', 'world', 'mini')));
         expect(mini.ok).toBe(true);
-        expect(mini.details).toMatchObject({ places: 1, map: 1, found: 0 });
+        expect(mini.details).toMatchObject({ places: world.places.length, map: 1, found: found.length });
     });
 
     test('the committed Tremola slice passes the data check: one place from the map, the rest found, no gap over 1050 m', () => {
@@ -207,6 +234,10 @@ describe('the worlds the importer makes', () => {
         expect(r.ok).toBe(true);
         expect(r.details.map).toBe(1);
         expect(r.details.found).toBeGreaterThanOrEqual(15);
+        // Every found place is a layby or a viewpoint, and there are some of each
+        expect(r.details.kinds.verge).toBeUndefined();
+        expect(r.details.kinds.layby).toBeGreaterThanOrEqual(5);
+        expect(r.details.kinds.viewpoint).toBeGreaterThanOrEqual(2);
         expect(r.details.maxGapM).toBeLessThanOrEqual(1050);
         expect(r.details.landOverM).toBeLessThanOrEqual(0.15);
     });
@@ -218,5 +249,11 @@ describe('the worlds the importer makes', () => {
         expect(checkPlaces(moved).ok).toBe(false);
         const swapped = { ...decoded, manifest: { ...decoded.manifest, places: [places[1], places[0], ...places.slice(2)] } };
         expect(checkPlaces(swapped).details.problems.join(' ')).toMatch(/out of order/);
+        // A layby called a viewpoint where the land does not fall away, and a place with another kind's surface
+        const layby = places.find(p => p.kind === 'layby' && p.source === 'found');
+        const named = { ...decoded, manifest: { ...decoded.manifest, places: places.map(p => (p === layby ? { ...p, kind: 'viewpoint', surface: SURFACE.viewpoint } : p)) } };
+        const viewWas = places.find(p => p.kind === 'viewpoint');
+        expect(checkPlaces({ ...decoded, manifest: { ...decoded.manifest, places: places.map(p => (p === viewWas ? { ...p, surface: SURFACE.layby } : p)) } }).details.problems.join(' ')).toMatch(/surface/);
+        expect(checkPlaces(named).details.problems.join(' ')).toMatch(/viewpoint with no fall/);
     });
 });

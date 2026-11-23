@@ -98,6 +98,11 @@ const CONTACT = {
 // rules is here; a rider's own numbers are its CHARACTERS `group`, and a character without them rides `rider`. A leg
 // has no group: its crew ride by the legs' own rules.
 const GROUP = {
+    // The group's pace: every rider of a world's group rides this share of the pace its traits give it (CREW_PACES), and
+    // takes its bends, gathers speed and plans its braking for them at the square of it (LANE_DRIVE.bike), so the speed
+    // it rides every bend at is this share too. Its hard braking (LANE_DRIVE.bike.brake, which the following rule reads
+    // for the vehicle ahead) is not raised. Its `least` and `most` are shares of this pace
+    pace: 1.15,
     // The row a character without `group` rides by
     rider: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: null, passPerS: 0.2, stop: null },
     // The line: a rider keeps its time gap (at its own speed, and no less than gapMinM) to whoever is next ahead of it on
@@ -120,13 +125,18 @@ const GROUP = {
     // Riders up to behindM behind a standing player stand behind it on their lane, gapM apart origin to origin (one
     // already nearer stands where it is). One that cannot stop behind it braking at `brake` rides on
     hold: { behindM: 400, gapM: 7, brake: 5 },
-    // Riders ahead of a stopped player, or more than regroupM ahead of the back of the line (the player or a rider), wait
-    // for it (for a rider, at most backMaxS): in the next stopping place on their own side of the road (env.places) past
+    // Riders ahead of a stopped player, or more than regroupM ahead of the last rider of the line (when the player is not
+    // behind it: then `ahead` holds), wait for it (for a rider, at most backMaxS): in the next stopping place on their own side of the road (env.places) past
     // the room they need to stop and leadM, within reachM; a rider takes the place a rider ahead of it waits in when that
     // is within reach. Where there is none, on the roadside. A rider moves off its lane into the place over the last
     // pullM, and has arrived within arriveM of its slot. In the place a rider follows another with slotGapM more than
     // the two halves between them (the slots are WorldPlaces.SLOT_M apart), not a queue's gap
     wait: { regroupM: 700, reachM: 1500, leadM: 15, pullM: 25, arriveM: 0.6, backMaxS: 240, slotGapM: 0 },
+    // A rider more than aheadM up the road from the player pulls in at the next stopping place on its own side within
+    // reachM (past the room it needs to stop) and waits there until the player is rejoin.joinM past it, or for maxS at
+    // most; then it falls in behind the player and passes back toward its place as after any wait. With no place in
+    // reach it eases to the player's pace on its lane (never a wait on the carriageway), and looks again each tick
+    ahead: { aheadM: 350, reachM: 600, maxS: 300 },
     // The roadside where no place is in reach: the first straight of straightM (bends under pass.curveMax, no hairpin,
     // no roadworks) looked for every stepM; riders slotM apart, each edgeM in from the carriageway's edge
     roadside: { straightM: 40, stepM: 10, slotM: 5, edgeM: 0.5 },
@@ -150,7 +160,7 @@ const GROUP = {
     // more and on its lane line (within bandM of it)
     pass: { lookM: 35, gainMs: 6, gainMinMs: 2, roomM: 25, slackM: 60, backM: 3, apartM: 120, curveMax: 0.012, hairpinMax: 0.02, stepM: 5, carMs: 12, sightM: 60, swingM: 2.2, inM: 16, clearM: 5, yield: 0.9, letM: 100, letS: 8, byMaxM: 220, playerMs: 4, bandM: 0.6 },
     // A rider is off the road (in no line and no queue) while it stands in a place, or while its box, as its offset
-    // turns it, is clearM or more clear of a bike on its lane line
+    // turns it, is clearM or more clear of a bike on its lane line. One waiting on the roadside is on the road
     aside: { clearM: 0.25 }
 };
 
@@ -217,7 +227,7 @@ class CrewGroup {
         this.laneSample = {};
         this.stopSample = {};
         // What the group did, by kind (for the tests and a console)
-        this.events = { halts: 0, holds: 0, waits: 0, roadside: 0, ownStops: 0, rejoins: 0, passes: 0, aborts: 0, spurts: 0 };
+        this.events = { halts: 0, holds: 0, waits: 0, roadside: 0, ownStops: 0, rejoins: 0, passes: 0, aborts: 0, spurts: 0, aheads: 0, eases: 0 };
     }
 
     // The group is the crew Traffic rides: a rider taken away (or added) is out of it (or in it) from the next frame
@@ -241,7 +251,7 @@ class CrewGroup {
             spurtS: 0, decided: null, waitS: 0, letS: 0, waitFor: null, waitedS: 0,
             off: 0, offRate: 0, tr: { from: 0, to: 0, len: 0, at: 0, active: false },
             pass: { target: null, phase: null, startS: 0, gain: 0, planM: 0 },
-            yielding: false, floorMs: 0, capMs: Infinity, stand: false, aside: false,
+            yielding: false, floorMs: 0, capMs: Infinity, stand: false, aside: false, easing: false,
             at: { s: 0, lateral: 0, y: NaN, off: 0, place: null, slot: 0 }
         };
         bike.ride = ride;
@@ -343,7 +353,9 @@ class CrewGroup {
         line.length = 0;
         for (let i = 0; i < this.riders.length; i++) {
             const ride = this.riders[i];
-            ride.aside = ride.state === 'wait' || this.offRoad(ride);
+            // (one that waits on the roadside stands on the carriageway's edge: it is in the line, and what comes up
+            // behind it follows it and stops)
+            ride.aside = (ride.state === 'wait' && !!ride.at.place) || this.offRoad(ride);
             ride.index = -1;
             if (ride.aside || !ride.bike.bikeGroup.visible) continue;
             const e = this.entries[i];
@@ -418,9 +430,11 @@ class CrewGroup {
                     return;
                 }
             }
-            // Far ahead of the back of the line (a rider or the player): it waits for it
+            // Too far ahead of the player: it waits for it in the next place, or rides at its pace (GROUP.ahead)
+            if (tick && this.aheadOf(ride)) return;
+            // Far ahead of the last rider of the line, with the player not behind it: it waits for that rider
             const tail = this.line.length ? this.line[this.line.length - 1] : null;
-            if (!this.halted && tail && ride.index >= 0 && tail.ride !== ride && ride.s - tail.s > G.wait.regroupM) return this.toWait(ride, tail.ride ? 'back' : 'player', null, tail.ride);
+            if (!this.halted && tail && tail.ride && ride.index >= 0 && tail.ride !== ride && ride.s - tail.s > G.wait.regroupM) return this.toWait(ride, 'back', null, tail.ride);
         }
         if (tick && own.spurt && ride.spurtS === 0) {
             const kind = this.env.route.kindAt ? this.env.route.kindAt(ride.s, this.kindSample) : { country: 1, mountain: 0, hairpin: 0 };
@@ -446,20 +460,46 @@ class CrewGroup {
         if (tick && !ride.pass.phase) this.tryPass(ride);
         if (tick) this.letBy(ride);
         this.passing(ride, tick);
+        // (one too far ahead with no place in reach rides no faster than the player)
+        if (ride.easing && this.lead && !ride.pass.phase) ride.capMs = Math.min(ride.capMs, this.lead.speed);
     }
 
-    // Off to wait: a slot in a stopping place ahead (`place`, or the next on its side), else the roadside
-    toWait(ride, why, place = null, waitFor = null) {
+    // A rider more than GROUP.ahead.aheadM ahead of a riding player: off to the next place on its side within reach
+    // (true), else it eases to the player's pace (ride.easing) until it is back within aheadM or a place comes in reach
+    aheadOf(ride) {
+        const A = GROUP.ahead, lead = this.lead;
+        if (!lead || this.halted || ride.index < 0 || ride.s - lead.s <= A.aheadM) {
+            ride.easing = false;
+            return false;
+        }
+        if (!ride.pass.phase && this.book(ride, null, A.reachM)) {
+            ride.easing = false;
+            this.events.aheads++;
+            this.toWait(ride, 'ahead', null, null, true);
+            return true;
+        }
+        if (!ride.easing) this.events.eases++;
+        ride.easing = true;
+        return false;
+    }
+
+    // Off to wait: a slot in a stopping place ahead (`place`, or the next on its side), else the roadside. `booked`: the
+    // slot is already aimed at (book)
+    toWait(ride, why, place = null, waitFor = null, booked = false) {
         ride.state = 'toWait';
         ride.why = why;
         ride.waitFor = waitFor;
         ride.waitedS = 0;
-        ride.at.place = null;
+        ride.easing = false;
         this.events.waits++;
+        if (booked) return;
+        ride.at.place = null;
         if (!this.book(ride, place)) this.roadside(ride);
     }
 
-    book(ride, chosen) {
+    // Aims a rider at the next free slot of a place on its own side within `reach` (`chosen`, or the place a rider ahead
+    // waits in, or the next one): true when it found one
+    book(ride, chosen, reach = GROUP.wait.reachM) {
         const places = this.env.places, W = GROUP.wait;
         if (!places || !places.list) return false;
         const side = Route.keepRight(ride.bike.direction);
@@ -470,12 +510,12 @@ class CrewGroup {
             for (const other of this.riders) {
                 const p = other.at.place;
                 if (other === ride || !p || (other.state !== 'toWait' && other.state !== 'wait')) continue;
-                if (p.s + p.length >= from && p.s - ride.s < W.reachM && (!place || p.s < place.s)) place = p;
+                if (p.s + p.length >= from && p.s - ride.s < reach && (!place || p.s < place.s)) place = p;
             }
         }
         for (let tries = 0; tries < 4; tries++) {
             if (!place) place = places.next(from, side);
-            if (!place || place.s - ride.s > W.reachM) return false;
+            if (!place || place.s - ride.s > reach) return false;
             let slot = 0;
             for (const other of this.riders) if (other !== ride && other.at.place === place && (other.state === 'toWait' || other.state === 'wait')) slot = Math.max(slot, other.at.slot + 1);
             if (slot < place.slots) {
@@ -553,13 +593,14 @@ class CrewGroup {
             if (this.halted) ride.why = 'player';
         }
         ride.waitedS += dt;
-        if (ride.why === 'back' && this.halted) ride.why = 'player';
+        if ((ride.why === 'back' || ride.why === 'ahead') && this.halted) ride.why = 'player';
         let ready;
         if (ride.why === 'own') ready = ride.waitS <= 0;
         // (a rider waiting for the back pulls out ahead of the first rider whose place is behind its own once that is
         // near, so the line keeps its order)
         else if (ride.why === 'back') ready = !ride.waitFor || ride.waitFor.s > ride.at.s - J.backM || ride.waitedS > GROUP.wait.backMaxS || this.nearBehind(ride);
-        else ready = !this.halted && !!this.lead && this.lead.s > ride.at.s + J.joinM;
+        // (one that waited for a player who was too far behind it waits maxS at the most: the player may ride away)
+        else ready = (!this.halted && !!this.lead && this.lead.s > ride.at.s + J.joinM) || (ride.why === 'ahead' && ride.waitedS > GROUP.ahead.maxS);
         if (!ready || !this.clearToGo(ride)) return;
         ride.state = 'out';
         ride.stand = false;
@@ -580,6 +621,7 @@ class CrewGroup {
             if (other !== ride && other.state === 'wait' && other.at.place === ride.at.place && Math.abs(other.at.s - ride.at.s) < GROUP.wait.reachM && other.at.slot < ride.at.slot) return false;
         }
         for (const e of this.line) {
+            if (e.ride === ride) continue;
             const back = ride.s - e.s;
             if (back < 0 && -back < J.aheadM) return false;
             if (back >= 0 && back < J.clearM + e.speed * J.clearS) return false;
@@ -2737,11 +2779,16 @@ class AIMotorcycle {
         if (!this.pace || !this.character || typeof route.kindAt !== 'function') return;
         const kind = route.kindAt(route.fromUnits(this.currentSegment + this.segmentProgress), this.kindSample || (this.kindSample = {}));
         const pace = Traffic.paceOf(Traffic.roadTrait(this.character, kind), this.paceSample || (this.paceSample = {}));
-        this.baseSpeed = (pace.speed + this.pace.luck * pace.spread) * this.pace.scale;
+        // (a rider of a world's group rides at the group's pace, GROUP.pace)
+        const group = this.ride ? GROUP.pace : 1, grip = group * group;
+        this.baseSpeed = (pace.speed + this.pace.luck * pace.spread) * this.pace.scale * group;
         if (!this.drive) this.drive = { ...LANE_DRIVE.bike };
+        this.drive.plan = LANE_DRIVE.bike.plan * grip;
+        this.drive.accel = LANE_DRIVE.bike.accel * grip;
+        this.drive.turnIn = LANE_DRIVE.bike.turnIn * grip;
         // (a rider of the group at a share of its pace takes its bends at that share of their speed)
         const share = this.ride ? this.ride.factor : 1;
-        this.drive.lateral = Math.min(LANE_DRIVE.bike.lateral, pace.corner * share * share);
+        this.drive.lateral = Math.min(LANE_DRIVE.bike.lateral * grip, pace.corner * grip * share * share);
     }
 
     update(deltaTime, playerPosition, allBikes, allCars) {

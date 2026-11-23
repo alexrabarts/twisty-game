@@ -280,7 +280,15 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
   // Each checkpoint's roadworks, as far as the game may build them: the found places keep clear of them
   const junctionS = junctions.flatMap(j => j.passes.map(p => p.sIn));
   const works = stations.filter(st => st.kind === 'gate').map(st => ({ s0: st.s, s1: st.s + siteReach(samples, st.s, junctionS) }));
-  const places = numberPlaces([...mapped, ...foundPlaces(samples, tiles, mouths, edges, mapped, works)]);
+  const found = foundPlaces(samples, tiles, mouths, edges, mapped, works);
+  // A found place is carved as a map place is: its pad goes on the ride's edges and the land is benched again (a tile
+  // no pad reaches comes out the same bytes)
+  if (applyPads(edges, ride, found)) {
+    const carver = createBencher({ edges, demAt, coverAt: coverLookup(cover) });
+    missing = 0;
+    for (const [tx, tz] of tileList) { const t = carver.tile(tx, tz); missing += t.missing; tiles.set(`${tx},${tz}`, t); }
+  }
+  const places = numberPlaces([...mapped, ...found]);
   log(`places: ${mapped.length} from the map, ${places.length - mapped.length} found`);
 
   const far = (() => {
