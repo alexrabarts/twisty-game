@@ -400,8 +400,10 @@ reflectedLight.indirectDiffuse *= uIndirect;
     reflectedLight.indirectDiffuse = max(reflectedLight.indirectDiffuse, diffuseColor.rgb * uLandFloor * ${f(floor)} * (0.8 + 0.2 * up));
 }`);
             LandShade.injectHaze(shader);
+            // The near grain of the land detail effect (js/world/landdetail.js), read only while it is on
+            if (detail && typeof LandDetail !== 'undefined') LandDetail.inject(shader);
         };
-        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${floor === 1 ? '' : `-${floor}`}`;
+        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${floor === 1 ? '' : `-${floor}`}${detail && typeof LandDetail !== 'undefined' ? '-grain' : ''}`;
         material.customProgramCacheKey = () => key;
         material.needsUpdate = true;
         return material;

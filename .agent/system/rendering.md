@@ -13,7 +13,7 @@ All rendering goes through `Graphics` in `js/graphics.js`. `main.js` never calls
 
 1. The scene renders into a half-float target with 4x MSAA (fewer samples at a lower graphics level: [graphics.md](graphics.md)). The renderer does no tone mapping.
 2. Bloom: threshold, five-level blur chain, additive upsample. The threshold is 1.0, or the preset's `threshold` (night: 1.8, with bloom 0.6), so at night only lamp heads, the moon and the middle of a lit window of the modelled village bloom (the window by little: its glass is 1.9 to 2.3); headlit paint does not.
-3. Composite: radial speed blur, height fog, light shafts, bloom, ACES tone map, saturation, contrast, tint, vignette, sRGB encode, dither.
+3. Composite: radial speed blur, ambient occlusion, the wet road's mirror, height fog, light shafts, bloom, headlight glare, ACES tone map, saturation, contrast, tint, colour grade, vignette, sRGB encode, dither. With edge smoothing on, the composite draws to a target and one more pass draws it to the canvas. The effects in this list are switches of "Effects" below; each off leaves the frame as it was.
 
 `renderer.toneMappingExposure` is still the exposure control. `Game.writeTime` sets it.
 
@@ -66,13 +66,35 @@ On a leg with `rockFace` in `SceneAssets.LEGS` (foggy-gorge), the wall ribbon's 
 
 `timeConfigs` in `main.js` holds the light values. They are tuned for linear lighting: the sky light (hemisphere top) is the zenith colour, not the horizon colour.
 
-`headlight` in a config switches on the one spot light and the visible beam cone. They are off in daylight because a spot light costs every lit fragment. The spot reaches 120 m with decay 2: a near-flat falloff lit a white house 60 m ahead as brightly as the road under the wheel, and the bloom turned it into a halo.
+`headlight` in a config switches on the one spot light (the visible beam cone was removed in dbef6d2). It is off in daylight because a spot light costs every lit fragment. The spot reaches 120 m with decay 2: a near-flat falloff lit a white house 60 m ahead as brightly as the road under the wheel, and the bloom turned it into a halo.
 
 - **Headlight.** The bike's lamp is one spot light and nothing else: no cone, no second light (`tests/unit/headlight-dip.test.js` holds the count). It rides on the main beam with a clear road and dips while a car or a rider is in front, going either way (`Traffic.inBeam`: within `rangeM` ahead inside the beam's cone; `Traffic.stepDip`: down over `dipS`, held `holdS` after the road clears, up over `riseS`; `Traffic.BEAM` has the aim, reach and strength of each beam). `Game` writes the light's target, distance and intensity from the dip each frame.
 
+## Effects
+
+The lighting and screen effects are one table, `Effects.LIST` in `js/effects.js`. A row is one effect: `id`, `name`, `levels` (the first is always `off`, the game as it was before the effect), `default`, a level for each preset (`presets`), `cost` (GPU ms for each level, measured), `needs` (what the renderer must have) and `switch` (how it is switched, in words) with `apply(game, level)` (the code). The settings dialog (`js/settings.js`) and the presets are built from the table. `tests/unit/effects.test.js` fails on a row without a default, an off state, a preset level or a cost, and on a switch of `Graphics.setEffects` that no row sets.
+
+| Effect | Levels | How it is switched | Files |
+|---|---|---|---|
+| Ambient occlusion (`ao`) | off, low (8 samples), high (16) | `Graphics.setEffects({ ao })`: a half-resolution pass over the scene's depth (`GFX_AO`) and a 4 x 4 depth-aware blur (`GFX_AO_BLUR`), multiplied in the composite before the fog. Radius 0.6 m, gone by 90 m (`Graphics.AO`). No material compiles again | `js/graphics.js` |
+| Land detail (`landDetail`) | off, on | `LandDetail.set(on)`: a uniform of the land tiles' shader (`LandShade.patch` with `detail` calls `LandDetail.inject`). Two 256 px textures made at load from seeded noise (grass blades; rock grain and cracks), read within 60 m by the slope (rock from about 40 degrees, on the face's own plane), shade the albedo and bend the normal | `js/world/landdetail.js`, one line in `js/world/landshade.js` |
+| Sun shadows (`shadows`) | off (one box, `render.shadowSpan`), on (two cascades) | `Cascades.set(game, on)`: the sun's box shrinks to 60 m (sharp), the shadowless companion light (`Game.distantLight`) casts a 420 m box ahead of the camera, drawn every other frame and snapped to its texels. `Cascades.patch` changes three's `lights_fragment_begin` once: with two casting directional lights both take the near map inside its box and the far map past it; with one the chunk is three's own. The trees, houses, walls (`road-works`), tunnels, bridges and stones cast while it is on (`Cascades.CASTERS`). Every material compiles again once at the switch | `js/effects.js`, `Game.applyShadowBox` |
+| Reflections (`reflections`) | off, on | `Graphics.setEffects({ wet })`: over flat ground near the camera the composite draws the bloom of what is above each pixel down onto it, by the road's wetness (`RoadSurface.wetness`): lamps and headlights mirrored on wet asphalt. And `Effects.coat`: a clear-coat lobe of the baked environment map over the paint, tank, helmet and visor of every bike (a uniform; a material is patched once, the first time the effect is on) | `js/graphics.js`, `js/effects.js` |
+| Colour grade (`grade`) | off, on | `Graphics.setEffects({ grade })`: after the tone map, an S-curve of contrast and cool shadows and warm highlights from `GFX_GRADES` (each time of day) or `GFX_GRADE_WEATHER` (rain, snow, fog), eased over about a second so a blend zone does not jump | `js/graphics.js` |
+| Edge smoothing (`smoothing`) | off, on | `Graphics.setEffects({ smoothing })`: the composite draws to a target and an FXAA pass (`GFX_SMOOTH`) draws it to the canvas | `js/graphics.js` |
+| Headlight glare (`streaks`) | off, on | `Graphics.setEffects({ streaks })`: two horizontal passes over the bloom's bright pass at a quarter of the frame (`GFX_STREAK`), added in the composite by the night and the rain (`Graphics.setGlare`). In clear daylight nothing is drawn | `js/graphics.js` |
+| Speed blur (`edgeBlur`) | off, on | `Graphics.setEffects({ edgeBlur })`: the composite's radial blur at the screen edges, which the game had before the effects. A page without post-processing keeps its CSS overlay | `js/graphics.js` |
+
+- **Off is the game as it was.** Every effect at `off` but the speed blur draws the frame of the game before the effects; a probe compares the two pixel by pixel (see [graphics.md](graphics.md), "What the effects cost").
+- **No effect adds a triangle.** The shadow cascade draws the casters into a second map; the scene's triangles (`world-budget`) do not change.
+- **Presets.** Auto (the default) gives the level to the frame time and caps each effect by the ladder level's `effectMs`; Low, Balanced and High fix the ladder at `low`, `high` and `ultra` and leave each effect as chosen. Default is Auto with every effect at its default. The choice is kept in `localStorage` (`twistyGraphics`) by `EffectSettings`.
+- **Per frame.** `Effects.frame(game)` gives the graphics the glare and the wetness, and coats a bike that is new. `Graphics.render` calls `onRender` first, which the cascade uses to move the far box: a probe's draw pays for the far map as the game's does.
+- **Settings dialog.** `SettingsDialog` opens from the menu's rider screen (SETTINGS) and the pause panel (Settings, O) through the dialog stack. It has a Graphics section from `Effects.PRESETS` and `Effects.LIST`, and a Sound section from `Sound.SETTINGS` (`id`, `label`, `kind` slider or toggle, `range`, `default`; read and written with the sound manager's `getSetting` and `setSetting`) when the sound engine defines it; without it the section is hidden. An effect that Auto holds below the choice says so on its row.
+- **A new effect** is one row of `Effects.LIST` with a measured cost, and its switch in `apply`. Measure it with `node tools/terrain-check.mjs world-quality --world tremola --gpu --desk --measure --effects high` (each effect in force is turned off in turn: `fx-<id>`), and take before and after pictures with `world-effect-shots --specs "edgeBlur;edgeBlur,<id>"`.
+
 ## Cost
 
-The graphics level sets the pixel ratio, the shadow map, the samples of the scene target, the bloom and the share of a world's trees drawn. The frame time steps it. See [graphics.md](graphics.md).
+The graphics level sets the pixel ratio, the shadow map, the samples of the scene target, the bloom, the share of a world's trees drawn and the most an effect may cost under Auto. The frame time steps it. See [graphics.md](graphics.md).
 
 ## Bikes and rider
 

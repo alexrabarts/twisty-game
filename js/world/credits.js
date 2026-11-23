@@ -80,9 +80,9 @@ const WorldCredits = {
     },
 
     // The pause panel of a ride: Resume, Restart leg (when `restart` is given: a world ride, whose crash opens no card
-    // to offer it), Menu (when `menu` is given), Credits and the rider mode. P and Escape resume, R is Restart leg,
-    // M is Menu. `speed` is the bike's as the pause began: the mode changes only while the bike stands
-    // (RiderModes.canChange), so with the bike moving its control is shown locked.
+    // to offer it), Menu (when `menu` is given), Credits, Settings and the rider mode. P and Escape resume, R is
+    // Restart leg, M is Menu, O is Settings. `speed` is the bike's as the pause began: the mode changes only while the
+    // bike stands (RiderModes.canChange), so with the bike moving its control is shown locked.
     showPause(environment, resume, menu = null, restart = null, speed = 0) {
         WorldCredits.hidePause();
         const panel = document.createElement('div');
@@ -117,6 +117,7 @@ const WorldCredits = {
             panel.appendChild(leave);
         }
         panel.appendChild(WorldCredits.button('btn', environment && environment.isWorld ? environment : null));
+        if (typeof SettingsDialog !== 'undefined') panel.appendChild(SettingsDialog.button('btn', 'Settings (O)'));
         // The rider mode (js/ridermodes.js). The stack gives keys to the top dialog alone, so the step key the ride
         // listens for is here the `data-key` of the next mode's button
         if (typeof RiderModes !== 'undefined') panel.appendChild(RiderModes.control(document, { locked: !RiderModes.canChange(speed) }));

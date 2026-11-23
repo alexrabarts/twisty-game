@@ -21,6 +21,9 @@
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
 //   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--measure [--rounds N]] [--out <dir>]   (each part of a world frame, or each graphics level: frame time and picture)
+// Every world probe takes --effects off|default|high|id=level,... (the effects of js/effects.js in force, the ladder held
+//   at its top so Auto caps none; `off` and a list start from every effect off), --desk (a 1440 x 900 view at a device
+//   pixel ratio of 2, as the owner's screen) and --night (the light and sky of night, Game.setTimeOfDay)
 //   node tools/terrain-check.mjs world-ground-shots --world tremola --gpu --out <dir> [--tag T] [--at s,...]   (the bike stopped on the steepest grade, up, down and across, chase and side views)
 //   node tools/terrain-check.mjs world-budget --world tremola --every 1000 --gpu
 //   world-hud rides the fixture of three stages tests/fixtures/world/mini (--world all) unless --worldData is given
@@ -174,7 +177,12 @@ async function openPage(browser, port, url = '/', seed = 1, prepare = null) {
     page.on('response', response => {
         if (response.status() === 404 && response.url().startsWith(`http://127.0.0.1:${port}`)) state.notFound.push(response.url());
     });
-    page.on('console', message => { if (message.type() === 'error') state.lastError = message.text().slice(0, 200); });
+    page.on('console', message => {
+        if (message.type() !== 'error') return;
+        state.lastError = message.text().slice(0, 200);
+        // A shader that does not compile is a console error, not a page error: the report keeps the first few
+        (state.consoleErrors ||= []).length < 12 && state.consoleErrors.push(message.text().slice(0, 600));
+    });
     page.on('pageerror', error => state.pageErrors.push(`${url}: ${error.message}`));
     // One seeded generator, reset before each leg starts; `seed` is where a page starts it
     await page.evaluateOnNewDocument((first) => {
@@ -2156,7 +2164,7 @@ function writeBaselines(report, fresh, frozen) {
 // ---------------------------------------------------------------- world probes
 // The streamed world (`?world=<id>`), one page for each probe. Every page blocks cloudfunctions.net
 // like the leg probes do, and nothing here answers a callable: a world submits nothing yet.
-const WORLD_PROBES = ['world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight', 'world-trees', 'world-haze'];
+const WORLD_PROBES = ['world-effect-shots', 'world-window', 'world-budget', 'world-ground', 'world-junction', 'world-wrongway', 'world-credit', 'world-net', 'world-finish', 'world-restart', 'world-cut', 'world-camera', 'world-frustum', 'world-camera-smooth', 'world-camera-frames', 'world-hud', 'world-shots', 'world-hairpin-shots', 'world-buildings', 'world-models', 'world-frametime', 'world-ride-shots', 'world-hairpin-assist', 'world-floating', 'world-watertight', 'world-trees', 'world-haze'];
 // Hosts the page may reach besides itself: the script CDNs and the font host of index.html
 const ALLOWED_HOSTS = ['cdn.jsdelivr.net', 'www.gstatic.com', 'unpkg.com', 'fonts.googleapis.com', 'fonts.gstatic.com'];
 const ALLOWED_PATHS = /^\/(world\/|tests\/fixtures\/world\/|assets\/|js\/|css\/|tools\/autopilot\.js|favicon|$|index\.html)/;
@@ -2177,9 +2185,51 @@ async function openWorld(browser, port, id, seed = 1, data = option('worldData')
         }
         await page.evaluate(() => { window.game.adaptResolution = () => {}; });
         await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+        await pageLook(page);
         return page;
     }
     return fail(2, `the world page did not start: ${state.pageErrors.join(' | ')} ${state.lastError}`);
+}
+
+// The view, the time of day and the effects a probe runs with (--desk, --night, --effects)
+async function pageLook(page) {
+    if (flag('desk')) {
+        await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
+        await page.evaluate(() => {
+            game.renderer.setPixelRatio(Math.min(devicePixelRatio, Quality.LEVELS[game.quality.level].pixelRatio));
+            game.onWindowResize();
+        });
+    }
+    if (flag('night')) await page.evaluate(() => game.setTimeOfDay('night'));
+    const spec = option('effects');
+    if (spec) {
+        const set = await page.evaluate(effectsSpec, spec);
+        if (set.error) fail(2, `--effects ${spec}: ${set.error}`);
+        state.effects = set;
+    }
+}
+
+// In the page: puts --effects in force. The ladder is held at its top, whose share caps no effect
+function effectsSpec(spec) {
+    if (typeof Effects === 'undefined' || !game.effects) return { error: 'this page has no effects (js/effects.js)' };
+    const settings = game.effects;
+    try {
+        if (spec === 'high') settings.setPreset('high');
+        else {
+            settings.setPreset('auto');
+            if (spec !== 'default') {
+                Effects.LIST.forEach(effect => settings.set(effect.id, 'off'));
+                if (spec !== 'off') spec.split(',').forEach(pair => { const [id, level] = pair.split('='); settings.set(id, level || 'on'); });
+            }
+        }
+    } catch (error) {
+        return { error: error.message };
+    }
+    game.applyGraphicsSettings();
+    game.quality.fix(Quality.LEVELS.length - 1);
+    Effects.frame(game);
+    game.graphics.easeEffects(10);
+    return { preset: settings.preset, inForce: { ...game.effectLevels } };
 }
 
 // What the budget probe counts: every mesh drawn in the scene, and the instances in them
@@ -3485,6 +3535,9 @@ const WORLD = {
                 let ticks = 0;
                 while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
                 game.environment.streamer.pump(Infinity);
+                // The effects' glare, wet road and grade are eased in Graphics.update, which a step without its draw
+                // skips: they take their values for this place at once
+                if (typeof Effects !== 'undefined' && game.effectLevels) { Effects.frame(game); game.graphics.easeEffects(10); }
                 twistyDev.step(1, { render: true });
                 return { s: Math.round(v.routeS), crashed: v.crashed };
             }, placeAt.toString(), pilotWorld.toString(), s);
@@ -3505,6 +3558,78 @@ const WORLD = {
                 return Math.round(sum / (d.length / 4) / 255 * 1000) / 1000;
             }, png) : undefined;
             files.push({ file, ...at, luma });
+        }
+        return { files };
+    },
+    // Before and after pictures of the effects (js/effects.js): at each station of --at the chase view as world-ride-shots
+    // rides to it, then one picture for each spec of --specs (';' between specs, each as --effects takes it), the
+    // frame drawn again under it. --night shoots at night. The files are <tag>-s<s>-<spec>.png in --out
+    'world-effect-shots': async (page) => {
+        const out = option('out');
+        if (!out) return { error: 'name a folder with --out <dir>' };
+        mkdirSync(out, { recursive: true });
+        const tag = option('tag') || 'fx';
+        const specs = (option('specs') || 'off;high').split(';');
+        const stations = option('at') ? option('at').split(',').map(Number) : [150];
+        await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+        const files = [];
+        for (const s of stations) {
+            const at = await page.evaluate(async (placeSource, pilotSource, s) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const v = game.vehicle;
+                game.cameraMode = 2;
+                await placeAt(Math.max(10, s - 140));
+                game.worldCamera.reset(v.yawAngle);
+                new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+                let ticks = 0;
+                while (v.routeS < s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+                game.environment.streamer.pump(Infinity);
+                return { s: Math.round(v.routeS), crashed: v.crashed };
+            }, placeAt.toString(), pilotWorld.toString(), s);
+            // --car: a car with its lamps on stands --car m ahead in the other lane, facing the bike (the glare's subject)
+            if (option('car')) await page.evaluate((ahead) => {
+                const car = game.traffic && game.traffic.cars && game.traffic.cars.find(c => c.carGroup && c.carGroup.parent);
+                if (!car) return;
+                const v = game.vehicle;
+                const p = game.environment.route.sample(v.routeS + ahead, {});
+                car.carGroup.position.set(p.x - 2.2 * Math.cos(p.heading), p.y + 0.32, p.z + 2.2 * Math.sin(p.heading));
+                car.carGroup.rotation.set(0, p.heading + Math.PI, 0);
+                car.carGroup.visible = true;
+                car.setHeadlights(true);
+                // The car's own update would put it back on its lane: it stands where it is put for the pictures
+                car.update = () => {};
+                car.carGroup.updateMatrixWorld(true);
+            }, Number(option('car')));
+            for (const spec of specs) {
+                const set = await page.evaluate(effectsSpec, spec);
+                if (set.error) return { error: `${spec}: ${set.error}` };
+                // Two draws: the first compiles what the spec changed and draws the far shadow map
+                await page.evaluate(() => { game.graphics.render(game.scene, game.camera); game.graphics.render(game.scene, game.camera); });
+                const name = spec.replace(/[^a-z0-9=,]+/gi, '').replace(/[=,]/g, '-');
+                const file = join(out, `${tag}-s${s}-${name}.png`);
+                await page.screenshot({ path: file });
+                files.push({ file, spec, ...at, inForce: set.inForce });
+                // --ao-buffer: the occlusion itself (white open, black closed), from the blurred half-resolution target
+                if (flag('ao-buffer') && set.inForce.ao !== 'off') {
+                    const png = await page.evaluate(() => {
+                        const g = game.graphics, t = g.aoTargets && g.aoTargets[1];
+                        if (!t) return null;
+                        const data = new Uint8Array(t.width * t.height * 4);
+                        g.renderer.readRenderTargetPixels(t, 0, 0, t.width, t.height, data);
+                        const canvas = document.createElement('canvas');
+                        canvas.width = t.width; canvas.height = t.height;
+                        const ctx = canvas.getContext('2d'), image = ctx.createImageData(t.width, t.height);
+                        for (let y = 0; y < t.height; y++) for (let x = 0; x < t.width; x++) {
+                            const from = ((t.height - 1 - y) * t.width + x) * 4, to = (y * t.width + x) * 4;
+                            image.data[to] = image.data[to + 1] = image.data[to + 2] = data[from];
+                            image.data[to + 3] = 255;
+                        }
+                        ctx.putImageData(image, 0, 0);
+                        return canvas.toDataURL('image/png').split(',')[1];
+                    });
+                    if (png) writeFileSync(file.replace(/\.png$/, '-ao.png'), Buffer.from(png, 'base64'));
+                }
+            }
         }
         return { files };
     },
@@ -5990,9 +6115,11 @@ async function qualityFrames(count) {
     return { updateMs: round(median(update)), submitMs: round(median(submit)), waitMs: round(median(wait)), renderMs: round(median(submit.map((v, k) => v + wait[k]))), gpuMs: round(median(gpu)), frameMs: round(median(frame)), worstMs: round(Math.max(...frame)), ...info };
 }
 
-// In the page: the parts world-quality turns off or down, one at a time
+// In the page: the parts world-quality turns off or down, one at a time; with --effects, each effect in force too
+// (fx-<id>: that effect off, the others as they are)
 function qualityParts() {
-    return ['pixel-1.5', 'pixel-1', 'pixel-0.75', 'shadow-1024', 'shadow-512', 'shadow-none', 'msaa-0', 'bloom-none', 'haze-none', 'trees-none', 'houses-none', 'scenery-none', 'side-roads-none', 'far-land-none', 'land-none', 'traffic-none'];
+    const effects = Object.entries(game.effectLevels || {}).filter(([, level]) => level !== 'off').map(([id]) => `fx-${id}`);
+    return [...effects, 'pixel-1.5', 'pixel-1', 'pixel-0.75', 'shadow-1024', 'shadow-512', 'shadow-none', 'msaa-0', 'bloom-none', 'haze-none', 'trees-none', 'houses-none', 'scenery-none', 'side-roads-none', 'far-land-none', 'land-none', 'traffic-none'];
 }
 
 // In the page: turns a part off (`on` true) or back as it was (`on` false). Everything it changes it keeps in
@@ -6019,6 +6146,12 @@ function qualityPart(name, on) {
         if (light.shadow.map) { light.shadow.map.dispose(); light.shadow.map = null; }
     };
     if (name === 'full') return;
+    if (name.startsWith('fx-')) {
+        const id = name.slice(3);
+        if (on) saved.effect = { ...game.effectLevels };
+        Effects.apply(game, on ? { ...saved.effect, [id]: 'off' } : saved.effect);
+        return;
+    }
     if (name.startsWith('pixel-')) {
         if (on) saved.pixel = r.getPixelRatio();
         r.setPixelRatio(on ? Number(name.slice(6)) : saved.pixel);
@@ -6126,6 +6259,8 @@ async function worldMain() {
     if (state.pageErrors.length) report.failures.push(...state.pageErrors.map(e => `page error: ${e}`));
     const missing = state.notFound.filter(u => !u.endsWith('/favicon.ico'));
     if (missing.length) report.failures.push(...missing.map(u => `404: ${u}`));
+    if (state.effects) report.effects = state.effects;
+    if (state.consoleErrors) report.consoleErrors = state.consoleErrors;
     report.failures.length && (exit = exit || 1);
     console.log(JSON.stringify(report, null, 1));
     process.exit(exit);

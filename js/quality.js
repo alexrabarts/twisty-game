@@ -11,16 +11,21 @@
 //   msaa         the samples of the HDR scene target (Graphics.sceneTarget), 0 for none
 //   bloom        whether the bloom passes run (the glare round the sun and bright paint)
 //   treeShare    the share of each tile's trees drawn in a world ride (the rest are not drawn; a leg has its own trees)
+//   effectMs     under the Auto preset, the most GPU time one effect of js/effects.js may cost (Effects.resolve): an
+//                effect dearer than it is held at a cheaper level or off
 const Quality = {
-    // Lowest first: a step down is one index lower. The top is the game as it was drawn before the ladder, to the
-    // last setting. The order is by the frame time saved for the look lost, as measured on a phone-class page
-    // (world-quality --measure): the pixel ratio first, then the shadows and the samples, then the trees and the bloom
+    // Lowest first: a step down is one index lower. Full is the game as it was drawn before the ladder, to the last
+    // setting; the levels over it add only the dearer effects. The order is by the frame time saved for the look lost,
+    // as measured (world-quality --measure): the dearest effects first, then the pixel ratio, then the shadows and the
+    // samples, then the trees and the bloom
     LEVELS: [
-        { id: 'lowest', label: 'Lowest', pixelRatio: 0.75, shadowMap: 0, msaa: 0, bloom: false, treeShare: 0.4 },
-        { id: 'low', label: 'Low', pixelRatio: 1, shadowMap: 0, msaa: 0, bloom: true, treeShare: 0.6 },
-        { id: 'medium', label: 'Medium', pixelRatio: 1.25, shadowMap: 1024, msaa: 0, bloom: true, treeShare: 0.8 },
-        { id: 'high', label: 'High', pixelRatio: 1.5, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1 },
-        { id: 'full', label: 'Full', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1 }
+        { id: 'lowest', label: 'Lowest', pixelRatio: 0.75, shadowMap: 0, msaa: 0, bloom: false, treeShare: 0.4, effectMs: 0.2 },
+        { id: 'low', label: 'Low', pixelRatio: 1, shadowMap: 0, msaa: 0, bloom: true, treeShare: 0.6, effectMs: 0.2 },
+        { id: 'medium', label: 'Medium', pixelRatio: 1.25, shadowMap: 1024, msaa: 0, bloom: true, treeShare: 0.8, effectMs: 0.2 },
+        { id: 'high', label: 'High', pixelRatio: 1.5, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 0.2 },
+        { id: 'full', label: 'Full', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 0.4 },
+        { id: 'rich', label: 'Rich', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 0.7 },
+        { id: 'ultra', label: 'Ultra', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 99 }
     ],
 
     // What each setting may be. `values`: the only ones allowed; `min`/`max`: a number in the range; `type`: a boolean.
@@ -30,7 +35,8 @@ const Quality = {
         shadowMap: { values: [0, 512, 1024, 2048], better: 'more' },
         msaa: { values: [0, 2, 4], better: 'more' },
         bloom: { type: 'boolean', better: 'more' },
-        treeShare: { min: 0.1, max: 1, better: 'more' }
+        treeShare: { min: 0.1, max: 1, better: 'more' },
+        effectMs: { min: 0, max: 99, better: 'more' }
     },
 
     // The frame time rules, in milliseconds. A frame is the time between two animation frames (what the rider sees);
@@ -72,7 +78,7 @@ const Quality = {
         { touch: true, level: 'high' },
         { maxCores: 2, level: 'medium' },
         { maxMemory: 2, level: 'medium' },
-        { level: 'full' }
+        { level: 'ultra' }
     ],
 
     // The device as the start rows read it, from a window (or anything with the same fields)

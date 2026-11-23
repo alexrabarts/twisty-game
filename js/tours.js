@@ -512,6 +512,8 @@ class TourSystem {
         document.body.classList.add('in-menu');
         // The data credit of the real-map world lives in a Credits panel, not on screen (js/world/credits.js)
         if (typeof WorldCredits !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(WorldCredits.button('showcase-secondary'));
+        // The settings (graphics and sound) open over the menu through the dialog stack (js/settings.js)
+        if (typeof SettingsDialog !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(SettingsDialog.button('showcase-secondary'));
 
         // The rider mode (js/ridermodes.js): free on the menu, for the world ride and the classic legs alike. A choice
         // gives the focus back to the primary button, so Enter still rides

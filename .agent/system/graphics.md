@@ -4,24 +4,63 @@ The quality ladder is in `js/quality.js`. It has one table of graphics levels, `
 
 ## The levels
 
-The lowest level is index 0. The top level is the game as it was drawn before the ladder.
+The lowest level is index 0. Full is the game as it was drawn before the ladder. The two levels over it add only the dearer effects of `js/effects.js` (see "The effects on the ladder").
 
-| Level | `pixelRatio` | `shadowMap` | `msaa` | `bloom` | `treeShare` |
-|---|---|---|---|---|---|
-| 0 Lowest | 0.75 | 0 (none) | 0 | off | 0.4 |
-| 1 Low | 1 | 0 (none) | 0 | on | 0.6 |
-| 2 Medium | 1.25 | 1024 | 0 | on | 0.8 |
-| 3 High | 1.5 | 2048 | 4 | on | 1 |
-| 4 Full | 2 | 2048 | 4 | on | 1 |
+| Level | `pixelRatio` | `shadowMap` | `msaa` | `bloom` | `treeShare` | `effectMs` |
+|---|---|---|---|---|---|---|
+| 0 Lowest | 0.75 | 0 (none) | 0 | off | 0.4 | 0.2 |
+| 1 Low | 1 | 0 (none) | 0 | on | 0.6 | 0.2 |
+| 2 Medium | 1.25 | 1024 | 0 | on | 0.8 | 0.2 |
+| 3 High | 1.5 | 2048 | 4 | on | 1 | 0.2 |
+| 4 Full | 2 | 2048 | 4 | on | 1 | 0.4 |
+| 5 Rich | 2 | 2048 | 4 | on | 1 | 0.7 |
+| 6 Ultra | 2 | 2048 | 4 | on | 1 | 99 |
 
 - `pixelRatio` is a cap. The game never draws more device pixels than the screen has.
 - `shadowMap` is the size of the sun's shadow map. 0 turns the shadows off. Every material compiles again once at that change.
 - `msaa` is the sample count of `Graphics.sceneTarget`. A change makes the target again on the next frame (`Graphics.setQuality`).
 - `bloom` off skips the five bloom passes. The composite then adds no bloom.
 - `treeShare` is the share of each world tile's trees that the game draws. Each tree mesh is in order from the bike (`Scenery.buildTile`), so the far trees go first. `Game.thinTrees` changes only the instance count. A tree is never solid. A classic leg has its own trees and does not use it.
+- `effectMs` is the most GPU time (ms, as measured) one effect may cost under the Auto preset. An effect dearer than it is held at a cheaper level, or off (`Effects.resolve`). A fixed preset does not read it.
 - `Quality.FIELDS` holds the permitted values. A lower level never has more of a setting than a higher level. `tests/unit/quality.test.js` holds both rules.
 
-To add a setting, add a column to every level and a row to `Quality.FIELDS`, then read it in `Game.applyQuality`. Keep the top level equal to the game before the change.
+To add a setting, add a column to every level and a row to `Quality.FIELDS`, then read it in `Game.applyQuality`. Keep the Full level equal to the game before the change.
+
+## The effects on the ladder
+
+The effects (`js/effects.js`, rules in [rendering.md](rendering.md), "Effects") are not columns of the levels: each effect carries its own measured cost, and a level carries `effectMs`. `Game.applyEffects` puts in force, for each effect, the highest level up to the player's choice that costs no more than `effectMs` of the level in force (Auto only). So as the frame time steps the ladder down, the step to Rich gives up the effects over 0.7 ms (the high occlusion and the edge smoothing), the step to Full those over 0.4 ms (the shadow cascades and the low occlusion), and only the step from Full to High loses pixel ratio; there only the effects of 0.2 ms or less are left (land detail, reflections, grade, glare, speed blur).
+
+## What the effects cost
+
+Measured with `node tools/terrain-check.mjs world-quality --world tremola --gpu --desk --measure --rounds 3 --effects high` (and `--effects edgeBlur,ao=low` for the low occlusion) on the Mac mini (`heavy -c browser`, an Apple M-series GPU) at a 1440 x 900 view at a device pixel ratio of 2 (2880 x 1800 pixels, as the owner's screen), in the chase view at s 1319 by day, at s 7900 in the rain (`--at 7900`) and at night (`--night`). Each effect in force is turned off against the frame with every effect on (`fx-<id>`). The number is the draw's time (submit and the wait for the GPU, `savedRenderMs`); the browser's GPU timer read up to eight times as much on that machine and its sums did not add up, so it is not used. Runs drift by about 0.2 ms.
+
+| Effect | Day | Rain | Night | In `Effects.LIST` |
+|---|---|---|---|---|
+| Ambient occlusion high | 0.9 | 1.1 | 0.5 | 1.1 |
+| Ambient occlusion low | 0.6 (day only) | | | 0.6 |
+| Edge smoothing | 0.8 | 0.7 | 0.6 | 0.8 |
+| Sun shadows (cascades) | 0.6 (+0.2 submit) | 0.6 | 0.6 | 0.6, CPU 0.2 |
+| Headlight glare | 0 (not drawn by day) | 0 | 0.2 | 0.2 |
+| Speed blur | 0 | 0.2 | 0.1 | 0.2 |
+| Colour grade | 0 | 0 | 0.2 | 0.2 |
+| Land detail | 0.1 | 0 | 0 | 0.1 |
+| Reflections | 0.1 | 0 | 0.1 | 0.1 |
+
+The whole frame with every effect on drew in 11.6 ms by day. For scale: the pixel ratio from 2 to 1.5 saved 3.4 ms, the samples 1.9 ms, the shadows 1.5 ms.
+
+The defaults (the occlusion low, land detail, the cascades, reflections, grade, glare and speed blur on; edge smoothing off, since the 4 samples already smooth the edges) and the frame time (`world-frametime`, the median of five places, on the mini):
+
+| View | Before the effects | With the defaults |
+|---|---|---|
+| 960 x 540 | 4.3 and 4.4 ms (worst 6.6, 5.9) | 5.0 and 5.3 ms (worst 6.9, 7.1) |
+| 2880 x 1800 (`--desk`) | 14.2 and 13.7 ms (worst 20.7, 18.8) | 15.7 and 15.4 ms (worst 21.3, 17.9) |
+
+Two pairs, each taken one after the other on the same machine. So the defaults keep the owner's size of frame inside the 16.7 ms budget on that GPU, and Auto takes the dearer ones off first where it is slower. No effect adds a triangle to the scene: `world-budget` counted 457,633 before and 457,722 with the defaults at s 2000 (the window was over 450,000 there before the effects too; a third run from another folder counted 532,892 with the game before the effects, so the count moves with the order the models load in). `tests/unit/effects.test.js` holds that no effect in force costs more than its level's share, that a step down never turns an effect on, and that the three dearest effects are off at every level under the full pixel ratio.
+
+A desktop starts at Ultra (`Quality.START`), a phone where it did before (Low, Medium or High), so a phone has only the near-free effects until its frame time shows headroom.
+
+The settings dialog (`js/settings.js`) sets the preset: Auto releases the ladder (`quality.release`), Low, Balanced and High fix it (`quality.fix`) at `low`, `high` and `ultra`.
+
 
 ## What a world frame costs
 
@@ -95,7 +134,7 @@ The ladder is one object, `game.quality`:
 - `quality.release()` gives the level back to the frame time ("Auto"). It starts from the level that was fixed.
 - `quality.level` is the level in force. `quality.isFixed` tells if a caller fixed it.
 
-In debug mode (`?debug`), the HUD shows the level (`Q3 High (auto)`). The tuning panel (T) has a Graphics row: − and + step through Auto and each level. A fixed level is not a tuning. The ride keeps its time. A graphics menu with an "Auto" preset uses `fix` and `release` in the same way.
+In debug mode (`?debug`), the HUD shows the level (`Q3 High (auto)`). The tuning panel (T) has a Graphics row: − and + step through Auto and each level. A fixed level is not a tuning. The ride keeps its time. The settings dialog's presets use `fix` and `release` in the same way.
 
 ## What was not checked
 

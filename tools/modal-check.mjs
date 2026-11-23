@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Browser proof for the game's dialogs (crash, finish, pause, the world ride's confirm, credits, best times, the name
-// entry and the menu). Opens them in every reachable sequence with real clicks, taps and key presses, and after each
+// Browser proof for the game's dialogs (crash, finish, pause, the world ride's confirm, credits, settings, best times,
+// the name entry and the menu). Opens them in every reachable sequence with real clicks, taps and key presses, and after each
 // step checks the one rule every dialog keeps (js/modals.js):
 //   - exactly one dialog is interactive, and it is the one the step opened (the others are hidden or inert)
 //   - every button of that dialog is the element under its own centre (document.elementFromPoint), so a click lands
@@ -45,7 +45,7 @@ if (outDir) mkdirSync(outDir, { recursive: true });
 
 // The dialogs the game had before js/modals.js, by selector; anything opened through Modals carries data-modal and
 // is found too, so a dialog added later is held to the same rule without a change here
-const KNOWN = ['#crashNotification', '#finishBanner', '#worldConfirm', '#world-pause', '#world-credits', '#leaderboardViewer', '#leaderboardEntryOverlay', '.tour-selector-overlay'];
+const KNOWN = ['#crashNotification', '#finishBanner', '#worldConfirm', '#world-pause', '#world-credits', '#settings', '#leaderboardViewer', '#leaderboardEntryOverlay', '.tour-selector-overlay'];
 
 // What a step expects: the dialog on top by its id (or first class), 'none' for the ride with no dialog, and nav for
 // a page load (a world goes to the menu by leaving ?world)
@@ -118,6 +118,31 @@ const modeLocked = () => {
     if (box.querySelector('.mode-picker-hint').textContent !== RiderModes.LOCKED_TEXT) problems.push('the control does not say why it is locked');
     return problems;
 };
+// The settings dialog (js/settings.js): the preset in force, kept, and the ladder fixed by it (Auto: free), and the
+// dialog's own row showing it
+const presetIs = (id) => {
+    const problems = [];
+    if (game.effects.preset !== id) problems.push(`the preset is ${game.effects.preset}, not ${id}`);
+    const stored = JSON.parse(localStorage.getItem(Effects.KEY) || '{}').preset || Effects.DEFAULT_PRESET;
+    if (stored !== id) problems.push(`the stored preset is ${stored}, not ${id}`);
+    const level = Effects.preset(id).level;
+    const held = game.quality.isFixed ? Quality.LEVELS[game.quality.level].id : null;
+    if ((level || null) !== held) problems.push(`the ladder is held at ${held}, not ${level || 'nothing (Auto)'}`);
+    const shown = document.querySelector('#settings [data-preset-row] [aria-checked="true"]');
+    if (shown && shown.dataset.value !== id) problems.push(`the dialog shows ${shown.dataset.value}`);
+    return problems;
+};
+const presetCheck = id => new Function(`return (${presetIs})(${JSON.stringify(id)});`);
+const effectIs = (id, level) => {
+    const problems = [];
+    if (game.effects.chosen[id] !== level) problems.push(`${id} is ${game.effects.chosen[id]}, not ${level}`);
+    const stored = (JSON.parse(localStorage.getItem(Effects.KEY) || '{}').effects || {})[id];
+    if (stored !== level) problems.push(`the stored ${id} is ${stored}, not ${level}`);
+    const shown = document.querySelector(`#settings [data-effect="${id}"] [aria-checked="true"]`);
+    if (!shown || shown.dataset.value !== level) problems.push(`the dialog shows ${shown && shown.dataset.value}`);
+    return problems;
+};
+const effectCheck = (id, level) => new Function(`return (${effectIs})(${JSON.stringify(id)}, ${JSON.stringify(level)});`);
 const SEQUENCES = [
     // A world ride: a crash opens no dialog (the game puts the bike back by itself), and the ride's own dialogs open
     // over the fall as over any riding
@@ -190,6 +215,18 @@ const SEQUENCES = [
         { key: 'KeyM', top: MENU, nav: true }
     ] },
 
+    // The settings over the pause panel of a world ride: an effect changed, O and Escape close it, the panel comes back
+    { name: 'world-pause-settings', page: 'world', steps: [
+        pause,
+        { click: '#world-pause [data-settings]', top: 'settings' },
+        { click: '#settings [data-effect="ao"] [data-value="high"]', top: 'settings', check: effectCheck('ao', 'high') },
+        { key: 'Escape', tap: '#settings [data-settings-close]', top: 'world-pause', focus: '#world-pause [data-settings]' },
+        { key: 'KeyO', tap: '#world-pause [data-settings]', top: 'settings' },
+        { click: '#settings [data-preset-row] [data-value="balanced"]', top: 'settings', check: presetCheck('balanced') },
+        { key: 'KeyO', tap: '#settings [data-settings-close]', top: 'world-pause' },
+        { click: '#world-pause [data-resume]', top: 'none', check: presetCheck('balanced') }
+    ] },
+
     // The menu of the legs: credits and best times over it
     { name: 'menu-credits', page: 'menu', steps: [
         { top: MENU },
@@ -197,6 +234,16 @@ const SEQUENCES = [
         { key: 'Escape', tap: '#world-credits button', top: MENU },
         { click: '.character-select-screen [data-credits]', top: 'world-credits' },
         { click: '#world-credits button', top: MENU }
+    ] },
+    // The settings over the menu: a preset fixes the ladder, Default gives it back to Auto
+    { name: 'menu-settings', page: 'menu', steps: [
+        { top: MENU },
+        { click: '.character-select-screen [data-settings]', top: 'settings', check: presetCheck('auto') },
+        { click: '#settings [data-preset-row] [data-value="low"]', top: 'settings', check: presetCheck('low') },
+        { key: 'Escape', tap: '#settings [data-settings-close]', top: MENU, focus: '.character-select-screen [data-settings]' },
+        { key: 'KeyO', tap: '.character-select-screen [data-settings]', top: 'settings', check: presetCheck('low') },
+        { click: '#settings [data-settings-default]', top: 'settings', check: presetCheck('auto') },
+        { click: '#settings [data-settings-close]', top: MENU }
     ] },
     { name: 'menu-best-times', page: 'menu', steps: [
         { click: '#riderClassicBtn', top: MENU, check: legScreen },

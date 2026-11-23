@@ -3,7 +3,7 @@
  */
 // The quality ladder (js/quality.js): one table of graphics levels, stepped by the frame time. Held here:
 //   - every level is a valid set of settings, and a lower level never has more of a setting than a higher one
-//   - the top level is the game as it was drawn before the ladder
+//   - the full level is the game as it was drawn before the ladder; the levels over it add only effects (effectMs)
 //   - under a slow frame-time trace the ladder steps down, and under a fast one it steps back up, slower than down
 //   - a noisy trace round the budget never makes it go up and down in a loop; a hitch or a hold never counts
 //   - a fixed level holds whatever the frame time, and a release goes on from it
@@ -63,9 +63,12 @@ describe('the levels', () => {
         }
     });
 
-    test('the top level is the game as drawn before the ladder', () => {
+    test('the full level is the game as drawn before the ladder, and the levels over it add only effects', () => {
         // Graphics.setupPost: 4 samples; Game.setupLighting: a 2048 map; Game.init: the pixel ratio capped at 2
-        expect(Quality.LEVELS[TOP]).toMatchObject({ pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1 });
+        const full = Quality.index('full');
+        const before = { pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1 };
+        expect(Quality.LEVELS[full]).toMatchObject(before);
+        for (let i = full + 1; i <= TOP; i++) expect(Quality.LEVELS[i]).toMatchObject(before);
     });
 
     test('every start row names a level', () => {
@@ -206,7 +209,7 @@ describe('the stepping', () => {
         ride(ladder, t, 30, () => 40);
         expect(ladder.level).toBe(0);
         expect(() => ladder.fix(99)).toThrow();
-        expect(ladder.fix('full')).toBe(TOP);
+        expect(ladder.fix('full')).toBe(Quality.index('full'));
     });
 
     test('the HUD text says the level and who chose it', () => {

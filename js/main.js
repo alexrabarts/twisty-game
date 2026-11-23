@@ -342,6 +342,7 @@ class Game {
         this.environment.onMeshBuilt = root => {
             this.graphics.fixColorSpaces(root);
             this.thinTrees(root);
+            if (typeof Effects !== 'undefined') Effects.dress(this, root);
         };
         this.environment.applyLandscapeConfig(this.environment.config.look);
         this.applyShadowBox(this.environment.config.render);
@@ -621,6 +622,7 @@ class Game {
         this.quality = new QualityLadder({ start: Quality.startLevel(device), now: performance.now(), apply: (level, index, reason) => this.applyQuality(level, index, reason) });
         this.quality.device = device;
         this.showQuality();
+        this.startEffects();
     }
 
     // Puts a level's settings in force. Each is read where it is drawn, so a change takes effect on the next frame
@@ -649,6 +651,54 @@ class Game {
         if (this.environment && this.environment.isWorld) this.thinTrees(this.environment.sceneryGroup);
         if (reason !== 'start') console.log(`Quality: ${Quality.describe(index, reason === 'fixed')} (${reason})`);
         this.showQuality();
+        this.applyEffects();
+    }
+
+    // The effects (js/effects.js) and the settings dialog (js/settings.js): the player's choice is read once, and a
+    // fixed preset fixes the ladder's level
+    startEffects() {
+        if (typeof EffectSettings === 'undefined') return;
+        let storage = null;
+        try {
+            storage = window.localStorage;
+        } catch (error) {
+            console.warn('Effects: no localStorage; the graphics settings last for this page only:', error);
+        }
+        this.effects = new EffectSettings({ storage });
+        if (typeof SettingsDialog !== 'undefined') SettingsDialog.connect(this.settingsControl());
+        this.applyGraphicsSettings();
+    }
+
+    // A changed choice in force: the preset's ladder level (or Auto) and every effect
+    applyGraphicsSettings() {
+        if (!this.effects || !this.quality) return;
+        const fixed = this.effects.fixedLevel();
+        const now = performance.now();
+        if (fixed) this.quality.fix(fixed, now);
+        else if (this.quality.isFixed) this.quality.release(now);
+        this.applyEffects();
+        this.showQuality();
+    }
+
+    // Each effect at its level in force: under Auto no effect costs more than the ladder level's effectMs
+    applyEffects() {
+        if (!this.effects || !this.quality || !this.graphics || typeof Effects === 'undefined') return;
+        Effects.apply(this, this.effectsInForce());
+    }
+
+    effectsInForce() {
+        const level = Quality.LEVELS[this.quality.level];
+        return this.effects.inForce(level.effectMs, effect => Effects.supported(effect, this.graphics, this));
+    }
+
+    settingsControl() {
+        return {
+            settings: this.effects,
+            apply: () => this.applyGraphicsSettings(),
+            inForce: () => this.effectsInForce(),
+            supported: effect => Effects.supported(effect, this.graphics, this),
+            sound: () => this.soundManager || null
+        };
     }
 
     // A world tile's trees, nearest the bike first in each mesh (Scenery.buildTile), drawn to the level's share: the
@@ -1385,7 +1435,8 @@ class Game {
     // Size the sun's shadow box for the leg: wide canyon walls need more
     applyShadowBox(render) {
         this.appliedShadowSpan = render.shadowSpan;
-        const half = render.shadowSpan / 2;
+        // The sun's box is the near cascade's while the shadow cascades are on (js/effects.js)
+        const half = (typeof Cascades !== 'undefined' ? Cascades.nearSpan(render.shadowSpan) : render.shadowSpan) / 2;
         const shadow = this.directionalLight.shadow.camera;
         shadow.left = -half;
         shadow.right = half;
@@ -3927,6 +3978,7 @@ class Game {
         // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
         // frame, before it is first drawn (js/world/landshade.js)
         if (this.environment.isWorld) LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
+        if (this.effectLevels) Effects.frame(this);
         this.graphics.update(
             rawDeltaTime,
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,
