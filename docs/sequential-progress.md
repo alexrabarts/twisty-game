@@ -566,3 +566,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 
 - Job: the final checks found model-surfaces failing 18 tests: the far bikes' wheels faced inward since the crew models. `tools/blender/far.py` `tyre()` wound its faces toward the axle and set the bead in, so each sidewall leaned in. The faces are wound the other way and the bead sits flush; the 18 far files are rebuilt with the same triangle counts.
 - Check: model-surfaces 60/60, crew 91/91, bikemodels 170/170, characters 64/64.
+
+## The chase camera stays smooth at s 9570 and s 10812
+
+- Job: the final checks found world-camera-smooth failing: a position jerk of 0.0376 at s 9570 and a yaw jerk of 0.0082 at s 10812. Both came from a limit taken as a plain min or max, which stopped a moving value's rate in one frame. The boom height under a roof is now a smooth minimum over 0.5 m (`WorldCamera.softCeiling`, `roofBlendM`), and the `keepHard` hold eases in over `keepBlend` and no longer pins the give-way spring.
+- Check: world-camera-smooth passes (position 0.0161, yaw 0.0020); world-camera-walls, world-frustum and world-camera pass; world-camera-bridge, -swing and -walls 29/29.
