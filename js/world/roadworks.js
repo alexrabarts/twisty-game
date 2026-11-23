@@ -3,7 +3,9 @@
 //   end gates     at each end, on each verge, three red and white boards side by side on one foot frame (the board of
 //                 the old checkpoint markers, a fifth taller: 2.45 m, five bands, red at the foot and the top, a silver strip on each white
 //                 band). The group on the closed lane's side carries the red-bordered roadworks triangle on the face
-//                 toward the traffic that arrives at that end
+//                 toward the traffic that arrives at that end. A gate and a light stand in front of a retaining
+//                 wall's coping, stepped in onto the road's edge where the coping leaves them no verge
+//                 (Roadworks.vergeOut, fitted again when the walls' plans arrive with the land: fitVerge)
 //   single lane   one lane is closed from the station (the entry gate) to the exit gate. The closed side is drawn from the station id
 //                 (Roadworks.random), so it is the same on every ride and every restart. Leitbaken (red and white
 //                 chevron boards on a black rubber foot) stand along the centre line, with a taper at each end out to
@@ -130,6 +132,9 @@ class Roadworks {
     // A gate group's centre and a light's past the carriageway edge, on the drawn verge
     static get GROUP_OUT_M() { return 0.6; }
     static get LIGHT_OUT_M() { return 0.55; }
+    // The gap a gate group or a light keeps to a retaining wall's coping where the verge is narrower than they need
+    // (Roadworks.vergeOut: the 0.5 m coping took the verge's outer part and a gate stood half on it)
+    static get COPING_CLEAR_M() { return 0.05; }
     // A site is drawn while the bike is within this many metres of it (in plan)
     static get REACH_M() { return 230; }
     // The lights: green for GREEN_S, amber for AMBER_S, then all red for as long as a car at CLEAR_SPEED_MS (the
@@ -1102,6 +1107,41 @@ class Roadworks {
         };
     }
 
+    // How far past the carriageway edge a thing on the verge stands at s on `sign`'s side: `out`, or less where a
+    // retaining wall's coping starts nearer (WorldGround.wallBand), so its `reach` (half its width across the road) stays
+    // in front of the coping. Where the coping starts at the carriageway's edge that is a step in onto the road's edge
+    // (negative): a gate stood half on the coping
+    vergeOut(s, sign, out, reach) {
+        const ground = this.env && this.env.ground;
+        const route = this.route;
+        if (!ground || typeof ground.wallBand !== 'function' || typeof route.indexAt !== 'function') return out;
+        const p = route.sample(Math.max(0, Math.min(route.length, s)), {});
+        const half = p.width / 2, lat = sign * (half + out);
+        const index = route.indexAt(Math.max(0, Math.min(route.length, s)));
+        const loc = ground.locate(p.x + lat * Math.cos(p.heading), p.z - lat * Math.sin(p.heading), { start: index - 2, end: index + 2 });
+        const band = ground.wallBand(loc, loc.width / 2);
+        if (!band) return out;
+        return Math.min(out, band.from - loc.width / 2 - reach - Roadworks.COPING_CLEAR_M);
+    }
+
+    // Puts a site's verge pieces (the gates, their triangle, the lights) where vergeOut gives today. True when one moved
+    fitVerge(site) {
+        const p = {};
+        let moved = false;
+        for (const e of site.elements) {
+            if (!e.verge) continue;
+            const v = e.verge;
+            this.route.sample(Math.max(0, Math.min(this.route.length, e.s)), p);
+            const lat = v.sign * (p.width / 2 + this.vergeOut(e.s, v.sign, v.out, v.reach));
+            if (Math.abs(lat - e.lat) < 1e-6) continue;
+            e.lat = lat;
+            e.x = p.x + lat * Math.cos(p.heading);
+            e.z = p.z - lat * Math.sin(p.heading);
+            moved = true;
+        }
+        return moved;
+    }
+
     // Every element of every site placed in the world, and the meshes that draw them. Each element:
     // {kind, role, site, x, y, z, yaw, matrix, box: {hx, hz, y0, y1} in its own frame}
     build() {
@@ -1124,6 +1164,8 @@ class Roadworks {
             elements.push(element);
             return element;
         };
+        // Half a verge piece's width across the road, from its own geometry (Roadworks.vergeOut)
+        const reach = kind => { const b = geo[kind].boundingBox; return Math.max(-b.min.x, b.max.x); };
         for (const site of this.sites) {
             site.elements = [];
             const keep = e => { site.elements.push(e); return e; };
@@ -1131,15 +1173,18 @@ class Roadworks {
                 const yaw = gate.facing > 0 ? 0 : Math.PI;
                 for (const sign of [Route.LEFT, Route.RIGHT]) {
                     const half = route.sample(gate.s, p).width / 2;
-                    const lat = sign * (half + Roadworks.GROUP_OUT_M);
-                    keep(place(site, 'gate', gate.s, lat, yaw));
+                    const verge = { sign, out: Roadworks.GROUP_OUT_M, reach: reach('gate') };
+                    const lat = sign * (half + this.vergeOut(gate.s, sign, verge.out, verge.reach));
+                    keep(place(site, 'gate', gate.s, lat, yaw, { verge }));
                     // The triangle on the closed lane's side, in front of the boards toward the arriving traffic
-                    if (sign === site.side) keep(place(site, 'triangle', gate.s, lat, yaw, { role: 'none' }));
+                    if (sign === site.side) keep(place(site, 'triangle', gate.s, lat, yaw, { role: 'none', verge }));
                 }
             }
             for (const light of site.lights) {
                 const yaw = light.facing > 0 ? 0 : Math.PI;
-                const body = keep(place(site, 'light', light.s, light.lat, yaw));
+                const verge = { sign: site.open, out: Roadworks.LIGHT_OUT_M, reach: reach('light') };
+                light.lat = site.open * (route.sample(light.s, p).width / 2 + this.vergeOut(light.s, verge.sign, verge.out, verge.reach));
+                const body = keep(place(site, 'light', light.s, light.lat, yaw, { verge }));
                 body.direction = light.direction;
                 light.element = body;
             }
@@ -1223,6 +1268,13 @@ class Roadworks {
     place(x, z, reach = Roadworks.REACH_M) {
         if (!this.group) return;
         const near = this.sites.filter(site => site.elements.some(e => Math.hypot(e.x - x, e.z - z) < reach));
+        // A wall's plan waits on the land's tiles (WorldEnvironment.rideWalls), which arrive after the sites are built:
+        // the verge pieces are fitted again whenever a plan changes
+        const stamp = this.env && this.env.faceStamp;
+        if (stamp !== this.vergeStamp) {
+            this.vergeStamp = stamp;
+            for (const site of near) if (this.fitVerge(site)) this.knocking = true;
+        }
         const key = near.map(site => site.id).join(',');
         if (key !== this.placedKey || this.knocking) {
             this.placedKey = key;

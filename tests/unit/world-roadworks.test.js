@@ -344,3 +344,32 @@ describe('the rider', () => {
         if (bad.length) throw new Error(bad.join('\n'));
     }, 600000);
 });
+
+describe('the verge pieces', () => {
+    test('no end gate or traffic light stands on a retaining wall\'s coping once the walls round it are known (Roadworks.vergeOut, fitVerge)', async () => {
+        const ground = env.ground, route = env.route;
+        const bad = [];
+        let walled = 0;
+        for (const site of works.sites) {
+            // The land's tiles round the site, which the walls' plans wait on, then the site drawn there
+            const mid = (site.s0 + site.s1) / 2;
+            const p = route.sample(mid, {});
+            env.update(p, mid, null, Infinity);
+            await env.streamer.settle(p, mid);
+            works.place(p.x, p.z);
+            for (const e of site.elements) {
+                if (e.kind !== 'gate' && e.kind !== 'light') continue;
+                const index = route.indexAt(e.s);
+                const loc = ground.locate(e.x, e.z, { start: index - 2, end: index + 2 });
+                const band = ground.wallBand(loc, loc.width / 2);
+                if (!band) continue;
+                walled++;
+                const outer = Math.abs(loc.lateral) + Math.max(-e.box.x0, e.box.x1);
+                if (outer > band.from + 1e-6) bad.push(`${e.kind} at s ${e.s.toFixed(0)}: reaches ${(outer - band.from).toFixed(2)} m onto the coping`);
+            }
+        }
+        console.log(`verge pieces in front of a wall: ${walled}`);
+        expect(walled).toBeGreaterThan(0);
+        expect(bad).toEqual([]);
+    }, 600000);
+});

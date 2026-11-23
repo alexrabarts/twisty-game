@@ -2472,9 +2472,10 @@ body.in-menu .virtual-button-camera {
 }
 
 /* The graphics level of debug mode (js/quality.js), under the tuned tag's place */
+/* Under the tuning panel's button (.tuning-open), which stands at + 48px in debug mode too */
 .hud-quality {
     position: absolute;
-    top: calc(var(--edge-top) + 48px);
+    top: calc(var(--edge-top) + 78px);
     left: var(--edge-left);
     padding: 2px 8px;
     border-radius: var(--r-sm);
