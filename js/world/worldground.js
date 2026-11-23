@@ -218,8 +218,9 @@ class WorldGround extends Ground {
     }
 
     // `lift` is added where the answer is a road's ribbon or its verge (a side road's too): RoadMesh.LIFT_M gives the
-    // surface as it is drawn (WorldGround.drawnY), 0 the height the physics rides
-    heightAt(loc, exact = false, lift = 0) {
+    // surface as it is drawn (WorldGround.drawnY), 0 the height the physics rides. `coping` false reads a wall's coping
+    // as the verge in front of it
+    heightAt(loc, exact = false, lift = 0, coping = true) {
         const half = loc.width !== undefined ? loc.width / 2 : this.halfRoad(loc);
         const reach = Math.abs(loc.lateral);
         const roofed = loc.flags ? loc.flags.tunnel || loc.flags.gallery : false;
@@ -231,7 +232,7 @@ class WorldGround extends Ground {
         // On a retaining wall of the ride's plan, or the wall that goes on past its end, the verge is the ribbon's up to
         // the wall's side to the road; over the wall's thickness its coping, WALL_MIN_UP_M over the road (wallBand)
         const band = this.wallBand(loc, half);
-        if (band && reach >= band.from && reach <= band.to) return loc.roadY + RoadMesh.COPING_UP_M + lift;
+        if (band && reach >= band.from && reach <= band.to) return loc.roadY + (coping ? RoadMesh.COPING_UP_M : 0) + lift;
         if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach, lift));
         if (band) return reach < band.from ? loc.roadY + lift : land;
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
@@ -240,9 +241,11 @@ class WorldGround extends Ground {
     }
 
     // The ground at a located point as it is drawn: the ribbon and the verge RoadMesh.LIFT_M over the road's height,
-    // the fill and the land on their triangles (what a wheel or a foot stands on: Vehicle.groundPose)
+    // the fill and the land on their triangles (what a wheel or a foot stands on: Vehicle.groundPose). A wall's coping
+    // is a face beside the bike, not ground under it: read there, the verge goes on at its height (a tyre against the
+    // 0.5 m coping read it as a 32 degree bank and laid the bike down)
     drawnY(loc) {
-        return this.heightAt(loc, false, RoadMesh.LIFT_M);
+        return this.heightAt(loc, false, RoadMesh.LIFT_M, false);
     }
 
     // Where a retaining wall of the ride's plan stands at loc's side (WorldEnvironment.walledAt), or the wall that goes

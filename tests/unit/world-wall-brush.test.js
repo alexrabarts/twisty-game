@@ -366,7 +366,7 @@ describe.each(worlds)('the hairpins of %s with a wall on the outside, ridden wid
             const cobbles = env.route.sample(w.h.apex, {}).flags.cobbles;
             const advice = WorldAssist.advice(env.route, WorldPhysics, w.h.s0 - 5, 40, cobbles ? WorldPhysics.cobbleGrip : 1);
             const pace = advice ? advice.speed : WorldAssist.advisedSpeed(WorldPhysics, WorldPhysics.rMin);
-            let touched = 0, lean = 0, said = 0;
+            let touched = 0, lean = 0, said = 0, tilt = 0;
             const r = await rideSpan(game, env, {
                 log: printed,
                 s0: Math.max(env.startS + 5, w.h.s0 - 25), s1: Math.min(env.endS - 5, w.h.s1 + 15), speed: pace,
@@ -375,9 +375,15 @@ describe.each(worlds)('the hairpins of %s with a wall on the outside, ridden wid
                     if ((v.brushes || 0) > touched && !touched) lean = Math.abs(v.leanAngle) * DEG;
                     touched = v.brushes || 0;
                     if (v.brushNew) { said++; v.brushNew = false; }
+                    // Drawn against the wall, the bike leans as it rides: the coping beside it is a face, not a bank
+                    // under it (WorldGround.drawnY; it read a 0.5 m coping as 32 degrees and laid the bike down)
+                    if (touched && !v.crashed) {
+                        v.updateMesh();
+                        tilt = Math.max(tilt, Math.abs(v.groundTilt || 0) * DEG);
+                    }
                 }
             });
-            rows.push({ apex: Math.round(w.h.apex), length: w.to - w.from, past: w.past, height: w.height, parapet: w.parapet, pace, touched, said, lean, crashed: r.crashed, cut: r.cut, cause: r.cause });
+            rows.push({ apex: Math.round(w.h.apex), length: w.to - w.from, past: w.past, height: w.height, parapet: w.parapet, pace, touched, said, lean, tilt, crashed: r.crashed, cut: r.cut, cause: r.cause });
         }
         const brushed = rows.filter(row => row.touched > 0 && !row.crashed && !row.cut);
         const crashed = rows.filter(row => row.crashed);
@@ -390,5 +396,6 @@ describe.each(worlds)('the hairpins of %s with a wall on the outside, ridden wid
         expect(rows.filter(row => row.crashed && /wall/i.test(String(row.cause))).map(row => row.apex)).toEqual([]);
         if (walled.length) expect(brushed.length).toBeGreaterThan(0);
         for (const row of brushed) expect(row.said).toBeGreaterThan(0);
+        expect(brushed.filter(row => row.tilt > 3).map(row => `${row.apex}: ${row.tilt.toFixed(1)} degrees`)).toEqual([]);
     }, 1800000);
 });
