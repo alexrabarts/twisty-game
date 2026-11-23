@@ -478,6 +478,8 @@ class Game {
         this.lastCheckpointHeading = start.heading;
         this.worldRun.begin(this.environment.startS);
         this.worldCamera.reset(start.heading);
+        // Each ride draws its own chance of a marmot crossing the road (Marmots.CROSSING)
+        if (this.environment.marmots) this.environment.marmots.seed(Math.floor(Math.random() * 1e9));
     }
 
     // What the guide reads each frame; the projection is the vehicle's own, from its wall check
@@ -3888,6 +3890,13 @@ class Game {
             // (the ride distance it streams by is the accepted progress, not the raw projection)
             this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
             this.watchLand();
+            // (watchLand can hand the ride to the legs a task later; the world is still here this frame)
+            const marmots = this.environment && this.environment.marmots;
+            if (marmots) {
+                const at = this.marmotBike || (this.marmotBike = {});
+                at.x = this.vehicle.position.x; at.z = this.vehicle.position.z; at.s = this.worldRun.lastS;
+                marmots.update(simulatedThisFrame, at, this.vehicle.speed, this.camera.position, this.soundManager);
+            }
         }
 
         // Distance-cull far scenery (throttled internally)

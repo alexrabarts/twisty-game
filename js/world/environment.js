@@ -308,6 +308,9 @@ class WorldEnvironment {
         });
         this.landmarkGroup = this.scenery.landmarks(this.data.manifest.landmarks || [], this.route);
         this.group.add(this.landmarkGroup);
+        // The marmots of the high pastures (js/world/marmots.js): placed from this world's own land and water
+        this.marmots = typeof Marmots !== 'undefined' && typeof SceneAssets !== 'undefined' ? new Marmots(this) : null;
+        if (this.marmots) this.group.add(this.marmots.group);
         this.group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
     }
 

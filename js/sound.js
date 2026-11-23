@@ -925,6 +925,28 @@ class SoundManager {
     playJumpSound() { this.cue('jump'); }
     playBrakeSound() { this.cue('brake'); }
 
+    // A marmot's alarm whistle (js/world/marmots.js), `metres` away: one short, high call that rises and falls,
+    // quieter with distance, in the effects bus
+    playWhistle(metres = 20) {
+        if (!this.enabled || !this.wake()) return;
+        const ctx = this.audioContext, g = this.graph;
+        const t = ctx.currentTime + 0.01, level = 0.16 * Math.min(1, 20 / Math.max(10, metres));
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(2300, t);
+        osc.frequency.linearRampToValueAtTime(3100, t + 0.07);
+        osc.frequency.linearRampToValueAtTime(2500, t + 0.28);
+        env.gain.setValueAtTime(0, t);
+        env.gain.linearRampToValueAtTime(level, t + 0.02);
+        env.gain.setTargetAtTime(0, t + 0.2, 0.04);
+        osc.connect(env);
+        env.connect(g.fxBus);
+        osc.start(t);
+        osc.stop(t + 0.45);
+        osc.onended = () => { osc.disconnect(); env.disconnect(); };
+    }
+
     // A crash: a low thud and a short burst of dulled noise, both soft; the scrape that follows is the bike sliding
     // (update, `crashed`)
     playCrashSound() {

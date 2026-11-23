@@ -104,6 +104,12 @@ Rules for a change to a car:
 | `tree_broadleaf.py` | `trees/broadleaf.glb` | `broadleaf_oak`, `broadleaf_beech`, `broadleaf_ash` (two crowns on a fork). |
 | `tree_bush.py` | `trees/bush.glb` | `bush_round`, `bush_low`, and each again under snow. |
 
+## Animals
+
+| Script | Output | What it makes |
+|---|---|---|
+| `marmot.py` | `animals/marmot.glb` | The alpine marmot in three poses, each a node the game swaps to animate it: `marmot_walk` (on all fours), `marmot_sit` (sitting up, the lookout) and `marmot_run` (stretched out). About 0.5 m long, 280 triangles a pose (at most 320), vertex colours from the owner's photos (kept out of the repository) taken at `EXPOSURE` so the coat sits with the land's palette, occlusion baked in. 23 KB. |
+
 `tree_kit.py` is the modelling kit. A plant is one mesh with no texture: its colour is in the vertex colours (bark, the green from a dark underside to a light crown, snow) with the occlusion baked on top. A leaf or bark photo tiled over a thousand trees would show its repeat; the variety comes from the shapes and from the turn, the size and the tint the game gives each tree. A conifer is a trunk and a stack of boughs, each a skirt whose rim runs out to tips and back into notches. A broadleaf crown is lobes melted into one skin (voxel remesh), roughened and cut down to its triangles, so no triangle is spent inside it.
 
 `js/treemodels.js` swaps them in. `Environment.createForest` still builds the procedural forest, two instanced meshes tagged `userData.plant`; when a file arrives each instance moves, with its matrix and its tint unchanged, to the instanced mesh of the shape a hash of its position picks. A leg draws its trees in six calls (three shapes to a kind; three on the winter leg, which has conifers only), where the procedural forest took two. A roadside bush keeps its mesh and its seat and takes a modelled shape, turned by the same hash.

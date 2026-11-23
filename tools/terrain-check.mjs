@@ -5240,6 +5240,115 @@ WORLD['world-toggle-ride'] = async (page) => {
     return result;
 };
 
+// world-marmots: the marmot colonies of the ride (js/world/marmots.js). The bike is put down every --every m (default
+// 400) so the land round the whole ride arrives, the colonies are gathered, and each animal is checked against the
+// rule as drawn: on the land (the drawn ground under it within 0.3 m), RULE.rideMinM to RULE.rideMaxM past every road
+// band, and not in water. Lists the colonies by ride distance. --out <dir> saves, for the first colonies, the chase view
+// with the bike stopped RIDE m before it and a view from 25, 60 and 120 m with the camera on the colony
+WORLD_PROBES.push('world-marmots');
+WORLD['world-marmots'] = async (page) => {
+    const result = await page.evaluate(async (placeSource, every) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, marmots = env.marmots;
+        if (!marmots) return { error: 'no marmots in this world' };
+        for (let k = 0; k < 200 && !marmots.meshes; k++) await new Promise(done => setTimeout(done, 50));
+        for (let s = 10; s < env.route.length; s += every) {
+            await placeAt(s);
+            const p = env.route.sample(s, {});
+            marmots.gather({ x: p.x, z: p.z, s });
+        }
+        const R = MarmotRule.RULE, failures = [], colonies = [];
+        const roads = env.scenery.roads;
+        for (const list of marmots.colonies.values()) {
+            for (const c of list) {
+                const loc = env.ground.locate(c.x, c.z, null, {});
+                colonies.push({ id: c.id, s: Math.round(env.route.sArray[loc.index]), past: Math.round(c.past), animals: c.animals.length, y: Math.round(c.animals[0].y) });
+                for (const a of c.animals) {
+                    const past = roads.clearance(a.x, a.z, R.rideMaxM + 2);
+                    if (past < R.rideMinM - 0.01) failures.push(`marmot ${a.id} ${past.toFixed(1)} m past a road band`);
+                    if (env.ground.tileZone(a.x, a.z) === WorldData.ZONE.water) failures.push(`marmot ${a.id} in water`);
+                    const drawn = env.ground.tileHeight(a.x, a.z);
+                    if (drawn !== null && Math.abs(drawn - a.y) > 0.3) failures.push(`marmot ${a.id} ${(a.y - drawn).toFixed(2)} m off the ground`);
+                }
+            }
+        }
+        colonies.sort((p, q) => p.s - q.s);
+        return { colonies, animals: colonies.reduce((n, c) => n + c.animals, 0), failures, loaded: !!marmots.meshes };
+    }, placeAt.toString(), Number(option('every') || 400));
+    // --crossing: the ride is given its one crossing and ridden through the colonies by the autopilot from --from
+    // (default 11000) at --speed (default 20 m/s): the crossing must start where the rule allows, and the animal must be
+    // off the road when the bike passes its place
+    if (flag('crossing')) result.crossing = await page.evaluate(async (placeSource, from, cruise) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, marmots = env.marmots, v = game.vehicle;
+        await placeAt(from);
+        game.worldCamera.reset(v.yawAngle);
+        marmots.crossingLeft = 1;
+        marmots.anyColony = true;
+        twistyDev.autopilot({ speed: cruise });
+        let onRoadAtPass = null, frames = 0;
+        for (; frames < 60 * 240 && v.routeS < env.route.length - 50; frames++) {
+            twistyDev.step(1);
+            const c = marmots.lastCrossing;
+            if (c && onRoadAtPass === null && v.routeS >= c.s) {
+                const life = c.life, loc = env.ground.locate(life.x, life.z, { start: c.index - 3, end: c.index + 3 }, {});
+                onRoadAtPass = Math.abs(loc.lateral) < loc.width / 2 + RoadSurface.VERGE_M;
+            }
+            if (c && onRoadAtPass !== null) break;
+            if (frames % 30 === 0) await new Promise(done => setTimeout(done, 0));
+        }
+        const c = marmots.lastCrossing;
+        return c ? { s: Math.round(c.s), startAhead: Math.round(c.startAhead), startSpeed: Math.round(c.startSpeed * 10) / 10, onRoadAtPass, seen: MarmotRule.seenFrom(env.route, c.s) } : { none: true, reached: Math.round(v.routeS) };
+    }, placeAt.toString(), Number(option('from') || 11000), Number(option('speed') || 20));
+    // (none at all is right for a bike too fast for the sight line: the rule gives no crossing it cannot clear in time)
+    if (result.crossing && ((result.crossing.none && Number(option('speed') || 20) <= 15) || result.crossing.onRoadAtPass || (!result.crossing.none && !result.crossing.seen))) result.failures.push(`crossing: ${JSON.stringify(result.crossing)}`);
+    const out = option('out');
+    if (out && result.colonies && result.colonies.length) {
+        mkdirSync(out, { recursive: true });
+        await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+        const shots = [];
+        for (const c of result.colonies.slice(0, Number(option('shots') || 3))) {
+            for (const far of [6, 25, 60, 120]) {
+                await page.evaluate(async (placeSource, id, far) => {
+                    const placeAt = new Function('game', `return (${placeSource})`)(game);
+                    const env = game.environment, marmots = env.marmots;
+                    const colony = [...marmots.colonies.values()].flat().find(k => k.id === id);
+                    const loc = env.ground.locate(colony.x, colony.z, null, {});
+                    const s = env.route.sArray[loc.index];
+                    await placeAt(Math.max(10, s - 5));
+                    // The game's own frames would draw its camera over this one
+                    twistyDev.freeze();
+                    // The animals at home, sitting up, as the camera finds them before they see it
+                    for (const a of colony.animals) { const life = marmots.animals.get(a.id); Object.assign(life, { mode: 'sit', x: a.x, y: a.y, z: a.z, t: 0, until: 99 }); }
+                    const cam = game.camera, p = env.route.sample(s, {});
+                    const a0 = colony.animals[0];
+                    const dx = a0.x - p.x, dz = a0.z - p.z, d = Math.hypot(dx, dz) || 1;
+                    const ex = a0.x - dx / d * far, ez = a0.z - dz / d * far;
+                    const ground = env.ground.tileHeight(ex, ez);
+                    const ey = Math.max(Number.isFinite(ground) ? ground : -Infinity, colony.animals[0].y) + 1.6;
+                    cam.up.set(0, 1, 0);
+                    cam.position.set(ex, ey, ez);
+                    cam.lookAt(a0.x, a0.y + 0.2, a0.z);
+                    cam.fov = far < 40 ? 40 : far < 90 ? 22 : 12;
+                    cam.updateProjectionMatrix();
+                    marmots.update(0, { x: ex + 1e4, z: ez + 1e4, s: -1 }, 0, cam.position, null);
+                    cam.updateMatrix();
+                    cam.updateMatrixWorld(true);
+                    game.graphics.render(game.scene, game.camera);
+                    // Read in the same task as the draw: the canvas keeps no frame once it is shown
+                    return game.graphics.renderer.domElement.toDataURL('image/png').split(',')[1];
+                }, placeAt.toString(), c.id, far).then(png => { result.png = png; });
+                const file = join(out, `marmots-${c.id.replace(/[^0-9m-]+/g, '_')}-${far}m.png`);
+                writeFileSync(file, Buffer.from(result.png, 'base64'));
+                delete result.png;
+                shots.push(file);
+            }
+        }
+        result.shots = shots;
+    }
+    return result;
+};
+
 WORLD['world-clearance'] = async (page) => {
     const result = await page.evaluate(clearanceWalk, placeAt.toString(), Number(option('every') || 300), CLEAR_HEADROOM_M, CLEAR_STEP_M, CLEAR_FINE_M);
     const out = option('out');

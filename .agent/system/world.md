@@ -608,3 +608,14 @@ Each boundary has one guard, and each guard logs once, loudly. A held value is a
 ## Determinism
 
 Scenery uses `Environment.rand()` (seeded per leg). The menu preview and the ride must build the same world. Do not use `Math.random()` in `environment.js`.
+
+## Marmots
+
+`js/world/marmots.js` puts small colonies of alpine marmots on the high pastures by the lakes. They come from a world's own data, by rule (`MarmotRule.RULE`), never from a place's name, so a new world gets them where its land and water say so.
+
+- **Where.** A colony needs open ground (grass, rock, scree, or no cover) at 2,000 m or higher. It stands within 140 m of water (a water node or water cover) and no nearer than 4 m. The ground is no steeper than about 30 degrees (`steep`). It is 15 to 120 m past every road band (`RoadClearance`). There is at most one colony to a 128 m cell, chosen by a hash of the cell. A colony has 2 to 5 animals within 20 m, each 2.5 m from the next. On the shipped stage this gives 25 colonies and 87 animals: one near km 11.1, the rest on the summit plateau from km 12.2.
+- **Life.** An animal sits up and looks out, drops to all fours, scuttles to a second point of its own 2 to 5 m off, and sits again. When the bike comes within 25 m it runs to its burrow and is gone, and the first of the colony whistles (`Sound.playWhistle`). It comes back 6 s after the bike is 60 m away. Animals are drawn within 260 m of the camera, at most 48 of each pose, as three instanced meshes. Each takes the haze (`LandShade.adopt`).
+- **Crossing.** A ride draws one crossing at most, in a quarter of rides (`Marmots.CROSSING.chance`). It happens at a colony within 60 m of the road. The road must run straight for 150 m before the place: the turning in all, both ways counted, is under 12 degrees (`MarmotRule.seenFrom`), so the animal is never hidden by a bend or a hairpin. It starts only when the animal will be off the road at least 1 s before the bike arrives at its present speed (`MarmotRule.mayStart`). A bike too fast for the sight line gets no crossing.
+- **Fairness.** A marmot is never solid, and the physics has no knowledge of it. It cannot make the bike crash or stop, so a ride with a crossing and a ride without are equal, and no board seed is needed. There is no call-out and no bonus.
+- **Checks.** `tests/unit/marmots.test.js` holds the rule on tiles built in memory, the crossing rule at every speed and the hiding. `node tools/terrain-check.mjs world-marmots --world tremola --gpu [--out <dir>] [--crossing --speed 12]` lists the colonies of the stage and checks each animal as drawn (on the drawn ground, past the road bands, out of the water). It takes pictures of a colony from 6, 25, 60 and 120 m, and with `--crossing` rides a forced crossing through the summit.
+
