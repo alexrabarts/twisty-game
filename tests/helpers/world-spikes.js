@@ -44,16 +44,21 @@
 //   - folds: a piece of a wall's top (a coping or a parapet's top: a level quad of stone) that is folded (its inner
 //     edge runs against its outer edge, or the two cross) or overlaps a neighbouring piece by more than `foldM2` in
 //     plan: on a tight curve the pieces of a top laid square to each segment crumpled over one another
+//   - piers: a viaduct's stone that stands on the land (a pier's face or side, a face down to the ground: the
+//     `feet` RoadMesh.addEdgeWorks lists in userData.viaduct) whose foot stands more than `footM` over the land drawn
+//     under it, or over a road's surface: a pier on air, or on another road
+//   - soffits: the underside of a viaduct's arch (`soffits`) with the land drawn over it, more than `footM` over
+//     the stone: land stands in the arch
 // spikeReport(store) gives {tiles, stretched, beside, setback, bare, ends, overhangs, flaps, proud, fins, unfaced,
-// thin, folds, low, tapers, closed, joined, wallEnds, km}: each a list, worst first, of {s, x, z, ...} (s the metres of
+// thin, folds, low, piers, soffits, tapers, closed, joined, wallEnds, km}: each a list, worst first, of {s, x, z, ...} (s the metres of
 // ride nearest), `tapers`, `closed` and `joined` counts, `wallEnds` the wall ends read, and `km` the offenders counted by kilometre
 // of ride (one decimal).
 //
 // What still stands on the Tremola slice, held so it can only shrink (tests/unit/world-spikes.test.js says what each is)
-export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 6, flaps: 2, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0 };
-export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8 };
+export const SPIKE_LIMITS = { beside: 127, setback: 354, bare: 0, ends: 0, overhangs: 6, flaps: 2, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0, piers: 0, soffits: 0 };
+export const SPIKE_RULES = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8, footM: 0.05 };
 
-export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8 }) {
+export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 30, besideM: 10, slope: 1.5, spanM: 2.5, flankM: 1.5, airM: 1, endsNearM: 40, flapNearM: 3, flapM: 0.15, proudM: 0.25, copingM: 0.8, foldM2: 0.005, minUpM: 0.5, jogM: 2, strayM: 0.8, footM: 0.05 }) {
     const { THREE } = game;
     store.tiles = store.tiles || new Map();
     store.works = store.works || new Map();
@@ -100,7 +105,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     };
 
     // What is drawn now: the land at full detail, the ground the roads lay, the road surfaces, the decks, the stone
-    const land = [], laid = [], ribbons = [], decks = [], stone = [], tiles = [], ground = [], tops = [];
+    const land = [], laid = [], ribbons = [], decks = [], stone = [], tiles = [], ground = [], tops = [], arches = [];
     for (const [key, built] of env.tileMeshes) {
         const mesh = built.mesh || built;
         if (!mesh || !mesh.isMesh || !/lod0$/.test(mesh.name)) continue;
@@ -115,9 +120,11 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             if (o.name === 'road-works') {
                 for (const g of o.geometry.groups) {
                     if (g.materialIndex === 0 || g.materialIndex === 3) { laid.push(gridOf(o, g.start, g.count, 4, `laid${g.materialIndex}`)); ground.push({ mesh: o, start: g.start, count: g.count }); }
-                    if (g.materialIndex === 1) decks.push(gridOf(o, g.start, g.count, 4, 'deck'));
+                    // (a viaduct's stone, group 4, is a structure as a deck is)
+                    if (g.materialIndex === 1 || g.materialIndex === 4) decks.push(gridOf(o, g.start, g.count, 4, `deck${g.materialIndex}`));
                     if (g.materialIndex === 2) { stone.push({ mesh: o, start: g.start, count: g.count }); tops.push(gridOf(o, g.start, g.count, 4, 'stone')); }
                 }
+                if (o.geometry.userData.viaduct) arches.push(o);
             } else if (o.name === 'road-ribbon' || o.name === 'road-side') ribbons.push(gridOf(o, 0, count, 4, 'ribbon'));
             else decks.push(gridOf(o, 0, count, 4, 'deck'));
         });
@@ -191,6 +198,27 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         return false;
     };
 
+    // A viaduct's upright stone (its faces, its arches' sides: group 4) hides the land behind it as a wall's does
+    const archQuads = [];
+    for (const mesh of arches) {
+        const pos = mesh.geometry.attributes.position;
+        for (const g of mesh.geometry.groups) {
+            if (g.materialIndex !== 4) continue;
+            for (let i = g.start; i + 5 < g.start + g.count; i += 6) {
+                const q = [0, 1, 2, 5].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(mesh.matrixWorld); return [v.x, v.y, v.z]; });
+                const ys = q.map(c => c[1]), plan = Math.abs((q[1][0] - q[0][0]) * (q[2][2] - q[0][2]) - (q[2][0] - q[0][0]) * (q[1][2] - q[0][2]));
+                if (plan > 1e-3) continue;
+                const pts = q.slice().sort((a, b) => a[0] - b[0] || a[2] - b[2]);
+                archQuads.push({ a: pts[0], b: pts[3], top: Math.max(...ys), foot: Math.min(...ys) });
+            }
+        }
+    }
+    const archAt = (x, y, z, reach = 0.7) => archQuads.some(q => {
+        const dx = q.b[0] - q.a[0], dz = q.b[2] - q.a[2], run = dx * dx + dz * dz;
+        const t = run === 0 ? 0 : Math.max(0, Math.min(1, ((x - q.a[0]) * dx + (z - q.a[2]) * dz) / run));
+        return Math.hypot(q.a[0] + dx * t - x, q.a[2] + dz * t - z) <= reach && y <= q.top + 0.3 && y >= q.foot - 0.5;
+    });
+
     // The land: each tile's own triangles once for a geometry (a tile cut again is read again)
     for (const { key, mesh } of tiles) {
         const done = store.tiles.get(key);
@@ -214,7 +242,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             if (away === null) continue;
             // Covered: each corner (a hand inside the triangle) and the middle under a road or behind stone
             const points = [[cx, cy, cz], ...t.map(p => [p[0] + (cx - p[0]) * 0.15, p[1] + (cy - p[1]) * 0.15, p[2] + (cz - p[2]) * 0.15])];
-            if (points.every(p => roofTop(p[0], p[2]) >= p[1] - 0.05 || stoneAt(p[0], p[1], p[2]))) continue;
+            if (points.every(p => roofTop(p[0], p[2]) >= p[1] - 0.05 || stoneAt(p[0], p[1], p[2]) || archAt(p[0], p[1], p[2]))) continue;
             record.stretched.push({ s: rideS(cx, cz), x: r2(cx), y: r2(cy), z: r2(cz), slope: r2(Math.min(999, slope)), spanM: r2(span), planM2: r2(Math.abs(ny) / 2), awayM: r2(away) });
         }
         for (let i = parts.faces[0]; i + 2 < parts.faces[0] + parts.faces[1]; i += 3) {
@@ -225,7 +253,7 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
             if (!nearRide(cx, cz)) continue;
             // (a cut that ends on the tile's edge hangs a skirt there: no closing face)
             if (Math.abs(cx / 512 - Math.round(cx / 512)) < 1e-4 || Math.abs(cz / 512 - Math.round(cz / 512)) < 1e-4) continue;
-            if (stoneAt(cx, cy, cz) || roofTop(cx, cz) >= cy + span / 2 - 0.05) continue;
+            if (stoneAt(cx, cy, cz) || archAt(cx, cy, cz) || roofTop(cx, cz) >= cy + span / 2 - 0.05) continue;
             // (a skirt on the tile's own edge hangs under the land: it is no closing face)
             const lt = landTop(cx, cz);
             if (lt !== null && lt >= cy + span / 2 - 0.05 && Math.abs(lt - (cy + span / 2)) > 0.3) continue;
@@ -577,12 +605,61 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
         }
         store.flaps.set(id, worst);
     }
+    // A viaduct's piers and arches against the land drawn at full detail: each foot in the land and on no road, no
+    // land over an arch's underside. Once for a geometry, near the ride, where the land under it is drawn
+    store.piers = store.piers || new Map();
+    store.soffits = store.soffits || new Map();
+    for (const mesh of arches) {
+        const id = mesh.geometry.uuid;
+        if (store.piers.has(id)) continue;
+        mesh.updateMatrixWorld(true);
+        const pos = mesh.geometry.attributes.position, { feet, soffits } = mesh.geometry.userData.viaduct;
+        const quadAt = i => [0, 1, 2, 3, 4, 5].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(mesh.matrixWorld); return [v.x, v.y, v.z]; });
+        const piers = [], under = [];
+        let unseen = false;
+        for (const [start, count] of feet) {
+            for (let i = start; i + 5 < start + count; i += 6) {
+                const q = quadAt(i), corners = [q[0], q[1], q[2], q[5]];
+                const top = Math.max(...corners.map(c => c[1]));
+                const low = corners.slice().sort((a, b) => a[1] - b[1]).slice(0, 2);
+                for (const u of [0.1, 0.5, 0.9]) {
+                    const x = low[0][0] + (low[1][0] - low[0][0]) * u, y = low[0][1] + (low[1][1] - low[0][1]) * u, z = low[0][2] + (low[1][2] - low[0][2]) * u;
+                    if (!nearRide(x, z, rules.endsNearM)) continue;
+                    const ground = landTop(x, z);
+                    if (ground === null) { unseen = true; continue; }
+                    const road = topOf(ribbons, x, z, top - 0.3);
+                    if (y > ground + rules.footM || (road !== null && road > y - 0.3)) { piers.push({ s: rideS(x, z), x: r2(x), y: r2(y), z: r2(z), overM: r2(y - ground), road: road === null ? null : r2(road) }); break; }
+                }
+            }
+        }
+        for (const [start, count] of soffits) {
+            for (let i = start; i + 2 < start + count; i += 3) {
+                const t = [0, 1, 2].map(k => { v.fromBufferAttribute(pos, i + k).applyMatrix4(mesh.matrixWorld); return [v.x, v.y, v.z]; });
+                const c = [0, 1, 2].map(k => (t[0][k] + t[1][k] + t[2][k]) / 3);
+                for (const p of [c, ...t.map(q => q.map((w, k) => w + (c[k] - w) * 0.15))]) {
+                    if (!nearRide(p[0], p[2], rules.endsNearM)) continue;
+                    const ground = landTop(p[0], p[2]);
+                    if (ground === null) { unseen = true; continue; }
+                    if (ground > p[1] - rules.footM) { under.push({ s: rideS(p[0], p[2]), x: r2(p[0]), y: r2(p[1]), z: r2(p[2]), overM: r2(ground - p[1]) }); break; }
+                }
+            }
+        }
+        // (read again once the land under it is drawn at full detail)
+        if (unseen && !piers.length && !under.length) continue;
+        store.piers.set(id, piers);
+        store.soffits.set(id, under);
+    }
     return { tiles: store.tiles.size };
 }
 
 export function spikeReport(store, besideM = 10, { jogM = 2, jogDeg = 35, jogPieceM = 4, strayM = 0.8 } = {}) {
     const r2 = n => Math.round(n * 100) / 100;
-    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], thin: [], folds: [], low: [], jogs: [], strays: [], died: [], tapers: 0, closed: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
+    const out = { tiles: (store.tiles || new Map()).size, stretched: [], beside: [], setback: [], bare: [], ends: [], overhangs: [], flaps: [], proud: [], fins: [], unfaced: [], thin: [], folds: [], low: [], jogs: [], strays: [], piers: [], soffits: [], died: [], tapers: 0, closed: 0, joined: 0, wallEnds: (store.wallEnds || new Map()).size, km: {} };
+    // (one place is drawn by one geometry at a time: a section built again leaves its old geometry's list behind)
+    for (const kind of ['piers', 'soffits']) {
+        const at = new Set();
+        for (const list of (store[kind] || new Map()).values()) for (const o of list) { const id = `${o.x},${o.z}`; if (!at.has(id)) { at.add(id); out[kind].push(o); } }
+    }
     // (an end another road's wall goes on from is no end: the two walls meet at a junction, `joined`)
     const looks = [...(store.looks || new Map()).values()];
     const joinedTo = look => looks.some(other => other.owner !== look.owner && Math.hypot(other.x - look.x, other.z - look.z) < 0.75);
@@ -645,10 +722,10 @@ export function spikeReport(store, besideM = 10, { jogM = 2, jogDeg = 35, jogPie
     out.ends.sort((a, b) => b.heightM - a.heightM);
     out.overhangs.sort((a, b) => b.airM - a.airM);
     out.thin.sort((a, b) => a.widthM - b.widthM);
-    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays']) {
+    for (const kind of ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays', 'piers', 'soffits']) {
         for (const o of out[kind]) {
             const km = (Math.round(o.s / 100) / 10).toFixed(1);
-            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0 };
+            out.km[km] = out.km[km] || { beside: 0, setback: 0, bare: 0, ends: 0, overhangs: 0, flaps: 0, proud: 0, fins: 0, unfaced: 0, thin: 0, folds: 0, low: 0, jogs: 0, strays: 0, piers: 0, soffits: 0 };
             out.km[km][kind]++;
         }
     }

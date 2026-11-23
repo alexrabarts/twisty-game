@@ -35,6 +35,11 @@ class WorldGround extends Ground {
     // Metres past the road edge that a bridge parapet stands (RoadMesh draws it there)
     static get PARAPET_M() { return 0.35; }
 
+    // Metres past the road edge that a viaduct's parapet's inner face stands (RoadMesh.viaduct: on its face's top)
+    static viaductParapet() {
+        return RoadMesh.VIADUCT_FACE_M - RoadMesh.VIADUCT.parapetW;
+    }
+
     // A side road past a wall's face within this of the ride's height runs on beside the ride (zoneAt): not a lower
     // road at the wall's foot
     static get SIDE_BESIDE_M() { return 1.5; }
@@ -240,7 +245,9 @@ class WorldGround extends Ground {
         if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach, lift));
         if (band) return reach < band.from ? loc.roadY + lift : land;
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
-        // parapet stands on the last PARAPET_W_M of the verge)
+        // parapet stands on the last PARAPET_W_M of the verge); on a viaduct out to its parapet
+        const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
+        if (point.viaduct) return reach < half + WorldGround.viaductParapet() ? loc.roadY + lift : land;
         return !(loc.flags && loc.flags.bridge) && reach < half + this.vergeAt(loc.index, loc.lateral, loc.t) - RoadMesh.PARAPET_W_M ? loc.roadY + lift : land;
     }
 
@@ -351,8 +358,9 @@ class WorldGround extends Ground {
             // Rock beside a tunnel or gallery: a wall just past the kerb
             return { kind: reach <= halfRoad + WorldGround.BENCH_M ? 'shoulder' : 'wall', side: this.benchSide, sign, start: reach <= halfRoad + WorldGround.BENCH_M ? halfRoad : halfRoad + WorldGround.BENCH_M, line: true };
         }
-        // A bridge has its parapet at the edge of the deck: past it there is no ground to ride or fall to
-        if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + WorldGround.PARAPET_M, line: true, height: RoadMesh.PARAPET_H_M };
+        // A bridge has its parapet at the edge of the deck: past it there is no ground to ride or fall to (a viaduct's
+        // stands on its face, at the verge's edge: RoadMesh.viaduct)
+        if (point.bits & WorldRoute.FLAG.bridge) return { kind: 'wall', side: this.wallSide, sign, start: halfRoad + (point.viaduct ? WorldGround.viaductParapet() : WorldGround.PARAPET_M), line: true, height: RoadMesh.PARAPET_H_M };
         // Where the road's edge stands on a retaining wall (the importer's drop node just past the verge, where RoadMesh
         // draws the wall and its parapet instead of the fill): the verge is drawn at the road's height up to the
         // parapet, and the parapet is solid, a wall at its inner face. A drop past a bench or open ground stays a fall

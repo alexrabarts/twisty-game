@@ -307,14 +307,15 @@ class RoadMesh {
             const o = RoadMesh.hold([-h - vn, -h, h, h + vp], curve[k]).offsets;
             const y = row.y + RoadMesh.LIFT_M;
             const at = offset => { const p = RoadMesh.place(row, offset); return [p.x, holdY ? holdY(p.x, y, p.z, row) : y, p.z]; };
-            return { bits: row.bits, i: row.i, s: row.s, fill: !!row.fill, l: at(o[0]), r: at(o[3]), lc: at(o[1]), rc: at(o[2]), mouth: RoadMesh.mouthOf(row) };
+            return { bits: row.bits, i: row.i, s: row.s, fill: !!row.fill, l: at(o[0]), r: at(o[3]), lc: at(o[1]), rc: at(o[2]), mouth: RoadMesh.mouthOf(row), viaduct: !!row.viaduct };
         });
     }
 
     // The verge of a row on its -lateral and its +lateral side: RoadSurface.VERGE_M on open ground (less on a bridge and
     // in a tunnel), and a stopping place's pad more where the ride has one (WorldPlaces: row.padN, row.padP)
     static verges(row) {
-        const bridge = (row.bits & 2) !== 0, tunnel = (row.bits & 5) !== 0;
+        // (a viaduct's ribbon keeps the road's verge, out to its faces and under its parapets: RoadMesh.viaduct)
+        const bridge = (row.bits & 2) !== 0 && !row.viaduct, tunnel = (row.bits & 5) !== 0;
         const verge = bridge ? RoadMesh.BRIDGE_VERGE_M : tunnel ? RoadMesh.TUNNEL_VERGE_M : RoadSurface.VERGE_M;
         return [verge + (row.padN || 0), verge + (row.padP || 0)];
     }
@@ -374,7 +375,8 @@ class RoadMesh {
         let clamped = 0;
         const sides = [];
         const sett = RoadMesh.feather(rows, along, row => (row.bits & 8) !== 0);
-        const built = RoadMesh.feather(rows, along, row => (row.bits & 7) !== 0);
+        // (on a viaduct the road and its verge are drawn as they were on its walls)
+        const built = RoadMesh.feather(rows, along, row => (row.bits & 7) !== 0 && !row.viaduct);
         styled.forEach((row, k) => {
             const h = row.width / 2;
             const [vn, vp] = RoadMesh.verges(row);
@@ -400,7 +402,9 @@ class RoadMesh {
             });
             const l = k * W * 3, r = (k * W + W - 1) * 3;
             const at = c => [positions[c], positions[c + 1], positions[c + 2]];
-            sides.push({ bits: row.bits, i: row.i, s: row.s, l: at(l), r: at(r), lc: at(l + 3), rc: at(r - 3), mouth: RoadMesh.mouthOf(row) });
+            // (a viaduct's row, so a wall into its end reaches its face: RoadMesh.edgeWorks `borrowed`. A far ribbon keeps
+            // the bridge's reach, as its verge is not drawn to the face)
+            sides.push({ bits: row.bits, i: row.i, s: row.s, l: at(l), r: at(r), lc: at(l + 3), rc: at(r - 3), mouth: RoadMesh.mouthOf(row), viaduct: !!row.viaduct });
         });
         const index = [];
         const [first, last] = draw || [0, n - 1];
@@ -602,6 +606,214 @@ class RoadMesh {
         return out;
     }
 
+    // Where the ride is walled on both edges an arched stone viaduct stands in place of the two retaining walls
+    // (WorldEnvironment.viaducts picks the stretches and lays them out, RoadMesh.viaduct builds one). One table, read
+    // on any world:
+    //   - the stretch: walled on both edges at the same rows for `minM`, two stretches under `gapM` apart are one, and
+    //     each wall stands `dropM` or more under its edge (the wall plan's own measure: how deep its stone stands)
+    //   - nothing else in it or within `clearM` of it (a structure, a side road's mouth, a stopping place), none within
+    //     `worksM` of a roadworks site; its arches stand where it bends no sharper than `curveMax` radians a metre
+    //   - the bays: `spanM` long (`spanMin` to `spanMax`: the stretch in whole bays), each pier `pierShare` of its bay
+    //     thick and no thinner than `pierMinM`
+    //   - an arch: `crownM` of stone over its crown under the road, its springing `springM` or more over the ground;
+    //     semicircular where that leaves room and a face opens, else segmental, springing as high as a face opens,
+    //     down to a rise of `riseMin` of its span; its springing `headroomM` over any road under it. A bay that has no
+    //     room for one, no pier clear of every road or no face that opens ends the viaduct with an abutment, and a
+    //     viaduct of fewer than `minBays` is none
+    //   - the ground under it is the lower of the land `groundM` out from each face (never under another road beside
+    //     it); within its faces the land is held to it (TerrainMesh.pitCuts: under an arch's opening on the faces' own
+    //     line, behind a blind face `cutBackM` out past it). A face opens under its arch only where that ground in front
+    //     of it lies `openM` or more under the springing; elsewhere it goes down into the land, `sinkM` deep, as the
+    //     piers do everywhere
+    //   - its parapet is a bridge's (`parapetW`, `parapetH`), in stone; an arch is drawn in `samples` pieces (near, far);
+    //     each face goes on `overlapM` past its ends, in front of the wall's face that goes on from there
+    static get VIADUCT() {
+        return {
+            minM: 24, gapM: RoadMesh.WALL_GAP_M, dropM: 8,
+            clearM: 12, worksM: 30, curveMax: 1 / 40,
+            spanM: 10, spanMin: 8, spanMax: 12, pierShare: 1 / 6, pierMinM: RoadMesh.PIER_D_M,
+            crownM: RoadMesh.DECK_M, springM: 1.5, riseMin: 1 / 6, headroomM: Carriageways.HEADROOM_M, minBays: 2,
+            groundM: [0.5, 2, 4], cutBackM: 0.15, openM: 0.3, sinkM: 0.5,
+            parapetW: 0.3, parapetH: 1.1, samples: [10, 4], overlapM: 0.25
+        };
+    }
+
+    // How far past the carriageway a viaduct's face stands: where the retaining walls' faces stood (the verge's edge,
+    // STONE_PROUD_M out), so a road beside it meets it as it met the wall; its parapet stands on the face's top, and
+    // the ribbon keeps its verge out to it
+    static get VIADUCT_FACE_M() { return RoadSurface.VERGE_M + RoadMesh.STONE_PROUD_M; }
+
+    // The underside of a bay's arch at ride metres `s` ({a0, a1, spring, rise}: its opening from a0 to a1, springing
+    // at `spring`, rising `rise`, a circle through the two springings and the crown), or null outside its opening
+    static archY(bay, s) {
+        if (!bay || !(bay.rise > 0) || s < bay.a0 - 1e-9 || s > bay.a1 + 1e-9) return null;
+        const half = (bay.a1 - bay.a0) / 2, r = Math.min(bay.rise, half), d = s - (bay.a0 + bay.a1) / 2;
+        const radius = (half * half + r * r) / (2 * r);
+        return bay.spring + r - radius + Math.sqrt(Math.max(0, radius * radius - d * d));
+    }
+
+    // The bay of a viaduct's layout that holds ride metres `s`, or null
+    static bayAt(via, s) {
+        for (const bay of via.bays) if (s >= bay.b0 - 1e-9 && s <= bay.b1 + 1e-9) return bay;
+        return null;
+    }
+
+    // The face of a viaduct at ride metres `s` on the `sign` side (+1 the +lateral, RoadMesh's `r`): {x, y, z} its top
+    // corner (VIADUCT_FACE_M past the carriageway, at the road's height) and {ox, oz} the way it
+    // faces, read between the two ride rows of `rows` (each {x, y, z, heading, width, s}) that hold `s`. `past` moves
+    // the point that far out from the face (or in, negative)
+    static viaductFace(rows, s, sign, out = {}, past = 0) {
+        let k = 0;
+        while (k + 2 < rows.length && rows[k + 1].s < s) k++;
+        const a = rows[k], b = rows[Math.min(rows.length - 1, k + 1)], t = b.s > a.s ? Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s))) : 0;
+        const pa = RoadMesh.place(a, sign * (a.width / 2 + RoadMesh.VIADUCT_FACE_M)), pb = RoadMesh.place(b, sign * (b.width / 2 + RoadMesh.VIADUCT_FACE_M));
+        const x = pa.x + (pb.x - pa.x) * t, z = pa.z + (pb.z - pa.z) * t;
+        const cx = a.x + (b.x - a.x) * t, cz = a.z + (b.z - a.z) * t, len = Math.hypot(x - cx, z - cz) || 1;
+        out.ox = (x - cx) / len;
+        out.oz = (z - cz) / len;
+        out.x = x + out.ox * past;
+        out.z = z + out.oz * past;
+        out.y = a.y + (b.y - a.y) * t;
+        return out;
+    }
+
+    // One viaduct's stone over ride rows `from` to `to` of `rows` (its layout `via`, WorldEnvironment.viaducts): on each
+    // side a face from the deck's corner down to its arches and, between them and where the land stands in front of
+    // it, to the ground; the arches' undersides from face to face; each pier's sides across under its springing; a
+    // bridge's parapet on top. The columns are read on the ride's metres, so two sections draw one viaduct as one.
+    // `land(x, z)` is the land as it is drawn (the faces, the piers and their sides stand in it), `ends` whether the
+    // viaduct ends at `from` and at `to` (its parapet takes a cap). Returns {positions, shades, viaduct: true, soffit,
+    // feet}: `soffit` and `feet` the vertex ranges ([start, count]) of the arches' undersides and of the stone that
+    // stands on the land (the piers' faces and sides, a face down to the ground)
+    static viaduct(rows, from, to, via, { lod = 0, land = null, ends = [true, true] } = {}) {
+        const out = { positions: [], shades: [], viaduct: true, soffit: [], feet: [], lit: [] };
+        const V = RoadMesh.VIADUCT, color = RoadMesh.COLORS.stone;
+        const span = rows.slice(from, to + 1);
+        if (span.length < 2) return out;
+        const s0 = span[0].s, s1 = span[span.length - 1].s;
+        // The columns: every row, each arch's ends and the points along its curve, the bays' ends
+        const n = V.samples[Math.min(V.samples.length - 1, lod)];
+        const at = new Set(span.map(row => row.s));
+        for (const bay of via.bays) {
+            at.add(bay.b0);
+            at.add(bay.b1);
+            if (!(bay.rise > 0)) continue;
+            for (let i = 0; i <= n; i++) at.add(bay.a0 + ((bay.a1 - bay.a0) * i) / n);
+        }
+        const list = [...at].filter(s => s >= s0 - 1e-6 && s <= s1 + 1e-6).sort((a, b) => a - b).filter((s, i, all) => i === 0 || s - all[i - 1] > 1e-4);
+        const bottomAt = (s, sign) => {
+            const rowsOf = via.rows;
+            let k = 0;
+            while (k + 2 < rowsOf.length && rowsOf[k + 1].s < s) k++;
+            const a = rowsOf[k], b = rowsOf[Math.min(rowsOf.length - 1, k + 1)], t = b.s > a.s ? Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s))) : 0;
+            const key = sign > 0 ? 'r' : 'l';
+            return a.bottom[key] + (b.bottom[key] - a.bottom[key]) * t;
+        };
+        // (each face stands in the land drawn in front of it and under it)
+        const into = (x, z) => { const y = land ? land(x, z) : null; return Number.isFinite(y) ? y - V.sinkM : Infinity; };
+        const cols = list.map(s => {
+            const col = { s };
+            for (const sign of [-1, 1]) {
+                const f = RoadMesh.viaductFace(span, s, sign);
+                // (the land half a metre out in front of the face, and under it)
+                const low = Math.min(bottomAt(s, sign), into(f.x + f.ox * 0.5, f.z + f.oz * 0.5), into(f.x - f.ox * 0.3, f.z - f.oz * 0.3));
+                col[sign > 0 ? 'r' : 'l'] = { x: f.x, y: f.y, z: f.z, low };
+            }
+            return col;
+        });
+        const mark = list => { const start = out.positions.length / 3; return () => list.push([start, out.positions.length / 3 - start]); };
+        for (let i = 0; i + 1 < cols.length; i++) {
+            const a = cols[i], b = cols[i + 1], mid = (a.s + b.s) / 2, bay = RoadMesh.bayAt(via, mid);
+            const ya = RoadMesh.archY(bay, a.s), yb = RoadMesh.archY(bay, b.s);
+            const arched = bay && bay.rise > 0 && ya !== null && yb !== null && mid > bay.a0 && mid < bay.a1;
+            for (const [key, sign] of [['l', -1], ['r', 1]]) {
+                const p = a[key], q = b[key];
+                const open = arched && bay.open[key];
+                const la = open ? ya : p.low, lb = open ? yb : q.low;
+                const done = open ? null : mark(out.feet);
+                // Wound to face out from the road (+lateral on the right)
+                if (sign > 0) RoadMesh.quad(out, [p.x, p.y, p.z], [q.x, q.y, q.z], [q.x, lb, q.z], [p.x, la, p.z], color);
+                else RoadMesh.quad(out, [q.x, q.y, q.z], [p.x, p.y, p.z], [p.x, la, p.z], [q.x, lb, q.z], color);
+                if (done) done();
+            }
+            // The arch's underside, from face to face, facing down. It is lit as the face it opens in is (`lit`): lit
+            // from below, as a soffit faces, the vault drew near black in the arch's mouth from the road beside it
+            if (arched && (bay.open.l || bay.open.r)) {
+                const done = mark(out.soffit);
+                const start = out.positions.length / 3;
+                RoadMesh.quad(out, [a.r.x, ya, a.r.z], [b.r.x, yb, b.r.z], [b.l.x, yb, b.l.z], [a.l.x, ya, a.l.z], color);
+                done();
+                const key = bay.open.r ? 'r' : 'l', f = RoadMesh.viaductFace(span, mid, key === 'r' ? 1 : -1);
+                out.lit.push([start, out.positions.length / 3 - start, f.ox, f.oz]);
+                // and the back of a blind face, its stone 2 cutBackM in from it, from the arch down into the land: the
+                // vault's back is stone, and the land's step behind it (WorldEnvironment.viaductOf) is hidden
+                for (const [key, sign] of [['l', -1], ['r', 1]]) {
+                    if (bay.open[key]) continue;
+                    const fa = RoadMesh.viaductFace(span, a.s, sign, {}, -2 * V.cutBackM), fb = RoadMesh.viaductFace(span, b.s, sign, {}, -2 * V.cutBackM);
+                    const back = mark(out.feet);
+                    if (sign < 0) RoadMesh.quad(out, [fa.x, ya, fa.z], [fb.x, yb, fb.z], [fb.x, b[key].low, fb.z], [fa.x, a[key].low, fa.z], color);
+                    else RoadMesh.quad(out, [fb.x, yb, fb.z], [fa.x, ya, fa.z], [fa.x, a[key].low, fa.z], [fb.x, b[key].low, fb.z], color);
+                    back();
+                }
+            }
+        }
+        // Each face goes on `overlapM` past an end of the viaduct, in front of the wall's face that starts there: two
+        // faces that met edge to edge, a few centimetres apart in depth, let the road's underside through between them
+        // as a pixel at a time from below (world-floating at s 7900)
+        for (const [col, way, end] of [[cols[0], -1, ends[0]], [cols[cols.length - 1], 1, ends[1]]]) {
+            if (!end) continue;
+            const row = way < 0 ? span[0] : span[span.length - 1], fx = Math.sin(row.heading) * way * V.overlapM, fz = Math.cos(row.heading) * way * V.overlapM;
+            for (const [key, sign] of [['l', -1], ['r', 1]]) {
+                const p = col[key], q = { x: p.x + fx, y: p.y, z: p.z + fz, low: p.low };
+                const [a, b] = way > 0 ? [p, q] : [q, p];
+                const done = mark(out.feet);
+                if (sign > 0) RoadMesh.quad(out, [a.x, a.y, a.z], [b.x, b.y, b.z], [b.x, b.low, b.z], [a.x, a.low, a.z], color);
+                else RoadMesh.quad(out, [b.x, b.y, b.z], [a.x, a.y, a.z], [a.x, a.low, a.z], [b.x, b.low, b.z], color);
+                done();
+            }
+        }
+        // Each open arch's two sides: across under the deck from face to face, from the stone over the crowns down into
+        // the land (over its springing it stands behind the arch's underside)
+        for (const bay of via.bays) {
+            if (!(bay.rise > 0) || !(bay.open.l || bay.open.r)) continue;
+            for (const [s, toward] of [[bay.a0, 1], [bay.a1, -1]]) {
+                if (s < s0 - 1e-6 || s > s1 + 1e-6) continue;
+                const l = RoadMesh.viaductFace(span, s, -1), r = RoadMesh.viaductFace(span, s, 1);
+                const low = Math.min(bottomAt(s, -1), bottomAt(s, 1), into(l.x, l.z), into(r.x, r.z), into((l.x + r.x) / 2, (l.z + r.z) / 2));
+                const top = Math.min(l.y, r.y) - V.crownM;
+                const done = mark(out.feet);
+                if (toward > 0) RoadMesh.quad(out, [r.x, top, r.z], [l.x, top, l.z], [l.x, low, l.z], [r.x, low, r.z], color);
+                else RoadMesh.quad(out, [l.x, top, l.z], [r.x, top, r.z], [r.x, low, r.z], [l.x, low, l.z], color);
+                done();
+            }
+        }
+        // Its top under the road: the stone over the arches' crowns from face to face, crownM under the road (closed
+        // from above where the ribbon and the parapets leave a gap, and what the checks read as the structure's top)
+        for (let k = 0; k + 1 < span.length; k++) {
+            const a = span[k], b = span[k + 1];
+            const at = (row, sign) => { const p = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.VIADUCT_FACE_M)); return [p.x, row.y - V.crownM, p.z]; };
+            RoadMesh.quad(out, at(a, 1), at(a, -1), at(b, -1), at(b, 1), color);
+        }
+        // Behind the joint of each face and its parapet, a band of stone a few centimetres in: the face's top has a
+        // point at every piece of an arch and the parapet one at every row, and the road's underside showed through
+        // that joint a pixel at a time from below (world-floating at s 7900)
+        for (let k = 0; k + 1 < span.length; k++) {
+            const a = span[k], b = span[k + 1];
+            for (const sign of [-1, 1]) {
+                const at = (row, up) => { const p = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.VIADUCT_FACE_M - 0.02)); return [p.x, row.y + up, p.z]; };
+                if (sign > 0) RoadMesh.quad(out, at(a, 0.05), at(b, 0.05), at(b, -0.1), at(a, -0.1), color);
+                else RoadMesh.quad(out, at(b, 0.05), at(a, 0.05), at(a, -0.1), at(b, -0.1), color);
+            }
+        }
+        // The parapets: a bridge's, on the faces' tops
+        for (const sign of [-1, 1]) {
+            const points = span.map(row => { const p = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.VIADUCT_FACE_M)); return [p.x, row.y, p.z]; });
+            const outward = span.map(row => [sign * Math.cos(row.heading), -sign * Math.sin(row.heading)]);
+            RoadMesh.rail(out, points, outward, V.parapetW, V.parapetH, color, ends);
+        }
+        return out;
+    }
+
     // A parapet swept along a run of edge points: `points` are the tops of the road's edge ([x, y, z]), `outward` the unit
     // plan direction out of the road at each (shared by the segments either side, so the run has no step or gap at a
     // row), and the parapet stands on the last `w` metres inside each point, `h` high. Inner face, coping and outer face,
@@ -752,6 +964,24 @@ class RoadMesh {
                     if (e && !e.blocked) { end[k] = e; row[k] = true; went[k] = true; }
                 }
             }
+            // A viaduct's two faces go on as walls from its ends, its abutments (WorldEnvironment.viaducts): to the
+            // last walled row under WALL_GAP_M short of either end, the rows between walled too, or for one segment
+            // where none is (a wing wall, a wall however short: `wing`)
+            // (a wing walls the segment from the viaduct's end to its row only: `wingEnd` is the way out of it)
+            const wing = [], wingEnd = [];
+            for (let j = 0; j < n; j++) {
+                if (!sides[j].viaduct) continue;
+                for (const way of [-1, 1]) {
+                    if (j + way < 0 || j + way >= n || sides[j + way].viaduct || (sides[j + way].bits & 7)) continue;
+                    let k = j + way;
+                    while (k >= 0 && k < n && !row[k] && !(sides[k].bits & 7) && Math.hypot(sides[k][key][0] - sides[j][key][0], sides[k][key][2] - sides[j][key][2]) < RoadMesh.WALL_GAP_M) k += way;
+                    const reached = k >= 0 && k < n && row[k];
+                    for (let m = reached ? k - way : j + way; m !== j; m -= way) {
+                        const e = RoadMesh.wallEnd(sides[m], key, foot, guard, true);
+                        if (e && !e.blocked) { end[m] = e; row[m] = true; wing[m] = true; if (!reached) wingEnd[m] = way; }
+                    }
+                }
+            }
             const at = k => (row[k] ? end[k].at : sides[k][key]);
             const step = k => Math.hypot(at(k + 1)[0] - at(k)[0], at(k + 1)[2] - at(k)[2]);
             // A wall between two rows is tested every metre against the other carriageways (a side road's edge beside
@@ -796,7 +1026,7 @@ class RoadMesh {
                 }
                 return true;
             };
-            const segs = () => { const seg = []; for (let k = 0; k + 1 < n; k++) seg.push((row[k] || row[k + 1]) && clear(k)); return seg; };
+            const segs = () => { const seg = []; for (let k = 0; k + 1 < n; k++) seg.push((row[k] || row[k + 1]) && clear(k) && !(wingEnd[k] === 1 && !row[k + 1]) && !(wingEnd[k + 1] === -1 && !row[k])); return seg; };
             const runsOf = seg => {
                 const out = [];
                 for (let k = 0; k < seg.length; k++) {
@@ -834,7 +1064,8 @@ class RoadMesh {
             for (const [from, to] of runsOf(seg)) {
                 let length = 0;
                 for (let k = from; k <= to; k++) if (own(k) || own(k + 1)) length += step(k);
-                if (length >= RoadMesh.WALL_RUN_M || from === 0 || to === seg.length - 1) continue;
+                // (nor is a wall that runs into a viaduct's end, however short: it is the viaduct's wing)
+                if (length >= RoadMesh.WALL_RUN_M || from === 0 || to === seg.length - 1 || wing.slice(from, to + 2).some(Boolean) || sides[from].viaduct || sides[to + 1].viaduct) continue;
                 for (let k = from; k <= to; k++) seg[k] = false;
                 for (let k = from; k <= to + 1; k++) if (!(seg[k - 1] || seg[k])) row[k] = false;
             }
@@ -1001,9 +1232,10 @@ class RoadMesh {
                 const borrowed = key => {
                     const from = plan.seg[key][k - 1] ? plan.end[key][k - 1] : plan.seg[key][k] ? plan.end[key][k + 1] : null;
                     if (!from) return null;
-                    // On the ride's own bridge the wall meets the deck's corner (BRIDGE_DECK_M past the carriageway)
+                    // On the ride's own bridge the wall meets the deck's corner (BRIDGE_DECK_M past the carriageway); at a
+                    // viaduct it goes on as its face, at the verge's edge
                     const c = side[key + 'c'];
-                    const at = !(sides.owner >= 0) && (side.bits & 2) && c ? [c[0] + out[key][0] * RoadMesh.BRIDGE_DECK_M, c[1], c[2] + out[key][1] * RoadMesh.BRIDGE_DECK_M] : side[key];
+                    const at = !(sides.owner >= 0) && (side.bits & 2) && !side.viaduct && c ? [c[0] + out[key][0] * RoadMesh.BRIDGE_DECK_M, c[1], c[2] + out[key][1] * RoadMesh.BRIDGE_DECK_M] : side[key];
                     return { kind: 'wall', y: from.y, out: out[key], color: null, top: null, at, run: null };
                 };
                 const l = borrowed('l'), r = borrowed('r');
@@ -1398,7 +1630,7 @@ class RoadMesh {
                     const P = RoadMesh.STONE_PROUD_M;
                     const oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
                     // (at a structure's row the face stands at the deck's own corner, not proud of it)
-                    const Pa = sides[k].bits & 7 ? 0 : P, Pb = sides[k + 1].bits & 7 ? 0 : P;
+                    const Pa = sides[k].bits & 7 && !sides[k].viaduct ? 0 : P, Pb = sides[k + 1].bits & 7 && !sides[k + 1].viaduct ? 0 : P;
                     // (its top a level coping COPING_UP_M over the edge and COPING_W_M deep: the wall's thickness, seen from
                     // above and from the road, where a marker stone can stand)
                     const up = RoadMesh.COPING_UP_M;
@@ -1453,17 +1685,20 @@ class RoadMesh {
 
     // The edge works of a ribbon as one mesh, added to `group` ('road-works': the apron in the land's material
     // (group 0), decks and the extra structures in the structures' (1), retaining walls and their parapets in stone
-    // (2), a junction's paving in the road's (3)): the triangles they cost. Groups 0 and 3 are ground, 1 and 2 structures
+    // (2), a junction's paving in the road's (3), a viaduct's stone (4, RoadMesh.viaduct)): the triangles they cost.
+    // Groups 0 and 3 are ground, 1, 2 and 4 structures. `userData.viaduct` holds the vertex ranges ([start, count]) of
+    // group 4's arch undersides (`soffits`) and of its stone that stands on the land (`feet`), for the checks
     // `sides` may be a list of rows' sides, or a list of such lists (several roads in one mesh: the side roads of a chunk)
     // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
     // `roads` (Carriageways) keeps each run's works out of every other road's carriageway (RoadMesh.edgeWorks guard)
     static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
-        const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] }, paving: { positions: [], shades: [] } };
+        const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] }, paving: { positions: [], shades: [] }, arch: { positions: [], shades: [] } };
         const face = [];
         // The road each triangle belongs to (a run's or a part's `owner`: a side edge id, -1 for the ride), so a check
         // can tell a road's own structures from another road's
-        const owners = { apron: [], wall: [], stone: [], paving: [] };
+        const owners = { apron: [], wall: [], stone: [], paving: [], arch: [] };
+        const arches = { soffits: [], feet: [], lit: [] };
         const own = (key, count, owner) => { for (let t = 0; t < count / 9; t++) owners[key].push(owner); };
         // The runs of retaining wall drawn here (RoadMesh.wallRuns), for the land that is cut to them
         const walls = group.userData.walls = [];
@@ -1495,11 +1730,16 @@ class RoadMesh {
         }
         if (!works.apron.positions.length && !works.wall.positions.length && !works.stone.positions.length && !works.paving.positions.length && !extra.some(part => part.positions.length)) return 0;
         for (const part of extra) {
-            works.wall.positions.push(...part.positions);
-            works.wall.shades.push(...part.shades);
-            own('wall', part.positions.length, part.owner ?? -1);
+            // (a viaduct's stone in its own group, in the stone's material)
+            const into = part.viaduct ? works.arch : works.wall;
+            const base = into.positions.length / 3;
+            if (part.viaduct) for (const key of ['soffit', 'feet']) for (const [start, count] of part[key] || []) arches[key === 'soffit' ? 'soffits' : 'feet'].push([base + start, count]);
+            if (part.viaduct) for (const [start, count, ox, oz] of part.lit || []) arches.lit.push([base + start, count, ox, oz]);
+            into.positions.push(...part.positions);
+            into.shades.push(...part.shades);
+            own(part.viaduct ? 'arch' : 'wall', part.positions.length, part.owner ?? -1);
         }
-        const apron = works.apron.positions.length / 3, wall = works.wall.positions.length / 3, stone = works.stone.positions.length / 3, paving = works.paving.positions.length / 3;
+        const apron = works.apron.positions.length / 3, wall = works.wall.positions.length / 3, stone = works.stone.positions.length / 3, paving = works.paving.positions.length / 3, arch = works.arch.positions.length / 3;
         // Every apron triangle faces up: a double-sided material flips the normal of a face seen from its back, and an
         // apron lit from underneath drew as a black line along the verge
         for (const part of [works.apron, works.paving]) {
@@ -1514,15 +1754,18 @@ class RoadMesh {
             }
         }
         // One colour space for the mesh: the apron's are the land's (linear), the walls' are made linear here
-        const shades = works.apron.shades.concat(works.wall.shades.map(v => Math.pow(v, 2.2)), works.stone.shades.map(v => Math.pow(v, 2.2)), works.paving.shades);
-        const geometry = RoadMesh.geometry(works.apron.positions.concat(works.wall.positions, works.stone.positions, works.paving.positions), shades);
+        const shades = works.apron.shades.concat(works.wall.shades.map(v => Math.pow(v, 2.2)), works.stone.shades.map(v => Math.pow(v, 2.2)), works.paving.shades, works.arch.shades.map(v => Math.pow(v, 2.2)));
+        const geometry = RoadMesh.geometry(works.apron.positions.concat(works.wall.positions, works.stone.positions, works.paving.positions, works.arch.positions), shades);
         geometry.userData.linearColors = true;
-        geometry.userData.owners = Int32Array.from(owners.apron.concat(owners.wall, owners.stone, owners.paving));
+        geometry.userData.owners = Int32Array.from(owners.apron.concat(owners.wall, owners.stone, owners.paving, owners.arch));
+        const first = apron + wall + stone + paving;
+        geometry.userData.viaduct = { soffits: arches.soffits.map(([start, count]) => [first + start, count]), feet: arches.feet.map(([start, count]) => [first + start, count]) };
         geometry.addGroup(0, apron, 0);
         if (wall) geometry.addGroup(apron, wall, 1);
         if (stone) geometry.addGroup(apron + wall, stone, 2);
         // A junction's paving is road, drawn as a road is (RoadSurface.pavingMaterial): as land it was a pale slab
         if (paving) geometry.addGroup(apron + wall + stone, paving, 3);
+        if (arch) geometry.addGroup(first, arch, 4);
         // A wall is lit flat across each quad: its two triangles share the quad's normal, so no crease shows. The apron
         // is lit as the land round it is (straight up): lit as a slope it read as a dark seam along the verge
         RoadMesh.flatNormals(geometry, apron / 3);
@@ -1531,7 +1774,7 @@ class RoadMesh {
         // A retaining wall's face is lit as one face along its run (each row's outward), and its courses are laid
         // along its own metres (`wallFace`: metres along, 1 on a wall's face, 2 on one drawn from its front only),
         // LandShade's stone
-        const wallFace = new Float32Array((apron + wall + stone + paving) * 2);
+        const wallFace = new Float32Array((apron + wall + stone + paving + arch) * 2);
         for (let v = 0; v < stone; v++) {
             if (!face[v * 4 + 1]) continue;
             const at = apron + wall + v;
@@ -1539,19 +1782,21 @@ class RoadMesh {
             wallFace[at * 2 + 1] = face[v * 4 + 1];
             normal[at * 3] = face[v * 4 + 2]; normal[at * 3 + 1] = 0; normal[at * 3 + 2] = face[v * 4 + 3];
         }
+        // (a viaduct's vaults lit as the face each opens in: RoadMesh.viaduct `lit`)
+        for (const [start, count, ox, oz] of arches.lit) for (let v = first + start; v < first + start + count; v++) { normal[v * 3] = ox; normal[v * 3 + 1] = 0; normal[v * 3 + 2] = oz; }
         geometry.setAttribute('wallFace', new THREE.BufferAttribute(wallFace, 2));
         // The paving takes the asphalt's texture on the ground plane, at the near ribbon's scale (from a whole tile
         // near the mesh, so the numbers stay small enough for the grain)
         if (paving) {
-            const uv = new Float32Array((apron + wall + stone + paving) * 2), pos = geometry.attributes.position.array, m = RoadSurface.ASPHALT_M;
+            const uv = new Float32Array((apron + wall + stone + paving + arch) * 2), pos = geometry.attributes.position.array, m = RoadSurface.ASPHALT_M;
             const first = (apron + wall + stone) * 3, u0 = Math.floor(pos[first] / m), v0 = Math.floor(pos[first + 2] / m);
             for (let v = apron + wall + stone; v < apron + wall + stone + paving; v++) { uv[v * 2] = pos[v * 3] / m - u0; uv[v * 2 + 1] = pos[v * 3 + 2] / m - v0; }
             geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
         }
-        const mesh = RoadMesh.mesh(geometry, 'road-works', [RoadMesh.apronMaterial(), RoadMesh.material(), RoadMesh.stoneMaterial(), RoadSurface.pavingMaterial()]);
+        const mesh = RoadMesh.mesh(geometry, 'road-works', [RoadMesh.apronMaterial(), RoadMesh.material(), RoadMesh.stoneMaterial(), RoadSurface.pavingMaterial(), RoadMesh.stoneMaterial()]);
         mesh.userData.world = 'works';
         group.add(mesh);
-        return (apron + wall + stone + paving) / 3;
+        return (apron + wall + stone + paving + arch) / 3;
     }
 
     // A piece of retaining wall from the end of one run (`a`, its top corner, `outA` the way that run faces there,
@@ -1790,7 +2035,8 @@ class RoadMesh {
         // A run clipped to the drawn rows; it ends where it really ends, not where it goes on into a neighbour
         const clip = mask => RoadMesh.runs(rows, mask).map(([from, to]) => [Math.max(from, first), Math.min(to, last), [from >= first, to <= last]]).filter(([from, to]) => to > from);
         for (const [from, to, ends] of clip(1 | 4)) structures.push([RoadMesh.tunnel(rows, from, to, roof, ends), 'tunnel']);
-        for (const [from, to, ends] of clip(2)) structures.push([RoadMesh.bridge(rows, from, to, groundAt, guard, ends), 'bridge']);
+        // (a viaduct's rows carry its layout, WorldEnvironment.viaducts: its stone in place of a bridge's concrete)
+        for (const [from, to, ends] of clip(2)) structures.push(rows[from].viaduct ? [RoadMesh.viaduct(rows, from, to, rows[from].viaduct, { lod, land: foot && foot.land ? foot.land : null, ends }), 'viaduct'] : [RoadMesh.bridge(rows, from, to, groundAt, guard, ends), 'bridge']);
         // With edge works the tunnels and bridges join their mesh (same material: the window counts meshes)
         const works = RoadMesh.addEdgeWorks(group, ribbon.sides, foot, structures.map(([parts]) => parts), roads);
         if (works) triangles += works;

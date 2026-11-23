@@ -26,7 +26,8 @@
 //
 // wallRuns(store) joins the faces of one road that share a top corner into runs and reports, with the measurements:
 //   - blocks: a run shorter than `minRunM`
-//   - steps: two runs of one road and one side whose ends are less than `minGapM` apart
+//   - steps: two runs of one road and one side whose ends are less than `minGapM` apart (an end that goes on into a
+//     structure, a bridge or a viaduct, is not read)
 //   - open: a run's end past which the road's edge hangs open
 //   - flanks: a run's end where the ground past it stands more than `flankM` over the ground in front of the wall,
 //     with no face of stone across the end (the open side of the slope that goes on from the wall)
@@ -108,7 +109,8 @@ export function wallWindow(game, env, store, at, nearM = 350) {
         for (const g of mesh.geometry.groups) {
             if (g.materialIndex === 0 || g.materialIndex === 3) aprons.push(gridOf(mesh, g.start, g.count, 4, g.materialIndex ? 'paving' : 'apron'));
             // The decks, soffits and tubes (and their parapets): a road that goes on over a structure hangs over nothing
-            if (g.materialIndex === 1) decks.push(gridOf(mesh, g.start, g.count, 4, 'deck'));
+            // (a viaduct's stone, group 4, is a structure as a deck is)
+            if (g.materialIndex === 1 || g.materialIndex === 4) decks.push(gridOf(mesh, g.start, g.count, 4, `deck${g.materialIndex}`));
             if (g.materialIndex === 2) stone.push({ mesh, start: g.start, count: g.count, owners });
         }
     };
@@ -231,7 +233,9 @@ export function wallWindow(game, env, store, at, nearM = 350) {
                 const before = groundTop(end.top[0] - ux * dir * 0.3 + ox * 0.4, end.top[2] - uz * dir * 0.3 + oz * 0.4);
                 const after = groundTop(end.top[0] + ux * dir * 0.3 + ox * 0.4, end.top[2] + uz * dir * 0.3 + oz * 0.4);
                 const flank = before !== null && after !== null ? r3(after - before) : 0;
-                face.ends.push({ x: r3(end.top[0]), y: r3(end.top[1]), z: r3(end.top[2]), open, dropM: worst, height: r3(end.top[1] - end.foot), flankM: flank });
+                // (an end that goes on into a structure, a bridge's deck or a viaduct's stone: the wall meets it there)
+                const structure = [0.3, 1].some(d => [0.3, 0.8].some(inM => { const deck = topOf(decks, end.top[0] + ux * dir * d - ox * inM, end.top[2] + uz * dir * d - oz * inM); return deck !== null && Math.abs(deck - end.top[1]) < 2.5; }));
+                face.ends.push({ x: r3(end.top[0]), y: r3(end.top[1]), z: r3(end.top[2]), open, dropM: worst, height: r3(end.top[1] - end.foot), flankM: flank, structure });
             }
             store.faces.set(id, face);
             fresh++;
@@ -304,8 +308,9 @@ export function wallRuns(store, { minRunM = 10, minGapM = 12, endM = 6, flankM =
             const p = runs[i], q = runs[j];
             if (p.owner !== q.owner || p.ox * q.ox + p.oz * q.oz < 0.5) continue;
             let best = Infinity, where = null;
-            // (an end with no height is no piece's end: a wall that tapers to nothing has died into the slope)
-            for (const a of p.ends) for (const b of q.ends) { if (a.height < 0.05 || b.height < 0.05) continue; const d = Math.hypot(a.x - b.x, a.z - b.z); if (d < best) { best = d; where = a; } }
+            // (an end with no height is no piece's end: a wall that tapers to nothing has died into the slope; nor is one
+            // that goes on into a structure, a viaduct's abutment, whose stone goes on from it)
+            for (const a of p.ends) for (const b of q.ends) { if (a.height < 0.05 || b.height < 0.05 || a.structure || b.structure) continue; const d = Math.hypot(a.x - b.x, a.z - b.z); if (d < best) { best = d; where = a; } }
             if (best < minGapM) out.steps.push({ s: where.s, owner: p.owner, gapM: r1(best), x: where.x, z: where.z, lengthsM: [r1(p.lengthM), r1(q.lengthM)] });
         }
     }

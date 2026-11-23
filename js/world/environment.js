@@ -461,6 +461,8 @@ class WorldEnvironment {
         };
         return points.slice(from, to + 1).map((p, i) => {
             const row = { x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, i: from + i, ...styles[from + i] };
+            // A viaduct's rows carry its layout, and are kept at every level of detail: its stone is laid on them
+            if (p.viaduct) Object.assign(row, { viaduct: p.viaduct, keep: true });
             // A stopping place's hard standing on either side (WorldPlaces.apply)
             // (every row of it is kept at the lower level of detail, RoadMesh.decimate: there the works lay the ground
             // under the verge, and across a place 5 m deep a row every 16 m made triangles of 44 m2 of flat ground)
@@ -524,6 +526,8 @@ class WorldEnvironment {
         while (a > 0 && S[section.from] - S[a] < WorldEnvironment.WALL_PLAN_M) a--;
         while (b < last && S[b] - S[section.to] < WorldEnvironment.WALL_PLAN_M) b++;
         const missing = new Set();
+        // The viaducts in these rows first (surveyViaducts): their rows are a structure's, and no wall stands on one
+        this.surveyViaducts(a, b, missing, index);
         const sides = RoadMesh.vergeSides(this.rowsOf(a, b), null, true);
         const all = RoadMesh.wallPlan(sides, this.edgeFoot(missing), this.carriageways.guard(-1));
         const base = Math.max(0, section.from - 1), top = Math.min(last, section.to + 1);
@@ -543,6 +547,324 @@ class WorldEnvironment {
         this.rideWallCache.set(index, out);
         this.faceStamp++;
         return out;
+    }
+
+    // The arched viaducts of the ride (RoadMesh.VIADUCT): where the ride is walled on both edges the two retaining
+    // walls give way to a stone viaduct. Each stretch is judged once, whole, when the land and the side roads round
+    // all of it are here, and read on the rows as the data gives them (`rawBits`), so the order the window builds in
+    // does not change it. A stretch walled on both edges (RoadMesh.wallEnd, the plan's own test, each wall `dropM`
+    // deep or more, and two such runs under `gapM` apart are one) of `minM` or more, with nothing else in it or near
+    // it, is laid out in bays (layViaduct); its rows then carry the bridge bit, so a structure's rules hold there (the
+    // walls end at its first row, the physics' parapets are its edges, no wall band) and the layout (`viaduct`).
+    // Rows `a` to `b` are surveyed; the keys of what is not here yet go into `missing`. A section's plan is being made
+    // (`making`): the plans of the others that hold the rows marked are made again
+    surveyViaducts(a, b, missing, making = -1) {
+        const V = RoadMesh.VIADUCT, points = this.route.points, S = this.route.sArray, n = points.length;
+        if (!this.viaductDone) { this.viaductDone = new Uint8Array(n); this.viaductEdge = new Map(); this.viaducts = []; }
+        const guard = this.carriageways.guard(-1);
+        // Whether the land asks for a wall dropM deep or more under the edge `key` of row i (RoadMesh.wallEnd, the
+        // plan's own test): true, false, or null with something not here
+        const walled = (i, key) => { const w = this.viaductWall(i, key, missing, guard); return w === null ? null : w.deep; };
+        // Whether an edge of row i stands on a wall as the plan makes it whole: a segment is walled where either of
+        // its rows is, and two walls of an edge under gapM apart are one (RoadMesh.wallPlan)
+        const along = (i, key) => {
+            const own = walled(i, key);
+            if (own !== false) return own;
+            for (const k of [i - 1, i + 1]) { if (k < 0 || k >= n) continue; const w = walled(k, key); if (w !== false) return w; }
+            let back = null, ahead = null;
+            for (let k = i - 2; k >= 0 && S[i] - S[k] < V.gapM + 2 * RoadMesh.WALL_GAP_M; k--) { const w = walled(k, key); if (w === null) return null; if (w) { back = k; break; } }
+            if (back === null) return false;
+            for (let k = i + 2; k < n && S[k] - S[i] < V.gapM + 2 * RoadMesh.WALL_GAP_M; k++) { const w = walled(k, key); if (w === null) return null; if (w) { ahead = k; break; } }
+            return ahead !== null && S[ahead - 1] - S[back + 1] < V.gapM;
+        };
+        const both = i => { const l = along(i, 'l'); if (l === null) return null; if (!l) return false; return along(i, 'r'); };
+        const marked = [];
+        for (let i = a; i <= b; i++) {
+            if (this.viaductDone[i]) continue;
+            const q = both(i);
+            if (!q) continue;
+            // The whole stretch: on from each end while the next row walled on both edges is under gapM away
+            let first = i, last = i, open = false;
+            for (let k = i + 1; k < n && S[k] - S[last] < V.gapM; k++) { const w = both(k); if (w === null) { open = true; break; } if (w) last = k; }
+            for (let k = i - 1; !open && k >= 0 && S[first] - S[k] < V.gapM; k--) { const w = both(k); if (w === null) { open = true; break; } if (w) first = k; }
+            if (open) continue;
+            const made = this.judgeViaduct(first, last, missing);
+            if (made === null) continue;
+            for (let k = first; k <= last; k++) this.viaductDone[k] = 1;
+            marked.push(...made);
+            i = last;
+        }
+        if (!marked.length) return;
+        for (const via of marked) {
+            this.viaducts.push(via);
+            for (let k = via.from; k <= via.to; k++) {
+                const p = points[k];
+                if (p.rawBits === undefined) p.rawBits = p.bits;
+                p.bits = p.rawBits | WorldRoute.FLAG.bridge;
+                p.flags = WorldRoute.flagsOf(p.bits);
+                p.viaduct = via;
+                if (this.goreRows) this.goreRows.delete(k);
+            }
+            if (this.goreRows) { this.goreRows.delete(via.from - 1); this.goreRows.delete(via.to + 1); }
+        }
+        // What was made on these rows before is made again: the other sections' wall plans that read them, the land
+        // under them and the sections drawn there
+        this.faceStamp++;
+        if (this.stonedRows) this.stonedRows.stamp = -1;
+        for (const via of marked) {
+            for (const section of this.streamer.sections) {
+                if (section.index === making || S[section.to] < via.s0 - WorldEnvironment.WALL_PLAN_M - 8 || S[section.from] > via.s1 + WorldEnvironment.WALL_PLAN_M + 8) continue;
+                this.dropRideWalls(section.index);
+            }
+            this.dropCuts(via.box);
+        }
+    }
+
+    // Whether the land asks for a wall under the edge `key` of ride row i (RoadMesh.wallEnd, the plan's own test, on
+    // the row as the data gives it): {any, deep} (deep: dropM or more under the edge), or null with something it reads
+    // not here (its keys go into `missing`). Kept once known
+    viaductWall(i, key, missing, guard = this.carriageways.guard(-1)) {
+        const id = key === 'l' ? -1 - i : i;
+        if (this.viaductEdge.has(id)) return this.viaductEdge.get(id);
+        const points = this.route.points, n = points.length, p = points[i], held = new Set();
+        for (const k of this.data.chunksNear(p.x, p.z, 40)) if (!this.data.chunks.has(k)) held.add(`chunk:${k}`);
+        const lo = Math.max(0, i - 1), hi = Math.min(n - 1, i + 1);
+        const rows = this.rowsOf(lo, hi).map(row => ({ ...row, bits: points[row.i].rawBits ?? row.bits }));
+        const side = RoadMesh.vergeSides(rows, null, true)[i - lo];
+        const e = RoadMesh.wallEnd(side, key, this.edgeFoot(held), guard);
+        if (held.size) { for (const k of held) missing.add(k); return null; }
+        const any = !!e && !e.blocked;
+        const out = { any, deep: any && side[key][1] - e.y >= RoadMesh.VIADUCT.dropM };
+        this.viaductEdge.set(id, out);
+        return out;
+    }
+
+    // A stretch walled on both edges, rows `lo` to `hi`, judged (RoadMesh.VIADUCT): the viaducts laid out in it ([]
+    // for none), or null while something it reads is not here (its keys go into `missing`)
+    judgeViaduct(lo, hi, missing) {
+        const V = RoadMesh.VIADUCT, points = this.route.points, S = this.route.sArray, n = points.length;
+        if (S[hi] - S[lo] < V.minM) return [];
+        // Nothing else in it or near it: a structure, a side road's mouth, a stopping place, a roadworks site
+        let near0 = lo, near1 = hi;
+        while (near0 > 0 && S[lo] - S[near0 - 1] <= V.clearM) near0--;
+        while (near1 < n - 1 && S[near1 + 1] - S[hi] <= V.clearM) near1++;
+        const styles = this.roadStyles();
+        for (let k = near0; k <= near1; k++) {
+            const p = points[k];
+            if (((p.rawBits ?? p.bits) & 7) || styles[k].mouthL || styles[k].mouthR || p.padN || p.padP || p.viaduct) return [];
+        }
+        for (const site of (this.roadworks && this.roadworks.sites) || []) if (site.s1 >= S[lo] - V.worksM && site.s0 <= S[hi] + V.worksM) return [];
+        // Its arches stand where it bends no sharper than curveMax: the longest such run of it (at a hairpin's apex
+        // the walls go on round the bend)
+        let first = lo, last = lo;
+        for (let k = lo; k < hi; k++) {
+            let to = k;
+            while (to < hi && Math.abs(this.route.headingChange(S[to], S[to + 1])) / Math.max(1e-6, S[to + 1] - S[to]) <= V.curveMax) to++;
+            if (S[to] - S[k] > S[last] - S[first]) { first = k; last = to; }
+            k = to;
+        }
+        // and inside the walls' stretch: the walls of both edges go on into its two ends, its abutments
+        // (RoadMesh.wallPlan walls the rows to a viaduct's end)
+        first = Math.max(first, lo + 1);
+        last = Math.min(last, hi - 1);
+        if (last <= first) return [];
+        // The ground beside each row: the land groundM out from each face (the nodes' own), and the lower of the
+        // two under it, never under another road that passes beneath
+        const rows = [];
+        const held = new Set();
+        for (let k = first; k <= last; k++) {
+            const p = points[k], ground = {};
+            for (const [key, sign] of [['l', -1], ['r', 1]]) {
+                const ox = sign * Math.cos(p.heading), oz = -sign * Math.sin(p.heading), out = p.width / 2 + RoadMesh.VIADUCT_FACE_M;
+                let low = Infinity;
+                for (const d of V.groundM) {
+                    const x = p.x + ox * (out + d), z = p.z + oz * (out + d), m = WorldData.TILE_M;
+                    const y = this.ground.tileHeight(x, z, false);
+                    if (y === null) { if (this.hasTileData(`${Math.floor(x / m)},${Math.floor(z / m)}`)) held.add(`${Math.floor(x / m)},${Math.floor(z / m)}`); continue; }
+                    low = Math.min(low, y);
+                }
+                ground[key] = low;
+            }
+            // (nor under another road beside it, out to where the ground is read: that road's edge and the ground it
+            // lays under its verge stand on the land as they did)
+            let floor = Math.min(ground.l, ground.r);
+            const reach = p.width / 2 + RoadMesh.VIADUCT_FACE_M + Math.max(...V.groundM);
+            for (const t of [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]) {
+                const lat = t * reach, x = p.x + lat * Math.cos(p.heading), z = p.z - lat * Math.sin(p.heading);
+                this.carriageways.each(x, z, RoadSurface.VERGE_M, r => { if (r.y < p.y - WorldEnvironment.SIDE_PASS_M) floor = Math.max(floor, r.y - TerrainMesh.SINK_M); });
+            }
+            rows.push({ i: k, s: S[k], y: p.y, x: p.x, z: p.z, heading: p.heading, width: p.width, ground, floor });
+        }
+        if (held.size) { for (const k of held) missing.add(k); return null; }
+        if (rows.some(row => !Number.isFinite(row.floor))) return [];
+        // (the lowest within half a bay: one ground under each arch, not a step at every row where a probe met another
+        // road's strip)
+        const raw = rows.map(row => row.floor);
+        for (const row of rows) {
+            row.floor = Math.min(...rows.filter((o, j) => Math.abs(o.s - row.s) <= V.spanM / 2 && Number.isFinite(raw[j])).map(o => raw[rows.indexOf(o)]));
+            row.bottom = { l: Math.min(row.floor, row.ground.l) - V.sinkM, r: Math.min(row.floor, row.ground.r) - V.sinkM };
+        }
+        // Laid out in bays; a bay with no room for an arch, no pier that stands clear or no face that opens ends the
+        // viaduct there, and what is left is laid out again
+        const made = [];
+        let runs = [[first, last]];
+        for (let pass = 0; pass < 8 && runs.length; pass++) {
+            const next = [];
+            for (const [A, B] of runs) {
+                const bays = this.layViaduct(rows.slice(A - first, B - first + 1));
+                if (!bays) continue;
+                if (bays.every(bay => bay.ok)) { made.push(this.viaductOf(rows.slice(A - first, B - first + 1), bays)); continue; }
+                const nearest = s => { let best = A; for (let k = A; k <= B; k++) if (Math.abs(S[k] - s) < Math.abs(S[best] - s)) best = k; return best; };
+                for (let j = 0; j < bays.length; j++) {
+                    if (!bays[j].ok) continue;
+                    let to = j;
+                    while (to + 1 < bays.length && bays[to + 1].ok) to++;
+                    const from = nearest(bays[j].b0), till = nearest(bays[to].b1);
+                    if (till > from && (from !== A || till !== B)) next.push([from, till]);
+                    j = to;
+                }
+            }
+            runs = next;
+        }
+        return made;
+    }
+
+    // The bays of a viaduct over `rows` (judgeViaduct's, first to last): [{b0, b1, a0, a1, spring, rise, open: {l, r},
+    // ok}] on the ride's metres, or null where the rows hold fewer than `minBays`. Each bay is the stretch's length in
+    // whole bays (spanMin to spanMax), its arch's opening between the half piers at its ends, semicircular where the
+    // ground under it leaves room, else segmental; `ok` where it has an arch, its piers stand clear of every road and
+    // its verge, and at least one face opens
+    layViaduct(rows) {
+        const V = RoadMesh.VIADUCT;
+        const s0 = rows[0].s, s1 = rows[rows.length - 1].s, L = s1 - s0;
+        let count = Math.max(1, Math.round(L / V.spanM));
+        while (count > 1 && L / count < V.spanMin) count--;
+        while (L / count > V.spanMax) count++;
+        if (count < V.minBays || L / count < V.spanMin - 1e-6) return null;
+        const bay = L / count, pier = Math.max(V.pierMinM, bay * V.pierShare);
+        // A row's value at metres s, between the rows that hold it
+        const at = (s, read) => {
+            let k = 0;
+            while (k + 2 < rows.length && rows[k + 1].s < s) k++;
+            const a = rows[k], b = rows[Math.min(rows.length - 1, k + 1)], t = b.s > a.s ? Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s))) : 0;
+            return read(a) + (read(b) - read(a)) * t;
+        };
+        const over = (from, to, read, pick) => { let v = pick(at(from, read), at(to, read)); for (const row of rows) if (row.s > from && row.s < to) v = pick(v, read(row)); return v; };
+        const place = (s, lateral) => { const y = at(s, r => r.y), x = at(s, r => r.x), z = at(s, r => r.z), h = at(s, r => r.heading); return { x: x + lateral * Math.cos(h), z: z - lateral * Math.sin(h), y }; };
+        const out = [];
+        for (let j = 0; j < count; j++) {
+            const b0 = s0 + j * bay, b1 = j === count - 1 ? s1 : b0 + bay, a0 = b0 + pier / 2, a1 = b1 - pier / 2, c = a1 - a0;
+            const top = over(b0, b1, r => r.y, Math.min), floor = over(b0, b1, r => r.floor, Math.max);
+            // The ground in front of each face along the opening (as the floor reads it): a face opens where it lies
+            // openM under the springing. A semicircle where it springs springM over the ground and one face opens;
+            // else as high as a face opens, segmental
+            const front = { l: over(a0, a1, r => r.ground.l, Math.max), r: over(a0, a1, r => r.ground.r, Math.max) };
+            const crown = top - V.crownM, low = floor + V.springM;
+            let spring = crown - c / 2;
+            if (spring < low || Math.min(front.l, front.r) > spring - V.openM) spring = Math.max(low, Math.min(front.l, front.r) + V.openM);
+            const rise = Math.min(c / 2, crown - spring) >= c * V.riseMin ? Math.min(c / 2, crown - spring) : 0;
+            // (`why` names what a bay lacks: room for an arch, headroom over a road, a pier clear of every road, an opening)
+            const why = rise > 0 ? [] : ['room'];
+            const half = at((b0 + b1) / 2, r => r.width) / 2 + RoadMesh.VIADUCT_FACE_M;
+            // Clear of a road under it by headroomM
+            for (const s of [a0, (a0 + a1) / 2, a1]) for (const t of [-1, -0.5, 0, 0.5, 1]) {
+                const p = place(s, t * half);
+                this.carriageways.each(p.x, p.z, 0, r => { if (r.depth >= 0 && r.y < p.y - WorldEnvironment.SIDE_PASS_M && spring < r.y + V.headroomM && !why.includes('headroom')) why.push('headroom'); });
+            }
+            // Its piers in no road and no road's verge
+            const margin = RoadSurface.VERGE_M + RoadMesh.PIER_CLEAR_M;
+            for (const [edge, inner] of [[b0, j > 0], [b1, j < count - 1]]) {
+                if (!inner) continue;
+                for (const s of [edge - pier / 2, edge + pier / 2]) for (const t of [-1, 0, 1]) {
+                    const p = place(s, t * half);
+                    if (this.carriageways.standsIn(p.x, p.z, at(s, r => r.floor) - V.sinkM, spring, null, margin) !== null && !why.includes('pier')) why.push('pier');
+                }
+            }
+            const open = { l: front.l <= spring - V.openM + 1e-9, r: front.r <= spring - V.openM + 1e-9 };
+            if (!open.l && !open.r) why.push('opening');
+            const ok = !why.length;
+            out.push({ b0, b1, a0, a1, spring, rise: ok ? rise : 0, open, ok, why });
+        }
+        return out;
+    }
+
+    // A viaduct over `rows` with its `bays` (layViaduct): {from, to, s0, s1, bays, rows, box, pits, lines}. Its land
+    // is cut along each face's line as the wall's was (`lines`, RoadMesh.wallRuns' shape, on the edge points the
+    // walls' runs end on, so the walls' runs before and after it go on as one line): the land in front of it is
+    // levelled as it was in front of the walls. Within those lines (CUT_BACK_M behind the line under an arch's
+    // opening; cutBackM behind a blind face, between its stone and the stone of its back, RoadMesh.viaduct) the land is
+    // held to the ground (`pits`, TerrainMesh.pitCuts), and cutBackM short of its first arch's side and its last's
+    viaductOf(rows, bays) {
+        const V = RoadMesh.VIADUCT, last = this.route.points.length - 1;
+        const from = rows[0].i, to = rows[rows.length - 1].i;
+        // (the edge points as the ride's wall plan reads them, with a row either side for the bend)
+        const before = Math.max(0, from - 1), sides = RoadMesh.vergeSides(this.rowsOf(before, Math.min(last, to + 1)), null, true).slice(from - before, from - before + rows.length);
+        const lines = ['l', 'r'].map(key => ({ key, owner: -1, viaduct: true, points: sides.map(side => side[key].slice()), out: sides.map(side => RoadMesh.outward(side)[key]) }));
+        const open = (row, key) => bays.some(bay => bay.open[key] && row.s >= bay.b0 - 1e-6 && row.s <= bay.b1 + 1e-6);
+        // A pit's corner at row k on edge `key`, `along` metres on along the road
+        const corner = (k, key, along) => {
+            const p = sides[k][key], o = RoadMesh.outward(sides[k])[key], h = rows[k].heading;
+            // (under an opening on the faces' own line: CUT_BACK_M behind it a strip of land the face no longer hides
+            // stood in the arch's mouth, its step a dark wedge under the arch)
+            const out = open(rows[k], key) ? 0 : RoadMesh.STONE_PROUD_M - V.cutBackM;
+            return [p[0] + o[0] * out + along * Math.sin(h), p[2] + o[1] * out + along * Math.cos(h)];
+        };
+        const end = Math.max(V.cutBackM, (bays[0].a0 - bays[0].b0) - V.cutBackM), tail = Math.max(V.cutBackM, (bays[bays.length - 1].b1 - bays[bays.length - 1].a1) - V.cutBackM);
+        const quads = [];
+        let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+        // (the rows the pit runs between: its ends lie on the segments that hold them)
+        let first = 0, final = rows.length - 1;
+        while (first + 1 < final && rows[first + 1].s <= rows[0].s + end) first++;
+        while (final - 1 > first && rows[final - 1].s >= rows[rows.length - 1].s - tail) final--;
+        for (let k = first; k < final; k++) {
+            const inA = k === first ? rows[0].s + end - rows[k].s : 0, inB = k + 1 === final ? rows[rows.length - 1].s - tail - rows[k + 1].s : 0;
+            const c = [corner(k, 'l', inA), corner(k + 1, 'l', inB), corner(k + 1, 'r', inB), corner(k, 'r', inA)];
+            quads.push({ c, f: [rows[k].floor, rows[k + 1].floor], outer: [true, k + 1 === final, true, k === first] });
+            for (const [x, z] of c) { x0 = Math.min(x0, x); z0 = Math.min(z0, z); x1 = Math.max(x1, x); z1 = Math.max(z1, z); }
+        }
+        const box = [x0 - 2, z0 - 2, x1 + 2, z1 + 2];
+        return { from, to, s0: rows[0].s, s1: rows[rows.length - 1].s, bays, rows: rows.map(row => ({ s: row.s, floor: row.floor, bottom: row.bottom })), box, pits: { quads, box }, lines };
+    }
+
+    // The pits of the viaducts near a tile (TerrainMesh.pitCuts)
+    pitsNear(tile) {
+        const m = WorldData.TILE_M;
+        const x0 = tile.tx * m, z0 = tile.tz * m;
+        return (this.viaducts || []).filter(via => via.box[2] >= x0 && via.box[0] <= x0 + m && via.box[3] >= z0 && via.box[1] <= z0 + m).map(via => via.pits);
+    }
+
+    // The faces of a viaduct for the chase camera (cameraFaces) over ride rows i to i + 1: each side's face from its
+    // parapet's top down to the ground, over its arches too (as the walls it replaces were: a boom that ran under an
+    // arch and met the pier beside it was drawn in all at once), and each arch's two sides across under it
+    viaductFaces(via, i, face) {
+        const V = RoadMesh.VIADUCT, points = this.route.points, S = this.route.sArray;
+        const rows = [points[i], points[i + 1]].map(p => ({ x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, s: p.s }));
+        const sa = S[i], sb = S[i + 1];
+        const bottom = (s, key) => {
+            let k = 0;
+            while (k + 2 < via.rows.length && via.rows[k + 1].s < s) k++;
+            const a = via.rows[k], b = via.rows[Math.min(via.rows.length - 1, k + 1)], t = b.s > a.s ? Math.max(0, Math.min(1, (s - a.s) / (b.s - a.s))) : 0;
+            return a.bottom[key] + (b.bottom[key] - a.bottom[key]) * t;
+        };
+        const fa = {}, fb = {};
+        for (const [key, sign] of [['l', -1], ['r', 1]]) {
+            RoadMesh.viaductFace(rows, sa, sign, fa);
+            RoadMesh.viaductFace(rows, sb, sign, fb);
+            // (a road stands on it, as on the walls it replaces: WorldCamera.wallShare keeps a boom met from outside off
+            // a deck that is a road overhead)
+            face(fa.x, fa.z, fb.x, fb.z, fa.y + V.parapetH, fb.y + V.parapetH, bottom(sa, key), bottom(sb, key), fa.ox, fa.oz, 1);
+        }
+        for (const bay of via.bays) {
+            if (!(bay.rise > 0)) continue;
+            for (const [s, way] of [[bay.a0, 1], [bay.a1, -1]]) {
+                if (s < sa || s >= sb) continue;
+                RoadMesh.viaductFace(rows, s, -1, fa);
+                RoadMesh.viaductFace(rows, s, 1, fb);
+                const low = Math.min(bottom(s, 'l'), bottom(s, 'r'));
+                // (facing into the opening: along the road, away from the pier)
+                face(fa.x, fa.z, fb.x, fb.z, bay.spring, bay.spring, low, low, way * -fa.oz, way * fa.ox, 0);
+            }
+        }
     }
 
     // The share of the fill's fall that a wall's face holds past its end (RoadMesh.edgeWorks `taper`), `t` of the way
@@ -683,6 +1005,7 @@ class WorldEnvironment {
     //   - the retaining walls of the ride's drawn sections and of the side roads (RoadMesh.wallRuns), with their parapets
     //   - the face a wall goes on as past its end (taperAt), as high as the wall, as deep as it holds the fill there
     //   - the parapets of the ride's bridges (WorldGround.zoneAt's wall)
+    //   - a viaduct's faces down to the ground, and its arches' sides (viaductFaces)
     //   - the walls of the houses drawn (Scenery.houseAt's rects)
     // The list is kept until the place has moved WALLS.stepM or one of those has changed (faceStamp, Scenery.stamp)
     cameraFaces(x, z, reach) {
@@ -739,6 +1062,8 @@ class WorldEnvironment {
                 for (const sign of [1, -1]) {
                     const ox = sign * Math.cos(a.heading), oz = -sign * Math.sin(a.heading);
                     if (bridge) {
+                        // (a viaduct's faces and the sides of its arches, RoadMesh.viaduct)
+                        if (a.viaduct && a.viaduct === b.viaduct) { if (sign > 0) this.viaductFaces(a.viaduct, i, face); continue; }
                         const p = WorldGround.pointAt(a, sign * (a.width / 2 + WorldGround.PARAPET_M), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + WorldGround.PARAPET_M), edge[1]);
                         face(p.x, p.z, q.x, q.z, a.y + H, b.y + H, a.y - RoadMesh.DECK_M, b.y - RoadMesh.DECK_M, ox, oz, 1);
                         continue;
@@ -1280,7 +1605,7 @@ class WorldEnvironment {
             for (let k = 1; k <= steps; k++) this.carriageways.each(ax + ((bx - ax) * k) / steps, az + ((bz - az) * k) / steps, RoadSurface.VERGE_M, r => { if (r.y > high) high = r.y; });
             return high;
         };
-        const cuts = TerrainMesh.cuts(tile, this.wallRunsNear(tile), this.nearTile, roadOver);
+        const cuts = TerrainMesh.cuts(tile, this.wallRunsNear(tile), this.nearTile, roadOver, this.pitsNear(tile));
         this.cutCache.set(key, cuts);
         return cuts;
     }
@@ -1294,6 +1619,8 @@ class WorldEnvironment {
         const ride = [];
         if (!this.streamer) return [];
         for (const section of this.streamer.sections) if (near(section.bbox)) ride.push(...this.rideWalls(section.index).runs);
+        // (a viaduct's faces cut the land as walls do, on from the walls at its ends: WorldEnvironment.viaductOf)
+        for (const via of this.viaducts || []) if (near(via.box)) ride.push(...via.lines);
         const at = p => `${Math.round(p[0] * 1000)},${Math.round(p[2] * 1000)}`;
         const starts = new Map();
         for (const run of ride) starts.set(`${run.key}|${at(run.points[0])}`, run);

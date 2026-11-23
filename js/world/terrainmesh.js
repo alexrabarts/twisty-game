@@ -389,8 +389,17 @@ class TerrainMesh {
     // height. Null when nothing is cut or lowered
     // `roadOver(ax, az, bx, bz)` gives the highest road surface between two points (or -Infinity): a node is never
     // lowered under a road that lies between it and the lower ground, so the land still meets that road's edge.
-    static cuts(tile, runs, near = null, roadOver = null) {
+    // `pits` are the ground under the viaducts (TerrainMesh.pitCuts): each triangle they reach is cut again to them
+    static cuts(tile, runs, near = null, roadOver = null, pits = null) {
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
+        const walls = TerrainMesh.wallCuts(tile, runs, near, roadOver);
+        if (!pits || !pits.length) return walls;
+        const out = walls || Object.assign(new Map(), { lowered: new Map() });
+        return TerrainMesh.pitCuts(tile, out, pits) || walls ? out : null;
+    }
+
+    // The land a tile's retaining walls cut (TerrainMesh.cuts, before the viaducts' pits)
+    static wallCuts(tile, runs, near = null, roadOver = null) {
         const W = 4;
         // The land the walls stand in is the land laid back (TerrainMesh.laidBack): what a wall's levelling reads and
         // lowers further
@@ -724,6 +733,278 @@ class TerrainMesh {
         return { chain, front: shape(frontIs), behind: shape(frontIs === one ? two : one) };
     }
 
+    // The ground under the viaducts (WorldEnvironment.viaducts). Within a viaduct's faces the land is lowered to the
+    // ground it stands on, so its arches open onto land and no land stands over an arch's underside; outside them it
+    // is as it was. `pits` are [{quads, box}]: each quad one segment of a viaduct between two ride rows, {c: its four
+    // corners [x, z] in turn (the left face at the first row, at the second, the right face at the second, at the
+    // first), f: [the ground at the first row, at the second], outer: [which of its four edges is the pit's own
+    // edge]}, and `box` [x0, z0, x1, z1] round all of them. Every triangle a quad reaches is cut along the quads' edges
+    // (a wall's cut triangle too, its parts and the faces that close its step): its pieces outside keep their heights,
+    // its pieces inside are held to the ground (lowered only), and a face of land closes the step at the pit's own
+    // edges, as at a wall's cut. Writes a record {pit: true, nodes, parts, faces, front, behind, chain} for each such
+    // triangle into `out` (TerrainMesh.cuts' map); true when it cut one
+    static pitCuts(tile, out, pits) {
+        const n = WorldData.TILE_N, cells = n - 1, c = WorldData.CELL_M;
+        const baseX = tile.tx * WorldData.TILE_M, baseZ = tile.tz * WorldData.TILE_M;
+        const quads = [];
+        for (const pit of pits) {
+            const [x0, z0, x1, z1] = pit.box;
+            if (x1 < baseX || z1 < baseZ || x0 > baseX + WorldData.TILE_M || z0 > baseZ + WorldData.TILE_M) continue;
+            for (const quad of pit.quads) quads.push(quad);
+        }
+        if (!quads.length) return false;
+        let cut = false;
+        const touched = new Map();
+        for (const quad of quads) {
+            const xs = quad.c.map(p => p[0]), zs = quad.c.map(p => p[1]);
+            const i0 = Math.max(0, Math.floor((Math.min(...xs) - baseX) / c)), i1 = Math.min(cells - 1, Math.floor((Math.max(...xs) - baseX) / c));
+            const j0 = Math.max(0, Math.floor((Math.min(...zs) - baseZ) / c)), j1 = Math.min(cells - 1, Math.floor((Math.max(...zs) - baseZ) / c));
+            for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) for (let which = 0; which < 2; which++) {
+                const id = (j * cells + i) * 2 + which;
+                (touched.get(id) || touched.set(id, { i, j, which, quads: [] }).get(id)).quads.push(quad);
+            }
+        }
+        for (const [id, { i, j, which, quads: near }] of touched) {
+            const nodes = which === 0 ? [[i, j], [i, j + 1], [i + 1, j]] : [[i + 1, j], [i, j + 1], [i + 1, j + 1]];
+            const record = TerrainMesh.pitTriangle(nodes.map(([a, b]) => [baseX + a * c, baseZ + b * c]), out.get(id) || null, near);
+            if (!record) continue;
+            record.nodes = nodes;
+            out.set(id, record);
+            cut = true;
+        }
+        return cut;
+    }
+
+    // Where along a pit's quad a point lies: 0 on its first row's edge, 1 on its second's (the inverse of the quad's
+    // bilinear map), so two quads that share a row give a point on it one ground
+    static pitAlong(quad, x, z) {
+        const [p0, p1, p2, p3] = quad.c;
+        // p = a + e u + f v + g u v: u across (first row's left to right), v along
+        const ax = p0[0], az = p0[1], ex = p3[0] - ax, ez = p3[1] - az, fx = p1[0] - ax, fz = p1[1] - az;
+        const gx = ax - p3[0] + p2[0] - p1[0], gz = az - p3[1] + p2[1] - p1[1], hx = x - ax, hz = z - az;
+        const cross = (ux, uz, vx, vz) => ux * vz - uz * vx;
+        const k2 = cross(gx, gz, fx, fz), k1 = cross(ex, ez, fx, fz) + cross(hx, hz, gx, gz), k0 = cross(hx, hz, ex, ez);
+        let v;
+        if (Math.abs(k2) < 1e-9) v = Math.abs(k1) > 1e-12 ? -k0 / k1 : 0;
+        else {
+            const w = Math.sqrt(Math.max(0, k1 * k1 - 4 * k0 * k2)), r1 = (-k1 - w) / (2 * k2), r2 = (-k1 + w) / (2 * k2);
+            v = Math.abs(r1 - 0.5) <= Math.abs(r2 - 0.5) ? r1 : r2;
+        }
+        return Math.max(0, Math.min(1, v));
+    }
+
+    // The ground a pit's quad holds a point at
+    static pitFloor(quad, x, z) {
+        const t = TerrainMesh.pitAlong(quad, x, z);
+        return quad.f[0] + (quad.f[1] - quad.f[0]) * t;
+    }
+
+    // A convex polygon of points ({x, z, ...}) clipped to the side of the line from a to b that `keep` (+1 its left,
+    // -1 its right) names. A point made on the line mixes the two it lies between (`mix`); each point's `edge` is the
+    // line its edge to the next runs along (`tag` for one made by this clip, else the edge's own)
+    static pitClip(poly, a, b, keep, tag) {
+        const side = p => keep * ((b[0] - a[0]) * (p.z - a[1]) - (b[1] - a[1]) * (p.x - a[0]));
+        const out = [];
+        for (let k = 0; k < poly.length; k++) {
+            const p = poly[k], q = poly[(k + 1) % poly.length], dp = side(p), dq = side(q);
+            const cross = edge => { const t = dp / (dp - dq); return { x: p.x + (q.x - p.x) * t, z: p.z + (q.z - p.z) * t, mix: [[p, 1 - t], [q, t]], edge }; };
+            // (the edge from a point made where p's edge leaves the kept side runs along the line; where it comes
+            // back in, along p's edge)
+            if (dp >= -1e-9) {
+                out.push({ ...p });
+                if (dq < -1e-9) out.push(cross(tag));
+            } else if (dq >= -1e-9) out.push(cross(p.edge));
+        }
+        return out.length >= 3 && Math.abs(TerrainMesh.pitArea(out)) > 1e-6 ? out : [];
+    }
+
+    static pitArea(poly) {
+        let a = 0;
+        for (let k = 0; k < poly.length; k++) { const p = poly[k], q = poly[(k + 1) % poly.length]; a += p.x * q.z - q.x * p.z; }
+        return a / 2;
+    }
+
+    // One land triangle (three [x, z]) cut to the pits' quads that reach it (`near`): its own triangle, or the parts
+    // of a wall's cut record (`record`), each clipped to the quads. Null where nothing of it lies in a pit
+    static pitTriangle(tri, record, near) {
+        const area = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
+        const bary = (x, z) => {
+            const w1 = ((x - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (z - tri[0][1])) / area;
+            const w2 = ((tri[1][0] - tri[0][0]) * (z - tri[0][1]) - (x - tri[0][0]) * (tri[1][1] - tri[0][1])) / area;
+            return [1 - w1 - w2, w1, w2];
+        };
+        // The pieces to cut: a point is {x, z, base, front} (a vertex of the triangle or of the wall's cut, read in its
+        // own part), or {x, z, mix} made on a cut
+        const pieces = [];
+        const faces = [];
+        if (record && !record.pit) {
+            for (const part of [record.front, record.behind]) {
+                const front = part === record.front;
+                for (const t of part.tris) pieces.push({ front, poly: t.map(k => ({ x: part.verts[k].x, z: part.verts[k].z, base: part.verts[k], front, edge: -1 })) });
+            }
+            // (and the faces that close the wall's step, where it is open)
+            for (let k = 0; k + 1 < record.chain.length; k++) {
+                const a = record.chain[k], b = record.chain[k + 1];
+                if (a.tau >= 1 && b.tau >= 1) continue;
+                faces.push({ a: { x: a.x, z: a.z, base: a, front: true }, b: { x: b.x, z: b.z, base: b, front: true }, la: { x: a.x, z: a.z, base: a, front: false }, lb: { x: b.x, z: b.z, base: b, front: false }, nx: a.nx, nz: a.nz });
+            }
+        } else if (record && record.pit) return null;
+        else pieces.push({ front: true, poly: tri.map((p, e) => ({ x: p[0], z: p[1], base: { node: e, x: p[0], z: p[1] }, front: true, edge: -1 })) });
+        // Wound one way, so `keep` +1 is the inside of each quad
+        for (const piece of pieces) if (TerrainMesh.pitArea(piece.poly) < 0) piece.poly.reverse();
+        const box = poly => [Math.min(...poly.map(p => p.x)), Math.min(...poly.map(p => p.z)), Math.max(...poly.map(p => p.x)), Math.max(...poly.map(p => p.z))];
+        const out = [];
+        const ground = [];
+        for (const piece of pieces) {
+            let rest = [piece.poly];
+            for (const quad of near) {
+                // (walked the other way round, the loop's edge k is the quad's edge 2 - k, mod 4)
+                const loop = TerrainMesh.pitArea(quad.c.map(p => ({ x: p[0], z: p[1] }))) > 0 ? quad.c : quad.c.slice().reverse();
+                const edgeOf = k => (loop === quad.c ? k : (6 - k) % 4);
+                const qb = [Math.min(...quad.c.map(p => p[0])), Math.min(...quad.c.map(p => p[1])), Math.max(...quad.c.map(p => p[0])), Math.max(...quad.c.map(p => p[1]))];
+                const next = [];
+                for (const poly of rest) {
+                    const pb = box(poly);
+                    if (pb[2] < qb[0] || pb[0] > qb[2] || pb[3] < qb[1] || pb[1] > qb[3]) { next.push(poly); continue; }
+                    // Inside: clipped to all four edges; outside: what each edge cuts off of what is left
+                    let held = poly;
+                    for (let k = 0; k < 4 && held.length; k++) {
+                        const a = loop[k], b = loop[(k + 1) % 4];
+                        const off = TerrainMesh.pitClip(held, a, b, -1, -1);
+                        if (off.length) next.push(off);
+                        held = TerrainMesh.pitClip(held, a, b, 1, edgeOf(k));
+                    }
+                    if (held.length) ground.push({ poly: held, quad, front: piece.front });
+                }
+                rest = next;
+            }
+            for (const poly of rest) out.push({ poly, front: piece.front });
+        }
+        if (!ground.length) return null;
+        // The pieces inside are held to the ground (`cap`), lowered only; each edge that runs along a pit's own edge
+        // takes a face of land from the piece's height outside down to the ground
+        const parts = [];
+        const fan = (poly, front, capped, quad) => {
+            const verts = poly.map(p => {
+                const v = { x: p.x, z: p.z, w: bary(p.x, p.z), base: p.base, front: p.front ?? front, mix: p.mix || null };
+                if (capped) v.cap = TerrainMesh.pitFloor(quad, p.x, p.z);
+                return v;
+            });
+            // (each wound as the land triangle is, and none with no area at all: the pieces were turned one way for the clip,
+            // and a piece wound against its triangle, or a sliver's, lit the land round it from under, near black)
+            const tris = [];
+            for (let k = 1; k + 1 < verts.length; k++) {
+                const A = verts[0], B = verts[k], C = verts[k + 1], w = (B.x - A.x) * (C.z - A.z) - (C.x - A.x) * (B.z - A.z);
+                if (Math.abs(w) < 1e-12) continue;
+                tris.push((w > 0) === (area > 0) ? [0, k, k + 1] : [0, k + 1, k]);
+            }
+            parts.push({ front, capped, verts, tris });
+            return verts;
+        };
+        const outside = out.map(piece => fan(piece.poly, piece.front, false, null)).map((verts, k) => ({ verts, tris: parts[k].tris }));
+        // The land just outside a pit's edge at (x, z), a step (dx, dz) out: a point mixed from the corners of the
+        // piece outside that holds it, or null where none of this triangle's does
+        const across = (x, z, dx, dz) => {
+            for (const piece of outside) for (const [a, b, c] of piece.tris) {
+                const A = piece.verts[a], B = piece.verts[b], C = piece.verts[c];
+                const d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+                if (Math.abs(d) < 1e-12) continue;
+                const weigh = (px, pz) => { const wa = ((B.z - C.z) * (px - C.x) + (C.x - B.x) * (pz - C.z)) / d, wb = ((C.z - A.z) * (px - C.x) + (A.x - C.x) * (pz - C.z)) / d; return [wa, wb, 1 - wa - wb]; };
+                if (weigh(x + dx, z + dz).some(w => w < -1e-7)) continue;
+                const w = weigh(x, z);
+                return { x, z, w: bary(x, z), mix: [[A, w[0]], [B, w[1]], [C, w[2]]] };
+            }
+            return null;
+        };
+        // An edge of a piece inside that lies on a pit's own edge with no edge made by the clip (a wall's cut on the
+        // pit's line, or a piece that ends on it) is found by where it lies
+        const onEdge = (quad, p, q) => {
+            for (let m = 0; m < 4; m++) {
+                if (!quad.outer[m]) continue;
+                const a = quad.c[m], b = quad.c[(m + 1) % 4], len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+                const off = v => Math.abs((b[0] - a[0]) * (v.z - a[1]) - (b[1] - a[1]) * (v.x - a[0])) / len;
+                if (off(p) < 0.01 && off(q) < 0.01) return m;
+            }
+            return -1;
+        };
+        for (const piece of ground) {
+            const verts = fan(piece.poly, piece.front, true, piece.quad);
+            const cx = piece.poly.reduce((s, v) => s + v.x, 0) / piece.poly.length, cz = piece.poly.reduce((s, v) => s + v.z, 0) / piece.poly.length;
+            for (let k = 0; k < piece.poly.length; k++) {
+                const p = piece.poly[k], q = piece.poly[(k + 1) % piece.poly.length];
+                const made = p.edge >= 0, e = made ? p.edge : onEdge(piece.quad, p, q);
+                if (e < 0 || !piece.quad.outer[e]) continue;
+                // (facing into the pit: the side it is seen from, through the arches)
+                const mx = (p.x + q.x) / 2, mz = (p.z + q.z) / 2, nx = cx - mx, nz = cz - mz, nl = Math.hypot(nx, nz) || 1;
+                // From the land outside down to the ground: the piece's own where the clip made the edge (the land goes
+                // on across it), else the land of the piece across it (a wall's cut on the line: the land in front)
+                let open = { x: p.x, z: p.z, w: bary(p.x, p.z), base: p.base, front: p.front ?? piece.front, mix: p.mix || null };
+                let shut = { x: q.x, z: q.z, w: bary(q.x, q.z), base: q.base, front: q.front ?? piece.front, mix: q.mix || null };
+                if (!made) {
+                    const step = 0.02 / nl, ap = across(p.x + (q.x - p.x) * 0.01, p.z + (q.z - p.z) * 0.01, -nx * step, -nz * step), aq = across(q.x + (p.x - q.x) * 0.01, q.z + (p.z - q.z) * 0.01, -nx * step, -nz * step);
+                    if (ap && aq) { open = across(p.x, p.z, -nx * step + (q.x - p.x) * 0.01, -nz * step + (q.z - p.z) * 0.01) || ap; shut = across(q.x, q.z, -nx * step + (p.x - q.x) * 0.01, -nz * step + (p.z - q.z) * 0.01) || aq; }
+                }
+                faces.push({ a: open, b: shut, la: verts[k], lb: verts[(k + 1) % verts.length], nx, nz });
+            }
+        }
+        // A wall's closing faces cut to the pits too: on a pit's edge (a centimetre either way: the wall's line and the
+        // pit's come from one edge) none stands, the pit's own face closes the step there
+        const lined = [];
+        for (const face of faces) {
+            if (face.la.cap !== undefined) { lined.push(face); continue; }
+            const ts = [0, 1];
+            for (const quad of near) {
+                const pts = quad.c;
+                for (let k = 0; k < 4; k++) {
+                    const a = pts[k], b = pts[(k + 1) % 4];
+                    const d1 = (b[0] - a[0]) * (face.a.z - a[1]) - (b[1] - a[1]) * (face.a.x - a[0]), d2 = (b[0] - a[0]) * (face.b.z - a[1]) - (b[1] - a[1]) * (face.b.x - a[0]);
+                    if ((d1 > 0) !== (d2 > 0)) ts.push(d1 / (d1 - d2));
+                }
+            }
+            ts.sort((p, q) => p - q);
+            for (let k = 0; k + 1 < ts.length; k++) {
+                const t0 = ts[k], t1 = ts[k + 1];
+                if (t1 - t0 < 1e-6) continue;
+                const at = (t, top) => { const A = top ? face.a : face.la, B = top ? face.b : face.lb; return { x: A.x + (B.x - A.x) * t, z: A.z + (B.z - A.z) * t, mix: [[A, 1 - t], [B, t]] }; };
+                const mx = face.a.x + (face.b.x - face.a.x) * (t0 + t1) / 2, mz = face.a.z + (face.b.z - face.a.z) * (t0 + t1) / 2;
+                // (inside a pit the step stands on, both its sides lowered to the ground as the land either side is)
+                const inside = near.find(q => TerrainMesh.pitInside(q, mx, mz, -0.01));
+                if (!inside && near.some(q => TerrainMesh.pitInside(q, mx, mz, 0.01))) continue;
+                const seg = { a: at(t0, true), b: at(t1, true), la: at(t0, false), lb: at(t1, false), nx: face.nx, nz: face.nz, wall: true };
+                if (inside) for (const v of [seg.a, seg.b, seg.la, seg.lb]) v.cap = TerrainMesh.pitFloor(inside, v.x, v.z);
+                lined.push(seg);
+            }
+        }
+        const front = { verts: [], tris: [] }, behind = { verts: [], tris: [] };
+        for (const part of parts) {
+            const into = part.capped ? behind : front, base = into.verts.length;
+            into.verts.push(...part.verts);
+            for (const t of part.tris) into.tris.push(t.map(k => base + k));
+        }
+        return { pit: true, parts, faces: lined, front, behind, chain: [] };
+    }
+
+    // Whether (x, z) lies inside a pit's quad (or within `margin` metres outside it)
+    static pitInside(quad, x, z, margin = 0) {
+        const sign = TerrainMesh.pitArea(quad.c.map(p => ({ x: p[0], z: p[1] }))) > 0 ? 1 : -1;
+        for (let k = 0; k < 4; k++) {
+            const a = quad.c[k], b = quad.c[(k + 1) % 4], len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+            if (sign * ((b[0] - a[0]) * (z - a[1]) - (b[1] - a[1]) * (x - a[0])) / len < -margin - 1e-9) return false;
+        }
+        return true;
+    }
+
+    // The height of a point of a pit's record (TerrainMesh.pitTriangle) over nodes at `nodeH`: a vertex of the
+    // triangle or of a wall's cut read in its own part, a point made on a cut mixed from the two it lies between, and
+    // a point inside a pit held to its ground (`cap`, less `sink`)
+    static pitY(v, nodeH, sink = 0) {
+        let y;
+        if (v.mix) { y = 0; for (const [p, t] of v.mix) y += t * TerrainMesh.pitY(p, nodeH, sink); }
+        else if (v.base.node >= 0) y = nodeH[v.base.node];
+        else y = TerrainMesh.cutVertexY(v.base, nodeH, v.front, sink);
+        return v.cap === undefined ? y : Math.min(y, v.cap - sink);
+    }
+
     // The height of the land at (x, z) of a tile, on the triangles it is drawn with at full detail: the nodes' two
     // triangles a cell, or the cut ones (TerrainMesh.cuts). The heights are the tile's own (not sunk: what the physics reads)
     static heightAt(tile, x, z, cuts = null) {
@@ -796,6 +1077,19 @@ class TerrainMesh {
 
     // The height at (x, z) inside a cut triangle, or null where no part of it holds the point
     static cutHeight(record, x, z, nodeH, sink = 0) {
+        if (record.pit) {
+            for (const part of record.parts) {
+                for (const [a, b, c] of part.tris) {
+                    const A = part.verts[a], B = part.verts[b], C = part.verts[c];
+                    const d = (B.z - C.z) * (A.x - C.x) + (C.x - B.x) * (A.z - C.z);
+                    if (Math.abs(d) < 1e-12) continue;
+                    const wa = ((B.z - C.z) * (x - C.x) + (C.x - B.x) * (z - C.z)) / d, wb = ((C.z - A.z) * (x - C.x) + (A.x - C.x) * (z - C.z)) / d, wc = 1 - wa - wb;
+                    if (wa < -1e-7 || wb < -1e-7 || wc < -1e-7) continue;
+                    return wa * TerrainMesh.pitY(A, nodeH, sink) + wb * TerrainMesh.pitY(B, nodeH, sink) + wc * TerrainMesh.pitY(C, nodeH, sink);
+                }
+            }
+            return null;
+        }
         for (const part of [record.front, record.behind]) {
             const front = part === record.front;
             for (const [a, b, c] of part.tris) {
@@ -867,7 +1161,7 @@ class TerrainMesh {
         }
         // The cut triangles: their parts in front of and behind each wall, the face that closes the step between
         // them, and where a cut meets the tile's edge, the two heights the skirt hangs from there
-        const extra = { positions: [], shades: [], land: [], faces: [], flat: [] };
+        const extra = { positions: [], shades: [], land: [], faces: [], flat: [], smooth: [] };
         const edgeCuts = new Map();
         if (cuts) {
             const add = (x, y, z, colour) => { extra.positions.push(x, y, z); extra.shades.push(colour[0], colour[1], colour[2]); return vertexCount + extra.positions.length / 3 - 1; };
@@ -879,6 +1173,37 @@ class TerrainMesh {
                     for (let k = 0; k < 3; k++) mix[k] = vertex.w[0] * shades[own[0] * 3 + k] + vertex.w[1] * shades[own[1] * 3 + k] + vertex.w[2] * shades[own[2] * 3 + k];
                     return mix;
                 };
+                // Under a viaduct (TerrainMesh.pitCuts): its pieces, and the faces of land that close the step at the
+                // pit's edges and at a wall's cut, as the cut's own faces are
+                if (record.pit) {
+                    const tri = record.nodes.map(([i, j]) => [baseX + i * WorldData.CELL_M, baseZ + j * WorldData.CELL_M]);
+                    const area = (tri[1][0] - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (tri[1][1] - tri[0][1]);
+                    const weights = v => v.w || (v.w = (() => { const w1 = ((v.x - tri[0][0]) * (tri[2][1] - tri[0][1]) - (tri[2][0] - tri[0][0]) * (v.z - tri[0][1])) / area, w2 = ((tri[1][0] - tri[0][0]) * (v.z - tri[0][1]) - (v.x - tri[0][0]) * (tri[1][1] - tri[0][1])) / area; return [1 - w1 - w2, w1, w2]; })());
+                    const yOf = v => { let y = TerrainMesh.pitY(v, nodeY, TerrainMesh.SINK_M); if (holdY) y = holdY(v.x, y, v.z); return y; };
+                    // (a point outside the pit lies on the triangle's own plane, and is lit as the triangle is between its
+                    // corners: `smooth`; lit by its own pieces only, the land round a pit showed every piece as a facet)
+                    const put = v => {
+                        if (!v.mix && v.cap === undefined && v.base && v.base.node >= 0) return own[v.base.node];
+                        const at = add(v.x, yOf(v), v.z, colourOf({ w: weights(v) }));
+                        if (v.cap === undefined) extra.smooth.push([at, own, weights(v)]);
+                        return at;
+                    };
+                    for (const part of record.parts) {
+                        const index = part.verts.map(put);
+                        for (const [a, b, c] of part.tris) extra.land.push(index[a], index[b], index[c]);
+                    }
+                    for (const face of record.faces) {
+                        const ya = yOf(face.a), yb = yOf(face.b), la = yOf(face.la), lb = yOf(face.lb);
+                        if (Math.abs(ya - la) < 1e-3 && Math.abs(yb - lb) < 1e-3) continue;
+                        // (a wall's face as its cut has it; a pit's facing the lower side, where it is seen from)
+                        const down = !face.wall && ya + yb < la + lb ? -1 : 1;
+                        const out = ((face.b.z - face.a.z) * face.nx - (face.b.x - face.a.x) * face.nz) * down > 0;
+                        const corner = (v, y) => { const w = add(v.x, y, v.z, colourOf({ w: weights(v) })); extra.flat.push(w); return w; };
+                        const at4 = out ? [corner(face.a, ya), corner(face.b, yb), corner(face.lb, lb), corner(face.la, la)] : [corner(face.b, yb), corner(face.a, ya), corner(face.la, la), corner(face.lb, lb)];
+                        extra.faces.push(at4[0], at4[1], at4[2], at4[0], at4[2], at4[3]);
+                    }
+                    continue;
+                }
                 const drawn = new Map();
                 for (const part of [record.front, record.behind]) {
                     const front = part === record.front;
@@ -1031,6 +1356,32 @@ class TerrainMesh {
         }
         // A closing face and a cut's skirt are lit as the land above them
         for (const v of extra.flat) { lit[v * 3] = 0; lit[v * 3 + 1] = 1; lit[v * 3 + 2] = 0; }
+        // (a node whose every triangle is cut, as under a viaduct's pit, is in none of the land's own: it is lit by the
+        // triangles it had, or the land round the pit took its normal as nothing and drew black)
+        const unlit = new Set();
+        for (const [, own] of extra.smooth) for (const v of own) if (v < side * side && !(lit[v * 3] || lit[v * 3 + 1] || lit[v * 3 + 2])) unlit.add(v);
+        for (const v of unlit) {
+            const a = v % side, b = (v - a) / side, P = k => [positionsAll[k * 3], positionsAll[k * 3 + 1], positionsAll[k * 3 + 2]];
+            let nx = 0, ny = 0, nz = 0;
+            const cell = (i, j) => {
+                if (i < 0 || j < 0 || i >= cells || j >= cells) return;
+                const v00 = j * side + i, v10 = v00 + 1, v01 = v00 + side, v11 = v01 + 1;
+                for (const [p, q, r] of [[v00, v01, v10], [v10, v01, v11]]) {
+                    if (p !== v && q !== v && r !== v) continue;
+                    const A = P(p), B = P(q), C = P(r), ux = C[0] - B[0], uy = C[1] - B[1], uz = C[2] - B[2], wx = A[0] - B[0], wy = A[1] - B[1], wz = A[2] - B[2];
+                    nx += uy * wz - uz * wy; ny += uz * wx - ux * wz; nz += ux * wy - uy * wx;
+                }
+            };
+            for (const [i, j] of [[a - 1, b - 1], [a, b - 1], [a - 1, b], [a, b]]) cell(i, j);
+            const l = Math.hypot(nx, ny, nz) || 1;
+            lit[v * 3] = nx / l; lit[v * 3 + 1] = ny / l; lit[v * 3 + 2] = nz / l;
+        }
+        for (const [v, own, w] of extra.smooth) {
+            let nx = 0, ny = 0, nz = 0;
+            for (let k = 0; k < 3; k++) { nx += w[k] * lit[own[k] * 3]; ny += w[k] * lit[own[k] * 3 + 1]; nz += w[k] * lit[own[k] * 3 + 2]; }
+            const l = Math.hypot(nx, ny, nz) || 1;
+            lit[v * 3] = nx / l; lit[v * 3 + 1] = ny / l; lit[v * 3 + 2] = nz / l;
+        }
         edges.forEach((edge, e) => {
             for (let k = 0; k < side; k++) {
                 const to = side * side + e * side + k, from = edge(k);

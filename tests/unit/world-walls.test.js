@@ -81,15 +81,16 @@ describe('the Tremola slice: the land meets every retaining wall', () => {
                     }
                     const whole = (WorldData.CELL_M * WorldData.CELL_M) / 2;
                     if (Math.abs(area - whole) > 1e-3) cut.holes.push({ key, id, areaM2: Math.round(area * 1000) / 1000 });
-                    // A cut's end on the tile's edge: the tile across the edge ends a cut at the same place
-                    for (const v of [record.chain[0], record.chain[record.chain.length - 1]]) {
+                    // A cut's end on the tile's edge: the tile across the edge ends a cut at the same place (the ground
+                    // under a viaduct has no cut line of its own: TerrainMesh.pitCuts)
+                    for (const v of record.pit ? [] : [record.chain[0], record.chain[record.chain.length - 1]]) {
                         const fx = (v.x - tx * m) / WorldData.CELL_M, fz = (v.z - tz * m) / WorldData.CELL_M;
                         const dx = Math.abs(fx) < 1e-7 ? -1 : Math.abs(fx - (n - 1)) < 1e-7 ? 1 : 0, dz = Math.abs(fz) < 1e-7 ? -1 : Math.abs(fz - (n - 1)) < 1e-7 ? 1 : 0;
                         if (!dx && !dz) continue;
                         const other = `${tx + dx},${tz + dz}`;
                         if (!env.data.tile(other)) continue;
                         const across = env.cutsOf(other);
-                        const met = across && [...across.values()].some(r => [r.chain[0], r.chain[r.chain.length - 1]].some(w => Math.hypot(w.x - v.x, w.z - v.z) < 1e-6 && Math.abs(w.tau - v.tau) < 1e-9));
+                        const met = across && [...across.values()].some(r => r.chain.length && [r.chain[0], r.chain[r.chain.length - 1]].some(w => Math.hypot(w.x - v.x, w.z - v.z) < 1e-6 && Math.abs(w.tau - v.tau) < 1e-9));
                         if (!met && v.tau < 1) cut.edges.push({ key, other, x: Math.round(v.x * 100) / 100, z: Math.round(v.z * 100) / 100 });
                     }
                 }

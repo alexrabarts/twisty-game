@@ -27,6 +27,13 @@
 //  13. `strays`: a coping corner that stands out of the coping it meets (their inner corners more than 0.16 m apart
 //      at a joint of two roads' walls: a wedge of coping toward the road), or a piece of a wall's top shorter than the
 //      coping is deep (0.8 m) that shares no corner with any other top
+//  14. `piers`: a viaduct's stone that stands on the land (a pier's face or side, a face down to the ground) with its
+//      foot more than 5 cm over the land drawn under it, or on a road (RoadMesh.viaduct `feet`)
+//  15. `soffits`: the land drawn over an arch's underside (RoadMesh.viaduct `soffit`)
+//
+// A viaduct stands where the ride is walled on both edges (WorldEnvironment.viaducts): its faces stand where the walls'
+// stood and its land is cut on their lines, so the counts above read it as they read the walls. Under it the land is
+// held to the ground (TerrainMesh.pitCuts); its stone hides the land behind it as a wall's does (`archAt`)
 //
 // At d2c4527 `low` read each top once, when first drawn, and three side roads' copings at a mouth (km 1.8, 2.3, 4.5)
 // were first drawn while the ride's section beside them was far: over its LOD0 ribbon they stood 0.28 to 0.38 m over
@@ -264,6 +271,11 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
         if (report.strays.length > SPIKE_LIMITS.strays) throw new Error(`${report.strays.length} coping pieces standing out or alone (at most ${SPIKE_LIMITS.strays}):\n${list(report.strays)}`);
     });
 
+    test('every pier of a viaduct stands in the land and on no road, and no land stands over an arch', () => {
+        if (report.piers.length > SPIKE_LIMITS.piers) throw new Error(`${report.piers.length} viaduct feet over the land or on a road:\n${list(report.piers)}`);
+        if (report.soffits.length > SPIKE_LIMITS.soffits) throw new Error(`${report.soffits.length} arch undersides with land over them:\n${list(report.soffits)}`);
+    });
+
     test('the wall inside the hairpin at km 2.4 goes on round the bend and dies into the ground', () => {
         // Where the wall of the leg above started at its full height at the hairpin's apex, a pale fin past it (the
         // owner's picture): no end of a wall stands there now, and the run ends back round the bend with no height
@@ -284,7 +296,7 @@ describe('the synthetic world: the same check', () => {
     let report;
     beforeAll(async () => {
         report = await read({ id: 'all', search: '?worldData=tests/fixtures/world/mini' });
-        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.closed} closed, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds, ${report.low.length} low`);
+        console.log(`spikes (synthetic): ${report.tiles} tiles; ${report.stretched.length} stretched (${report.beside.length} beside, ${report.setback.length} set back), ${report.bare.length} bare, ${report.ends.length} ends, ${report.overhangs.length} overhangs, ${report.flaps.length} flaps at ${report.wallEnds} wall ends (${report.tapers} taper, ${report.closed} closed, ${report.joined} joined, ${report.proud.length} proud), ${report.fins.length} fins, ${report.unfaced.length} unfaced, ${report.thin.length} thin, ${report.folds.length} folds, ${report.low.length} low, ${report.piers.length} piers, ${report.soffits.length} soffits`);
     }, 3600000);
 
     test('every wall end is closed, with no open side beside it, and no closing face is bare', () => {
@@ -299,6 +311,8 @@ describe('the synthetic world: the same check', () => {
         expect(report.folds).toEqual([]);
         expect(report.jogs).toEqual([]);
         expect(report.strays).toEqual([]);
+        expect(report.piers).toEqual([]);
+        expect(report.soffits).toEqual([]);
         // (16 faces of two side roads' walls fall with roads steeper than 0.4, which the helper reads against the ride
         // only. Before the taper: 36 proud ends, 111 fins)
         expect(report.proud).toEqual([]);
