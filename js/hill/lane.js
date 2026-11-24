@@ -37,6 +37,8 @@ class HillLane {
             gapShare: 0.12, gapM: [1.5, 3], lowWallUpM: 0.9,
             // Not all terraces: the share of each kind of building after the opening, the gardens a detached or
             // semi-detached one stands between (m), the share of garden walls with a gate
+            // Thatch on this share of the buildings before thatchToS
+            thatchToS: 240, thatchShare: 0.75,
             kinds: { terrace: 0.52, semi: 0.16, detached: 0.14, shop: 0.12, pub: 0.02, garden: 0.04 }, gardenM: [4, 9], gateShare: 0.4,
             // The church, set back behind its churchyard wall on one side: where along the lane, its frontage, how far
             // back, and its nave and tower
@@ -61,7 +63,7 @@ class HillLane {
                     [90, 101.5, 2, 'tile', 'lime', 6.02, 12, [[96.45, 13.05]]],
                     [101.5, 112.75, 2, 'tile', 'stone', 5.6, 10.8, [[108, 12]]]
                 ],
-                churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], tower: [27.8, -3.45, 3.55], fence: [24, 44, -2.95],
+                churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], tower: [27.8, -3.45, 3.55], stones: [16, 31, 2.55], fence: [24, 44, -2.95],
                 tree: [109, 18.4, 17.2, 4.2]
             },
             // The end: past stopS the camera eases over endEaseS to a fixed point high behind the bicycle (at s, across,
@@ -417,7 +419,9 @@ class HillLane {
     finishes(rand, kind) {
         return {
             roof: ['thatch', 'thatch', 'tile', 'slate'][Math.floor(rand() * 4)],
-            wall: ['rubble', 'dressed', 'cream', 'blush', 'lime', 'rubble', 'brick', 'honey'][Math.floor(rand() * 8)],
+            dormers: rand() < 0.6,
+            // Grey rubble and dressed stone and whitened render, as the stills have them; brick rare
+            wall: rand() < 0.05 ? 'brick' : ['rubble', 'rubble', 'dressed', 'lime', 'cream', 'rubble', 'dressed', 'lime'][Math.floor(rand() * 8)],
             quoins: rand() < 0.5,
             gable: kind === 'terrace' ? rand() < 0.15 : rand() < 0.4,
             chimney: rand() < 0.85 ? (rand() < 0.5 ? -1 : 1) : 0,
@@ -450,7 +454,10 @@ class HillLane {
         } else {
             for (const [from, to, storeys, roof, wall, eaves, ridge, chimneys] of r.opening.left) {
                 const f = this.frame(side, from, to, r.cottageDeepM);
-                list.push({ ...f, kind: 'terrace', ...this.finishes(rand, 'terrace'), storeys, roof, wall, gable: false, eaves: f.floor + eaves, ridge: f.floor + ridge,
+                // (flags only at their fronts: the stills have no railing there)
+                const finish = this.finishes(rand, 'terrace'), prev = list[list.length - 1];
+                if (prev && prev.porch === finish.porch && prev.doorColour === finish.doorColour) finish.doorColour = (finish.doorColour + 1) % 5;
+                list.push({ ...f, kind: 'terrace', ...finish, front: 'flags', climber: false, storeys, roof, wall, gable: false, eaves: f.floor + eaves, ridge: f.floor + ridge,
                     chimneys: chimneys.map(([cs, top]) => ({ along: cs - f.mid, top: f.floor + top })), opening: true });
             }
             s = r.opening.left[r.opening.left.length - 1][1];
@@ -497,7 +504,13 @@ class HillLane {
             const eaves = r.eavesUpM[storeys - 1];
             const ridge = r.ridgeUpM[0] + rand() * (r.ridgeUpM[1] - r.ridgeUpM[0]);
             const f = this.frame(side, s, s + wide, r.cottageDeepM);
-            list.push({ ...f, kind, ...this.finishes(rand, kind), eaves: f.floor + eaves, ridge: f.floor + eaves + ridge, storeys });
+            const finish = this.finishes(rand, kind);
+            // Thatch over most of what the opening and the main straight see, as in the stills; tile and slate now and then
+            if (f.mid < r.thatchToS && kind !== 'shop' && rand() < r.thatchShare) finish.roof = 'thatch';
+            // No two neighbours alike in every finish: a like one takes another door colour
+            const prev = list[list.length - 1];
+            if (prev && ['wall', 'roof', 'gable', 'front', 'porch', 'doorColour'].every(k => prev[k] === finish[k])) finish.doorColour = (finish.doorColour + 1) % 5;
+            list.push({ ...f, kind, ...finish, eaves: f.floor + eaves, ridge: f.floor + eaves + ridge, storeys });
             s += wide;
             // A semi-detached pair is two; a detached cottage, or the end of a pair, stands with a garden after it
             if (kind === 'semi') pair = pair > 0 ? 0 : 1;

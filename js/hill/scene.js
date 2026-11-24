@@ -82,8 +82,8 @@ class HillScene {
         // Light walls by the owner's word: pale rubble and dressed stone, honey stone, cream, blush and lime render, and
         // brick (its colour is its texture's)
         return Object.freeze({
-            rubble: 0xd8d2c4, dressed: 0xe2dacb, honey: 0xe2d2ae, cream: 0xece4d0, blush: 0xe8dccf, lime: 0xf2f0ea, brick: 0xffffff, stone: 0xd2cbbd,
-            thatch: 0x8a7e6a, tile: 0xb08068, slate: 0x7a8088,
+            rubble: 0xc9c5bb, dressed: 0xd5d0c5, honey: 0xd6ccb4, cream: 0xe4e0d6, blush: 0xe2d8cc, lime: 0xeeece6, brick: 0xd8d0cc, stone: 0xc9c5bb,
+            thatch: 0x9c907a, tile: 0x9a7a68, slate: 0x727880,
             coping: 0xcfc6b4, gardenWall: 0xd6ccb8, flags: 0xc4beb2, kerb: 0xa8a294, step: 0xbdb4a2, sill: 0xd8d0be,
             frame: 0xf1ede3, glass: 0xc8ccd0, lit: 0x8a6a42, iron: 0x26262a, pot: 0xa0684a,
             doors: [0x3e5a44, 0x7a2e2a, 0x2e4058, 0x5a4430, 0x2c2c2e],
@@ -165,7 +165,11 @@ class HillScene {
             for (let i = 0; i < W * H; i++) {
                 const h = height[i];
                 const ao = 0.38 + 0.62 * Math.min(1, h / 0.35);
-                const rough = h > 0.78 ? 0.6 + (0.92 - 0.6) * (1 - (h - 0.78) / 0.22) : 0.93;
+                // Matte, the worn tops a little less so; in wet patches the tops shine (the stills' wet stone)
+                const x = i % W, y = Math.floor(i / W);
+                const wet = Math.max(0, Math.sin(x / W * 6.283 * 1.3 + Math.sin(y / H * 6.283) * 2) * Math.sin(y / H * 6.283 * 0.9 + 1.1) - 0.35) / 0.65;
+                const top = h > 0.6 ? Math.min(1, (h - 0.6) / 0.3) : 0;
+                const rough = 0.93 - top * (0.25 + 0.4 * wet);
                 d[i * 4] = ao * 255; d[i * 4 + 1] = rough * 255; d[i * 4 + 2] = 0; d[i * 4 + 3] = 255;
             }
         });
@@ -703,8 +707,34 @@ class HillScene {
         box(meshes.dark, ps, pa, pu / 2, 0.035, pu / 2, 0.035, rgb(C.iron));
         box(meshes.dark, ps, pa + 0.45, pu - 0.25, 0.025, 0.025, 0.45, rgb(C.iron));
         box(meshes.dark, ps, pa, pu + 0.05, 0.06, 0.06, 0.06, rgb(C.iron));
+        // The old dark stone building on the right, end on to the lane: a rough rubble face with its near corner top at
+        // `tower`, its wall rising away from the lane, two buttresses stepped against it, an uneven coping, moss along
+        // the top and the foot, a slate roof behind
         const [ts, ta, tu] = o.tower;
-        box(meshes.rubble, ts, ta, tu / 2 - 0.4, 0.75, tu / 2 + 0.4, 0.75, rgb(0xa49e92));
+        const rand = HillLane.random(907);
+        const dark = rgb(0x9e978c), deep = ta - 3.2;
+        for (let s = ts - 3, k = 0; s < ts + 6; s += 1, k++) {
+            const top = tu + Math.max(0, s - ts) * 0.22 + (rand() - 0.5) * 0.25;
+            box(meshes.rubble, s + 0.5, (ta + deep) / 2, (top - 0.6) / 2, 0.51, (top + 0.6) / 2, (ta - deep) / 2, dark);
+            // Its coping, each stone its own height
+            box(meshes.rubble, s + 0.5, (ta + deep) / 2, top + 0.08, 0.5, 0.1 + rand() * 0.06, (ta - deep) / 2 + 0.06, rgb(0x6a655e));
+            for (let m = 0; m < 2; m++) HillScene.leaf(repeats, (q => [q.x, q.y, q.z])(p(s + rand(), ta + 0.03, top + 0.02)), 0.18 + rand() * 0.15, 0.05, 0.14, [0x4f5e36, 0x5d6a3e][m]);
+            HillScene.leaf(repeats, (q => [q.x, q.y, q.z])(p(s + rand(), ta + 0.1, 0.15)), 0.3 + rand() * 0.3, 0.18, 0.12, 0x56643a);
+        }
+        for (const [bs, h] of [[ts - 2.2, 2.6], [ts + 2.6, 3.2]]) {
+            box(meshes.rubble, bs, ta + 0.45, h * 0.3 - 0.3, 0.35, h * 0.3 + 0.3, 0.45, dark);
+            box(meshes.rubble, bs, ta + 0.25, h * 0.75, 0.3, h * 0.25, 0.25, dark);
+            box(meshes.dressed, bs, ta + 0.25, h + 0.05, 0.34, 0.06, 0.3, rgb(0x6a655e));
+        }
+        const back = p(ts + 1.5, deep - 1.5, tu + 2.2), eave = p(ts + 1.5, deep + 0.3, tu + 0.9), f = frame(ts + 1.5);
+        meshes.slate.box([(back.x + eave.x) / 2, (back.y + eave.y) / 2, (back.z + eave.z) / 2], [f.alongX * 5, 0, f.alongZ * 5], [0, 0.08, 0],
+            [(eave.x - back.x) / 2, (eave.y - back.y) / 2, (eave.z - back.z) / 2], rgb(0x5c6068));
+        // On the left by the churn: rough stones heaped along the lane's edge, as the stills have, in place of a railing
+        const [s0, s1, sa] = o.stones;
+        for (let s = s0; s < s1; s += 0.55 + rand() * 0.3) {
+            const h = 0.18 + rand() * 0.22;
+            box(meshes.rubble, s, sa + (rand() - 0.5) * 0.3, h / 2 - 0.05, 0.22 + rand() * 0.12, h / 2 + 0.05, 0.25 + rand() * 0.12, rgb(0xb4aea2));
+        }
         const [f0, f1, fa] = o.fence;
         for (let s = f0; s <= f1; s += 2) box(meshes.plain, s, fa, 0.5, 0.06, 0.5, 0.06, rgb(0x3a342c));
         for (let s = f0; s < f1; s += 1) box(meshes.plain, s + 0.5, fa, 0.85, 0.52, 0.03, 0.03, rgb(0x3a342c));
@@ -768,9 +798,23 @@ class HillScene {
                 wallMesh.tri(pt(end * hw, c.eaves, hd), pt(end * hw, c.eaves, -hd), pt(end * hw, c.ridge - 0.15, 0), wall);
             }
             if (thatch) {
-                // The thatch's rounded ridge and its thick rounded eave along the front
-                box(roofMesh, 0, c.ridge + 0.14, 0, hw + over * 0.6, 0.22, 0.32, rgb(shade(C.thatch, 0.85)));
-                box(roofMesh, 0, eaveY - over * 0.45 - 0.08, -(hd + over * 0.95), hw + over * 0.6, 0.22, 0.24, roof);
+                // The thatch's thick ridge, its cap a darker band laid over it, and its deep rounded eave along the
+                // front and the back, a second roll over it
+                box(roofMesh, 0, c.ridge + 0.14, 0, hw + over * 0.6, 0.24, 0.36, rgb(shade(C.thatch, 0.85)));
+                for (const side of [-1, 1]) box(roofMesh, 0, c.ridge - 0.02, side * 0.38, hw + over * 0.55, 0.12, 0.14, rgb(shade(C.thatch, 0.7)));
+                for (const side of [-1, 1]) {
+                    box(roofMesh, 0, eaveY - over * 0.45 - 0.08, side * (hd + over * 0.95), hw + over * 0.6, 0.24, 0.26, roof);
+                    box(roofMesh, 0, eaveY - over * 0.45 + 0.14, side * (hd + over * 0.7), hw + over * 0.6, 0.16, 0.2, rgb(shade(C.thatch, 1.06)));
+                }
+                // Eyebrow dormers: the thatch swept up and over each upper window that breaks the eave
+                if (c.dormers && c.storeys > 1) {
+                    const count = Math.max(1, Math.floor(c.wide / 2.3));
+                    for (let i = 0; i < count; i++) {
+                        const along = -hw + (i + 0.5) * c.wide / count;
+                        if (Math.abs(along) > hw - 0.7) continue;
+                        box(roofMesh, along, eaveY + 0.1, -(hd + over * 0.5), 0.7, 0.2, 0.45, roof);
+                    }
+                }
             } else {
                 box(roofMesh, 0, c.ridge + 0.06, 0, hw + over * 0.6, 0.08, 0.12, rgb(shade(C[c.roof] || C.tile, 0.8)));
                 box(meshes.dark, 0, eaveY - over * 0.45 - 0.04, -(hd + over * 0.8), hw + over * 0.5, 0.045, 0.06, rgb(C.iron));
@@ -793,6 +837,8 @@ class HillScene {
             const top = ch.top, out = ch.out || 0;
             box(c.wall === 'brick' ? meshes.brick : meshes.rubble, ch.along, (base + top) / 2, out, 0.45, (top - base) / 2, 0.32, rgb(c.wall === 'brick' ? 0xffffff : shade(0xd2cbbd, 0.9)));
             box(meshes.dressed, ch.along, top + 0.05, out, 0.5, 0.06, 0.37, rgb(C.coping));
+            // Thatch wraps round a chimney where it comes through
+            if (thatch) box(roofMesh, ch.along, c.ridge - 0.05, out, 0.62, 0.3, 0.48, rgb(shade(C.thatch, 0.9)));
             for (const k of [-1, 1]) {
                 const q = pt(ch.along + k * 0.2, top + 0.3, out);
                 repeats.pots.push(pot.clone().compose(new THREE.Vector3(q[0], q[1], q[2]), new THREE.Quaternion(), new THREE.Vector3(1, 0.45, 1)));
@@ -853,13 +899,14 @@ class HillScene {
                 if (storey === 0 && Math.abs(along - doorAt) < 1.15) continue;
                 if (storey === 0 && shop && along < doorAt) continue;
                 if (Math.abs(along) > hw - 0.55) continue;
-                box(meshes.trim, along, y, face - 0.02, 0.44, 0.62, 0.025, frame);
-                box(meshes.glass, along, y, face - 0.035, 0.38, 0.56, 0.02, c.lit && storey === 0 ? lit : glass);
-                box(meshes.trim, along, y, face - 0.05, 0.38, 0.03, 0.015, frame);
-                box(meshes.trim, along, y, face - 0.05, 0.016, 0.56, 0.015, frame);
-                for (const k of [-1, 1]) box(meshes.trim, along, y + k * 0.28, face - 0.05, 0.38, 0.012, 0.012, frame);
-                box(meshes.dressed, along, y - 0.68, face - 0.08, 0.52, 0.04, 0.1, sill);
-                box(meshes.dressed, along, y + 0.7, face - 0.03, 0.54, 0.07, 0.045, sill);
+                // Small casements, as the stills have them
+                box(meshes.trim, along, y, face - 0.02, 0.36, 0.5, 0.025, frame);
+                box(meshes.glass, along, y, face - 0.05, 0.31, 0.45, 0.01, c.lit && storey === 0 ? lit : glass);
+                box(meshes.trim, along, y, face - 0.065, 0.31, 0.022, 0.008, frame);
+                box(meshes.trim, along, y, face - 0.065, 0.014, 0.45, 0.008, frame);
+                for (const k of [-1, 1]) box(meshes.trim, along, y + k * 0.22, face - 0.065, 0.31, 0.01, 0.008, frame);
+                box(meshes.dressed, along, y - 0.55, face - 0.08, 0.42, 0.04, 0.1, sill);
+                box(meshes.dressed, along, y + 0.57, face - 0.03, 0.44, 0.06, 0.045, sill);
                 if (c.boxes && storey === 0) {
                     box(meshes.plain, along, y - 0.6, face - 0.2, 0.45, 0.09, 0.1, rgb(0x5a4a38));
                     for (let k = -2; k <= 2; k++) {

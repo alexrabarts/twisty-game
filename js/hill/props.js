@@ -13,7 +13,7 @@ class HillProps {
             pot: { shape: 'can', r: 0.17, h: 0.26, kg: 5, round: true, breaks: true, colour: 0xa65a38, share: 0.45 },
             tub: { shape: 'box', w: 0.7, h: 0.28, d: 0.26, kg: 9, colour: 0x5e4a36, share: 0.25, flowers: true },
             bottle: { shape: 'can', r: 0.034, h: 0.24, kg: 0.6, round: true, fly: true, colour: 0xf2f0ea, share: 0.35 },
-            churn: { shape: 'can', r: 0.19, h: 0.62, kg: 26, round: true, heavy: true, colour: 0xb8bcc0, share: 0.06 },
+            churn: { shape: 'can', r: 0.19, h: 0.62, kg: 26, round: true, heavy: true, colour: 0x6c6b66, share: 0.06 },
             bucket: { shape: 'can', r: 0.15, h: 0.27, kg: 2, round: true, colour: 0x9aa0a4, share: 0.15 },
             basket: { shape: 'box', w: 0.46, h: 0.26, d: 0.34, kg: 2, colour: 0x9a7546, share: 0.15 },
             dustbin: { shape: 'can', r: 0.25, h: 0.74, kg: 18, round: true, heavy: true, lid: true, colour: 0x6e7276, share: 0.12 },
@@ -105,6 +105,15 @@ class HillProps {
                 geometry.translate(0, kind.r, 0);
                 const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshStandardMaterial({ map: HillProps.leather(), roughness: 0.65, metalness: 0 }), counts[name]);
                 mesh.name = 'hill-prop-ball';
+                mesh.castShadow = mesh.receiveShadow = true;
+                mesh.frustumCulled = false;
+                this.group.add(mesh);
+                this.meshes[name] = mesh;
+                continue;
+            }
+            if (name === 'churn') {
+                const mesh = new THREE.InstancedMesh(HillProps.churn(), new THREE.MeshStandardMaterial({ color: kind.colour, roughness: 0.8, metalness: 0.3 }), counts[name]);
+                mesh.name = 'hill-prop-churn';
                 mesh.castShadow = mesh.receiveShadow = true;
                 mesh.frustumCulled = false;
                 this.group.add(mesh);
@@ -399,6 +408,25 @@ class HillProps {
             for (let i = used[name] || 0; i < mesh.count; i++) mesh.setMatrixAt(i, m.makeScale(0, 0, 0));
             mesh.instanceMatrix.needsUpdate = true;
         }
+    }
+
+    // An old milk churn: a body, its shoulder in to the neck, a lip and the lid with its knob, dented here and there
+    static churn() {
+        const profile = [[0, 0], [0.17, 0], [0.185, 0.03], [0.19, 0.38], [0.17, 0.44], [0.1, 0.5], [0.09, 0.56], [0.11, 0.57], [0.11, 0.6], [0.06, 0.62], [0.03, 0.66], [0, 0.66]]
+            .map(([r, y]) => new THREE.Vector2(r, y));
+        const geometry = new THREE.LatheGeometry(profile, 20);
+        const p = geometry.attributes.position;
+        for (let i = 0; i < p.count; i++) {
+            const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.atan2(z, x);
+            if (y < 0.03 || y > 0.42) continue;
+            // A few dents in the body: shallow, wide
+            const dent = Math.max(0, Math.cos(a * 3 + 1) * Math.cos((y - 0.25) * 18)) ** 4 * 0.012 + Math.max(0, Math.sin(a * 5 - 2) * Math.sin(y * 30)) ** 6 * 0.008;
+            const k = 1 - dent / Math.max(0.05, Math.hypot(x, z));
+            p.setX(i, x * k);
+            p.setZ(i, z * k);
+        }
+        geometry.computeVertexNormals();
+        return geometry;
     }
 
     // The football's leather: worn brown panels in rows, their seams dark, the lace on one panel; no mark or name

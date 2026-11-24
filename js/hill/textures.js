@@ -48,7 +48,8 @@ class HillTextures {
                 }
             }
         };
-        const grey = (base, spread) => { const v = base + (rand() - 0.5) * spread; const w = (rand() - 0.5) * spread * 0.4; return [v + w, v, v - w]; };
+        // Grey stone, a few stones a little warm or cool
+        const grey = (base, spread) => { const v = base + (rand() - 0.5) * spread; const w = (rand() - 0.5) * spread * 0.15; return [v + w, v, v - w * 0.5]; };
         const mortar = [0.62, 0.6, 0.55];
         if (name === 'dressed') {
             for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) put(x, y, 0.15, mortar);
@@ -63,9 +64,9 @@ class HillTextures {
                 }
             }
         } else if (name === 'rubble') {
-            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) put(x, y, 0.1, [0.6, 0.57, 0.52]);
-            for (let i = 0; i < 260; i++) {
-                const w = 18 + rand() * 46, h = 12 + rand() * 26, x = rand() * N, y = rand() * N, tone = grey(0.82, 0.3);
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) put(x, y, 0.1, [0.62, 0.61, 0.58]);
+            for (let i = 0; i < 700; i++) {
+                const w = 10 + rand() * 22, h = 7 + rand() * 12, x = rand() * N, y = rand() * N, tone = grey(0.82, 0.3);
                 for (let dy = -h; dy < h; dy++) for (let dx = -w; dx < w; dx++) {
                     const d = (dx / w) ** 2 + (dy / h) ** 2 + (rand() - 0.5) * 0.15;
                     if (d < 1) put(Math.round(x + dx), Math.round(y + dy), 0.25 + 0.7 * Math.sqrt(1 - Math.min(1, d)), tone);
@@ -95,10 +96,11 @@ class HillTextures {
             }
         } else if (name === 'thatch') {
             // Reed laid in courses: fine strands down the slope, darker in the shadow under each course
-            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) put(x, y, 0.5, [0.7, 0.62, 0.5]);
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) put(x, y, 0.5, [0.66, 0.6, 0.5]);
             for (let i = 0; i < 9000; i++) {
                 const x = rand() * N, y = rand() * N, len = 10 + rand() * 30, tone = 0.55 + rand() * 0.4;
-                for (let k = 0; k < len; k++) put(Math.round(x + k * 0.08), Math.round(y + k), 0.45 + rand() * 0.4, [tone * 0.95, tone * 0.85, tone * 0.68]);
+                // Weathered: grey-brown straw, the odd fresher one
+                for (let k = 0; k < len; k++) put(Math.round(x + k * 0.08), Math.round(y + k), 0.45 + rand() * 0.4, [tone * 0.9, tone * 0.84, tone * 0.72]);
             }
             const courses = 8;
             for (let c = 0; c < courses; c++) {

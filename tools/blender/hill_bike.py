@@ -4,8 +4,9 @@
 # its main triangle, north-road bars swept back, rod brakes, a sprung leather saddle, full black mudguards and a
 # closed chain case. No maker's name, badge or wordmark anywhere; the plate is blank, the loaves plain.
 #
-# The boy is in a dark flat cap, a grey knitted jumper under a dark scarf, a long cream apron to the knees, dark
-# breeches, dark socks and black boots. His legs are nodes of
+# The boy is in a dark flat cap, an oatmeal knitted jumper under a dark scarf, a long cream apron to the knees, dark
+# breeches to below the knee, dark socks and black boots. No lamp at the back and no reflector: the bicycle is of a
+# time before them. His legs are nodes of
 # their own (thigh, shin and foot each side), each built hanging straight down from its pivot (hip, knee, ankle), so
 # the game poses them: on the pedals, or straight out to the sides on the way down the hill. The cranks and the pedals
 # are nodes too, turned by the game; the wheels spin on their axles.
@@ -53,7 +54,7 @@ EXTRA = {
     "wicker_dark": (0x6E5030, 0.9, 0.0),
     "skin": (0xE2B596, 0.7, 0.0),
     "cap": (0x2C2A28, 0.95, 0.0),
-    "jumper": (0x9A948A, 0.95, 0.0),
+    "jumper": (0xB4AA98, 0.95, 0.0),
     "scarf": (0x2A2826, 0.95, 0.0),
     "apron": (0xD8D0BC, 0.9, 0.0),
     "shorts": (0x34322F, 0.95, 0.0),
@@ -103,8 +104,6 @@ def frame(k):
             (SADDLE[2] - 0.06, SADDLE[1] - 0.025, SADDLE[1] + 0.035, 0.1, 3, 3), (SADDLE[2] - 0.11, SADDLE[1] - 0.02, SADDLE[1] + 0.03, 0.095)], "leather", ring=12, steps=2)
     for side in (-1, 1):
         k.tube([(side * 0.06, SADDLE[1] - 0.025, SADDLE[2] - 0.08), (side * 0.06, SADDLE[1] - 0.09, SADDLE[2] - 0.07)], 0.014, "steel_dark", seg=8)
-    # The rear carrier's stand over the wheel and a red reflector
-    k.box((0.05, 0.05, 0.012), (0, 0.57, REAR[2] - 0.285), "reflector", rot=(0.7, 0, 0), bevel=0.004)
 
 
 def front(k):
@@ -166,8 +165,6 @@ def front(k):
     k.begin("headlight", (0, 0.8, 1.08))
     k.cylinder(0.03, 0.006, (0, 0.8, 1.076), "headlight", axis="z", seg=12)
     k.begin("body")
-    k.begin("brake_light", (0, 0.62, REAR[2] - 0.38))
-    k.box((0.04, 0.03, 0.01), (0, 0.62, REAR[2] - 0.38), "reflector", bevel=0.003)
 
 
 def drive(k):
@@ -246,11 +243,11 @@ def boy(k):
         x = side * HIP[0]
         k.begin(f"thigh_{tag}", (x, HIP[1], HIP[2]))
         k.tube([(x, HIP[1], HIP[2]), (x, HIP[1] - 0.2, HIP[2])], 0.072, "shorts", seg=12)
-        k.tube([(x, HIP[1] - 0.2, HIP[2]), (x, HIP[1] - THIGH, HIP[2])], 0.052, "skin", seg=10)
+        k.tube([(x, HIP[1] - 0.2, HIP[2]), (x, HIP[1] - THIGH, HIP[2])], 0.056, "shorts", seg=10)
         knee = HIP[1] - THIGH
         k.begin(f"shin_{tag}", (x, knee, HIP[2]))
-        k.lathe([(0, 0.0), (0.05, 0.005), (0.052, 0.03), (0.0, 0.035)], (x, knee - 0.035, HIP[2]), "skin", seg=10)
-        k.tube([(x, knee - 0.02, HIP[2]), (x, knee - 0.12, HIP[2])], 0.045, "skin", seg=10)
+        k.lathe([(0, 0.0), (0.054, 0.005), (0.056, 0.03), (0.0, 0.035)], (x, knee - 0.035, HIP[2]), "shorts", seg=10)
+        k.tube([(x, knee - 0.02, HIP[2]), (x, knee - 0.12, HIP[2])], 0.05, "shorts", seg=10)
         k.tube([(x, knee - 0.12, HIP[2]), (x, knee - SHIN + 0.03, HIP[2])], 0.043, "sock", seg=10)
         k.box((0.1, 0.03, 0.1), (x, knee - 0.12, HIP[2]), "sock", bevel=0.012)
         ankle = knee - SHIN
