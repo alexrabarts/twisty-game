@@ -13,7 +13,7 @@ const root = new URL('../../', import.meta.url);
 
 // Who owns which bike, as the owner assigned them (the first is the default)
 const OWNERS = {
-    steve: ['bike08_xsr900', 'bike13_panigale'],
+    steve: ['bike08_xsr900', 'bike17_minimoto', 'bike13_panigale'],
     alex: ['bike02_speed_triple', 'bike10_tiger900'],
     tim: ['bike14_forza', 'bike06_z750'],
     shane: ['bike03_duke390', 'bike09_duke890', 'bike11_duke990', 'bike16_superadv'],
@@ -598,6 +598,7 @@ const DIFFERS = { steve: ['speed', 'accel', 'handling', 'comfort'], alex: ['jump
 const HEAD_PHYSICS = {
     steve: {
         bike08_xsr900: { comfortShake: 1.25, maxSpeed: 1.1, acceleration: 1.1, brakeForce: 1.05, steeringForce: 1, jumpPower: 0.85, wheeliePop: 1.3, wheelieThrottle: 1.15 },
+        bike17_minimoto: { comfortShake: 1.191667, maxSpeed: 0.7, acceleration: 0.75, brakeForce: 0.966, steeringForce: 1.2, jumpPower: 0.85, wheeliePop: 1.3, wheelieThrottle: 1.15 },
         bike13_panigale: { comfortShake: 1.4, maxSpeed: 1.2, acceleration: 1.21, brakeForce: 1.15, steeringForce: 0.943396, jumpPower: 0.85, wheeliePop: 1.3, wheelieThrottle: 1.15 }
     },
     alex: {

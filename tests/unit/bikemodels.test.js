@@ -393,9 +393,11 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
             expect((tyre.min.z + tyre.max.z) / 2).toBeCloseTo(z, 3);
             expect(tyre.min.y).toBeCloseTo(0, 2);
             expect(radius).toBeCloseTo(y, 2);
-            expect(radius).toBeGreaterThan(0.25);
-            expect(radius).toBeLessThan(0.36);
-            expect(Math.abs(z)).toBeGreaterThan(0.65);
+            // (a mini bike on its 12 inch wheels is smaller and shorter than every other)
+            const mini = game.BIKE_MODELS[id].cls === 'mini';
+            expect(radius).toBeGreaterThan(mini ? 0.22 : 0.25);
+            expect(radius).toBeLessThan(mini ? 0.25 : 0.36);
+            expect(Math.abs(z)).toBeGreaterThan(mini ? 0.55 : 0.65);
         }
         // Nothing of the bike under the ground
         expect(box(vehicle.group).min.y).toBeGreaterThan(-0.005);

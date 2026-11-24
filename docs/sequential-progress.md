@@ -603,3 +603,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Check: mean colour difference over the 18 bikes and 4 views 0.069 to 0.065, the trail bike 0.105 to 0.077; its white panels and plate are back. Each far file stays under its budgets (2,050 triangles, 72 KB). crew, bikemodels, characters, model-surfaces, bike-handedness, bike-stands: 6 suites, 504 tests pass. Pictures: ~/Library/Caches/twisty-world/far-check/index.html.
 - Left: mirrors and some plates (the naked middleweight's, the superbike's) are still dark at far: they are small parts merged into the nearest kept colour. A crew bike draws up to 2 more calls.
 
+
+## Steve's mini moto
+
+- Job: by the owner's word, a black mini moto for Steve, "a bit ridiculous" under a tall rider, with a seat extension, and a centre of gravity far back, so little steering under acceleration. New detailed bike `bike17_minimoto` (`tools/blender/bikes/bike17_minimoto.py`: 12 inch cast wheels, 1.2 m wheelbase, short upside-down forks, a flat seat on a black extension rack past the rear wheel) and its far file. It is Steve's second bike, between his retro triple and his superbike (the last of a list is the most powerful). A new class `mini` and the entry's `rearLoad` 0.45: at full throttle it leans in at 55 % of its rate (`.agent/system/handling.md`, "A rider far back steers less under the throttle").
+- Check: `tests/unit/minimoto.test.js` (5 tests); bikemodels, brake-calipers and characters pass with the new bike (the mini's smaller wheels are allowed by its class). Rider card for Steve on it: speed 2, acceleration 1, handling 5, jump 2, comfort 2.
+- Left: built from general knowledge, not a photo. The far file is 2,047 triangles.

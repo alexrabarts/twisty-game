@@ -204,6 +204,17 @@ A bike can have `leanMaxDeg` in its catalogue entry (`BIKE_MODELS`, and the proc
 
 `tests/unit/rider-mass.test.js` holds the cap with every rider in every mode, held hard over at 4 to 30 m/s, in a world and on a leg.
 
+## A rider far back steers less under the throttle
+
+The owner: "add a black mini moto bike to Steve's character. Steve is tall so it should look a bit ridiculous. it can have a bit of a seat extension but that also means centre of gravity is quite far back so it doesn't have a lot of steering authority under acceleration."
+
+A bike can have `rearLoad` in its catalogue entry (`BIKE_MODELS`): the share of its steering it loses at full throttle. `Vehicle.rearLoadOf` reads it (0 for a bike without it, held to 0.9), and `Vehicle.steerUnderThrottle(rearLoad, throttle)` gives the share kept, `1 - rearLoad x throttle`. A world scales its lean rate by it with the world's throttle (`worldThrottle`, which rises over `throttleRiseS`); a classic leg scales its steering torque by it with the throttle input of the frame. Only the mini bike (`bike17_minimoto`) has it, 0.45: at full throttle it leans in at 55 % of its rate, at a cruise (0.2) at 91 %. With the throttle shut it steers as quickly as its class makes it (`mini`: `steeringForce` 1.2, the quickest class).
+
+- **Why the throttle, not the speed.** The rider sits back on the extension; the drive lifts the light front, and a light front turns less. Off the throttle the weight comes forward again.
+- **The class.** `mini` in `BIKE_CLASSES`: slow (`maxSpeed` 0.62), weak (`acceleration` 0.72), quick to turn (1.2). Its `comfortShake` (0.65) keeps it under a superbike's on the rider card, which `tests/unit/characters.test.js` holds for every rider.
+
+`tests/unit/minimoto.test.js` holds the rule: the mini leans in slower at full throttle than at a cruise, in a world and on a leg, and Steve's first bike leans in the same at any throttle.
+
 ## A rider who cannot reach the ground
 
 The owner: "lucy has short legs. make her fall over if she stops on any above a 5 degree incline."

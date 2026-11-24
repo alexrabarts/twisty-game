@@ -275,7 +275,7 @@ const CHARACTERS = [
         name: 'Steve',
         bikeLabel: 'Retro sports triple',
         bikeColor: '0x021b74', // Deep blue tank, gold wheels
-        bikes: ['bike08_xsr900', 'bike13_panigale'],
+        bikes: ['bike08_xsr900', 'bike17_minimoto', 'bike13_panigale'],
         outfits: OUTFITS.steve,
         kit: OUTFITS.steve[0].kit,
         // The tallest of them
@@ -479,7 +479,9 @@ const BIKE_CLASSES = {
     retro: { maxSpeed: 0.9, acceleration: 1.0, steeringForce: 1.06, brakeForce: 0.95, comfortShake: 0.75 },
     adventure: { maxSpeed: 1.0, acceleration: 1.0, steeringForce: 1.1, brakeForce: 1.05, comfortShake: 0.55 },
     tourer: { maxSpeed: 1.02, acceleration: 1.02, steeringForce: 1.04, brakeForce: 1.05, comfortShake: 0.6 },
-    scooter: { maxSpeed: 0.75, acceleration: 0.8, steeringForce: 1.1, brakeForce: 1.0, comfortShake: 0.3 }
+    scooter: { maxSpeed: 0.75, acceleration: 0.8, steeringForce: 1.1, brakeForce: 1.0, comfortShake: 0.3 },
+    // A 125 cc mini bike on 12 inch wheels: slow and quick to turn; its fat little tyres keep it softer than a superbike
+    mini: { maxSpeed: 0.62, acceleration: 0.72, steeringForce: 1.2, brakeForce: 0.92, comfortShake: 0.65 }
 };
 const LIGHT_BIKE = { maxSpeed: 0.85, acceleration: 0.9, steeringForce: 1.06, brakeForce: 0.95, comfortShake: 1.1 };
 // The range a scaled multiplier is held to, so a rider on a bike far from
@@ -540,7 +542,10 @@ const BIKE_MODELS = {
     bike13_panigale_black: { kind: 'sport', cls: 'supersport', engine: 'v4', kg: 198, spare: 1, name: 'V4 superbike, black', year: 2020, paint: 0x010101, rearBrake: 'left', drive: 'chain', pose: { torsoLean: 0.78, style: 'race' } },
     bike14_forza: { kind: 'scooter', cls: 'scooter', engine: 'single', kg: 182, spare: 0, leanMaxDeg: 45, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
     bike15_crf250: { kind: 'dirt', cls: 'adventure', engine: 'single', light: true, offroad: 1, kg: 146, spare: 0.1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
-    bike16_superadv: { kind: 'adventure', cls: 'adventure', engine: 'v-twin', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } }
+    bike16_superadv: { kind: 'adventure', cls: 'adventure', engine: 'v-twin', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } },
+    // Steve's mini moto (the owner, 2026-11-23): its rider sits back on the seat's extension, so under the throttle the
+    // front goes light and it steers less (`rearLoad`: the share of its steering it loses at full throttle)
+    bike17_minimoto: { kind: 'naked', cls: 'mini', engine: 'single', light: true, kg: 104, spare: 0.1, rearLoad: 0.45, name: 'Mini moto, black', year: 2022, paint: 0x020202, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.18 } }
 };
 // `far` is the bike as the touring crew ride it, a light file of its own made from the detail file (tools/blender/far.py)
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, far: `assets/bikes/far/${id}.glb`, keepFileColours: true }));
@@ -624,6 +629,7 @@ class Vehicle {
         this.outfit = Vehicle.outfitOf(this.character, options.outfit);
         this.bike = Vehicle.kindOf(this.model);
         this.offroad = Vehicle.offroadOf(this.model);
+        this.rearLoad = Vehicle.rearLoadOf(this.model);
         // The rider's weight, which with the bike's is the mass the handling reads (RIDER_MASS, Vehicle.pairOf)
         this.riderKg = Vehicle.riderKgOf(this.character);
         // How light the bike and its rider are and the power they have to spare, which shape the wheelie
@@ -2454,6 +2460,8 @@ class Vehicle {
     integrate(deltaTime, steeringInput, throttleInput, brakeInput, wheelieInput = 0) {
         // Store inputs for use in updateMesh
         this.currentBrakeInput = brakeInput;
+        // (and the throttle, which a bike with its rider far back steers less under: Vehicle.rearLoadOf)
+        this.currentThrottleInput = throttleInput;
         this.currentDeltaTime = deltaTime;
         // The way the bike rode into this tick: a crash replaces the speed and the velocity (a bounce off a wall),
         // and the rider leaves the bike with what it had (Vehicle.beginRiderFall)
@@ -3106,7 +3114,7 @@ class Vehicle {
         // 1. STEERING TORQUE: Counter-steering effect (speed-dependent)
         // Higher speed = more gyroscopic stability = harder to lean
         // Increase torque when trying to return to upright from a lean
-        let steeringTorque = -steeringInput * this.tuned('steeringForce') * speedFactor;
+        let steeringTorque = -steeringInput * this.tuned('steeringForce') * speedFactor * (this.rearLoad ? Vehicle.steerUnderThrottle(this.rearLoad, this.currentThrottleInput) : 1);
         
         // Boost steering torque when actively steering against current lean (counter-steering)
         // (torque is -steeringInput, so input and lean share a sign when the
@@ -3457,7 +3465,7 @@ class Vehicle {
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
         const character = ((this.character.physics && this.character.physics.steeringForce) || 1) * this.leanMass;
-        let rate = -u * world.leanRate * speedFactor * character;
+        let rate = -u * world.leanRate * speedFactor * character * (this.rearLoad ? Vehicle.steerUnderThrottle(this.rearLoad, this.worldThrottle) : 1);
         if (u !== 0 && Math.sign(u) === Math.sign(lean)) rate *= world.pickUpBoost;
 
         // The soft limit: an outward rate shrinks to the room left under the limit. Past the limit (the grip
@@ -6390,6 +6398,16 @@ Vehicle.kindOf = (id) => (BIKE_MODELS[id] ? BIKE_MODELS[id].kind : (Vehicle.BIKE
 
 // How much of an off-road bike a bike is, 0 to 1: the catalogue entry's own
 // trait, so it is the same before and after the bike's file loads
+// The share of its steering a bike loses at full throttle (BIKE_MODELS `rearLoad`): a rider far back over the rear
+// wheel lightens the front as it drives, so the bike turns less the harder it pulls. 0 for every other bike
+Vehicle.rearLoadOf = (id) => {
+    const bike = BIKE_MODELS[id];
+    return Math.max(0, Math.min(0.9, (bike && bike.rearLoad) || 0));
+};
+
+// How much of its steering the bike keeps at a throttle opening (0 to 1)
+Vehicle.steerUnderThrottle = (rearLoad, throttle) => 1 - rearLoad * Math.max(0, Math.min(1, throttle || 0));
+
 Vehicle.offroadOf = (id) => {
     const bike = BIKE_MODELS[id] || Vehicle.BIKES[id];
     return Math.max(0, Math.min(1, (bike && bike.offroad) || 0));

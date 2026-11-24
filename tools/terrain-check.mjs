@@ -7688,3 +7688,60 @@ function longLegChecks(report) {
         });
     }
 }
+
+// world-bike-shots: a rider on two of his bikes side by side, stood on the road, from the left, the front three
+// quarters and the rear three quarters (GPU pictures). Each bike is a Vehicle of its own, dressed from its detail file.
+//   node tools/terrain-check.mjs world-bike-shots --world tremola --gpu --out <dir> [--rider steve] [--bikes a,b] [--at 300]
+async function bikeShots(placeSource, at, riderId, bikes) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const own = game.vehicle;
+    game.cameraMode = 2;
+    await placeAt(at);
+    twistyDev.autopilot({ speed: 0 });
+    twistyDev.step(1);
+    const character = CHARACTERS.find(c => c.id === riderId);
+    const sin = Math.sin(own.yawAngle), cos = Math.cos(own.yawAngle);
+    const rides = bikes.map((id, i) => {
+        const v = new Vehicle(game.scene, null, character, id);
+        const side = (i - (bikes.length - 1) / 2) * 1.6;
+        v.position.set(own.position.x + cos * side, own.position.y, own.position.z - sin * side);
+        v.yawAngle = own.yawAngle;
+        return v;
+    });
+    const until = performance.now() + 30000;
+    while (rides.some(v => !v.modelled) && performance.now() < until) await new Promise(resolve => setTimeout(resolve, 200));
+    own.group.visible = false;
+    const centre = own.position.clone();
+    const views = { left: [-1, 0], front: [-0.7, 0.7], rear: [-0.7, -0.7], right: [1, 0] };
+    const shots = [];
+    for (const [name, [across, along]] of Object.entries(views)) {
+        rides.forEach(v => { v.updateMesh(); v.group.updateMatrixWorld(true); });
+        const cam = game.camera;
+        const off = 5.2;
+        cam.position.set(centre.x + (cos * across + sin * along) * off, centre.y + 1.1, centre.z + (-sin * across + cos * along) * off);
+        cam.up.set(0, 1, 0);
+        cam.lookAt(centre.x, centre.y + 0.75, centre.z);
+        cam.updateMatrixWorld(true);
+        game.graphics.render(game.scene, cam);
+        shots.push({ view: name, png: game.graphics.renderer.domElement.toDataURL('image/png') });
+    }
+    const facts = rides.map(v => ({ bike: v.model, modelled: v.modelled === true, seat: v.riderBasePos && v.riderBasePos.toArray().map(n => Math.round(n * 100) / 100) }));
+    rides.forEach(v => game.scene.remove(v.group));
+    own.group.visible = true;
+    return { shots, facts };
+}
+WORLD_PROBES.push('world-bike-shots');
+WORLD['world-bike-shots'] = async (page) => {
+    const out = option('out');
+    if (!out) return { error: 'name a folder with --out <dir>' };
+    mkdirSync(out, { recursive: true });
+    const rider = option('rider') || 'steve';
+    const bikes = (option('bikes') || 'bike08_xsr900,bike17_minimoto').split(',');
+    const { shots, facts } = await page.evaluate(bikeShots, placeAt.toString(), Number(option('at') || 300), rider, bikes);
+    const files = shots.map(shot => {
+        const file = join(out, `${rider}-${shot.view}.png`);
+        writeFileSync(file, Buffer.from(shot.png.split(',')[1], 'base64'));
+        return file;
+    });
+    return { facts, files };
+};

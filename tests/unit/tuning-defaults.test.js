@@ -57,8 +57,9 @@ const { THREE, Tuning, Vehicle, WorldPhysics, WorldAssist, WorldEnvironment, CHA
 const RiderModes = new Function('Tuning', 'WorldAssist', 'console', `${loadScript('ridermodes.js')}\nreturn RiderModes;`)(Tuning, WorldAssist, console);
 const parsed = Tuning.parse(BLOCK);
 const at = (object, field) => field.split('.').reduce((node, key) => node[key], object);
-// Every rider on every bike of theirs that is in the catalogue
-const RIDES = CHARACTERS.flatMap(character => character.bikes.filter(id => BIKE_MODELS[id]).map(id => [character.id, id]));
+// Every rider on every bike of theirs that is in the catalogue, and was in the catalogue of the commit before (a bike
+// added since has nothing to be held against)
+const RIDES = CHARACTERS.flatMap(character => character.bikes.filter(id => BIKE_MODELS[id] && before.BIKE_MODELS[id]).map(id => [character.id, id]));
 const riderOf = (G0, id) => G0.CHARACTERS.find(character => character.id === id);
 const bikeOf = (G0, [who, id]) => new G0.Vehicle(new G0.THREE.Scene(), null, riderOf(G0, who), id, { model: false });
 // A rider with no multiplier of their own and the middle of every trait, on the first bike of the catalogue's first
