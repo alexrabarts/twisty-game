@@ -51,7 +51,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, join, normalize, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
@@ -7702,7 +7702,7 @@ async function hillCompare(shot, bike, still, crop, lit) {
     b.legsOut = b.legs > 0;
     ride.rider.foot = bike.speed ? 0 : 1;
     if (shot === 'loaf') {
-        for (let i = 0; i < 100 && !ride.loaf; i++) await new Promise(resolve => setTimeout(resolve, 100));
+        ride.makeLoaf();
         ride.showLoaf(true);
         ride.forcedShot = null;
     } else {
@@ -7785,6 +7785,96 @@ WORLD['hill-look'] = async (page) => {
     const file = option('out') || join(HILL_SHOTS_OUT, 'hill-look.png');
     writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
     return { said: result.said, file };
+};
+
+// hill-overlay: the opening shot (HillRide.SHOTS.opening, from HillLane.RULE.opening) beside the reference frame it was
+// fitted to: a sheet of the frame, the game at the frame's own shape, and the two at half each, with the frame's key
+// points (the boy's head and shoulders, the lane's far end, the chimney tops, the post, the churn, the tower, the tree)
+// marked where the frame has them (yellow) and where the game puts them (cyan), and the mean distance between them in
+// pixels of the frame's height. --still <file> is the frame (private, never in the repo).
+//   node tools/terrain-check.mjs hill-overlay --gpu --still <file> [--out <file.png>]
+const HILL_KEYS = [
+    ['boy head', [0.683, 0.35]], ['boy shoulders', [0.70, 0.47]], ['far lane', [0.43, 0.665]],
+    ['chimney 56.6', [0.195, 0.02]], ['chimney 66.5', [0.388, 0.11]], ['chimney 75.75', [0.513, 0.11]], ['chimney 96.45', [0.698, 0.23]],
+    ['post top', [0.135, 0.41]], ['churn top', [0.105, 0.79]], ['tower top', [0.92, 0.13]], ['tree', [0.6, 0.2]]
+];
+async function hillOverlay(still, keys) {
+    const ride = window.game.hill, game = window.game, lane = ride.lane, o = lane.rule.opening;
+    ride.running = false;
+    cancelAnimationFrame(ride.frameId);
+    ride.bike.reset(lane.rule.startM, o.startAcross);
+    ride.hold = { phase: 'hold', t: 0 };
+    ride.forcedShot = null;
+    const source = await new Promise(resolve => { const im = new Image(); im.onload = () => resolve(im); im.src = still; });
+    const H = 771, W = Math.round(H * source.width / source.height);
+    const renderer = game.renderer, keep = renderer.getSize(new THREE.Vector2()), ratio = renderer.getPixelRatio();
+    renderer.setPixelRatio(1);
+    renderer.setSize(W, H, false);
+    if (game.graphics.resizeTargets) game.graphics.resizeTargets();
+    game.camera.aspect = W / H;
+    game.camera.updateProjectionMatrix();
+    ride.draw(1 / 60);
+    ride.draw(1 / 60);
+    const shot = await new Promise(resolve => { const im = new Image(); im.onload = () => resolve(im); im.src = renderer.domElement.toDataURL('image/png'); });
+    // The game's key points: where its own pieces stand
+    const cam = game.camera, v = new THREE.Vector3();
+    const project = p => { v.set(p.x, p.y, p.z).project(cam); return [(v.x + 1) / 2, (1 - v.y) / 2]; };
+    const at = (s, across, up) => lane.at(s, across, up, {});
+    const chimney = s => {
+        for (const c of lane.cottages) for (const ch of c.chimneys || []) if (Math.abs(c.mid + ch.along - s) < 0.01) {
+            return { x: c.x + c.alongX * ch.along, y: ch.top + 0.45, z: c.z + c.alongZ * ch.along };
+        }
+        return null;
+    };
+    const front = lane.rule.halfWidthM + lane.rule.flagsM;
+    const places = {
+        'boy head': at(lane.rule.startM, o.startAcross, 1.74), 'boy shoulders': at(lane.rule.startM - 0.15, o.startAcross, 1.42), 'far lane': at(56, 0, 0),
+        'chimney 56.6': chimney(56.6), 'chimney 66.5': chimney(66.5), 'chimney 75.75': chimney(75.75), 'chimney 96.45': chimney(96.45),
+        'post top': at(o.post[0], o.post[1], o.post[2]), 'churn top': at(o.churn[0], o.churn[1], o.step[3] + 0.1 + 0.62), 'tower top': at(o.tower[0], o.tower[1], o.tower[2]),
+        tree: at(o.tree[0], o.tree[1], o.tree[2])
+    };
+    const canvas = document.createElement('canvas');
+    canvas.width = W * 3 + 16;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0, W, H);
+    ctx.drawImage(shot, W + 8, 0, W, H);
+    ctx.globalAlpha = 1;
+    ctx.drawImage(source, 2 * W + 16, 0, W, H);
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(shot, 2 * W + 16, 0, W, H);
+    ctx.globalAlpha = 1;
+    const errors = [];
+    for (const [name, want] of keys) {
+        const p = places[name];
+        if (!p) continue;
+        const got = project(p);
+        errors.push({ name, want, got: got.map(x => +x.toFixed(3)), px: +(Math.hypot((got[0] - want[0]) * W, (got[1] - want[1]) * H) * 857 / H).toFixed(1) });
+        for (const x0 of [0, W + 8, 2 * W + 16]) {
+            ctx.strokeStyle = 'rgba(255, 220, 0, 0.95)';
+            ctx.beginPath(); ctx.arc(x0 + want[0] * W, want[1] * H, 7, 0, Math.PI * 2); ctx.stroke();
+            ctx.strokeStyle = 'rgba(0, 230, 255, 0.95)';
+            ctx.beginPath(); ctx.arc(x0 + got[0] * W, got[1] * H, 4, 0, Math.PI * 2); ctx.stroke();
+        }
+    }
+    renderer.setPixelRatio(ratio);
+    renderer.setSize(keep.x, keep.y, false);
+    if (game.graphics.resizeTargets) game.graphics.resizeTargets();
+    game.camera.aspect = keep.x / keep.y;
+    game.camera.updateProjectionMatrix();
+    const mean = errors.reduce((n, e) => n + e.px, 0) / errors.length;
+    return { png: canvas.toDataURL('image/png'), errors, meanPx: +mean.toFixed(1), info: { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles } };
+}
+WORLD_PROBES.push('hill-overlay');
+WORLD['hill-overlay'] = async (page) => {
+    const still = option('still');
+    if (!still) return { error: 'name the frame with --still <file>' };
+    const data = `data:image/png;base64,${readFileSync(still).toString('base64')}`;
+    const result = await page.evaluate(hillOverlay, data, HILL_KEYS);
+    const file = option('out') || join(HILL_COMPARE_OUT, 'opening-overlay.png');
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
+    return { file, meanPx: result.meanPx, errors: result.errors, info: result.info };
 };
 
 // hill-shots: the hill ride (js/hill/ride.js, opened by RideMode.HILL_KEY) in GPU pictures, the bicycle placed and
@@ -7898,7 +7988,7 @@ async function hillShots() {
     }
     ride.props.reset();
     // The last picture
-    for (let i = 0; i < 100 && !ride.loaf; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    ride.makeLoaf();
     ride.showLoaf(true);
     shoot('loaf', 0);
     ride.showLoaf(false);

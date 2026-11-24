@@ -11,7 +11,7 @@ class HillRider {
     // (swayM at swayHz, each leg its own phase), the cobbles' bounce answered after lagS, times bounceGain, and a
     // balance against the lean (leanGain m for each rad)
     static get LEGS_OUT() {
-        return Object.freeze({ reach: 0.985, swayM: 0.05, swayHz: 0.6, lagS: 0.08, bounceGain: 5, leanGain: 0.25 });
+        return Object.freeze({ reach: 0.996, swayM: 0.017, swayHz: 0.35, lagS: 0.12, bounceGain: 1.7, leanGain: 0.12 });
     }
 
     // The ankle over its pedal, from the pedal's pivot
@@ -55,7 +55,8 @@ class HillRider {
             this.frame.add(pivot);
             this.parts[name] = pivot;
         }
-        const need = ['wheel_front', 'wheel_rear', 'cranks', 'pedal_l', 'pedal_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r', 'boy'];
+        const need = ['wheel_front', 'wheel_rear', 'cranks', 'pedal_l', 'pedal_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r', 'boy',
+            'steer', 'upperarm_l', 'upperarm_r', 'forearm_l', 'forearm_r'];
         const missing = need.filter(name => !this.parts[name]);
         if (missing.length) throw new Error(`${HillRider.FILE} lacks ${missing.join(', ')}`);
         this.rest = {};
@@ -76,6 +77,121 @@ class HillRider {
         });
         this.scratch = { ankle: new THREE.Vector3(), out: new THREE.Vector3(), knee: new THREE.Vector3(), pole: new THREE.Vector3(), toe: new THREE.Vector3(), up: new THREE.Vector3(), m: new THREE.Matrix4(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3() };
         this.spin = { front: 0, rear: 0 };
+        // The front wheel turns with the fork and the bars about the head tube
+        const steer = this.parts.steer;
+        this.frame.remove(this.parts.wheel_front);
+        steer.add(this.parts.wheel_front);
+        this.parts.wheel_front.position.sub(r.steer);
+        const A = HillRider.ARMS;
+        this.axis = new THREE.Vector3(0, Math.cos(A.rakeDeg * Math.PI / 180), -Math.sin(A.rakeDeg * Math.PI / 180));
+        this.arms = ['l', 'r'].map(tag => {
+            const shoulder = r[`upperarm_${tag}`].clone(), side = Math.sign(shoulder.x) || 1;
+            return {
+                tag, side, shoulder, upper: shoulder.distanceTo(r[`forearm_${tag}`]), lower: A.forearmM,
+                grip: new THREE.Vector3(side * A.grip[0], A.grip[1], A.grip[2]),
+                upperPart: this.parts[`upperarm_${tag}`], lowerPart: this.parts[`forearm_${tag}`]
+            };
+        });
+        this.steerQ = new THREE.Quaternion();
+    }
+
+    // The boy's parts that leave the bicycle in a fall
+    static get BODY() { return ['boy', 'upperarm_l', 'upperarm_r', 'forearm_l', 'forearm_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r']; }
+
+    // The boy thrown off and falling as the vehicle's own rider falls (Vehicle.beginRiderFall, stepRiderFall,
+    // drawRiderFall: the kinds, the rows, the keys and the slide are theirs). His body takes that rider's place and turn,
+    // and each limb that limb's direction from its root and its share of its reach, at the boy's own lengths
+    fall(v) {
+        const s = this.scratch, r = this.rest, rf = v.riderFall;
+        v.drawRiderFall();
+        if (!this.fallen) {
+            this.fallen = new THREE.Group();
+            this.fallen.name = 'hill-boy-fallen';
+            (this.group.parent || this.group).add(this.fallen);
+            for (const name of HillRider.BODY) {
+                this.frame.remove(this.parts[name]);
+                this.fallen.add(this.parts[name]);
+            }
+            this.parts.boy.position.set(0, 0, 0);
+            this.parts.boy.quaternion.identity();
+        }
+        // (where the vehicle's rider is now drawn, in the world)
+        v.group.updateMatrixWorld(true);
+        v.rider.getWorldPosition(this.fallen.position);
+        v.rider.getWorldQuaternion(this.fallen.quaternion);
+        // (the vehicle's rider leans his spine forward by rf.lean in his own shape; the boy is built leaning already)
+        let i = 0;
+        for (const [rig, mine] of [[v.arms, this.arms], [v.legs, this.legs]]) {
+            for (const side of [-1, 1]) {
+                const limb = rig[side], end = rf.end[i++];
+                const own = mine.find(m => m.side === side);
+                const root = s.sh || (s.sh = new THREE.Vector3());
+                const isArm = mine === this.arms;
+                root.copy(isArm ? own.shoulder : own.hip).sub(r.boy);
+                const dir = s.x.subVectors(end, limb.root);
+                const share = Math.min(1, dir.length() / limb.reach);
+                dir.normalize();
+                const length = (own.upper + own.lower) * Math.max(0.55, share);
+                s.ankle.copy(root).addScaledVector(dir, length);
+                s.pole.set(side * (isArm ? 1 : 0.2), isArm ? -0.6 : 0.3, isArm ? -0.3 : 1);
+                HillRider.knee(root, s.ankle, own.upper, own.lower, s.pole, s.knee);
+                s.up.set(0, 0, 1);
+                if (isArm) {
+                    this.point(own.upperPart, root, s.knee, s.up);
+                    this.point(own.lowerPart, s.knee, s.ankle, s.up);
+                } else {
+                    this.point(own.thigh, root, s.knee, s.up);
+                    this.point(own.shin, s.knee, s.ankle, s.up);
+                    own.foot.position.copy(s.ankle);
+                    own.foot.quaternion.copy(own.shin.quaternion);
+                }
+            }
+        }
+    }
+
+    // Back on the bicycle after the restart: every part of him on the frame again, where it was built
+    remount() {
+        for (const name of HillRider.BODY) {
+            this.fallen.remove(this.parts[name]);
+            this.frame.add(this.parts[name]);
+            this.parts[name].position.copy(this.rest[name] || this.parts[name].position);
+            this.parts[name].quaternion.identity();
+        }
+        if (this.fallen.parent) this.fallen.parent.remove(this.fallen);
+        this.fallen = null;
+    }
+
+    // The arms and the bars: the head tube's rake, where each hand holds its grip (on +x, mirrored), the forearm's
+    // length to the hand's middle, the shoulders' turn with the bars (a share of their angle), and how far a shoulder
+    // reaches forward to a far grip (m)
+    static get ARMS() {
+        return Object.freeze({ rakeDeg: 20, grip: [0.27, 1.02, 0.2], forearmM: 0.31, shoulderTurn: 0.3, shoulderReachM: 0.06 });
+    }
+
+    // The bars turned to `bars` (radians) about the head tube, the shoulders turned a little with them, each arm from its
+    // shoulder to its grip with the elbow bent out and down
+    steer(bars) {
+        const s = this.scratch, A = HillRider.ARMS, r = this.rest;
+        this.steerQ.setFromAxisAngle(this.axis, bars);
+        this.parts.steer.quaternion.copy(this.steerQ);
+        s.q2 = s.q2 || new THREE.Quaternion();
+        s.q2.setFromAxisAngle(s.yAxis || (s.yAxis = new THREE.Vector3(0, 1, 0)), bars * A.shoulderTurn);
+        this.parts.boy.quaternion.copy(s.q2);
+        s.hand = s.hand || new THREE.Vector3();
+        s.sh = s.sh || new THREE.Vector3();
+        s.elbow = s.elbow || new THREE.Vector3();
+        for (const arm of this.arms) {
+            s.hand.copy(arm.grip).sub(r.steer).applyQuaternion(this.steerQ).add(r.steer);
+            s.sh.copy(arm.shoulder).sub(r.boy).applyQuaternion(s.q2).add(r.boy);
+            // A shoulder reaches forward to a grip past the arm's length
+            const gap = s.sh.distanceTo(s.hand) - (arm.upper + arm.lower) * 0.97;
+            if (gap > 0) s.sh.addScaledVector(s.elbow.subVectors(s.hand, s.sh).normalize(), Math.min(gap, A.shoulderReachM));
+            s.pole.set(arm.side, -0.6, -0.3);
+            HillRider.knee(s.sh, s.hand, arm.upper, arm.lower, s.pole, s.elbow);
+            s.up.set(0, 0, 1);
+            this.point(arm.upperPart, s.sh, s.elbow, s.up);
+            this.point(arm.lowerPart, s.elbow, s.hand, s.up);
+        }
     }
 
     // Turns `part` so that its local -y runs from `from` to `to` and its local +z leans towards `front`
@@ -99,7 +215,7 @@ class HillRider {
         const s = this.scratch, v = bike.vehicle;
         const p = lane.sample(bike.s, s.lane || (s.lane = {}));
         const along = p.grade * Math.cos(bike.yaw - p.heading);
-        this.group.position.set(v.position.x, p.y + bike.bounce, v.position.z);
+        this.group.position.set(v.position.x, v.position.y, v.position.z);
         // The foot down: the frame leans onto the left foot over FOOT_S, as a motorbike's does (Vehicle.updateFooting)
         const footTo = bike.footDown ? 1 : 0;
         const footStep = dt / Vehicle.FOOT_S;
@@ -129,6 +245,14 @@ class HillRider {
         this.parts.wheel_front.rotation.x = this.spin.front;
         this.parts.wheel_rear.rotation.x = this.spin.rear;
         this.parts.cranks.rotation.x = bike.crank;
+        // Off the bicycle in a fall: the boy has his own place and pose, the motorbike rider's fall (Vehicle.riderFall)
+        if (v.riderFall && v.riderFall.on) {
+            this.fall(v);
+            this.parts.steer.quaternion.identity();
+            return;
+        }
+        if (this.fallen) this.remount();
+        this.steer(v.barsDrawn ? v.barsDrawn() : 0);
 
         const out = HillRider.LEGS_OUT;
         const legsShare = bike.legs * bike.legs * (3 - 2 * bike.legs);
@@ -142,12 +266,15 @@ class HillRider {
             // The ankle on the pedal, or out to the side, and between the two as the pose changes
             const on = s.ankle.copy(leg.pedalPart.position).add(s.toe.fromArray(HillRider.ANKLE_ON_PEDAL));
             const pose = bike.legPose[leg.tag];
-            const length = (leg.upper + leg.lower) * (out.reach - pose.bend);
-            s.out.set(pose.spread * leg.side, pose.drop, pose.ahead).normalize().multiplyScalar(length).add(leg.hip);
+            // Held out the leg is one straight line from the hip (its knee bent about 10 degrees at most, out.reach): the
+            // sway, the bounce and the balance move its direction, never its length
+            const length = (leg.upper + leg.lower) * out.reach;
+            s.out.set(pose.spread * leg.side, pose.drop, pose.ahead).normalize().multiplyScalar(length);
             const phase = leg.side > 0 ? 0 : 1.9;
             s.out.x += Math.sin(this.t * 2 * Math.PI * out.swayHz + phase) * out.swayM * leg.side;
             s.out.y += Math.sin(this.t * 2 * Math.PI * out.swayHz * 0.7 + phase * 1.3) * out.swayM * 0.6
                 + (this.legBounce - bike.bounce) * out.bounceGain + leg.side * bike.lean * out.leanGain;
+            s.out.setLength(length).add(leg.hip);
             on.lerp(s.out, legsShare);
             // The left foot put down on the cobbles at its own place, FOOT_OUT out from the frame and FOOT_AHEAD ahead
             // of the pedals, never under the ground there

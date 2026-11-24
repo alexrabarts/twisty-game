@@ -20,8 +20,17 @@ class HillProps {
             lid: { shape: 'can', r: 0.27, h: 0.05, kg: 1, round: true, fly: true, colour: 0x7a7e82, share: 0 },
             crate: { shape: 'box', w: 0.5, h: 0.34, d: 0.4, kg: 6, colour: 0x8a6a44, share: 0.15 },
             broom: { shape: 'box', w: 0.04, h: 1.3, d: 0.04, kg: 1, fly: true, colour: 0x6a5032, share: 0.12, leans: true },
-            shard: { shape: 'box', w: 0.12, h: 0.05, d: 0.1, kg: 0.5, colour: 0xa65a38, share: 0 }
+            shard: { shape: 'box', w: 0.12, h: 0.05, d: 0.1, kg: 0.5, colour: 0xa65a38, share: 0 },
+            // The old leather football: light and bouncy, the one thing that does not settle (HillProps.BALL)
+            ball: { shape: 'ball', r: 0.11, h: 0.22, kg: 0.45, round: true, colour: 0xffffff, share: 0 }
         });
+    }
+
+    // The football: where it rests (along the main straight at a share of its length, on the side, how far in from the
+    // lane's edge), its bounce off the ground, a wall, a kerb or a thing, its rolling friction (1/s), the share of the
+    // fall it rolls with (a hollow ball), the lift a hit gives it for each m/s, and the bounce speed its thud starts at
+    static get BALL() {
+        return Object.freeze({ at: 0.42, side: 1, inM: 0.35, bounce: 0.7, roll: 0.08, rollFall: 0.6, lift: 0.3, thudMs: 0.4, restMs: 0.35 });
     }
 
     // The push and the response: the share of the bicycle's speed a thing of no mass takes, the lift a flying thing
@@ -30,7 +39,7 @@ class HillProps {
     // the speed over which a heavy one knocks him off
     static get RULE() {
         return Object.freeze({
-            seed: 77, edgeShare: 0.1, reachM: 0.34, push: 1.5, fly: 0.35, bounce: 0.3, slide: 4, roll: 0.25, rollFall: 0.6,
+            seed: 77, edgeShare: 0.1, reachM: 0.34, push: 1.5, fly: 0.15, bounce: 0.1, heavyBounce: 0.02, slide: 7, roll: 0.5, rollFall: 0.6, spinDamp: 2.5,
             breakMs: 2.2, lightLoss: 0.04, heavyLoss: 0.3, wobble: 0.6, heavyFallMs: 5.5, sleepMs: 0.05
         });
     }
@@ -46,6 +55,16 @@ class HillProps {
             const on = Math.abs(across) > r.halfWidthM ? 0.1 : lane.cobble(s, across);
             list.push({ kind, s, across, x: p.x + p.leftX * across, y: p.y + on, z: p.z + p.leftZ * across, yaw, lean });
         };
+        // The opening frame's milk churn on its stone step by the camera
+        if (r.opening) {
+            const [cs, ca] = r.opening.churn;
+            put('churn', cs, ca, 0);
+            list[list.length - 1].y = lane.sample(cs).y + r.opening.step[3] + 0.1;
+            list[list.length - 1].onStep = true;
+        }
+        // The football, resting at the lane's edge outside a house on the main straight
+        const B = HillProps.BALL;
+        put('ball', r.mainStraight.fromS + (r.mainStraight.toS - r.mainStraight.fromS) * B.at, B.side * (r.halfWidthM - B.inM), 0);
         for (const c of lane.cottages) {
             const front = r.halfWidthM + r.flagsM - 0.35;
             const doorS = c.from + c.wide * c.door;
@@ -82,6 +101,17 @@ class HillProps {
         counts.shard = (counts.pot || 0) * 4;
         for (const [name, kind] of Object.entries(HillProps.KINDS)) {
             if (!counts[name]) continue;
+            if (kind.shape === 'ball') {
+                const geometry = new THREE.SphereGeometry(kind.r, 24, 16);
+                geometry.translate(0, kind.r, 0);
+                const mesh = new THREE.InstancedMesh(geometry, new THREE.MeshStandardMaterial({ map: HillProps.leather(), roughness: 0.65, metalness: 0 }), counts[name]);
+                mesh.name = 'hill-prop-ball';
+                mesh.castShadow = mesh.receiveShadow = true;
+                mesh.frustumCulled = false;
+                this.group.add(mesh);
+                this.meshes[name] = mesh;
+                continue;
+            }
             const geometry = kind.shape === 'can' ? new THREE.CylinderGeometry(kind.r * (name === 'pot' ? 1.15 : 1), kind.r, kind.h, name === 'bottle' ? 6 : 10) : new THREE.BoxGeometry(kind.w, kind.h, kind.d);
             geometry.translate(0, kind.h / 2, 0);
             const material = new THREE.MeshStandardMaterial({ color: kind.colour, roughness: name === 'churn' || name === 'bucket' || name === 'dustbin' || name === 'lid' ? 0.45 : 0.85, metalness: name === 'churn' || name === 'bucket' ? 0.6 : 0 });
@@ -99,7 +129,8 @@ class HillProps {
     // Everything back in its place, standing
     reset() {
         this.items = this.places.map(place => ({
-            ...place, kind: place.kind, vx: 0, vy: 0, vz: 0, spinX: 0, spinZ: 0, tipX: 0, tipZ: place.lean, moving: false, hit: 0, gone: false
+            ...place, kind: place.kind, vx: 0, vy: 0, vz: 0, spinX: 0, spinZ: 0, tipX: 0, tipZ: place.lean, moving: false, hit: 0, gone: false,
+            turn: place.kind === 'ball' ? new THREE.Quaternion() : null
         }));
         this.spares = { lid: [], shard: [] };
         this.hits = 0;
@@ -133,9 +164,9 @@ class HillProps {
             const away = d > 1e-3 ? 1 / d : 0;
             item.vx = (fx * 0.8 + ox * away * 0.6) * v.speed * share;
             item.vz = (fz * 0.8 + oz * away * 0.6) * v.speed * share;
-            item.vy = (kind.fly ? R.fly * 2 : R.fly * 0.5) * v.speed * share;
-            item.spinX = (Math.random() - 0.5) * 8 * share;
-            item.spinZ = (Math.random() - 0.5) * 8 * share;
+            item.vy = (kind.shape === 'ball' ? HillProps.BALL.lift : kind.fly ? R.fly * 2 : R.fly * 0.5) * v.speed * share;
+            item.spinX = (Math.random() - 0.5) * 4 * share;
+            item.spinZ = (Math.random() - 0.5) * 4 * share;
             if (kind.lid && !item.lidOff) this.lidOff(item);
             if (kind.breaks && v.speed > R.breakMs) this.shatter(item);
             if (kind.heavy) {
@@ -155,8 +186,8 @@ class HillProps {
     // A dustbin's lid comes off and flies
     lidOff(item) {
         item.lidOff = true;
-        const lid = { kind: 'lid', x: item.x, y: item.y + HillProps.KINDS.dustbin.h, z: item.z, yaw: item.yaw, lean: 0, vx: item.vx * 1.2, vy: 2.5, vz: item.vz * 1.2,
-            spinX: 6, spinZ: -4, tipX: 0, tipZ: 0, moving: true, hit: 1, gone: false };
+        const lid = { kind: 'lid', x: item.x, y: item.y + HillProps.KINDS.dustbin.h, z: item.z, yaw: item.yaw, lean: 0, vx: item.vx * 1.1, vy: 1.1, vz: item.vz * 1.1,
+            spinX: 3, spinZ: -2, tipX: 0, tipZ: 0, moving: true, hit: 1, gone: false };
         this.items.push(lid);
         this.spares.lid.push(lid);
     }
@@ -166,12 +197,110 @@ class HillProps {
         item.gone = true;
         for (let i = 0; i < 4; i++) {
             const a = i * Math.PI / 2 + item.yaw;
-            const shard = { kind: 'shard', x: item.x, y: item.y + 0.1, z: item.z, yaw: a, lean: 0, vx: item.vx * 0.6 + Math.sin(a) * 1.2, vy: 1.5 + i * 0.3,
+            const shard = { kind: 'shard', x: item.x, y: item.y + 0.1, z: item.z, yaw: a, lean: 0, vx: item.vx * 0.6 + Math.sin(a) * 0.8, vy: 0.7 + i * 0.15,
                 vz: item.vz * 0.6 + Math.cos(a) * 1.2, spinX: 5, spinZ: 3, tipX: 0, tipZ: 0, moving: true, hit: 1, gone: false };
             this.items.push(shard);
             this.spares.shard.push(shard);
         }
         this.puff = { x: item.x, y: item.y + 0.2, z: item.z, t: 0 };
+    }
+
+    // The football's step: a hollow ball that bounces off the cobbles, the kerb, the house fronts and the other
+    // things, rolls on down the fall with its spin, and thuds at each bounce
+    ball(item, kind, dt) {
+        const B = HillProps.BALL, lane = this.lane, r = lane.rule, at = this.scratch.at;
+        lane.project(item.x, item.z, item.s, at);
+        item.s = at.s;
+        const p = lane.sample(at.s);
+        const out = Math.abs(at.across) > r.halfWidthM;
+        // (a ball of its size rides over the cobbles' crowns: it meets the lane as smooth)
+        const ground = p.y + (out ? 0.1 : HillLane.COBBLES.upM);
+        item.vy -= 9.81 * dt;
+        const fromAcross = at.across;
+        item.x += item.vx * dt;
+        item.y += item.vy * dt;
+        item.z += item.vz * dt;
+        lane.project(item.x, item.z, item.s, at);
+        const reflect = (nx, nz) => {
+            const into = item.vx * nx + item.vz * nz;
+            if (into <= 0) return 0;
+            item.vx -= (1 + B.bounce) * into * nx;
+            item.vz -= (1 + B.bounce) * into * nz;
+            return into;
+        };
+        let knock = 0;
+        // The house fronts, and the kerb's face when the ball is low enough to meet it
+        const side = Math.sign(at.across);
+        const wall = r.halfWidthM + r.flagsM - 0.15 - kind.r;
+        if (Math.abs(at.across) > wall) {
+            knock = Math.max(knock, reflect(p.leftX * side, p.leftZ * side));
+            const back = Math.abs(at.across) - wall;
+            item.x -= p.leftX * side * back;
+            item.z -= p.leftZ * side * back;
+        } else if (Math.abs(fromAcross) <= r.halfWidthM && Math.abs(at.across) > r.halfWidthM - kind.r * 0.5 && item.y < p.y + 0.1 - kind.r * 0.4) {
+            knock = Math.max(knock, reflect(p.leftX * side, p.leftZ * side));
+        }
+        // The other things: a ball meets each as a circle and bounces off it, a light one nudged
+        for (const other of this.items) {
+            if (other === item || other.gone) continue;
+            const o = HillProps.KINDS[other.kind];
+            const radius = o.shape === 'can' ? o.r : Math.max(o.w, o.d) / 2;
+            const dx = item.x - other.x, dz = item.z - other.z, d = Math.hypot(dx, dz);
+            if (d >= radius + kind.r || d < 1e-6 || item.y > other.y + o.h) continue;
+            const nx = dx / d, nz = dz / d;
+            const into = reflect(-nx, -nz);
+            item.x = other.x + nx * (radius + kind.r);
+            item.z = other.z + nz * (radius + kind.r);
+            knock = Math.max(knock, into);
+            if (!o.heavy && into > 0.5) {
+                other.moving = true;
+                other.vx -= nx * into * kind.kg / o.kg;
+                other.vz -= nz * into * kind.kg / o.kg;
+            }
+        }
+        item.rolling = false;
+        if (item.y <= ground) {
+            // The ground's normal on the fall of the lane: a bounce turns back the speed into it, so on the hill the
+            // bounces die away against the slope as on the flat, and it rolls on down
+            const g = p.grade, n = 1 / Math.hypot(g, 1);
+            const nx = -g * p.alongX * n, ny = n, nz = -g * p.alongZ * n;
+            const into = item.vx * nx + item.vy * ny + item.vz * nz;
+            item.y = ground;
+            if (into < 0) {
+                const fall = -into;
+                const back = fall > B.restMs ? 1 + B.bounce : 1;
+                item.vx -= back * into * nx;
+                item.vy -= back * into * ny;
+                item.vz -= back * into * nz;
+                knock = Math.max(knock, fall);
+                if (fall > B.restMs) {
+                    item.bounces = (item.bounces || 0) + 1;
+                    item.bounceMs = fall * B.bounce;
+                } else {
+                    // Rolling: a hollow ball takes rollFall of the slope's pull, and loses a little to the cobbles
+                    item.rolling = true;
+                    const pull = 9.81 * dt * (1 - B.rollFall);
+                    const tx = -pull * (0 - ny * nx), ty = -pull * (1 - ny * ny), tz = -pull * (0 - ny * nz);
+                    item.vx -= tx;
+                    item.vy -= ty;
+                    item.vz -= tz;
+                    const keep = Math.max(0, 1 - B.roll * dt);
+                    item.vx *= keep;
+                    item.vz *= keep;
+                }
+            }
+        }
+        // Rolling: it turns about the axis across its way, as far as it goes over its radius
+        const pace = Math.hypot(item.vx, item.vz);
+        if (pace > 1e-4) {
+            const axis = this.scratch.axis || (this.scratch.axis = new THREE.Vector3());
+            axis.set(item.vz / pace, 0, -item.vx / pace);
+            const step = this.scratch.turn || (this.scratch.turn = new THREE.Quaternion());
+            item.turn.premultiply(step.setFromAxisAngle(axis, pace * dt / kind.r));
+        }
+        if (knock > B.thudMs && this.sound) HillProps.thud(this.sound, Math.min(1, knock / 8));
+        if (item.rolling && pace < 0.03 && Math.abs(p.grade) < 0.01) item.moving = false;
+        if (at.s >= r.lengthM - 1) item.gone = true;
     }
 
     // One step of everything moving: gravity, the bounce off the ground, the slide and the roll (a round thing rolls
@@ -185,6 +314,10 @@ class HillProps {
             if (!item.moving || item.gone) continue;
             moved = true;
             const kind = K[item.kind];
+            if (kind.shape === 'ball') {
+                this.ball(item, kind, dt);
+                continue;
+            }
             lane.project(item.x, item.z, item.s, at);
             item.s = at.s;
             const p = lane.sample(at.s);
@@ -195,6 +328,9 @@ class HillProps {
             item.z += item.vz * dt;
             item.tipX += item.spinX * dt;
             item.tipZ += item.spinZ * dt;
+            const damp = Math.max(0, 1 - R.spinDamp * dt);
+            item.spinX *= damp;
+            item.spinZ *= damp;
             // The house fronts: no thing goes through them
             const wall = r.halfWidthM + r.flagsM - 0.15;
             if (Math.abs(at.across) > wall) {
@@ -207,7 +343,7 @@ class HillProps {
             }
             if (item.y <= ground) {
                 item.y = ground;
-                if (item.vy < 0) item.vy = -item.vy * R.bounce;
+                if (item.vy < 0) item.vy = -item.vy * (kind.heavy ? R.heavyBounce : R.bounce);
                 if (item.vy < 0.4) item.vy = 0;
                 // On the ground: a round thing lies on its side and rolls on down the fall; a square one slides to a stop
                 const friction = kind.round ? R.roll : R.slide;
@@ -252,8 +388,8 @@ class HillProps {
             if (item.gone) {
                 m.makeScale(0, 0, 0);
             } else {
-                e.set(item.tipX, item.yaw, item.tipZ, 'YXZ');
-                q.setFromEuler(e);
+                if (item.turn) q.copy(item.turn);
+                else q.setFromEuler(e.set(item.tipX, item.yaw, item.tipZ, 'YXZ'));
                 p.set(item.x, item.y, item.z);
                 m.compose(p, q, s);
             }
@@ -264,6 +400,68 @@ class HillProps {
             for (let i = used[name] || 0; i < mesh.count; i++) mesh.setMatrixAt(i, m.makeScale(0, 0, 0));
             mesh.instanceMatrix.needsUpdate = true;
         }
+    }
+
+    // The football's leather: worn brown panels in rows, their seams dark, the lace on one panel; no mark or name
+    static leather() {
+        if (typeof document === 'undefined' || typeof document.createElement !== 'function') return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        const rand = HillLane.random(431);
+        for (let row = 0; row < 3; row++) for (let col = 0; col < 6; col++) {
+            const x = col * 512 / 6 + (row % 2) * 512 / 12, y = row * 256 / 3;
+            const tone = 96 + Math.round(rand() * 26);
+            ctx.fillStyle = `rgb(${tone + 22}, ${Math.round(tone * 0.62)}, ${Math.round(tone * 0.34)})`;
+            ctx.fillRect(x, y, 512 / 6, 256 / 3);
+            ctx.fillRect(x - 512, y, 512 / 6, 256 / 3);
+        }
+        // Wear: lighter scuffs and darker grime
+        for (let i = 0; i < 260; i++) {
+            ctx.fillStyle = rand() < 0.5 ? `rgba(220, 190, 150, ${rand() * 0.12})` : `rgba(30, 18, 8, ${rand() * 0.15})`;
+            ctx.beginPath();
+            ctx.ellipse(rand() * 512, rand() * 256, 2 + rand() * 14, 1 + rand() * 5, rand() * 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.strokeStyle = 'rgba(40, 22, 10, 0.9)';
+        ctx.lineWidth = 3;
+        for (let row = 0; row <= 3; row++) {
+            ctx.beginPath(); ctx.moveTo(0, row * 256 / 3); ctx.lineTo(512, row * 256 / 3); ctx.stroke();
+            for (let col = 0; col <= 6; col++) {
+                const x = col * 512 / 6 + (row % 2) * 512 / 12;
+                ctx.beginPath(); ctx.moveTo(x, row * 256 / 3); ctx.lineTo(x, (row + 1) * 256 / 3); ctx.stroke();
+            }
+        }
+        // The lace: a slit with cross stitches over it
+        ctx.strokeStyle = 'rgb(60, 36, 18)';
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(256, 100); ctx.lineTo(256, 156); ctx.stroke();
+        ctx.strokeStyle = 'rgb(200, 170, 120)';
+        ctx.lineWidth = 3;
+        for (let y = 104; y < 156; y += 8) { ctx.beginPath(); ctx.moveTo(248, y); ctx.lineTo(264, y + 4); ctx.stroke(); }
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.encoding = THREE.sRGBEncoding;
+        return texture;
+    }
+
+    // The football's hollow thud: a low tone falling in pitch and a soft knock, quieter as it slows (`strength` 0 to 1)
+    static thud(sound, strength) {
+        if (!sound || !sound.audioContext || !sound.graph || !sound.enabled) return;
+        const ctx = sound.audioContext, t = ctx.currentTime;
+        const tone = ctx.createOscillator();
+        tone.type = 'sine';
+        tone.frequency.setValueAtTime(150, t);
+        tone.frequency.exponentialRampToValueAtTime(70, t + 0.12);
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.exponentialRampToValueAtTime(0.05 + 0.45 * strength, t + 0.006);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
+        tone.connect(gain);
+        gain.connect(sound.graph.master);
+        tone.start(t);
+        tone.stop(t + 0.2);
+        HillProps.clatter(sound, 0.05 * strength, false);
     }
 
     // A clatter through the game's sound (js/sound.js): a short burst of filtered noise, lower and longer for a heavy

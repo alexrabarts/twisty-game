@@ -14,7 +14,7 @@
 class HillBicycle {
     static get RULE() {
         return Object.freeze({
-            legsOutMs: 6.5, legsInMs: 4.2, legsGrade: -0.04, legsQuietS: 0.4, legsBlendS: 0.45,
+            legsOutMs: 6.5, legsInMs: 4.2, legsGrade: -0.04, legsQuietS: 0.4, legsBlendS: 0.8,
             // How near the kerb the wheels go: the kerb stands at the lane's edge
             kerbM: 0.3,
             // After a fall: how long he lies before the bicycle is stood up again in place
@@ -29,8 +29,8 @@ class HillBicycle {
     // share of the reach it takes), the toe up (rad). The rider draws them (HillRider.LEGS_OUT: sway, bounce, balance)
     static get LEGS() {
         return Object.freeze({
-            everyS: [3, 8], forS: [0.5, 1.5],
-            spread: [0.68, 0.92], drop: [-0.62, -0.32], ahead: [0.12, 0.48], bend: [0, 0.16], toe: [0.35, 0.95]
+            everyS: [5, 12], forS: [0.6, 1.2],
+            spread: [0.74, 0.86], drop: [-0.55, -0.4], ahead: [0.2, 0.4], toe: [0.5, 0.8]
         });
     }
 
@@ -38,6 +38,8 @@ class HillBicycle {
         this.lane = lane;
         this.rule = rule;
         this.vehicle = new HillVehicle();
+        // The ground his fall lands on (HillVehicle.riderGroundY)
+        this.vehicle.lane = lane;
         this.at = {};
         this.reset();
     }
@@ -93,7 +95,6 @@ class HillBicycle {
             pose.spread = pick(L.spread);
             pose.drop = pick(L.drop);
             pose.ahead = pick(L.ahead);
-            pose.bend = pick(L.bend);
             pose.toe = pick(L.toe);
         }
         this.poses++;
@@ -105,7 +106,10 @@ class HillBicycle {
         this.lane.project(v.position.x, v.position.z, this.s, this.at);
         this.s = this.at.s;
         this.across = this.at.across;
-        v.position.y = this.lane.sample(this.s).y + this.bounce;
+        // In a side road, its own surface
+        const road = this.lane.sideAt(v.position.x, v.position.z, this.road || (this.road = {}));
+        this.inRoad = road && road.road.ride > 0 && road.d > 0 ? road : null;
+        v.position.y = (this.inRoad ? this.lane.roadY(road.road, road.d, road.w) : this.lane.sample(this.s).y) + this.bounce;
     }
 
     // One step. `input` is { pedal: 0..1, brake: 0..1, steer: -1..1 (+ to the left, the game's sign), wheelie: 0..1 }
@@ -185,6 +189,37 @@ class HillBicycle {
         const v = this.vehicle, r = this.rule;
         this.lane.project(v.position.x, v.position.z, this.s, this.at);
         const limit = this.lane.rule.halfWidthM - r.kerbM;
+        // A side road that can be ridden: its mouth is open, its sides and its end are walls
+        const road = this.lane.sideAt(v.position.x, v.position.z, this.road || (this.road = {}));
+        const open = road && road.road.ride > 0 && Math.sign(this.at.across) === road.road.side && Math.abs(road.w) < road.road.wide / 2 - r.kerbM;
+        if (road && road.road.ride > 0 && road.d > 0) {
+            const R = road.road, p = this.lane.roadPoint(R, road.d);
+            const side = Math.abs(road.w) - (R.wide / 2 - r.kerbM), end = road.d - (R.ride - r.kerbM);
+            const touch = (nx, nz, push) => {
+                v.position.x += nx * push;
+                v.position.z += nz * push;
+                if (v.crashed) {
+                    v.velocity.multiplyScalar(0.5);
+                    return;
+                }
+                if (v.wallTouch(nx, nz, 0.2)) v.brush(nx, nz);
+                else {
+                    v.worldCrash(R.end === 'gate' && end > 0 ? 'Rode into the gate' : 'Rode into the wall', null, 'wall');
+                    this.hits++;
+                }
+            };
+            if (side > 0 && road.d > r.kerbM) touch(-Math.sign(road.w) * p.crossX, -Math.sign(road.w) * p.crossZ, side);
+            if (end > 0) touch(-p.dirX, -p.dirZ, end);
+            // In it, past the lane's edge: the lane's kerbs are behind him
+            if (road.d > r.kerbM) {
+                if (!v.crashed) v.brushStep(dt);
+                return;
+            }
+        }
+        if (open) {
+            if (!v.crashed) v.brushStep(dt);
+            return;
+        }
         // Down and sliding, the bicycle stops at the kerb
         if (v.crashed && Math.abs(this.at.across) > this.lane.rule.halfWidthM - 0.1) {
             const p = this.lane.sample(this.at.s), side = Math.sign(this.at.across);

@@ -9,11 +9,17 @@ class HillVehicle extends Vehicle {
         return Object.freeze({
             // A 20 kg delivery bicycle and a 40 kg boy; 26 inch wheels; a delivery bicycle's long wheelbase
             bikeKg: 20, riderKg: 40, wheelbaseM: 1.15, wheelM: 0.33,
-            // One gear: metres for each turn of the cranks, the most turns a minute; the push at the road when the
-            // cranks barely turn (it falls to nothing at the most)
-            developmentM: 4.2, cadenceMostRpm: 92, pushN: 150,
-            // Rolling drag on the cobbles, as a share of the weight
-            rollCobbles: 0.04,
+            // One tall gear: metres for each turn of the cranks, the most turns a minute; the push at the road when the
+            // cranks barely turn. It holds up through the middle and fades only near the most (pushFade, the power of the
+            // cadence's share it falls by), so pedalling adds real speed up to about 15 m/s on the flat
+            developmentM: 9.25, cadenceMostRpm: 120, pushN: 200, pushFade: 3,
+            // Rolling drag on the cobbles, as a share of the weight, and the air's: the drag area (m2) of the boy crouched
+            // a little with his legs out
+            rollCobbles: 0.025, dragAreaM2: 0.5,
+            // The steering: under directMs (walking pace) the bars turn the bicycle; over counterMs the lean does, the
+            // bars drawn as a countersteer (a push of counterGain s of the lean rate the other way, at most counterMostDeg)
+            // over the small angle the turn's own curve needs; a smoothstep by speed between the two
+            steer: Object.freeze({ directMs: 1.5, counterMs: 2.8, counterGain: 0.1, counterMostDeg: 6 }),
             // Rod brakes: the most they slow the bicycle (m/s2)
             brakeMs2: 2.4,
             // The wheelie: the pop is the hard push's (the push share at this speed) times popGain, the push's lift
@@ -33,15 +39,19 @@ class HillVehicle extends Vehicle {
         HillVehicle.world = Object.freeze({
             ...WorldPhysics,
             leanCapDeg: 42,
-            leanRate: WorldPhysics.leanRate * 0.6,
+            // Quicker to lean than it was (0.6 of a motorbike's), the keys easing in more softly to it
+            leanRate: WorldPhysics.leanRate * 0.75,
+            steerKeys: Object.freeze({ ...WorldPhysics.steerKeys, keyS: WorldPhysics.steerKeys.keyS * 1.4, featherS: WorldPhysics.steerKeys.featherS * 1.4 }),
             steerSpeed: 8,
             cobbleGrip: 0.72,
             radiusFloor: 3,
-            lockRadius: 1.3,
-            turnBlendSpeed: 4,
-            lowLeanSpeed: 3, lowLeanFullSpeed: 2, lowLeanDeg: 25,
+            // At a crawl the bars turn the bicycle (full lock about 33 degrees) and it barely leans; the bars hand the turn
+            // to the lean between directMs and counterMs (HillVehicle.lowSpeedShare)
+            lockRadius: 1.75,
+            turnBlendSpeed: D.steer.counterMs,
+            lowLeanSpeed: D.steer.counterMs, lowLeanFullSpeed: D.steer.directMs, lowLeanDeg: 6,
             idleSpeed: 0, engineBrake: 0, engineBrakeMax: 0, rollDecel: 0,
-            aeroDrag: 0.5 * 1.2 * 0.7 / (D.bikeKg + D.riderKg),
+            aeroDrag: 0.5 * 1.2 * D.dragAreaM2 / (D.bikeKg + D.riderKg),
             fallSpeed: 1.2, tipLeanDeg: 14, footDownDecel: 2, footDownSpeed: 0.6,
             throttleRiseS: 0.25, throttleFallS: 0.1
         });
@@ -85,10 +95,43 @@ class HillVehicle extends Vehicle {
         return Math.max(0, 1 - Math.max(0, speed) / this.pedalMostMs);
     }
 
-    // The drive at full pedal (m/s2): his push over the mass, falling with the cadence
+    // The ground under (x, z) for the rider's own fall (Vehicle.stepRiderFall): the cobbles on the lane, the flags beside
+    // it. He slides down the lane's fall as he would down any slope
+    riderGroundY(x, z) {
+        if (!this.lane) return this.position.y;
+        const at = this.groundAt || (this.groundAt = {});
+        this.lane.project(x, z, null, at);
+        const r = this.lane.rule;
+        return this.lane.sample(at.s).y + (Math.abs(at.across) > r.halfWidthM ? 0.1 : this.lane.cobble(at.s, at.across));
+    }
+
+    // The share of the turn the bars give at speed v: 1 to directMs, 0 from counterMs, a smoothstep between (no step in
+    // the yaw rate, the bars or the lean limit)
+    lowSpeedShare(v) {
+        const S = HillVehicle.DATA.steer;
+        const x = Math.max(0, Math.min(1, (S.counterMs - v) / (S.counterMs - S.directMs)));
+        return x * x * (3 - 2 * x);
+    }
+
+    // The bars' angle as drawn (radians, + with + steering): the vehicle's own bar angle at a crawl; at speed the angle
+    // the turn's curve needs (atan of wheelbase over radius) plus the countersteer push against the lean rate
+    barsDrawn() {
+        const S = HillVehicle.DATA.steer, world = this.worldPhysics;
+        const share = this.lowSpeedShare(this.speed);
+        const v2 = Math.max(this.speed * this.speed, 1e-6);
+        const lock = Math.atan(this.wheelbase / world.lockRadius);
+        const curve = Math.min(1 / world.radiusFloor, 9.81 * Math.tan(Math.abs(this.leanAngle)) / v2);
+        const most = S.counterMostDeg * Math.PI / 180;
+        const push = Math.max(-most, Math.min(most, S.counterGain * this.leanVelocity));
+        const lean = Math.max(-lock, Math.min(lock, -Math.sign(this.leanAngle) * Math.atan(this.wheelbase * curve) + push));
+        return share * this.handlebarAngle + (1 - share) * lean;
+    }
+
+    // The drive at full pedal (m/s2): his push over the mass, strong through the middle of the cadence, fading near the top
     worldDrive(v) {
         const D = HillVehicle.DATA;
-        return D.pushN * this.pushShare(v) / this.mass;
+        const share = Math.min(1, Math.max(0, v) / this.pedalMostMs);
+        return D.pushN * (1 - Math.pow(share, D.pushFade)) / this.mass;
     }
 
     worldBrakeDecel() {

@@ -40,6 +40,7 @@ GRIP = (0.27, 1.02, 0.2)
 HIP = (0.09, 1.02, -0.2)
 THIGH, SHIN = 0.45, 0.45
 SHOULDER = (0.17, 1.45, -0.1)
+UPPER_ARM, FOREARM = 0.32, 0.31
 NECK = (0, 1.52, -0.07)
 HEAD = (0, 1.64, -0.05)
 
@@ -95,7 +96,6 @@ def frame(k):
     E.panel(k, [(0.13, 0.28), (0.1, 0.4), (-0.3, 0.42), (-0.62, 0.38), (-0.66, 0.3), (-0.62, 0.25), (-0.3, 0.2), (0.0, 0.14), (0.1, 0.18)], 0.075, 0.03,
             "paint", bevel=0.008)
     # Mudguards, black, close round both wheels
-    k.guard((FRONT[1], FRONT[2]), FRONT_R + 0.03, 0.06, math.radians(-40), math.radians(140), "paint", crown=0.012, nu=10)
     k.guard((REAR[1], REAR[2]), REAR_R + 0.03, 0.06, math.radians(-10), math.radians(200), "paint", crown=0.012, nu=12)
     # The saddle: sprung leather on two coil springs, on its pillar
     k.tube([(0, seat_top[0], seat_top[1]), (0, SADDLE[1] - 0.04, SADDLE[2])], 0.012, "steel", seg=8)
@@ -142,8 +142,10 @@ def front(k):
                    steps=2)
     k.keep = False
 
-    # The fork and the bars turn with the steering; here they stay put, as the game leans the whole bicycle
-    k.begin("body")
+    # The fork, the front mudguard, the stem and the bars turn with the steering about the head tube: a node of their
+    # own, its pivot at the fork crown (the game turns it, and hangs the front wheel on it)
+    k.begin("steer", (0, CROWN[0], CROWN[1]))
+    k.guard((FRONT[1], FRONT[2]), FRONT_R + 0.03, 0.06, math.radians(-40), math.radians(140), "paint", crown=0.012, nu=10)
     for side in (-1, 1):
         k.tube([(side * 0.045, FRONT[1], FRONT[2]), (side * 0.03, CROWN[0], CROWN[1])], 0.011, "paint", seg=8)
     k.rod((-0.05, FRONT[1], FRONT[2]), (0.05, FRONT[1], FRONT[2]), 0.007, "steel", seg=6)
@@ -157,12 +159,13 @@ def front(k):
         # The rod brake's lever under the bar, its rod down the head tube to the stirrup
         k.box((0.012, 0.01, 0.12), (side * (GRIP[0] - 0.02), GRIP[1] - 0.03, GRIP[2] + 0.06), "chrome", bevel=0.002)
         k.tube([(side * 0.1, stem[0] - 0.01, stem[1]), (side * 0.03, CROWN[0] + 0.04, CROWN[1] + 0.02)], 0.004, "chrome", seg=4)
-    # The lamp on the basket's front and the bell on the bar
+    # The bell on the bar, then the lamp on the basket's front
+    k.lathe([(0, 0), (0.028, 0.0), (0.03, 0.012), (0.02, 0.025), (0, 0.028)], (-0.18, GRIP[1] + 0.02, GRIP[2] + 0.06), "chrome", seg=12)
+    k.begin("body")
     k.cylinder(0.035, 0.05, (0, 0.8, 1.05), "chrome", axis="z", seg=12)
     k.begin("headlight", (0, 0.8, 1.08))
     k.cylinder(0.03, 0.006, (0, 0.8, 1.076), "headlight", axis="z", seg=12)
     k.begin("body")
-    k.lathe([(0, 0), (0.028, 0.0), (0.03, 0.012), (0.02, 0.025), (0, 0.028)], (-0.18, GRIP[1] + 0.02, GRIP[2] + 0.06), "chrome", seg=12)
     k.begin("brake_light", (0, 0.62, REAR[2] - 0.38))
     k.box((0.04, 0.03, 0.01), (0, 0.62, REAR[2] - 0.38), "reflector", bevel=0.003)
 
@@ -192,14 +195,6 @@ def boy(k):
     k.loft([(hy + 0.04, hz - 0.11, hz + 0.1, 0.15, 2.4, 2.4), (hy + 0.2, hz - 0.1, hz + 0.1, 0.16, 2.4, 2.4), (hy + 0.36, hz - 0.06, hz + 0.12, 0.18, 2.4, 2.4),
             (SHOULDER[1] + 0.01, SHOULDER[2] - 0.08, SHOULDER[2] + 0.08, 0.17, 2.2, 2.2), (SHOULDER[1] + 0.05, SHOULDER[2] - 0.05, SHOULDER[2] + 0.05, 0.08)],
            "jumper", axis="y", ring=16, steps=2)
-    # Arms: upper arm and forearm with the elbow bent out and down, the hands on the grips
-    for side in (-1, 1):
-        s = (side * SHOULDER[0], SHOULDER[1], SHOULDER[2])
-        g = (side * GRIP[0], GRIP[1] + 0.02, GRIP[2])
-        elbow = (side * (SHOULDER[0] + 0.08), (s[1] + g[1]) / 2 - 0.02, (s[2] + g[2]) / 2 - 0.02)
-        k.tube([s, elbow], 0.042, "jumper", seg=10)
-        k.tube([elbow, (g[0] * 0.98, g[1] + 0.005, g[2] - 0.04)], 0.036, "jumper", seg=10)
-        k.lathe([(0, -0.035), (0.03, -0.03), (0.035, 0.0), (0.03, 0.03), (0, 0.035)], g, "skin", axis="x", seg=10)
     # A dark scarf crossed at the neck, and the long cream apron tied at the waist, over the lap and hanging past it
     k.loft([(NECK[1] - 0.09, NECK[2] - 0.07, NECK[2] + 0.08, 0.1, 2.4, 2.4), (NECK[1] - 0.02, NECK[2] - 0.06, NECK[2] + 0.07, 0.075, 2.4, 2.4)], "scarf", axis="y",
            ring=12, steps=1)
@@ -233,6 +228,18 @@ def boy(k):
         return (across * (0.085 - 0.02 * u), HEAD[1] + 0.045 - 0.025 * u - 0.01 * across * across, HEAD[2] + 0.085 + 0.06 * u)
 
     k.sheet(peak, "cap", nu=3, nv=6, thick=0.008)
+
+    # The arms, each segment hanging straight down from its pivot (shoulder, elbow), the hand at the forearm's end: the
+    # game puts the hands on the grips as the bars turn
+    for side, tag in ((1, "r"), (-1, "l")):
+        x, top = side * SHOULDER[0], SHOULDER[1]
+        k.begin(f"upperarm_{tag}", (x, top, SHOULDER[2]))
+        k.tube([(x, top, SHOULDER[2]), (x, top - UPPER_ARM, SHOULDER[2])], 0.042, "jumper", seg=10)
+        elbow = top - UPPER_ARM
+        k.begin(f"forearm_{tag}", (x, elbow, SHOULDER[2]))
+        k.tube([(x, elbow, SHOULDER[2]), (x, elbow - FOREARM + 0.04, SHOULDER[2])], 0.036, "jumper", seg=10)
+        k.lathe([(0, -0.035), (0.03, -0.03), (0.035, 0.0), (0.03, 0.03), (0, 0.035)], (x, elbow - FOREARM, SHOULDER[2]), "skin", axis="x", seg=10)
+    k.begin("boy", (0, HIP[1], HIP[2]))
 
     # The legs, each segment hanging straight down from its pivot: the game poses them
     for side, tag in ((1, "r"), (-1, "l")):

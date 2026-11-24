@@ -19,8 +19,8 @@ class HillRide {
     // him go, the lens closing in as he gets further; ahead of him looking back up the hill
     static get VIEWS() {
         return Object.freeze([
-            { id: 'follow', name: 'Behind', back: 6.5, up: 3.4, look: 9, fov: 60 },
-            { id: 'top', name: 'From the top', s: 36, across: 1.2, up: 3.6, fovNear: 55, fovFar: 16, frameM: 6 },
+            { id: 'follow', name: 'Behind', back: 8.5, up: 3.6, look: 10, fov: 46 },
+            { id: 'cinema', name: 'Cinematic', fovNear: 55, fovFar: 12, frameM: 3.2 },
             { id: 'front', name: 'In front', ahead: 7, up: 1.3, fov: 55 }
         ]);
     }
@@ -30,8 +30,8 @@ class HillRide {
     // start, raking across the house fronts on the left; through a warm haze
     static get LIGHT() {
         return Object.freeze({
-            elevationDeg: 14, alongS: 170, sunColour: 0xffd09a, sunIntensity: 2.1,
-            haze: 0xcfc8b8, hazeDensity: 0.0035, ambient: 0.26, sky: 0xc4beb0, ground: 0x6a604c, hemisphere: 0.7
+            elevationDeg: 14, alongS: 126, sunColour: 0xffd09a, sunIntensity: 2.1,
+            haze: 0xd4cec2, hazeDensity: 0.0045, ambient: 0.26, sky: 0xc4beb0, ground: 0x6a604c, hemisphere: 0.7
         });
     }
 
@@ -48,7 +48,7 @@ class HillRide {
     // fixed camera (HillLane.RULE.end) is framed as `opening` is, high behind and looking down the lane
     static get SHOTS() {
         return Object.freeze({
-            opening: { position: [17.5, 0.9, 3.4], target: [50, -0.3, -7], fov: 46 },
+            opening: HillRide.openingShot(),
             climbFoot: { position: [148, 1.6, 1.7], target: [100, -0.5, 6], fov: 46 },
             climbShop: { position: [118, -2.3, 1.3], target: [88, 0.8, 4.5], fov: 52 },
             shopSide: { position: [106.5, -3.4, 1.35], target: [109.5, -0.3, 0.9], fov: 50 },
@@ -58,7 +58,95 @@ class HillRide {
 
     // The hold at the start: the opening shot for holdS (or until he pedals, after leastS), then the camera eases over
     // easeS to the view chosen while the boy pushes off (push of the pedal for pushS, unless the rider rides himself)
-    static get HOLD() { return Object.freeze({ holdS: 3.5, leastS: 0.8, easeS: 1.6, pushS: 1.2, push: 0.7 }); }
+    static get HOLD() { return Object.freeze({ holdS: 3.5, leastS: 0.8, easeS: 2.6, pushS: 1.2, push: 0.7 }); }
+
+    // The opening shot from the lane's opening camera (HillLane.RULE.opening.camera: fitted to the reference frame):
+    // its place, a point 30 m along its aim, its field of view
+    static openingShot() {
+        const rule = HillLane.RULE;
+        const [s, across, up, yaw, pitch, fov] = rule.opening.camera;
+        const lane = HillRide.laneOnce || (HillRide.laneOnce = new HillLane());
+        const p = lane.sample(s), h = p.heading + yaw, at = lane.at(s, across, up, {});
+        const tx = at.x + Math.sin(h) * Math.cos(pitch) * 30, ty = at.y + Math.sin(pitch) * 30, tz = at.z + Math.cos(h) * Math.cos(pitch) * 30;
+        const t = lane.project(tx, tz, null, {});
+        return { position: [s, across, up], target: [t.s, t.across, ty - lane.sample(t.s).y], fov };
+    }
+
+    // The cinematic cameras down the course, in order: [s, across, up] on the lane (from doorways and high windows by
+    // the house fronts, low by the cobbles, two of SHOTS' key frames), or { road, d, up } in a side road's mouth. Each
+    // turns to follow the bicycle and closes its lens to keep him frameM of the picture's height
+    static get CINEMA() {
+        return Object.freeze([
+            [30, -2.4, 0.4], [60, 3.85, 1.6], [95, -3.85, 4.6], [118, -2.3, 1.3], { road: 0, d: 4, up: 1.7 }, [148, 1.6, 1.7], { road: 1, d: 3, up: 1.5 },
+            [185, -3.85, 4.8], [215, -2.4, 0.35], [250, 3.85, 1.6], [280, -3.85, 4.5], { road: 3, d: 4, up: 1.7 }, [335, -3.85, 1.6],
+            { road: 4, d: 6, up: 2 }, [372, -2.4, 0.4], [398, 3.85, 4.5], [405, -3.85, 1.6], [420, -3.85, 1.6], [430, 2.4, 3]
+        ]);
+    }
+
+    // The cuts: none sooner than gapS after the last; a camera keeps the bicycle while it sees it now and aheadS on
+    // and is within mostM; the next is the one that sees him longest down the course from now (looked for every
+    // stepS up to lookS), the nearer to bestM the better
+    static get CUTS() { return Object.freeze({ gapS: 1.5, aheadS: 0.8, mostM: 45, lookS: 5, stepS: 0.5, bestM: 14 }); }
+
+    // A cinematic camera's place in the world
+    static cinemaAt(lane, cam, out = {}) {
+        if (Array.isArray(cam)) return lane.at(cam[0], cam[1], cam[2], out);
+        const road = lane.sideRoads[cam.road], p = lane.roadPoint(road, cam.d);
+        out.x = p.x;
+        out.y = lane.roadY(road, cam.d, 0) + cam.up;
+        out.z = p.z;
+        return out;
+    }
+
+    // The bicycle's points a camera must see: its wheels and his head, where it is and `ahead` s on along its way
+    static bikePoints(bike, ahead = 0) {
+        const v = bike.vehicle, fx = Math.sin(v.yawAngle), fz = Math.cos(v.yawAngle);
+        const go = v.speed * ahead, x = v.position.x + fx * go, z = v.position.z + fz * go;
+        const y = ahead > 0 ? bike.lane.sample(bike.s + go).y : v.position.y;
+        return [{ x: x - fx * 0.55, y: y + 0.4, z: z - fz * 0.55 }, { x: x + fx * 0.55, y: y + 0.4, z: z + fz * 0.55 }, { x, y: y + 1.65, z }];
+    }
+
+    // Whether the camera at `eye` sees the bicycle's points: all of them near enough and none behind a building
+    static clear(lane, eye, points) {
+        const C = HillRide.CUTS;
+        return points.every(p => Math.hypot(p.x - eye.x, p.y - eye.y, p.z - eye.z) < C.mostM && !lane.blocks(eye, p));
+    }
+
+    // The cinematic camera for the bicycle now: the one it has while it still sees him, or after gapS the one that
+    // sees him longest down the course. `force` picks afresh (the start, a restart, after a fall)
+    cinemaPick(force = false) {
+        const C = HillRide.CUTS, lane = this.lane, bike = this.bike, now = bike.timeS || 0;
+        const cams = HillRide.CINEMA, eye = this.cinemaEye || (this.cinemaEye = {});
+        const keep = this.cinema;
+        if (!force && keep !== undefined && keep !== null) {
+            HillRide.cinemaAt(lane, cams[keep], eye);
+            const fine = HillRide.clear(lane, eye, HillRide.bikePoints(bike)) && HillRide.clear(lane, eye, HillRide.bikePoints(bike, C.aheadS));
+            if (fine || now - this.cinemaCutAt < C.gapS) return keep;
+        }
+        if (force) this.cinemaCutAt = now;
+        let best = keep, bestScore = -Infinity;
+        for (let i = 0; i < cams.length; i++) {
+            HillRide.cinemaAt(lane, cams[i], eye);
+            let seen = 0;
+            for (let t = 0; t <= C.lookS; t += C.stepS) {
+                if (!HillRide.clear(lane, eye, HillRide.bikePoints(bike, t))) break;
+                seen++;
+            }
+            if (seen === 0) continue;
+            const d = Math.hypot(eye.x - bike.vehicle.position.x, eye.z - bike.vehicle.position.z);
+            const score = seen * 10 - Math.abs(d - C.bestM) * 0.2 - (i === keep ? 0 : 0.5);
+            if (score > bestScore) {
+                bestScore = score;
+                best = i;
+            }
+        }
+        if (best !== keep) {
+            this.cinemaCutAt = now;
+            this.cinemaCuts = (this.cinemaCuts || 0) + 1;
+        }
+        this.cinema = best === undefined ? 0 : best;
+        return this.cinema;
+    }
 
     // A shot's place and aim in the world, into `at` and `look`; `name` is a name of SHOTS or a shot itself
     static shot(lane, name, at, look) {
@@ -99,13 +187,12 @@ class HillRide {
         const model = await SceneAssets.loadModel(HillRider.FILE);
         this.rider = new HillRider(model);
         this.props = new HillProps(this.lane);
+        this.props.sound = game.soundManager;
         game.scene.add(this.props.group);
         // A puff of soil where a pot breaks
         this.puff = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0x5a4430, roughness: 1, transparent: true, opacity: 0 }));
         this.puff.visible = false;
         game.scene.add(this.puff);
-        // The last picture, loaded behind the ride
-        SceneAssets.loadModel(HillRide.LOAF.file).then(loaf => this.buildLoaf(loaf)).catch(error => console.warn('Hill ride: the last picture did not load:', error));
         game.scene.add(this.rider.group);
         game.graphics.fixColorSpaces();
         this.light();
@@ -116,7 +203,7 @@ class HillRide {
             if (event.code === 'Escape') window.location.assign(window.location.pathname);
         };
         document.addEventListener('keydown', this.keys);
-        this.bike.reset();
+        this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
         this.hold = { phase: 'hold', t: 0 };
         this.rider.update(this.bike, this.lane, 0);
         this.placeCamera(1);
@@ -188,12 +275,13 @@ class HillRide {
     }
 
     restart() {
-        this.bike.reset();
+        this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
         if (this.props) this.props.reset();
         if (this.loafShown) this.showLoaf(false);
         this.hold = { phase: 'hold', t: 0 };
         this.accumulated = 0;
         this.ending = null;
+        this.cinema = null;
         if (this.endNote) this.endNote.style.display = 'none';
         if (this.fade) this.fade.style.opacity = '0';
         this.placeCamera(1);
@@ -226,33 +314,20 @@ class HillRide {
 
     // The last picture: the loaf on its board on a table, far below the village, in a warm low light from the side
     static get LOAF() {
-        return Object.freeze({ file: 'assets/hill/loaf.glb', at: [0, -400, 0], camera: [0.42, 0.36, 0.62], fov: 34, light: [0.8, 0.55, 0.35], colour: 0xffdcb0, intensity: 1.9, table: 0x2e2018, revealS: 1.4 });
+        return Object.freeze({ at: [0, -400, 0], camera: [0.42, 0.36, 0.62], fov: 34, light: [0.8, 0.55, 0.35], colour: 0xffdcb0, intensity: 1.9, table: 0x2e2018, revealS: 1.4 });
     }
 
-    buildLoaf(model) {
-        const lod = model.groups && model.groups.get('lod0') ? model.groups.get('lod0') : model;
+    // Builds the last picture (HillLoaf) if it is not built yet: only once the ride reaches its end
+    makeLoaf() {
+        if (this.loaf || typeof HillLoaf === 'undefined') return this.loaf;
         const L = HillRide.LOAF;
-        const group = new THREE.Group();
-        group.name = 'hill-loaf';
-        for (const [name, primitives] of lod.meshes) {
-            const pivot = new THREE.Group();
-            pivot.position.copy(lod.places.get(name));
-            for (const { geometry, material } of primitives) {
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.castShadow = mesh.receiveShadow = true;
-                pivot.add(mesh);
-            }
-            group.add(pivot);
-        }
-        const table = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshStandardMaterial({ color: L.table, roughness: 0.7 }));
-        table.rotation.x = -Math.PI / 2;
-        table.receiveShadow = true;
-        group.add(table);
+        const group = HillLoaf.build(this.game.renderer ? this.game.renderer.capabilities.getMaxAnisotropy() : 8);
         group.position.fromArray(L.at);
         group.visible = false;
         this.game.scene.add(group);
         this.game.graphics.fixColorSpaces(group);
         this.loaf = group;
+        return group;
     }
 
     // Shows the last picture: the village put away, the loaf in its light, the camera on it
@@ -261,6 +336,7 @@ class HillRide {
         if (this.village) this.village.visible = !on;
         if (this.rider) this.rider.group.visible = !on;
         if (this.props) this.props.group.visible = !on;
+        if (on) this.makeLoaf();
         if (this.loaf) this.loaf.visible = on;
         if (on && game.scene) {
             this.savedFog = game.scene.fog;
@@ -287,6 +363,8 @@ class HillRide {
             e.hidden = HillRide.seen(this.game.camera, this.lane, HillRide.points(this.lane, this.bike)) ? 0 : e.hidden + dt;
             if (e.hidden >= end.hiddenS) {
                 e.phase = 'fading';
+                // The last picture is built under the fade, the screen going dark
+                this.makeLoaf();
                 e.fadeAt = e.t;
                 if (this.music) this.music.stop(end.fadeS);
             }
@@ -336,6 +414,7 @@ class HillRide {
                 this.hold.t = 0;
                 this.hold.from = this.game.camera.position.clone();
                 this.hold.lookFrom = this.look.clone();
+                this.hold.fovFrom = this.game.camera.fov;
             } else if (this.hold.phase === 'ease' && this.hold.t >= H.easeS) {
                 this.hold = null;
             }
@@ -450,10 +529,15 @@ class HillRide {
             this.camTarget.set(back.x + back.leftX * this.bike.across * 0.5, back.y + view.up, back.z + back.leftZ * this.bike.across * 0.5);
             const ahead = this.lane.sample(this.bike.s + view.look, {});
             this.look.set(ahead.x, ahead.y + 0.6, ahead.z).lerp(bike, 0.35);
-        } else if (view.id === 'top') {
-            const top = this.lane.at(view.s, view.across, view.up, {});
+        } else if (view.id === 'cinema') {
+            // After a fall or a restart, the camera that sees him
+            const down = this.bike.crashed;
+            const force = this.cinema === undefined || this.cinema === null || (this.wasDown && !down) || (this.bike.timeS || 0) < (this.cinemaCutAt || 0);
+            this.wasDown = down;
+            const top = HillRide.cinemaAt(this.lane, HillRide.CINEMA[this.cinemaPick(force)], {});
+            const v = this.bike.vehicle.position;
             this.camTarget.set(top.x, top.y, top.z);
-            this.look.set(bike.x, bike.y + 0.9, bike.z);
+            this.look.set(v.x, v.y + 0.9, v.z);
             // The lens closes in to keep him about frameM of the picture's height
             const d = this.camTarget.distanceTo(this.look);
             fov = Math.max(view.fovFar, Math.min(view.fovNear, 2 * Math.atan(view.frameM / 2 / Math.max(1, d)) * 180 / Math.PI * 1.6));
@@ -464,10 +548,12 @@ class HillRide {
             this.look.set(bike.x, bike.y + 0.8, bike.z);
         }
         if (this.hold && this.hold.phase === 'ease') {
-            // From the opening shot to the view, eased
-            const t = Math.min(1, this.hold.t / HillRide.HOLD.easeS), k = t * t * (3 - 2 * t);
+            // From the opening shot to the view as he pushes off: the camera cranes up and back, the aim and the lens
+            // follow, all eased, no cut
+            const t = Math.min(1, this.hold.t / HillRide.HOLD.easeS), k = t * t * t * (t * (6 * t - 15) + 10);
             cam.position.copy(this.hold.from).lerp(this.camTarget, k);
             this.look.copy(this.hold.lookFrom).lerp(this.look, k);
+            fov = this.hold.fovFrom + (fov - this.hold.fovFrom) * k;
         } else cam.position.lerp(this.camTarget, blend);
         cam.up.set(0, 1, 0);
         if (cam.fov !== fov) {

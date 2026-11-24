@@ -16,8 +16,8 @@ const THREE = realThree();
 const game = loadGame(THREE);
 const { Vehicle, WorldPhysics, CHARACTERS } = game;
 const RideMode = new Function(`${loadScript('ridemode.js')}\nreturn RideMode;`)();
-const { HillLane, HillVehicle, HillBicycle, HillMusic, HillRide, HillProps, HillScene } = new Function('THREE', 'Vehicle', 'WorldPhysics', 'CHARACTERS',
-    `${['lane', 'pushbike', 'bicycle', 'music', 'ride', 'props', 'scene'].map(n => loadScript(`hill/${n}.js`)).join('\n')}\nreturn { HillLane, HillVehicle, HillBicycle, HillMusic, HillRide, HillProps, HillScene };`
+const { HillLane, HillVehicle, HillBicycle, HillMusic, HillRide, HillProps, HillScene, HillTextures } = new Function('THREE', 'Vehicle', 'WorldPhysics', 'CHARACTERS',
+    `${['lane', 'pushbike', 'bicycle', 'music', 'ride', 'props', 'textures', 'scene'].map(n => loadScript(`hill/${n}.js`)).join('\n')}\nreturn { HillLane, HillVehicle, HillBicycle, HillMusic, HillRide, HillProps, HillScene, HillTextures };`
 )(THREE, Vehicle, WorldPhysics, CHARACTERS);
 
 const DT = 1 / 120;
@@ -82,40 +82,43 @@ describe('the lane', () => {
     });
 
     test('the course: a gentle right-hander from the start onto the main straight, a left curve, a fast steep part, a sharp right, a last gentle left', () => {
+        const r = lane.rule, H = r.heading;
         const grades = lane.points.map(p => p.grade);
         expect(Math.max(...grades)).toBeLessThan(0);
         expect(Math.min(...grades)).toBeLessThan(-0.2);
-        expect(Math.min(...grades)).toBeGreaterThan(-0.26);
-        expect(lane.rule.lengthM).toBe(600);
-        expect(lane.sample(lane.rule.startM).y - lane.sample(lane.rule.lengthM).y).toBeGreaterThan(60);
+        expect(Math.min(...grades)).toBeGreaterThan(-0.27);
+        expect(r.lengthM).toBeGreaterThan(550);
+        expect(lane.sample(r.startM).y - lane.sample(r.lengthM).y).toBeGreaterThan(60);
         const straight = (from, to) => {
             for (let s = from; s <= to; s++) expect(Math.abs(lane.radiusAt(s))).toBeGreaterThan(1000);
         };
-        // The gentle right-hander: a turn to the right of about the angle the start's view has the sun off it, never tight
-        const right = lane.sample(lane.rule.mainStraight.fromS).heading - lane.sample(lane.rule.startM).heading;
+        // A steep straight from the start, as the opening frame has it, then the right-hander onto the main straight
+        straight(0, H[1][0] - 1);
+        for (let s = r.startM + 10; s <= r.startM + 25; s++) expect(lane.sample(s).grade).toBeLessThan(-0.15);
+        const right = lane.sample(r.mainStraight.fromS).heading - lane.sample(r.startM).heading;
         expect(right).toBeLessThan(-0.45);
         expect(right).toBeGreaterThan(-0.8);
-        for (let s = 30; s <= 110; s++) expect(Math.abs(lane.radiusAt(s))).toBeGreaterThan(40);
-        straight(lane.rule.mainStraight.fromS, lane.rule.mainStraight.toS);
-        straight(312, 418);
+        // (at the foot of the steep start, as the opening frame has it: no tighter than 25 m)
+        for (let s = H[1][0]; s <= H[2][0]; s++) expect(Math.abs(lane.radiusAt(s))).toBeGreaterThan(25);
+        straight(r.mainStraight.fromS, r.mainStraight.toS);
+        straight(H[4][0] + 2, r.sharpRight.fromS - 2);
         // The left curve between them
         let left = 0;
-        for (let s = 230; s <= 290; s++) if (lane.radiusAt(s) > 0) left++;
+        for (let s = H[3][0]; s <= H[4][0]; s++) if (lane.radiusAt(s) > 0) left++;
         expect(left).toBeGreaterThan(50);
         // The sharp right: its tightest radius as the rule gives it, and it turns right (the radius is negative)
-        const { fromS, toS, leastRadiusM } = lane.rule.sharpRight;
+        const { fromS, toS, leastRadiusM } = r.sharpRight;
         let least = Infinity;
         for (let s = fromS; s <= toS; s += 0.25) {
-            const r = lane.radiusAt(s);
-            expect(r).toBeLessThan(0);
-            least = Math.min(least, Math.abs(r));
+            const radius = lane.radiusAt(s);
+            expect(radius).toBeLessThan(0);
+            least = Math.min(least, Math.abs(radius));
         }
         expect(least).toBeGreaterThanOrEqual(leastRadiusM[0]);
         expect(least).toBeLessThanOrEqual(leastRadiusM[1]);
         // The last curve is gentle and to the left, and the camera holds at its start
-        for (let s = 490; s <= 560; s += 5) expect(lane.radiusAt(s)).toBeGreaterThan(60);
-        expect(lane.rule.end.s).toBeGreaterThan(475);
-        expect(lane.rule.end.s).toBeLessThan(495);
+        for (let s = H[7][0] + 10; s <= H[8][0] - 5; s += 5) expect(lane.radiusAt(s)).toBeGreaterThan(60);
+        expect(Math.abs(r.end.s - H[7][0])).toBeLessThan(10);
     });
 
     test('the low sun lies along the main straight: ahead down it, to the right at the start', () => {
@@ -136,15 +139,15 @@ describe('the lane', () => {
     test('a terrace stands on each side all the way down, end to end without overlapping, each side its own', () => {
         for (const side of [1, -1]) {
             const row = lane.cottages.filter(c => c.side === side);
-            expect(row.length).toBeGreaterThan(55);
+            expect(row.length).toBeGreaterThan(40);
             // Low walls stand only for short stretches
-            for (const w of lane.walls.filter(g => g.side === side && !g.upM)) expect(w.to - w.from).toBeLessThanOrEqual(3.01);
+            for (const w of lane.walls.filter(g => g.side === side && g.kind === 'wall' && !g.upM)) expect(w.to - w.from).toBeLessThanOrEqual(3.01);
             // The left from the top; the right after the top wall
             expect(row[0].from).toBeLessThanOrEqual(side > 0 ? lane.rule.startM - 10 : lane.rule.topWallToS + 3);
             expect(row[row.length - 1].to).toBeGreaterThan(lane.rule.lengthM - 12);
             for (let i = 1; i < row.length; i++) expect(row[i].from).toBeGreaterThanOrEqual(row[i - 1].to - 1e-9);
-            // Its gaps are where its low walls run
-            const gaps = lane.walls.filter(w => w.side === side);
+            // Its gaps are where its low walls run, or a side road's mouth
+            const gaps = [...lane.walls.filter(w => w.side === side), ...lane.sideRoads.filter(m => m.side === side)];
             for (let i = 1; i < row.length; i++) {
                 for (let s = row[i - 1].to + 0.05; s < row[i].from - 0.05; s += 0.25) expect([side, s, gaps.some(w => w.from <= s && s <= w.to)]).toEqual([side, s, true]);
             }
@@ -158,6 +161,12 @@ describe('the lane', () => {
         const left = lane.cottages.filter(c => c.side === 1).map(key), right = lane.cottages.filter(c => c.side === -1).map(key);
         for (const row of [left, right]) for (let i = 1; i < row.length; i++) expect(row[i]).not.toBe(row[i - 1]);
         expect(left.slice(0, 20)).not.toEqual(right.slice(0, 20));
+        // Not all terraces: semi-detached pairs, detached cottages in gardens, shops, a pub, and the church set back
+        const kinds = new Set(lane.cottages.map(c => c.kind));
+        for (const k of ['terrace', 'semi', 'detached', 'shop', 'pub']) expect(kinds.has(k)).toBe(true);
+        expect(lane.walls.filter(w => w.kind === 'garden').length).toBeGreaterThan(10);
+        expect(lane.walls.some(w => w.gate)).toBe(true);
+        expect(lane.church).toBeTruthy();
     });
 
     test('no cottage stands on the lane: every corner of every one is clear of the cobbles and its flags', () => {
@@ -215,6 +224,76 @@ describe('the lane', () => {
     });
 });
 
+describe('the side roads', () => {
+    const lane = new HillLane();
+
+    test('four to six, on both sides, none in the sharp right or the last left, a mix of kinds', () => {
+        const r = lane.rule;
+        expect(lane.sideRoads.length).toBeGreaterThanOrEqual(4);
+        expect(lane.sideRoads.length).toBeLessThanOrEqual(6);
+        expect(new Set(lane.sideRoads.map(m => m.side)).size).toBe(2);
+        expect(new Set(lane.sideRoads.map(m => m.kind))).toEqual(new Set(['cobbled', 'gravel', 'steps']));
+        for (const m of lane.sideRoads) {
+            expect(m.to < r.sharpRight.fromS || m.from > r.sharpRight.toS).toBe(true);
+            expect(m.from).toBeLessThan(r.heading[6][0]);
+            expect(m.houses.length + m.walls.length).toBeGreaterThan(2);
+            // No cottage of the lane stands in its mouth
+            for (const c of lane.cottages) if (c.side === m.side) expect(c.to <= m.from + 1e-6 || c.from >= m.to - 1e-6).toBe(true);
+        }
+    });
+
+    test('every mouth meets the lane with no step, and the surface eases on smoothly', () => {
+        for (const m of lane.sideRoads) {
+            for (let w = -m.wide / 2; w <= m.wide / 2 + 1e-6; w += 0.25) {
+                expect(Math.abs(lane.roadY(m, 0, w) - lane.sample(m.s + w).y)).toBeLessThan(0.005);
+                for (let d = 0; d < HillLane.SIDE.mouthM + 1; d += 0.1) expect(Math.abs(lane.roadY(m, d + 0.1, w) - lane.roadY(m, d, w))).toBeLessThan(m.kind === 'steps' && d > lane.rule.flagsM ? 0.16 : 0.05);
+            }
+        }
+    });
+
+    test('they never cross the course or each other', () => {
+        const r = lane.rule;
+        for (const m of lane.sideRoads) {
+            for (const p of m.points) {
+                if (p.d < 0.5) continue;
+                for (const w of [-m.wide / 2, 0, m.wide / 2]) {
+                    const at = lane.project(p.x + p.crossX * w, p.z + p.crossZ * w, m.s, {});
+                    expect(Math.abs(at.across)).toBeGreaterThan(r.halfWidthM);
+                }
+            }
+            for (const o of lane.sideRoads) {
+                if (o === m) continue;
+                let least = Infinity;
+                for (const p of m.points) for (const q of o.points) least = Math.min(least, Math.hypot(p.x - q.x, p.z - q.z));
+                expect(least).toBeGreaterThan((m.wide + o.wide) / 2 + 1);
+            }
+        }
+    });
+
+    test('ridden in, the bicycle stops at what closes it, and the ending never fires from a side road', () => {
+        for (const m of lane.sideRoads.filter(m => m.ride > 0)) {
+            const bike = new HillBicycle(lane);
+            bike.reset(m.s, 0);
+            const p = lane.roadPoint(m, 3), v = bike.vehicle;
+            v.position.set(p.x, lane.roadY(m, 3, 0), p.z);
+            v.yawAngle = Math.atan2(p.dirX, p.dirZ);
+            v.footDown = false;
+            bike.place();
+            let most = 0;
+            const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, ending: null });
+            for (let t = 0; t < 5; t += DT) {
+                if (!v.crashed && t < 1) v.speed = 4;
+                bike.step(DT, quiet);
+                const at = lane.sideAt(v.position.x, v.position.z, {});
+                if (at && at.road === m) most = Math.max(most, at.d);
+                expect(ride.updateEnding(DT)).toBe(null);
+            }
+            expect(most).toBeGreaterThan(m.ride - 1.5);
+            expect(most).toBeLessThan(m.ride + 0.05);
+        }
+    });
+});
+
 describe("the bicycle: the game's own bike with a delivery bicycle's numbers", () => {
     test("steered left at speed it leans left and turns left, through the vehicle's own lean path", () => {
         const bike = new HillBicycle(flat());
@@ -263,39 +342,79 @@ describe("the bicycle: the game's own bike with a delivery bicycle's numbers", (
         console.log(`hill bicycle: lean rate ${bikeRate.toFixed(2)} rad/s against a motorbike's ${motoRate.toFixed(2)}; held over at 7 m/s, lean ${(Math.abs(held.leanAngle) * 180 / Math.PI).toFixed(1)} deg, radius ${radius.toFixed(1)} m`);
     });
 
+    test('at a crawl the bars turn it hard over with little lean; at speed the bars stay near straight and the lean turns it; no step between', () => {
+        const hold = (speed, seconds = 3) => {
+            const v = new HillVehicle();
+            v.surface.grade = 0;
+            let yaw = v.yawAngle, curve = 0;
+            for (let t = 0; t < seconds; t += DT) {
+                v.speed = speed;
+                v.footDown = false;
+                v.update(DT, 1, 0.3, 0, 0);
+                curve = Math.abs(v.yawAngle - yaw) / DT / speed;
+                yaw = v.yawAngle;
+            }
+            return { bars: Math.abs(v.barsDrawn()) * 180 / Math.PI, lean: Math.abs(v.leanAngle) * 180 / Math.PI, radius: 1 / curve };
+        };
+        const crawl = hold(0.8), quick = hold(7);
+        expect(crawl.bars).toBeGreaterThan(28);
+        expect(crawl.lean).toBeLessThan(8);
+        expect(crawl.radius).toBeLessThan(2.5);
+        expect(quick.bars).toBeLessThan(9);
+        expect(quick.lean).toBeGreaterThan(25);
+        // Speed swept from 0.3 to 7 m/s under full steer: the bars, the lean and the path's curve change smoothly
+        const v = new HillVehicle();
+        v.surface.grade = 0;
+        let last = null, yaw = v.yawAngle;
+        const jumps = { bars: 0, lean: 0, curve: 0 };
+        for (let t = 0; t < 8; t += DT) {
+            v.speed = 0.3 + 6.7 * t / 8;
+            v.footDown = false;
+            v.update(DT, 1, 0.3, 0, 0);
+            const now = { bars: v.barsDrawn(), lean: v.leanAngle, curve: (v.yawAngle - yaw) / DT / v.speed };
+            yaw = v.yawAngle;
+            if (last && t > 0.5) for (const k of Object.keys(jumps)) jumps[k] = Math.max(jumps[k], Math.abs(now[k] - last[k]));
+            last = now;
+        }
+        expect(jumps.bars).toBeLessThan(0.01);
+        expect(jumps.lean).toBeLessThan(0.01);
+        expect(jumps.curve).toBeLessThan(0.01);
+        console.log(`hill steering: at 0.8 m/s bars ${crawl.bars.toFixed(1)} deg, lean ${crawl.lean.toFixed(1)} deg, radius ${crawl.radius.toFixed(2)} m; at 7 m/s bars ${quick.bars.toFixed(1)} deg, lean ${quick.lean.toFixed(1)} deg, radius ${quick.radius.toFixed(1)} m; largest step a frame: bars ${jumps.bars.toFixed(4)} rad, lean ${jumps.lean.toFixed(4)} rad, curve ${jumps.curve.toFixed(4)} 1/m`);
+    });
+
     test('stood at the top it rolls off on the fall alone, the legs come out at speed, and the autopilot takes it to the last curve', () => {
         const bike = new HillBicycle(new HillLane());
         const r = bike.rule;
         expect(bike.s).toBe(bike.lane.rule.startM);
         expect(bike.footDown).toBe(true);
         let outAt = null, top = 0, crashes = 0, cranks = 0, straightTop = 0;
-        for (let t = 0; t < 160 && bike.s < 500; t += DT) {
-            const input = pilot(bike, { bend: 8, before: 45 });
+        for (let t = 0; t < 160 && bike.s < bike.lane.rule.end.stopS + 12; t += DT) {
+            const input = pilot(bike, { bend: 8, before: 60 });
             // A push off from the stand, then nothing but the bars and the brakes
             if (t < 1.5) input.pedal = 1;
             bike.step(DT, input);
             if (bike.crashed) crashes++;
             top = Math.max(top, bike.speed);
-            if (bike.s > 370 && bike.s < 400) straightTop = Math.max(straightTop, bike.speed);
+            if (bike.s > bike.lane.rule.heading[4][0] && bike.s < bike.lane.rule.sharpRight.fromS) straightTop = Math.max(straightTop, bike.speed);
             cranks = Math.max(cranks, bike.crank);
             if (outAt === null && bike.legs >= 1) outAt = { s: bike.s, speed: bike.speed };
         }
         expect(crashes).toBe(0);
-        expect(bike.s).toBeGreaterThanOrEqual(500);
+        expect(bike.s).toBeGreaterThanOrEqual(bike.lane.rule.end.stopS + 12);
         expect(outAt).not.toBeNull();
         expect(outAt.speed).toBeGreaterThan(r.legsOutMs);
         expect(outAt.s).toBeLessThan(160);
         // Real pace at the bottom of the straight, nothing touched but the bars
-        expect(straightTop).toBeGreaterThan(15);
-        expect(straightTop).toBeLessThan(18.5);
+        expect(straightTop).toBeGreaterThan(18.5);
+        expect(straightTop).toBeLessThan(22.5);
     });
 
     test('the sharp right cannot be taken at full speed: he runs wide into the house fronts, or falls', () => {
         const bike = new HillBicycle(new HillLane());
-        bike.reset(385);
-        bike.vehicle.speed = 15;
+        bike.reset(bike.lane.rule.sharpRight.fromS - 35);
+        bike.vehicle.speed = 19;
         let trouble = 0;
-        for (let t = 0; t < 8 && bike.s < 450; t += DT) {
+        for (let t = 0; t < 8 && bike.s < bike.lane.rule.sharpRight.toS + 12; t += DT) {
             bike.step(DT, pilot(bike));
             if (bike.crashed || bike.vehicle.brushNew) trouble++;
             bike.vehicle.brushNew = false;
@@ -342,7 +461,7 @@ describe("the bicycle: the game's own bike with a delivery bicycle's numbers", (
     test('the legs stay out while it is too fast for his feet, and come in once it slows', () => {
         const bike = new HillBicycle(flat());
         bike.reset(20);
-        bike.vehicle.speed = 9;
+        bike.vehicle.speed = 20;
         bike.legsOut = true;
         bike.legs = 1;
         ride(bike, { pedal: 1, brake: 0, steer: 0 }, 0.2);
@@ -426,7 +545,7 @@ describe('the end of the ride', () => {
     test('the stopped camera sees him come into the last curve, then loses him round it, and he stays out of sight', () => {
         const lane = new HillLane();
         const bike = new HillBicycle(lane);
-        bike.reset(462);
+        bike.reset(lane.rule.end.stopS - 26);
         bike.vehicle.speed = 9;
         const cam = camera();
         const end = lane.rule.end;
@@ -441,7 +560,7 @@ describe('the end of the ride', () => {
         }
         expect(seenFrom).toBeLessThan(end.stopS + 1);
         expect(lostAt - seenFrom).toBeGreaterThan(20);
-        expect(lostAt).toBeGreaterThan(510);
+        expect(lostAt).toBeGreaterThan(lane.rule.end.lookS - 12);
         expect(seenAfter).toBe(false);
     });
 
@@ -449,7 +568,7 @@ describe('the end of the ride', () => {
         const lane = new HillLane();
         const cam = camera();
         const bike = new HillBicycle(lane);
-        bike.reset(462);
+        bike.reset(lane.rule.end.stopS - 26);
         bike.vehicle.speed = 9;
         const ride = Object.assign(Object.create(HillRide.prototype), {
             lane, bike, game: { camera: cam }, music: { stop() { this.stopped = true; }, close() { this.closed = true; } }, look: new THREE.Vector3(),
@@ -468,6 +587,42 @@ describe('the end of the ride', () => {
         expect(ride.fade.style.opacity).toBe('0');
         expect(ride.loafShown).toBe(true);
         expect(ride.endNote.style.display).toBe('');
+    });
+});
+
+describe('the cinematic cameras', () => {
+    test('down a whole ride the bicycle is always in frame and in clear view until the ending, and the cuts are spaced', () => {
+        const lane = new HillLane(), bike = new HillBicycle(lane);
+        const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);
+        const ride = Object.assign(Object.create(HillRide.prototype), {
+            lane, bike, game: { camera }, view: HillRide.VIEWS.findIndex(v => v.id === 'cinema'), look: new THREE.Vector3(), camTarget: new THREE.Vector3(),
+            sample: {}, rider: null, hold: null, ending: null
+        });
+        const frustum = new THREE.Frustum(), m = new THREE.Matrix4(), q = new THREE.Vector3();
+        const cuts = [];
+        let last = null, frames = 0, out = 0, hidden = 0;
+        for (let t = 0; t < 200 && bike.s < lane.rule.end.stopS; t += DT) {
+            const input = pilot(bike, { bend: 8, before: 60 });
+            if (t < 1.5) input.pedal = 1;
+            bike.step(DT, input);
+            ride.placeCamera(1);
+            if (ride.cinema !== last) {
+                cuts.push(bike.timeS);
+                last = ride.cinema;
+            }
+            frames++;
+            camera.updateMatrixWorld();
+            frustum.setFromProjectionMatrix(m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+            const points = HillRide.bikePoints(bike);
+            if (!points.every(p => frustum.containsPoint(q.set(p.x, p.y, p.z)))) out++;
+            if (points.some(p => lane.blocks(camera.position, p))) hidden++;
+        }
+        console.log(`hill cinema: ${cuts.length} cameras over ${frames} frames; out of frame ${out}, hidden ${hidden}; shortest shot ${Math.min(...cuts.slice(1).map((c, i) => c - cuts[i])).toFixed(2)} s`);
+        expect(bike.s).toBeGreaterThanOrEqual(lane.rule.end.stopS);
+        expect(out).toBe(0);
+        expect(hidden).toBe(0);
+        for (let i = 1; i < cuts.length; i++) expect(cuts[i] - cuts[i - 1]).toBeGreaterThanOrEqual(HillRide.CUTS.gapS - 1e-9);
+        expect(cuts.length).toBeGreaterThan(6);
     });
 });
 
@@ -539,6 +694,40 @@ describe('the boy on the bicycle', () => {
         }
     });
 
+    test("in a crash he comes off as a motorbike's rider does, falls clear of the bicycle, and is back on it after the restart", () => {
+        const real = new HillBicycle(lane);
+        const scene = new THREE.Group();
+        scene.add(rider.group);
+        real.reset(lane.rule.sharpRight.fromS - 30);
+        for (let t = 0; t < 0.5; t += DT) real.step(DT, { pedal: 1, brake: 0, steer: 0 });
+        real.vehicle.speed = 12;
+        real.vehicle.worldCrash('Too fast for the corner', null, 'grip');
+        let most = 0, kinds = new Set();
+        const hip = new THREE.Vector3(), seat = new THREE.Vector3();
+        for (let t = 0; t < 2; t += DT) {
+            real.step(DT, { pedal: 0, brake: 0, steer: 0 });
+            rider.update(real, lane, DT);
+            if (rider.fallen) {
+                kinds.add(real.vehicle.riderFall.kind);
+                scene.updateMatrixWorld(true);
+                rider.parts.boy.getWorldPosition(hip);
+                rider.frame.localToWorld(seat.copy(rider.rest.boy));
+                most = Math.max(most, hip.distanceTo(seat));
+                expect(hip.y).toBeGreaterThan(lane.sample(real.s).y - 1.5);
+            }
+        }
+        expect([...kinds]).toEqual(['lowside']);
+        expect(most).toBeGreaterThan(0.8);
+        for (let t = 0; t < 2; t += DT) {
+            real.step(DT, { pedal: 0, brake: 0, steer: 0 });
+            rider.update(real, lane, DT);
+        }
+        expect(real.crashed).toBe(false);
+        expect(rider.fallen).toBe(null);
+        expect(rider.parts.boy.parent).toBe(rider.frame);
+        scene.remove(rider.group);
+    });
+
     test('legs out, each leg is straight out to its own side, below the hip and clear of the bicycle and the ground', () => {
         rider.foot = 0;
         rider.update(bike(0, 1), lane, 0);
@@ -546,7 +735,7 @@ describe('the boy on the bicycle', () => {
         for (const leg of rider.legs) {
             hip.copy(leg.thigh.position);
             ankle.copy(leg.foot.position);
-            expect(hip.distanceTo(ankle)).toBeGreaterThan((leg.upper + leg.lower) * (HillRider.LEGS_OUT.reach - HillBicycle.LEGS.bend[1]) - 0.08);
+            expect(hip.distanceTo(ankle)).toBeGreaterThan((leg.upper + leg.lower) * HillRider.LEGS_OUT.reach - 0.08);
             expect(Math.sign(ankle.x)).toBe(leg.side);
             expect(Math.abs(ankle.x)).toBeGreaterThan(0.55);
             expect(ankle.y).toBeLessThan(hip.y);
@@ -610,9 +799,10 @@ describe('the things in the street', () => {
         expect(HillProps.place(lane)).toEqual(places);
         let edge = 0;
         for (const p of places) {
-            expect(Math.abs(p.across)).toBeGreaterThan(lane.rule.halfWidthM - 0.6);
+            // The opening frame's churn stands on its step by the camera, as the reference frame has it
+            if (!p.onStep) expect(Math.abs(p.across)).toBeGreaterThan(lane.rule.halfWidthM - 0.6);
             expect(Math.abs(p.across)).toBeLessThan(lane.rule.halfWidthM + lane.rule.flagsM);
-            const ground = lane.sample(p.s).y + (Math.abs(p.across) > lane.rule.halfWidthM ? 0.1 : lane.cobble(p.s, p.across));
+            const ground = lane.sample(p.s).y + (p.onStep ? lane.rule.opening.step[3] + 0.1 : Math.abs(p.across) > lane.rule.halfWidthM ? 0.1 : lane.cobble(p.s, p.across));
             expect(Math.abs(p.y - ground)).toBeLessThan(1e-9);
             if (Math.abs(p.across) < lane.rule.halfWidthM) edge++;
         }
@@ -661,6 +851,43 @@ describe('the things in the street', () => {
         expect(hit).toBeGreaterThan(0);
         expect(bike.crashed).toBe(true);
     });
+    test('the football bounces off at a hit, lower each time, rolls on down the hill and never goes through a house front', () => {
+        const props = new HillProps(lane);
+        const bike = new HillBicycle(lane);
+        const ball = props.items.find(i => i.kind === 'ball');
+        expect(ball).toBeTruthy();
+        bike.reset(ball.s - 3, ball.across);
+        let hit = 0;
+        for (let t = 0; t < 1 && !hit; t += DT) {
+            bike.vehicle.speed = 7;
+            bike.step(DT, quiet);
+            hit = props.knock(bike, null);
+        }
+        expect(hit).toBeGreaterThan(0);
+        expect(bike.crashed).toBe(false);
+        const startS = ball.s, tops = [];
+        // Each bounce leaves the ground at the ball's bounce share of the speed it came down with (on the hill a bounce
+        // can climb higher over the next floor, which is lower), and in the end it rolls
+        let wide = 0, rolledS = 0;
+        for (let t = 0; t < 12; t += DT) {
+            const before = ball.vy;
+            props.step(DT);
+            if (ball.bounces > (ball.counted || 0)) {
+                ball.counted = ball.bounces;
+                // (the height it leaves with, off the slope)
+                tops.push(ball.bounceMs ** 2 / 19.62);
+            }
+            rolledS = ball.rolling && ball.moving ? rolledS + DT : 0;
+            const at = lane.project(ball.x, ball.z, ball.s, {});
+            wide = Math.max(wide, Math.abs(at.across));
+        }
+        expect(tops.length).toBeGreaterThanOrEqual(3);
+        for (let i = 1; i < 3; i++) expect(tops[i]).toBeLessThan(tops[i - 1]);
+        expect(rolledS).toBeGreaterThan(1);
+        expect(wide).toBeLessThan(lane.rule.halfWidthM + lane.rule.flagsM - 0.1);
+        expect(ball.s).toBeGreaterThan(startS + 10);
+        console.log(`hill football: ${tops.length} bounces, the first rising ${tops.slice(0, 5).map(x => x.toFixed(2)).join(', ')} m; ${(ball.s - startS).toFixed(0)} m down the lane in 12 s`);
+    });
 });
 
 describe('the village within its budget', () => {
@@ -671,9 +898,18 @@ describe('the village within its budget', () => {
         HillScene.cobbleTextures = () => ({ map: null, normalMap: null, aoMap: null, roughnessMap: null });
         const fieldKeep = HillScene.fieldTexture;
         HillScene.fieldTexture = () => null;
+        HillTextures.made = new Proxy({}, { get: () => ({ map: null, normalMap: null }) });
+        const skyKeep = HillScene.paneSky;
+        HillScene.paneSky = () => null;
         const { group } = HillScene.build(lane);
         HillScene.cobbleTextures = keep;
         HillScene.fieldTexture = fieldKeep;
+        HillScene.paneSky = skyKeep;
+        HillTextures.made = null;
+        let draws = 0;
+        group.traverse(o => { if (o.isMesh) draws++; });
+        console.log(`hill village: ${draws} draws`);
+        expect(draws).toBeLessThan(40);
         let triangles = 0;
         group.traverse(o => {
             if (!o.isMesh) return;
