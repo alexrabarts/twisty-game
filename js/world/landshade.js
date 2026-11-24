@@ -368,9 +368,14 @@ float landNoise(vec2 p) {
     // its segments; any other stone is read along its own horizontal
     // (a face that tapers out past a wall's end is drawn only from the side it faces: wallFace 2, its normal the
     // way out from its road; read in view space, where the eye is the origin)
-    if (vWallFace.y > 1.5 && dot(vViewPosition, vNormal) < 0.0) discard;
-    float u = vWallFace.y > 0.5 ? vWallFace.x : dot(vLandPos.xz, t);
-    float y = vLandPos.y + ${f(S.wanderM)} * (landNoise(vec2(u * 0.9, vLandPos.y * 0.5)) - 0.5);
+    // The underside of an arch (wallFace y over 2.5: RoadMesh.BARREL plus its metres across the road) is a barrel: its
+    // courses run across from face to face and step round the curve by the arch's own metres (wallFace x), so the
+    // crown is not one course drawn out into long level stripes
+    bool barrel = vWallFace.y > 2.5;
+    if (vWallFace.y > 1.5 && !barrel && dot(vViewPosition, vNormal) < 0.0) discard;
+    float u = barrel ? vWallFace.y - ${f(typeof RoadMesh !== 'undefined' ? RoadMesh.BARREL : 50)} : vWallFace.y > 0.5 ? vWallFace.x : dot(vLandPos.xz, t);
+    float rise = barrel ? vWallFace.x : vLandPos.y;
+    float y = rise + ${f(S.wanderM)} * (landNoise(vec2(u * 0.9, rise * 0.5)) - 0.5);
     float band = floor(y / ${f(S.bandM)});
     float inBand = fract(y / ${f(S.bandM)});
     // Two courses to a band, split at a height of the band's own: courses of uneven height
@@ -385,8 +390,8 @@ float landNoise(vec2 p) {
     vec2 f = vec2(fract(w), vIn);
     float joint = min(min(f.x, 1.0 - f.x) * len, min(f.y, 1.0 - f.y) * courseH);
     float h = landHash(vec2(col, row)), tint = landHash(vec2(row, col + 11.0)) - 0.5;
-    float stain = landNoise(vec2(u, vLandPos.y) * 0.35) * 0.6 + landNoise(vec2(u, vLandPos.y) * 0.08) * 0.4;
-    float tone = (0.68 + 0.5 * h + 0.24 * (landNoise(vec2(u, vLandPos.y) * 5.0) - 0.5)) * (0.78 + 0.36 * stain);
+    float stain = landNoise(vec2(u, rise) * 0.35) * 0.6 + landNoise(vec2(u, rise) * 0.08) * 0.4;
+    float tone = (0.68 + 0.5 * h + 0.24 * (landNoise(vec2(u, rise) * 5.0) - 0.5)) * (0.78 + 0.36 * stain);
     vec3 face = vec3(tone * (1.0 + 0.14 * tint), tone * (1.0 + 0.04 * (stain - 0.5)), tone * (1.0 - 0.14 * tint)) * mix(0.66, 1.0, smoothstep(0.006, 0.035, joint));
     float far = smoothstep(30.0, 140.0, length(vViewPosition));
     diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)), far);

@@ -217,6 +217,9 @@ class RoadMesh {
     // How far the stone under a viaduct's deck is turned down from the face its arch opens in (radians): its light
     // is never more than that face's, and less of the sky's
     static get VAULT_TILT() { return Math.PI / 12; }
+    // An arch's underside carries its metres across the road in wallFace's second value, offset by this so it can never
+    // be read as a wall's 1 or 2 (LandShade's stone: over 2.5 is a barrel, its metres across that less BARREL)
+    static get BARREL() { return 50; }
 
     // Metres over which a change of surface (asphalt to setts, onto a structure and off it) is blended
     static get FEATHER_M() { return 5; }
@@ -668,6 +671,13 @@ class RoadMesh {
         return bay.spring + r - radius + Math.sqrt(Math.max(0, radius * radius - d * d));
     }
 
+    // The metres round an arch's curve from its crown to ride metres `s` (negative before it), on the circle archY draws
+    static archArc(bay, s) {
+        const half = (bay.a1 - bay.a0) / 2, r = Math.min(bay.rise, half), d = s - (bay.a0 + bay.a1) / 2;
+        const radius = (half * half + r * r) / (2 * r);
+        return radius * Math.asin(Math.max(-1, Math.min(1, d / radius)));
+    }
+
     // The bay of a viaduct's layout that holds ride metres `s`, or null
     static bayAt(via, s) {
         for (const bay of via.bays) if (s >= bay.b0 - 1e-9 && s <= bay.b1 + 1e-9) return bay;
@@ -702,7 +712,7 @@ class RoadMesh {
     // soffit, feet}: `vault` the arches' undersides, `soffit` their vertex ranges in it, `feet` those of the stone that
     // stands on the land (the piers' faces and sides, a face down to the ground)
     static viaduct(rows, from, to, via, { lod = 0, land = null, ends = [true, true] } = {}) {
-        const out = { positions: [], shades: [], face: [], vault: { positions: [], shades: [], feet: [], out: [], along: [] }, viaduct: true, soffit: [], feet: [] };
+        const out = { positions: [], shades: [], face: [], vault: { positions: [], shades: [], feet: [], out: [], along: [], kind: [] }, viaduct: true, soffit: [], feet: [] };
         const V = RoadMesh.VIADUCT, color = RoadMesh.COLORS.stone;
         const span = rows.slice(from, to + 1);
         if (span.length < 2) return out;
@@ -751,11 +761,14 @@ class RoadMesh {
         // own way, an arch's side or back that faced the sun drew white under the deck, which casts no shadow (km 7.9)
         // `along` the metres each corner's courses are laid along (its own horizontal: as a wall's face is laid, so an
         // arch's side across the road reads as blocks, not as one course drawn out into stripes)
-        const under = (a, b, c, d, way, along, feet = false) => {
+        // An arch's underside passes `across`, each corner's metres across the road from its middle: its `kind` is then
+        // RoadMesh.BARREL plus that (always over 2.5), and its `along` the arch's own metres round its curve
+        // (RoadMesh.archArc). Every other piece is kind 1
+        const under = (a, b, c, d, way, along, feet = false, across = null) => {
             const start = out.vault.positions.length / 3;
             RoadMesh.quad(out.vault, a, b, c, d, color);
             out.vault.out.push(way, way, way, way, way, way);
-            for (const corner of [0, 1, 2, 0, 2, 3]) out.vault.along.push(along[corner]);
+            for (const corner of [0, 1, 2, 0, 2, 3]) { out.vault.along.push(along[corner]); out.vault.kind.push(across ? RoadMesh.BARREL + across[corner] : 1); }
             if (feet) out.vault.feet.push([start, 6]);
             return [start, 6];
         };
@@ -779,7 +792,9 @@ class RoadMesh {
             // The arch's underside, from face to face: the same stone in a deck's shade (`vault`, RoadMesh.addEdgeWorks)
             if (arched && (bay.open.l || bay.open.r)) {
                 const way = opening(bay, mid);
-                out.soffit.push(under([a.r.x, ya, a.r.z], [b.r.x, yb, b.r.z], [b.l.x, yb, b.l.z], [a.l.x, ya, a.l.z], way, [a.s, b.s, b.s, a.s]));
+                const ra = RoadMesh.archArc(bay, a.s), rb = RoadMesh.archArc(bay, b.s);
+                const wa = Math.hypot(a.r.x - a.l.x, a.r.z - a.l.z) / 2, wb = Math.hypot(b.r.x - b.l.x, b.r.z - b.l.z) / 2;
+                out.soffit.push(under([a.r.x, ya, a.r.z], [b.r.x, yb, b.r.z], [b.l.x, yb, b.l.z], [a.l.x, ya, a.l.z], way, [ra, rb, rb, ra], false, [wa, wb, -wb, -wa]));
                 // and the back of a blind face, its stone 2 cutBackM in from it, from the arch down into the land: the
                 // vault's back is stone, and the land's step behind it (WorldEnvironment.viaductOf) is hidden
                 for (const [key, sign] of [['l', -1], ['r', 1]]) {
@@ -1895,7 +1910,7 @@ class RoadMesh {
         // can tell a road's own structures from another road's
         const owners = { apron: [], wall: [], stone: [], paving: [], arch: [], vault: [] };
         const arches = { soffits: [], feet: [], underFeet: [] };
-        const vaultOut = [], vaultAlong = [];
+        const vaultOut = [], vaultAlong = [], vaultKind = [];
         const archFace = [];
         const own = (key, count, owner) => { for (let t = 0; t < count / 9; t++) owners[key].push(owner); };
         // The runs of retaining wall drawn here (RoadMesh.wallRuns), for the land that is cut to them
@@ -1951,6 +1966,7 @@ class RoadMesh {
                 for (const [start, count] of part.vault.feet) arches.underFeet.push([vaultBase + start, count]);
                 vaultOut.push(...part.vault.out);
                 vaultAlong.push(...part.vault.along);
+                vaultKind.push(...part.vault.kind);
                 works.vault.positions.push(...part.vault.positions);
                 works.vault.shades.push(...part.vault.shades);
                 own('vault', part.vault.positions.length, part.owner ?? -1);
@@ -2011,7 +2027,7 @@ class RoadMesh {
             const [ox, oz] = vaultOut[v], at = first + arch + v, c = Math.cos(RoadMesh.VAULT_TILT);
             normal[at * 3] = ox * c; normal[at * 3 + 1] = -Math.sin(RoadMesh.VAULT_TILT); normal[at * 3 + 2] = oz * c;
             wallFace[at * 2] = vaultAlong[v];
-            wallFace[at * 2 + 1] = 1;
+            wallFace[at * 2 + 1] = vaultKind[v] || 1;
         }
         // (and a viaduct's, laid and lit as a wall's: RoadMesh.viaduct `face`)
         for (let v = 0; v < arch; v++) {

@@ -190,7 +190,7 @@ function holds(env) {
 // material) lit as the face its arch opens in, turned down VAULT_TILT: for any sun above the horizon no more light falls
 // on it than on that face. Lit by their own way, the arches' insides glowed white in the rain at km 7.9
 function stone(env) {
-    let meshes = 0, faces = 0, under = 0;
+    let meshes = 0, faces = 0, under = 0, barrels = 0;
     const tilt = RoadMesh.VAULT_TILT;
     expect(tilt).toBeGreaterThan(0);
     env.group.traverse(o => {
@@ -205,8 +205,8 @@ function stone(env) {
             faces++;
             expect(Math.abs(normal.getY(v))).toBeLessThan(1e-6);
         }
-        const vault = g.groups.find(x => x.materialIndex === 5);
-        for (const [start, count] of g.userData.viaduct.soffits) for (let v = start; v < start + count; v++) expect(v >= vault.start && v < vault.start + vault.count).toBe(true);
+        const vault = g.groups.find(x => x.materialIndex === 5), soffit = new Set();
+        for (const [start, count] of g.userData.viaduct.soffits) for (let v = start; v < start + count; v++) { expect(v >= vault.start && v < vault.start + vault.count).toBe(true); soffit.add(v); }
         for (let v = vault.start; v < vault.start + vault.count; v++) {
             under++;
             const nx = normal.getX(v), ny = normal.getY(v), nz = normal.getZ(v);
@@ -221,12 +221,20 @@ function stone(env) {
             }
             const ox = Math.cos(best.p.heading), oz = -Math.sin(best.p.heading), along = Math.abs(nx * ox + nz * oz) / Math.cos(tilt);
             expect(along).toBeGreaterThan(0.9);
-            expect(face.getY(v)).toBe(1);
+            // An arch's underside is laid as a barrel: its metres across the road over RoadMesh.BARREL, and its metres
+            // round the curve no more than a half circle's (the owner's "brick under the arches": courses by world
+            // height drew its crown as long level stripes). Every other piece under the deck is laid as a wall
+            if (soffit.has(v)) {
+                barrels++;
+                expect(Math.abs(face.getY(v) - RoadMesh.BARREL)).toBeLessThan(12);
+                expect(Math.abs(face.getX(v))).toBeLessThan(15);
+            } else expect(face.getY(v)).toBe(1);
         }
     });
     expect(meshes).toBeGreaterThan(0);
     expect(faces).toBeGreaterThan(0);
     expect(under).toBeGreaterThan(0);
+    expect(barrels).toBeGreaterThan(0);
 }
 
 describe('the shipped stage', () => {

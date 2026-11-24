@@ -5416,6 +5416,56 @@ WORLD['world-marmots'] = async (page) => {
     return result;
 };
 
+// world-vault-shots --out <dir>: under each arch of the ride's viaducts, from its open face and from beside it, the
+// camera 1.6 m over the land looking into and up the arch's underside (the stone of the vault: 6b3)
+WORLD_PROBES.push('world-vault-shots');
+WORLD['world-vault-shots'] = async (page) => {
+    const out = option('out');
+    if (!out) return { error: 'name a folder with --out <dir>' };
+    mkdirSync(out, { recursive: true });
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
+    const arches = await page.evaluate(async (placeSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        for (let s = 7800; s < 8200; s += 100) await placeAt(s);
+        const list = [];
+        for (const via of env.viaducts || []) for (const bay of via.bays) if (bay.rise > 0) list.push({ s: (bay.a0 + bay.a1) / 2, rise: bay.rise, spring: bay.spring, span: bay.a1 - bay.a0, side: bay.open.r ? 1 : -1 });
+        return list;
+    }, placeAt.toString());
+    const files = [];
+    for (const [k, arch] of arches.entries()) {
+        for (const view of ['into', 'up']) {
+            const png = await page.evaluate(async (placeSource, arch, view) => {
+                const placeAt = new Function('game', `return (${placeSource})`)(game);
+                const env = game.environment;
+                await placeAt(Math.max(10, arch.s - 40));
+                twistyDev.freeze();
+                const p = env.route.sample(arch.s, {}), ox = Math.cos(p.heading) * arch.side, oz = -Math.sin(p.heading) * arch.side;
+                const fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+                // 'into': 7 m out from the open face, a little over the springing, looking in at the crown; 'up': under
+                // the arch at its face, looking up the barrel across the road
+                const halfW = p.width / 2 + 1.2, out = view === 'into' ? halfW + 7 : halfW - 0.5;
+                const ex = p.x + ox * out, ez = p.z + oz * out;
+                const g = env.ground.tileHeight(ex, ez), ey = Math.max(Number.isFinite(g) ? g + 0.8 : -Infinity, arch.spring + (view === 'into' ? 0.6 : -0.6));
+                const cam = game.camera;
+                cam.up.set(0, 1, 0);
+                cam.position.set(ex, ey, ez);
+                cam.lookAt(p.x - ox * (view === 'into' ? 0 : halfW), arch.spring + arch.rise * (view === 'into' ? 0.7 : 0.95), p.z - oz * (view === 'into' ? 0 : halfW));
+                cam.fov = 70;
+                cam.updateProjectionMatrix();
+                cam.updateMatrix();
+                cam.updateMatrixWorld(true);
+                game.graphics.render(game.scene, cam);
+                return game.graphics.renderer.domElement.toDataURL('image/png').split(',')[1];
+            }, placeAt.toString(), arch, view);
+            const file = join(out, `vault-${k}-s${Math.round(arch.s)}-${view}.png`);
+            writeFileSync(file, Buffer.from(png, 'base64'));
+            files.push(file);
+        }
+    }
+    return { arches, files };
+};
+
 WORLD['world-clearance'] = async (page) => {
     const result = await page.evaluate(clearanceWalk, placeAt.toString(), Number(option('every') || 300), CLEAR_HEADROOM_M, CLEAR_STEP_M, CLEAR_FINE_M);
     const out = option('out');
