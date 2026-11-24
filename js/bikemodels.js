@@ -87,6 +87,18 @@ const BikeModels = (() => {
     })));
   }
 
+  // The files the touring crew rides in (each character's first bike's far file and the light rider), fetched while a
+  // world's loading screen is up: with them in, BikeModels.crew dresses each rider as it is made, so the ride starts
+  // with the crew on their own bikes. Fetched when the crew was made, they arrived as the group set off bunched up
+  // and the riders changed from the procedural bike to their own in plain sight (the owner, 2026-11-23)
+  function preloadCrew() {
+    const urls = new Set([RIDER_FAR, ...CHARACTERS.map((character) => entry(Vehicle.bikeOf(character)).far).filter(Boolean)]);
+    return Promise.all([...urls].map((url) => load(url).catch((error) => {
+      console.error(`BikeModels: ${url} did not load; its crew rider keeps the procedural bike:`, error);
+      return null;
+    })));
+  }
+
   // A bike file as its levels of detail ([lod0, lod1], or the file alone
   // when it has no groups), each { meshes, places }, done once per file and
   // in place: mirrored where its entry says so, and each wheel's pivot moved
@@ -619,7 +631,8 @@ const BikeModels = (() => {
   // (bike.modelWaiting, which AIMotorcycle.update runs). The files are asked
   // for here and no earlier: with them asked for as a world starts,
   // world-budget once stood 70 000 over with twice the trees in the window
-  // (taken to be the tree models held back by six more requests; not proven).
+  // (taken to be the tree models held back by six more requests; not proven). A world's loading screen fetches them
+  // after the world's own files are in (preloadCrew), so a ride's crew is dressed as it is made.
   function crew(bike) {
     const character = bike.character;
     const id = bike.model;
@@ -690,5 +703,5 @@ const BikeModels = (() => {
     });
   }
 
-  return { dress, standIn, crew, crewBike, preload, file, entry, MODELS, BIKES, RIDER, RIDER_FAR, LENGTHS, FAR };
+  return { dress, standIn, crew, crewBike, preload, preloadCrew, file, entry, MODELS, BIKES, RIDER, RIDER_FAR, LENGTHS, FAR };
 })();

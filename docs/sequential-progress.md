@@ -592,3 +592,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Check: `tests/unit/world-viaduct.test.js` holds every underside vertex as a barrel and every other piece under the deck as a wall; with world-meshes, world-watertight and the pinned four, 7 suites and 118 tests pass. Pictures from 7 m out and from under each of the 5 arches: ~/Library/Caches/twisty-world/vault-shots/. The before pictures were not taken again (the GPU hosts were full); the owner's own picture is the before.
 - Left: the courses wander up and down as a wall's do, which reads a little wavy round the barrel.
 
+## The crew start on their own bikes
+
+- Job: the owner saw the other riders start on the plain procedural bike and change to their own bike moments later, in plain sight as the group set off bunched up. Their files (each character's far bike and the light rider) were asked for only when the crew was made. They are now fetched behind the world's loading screen (`BikeModels.preloadCrew`, awaited in `Game.startWorld` after the world's own files), so each rider is dressed as it is made (`AIMotorcycle.dressedAtStart`).
+- Check: `world-crew-start` on the slice: before, all 5 riders started on the procedural bike; after, none, and no model change in the first 10 s. The fetch is 7 files, about 550 KB (a few milliseconds from the local server; on a slow network it lengthens the loading screen by that download). world-budget at s 0, 2000 and 4000 is the same with and without it, within the run-to-run spread (424 to 425 k, 447 to 458 k, 451 to 453 k). crew, bikemodels, world-group, ride-mode and the pinned four: 8 suites, 328 tests pass.
+

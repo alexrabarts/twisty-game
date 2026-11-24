@@ -300,6 +300,8 @@ class Game {
         }
         try {
             const environment = await WorldEnvironment.load(this.scene, { id, search: window.location.search });
+            // The crew's own bikes and the light rider, behind the loading screen (BikeModels.preloadCrew)
+            if (typeof BikeModels !== 'undefined' && BikeModels.preloadCrew) await BikeModels.preloadCrew();
             await this.initializeGameWithWorld(environment);
         } catch (error) {
             this.fallBackToLegs(error);

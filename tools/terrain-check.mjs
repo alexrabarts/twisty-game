@@ -5466,6 +5466,27 @@ WORLD['world-vault-shots'] = async (page) => {
     return { arches, files };
 };
 
+// world-crew-start: the crew is on its own bikes from the first frame of a ride (BikeModels.preloadCrew behind the loading
+// screen): every rider of the group modelled before the game is stepped, and none changes model in the first 10 s.
+// Also how long the crew's files took to fetch (the loading screen waits on them)
+WORLD_PROBES.push('world-crew-start');
+WORLD['world-crew-start'] = page => page.evaluate(async () => {
+    const riders = (game.traffic && game.traffic.motorcycles || []).filter(b => b.character);
+    const first = riders.map(b => ({ id: b.character.id, modelled: !!b.dressedAtStart }));
+    const groups = riders.map(b => b.bikeGroup.children.slice());
+    let changed = 0;
+    for (let f = 0; f < 600; f++) {
+        twistyDev.step(1);
+        riders.forEach((b, k) => { if (b.bikeGroup.children.some((c, i) => c !== groups[k][i]) || b.bikeGroup.children.length !== groups[k].length) { changed++; groups[k] = b.bikeGroup.children.slice(); } });
+    }
+    const files = performance.getEntriesByType('resource').filter(e => /assets\/bikes\/(far\/|rider_far)/.test(e.name));
+    const failures = [];
+    if (!riders.length) failures.push('no crew riders');
+    for (const r of first) if (!r.modelled) failures.push(`${r.id} started on the procedural bike`);
+    if (changed) failures.push(`${changed} model changes in the first 10 s`);
+    return { riders: first, changed, files: files.length, fetchMs: Math.round(Math.max(0, ...files.map(e => e.responseEnd)) - Math.min(...files.map(e => e.startTime))), bytes: files.reduce((n, e) => n + (e.transferSize || e.encodedBodySize || 0), 0), failures };
+});
+
 WORLD['world-clearance'] = async (page) => {
     const result = await page.evaluate(clearanceWalk, placeAt.toString(), Number(option('every') || 300), CLEAR_HEADROOM_M, CLEAR_STEP_M, CLEAR_FINE_M);
     const out = option('out');

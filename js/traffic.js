@@ -2632,7 +2632,8 @@ class AIMotorcycle {
 
         // A rider of the touring crew rides its character's own bike once its files are in
         // (js/bikemodels.js); the parts built above stand until then
-        if (this.character && typeof BikeModels !== 'undefined') BikeModels.crew(this);
+        // (dressedAtStart: dressed as it was made, its files already in; else it showed the procedural bike first)
+        if (this.character && typeof BikeModels !== 'undefined') this.dressedAtStart = BikeModels.crew(this) === true;
     }
 
     // The modelled rider's body goes into the turn as its character does (CHARACTERS bodyLean, Vehicle.riderLean),
