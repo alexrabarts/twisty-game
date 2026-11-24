@@ -104,6 +104,10 @@ Rules for a change to a car:
 | `tree_broadleaf.py` | `trees/broadleaf.glb` | `broadleaf_oak`, `broadleaf_beech`, `broadleaf_ash` (two crowns on a fork). |
 | `tree_bush.py` | `trees/bush.glb` | `bush_round`, `bush_low`, and each again under snow. |
 
+## The hill ride's bicycle
+
+`hill_bike.py` builds the hill ride's bicycle and its rider (`.agent/system/hill.md`) into `assets/hill/bicycle.glb` with the bike kit (`bikes/_kit_E.py`), with no far file. The file has two 26 inch wheels, the basket of plain loaves, a blank plate, the cranks and each pedal as nodes, and the boy, whose legs are nodes too (thigh, shin and foot each side, each hanging straight down from its pivot), so the game poses them.
+
 ## Animals
 
 | Script | Output | What it makes |

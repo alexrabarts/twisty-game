@@ -5,6 +5,7 @@
 //   (no query)        the menu; choosing a rider starts DEFAULT_WORLD, and Classic legs opens the leg screen
 //   ?world=<id|all>   that world at once, without the menu
 //   ?legs             the menu as it was before the world: the rider goes on to the leg screen
+//   ?<HILL_KEY>       the hill ride (js/hill/ride.js) at once, without the menu: a ride of its own, never timed
 const RideMode = {
     // The world a rider chosen on the menu rides: the Tremola slice (world/manifest.json)
     DEFAULT_WORLD: 'tremola',
@@ -13,11 +14,17 @@ const RideMode = {
     FALLBACK_NOTE: 'The Andermatt road could not load here, so the classic legs are open instead.',
     // What the menu says when a world's land stopped loading during a ride (WorldStreamer.landState lost) and the legs
     // took over
+    // What the menu says when the hill ride could not start
+    HILL_FAIL_NOTE: 'The hill ride could not load here, so the classic legs are open instead.',
     LAND_LOST_NOTE: 'The land beside the road stopped loading, so the ride has ended and the classic legs are open instead.',
 
-    // { kind: 'world' | 'legs', world: the stage id or 'all' (null for the legs), direct: start without the menu }
+    // The address key that opens the hill ride: the only place the key is written
+    HILL_KEY: 'hovis',
+
+    // { kind: 'world' | 'legs' | 'hill', world: the stage id or 'all' (null otherwise), direct: start without the menu }
     resolve(search) {
         const params = new URLSearchParams(search || '');
+        if (params.has(RideMode.HILL_KEY)) return { kind: 'hill', world: null, direct: true };
         const asked = params.get('world');
         if (asked) return { kind: 'world', world: asked, direct: true };
         if (params.has('legs')) return { kind: 'legs', world: null, direct: false };

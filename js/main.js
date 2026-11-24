@@ -246,6 +246,10 @@ class Game {
     // default) or, under ?legs, goes on to the leg screen; Classic legs on the rider screen goes to the leg screen
     openRide() {
         const mode = this.rideMode;
+        if (mode.kind === 'hill') {
+            this.startHill();
+            return;
+        }
         if (mode.direct) {
             this.startWorld(mode.world);
             return;
@@ -254,6 +258,17 @@ class Game {
         this.tourSystem.createLegSelector(document.body, (leg) => {
             console.log('Leg selected:', leg.name);
             this.initializeGameWithLeg(leg);
+        });
+    }
+
+    // The hill ride (js/hill/ride.js): a ride of its own on this page, with no menu, clock or board. One that cannot
+    // start (its model did not load) hands over to the legs, as a world that cannot load does
+    startHill() {
+        this.hill = new HillRide(this);
+        this.hill.start().catch(error => {
+            if (this.hill) this.hill.running = false;
+            document.body.classList.remove('hill-on');
+            this.fallBackToLegs(error, RideMode.HILL_FAIL_NOTE);
         });
     }
 

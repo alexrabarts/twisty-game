@@ -2726,3 +2726,36 @@ body.world-loading-on .tuning-open,
 body.world-loading-on .tuning-panel {
     display: none;
 }
+
+/* The hill ride (js/hill/ride.js): no HUD, a line of keys at the foot of the screen, a note at the bottom of the hill */
+body.hill-on .hud {
+    visibility: hidden;
+}
+
+.hill-note {
+    position: fixed;
+    left: 16px;
+    right: 16px;
+    bottom: 14px;
+    color: #f4efe2;
+    font: 13px/1.4 system-ui, sans-serif;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+    pointer-events: none;
+}
+
+.hill-view {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.hill-end {
+    position: fixed;
+    left: 50%;
+    top: 40%;
+    transform: translate(-50%, -50%);
+    padding: 14px 22px;
+    background: rgba(30, 26, 20, 0.72);
+    color: #f4efe2;
+    border-radius: 8px;
+    font: 18px/1.4 system-ui, sans-serif;
+}

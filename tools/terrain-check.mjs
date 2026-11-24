@@ -7344,7 +7344,7 @@ async function worldMain() {
             state.requests = [];
             // The stage HUD needs a ride of two stages or more; the shipped data holds one, so without --worldData
             // it rides the two-stage fixture
-            const page = name === 'world-hud' && !option('worldData')
+            const page = name.startsWith('hill-') ? await openHill(browser, port) : name === 'world-hud' && !option('worldData')
                 ? await openWorld(browser, port, 'all', 1, WORLD_HUD_DATA)
                 : await openWorld(browser, port, id);
             report.results[name] = await WORLD[name](page, port);
@@ -7664,6 +7664,78 @@ WORLD['world-bike-shots'] = async (page) => {
     });
     return { facts, files };
 };
+
+// hill-shots: the hill ride (js/hill/ride.js, opened by RideMode.HILL_KEY) in GPU pictures. The bicycle starts stood at
+// the top and rolls down on gravity alone, no pedal and no brake: pictures at the start, at the moment the legs are
+// fully out, and halfway down, each from the three views (behind, from the top of the lane, in front), with the speed,
+// the place and the time of each. Saved to --out (default ~/Library/Caches/twisty-world/hill-shots/).
+//   node tools/terrain-check.mjs hill-shots --gpu [--out <dir>]
+const HILL_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/hill-shots');
+async function hillShots() {
+    const ride = window.game.hill;
+    ride.running = false;
+    cancelAnimationFrame(ride.frameId);
+    const bike = ride.bike;
+    const shots = [];
+    const facts = [];
+    const shoot = (tag) => {
+        for (const [view, name] of [[0, 'behind'], [1, 'top'], [2, 'front']]) {
+            ride.view = view;
+            ride.placeCamera(1);
+            ride.draw(0);
+            shots.push({ tag: `${tag}-${name}`, png: window.game.renderer.domElement.toDataURL('image/png') });
+        }
+        facts.push({ tag, s: Math.round(bike.s * 10) / 10, speed: Math.round(bike.speed * 100) / 100, legs: Math.round(bike.legs * 100) / 100, timeS: Math.round(bike.timeS * 10) / 10 });
+    };
+    // The band: woken as a key press wakes the game's sound, played for a moment, then put back as it was
+    const sound = window.game.soundManager;
+    const muted = sound.getSetting('muted');
+    sound.setSetting('muted', false);
+    sound.wake();
+    ride.music.play();
+    await new Promise(resolve => setTimeout(resolve, 600));
+    const music = { context: sound.audioContext ? sound.audioContext.state : null, playing: ride.music.playing };
+    ride.music.stop();
+    sound.setSetting('muted', muted);
+    const quiet = { pedal: 0, brake: 0, steer: 0 };
+    const run = (until, most = 120) => {
+        let t = 0;
+        while (!until() && t < most) {
+            bike.step(1 / 120, quiet);
+            t += 1 / 120;
+        }
+    };
+    bike.reset();
+    shoot('start');
+    run(() => bike.legs >= 1);
+    shoot('legs-out');
+    run(() => bike.s >= 110);
+    shoot('halfway');
+    let top = 0;
+    run(() => { top = Math.max(top, bike.speed); return bike.finished && bike.speed < 0.05; }, 240);
+    facts.push({ tag: 'end', s: Math.round(bike.s * 10) / 10, speed: Math.round(bike.speed * 100) / 100, legs: bike.legs, timeS: Math.round(bike.timeS * 10) / 10, topSpeed: Math.round(top * 100) / 100 });
+    return { shots, facts, music };
+}
+WORLD_PROBES.push('hill-shots');
+WORLD['hill-shots'] = async (page) => {
+    const out = option('out') || HILL_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const { shots, facts, music } = await page.evaluate(hillShots);
+    const files = shots.map(shot => {
+        const file = join(out, `hill-${shot.tag}.png`);
+        writeFileSync(file, Buffer.from(shot.png.split(',')[1], 'base64'));
+        return file;
+    });
+    return { facts, music, files };
+};
+
+async function openHill(browser, port) {
+    // The address key is written in js/ridemode.js alone
+    const key = new Function(`${readFileSync(join(root, 'js/ridemode.js'), 'utf8')}\nreturn RideMode.HILL_KEY;`)();
+    const page = await openPage(browser, port, `/?${key}`);
+    await page.waitForFunction('window.game && window.game.hill && window.game.hill.running', { timeout: 120000 });
+    return page;
+}
 
 main();
 
