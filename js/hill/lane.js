@@ -63,7 +63,10 @@ class HillLane {
                     [90, 101.5, 2, 'tile', 'lime', 6.02, 12, [[96.45, 13.05]]],
                     [101.5, 112.75, 2, 'tile', 'stone', 5.6, 10.8, [[108, 12]]]
                 ],
-                churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], tower: [27.8, -3.45, 3.55], stones: [16, 31, 2.55], fence: [24, 44, -2.95],
+                churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], stones: [16, 31, 2.55],
+                // The cottage on the right, in the sun's shadow: [from, to, eaves, ridge, roof, wall, set back from the flags];
+                // its near top corner is where the still's dark shape has it
+                right: [29.2, 37.5, 4.3, 6.6, 'thatch', 'rubble', 0], fence: [24, 44, -2.95],
                 tree: [109, 18.4, 17.2, 4.2]
             },
             // The end: past stopS the camera eases over endEaseS to a fixed point high behind the bicycle (at s, across,
@@ -451,6 +454,11 @@ class HillLane {
         if (side < 0) {
             this.walls.push({ side, from: r.cottagesFromM, to: r.topWallToS, upM: r.topWallUpM, kind: 'wall' });
             s = r.topWallToS;
+            // The opening's cottage on the right, behind the top wall
+            const [from, to, eaves, ridge, roof, wall, back] = r.opening.right;
+            const f = this.frame(side, from, to, r.cottageDeepM, back);
+            list.push({ ...f, kind: 'terrace', ...this.finishes(HillLane.random(r.seed + 211), 'terrace'), front: 'flags', climber: false, storeys: 1, roof, wall, gable: false,
+                eaves: f.floor + eaves, ridge: f.floor + ridge, chimney: 1, opening: true });
         } else {
             for (const [from, to, storeys, roof, wall, eaves, ridge, chimneys] of r.opening.left) {
                 const f = this.frame(side, from, to, r.cottageDeepM);

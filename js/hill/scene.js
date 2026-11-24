@@ -693,7 +693,7 @@ class HillScene {
     }
 
     // The pieces of the opening frame (HillLane.RULE.opening): the milk churn on its stone step, the iron post with its
-    // arm, the dark stone tower and the rail on the right, the big bare tree beyond the thatched roof
+    // arm and the rough stones on the left, the rail on the right, the big bare tree beyond the thatched roof
     static opening(lane, meshes, repeats) {
         const C = HillScene.COLOURS, rgb = HillScene.rgb;
         const o = lane.rule.opening;
@@ -707,28 +707,7 @@ class HillScene {
         box(meshes.dark, ps, pa, pu / 2, 0.035, pu / 2, 0.035, rgb(C.iron));
         box(meshes.dark, ps, pa + 0.45, pu - 0.25, 0.025, 0.025, 0.45, rgb(C.iron));
         box(meshes.dark, ps, pa, pu + 0.05, 0.06, 0.06, 0.06, rgb(C.iron));
-        // The old dark stone building on the right, end on to the lane: a rough rubble face with its near corner top at
-        // `tower`, its wall rising away from the lane, two buttresses stepped against it, an uneven coping, moss along
-        // the top and the foot, a slate roof behind
-        const [ts, ta, tu] = o.tower;
         const rand = HillLane.random(907);
-        const dark = rgb(0x9e978c), deep = ta - 3.2;
-        for (let s = ts - 3, k = 0; s < ts + 6; s += 1, k++) {
-            const top = tu + Math.max(0, s - ts) * 0.22 + (rand() - 0.5) * 0.25;
-            box(meshes.rubble, s + 0.5, (ta + deep) / 2, (top - 0.6) / 2, 0.51, (top + 0.6) / 2, (ta - deep) / 2, dark);
-            // Its coping, each stone its own height
-            box(meshes.rubble, s + 0.5, (ta + deep) / 2, top + 0.08, 0.5, 0.1 + rand() * 0.06, (ta - deep) / 2 + 0.06, rgb(0x6a655e));
-            for (let m = 0; m < 2; m++) HillScene.leaf(repeats, (q => [q.x, q.y, q.z])(p(s + rand(), ta + 0.03, top + 0.02)), 0.18 + rand() * 0.15, 0.05, 0.14, [0x4f5e36, 0x5d6a3e][m]);
-            HillScene.leaf(repeats, (q => [q.x, q.y, q.z])(p(s + rand(), ta + 0.1, 0.15)), 0.3 + rand() * 0.3, 0.18, 0.12, 0x56643a);
-        }
-        for (const [bs, h] of [[ts - 2.2, 2.6], [ts + 2.6, 3.2]]) {
-            box(meshes.rubble, bs, ta + 0.45, h * 0.3 - 0.3, 0.35, h * 0.3 + 0.3, 0.45, dark);
-            box(meshes.rubble, bs, ta + 0.25, h * 0.75, 0.3, h * 0.25, 0.25, dark);
-            box(meshes.dressed, bs, ta + 0.25, h + 0.05, 0.34, 0.06, 0.3, rgb(0x6a655e));
-        }
-        const back = p(ts + 1.5, deep - 1.5, tu + 2.2), eave = p(ts + 1.5, deep + 0.3, tu + 0.9), f = frame(ts + 1.5);
-        meshes.slate.box([(back.x + eave.x) / 2, (back.y + eave.y) / 2, (back.z + eave.z) / 2], [f.alongX * 5, 0, f.alongZ * 5], [0, 0.08, 0],
-            [(eave.x - back.x) / 2, (eave.y - back.y) / 2, (eave.z - back.z) / 2], rgb(0x5c6068));
         // On the left by the churn: rough stones heaped along the lane's edge, as the stills have, in place of a railing
         const [s0, s1, sa] = o.stones;
         for (let s = s0; s < s1; s += 0.55 + rand() * 0.3) {

@@ -7796,7 +7796,7 @@ WORLD['hill-look'] = async (page) => {
 const HILL_KEYS = [
     ['boy head', [0.683, 0.35]], ['boy shoulders', [0.70, 0.47]], ['far lane', [0.43, 0.665]],
     ['chimney 56.6', [0.195, 0.02]], ['chimney 66.5', [0.388, 0.11]], ['chimney 75.75', [0.513, 0.11]], ['chimney 96.45', [0.698, 0.23]],
-    ['post top', [0.135, 0.41]], ['churn top', [0.105, 0.79]], ['tower top', [0.92, 0.13]], ['tree', [0.6, 0.2]]
+    ['post top', [0.135, 0.41]], ['churn top', [0.105, 0.79]], ['house corner', [0.92, 0.13]], ['tree', [0.6, 0.2]]
 ];
 async function hillOverlay(still, keys) {
     const ride = window.game.hill, game = window.game, lane = ride.lane, o = lane.rule.opening;
@@ -7830,7 +7830,7 @@ async function hillOverlay(still, keys) {
     const places = {
         'boy head': at(lane.rule.startM, o.startAcross, 1.74), 'boy shoulders': at(lane.rule.startM - 0.15, o.startAcross, 1.42), 'far lane': at(56, 0, 0),
         'chimney 56.6': chimney(56.6), 'chimney 66.5': chimney(66.5), 'chimney 75.75': chimney(75.75), 'chimney 96.45': chimney(96.45),
-        'post top': at(o.post[0], o.post[1], o.post[2]), 'churn top': at(o.churn[0], o.churn[1], 0.62), 'tower top': at(o.tower[0], o.tower[1], o.tower[2]),
+        'post top': at(o.post[0], o.post[1], o.post[2]), 'churn top': at(o.churn[0], o.churn[1], 0.62), 'house corner': (() => { const R = lane.rule; const q = at(o.right[0], -(R.halfWidthM + R.flagsM + o.right[6]), 0); q.y = lane.cottages.find(c => c.opening && c.side < 0).eaves; return q; })(),
         tree: at(o.tree[0], o.tree[1], o.tree[2])
     };
     const canvas = document.createElement('canvas');
@@ -7844,6 +7844,15 @@ async function hillOverlay(still, keys) {
     ctx.globalAlpha = 0.5;
     ctx.drawImage(shot, 2 * W + 16, 0, W, H);
     ctx.globalAlpha = 1;
+    // The mean luminance of the right-hand house in shade (the box `shade`, shares of the frame), in the still and the game
+    const shadeBox = [0.84, 0.18, 0.99, 0.62];
+    const luma = (x0) => {
+        const d = ctx.getImageData(x0 + shadeBox[0] * W, shadeBox[1] * H, (shadeBox[2] - shadeBox[0]) * W, (shadeBox[3] - shadeBox[1]) * H).data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4) sum += (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+        return +(sum / (d.length / 4)).toFixed(3);
+    };
+    const shade = { still: luma(0), game: luma(W + 8) };
     const errors = [];
     for (const [name, want] of keys) {
         const p = places[name];
@@ -7863,7 +7872,7 @@ async function hillOverlay(still, keys) {
     game.camera.aspect = keep.x / keep.y;
     game.camera.updateProjectionMatrix();
     const mean = errors.reduce((n, e) => n + e.px, 0) / errors.length;
-    return { png: canvas.toDataURL('image/png'), errors, meanPx: +mean.toFixed(1), info: { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles } };
+    return { png: canvas.toDataURL('image/png'), errors, shade, meanPx: +mean.toFixed(1), info: { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles } };
 }
 WORLD_PROBES.push('hill-overlay');
 WORLD['hill-overlay'] = async (page) => {
@@ -7874,7 +7883,7 @@ WORLD['hill-overlay'] = async (page) => {
     const file = option('out') || join(HILL_COMPARE_OUT, 'opening-overlay.png');
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
-    return { file, meanPx: result.meanPx, errors: result.errors, info: result.info };
+    return { file, meanPx: result.meanPx, shade: result.shade, errors: result.errors, info: result.info };
 };
 
 // hill-shots: the hill ride (js/hill/ride.js, opened by RideMode.HILL_KEY) in GPU pictures, the bicycle placed and

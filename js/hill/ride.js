@@ -31,7 +31,7 @@ class HillRide {
     static get LIGHT() {
         return Object.freeze({
             elevationDeg: 14, alongS: 126, sunColour: 0xf8dcb4, sunIntensity: 2.0,
-            haze: 0xdedcd6, hazeDensity: 0.0075, ambient: 0.3, sky: 0xcfccc4, ground: 0x6a604c, hemisphere: 0.75
+            haze: 0xdedcd6, hazeDensity: 0.0075, ambient: 0.33, sky: 0xcfccc4, ground: 0x6a604c, hemisphere: 0.82
         });
     }
 
