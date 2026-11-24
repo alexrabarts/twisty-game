@@ -206,7 +206,7 @@ A bike can have `leanMaxDeg` in its catalogue entry (`BIKE_MODELS`, and the proc
 
 ## A rider far back steers less under the throttle
 
-The owner: "add a black mini moto bike to Steve's character. Steve is tall so it should look a bit ridiculous. it can have a bit of a seat extension but that also means centre of gravity is quite far back so it doesn't have a lot of steering authority under acceleration."
+By the owner's word, Steve has a black mini moto with a seat extension. The extension puts the centre of mass far back, so the bike has little steering authority under acceleration.
 
 A bike can have `rearLoad` in its catalogue entry (`BIKE_MODELS`): the share of its steering it loses at full throttle. `Vehicle.rearLoadOf` reads it (0 for a bike without it, held to 0.9), and `Vehicle.steerUnderThrottle(rearLoad, throttle)` gives the share kept, `1 - rearLoad x throttle`. A world scales its lean rate by it with the world's throttle (`worldThrottle`, which rises over `throttleRiseS`); a classic leg scales its steering torque by it with the throttle input of the frame. Only the mini bike (`bike17_minimoto`) has it, 0.45: at full throttle it leans in at 55 % of its rate, at a cruise (0.2) at 91 %. With the throttle shut it steers as quickly as its class makes it (`mini`: `steeringForce` 1.2, the quickest class).
 

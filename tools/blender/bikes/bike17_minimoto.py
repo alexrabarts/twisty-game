@@ -1,5 +1,5 @@
-# bike-17: Steve's mini moto, by the owner's word: a black 125 cc mini bike, which a tall rider makes look a bit
-# ridiculous, with a seat extension running back past the rear wheel. From general knowledge of the class (no photo):
+# bike-17: Steve's mini moto, by the owner's word: a black 125 cc mini bike, with a seat extension running back past
+# the rear wheel. From general knowledge of the class (no photo):
 # small and stocky on 12 inch cast wheels with fat little tyres, short upside-down forks, a small round-cornered
 # headlight in a black nose, a stubby tank between black shrouds, a horizontal single under a black steel frame, a
 # short black swingarm, a low silencer on the right, and a flat seat that runs back over the tail on a black extension
