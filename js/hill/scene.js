@@ -655,7 +655,8 @@ class HillScene {
                     continue;
                 }
                 const top = y + (steps ? 2.2 : 1.6);
-                meshes.rubble.box([a[0], (y - 0.4 + top) / 2, a[2]], [p.dirX * (e - d) / 2, 0, p.dirZ * (e - d) / 2], [0, (top - y + 0.4) / 2, 0], [p.crossX * 0.2, 0, p.crossZ * 0.2], rgb(C.gardenWall));
+                const low = Math.min(y, road.y0) - 0.4;
+                meshes.rubble.box([a[0], (low + top) / 2, a[2]], [p.dirX * (e - d) / 2, 0, p.dirZ * (e - d) / 2], [0, (top - low) / 2, 0], [p.crossX * 0.2, 0, p.crossZ * 0.2], rgb(C.gardenWall));
                 meshes.dressed.box([a[0], top + 0.05, a[2]], [p.dirX * ((e - d) / 2 + 0.02), 0, p.dirZ * ((e - d) / 2 + 0.02)], [0, 0.05, 0], [p.crossX * 0.25, 0, p.crossZ * 0.25], rgb(C.coping));
             }
         }

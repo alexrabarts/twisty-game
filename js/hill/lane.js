@@ -143,13 +143,13 @@ class HillLane {
         let y = edge + (road.y0 - edge) * e;
         if (road.kind === 'steps') {
             const from = this.rule.flagsM + 0.3;
-            if (d > from) y += Math.ceil((d - from) / HillLane.SIDE.treadM) * HillLane.SIDE.riseM;
+            if (d > from) y += Math.min(HillLane.SIDE.stepsM, Math.ceil((d - from) / HillLane.SIDE.treadM) * HillLane.SIDE.riseM);
         }
         return y;
     }
 
-    // The ways into the side roads, as numbers: the mouth's easing (m), a step's tread and rise (m)
-    static get SIDE() { return Object.freeze({ mouthM: 5, treadM: 0.32, riseM: 0.15 }); }
+    // The ways into the side roads, as numbers: the mouth's easing (m), a step's tread and rise (m), the steps' whole rise
+    static get SIDE() { return Object.freeze({ mouthM: 5, treadM: 0.32, riseM: 0.15, stepsM: 2.4 }); }
 
     // The side road at (x, z), if any: { road, d, w } (in along its centre line, across it), the nearest
     sideAt(x, z, out = {}) {
@@ -195,7 +195,7 @@ class HillLane {
                     const finish = this.finishes(rand, 'terrace');
                     road.houses.push({
                         side: sgn, from: d, to: d + wide, mid: d + wide / 2, wide, x: m.x + outX * off, z: m.z + outZ * off, heading: Math.atan2(m.dirX, m.dirZ),
-                        alongX: m.dirX, alongZ: m.dirZ, outX, outZ, hw: wide / 2, hd, floor: y + 0.15, foot: y - 0.6, kind: 'terrace', ...finish, front: 'flags',
+                        alongX: m.dirX, alongZ: m.dirZ, outX, outZ, hw: wide / 2, hd, floor: y + 0.15, foot: Math.min(y, road.y0) - 0.6, kind: 'terrace', ...finish, front: 'flags',
                         storeys, eaves: y + 0.15 + r.eavesUpM[storeys - 1], ridge: y + 0.15 + r.eavesUpM[storeys - 1] + r.ridgeUpM[0] + rand() * (r.ridgeUpM[1] - r.ridgeUpM[0])
                     });
                     houses++;
