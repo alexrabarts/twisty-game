@@ -102,10 +102,15 @@ const GROUP = {
     // takes its bends, gathers speed and plans its braking for them at the square of it (LANE_DRIVE.bike), so the speed
     // it rides every bend at is this share too. Its hard braking (LANE_DRIVE.bike.brake, which the following rule reads
     // for the vehicle ahead) is not raised. Its `least` and `most` are shares of this pace. The square is held at
-    // gripMost, about 0.8 g in a bend (LANE_DRIVE.bike lateral 4 m/s^2 times it): a quicker pace is quicker on the
-    // straights and holds its bends at that
-    pace: 1.5,
-    gripMost: 1.96,
+    // gripMost, about 0.9 g in a bend (LANE_DRIVE.bike lateral 4 m/s^2 times it): a quicker pace is quicker on the
+    // straights and holds its bends at that. The pace alone was spent at 1.5 (the riders' mean moving speed 17.68 m/s
+    // at 1.5, 18.06 at 1.6, 17.86 at 1.7 with the bends at 0.8 g); the bends at 0.9 g with 1.6 ride quicker
+    pace: 1.6,
+    gripMost: 2.25,
+    // The hardest a rider of the group plans its braking (m/s^2), for a bend and for the vehicle ahead: under its hard
+    // braking (LANE_DRIVE.bike.brake, 6), which the following rule reads for the vehicle ahead. A plan harder than the
+    // brake asks for room the rider cannot stop in: it arrives too fast at a bend and at the back of the one ahead
+    planMost: 5.88,
     // The row a character without `group` rides by
     rider: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: null, passPerS: 0.2, stop: null },
     // The line: a rider keeps its time gap (at its own speed, and no less than gapMinM) to whoever is next ahead of it on
@@ -147,8 +152,10 @@ const GROUP = {
     // whose place is behind its own, is within backM of it, so the line keeps its order; its own wait: once that is
     // over), the riders in front of it in the place have gone, and the road behind it is clear: every vehicle behind
     // further off than clearM and clearS of its speed, nobody within aheadM ahead (another rider pulling out too). It
-    // moves back onto its lane over pullM
-    rejoin: { joinM: 12, backM: 300, clearM: 20, clearS: 4, aheadM: 12, pullM: 25 },
+    // moves back onto its lane over pullM. One that waits on the roadside stands in the line, so what comes up behind it
+    // stands queued behind it: a vehicle behind slower than queuedMs does not hold it (it held it, and the queue behind
+    // it, for good: riders waiting for the back stood there with the back queued behind them)
+    rejoin: { joinM: 12, backM: 300, clearM: 20, clearS: 4, aheadM: 12, pullM: 25, queuedMs: 0.5 },
     // A pass: a rider passes the vehicle next ahead of it (within lookM) only when its own place in the group is ahead of
     // that one's (CHARACTERS `place`; the player's is its character's), it can ride gainMinMs faster than it within its
     // most (it rides up to gainMs faster), the vehicle ahead of that is roomM or more further on, no other pass is
@@ -627,7 +634,7 @@ class CrewGroup {
             if (e.ride === ride) continue;
             const back = ride.s - e.s;
             if (back < 0 && -back < J.aheadM) return false;
-            if (back >= 0 && back < J.clearM + e.speed * J.clearS) return false;
+            if (back >= 0 && back < J.clearM + e.speed * J.clearS && (ride.at.place || e.speed >= J.queuedMs)) return false;
         }
         // Nor while another rider off the road moves near it
         for (const other of this.riders) {
@@ -2787,7 +2794,7 @@ class AIMotorcycle {
         const group = this.ride ? GROUP.pace : 1, grip = Math.min(group * group, this.ride ? GROUP.gripMost : 1);
         this.baseSpeed = (pace.speed + this.pace.luck * pace.spread) * this.pace.scale * group;
         if (!this.drive) this.drive = { ...LANE_DRIVE.bike };
-        this.drive.plan = LANE_DRIVE.bike.plan * grip;
+        this.drive.plan = Math.min(LANE_DRIVE.bike.plan * grip, this.ride ? GROUP.planMost : Infinity);
         this.drive.accel = LANE_DRIVE.bike.accel * grip;
         this.drive.turnIn = LANE_DRIVE.bike.turnIn * grip;
         // (a rider of the group at a share of its pace takes its bends at that share of their speed)

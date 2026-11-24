@@ -70,19 +70,24 @@ describe('the group\'s pace', () => {
         expect(b.over).toBe(0);
         expect(a.overlaps).toEqual([]);
         expect(b.overlaps).toEqual([]);
+        // Nobody is held for good: riders that waited on the roadside for the back, with the back queued behind them,
+        // once stood there for the rest of the ride (1.8 km of the slice ridden in 1400 s)
+        for (const e of [...a.each, ...b.each]) expect(e.metres).toBeGreaterThan(route.length / 2);
     }, 900000);
 
-    test('every rider of the group rides the group\'s pace: its traits\' pace times GROUP.pace, its bends at the square of it, held at gripMost', () => {
+    test('every rider of the group rides the group\'s pace: its traits\' pace times GROUP.pace, its bends at the square of it, held at gripMost, its braking planned at planMost at most', () => {
         expect(G.pace).toBeGreaterThan(1);
         const grip = Math.min(G.pace * G.pace, G.gripMost);
-        expect(4 * grip).toBeLessThanOrEqual(8);
+        expect(4 * grip).toBeLessThanOrEqual(9);
         const ride = groupRide(game, env, { rider: byPlace(6), at: IN_PLACE, seconds: 5 });
         for (const r of ride.riders) {
             const kind = route.kindAt(sOf(r), {});
             const pace = Traffic.paceOf(Traffic.roadTrait(r.character, kind));
             expect(r.baseSpeed).toBeCloseTo((pace.speed + r.pace.luck * pace.spread) * r.pace.scale * G.pace, 2);
-            expect(r.drive.plan).toBeCloseTo(3 * grip, 6);
+            expect(r.drive.plan).toBeCloseTo(Math.min(3 * grip, G.planMost), 6);
             expect(r.drive.brake).toBe(6);
+            // (it never plans to stop in less room than its hard braking stops it in, which the following rule reads)
+            expect(r.drive.plan).toBeLessThanOrEqual(r.drive.brake);
             expect(r.drive.lateral).toBeLessThanOrEqual(4 * grip + 1e-9);
         }
     }, 300000);
