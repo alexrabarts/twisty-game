@@ -431,7 +431,8 @@ describe('degrees of off-road capability', () => {
     for (const c of game.CHARACTERS) for (const id of c.bikes || []) if (!riders.some(r => r[1] === id)) riders.push([c.id, id]);
     const trait = who => game.Vehicle.offroadOf(who[1]);
     const offroad = riders.filter(who => trait(who) > 0).sort((a, b) => trait(b) - trait(a));
-    const plain = riders.filter(who => trait(who) === 0);
+    // (a bike added since that commit has nothing to be held against)
+    const plain = riders.filter(who => trait(who) === 0 && before.BIKE_MODELS[who[1]]);
     const tables = new Map();
     const table = (g, who) => {
         const key = `${g === game ? 'now' : 'before'} ${who[1]}`;

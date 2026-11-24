@@ -393,11 +393,11 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
             expect((tyre.min.z + tyre.max.z) / 2).toBeCloseTo(z, 3);
             expect(tyre.min.y).toBeCloseTo(0, 2);
             expect(radius).toBeCloseTo(y, 2);
-            // (a mini bike on its 12 inch wheels is smaller and shorter than every other)
+            // (a mini bike on its 0.25 m wheels is far smaller and shorter than every other)
             const mini = game.BIKE_MODELS[id].cls === 'mini';
-            expect(radius).toBeGreaterThan(mini ? 0.22 : 0.25);
-            expect(radius).toBeLessThan(mini ? 0.25 : 0.36);
-            expect(Math.abs(z)).toBeGreaterThan(mini ? 0.55 : 0.65);
+            expect(radius).toBeGreaterThan(mini ? 0.11 : 0.25);
+            expect(radius).toBeLessThan(mini ? 0.14 : 0.36);
+            expect(Math.abs(z)).toBeGreaterThan(mini ? 0.3 : 0.65);
         }
         // Nothing of the bike under the ground
         expect(box(vehicle.group).min.y).toBeGreaterThan(-0.005);
@@ -415,8 +415,10 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
         vehicle.updateMesh();
         const [, , rear] = vehicle.axles.rear;
         const [, , front] = vehicle.axles.front;
-        expect(vehicle.rearWheel.rotation.x).toBeCloseTo(30 / 60 / rear, 6);
-        expect(vehicle.frontWheel.rotation.x).toBeCloseTo(30 / 60 / front, 6);
+        // Within a whole turn: a mini's small wheel turns past half of one in a frame at 30 m/s
+        const turn = a => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+        expect(turn(vehicle.rearWheel.rotation.x)).toBeCloseTo(turn(30 / 60 / rear), 6);
+        expect(turn(vehicle.frontWheel.rotation.x)).toBeCloseTo(turn(30 / 60 / front), 6);
         expect(vehicle.frontDisc.rotation.x).toBe(vehicle.frontWheel.rotation.x);
 
         vehicle.isWheelie = true;

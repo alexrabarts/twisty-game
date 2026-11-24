@@ -8,7 +8,8 @@
 // Sizes: the procedural kinds are modelled a little under life size (the
 // dirt bike's 18-inch rear rim is 0.40 m across), the detailed bikes at life
 // size, so a 200-340 mm disc is a radius of 0.10-0.17 m (the scrambler's
-// front disc is 330 mm). Each bike's axles are its own (vehicle.axles).
+// front disc is 330 mm). A mini bike (BIKE_MODELS cls 'mini') on its 5 inch rims carries 100-160 mm discs, a radius of
+// 0.05-0.08 m. Each bike's axles are its own (vehicle.axles).
 import { readFileSync } from 'node:fs';
 import { Blob } from 'node:buffer';
 import { TextDecoder } from 'node:util';
@@ -17,6 +18,7 @@ import { planeNormal } from '../helpers/bike-rig.js';
 
 const root = new URL('../../', import.meta.url);
 const RADIUS = [0.1, 0.17];
+const MINI_RADIUS = [0.05, 0.08];
 const AXLE = { disc_rear: [0.3, -0.7], disc_front: [0.3, 0.7] };
 const WHEEL = { disc_rear: 'rear', disc_front: 'front' };
 const NODE = { disc_rear: 'rearDisc', disc_front: 'frontDisc' };
@@ -149,8 +151,9 @@ describe.each(bikes)('%s brake discs in the game', (label, id, file) => {
             for (const disc of found) {
                 expect(disc.tilt).toBeLessThan(3);
                 expect(disc.offset).toBeLessThan(0.003);
-                expect(disc.radius).toBeGreaterThanOrEqual(RADIUS[0]);
-                expect(disc.radius).toBeLessThanOrEqual(RADIUS[1]);
+                const [least, most] = (game.BIKE_MODELS[id] || {}).cls === 'mini' ? MINI_RADIUS : RADIUS;
+                expect(disc.radius).toBeGreaterThanOrEqual(least);
+                expect(disc.radius).toBeLessThanOrEqual(most);
                 // Thin across the axle: a disc turned on its edge would span its diameter
                 expect(disc.x[1] - disc.x[0]).toBeLessThan(0.03);
             }

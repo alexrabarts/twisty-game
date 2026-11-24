@@ -543,9 +543,12 @@ const BIKE_MODELS = {
     bike14_forza: { kind: 'scooter', cls: 'scooter', engine: 'single', kg: 182, spare: 0, leanMaxDeg: 45, name: 'Sports scooter, blue and silver', year: 2019, paint: 0x030925, rearBrake: 'right', drive: 'belt', pose: { torsoLean: 0.06, style: 'commuter' } },
     bike15_crf250: { kind: 'dirt', cls: 'adventure', engine: 'single', light: true, offroad: 1, kg: 146, spare: 0.1, name: 'Trail single, red', year: 2019, paint: 0xa00102, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.14, style: 'adv' } },
     bike16_superadv: { kind: 'adventure', cls: 'adventure', engine: 'v-twin', offroad: 0.5, kg: 245, spare: 0.64, name: 'Big adventure tourer, orange', year: 2021, paint: 0xde1d01, rearBrake: 'right', drive: 'chain', luggage: true, pose: { torsoLean: 0.12, style: 'adv' } },
-    // Steve's mini moto (the owner, 2026-11-23): its rider sits back on the seat's extension, so under the throttle the
-    // front goes light and it steers less (`rearLoad`: the share of its steering it loses at full throttle)
-    bike17_minimoto: { kind: 'naked', cls: 'mini', engine: 'single', light: true, kg: 104, spare: 0.1, rearLoad: 0.45, name: 'Mini moto, black', year: 2022, paint: 0x020202, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.18 } }
+    // Steve's mini moto (the owner, 2026-11-24, with a reference picture): a racing pocket bike that comes up to the
+    // rider's knees. He crouches over it, chest low over the screen, knees out wide at the bars, feet on the pegs by the
+    // rear wheel; sat that far back, under the throttle the front goes light and it steers less (`rearLoad`: the share
+    // of its steering it loses at full throttle). The real bike weighs about 25 kg; its `kg` stands at the floor the
+    // handling's weight rules were tuned over (80 kg up, tests/unit/wheelie-pop.test.js)
+    bike17_minimoto: { kind: 'sport', cls: 'mini', engine: 'single', light: true, kg: 81, spare: 0.1, rearLoad: 0.45, name: 'Pocket racer, black', year: 2022, paint: 0x020202, rearBrake: 'right', drive: 'chain', pose: { torsoLean: 0.6, style: 'race', elbowOut: 0.15, kneeOut: 0.6, kneeUp: 1.2 } }
 };
 // `far` is the bike as the touring crew ride it, a light file of its own made from the detail file (tools/blender/far.py)
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, far: `assets/bikes/far/${id}.glb`, keepFileColours: true }));

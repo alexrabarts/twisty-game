@@ -389,7 +389,8 @@ const BikeModels = (() => {
       const sole = new THREE.Vector3(side * Math.abs(peg.x), peg.y + 0.05, peg.z).sub(base);
       const ankle = sole.clone().add(new THREE.Vector3(0, 0.062, -0.022));
       const hip = up.clone().multiplyScalar(-0.17).setX(side * 0.09 * wide);
-      const knee = joint(hip, ankle, LENGTHS.thigh * tall, LENGTHS.shin * tall, new THREE.Vector3(side * (0.06 + spec.kneeOut * 2), 0.3, 1));
+      // (a pose's kneeUp lifts the knee over the hip: the crouch on a bike that comes up to the rider's knees)
+      const knee = joint(hip, ankle, LENGTHS.thigh * tall, LENGTHS.shin * tall, new THREE.Vector3(side * (0.06 + spec.kneeOut * 2), 0.3 + (spec.kneeUp || 0), 1));
       const fold = knee.clone().sub(hip.clone().add(ankle).multiplyScalar(0.5)).normalize();
       const thigh = limb("thigh", spec.thighStyle, hip, knee, fold);
       const shin = limb("shin", spec.shinStyle, knee, ankle, fold);

@@ -7604,8 +7604,8 @@ function worldChecks(report) {
     }
 }
 
-// world-bike-shots: a rider on two of his bikes side by side, stood on the road, from the left, the front three
-// quarters and the rear three quarters (GPU pictures). Each bike is a Vehicle of its own, dressed from its detail file.
+// world-bike-shots: a rider on two of his bikes side by side, stood on the road: each bike from its side and from in
+// front, close, then the two together from the front and the rear three quarters (GPU pictures). Each bike is a Vehicle of its own, dressed from its detail file.
 //   node tools/terrain-check.mjs world-bike-shots --world tremola --gpu --out <dir> [--rider steve] [--bikes a,b] [--at 300]
 async function bikeShots(placeSource, at, riderId, bikes) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
@@ -7629,6 +7629,7 @@ async function bikeShots(placeSource, at, riderId, bikes) {
     // Each bike from its own outer side, close, then the two together from the front and the rear three quarters
     const views = [
         ...rides.map((v, i) => [`side-${v.model}`, v.position.clone(), [i === 0 ? -1 : 1, 0], 3]),
+        ...rides.map((v, i) => [`face-${v.model}`, v.position.clone(), [(i === 0 ? -1 : 1) * 0.35, 0.94], 2.6]),
         ['front', own.position.clone(), [-0.6, 0.8], 4.2],
         ['rear', own.position.clone(), [-0.6, -0.8], 4.2]
     ];
