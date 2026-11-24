@@ -399,6 +399,13 @@ class Game {
             this.thinTrees(root);
             if (typeof Effects !== 'undefined') Effects.dress(this, root);
         };
+        // Anything added under the world after that, by any code (a stopping place's props rebuilt as the bike comes
+        // near, PlaceMesh.update), is dressed the same way before its first draw (Graphics.dressAdded)
+        const world = this.environment;
+        this.graphics.onAdded = root => {
+            if (this.environment !== world || !world.group) return;
+            for (let o = root; o; o = o.parent) if (o === world.group) return world.onMeshBuilt(root);
+        };
         this.environment.applyLandscapeConfig(this.environment.config.look);
         this.applyShadowBox(this.environment.config.render);
         this.cones = null;

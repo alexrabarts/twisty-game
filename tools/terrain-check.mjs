@@ -6589,6 +6589,167 @@ function groupEye(kind) {
     return { png: game.graphics.renderer.domElement.toDataURL('image/png'), eye: [eye.x, eye.y, eye.z].map(n => Math.round(n)) };
 }
 
+// world-flash: no world mesh changes colour as the bike comes up to it. It rides up to a stopping place (its props,
+// PlaceMesh, are built near the bike only) and to a hairpin's row of marker stones (the kerbs, Scenery.setStones by the
+// tile's detail) at 18 m/s, and every frame records the mean colour of those meshes' pixels (a mask drawn on a layer
+// of their own into a small target, against the frame drawn into another), and whether each is dressed as a world mesh
+// should be before its first draw: its vertex colours decoded (Graphics.fixColorSpaces), its material hazed
+// (LandShade.haze), its shadows set (Effects.dress). Fails on a frame-to-frame jump in luminance over `jump` with the
+// mesh well in view, and on a mesh drawn undressed. --out <dir> saves the frames either side of each jump.
+//   node tools/terrain-check.mjs world-flash --world tremola --gpu [--out <dir>]
+async function flashRun(placeSource, jump) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, g = game.graphics, renderer = g.renderer;
+    const v = game.vehicle;
+    const W = 480, H = 270;
+    const frame = new THREE.WebGLRenderTarget(W, H), mask = new THREE.WebGLRenderTarget(W, H);
+    const white = new THREE.MeshBasicMaterial({ color: 0xffffff }), black = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    // A frame read back as a PNG (the target's rows run bottom up)
+    const png = (pixels) => {
+        const c = document.createElement('canvas');
+        c.width = W;
+        c.height = H;
+        const ctx = c.getContext('2d'), img = ctx.createImageData(W, H);
+        for (let y = 0; y < H; y++) img.data.set(pixels.subarray((H - 1 - y) * W * 4, (H - y) * W * 4), y * W * 4);
+        ctx.putImageData(img, 0, 0);
+        return c.toDataURL('image/png');
+    };
+    const a = new Uint8Array(W * H * 4), b = new Uint8Array(W * H * 4);
+    const side = Route.keepRight(1);
+    const place = env.places.list.find(p => p.side === side && p.s > 3000 && p.kind === 'layby') || env.places.list.find(p => p.s > 3000);
+    const pins = route.hairpins ? route.hairpins() : [];
+    const runs = [{ name: 'place', toS: place.s, pick: o => o.name === 'world-places' }];
+    const pin = pins.find(h => h.apex > 2000) || pins[0];
+    if (pin) runs.push({ name: 'kerbs', toS: pin.apex, pick: o => o.name === 'stone-kerbs' });
+    const dressed = o => {
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        const decoded = !o.geometry.attributes.color || o.geometry.userData.linearColors || g.seenGeometries.has(o.geometry);
+        const hazed = ms.every(m => !LandShade.hazeable(m) || m.userData.haze);
+        const shadowed = !(game.effectLevels && game.effectLevels.shadows === 'on') || !Cascades.CASTERS.test(o.name) || o.castShadow;
+        return { decoded, hazed, shadowed };
+    };
+    const out = [];
+    for (const run of runs) {
+        await placeAt(Math.max(10, run.toS - 320));
+        game.worldCamera.reset(v.yawAngle);
+        twistyDev.autopilot({ speed: 18 });
+        const series = [];
+        for (let f = 0; f < 60 * 22 && v.routeS < run.toS + 15; f++) {
+            twistyDev.step(1, { render: true });
+            const targets = [];
+            game.scene.traverseVisible(o => { if (o.isMesh && run.pick(o)) targets.push(o); });
+            if (!targets.length) { series.push({ f, s: Math.round(v.routeS), n: 0 }); continue; }
+            renderer.setRenderTarget(frame);
+            renderer.render(game.scene, game.camera);
+            const layers = targets.map(o => o.layers.mask);
+            targets.forEach(o => o.layers.enable(7));
+            const keepLayers = game.camera.layers.mask, keepOverride = game.scene.overrideMaterial, keepBg = game.scene.background, keepFog = game.scene.fog;
+            game.camera.layers.set(7);
+            game.scene.overrideMaterial = white;
+            game.scene.background = null;
+            game.scene.fog = null;
+            // The mask: everything black, then the targets white where they are in front (the depth kept between)
+            const keepClear = renderer.autoClear;
+            renderer.setRenderTarget(mask);
+            renderer.setClearColor(0x000000, 1);
+            renderer.clear();
+            renderer.autoClear = false;
+            game.camera.layers.mask = keepLayers;
+            game.scene.overrideMaterial = black;
+            renderer.render(game.scene, game.camera);
+            game.camera.layers.set(7);
+            game.scene.overrideMaterial = white;
+            renderer.render(game.scene, game.camera);
+            renderer.autoClear = keepClear;
+            game.camera.layers.mask = keepLayers;
+            game.scene.overrideMaterial = keepOverride;
+            game.scene.background = keepBg;
+            game.scene.fog = keepFog;
+            targets.forEach((o, i) => { o.layers.mask = layers[i]; });
+            renderer.readRenderTargetPixels(frame, 0, 0, W, H, a);
+            renderer.readRenderTargetPixels(mask, 0, 0, W, H, b);
+            renderer.setRenderTarget(null);
+            let n = 0, r = 0, gg = 0, bb = 0;
+            for (let i = 0; i < W * H; i++) if (b[i * 4] > 128) { n++; r += a[i * 4]; gg += a[i * 4 + 1]; bb += a[i * 4 + 2]; }
+            const state = dressed(targets[0]);
+            // The first frame a target is drawn undressed, and the first after it dressed again, as pictures
+            if (!run.shots) run.shots = {};
+            if (n > 0 && !state.decoded && !run.shots.undressed) run.shots.undressed = png(a);
+            if (n > 0 && state.decoded && run.shots.undressed && !run.shots.dressed) run.shots.dressed = png(a);
+            series.push({ f, s: Math.round(v.routeS), n, mesh: targets[0].uuid.slice(0, 6), luma: n ? +((0.2126 * r + 0.7152 * gg + 0.0722 * bb) / n / 255).toFixed(3) : null, rgb: n ? [r, gg, bb].map(x => Math.round(x / n)) : null, ...state });
+        }
+        const jumps = [], undressed = [];
+        for (let i = 1; i < series.length; i++) {
+            const p = series[i - 1], q = series[i];
+            if (p.n > 60 && q.n > 60 && Math.abs(q.luma - p.luma) > jump) jumps.push({ f: q.f, s: q.s, from: p.luma, to: q.luma, pixels: q.n });
+            if (q.n > 0 && (!q.decoded || !q.hazed || !q.shadowed)) undressed.push({ f: q.f, s: q.s, decoded: q.decoded, hazed: q.hazed, shadowed: q.shadowed });
+        }
+        out.push({ shots: run.shots || {}, run: run.name, toS: Math.round(run.toS), frames: series.length, seen: series.filter(x => x.n > 0).length, jumps: jumps.slice(0, 12), undressed: undressed.slice(0, 12), undressedFrames: undressed.length, meshes: [...new Set(series.filter(x => x.mesh).map(x => x.mesh))].length, lumas: series.filter(x => x.n > 15).map(x => `${x.s}:${x.luma}`).filter((x, i) => i % 8 === 0) });
+    }
+    // The props rebuilt with the bike stood 12 m short of the place (as when another place comes within reach,
+    // PlaceMesh.update): the next frame must look as the one before it
+    await placeAt(place.s - 12);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 30; i++) twistyDev.step(1, { render: true });
+    const measure = () => {
+        const targets = [];
+        game.scene.traverseVisible(o => { if (o.isMesh && o.name === 'world-places') targets.push(o); });
+        renderer.setRenderTarget(frame);
+        renderer.render(game.scene, game.camera);
+        renderer.readRenderTargetPixels(frame, 0, 0, W, H, a);
+        // (the mask as above)
+        const keepClear = renderer.autoClear, keepLayers = game.camera.layers.mask, keepOverride = game.scene.overrideMaterial;
+        targets.forEach(o => o.layers.enable(7));
+        renderer.setRenderTarget(mask);
+        renderer.clear();
+        renderer.autoClear = false;
+        game.scene.overrideMaterial = black;
+        renderer.render(game.scene, game.camera);
+        game.camera.layers.set(7);
+        game.scene.overrideMaterial = white;
+        renderer.render(game.scene, game.camera);
+        renderer.autoClear = keepClear;
+        game.camera.layers.mask = keepLayers;
+        game.scene.overrideMaterial = keepOverride;
+        targets.forEach(o => o.layers.disable(7));
+        renderer.readRenderTargetPixels(mask, 0, 0, W, H, b);
+        renderer.setRenderTarget(null);
+        let n = 0, l = 0;
+        for (let i = 0; i < W * H; i++) if (b[i * 4] > 128) { n++; l += (0.2126 * a[i * 4] + 0.7152 * a[i * 4 + 1] + 0.0722 * a[i * 4 + 2]) / 255; }
+        return { n, luma: n ? +(l / n).toFixed(3) : null, png: png(a) };
+    };
+    const settled = measure();
+    env.placeMesh.key = null;
+    env.placeMesh.update(v.position);
+    // One step drawn as the game draws it (Graphics.render), then measured
+    twistyDev.step(1, { render: true });
+    const rebuilt = measure();
+    out.push({ run: 'rebuild', shots: { settled: settled.png, rebuilt: rebuilt.png }, frames: 2, seen: 2, meshes: 1, undressed: [], undressedFrames: 0,
+        jumps: settled.n > 60 && Math.abs(rebuilt.luma - settled.luma) > jump ? [{ s: Math.round(v.routeS), from: settled.luma, to: rebuilt.luma, pixels: rebuilt.n }] : [],
+        lumas: [`settled:${settled.luma} (${settled.n} px)`, `rebuilt:${rebuilt.luma} (${rebuilt.n} px)`] });
+    frame.dispose();
+    mask.dispose();
+    return out;
+}
+WORLD_PROBES.push('world-flash');
+WORLD['world-flash'] = async (page) => {
+    const jump = Number(option('jump') || 0.06);
+    const runs = await page.evaluate(flashRun, placeAt.toString(), jump);
+    const dir = option('out');
+    for (const r of runs) {
+        for (const [k, data] of Object.entries(r.shots || {})) {
+            if (dir) {
+                mkdirSync(dir, { recursive: true });
+                writeFileSync(join(dir, `${option('tag') || 'flash'}-${r.run}-${k}.png`), Buffer.from(data.split(',')[1], 'base64'));
+            }
+        }
+        r.shots = Object.keys(r.shots || {});
+    }
+    const failures = runs.flatMap(r => [...r.jumps.map(j => `${r.run}: luminance ${j.from} to ${j.to} at s ${j.s}`), ...(r.undressedFrames ? [`${r.run}: ${r.undressedFrames} frames drawn undressed (first at s ${r.undressed[0].s}: ${JSON.stringify(r.undressed[0])})`] : [])]);
+    return { ok: failures.length === 0, failures, runs };
+};
+
 // world-place-shots: the stopping places (WorldPlaces, PlaceMesh; .agent/system/world.md, "Stopping places") in
 // pictures. For each place named (--ids p3,p7 or all; by default the first open layby, viewpoint and car park on the
 // riders' side): the player stops 260 m before it with the crew just ahead, so the riders go to wait in it (a place on

@@ -828,6 +828,7 @@ class Graphics {
         this.bufferSize = new THREE.Vector2();
         this.seenTextures = new WeakSet();
         this.seenGeometries = new WeakSet();
+        Graphics.watchAdds();
 
         // HDR post-processing needs float render targets (WebGL2). Without
         // them the renderer tone-maps straight to the canvas instead.
@@ -1180,6 +1181,40 @@ class Graphics {
         this.stats.envBakes++;
         this.stats.lastBakeFrame = this.frames;
         this.bakedBlend = this.skyBlend;
+    }
+
+    // Every object added to any parent anywhere is noted (three's Object3D.add, wrapped once), so that it is dressed
+    // before its first draw (Graphics.dressAdded): a mesh built or rebuilt at any time, by any code, never shows a frame
+    // with its sRGB colours read as linear (pale), or without what the ride's effects add to it
+    static watchAdds() {
+        if (Graphics.added) return;
+        Graphics.added = [];
+        const add = THREE.Object3D.prototype.add;
+        THREE.Object3D.prototype.add = function (...objects) {
+            const result = add.apply(this, objects);
+            for (const object of objects) if (object && object !== this) Graphics.added.push(object);
+            return result;
+        };
+    }
+
+    // What was added since the last draw and now hangs in `scene`, dressed: its colours decoded (fixColorSpaces), then
+    // whatever the game adds (onAdded: a world's shadows and tree share). What hangs elsewhere is dressed when its own
+    // group is added to the scene, which notes the group in turn
+    dressAdded(scene) {
+        const list = Graphics.added;
+        if (!list || !list.length) return 0;
+        Graphics.added = [];
+        let dressed = 0;
+        for (const object of list) {
+            let top = object;
+            while (top.parent) top = top.parent;
+            if (top !== scene) continue;
+            this.fixColorSpaces(object);
+            if (this.onAdded) this.onAdded(object);
+            dressed++;
+        }
+        this.stats.dressed = (this.stats.dressed || 0) + dressed;
+        return dressed;
     }
 
     // Colour textures and vertex colours created by the game are authored in
@@ -1569,6 +1604,8 @@ class Graphics {
     }
 
     render(scene, camera) {
+        // Nothing is drawn before it is dressed
+        this.dressAdded(scene);
         // What must change before each draw (the far shadow cascade's box: js/effects.js, Cascades)
         if (this.onRender) this.onRender(camera);
         this.ensureSkyInScene();
