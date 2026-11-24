@@ -85,15 +85,33 @@ class HillMusic {
         this.schedule();
     }
 
-    stop() {
+    // Stops the band, fading over about `fadeS`
+    stop(fadeS = 0.6) {
         if (!this.playing) return;
         clearInterval(this.timer);
         this.timer = null;
         const ctx = this.sound.audioContext;
-        this.out.gain.setTargetAtTime(0, ctx.currentTime, 0.2);
+        this.out.gain.setTargetAtTime(0, ctx.currentTime, fadeS / 3);
         const out = this.out;
-        setTimeout(() => out.disconnect(), 1500);
+        setTimeout(() => out.disconnect(), fadeS * 1000 + 1500);
         this.playing = false;
+    }
+
+    // The band's last chord, for the last picture: the tonic held by every voice, the cornet on the tonic an octave up
+    close() {
+        const sound = this.sound;
+        if (!sound || !sound.audioContext || !sound.graph) return;
+        const ctx = sound.audioContext;
+        const out = ctx.createGain();
+        out.gain.value = 1;
+        out.connect(sound.graph.master);
+        const keep = this.out;
+        this.out = out;
+        const at = ctx.currentTime + 0.3, beat = HillMusic.SCORE.beatS;
+        const tonic = HillMusic.SCORE.tonic;
+        for (const [midi, voice] of [[tonic, 'cornet'], [tonic - 8, 'horn'], [tonic - 5, 'horn'], [tonic - 24, 'tuba']]) this.note({ midi, voice, durS: beat * 4 }, at);
+        this.out = keep;
+        setTimeout(() => out.disconnect(), beat * 4 * 1000 + 3000);
     }
 
     // Schedules the notes that start within the next half second

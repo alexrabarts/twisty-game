@@ -2759,3 +2759,26 @@ body.hill-on .hud {
     border-radius: 8px;
     font: 18px/1.4 system-ui, sans-serif;
 }
+
+.hill-fade {
+    position: fixed;
+    inset: 0;
+    background: #1c1813;
+    pointer-events: none;
+    transition: none;
+}
+
+.hill-end {
+    text-align: center;
+}
+
+.hill-end-title {
+    font-size: 26px;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+}
+
+.hill-end-keys {
+    font-size: 15px;
+    opacity: 0.8;
+}

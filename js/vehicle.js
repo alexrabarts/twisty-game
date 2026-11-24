@@ -698,6 +698,8 @@ class Vehicle {
         
         // Advanced wheelie balance system
         this.wheelieBalance = 0; // -1 to 1, 0 is perfectly balanced
+        // Under this speed (m/s) a wheelie ends: a motorbike's needs pace; a bicycle's does not (js/hill/pushbike.js)
+        this.wheelieEndSpeed = 5;
 
         // Weather system reference
         this.weatherSystem = null;
@@ -2970,7 +2972,7 @@ class Vehicle {
             this.wheelieAngle = 0.05; // Start with more visible angle
             // Initial lift: the rider's own, by how light the bike is at low speed and by the drive it has to spare at
             // this speed (Vehicle.popShare)
-            this.wheelieVelocity = 3.5 * (this.tuned('wheeliePopMult') || 1) * Vehicle.popShare(this.wheelieBike, this.speed);
+            this.wheelieVelocity = 3.5 * (this.tuned('wheeliePopMult') || 1) * this.wheeliePop(this.speed);
             this.wheelieStartTime = performance.now();
             this.wheelieScoreAccumulated = 0;
             console.log('===== WHEELIE STARTED! =====');
@@ -2991,7 +2993,7 @@ class Vehicle {
                 // Progressive throttle response - more sensitive at higher angles
                 // The throttle lifts only by the drive the bike has to spare at this speed (Vehicle.liftShare): a
                 // bike with none cannot hold the front up, a powerful one still can at speed
-                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.tuned('wheelieThrottleMult') || 1) * Vehicle.liftShare(this.wheelieBike, this.speed);
+                const throttleSensitivity = (5.2 + (angleDegrees / 60) * 0.8) * (this.tuned('wheelieThrottleMult') || 1) * this.wheelieLift(this.speed);
                 this.wheelieVelocity += throttleInput * throttleSensitivity * deltaTime;
             }
             
@@ -3070,7 +3072,7 @@ class Vehicle {
             }
 
             // End wheelie if angle gets to zero or speed too low
-            if (this.wheelieAngle <= 0 || this.speed < 5) {
+            if (this.wheelieAngle <= 0 || this.speed < this.wheelieEndSpeed) {
                 this.isWheelie = false;
                 this.wheelieAngle = 0;
                 this.wheelieVelocity = 0;
@@ -3097,6 +3099,16 @@ class Vehicle {
                 this.wheelieAngle = 0;
             }
         }
+    }
+
+    // The pop and the throttle's lift of a wheelie at a speed, as shares (Vehicle.popShare, liftShare): a bike with
+    // another kind of drive (the hill ride's bicycle, js/hill/pushbike.js) has its own
+    wheeliePop(speed) {
+        return Vehicle.popShare(this.wheelieBike, speed);
+    }
+
+    wheelieLift(speed) {
+        return Vehicle.liftShare(this.wheelieBike, speed);
     }
 
     updatePhysics(deltaTime, steeringInput) {

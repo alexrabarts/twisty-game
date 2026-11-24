@@ -7665,30 +7665,260 @@ WORLD['world-bike-shots'] = async (page) => {
     return { facts, files };
 };
 
-// hill-shots: the hill ride (js/hill/ride.js, opened by RideMode.HILL_KEY) in GPU pictures. The bicycle starts stood at
-// the top and rolls down on gravity alone, no pedal and no brake: pictures at the start, at the moment the legs are
-// fully out, and halfway down, each from the three views (behind, from the top of the lane, in front), with the speed,
-// the place and the time of each. Saved to --out (default ~/Library/Caches/twisty-world/hill-shots/).
+// hill-compare: the hill ride beside the owner's reference stills. For each still (--stills <dir>: its pictures in
+// name order, private, never in the repo) the game is drawn from the named shot that matches it (HillRide.SHOTS) with
+// the bicycle where the still has the boy, and a sheet is saved: the still on the left, the game on the right, the
+// same height. Each sheet comes with the mean colour of the lit house faces in both (a rectangle per still).
+//   node tools/terrain-check.mjs hill-compare --gpu --stills <dir> [--out <dir>] [--tag before]
+const HILL_COMPARE_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/hill-shots/compare');
+// Per still, in name order: the shot, where the bicycle is ({ s, across, uphill, speed, legs }), and the rectangle of
+// lit house faces in the picture (shares of its width and height). The video's own area of each still is CROP (px)
+const HILL_STILLS = [
+    { shot: 'climbFoot', bike: { s: 110, uphill: true }, lit: [0.06, 0.18, 0.42, 0.62] },
+    { shot: 'basket', bike: { s: 108.5, uphill: true }, lit: [0.0, 0.0, 0.3, 0.35] },
+    { shot: 'climbShop', bike: { s: 110, uphill: true }, lit: [0.25, 0.05, 0.7, 0.35] },
+    { shot: 'shopSide', bike: { s: 109.5, across: -0.3, uphill: true }, lit: [0.3, 0.02, 0.75, 0.32] },
+    { shot: 'shopSide', bike: { s: 109.5, across: -0.3, uphill: true }, lit: [0.3, 0.02, 0.75, 0.32] },
+    { shot: 'shopSide', bike: { s: 109.5, across: -0.3, uphill: true }, lit: [0.3, 0.02, 0.75, 0.32] },
+    { shot: 'opening', bike: { s: 22 }, lit: [0.27, 0.32, 0.5, 0.62] },
+    { shot: 'opening', bike: { s: 30, speed: 7, legs: 1 }, lit: [0.27, 0.32, 0.5, 0.62] },
+    { shot: 'opening', bike: { s: 38, speed: 7, legs: 1 }, lit: [0.27, 0.32, 0.5, 0.62] },
+    { shot: 'opening', bike: { s: 48, speed: 7, legs: 1 }, lit: [0.27, 0.32, 0.5, 0.62] },
+    { shot: 'loaf', bike: { s: 22 }, lit: [0.25, 0.25, 0.65, 0.75] }
+];
+const HILL_CROP = [114, 34, 772, 552];
+async function hillCompare(shot, bike, still, crop, lit) {
+    const ride = window.game.hill;
+    ride.running = false;
+    cancelAnimationFrame(ride.frameId);
+    ride.hold = null;
+    ride.ending = null;
+    const b = ride.bike;
+    b.reset(bike.s, bike.across || 0);
+    if (bike.uphill) b.vehicle.yawAngle += Math.PI;
+    b.vehicle.speed = bike.speed || 0;
+    b.vehicle.footDown = !bike.speed;
+    b.legs = bike.legs || 0;
+    b.legsOut = b.legs > 0;
+    ride.rider.foot = bike.speed ? 0 : 1;
+    if (shot === 'loaf') {
+        for (let i = 0; i < 100 && !ride.loaf; i++) await new Promise(resolve => setTimeout(resolve, 100));
+        ride.showLoaf(true);
+        ride.forcedShot = null;
+    } else {
+        if (ride.loafShown) ride.showLoaf(false);
+        ride.forcedShot = shot;
+    }
+    ride.draw(0);
+    ride.draw(0);
+    const game = await new Promise(resolve => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.src = window.game.renderer.domElement.toDataURL('image/png');
+    });
+    ride.forcedShot = null;
+    const source = await new Promise(resolve => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.src = still;
+    });
+    const [cx, cy, cw, ch] = crop;
+    const H = 540, W1 = Math.round(cw * H / ch), W2 = Math.round(game.width * H / game.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = W1 + W2 + 8;
+    canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, H);
+    ctx.drawImage(source, cx, cy, cw, ch, 0, 0, W1, H);
+    ctx.drawImage(game, 0, 0, game.width, game.height, W1 + 8, 0, W2, H);
+    const mean = (x0, w) => {
+        const d = ctx.getImageData(Math.round(x0 + lit[0] * w), Math.round(lit[1] * H), Math.max(1, Math.round((lit[2] - lit[0]) * w)), Math.max(1, Math.round((lit[3] - lit[1]) * H))).data;
+        const sum = [0, 0, 0];
+        for (let i = 0; i < d.length; i += 4) for (let c = 0; c < 3; c++) sum[c] += d[i + c];
+        return sum.map(v => Math.round(v / (d.length / 4)));
+    };
+    const meanStill = mean(0, W1), meanGame = mean(W1 + 8, W2);
+    // The rectangles drawn on the sheet
+    ctx.strokeStyle = 'rgba(255, 220, 0, 0.8)';
+    ctx.lineWidth = 2;
+    for (const [x0, w] of [[0, W1], [W1 + 8, W2]]) ctx.strokeRect(x0 + lit[0] * w, lit[1] * H, (lit[2] - lit[0]) * w, (lit[3] - lit[1]) * H);
+    return { png: canvas.toDataURL('image/png'), still: meanStill, game: meanGame };
+}
+WORLD_PROBES.push('hill-compare');
+WORLD['hill-compare'] = async (page) => {
+    const dir = option('stills');
+    if (!dir) return { error: 'name the stills folder with --stills <dir>' };
+    const out = option('out') || HILL_COMPARE_OUT;
+    const tag = option('tag') || 'sheet';
+    mkdirSync(out, { recursive: true });
+    const names = readdirSync(dir).filter(n => /\.png$/i.test(n)).sort();
+    const sheets = [];
+    for (let i = 0; i < names.length && i < HILL_STILLS.length; i++) {
+        const spec = HILL_STILLS[i];
+        const still = `data:image/png;base64,${readFileSync(join(dir, names[i])).toString('base64')}`;
+        const result = await page.evaluate(hillCompare, spec.shot, spec.bike, still, HILL_CROP, spec.lit);
+        const file = join(out, `${tag}-${String(i + 1).padStart(2, '0')}-${spec.shot}.png`);
+        writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
+        sheets.push({ file, shot: spec.shot, litStill: result.still, litGame: result.game });
+    }
+    return { sheets };
+};
+
+// hill-look: one picture of the hill ride after a script of the caller's (--script <file>: the body of an async
+// function given `ride`, `game` and `THREE`, run in the page before the picture; what it returns is reported), from
+// the camera as the script leaves it. For looking into a question of the light or the scene.
+//   node tools/terrain-check.mjs hill-look --gpu --script <file> [--out <file.png>]
+WORLD_PROBES.push('hill-look');
+WORLD['hill-look'] = async (page) => {
+    const script = option('script');
+    if (!script) return { error: 'name a script with --script <file>' };
+    const body = readFileSync(script, 'utf8');
+    const result = await page.evaluate(async (source) => {
+        const ride = window.game.hill;
+        ride.running = false;
+        cancelAnimationFrame(ride.frameId);
+        const run = new Function('ride', 'game', 'THREE', `return (async () => { ${source} })();`);
+        const said = await run(ride, window.game, THREE);
+        return { said, png: window.game.renderer.domElement.toDataURL('image/png') };
+    }, body);
+    const file = option('out') || join(HILL_SHOTS_OUT, 'hill-look.png');
+    writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
+    return { said: result.said, file };
+};
+
+// hill-shots: the hill ride (js/hill/ride.js, opened by RideMode.HILL_KEY) in GPU pictures, the bicycle placed and
+// ridden by the tests' autopilot: the start hold from the opening shot, the legs out on the main straight into the sun,
+// the fast part, the sharp right, the camera held at the last curve with the bicycle at the bend and gone, both sides
+// of the lane, a window's glint, the cobbles in the low sun, a wheelie, a thing knocked, the last picture and the end
+// card. Each with the bicycle's state and the picture's mean luminance; the band is checked to play. Saved to --out
+// (default ~/Library/Caches/twisty-world/hill-shots/).
 //   node tools/terrain-check.mjs hill-shots --gpu [--out <dir>]
 const HILL_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/hill-shots');
 async function hillShots() {
     const ride = window.game.hill;
     ride.running = false;
     cancelAnimationFrame(ride.frameId);
-    const bike = ride.bike;
+    const game = window.game, lane = ride.lane, bike = ride.bike;
     const shots = [];
     const facts = [];
-    const shoot = (tag) => {
-        for (const [view, name] of [[0, 'behind'], [1, 'top'], [2, 'front']]) {
-            ride.view = view;
-            ride.placeCamera(1);
-            ride.draw(0);
-            shots.push({ tag: `${tag}-${name}`, png: window.game.renderer.domElement.toDataURL('image/png') });
-        }
-        facts.push({ tag, s: Math.round(bike.s * 10) / 10, speed: Math.round(bike.speed * 100) / 100, legs: Math.round(bike.legs * 100) / 100, timeS: Math.round(bike.timeS * 10) / 10 });
+    const dt = 1 / 120;
+    // The autopilot of the tests: steer for a point ahead on the centre, brake to `most`
+    const pilot = (most = Infinity) => {
+        const v = bike.speed, ahead = lane.sample(bike.s + 4 + v * 0.6), at = bike.vehicle.position;
+        let err = Math.atan2(ahead.x - at.x, ahead.z - at.z) - bike.yaw;
+        err = Math.atan2(Math.sin(err), Math.cos(err));
+        const turn = 2.2 * err * Math.max(1, v);
+        const lean = -Math.atan(Math.max(0, v) * Math.max(-3, Math.min(3, turn / Math.max(1, v))) / 9.81);
+        return { pedal: 0, brake: v > most ? 1 : 0, steer: Math.max(-1, Math.min(1, (bike.lean - lean) * 5)) };
     };
+    const run = (seconds, input = () => pilot()) => {
+        for (let t = 0; t < seconds; t += dt) {
+            bike.step(dt, input(t));
+            ride.props.knock(bike, null);
+            ride.props.step(dt);
+        }
+    };
+    const shoot = (tag, view = 0, forced = null) => {
+        ride.view = view;
+        ride.forcedShot = forced;
+        ride.placeCamera(1);
+        ride.draw(1 / 60);
+        ride.draw(1 / 60);
+        shots.push({ tag, png: game.renderer.domElement.toDataURL('image/png') });
+        facts.push({ tag, s: Math.round(bike.s * 10) / 10, speed: Math.round(bike.speed * 100) / 100, legs: Math.round(bike.legs * 100) / 100, lean: Math.round(bike.lean * 100) / 100, wheelie: Math.round(bike.wheelie * 100) / 100, footDown: bike.footDown, crashed: bike.crashed });
+        ride.forcedShot = null;
+    };
+    const place = (s, speed, across = 0) => {
+        bike.reset(s, across);
+        bike.vehicle.speed = speed;
+        bike.vehicle.footDown = speed === 0;
+        ride.ending = null;
+        ride.hold = null;
+    };
+    const L = lane.rule;
+    // The start hold: the opening shot, a foot down, the sun to the right
+    ride.restart();
+    run(0.6, () => ({ pedal: 0, brake: 1, steer: 0 }));
+    ride.hold = { phase: 'hold', t: 0 };
+    shoot('hold-opening', 0, 'opening');
+    ride.hold = null;
+    shoot('hold-behind', 0);
+    // Down the main straight into the sun, legs out
+    place(130, 8);
+    run(3);
+    shoot('legs-out-behind', 0);
+    shoot('legs-out-front', 2);
+    place(200, 11);
+    run(1.5);
+    shoot('straight-into-sun', 0);
+    // The fast part, then the sharp right
+    place(360, 13);
+    run(2);
+    shoot('fast-behind', 0);
+    place(412, 8);
+    run(1.4, () => pilot(8));
+    shoot('sharp-right', 0);
+    shoot('sharp-right-front', 2);
+    // The camera held at the last curve, the bicycle rolling round it and out of sight
+    place(L.end.stopS + 2, 9);
+    ride.ending = { phase: 'watching', t: 10, hidden: 0, from: game.camera.position.clone(), lookFrom: ride.look.clone() };
+    run(1.5, () => pilot(9));
+    shoot('end-held-bend', 0);
+    run(3, () => pilot(9));
+    shoot('end-held-gone', 0);
+    ride.ending = null;
+    // Both sides of the lane, from its middle
+    place(150, 0);
+    shoot('side-left', 0, { position: [150, -1.5, 1.7], target: [158, 6, 3], fov: 60 });
+    shoot('side-right', 0, { position: [150, 1.5, 1.7], target: [158, -6, 3], fov: 60 });
+    // A window's golden glint near the start, and the cobbles in the low sun, into it and with it behind, close and far
+    place(22, 0);
+    shoot('window-glint', 0, { position: [14, -1.2, 2.2], target: [19, 4, 2.4], fov: 40 });
+    place(175, 0);
+    shoot('cobbles-into-sun-close', 0, { position: [160, 0.5, 1.3], target: [168, 0, -0.6], fov: 50 });
+    shoot('cobbles-into-sun-far', 0, { position: [125, 0.5, 2.5], target: [200, 0, -6], fov: 50 });
+    shoot('cobbles-sun-behind-close', 0, { position: [190, 0.5, 1.3], target: [182, 0, 0.1], fov: 50 });
+    // A wheelie at walking pace on the hill
+    place(60, 1.5);
+    run(0.7, t => ({ pedal: 1, brake: 0, steer: 0, wheelie: t < 0.1 ? 1 : 0 }));
+    shoot('wheelie', 2);
+    // A thing knocked: ride into the first one at the lane's edge on a straight
+    const target = ride.props.items.find(i => Math.abs(i.across) < L.halfWidthM && i.s > 130 && i.s < 220);
+    if (target) {
+        place(target.s - 5, 5, target.across);
+        let hit = 0;
+        for (let t = 0; t < 3 && !hit; t += dt) {
+            bike.step(dt, { pedal: 0, brake: 0, steer: 0 });
+            hit = ride.props.knock(bike, null);
+            ride.props.step(dt);
+        }
+        run(0.15, () => ({ pedal: 0, brake: 0, steer: 0 }));
+        shoot('knock', 2);
+    }
+    ride.props.reset();
+    // The last picture
+    for (let i = 0; i < 100 && !ride.loaf; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    ride.showLoaf(true);
+    shoot('loaf', 0);
+    ride.showLoaf(false);
+    // Each picture's mean luminance, 0 to 1 (how dark the lane reads)
+    for (const shot of shots) {
+        const image = new Image();
+        image.src = shot.png;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(image, 0, 0);
+        const d = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+        shot.luma = Math.round(sum / (d.length / 4) / 255 * 1000) / 1000;
+    }
     // The band: woken as a key press wakes the game's sound, played for a moment, then put back as it was
-    const sound = window.game.soundManager;
+    const sound = game.soundManager;
     const muted = sound.getSetting('muted');
     sound.setSetting('muted', false);
     sound.wake();
@@ -7697,23 +7927,6 @@ async function hillShots() {
     const music = { context: sound.audioContext ? sound.audioContext.state : null, playing: ride.music.playing };
     ride.music.stop();
     sound.setSetting('muted', muted);
-    const quiet = { pedal: 0, brake: 0, steer: 0 };
-    const run = (until, most = 120) => {
-        let t = 0;
-        while (!until() && t < most) {
-            bike.step(1 / 120, quiet);
-            t += 1 / 120;
-        }
-    };
-    bike.reset();
-    shoot('start');
-    run(() => bike.legs >= 1);
-    shoot('legs-out');
-    run(() => bike.s >= 110);
-    shoot('halfway');
-    let top = 0;
-    run(() => { top = Math.max(top, bike.speed); return bike.finished && bike.speed < 0.05; }, 240);
-    facts.push({ tag: 'end', s: Math.round(bike.s * 10) / 10, speed: Math.round(bike.speed * 100) / 100, legs: bike.legs, timeS: Math.round(bike.timeS * 10) / 10, topSpeed: Math.round(top * 100) / 100 });
     return { shots, facts, music };
 }
 WORLD_PROBES.push('hill-shots');
@@ -7721,12 +7934,24 @@ WORLD['hill-shots'] = async (page) => {
     const out = option('out') || HILL_SHOTS_OUT;
     mkdirSync(out, { recursive: true });
     const { shots, facts, music } = await page.evaluate(hillShots);
+    const luma = Object.fromEntries(shots.map(shot => [shot.tag, shot.luma]));
+    // The end card over the last picture: the page itself, as the rider sees it
+    await page.evaluate(() => {
+        const ride = window.game.hill;
+        ride.showLoaf(true);
+        ride.fade.style.opacity = '0';
+        ride.endNote.style.display = '';
+        ride.draw(1 / 60);
+    });
+    const card = join(out, 'hill-end-card.png');
+    writeFileSync(card, await page.screenshot());
     const files = shots.map(shot => {
         const file = join(out, `hill-${shot.tag}.png`);
         writeFileSync(file, Buffer.from(shot.png.split(',')[1], 'base64'));
         return file;
     });
-    return { facts, music, files };
+    files.push(card);
+    return { facts, music, luma, files };
 };
 
 async function openHill(browser, port) {

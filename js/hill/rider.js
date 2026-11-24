@@ -7,8 +7,11 @@ class HillRider {
 
     // How the legs stand when out: the direction from the hip, for the leg on +x (mirrored for the other), and the
     // way the boot's toe points; the share of the leg's length they reach
+    // The pose itself comes from the bicycle (HillBicycle.LEGS, legPose); here how it lives while held out: a slow sway
+    // (swayM at swayHz, each leg its own phase), the cobbles' bounce answered after lagS, times bounceGain, and a
+    // balance against the lean (leanGain m for each rad)
     static get LEGS_OUT() {
-        return Object.freeze({ toward: [0.8, -0.5, 0.33], toe: [0.25, 0.75, 0.6], reach: 0.985 });
+        return Object.freeze({ reach: 0.985, swayM: 0.05, swayHz: 0.6, lagS: 0.08, bounceGain: 5, leanGain: 0.25 });
     }
 
     // The ankle over its pedal, from the pedal's pivot
@@ -88,12 +91,38 @@ class HillRider {
         part.position.copy(from);
     }
 
-    // Sets every part from the bicycle's state; `p` is the lane's sample at the bicycle (HillLane.sample)
-    update(bike, p, dt) {
-        const s = this.scratch;
-        // On the lane: along its heading, pitched with its fall, leaned for a drift, shaken by the cobbles
-        this.group.position.set(p.x + p.leftX * bike.across, p.y + bike.bounce, p.z + p.leftZ * bike.across);
-        this.group.rotation.set(Math.atan(-p.grade) + bike.pitch, p.heading, bike.lean, 'YXZ');
+    // Sets every part from the bicycle's state (HillBicycle) on `lane` (HillLane). The frame is placed where the game's
+    // bike is, along its heading, pitched with the lane's fall along that heading, leaned as the bike leans (+ to its
+    // right, as Vehicle draws it), lifted about the rear axle in a wheelie, leaned onto a foot when it stands, and laid
+    // over on its side when it falls
+    update(bike, lane, dt) {
+        const s = this.scratch, v = bike.vehicle;
+        const p = lane.sample(bike.s, s.lane || (s.lane = {}));
+        const along = p.grade * Math.cos(bike.yaw - p.heading);
+        this.group.position.set(v.position.x, p.y + bike.bounce, v.position.z);
+        // The foot down: the frame leans onto the left foot over FOOT_S, as a motorbike's does (Vehicle.updateFooting)
+        const footTo = bike.footDown ? 1 : 0;
+        const footStep = dt / Vehicle.FOOT_S;
+        this.foot = this.foot === undefined ? footTo : this.foot + Math.max(-footStep, Math.min(footStep, footTo - this.foot));
+        const footShare = this.foot * this.foot * (3 - 2 * this.foot);
+        // Down after a fall: laid over to the side it went, over 0.45 s
+        const fallTo = bike.crashed ? 1 : 0;
+        const downStep = dt / 0.45;
+        this.down = this.down === undefined ? fallTo : this.down + Math.max(-downStep, Math.min(downStep, fallTo - this.down));
+        const fallSide = Math.sign(v.crashAngle || v.leanAngle || 1);
+        const roll = bike.crashed || this.down > 0
+            ? fallSide * 1.35 * this.down + v.leanAngle * (1 - this.down)
+            : v.leanAngle - Vehicle.LEFT * Vehicle.FOOT_LEAN * footShare;
+        this.group.rotation.set(Math.atan(-along) + bike.pitch, bike.yaw, roll, 'YXZ');
+        // The wheelie: the frame turned nose up about the rear axle, the rear tyre kept on the ground
+        const w = bike.wheelie;
+        s.q = s.q || new THREE.Quaternion();
+        s.q.setFromAxisAngle(Vehicle.AXLE, -w);
+        this.frame.quaternion.copy(s.q);
+        s.rear = s.rear || new THREE.Vector3();
+        s.rear.set(0, this.rest.wheel_rear.y, this.rest.wheel_rear.z);
+        this.frame.position.copy(s.rear).sub(s.toe.copy(s.rear).applyQuaternion(s.q));
+        this.group.updateMatrixWorld(true);
 
         this.spin.front = (this.spin.front + bike.speed * dt / this.radius.front) % (2 * Math.PI);
         this.spin.rear = (this.spin.rear + bike.speed * dt / this.radius.rear) % (2 * Math.PI);
@@ -102,25 +131,45 @@ class HillRider {
         this.parts.cranks.rotation.x = bike.crank;
 
         const out = HillRider.LEGS_OUT;
-        const w = bike.legs * bike.legs * (3 - 2 * bike.legs);
+        const legsShare = bike.legs * bike.legs * (3 - 2 * bike.legs);
+        // The legs' own life while out: the time, the cobbles' bounce after a lag
+        this.t = (this.t || 0) + dt;
+        this.legBounce = (this.legBounce || 0) + (bike.bounce - (this.legBounce || 0)) * Math.min(1, dt / out.lagS);
         for (const leg of this.legs) {
             // The pedal at its crank's angle, level whatever the angle
             const a = bike.crank + leg.start;
             leg.pedalPart.position.set(leg.pedalX, this.bb.y - Math.cos(a) * leg.crank, this.bb.z - Math.sin(a) * leg.crank);
             // The ankle on the pedal, or out to the side, and between the two as the pose changes
             const on = s.ankle.copy(leg.pedalPart.position).add(s.toe.fromArray(HillRider.ANKLE_ON_PEDAL));
-            const length = (leg.upper + leg.lower) * out.reach;
-            s.out.set(out.toward[0] * leg.side, out.toward[1], out.toward[2]).normalize().multiplyScalar(length).add(leg.hip);
-            on.lerp(s.out, w);
+            const pose = bike.legPose[leg.tag];
+            const length = (leg.upper + leg.lower) * (out.reach - pose.bend);
+            s.out.set(pose.spread * leg.side, pose.drop, pose.ahead).normalize().multiplyScalar(length).add(leg.hip);
+            const phase = leg.side > 0 ? 0 : 1.9;
+            s.out.x += Math.sin(this.t * 2 * Math.PI * out.swayHz + phase) * out.swayM * leg.side;
+            s.out.y += Math.sin(this.t * 2 * Math.PI * out.swayHz * 0.7 + phase * 1.3) * out.swayM * 0.6
+                + (this.legBounce - bike.bounce) * out.bounceGain + leg.side * bike.lean * out.leanGain;
+            on.lerp(s.out, legsShare);
+            // The left foot put down on the cobbles at its own place, FOOT_OUT out from the frame and FOOT_AHEAD ahead
+            // of the pedals, never under the ground there
+            const down = leg.side === Vehicle.LEFT ? footShare * (1 - legsShare) : 0;
+            if (down > 0) {
+                s.foot = s.foot || new THREE.Vector3();
+                s.foot.set(leg.side * Vehicle.FOOT_OUT, 0, this.bb.z + Vehicle.FOOT_AHEAD);
+                this.frame.localToWorld(s.foot);
+                lane.project(s.foot.x, s.foot.z, bike.s, s.footAt || (s.footAt = {}));
+                s.foot.y = lane.sample(s.footAt.s).y + lane.cobble(s.footAt.s, s.footAt.across) + HillRider.ANKLE_ON_PEDAL[1];
+                this.frame.worldToLocal(s.foot);
+                on.lerp(s.foot, down);
+            }
             // The knee bends forward over the pedal; held out straight, any pole will do, so it turns with the leg
-            s.pole.set(0.15 * leg.side * (1 + w * 3), 0.3, 1);
+            s.pole.set(0.15 * leg.side * (1 + legsShare * 3 + down * 2), 0.3 + legsShare * 0.5, 1);
             HillRider.knee(leg.hip, on, leg.upper, leg.lower, s.pole, s.knee);
             s.up.set(0, 0, 1);
             this.point(leg.thigh, leg.hip, s.knee, s.up);
             this.point(leg.shin, s.knee, on, s.up);
             // The boot along the pedal, or its toe up and out with the leg
-            s.toe.set(out.toe[0] * leg.side * w, out.toe[1] * w, 1 - w * (1 - out.toe[2])).normalize();
-            s.up.set(0, 1, 0).lerp(s.out.set(leg.side * 0.4, 0.2, -0.9), w).normalize();
+            s.toe.set(0.25 * leg.side * legsShare, Math.sin(pose.toe) * legsShare, 1 - legsShare * (1 - Math.cos(pose.toe))).normalize();
+            s.up.set(0, 1, 0).lerp(s.out.set(leg.side * 0.4, 0.2, -0.9), legsShare).normalize();
             leg.foot.position.copy(on);
             s.z.copy(s.toe);
             s.x.crossVectors(s.up, s.z).normalize();
