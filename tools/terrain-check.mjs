@@ -7618,7 +7618,7 @@ async function bikeShots(placeSource, at, riderId, bikes) {
     const sin = Math.sin(own.yawAngle), cos = Math.cos(own.yawAngle);
     const rides = bikes.map((id, i) => {
         const v = new Vehicle(game.scene, null, character, id);
-        const side = (i - (bikes.length - 1) / 2) * 1.6;
+        const side = (i - (bikes.length - 1) / 2) * 2.4;
         v.position.set(own.position.x + cos * side, own.position.y, own.position.z - sin * side);
         v.yawAngle = own.yawAngle;
         return v;
@@ -7626,14 +7626,17 @@ async function bikeShots(placeSource, at, riderId, bikes) {
     const until = performance.now() + 30000;
     while (rides.some(v => !v.modelled) && performance.now() < until) await new Promise(resolve => setTimeout(resolve, 200));
     own.group.visible = false;
-    const centre = own.position.clone();
-    const views = { left: [-1, 0], front: [-0.7, 0.7], rear: [-0.7, -0.7], right: [1, 0] };
+    // Each bike from its own outer side, close, then the two together from the front and the rear three quarters
+    const views = [
+        ...rides.map((v, i) => [`side-${v.model}`, v.position.clone(), [i === 0 ? -1 : 1, 0], 3]),
+        ['front', own.position.clone(), [-0.6, 0.8], 4.2],
+        ['rear', own.position.clone(), [-0.6, -0.8], 4.2]
+    ];
     const shots = [];
-    for (const [name, [across, along]] of Object.entries(views)) {
+    for (const [name, centre, [across, along], off] of views) {
         rides.forEach(v => { v.updateMesh(); v.group.updateMatrixWorld(true); });
         const cam = game.camera;
-        const off = 5.2;
-        cam.position.set(centre.x + (cos * across + sin * along) * off, centre.y + 1.1, centre.z + (-sin * across + cos * along) * off);
+        cam.position.set(centre.x + (cos * across + sin * along) * off, centre.y + 1.0, centre.z + (-sin * across + cos * along) * off);
         cam.up.set(0, 1, 0);
         cam.lookAt(centre.x, centre.y + 0.75, centre.z);
         cam.updateMatrixWorld(true);
