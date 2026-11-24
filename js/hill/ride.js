@@ -314,7 +314,7 @@ class HillRide {
 
     // The last picture: the loaf on its board on a table, far below the village, in a warm low light from the side
     static get LOAF() {
-        return Object.freeze({ at: [0, -400, 0], camera: [0.42, 0.36, 0.62], fov: 34, light: [0.8, 0.55, 0.35], colour: 0xffdcb0, intensity: 1.9, table: 0x2e2018, revealS: 1.4 });
+        return Object.freeze({ at: [0, -400, 0], camera: [0.42, 0.36, 0.62], fov: 34, light: [0.8, 0.55, 0.35], colour: 0xffdcb0, intensity: 1.5, table: 0x2e2018, revealS: 1.4 });
     }
 
     // Builds the last picture (HillLoaf) if it is not built yet: only once the ride reaches its end

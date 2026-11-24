@@ -316,7 +316,7 @@ class HillScene {
         }
         const posts = HillScene.instanced(new THREE.BoxGeometry(0.035, 1, 0.035), C.iron, repeats.posts, 'hill-railing-posts');
         const pots = HillScene.instanced(new THREE.CylinderGeometry(0.11, 0.13, 1, 8), C.pot, repeats.pots, 'hill-chimney-pots');
-        const leaves = HillScene.instanced(new THREE.IcosahedronGeometry(1, 0), 0xffffff, repeats.leaves, 'hill-leaves', true);
+        const leaves = HillScene.instanced(new THREE.DodecahedronGeometry(1, 0), 0xffffff, repeats.leaves, 'hill-leaves', true);
         const flowers = HillScene.instanced(new THREE.IcosahedronGeometry(1, 0), 0xffffff, repeats.flowers, 'hill-flowers', true);
         const stones = HillScene.instanced(new THREE.BoxGeometry(1, 1, 1), 0xb8b2a6, repeats.stones, 'hill-gravestones');
         const trunks = HillScene.instanced(new THREE.CylinderGeometry(0.6, 1, 1, 6).translate(0, 0.5, 0), 0x4a4038, repeats.trunks, 'hill-trunks');
@@ -522,7 +522,8 @@ class HillScene {
         }
         for (const along of [-hw + 1, hw - 1]) {
             const at = pt(along, c.floor, -hd - 7.5);
-            HillScene.leaf(repeats, [at[0], at[1] + 2.5, at[2]], 1.6, 3, 1.6, 0x2e3e26);
+            // A yew: a dark column of clumps narrowing to its top
+            for (let k = 0; k < 4; k++) HillScene.leaf(repeats, [at[0], at[1] + 0.9 + k * 1.1, at[2]], 1.3 - k * 0.25, 0.9, 1.3 - k * 0.25, [0x2e3e26, 0x34462c][k % 2]);
         }
     }
 
@@ -697,15 +698,12 @@ class HillScene {
             const f = frame(s), a = p(s, across, up);
             mesh.box([a.x, a.y, a.z], [f.alongX * ha, 0, f.alongZ * ha], [0, hu, 0], [f.leftX * ho, 0, f.leftZ * ho], colour);
         };
-        const [s0, s1, stepAcross, stepUp] = o.step;
-        box(meshes.rubble, (s0 + s1) / 2, stepAcross, stepUp / 2 - 0.2, (s1 - s0) / 2, stepUp / 2 + 0.2, 0.45, rgb(0xb8b0a0));
-        box(meshes.dressed, (s0 + s1) / 2, stepAcross, stepUp + 0.04, (s1 - s0) / 2 + 0.03, 0.05, 0.5, rgb(C.coping));
         const [ps, pa, pu] = o.post;
         box(meshes.dark, ps, pa, pu / 2, 0.035, pu / 2, 0.035, rgb(C.iron));
         box(meshes.dark, ps, pa + 0.45, pu - 0.25, 0.025, 0.025, 0.45, rgb(C.iron));
         box(meshes.dark, ps, pa, pu + 0.05, 0.06, 0.06, 0.06, rgb(C.iron));
         const [ts, ta, tu] = o.tower;
-        box(meshes.rubble, ts, ta, tu / 2 - 0.4, 1.2, tu / 2 + 0.4, 1.1, rgb(0x6e6a62));
+        box(meshes.rubble, ts, ta, tu / 2 - 0.4, 0.75, tu / 2 + 0.4, 0.75, rgb(0xa49e92));
         const [f0, f1, fa] = o.fence;
         for (let s = f0; s <= f1; s += 2) box(meshes.plain, s, fa, 0.5, 0.06, 0.5, 0.06, rgb(0x3a342c));
         for (let s = f0; s < f1; s += 1) box(meshes.plain, s + 0.5, fa, 0.85, 0.52, 0.03, 0.03, rgb(0x3a342c));
@@ -874,9 +872,11 @@ class HillScene {
         // Ivy up the front from one corner
         if (c.climber) {
             const end = rand() < 0.5 ? -1 : 1;
-            for (let k = 0; k < 10; k++) {
-                const along = end * (hw - 0.3 - rand() * Math.min(2.2, hw)), y = c.floor + 0.4 + rand() * (c.eaves - c.floor - 0.6) * (1 - k / 14);
-                HillScene.leaf(repeats, pt(along, y, face - 0.08), 0.35 + rand() * 0.3, 0.3 + rand() * 0.3, 0.06, greens[k % 3], c.heading);
+            // Many small clumps, thick at the foot and thinning up the wall, held close to it
+            for (let k = 0; k < 26; k++) {
+                const up = rand() ** 1.6;
+                const along = end * (hw - 0.25 - rand() * Math.min(2.4, hw) * (1 - up * 0.5)), y = c.floor + 0.2 + up * (c.eaves - c.floor - 0.4);
+                HillScene.leaf(repeats, pt(along, y, face - 0.05), 0.16 + rand() * 0.12, 0.14 + rand() * 0.1, 0.05, greens[k % 3], c.heading);
             }
         }
 

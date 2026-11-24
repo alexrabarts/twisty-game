@@ -56,12 +56,12 @@ class HillLane {
                     [16, 39.95, 2, 'tile', 'rubble', 5.1, 7.6, [[30, 9.2]]],
                     [39.95, 50.4, 2, 'tile', 'rubble', 5.14, 7.52, []],
                     [50.4, 60.8, 2, 'tile', 'rubble', 5.14, 7.52, [[56.6, 9.29]]],
-                    [60.8, 79.05, 2, 'thatch', 'stone', 5.08, 10.5, [[66.5, 11.27], [75.75, 12.2]]],
+                    [60.8, 79.05, 2, 'thatch', 'stone', 5.08, 10.5, [[66.5, 11.75], [75.75, 12.2]]],
                     [79.05, 90, 2, 'thatch', 'lime', 5.4, 10.2, []],
                     [90, 101.5, 2, 'tile', 'lime', 6.02, 12, [[96.45, 13.05]]],
                     [101.5, 112.75, 2, 'tile', 'stone', 5.6, 10.8, [[108, 12]]]
                 ],
-                churn: [23.25, 1.9, 0.12], post: [23.64, 1.75, 1.8], step: [22.2, 24.4, 2.1, 0.12], tower: [27.8, -3.6, 3.7], fence: [24, 44, -2.95],
+                churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], tower: [27.8, -3.45, 3.55], fence: [24, 44, -2.95],
                 tree: [109, 18.4, 17.2, 4.2]
             },
             // The end: past stopS the camera eases over endEaseS to a fixed point high behind the bicycle (at s, across,
@@ -179,6 +179,8 @@ class HillLane {
         const r = this.rule;
         const rand = HillLane.random(r.seed + Math.round(road.s));
         const start = r.flagsM + r.cottageDeepM + 0.6;
+        // Its first stretch, between the lane's corner buildings: walls on both sides from the flags in
+        for (const sgn of [-1, 1]) road.walls.push({ side: sgn, from: r.flagsM + 0.3, to: start, hedge: false });
         for (const sgn of [-1, 1]) {
             let d = start, houses = 0;
             while (d < road.length - 2) {
@@ -461,7 +463,8 @@ class HillLane {
             // A side road's mouth: the frontage stops short of it, a garden wall to its edge, and goes on past it
             const mouth = this.sideRoads.find(m => m.side === side && m.to > s && m.from < s + r.cottageWide[1] + 3);
             if (mouth) {
-                if (mouth.from - s > 0.3) this.walls.push({ side, from: s, to: mouth.from, kind: 'garden', gate: false });
+                // (a stone wall to its corner, as high as a yard's, so the mouth reads as a way in)
+                if (mouth.from - s > 0.3) this.walls.push({ side, from: s, to: mouth.from, kind: 'wall', upM: 1.6 });
                 s = Math.max(s, mouth.to);
                 pair = 0;
                 continue;
@@ -476,7 +479,7 @@ class HillLane {
             }
             let kind = pair > 0 ? 'semi' : pickKind();
             if (kind === 'garden') {
-                const gap = r.gardenM[0] + rand() * (r.gardenM[1] - r.gardenM[0]);
+                const gap = this.upTo(side, s, r.gardenM[0] + rand() * (r.gardenM[1] - r.gardenM[0]));
                 this.walls.push({ side, from: s, to: Math.min(s + gap, lastM), kind: 'garden', gate: rand() < r.gateShare });
                 s += gap;
                 continue;
@@ -499,16 +502,22 @@ class HillLane {
             // A semi-detached pair is two; a detached cottage, or the end of a pair, stands with a garden after it
             if (kind === 'semi') pair = pair > 0 ? 0 : 1;
             if (kind === 'detached' || (kind === 'semi' && pair === 0)) {
-                const gap = r.gardenM[0] + rand() * (r.gardenM[1] - r.gardenM[0]);
+                const gap = this.upTo(side, s, r.gardenM[0] + rand() * (r.gardenM[1] - r.gardenM[0]));
                 this.walls.push({ side, from: s, to: Math.min(s + gap, lastM), kind: 'garden', gate: rand() < r.gateShare });
                 s += gap;
             } else if (rand() < r.gapShare) {
-                const gap = r.gapM[0] + rand() * (r.gapM[1] - r.gapM[0]);
+                const gap = this.upTo(side, s, r.gapM[0] + rand() * (r.gapM[1] - r.gapM[0]));
                 this.walls.push({ side, from: s, to: Math.min(s + gap, lastM), kind: 'wall', gate: rand() < r.gateShare });
                 s += gap;
             }
         }
         return list;
+    }
+
+    // A length from `s` on `side`, cut short at the next side road's mouth
+    upTo(side, s, length) {
+        const next = this.sideRoads.filter(m => m.side === side && m.from >= s - 1e-6).reduce((n, m) => Math.min(n, m.from), Infinity);
+        return Math.max(0.01, Math.min(length, next - s));
     }
 
     // Whether a cottage can stand from `from` to `to` on `side`: no tight turn on its inside along it

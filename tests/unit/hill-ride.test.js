@@ -799,10 +799,10 @@ describe('the things in the street', () => {
         expect(HillProps.place(lane)).toEqual(places);
         let edge = 0;
         for (const p of places) {
-            // The opening frame's churn stands on its step by the camera, as the reference frame has it
-            if (!p.onStep) expect(Math.abs(p.across)).toBeGreaterThan(lane.rule.halfWidthM - 0.6);
+            // The opening frame's churn stands by the camera, as the reference frame has it
+            if (!p.opening) expect(Math.abs(p.across)).toBeGreaterThan(lane.rule.halfWidthM - 0.6);
             expect(Math.abs(p.across)).toBeLessThan(lane.rule.halfWidthM + lane.rule.flagsM);
-            const ground = lane.sample(p.s).y + (p.onStep ? lane.rule.opening.step[3] + 0.1 : Math.abs(p.across) > lane.rule.halfWidthM ? 0.1 : lane.cobble(p.s, p.across));
+            const ground = lane.sample(p.s).y + (Math.abs(p.across) > lane.rule.halfWidthM ? 0.1 : lane.cobble(p.s, p.across));
             expect(Math.abs(p.y - ground)).toBeLessThan(1e-9);
             if (Math.abs(p.across) < lane.rule.halfWidthM) edge++;
         }

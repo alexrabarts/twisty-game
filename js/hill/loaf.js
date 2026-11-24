@@ -12,7 +12,7 @@ class HillLoaf {
             halfM: 0.17, wideM: 0.105, highM: 0.12, cutZ: 0.105, sliceM: 0.016,
             // The slashes: how many, the first one's z, the gap between, their angle from straight across (rad), half
             // length, depth, opening and lip height (m)
-            slashes: { count: 5, fromZ: -0.12, gapM: 0.055, angle: 0.45, halfM: 0.075, deepM: 0.013, openM: 0.0075, lipM: 0.006 },
+            slashes: { count: 5, fromZ: -0.12, gapM: 0.055, angle: 0.45, halfM: 0.08, deepM: 0.02, openM: 0.0105, lipM: 0.008 },
             // The grid of the loaf (along, around), its maps' size
             grid: [240, 180], map: [1024, 512],
             board: [0.62, 0.035, 0.42], seed: 509
@@ -313,13 +313,13 @@ class HillLoaf {
             HillLoaf.field(p, f);
             const n = HillLoaf.fbm(p.x * 40, p.y * 40, p.z * 40, 3);
             // Baked: darker on top and on the lips, golden down the sides, pale in the cuts
-            const bake = Math.max(0, Math.min(1, 0.25 + 0.5 * f.top + 1.2 * f.lip + 0.5 * (n - 0.5)));
+            const bake = Math.max(0, Math.min(1, 0.35 + 0.5 * f.top + 1.4 * f.lip + 0.5 * (n - 0.5)));
             let r = mix(0.82, 0.4, bake), g = mix(0.55, 0.21, bake), b = mix(0.26, 0.07, bake);
             const cut = f.cut;
             r = mix(r, 0.9 + 0.05 * n, cut); g = mix(g, 0.72 + 0.06 * n, cut); b = mix(b, 0.45 + 0.05 * n, cut);
             // Flour on top, patchy, none in the cuts (it went on before the slashing)
             const flourNoise = HillLoaf.fbm(p.x * 14 + 3, p.y * 14, p.z * 14, 4);
-            const flour = Math.max(0, Math.min(1, (flourNoise - 0.48) / 0.18)) * f.top ** 1.6 * (1 - cut) * (0.7 + 0.3 * HillLoaf.noise(p.x * 300, p.y * 300, p.z * 300));
+            const flour = 0.7 * Math.max(0, Math.min(1, (flourNoise - 0.56) / 0.16)) * f.top ** 2 * (1 - cut) * (0.7 + 0.3 * HillLoaf.noise(p.x * 300, p.y * 300, p.z * 300));
             r = mix(r, 0.94, flour * 0.85); g = mix(g, 0.91, flour * 0.85); b = mix(b, 0.85, flour * 0.85);
             const i = (y * W + x) * 4;
             ci.data[i] = r * 255; ci.data[i + 1] = g * 255; ci.data[i + 2] = b * 255; ci.data[i + 3] = 255;
@@ -349,7 +349,7 @@ class HillLoaf {
             colour[i * 3] = 0.93 + 0.05 * n; colour[i * 3 + 1] = 0.85 + 0.05 * n; colour[i * 3 + 2] = 0.68 + 0.05 * n;
             height[i] = 0.5 + 0.2 * n;
         }
-        for (let k = 0; k < 1400; k++) {
+        for (let k = 0; k < 650; k++) {
             const r = 1 + 9 * rand() ** 3, sx = r * (1 + rand() * 0.8), sy = r * (0.6 + rand() * 0.5), cx = rand() * N, cy = rand() * N, turn = rand() * Math.PI;
             const c = Math.cos(turn), s = Math.sin(turn);
             for (let dy = -Math.ceil(sx); dy <= sx; dy++) for (let dx = -Math.ceil(sx); dx <= sx; dx++) {
@@ -360,8 +360,8 @@ class HillLoaf {
                 const i = y * N + x;
                 if (d < 1) {
                     // Inside the hole: deeper and darker, its upper edge lit
-                    const shade = 0.55 + 0.25 * d + 0.15 * Math.max(0, v);
-                    colour[i * 3] *= shade; colour[i * 3 + 1] *= shade; colour[i * 3 + 2] *= shade * 0.95;
+                    const shade = 0.72 + 0.2 * d + 0.1 * Math.max(0, v);
+                    colour[i * 3] *= shade; colour[i * 3 + 1] *= shade * 0.97; colour[i * 3 + 2] *= shade * 0.9;
                     height[i] = Math.min(height[i], 0.5 - 0.5 * (1 - d));
                 } else height[i] += 0.05;
             }

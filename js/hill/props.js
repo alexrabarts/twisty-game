@@ -55,12 +55,11 @@ class HillProps {
             const on = Math.abs(across) > r.halfWidthM ? 0.1 : lane.cobble(s, across);
             list.push({ kind, s, across, x: p.x + p.leftX * across, y: p.y + on, z: p.z + p.leftZ * across, yaw, lean });
         };
-        // The opening frame's milk churn on its stone step by the camera
+        // The opening frame's milk churn on the cobbles by the camera
         if (r.opening) {
             const [cs, ca] = r.opening.churn;
             put('churn', cs, ca, 0);
-            list[list.length - 1].y = lane.sample(cs).y + r.opening.step[3] + 0.1;
-            list[list.length - 1].onStep = true;
+            list[list.length - 1].opening = true;
         }
         // The football, resting at the lane's edge outside a house on the main straight
         const B = HillProps.BALL;
@@ -413,7 +412,7 @@ class HillProps {
         for (let row = 0; row < 3; row++) for (let col = 0; col < 6; col++) {
             const x = col * 512 / 6 + (row % 2) * 512 / 12, y = row * 256 / 3;
             const tone = 96 + Math.round(rand() * 26);
-            ctx.fillStyle = `rgb(${tone + 22}, ${Math.round(tone * 0.62)}, ${Math.round(tone * 0.34)})`;
+            ctx.fillStyle = `rgb(${tone + 8}, ${Math.round(tone * 0.66)}, ${Math.round(tone * 0.42)})`;
             ctx.fillRect(x, y, 512 / 6, 256 / 3);
             ctx.fillRect(x - 512, y, 512 / 6, 256 / 3);
         }

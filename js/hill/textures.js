@@ -91,7 +91,7 @@ class HillTextures {
             for (let r = 0; r < rows; r++) for (let c = -1; c < cols; c++) {
                 const w = N / cols, h = N / rows, x = c * w + (r % 2 ? w / 2 : 0);
                 const t = 0.75 + (rand() - 0.5) * 0.25;
-                block(Math.round(x) + 1, Math.round(r * h) + 1, Math.round(w) - 2, Math.round(h) - 2, [t + 0.05, t * 0.62, t * 0.48], 0.6, 0.15);
+                block(Math.round(x) + 1, Math.round(r * h) + 1, Math.round(w) - 2, Math.round(h) - 2, [t * 0.86, t * 0.62, t * 0.52], 0.6, 0.15);
             }
         } else if (name === 'thatch') {
             // Reed laid in courses: fine strands down the slope, darker in the shadow under each course

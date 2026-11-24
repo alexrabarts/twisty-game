@@ -7830,7 +7830,7 @@ async function hillOverlay(still, keys) {
     const places = {
         'boy head': at(lane.rule.startM, o.startAcross, 1.74), 'boy shoulders': at(lane.rule.startM - 0.15, o.startAcross, 1.42), 'far lane': at(56, 0, 0),
         'chimney 56.6': chimney(56.6), 'chimney 66.5': chimney(66.5), 'chimney 75.75': chimney(75.75), 'chimney 96.45': chimney(96.45),
-        'post top': at(o.post[0], o.post[1], o.post[2]), 'churn top': at(o.churn[0], o.churn[1], o.step[3] + 0.1 + 0.62), 'tower top': at(o.tower[0], o.tower[1], o.tower[2]),
+        'post top': at(o.post[0], o.post[1], o.post[2]), 'churn top': at(o.churn[0], o.churn[1], 0.62), 'tower top': at(o.tower[0], o.tower[1], o.tower[2]),
         tree: at(o.tree[0], o.tree[1], o.tree[2])
     };
     const canvas = document.createElement('canvas');
