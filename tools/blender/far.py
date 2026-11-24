@@ -17,9 +17,10 @@
 #      unless they are lit.
 #   2. Each tyre is turned again from its own profile, so it stays round; a
 #      tyre cut down by collapsing edges wobbles as it spins.
-#   3. A node keeps its paint, its lit and its see-through materials and its
-#      largest others, MATERIALS at most; each of the rest takes the kept
-#      material nearest in colour. Each material is a draw call.
+#   3. Materials of one colour count as one. A node keeps its paint, its
+#      lit and its see-through materials and its largest other colours,
+#      MATERIALS at most; each of the rest takes the kept material nearest
+#      in colour. Each material is a draw call.
 #   4. What is left is cut down by collapsing edges, by one share for the
 #      whole bike, to BIKE_TARGET triangles. The occlusion of each new corner
 #      is that of the nearest old one.
@@ -46,7 +47,7 @@ BIKE_BUDGET = 2300
 BIKE_TARGET = 2050
 BIKE_BYTES = 72 * 1024
 DROP_M = 0.1
-MATERIALS = 6
+MATERIALS = 8
 # Never merged into another, and never dropped for their size
 LIT = ("headlight", "brake", "brake_light")
 OWN = LIT + ("paint", "glass")
@@ -178,12 +179,33 @@ def without_small(shape, limit=DROP_M):
     return shape.keep([part not in small for part in island])
 
 
-# Rule 3: each face's material after the small ones are merged into the kept one nearest in colour
+# Rule 3: each face's material after the small ones are merged into the kept one nearest in colour. Materials of one
+# colour (within SAME_COLOUR, as metal or not) count as one first: a bike's several near-blacks (frame, trim, rubber,
+# casing) took four of the six places by area and left out its white plate, white panels, chrome and gold, which
+# then took black (the owner: "check the low quality models match the high quality ones")
+SAME_COLOUR = 0.012
+
+
 def merged(shape, colours, most=MATERIALS):
     area = {}
     for face, name in zip(shape.faces, shape.names):
         area[name] = area.get(name, 0.0) + shape.area(face)
-    ranked = sorted(area, key=lambda name: (-area[name], name))
+
+    def apart(a, b):
+        return sum((p - q) ** 2 for p, q in zip(colours[a][:3], colours[b][:3])) + 0.25 * (colours[a][3] - colours[b][3]) ** 2
+
+    # One colour's materials, each led by its largest (a lit, paint or glass material leads its own)
+    lead = {}
+    for name in sorted(area, key=lambda name: (name not in OWN, -area[name], name)):
+        if name in OWN:
+            lead[name] = name
+            continue
+        same = next((other for other in sorted(set(lead.values())) if other not in LIT and other != "glass" and apart(name, other) < SAME_COLOUR), None)
+        lead[name] = same or name
+    total = {}
+    for name, a in area.items():
+        total[lead[name]] = total.get(lead[name], 0.0) + a
+    ranked = sorted(total, key=lambda name: (-total[name], name))
     kept = [name for name in ranked if name in OWN]
     for name in ranked:
         if len(kept) >= most:
@@ -193,10 +215,9 @@ def merged(shape, colours, most=MATERIALS):
     plain = [name for name in kept if name not in LIT and name != "glass"] or kept
 
     def nearest(name):
-        r, g, b, metal = colours[name]
-        return min(plain, key=lambda other: (sum((p - q) ** 2 for p, q in zip((r, g, b), colours[other][:3])) + 0.25 * (metal - colours[other][3]) ** 2, other))
+        return min(plain, key=lambda other: (apart(name, other), other))
 
-    swap = {name: name if name in kept else nearest(name) for name in area}
+    swap = {name: lead[name] if lead[name] in kept else nearest(name) for name in area}
     return [swap[name] for name in shape.names]
 
 
