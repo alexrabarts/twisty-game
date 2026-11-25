@@ -1739,6 +1739,64 @@ const PROBES = {
             return { viewport: [innerWidth, innerHeight], gates: out };
         }, i);
     },
+    // GPU pictures of a classic leg's props (the groups named `leg-prop:<kind>` in js/environment.js): the first of
+    // each kind on the leg, close (2.5 times its size off, at least 4 m) and from the road 25 m back, the bike
+    // hidden, into --out <dir> (MODEL_SHOTS_OUT/legs by default) as <leg>-<kind>-<view>.png
+    'leg-model-shots': async (page, i, id) => {
+        const out = option('out') || join(MODEL_SHOTS_OUT, 'legs');
+        mkdirSync(out, { recursive: true });
+        await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        const shots = await page.evaluate(async (index) => {
+            const leg = game.tourSystem.legs[index];
+            window.__reseed(1);
+            twistyDev.start(leg.id);
+            twistyDev.freeze();
+            game.traffic = null;
+            if (game.environment.dressing) await game.environment.dressing;
+            const env = game.environment, v = game.vehicle;
+            const taken = {}, box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
+            const end = env.endSegment || 700;
+            for (let seg = env.startSegment || 0; seg < end; seg += 30) {
+                twistyDev.teleport(seg);
+                for (let k = 0; k < 4; k++) env.update(v.currentSegment || seg, Infinity);
+                game.scene.updateMatrixWorld(true);
+                const found = [];
+                game.scene.traverse(o => { if (o.name && o.name.startsWith('leg-prop:') && !taken[o.name]) found.push(o); });
+                for (const o of found) {
+                    if (taken[o.name]) continue;
+                    box.setFromObject(o); box.getSize(size); box.getCenter(centre);
+                    const at = env.roadPath[Math.min(env.roadPath.length - 1, Math.max(0, seg))];
+                    const dx = at.x - centre.x, dz = at.z - centre.z, d = Math.hypot(dx, dz) || 1;
+                    const reach = Math.max(4, Math.max(size.x, size.y, size.z) * 2.5);
+                    const look = (eye) => {
+                        game.camera.position.copy(eye);
+                        game.camera.lookAt(centre);
+                        game.camera.updateMatrixWorld(true);
+                        game.graphics.render(game.scene, game.camera);
+                        return game.graphics.renderer.domElement.toDataURL('image/png');
+                    };
+                    const shown = v.group ? v.group.visible : null;
+                    if (v.group) v.group.visible = false;
+                    const close = look(new THREE.Vector3(centre.x + (dx / d) * reach + (dz / d) * reach * 0.5, box.min.y + Math.max(1.6, size.y * 0.8), centre.z + (dz / d) * reach - (dx / d) * reach * 0.5));
+                    const back = env.roadPath[Math.max(0, seg - 2)];
+                    const play = look(new THREE.Vector3(back.x, back.y + 2.6, back.z));
+                    if (v.group) v.group.visible = shown;
+                    taken[o.name] = { segment: seg, size: [size.x, size.y, size.z].map(n => Math.round(n * 10) / 10), close, play };
+                }
+            }
+            return taken;
+        }, i);
+        const files = {};
+        for (const [name, shot] of Object.entries(shots)) {
+            const kind = name.split(':')[1];
+            for (const view of ['close', 'play']) {
+                const file = join(out, `${id}-${kind}-${view}.png`);
+                writeFileSync(file, Buffer.from(shot[view].split(',')[1], 'base64'));
+                files[`${kind}-${view}`] = file;
+            }
+        }
+        return { kinds: Object.fromEntries(Object.entries(shots).map(([n, s]) => [n, { segment: s.segment, size: s.size }])), files };
+    },
     legs: (page, i) => inPage(page, 'legCheck', i, 60),
     snapshot: (page, i) => inPage(page, 'snapshot', i),
     raycast: (page, i) => inPage(page, 'raycast', i),
@@ -8313,11 +8371,16 @@ WORLD['world-model-shots'] = async (page) => {
     for (const s of stations) {
         const station = await page.evaluate(modelStation, placeAt.toString(), countScene.toString(), MODEL_GROUPS, s, only);
         inventory.push({ s, counts: station.counts, groups: station.groups });
-        for (const [g, c] of Object.entries(station.best)) if (!best[g] || c.score < best[g].score) best[g] = c;
+        for (const [g, c] of Object.entries(station.best)) {
+            if (best[g] && c.score >= best[g].score) continue;
+            best[g] = c;
+            if (station.live[g]) best[g].pngs = station.live[g];
+        }
     }
     const views = {};
     for (const [group, b] of Object.entries(best)) {
-        const pngs = await page.evaluate(modelPictures, placeAt.toString(), b, MODEL_PLAY_M, group);
+        const { pngs: taken, ...copy } = b;
+        const pngs = taken || await page.evaluate(modelPictures, placeAt.toString(), copy, MODEL_PLAY_M, group);
         views[group] = { s: Math.round(b.near.s), at: b.s, distance: Math.round(b.near.d * 10) / 10, size: Math.round(b.copy.size * 100) / 100, triangles: b.triangles, name: b.name, files: {} };
         for (const [name, png] of Object.entries(pngs)) {
             const file = join(out, `${tag}-${group}-${name}.png`);
@@ -8403,7 +8466,31 @@ async function modelStation(placeSource, countSource, groupRules, s, only) {
             if (!best[g] || score < best[g].score) best[g] = { score, s, copy: c, near: { s: at.s, d: Math.hypot(p.x - c.x, p.z - c.z), p: { x: p.x, y: p.y, z: p.z } }, name: key, triangles: each };
         }
     });
-    return { counts: count(), groups, best };
+    // The vehicles move on as soon as the bike is put down again: their pictures are taken here, as they stand now,
+    // from beside each (2.5 times its size off) and from the bike's place on the ride, the bike hidden
+    const live = {};
+    const shown = v.group ? v.group.visible : null;
+    for (const g of ['cars', 'crew']) {
+        const b = best[g];
+        if (!b) continue;
+        if (v.group) v.group.visible = false;
+        const look = (eye, target) => {
+            game.camera.position.copy(eye);
+            game.camera.lookAt(target);
+            game.camera.updateMatrixWorld(true);
+            game.graphics.render(game.scene, game.camera);
+            return game.graphics.renderer.domElement.toDataURL('image/png');
+        };
+        const c = b.copy, p = b.near.p, dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz) || 1;
+        const reach = Math.max(3, c.size * 1.6), sx = dz / d, sz = -dx / d;
+        const target = new THREE.Vector3(c.x, c.foot + (c.top - c.foot) * 0.5, c.z);
+        live[g] = {
+            close: look(new THREE.Vector3(c.x + (dx / d + sx) * reach * 0.7, c.foot + 1.4, c.z + (dz / d + sz) * reach * 0.7), target),
+            play: look(new THREE.Vector3(v.position.x, v.position.y + 2.6, v.position.z), target)
+        };
+        if (v.group) v.group.visible = shown;
+    }
+    return { counts: count(), groups, best, live };
 }
 
 // In the page: the close and the play-distance pictures of one copy (modelStation's `best`), the bike hidden
