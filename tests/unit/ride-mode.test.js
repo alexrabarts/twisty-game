@@ -59,6 +59,14 @@ describe('the mode a URL asks for', () => {
         expect(RideMode.resolve('?legs=1&fps=1')).toEqual({ kind: 'legs', world: null, direct: false });
     });
 
+    test('&mode=roam asks for free roam; anything else is a time trial', () => {
+        expect(RideMode.resolve('?world=tremola&mode=roam&debug')).toEqual({ kind: 'world', world: 'tremola', direct: true, mode: 'roam' });
+        expect(RideMode.resolve('?mode=roam')).toEqual({ kind: 'world', world: 'tremola', direct: false, mode: 'roam' });
+        expect(RideMode.resolve('?world=tremola&mode=race').mode).toBe(undefined);
+        // A fresh page for free roam keeps the mode and debug mode (free roam is open in debug mode only)
+        expect(RideMode.worldUrl({ pathname: '/', search: '?debug' }, 'tremola', 'roam')).toBe('/?world=tremola&mode=roam&debug=');
+    });
+
     test('a fresh page for a world keeps the data folder it was read from', () => {
         expect(RideMode.worldUrl({ pathname: '/twisty/', search: '?worldData=tests/fixtures/world/mini' }, 'all')).toBe('/twisty/?world=all&worldData=tests%2Ffixtures%2Fworld%2Fmini');
         expect(RideMode.worldUrl({ pathname: '/', search: '?legs' }, 'tremola')).toBe('/?world=tremola');

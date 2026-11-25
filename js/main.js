@@ -276,7 +276,7 @@ class Game {
     // (the rider and bike are kept in localStorage); a page that has ridden nothing starts it here
     chooseWorld() {
         if (this.environment) {
-            window.location.assign(RideMode.worldUrl(window.location, this.rideMode.world));
+            window.location.assign(RideMode.worldUrl(window.location, this.rideMode.world, typeof GameModes !== 'undefined' ? GameModes.chosen : 'trial'));
             return;
         }
         this.startWorld(this.rideMode.world);
@@ -447,6 +447,7 @@ class Game {
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
         this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => this.environment.overheadY(x, z, y), (x, z, reach) => this.environment.cameraFaces(x, z, reach));
         this.worldCamera.reset(start.heading);
+        this.startFreeRoam();
 
         const normalCameraOffset = this.baseCameraOffset.clone();
         normalCameraOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
@@ -493,6 +494,47 @@ class Game {
     worldStageSpan() {
         const stage = this.environment.stage;
         return stage ? { from: stage.from, to: stage.to } : { from: 0, to: this.environment.route.length };
+    }
+
+    // Free roam (GameModes 'roam': from the address or the menu, in debug mode only): no clock, stations or rules of the
+    // ride, the roadworks off, the camera behind the rider on any road, and the edge of the map (FreeRoam)
+    startFreeRoam() {
+        const debug = Game.debugEnabled(window.location.search);
+        this.freeRoam = typeof GameModes !== 'undefined' && GameModes.active(this.rideMode, debug) === 'roam';
+        document.body.classList.toggle('free-roam', this.freeRoam);
+        if (!this.freeRoam) {
+            this.roam = null;
+            return;
+        }
+        const environment = this.environment;
+        const tiles = environment.data && environment.data.manifest && environment.data.manifest.tiles ? environment.data.manifest.tiles.height : [];
+        this.roam = new FreeRoam(tiles, WorldData.TILE_M);
+        environment.guide.roam = true;
+        this.worldCamera.followRider = true;
+        // The roadworks' lights work one lane for the ride's own direction: in free roam the sites are off
+        if (environment.roadworks) {
+            if (environment.roadworks.group) environment.roadworks.group.visible = false;
+            environment.roadworks = null;
+            environment.roadworksZones = [];
+        }
+    }
+
+    // One frame of free roam: the edge of the map. In the soft band the bike slows and is told; at the hard line it is
+    // put back where it last was on a road, turned round
+    updateFreeRoam(dt) {
+        const v = this.vehicle;
+        // Off the ride the bike's place on it is found again each frame over the whole ride: its windowed search follows
+        // a bike that rides along the ride, and one far down a side road outruns it, and then the ground is read off
+        // the wrong strand of the ride (FreeRoam.FAR_M)
+        const p = v.projection;
+        if (!(p && p.index >= 0) || Math.abs(p.lateral) > (p.width || 0) / 2 + FreeRoam.FAR_M) v.findNearestRoadSegment();
+        const at = this.roam.step({ x: v.position.x, y: v.position.y, z: v.position.z, heading: v.yawAngle, speed: v.speed, onRoad: !v.runoff, crashed: !!v.crashed, dt });
+        if (at.zone !== this.roamZone) {
+            if (at.zone === 'soft') showCallout(Game.ROAM_TEXT.edge, 'warn', Game.CALLOUT_MS.warning);
+            this.roamZone = at.zone;
+        }
+        if (at.drag > 0 && !v.crashed) v.speed *= Math.max(0, 1 - at.drag * dt);
+        if (at.zone === 'hard' && !v.crashed) this.restartInPlace('edge');
     }
 
     // A world ride starts on the start line (a restart is in place: restartInPlace)
@@ -1042,7 +1084,7 @@ class Game {
             this.shownWorldStage = null;
             this.shownWorldGates = null;
             // (before the count: a world's count stands on its progress bar, a leg's on its pips)
-            if (world) this.showWorldStage();
+            if (world && !this.freeRoam) this.showWorldStage();
             else this.hud.hideProgress();
             this.hud.setGates(0, this.gateTotal());
         }
@@ -2326,6 +2368,8 @@ class Game {
         input.s = typeof v.roadFrame === 'function' && Number.isFinite(s) && v.projection.index >= 0 ? v.roadFrame().s : s;
         input.index = v.projection.index >= 0 ? v.projection.index : Math.floor(this.environment.route.toUnits(input.s));
         input.speed = v.speed;
+        // (the way the bike goes, for the free-roam camera: WorldCamera.followRider)
+        input.yaw = v.yawAngle;
         input.lift = mode.type === 'high' ? 2 : 1;
         input.offset.x = this.cameraOffset.x;
         input.offset.y = this.cameraOffset.y;
@@ -2479,6 +2523,14 @@ class Game {
         const hue = Math.round(140 * (1 - ratio));
         indicator.style.setProperty('--tone', `hsl(${hue}, 90%, 60%)`);
         zone.textContent = `WHEELIE ${degrees}°`;
+    }
+
+    // The ride distance the world streams by: the run's accepted progress, or in free roam (no progress) the nearest place
+    // on the ride to the bike
+    worldStreamS() {
+        if (!this.freeRoam) return this.worldRun.lastS;
+        const v = this.vehicle, s = v.projection && Number.isFinite(v.projection.s) && v.projection.index >= 0 ? v.projection.s : v.routeS;
+        return Number.isFinite(s) ? s : this.environment.startS;
     }
 
     // Metres of the route ridden this stage: the run's accepted progress from the stage's start (the bike's own
@@ -3740,7 +3792,8 @@ class Game {
         // Check for checkpoint passes and jump scoring
         if (!this.vehicle.crashed && !this.finished) {
             if (this.environment.isWorld) {
-                this.updateWorldRun(deltaTime);
+                if (this.freeRoam) this.updateFreeRoam(deltaTime);
+                else this.updateWorldRun(deltaTime);
                 this.updateRoadworks();
             }
             this.checkCheckpoints();
@@ -3911,14 +3964,15 @@ class Game {
         }
         // A world streams by place round the bike, and guides the rider
         if (this.environment && this.environment.isWorld && this.vehicle) {
-            // (the ride distance it streams by is the accepted progress, not the raw projection)
-            this.environment.update(this.vehicle.position, this.worldRun.lastS, this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
+            // (the ride distance it streams by is the accepted progress, not the raw projection; free roam has none, and
+            // streams by the nearest place on the ride as well as round the bike: Game.worldStreamS)
+            this.environment.update(this.vehicle.position, this.worldStreamS(), this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
             this.watchLand();
             // (watchLand can hand the ride to the legs a task later; the world is still here this frame)
             const marmots = this.environment && this.environment.marmots;
             if (marmots) {
                 const at = this.marmotBike || (this.marmotBike = {});
-                at.x = this.vehicle.position.x; at.z = this.vehicle.position.z; at.s = this.worldRun.lastS;
+                at.x = this.vehicle.position.x; at.z = this.vehicle.position.z; at.s = this.worldStreamS();
                 marmots.update(simulatedThisFrame, at, this.vehicle.speed, this.camera.position, this.soundManager);
             }
         }
@@ -4449,6 +4503,10 @@ class Game {
     // the restart are counted once, and the guide's timers and the cut rule start again, so one excursion costs one
     // penalty.
     restartInPlace(reason) {
+        if (this.freeRoam && this.roam) {
+            this.restartRoam(reason);
+            return;
+        }
         const { environment, vehicle, worldRun } = this;
         const route = environment.route;
         // (further back each time the place itself has crashed the rider twice running: beginWorldCrash)
@@ -4499,6 +4557,38 @@ class Game {
         });
         // (a crash has said its cause and its cost during the fall)
         if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
+    }
+
+    // A restart in free roam: back where the bike last was on a road (the ride or a side road), a second before the
+    // crash, facing the way it was going; at the edge of the map turned round. No penalty: there is no clock
+    restartRoam(reason) {
+        const { environment, vehicle } = this;
+        const pose = this.roam.restartPose(reason === 'edge');
+        this.worldCrash = null;
+        this.worldSinceRestartS = 0;
+        const distanceSoFar = vehicle.distanceTraveled;
+        const start = environment.startPosition();
+        vehicle.reset();
+        vehicle.distanceTraveled = distanceSoFar;
+        if (pose) {
+            vehicle.position.set(pose.x, pose.y, pose.z);
+            vehicle.yawAngle = pose.heading;
+        } else {
+            vehicle.position.set(start.x, start.y, start.z);
+            vehicle.yawAngle = start.heading;
+        }
+        vehicle.speed = 0;
+        vehicle.findNearestRoadSegment();
+        vehicle.updateMesh();
+        if (this.input) {
+            if (this.input.steerEase) this.input.steerEase.reset();
+            if (this.input.clearActions) this.input.clearActions();
+        }
+        this.removeRunOverlays();
+        environment.guide.reset();
+        this.worldCamera.reset(vehicle.yawAngle);
+        if (this.traffic && vehicle.routeS !== undefined) this.traffic.clearAround(environment.route.toUnits(vehicle.routeS || 0), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / environment.route.unitM));
+        if (reason !== 'crash') showCallout(reason === 'edge' ? Game.ROAM_TEXT['edge-back'] : Game.ROAM_TEXT.key, 'warn', Game.CALLOUT_MS.restart);
     }
 
     // The gearbox (js/sound.js Gearbox, .agent/system/sound.md) is for the sound and the HUD only: it reads the bike's
@@ -4728,6 +4818,9 @@ Game.WORLD_OVERCAST_SKY = 3.6;
 
 // Debug mode's N puts the bike this far before the next station
 Game.DEBUG_SKIP_BEFORE_M = 40;
+
+// What free roam tells the rider (Game.updateFreeRoam, restartRoam)
+Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 'edge-back': 'Turned back at the edge of the map' };
 
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';

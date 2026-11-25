@@ -2181,7 +2181,8 @@ const WORLD_BIKE_TILE_M = 900;
 
 async function openWorld(browser, port, id, seed = 1, data = option('worldData')) {
     for (let attempt = 0; attempt < 3; attempt++) {
-        const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}`, seed);
+        // (--query adds to the address: free roam is `--query 'mode=roam&debug'`)
+        const page = await openPage(browser, port, `/?world=${encodeURIComponent(id)}${data ? `&worldData=${encodeURIComponent(data)}` : ''}${option('query') ? `&${option('query')}` : ''}`, seed);
         try {
             // The vehicle is made before the first window settles; the ride state comes after it, so wait for that
             await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 120000 });
@@ -6592,6 +6593,126 @@ function groupEye(kind) {
     game.graphics.render(game.scene, game.camera);
     return { png: game.graphics.renderer.domElement.toDataURL('image/png'), eye: [eye.x, eye.y, eye.z].map(n => Math.round(n)) };
 }
+
+// world-roam: free roam (GameModes, FreeRoam), run with `--query 'mode=roam&debug'`. Checks that the ride is in free
+// roam (no run, the guide's rules off, the follow camera), that nothing in the scene is a barrier, that a bike ridden
+// off the ride onto the side road that runs furthest from it rides 100 m and more off the ride on that road's own
+// surface (never 1 m over or under it), and that a bike put
+// inside the edge of the map is turned back to a road. Pictures (`--out <dir>`): the chase at the start, on the side
+// road, and the rider screen of a debug page with its game mode row (`roam-menu.png`).
+//   node tools/terrain-check.mjs world-roam --world tremola --gpu --query 'mode=roam&debug' [--out <dir>]
+async function roamRun(placeSource) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, v = game.vehicle, out = { shots: {} };
+    const frame = () => game.renderer.domElement.toDataURL('image/jpeg', 0.9);
+    out.freeRoam = !!game.freeRoam;
+    out.guideRoam = !!env.guide.roam;
+    out.follow = !!game.worldCamera.followRider;
+    const barriers = [];
+    game.scene.traverse(o => { if (/barrier/i.test(o.name || '')) barriers.push(o.name); });
+    out.barriers = barriers;
+    for (let i = 0; i < 60; i++) twistyDev.step(1, { render: true });
+    out.shots.start = frame();
+    // A side road, ridden onto from the ride as a rider would: the junction whose side road runs furthest, the bike put
+    // 60 m before it on the ride, steered along the ride and then along the side road (the autopilot rides the ride only)
+    const graph = env.graph, route = env.route;
+    let pick = null;
+    for (const [edgeId, node] of graph.sideStubs()) {
+        const junction = graph.junctions.find(j => j.node === node);
+        if (!junction || !junction.passes || !junction.passes.length) continue;
+        const s = junction.passes[0].sIn;
+        if (s < env.startS + 200 || s > env.endS - 200) continue;
+        await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
+        const chain = graph.chainFrom(edgeId, node, 600);
+        const far = chain.rows.length ? Math.abs(route.project(chain.rows[chain.rows.length - 1].x, chain.rows[chain.rows.length - 1].z, null, {}).lateral) : 0;
+        if (!pick || far > pick.far) pick = { edgeId, node, s, rows: chain.rows, far };
+    }
+    out.side = pick ? { edge: pick.edgeId, s: Math.round(pick.s), far: Math.round(pick.far), rows: pick.rows.length } : null;
+    if (pick) {
+        await placeAt(Math.max(env.startS + 10, pick.s - 60));
+        game.worldCamera.reset(v.yawAngle);
+        const path = [];
+        for (let d = -60; d <= 0; d += 4) { const p = route.sample(pick.s + d, {}); path.push({ x: p.x, z: p.z }); }
+        for (const r of pick.rows) path.push({ x: r.x, z: r.z });
+        twistyDev.autopilot({ speed: 0 });
+        let near = 0;
+        // (slow through the turn off the ride: the junction is the path's sixteenth point)
+        const want = () => (near >= 8 && near <= 26 ? 5 : 11);
+        game.input.getThrottleInput = () => (v.speed < want() ? 0.5 : 0);
+        game.input.getBrakeInput = () => (v.speed > want() + 1.5 ? 0.6 : 0);
+        game.input.getSteeringInput = () => {
+            let best = near, d = Infinity;
+            for (let k = Math.max(0, near - 5); k < Math.min(path.length, near + 30); k++) {
+                const e = Math.hypot(path[k].x - v.position.x, path[k].z - v.position.z);
+                if (e < d) { d = e; best = k; }
+            }
+            near = best;
+            const t = path[Math.min(path.length - 1, near + 2)];
+            let diff = Math.atan2(t.x - v.position.x, t.z - v.position.z) - v.yawAngle;
+            diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+            // (positive steering turns left, to a greater yaw)
+            return Math.max(-1, Math.min(1, diff * 2.5));
+        };
+        const before = game.restarts || 0;
+        let crashed = false, most = 0;
+        const trace = [];
+        for (let i = 0; i < 60 * 60 && near < path.length - 3; i++) {
+            twistyDev.step(1, { render: i % 30 === 29 });
+            crashed = crashed || !!v.crashed;
+            const off = Math.abs(route.project(v.position.x, v.position.z, null, {}).lateral);
+            most = Math.max(most, off);
+            if (i % 60 === 0) trace.push([i, +(v.position.y - env.ground.groundY(v.position.x, v.position.z, null)).toFixed(2), +v.speed.toFixed(1), Math.round(off)]);
+            if (!out.shots.side && off > 120) {
+                for (let k = 0; k < 20; k++) twistyDev.step(1, { render: true });
+                out.shots.side = frame();
+            }
+        }
+        out.trace = trace;
+        out.sideRide = { furthest: Math.round(most), crashed, restarts: (game.restarts || 0) - before, nan: !Number.isFinite(v.position.x + v.position.y + v.position.z), speed: +v.speed.toFixed(1), moved: Math.round(most) };
+        if (!out.shots.side) out.shots.side = frame();
+    }
+    // The edge of the map: a tile of the detailed land with no tile beside it, a point 25 m inside its open side
+    const tiles = new Set(env.data.manifest.tiles.height.map(([a, b]) => `${a},${b}`)), m = WorldData.TILE_M;
+    let edge = null;
+    for (const [tx, tz] of env.data.manifest.tiles.height) {
+        if (!tiles.has(`${tx + 1},${tz}`) && tiles.has(`${tx - 1},${tz}`)) { edge = { x: (tx + 1) * m - 25, z: (tz + 0.5) * m }; break; }
+    }
+    if (edge) {
+        const roadBefore = { x: v.position.x, z: v.position.z };
+        const keep = { x: v.position.x, y: v.position.y, z: v.position.z, yaw: v.yawAngle };
+        v.reset();
+        v.yawAngle = keep.yaw;
+        v.position.set(edge.x, env.ground.groundY(edge.x, edge.z, null), edge.z);
+        v.speed = 5;
+        for (let i = 0; i < 3; i++) twistyDev.step(1);
+        out.edge = { at: [Math.round(edge.x), Math.round(edge.z)], putBack: Math.round(Math.hypot(v.position.x - edge.x, v.position.z - edge.z)), zone: game.roam ? game.roam.zone : null, nearRoad: Math.round(Math.hypot(v.position.x - roadBefore.x, v.position.z - roadBefore.z)) };
+    }
+    return out;
+}
+WORLD_PROBES.push('world-roam');
+WORLD['world-roam'] = async (page) => {
+    await page.addStyleTag({ content: '.hud-keys { display: none !important; }' });
+    const result = await page.evaluate(roamRun, placeAt.toString());
+    const dir = option('out') || join(process.env.HOME || '.', 'Library/Caches/twisty-world/roam-shots');
+    mkdirSync(dir, { recursive: true });
+    for (const [k, data] of Object.entries(result.shots)) writeFileSync(join(dir, `roam-${k}.jpg`), Buffer.from(data.split(',')[1], 'base64'));
+    delete result.shots;
+    // The menu of a debug page: the rider screen with its game mode row
+    await page.goto(`http://127.0.0.1:${option('port') || 8080}/?debug`, { waitUntil: 'load' });
+    await page.waitForSelector('[data-game-mode-picker]', { timeout: 60000 }).catch(() => null);
+    await new Promise(r => setTimeout(r, 1500));
+    await page.screenshot({ path: join(dir, 'roam-menu.png') });
+    result.menuRow = await page.evaluate(() => [...document.querySelectorAll('[data-game-mode]')].map(b => `${b.dataset.gameMode}:${b.disabled ? 'locked' : 'open'}`));
+    const failures = [];
+    if (!result.freeRoam || !result.guideRoam || !result.follow) failures.push('not in free roam');
+    if (result.barriers.length) failures.push(`barriers in the scene: ${result.barriers.slice(0, 5).join(', ')}`);
+    if (!result.side) failures.push('no side road found');
+    else if (result.sideRide.nan || result.sideRide.furthest < 100) failures.push(`the side road ride: ${JSON.stringify(result.sideRide)}`);
+    // (the bike rides on the side road's own surface, not the ride's height beside it: Vehicle.surfaceAt)
+    if (result.trace && result.trace.some(([, over]) => Math.abs(over) > 1)) failures.push(`the bike off the side road's surface: ${JSON.stringify(result.trace.filter(([, over]) => Math.abs(over) > 1).slice(0, 4))}`);
+    if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
+    return { ok: failures.length === 0, failures, ...result, dir };
+};
 
 // world-edge-shots: the edge furniture (EdgeStyles, Scenery.stoneSites) in pictures: for each style that stands
 // somewhere on the stage, the first piece of it the ride passes, seen from the road 9 m before it

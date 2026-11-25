@@ -4949,6 +4949,10 @@ class Vehicle {
         const ground = this.environment.ground;
         let zone = ground.zoneAt(loc, ground.halfRoad(loc));
         if (this.worldPhysics) zone = this.worldZone(zone, loc);
+        // A side road past the ride's carriageway is its own surface (WorldGround.heightAt reads WorldGround.sideRoadY),
+        // not the ride's height beside it: near a junction the two are the same, a side road far from the ride is not
+        // (a bike 200 m down one rode at the ride's height, 17 m over the road)
+        if (zone.kind === 'road' && this.worldPhysics && Math.abs(loc.lateral) > ground.halfRoad(loc)) return ground.heightAt(loc, false);
         if (zone.kind !== 'runoff') return loc.roadY;
         return ground.heightAt(loc, false);
     }

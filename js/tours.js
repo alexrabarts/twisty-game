@@ -480,6 +480,7 @@ class TourSystem {
                             <div class="showcase-info" id="riderInfoCard"></div>
                             <button class="carousel-arrow" id="riderNextBtn">›</button>
                         </div>
+                        ${world ? '<div class="showcase-mode" id="gameModeRow"></div>' : ''}
                         <div class="showcase-mode" id="riderModeRow"></div>
                         <div class="showcase-actions">
                             <button id="riderContinueBtn" class="showcase-continue">${world ? 'RIDE →' : 'CONTINUE →'}</button>
@@ -514,6 +515,12 @@ class TourSystem {
         if (typeof WorldCredits !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(WorldCredits.button('showcase-secondary'));
         // The settings (graphics and sound) open over the menu through the dialog stack (js/settings.js)
         if (typeof SettingsDialog !== 'undefined') container.querySelector('.character-select-screen .showcase-actions').appendChild(SettingsDialog.button('showcase-secondary'));
+
+        // The game mode (js/gamemodes.js), for the world ride: Time trial, and Free roam with its lock (open in debug mode)
+        const gameRow = container.querySelector('#gameModeRow');
+        if (gameRow && typeof GameModes !== 'undefined') {
+            gameRow.appendChild(GameModes.control(document, { debug: !!this.unlockAll, icon, after: () => focusPrimary('riderContinueBtn') }));
+        }
 
         // The rider mode (js/ridermodes.js): free on the menu, for the world ride and the classic legs alike. A choice
         // gives the focus back to the primary button, so Enter still rides

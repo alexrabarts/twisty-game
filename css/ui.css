@@ -2849,4 +2849,12 @@ body.hill-on .virtual-button-throw.left {
 
 .hill-end-btn[hidden] {
     display: none;
+
+
+/* Free roam (js/gamemodes.js, Game.startFreeRoam): no clock, no checkpoints, no stage progress */
+body.free-roam #raceTimer,
+body.free-roam #hudProgress,
+body.free-roam #hudGates,
+body.free-roam #hudStageText {
+    display: none !important;
 }

@@ -53,6 +53,8 @@ class WorldGuide {
 
     // The rule for one frame. `state`: {projection, speed, yaw, dt}. Returns 'restart' on the frame it fires.
     step(state) {
+        // Free roam has no ride to be off or against (FreeRoam)
+        if (this.roam) return null;
         const { projection, speed, yaw, dt } = state;
         const off = this.route.offRoute(projection);
         const against = speed > WorldGuide.REVERSE_SPEED && Math.cos(yaw - projection.heading) < 0;

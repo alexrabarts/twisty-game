@@ -30,6 +30,8 @@ class WorldCamera {
             // The hairpin pull, 0 to 1: the road's turn over pullSpanM metres from pullBehindM behind the bike,
             // nothing under pullFrom rad and all of it from pullTo rad. It rises at pullIn and falls at pullOut, so the
             // camera eases back in on the straight after.
+            // Free roam: the boom follows the rider's way at followRate (followRider)
+            followRate: 3,
             pullBehindM: 15, pullSpanM: 75, pullFrom: 0.5, pullTo: 1.8, pullIn: 4, pullOut: 2,
             // At full pull the boom is pullBack longer and raiseM higher; its length and height move at boomRate
             pullBack: 0.5, raiseM: 3, boomRate: 5,
@@ -213,8 +215,9 @@ class WorldCamera {
         return value;
     }
 
-    // The route's smooth signed curvature at s
+    // The route's smooth signed curvature at s (none on the rider's own line in free roam: followRider)
     curvature(s) {
+        if (this.followAt) return 0;
         const route = this.route;
         const span = WorldCamera.TUNING.curvatureSpanM;
         return typeof route.smoothCurvatureAt === 'function' ? route.smoothCurvatureAt(s, span) : route.curvatureAt(s - span / 2, span);
@@ -234,8 +237,19 @@ class WorldCamera {
         return total;
     }
 
-    // The point and heading of the smooth centreline at s: {x, y, z, heading}
+    // The point and heading of the smooth centreline at s: {x, y, z, heading}. In free roam (followRider) the line is
+    // the rider's own: straight through the bike along the way it goes, so the boom and the look follow the rider on
+    // any road, not the ride
     centre(s, out) {
+        const f = this.followAt;
+        if (f) {
+            const d = s - f.s;
+            out.x = f.x + Math.sin(f.heading) * d;
+            out.z = f.z + Math.cos(f.heading) * d;
+            out.y = f.y;
+            out.heading = f.heading;
+            return out;
+        }
         const route = this.route;
         const clamped = Math.max(0, Math.min(route.length, s));
         const y = route.sample(clamped, this.sampled).y;
@@ -449,6 +463,17 @@ class WorldCamera {
         this.fresh = false;
         this.index = bike.index;
         const s = bike.s;
+        // Free roam: the line the camera reads is the rider's own (centre), through the bike along its way. The way is
+        // the bike's travel, eased by followRate, so a wobble does not swing the boom
+        if (this.followRider) {
+            const f = this.followAt || (this.followAt = { heading: bike.yaw || 0 });
+            const want = Number.isFinite(bike.yaw) ? bike.yaw : f.heading;
+            f.heading = fresh ? want : f.heading + WorldCamera.wrap(want - f.heading) * Math.min(1, step * WorldCamera.TUNING.followRate);
+            f.x = bike.x;
+            f.y = bike.y;
+            f.z = bike.z;
+            f.s = s;
+        } else this.followAt = null;
 
         // The hairpin pull
         const pullWant = this.pullAt(s);
