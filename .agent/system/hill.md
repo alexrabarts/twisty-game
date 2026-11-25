@@ -32,7 +32,17 @@ Five side roads (`RULE.sideRoads`, `HillLane.sideRoad`) leave the lane on both s
 
 At the top, on the right, a stone wall stands instead of cottages, 1.5 m high, to s 90 (`topWallToS`, `topWallUpM`). This is how the reference frames have it. With cottages there, the low sun from the right put the whole start in shade.
 
-The land falls away towards the sun's side, the vale, and rises on the other side (`HillScene.groundY`), so no hill stands between the sun and the street.
+## The land
+
+`HillLand` (js/hill/lane.js, `lane.ground()`) holds the land as data. These are its rules:
+- **It follows the lane.** Out to `bandM` (20 m) from the lane or a side road, the land is at the height of the nearest part of the lane, so it falls as the lane falls. The heights of near paths are blended (`blendM`), so the land has no crease between two paths.
+- **Each house has a level yard.** From its front to `yardM` (8 m) behind its back, the land is at the house's floor (`pads`). It eases back into the land over `padEaseM`. The church stands on a level yard of its own.
+- **It stays under the paving.** Under the lane, its flags and each side road, and for a cell and a half round them, the land is `underM` under the surface.
+- **Past the band it is the hillside.** It falls towards the vale (down the main straight and to its right) and rises on the other side, to low hills far off. So no hill stands between the sun and the street.
+
+The land is drawn as two grids in one mesh (`HillScene.vale`). A fine grid of 2 m cells covers each coarse cell that comes within `reachM` of a path. A coarse grid of 24 m cells goes out to the hills. They meet edge to edge, and the edge of the fine grid takes the heights of the coarse grid, so no gap opens. `HillLand.heightAt` is the drawn surface (the same triangles). `surfaceAt` is the paving where there is paving, else the land.
+
+Every piece that stands on the ground has its foot in it. A building's foot is `footM` (0.3 m) under the lowest land under its footprint (`lane.ground()` sets it). A wall, a pier, a step, a post, a shed, a gravestone, a hedge or a tree goes down to the lowest ground under it (`HillScene.standing`, `lowestSurface`). A railing stands post by post on the flags under it, and its rail falls with them. A back fence closes the yard on three sides. Each such piece is noted in `HillScene.stands`, with its footprint and its foot.
 
 `HillLane.blocks(a, b)` is the line-of-sight test against the buildings of the lane and of the side roads (`solids`). The ending, the cinematic cameras and the seen faces use it.
 
@@ -168,6 +178,11 @@ The ending (`HillLane.RULE.end`, `HillRide.updateEnding`) goes through these pha
   - **The side roads.** Four to six, on both sides, a mix of kinds, none in the sharp right or the last left; no mouth has a step; none crosses the course or another; ridden in, the bicycle stops at what closes it, and the ending never fires there.
   - **The cinematic cameras.** Over a whole ride the bicycle is always in frame and in clear view until the ending, and no two cuts are within 1.5 s.
   - **The budget.** The village is under 300,000 triangles and 40 draws.
+- `tests/unit/hill-ground.test.js` checks the land:
+  - **Nothing floats.** At each corner and the centre of each piece in `HillScene.stands`, the foot is at most 5 cm over the ground (`surfaceAt`).
+  - **The paving.** The land never shows through the lane, its flags or a side road. Just past the flags, where nothing stands, the land is within 0.3 m of the flags.
+  - **The fall.** Behind each house the land is at the house's floor; 18 m out on both sides the land falls as the lane falls.
+  - **The grids.** The fine and the coarse grid meet edge to edge, with no gap.
 - `node tools/terrain-check.mjs hill-overlay --gpu --still <file>` draws the opening frame, the game's opening shot at the frame's shape, and the two at half each, with the frame's key points (yellow) and the game's (cyan), and gives the mean distance between them in pixels of an 857 px high frame.
 - `node tools/terrain-check.mjs hill-shots --gpu` takes the ride's pictures, each with its mean luminance, into `~/Library/Caches/twisty-world/hill-shots/`.
 - `node tools/terrain-check.mjs hill-compare --gpu --stills <dir>` makes side-by-side sheets of the reference stills (private) and the game from the matching shots, with the mean colour of the lit house faces in both. They go into `~/Library/Caches/twisty-world/hill-shots/compare/`.

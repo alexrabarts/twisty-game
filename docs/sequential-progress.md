@@ -663,3 +663,11 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 ## The hill ride: the loaves spill in a fall
 
 - When the boy comes off, the six loaves fly out of the basket, land on the lane and lie there, the basket empty, until R (`HillSpill`). A test throws them in a fall on the real lane and checks that they rest on the lane, inside the house fronts, and that R puts them back.
+
+## The hill ride: nothing floats
+
+- The land was a flat plane 3 m under the lane, on a grid of 15 m cells. The houses, the walls, the yards, the fences and the churchyard stood over it, with a gap under them.
+- Now the land follows the lane down (`HillLand`): level with it beside the houses, a level yard behind each house, under all paving, then the hillside falls to the vale. A fine grid of 2 m cells round the village meets the coarse grid edge to edge.
+- Every piece that stands on the ground has its foot in the land or the paving. A railing stands post by post on the flags; a back fence closes its yard on three sides.
+- `tests/unit/hill-ground.test.js` holds it. Before: 1401 of 2335 standing pieces were more than 5 cm over the land, and in open gaps the land was about 3 m under the flags' edge. After: none, and none.
+- The vale's far trees are plainer crowns, to keep the budget: 263,458 triangles of 300,000.

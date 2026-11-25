@@ -115,6 +115,20 @@ class HillLane {
         this.solids = [...this.cottages, ...this.sideRoads.flatMap(road => road.houses)];
     }
 
+    // The land (HillLand), made once on first call, and every building's foot set into it: footM under the lowest land
+    // under its footprint, the church's under its nave and its tower
+    ground() {
+        if (this.land) return this.land;
+        const land = this.land = new HillLand(this);
+        const set = (c, along, hw) => land.footOf(c.x + c.alongX * along, c.z + c.alongZ * along, c.alongX, c.alongZ, hw, c.outX, c.outZ, c.hd);
+        for (const c of this.solids) c.foot = Math.min(c.foot, set(c, 0, c.hw));
+        if (this.church) {
+            const c = this.church, T = this.rule.church.tower;
+            c.foot = Math.min(c.foot, set(c, 0, c.hw), set(c, -c.hw - T[0] / 2 + 0.5, T[0] / 2));
+        }
+        return land;
+    }
+
     // A side road from its data (RULE.sideRoads): its centre line every half metre from the lane's edge, straight out
     // and then bending, its mouth's span of the lane, its height at the lane's (y0)
     sideRoad([s, side, kind, wide, length, straight, bend, ride, end]) {
@@ -627,4 +641,298 @@ class HillLane {
     }
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { HillLane };
+// The land the village stands in, as data (js/hill/scene.js draws it): level with the lane along the built band on both
+// sides, so the house fronts, the gardens and the walls meet it at their heights, a levelled yard behind each house and
+// round the church, just under every paved surface, then out past the band the hillside: falling towards the vale on the
+// sun's side, rising on the other, to low hills far off. The land is drawn as two grids, a fine one round the lane and
+// its side roads and a coarse one out to the hills, and `heightAt` is the drawn surface itself (the same triangles), so
+// a foot set on it is on what the camera sees
+class HillLand {
+    static get RULE() {
+        return Object.freeze({
+            // The fine grid: its cell, and how near the lane or a side road a coarse cell must come to be drawn fine (m)
+            cellM: 2, reachM: 30,
+            // Level with the nearest path out to bandM, then the hillside's fall eased in over easeM; the path heights are
+            // blended over blendM (so the land has no crease between two paths), and lifted liftM (just under the flags)
+            bandM: 20, easeM: 14, blendM: 2.5, liftM: 0.06,
+            // Under a paved surface (the lane, its flags, a side road) the land stays underM below it
+            underM: 0.08,
+            // A levelled yard eases back into the land over padEaseM; a house's yard runs yardM behind its back
+            padEaseM: 3, yardM: 8,
+            // The hillside: the fall per metre towards the vale, the rise away from it; the vale lies down the main
+            // straight and a little to its right (valeCross of its right)
+            fall: 0.22, rise: 0.3, valeCross: 0.7,
+            // The coarse grid: its size and cells (a whole number of fine cells to each)
+            valeM: 2400, valeCells: 100,
+            // A foot reaches footM under the lowest land under it
+            footM: 0.3
+        });
+    }
+
+    constructor(lane) {
+        const R = HillLand.RULE, r = lane.rule;
+        this.lane = lane;
+        // The paths the land follows: the lane every metre and each side road every half metre, bucketed for the search
+        this.paths = [];
+        for (const p of lane.points) this.paths.push({ x: p.x, z: p.z, y: p.y, s: p.s });
+        for (const road of lane.sideRoads) for (const p of road.points) this.paths.push({ x: p.x, z: p.z, y: lane.roadY(road, p.d, 0) });
+        this.bucketM = 8;
+        this.buckets = new Map();
+        for (const p of this.paths) {
+            const key = this.key(Math.floor(p.x / this.bucketM), Math.floor(p.z / this.bucketM));
+            if (!this.buckets.has(key)) this.buckets.set(key, []);
+            this.buckets.get(key).push(p);
+        }
+        const m = lane.sample((r.mainStraight.fromS + r.mainStraight.toS) / 2);
+        const vx = m.alongX - m.leftX * R.valeCross, vz = m.alongZ - m.leftZ * R.valeCross, vl = Math.hypot(vx, vz);
+        this.vale = { x: vx / vl, z: vz / vl };
+        // The levelled yards: each house of the lane and of the side roads from its front to yardM behind it, at its floor;
+        // the church on its footprint and a little round it
+        this.pads = [];
+        const pad = (c, along0, along1, out0, out1, y) => {
+            // (reach2: the square of how far from its centre the yard and its easing reach)
+            const reach = Math.hypot(Math.max(-along0, along1), Math.max(-out0, out1)) + R.padEaseM;
+            this.pads.push({ x: c.x, z: c.z, ax: c.alongX, az: c.alongZ, ox: c.outX, oz: c.outZ, along0, along1, out0, out1, y, reach2: reach * reach });
+        };
+        for (const c of lane.cottages) pad(c, -c.hw, c.hw, -c.hd, c.hd + R.yardM, c.floor);
+        for (const road of lane.sideRoads) for (const c of road.houses) pad(c, -c.hw, c.hw, -c.hd, c.hd + R.yardM / 2, c.floor);
+        if (lane.church) {
+            const c = lane.church, T = r.church.tower;
+            pad(c, -c.hw - T[0] - 1.5, c.hw + 1.5, -c.hd - 1.5, c.hd + 2, c.floor);
+        }
+        this.buildGrids();
+    }
+
+    key(i, j) {
+        return i * 100003 + j;
+    }
+
+    // The path heights blended round (x, z): { d, y, ux, uz } (the distance to the nearest path point, the blended height,
+    // the blended way out from the paths), or the nearest lane point's when no path is near
+    near(x, z) {
+        const R = HillLand.RULE, b = this.bucketM;
+        const i0 = Math.floor(x / b), j0 = Math.floor(z / b);
+        // Two passes over the buckets round the point: the nearest distance, then the blend of the points near it
+        const lists = [];
+        let dmin2 = Infinity;
+        for (let i = i0 - 3; i <= i0 + 3; i++) {
+            for (let j = j0 - 3; j <= j0 + 3; j++) {
+                const list = this.buckets.get(this.key(i, j));
+                if (!list) continue;
+                lists.push(list);
+                for (const p of list) {
+                    const dx = x - p.x, dz = z - p.z, d2 = dx * dx + dz * dz;
+                    if (d2 < dmin2) dmin2 = d2;
+                }
+            }
+        }
+        const dmin = Math.sqrt(dmin2);
+        if (dmin > 3 * b) {
+            // Far out: the nearest lane point, as a coarse search
+            let best = Infinity, near = this.paths[0];
+            for (let k = 0; k < this.lane.points.length; k += 2) {
+                const p = this.lane.points[k], dx = x - p.x, dz = z - p.z, d2 = dx * dx + dz * dz;
+                if (d2 < best) { best = d2; near = p; }
+            }
+            best = Math.sqrt(best);
+            return { d: best, y: near.y, ux: best > 1e-6 ? (x - near.x) / best : 0, uz: best > 1e-6 ? (z - near.z) / best : 0, s: near.s };
+        }
+        const reach = dmin + 4 * R.blendM, reach2 = reach * reach;
+        let sw = 0, sy = 0, sx = 0, sz = 0, s = null, laneD = Infinity;
+        for (const list of lists) {
+            for (const p of list) {
+                const dx = x - p.x, dz = z - p.z, d2 = dx * dx + dz * dz;
+                if (d2 > reach2) continue;
+                const d = Math.sqrt(d2);
+                if (p.s !== undefined && d < laneD) { laneD = d; s = p.s; }
+                const w = Math.exp(-(d - dmin) / R.blendM);
+                sw += w;
+                sy += w * p.y;
+                if (d > 1e-6) {
+                    sx += w * dx / d;
+                    sz += w * dz / d;
+                }
+            }
+        }
+        const ul = Math.sqrt(sx * sx + sz * sz) || 1;
+        return { d: dmin, y: sy / sw, ux: sx / ul, uz: sz / ul, s };
+    }
+
+    // The land's own height at (x, z), before it is drawn on a grid
+    raw(x, z) {
+        const R = HillLand.RULE;
+        const n = this.near(x, z);
+        const out = Math.max(0, n.d - R.bandM);
+        let y = n.y + R.liftM * (1 - HillLand.smooth(out / R.easeM));
+        if (out > 0) {
+            const towards = n.ux * this.vale.x + n.uz * this.vale.z;
+            const slope = towards > 0 ? -R.fall * towards : R.rise * -towards;
+            const eased = out < R.easeM ? out * out / (2 * R.easeM) : out - R.easeM / 2;
+            const hills = 60 * HillLand.smooth((eased * towards - 1100) / 700);
+            const ripple = 3 * Math.sin(x * 0.011) * Math.cos(z * 0.009) + 1.5 * Math.sin(x * 0.031 + z * 0.017);
+            y += Math.max(-70, slope * eased) + hills + ripple * HillLand.smooth(out / 60);
+        }
+        if (n.d > R.bandM + R.padEaseM + 12) return y;
+        // The levelled yards: inside one the land is its level; within padEaseM of one it eases back
+        let wmax = 0, wsum = 0, ysum = 0, inside = null;
+        for (const p of this.pads) {
+            const dx = x - p.x, dz = z - p.z;
+            if (dx * dx + dz * dz > p.reach2) continue;
+            const a = dx * p.ax + dz * p.az, o = dx * p.ox + dz * p.oz;
+            const ea = Math.max(0, p.along0 - a, a - p.along1), eo = Math.max(0, p.out0 - o, o - p.out1);
+            if (ea >= R.padEaseM || eo >= R.padEaseM) continue;
+            const e = Math.sqrt(ea * ea + eo * eo);
+            if (e >= R.padEaseM) continue;
+            if (e === 0) { inside = p; break; }
+            const w = HillLand.smooth(1 - e / R.padEaseM);
+            wmax = Math.max(wmax, w);
+            wsum += w;
+            ysum += w * p.y;
+        }
+        if (inside) y = inside.y;
+        else if (wsum > 0) y = y * (1 - wmax) + ysum / wsum * wmax;
+        // Under every paved surface (the lane and its flags, a side road) and for a cell and a half round it, so no
+        // drawn triangle rises through one, at the lane's own height
+        const paved = this.pavedAt(x, z, 1.5 * R.cellM, true, n.s);
+        if (paved !== null) y = Math.min(y, paved - R.underM);
+        return y;
+    }
+
+    static smooth(t) {
+        const c = Math.max(0, Math.min(1, t));
+        return c * c * (3 - 2 * c);
+    }
+
+    // The coarse grid out to the hills, and the fine grid inside the coarse cells that come within reachM of the lane or
+    // a side road: the fine grid's cells are cellM, a whole number to a coarse cell, so the two meet edge to edge; where
+    // they meet the fine grid's edge takes the coarse grid's heights, so no gap opens between them
+    buildGrids() {
+        const R = HillLand.RULE, lane = this.lane, r = lane.rule;
+        const mid = lane.sample(r.lengthM / 2), m = lane.sample((r.mainStraight.fromS + r.mainStraight.toS) / 2);
+        const n = R.valeCells, c = R.valeM / n, k = Math.round(c / R.cellM);
+        const x0 = mid.x + m.alongX * 500 - R.valeM / 2, z0 = mid.z + m.alongZ * 500 - R.valeM / 2;
+        const heights = new Float32Array((n + 1) * (n + 1));
+        for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) heights[i * (n + 1) + j] = this.raw(x0 + i * c, z0 + j * c);
+        // A coarse cell is fine when a path point comes within reachM of it
+        const covered = new Uint8Array(n * n);
+        for (const p of this.paths) {
+            const i0 = Math.max(0, Math.floor((p.x - R.reachM - x0) / c)), i1 = Math.min(n - 1, Math.floor((p.x + R.reachM - x0) / c));
+            const j0 = Math.max(0, Math.floor((p.z - R.reachM - z0) / c)), j1 = Math.min(n - 1, Math.floor((p.z + R.reachM - z0) / c));
+            for (let i = i0; i <= i1; i++) {
+                for (let j = j0; j <= j1; j++) {
+                    const dx = Math.max(0, x0 + i * c - p.x, p.x - x0 - (i + 1) * c), dz = Math.max(0, z0 + j * c - p.z, p.z - z0 - (j + 1) * c);
+                    if (dx * dx + dz * dz <= R.reachM * R.reachM) covered[i * n + j] = 1;
+                }
+            }
+        }
+        this.coarse = { x0, z0, c, nx: n, nz: n, heights, covered };
+        let ci0 = n, ci1 = -1, cj0 = n, cj1 = -1;
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                if (!covered[i * n + j]) continue;
+                ci0 = Math.min(ci0, i); ci1 = Math.max(ci1, i); cj0 = Math.min(cj0, j); cj1 = Math.max(cj1, j);
+            }
+        }
+        const nx = (ci1 - ci0 + 1) * k, nz = (cj1 - cj0 + 1) * k, f = c / k;
+        const fx0 = x0 + ci0 * c, fz0 = z0 + cj0 * c;
+        const drawn = new Uint8Array(nx * nz), fine = new Float32Array((nx + 1) * (nz + 1)).fill(NaN);
+        const isCovered = (i, j) => i >= 0 && j >= 0 && i < n && j < n && covered[i * n + j] === 1;
+        for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) if (isCovered(ci0 + Math.floor(i / k), cj0 + Math.floor(j / k))) drawn[i * nz + j] = 1;
+        this.fine = { x0: fx0, z0: fz0, c: f, nx, nz, drawn, heights: fine };
+        for (let i = 0; i <= nx; i++) {
+            for (let j = 0; j <= nz; j++) {
+                // The coarse cells round this vertex: it is on the fine grid's edge when one of them is not fine
+                const ci = ci0 + Math.floor(i / k), cj = cj0 + Math.floor(j / k), oi = i % k === 0, oj = j % k === 0;
+                const round = [[ci, cj], [oi ? ci - 1 : ci, cj], [ci, oj ? cj - 1 : cj], [oi ? ci - 1 : ci, oj ? cj - 1 : cj]];
+                if (!round.some(([a, b]) => isCovered(a, b))) continue;
+                const x = fx0 + i * f, z = fz0 + j * f;
+                fine[i * (nz + 1) + j] = round.every(([a, b]) => isCovered(a, b)) ? this.raw(x, z) : HillLand.onGrid(this.coarse, x, z);
+            }
+        }
+    }
+
+    // The height of a grid's drawn surface in its cell (i, j): split along the diagonal from (i, j) to (i + 1, j + 1)
+    static onGrid(g, x, z) {
+        const fx = (x - g.x0) / g.c, fz = (z - g.z0) / g.c;
+        const i = Math.floor(fx), j = Math.floor(fz);
+        if (i < 0 || j < 0 || i >= g.nx || j >= g.nz) return null;
+        const u = fx - i, v = fz - j, w = g.nz + 1;
+        const h00 = g.heights[i * w + j], h10 = g.heights[(i + 1) * w + j], h01 = g.heights[i * w + j + 1], h11 = g.heights[(i + 1) * w + j + 1];
+        return u >= v ? h00 + u * (h10 - h00) + v * (h11 - h10) : h00 + v * (h01 - h00) + u * (h11 - h01);
+    }
+
+    // The drawn land's height at (x, z): the fine grid where it is drawn, else the coarse
+    heightAt(x, z) {
+        const f = this.fine, i = Math.floor((x - f.x0) / f.c), j = Math.floor((z - f.z0) / f.c);
+        if (i >= 0 && j >= 0 && i < f.nx && j < f.nz && f.drawn[i * f.nz + j]) return HillLand.onGrid(f, x, z);
+        const y = HillLand.onGrid(this.coarse, x, z);
+        return y === null ? this.raw(x, z) : y;
+    }
+
+    // The paved surface at (x, z) if one covers it, or comes within `margin` of it (the lane, its flags, a side road's
+    // surface), else null; `low` gives the lane's own height under its flags, `hint` an s near the point
+    pavedAt(x, z, margin = 0, low = false, hint = null) {
+        const lane = this.lane, r = lane.rule;
+        const at = lane.project(x, z, hint);
+        if (Math.abs(at.across) <= r.halfWidthM + r.flagsM + 0.3 + margin && at.s > 0 && at.s < r.lengthM) {
+            const onMouth = lane.sideRoads.some(m => Math.sign(at.across) === m.side && m.kind !== 'steps' && at.s > m.from && at.s < m.to && Math.abs(at.across) > r.halfWidthM);
+            if (!onMouth) {
+                const y = lane.sample(at.s).y + (!low && Math.abs(at.across) > r.halfWidthM ? 0.1 : 0);
+                const road = this.roadAt(x, z, margin, low);
+                return road === null ? y : Math.min(y, road);
+            }
+        }
+        return this.roadAt(x, z, margin, low);
+    }
+
+    // The lowest side road surface at (x, z), or within `margin` of it, else null (`low` as for pavedAt)
+    roadAt(x, z, margin = 0, low = false) {
+        const lane = this.lane;
+        let least = null;
+        for (const road of lane.sideRoads) {
+            const m = road.points[0];
+            if (Math.hypot(x - m.x, z - m.z) > road.length + road.wide + margin + 2) continue;
+            const half = road.wide / 2;
+            for (const p of road.points) {
+                const dx = x - p.x, dz = z - p.z;
+                const along = dx * p.dirX + dz * p.dirZ, w = dx * p.crossX + dz * p.crossZ;
+                // (a point of the road's centre line beside this one, and the point within the road or `margin` of it)
+                if (Math.abs(along) > 0.26 && !(p.d === 0 && along < 0 && along >= -margin) && !(p === road.points[road.points.length - 1] && along > 0 && along <= margin)) continue;
+                if (Math.abs(w) > half + margin) continue;
+                // Over the steps, with a margin, the lowest tread in reach
+                const d = Math.max(0, Math.min(road.length, p.d + along - (low && road.kind === 'steps' ? margin : 0)));
+                const y = lane.roadY(road, d, Math.max(-half, Math.min(half, w)));
+                if (least === null || y < least) least = y;
+            }
+        }
+        return least;
+    }
+
+    // What a foot stands on at (x, z): the paved surface where one is, else the drawn land
+    surfaceAt(x, z) {
+        const paved = this.pavedAt(x, z);
+        return paved === null ? this.heightAt(x, z) : Math.max(paved, this.heightAt(x, z));
+    }
+
+    // The lowest drawn land under a rectangle: centre (x, z), a half-extent `hu` along (ux, uz) and `hv` along (vx, vz),
+    // sampled every `step` m and at its corners
+    lowest(x, z, ux, uz, hu, vx, vz, hv, step = 0.5) {
+        let least = Infinity;
+        const nu = Math.max(1, Math.ceil(2 * hu / step)), nv = Math.max(1, Math.ceil(2 * hv / step));
+        for (let a = 0; a <= nu; a++) {
+            const s = -hu + 2 * hu * a / nu;
+            for (let b = 0; b <= nv; b++) {
+                const t = -hv + 2 * hv * b / nv;
+                least = Math.min(least, this.heightAt(x + ux * s + vx * t, z + uz * s + vz * t));
+            }
+        }
+        return least;
+    }
+
+    // Where a foot of that rectangle goes: footM under the lowest land under it
+    footOf(x, z, ux, uz, hu, vx, vz, hv) {
+        return this.lowest(x, z, ux, uz, hu, vx, vz, hv) - HillLand.RULE.footM;
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { HillLane, HillLand };
