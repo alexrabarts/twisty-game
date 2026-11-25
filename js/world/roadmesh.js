@@ -564,14 +564,18 @@ class RoadMesh {
     }
 
     // A tube round the road over a tunnel or gallery run, with a portal frame at each end (`ends`: [start, end], false
-    // where the run goes on into the neighbouring section, which draws it)
-    static tunnel(rows, from, to, roof, ends = [true, true]) {
+    // where the run goes on into the neighbouring section, which draws it). The land is cut to the tube's box
+    // (TerrainMesh.tubeClip), so the tube closes everything the land no longer does (RoadMesh.tubeWorks):
+    //   floor     a concrete strip from TUBE_FLOOR_M past the carriageway's edge out to each wall, over the ribbon's
+    //             verge, which thins out there
+    //   footing   each wall's face carried down to the land at its foot where the land lies under the floor (a gallery
+    //             on a hillside stands on its wall, not over a gap)
+    //   headwall  over a portal's beam, a face in the portal's plane up to the land behind it, at most TUBE_HEAD_M
+    // `groundAt(x, z)` is the land (null where it is not known: no footing and no headwall there)
+    static tunnel(rows, from, to, roof, ends = [true, true], groundAt = null) {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
-        const side = (row, sign) => {
-            const o = sign * (row.width / 2 + 1.6);
-            return [row.x + o * Math.cos(row.heading), row.y, row.z - o * Math.sin(row.heading)];
-        };
+        const side = (row, sign, o = row.width / 2 + RoadMesh.TUBE_WALL_M) => [row.x + sign * o * Math.cos(row.heading), row.y, row.z - sign * o * Math.sin(row.heading)];
         for (let i = from; i < to; i++) {
             const a = rows[i], b = rows[i + 1];
             const la = side(a, -1), ra = side(a, 1), lb = side(b, -1), rb = side(b, 1);
@@ -579,17 +583,161 @@ class RoadMesh {
             RoadMesh.quad(out, la, lb, up(lb), up(la), colors.tunnel);
             RoadMesh.quad(out, rb, ra, up(ra), up(rb), colors.tunnel);
             RoadMesh.quad(out, up(la), up(lb), up(rb), up(ra), colors.tunnel);
+            RoadMesh.tubeWorks(out, { la, ra, lb, rb, roof }, groundAt, {
+                l: [side(a, -1, a.width / 2 + RoadMesh.TUBE_FLOOR_M), side(b, -1, b.width / 2 + RoadMesh.TUBE_FLOOR_M)],
+                r: [side(a, 1, a.width / 2 + RoadMesh.TUBE_FLOOR_M), side(b, 1, b.width / 2 + RoadMesh.TUBE_FLOOR_M)]
+            });
         }
-        for (const row of [ends[0] ? rows[from] : null, ends[1] ? rows[to] : null]) {
+        for (const [row, inward] of [[ends[0] ? rows[from] : null, 1], [ends[1] ? rows[to] : null, -1]]) {
             if (!row) continue;
-            const w = row.width + 3.2;
-            const post = (w / 2 + 0.3);
-            RoadMesh.box(out, row.x, row.y + roof + 0.6, row.z, w + 1.2, 1.2, 1.4, row.heading, colors.concrete);
-            for (const sign of [-1, 1]) {
-                RoadMesh.box(out, row.x + sign * post * Math.cos(row.heading), row.y + roof / 2, row.z - sign * post * Math.sin(row.heading), 0.6, roof, 1.4, row.heading, colors.concrete);
-            }
+            RoadMesh.wings(out, RoadMesh.mouthLines(rows, inward > 0 ? from : to, -inward, (r, sign) => side(r, sign)), groundAt, null, [Math.sin(row.heading) * inward, Math.cos(row.heading) * inward]);
+            // (the frame square to the row, its forward into the tube)
+            RoadMesh.portalFrame(out, side(row, -1), side(row, 1), inward > 0 ? row.heading : row.heading + Math.PI, roof, groundAt);
         }
         return out;
+    }
+
+    // How far past half the road's width a ride tube's walls stand
+    static get TUBE_WALL_M() { return 1.6; }
+    // How far out in front of a portal the land is cut to the tube's walls and roof, and a wing wall stands on each
+    // wall's line (RoadMesh.wings): the land over the approach, laid from the carved road to the land over the tube,
+    // stood up to 0.9 m over the road there
+    static get TUBE_MOUTH_M() { return 12; }
+    // How deep a portal's frame is, out from the portal
+    static get TUBE_FRAME_M() { return 1.4; }
+    // Past the carriageway's edge, where a tube's concrete floor begins
+    static get TUBE_FLOOR_M() { return 0.3; }
+    // The most a portal's headwall stands over its road
+    static get TUBE_HEAD_M() { return 14; }
+    // How far under the land a tube's footing reaches
+    static get TUBE_FOOT_M() { return 0.3; }
+
+    // A tube segment's floor strips and footings (RoadMesh.tunnel): `seg` {la, ra, lb, rb, roof} its walls' feet at its
+    // two rows; `floor` {l: [a, b], r: [a, b]} where each floor strip starts (none for a road whose verge reaches its
+    // walls)
+    static tubeWorks(out, seg, groundAt, floor = null) {
+        const colors = RoadMesh.COLORS;
+        const lift = p => [p[0], p[1] + RoadMesh.LIFT_M + 0.01, p[2]];
+        if (floor) {
+            RoadMesh.quad(out, lift(floor.l[0]), lift(floor.l[1]), lift(seg.lb), lift(seg.la), colors.concrete);
+            RoadMesh.quad(out, lift(seg.ra), lift(seg.rb), lift(floor.r[1]), lift(floor.r[0]), colors.concrete);
+        }
+        if (!groundAt) return;
+        for (const [a, b] of [[seg.la, seg.lb], [seg.ra, seg.rb]]) {
+            const ga = groundAt(a[0], a[2]), gb = groundAt(b[0], b[2]);
+            if (!Number.isFinite(ga) || !Number.isFinite(gb)) continue;
+            // (only where the land lies under the floor; at least TUBE_FOOT_M deep at both ends, no sliver)
+            if (!(ga < a[1] - 0.05 || gb < b[1] - 0.05)) continue;
+            const da = a[1] - Math.max(RoadMesh.TUBE_FOOT_M, a[1] - ga + RoadMesh.TUBE_FOOT_M), db = b[1] - Math.max(RoadMesh.TUBE_FOOT_M, b[1] - gb + RoadMesh.TUBE_FOOT_M);
+            RoadMesh.quad(out, [a[0], da, a[2]], [b[0], db, b[2]], b, a, colors.tunnel);
+        }
+    }
+
+    // The wing walls in front of a portal: along each wall's line from the portal out TUBE_MOUTH_M (`lines`: the wall
+    // feet [l, r] of each row outward, the portal's first), from the road up to the land outside the line where it
+    // stands over the road. The land between the lines is cut there as in the tube (TerrainMesh.tubeClip): the faces
+    // close its sides
+    static wings(out, lines, groundAt, guard = null, forward = null) {
+        if (!groundAt || lines.length < 2) return;
+        // (from the portal frame's outer face on: the frame's posts close the first TUBE_FRAME_M, and each wing starts at
+        // its post's outer corner, `forward` the frame's way into the tube)
+        const [fx, fz] = forward || [0, 0];
+        const out0 = p => [p[0] - fx * RoadMesh.TUBE_FRAME_M, p[1], p[2] - fz * RoadMesh.TUBE_FRAME_M];
+        const past = p => -((p[0] - lines[0][0][0]) * fx + (p[2] - lines[0][0][2]) * fz) > RoadMesh.TUBE_FRAME_M + 0.05;
+        lines = [[out0(lines[0][0]), out0(lines[0][1])], ...lines.slice(1).filter(line => past(line[0]) && past(line[1]))];
+        for (let k = 0; k + 1 < lines.length; k++) {
+            for (const side of [0, 1]) {
+                const a = lines[k][side], b = lines[k + 1][side];
+                const ga = groundAt(a[0], a[2]), gb = groundAt(b[0], b[2]);
+                if (!Number.isFinite(ga) || !Number.isFinite(gb)) continue;
+                if (!(ga > a[1] + 0.05 || gb > b[1] + 0.05)) continue;
+                const top = Math.max(ga, gb) + 0.1;
+                if (guard && [a, b].some(p => { const over = guard.ceiling(p[0], p[2], p[1]); return over !== null && over - RoadMesh.DECK_M < top; })) continue;
+                if (guard && ![0, 0.5, 1].every(f => guard.clear(a[0] + (b[0] - a[0]) * f, a[2] + (b[2] - a[2]) * f, Math.min(a[1], b[1]), top, 0.3))) continue;
+                RoadMesh.quad(out, a, b, [b[0], Math.max(b[1], gb) + 0.1, b[2]], [a[0], Math.max(a[1], ga) + 0.1, a[2]], RoadMesh.COLORS.concrete);
+            }
+        }
+    }
+
+    // The wall feet [l, r] of `rows` from row `at` out along `step` (+1 on, -1 back) for TUBE_MOUTH_M, as `foot(row,
+    // sign)` gives them: the portal's row first
+    static mouthLines(rows, at, step, foot) {
+        const lines = [[foot(rows[at], -1), foot(rows[at], 1)]];
+        let walked = 0;
+        for (let j = at; rows[j + step] && walked < RoadMesh.TUBE_MOUTH_M; j += step) {
+            walked += Math.hypot(rows[j + step].x - rows[j].x, rows[j + step].z - rows[j].z);
+            lines.push([foot(rows[j + step], -1), foot(rows[j + step], 1)]);
+        }
+        return lines;
+    }
+
+    // A side road's portal at the tube's row `at` (its wall feet {l, r}), the tube running on to `next`: a beam over the
+    // opening, a post at each wall and the headwall over the beam to the land behind (RoadMesh.headwall), all square to
+    // the line from l to r, so each post's inner face runs through its wall's foot and no corner of the frame stands a
+    // hand from the tube's. Each piece keeps out of another road's carriageway (`guard`)
+    static sidePortal(out, at, next, roof, groundAt, guard = null) {
+        const [lx, , lz] = at.l, [rx, , rz] = at.r;
+        // (square to the line from l to r: a heading h has its right at (cos h, -sin h); forward into the tube)
+        let heading = Math.atan2(-(rz - lz), rx - lx);
+        const nx = (next.l[0] + next.r[0]) / 2 - (lx + rx) / 2, nz = (next.l[2] + next.r[2]) / 2 - (lz + rz) / 2;
+        if (Math.sin(heading) * nx + Math.cos(heading) * nz < 0) heading += Math.PI;
+        return RoadMesh.portalFrame(out, at.l, at.r, heading, roof, groundAt, guard);
+    }
+
+    // A portal's frame at the walls' feet l and r, `heading` its forward into the tube, square to the line from l to r:
+    // a post at each wall (its inner face through the wall's foot, from the portal's plane out TUBE_FRAME_M, up into the
+    // beam), the beam over the opening (from FRAME_IN_M inside the plane out past the posts, its foot FRAME_IN_M over the
+    // roof) and the headwall over the beam in the beam's inner face (RoadMesh.headwall). No two of its faces, nor one
+    // of them and the tube's, share a plane where they overlap, and no corner of it stands a hand from another's.
+    // Each piece keeps out of another road's carriageway (`guard`). Returns its forward [x, z]
+    static portalFrame(out, l, r, heading, roof, groundAt, guard = null) {
+        const span = Math.hypot(r[0] - l[0], r[2] - l[2]) || 1, ux = (r[0] - l[0]) / span, uz = (r[2] - l[2]) / span;
+        const fx = Math.sin(heading), fz = Math.cos(heading), deep = RoadMesh.TUBE_FRAME_M, inM = RoadMesh.FRAME_IN_M;
+        const c = RoadMesh.COLORS.concrete, cy = (l[1] + r[1]) / 2;
+        const clear = (x, z, y0, y1, w, d0, d1) => !guard || [-w, 0, w].every(a => [d0, d1].every(d => guard.clear(x + ux * a + fx * d, z + uz * a + fz * d, y0, y1, 0.1)));
+        const mx = (l[0] + r[0]) / 2, mz = (l[2] + r[2]) / 2;
+        // The beam: along from -deep - inM to +inM
+        const bAlong = -deep / 2, bDeep = deep + 2 * inM;
+        // (a hand wider than the posts' outer faces, so its ends stand in no plane of theirs)
+        if (clear(mx, mz, cy + roof, cy + roof + 1.2, span / 2 + 0.7, -deep - inM, inM)) RoadMesh.box(out, mx + fx * bAlong, cy + roof + inM + (1.2 - inM) / 2, mz + fz * bAlong, span + 1.4, 1.2 - inM, bDeep, heading, c);
+        for (const [p, sign] of [[l, -1], [r, 1]]) {
+            const x = p[0] + sign * ux * 0.3 - fx * deep / 2, z = p[2] + sign * uz * 0.3 - fz * deep / 2;
+            // (up to the beam's middle from its own foot)
+            const top = cy + roof + 0.6;
+            if (clear(x, z, p[1], top, 0.3, -deep / 2, deep / 2)) RoadMesh.box(out, x, (p[1] + top) / 2, z, 0.6, top - p[1], deep, heading, c);
+        }
+        if (clear(mx, mz, cy + roof + 1.2, cy + RoadMesh.TUBE_HEAD_M, span / 2, 0, inM)) RoadMesh.headwall(out, { x: mx + fx * inM, y: cy, z: mz + fz * inM, heading }, span / 2 + 0.7, cy + roof + 1.2, cy + RoadMesh.TUBE_HEAD_M, 1, groundAt, guard);
+        return [fx, fz];
+    }
+
+    // How far into the tube a portal's beam reaches, and how far over the roof its foot stands
+    static get FRAME_IN_M() { return 0.1; }
+
+    // A portal's headwall: in the plane of `row`, from `bottom` up to the land just inside the tube (`inward` +1 along
+    // the row's heading, -1 against it), at most `most`, across `half` either side of the centre line. The land over
+    // the tube is cut at its roof (TerrainMesh.tubeClip): the face closes the step from the beam to the land behind
+    static headwall(out, row, half, bottom, most, inward, groundAt, guard = null) {
+        if (!groundAt) return;
+        const fx = Math.sin(row.heading) * inward, fz = Math.cos(row.heading) * inward;
+        const rx = Math.cos(row.heading), rz = -Math.sin(row.heading);
+        const steps = Math.max(2, Math.ceil((2 * half) / 0.5));
+        const tops = [];
+        for (let k = 0; k <= steps; k++) {
+            const lat = -half + (2 * half * k) / steps;
+            const x = row.x + rx * lat, z = row.z + rz * lat;
+            // (the highest land within the first metre and a half behind the plane: what the face must reach)
+            let top = -Infinity;
+            for (const d of [0.3, 0.8, 1.5]) { const g = groundAt(x + fx * d, z + fz * d); if (Number.isFinite(g)) top = Math.max(top, g); }
+            // (and a deck's depth under any other road over it: a tube under a road meets that road's own works)
+            const over = guard ? guard.ceiling(x, z, row.y) : null;
+            tops.push({ x, z, top: Math.min(most, top, over === null ? Infinity : over - RoadMesh.DECK_M) });
+        }
+        for (let k = 0; k < steps; k++) {
+            const a = tops[k], b = tops[k + 1];
+            if (!(a.top > bottom + 0.05 || b.top > bottom + 0.05)) continue;
+            const ta = Math.max(bottom, a.top) + 0.1, tb = Math.max(bottom, b.top) + 0.1;
+            RoadMesh.quad(out, [a.x, bottom, a.z], [b.x, bottom, b.z], [b.x, tb, b.z], [a.x, ta, a.z], RoadMesh.COLORS.concrete);
+        }
     }
 
     // A deck under the road, parapets either side and piers down to the ground (RoadMesh.placePiers), each swept
@@ -2164,7 +2312,8 @@ class RoadMesh {
     // and a pier whose place falls in a road or its verge moves along the deck to the nearest place clear of both, so
     // the deck spans the road in one. Returns {parts, piers, sides}: the structures ({positions, shades}, sRGB) and
     // the sides with the bridge bit on every decked row, so the edge works leave those to the deck
-    static sideStructures(sides, groundAt = null, roof = 6.5, footAt = null, guard = null) {
+    // `through` ([start, end]): the road goes on as a tube past its first or last row (no portal there)
+    static sideStructures(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false]) {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
         const drop = RoadMesh.PARAPET_DROP_M, D = RoadMesh.DECK_M, H = RoadMesh.PARAPET_H_M;
@@ -2193,6 +2342,7 @@ class RoadMesh {
         const decked = raised.map((on, k) => (on || (raised[k - 1] && !(sides[k].bits & 5)) || (raised[k + 1] && !(sides[k].bits & 5))) && clearRow(sides[k]));
         const down = (p, m) => [p[0], p[1] - m, p[2]];
         const rails = { l: [], r: [] };
+        const tubes = [];
         // The deck's centre line, run by run, for the piers
         const runs = [];
         let run = null;
@@ -2207,6 +2357,20 @@ class RoadMesh {
                 RoadMesh.quad(out, a.l, b.l, up(b.l), up(a.l), colors.tunnel);
                 RoadMesh.quad(out, b.r, a.r, up(a.r), up(b.r), colors.tunnel);
                 RoadMesh.quad(out, up(a.l), up(b.l), up(b.r), up(a.r), colors.tunnel);
+                // (the land is cut to the tube's box: its lowest roof over the segment; its walls stand on the land, and
+                // where the run ends, a portal: RoadMesh.tubeWorks, sidePortal)
+                const low = Math.min(...[a.l, a.r, b.l, b.r].map(p => up(p)[1] - p[1]));
+                tubes.push({ la: a.l, ra: a.r, rb: b.r, lb: b.l, roof: low });
+                RoadMesh.tubeWorks(out, { la: a.l, ra: a.r, lb: b.l, rb: b.r, roof: low }, groundAt);
+                // (in front of a portal the land is cut to the walls and roof too, and wing walls close its sides)
+                const rowsOf = sides.map(side => ({ x: (side.l[0] + side.r[0]) / 2, z: (side.l[2] + side.r[2]) / 2, side }));
+                const mouth = (at, step, forward) => {
+                    const lines = RoadMesh.mouthLines(rowsOf, at, step, (r, sign) => (sign < 0 ? r.side.l : r.side.r));
+                    for (let j = 0; j + 1 < lines.length; j++) tubes.push({ la: lines[j][0], ra: lines[j][1], rb: lines[j + 1][1], lb: lines[j + 1][0], roof: low, mouth: true });
+                    RoadMesh.wings(out, lines, groundAt, guard, forward);
+                };
+                if (sides[k - 1] ? !(sides[k - 1].bits & 5) : !through[0]) mouth(k, -1, RoadMesh.sidePortal(out, a, b, low, groundAt, guard));
+                if (sides[k + 2] ? !(sides[k + 2].bits & 5) : !through[1]) mouth(k + 1, 1, RoadMesh.sidePortal(out, b, a, low, groundAt, guard));
                 run = null;
                 continue;
             }
@@ -2228,7 +2392,7 @@ class RoadMesh {
         RoadMesh.rails(out, rails.l, RoadMesh.PARAPET_W_M, H, colors.concrete);
         RoadMesh.rails(out, rails.r, RoadMesh.PARAPET_W_M, H, colors.concrete);
         const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard });
-        return { parts: out.positions.length ? [out] : [], piers, sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };
+        return { parts: out.positions.length ? [out] : [], piers, tubes, sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };
     }
 
     static structureMesh(parts, name) {
@@ -2287,7 +2451,7 @@ class RoadMesh {
         const guard = roads ? roads.guard(-1) : null;
         // A run clipped to the drawn rows; it ends where it really ends, not where it goes on into a neighbour
         const clip = mask => RoadMesh.runs(rows, mask).map(([from, to]) => [Math.max(from, first), Math.min(to, last), [from >= first, to <= last]]).filter(([from, to]) => to > from);
-        for (const [from, to, ends] of clip(1 | 4)) structures.push([RoadMesh.tunnel(rows, from, to, roof, ends), 'tunnel']);
+        for (const [from, to, ends] of clip(1 | 4)) structures.push([RoadMesh.tunnel(rows, from, to, roof, ends, groundAt), 'tunnel']);
         // (a viaduct's rows carry its layout, WorldEnvironment.viaducts: its stone in place of a bridge's concrete)
         for (const [from, to, ends] of clip(2)) structures.push(rows[from].viaduct ? [RoadMesh.viaduct(rows, from, to, rows[from].viaduct, { lod, land: foot && foot.land ? foot.land : null, ends }), 'viaduct'] : [RoadMesh.bridge(rows, from, to, groundAt, guard, ends), 'bridge']);
         // With edge works the tunnels and bridges join their mesh (same material: the window counts meshes)

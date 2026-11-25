@@ -16,6 +16,7 @@
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
+//   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T]   (no land in a tunnel's or gallery's box or across its portals; pictures of every portal)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
@@ -58,6 +59,7 @@ import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/hel
 import { fairnessWindow, roadworksWindow } from '../tests/helpers/world-fairness.js';
 import { wallWindow, wallRuns, WALL_LIMITS } from '../tests/helpers/world-walls.js';
 import { junctionWindow, junctionReport, junctionLimits } from '../tests/helpers/world-junctions.js';
+import { tunnelWindow, tunnelReport, TUNNEL_LIMITS } from '../tests/helpers/world-tunnels.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
@@ -6114,6 +6116,66 @@ function junctionChecks(results, failures) {
     }
 }
 
+// world-tunnels: the land and the tubes of every tunnel and gallery, ride and side road, as drawn in the page
+// (tests/helpers/world-tunnels.js): the bike is put down every --every metres (200) along the stage and every tube near
+// it is read. It fails on land in a tube's box, a gap in the ride's floor out to the walls, land over the road in front
+// of a portal, or land over the roof behind a portal with nothing drawn to front it (TUNNEL_LIMITS). With --out, three
+// views of every portal it found are saved, the frame alone: from the road 28 m out, from 22 m out and 12 m to the side
+// and 9 m up, and from 14 m inside looking out (`<tag>-<road>-<x>_<z>-<view>.png`, with an index.json).
+//   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T] [--portals <index.json>]
+WORLD_PROBES.push('world-tunnels');
+WORLD['world-tunnels'] = async (page) => {
+    const every = Number(option('every') || 200);
+    const read = await page.evaluate(async (windowSource, reportSource, placeSource, every) => {
+        const window = new Function(`return (${windowSource})`)(), report = new Function(`return (${reportSource})`)();
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, store = {};
+        game.worldLinger = false;
+        for (let s = env.startS + 1; s < env.endS; s += every) {
+            const p = await placeAt(s);
+            window({ THREE }, env, store, p, { nearM: Math.max(every, 500) });
+        }
+        // (each portal with the ride distance it is seen from)
+        const out = report(store);
+        for (const portal of out.portalList) portal.at = portal.s !== null ? portal.s : env.route.sArray[env.route.project(portal.x, portal.z, null, {}).index];
+        return out;
+    }, tunnelWindow.toString(), tunnelReport.toString(), placeAt.toString(), every);
+    const out = option('out');
+    const views = [];
+    if (out) {
+        mkdirSync(out, { recursive: true });
+        await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+        const tag = option('tag') || 'tunnel';
+        // (--portals <index.json>: the portals another run found, so a before and an after picture the same places)
+        const portals = option('portals') ? JSON.parse(readFileSync(option('portals'), 'utf8')).portals : read.portalList;
+        for (const portal of portals) {
+            const [dx, dz] = portal.out, nx = -dz, nz = dx, y = portal.y;
+            const eyes = {
+                outside: [portal.x + dx * 28, y + 3.5, portal.z + dz * 28, portal.x, y + 3, portal.z],
+                oblique: [portal.x + dx * 22 + nx * 12, y + 9, portal.z + dz * 22 + nz * 12, portal.x, y + 3, portal.z],
+                inside: [portal.x - dx * 14, y + 2.2, portal.z - dz * 14, portal.x + dx * 10, y + 2, portal.z + dz * 10]
+            };
+            for (const [name, at] of Object.entries(eyes)) {
+                const png = await page.evaluate(junctionEye, placeAt.toString(), { s: Math.max(1, portal.at - (portal.road === 'ride' ? 0 : 0)), at });
+                const file = join(out, `${tag}-${portal.road}-${Math.round(portal.x)}_${Math.round(portal.z)}-${name}.png`);
+                writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+                views.push({ portal: portal.key, run: portal.run, view: name, file });
+            }
+        }
+        writeFileSync(join(out, 'index.json'), JSON.stringify({ report: { ...read, portalList: undefined }, portals: read.portalList, views }, null, 1));
+    }
+    return { ...read, views };
+};
+
+function tunnelChecks(results, failures) {
+    const found = results['world-tunnels'];
+    if (!found) return;
+    const says = { inside: 'places with land inside a tube', floor: 'places of the ride\'s tube floor with nothing drawn', mouth: 'places with land over the road in front of a portal', face: 'places with land over the roof behind a portal unfronted in its plane' };
+    for (const [kind, text] of Object.entries(says)) {
+        if (found[kind] > TUNNEL_LIMITS[kind]) failures.push(`world-tunnels: ${found[kind]} ${text} (at most ${TUNNEL_LIMITS[kind]}): ${JSON.stringify(found.list.filter(r => r[kind] > 0).slice(0, 4).map(r => ({ key: r.key, [kind]: r[kind], worst: r.worst[kind] })))}`);
+    }
+}
+
 // world-stones: the marker stones as they are drawn, in the page. The bike is put down every --every metres (200 by
 // default) and every stone drawn within STONE_NEAR_M of it, where the land is at full detail, is cast on against the
 // drawn ground (the tiles, the roads and the ground of the edge works; a wall, a deck or a parapet is a structure).
@@ -8040,6 +8102,7 @@ function worldChecks(report) {
     vertexChecks(results, failures);
     wallChecks(results, failures);
     junctionChecks(results, failures);
+    tunnelChecks(results, failures);
     stoneChecks(results, failures);
     stopChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];

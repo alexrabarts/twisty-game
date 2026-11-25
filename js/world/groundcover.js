@@ -362,6 +362,8 @@ if (coverNear > 0.0) {
         }
         out.y = TerrainMesh.drawnAt(mesh, x, z);
         if (!Number.isFinite(out.y)) return null;
+        // (none in a tunnel's or a gallery's box: the land there is cut away, TerrainMesh.tubeClip)
+        if (env.tubesNear && TerrainMesh.inTube(env.tubesNear(key), x, out.y, z)) return null;
         // The land is the top of what is drawn here: the ground the physics reads (the fill beside the road, a
         // stopping place, a side road) is the tile itself, within LAND_TOL_M; a carved node is drawn SINK_M under it
         // (only by the ride: past WALL_REACH_M of it, and beside a side road, the ground is the tile's)

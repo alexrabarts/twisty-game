@@ -187,6 +187,8 @@ class WorldEnvironment {
         // Counts every change of what cameraFaces lists (the ride's wall plans, the sections drawn, the side roads' walls)
         this.faceStamp = 0;
         this.sideWalls = new Map();
+        // The tubes of the side roads' tunnels and galleries, by chunk (setSideTubes): the land is cut to them
+        this.sideTubes = new Map();
         this.cutCache = new Map();
         this.roadGroup = new THREE.Group();
         this.sideGroup = new THREE.Group();
@@ -341,7 +343,7 @@ class WorldEnvironment {
         const built = TerrainMesh.build(tile, cover, lod, (x, y, z) => {
             const low = this.rideSurfaceAt(x, z, y);
             return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
-        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null);
+        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null, this.tubesNear(key));
         built.mesh.userData.skipCulling = true;
         this.tileGroup.add(built.mesh);
         this.onMeshBuilt(built.mesh);
@@ -2328,11 +2330,13 @@ class WorldEnvironment {
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
         // detail, as the ride's do, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
-        const draw = (rows, stub, edge, guard, s0 = 0) => {
+        // (`before` and `after`: the rows the road goes on as past its ends, so a tube that runs on past one has no portal there)
+        const draw = (rows, stub, edge, guard, s0 = 0, before = [], after = []) => {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
-            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard);
-            Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, rows, stub, edge: edge.id, s0 });
+            const through = [!!(before.length && before[before.length - 1].bits & 5), !!(after.length && after[0].bits & 5)];
+            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through);
+            Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, tubes: built.tubes, through, rows, stub, edge: edge.id, s0 });
             // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
             sides.push(Object.assign(built.sides, { owner: edge.id }));
@@ -2370,14 +2374,15 @@ class WorldEnvironment {
                     // The rest goes on from the stub's end, run away from the junction and measured from it
                     if (!away) far = flip(far);
                     farS = length;
-                    draw(stubRows, true, edge, guard);
+                    draw(stubRows, true, edge, guard, 0, [], [...rest, ...onward]);
                     if (far.length < 2) return;
-                    draw(this.holdSide(far, stubPlain.slice(0, -1), onward), false, edge, guard, farS);
+                    draw(this.holdSide(far, stubPlain.slice(0, -1), onward), false, edge, guard, farS, stubPlain.slice(0, -1), onward);
                     return;
                 }
             }
             if (far.length < 2) return;
-            draw(this.holdSide(far, this.sideOnward(edge, 'a'), this.sideOnward(edge, 'b')), false, edge, guard, farS);
+            const before = this.sideOnward(edge, 'a'), after = this.sideOnward(edge, 'b');
+            draw(this.holdSide(far, before, after), false, edge, guard, farS, before, after);
         });
         // The edge works of every side road here, one mesh: its retaining walls, decks and tubes (a side road is seen
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
@@ -2390,8 +2395,9 @@ class WorldEnvironment {
         const ends = box ? this.rideWallEnds(box, WorldEnvironment.WALL_JOIN_M + 60, missing) : [];
         foot.joined = (x, y, z) => ends.some(end => { const d = Math.hypot(end.p[0] - x, end.p[2] - z); return d < WorldEnvironment.WALL_JOIN_M && d > 0.05 && Math.abs(end.p[1] - y) <= 1; });
         triangles += RoadMesh.addEdgeWorks(group, sides, foot, structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
-        // The land is cut to their walls (setSideWalls)
+        // The land is cut to their walls (setSideWalls) and to their tubes (setSideTubes)
         this.setSideWalls(k, group.userData.walls || []);
+        this.setSideTubes(k, roads.flatMap(road => road.userData.tubes || []));
         group.userData.roads = roads;
         group.userData.works = triangles;
         triangles += this.drawSideRibbons(k, group, near);
@@ -2484,6 +2490,66 @@ class WorldEnvironment {
         if (this.goreRows) this.goreRows.clear();
         if (this.cleftRows) this.cleftRows.clear();
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
+        // (a tube no longer drawn cuts no land)
+        this.setSideTubes(k, []);
+    }
+
+    // The boxes of the ride's tunnels and galleries (TerrainMesh.tubeBox), made once: each segment between two rows of
+    // a run, its walls RoadMesh.TUBE_WALL_M past half the road's width either side, as RoadMesh.tunnel draws them
+    rideTubes() {
+        if (this.rideTubeList) return this.rideTubeList;
+        const points = this.route.points, list = [];
+        const foot = (p, sign) => { const o = sign * (p.width / 2 + RoadMesh.TUBE_WALL_M); return [p.x + o * Math.cos(p.heading), p.y, p.z - o * Math.sin(p.heading)]; };
+        const tube = i => !!(points[i] && points[i].bits & 5);
+        const add = (a, b) => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(box); };
+        for (let i = 0; i + 1 < points.length; i++) {
+            if (tube(i) && tube(i + 1)) add(points[i], points[i + 1]);
+            // In front of each portal, out RoadMesh.TUBE_MOUTH_M along the road (RoadMesh.wings closes its sides)
+            for (const [at, step] of [[i, -1], [i + 1, 1]]) {
+                if (!(tube(i) && tube(i + 1)) || tube(at + step) || !points[at + step]) continue;
+                let walked = 0;
+                for (let j = at; points[j + step] && walked < RoadMesh.TUBE_MOUTH_M; j += step) {
+                    walked += Math.hypot(points[j + step].x - points[j].x, points[j + step].z - points[j].z);
+                    add(points[j], points[j + step]);
+                }
+            }
+        }
+        this.rideTubeList = list;
+        return list;
+    }
+
+    // The tubes whose boxes reach tile `key`: the ride's and those of the side roads drawn now
+    tubesNear(key) {
+        if (!this.tubeCache) this.tubeCache = new Map();
+        if (this.tubeCache.has(key)) return this.tubeCache.get(key);
+        const [tx, tz] = key.split(',').map(Number), m = WorldData.TILE_M;
+        const x0 = tx * m, z0 = tz * m, x1 = x0 + m, z1 = z0 + m;
+        const near = b => b[2] >= x0 && b[0] <= x1 && b[3] >= z0 && b[1] <= z1;
+        const out = this.rideTubes().filter(tube => near(tube.box));
+        for (const list of this.sideTubes.values()) for (const tube of list) if (near(tube.box)) out.push(tube);
+        this.tubeCache.set(key, out);
+        return out;
+    }
+
+    // The tubes a side chunk draws ({la, ra, rb, lb, roof}, RoadMesh.sideStructures): the tiles under them are drawn
+    // again, at the level of detail they have, when they change
+    setSideTubes(k, segments) {
+        const boxes = segments.map(s => TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof)).filter(Boolean);
+        const sign = list => list.map(b => b.box.map(v => Math.round(v * 100)).join(',') + `:${Math.round(b.roof * 100)}`).join('|');
+        const old = this.sideTubes.get(k) || [];
+        if (sign(old) === sign(boxes)) return;
+        if (boxes.length) this.sideTubes.set(k, boxes);
+        else this.sideTubes.delete(k);
+        if (this.tubeCache) this.tubeCache.clear();
+        const m = WorldData.TILE_M, keys = new Set();
+        for (const b of old.concat(boxes)) for (let tx = Math.floor(b.box[0] / m); tx <= Math.floor(b.box[2] / m); tx++) for (let tz = Math.floor(b.box[1] / m); tz <= Math.floor(b.box[3] / m); tz++) keys.add(`${tx},${tz}`);
+        for (const key of keys) {
+            if (!this.tileMeshes.has(key) || !this.streamer) continue;
+            this.streamer.enqueue(`tube:${key}`, WorldEnvironment.LATER, () => {
+                const state = this.streamer.tiles.get(key);
+                if (state && this.tileMeshes.has(key) && this.data.tile(key)) this.buildTile(key, state.lod);
+            });
+        }
     }
 
     // Streams the world round the bike and builds what the 4 ms budget allows.

@@ -984,6 +984,147 @@ class TerrainMesh {
         return { pit: true, parts, faces: lined, front, behind, chain: [] };
     }
 
+    // How far under a tube's floor and over its roof the land it cuts keeps (TerrainMesh.tubeClip): under the floor the
+    // land is under the road; over the roof, on it
+    static get TUBE_UNDER_M() { return 0.05; }
+    static get TUBE_OVER_M() { return 0.03; }
+
+    // A tube's box in the world's metres, from its corners (four [x, y, z]: the walls' feet at its first row, la and
+    // ra, and at its second, lb and rb) and its roof's height over the floor: {box, planes, floor} where `planes` are
+    // the four walls and ends as [nx, nz, d] (inside where nx x + nz z + d >= 0) and `floor` [a, b, c] the floor's plane
+    // y = a + b x + c z (through la, ra and the middle of lb and rb). Null for a segment with no area
+    static tubeBox(la, ra, rb, lb, roof) {
+        const loop = [la, lb, rb, ra];
+        let area = 0;
+        for (let k = 0; k < 4; k++) { const p = loop[k], q = loop[(k + 1) % 4]; area += p[0] * q[2] - q[0] * p[2]; }
+        if (Math.abs(area) < 1e-6) return null;
+        const sign = area > 0 ? 1 : -1;
+        const planes = [];
+        for (let k = 0; k < 4; k++) {
+            const p = loop[k], q = loop[(k + 1) % 4];
+            const ex = q[0] - p[0], ez = q[2] - p[2], len = Math.hypot(ex, ez);
+            if (len < 1e-9) return null;
+            // (left of p to q for a loop wound with positive area)
+            const nx = (-ez / len) * sign, nz = (ex / len) * sign;
+            planes.push([nx, nz, -(nx * p[0] + nz * p[2])]);
+        }
+        const m = [(lb[0] + rb[0]) / 2, (lb[1] + rb[1]) / 2, (lb[2] + rb[2]) / 2];
+        const ux = ra[0] - la[0], uy = ra[1] - la[1], uz = ra[2] - la[2], vx = m[0] - la[0], vy = m[1] - la[1], vz = m[2] - la[2];
+        // y = a + b x + c z through the three: the normal (u x v), solved for y
+        const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+        if (Math.abs(ny) < 1e-9) return null;
+        const b = -nx / ny, c = -nz / ny, a = la[1] - b * la[0] - c * la[2];
+        const xs = loop.map(p => p[0]), zs = loop.map(p => p[2]);
+        return { box: [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)], planes, floor: [a, b, c], roof };
+    }
+
+    // Whether the point (x, y, z) lies in one of `tubes`' boxes (TerrainMesh.tubeBox), as tubeClip cuts them: a thing
+    // that stands on the land there stands in a tunnel
+    static inTube(tubes, x, y, z) {
+        return tubes.some(tube => {
+            const b = tube.box;
+            if (x < b[0] || x > b[2] || z < b[1] || z > b[3]) return false;
+            if (!tube.planes.every(([nx, nz, d]) => nx * x + nz * z + d >= 0)) return false;
+            const floor = tube.floor[0] + tube.floor[1] * x + tube.floor[2] * z;
+            return y > floor - TerrainMesh.TUBE_UNDER_M && y < floor + tube.roof + TerrainMesh.TUBE_OVER_M;
+        });
+    }
+
+    // The land's triangles less every tube's box: what lies inside a box's walls and ends, higher than TUBE_UNDER_M
+    // under its floor and lower than TUBE_OVER_M over its roof, is left out, and a triangle the box cuts is cut along
+    // the box's faces (its pieces keep their colour mixed from the corners). `lists` are runs of the index (three
+    // vertices a triangle); `tubes` the boxes (TerrainMesh.tubeBox). Returns {positions, shades, lists} with the new
+    // vertices after the old, or null when no triangle reaches a box
+    static tubeClip(positions, shades, lists, tubes) {
+        const cell = 16, hash = new Map();
+        tubes.forEach((tube, k) => {
+            const [x0, z0, x1, z1] = tube.box;
+            for (let cx = Math.floor(x0 / cell); cx <= Math.floor(x1 / cell); cx++) for (let cz = Math.floor(z0 / cell); cz <= Math.floor(z1 / cell); cz++) {
+                const h = cx * 65536 + cz;
+                (hash.get(h) || hash.set(h, []).get(h)).push(k);
+            }
+        });
+        const extraP = [], extraS = [];
+        const base = positions.length / 3;
+        const P = v => (v < base ? [positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2], shades[v * 3], shades[v * 3 + 1], shades[v * 3 + 2]] : extraP[v - base]);
+        const add = p => { extraP.push(p); return base + extraP.length - 1; };
+        // The box's six faces as linear functions of a point, inside where >= 0
+        const faces = tube => [
+            ...tube.planes.map(([nx, nz, d]) => p => nx * p[0] + nz * p[2] + d),
+            p => p[1] - (tube.floor[0] + tube.floor[1] * p[0] + tube.floor[2] * p[2]) + TerrainMesh.TUBE_UNDER_M,
+            p => tube.floor[0] + tube.floor[1] * p[0] + tube.floor[2] * p[2] + tube.roof + TerrainMesh.TUBE_OVER_M - p[1]
+        ];
+        const clip = (poly, f, keep) => {
+            const out = [];
+            for (let k = 0; k < poly.length; k++) {
+                const p = poly[k], q = poly[(k + 1) % poly.length], dp = keep * f(p), dq = keep * f(q);
+                if (dp >= 0) out.push(p);
+                if ((dp >= 0) !== (dq >= 0)) {
+                    const t = dp / (dp - dq);
+                    out.push(p.map((v, j) => v + (q[j] - v) * t));
+                }
+            }
+            return out.length >= 3 ? out : [];
+        };
+        const area = poly => {
+            let x = 0, y = 0, z = 0;
+            for (let k = 1; k + 1 < poly.length; k++) {
+                const a = poly[0], b = poly[k], c = poly[k + 1];
+                const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+                x += uy * vz - uz * vy; y += uz * vx - ux * vz; z += ux * vy - uy * vx;
+            }
+            return Math.hypot(x, y, z) / 2;
+        };
+        let changed = false;
+        const out = lists.map(list => {
+            const kept = [];
+            for (let i = 0; i + 2 < list.length; i += 3) {
+                const ids = [list[i], list[i + 1], list[i + 2]];
+                const tri = ids.map(P);
+                const x0 = Math.min(tri[0][0], tri[1][0], tri[2][0]), x1 = Math.max(tri[0][0], tri[1][0], tri[2][0]);
+                const z0 = Math.min(tri[0][2], tri[1][2], tri[2][2]), z1 = Math.max(tri[0][2], tri[1][2], tri[2][2]);
+                const near = new Set();
+                for (let cx = Math.floor(x0 / cell); cx <= Math.floor(x1 / cell); cx++) for (let cz = Math.floor(z0 / cell); cz <= Math.floor(z1 / cell); cz++) for (const k of hash.get(cx * 65536 + cz) || []) near.add(k);
+                const reach = [...near].filter(k => { const b = tubes[k].box; return b[2] >= x0 && b[0] <= x1 && b[3] >= z0 && b[1] <= z1; });
+                if (!reach.length) { kept.push(ids[0], ids[1], ids[2]); continue; }
+                // Each tube takes its box out of what the ones before it left
+                let rest = [tri.map((p, k) => Object.assign(p.slice(), { id: ids[k] }))];
+                let cut = false;
+                for (const k of reach) {
+                    const fs = faces(tubes[k]);
+                    const next = [];
+                    for (const poly of rest) {
+                        let held = poly;
+                        // (a piece wholly outside one face keeps its whole)
+                        if (fs.some(f => poly.every(p => f(p) < 0))) { next.push(poly); continue; }
+                        cut = true;
+                        for (const f of fs) {
+                            if (!held.length) break;
+                            const off = clip(held, f, -1);
+                            if (off.length && area(off) > 1e-5) next.push(off);
+                            held = clip(held, f, 1);
+                        }
+                    }
+                    rest = next;
+                }
+                if (!cut) { kept.push(ids[0], ids[1], ids[2]); continue; }
+                changed = true;
+                // The pieces as fans, on the triangle's own vertices where a corner is one of them
+                for (const poly of rest) {
+                    const at = poly.map(p => (p.id !== undefined ? p.id : add(p)));
+                    for (let k = 1; k + 1 < at.length; k++) kept.push(at[0], at[k], at[k + 1]);
+                }
+            }
+            return Uint32Array.from(kept);
+        });
+        if (!changed) return null;
+        const positionsOut = new Float32Array(positions.length + extraP.length * 3), shadesOut = new Float32Array(shades.length + extraP.length * 3);
+        positionsOut.set(positions, 0);
+        shadesOut.set(shades, 0);
+        extraP.forEach((p, k) => { const o = (base + k) * 3; positionsOut[o] = p[0]; positionsOut[o + 1] = p[1]; positionsOut[o + 2] = p[2]; shadesOut[o] = p[3]; shadesOut[o + 1] = p[4]; shadesOut[o + 2] = p[5]; });
+        return { positions: positionsOut, shades: shadesOut, lists: out };
+    }
+
     // Whether (x, z) lies inside a pit's quad (or within `margin` metres outside it)
     static pitInside(quad, x, z, margin = 0) {
         const sign = TerrainMesh.pitArea(quad.c.map(p => ({ x: p[0], z: p[1] }))) > 0 ? 1 : -1;
@@ -1109,7 +1250,7 @@ class TerrainMesh {
     // resident neighbouring tile or null (TerrainMesh.node): the tile reads its neighbours' nodes across its edges.
     // `cuts` (TerrainMesh.cuts) are the full-detail triangles cut to the retaining walls: drawn at LOD0 in place of the
     // nodes' own.
-    static build(tile, cover, lod, holdY = null, near = null, cuts = null) {
+    static build(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null) {
         if (lod !== 0) cuts = null;
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
         const n = WorldData.TILE_N;
@@ -1324,6 +1465,27 @@ class TerrainMesh {
                 indices[at++] = apex; indices[at++] = apex + 1 + ((e + 1) % sides); indices[at++] = apex + 1 + e;
             }
         });
+        // No land in a tunnel's or a gallery's box, at any level of detail (TerrainMesh.tubeClip): the land, its skirts
+        // and the faces that close its cuts lose what lies between a tube's floor and its roof
+        const crownTris = crowns.length * sides * 3;
+        let faceCount = cuts ? extra.faces.length : 0;
+        if (tubes && tubes.length) {
+            const clipped = TerrainMesh.tubeClip(positionsAll, shadesAll, [indices.subarray(0, landCount), indices.subarray(landCount, at - crownTris - faceCount), indices.subarray(at - crownTris - faceCount, at - crownTris)], tubes);
+            if (clipped) {
+                const [land, skirts, faces] = clipped.lists;
+                const joined = new Uint32Array(land.length + skirts.length + faces.length + crownTris);
+                joined.set(land, 0);
+                joined.set(skirts, land.length);
+                joined.set(faces, land.length + skirts.length);
+                joined.set(indices.subarray(at - crownTris, at), land.length + skirts.length + faces.length);
+                indices = joined;
+                landCount = land.length;
+                faceCount = faces.length;
+                at = joined.length;
+                positionsAll = clipped.positions;
+                shadesAll = clipped.shades;
+            }
+        }
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(positionsAll, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(shadesAll, 3));
@@ -1415,7 +1577,7 @@ class TerrainMesh {
         mesh.userData.closing = extra.flat;
         // Where each kind of triangle lies in the index: the land's own (from 0), then the tile's skirts, then the
         // faces that close the cuts' steps with the cut edges' skirts ([start, count])
-        mesh.userData.parts = { land: landCount, faces: cuts ? [at - crowns.length * sides * 3 - extra.faces.length, extra.faces.length] : [0, 0] };
+        mesh.userData.parts = { land: landCount, faces: faceCount ? [at - crownTris - faceCount, faceCount] : [0, 0] };
         return { mesh, triangles: indices.length / 3 };
     }
 }
