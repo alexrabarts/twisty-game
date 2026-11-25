@@ -962,7 +962,43 @@ describe('the things in the street', () => {
             if (Math.abs(p.across) < lane.rule.halfWidthM) edge++;
         }
         expect(edge).toBeGreaterThan(3);
-        expect(new Set(places.map(p => p.kind)).size).toBeGreaterThanOrEqual(8);
+        // At the houses only what the milkman leaves: milk at most doors, bread at fewer
+        const doors = kind => new Set(places.filter(p => p.kind === kind).map(p => Math.round(p.s * 2) + ':' + Math.sign(p.across))).size;
+        expect(new Set(places.filter(p => !p.opening && p.kind !== 'ball').map(p => p.kind))).toEqual(new Set(['bottle', 'bread']));
+        expect(doors('bread')).toBeGreaterThan(3);
+        expect(doors('bread')).toBeLessThan(doors('bottle') / 2);
+    });
+
+    test('a knocked milk bottle smashes: its glass flies, a splash goes up and a pool of milk stays where it stood; R puts it back', () => {
+        const props = new HillProps(lane);
+        const item = props.items.find(i => i.kind === 'bottle' && Math.abs(i.across) < lane.rule.halfWidthM);
+        expect(item).toBeTruthy();
+        const bike = new HillBicycle(lane);
+        bike.reset(item.s - 4, item.across);
+        let hit = 0;
+        for (let t = 0; t < 2 && !hit; t += DT) {
+            bike.vehicle.speed = 3;
+            bike.step(DT, quiet);
+            hit = props.knock(bike, null);
+            props.step(DT);
+        }
+        expect(hit).toBeGreaterThan(0);
+        expect(bike.crashed).toBe(false);
+        const smashed = props.items.find(i => i.kind === 'bottle' && i.gone);
+        expect(smashed).toBeTruthy();
+        expect(props.puff).toBeTruthy();
+        for (let t = 0; t < 2; t += DT) props.step(DT);
+        const glass = props.items.filter(i => i.kind === 'glass');
+        expect(glass.length).toBe(HillProps.RULE.glassBits * props.items.filter(i => i.kind === 'bottle' && i.gone).length);
+        for (const g of glass) expect(Math.hypot(g.x - smashed.x, g.z - smashed.z)).toBeGreaterThan(0.05);
+        const pool = props.items.find(i => i.kind === 'milk');
+        expect(pool.size).toBe(1);
+        expect(Math.abs(pool.y - smashed.y)).toBeLessThan(0.01);
+        // Nothing knocks the pool, and the ride over it costs the bicycle nothing
+        expect(props.knock(Object.assign(bike, {}), null)).toBe(0);
+        props.reset();
+        expect(props.items.length).toBe(props.places.length);
+        expect(props.items.some(i => i.kind === 'glass' || i.kind === 'milk' || i.gone)).toBe(false);
     });
 
     test('a knock moves a thing away from the bicycle and costs the bicycle; R puts it back', () => {

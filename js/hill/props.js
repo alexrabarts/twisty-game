@@ -1,26 +1,23 @@
-// The hill ride's street things (js/hill/ride.js): flower pots, window-box tubs, milk bottles on the steps, a churn, tin
-// buckets, wicker baskets, dustbins with their lids, crates and brooms, set out in front of the cottages from the seed
-// (the same street on every load), most at the fronts and steps, a few out at the lane's edge where a rider can reach
-// them. Any of them can be knocked: no physics library, a simple rigid body each. On contact the bicycle's speed and
-// heading give the thing a push; it slides, tumbles and bounces, a round one rolls on down the hill, lids and bottles
-// fly a little, a pot breaks into shards with a puff of soil. A light thing costs the bicycle a little speed and a
-// wobble; a heavy one (the churn, a dustbin) a bigger jolt, and at speed it knocks the boy off. R puts everything back.
+// The hill ride's street things (js/hill/ride.js): what the milkman has left at the doors, milk bottles on most steps
+// and now and then a loaf in its paper, set out from the seed (the same street on every load), most on the steps, a
+// few out at the lane's edge where a rider can reach them; the churn of the opening frame and an old football. Any of
+// them can be knocked: no physics library, a simple rigid body each. On contact the bicycle's speed and heading give
+// the thing a push; it slides, tumbles and bounces, a round one rolls on down the hill, a bottle smashes into glass
+// with a splash of milk and leaves a pool of it on the ground. A light thing costs the bicycle a little speed and a
+// wobble; the heavy churn a bigger jolt, and at speed it knocks the boy off. R puts everything back.
 class HillProps {
     // Each kind: its shape ('can' upright cylinder, 'box'), size (m: radius and height, or width, height, depth), mass,
     // whether it rolls, breaks or is heavy, its colour, and the share of houses that put one out
     static get KINDS() {
         return Object.freeze({
-            pot: { shape: 'can', r: 0.17, h: 0.26, kg: 5, round: true, breaks: true, colour: 0xa65a38, share: 0.45 },
-            tub: { shape: 'box', w: 0.7, h: 0.28, d: 0.26, kg: 9, colour: 0x5e4a36, share: 0.25, flowers: true },
-            bottle: { shape: 'can', r: 0.034, h: 0.24, kg: 0.6, round: true, fly: true, colour: 0xf2f0ea, share: 0.35 },
-            churn: { shape: 'can', r: 0.19, h: 0.62, kg: 26, round: true, heavy: true, colour: 0x6c6b66, share: 0.06 },
-            bucket: { shape: 'can', r: 0.15, h: 0.27, kg: 2, round: true, colour: 0x9aa0a4, share: 0.15 },
-            basket: { shape: 'box', w: 0.46, h: 0.26, d: 0.34, kg: 2, colour: 0x9a7546, share: 0.15 },
-            dustbin: { shape: 'can', r: 0.25, h: 0.74, kg: 18, round: true, heavy: true, lid: true, colour: 0x6e7276, share: 0.12 },
-            lid: { shape: 'can', r: 0.27, h: 0.05, kg: 1, round: true, fly: true, colour: 0x7a7e82, share: 0 },
-            crate: { shape: 'box', w: 0.5, h: 0.34, d: 0.4, kg: 6, colour: 0x8a6a44, share: 0.15 },
-            broom: { shape: 'box', w: 0.04, h: 1.3, d: 0.04, kg: 1, fly: true, colour: 0x6a5032, share: 0.12, leans: true },
-            shard: { shape: 'box', w: 0.12, h: 0.05, d: 0.1, kg: 0.5, colour: 0xa65a38, share: 0 },
+            // A pint of milk, its foil cap on: glass, it smashes at any knock (HillProps.RULE.smashMs)
+            bottle: { shape: 'bottle', r: 0.034, h: 0.21, kg: 0.6, round: true, fly: true, breaks: true, colour: 0xf4f2ec, share: 0.7 },
+            // A large baked loaf, on fewer steps than the milk
+            bread: { shape: 'loaf', w: 0.27, h: 0.12, d: 0.14, kg: 0.8, colour: 0xa8692f, share: 0.16 },
+            churn: { shape: 'can', r: 0.19, h: 0.62, kg: 26, round: true, heavy: true, colour: 0x6c6b66, share: 0 },
+            // A smashed bottle's glass, and the pool of its milk on the ground (flat: nothing knocks it)
+            glass: { shape: 'box', w: 0.045, h: 0.008, d: 0.035, kg: 0.05, colour: 0xd6e6df, share: 0 },
+            milk: { shape: 'pool', r: 0.2, h: 0.004, kg: 0, flat: true, colour: 0xf6f5f0, share: 0 },
             // The old leather football: light and bouncy, the one thing that does not settle (HillProps.BALL)
             ball: { shape: 'ball', r: 0.11, h: 0.22, kg: 0.45, round: true, colour: 0xffffff, share: 0 }
         });
@@ -41,12 +38,12 @@ class HillProps {
 
     // The push and the response: the share of the bicycle's speed a thing of no mass takes, the lift a flying thing
     // gets for each m/s, the bounce, the slide and the roll friction (1/s), how much of the fall a round thing rolls
-    // with, the speed a pot breaks at, the speed loss and wobble a light thing costs the bicycle and a heavy one, and
+    // with, the speed a bottle smashes at and the bits of glass it makes, the speed loss and wobble a light thing costs the bicycle and a heavy one, and
     // the speed over which a heavy one knocks him off
     static get RULE() {
         return Object.freeze({
-            seed: 77, edgeShare: 0.1, reachM: 0.34, push: 1.5, fly: 0.15, bounce: 0.1, heavyBounce: 0.02, slide: 7, roll: 0.5, rollFall: 0.6, spinDamp: 2.5,
-            breakMs: 2.2, lightLoss: 0.04, heavyLoss: 0.3, wobble: 0.6, heavyFallMs: 5.5, sleepMs: 0.05
+            seed: 77, edgeShare: 0.12, reachM: 0.34, push: 1.5, fly: 0.15, bounce: 0.1, heavyBounce: 0.02, slide: 7, roll: 0.5, rollFall: 0.6, spinDamp: 2.5,
+            smashMs: 0.6, glassBits: 3, lightLoss: 0.04, heavyLoss: 0.3, wobble: 0.6, heavyFallMs: 5.5, sleepMs: 0.05
         });
     }
 
@@ -75,18 +72,17 @@ class HillProps {
             const doorS = c.from + c.wide * c.door;
             for (const [name, kind] of kinds) {
                 if (rand() >= kind.share) continue;
-                // Bottles stand on the step; the rest along the front, clear of the door, now and then at the lane's edge
-                let s = name === 'bottle' ? doorS + (rand() - 0.5) * 0.5 : c.from + 0.6 + rand() * (c.wide - 1.2);
-                if (name !== 'bottle' && Math.abs(s - doorS) < 0.8) s = doorS + (s < doorS ? -0.9 : 0.9);
-                const edge = name !== 'bottle' && name !== 'broom' && rand() < R.edgeShare;
-                const across = c.side * (edge ? r.halfWidthM - 0.45 : front);
+                // On the step by the door (the bread to one side of where the milk stands), now and then left out at
+                // the lane's edge
+                const edge = rand() < R.edgeShare;
+                const across = c.side * (edge ? r.halfWidthM - 0.45 : front - 0.2);
                 if (name === 'bottle') {
-                    const n = 1 + Math.floor(rand() * 3);
-                    for (let i = 0; i < n; i++) put('bottle', s + i * 0.08, c.side * (r.halfWidthM + r.flagsM - 0.55), 0);
+                    const s = doorS + (rand() - 0.5) * 0.4, n = 1 + Math.floor(rand() * 3);
+                    for (let i = 0; i < n; i++) put('bottle', s + i * 0.08, across, 0);
                     continue;
                 }
-                const yaw = c.heading + (rand() - 0.5) * 0.8;
-                put(name, s, name === 'broom' ? c.side * (front + 0.2) : across, yaw, name === 'broom' ? -c.side * 0.25 : 0);
+                const s = doorS + (rand() < 0.5 ? -1 : 1) * (0.32 + rand() * 0.12);
+                put(name, s, across, c.heading + (rand() - 0.5) * 0.6);
             }
         }
         return list;
@@ -101,9 +97,9 @@ class HillProps {
         this.scratch = { m: new THREE.Matrix4(), q: new THREE.Quaternion(), e: new THREE.Euler(0, 0, 0, 'YXZ'), p: new THREE.Vector3(), s: new THREE.Vector3(1, 1, 1), at: {} };
         const counts = {};
         for (const place of this.places) counts[place.kind] = (counts[place.kind] || 0) + 1;
-        // Room for every lid and every shard a knock can make
-        counts.lid = counts.dustbin || 0;
-        counts.shard = (counts.pot || 0) * 4;
+        // Room for the glass and the pool of milk of every bottle a knock can smash
+        counts.glass = (counts.bottle || 0) * HillProps.RULE.glassBits;
+        counts.milk = counts.bottle || 0;
         for (const [name, kind] of Object.entries(HillProps.KINDS)) {
             if (!counts[name]) continue;
             if (kind.shape === 'ball') {
@@ -126,12 +122,20 @@ class HillProps {
                 this.meshes[name] = mesh;
                 continue;
             }
-            const geometry = kind.shape === 'can' ? new THREE.CylinderGeometry(kind.r * (name === 'pot' ? 1.15 : 1), kind.r, kind.h, name === 'bottle' ? 6 : 10) : new THREE.BoxGeometry(kind.w, kind.h, kind.d);
-            geometry.translate(0, kind.h / 2, 0);
-            const material = new THREE.MeshStandardMaterial({ color: kind.colour, roughness: name === 'churn' || name === 'bucket' || name === 'dustbin' || name === 'lid' ? 0.45 : 0.85, metalness: name === 'churn' || name === 'bucket' ? 0.6 : 0 });
+            let geometry;
+            if (kind.shape === 'bottle') geometry = HillProps.bottle(kind);
+            else if (kind.shape === 'pool') geometry = HillProps.pool(kind);
+            else if (kind.shape === 'loaf') geometry = HillProps.loaf(kind);
+            else {
+                geometry = kind.shape === 'can' ? new THREE.CylinderGeometry(kind.r, kind.r, kind.h, 10) : new THREE.BoxGeometry(kind.w, kind.h, kind.d);
+                geometry.translate(0, kind.h / 2, 0);
+            }
+            const glassy = name === 'bottle' || name === 'glass';
+            const material = new THREE.MeshStandardMaterial({ color: kind.colour, vertexColors: name === 'bottle', roughness: glassy ? 0.2 : name === 'milk' ? 0.35 : 0.85, metalness: 0,
+                transparent: name === 'glass', opacity: name === 'glass' ? 0.7 : 1 });
             const mesh = new THREE.InstancedMesh(geometry, material, counts[name]);
             mesh.name = `hill-prop-${name}`;
-            mesh.castShadow = true;
+            mesh.castShadow = !kind.flat;
             mesh.receiveShadow = true;
             mesh.frustumCulled = false;
             this.group.add(mesh);
@@ -146,7 +150,7 @@ class HillProps {
             ...place, kind: place.kind, vx: 0, vy: 0, vz: 0, spinX: 0, spinZ: 0, tipX: 0, tipZ: place.lean, moving: false, hit: 0, gone: false,
             turn: place.kind === 'ball' ? new THREE.Quaternion() : null
         }));
-        this.spares = { lid: [], shard: [] };
+        this.spares = { glass: [], milk: [] };
         this.hits = 0;
         this.draw();
     }
@@ -162,6 +166,7 @@ class HillProps {
         for (const item of this.items) {
             if (item.gone || item.hit > 0) continue;
             const kind = K[item.kind];
+            if (kind.flat) continue;
             const radius = HillProps.radius(kind);
             // The thing against the bicycle's line from its rear wheel to its front
             const dx = item.x - v.position.x, dz = item.z - v.position.z;
@@ -181,42 +186,41 @@ class HillProps {
             item.vy = (kind.shape === 'ball' ? HillProps.BALL.lift : kind.fly ? R.fly * 2 : R.fly * 0.5) * v.speed * share;
             item.spinX = (Math.random() - 0.5) * 4 * share;
             item.spinZ = (Math.random() - 0.5) * 4 * share;
-            if (kind.lid && !item.lidOff) this.lidOff(item);
-            if (kind.breaks && v.speed > R.breakMs) this.shatter(item);
+            const smashed = kind.breaks && v.speed > R.smashMs;
+            if (smashed) this.smash(item, sound);
             if (kind.heavy) {
                 const before = v.speed;
                 v.speed *= 1 - R.heavyLoss;
-                if (before > R.heavyFallMs) v.worldCrash(`Ran into the ${item.kind === 'churn' ? 'milk churn' : 'dustbin'}`, null, 'obstacle');
+                if (before > R.heavyFallMs) v.worldCrash('Ran into the milk churn', null, 'obstacle');
                 else v.leanVelocity += (Math.random() - 0.5) * R.wobble * 2;
             } else {
                 v.speed *= 1 - R.lightLoss * Math.min(2, kind.kg / 5);
                 v.leanVelocity += (Math.random() - 0.5) * R.wobble;
             }
-            if (sound) HillProps.clatter(sound, kind.heavy ? 1 : kind.kg > 3 ? 0.6 : 0.35, kind.shape === 'can' && kind.colour !== 0xa65a38);
+            if (sound && !smashed) HillProps.clatter(sound, kind.heavy ? 1 : kind.kg > 3 ? 0.6 : 0.35, kind.heavy);
         }
         return knocked;
     }
 
-    // A dustbin's lid comes off and flies
-    lidOff(item) {
-        item.lidOff = true;
-        const lid = { kind: 'lid', x: item.x, y: item.y + HillProps.KINDS.dustbin.h, z: item.z, yaw: item.yaw, lean: 0, vx: item.vx * 1.1, vy: 1.1, vz: item.vz * 1.1,
-            spinX: 3, spinZ: -2, tipX: 0, tipZ: 0, moving: true, hit: 1, gone: false };
-        this.items.push(lid);
-        this.spares.lid.push(lid);
-    }
-
-    // A pot breaks: four shards fly from it, and a puff of soil (HillRide draws the puff)
-    shatter(item) {
+    // A bottle smashes: its glass flies, the milk splashes up (HillRide draws the splash) and spreads in a pool on the
+    // ground where it stood
+    smash(item, sound = null) {
+        const R = HillProps.RULE;
         item.gone = true;
-        for (let i = 0; i < 4; i++) {
-            const a = i * Math.PI / 2 + item.yaw;
-            const shard = { kind: 'shard', x: item.x, y: item.y + 0.1, z: item.z, yaw: a, lean: 0, vx: item.vx * 0.6 + Math.sin(a) * 0.8, vy: 0.7 + i * 0.15,
-                vz: item.vz * 0.6 + Math.cos(a) * 1.2, spinX: 5, spinZ: 3, tipX: 0, tipZ: 0, moving: true, hit: 1, gone: false };
-            this.items.push(shard);
-            this.spares.shard.push(shard);
+        for (let i = 0; i < R.glassBits; i++) {
+            const a = i * 2 * Math.PI / R.glassBits + item.yaw + Math.random() * 0.6;
+            const glass = { kind: 'glass', x: item.x, y: item.y + 0.08, z: item.z, yaw: a, lean: 0, vx: item.vx * 0.5 + Math.sin(a) * (0.6 + Math.random() * 0.8),
+                vy: 0.6 + Math.random() * 0.8, vz: item.vz * 0.5 + Math.cos(a) * (0.6 + Math.random() * 0.8), spinX: 8, spinZ: 6, tipX: 0, tipZ: 0, moving: true, hit: 1, gone: false };
+            this.items.push(glass);
+            this.spares.glass.push(glass);
         }
-        this.puff = { x: item.x, y: item.y + 0.2, z: item.z, t: 0 };
+        const p = this.lane.sample(item.s);
+        const pool = { kind: 'milk', x: item.x + item.vx * 0.08, y: item.y + 0.003, z: item.z + item.vz * 0.08, yaw: Math.random() * Math.PI, lean: 0, vx: 0, vy: 0, vz: 0,
+            spinX: 0, spinZ: 0, tipX: 0, tipZ: 0, moving: false, hit: 1, gone: false, size: 0.15, grows: true, s: item.s, across: item.across };
+        this.items.push(pool);
+        this.spares.milk.push(pool);
+        this.puff = { x: item.x, y: item.y + 0.12, z: item.z, t: 0, colour: 0xf8f7f2, alongX: p.alongX, alongZ: p.alongZ };
+        if (sound) HillProps.tinkle(sound);
     }
 
     // The football's step: a hollow ball that bounces off the cobbles, the kerb, the house fronts and the other
@@ -258,6 +262,7 @@ class HillProps {
         for (const other of this.items) {
             if (other === item || other.gone) continue;
             const o = HillProps.KINDS[other.kind];
+            if (o.flat) continue;
             const radius = HillProps.radius(o);
             const dx = item.x - other.x, dz = item.z - other.z, d = Math.hypot(dx, dz);
             if (d >= radius + kind.r || d < 1e-6 || item.y > other.y + o.h) continue;
@@ -325,6 +330,11 @@ class HillProps {
         let moved = false;
         for (const item of this.items) {
             if (item.hit > 0) item.hit -= dt;
+            // A pool of milk spreads over its first second
+            if (item.grows) {
+                item.size = Math.min(1, item.size + dt * 1.6);
+                if (item.size >= 1) item.grows = false;
+            }
             if (!item.moving || item.gone) continue;
             moved = true;
             const kind = K[item.kind];
@@ -405,14 +415,93 @@ class HillProps {
                 if (item.turn) q.copy(item.turn);
                 else q.setFromEuler(e.set(item.tipX, item.yaw, item.tipZ, 'YXZ'));
                 p.set(item.x, item.y, item.z);
+                if (item.size !== undefined) s.set(item.size, 1, item.size);
                 m.compose(p, q, s);
+                s.set(1, 1, 1);
             }
             mesh.setMatrixAt(i, m);
         }
         for (const [name, mesh] of Object.entries(this.meshes)) {
-            // Instances not in use yet (lids and shards before a knock) are drawn at no size
+            // Instances not in use yet (glass and milk before a smash) are drawn at no size
             for (let i = used[name] || 0; i < mesh.count; i++) mesh.setMatrixAt(i, m.makeScale(0, 0, 0));
             mesh.instanceMatrix.needsUpdate = true;
+        }
+    }
+
+    // A pint milk bottle: the thick base, the straight body, the shoulder in to the neck, the lip and its foil cap,
+    // the cap silver through the vertex colours and the rest the milk's white through the glass
+    static bottle(kind) {
+        const h = kind.h, r = kind.r;
+        // (six sides: a hundred and more of them stand in the street)
+        const profile = [[0, 0], [r, h * 0.03], [r, h * 0.55], [r * 0.6, h * 0.8], [r * 0.5, h * 0.94], [r * 0.58, h], [0, h]].map(([x, y]) => new THREE.Vector2(x, y));
+        const geometry = new THREE.LatheGeometry(profile, 6);
+        const p = geometry.attributes.position, colours = new Float32Array(p.count * 3);
+        for (let i = 0; i < p.count; i++) {
+            const cap = p.getY(i) > h * 0.94;
+            colours.set(cap ? [0.78, 0.8, 0.84] : [1, 1, 1], i * 3);
+        }
+        geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+
+    // A loaf: a long rounded crust, domed on top and flatter underneath, its length along the thing's own z
+    static loaf(kind) {
+        const geometry = new THREE.CapsuleGeometry(kind.d / 2, kind.w - kind.d, 3, 8);
+        geometry.rotateX(Math.PI / 2);
+        geometry.scale(1, kind.h / kind.d, 1);
+        const p = geometry.attributes.position;
+        for (let i = 0; i < p.count; i++) if (p.getY(i) < 0) p.setY(i, p.getY(i) * 0.4);
+        geometry.translate(0, kind.h * 0.4, 0);
+        geometry.computeVertexNormals();
+        return geometry;
+    }
+
+    // A pool of spilt milk: a flat disc on the ground with a ragged edge
+    static pool(kind) {
+        const n = 14, shape = new THREE.Shape();
+        for (let i = 0; i <= n; i++) {
+            const a = i / n * 2 * Math.PI, k = kind.r * (0.75 + 0.25 * Math.abs(Math.sin(a * 2.5 + 1)) + (i % 3 === 0 ? 0.12 : 0));
+            if (i === 0) shape.moveTo(Math.cos(a) * k, Math.sin(a) * k);
+            else shape.lineTo(Math.cos(a) * k, Math.sin(a) * k);
+        }
+        const geometry = new THREE.ShapeGeometry(shape);
+        geometry.rotateX(-Math.PI / 2);
+        return geometry;
+    }
+
+    // A milk bottle smashing: a sharp crack of high noise and a few short rings of glass after it
+    static tinkle(sound) {
+        if (!sound || !sound.audioContext || !sound.graph || !sound.enabled) return;
+        const ctx = sound.audioContext, t = ctx.currentTime;
+        const length = 0.18;
+        const buffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * length), ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 5);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.value = 2600;
+        const gain = ctx.createGain();
+        gain.gain.value = 0.5;
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(sound.graph.master);
+        source.start(t);
+        for (let i = 0; i < 4; i++) {
+            const at = t + 0.03 + i * 0.045 + Math.random() * 0.03;
+            const ring = ctx.createOscillator();
+            ring.type = 'sine';
+            ring.frequency.value = 3200 + Math.random() * 2600;
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, at);
+            g.gain.exponentialRampToValueAtTime(0.06, at + 0.004);
+            g.gain.exponentialRampToValueAtTime(0.0001, at + 0.09);
+            ring.connect(g);
+            g.connect(sound.graph.master);
+            ring.start(at);
+            ring.stop(at + 0.1);
         }
     }
 

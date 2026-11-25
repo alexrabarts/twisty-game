@@ -210,8 +210,8 @@ class HillRide {
         this.props = new HillProps(this.lane);
         this.props.sound = game.soundManager;
         game.scene.add(this.props.group);
-        // A puff of soil where a pot breaks
-        this.puff = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0x5a4430, roughness: 1, transparent: true, opacity: 0 }));
+        // The splash of milk where a bottle smashes
+        this.puff = new THREE.Mesh(new THREE.IcosahedronGeometry(1, 1), new THREE.MeshStandardMaterial({ color: 0xf8f7f2, roughness: 0.4, transparent: true, opacity: 0 }));
         this.puff.visible = false;
         game.scene.add(this.puff);
         game.scene.add(this.rider.group);
@@ -665,10 +665,11 @@ class HillRide {
             const puff = this.props.puff;
             this.puff.visible = !!puff;
             if (puff) {
-                const size = 0.15 + puff.t * 0.5;
-                this.puff.position.set(puff.x, puff.y + puff.t * 0.4, puff.z);
-                this.puff.scale.setScalar(size);
-                this.puff.material.opacity = Math.max(0, 0.6 * (1 - puff.t / 1.2));
+                // Up and out quickly, then down flat onto the ground as it goes
+                const up = Math.min(1, puff.t / 0.12), size = 0.03 + up * 0.06;
+                this.puff.position.set(puff.x, puff.y + up * 0.06 - Math.max(0, puff.t - 0.12) * 0.2, puff.z);
+                this.puff.scale.set(size * (1 + puff.t * 2), size * 0.7 * Math.max(0.15, 1 - puff.t * 1.5), size * (1 + puff.t * 2));
+                this.puff.material.opacity = Math.max(0, 0.85 * (1 - puff.t / 0.6));
             }
         }
         this.placeCamera(Math.min(1, dt * 6));

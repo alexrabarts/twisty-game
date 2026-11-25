@@ -8218,7 +8218,9 @@ async function hillShots() {
     run(0.7, t => ({ pedal: 1, brake: 0, steer: 0, wheelie: t < 0.1 ? 1 : 0 }));
     shoot('wheelie', 2);
     // A thing knocked: ride into the first one at the lane's edge on a straight
-    const target = ride.props.items.find(i => Math.abs(i.across) < L.halfWidthM && i.s > 130 && i.s < 220);
+    // (a milk bottle when one stands there, to see it smash)
+    const near = i => Math.abs(i.across) < L.halfWidthM && i.s > 130 && i.s < 220;
+    const target = ride.props.items.find(i => near(i) && i.kind === 'bottle') || ride.props.items.find(near);
     if (target) {
         place(target.s - 5, 5, target.across);
         let hit = 0;
