@@ -282,10 +282,10 @@ describe('the cat', () => {
 });
 
 describe('the washing', () => {
-    test('the sheets on their line keep clear of every house, porch and wall through the whole of their flap', () => {
+    test('the washing on its line, every fold, sleeve and peg, keeps clear of every house, porch and wall through the whole of its flap', () => {
         const day = new HillDay(lane);
         const g = day.build();
-        // Every point of every sheet, at 11 places across and down it, at 41 moments of a cycle of the wind
+        // Every point of every piece of washing, at 41 moments of a cycle of the wind
         const H = HillDay.HAZARDS.washing, clearM = HillDay.WASHING.clearM;
         let worst = Infinity, where = '';
         const inside = (c, p) => {
@@ -301,10 +301,15 @@ describe('the washing', () => {
             day.draw();
             g.updateMatrixWorld(true);
             for (const sheet of day.sheets) {
-                const mesh = sheet.pivot.children[0];
-                const w = mesh.geometry.parameters.width, h = mesh.geometry.parameters.height;
-                for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) {
-                    const p = mesh.localToWorld(new THREE.Vector3((i / 10 - 0.5) * w, (j / 10 - 0.5) * h, 0));
+                // (every point of the cloth as drawn, its folds and sleeves too, and its pegs)
+                const points = [];
+                sheet.pivot.traverse(o => {
+                    if (!o.isMesh) return;
+                    const pos = o.geometry.attributes.position;
+                    for (let i = 0; i < pos.count; i++) points.push(o.localToWorld(new THREE.Vector3().fromBufferAttribute(pos, i)));
+                });
+                expect(points.length).toBeGreaterThan(80);
+                for (const p of points) {
                     const at = lane.project(p.x, p.z, sheet.s, {});
                     for (const c of lane.cottages) {
                         if (Math.abs(c.mid - sheet.s) > 20) continue;
@@ -317,7 +322,7 @@ describe('the washing', () => {
                 }
             }
         }
-        console.log(`hill washing: the sheets keep ${(worst * 100).toFixed(0)} cm clear at the least (of ${where})`);
+        console.log(`hill washing: the washing keeps ${(worst * 100).toFixed(1)} cm clear at the least (of ${where})`);
         expect(worst).toBeGreaterThan(clearM - 1e-6);
     });
 });

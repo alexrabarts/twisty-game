@@ -35,7 +35,12 @@ class HillDay {
     // they hang plumb at rest and blow out only towards the lane, so their line stands clearM in from the nearest face
     // of anything on its side along its length (HillDay.washingFaces), and never further out than lineM over the lane's
     // edge
-    static get WASHING() { return Object.freeze({ clearM: 0.15, lineM: 0.1, upM: 2.6 }); }
+    // foldM: how far the cloth's folds stand out of its plane either way, and bendM how much nearer the houses the ends
+    // of a wide piece come where the lane bends under it (the line stands that much further in, so they keep clearM
+    // too); the pieces on the line: [width, drop, kind]
+    static get WASHING() {
+        return Object.freeze({ clearM: 0.15, lineM: 0.1, upM: 2.6, foldM: 0.035, bendM: 0.01, pieces: [[1.1, 1.3, 'sheet'], [0.62, 0.78, 'shirt'], [0.55, 0.85, 'towel']] });
+    }
 
     // How far out from the lane's middle (m, on the washing's side) the nearest face stands along the washing's length:
     // a front wall or railing at the flags' edge, a porch, a shop's bay, a house front, a wall in a gap
@@ -60,7 +65,7 @@ class HillDay {
     // Where the washing's line stands across the lane (m out from the middle, on its side)
     static washingLine(lane) {
         const W = HillDay.WASHING;
-        return Math.min(lane.rule.halfWidthM + W.lineM, HillDay.washingFace(lane) - W.clearM);
+        return Math.min(lane.rule.halfWidthM + W.lineM, HillDay.washingFace(lane) - W.clearM - W.foldM - W.bendM);
     }
 
     // The loaves the basket holds when full
@@ -360,6 +365,31 @@ class HillDay {
         } else f.run = 0;
     }
 
+    // A piece of washing hung from its line at y = 0, `w` wide and `drop` long, as shapes: the cloth in soft folds (more
+    // towards its foot, WASHING.foldM at most either way), a shirt with its sleeves hanging from its shoulders, a towel
+    // with a band across its foot
+    static clothPieces(w, drop, kind) {
+        const F = HillDay.WASHING.foldM;
+        const cloth = (width, height, x0, y0, phase) => {
+            const g = new THREE.PlaneGeometry(width, height, 8, 8), p = g.attributes.position;
+            for (let i = 0; i < p.count; i++) {
+                const x = p.getX(i), y = p.getY(i), down = (height / 2 - y) / height;
+                p.setZ(i, F * (0.35 + 0.65 * down) * Math.sin((x / width) * Math.PI * 5 + phase) * Math.min(1, down * 3 + 0.2));
+                p.setXYZ(i, x + x0, y + y0, p.getZ(i));
+            }
+            g.computeVertexNormals();
+            return g;
+        };
+        if (kind === 'shirt') {
+            const body = cloth(w * 0.62, drop, 0, -drop / 2, 0.7);
+            const sleeves = [-1, 1].map(a => cloth(w * 0.17, drop * 0.62, a * w * 0.4, -drop * 0.31 - 0.04, a * 1.3));
+            return [body, ...sleeves];
+        }
+        const main = cloth(w, drop, 0, -drop / 2, kind === 'towel' ? 2.1 : 0);
+        if (kind === 'towel') return [main, cloth(w, 0.07, 0, -drop + 0.12, 2.1).translate(0, 0, 0.004)];
+        return [main];
+    }
+
     // Boxes (each [w, h, d, x, y, z]) as one shape
     static boxes(list) {
         const positions = [], normals = [];
@@ -580,15 +610,26 @@ class HillDay {
         // The washing: a line along the house fronts on its side, three sheets on it
         const H = HillDay.HAZARDS.washing;
         this.sheets = [];
-        for (let i = 0; i < 3; i++) {
-            const pivot = new THREE.Group();
-            const sheet = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.3), cloth);
-            sheet.position.y = -0.65;
-            sheet.castShadow = true;
-            pivot.add(sheet);
+        const peg = new THREE.BoxGeometry(0.018, 0.07, 0.022), pegWood = mat(0xb89a70);
+        const shades = [0xece6d8, 0x9aa8b8, 0xd8c8a8];
+        let along = H.s + 0.2;
+        HillDay.WASHING.pieces.forEach(([w, drop, kind], i) => {
+            const pivot = new THREE.Group(), stuff = mat(shades[i % shades.length], { side: THREE.DoubleSide });
+            along += w / 2 + 0.1;
+            for (const piece of HillDay.clothPieces(w, drop, kind)) {
+                const m = new THREE.Mesh(piece, stuff);
+                m.castShadow = true;
+                pivot.add(m);
+            }
+            for (const x of kind === 'sheet' ? [-w / 2 + 0.03, 0, w / 2 - 0.03] : [-w / 2 + 0.03, w / 2 - 0.03]) {
+                const p = new THREE.Mesh(peg, pegWood);
+                p.position.set(x, 0, 0);
+                pivot.add(p);
+            }
             g.add(pivot);
-            this.sheets.push({ pivot, s: H.s + 0.7 + i * 1.3 });
-        }
+            this.sheets.push({ pivot, s: along });
+            along += w / 2;
+        });
         this.washLine = HillDay.washingLine(lane);
         const a = lane.at(H.s, H.side * this.washLine, HillDay.WASHING.upM, {}), b = lane.at(H.s + H.lengthM, H.side * this.washLine, HillDay.WASHING.upM, {});
         const line = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z), 4), dark);
