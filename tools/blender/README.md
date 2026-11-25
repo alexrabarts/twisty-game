@@ -7,7 +7,7 @@ Scripts that build the modelled scenery, the trees, the traffic cars, the bikes 
 From the repository root:
 
 ```sh
-for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bridge_stone bike_sport bike_adventure bike_scooter bike_dirt bike_naked rider far car_hatchback car_van tree_conifer tree_broadleaf tree_bush; do
+for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bridge_stone bike_sport bike_adventure bike_scooter bike_dirt bike_naked rider far car_hatchback car_van tree_conifer tree_broadleaf tree_bush tree_shrub; do
   blender --background --factory-startup --python tools/blender/$script.py
 done
 ```
@@ -102,7 +102,8 @@ Rules for a change to a car:
 |---|---|---|
 | `tree_conifer.py` | `trees/conifer.glb` | `conifer_spruce`, `conifer_fir`, `conifer_pine`, and each again under snow (`_snow`) for the winter leg. |
 | `tree_broadleaf.py` | `trees/broadleaf.glb` | `broadleaf_oak`, `broadleaf_beech`, `broadleaf_ash` (two crowns on a fork), each crown a leaf clump to a lobe. |
-| `tree_bush.py` | `trees/bush.glb` | `bush_round`, `bush_low`, and each again under snow. |
+| `tree_bush.py` | `trees/bush.glb` | `bush_round`, `bush_low`, and each again under snow: three leaf clumps standing apart and a fringe of ten leaves over them (80 triangles), so the outline is broken. |
+| `tree_shrub.py` | `trees/shrubs.glb` | A world's shrubs, `alder` (green alder) and `rose` (alpine rose), each at three levels: `<species>_near` (at most 800 triangles: stems out of the ground to each mass of leaves, a dark core in each mass, and its outside in sprays of leaves, each leaf folded on its midrib, with sky between them), `<species>_mid` (one clump to a mass on two stems, at most 140) and `<species>_far` (one clump, at most 24). |
 | `tree_alpine.py` | `trees/alpine.glb` | A world's species, `spruce`, `fir`, `pine`, `larch`, `beech` and `ash`, each at three levels: `<species>_near` (at most 1,400 triangles: the trunk to the leader, each branch a spray with a sawtooth edge, leaf clumps with sky between them), `<species>_mid` (the legs' shape, at most 220) and `<species>_far` (at most 70). |
 
 ## The hill ride's bicycle
@@ -124,6 +125,7 @@ Rules for a change to a car:
 Rules for a change to a plant:
 
 - The game sinks a tree's origin 0.6 m under the ground at any scale (0.55 to 1.55), so the ground cuts the model between y = 0.4 and y = 1.1. Keep a plain trunk through that range, about 0.4 to 0.5 in radius (the solid circle of a trunk is 0.6), and nothing else below y = 1.15.
+- A world's shrub (`tree_shrub.py`) stands on a world's seat of a bush: its origin 0.2 m under the ground at any scale (0.8 to 1.4), so its ground is y = 0.2, its stems start at y = 0 and its lowest leaves sit on the ground. Every level of a species is made from one layout (its masses of leaves), so each stays within a quarter of the mid level's height and three tenths of its spread (`tests/unit/treemodels.test.js`). Its stems are wood to the world's palette (a vertex whose green does not lead), and the world draws each species in its own green (`Vegetation.PALETTE`). `TWISTY_PREVIEW` renders the levels side by side (`shrubs-close.png`, `shrubs-near.png`).
 - Keep each tree at or under 220 triangles and each bush under 80 (`TREE_BUDGET`, `BUSH_BUDGET`). Storm-valley draws 1,173 trees: at 220 each they take 258,000 of the leg's 450,000 triangles. The scripts and `tests/unit/treemodels.test.js` fail above these.
 - A bush is modelled like the ball it replaces: centred on its origin, about a metre in radius, reaching 0.3 below it.
 - The vertex colours are the plant's own colours, written linear (16 bits a channel, as the exporter writes them). The game multiplies a tree by its instance tint and a bush by one of two tones (`BUSH_TONES`); the snow variants of a bush are not tinted.

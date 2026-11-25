@@ -91,8 +91,8 @@ describe('the vegetation palette', () => {
 
 describe('the world\'s modelled trees', () => {
     let models, fileColours;
-    const files = { conifer: 'assets/trees/conifer.glb', broadleaf: 'assets/trees/broadleaf.glb', bush: 'assets/trees/bush.glb', alpine: 'assets/trees/alpine.glb' };
-    // A world's species are drawn from the levels of assets/trees/alpine.glb, its bushes from bush.glb
+    const files = { conifer: 'assets/trees/conifer.glb', broadleaf: 'assets/trees/broadleaf.glb', bush: 'assets/trees/bush.glb', alpine: 'assets/trees/alpine.glb', shrubs: 'assets/trees/shrubs.glb' };
+    // A world's species are drawn from the levels of assets/trees/alpine.glb, its shrubs from those of shrubs.glb
     const levels = shape => (shape.lods ? Object.values(shape.lods).flat() : shape.parts);
     beforeAll(async () => {
         // The parsed files, as the legs' TreeModels reads them (SceneAssets keeps one parse per file)
@@ -114,8 +114,8 @@ describe('the world\'s modelled trees', () => {
                 expect({ shape: shape.name, outside: outside(shape.kind, vertexColours(part.geometry)) }).toEqual({ shape: shape.name, outside: [] });
             }
         }
-        // Every species of the world at all three levels
-        for (const shape of models.trees.filter(s => s.kind !== 'bush')) expect(Object.keys(shape.lods).sort()).toEqual(['far', 'mid', 'near']);
+        // Every species and every shrub of the world at all three levels
+        for (const shape of models.trees) expect(Object.keys(shape.lods).sort()).toEqual(['far', 'mid', 'near']);
     });
 
     test('the larch takes its own palette: a lighter, yellower green than the spruce', () => {

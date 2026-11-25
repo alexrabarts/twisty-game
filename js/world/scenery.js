@@ -173,10 +173,22 @@ class Scenery {
         ];
     }
     static get LARCH_FROM_M() { return 1650; }
+    // The shrubs of a world, drawn as the trees are, at three levels from assets/trees/shrubs.glb
+    // (tools/blender/tree_shrub.py, `<node>_<level>`): each a species of the Gotthard's slopes, in its own palette
+    // (js/world/vegetation.js) and with its share of the bushes (`high` over LARCH_FROM_M: the alpine rose takes over
+    // above the green alder). Two species, as the legs' two bushes before them: each is a forest mesh at each level
+    // (Scenery.forestMesh, kept once made), and the window has about 120 meshes to spare (a dwarf juniper as a third
+    // put the Tremola at km 4 under it). Without the file a world draws the legs' two bushes
+    static get SHRUBS() {
+        return [
+            { kind: 'bush', name: 'bush_alder', node: 'alder', palette: 'alder', share: 0.6, high: 0.35 },
+            { kind: 'bush', name: 'bush_rose', node: 'rose', palette: 'rose', share: 0.4, high: 0.65 }
+        ];
+    }
     // How light a level's colours are against its kind's palette (Vegetation.shape). The near level's branches and leaf
     // clumps look up more than the mid level's skirts and lobes, so the sky lights them more: drawn at the palette's
     // own middle they stood lighter and yellower than the same tree a step further off
-    static get LEVEL_SHADE() { return { conifer: { near: 0.78 }, broadleaf: { near: 0.9 } }; }
+    static get LEVEL_SHADE() { return { conifer: { near: 0.78 }, broadleaf: { near: 0.9 }, bush: { near: 0.9 } }; }
     static get BUILDING_CAP() { return 300; }
     // Triangles the trees and houses may add up to in a window (the window budget is 450 000 in all)
     // (200 000 until the far land took about 50 000 of the window: js/world/horizon.js FarLand)
@@ -326,8 +338,9 @@ class Scenery {
     // loadModel: SceneAssets.loadModel (a path to a promise of {meshes, places})
     static async loadModels(loadModel) {
         try {
-            const [alpine, bush, houses] = await Promise.all([
-                loadModel('assets/trees/alpine.glb'), loadModel('assets/trees/bush.glb'), loadModel('assets/village/houses.glb')
+            const [alpine, bush, houses, shrubs] = await Promise.all([
+                loadModel('assets/trees/alpine.glb'), loadModel('assets/trees/bush.glb'), loadModel('assets/village/houses.glb'),
+                loadModel('assets/trees/shrubs.glb').catch(error => { console.warn(`world scenery: shrubs unavailable (${error.message}); using the legs' bushes`); return null; })
             ]);
             // A world draws the shapes in its own palette and light (js/world/vegetation.js); the legs keep the files' colours
             // and materials: a house draws with world copies of them, which take the haze (LandShade.adopt)
@@ -341,7 +354,17 @@ class Scenery {
                 if (!lods.mid) continue;
                 trees.push({ kind: species.kind, name: species.name, node: species.node, share: species.share, high: species.high, parts: lods.mid, lods });
             }
-            for (const name of ['bush_round', 'bush_low']) if (bush.meshes.get(name)) trees.push({ kind: 'bush', name, parts: Vegetation.shape(bush.meshes.get(name), 'bush') });
+            const before = trees.length;
+            for (const species of shrubs ? Scenery.SHRUBS : []) {
+                const lods = {};
+                for (const level of Scenery.TREE_LEVELS) {
+                    const parts = shrubs.meshes.get(`${species.node}_${level}`);
+                    if (parts) lods[level] = Vegetation.shape(parts, species.kind, species.palette, (Scenery.LEVEL_SHADE[species.kind] || {})[level] || 1);
+                }
+                if (!lods.mid) continue;
+                trees.push({ kind: species.kind, name: species.name, node: species.node, share: species.share, high: species.high, parts: lods.mid, lods });
+            }
+            if (trees.length === before) for (const name of ['bush_round', 'bush_low']) if (bush.meshes.get(name)) trees.push({ kind: 'bush', name, parts: Vegetation.shape(bush.meshes.get(name), 'bush') });
             const homes = [...houses.meshes.keys()].filter(name => name.startsWith('house_') && !name.includes(':')).sort().map(name => ({ name, parts: LandShade.adopt(houses.meshes.get(name)) }));
             if (!trees.length || !homes.length) return null;
             return { trees, houses: homes };

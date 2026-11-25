@@ -218,6 +218,67 @@ describe('the world\'s tree levels', () => {
     });
 });
 
+// A world's shrubs (assets/trees/shrubs.glb, tools/blender/tree_shrub.py): each species at three levels in its
+// budget, the near level leaves on stems and the far one clump, every level in the same outline, standing on the
+// world's seat of a bush (its origin 0.2 m under the ground: the stems reach under y = 0.2, nothing hangs over it)
+describe('the world\'s shrub levels', () => {
+    const game = load();
+    const SHRUBS = ['alder', 'rose'];
+    const LEVELS = { near: 800, mid: 140, far: 24 };
+    let shrubs;
+
+    beforeAll(async () => {
+        shrubs = await game.SceneAssets.loadModel('assets/trees/shrubs.glb');
+    });
+
+    const box = name => {
+        const primitives = shrubs.meshes.get(name);
+        expect({ name, found: !!primitives && primitives.length === 1 }).toEqual({ name, found: true });
+        const g = primitives[0].geometry;
+        g.computeBoundingBox();
+        return { g, bb: g.boundingBox };
+    };
+
+    test('every shrub has its three levels, each in its budget, the near level the most detailed', () => {
+        for (const species of SHRUBS) {
+            const counts = Object.fromEntries(Object.keys(LEVELS).map(level => [level, triangles(box(`${species}_${level}`).g)]));
+            for (const [level, most] of Object.entries(LEVELS)) expect({ species, level, over: counts[level] > most }).toEqual({ species, level, over: false });
+            expect(counts.near).toBeGreaterThan(counts.mid * 3);
+            expect(counts.mid).toBeGreaterThan(counts.far * 3);
+        }
+    });
+
+    test('every level stands in the same outline, rooted in the ground', () => {
+        const spread = bb => Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z);
+        for (const species of SHRUBS) {
+            const mid = box(`${species}_mid`).bb;
+            for (const level of ['near', 'mid', 'far']) {
+                const b = box(`${species}_${level}`).bb;
+                expect({ species, level, height: Math.abs(b.max.y / mid.max.y - 1) < 0.25 }).toEqual({ species, level, height: true });
+                expect({ species, level, spread: Math.abs(spread(b) / spread(mid) - 1) < 0.3 }).toEqual({ species, level, spread: true });
+                expect({ species, level, rooted: b.min.y <= 0.2 }).toEqual({ species, level, rooted: true });
+            }
+        }
+    });
+
+    test('the near level has stems: vertices whose green does not lead, the wood the world draws in its palette', () => {
+        for (const species of SHRUBS) {
+            const colour = box(`${species}_near`).g.attributes.color;
+            const scale = colour.array instanceof Uint16Array ? 65535 : colour.array instanceof Uint8Array ? 255 : 1;
+            let wood = 0;
+            for (let i = 0; i < colour.count; i++) if (colour.array[i * colour.itemSize + 1] / scale <= colour.array[i * colour.itemSize] / scale * 1.15) wood++;
+            expect({ species, wood: wood > 20 }).toEqual({ species, wood: true });
+        }
+    });
+
+    test('the file carries no texture and stays small', () => {
+        const bytes = readFileSync(new URL('assets/trees/shrubs.glb', root));
+        const json = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString());
+        expect(json.images || []).toHaveLength(0);
+        expect(statSync(new URL('assets/trees/shrubs.glb', root)).size).toBeLessThanOrEqual(240 * 1024);
+    });
+});
+
 describe.each([[STORM, 'storm-valley'], [VALLEY, 'valley-run'], [WINTER, 'winter-pass']])('dressing leg %i (%s)', (legIndex) => {
     const game = load();
     const env = build(game, legIndex);

@@ -38,6 +38,7 @@ A world draws each species of tree (`Scenery.SPECIES`: spruce, larch, pine, fir,
 | mid | 164 to 212 | skirts of boughs, or one leaf clump to a lobe: the shapes the legs draw | the next 200 times the share within 420 m (`TREE_MID_CAP`, `TREE_MID_M`) |
 | far | 44 to 66 | three notched skirts, or three clumps on the trunk | the rest |
 
+- The shrubs (`Scenery.SHRUBS`: green alder and alpine rose, from `assets/trees/shrubs.glb`) take the same three levels and the same rank: near 740 and 760 triangles, mid 112, far 20. Low and Lowest draw them at the mid level at the nearest, as the trees.
 - One instanced mesh for each part of each shape at each level holds the window's trees (`Scenery.forest`, `trees:<shape>:<level>`). Before, each tile had a mesh for each shape. The window thus has fewer meshes and draw calls.
 - `Scenery.rankTrees` chooses again when a tile comes or goes and for every 8 m the bike moves. It draws the nearest trees first. At their far level they share the triangle cap (`TRIANGLE_CAP`) with the houses and the boulders, after room for 16 near trees (`TREE_NEAR_KEPT`). A tree moves up a level only while the cap has room for it. So the window never holds more than the cap.
 - Each tree has its own girth (0.88 to 1.12 of its height's width) and its own tint (`Scenery.treeTint`: 0.8 to 1 of its colours, toward blue or yellow). The tint is never over 1 in a channel, so no tree goes past its kind's caps.
