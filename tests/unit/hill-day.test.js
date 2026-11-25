@@ -241,8 +241,6 @@ describe('the climb', () => {
             const input = pilot(bike, { dir: -1, across: C.across });
             input.pedal = 1;
             input.brake = 0;
-            // The player steers as the camera sees him, which the climb turns back (climbStep)
-            input.steer = -input.steer;
             ride.climbStep(DT, input);
             if (ride.climb.phase !== 'climb') break;
             const down = bike.crashed;
@@ -291,7 +289,7 @@ describe('the climb', () => {
         expect(turned).toBeGreaterThan(0.5);
     });
 
-    test('the climb ends at the cart: the steer keys are turned for the camera, the basket is made up, then the hold at the top', () => {
+    test('the climb ends at the cart: the steer keys are the bicycle\'s own, the basket is made up, then the hold at the top', () => {
         const bike = new HillBicycle(lane);
         const day = new HillDay(lane);
         const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day, game: { camera: new THREE.PerspectiveCamera() }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(), sample: {}, view: 0 });
@@ -300,7 +298,7 @@ describe('the climb', () => {
         expect(ride.hold).toBe(null);
         const controls = { pedal: 1, brake: 0, steer: 0.5, wheelie: 1 };
         ride.climbStep(DT, controls);
-        expect(controls).toMatchObject({ steer: -0.5, wheelie: 0 });
+        expect(controls).toMatchObject({ steer: 0.5, wheelie: 0 });
         bike.reset(HillDay.CLIMB.triggerS - 0.5);
         ride.climbStep(DT, {});
         expect(ride.climb.phase).toBe('restock');
@@ -312,6 +310,36 @@ describe('the climb', () => {
         expect(day.loaves).toBe(HillDay.BASKET);
         expect(day.climbing).toBe(false);
         expect(bike.walking).toBe(false);
+    });
+
+    test.each([['the wide shot', 3], ['the long lens head on', 10], ['the stop by the stall', 16.5]])('in %s the left key turns him and the bicycle to his left and the right key to his right, as on the descent', (name, at) => {
+        // He walks up for `at` s on the pedal key, then for 1 s with a steer key held (left: +1, as js/input.js
+        // gives it); how far the bicycle has turned from the same walk with no steer key (+ to his left)
+        const turned = steer => {
+            const bike = new HillBicycle(lane);
+            const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day: new HillDay(lane), game: { camera: new THREE.PerspectiveCamera() }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(), sample: {}, view: 0 });
+            ride.beginClimb();
+            for (let t = 0; t < at + 1; t += DT) {
+                // (kept on the lane's middle by the pilot until the key)
+                const input = { pedal: 1, brake: 0, steer: t >= at ? steer : pilot(bike, { dir: -1 }).steer, wheelie: 0 };
+                ride.climbStep(DT, input);
+                bike.step(DT, input);
+            }
+            return bike.vehicle.yawAngle;
+        };
+        // (his left: a heading a little more towards it; the yaw grows to the left, as on the descent below)
+        const ahead = turned(0), left = turned(1) - ahead, right = turned(-1) - ahead;
+        const down = new HillBicycle(lane);
+        down.reset(120);
+        down.vehicle.speed = 1.5;
+        const yaw0 = down.vehicle.yawAngle;
+        for (let t = 0; t < 1; t += DT) down.step(DT, { pedal: 0.3, brake: 0, steer: 1, wheelie: 0 });
+        const descentLeft = Math.sign(down.vehicle.yawAngle - yaw0);
+        console.log(`hill climb keys, ${name}: left turns him ${left.toFixed(2)} rad, right ${right.toFixed(2)} (the descent's left key turns it ${descentLeft > 0 ? '+' : '-'})`);
+        expect(Math.sign(left)).toBe(descentLeft);
+        expect(Math.sign(right)).toBe(-descentLeft);
+        expect(Math.abs(left)).toBeGreaterThan(0.1);
+        expect(Math.abs(right)).toBeGreaterThan(0.1);
     });
 
     test('on foot: the pedal key walks him up at about walkMs, and let go he holds the bicycle where it is', () => {

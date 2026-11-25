@@ -480,8 +480,9 @@ class HillRide {
         const C = HillDay.CLIMB;
         climb.t += dt;
         if (climb.phase === 'climb') {
-            // He comes towards the camera, so its left is his right
-            controls.steer = -controls.steer;
+            // The keys are the bicycle's own, as on the descent: the left key turns its bars and him to his left. (They were
+            // once turned for the cameras, which face him, so that the left key moved him to the left of the picture; the
+            // owner found that backwards: he steers the bicycle, not the picture)
             controls.wheelie = 0;
             // On foot, pushing: the pedal key walks him on at walkMs, and let go he holds the bicycle where it is
             this.bike.walking = true;
