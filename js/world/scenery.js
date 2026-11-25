@@ -199,8 +199,9 @@ class Scenery {
     // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
     // where the rows before the junctions were 1 440)
     static get TRIANGLE_CAP() { return 127000; }
-    // Boulders on rock and scree, nearest first (20 triangles each)
-    static get BOULDER_CAP() { return 160; }
+    // Boulders on rock and scree, nearest first
+    // (160 until a boulder was fractured granite of about 56 triangles, where it was 20)
+    static get BOULDER_CAP() { return 120; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
     static get HOUSE_TRIANGLES() { return 80000; }
     // Marker stones: STONE_GAP_M apart along the road's edge, STONE_OUT_M past the verge, sunk STONE_SINK_M. Sawn
@@ -698,14 +699,99 @@ class Scenery {
         return sites;
     }
 
-    // A boulder: a flattened, flat-shaded icosahedron in grey granite
-    static boulderPart() {
-        if (!Scenery.boulder) {
-            const geometry = new THREE.IcosahedronGeometry(1, 0);
-            geometry.translate(0, 0.45, 0);
-            Scenery.boulder = { geometry, material: new THREE.MeshLambertMaterial({ color: 0x8a857c, flatShading: true }) };
+    // A boulder: granite broken along fracture planes. Each of BOULDER_SHAPES shapes is a block cut by planes
+    // (Scenery.clipSolid): its eight corners knocked off, BOULDER_PLANES fractures at a seeded slant and depth, and a
+    // flat bed under the ground, then stood in the box the icosahedron it replaces had (a metre across, y -0.55 to
+    // 1.45). So the stone is a few large flat faces meeting in sharp edges, as a broken block is, not a ball. Each face
+    // is its own grey: lighter where it looks up at the sky and the weather has bleached it, darker under, with spots
+    // of lichen on the tops. Flat shaded, in vertex colours; 48 to 60 triangles (the 20 of the icosahedron read as a
+    // faceted ball)
+    static get BOULDER_SHAPES() { return 3; }
+    static get BOULDER_PLANES() { return 5; }
+    static boulderPart(shape = 0) {
+        Scenery.boulders = Scenery.boulders || [];
+        if (!Scenery.boulders[shape]) {
+            const h = k => Scenery.hash(shape + 1, k, 97);
+            const V = (x, y, z) => new THREE.Vector3(x, y, z);
+            let faces = [[V(-1, -1, -1), V(1, -1, -1), V(1, 1, -1), V(-1, 1, -1)], [V(-1, -1, 1), V(-1, 1, 1), V(1, 1, 1), V(1, -1, 1)],
+                [V(-1, -1, -1), V(-1, 1, -1), V(-1, 1, 1), V(-1, -1, 1)], [V(1, -1, -1), V(1, -1, 1), V(1, 1, 1), V(1, 1, -1)],
+                [V(-1, 1, -1), V(1, 1, -1), V(1, 1, 1), V(-1, 1, 1)], [V(-1, -1, -1), V(-1, -1, 1), V(1, -1, 1), V(1, -1, -1)]];
+            const planes = [];
+            for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) planes.push({ n: V(x, y, z).normalize(), d: 0.9 + 0.12 * h(planes.length + 50) });
+            for (let k = 0; k < Scenery.BOULDER_PLANES; k++) {
+                const u = h(k * 3) * Math.PI * 2, v = Math.acos(1 - 2 * (0.1 + 0.75 * h(k * 3 + 1)));
+                planes.push({ n: V(Math.sin(v) * Math.cos(u), Math.cos(v), Math.sin(v) * Math.sin(u)), d: 0.62 + 0.25 * h(k * 3 + 2) });
+            }
+            planes.push({ n: V(0, -1, 0), d: 0.6 });
+            for (const plane of planes) faces = Scenery.clipSolid(faces, plane.n, plane.d);
+            // Into the icosahedron's box: a metre in radius across, from y -0.55 to 1.45
+            let reach = 0, lo = Infinity, hi = -Infinity;
+            for (const f of faces) for (const p of f) { reach = Math.max(reach, Math.hypot(p.x, p.z)); lo = Math.min(lo, p.y); hi = Math.max(hi, p.y); }
+            const positions = [], colours = [];
+            const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+            const middle = new THREE.Vector3(), mid = new THREE.Vector3();
+            let count = 0;
+            for (const f of faces) for (const p of f) { middle.add(p); count++; }
+            middle.divideScalar(count);
+            faces.forEach((f, k) => {
+                // Each face wound to look out of the stone (the solid is convex: away from its middle)
+                mid.set(0, 0, 0);
+                for (const p of f) mid.add(p);
+                mid.divideScalar(f.length).sub(middle);
+                const turn = f[1].clone().sub(f[0]).cross(f[2].clone().sub(f[0])).dot(mid) < 0;
+                const ps = (turn ? f.slice().reverse() : f).map(p => [p.x / reach, -0.55 + (p.y - lo) / (hi - lo) * 2, p.z / reach]);
+                a.fromArray(ps[0]); b.fromArray(ps[1]); c.fromArray(ps[2]);
+                const up = b.clone().sub(a).cross(c.clone().sub(a)).normalize().y;
+                // A grey for each face by the way it looks, as sRGB (Graphics.fixColorSpaces decodes float colours)
+                const grey = 0.37 + 0.08 * Math.max(0, up) - 0.08 * Math.max(0, -up) + 0.06 * (h(100 + k) - 0.5);
+                let rgb = [grey * 1.01, grey, grey * 0.97];
+                // Lichen on a few faces that look up: a dull yellow green, or the rust of the high crusts
+                const lichen = h(300 + k);
+                if (up > 0.35 && lichen < 0.3) rgb = lichen < 0.1 ? [grey * 1.12, grey * 0.92, grey * 0.72] : [grey * 0.98, grey * 1.04, grey * 0.8];
+                for (let i = 1; i + 1 < ps.length; i++) for (const p of [ps[0], ps[i], ps[i + 1]]) { positions.push(...p); colours.push(...rgb); }
+            });
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+            geometry.computeVertexNormals();
+            geometry.computeBoundingSphere();
+            Scenery.boulders[shape] = { geometry, material: Scenery.boulderMaterial(), triangles: positions.length / 9 };
         }
-        return Scenery.boulder;
+        return Scenery.boulders[shape];
+    }
+
+    // A convex solid (faces: lists of points, each wound anticlockwise seen from outside) cut by the plane n . p = d,
+    // keeping the side under it: each face clipped, and the cut closed by a face of its own
+    static clipSolid(faces, n, d) {
+        const out = [], cut = [];
+        for (const f of faces) {
+            const kept = [];
+            for (let i = 0; i < f.length; i++) {
+                const p = f[i], q = f[(i + 1) % f.length], dp = n.dot(p) - d, dq = n.dot(q) - d;
+                if (dp <= 0) kept.push(p);
+                if ((dp < 0 && dq > 0) || (dp > 0 && dq < 0)) {
+                    const x = p.clone().lerp(q, dp / (dp - dq));
+                    kept.push(x);
+                    cut.push(x);
+                }
+            }
+            if (kept.length >= 3) out.push(kept);
+        }
+        const points = [];
+        for (const p of cut) if (!points.some(q => q.distanceTo(p) < 1e-6)) points.push(p);
+        if (points.length < 3) return out;
+        const centre = points.reduce((sum, p) => sum.add(p), new THREE.Vector3()).divideScalar(points.length);
+        const u = new THREE.Vector3(Math.abs(n.x) > 0.9 ? 0 : 1, Math.abs(n.x) > 0.9 ? 1 : 0, 0);
+        u.sub(n.clone().multiplyScalar(n.dot(u))).normalize();
+        const v = n.clone().cross(u);
+        const angle = p => { const r = p.clone().sub(centre); return Math.atan2(r.dot(v), r.dot(u)); };
+        out.push(points.sort((p, q) => angle(p) - angle(q)));
+        return out;
+    }
+
+    static boulderMaterial() {
+        if (!Scenery.boulderLit) Scenery.boulderLit = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+        return Scenery.boulderLit;
     }
 
     static trianglesOf(parts) {
@@ -803,10 +889,13 @@ class Scenery {
                 scale.set(b.size * 1.3, b.size * 0.8, b.size);
                 return new THREE.Matrix4().compose(position, rotation, scale);
             });
-            this.instanced([Scenery.boulderPart()], matrices, 'boulders', group);
+            const shape = Math.floor(Scenery.hash(tile.tx, tile.tz, 36) * Scenery.BOULDER_SHAPES);
+            this.instanced([Scenery.boulderPart(shape)], matrices, 'boulders', group);
         }
         held.boulders = stones.length;
-        held.boulderTriangles = stones.length * 20;
+            // The tile's boulders are one of the shapes, by a hash of the tile, each turned and sized its own way: one
+            // instanced mesh for the tile, as before (a mesh for each shape put the window over its meshes' margin)
+        held.boulderTriangles = stones.length * (stones.length ? Scenery.boulderPart(Math.floor(Scenery.hash(tile.tx, tile.tz, 36) * Scenery.BOULDER_SHAPES)).triangles : 0);
 
         // The marker stones of this tile, where it is near enough to have them
         held.stoneOn = markers;
