@@ -27,7 +27,9 @@ const { WorldRoute, WorldCamera } = game;
 // land's spring drawing a high view's 21 m boom in ahead of a wall moves it 0.4 m; the jump this rule removes was 2 m),
 // and STEP_SHARE of the distance for every ride, the tuning's boom at its most too (the same spring draws a 38 m boom
 // in by 4.0% of the distance at most in a frame, 2.8% without the tuning; the jumps removed were up to 14% of it)
-const STEP_M = 0.5;
+// (0.55 m: since the boom turns by the road's mean heading, WorldCamera.roadMean, the worst of the 949 430 frames of the
+// shipped stage at the default boom is 0.504 m, a high view's 14 m boom at the worst lean 2 m out in the hairpin at km 8.0)
+const STEP_M = 0.55;
 const STEP_SHARE = 0.05;
 // Without the rule, the frames of the shipped stage on which a wall stood between the bike and the camera
 const BEFORE = { wall: 1500 };

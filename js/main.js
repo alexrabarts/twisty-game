@@ -460,7 +460,8 @@ class Game {
         this.prewarmWorldWeather();
 
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
-        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => this.environment.overheadY(x, z, y), (x, z, reach) => this.environment.cameraFaces(x, z, reach));
+        // (a road overhead, and the roof of a tunnel or gallery: WorldEnvironment.tubeRoofY)
+        this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => Math.min(this.environment.overheadY(x, z, y), this.environment.tubeRoofY(x, z, y)), (x, z, reach) => this.environment.cameraFaces(x, z, reach));
         this.worldCamera.reset(start.heading);
         await this.startFreeRoam();
 
@@ -2329,7 +2330,10 @@ class Game {
         // View sits 8 above the bike, higher than the 7.5 m roof. The smoothed
         // position keeps the clamp too, so the camera eases out of the tunnel
         // rather than jumping to where it would have been
-        const roofY = this.tunnelRoofY();
+        // (a world's camera keeps under a tube's roof itself, eased in before the portal: WorldEnvironment.tubeRoofY;
+        // this clamp at the bike's own roof held it down in one frame and let the boom behind the bike through a
+        // lower roof on a climb)
+        const roofY = this.environment.isWorld ? null : this.tunnelRoofY();
         if (roofY !== null && this.camera.position.y > roofY - 1.0) {
             this.camera.position.y = Math.max(roofY - 1.0, minCameraHeight);
             this.currentCameraPos.y = Math.min(this.currentCameraPos.y, this.camera.position.y);
@@ -2509,8 +2513,9 @@ class Game {
         input.s = typeof v.roadFrame === 'function' && Number.isFinite(s) && v.projection.index >= 0 ? v.roadFrame().s : s;
         input.index = v.projection.index >= 0 ? v.projection.index : Math.floor(this.environment.route.toUnits(input.s));
         input.speed = v.speed;
-        // (the way the bike goes, for the free-roam camera: WorldCamera.followRider)
+        // (the way the bike goes, and whether it is on the ride, for the free-roam camera: WorldCamera.followRider)
         input.yaw = v.yawAngle;
+        input.onRide = v.projection.index >= 0 && Math.abs(v.projection.lateral || 0) <= (v.projection.width || 0) / 2 + Game.CAMERA_RIDE_M;
         input.lift = mode.type === 'high' ? 2 : 1;
         input.offset.x = this.cameraOffset.x;
         input.offset.y = this.cameraOffset.y;
@@ -5341,6 +5346,8 @@ Game.WORLD_RESTART_TEXT = {
 // holds the same number (LONG.penaltyMs); tests/unit/board-contract.test.js
 // fails when they differ.
 Game.RESTART_PENALTY_MS = 5000;
+// How far past the ride's edge the bike may be and the chase camera still read the ride (WorldCamera.followRider)
+Game.CAMERA_RIDE_M = 4;
 // Cars within this many segments of the rider move ahead on a restart
 Game.RESTART_CLEAR_SEGMENTS = 6;
 // Underscores the name box shows at most: it is 250 px wide, and a placeholder longer than this only spills past it

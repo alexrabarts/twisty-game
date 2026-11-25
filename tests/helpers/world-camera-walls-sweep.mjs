@@ -50,7 +50,8 @@ export async function sweep(id, search = '', stepM = 0.5, stepShare = 0.05) {
         env.update(p, hairpin.apex, null, Infinity);
         await env.streamer.settle(p, hairpin.apex);
         const solids = solidsOf(game, env, { x: p.x, z: p.z, reach: 140 });
-        const overhead = (x, z, y) => env.overheadY(x, z, y);
+        // (as Game builds it: a road overhead and a tube's roof)
+        const overhead = (x, z, y) => Math.min(env.overheadY(x, z, y), env.tubeRoofY(x, z, y));
         // The rule off: the camera is given no wall faces
         const cameras = { on: new WorldCamera(env.route, env.ground, overhead, (x, z, reach) => env.cameraFaces(x, z, reach)), off: new WorldCamera(env.route, env.ground, overhead) };
         out.faces = Math.max(out.faces, env.cameraFaces(p.x, p.z, 48).count);

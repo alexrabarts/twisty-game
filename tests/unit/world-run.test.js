@@ -621,7 +621,11 @@ describe('WorldCamera', () => {
         expect(camera.pull).toBeGreaterThan(0.99);
         expect(camera.springs.distance.x).toBeCloseTo(6 * (1 + T.pullBack), 1);
         expect(camera.springs.height.x).toBeCloseTo(3 + T.raiseM, 1);
-        expect(WorldCamera.wrap(camera.yaw - route.curveAt(215 - T.followBehindM, {}).heading)).toBeCloseTo(0, 3);
+        // (the road's mean heading there over the span of a bike at rest at full pull, as it settles on a bend:
+        // WorldCamera.roadMean)
+        const span = T.yawSpanMinM + (Math.min(T.yawSpanMinM, T.yawSpanBendM) - T.yawSpanMinM) * camera.pull;
+        const mean = camera.roadMean(215 - T.followBehindM, span, camera.yaw, {});
+        expect(WorldCamera.wrap(camera.yaw - mean.heading)).toBeCloseTo(0, 3);
         // On the leg back it eases out, not at once
         const back = route.length - 60;
         camera.update(bikeAt(route, back, 0), DT);
@@ -647,9 +651,7 @@ describe('WorldCamera', () => {
         };
         // A look target far to the side, as the road round a hairpin is: the bike would be off the screen
         camera.anchor = { x: 0, y: 0, z: 0 };
-        Object.assign(camera.springs.lx, { x: 40, v: 0, t: 40 });
-        Object.assign(camera.springs.ly, { x: 0, v: 0, t: 0 });
-        Object.assign(camera.springs.lz, { x: 0, v: 0, t: 0 });
+        Object.assign(camera.lookOffset, { x: 40, y: 0, z: 0 });
         expect(project({ x: 40, y: 0, z: 0 })).toBeGreaterThan(1);
         const first = project(camera.aim(eye, bike, probe));
         expect(first).toBeLessThanOrEqual(T.keepHard + 1e-3);

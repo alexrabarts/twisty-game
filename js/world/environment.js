@@ -1380,6 +1380,7 @@ class WorldEnvironment {
     //   - the parapets of the ride's bridges (WorldGround.zoneAt's wall)
     //   - a viaduct's faces down to the ground, and its arches' sides (viaductFaces)
     //   - the walls of the houses drawn (Scenery.houseAt's rects)
+    //   - the walls of the ride's tunnels and galleries, floor to roof (RoadMesh.tunnel)
     // The list is kept until the place has moved WALLS.stepM or one of those has changed (faceStamp, Scenery.stamp)
     cameraFaces(x, z, reach) {
         const W = WorldCamera.WALLS, N = WorldCamera.FACE;
@@ -1439,6 +1440,13 @@ class WorldEnvironment {
                         if (a.viaduct && a.viaduct === b.viaduct) { if (sign > 0) this.viaductFaces(a.viaduct, i, face); continue; }
                         const p = WorldGround.pointAt(a, sign * (a.width / 2 + WorldGround.PARAPET_M), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + WorldGround.PARAPET_M), edge[1]);
                         face(p.x, p.z, q.x, q.z, a.y + H, b.y + H, a.y - RoadMesh.DECK_M, b.y - RoadMesh.DECK_M, ox, oz, 1);
+                        continue;
+                    }
+                    if (a.bits & b.bits & (WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery)) {
+                        // (a tube's wall, RoadMesh.tunnel: from its floor to its roof, facing the road)
+                        const o = RoadMesh.TUBE_WALL_M;
+                        const p = WorldGround.pointAt(a, sign * (a.width / 2 + o), edge[0]), q = WorldGround.pointAt(b, sign * (b.width / 2 + o), edge[1]);
+                        face(p.x, p.z, q.x, q.z, a.y + WorldRoute.ROOF_M, b.y + WorldRoute.ROOF_M, a.y, b.y, -ox, -oz, 0);
                         continue;
                     }
                     if ((a.bits | b.bits) & 7) continue;
@@ -2769,7 +2777,8 @@ class WorldEnvironment {
         const points = this.route.points, list = [];
         const foot = (p, sign) => { const o = sign * (p.width / 2 + RoadMesh.TUBE_WALL_M); return [p.x + o * Math.cos(p.heading), p.y, p.z - o * Math.sin(p.heading)]; };
         const tube = i => !!(points[i] && points[i].bits & 5);
-        const add = (a, b) => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(box); };
+        // (a box in front of a portal is marked `mouth`: the land is cut there, but no roof stands over it)
+        const add = (a, b, mouth = false) => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(mouth ? Object.assign(box, { mouth }) : box); };
         for (let i = 0; i + 1 < points.length; i++) {
             if (tube(i) && tube(i + 1)) add(points[i], points[i + 1]);
             // In front of each portal, out RoadMesh.TUBE_MOUTH_M along the road (RoadMesh.wings closes its sides)
@@ -2778,7 +2787,7 @@ class WorldEnvironment {
                 let walked = 0;
                 for (let j = at; points[j + step] && walked < RoadMesh.TUBE_MOUTH_M; j += step) {
                     walked += Math.hypot(points[j + step].x - points[j].x, points[j + step].z - points[j].z);
-                    add(points[j], points[j + step]);
+                    add(points[j], points[j + step], true);
                 }
             }
         }
@@ -2812,6 +2821,32 @@ class WorldEnvironment {
         this.onMeshBuilt(this.horizon);
     }
 
+    // The lowest roof of a tunnel or gallery over (x, z) for the chase camera (WorldCamera's `overhead`), less
+    // TUBE_CAMERA_M, or Infinity with none: the tube whose box holds (x, z) in plan, whose floor is no more than
+    // TUBE_LEVEL_M over y and whose roof is over y (the tube of the road at y, not one of another leg above or below
+    // it). Read from the tubes' boxes (rideTubes, setSideTubes), the world's data as the builder lays it, never from
+    // what is hung in them. A box in front of a portal has no roof
+    tubeRoofY(x, z, y) {
+        const m = WorldData.TILE_M;
+        let low = Infinity;
+        for (const tube of this.tubesNear(`${Math.floor(x / m)},${Math.floor(z / m)}`)) {
+            if (tube.mouth) continue;
+            const b = tube.box;
+            if (x < b[0] || x > b[2] || z < b[1] || z > b[3]) continue;
+            if (!tube.planes.every(([nx, nz, d]) => nx * x + nz * z + d >= 0)) continue;
+            const floor = tube.floor[0] + tube.floor[1] * x + tube.floor[2] * z;
+            if (floor > y + WorldEnvironment.TUBE_LEVEL_M || floor + tube.roof < y) continue;
+            low = Math.min(low, floor + tube.roof - WorldEnvironment.TUBE_CAMERA_M);
+        }
+        return low;
+    }
+
+    // The room the chase camera keeps under a tube's roof besides its own margin (WorldCamera roofClearM, roofHardM):
+    // the lights, fans and services hung from the roof, and the view's near plane (0.46 m from the eye at its corners)
+    static get TUBE_CAMERA_M() { return 1.5; }
+    // How far over the road's height a tube's floor may be and still be the road's own tube
+    static get TUBE_LEVEL_M() { return 2.5; }
+
     // The tubes whose boxes reach tile `key`: the ride's and those of the side roads drawn now
     tubesNear(key) {
         if (!this.tubeCache) this.tubeCache = new Map();
@@ -2828,7 +2863,7 @@ class WorldEnvironment {
     // The tubes a side chunk draws ({la, ra, rb, lb, roof}, RoadMesh.sideStructures): the tiles under them are drawn
     // again, at the level of detail they have, when they change
     setSideTubes(k, segments) {
-        const boxes = segments.map(s => TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof)).filter(Boolean);
+        const boxes = segments.map(s => { const box = TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof); return box && s.mouth ? Object.assign(box, { mouth: true }) : box; }).filter(Boolean);
         const sign = list => list.map(b => b.box.map(v => Math.round(v * 100)).join(',') + `:${Math.round(b.roof * 100)}`).join('|');
         const old = this.sideTubes.get(k) || [];
         if (sign(old) === sign(boxes)) return;

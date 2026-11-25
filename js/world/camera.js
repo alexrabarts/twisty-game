@@ -14,6 +14,11 @@
 //     both lagged, in the boom's frame (not the bike's yaw); the land scales the sideways shift down (swingShare)
 //   - a wall beside the road (a retaining wall and its parapet, a wall's taper, a bridge's parapet, a house) ends the
 //     boom short of its face, and the swing gives way to it, so the camera never goes through one or sits behind it
+//   - through an S the camera does not swing with each bend: the boom turns by the road's mean heading over a span
+//     that grows with speed (roadMean), the swing takes only the share of the turn the S does not cancel, and the
+//     look follows the road's turn through a spring of its own (tests/unit/world-camera-chicane.test.js)
+//   - in a tunnel or gallery the boom comes down under the roof as under a bridge (Game passes the tube's roof as a
+//     road overhead: WorldEnvironment.tubeRoofY), and the tube's walls are faces
 //
 // Everything the camera reads from the route is smooth: the Hermite centreline (WorldRoute.curveAt) and the
 // smoothed curvature profile (WorldRoute.smoothCurvatureAt), at the bike's smooth road position (Vehicle.roadFrame).
@@ -30,19 +35,29 @@ class WorldCamera {
             // The hairpin pull, 0 to 1: the road's turn over pullSpanM metres from pullBehindM behind the bike,
             // nothing under pullFrom rad and all of it from pullTo rad. It rises at pullIn and falls at pullOut, so the
             // camera eases back in on the straight after.
-            // Free roam: the boom follows the rider's way at followRate (followRider)
+            // Free roam off the ride: the boom follows the rider's way at followRate (followRider)
             followRate: 3,
             pullBehindM: 15, pullSpanM: 75, pullFrom: 0.5, pullTo: 1.8, pullIn: 4, pullOut: 2,
             // At full pull the boom is pullBack longer and raiseM higher; its length and height move at boomRate
             pullBack: 0.5, raiseM: 3, boomRate: 5,
-            // The boom yaw follows the route heading followBehindM behind the bike, at yawRate, yawRateBend at full pull
-            followBehindM: 4, yawRate: 6, yawRateBend: 10,
+            // The boom yaw follows the route heading followBehindM behind the bike, at yawRate, yawRateBend at full pull.
+            // That heading is the road's mean over a span centred there (roadMean): yawSpanS seconds of riding,
+            // yawSpanMinM to yawSpanMaxM metres, and down to yawSpanBendM at full pull: in one hairpin the boom keeps to
+            // the road beside the bike, along its walls (a pair of hairpins one each way, and an S, turn little in all
+            // and pull little)
+            followBehindM: 4, yawRate: 6, yawRateBend: 10, yawSpanS: 3, yawSpanMinM: 80, yawSpanMaxM: 120, yawSpanBendM: 30,
+            // The carving swing takes the share of the road's turn over that span that a turn the other way does not
+            // cancel (roadMean straight): a whole swing on one bend, little through an S. A road that turns less than
+            // straightFrom rad over the span keeps the whole swing, eased in to straightTo
+            straightFrom: 0.2, straightTo: 0.5,
             // The point the boom hangs from follows the bike at anchorRate (it takes the bike's own judder out)
             anchorRate: 14,
             // Look target: lookBaseM + lookPerMs x speed metres ahead on the route, out to lookBendM on a hairpin by how
             // far the road turns over the next bendSpanM (nothing under bendFrom rad, all of it from bendTo rad). Its
-            // offset from the bike moves at lookRate.
-            lookBaseM: 8, lookPerMs: 0.6, lookBendM: 30, bendSpanM: 50, bendFrom: 0.35, bendTo: 1.0, lookRate: 4,
+            // offset from the bike moves at lookRate as the bike moves across the road, and at lookTurnRate as the road
+            // turns, without the target's own rate carried: carried, the look ran round each bend of an S and of a pair
+            // of hairpins as fast as the point on the road did, and the view swung after it
+            lookBaseM: 8, lookPerMs: 0.6, lookBendM: 30, bendSpanM: 50, bendFrom: 0.35, bendTo: 1.0, lookRate: 4, lookTurnRate: 2.5,
             // The look target gives way to the bike until the bike is within keepIn of the screen's middle (1 is the
             // edge), at keepRate; never further out than keepHard. That hold eases in over keepBlend of the share: as a
             // plain limit it caught a spring lagging a quickly growing give-way in one frame, and the view's turn
@@ -55,8 +70,10 @@ class WorldCamera {
             fovRate: 3,
             // The boom starts headM over the bike and stays clearM over the land; it is shortened at fractionIn and
             // grows back at fractionOut, and never comes within hardClearM of the land. The land is also tested where
-            // the boom will be foreseeS seconds on, so the boom starts to shorten before the land reaches it.
-            headM: 1.2, clearM: 0.6, hardClearM: 0.2, fractionIn: 10, fractionOut: 2.5, foreseeS: 0.3,
+            // the boom will be foreseeS seconds on, so the boom starts to shorten before the land reaches it (0.3 s
+            // before the boom turned by the road's mean heading: in a hairpin that boom meets the walls a little later,
+            // and at 0.3 s the hard limit caught it in a frame)
+            headM: 1.2, clearM: 0.6, hardClearM: 0.2, fractionIn: 10, fractionOut: 2.5, foreseeS: 0.5,
             // The camera stays floorM over the land, eased in over floorBandM
             floorM: 1.0, floorBandM: 0.4,
             // Under a road overhead the boom stays roofClearM under its deck, as high as it can be there, and roofFastM
@@ -104,8 +121,9 @@ class WorldCamera {
             // the bike's (it is a road overhead from there, WorldEnvironment.OVERHEAD_FROM_M: the camera stays under
             // it, so past the wall it would be in the hill), eased in from roadFrom
             roadFrom: 1.5, roadTo: 2.5, roadUpM: 60,
-            // A boom that passes a face's end is drawn in from endBandM past it, eased, and held from hardM past it
-            endBandM: 3,
+            // A boom that passes a face's end is drawn in from endBandM past it (or endBandShare of the boom's length, the
+            // more: a long boom's end sweeps past a face's end as much faster), eased, and held from hardM past it
+            endBandM: 3, endBandShare: 0.15,
             // A house is taken to stand houseM over the land under it
             houseM: 12,
             // The faces are listed within two booms of the bike and reachM more (in whole steps of reachM), and again
@@ -144,9 +162,10 @@ class WorldCamera {
         this.curve = {};
         this.sampled = {};
         this.springs = {};
-        for (const name of ['pull', 'yaw', 'distance', 'height', 'ax', 'ay', 'az', 'lx', 'ly', 'lz', 'fraction', 'keep', 'fov', 'swingShare', 'roof']) this.springs[name] = { x: 0, v: 0, t: 0, rate: null };
+        for (const name of ['pull', 'yaw', 'distance', 'height', 'ax', 'ay', 'az', 'lx', 'ly', 'lz', 'tx', 'tz', 'fraction', 'keep', 'fov', 'swingShare', 'roof']) this.springs[name] = { x: 0, v: 0, t: 0, rate: null };
         this.position = { x: 0, y: 0, z: 0 };
         this.anchor = { x: 0, y: 0, z: 0 };
+        this.lookOffset = { x: 0, y: 0, z: 0 };
         this.look = { x: 0, y: 0, z: 0 };
         this.head = { x: 0, y: 0, z: 0 };
         this.want = { x: 0, y: 0, z: 0 };
@@ -267,6 +286,40 @@ class WorldCamera {
         return out;
     }
 
+    // The road over `span` metres centred on s, each point weighed by a raised cosine (none at the span's ends, so
+    // everything here moves smoothly with s). Fills and returns `out`: {heading} the road's mean heading, unwrapped near
+    // `near`, and {straight} the share of its turn that is not cancelled by a turn the other way (1 on a single bend or
+    // a straight, near 0 through an S of two equal bends). A bend each way inside the span cancels out of the heading;
+    // one bend's whole turn still comes through, over the span
+    roadMean(s, span, near, out) {
+        const t = WorldCamera.TUNING;
+        const n = Math.max(2, Math.round(span / t.turnStepM));
+        const d = span / n;
+        const from = s - span / 2;
+        const start = this.centre(from, this.spanAt || (this.spanAt = {})).heading;
+        let heading = near + WorldCamera.wrap(start - near);
+        let last = this.curvature(from);
+        let sum = 0, weights = 0, net = 0, total = 0;
+        for (let i = 1; i < n; i++) {
+            const next = this.curvature(from + i * d);
+            const turn = (last + next) / 2 * d;
+            heading += turn;
+            last = next;
+            const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n);
+            sum += w * heading;
+            weights += w;
+            net += w * turn;
+            total += w * Math.abs(turn);
+        }
+        out.heading = sum / weights;
+        // (a road that hardly turns is a straight: the share eases from 1 over straightFrom to straightTo of turn; the
+        // weights are a half on the mean, so twice the weighed sum is the turn)
+        const f = Math.max(0, Math.min(1, (2 * total - t.straightFrom) / (t.straightTo - t.straightFrom)));
+        const ease = f * f * (3 - 2 * f);
+        out.straight = 1 - ease * (1 - Math.abs(net) / Math.max(total, 1e-9));
+        return out;
+    }
+
     // The wanted hairpin pull at s, 0 to 1
     pullAt(s) {
         const t = WorldCamera.TUNING;
@@ -369,6 +422,7 @@ class WorldCamera {
         const w = WorldCamera.WALLS, d = walls.data, n = walls.count * WorldCamera.FACE;
         const dx = end.x - head.x, dy = end.y - head.y, dz = end.z - head.z;
         const clear = soft ? w.clearM : w.hardM;
+        const band = Math.max(w.endBandM, w.endBandShare * Math.hypot(dx, dy, dz));
         let share = 1;
         for (let i = 0; i < n; i += WorldCamera.FACE) {
             const ex = d[i + 2] - d[i], ez = d[i + 3] - d[i + 1];
@@ -386,7 +440,7 @@ class WorldCamera {
             const at = Math.min(1, gap / rate);
             const along = (px * ex + pz * ez + (dx * ex + dz * ez) * at) / length;
             const past = Math.max(0, -along, along - length);
-            if (past >= w.hardM + (soft ? w.endBandM : 0)) continue;
+            if (past >= w.hardM + (soft ? band : 0)) continue;
             const u = Math.max(0, Math.min(1, along / length));
             const y = head.y + dy * at;
             if (y <= d[i + 6] + (d[i + 7] - d[i + 6]) * u) continue;
@@ -403,7 +457,7 @@ class WorldCamera {
                 continue;
             }
             const low = Math.max(0, Math.min(1, (w.overM + w.overBandM - over) / w.overBandM));
-            const inside = Math.max(0, Math.min(1, 1 - (past - w.hardM) / w.endBandM));
+            const inside = Math.max(0, Math.min(1, 1 - (past - w.hardM) / band));
             const weight = low * low * (3 - 2 * low) * inside * inside * (3 - 2 * inside);
             share = Math.min(share, 1 - weight * (1 - hit));
         }
@@ -463,9 +517,12 @@ class WorldCamera {
         this.fresh = false;
         this.index = bike.index;
         const s = bike.s;
-        // Free roam: the line the camera reads is the rider's own (centre), through the bike along its way. The way is
-        // the bike's travel, eased by followRate, so a wobble does not swing the boom
-        if (this.followRider) {
+        // Free roam off the ride: the line the camera reads is the rider's own (centre), through the bike along its way.
+        // The way is the bike's travel, eased by followRate, so a wobble does not swing the boom. On the ride (bike.onRide)
+        // free roam reads the ride as the time trial does, so the two have one chase camera: the rider's straight line
+        // ran into the roads above a bend, the roof rule took them for decks overhead, and the boom sat at its head's
+        // height (1.3 m over the bike in place of 3 m in the standard view, 8 m in the high)
+        if (this.followRider && !bike.onRide) {
             const f = this.followAt || (this.followAt = { heading: bike.yaw || 0 });
             const want = Number.isFinite(bike.yaw) ? bike.yaw : f.heading;
             f.heading = fresh ? want : f.heading + WorldCamera.wrap(want - f.heading) * Math.min(1, step * WorldCamera.TUNING.followRate);
@@ -481,8 +538,13 @@ class WorldCamera {
         else WorldCamera.spring(sp.pull, pullWant, pullWant > sp.pull.x ? t.pullIn : t.pullOut, step);
         this.pull = Math.max(0, Math.min(1, sp.pull.x));
 
-        // The boom yaw: the route heading behind the bike, unwrapped onto the spring's own turn
-        const heading = this.centre(s - t.followBehindM, this.behind).heading;
+        // The boom yaw: the road's mean heading behind the bike, over a span that grows with speed, unwrapped onto the
+        // spring's own turn. A short S inside the span cancels out, so the boom does not swing with each of its bends
+        const wide = Math.max(t.yawSpanMinM, Math.min(t.yawSpanMaxM, bike.speed * t.yawSpanS));
+        const span = wide + (Math.min(wide, t.yawSpanBendM) - wide) * this.pull;
+        const near = fresh ? this.centre(s - t.followBehindM, this.behind).heading : sp.yaw.t;
+        const mean = this.roadMean(s - t.followBehindM, span, near, this.mean || (this.mean = {}));
+        const heading = mean.heading;
         const yawWant = sp.yaw.t + WorldCamera.wrap(heading - sp.yaw.t);
         if (fresh) WorldCamera.settle(sp.yaw, heading);
         else WorldCamera.spring(sp.yaw, yawWant, t.yawRate + (t.yawRateBend - t.yawRate) * this.pull, step, true, t.maxYawRate);
@@ -519,7 +581,8 @@ class WorldCamera {
         const swing = bike.swing;
         const road = this.centre(s, this.road || (this.road = {}));
         const across = (anchor.x - road.x) * Math.cos(road.heading) - (anchor.z - road.z) * Math.sin(road.heading);
-        const swingWant = swing ? swing.x : 0, lookSwingWant = swing ? swing.look : 0;
+        // (through an S the swing each way cancels, as the road's bends do: roadMean straight)
+        const swingWant = swing ? swing.x * mean.straight : 0, lookSwingWant = swing ? swing.look * mean.straight : 0;
         if (fresh || !swing) {
             this.trail = across + swingWant;
             this.lookSwing = lookSwingWant;
@@ -549,19 +612,31 @@ class WorldCamera {
         const reachStep = WorldCamera.WALLS.reachM;
         this.walls = this.faces ? this.faces(anchor.x, anchor.z, reachStep * Math.ceil(1 + 2 * sp.distance.x / reachStep)) : null;
 
-        // The look target's offset from the anchor, toward the road ahead
+        // The look target's offset from the anchor, toward the road ahead, in two parts: from the bike to the road's
+        // centre at the bike (lx, lz: the bike's weave across the road, carried at lookRate as before) and from there
+        // to the road ahead (tx, tz: the road's own turn, at lookTurnRate and not carried, so the look does not run
+        // round each bend of an S as fast as the road does)
         const ahead = this.lookTarget(s, bike.speed, bike.lift, this.ahead);
-        const lx = ahead.x - anchor.x, ly = ahead.y - anchor.y, lz = ahead.z - anchor.z;
+        const lx = road.x - anchor.x, ly = ahead.y - anchor.y, lz = road.z - anchor.z;
+        const tx = ahead.x - road.x, tz = ahead.z - road.z;
         if (fresh) {
             WorldCamera.settle(sp.lx, lx);
             WorldCamera.settle(sp.ly, ly);
             WorldCamera.settle(sp.lz, lz);
+            WorldCamera.settle(sp.tx, tx);
+            WorldCamera.settle(sp.tz, tz);
             WorldCamera.settle(sp.keep, 0);
         } else {
             WorldCamera.spring(sp.lx, lx, t.lookRate, step, true, t.maxSpeedMs);
             WorldCamera.spring(sp.ly, ly, t.lookRate, step, true, t.maxSpeedMs);
             WorldCamera.spring(sp.lz, lz, t.lookRate, step, true, t.maxSpeedMs);
+            WorldCamera.spring(sp.tx, tx, t.lookTurnRate, step);
+            WorldCamera.spring(sp.tz, tz, t.lookTurnRate, step);
         }
+        const offset = this.lookOffset;
+        offset.x = sp.lx.x + sp.tx.x;
+        offset.y = sp.ly.x;
+        offset.z = sp.lz.x + sp.tz.x;
 
         // The swing gives way to the land, the walls, a road overhead and the road ahead: the largest step of it whose
         // boom the land and the walls shorten no more than the boom with no swing, that no deck brings lower, and from whose end the road aheadM on is no nearer the side of the view
@@ -572,15 +647,15 @@ class WorldCamera {
             // Where aim() will look: the road ahead, given way toward the bike as much as on the last frame
             const look = this.lookFrom || (this.lookFrom = {});
             const keep = fresh ? 0 : this.keep || 0;
-            look.x = anchor.x + (sp.lx.x + this.lookSwing * Math.cos(this.yaw)) * (1 - keep);
-            look.z = anchor.z + (sp.lz.x - this.lookSwing * Math.sin(this.yaw)) * (1 - keep);
-            const road = this.centre(s + t.aheadM, this.roadAhead || (this.roadAhead = {}));
+            look.x = anchor.x + (offset.x + this.lookSwing * Math.cos(this.yaw)) * (1 - keep);
+            look.z = anchor.z + (offset.z - this.lookSwing * Math.sin(this.yaw)) * (1 - keep);
+            const far = this.centre(s + t.aheadM, this.roadAhead || (this.roadAhead = {}));
             const half = Math.tan(sp.fov.x * Math.PI / 360) * (bike.aspect || 16 / 9);
             const reach = fresh ? 1 : sp.fraction.x;
             // How far across the view the road ahead is, seen from the boom's end (1 is the side; behind is Infinity)
             const across = end => {
                 const x = head.x + (end.x - head.x) * reach, z = head.z + (end.z - head.z) * reach;
-                const ax = look.x - x, az = look.z - z, bx = road.x - x, bz = road.z - z;
+                const ax = look.x - x, az = look.z - z, bx = far.x - x, bz = far.z - z;
                 const angle = Math.atan2(ax * bz - az * bx, ax * bx + az * bz);
                 return Math.abs(angle) >= Math.PI / 2 ? Infinity : Math.abs(Math.tan(angle)) / half;
             };
@@ -618,7 +693,8 @@ class WorldCamera {
             let roofWant = Math.min(sp.height.x + t.roofBlendM, this.roofHeight(head, open, anchor.y, bike.y));
             const reach = Math.max(t.roofAheadMinM, bike.speed * t.roofAheadS);
             const at = this.roofAt || (this.roofAt = {});
-            for (let k = 1; k <= t.roofPoints; k++) {
+            // (off the ride in free roam the road ahead is not known: the roof is read over the boom alone)
+            for (let k = 1; k <= (this.followAt ? 0 : t.roofPoints); k++) {
                 const p = this.centre(s + reach * k / t.roofPoints, at);
                 const under = this.overhead(p.x, p.z, p.y);
                 if (under === Infinity) continue;
@@ -679,9 +755,9 @@ class WorldCamera {
         const sp = this.springs;
         const look = this.look;
         // The look point's lead into the corner is to the boom's side; the give-way below still keeps the bike in view
-        look.x = this.anchor.x + sp.lx.x + this.lookSwing * Math.cos(this.yaw);
-        look.y = this.anchor.y + sp.ly.x;
-        look.z = this.anchor.z + sp.lz.x - this.lookSwing * Math.sin(this.yaw);
+        look.x = this.anchor.x + this.lookOffset.x + this.lookSwing * Math.cos(this.yaw);
+        look.y = this.anchor.y + this.lookOffset.y;
+        look.z = this.anchor.z + this.lookOffset.z - this.lookSwing * Math.sin(this.yaw);
         const want = this.giveWay(camera, look, bike, probe, t.keepIn);
         WorldCamera.spring(sp.keep, want, t.keepRate, this.step || 1 / 60);
         let share = Math.max(0, Math.min(1, sp.keep.x));
