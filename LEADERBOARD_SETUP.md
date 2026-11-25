@@ -177,6 +177,30 @@ Rollback: redeploy the previous commit's functions. `database.rules.json` needs
 no change: `courseBoards` is closed to clients by default, and functions use the
 admin SDK.
 
+## The hill ride's board
+
+`functions/hill-courses.json` is the server's copy of `HillBoard.row()` (js/hill/board.js).
+`tests/unit/hill-board.test.js` fails when the copy and the game differ.
+It holds one row, `village-hill-v1`: 3 gates, and a floor and a ceiling for each of the 4 parts of the course.
+
+| | The hill board |
+|---|---|
+| Protocol | 2 |
+| Store | `/courseBoards/village-hill-v1` |
+| Gates | exactly 3 |
+| Ranks on | the finish-line time, which includes 5 s per fall |
+| Limits | each part at most 30 m/s and at least 0.5 m/s (plus 15 s per restart); the whole at least the sum of the floors plus 5 s per restart, at most 15 min; session 30 min |
+
+Deploy (the user's step; an agent never runs it):
+
+```bash
+cd functions && npm ci && npm test && firebase deploy --only functions
+```
+
+Effect check: `startRun` with `legId: "village-hill-v1"` returns `protocol: 2` and `gates: 3`.
+Until the deploy, the server has no row for the board. The client then sends nothing: the end card shows the time, the best and "Board unavailable: the online board for this ride is not open yet".
+`database.rules.json` needs no change: `courseBoards` is closed to clients, and functions use the admin SDK.
+
 ## Database Structure
 
 ```

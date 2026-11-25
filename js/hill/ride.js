@@ -2,9 +2,10 @@
 // (RideMode kind 'hill', js/ridemode.js). It starts at the top, stood still; gravity does most of the work, and at
 // speed the boy takes his feet off the pedals and holds his legs out. Near the bottom the camera stops high behind him
 // (HillLane.RULE.end) and stays while he rolls on round the bend; once he is out of its sight the picture fades and
-// the ride ends on a quiet card. It has no clock, no gates and no board: nothing
-// is timed and nothing is sent anywhere. It uses the game's renderer, scene lights, input and sound, and nothing of
-// the legs or the world.
+// the ride ends on a quiet card. It is timed from the roll-off to the finish on the last left (HillBoard,
+// js/hill/board.js), but no clock shows during the ride: the time, the rider's best and the online board show only on
+// the end card. It uses the game's renderer, scene lights, input, sound and leaderboard service, and nothing of the
+// legs or the world.
 //
 //   the lane and what stands by it    js/hill/lane.js (data), js/hill/scene.js (drawn)
 //   the bicycle's physics             js/hill/pushbike.js (the game's own bike), js/hill/bicycle.js (on the lane)
@@ -12,6 +13,7 @@
 //   the things in the street          js/hill/props.js
 //   the music                         js/hill/music.js
 //   the last picture                  assets/hill/loaf.glb (tools/blender/hill_loaf.py)
+//   the time and the board            js/hill/board.js, functions/hill-courses.json
 class HillRide {
     static get STEP_S() { return 1 / 120; }
 
@@ -161,6 +163,20 @@ class HillRide {
         return 'Up or W pedals · Down or S brakes · Left and Right steer · Space wheelies · Z changes the view · R starts again from the top · M sound · Esc leaves';
     }
 
+    // The local best on this device, in seconds, as the legs keep theirs (Game.bestTimeKey)
+    static get BEST_KEY() { return `motorcycleBestTime_${HillBoard.ID}`; }
+
+    // What the card says about the board when it cannot show it
+    static get BOARD_NOTES() {
+        return Object.freeze({
+            loading: 'Loading the board…',
+            unavailable: 'Board unavailable',
+            empty: 'No times on the board yet',
+            untimed: 'This ride is not on the board: debug mode, test data, a tuned ride or a place set by a tool',
+            notOpen: 'Board unavailable: the online board for this ride is not open yet'
+        });
+    }
+
     constructor(game) {
         this.game = game;
         this.lane = new HillLane();
@@ -176,6 +192,9 @@ class HillRide {
         this.endLook = new THREE.Vector3();
         this.ending = null;
         this.running = false;
+        // The clock and the board's session for this run (HillBoard); the session opens at the roll-off
+        this.board = typeof HillBoard !== 'undefined' ? new HillBoard(this.lane) : null;
+        this.session = null;
     }
 
     async start() {
@@ -268,7 +287,32 @@ class HillRide {
         const line = document.createElement('div');
         line.className = 'hill-end-keys';
         line.textContent = 'R rides it again · Esc leaves';
-        this.endNote.append(title, line);
+        // The time, the best and the board: filled when the card opens (showCard)
+        const part = (tag, className) => {
+            const el = document.createElement(tag);
+            el.className = className;
+            return el;
+        };
+        const button = (text, key, className, click) => {
+            const el = part('button', `hill-end-btn${className ? ` ${className}` : ''}`);
+            el.type = 'button';
+            el.textContent = text;
+            el.dataset.key = key;
+            el.addEventListener('click', click);
+            return el;
+        };
+        this.card = {
+            time: part('div', 'hill-end-time'),
+            best: part('div', 'hill-end-best'),
+            board: part('div', 'hill-end-board'),
+            name: button('Put my name on the board', 'KeyN', 'primary', () => this.enterName()),
+            again: button('Ride again', 'KeyR', '', () => this.restart()),
+            leave: button('Leave', 'Escape', '', () => window.location.assign(window.location.pathname))
+        };
+        this.card.name.hidden = true;
+        const buttons = part('div', 'hill-end-buttons');
+        buttons.append(this.card.name, this.card.again, this.card.leave);
+        this.endNote.append(title, this.card.time, this.card.best, this.card.board, buttons, line);
         this.endNote.style.display = 'none';
         note.append(this.viewNote, keys);
         document.body.append(note, this.fade, this.endNote);
@@ -280,6 +324,9 @@ class HillRide {
     }
 
     restart() {
+        this.closeCard();
+        this.dropSession();
+        if (this.board) this.board.reset();
         this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
         if (this.props) this.props.reset();
         if (this.spill) this.spill.reset();
@@ -291,6 +338,164 @@ class HillRide {
         if (this.endNote) this.endNote.style.display = 'none';
         if (this.fade) this.fade.style.opacity = '0';
         this.placeCamera(1);
+    }
+
+    // The roll-off: the clock starts, and a run that may go to the board opens its session with the server (times
+    // recorded before the reply are signed when it comes: RunSession). Debug mode, a tuned ride or test data runs the
+    // clock but opens none
+    beginTiming() {
+        if (!this.board) return;
+        this.dropSession();
+        this.board.begin(this.bike.s);
+        const tuned = typeof Tuning !== 'undefined' && typeof Tuning.beginRide === 'function' && Tuning.beginRide();
+        const search = typeof window !== 'undefined' && window.location ? window.location.search : '';
+        if (!HillBoard.allowed(search, tuned) || this.forcedShot) {
+            this.board.trusted = false;
+            return;
+        }
+        const service = this.game.leaderboardService;
+        if (!service) return;
+        this.session = service.openSession(HillBoard.ID, HillBoard.expected());
+        // The name entry (Game.showLeaderboardEntryUI) submits through the service's own session
+        service.session = this.session;
+    }
+
+    // Each frame: a ride tuned at any moment, or one a tool holds on a shot, is no longer sent anywhere
+    watchTrust() {
+        if (!this.board || !this.board.running) return;
+        const tuned = typeof Tuning !== 'undefined' && Tuning.ride && Tuning.ride.tuned;
+        if (tuned || this.forcedShot) this.board.trusted = false;
+        if (!this.board.trusted) this.dropSession();
+    }
+
+    // One physics step of the clock; `fell` on the step a fall begins. Gates, falls and the finish go to the session
+    timeStep(dt, fell) {
+        const event = this.board.step(dt, this.bike.s, fell);
+        if (!this.board.trusted) this.dropSession();
+        const session = this.session;
+        if (!event || !session) return event;
+        if (event.fell) session.recordRestart();
+        if (event.gate !== undefined) session.recordCheckpoint(event.gate, event.ms);
+        if (event.finish !== undefined) session.recordFinish(event.finish);
+        return event;
+    }
+
+    dropSession() {
+        if (this.session) this.session.cancel();
+        this.session = null;
+    }
+
+    // The rider's best on this device in ms, after keeping `ms` if it beats it (null: no best yet)
+    keepBest(ms) {
+        let best = NaN;
+        try {
+            best = parseFloat(window.localStorage.getItem(HillRide.BEST_KEY));
+            if (ms !== null && !(best * 1000 <= ms)) {
+                window.localStorage.setItem(HillRide.BEST_KEY, String(ms / 1000));
+                best = ms / 1000;
+            }
+        } catch (error) {
+            console.warn('Hill ride: the best time cannot be kept on this device:', error);
+            if (ms !== null) best = ms / 1000;
+        }
+        return Number.isFinite(best) ? Math.round(best * 1000) : null;
+    }
+
+    // The end card over the last picture: the time, the best, the board's top 10, and the name entry when the run
+    // can go to the board. It is a dialog of the one stack (js/modals.js): R, Esc and N are its buttons' keys
+    async showCard() {
+        const board = this.board, card = this.card, notes = HillRide.BOARD_NOTES;
+        if (!card) return;
+        const ran = (this.cardRun = (this.cardRun || 0) + 1);
+        const timed = board.finished && board.trusted;
+        const ms = board.finished ? board.finishMs : null;
+        const falls = board.restarts > 0 ? ` (${board.restarts} ${board.restarts === 1 ? 'fall' : 'falls'}, +${board.restarts * HillBoard.LIMITS.penaltyMs / 1000} s)` : '';
+        card.time.textContent = ms !== null ? `Your time ${HillBoard.format(ms)}${falls}` : 'Not timed';
+        const before = this.keepBest(null);
+        const best = timed ? this.keepBest(ms) : before;
+        card.best.textContent = best === null ? 'No best yet' : `Your best ${HillBoard.format(best)}${timed && best === ms && before !== ms ? ' · a new best' : ''}`;
+        card.name.hidden = true;
+        card.board.textContent = timed ? notes.loading : notes.untimed;
+        this.endNote.style.display = '';
+        if (typeof Modals !== 'undefined') Modals.open(this.endNote, { keep: true, under: 'show' });
+        const session = timed ? this.session : null;
+        let open = false;
+        if (session) {
+            const started = await session.ready;
+            if (ran !== this.cardRun) return;
+            open = started === true && session.isActive();
+            // A server that has no row for the board: nothing to read. A session that failed (offline, rate limited)
+            // still reads the board, with no name entry
+            if (session.unsupported) {
+                card.board.textContent = notes.notOpen;
+                return;
+            }
+        }
+        if (!timed) return;
+        await this.fillBoard(ran);
+        if (ran !== this.cardRun || !open) return;
+        card.name.hidden = false;
+        card.name.focus({ preventScroll: true });
+    }
+
+    // The board's top 10 into the card; a board that cannot be read says so and the time stays
+    async fillBoard(ran) {
+        const card = this.card, notes = HillRide.BOARD_NOTES, service = this.game.leaderboardService;
+        if (!service) {
+            card.board.textContent = notes.unavailable;
+            return;
+        }
+        let result = null;
+        try {
+            result = await service.fetchLeaderboard(HillBoard.ID, 10);
+        } catch (error) {
+            console.warn('Hill ride: the board could not be read:', error);
+        }
+        if (ran !== this.cardRun) return;
+        if (!result || !result.success || !Array.isArray(result.entries)) {
+            card.board.textContent = notes.unavailable;
+            return;
+        }
+        if (result.entries.length === 0) {
+            card.board.textContent = notes.empty;
+            return;
+        }
+        const table = document.createElement('table');
+        table.className = 'lb-table';
+        result.entries.forEach((entry, i) => {
+            const row = table.insertRow();
+            const falls = entry.restarts > 0 ? ` ${entry.restarts}R` : '';
+            const cells = [
+                [`${entry.rank !== undefined ? entry.rank : i + 1}.`, 'lb-rank'],
+                [String(entry.playerName), 'lb-name'],
+                [`${HillBoard.format(entry.totalTime)}${falls}${entry.flagged ? ' (flagged)' : ''}`, 'lb-time']
+            ];
+            for (const [text, className] of cells) {
+                const cell = row.insertCell();
+                cell.className = className;
+                cell.textContent = text;
+            }
+        });
+        card.board.replaceChildren(table);
+    }
+
+    // The game's own name entry over the card; afterwards the board is read again with the time on it
+    enterName() {
+        if (!this.session || !this.session.isActive() || typeof this.game.showLeaderboardEntryUI !== 'function') return;
+        this.card.name.hidden = true;
+        const ran = this.cardRun;
+        this.game.showLeaderboardEntryUI(() => {
+            if (ran !== this.cardRun) return;
+            this.session = null;
+            this.card.board.textContent = HillRide.BOARD_NOTES.loading;
+            this.fillBoard(ran);
+        });
+    }
+
+    closeCard() {
+        this.cardRun = (this.cardRun || 0) + 1;
+        if (this.endNote && typeof Modals !== 'undefined' && Modals.isOpen(this.endNote)) Modals.close(this.endNote);
+        if (this.endNote) this.endNote.style.display = 'none';
     }
 
     // The points of the boy and the bicycle the camera must see: the wheels' hubs and his head, from the lane and the
@@ -391,6 +596,7 @@ class HillRide {
             if (share >= 1) {
                 e.phase = 'done';
                 if (this.endNote) this.endNote.style.display = '';
+                if (this.board) this.showCard();
             }
         }
         return e.phase;
@@ -416,6 +622,8 @@ class HillRide {
             this.hold.t += dt;
             const H = HillRide.HOLD;
             if (this.hold.phase === 'hold' && this.hold.t >= H.leastS && controls.pedal > 0) {
+                // The bicycle rolls: the clock starts
+                this.beginTiming();
                 this.hold.phase = 'ease';
                 this.hold.t = 0;
                 this.hold.from = this.game.camera.position.clone();
@@ -431,8 +639,11 @@ class HillRide {
         // Near the end of the lane he pulls up
         if (this.bike.s > this.lane.rule.lengthM - 12) controls.brake = 1;
         this.accumulated += dt;
+        this.watchTrust();
         while (this.accumulated >= HillRide.STEP_S) {
+            const down = this.bike.crashed;
             this.bike.step(HillRide.STEP_S, controls);
+            if (this.board) this.timeStep(HillRide.STEP_S, !down && this.bike.crashed);
             if (this.props) {
                 this.props.knock(this.bike, game.soundManager);
                 this.props.step(HillRide.STEP_S);

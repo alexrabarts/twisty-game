@@ -8,9 +8,10 @@ const boards = require('./boards');
 const NAME_MIN = 1;
 const NAME_MAX = 5;
 
-function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, HttpsError, table = boards.courses }) {
-    const rule = boardId => boards.ruleFor(boardId, table);
-    const path = boardId => boards.storePath(boardId, table);
+function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, HttpsError, table = boards.courses, hills = boards.hills }) {
+    const rule = boardId => boards.ruleFor(boardId, table, hills);
+    const path = boardId => boards.storePath(boardId, table, hills);
+    const isTable = boardId => boards.isTable(boardId, table, hills);
 
     async function checkRateLimit(deviceFingerprint, hourlyLimit = 500, dailyLimit = 5000) {
         const hourAgo = now() - (60 * 60 * 1000);
@@ -73,21 +74,34 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
 
     // Protocol 2: each gap between gates (the first from 0) inside the gate
     // limits, and the finish inside the board's floor and the total cap. A
-    // restart only adds to the signed times, so the floor rises with it.
+    // restart only adds to the signed times, so the floor rises with it. A
+    // hill ride's row gives each part its own floor and ceiling, the last part
+    // (the last gate to the finish) too, and each restart raises every ceiling.
     function validateLongPhysics(r, checkpointTimes, finishTime, restarts) {
+        const least = i => (r.gateFloorsMs ? r.gateFloorsMs[i] : r.minGateMs);
+        const most = i => (r.gateCeilsMs ? r.gateCeilsMs[i] + r.restartMs * restarts : r.maxGateMs);
         let previous = 0;
         for (let i = 0; i < checkpointTimes.length; i++) {
             const delta = checkpointTimes[i] - previous;
-            if (!Number.isFinite(checkpointTimes[i]) || delta < r.minGateMs) {
-                throw new HttpsError('invalid-argument', `Checkpoint ${i} too fast: ${delta}ms since the last (min: ${r.minGateMs}ms)`);
+            if (!Number.isFinite(checkpointTimes[i]) || delta < least(i)) {
+                throw new HttpsError('invalid-argument', `Checkpoint ${i} too fast: ${delta}ms since the last (min: ${least(i)}ms)`);
             }
-            if (delta > r.maxGateMs) {
-                throw new HttpsError('invalid-argument', `Checkpoint ${i} too slow: ${delta}ms since the last (max: ${r.maxGateMs}ms)`);
+            if (delta > most(i)) {
+                throw new HttpsError('invalid-argument', `Checkpoint ${i} too slow: ${delta}ms since the last (max: ${most(i)}ms)`);
             }
             previous = checkpointTimes[i];
         }
         if (finishTime <= previous) {
             throw new HttpsError('invalid-argument', 'Finish time must be after the last checkpoint');
+        }
+        if (r.gateFloorsMs) {
+            const last = finishTime - previous, at = checkpointTimes.length;
+            if (last < least(at)) {
+                throw new HttpsError('invalid-argument', `Finish too fast: ${last}ms since the last checkpoint (min: ${least(at)}ms)`);
+            }
+            if (last > most(at)) {
+                throw new HttpsError('invalid-argument', `Finish too slow: ${last}ms since the last checkpoint (max: ${most(at)}ms)`);
+            }
         }
         const floor = r.minTotalMs + r.penaltyMs * restarts;
         if (finishTime < floor) {
@@ -140,7 +154,7 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
             deviceFingerprint,
             expiresAt: startTime + r.ttlMs
         };
-        if (boards.isTable(legId, table)) {
+        if (isTable(legId)) {
             session.protocol = r.protocol;
             session.gates = r.gates;
         }
@@ -150,7 +164,7 @@ function createHandlers({ db, now = Date.now, randomBytes = crypto.randomBytes, 
 
         // The server owns the name limit; a client that gets no nameMax keeps exactly 4
         const reply = { sessionId: sessionRef.key, sessionToken, nameMax: NAME_MAX };
-        if (boards.isTable(legId, table)) {
+        if (isTable(legId)) {
             reply.protocol = r.protocol;
             reply.gates = r.gates;
         }

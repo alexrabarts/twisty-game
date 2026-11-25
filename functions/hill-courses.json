@@ -1,0 +1,26 @@
+{
+  "village-hill-v1": {
+    "kind": "hill",
+    "gates": 3,
+    "metres": [
+      98,
+      110,
+      110,
+      104
+    ],
+    "gateFloorsMs": [
+      3266,
+      3666,
+      3666,
+      3466
+    ],
+    "gateCeilsMs": [
+      196000,
+      220000,
+      220000,
+      208000
+    ],
+    "restartMs": 15000,
+    "penaltyMs": 5000
+  }
+}

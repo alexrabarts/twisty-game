@@ -5,7 +5,7 @@
 //   (no query)        the menu; choosing a rider starts DEFAULT_WORLD, and Classic legs opens the leg screen
 //   ?world=<id|all>   that world at once, without the menu
 //   ?legs             the menu as it was before the world: the rider goes on to the leg screen
-//   ?<HILL_KEY>       the hill ride (js/hill/ride.js) at once, without the menu: a ride of its own, never timed
+//   ?<HILL_KEY>       the hill ride (js/hill/ride.js) at once, without the menu: a ride of its own, timed only on its end card (js/hill/board.js)
 const RideMode = {
     // The world a rider chosen on the menu rides: the Tremola slice (world/manifest.json)
     DEFAULT_WORLD: 'tremola',

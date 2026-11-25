@@ -261,7 +261,7 @@ class Game {
         });
     }
 
-    // The hill ride (js/hill/ride.js): a ride of its own on this page, with no menu, clock or board. One that cannot
+    // The hill ride (js/hill/ride.js): a ride of its own on this page, with no menu and no clock on screen; its time and board show on its end card. One that cannot
     // start (its model did not load) hands over to the legs, as a world that cannot load does
     startHill() {
         this.hill = new HillRide(this);

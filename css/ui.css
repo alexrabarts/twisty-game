@@ -2782,3 +2782,51 @@ body.hill-on .hud {
     font-size: 15px;
     opacity: 0.8;
 }
+.hill-end-time {
+    font-size: 22px;
+    font-variant-numeric: tabular-nums;
+}
+
+.hill-end-best {
+    font-size: 15px;
+    opacity: 0.85;
+    margin-bottom: 10px;
+}
+
+.hill-end-board {
+    font-size: 14px;
+    min-width: 260px;
+    margin: 0 auto 12px;
+}
+
+.hill-end-board .lb-table {
+    margin: 0 auto;
+}
+
+.hill-end-buttons {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.hill-end-btn {
+    font: inherit;
+    font-size: 15px;
+    padding: 6px 14px;
+    border: 1px solid rgba(244, 239, 226, 0.5);
+    border-radius: 6px;
+    background: rgba(244, 239, 226, 0.1);
+    color: inherit;
+    cursor: pointer;
+}
+
+.hill-end-btn.primary {
+    background: #f4efe2;
+    color: #1e1a14;
+}
+
+.hill-end-btn[hidden] {
+    display: none;
+}

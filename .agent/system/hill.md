@@ -2,9 +2,9 @@
 
 The hill ride is a short ride of its own. The address key `RideMode.HILL_KEY` (js/ridemode.js) opens it; that file is the only place the key is written. It shows no menu.
 
-A boy on a heavy delivery bicycle starts at the top of a steep cobbled lane through a stone village. The ride holds on the opening shot, then he rides down. Near the bottom the camera stops and the bicycle rolls on round the last curve and out of sight. The picture fades to a loaf on a board, the band plays its last chord, and the end card shows R and Esc.
+A boy on a heavy delivery bicycle starts at the top of a steep cobbled lane through a stone village. The ride holds on the opening shot, then he rides down. Near the bottom the camera stops and the bicycle rolls on round the last curve and out of sight. The picture fades to a loaf on a board, the band plays its last chord, and the end card shows the time, the best and the board.
 
-The ride has no clock, no gates and no board, and it sends nothing anywhere. The classic legs and the world are not touched. If its model does not load, the classic legs open with `RideMode.HILL_FAIL_NOTE`.
+The ride is timed, but no clock shows during the ride. The time shows only on the end card (see "The time and the board"). The classic legs and the world are not touched. If its model does not load, the classic legs open with `RideMode.HILL_FAIL_NOTE`.
 
 The owner gave key frames of the scene he had in mind. The frames are private and stay out of the repo. Only shapes, sizes, colour numbers and camera places come from them. No bread brand, logo or wordmark is on any model or text. The frame plate on the bicycle is blank, and the loaves are plain.
 
@@ -150,12 +150,53 @@ The ending (`HillLane.RULE.end`, `HillRide.updateEnding`) goes through these pha
 3. The last picture comes up: the loaf in a warm side light. The band plays its last chord (`HillMusic.close`). `HillLoaf` (js/hill/loaf.js) builds it under the fade, only when the ride reaches its end, so it is outside the village's budget. It is a crusty bloomer: a fine grid displaced by its own field, with a flat base, five deep slashes with torn raised lips, and a split along one side. Its colour, normal and roughness maps come from the same field: golden to deep brown, darker on the ridges, pale in the cuts, flour on top, the crust's crackle and the crumb's pores. One slice is cut off and lies on a worn board with grain and knife marks, with a bread knife and crumbs. The table behind goes soft, as a short lens makes it.
 4. The card shows.
 
+## The time and the board
+
+`HillBoard` (js/hill/board.js) holds the clock and the board's data. Its board id is `village-hill-v1`. The id never holds the address key.
+
+- **The start.** The clock starts when the bicycle rolls off the opening hold: the player pedals, and the hold ends (`HillRide.beginTiming`). The bicycle never starts by itself.
+- **The finish.** The finish line is `HillLane.RULE.end.stopS` (s 444), on the last left. There the camera stops and the ending begins (`HillBoard.finishS`).
+- **The gates.** Three timing lines, `HillBoard.GATES_S`: s 120 on the main straight, s 230 and s 340 before the sharp right.
+- **The clock.** It counts physics time, one step of 1/120 s at a time (`HillBoard.step`), so a slow frame changes nothing.
+- **A fall.** The in-place restart adds 5 s to the clock and counts one restart, as on a world ride (`LIMITS.penaltyMs`).
+- **R.** R starts the ride, the clock and the run again from the top. It drops the open session.
+- **No clock on screen.** The HUD is hidden on the hill ride, and nothing draws the time until the card. `tests/unit/hill-board.test.js` holds this.
+
+The end card (`HillRide.showCard`) is a dialog of the one stack (js/modals.js). It shows:
+- the time, with the falls and their seconds;
+- the rider's best on this device (`HillRide.BEST_KEY`), and "a new best" when it is one;
+- the board's top 10 (`getLeaderboard`);
+- the button "Put my name on the board" (N). It opens the game's own name entry (`Game.showLeaderboardEntryUI`). After the name, the card reads the board again;
+- the buttons Ride again (R) and Leave (Esc). The keys go through each button's `data-key`, not through a listener of the card.
+
+The run goes to the board through the game's leaderboard path: a session from `startRun` at the roll-off (`LeaderboardService.openSession`), the HMAC proof chain over the three gates, and a signed finish with the restart count (`RunSession`). The server holds each part of the course to its own limits (`functions/hill-courses.json`, `HillBoard.row`):
+- the floor: the part's length at 30 m/s. The fastest test ride tops out near 20 m/s;
+- the ceiling: the part's length at 0.5 m/s, plus 15 s for each restart;
+- the whole: the sum of the floors plus 5 s for each restart, and at most 15 min.
+
+`tests/unit/hill-board.test.js` holds `functions/hill-courses.json` equal to `HillBoard.row`. If a gate or the finish moves, change the board id (`-v2`) and the row together.
+
+These rides are never sent. The clock still runs, and the card says that the ride is not on the board:
+- debug mode (`?debug`);
+- test data (`?worldData`);
+- a tuned ride, at its start or at any moment of it (`Tuning.ride.tuned`);
+- a shot that a tool holds (`forcedShot`);
+- a place that a tool sets: the bicycle moves more than 2 m along the lane in one step (`LIMITS.jumpM`).
+
+The card never shows an error for the board:
+- No leaderboard service, or the board cannot be read: "Board unavailable", and the time stays.
+- The server has no row for the board (the functions are not deployed): "Board unavailable: the online board for this ride is not open yet". Nothing is sent.
+- The session failed (offline, rate limited): the card reads the board, but it shows no name entry.
+
 ## The music
 
 `HillMusic` (js/hill/music.js) plays the slow theme of the Largo from Dvorak's Ninth Symphony, which is in the public domain. It is set for cornet, two horns and tuba, and every voice is synthesised through the game's sound graph. It follows Mute and Volume.
 
 ## Checks
 
+- `tests/unit/hill-board.test.js` checks the clock, the server's row against `HillBoard.row`, and rides down the lane (pushed all the way, with no brake, calm, with falls) against each part's floor and ceiling. A ride signed by the game's `RunSession` goes onto the board through the real handlers. It also checks the rides that are never sent.
+- `tests/unit/hill-card.test.js` checks the end card in a page: no time during the ride; the time, the best and the top 10 at the end; N, R and Esc through the stack; and the words for a board that cannot be read.
+- `functions/test/hill.test.js` (`cd functions && npm test`) checks the hill rows and the handlers' limits for each part.
 - `tests/unit/hill-ride.test.js` checks these things:
   - **The address.** It opens the ride, and the key appears nowhere else.
   - **The course.** The order of its parts, the right-hander's angle, the straights, the sharp right's radius and the last left.
