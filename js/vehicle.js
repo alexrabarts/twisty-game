@@ -332,6 +332,8 @@ const CHARACTERS = [
     },
     {
         id: 'tim',
+        // At a leg's end stop (js/world/stopscene.js): what this rider does once off the bike, by the owner's word
+        stop: ['vape'],
         kg: 90,
         name: 'Tim',
         bikeLabel: 'Sports scooter',
@@ -396,6 +398,8 @@ const CHARACTERS = [
     },
     {
         id: 'lucy',
+        // At a leg's end stop (js/world/stopscene.js): what this rider does once off the bike, by the owner's word
+        stop: ['vape'],
         kg: 55,
         footSlopeDeg: 5,
         name: 'Lucy',
@@ -436,6 +440,8 @@ const CHARACTERS = [
     },
     {
         id: 'guy',
+        // At a leg's end stop (js/world/stopscene.js): what this rider does once off the bike, by the owner's word
+        stop: ['vape'],
         kg: 80,
         name: 'Guy',
         bikeLabel: 'Retro scrambler',

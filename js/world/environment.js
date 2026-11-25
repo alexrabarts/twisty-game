@@ -283,6 +283,14 @@ class WorldEnvironment {
         if (this.roadworks.group) this.group.add(this.roadworks.group);
         // No rider waits in the works or under a gate: the places there are closed (WorldPlaces.close)
         this.places.close([...(this.roadworks.sites || []).map(site => ({ s0: site.s0, s1: site.s1 })), { s0: this.startS, s1: this.startS }, { s0: this.endS, s1: this.endS }]);
+        // The stops at the stages' ends (StopScene): each area laid as hard standing, with its kind's props
+        if (typeof StopScene !== 'undefined') {
+            this.stopMeshes = StopScene.buildAll(this.stops);
+            for (const mesh of this.stopMeshes) {
+                this.triangleCount += mesh.geometry.attributes.position.count / 3;
+                this.group.add(mesh);
+            }
+        }
         // What makes each open place read as a stop (its props), solid to the bike as a house's walls are
         this.placeMesh = new PlaceMesh(this.places, this.route);
         this.group.add(this.placeMesh.group);

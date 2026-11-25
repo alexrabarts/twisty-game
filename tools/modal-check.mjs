@@ -59,7 +59,8 @@ const crash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotific
 const worldCrash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotification(); }, top: 'none' };
 // P on a keyboard; a touch screen has only its pause button to tap
 const pause = { eval: () => game.pauseRace(), touch: '.virtual-button-pause', top: 'world-pause' };
-const finish = { eval: () => game.finishRun(), top: 'finishBanner' };
+// (a leg that ends at a stop plays its scene first: skipped to its card, as any key does)
+const finish = { eval: () => { game.finishRun(); if (game.stopScene) game.skipStopScene(); }, top: 'finishBanner' };
 // A world ride is up: the world's environment, the bike and the run
 const WORLD_READY = 'window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun';
 // The world chosen on the menu is the leg picked on the leg list (js/world/legs.js): leg 1, the run-in from the north

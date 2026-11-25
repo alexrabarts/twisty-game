@@ -5617,19 +5617,22 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
         console.log = log;
         game.restartFromCheckpoint = restart;
     }
-    return { every, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
+    return { every, stageM: Math.round(env.endS - env.startS), gates: (env.checkpoints || []).length, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
 }, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100), roadworksWindow.toString());
 
 // The least number of hairpins a stage's probes must find: the stage's own count by tools/world/verify.mjs
 // findHairpins, so a finder that finds nothing fails where the data has hairpins and a stage with none (the run-in
-// from the north) is not failed for having none. The Tremola has 31; the probes ask for 20 of them, as before.
-const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'gotthard-lookout': 1 };
+// from the north, and the lookout leg, whose one hairpin is past its finish line at the stop) is not failed for having
+// none. The Tremola has 31; the probes ask for 20 of them, as before.
+const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'gotthard-lookout': 0 };
 const hairpinsLeast = () => HAIRPINS_LEAST[option('world') || 'tremola'] ?? 1;
 
 function fairnessChecks(results, failures) {
     const fair = results['world-fairness'];
     if (!fair) return;
-    if (!(fair.points > 500000)) failures.push(`world-fairness: only ${fair.points} points of the drawn road read`);
+    // (the Tremola's 13.2 km read over 500 000 points: 38 a metre of stage; a shorter stage has fewer)
+    const least = Number.isFinite(fair.stageM) ? 30 * fair.stageM : 500000;
+    if (!(fair.points > least)) failures.push(`world-fairness: only ${fair.points} points of the drawn road read, want over ${least}`);
     if (fair.widthCount) failures.push(`world-fairness: ${fair.widthCount} points where the physics band is over 0.1 m off the drawn ribbon (worst ${fair.worstWidthM} m): ${JSON.stringify(fair.width.slice(0, 10))}`);
     if (fair.solidCount) failures.push(`world-fairness: ${fair.solidCount} wall or fall points on the drawn road with nothing drawn within 0.5 m: ${JSON.stringify(fair.solid.slice(0, 10))}`);
     if (fair.runoffCount) failures.push(`world-fairness: ${fair.runoffCount} run-off points on the drawn carriageway: ${JSON.stringify(fair.runoff.slice(0, 10))}`);
@@ -5637,7 +5640,8 @@ function fairnessChecks(results, failures) {
     if (fair.crashes.length) failures.push(`world-fairness: ${fair.crashes.length} crashes in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.crashes.slice(0, 10))}`);
     if (fair.restarts.length) failures.push(`world-fairness: ${fair.restarts.length} restarts in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.restarts.slice(0, 10))}`);
     const works = fair.works || {};
-    if (!(works.sites > 0) || fair.siteRides !== works.sites * 2) failures.push(`world-fairness: ${fair.siteRides} rides through ${works.sites} roadworks sites`);
+    // (a stage with no checkpoint has no roadworks: the lookout leg is shorter than twice the station spacing)
+    if (!((works.sites > 0) || fair.gates === 0) || fair.siteRides !== (works.sites || 0) * 2) failures.push(`world-fairness: ${fair.siteRides} rides through ${works.sites} roadworks sites`);
     if ((works.narrow || []).length) failures.push(`world-fairness: open lanes under 3.2 m: ${JSON.stringify(works.narrow)}`);
     if ((works.inOpen || []).length) failures.push(`world-fairness: roadworks in an open lane: ${JSON.stringify(works.inOpen.slice(0, 10))}`);
     if ((works.drawnOff || []).length) failures.push(`world-fairness: roadworks whose physics box is not the drawn one: ${JSON.stringify(works.drawnOff.slice(0, 10))}`);
@@ -6067,7 +6071,9 @@ WORLD['world-junctions'] = async (page) => {
 function junctionChecks(results, failures) {
     const junctions = results['world-junctions'];
     if (!junctions) return;
-    if (!(junctions.roads >= 20)) failures.push(`world-junctions: only ${junctions.roads} side roads were read`);
+    // (the Tremola has 26 side roads; a stage has at least one a kilometre where the probe reads them)
+    const roadsLeast = (option('world') || 'tremola') === 'tremola' ? 20 : 1;
+    if (!(junctions.roads >= roadsLeast)) failures.push(`world-junctions: only ${junctions.roads} side roads were read`);
     const says = { steps: 'side roads with a step in their surface', holes: 'side roads with a hole in their surface', sunk: 'side roads with land over their surface', decks: 'side roads with a deck or parapet in their mouth', open: 'side roads whose edge hangs open in their mouth', walls: 'side roads with a wall of the ride drawn across their mouth', blocked: 'side roads whose mouth the physics shuts with the ride\'s wall', cliffs: 'side roads with a face of laid ground beside the other road in their mouth', strips: 'side roads with land, laid ground or the ride\'s verge drawn over them in their mouth', pits: 'side roads with a gap under the line between them and the ride beside them', clefts: 'side roads with a narrow gap open to the land between them and the ride beside them' };
     for (const [kind, text] of Object.entries(says)) {
         if (junctions[kind].count > JUNCTION_LIMITS[kind]) failures.push(`world-junctions: ${junctions[kind].count} ${text} (at most ${JUNCTION_LIMITS[kind]}): ${JSON.stringify(junctions[kind].worst.slice(0, 5))}`);
@@ -7883,6 +7889,113 @@ function treeChecks(results, failures) {
     if (read < 5) failures.push(`world-trees: only ${read} view bands held ${TREE_MIN_PX} tree pixels or more, want 5`);
 }
 
+// world-stop-shots: the scene at the leg's end stop (js/world/stopscene.js). The bike is put down STOP_SHOTS_BACK_M
+// before the finish line and the ride finished there; the scene is then run in steps of 1/30 s (the land streamed
+// round the stop) and the screen saved at each moment (--at seconds), with the bars, the card and the riders. It
+// fails on a stage with no stop at its end, a rider not parked in its slot (over STOP_SLOT_M off it) or not stood
+// off its bike at the end, a bike or a standing rider's boots off the ground (STOP_GROUND_M), the camera under the
+// ground, and no card at the end.
+//   node tools/terrain-check.mjs world-stop-shots --world gotthard-lookout --gpu [--out <dir>] [--at 1,4,8,12,16,20]
+const STOP_SHOTS_BACK_M = 20;
+const STOP_SLOT_M = 0.3;
+const STOP_GROUND_M = 0.15;
+const STOP_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/6f-shots/stop');
+WORLD_PROBES.push('world-stop-shots');
+WORLD['world-stop-shots'] = async (page) => {
+    const out = option('out') || STOP_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || (option('world') || 'tremola');
+    const moments = (option('at') || '1,4,8,12,16,20').split(',').map(Number);
+    const begun = await page.evaluate(async (placeSource, back) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        if (typeof StopScene === 'undefined' || !StopScene.stopAt(env)) return { error: `no stop at the end of ${env.stage ? env.stage.id : 'the ride'}` };
+        game.worldLinger = false;
+        await placeAt(env.endS - back);
+        twistyDev.freeze();
+        game.finishRun();
+        return { stop: StopScene.stopAt(env).id, scene: !!game.stopScene };
+    }, placeAt.toString(), STOP_SHOTS_BACK_M);
+    if (begun.error) return { error: begun.error };
+    const shots = [];
+    let at = 0;
+    for (const t of moments) {
+        await page.evaluate(async (until) => {
+            const env = game.environment, scene = game.stopScene;
+            while (scene && scene.t < until) {
+                game.stepStopScene(1 / 30);
+                env.update(game.vehicle.position, scene.stop.s, null, Infinity, 1 / 30);
+            }
+            game.lastCullTime = 0;
+            game.updatePerformanceCulling();
+            await env.streamer.settle(game.vehicle.position, scene.stop.s);
+            game.graphics.render(game.scene, game.camera);
+        }, t);
+        at = t;
+        const file = join(out, `${tag}-stop-${String(t).padStart(2, '0')}s.png`);
+        await page.screenshot({ path: file });
+        shots.push({ t, file });
+    }
+    // (then on until every rider has parked and got off, for the checks)
+    await page.evaluate(() => {
+        const env = game.environment, scene = game.stopScene;
+        while (scene && scene.t < scene.allParkedS + StopScene.GET_OFF_S + 0.5) {
+            game.stepStopScene(1 / 30);
+            env.update(game.vehicle.position, scene.stop.s, null, Infinity, 1 / 30);
+        }
+    });
+    const end = await page.evaluate(() => {
+        const scene = game.stopScene, env = game.environment;
+        const ground = (x, z) => env.ground.groundY(x, z, null);
+        const riders = scene.riders.map((r) => {
+            const group = r.player ? r.bike.group : r.bike.bikeGroup;
+            const p = group.position;
+            const y = ground(p.x, p.z);
+            const boot = r.stood && r.bike.legs ? r.bike.rider.localToWorld(r.bike.legs[-1].at().clone()) : null;
+            const by = boot ? ground(boot.x, boot.z) : null;
+            let shown = true;
+            for (let o = group; o; o = o.parent) if (!o.visible) shown = false;
+            return { who: r.bike.character ? r.bike.character.id : '?', player: !!r.player, inScene: !!group.parent, shown, meshesShown: (() => { let n = 0; group.traverse(o => { if (o.isMesh && o.visible) n++; }); return n; })(), offSlotM: Math.round(Math.hypot(p.x - r.slot.x, p.z - r.slot.z) * 100) / 100,
+                overGroundM: Math.round((p.y - y) * 100) / 100, stood: !!r.stood, bootOverGroundM: boot ? Math.round((boot.y - by - 0.03) * 100) / 100 : null, vape: r.actions.includes('vape') };
+        });
+        const cam = game.camera.position;
+        const v = game.vehicle;
+        const debug = { position: [v.position.x, v.position.y, v.position.z], group: [v.group.position.x, v.group.position.y, v.group.position.z], parent: v.group.parent && v.group.parent.type, slot0: scene.riders[0].slot, groundAt: ground(v.position.x, v.position.z) };
+        return { debug, riders, cameraOverGroundM: Math.round((cam.y - ground(cam.x, cam.z)) * 100) / 100, card: !!document.querySelector('#finishBanner.stop-card'), bars: [...document.querySelectorAll('.stop-bar')].map(b => b.getBoundingClientRect().height), puffs: scene.puffs.length, kind: scene.stop.kind };
+    });
+    // and the stop from over it (25 m up and back from the bikes toward the road), and the group close (6 m up, 12 back)
+    for (const [name, up, back] of [['over', 25, 25], ['group', 6, 12]]) {
+        await page.evaluate((up, back) => {
+            const scene = game.stopScene, f = StopScene.frame(scene.stop), env = game.environment;
+            const y = env.ground.groundY(f.ox, f.oz, null);
+            game.camera.position.set(f.ox - back * f.outX, y + up, f.oz - back * f.outZ);
+            game.camera.lookAt(f.ox, y + 1, f.oz);
+            game.graphics.render(game.scene, game.camera);
+        }, up, back);
+        const file = join(out, `${tag}-stop-${name}.png`);
+        await page.screenshot({ path: file });
+        shots.push({ t: name, file });
+    }
+    writeFileSync(join(out, `${tag}-index.json`), JSON.stringify({ begun, shots, end }, null, 1));
+    return { ...begun, last: at, shots, ...end };
+};
+
+function stopChecks(results, failures) {
+    const stop = results['world-stop-shots'];
+    if (!stop) return;
+    if (stop.error) { failures.push(`world-stop-shots: ${stop.error}`); return; }
+    if (!stop.card) failures.push('world-stop-shots: no result card at the end of the scene');
+    if (!(stop.cameraOverGroundM > 0.2)) failures.push(`world-stop-shots: the camera is ${stop.cameraOverGroundM} m over the ground`);
+    if (!stop.bars.every(h => h > 0)) failures.push(`world-stop-shots: the bars are ${JSON.stringify(stop.bars)} px high`);
+    stop.riders.forEach((r) => {
+        if (!(r.meshesShown > 0)) failures.push(`world-stop-shots: ${r.who}'s bike is not drawn`);
+        if (!(r.offSlotM <= STOP_SLOT_M)) failures.push(`world-stop-shots: ${r.who} stands ${r.offSlotM} m off its slot`);
+        if (!(Math.abs(r.overGroundM) <= STOP_GROUND_M)) failures.push(`world-stop-shots: ${r.who}'s bike is ${r.overGroundM} m off the ground`);
+        if (!r.stood) failures.push(`world-stop-shots: ${r.who} did not get off the bike`);
+        else if (!(Math.abs(r.bootOverGroundM) <= STOP_GROUND_M)) failures.push(`world-stop-shots: ${r.who}'s boots are ${r.bootOverGroundM} m off the ground`);
+    });
+}
+
 function worldChecks(report) {
     const { results, failures } = report;
     clearanceChecks(results, failures);
@@ -7894,6 +8007,7 @@ function worldChecks(report) {
     wallChecks(results, failures);
     junctionChecks(results, failures);
     stoneChecks(results, failures);
+    stopChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
         Object.entries(LEG_BUDGET).forEach(([key, most]) => { if (!(r[key] <= most)) failures.push(`world at s ${r.s}: ${r[key]} ${key}, over ${most}`); });

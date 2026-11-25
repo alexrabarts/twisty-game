@@ -3010,3 +3010,72 @@ body.photo-mode .virtual-button-pause {
     width: max-content;
     max-width: calc(100vw - 32px);
 }
+
+/* The stop scene at a leg's end (js/world/stopscene.js): black bars slide in over the canvas, the HUD fades out under
+   them, and the result card sits in the lower bar (its height is --stop-bar) */
+.stop-bar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    height: 0;
+    z-index: calc(var(--z-run-card) - 1);
+    background: #000;
+    pointer-events: none;
+    transition: height 0.6s var(--ease-out);
+}
+
+.stop-bar-top {
+    top: 0;
+}
+
+.stop-bar-bottom {
+    bottom: 0;
+}
+
+body.stop-scene #hud,
+body.stop-scene .world-guide,
+body.stop-scene .virtual-controls-left,
+body.stop-scene .virtual-controls-right,
+body.stop-scene .virtual-button-camera,
+body.stop-scene .virtual-button-pause {
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.6s var(--ease-out), visibility 0s linear 0.6s;
+}
+
+.finish-banner.stop-card {
+    top: auto;
+    bottom: 8px;
+    transform: translateX(-50%);
+    max-height: 45vh;
+    padding: 12px 18px;
+    background: rgba(8, 10, 14, 0.9);
+    animation: stop-card-in 0.5s var(--ease-out) both;
+}
+
+@keyframes stop-card-in {
+    from { opacity: 0; transform: translate(-50%, 20%); }
+    to { opacity: 1; transform: translateX(-50%); }
+}
+
+.finish-banner.stop-card .finish-title {
+    margin-bottom: 4px;
+    font-size: clamp(18px, 1.2vw + 12px, 26px);
+}
+
+.finish-banner.stop-card .finish-time {
+    font-size: clamp(30px, 3vw + 18px, 48px);
+}
+
+.finish-banner.stop-card .finish-buttons {
+    margin-top: var(--sp-2);
+    flex-wrap: nowrap;
+}
+
+.finish-banner.stop-card .finish-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 8px;
+    padding-right: 8px;
+    white-space: nowrap;
+}

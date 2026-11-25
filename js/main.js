@@ -2632,8 +2632,6 @@ class Game {
     // The end of a world stage: the time and the restarts, and R to ride it again. Boards, unlocks and the
     // next stage belong to the run flow of the world, not to this page.
     showWorldFinish() {
-        // A finished leg opens the next on the menu (WorldLegs)
-        if (typeof WorldLegs !== 'undefined' && this.environment.stage) WorldLegs.markFinished(this.environment.stage.id);
         const banner = document.createElement('div');
         banner.id = 'finishBanner';
         banner.className = 'finish-banner';
@@ -3759,6 +3757,17 @@ class Game {
             return;
         }
 
+        // The stop scene (StopScene) moves the bikes and the camera itself: no physics, no input, the land streamed
+        // round the player's bike
+        if (this.stopScene) {
+            this.stepStopScene(rawDeltaTime);
+            // (the crew comes in from wherever it was: what the distance cull hid round it is shown again)
+            this.updatePerformanceCulling();
+            if (this.environment && this.environment.isWorld) this.environment.update(this.vehicle.position, this.stopScene.stop.s, null, Game.SECTION_BUDGET_MS, rawDeltaTime);
+            this.graphics.render(this.scene, this.camera);
+            return;
+        }
+
         this.watchTuning();
 
         // A world ride eases the steer keys (SteerEase); a leg has no physics object and keeps its own smoothing
@@ -4322,7 +4331,146 @@ class Game {
             this.leaderboardService.recordFinish(Math.round(finishTime))
                 .catch(error => console.error('Failed to record finish:', error));
         }
+        // A finished leg opens the next on the menu (WorldLegs)
+        if (world && typeof WorldLegs !== 'undefined' && this.environment.stage && !this.freeRoam) WorldLegs.markFinished(this.environment.stage.id);
+        // A leg that ends at a stop rides on into it: the stop scene (js/world/stopscene.js) shows the card in its bar
+        if (world && !this.freeRoam && this.startStopScene()) return;
         this.showFinishScreen();
+    }
+
+    // The scene at a leg's end stop (StopScene): bars in, the HUD out, the group pulls in and parks, the riders get off,
+    // and the card comes up in the lower bar. False when the stage has no stop at its end
+    startStopScene() {
+        if (typeof StopScene === 'undefined' || this.stopScene) return false;
+        const env = this.environment;
+        const stop = StopScene.stopAt(env);
+        if (!stop) return false;
+        const route = env.route;
+        const crew = this.traffic ? this.traffic.motorcycles.filter(bike => bike.direction === 1 && bike.bikeGroup && bike.bikeGroup.visible && bike.rider) : [];
+        const riders = [{ bike: this.vehicle, s: this.vehicle.routeS, player: true }, ...crew
+            .map(bike => ({ bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress) }))
+            .sort((a, b) => b.s - a.s)];
+        const ground = env.ground;
+        this.stopScene = new StopScene({ stop, route, riders, ground: (x, z) => ground.groundY(x, z, null) });
+        this.stopScene.view = { bars: StopScene.showBars(document), puffs: [] };
+        document.body.classList.add('stop-scene');
+        if (this.soundManager) this.soundManager.stopEngineSound();
+        // Any key or a tap skips to the card; the card's own keys (js/modals.js) take over once it is up
+        const skip = (event) => {
+            if (!this.stopScene || this.stopScene.card) return;
+            if (event.type === 'keydown') event.preventDefault();
+            this.skipStopScene();
+        };
+        this.stopScene.view.skip = skip;
+        window.addEventListener('keydown', skip, true);
+        if (this.renderer) this.renderer.domElement.addEventListener('pointerdown', skip);
+        return true;
+    }
+
+    // Straight to where the scene rests: everyone parked and stood, the card up
+    skipStopScene() {
+        const scene = this.stopScene;
+        if (!scene) return;
+        scene.skip();
+        this.stepStopScene(0);
+        this.lastCullTime = 0;
+        this.updatePerformanceCulling();
+    }
+
+    // One frame of the stop scene: the bikes along their ways in, the riders off once parked, the camera on its path,
+    // the vape clouds, and the card once it is due
+    stepStopScene(dt) {
+        const scene = this.stopScene;
+        const frame = scene.step(dt);
+        // The crew comes in from wherever it was: what the distance cull hid round it shows from its first frame here
+        if (!scene.culled) {
+            scene.culled = true;
+            this.lastCullTime = 0;
+        }
+        frame.riders.forEach((at, k) => {
+            const r = scene.riders[k];
+            const bike = r.bike;
+            const group = r.player ? bike.group : bike.bikeGroup;
+            if (!group) return;
+            group.visible = at.shown;
+            if (!at.shown || at.y === null) return;
+            if (r.player) {
+                bike.position.set(at.x, at.y, at.z);
+                bike.yawAngle = at.heading;
+                bike.speed = at.speed;
+                bike.leanAngle = 0;
+                if (!r.stood) bike.updateMesh();
+                // (on the stop's ground as the crew are: the ride's ground pose reads the roads, not a car park)
+                group.position.set(at.x, at.y, at.z);
+                group.rotation.x = 0;
+                group.rotation.z = 0;
+            } else {
+                bike.currentSpeed = at.speed;
+                bike.leanAngle = 0;
+                group.position.set(at.x, at.y, at.z);
+                group.rotation.set(0, at.heading, 0);
+            }
+            if (at.stand && !r.stood) {
+                r.stood = StopScene.stand(r, (x, z) => this.environment.ground.groundY(x, z, null));
+                group.updateMatrixWorld(true);
+            }
+            if (r.stood && r.actions.includes('vape')) StopScene.puff(this.scene, scene, r, dt);
+        });
+        StopScene.stepPuffs(this.scene, scene, dt);
+        const cam = frame.camera;
+        this.camera.position.set(cam.eye.x, cam.eye.y, cam.eye.z);
+        this.camera.up.set(0, 1, 0);
+        this.camera.lookAt(cam.look.x, cam.look.y, cam.look.z);
+        if (frame.card && !scene.card) {
+            scene.card = true;
+            this.showStopCard(scene);
+        }
+    }
+
+    // The result card in the lower bar: the time, then what can be done here (a picture, the next leg), restart, menu
+    showStopCard(scene) {
+        const next = typeof WorldLegs !== 'undefined' ? WorldLegs.LIST.find(leg => leg.opensAfter === this.environment.stage.id) : null;
+        const actions = (StopScene.KINDS[scene.stop.kind] || {}).actions || [];
+        const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
+        const banner = document.createElement('div');
+        banner.id = 'finishBanner';
+        banner.className = 'finish-banner stop-card';
+        banner.innerHTML = `
+            <div class="finish-main">
+                <div class="finish-title">STAGE COMPLETE</div>
+                <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
+                <div class="finish-deltas">${restarts}</div>
+                <div class="finish-buttons">
+                    ${next ? `<button id="stopNextBtn" class="finish-btn primary" data-key="KeyN"><u>N</u>EXT LEG</button>` : ''}
+                    ${actions.includes('photo') && typeof PhotoMode !== 'undefined' ? '<button id="stopPhotoBtn" class="finish-btn secondary" data-key="KeyV">PHOTO (<u>V</u>)</button>' : ''}
+                    <button id="restartLegBtn" class="finish-btn ${next ? 'secondary' : 'primary'}" data-key="KeyR"><u>R</u>ESTART</button>
+                    <button id="returnToMenuBtn" class="finish-btn secondary" data-key="KeyM" data-menu><u>M</u>ENU</button>
+                </div>
+            </div>`;
+        if (this.hud) this.hud.clearTransient();
+        document.body.classList.add('run-over');
+        Modals.open(banner);
+        if (this.input) this.input.setMenuActive(true);
+        banner.querySelector('#restartLegBtn').addEventListener('click', () => { this.endStopScene(); this.restartLeg(); });
+        banner.querySelector('#returnToMenuBtn').addEventListener('click', () => { this.endStopScene(); this.returnToMenu(); });
+        const nextButton = banner.querySelector('#stopNextBtn');
+        if (nextButton) nextButton.addEventListener('click', () => window.location.assign(RideMode.worldUrl(window.location, next.id)));
+        const photo = banner.querySelector('#stopPhotoBtn');
+        if (photo) photo.addEventListener('click', () => this.openPhoto());
+    }
+
+    // The scene ends: bars out, the HUD back, the clouds gone, the listeners off
+    endStopScene() {
+        const scene = this.stopScene;
+        if (!scene) return;
+        this.stopScene = null;
+        window.removeEventListener('keydown', scene.view.skip, true);
+        if (this.renderer) this.renderer.domElement.removeEventListener('pointerdown', scene.view.skip);
+        StopScene.clearPuffs(this.scene, scene);
+        // (every rider back on the bike, as built: the restart and the next ride find them seated)
+        scene.riders.forEach(r => StopScene.seat(r));
+        StopScene.hideBars(scene.view.bars);
+        document.body.classList.remove('stop-scene');
     }
 
     // One frame of a world ride: the stations in order, the finish, and the cut rule, all from the
@@ -4674,7 +4822,7 @@ class Game {
     // Photo mode (js/world/photo.js): from the pause panel, or with its key while riding (the ride pauses under it). The
     // HUD goes, a camera of the rider's own goes round the bike; Back returns to where it was opened from
     openPhoto() {
-        if (!this.freeRoam || !this.environment || typeof PhotoMode === 'undefined' || this.photo) return;
+        if (!(this.freeRoam || this.stopScene) || !this.environment || typeof PhotoMode === 'undefined' || this.photo) return;
         const fromRide = !this.paused;
         if (fromRide) this.pauseRace({ panel: false });
         const ground = this.environment.ground;

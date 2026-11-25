@@ -680,6 +680,8 @@ const BikeModels = (() => {
           frame, rearWheel, frontWheel, brakeLight,
           rider: seated.rider, helmet: seated.helmet, visor: seated.visor, arms: seated.arms, legs: seated.legs,
           riderBasePos: seated.rider.position.clone(),
+          // (its shape's lean: the stop scene stands it upright, js/world/stopscene.js)
+          riderSpec: spec,
           // The bar of a crew bike does not turn: Vehicle.holdRider reads a rig at rest
           steerRig: { turn: new THREE.Quaternion(), point: new THREE.Vector3() },
           modelled: true,
