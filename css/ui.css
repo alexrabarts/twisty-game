@@ -2849,7 +2849,7 @@ body.hill-on .virtual-button-throw.left {
 
 .hill-end-btn[hidden] {
     display: none;
-
+}
 
 /* Free roam (js/gamemodes.js, Game.startFreeRoam): no clock, no checkpoints, no stage progress */
 body.free-roam #raceTimer,
@@ -2858,3 +2858,6 @@ body.free-roam #hudGates,
 body.free-roam #hudStageText {
     display: none !important;
 }
+
+/* A row the picker hides (free roam's Start at and Ride with rows while Time trial is chosen): the attribute alone loses to the row's grid */
+.mode-picker-row[hidden] { display: none; }

@@ -6741,6 +6741,13 @@ WORLD['world-roam'] = async (page) => {
     await new Promise(r => setTimeout(r, 1500));
     await page.screenshot({ path: join(dir, 'roam-menu.png') });
     result.menuRow = await page.evaluate(() => [...document.querySelectorAll('[data-game-mode]')].map(b => `${b.dataset.gameMode}:${b.disabled ? 'locked' : 'open'}`));
+    // Free roam's rows (Start at, Ride with) show with free roam chosen only
+    const shown = () => page.evaluate(() => [...document.querySelectorAll('.game-start-row, .game-group-row')].map(r => r.getBoundingClientRect().height > 0));
+    result.roamRows = { trial: await shown() };
+    await page.click('[data-game-mode="roam"]').catch(() => null);
+    await new Promise(r => setTimeout(r, 300));
+    result.roamRows.roam = await shown();
+    await page.screenshot({ path: join(dir, 'roam-menu-roam.png') });
     const failures = [];
     if (!result.freeRoam || !result.guideRoam || !result.follow) failures.push('not in free roam');
     if (result.barriers.length) failures.push(`barriers in the scene: ${result.barriers.slice(0, 5).join(', ')}`);
@@ -6750,6 +6757,7 @@ WORLD['world-roam'] = async (page) => {
     if (result.trace && result.trace.some(([, over]) => Math.abs(over) > 1)) failures.push(`the bike off the side road's surface: ${JSON.stringify(result.trace.filter(([, over]) => Math.abs(over) > 1).slice(0, 4))}`);
     // (the bike well in the frame on the side road, not at its edge: WorldCamera.followRider's look)
     if (result.framed && (Math.abs(result.framed.x) > 0.6 || Math.abs(result.framed.y) > 0.6)) failures.push(`the bike at the edge of the frame on the side road: ${JSON.stringify(result.framed)}`);
+    if (result.roamRows && (result.roamRows.trial.some(Boolean) || !result.roamRows.roam.every(Boolean))) failures.push(`free roam's rows on the rider screen: ${JSON.stringify(result.roamRows)}`);
     if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
     if (result.crewRide && result.crewRide.mostAhead > 0) failures.push(`a rider of the group ${result.crewRide.mostAhead} m ahead of the leading player`);
     if (result.crewSide && result.crewSide.waiting < result.crewSide.riders) failures.push(`riders not waiting while the player is down a side road: ${JSON.stringify(result.crewSide)}`);
