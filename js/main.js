@@ -450,7 +450,7 @@ class Game {
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
         this.worldCamera = new WorldCamera(this.environment.route, this.environment.ground, (x, z, y) => this.environment.overheadY(x, z, y), (x, z, reach) => this.environment.cameraFaces(x, z, reach));
         this.worldCamera.reset(start.heading);
-        this.startFreeRoam();
+        await this.startFreeRoam();
 
         const normalCameraOffset = this.baseCameraOffset.clone();
         normalCameraOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
@@ -501,7 +501,7 @@ class Game {
 
     // Free roam (GameModes 'roam': from the address or the menu, in debug mode only): no clock, stations or rules of the
     // ride, the roadworks off, the camera behind the rider on any road, and the edge of the map (FreeRoam)
-    startFreeRoam() {
+    async startFreeRoam() {
         const debug = Game.debugEnabled(window.location.search);
         this.freeRoam = typeof GameModes !== 'undefined' && GameModes.active(this.rideMode, debug) === 'roam';
         document.body.classList.toggle('free-roam', this.freeRoam);
@@ -523,7 +523,7 @@ class Game {
         }
         // Start anywhere (the menu's Start at): the start, a stopping place or the summit. The crew rides behind the
         // player wherever it starts (travelTo grids it there)
-        this.travelTo(FreeRoam.startFor(environment, (this.rideMode && this.rideMode.start) || GameModes.startAt), false);
+        await this.travelTo(FreeRoam.startFor(environment, (this.rideMode && this.rideMode.start) || GameModes.startAt), false);
         // The roadworks' lights work one lane for the ride's own direction: in free roam the sites are off
         if (environment.roadworks) {
             if (environment.roadworks.group) environment.roadworks.group.visible = false;
@@ -1213,7 +1213,7 @@ class Game {
         // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
         // in the middle of a ride
         if (panel && this.hud) this.hud.recallHint(true);
-        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null, this.vehicle ? this.vehicle.speed : 0);
+        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null, this.vehicle ? this.vehicle.speed : 0, this.freeRoam && typeof FastTravel !== 'undefined' ? () => this.openTravel() : null);
     }
 
     // Restart leg from the pause panel of a world ride (a world crash opens no card to offer it): it asks first, and
@@ -4582,8 +4582,30 @@ class Game {
         if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
     }
 
-    // Free roam puts the bike at a destination (FreeRoam.destinations): standing, facing along the ride, the land under it
-    // held until it is here, the camera and the guide set again. `say` tells the rider where they are
+    // Fast travel (js/world/travel.js): from the pause panel, or with its key while riding (the ride pauses under it).
+    // A pick takes the bike there and rides on; Back goes back to where it was opened from
+    openTravel() {
+        if (!this.freeRoam || !this.environment || typeof FastTravel === 'undefined') return;
+        const fromRide = !this.paused;
+        if (fromRide) this.pauseRace({ panel: false });
+        const s = this.worldStreamS ? this.worldStreamS() : this.vehicle.routeS;
+        FastTravel.show(document, FreeRoam.destinations(this.environment), s, (dest) => {
+            // (the ride stays paused, its panel down, until the land at the place is in)
+            FastTravel.hide(document);
+            if (typeof WorldCredits !== 'undefined') WorldCredits.hidePause();
+            this.travelTo(dest).then(() => this.resumeRace(), (error) => {
+                console.error('Fast travel: the land did not load', error);
+                this.resumeRace();
+            });
+        }, () => {
+            FastTravel.hide(document);
+            if (fromRide) this.resumeRace();
+        });
+    }
+
+    // Free roam puts the bike at a destination (FreeRoam.destinations): standing, facing along the ride, the camera, the
+    // guide and the crew set again. The promise settles once the land round it is in (WorldStreamer.settle), and the
+    // bike is put on that land. `say` tells the rider where they are
     travelTo(dest, say = true) {
         const { environment, vehicle } = this;
         const distanceSoFar = vehicle.distanceTraveled;
@@ -4607,6 +4629,12 @@ class Game {
         }
         if (this.atmosphereTrack) this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(dest.s), { environment, weatherSystem: this.weatherSystem });
         if (say) showCallout(dest.name, 'good', Game.CALLOUT_MS.restart);
+        return environment.streamer.settle(vehicle.position, dest.s).then(() => {
+            const ground = environment.ground.groundY(dest.x, dest.z, null);
+            if (Number.isFinite(ground)) vehicle.position.y = ground;
+            vehicle.findNearestRoadSegment();
+            vehicle.updateMesh();
+        });
     }
 
     // A restart in free roam: back where the bike last was on a road (the ride or a side road), a second before the
@@ -4939,6 +4967,15 @@ document.addEventListener('keydown', (event) => {
     if (event.code !== 'KeyN' || event.repeat || !window.game || !Game.debugEnabled(window.location.search)) return;
     if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
     window.game.debugSkipToNextGate();
+});
+
+// Fast travel's key in a free-roam ride (Game.openTravel). Not while a dialog is open: there the pause panel's Travel
+// button holds the key (js/modals.js). Not while a name is typed
+document.addEventListener('keydown', (event) => {
+    if (typeof FastTravel === 'undefined' || event.code !== FastTravel.KEY || event.repeat || event.ctrlKey || event.metaKey || event.altKey || !window.game || !window.game.freeRoam) return;
+    if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
+    if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
+    window.game.openTravel();
 });
 
 // The rider mode's key in a ride (Game.stepRiderMode). Not while a dialog is open: the dialog stack owns the keys

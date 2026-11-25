@@ -227,6 +227,23 @@ const SEQUENCES = [
         { click: '#world-pause [data-resume]', top: 'none', check: presetCheck('balanced') }
     ] },
 
+    // Free roam's fast travel (js/world/travel.js): from the pause panel (a click and G through the dialog stack) and with
+    // G while riding; Escape goes back to where it opened from, a place takes the bike there and rides on
+    { name: 'roam-pause-travel', page: 'roam', steps: [
+        pause,
+        { click: '#world-pause [data-travel-open]', top: 'fast-travel' },
+        { key: 'Escape', tap: '#fast-travel [data-key="Escape"]', top: 'world-pause', focus: '#world-pause [data-travel-open]' },
+        { key: 'KeyG', tap: '#world-pause [data-travel-open]', top: 'fast-travel' },
+        { click: '#fast-travel [data-travel="summit"]', top: 'none' }
+    ] },
+    // (keys only: a touch screen opens it from the pause panel, roam-pause-travel)
+    { name: 'roam-travel-key', page: 'roam', steps: [
+        { key: 'KeyG', top: 'fast-travel' },
+        { key: 'Escape', top: 'none' },
+        { key: 'KeyG', top: 'fast-travel' },
+        { key: 'Digit2', top: 'none' }
+    ] },
+
     // The menu of the legs: credits and best times over it
     { name: 'menu-credits', page: 'menu', steps: [
         { top: MENU },
@@ -369,9 +386,10 @@ async function openPage(browser, port, kind, variant, errors, noWorld = false) {
         }
     });
     page.on('pageerror', error => errors.push(error.message));
-    const url = kind === 'world' ? '/?world=tremola' : '/';
+    // (roam: the world in free roam, open in debug mode)
+    const url = kind === 'world' ? '/?world=tremola' : kind === 'roam' ? '/?world=tremola&mode=roam&debug' : '/';
     await page.goto(`http://127.0.0.1:${port}${url}`, { waitUntil: 'load', timeout: 600000 });
-    if (kind === 'world') {
+    if (kind === 'world' || kind === 'roam') {
         await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 600000, polling: 500 });
     } else {
         await page.waitForFunction('window.game && window.game.tourSystem && document.querySelector(".tour-selector-overlay")', { timeout: 60000, polling: 250 });

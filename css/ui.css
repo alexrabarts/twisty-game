@@ -2861,3 +2861,38 @@ body.free-roam #hudStageText {
 
 /* A row the picker hides (free roam's Start at and Ride with rows while Time trial is chosen): the attribute alone loses to the row's grid */
 .mode-picker-row[hidden] { display: none; }
+
+/* Fast travel (js/world/travel.js): the pause panel's look, a list of places with how far each is */
+.fast-travel {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px 22px;
+    width: min(420px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    color: #fff;
+    font: 14px system-ui, sans-serif;
+}
+
+.fast-travel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow-y: auto;
+}
+
+.fast-travel-btn {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    text-align: left;
+}
+
+.fast-travel-far {
+    color: var(--c-text-dim);
+    white-space: nowrap;
+}

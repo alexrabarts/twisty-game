@@ -83,7 +83,7 @@ const WorldCredits = {
     // to offer it), Menu (when `menu` is given), Credits, Settings and the rider mode. P and Escape resume, R is
     // Restart leg, M is Menu, O is Settings. `speed` is the bike's as the pause began: the mode changes only while the
     // bike stands (RiderModes.canChange), so with the bike moving its control is shown locked.
-    showPause(environment, resume, menu = null, restart = null, speed = 0) {
+    showPause(environment, resume, menu = null, restart = null, speed = 0, travel = null) {
         WorldCredits.hidePause();
         const panel = document.createElement('div');
         panel.id = 'world-pause';
@@ -106,6 +106,16 @@ const WorldCredits = {
             again.innerHTML = '<u>R</u>estart leg';
             again.addEventListener('click', (event) => { event.stopPropagation(); restart(); });
             panel.appendChild(again);
+        }
+        // (free roam: fast travel, js/world/travel.js)
+        if (travel) {
+            const go = document.createElement('button');
+            go.className = 'btn';
+            go.dataset.travelOpen = '';
+            go.dataset.key = FastTravel.KEY;
+            go.innerHTML = 'Travel (<u>G</u>)';
+            go.addEventListener('click', (event) => { event.stopPropagation(); travel(); });
+            panel.appendChild(go);
         }
         if (menu) {
             const leave = document.createElement('button');

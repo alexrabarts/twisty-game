@@ -16,6 +16,7 @@ const read = name => readFileSync(join(root, 'js', name), 'utf8');
 const { GameModes } = new Function(`${read('gamemodes.js')}\nreturn { GameModes };`)();
 const { FreeRoam } = new Function(`${read('world/freeroam.js')}\nreturn { FreeRoam };`)();
 const { WorldLooks } = new Function(`${read('world/looks.js')}\nreturn { WorldLooks };`)();
+const { FastTravel } = new Function('Modals', `${read('world/travel.js')}\nreturn { FastTravel };`)({ open: (el) => { document.body.appendChild(el); return el; }, close: (el) => el.remove() });
 const game = loadGame();
 
 describe('the mode', () => {
@@ -202,5 +203,27 @@ describe('time of day and weather', () => {
         expect([GameModes.time, GameModes.weather]).toEqual(['night', 'fog']);
         GameModes.chosen = 'trial';
         GameModes.time = GameModes.weather = 'stage';
+    });
+});
+
+describe('fast travel', () => {
+    const list = [{ id: 'start', name: 'The start', s: 70 }, { id: 'p1', name: 'Lay-by, km 2.0', s: 2000 }, { id: 'summit', name: 'The summit', s: 13157 }];
+
+    test('a button for each place with its key and how far it is; a pick goes there, Back cancels', () => {
+        let went = null, cancelled = 0;
+        const box = FastTravel.show(document, list, 1500, (dest) => { went = dest; }, () => { cancelled++; });
+        const buttons = [...box.querySelectorAll('[data-travel]')];
+        expect(buttons.map(b => b.dataset.key)).toEqual(['Digit1', 'Digit2', 'Digit3']);
+        expect(buttons.map(b => b.querySelector('.fast-travel-far').textContent)).toEqual(['1.4 km back', '0.5 km on', '12 km on']);
+        buttons[2].click();
+        expect(went.id).toBe('summit');
+        box.querySelector('[data-key="Escape"]').click();
+        expect(cancelled).toBe(1);
+        FastTravel.hide(document);
+        expect(document.getElementById('fast-travel')).toBe(null);
+    });
+
+    test('a place within 50 m is here', () => {
+        expect(FastTravel.distance(1000, 1030)).toBe('here');
     });
 });
