@@ -153,6 +153,11 @@ class LandShade {
         return { perM: 1 / 4400, baseY: 1500, scaleM: 6000, onset: 2, most: 0.94, desat: 0.85, air: { s: 0.5, v: 0.58 } };
     }
 
+    // The air of the stage in play (WorldLooks.airOf: measured on that stage's own photos), or null for LandShade.HAZE's
+    static setAir(air) {
+        LandShade.stageAir = air && Number.isFinite(air.s) && Number.isFinite(air.v) ? { s: air.s, v: air.v } : null;
+    }
+
     static writeHaze(h) {
         LandShade.uniforms.uHaze.value.set(h.perM, h.most, h.desat, 1 / h.scaleM);
         LandShade.uniforms.uHazeBaseY.value = h.baseY;
@@ -209,7 +214,7 @@ class LandShade {
         const hsl = {};
         const display = fog.clone().convertLinearToSRGB();
         display.getHSL(hsl);
-        const { s, v } = LandShade.HAZE.air;
+        const { s, v } = LandShade.stageAir || LandShade.HAZE.air;
         // HSV (h, s, v) to HSL for Color.setHSL
         const l = v * (1 - s / 2);
         const sl = l > 0 && l < 1 ? (v - l) / Math.min(l, 1 - l) : 0;

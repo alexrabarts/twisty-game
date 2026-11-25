@@ -106,6 +106,10 @@ Keep the rectangles and their overlays under `matches/round-<n>/ref-rects/`, nev
 
 `node tools/world/photomatch.mjs haze --round <n>` measures the colour of distant land in every matched photo by its real distance (1 to 3 km, 3 to 8 km, from 8 km) and the colour of the sky 1 to 8% of the picture's height over the skyline. It prints the numbers of each band over the photos with a camera that can be trusted, and writes them with each photo's own numbers to `matches/round-<n>/haze.json`. Only the pooled numbers go into the repo: they set `LandShade.HAZE` (`js/world/landshade.js`) and the ranges of the browser check `world-haze` (`HAZE_BANDS`, `HAZE_SKY` in `tools/terrain-check.mjs`). Measure again when a round adds photos with a far view.
 
+### Each leg's own numbers
+
+A leg is measured on its own photos: `node tools/world/photomatch.mjs haze --round <name> --data worlds/gotthard --stage gotthard-lookout`. `--data` reads the drawn world of another data folder (default `world/`), and `--stage` keeps the photos whose nearest point of that folder's ride lies on the stage (to the next stage's start, the last stage to the ride's end: the stop past its finish line is its own). A round with `--data` leaves `coverage.json` as it is. The numbers go into `WorldLooks.stageAir` (js/world/looks.js) with the count of photos; a stage with no photo of distant land names the stage it takes its air from (`from`). The game sets the stage's air when the leg loads (`LandShade.setAir`).
+
 ## 5. After an import grows the world
 
 1. Run `node tools/world/photomatch.mjs coverage`. `coverage.json` lists each cluster of photos with its distance to the drawn world (`corridorDistanceM`) and to the planned route. Use it to size the next import or a free-roam corridor so that it covers the stops. In the importer, `readCoverage()` and `coverageBoxes(coverage, { reachM, marginM })` from `tools/world/photos/geo.mjs` give the LV95 boxes round the stops near the planned route.

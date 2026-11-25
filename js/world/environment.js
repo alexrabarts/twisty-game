@@ -142,6 +142,8 @@ class WorldEnvironment {
         this.places = new WorldPlaces(data.manifest.places || [], this.route, stage ? { from: stage.from, to: stage.to, stage: stage.id } : {});
         // The stops at the stages' ends (tools/world/stops.mjs): where the group parks after the finish line
         this.stops = data.manifest.stops || [];
+        // The stage's own air, measured on its photos (WorldLooks.stageAir)
+        if (typeof LandShade !== 'undefined' && typeof WorldLooks !== 'undefined') LandShade.setAir(stage ? WorldLooks.airOf(stage.id) : null);
         this.ground = new WorldGround(this.route, data);
         // The physics reads the land as it is drawn: cut to the retaining walls (cutsOf)
         this.ground.cutsOf = key => this.cutsOf(key);

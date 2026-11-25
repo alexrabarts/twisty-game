@@ -3,7 +3,8 @@
 //   node tools/world/photomatch.mjs [--round 1] [--only <file>] [--no-game] [--margin 300] [--max <n>]
 //   node tools/world/photomatch.mjs coverage
 //   node tools/world/photomatch.mjs haze [--round 5]
-//   --data <folder> reads the drawn world of another data folder (worlds/gotthard with --world gotthard-lookout)
+//   --data <folder> reads the drawn world of another data folder (worlds/gotthard with --world gotthard-lookout);
+//   --stage <id> keeps the photos on that stage of its ride (a leg's own numbers)
 //
 // For every row of every geo CSV (~/Pictures/twisty-reference/geo/*.csv, "file;lat;lng"):
 //   1. WGS84 -> LV95 (swisstopo's approximate formulas) -> local metres of world/manifest.json; the nearest point
@@ -34,6 +35,8 @@ import { readExif, fieldOfView } from './photos/exif.mjs';
 import { readImage, writeJpeg, jpegBytesFor, regionStats, statGaps, sideBySide, drawRows, copyImage } from './photos/image.mjs';
 import { HeightField, horizonProfile, fitPose, guidedSkyline, horizonRows, depthGrid } from './photos/horizon.mjs';
 import { confidenceOf, regionOf, REGION_NAMES, skylineGap, RoadIndex } from './photos/compare.mjs';
+import { decodeWorld } from './encode.mjs';
+import { rideSamples } from './stations.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -71,12 +74,36 @@ function nearestPlanned(planned, x, z) {
   return { distanceM: Math.round(hit.distance), alongM: Math.round(hit.s), nearestWaypoint: near.name, waypointDistanceM: Math.round(Math.hypot(near.x - x, near.z - z)) };
 }
 
+// `--stage <id>` keeps the photos whose nearest point of the folder's ride lies on that stage (within `margin` of it):
+// each leg's own photos, for its own numbers (a leg's look and haze)
+function stageFilter(margin) {
+  const id = option('stage');
+  if (!id) return () => true;
+  const dir = path.join(ROOT, option('data', 'world'));
+  const world = decodeWorld(dir);
+  const stage = world.ride.stages.find(st => st.id === id);
+  if (!stage) throw new Error(`no stage ${id} in ${dir}`);
+  const samples = rideSamples(world.edges, world.ride.path);
+  // (a stage runs on to the next one's start, and the last to the ride's end: its stop past the finish line is its own)
+  const next = world.ride.stages.find(st => st.from >= stage.to - 1e-6 && st.id !== id);
+  const to = next ? next.from : Infinity;
+  return (x, z) => {
+    let best = Infinity, at = 0;
+    for (let i = 0; i < samples.s.length; i += 2) {
+      const d = Math.hypot(samples.x[i] - x, samples.z[i] - z);
+      if (d < best) { best = d; at = samples.s[i]; }
+    }
+    return best <= margin && at >= stage.from && at <= to;
+  };
+}
+
 function photoRows(world, margin) {
+  const onStage = stageFilter(margin);
   return readGeoCsvs(path.join(REFERENCE_DIR, 'geo')).map(row => {
     const { e, n } = wgs84ToLv95(row.lng, row.lat);
     const { x, z } = toLocal(e, n, world.origin);
     const worldDistanceM = distanceToSquares(world.squares, x, z);
-    return { ...row, e, n, x, z, worldDistanceM, inWorld: worldDistanceM <= margin, found: findPhoto(row.file, path.join(REFERENCE_DIR, '_all')) };
+    return { ...row, e, n, x, z, worldDistanceM, inWorld: worldDistanceM <= margin && onStage(x, z), found: findPhoto(row.file, path.join(REFERENCE_DIR, '_all')) };
   });
 }
 

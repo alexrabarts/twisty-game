@@ -231,6 +231,9 @@ window.twistyDev = {
     step(n = 1, options = {}) {
         const game = window.game;
         this.freeze();
+        // A ride put down past a leg's finish line is not a ride into its stop: the stop scene (js/world/stopscene.js)
+        // moves no physics, so a stepped proof ends it and rides on
+        if (game.stopScene && game.endStopScene) game.endStopScene();
         const graphics = game.graphics;
         const render = graphics.render;
         const update = graphics.update;

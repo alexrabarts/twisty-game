@@ -53,6 +53,21 @@ describe('every stage changes its weather or its light along it', () => {
         }
     });
 
+    test('each new leg has its own air, measured on its photos, or names the stage it takes it from', () => {
+        for (const name of readdirSync(path.join(REPO, 'worlds'))) {
+            const stages = JSON.parse(readFileSync(path.join(REPO, 'worlds', name, 'manifest.json'), 'utf8')).stages;
+            for (const stage of stages) {
+                const row = WorldLooks.stageAir[stage.id];
+                expect(row).toBeDefined();
+                if (row.from) expect(row.photos).toBe(0);
+                else { expect(row.photos).toBeGreaterThan(0); expect(row.s).toBeGreaterThan(0); expect(row.v).toBeGreaterThan(0); }
+                expect(WorldLooks.airOf(stage.id) === null || Number.isFinite(WorldLooks.airOf(stage.id).s)).toBe(true);
+            }
+        }
+        expect(WorldLooks.airOf('gotthard-north')).toBeNull();
+        expect(Object.keys(WorldLooks)).not.toContain('stageAir');
+    });
+
     test('the Tremola goes from clear air to cloud to rain, and back to clear air before the top', () => {
         const stage = manifest.stages.find(s => s.id === 'tremola');
         const changes = trackOf(WorldLooks).changesWithin(stage.from / UNIT, stage.to / UNIT);

@@ -92,6 +92,31 @@ Object.defineProperties(WorldLooks, {
             }
         }
     },
+    // The air of each stage: the saturation and value of distant land's haze (LandShade.HAZE.air), measured on that
+    // stage's own photos with `node tools/world/photomatch.mjs haze --data <folder> --stage <id>` (the photos with a
+    // camera that can be trusted, distant land by its real distance). A stage with no photo of distant land takes the
+    // air of the stage it names in `from`, and says so. The Tremola's is LandShade.HAZE.air itself (19 photos: land
+    // 8 km on at saturation 0.46, value 0.67; 3 to 8 km 0.37, 0.47).
+    //   gotthard-lookout  13 photos at the lookout: 8 km on 96, 126, 161 (hue 212, saturation 0.41, value 0.63), 3 to
+    //                     8 km 84, 101, 117 (hue 209, 0.28, 0.46), sky over the skyline 191, 205, 221. Greyer air than
+    //                     the Tremola's: its air's saturation and value scaled by the far band's (0.41 / 0.46, 0.63 /
+    //                     0.67)
+    //   gotthard-north    4 photos, all of the village at the start in the evening, its land reddened by the low sun and
+    //                     one photo of land 8 km off: no measure of the ramp's air, so the Tremola's
+    stageAir: {
+        value: Object.freeze({
+            'gotthard-lookout': Object.freeze({ s: 0.45, v: 0.55, photos: 13 }),
+            'gotthard-north': Object.freeze({ from: 'tremola', photos: 0 })
+        })
+    },
+    // The air of a stage: its own, its `from` stage's, or null (LandShade.HAZE.air)
+    airOf: {
+        value(id) {
+            const row = WorldLooks.stageAir[id];
+            if (!row) return null;
+            return row.from ? WorldLooks.airOf(row.from) : { s: row.s, v: row.v };
+        }
+    },
     // Free roam's pickers (GameModes.TIMES, GameModes.WEATHERS): every part of every stage of `looks` at one time of day
     // and one weather; 'stage' keeps a stage's own. The weather's strength is `strength` (rain at full, fog as the
     // cloud variant's). No snow: its grip (grip.snow, lateral 0.4) puts a rider at full lock in a hairpin on the
