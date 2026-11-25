@@ -45,8 +45,8 @@ class HillRide {
     // cobbleTone of it, darker
     static get CLIMB_LIGHT() {
         return Object.freeze({
-            headingRad: 0.02, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 1.9,
-            haze: 0xe4dfd4, hazeDensity: 0.012, ambient: 0.12, sky: 0xdcd8d0, ground: 0x7a705c, hemisphere: 0.3, envIntensity: 0.15, cobbleRough: 0.28, cobbleNormal: 2, cobbleTone: 0.72
+            headingRad: 0.1, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 1.9,
+            haze: 0xe4dfd4, hazeDensity: 0.012, ambient: 0.16, sky: 0xdcd8d0, ground: 0x7a705c, hemisphere: 0.38, envIntensity: 0.2, cobbleRough: 0.28, cobbleNormal: 2, cobbleTone: 0.72
         });
     }
 
@@ -85,13 +85,13 @@ class HillRide {
     //   far end, small against them;
     // - then a long lens head on, trackM up the lane ahead of him and `up` over the lane there, on his line, aimed lookUpM
     //   over the bicycle, keeping trackFrameM of picture height at his distance. It goes back up the lane as he comes on;
-    // - at `stop`, a pace from the stall, it stays. As he comes on the lens opens out and then closes in to his
-    //   distance (`frames`: [his distance in m, the picture's height there in m], eased between), and it turns with
-    //   him as he wheels the bicycle in to the stall, side on
+    // - at `stop`, uphill of the stall and in line with its front, it stays. As he comes on the lens opens out and then
+    //   closes in to his distance (`frames`: [his distance in m, the picture's height there in m], eased between), and
+    //   it turns with him, aimed stallAim of the way to the stall's front, as he wheels the bicycle in to it, side on
     static get CLIMB_SHOTS() {
         return Object.freeze({
             wideM: 12, wide: { position: [32, -2.0, 0.95], target: [64, 2.5, 2.4], fov: 15 },
-            trackM: 16, up: 1.2, lookUpM: 0.85, trackFrameM: 1.4, stop: [25.0, -0.6, 1.25],
+            trackM: 16, up: 1.2, lookUpM: 0.85, trackFrameM: 1.4, stop: [23.6, 1.4, 1.3], stallAim: 0.5,
             frames: [[16, 1.4], [14.5, 1.5], [11.5, 3.0], [9, 3.2], [7, 2.7], [5.5, 2.4], [4.2, 2.0], [3, 1.65]]
         });
     }
@@ -125,6 +125,12 @@ class HillRide {
         const p = lane.at(S.stop[0], S.stop[1], S.stop[2], this.climbAt || (this.climbAt = {}));
         at.set(p.x, p.y, p.z);
         const d = Math.max(0.5, at.distanceTo(look));
+        // Aimed stallAim of the way from him to the stall's front, so the stall runs away at the left of the picture
+        // as he comes in to it
+        const C = HillDay.CLIMB, front = lane.at(C.stall[0], C.stall[1] - 0.4, 1.0, this.stallAt || (this.stallAt = {}));
+        look.x += (front.x - look.x) * S.stallAim;
+        look.y += (front.y - look.y) * S.stallAim;
+        look.z += (front.z - look.z) * S.stallAim;
         return 2 * Math.atan(HillRide.climbFrame(d) / 2 / d) * 180 / Math.PI;
     }
 
@@ -479,7 +485,9 @@ class HillRide {
             controls.wheelie = 0;
             // On foot, pushing: the pedal key walks him on at walkMs, and let go he holds the bicycle where it is
             this.bike.walking = true;
-            const short = C.walkMs - this.bike.speed;
+            // (he slows as he wheels it in to the stall: slowM of his pace at the meeting place)
+            const near = Math.max(0, Math.min(1, (C.meet[0] + C.turnInM - this.bike.s) / C.turnInM));
+            const short = C.walkMs * (1 - (1 - C.slowM) * near) - this.bike.speed;
             if ((controls.pedal || 0) > 0) {
                 climb.hold = Math.max(-0.5, Math.min(0.6, (climb.hold || 0) + short * dt * C.walkHold));
                 controls.pedal = Math.max(0, Math.min(1, C.walkBase + short * C.walkGain + climb.hold));

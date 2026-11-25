@@ -24,9 +24,9 @@ class HillDay {
     // middle, its long side along the lane). Over the last turnInM before `meet` ([s, across]: in front of the stall)
     // he wheels the bicycle in to it, whatever the keys say, steering for `meet` (turnGain of the steer for each radian
     // off), so it comes to the stall nearly across the lane, as the last stills have it; the climb ends within meetM
-    // of `meet`, or at triggerS
+    // of `meet`, or at triggerS. He slows as he wheels it in, to slowM of his pace at `meet`
     static get CLIMB() {
-        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, stall: [28.1, 2.65], meet: [28.6, 1.15], turnInM: 5.5, turnGain: 2.0, meetM: 0.4,
+        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, stall: [28.1, 2.65], meet: [28.6, 1.15], turnInM: 5.5, turnGain: 2.0, meetM: 0.4, slowM: 0.55,
             restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
     }
 
@@ -444,7 +444,7 @@ class HillDay {
 
     // The stall at the top where the climb ends, as the last stills have it: a trestle table along the lane's edge on
     // the left going down (CLIMB.stall: its middle, long side along the lane), its top level and each leg down to the
-    // cobbles under it; on it a pair of scales with a brass pan, willow baskets of greens, cabbages and roots, carrots
+    // cobbles under it; on it a pair of scales with a brass pan, willow baskets of greens, cabbages and roots high on a shelf at the back, carrots
     // and a marrow along its front, a tray of the bakery's loaves, a big basket tipped up at the back; a churn and a
     // crate under it; and over it a blank board hung from an iron arm on a post (no words on it). Local axes: x down the
     // lane, z out towards its middle, y up
@@ -483,12 +483,15 @@ class HillDay {
         put(new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.09, 0.07, 16, 1, true), brass), -half + 0.2, top + 0.24, 0.12).material.side = THREE.DoubleSide;
         put(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.015, 12), brass), -half + 0.42, top + 0.07, 0.12);
         // Willow baskets of greens, cabbages and roots along the back
-        const basket = (x, z, r, h) => {
-            const b = put(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, h, 18, 1, true), willow), x, top + h / 2, z);
+        // A shelf along the back, so the baskets stand high as the stills have them
+        const shelf = top + 0.3;
+        put(box(half * 2 - 0.1, 0.3, 0.3, boards), 0, top + 0.15, -deep + 0.16);
+        const basket = (x, z, r, h, base = shelf) => {
+            const b = put(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, h, 18, 1, true), willow), x, base + h / 2, z);
             b.material.side = THREE.DoubleSide;
-            put(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.85, r * 0.85, 0.01, 18), willow), x, top + 0.005, z);
-            put(new THREE.Mesh(new THREE.TorusGeometry(r, 0.014, 6, 24), willow), x, top + h, z, Math.PI / 2);
-            return top + h;
+            put(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.85, r * 0.85, 0.01, 18), willow), x, base + 0.005, z);
+            put(new THREE.Mesh(new THREE.TorusGeometry(r, 0.014, 6, 24), willow), x, base + h, z, Math.PI / 2);
+            return base + h;
         };
         const rand = HillLane.random(4271);
         const greens = [0x5e7a3a, 0x6e8a44, 0x4e6a30], roots = [0xd8ccb0, 0xc8b898, 0xe0d4bc];
@@ -499,10 +502,11 @@ class HillDay {
                 put(m, x + Math.cos(a) * d, rim - size * 0.2 + rand() * size * 0.3, z + Math.sin(a) * d);
             }
         };
-        fill(-0.15, -0.16, 0.2, basket(-0.15, -0.16, 0.22, 0.16), greens, 0.085);
-        fill(0.32, -0.18, 0.17, basket(0.32, -0.18, 0.19, 0.14), roots, 0.055);
+        fill(-0.1, -0.22, 0.24, basket(-0.1, -0.22, 0.27, 0.2), greens, 0.1);
+        fill(0.42, -0.22, 0.2, basket(0.42, -0.22, 0.23, 0.18), roots, 0.065);
+        fill(-0.5, 0.12, 0.17, basket(-0.5, 0.12, 0.19, 0.14, top), greens, 0.08);
         // A big basket tipped up against the back, its mouth to the lane
-        const tipped = put(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.24, 0.34, 18, 1, true), willow), -0.62, top + 0.3, -0.24, -1.05);
+        const tipped = put(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.27, 0.38, 18, 1, true), willow), -0.62, shelf + 0.32, -0.26, -1.05);
         tipped.material.side = THREE.DoubleSide;
         // Carrots in a row along the front, a marrow beside them
         const carrot = new THREE.ConeGeometry(0.022, 0.18, 6), orange = mat(0xd0722a);

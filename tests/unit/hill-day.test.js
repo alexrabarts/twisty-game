@@ -257,8 +257,11 @@ describe('the climb', () => {
                     expect(camera.position.distanceTo(wideAt)).toBeLessThan(1e-6);
                     wide++;
                 } else if (camera.position.distanceTo(new THREE.Vector3(stopAt.x, stopAt.y, stopAt.z)) < 1e-6) {
-                    expect(frameAt()).toBeGreaterThan(least - 0.05);
-                    expect(frameAt()).toBeLessThan(most + 0.05);
+                    // (the picture's height at his distance: the camera aims between him and the stall)
+                    const v = bike.vehicle.position, d = camera.position.distanceTo(new THREE.Vector3(v.x, v.y + S.lookUpM, v.z));
+                    const frame = 2 * d * Math.tan(camera.fov * Math.PI / 360);
+                    expect(frame).toBeGreaterThan(least - 0.05);
+                    expect(frame).toBeLessThan(most + 0.05);
                     stopped++;
                 } else {
                     // (on the lane, trackM up it from him)

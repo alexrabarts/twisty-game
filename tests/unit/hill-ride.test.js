@@ -149,9 +149,11 @@ describe('the lane', () => {
         const flat = Math.hypot(sun.x, sun.z);
         expect(Math.asin(sun.y) * 180 / Math.PI).toBeCloseTo(L.elevationDeg, 6);
         expect(Math.asin(sun.y) * 180 / Math.PI).toBeLessThan(HillRide.LIGHT.elevationDeg);
-        // Along the top stretch (straight down it within 5 degrees), where the climb's head-on camera looks down at him
+        // Along the top stretch (down it within 8 degrees, a little to its left, where the glare path lies), where the
+        // climb's head-on camera looks down at him
         const p = lane.sample(30);
-        expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(Math.cos(5 * Math.PI / 180));
+        expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(Math.cos(8 * Math.PI / 180));
+        expect(sun.x * p.leftX + sun.z * p.leftZ).toBeGreaterThan(0);
         // Wet cobbles: smoother and darker than the dry ones
         expect(L.cobbleRough).toBeLessThan(0.5);
         expect(L.cobbleTone).toBeLessThan(1);

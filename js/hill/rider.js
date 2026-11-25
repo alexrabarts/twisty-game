@@ -31,9 +31,9 @@ class HillRider {
     // from his waist, apronClearM clear of the knee ahead (swung forward apronMostRad at most). The bicycle leans in towards him by leanRad; on and off the
     // saddle over blendS
     static get WALK() {
-        return Object.freeze({ hip: [0.36, 0.82, -0.45], bendRad: 0.62, turnRad: 0.35, headUpRad: 0.72, reachM: 0.22, strideM: 1.3, stance: 0.6, liftM: 0.1, footX: 0.11,
+        return Object.freeze({ hip: [0.36, 0.78, -0.45], bendRad: 0.62, turnRad: 0.35, headUpRad: 0.72, reachM: 0.22, strideM: 1.25, stance: 0.6, liftM: 0.1, footX: 0.11,
             foot: { rollShare: 0.2, toeOffRad: 0.55, heelRad: 0.18, toeM: 0.15, heelM: 0.07, standM: 0.1, stepMs: 0.8, settleS: 0.35 },
-            backM: 0.08, leanRad: 0.06, blendS: 0.4, apronClearM: 0.03, apronMostRad: 0.35, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.88 } });
+            backM: 0.14, leanRad: 0.06, blendS: 0.4, apronClearM: 0.03, apronMostRad: 0.35, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.88 } });
     }
 
     // How far into his tired stretch he is at `walkM` metres walked (0..1, eased: WALK.down)
