@@ -27,9 +27,7 @@ class Vegetation {
             larch: { foliage: [0.27, 0.33, 0.24], wood: [0.28, 0.22, 0.17] },
             broadleaf: { foliage: [0.28, 0.34, 0.25], wood: [0.29, 0.24, 0.19] },
             bush: { foliage: [0.26, 0.31, 0.23], wood: [0.27, 0.23, 0.18] },
-            // The shrubs (Scenery.SHRUBS), each its own green about the bush's: the green alder fresh and yellower, the
-            // alpine rose a deep dark green
-            alder: { foliage: [0.27, 0.33, 0.22], wood: [0.3, 0.26, 0.21] },
+            // The shrub (Scenery.SHRUBS), its own green about the bush's: the alpine rose a deep dark green
             rose: { foliage: [0.21, 0.27, 0.2], wood: [0.26, 0.2, 0.16] }
         };
     }

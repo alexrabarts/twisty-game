@@ -223,7 +223,7 @@ describe('the world\'s tree levels', () => {
 // world's seat of a bush (its origin 0.2 m under the ground: the stems reach under y = 0.2, nothing hangs over it)
 describe('the world\'s shrub levels', () => {
     const game = load();
-    const SHRUBS = ['alder', 'rose'];
+    const SHRUBS = ['rose'];
     const LEVELS = { near: 800, mid: 140, far: 24 };
     let shrubs;
 

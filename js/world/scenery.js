@@ -174,15 +174,13 @@ class Scenery {
     }
     static get LARCH_FROM_M() { return 1650; }
     // The shrubs of a world, drawn as the trees are, at three levels from assets/trees/shrubs.glb
-    // (tools/blender/tree_shrub.py, `<node>_<level>`): each a species of the Gotthard's slopes, in its own palette
-    // (js/world/vegetation.js) and with its share of the bushes (`high` over LARCH_FROM_M: the alpine rose takes over
-    // above the green alder). Two species, as the legs' two bushes before them: each is a forest mesh at each level
-    // (Scenery.forestMesh, kept once made), and the window has about 120 meshes to spare (a dwarf juniper as a third
-    // put the Tremola at km 4 under it). Without the file a world draws the legs' two bushes
+    // (tools/blender/tree_shrub.py, `<node>_<level>`): the alpine rose of the Gotthard's upper slopes, in its own
+    // palette (js/world/vegetation.js), each bush its own size, girth, turn and tint. One species: each is a forest
+    // mesh at each level (Scenery.forestMesh, kept once made), and the window has about 120 meshes to spare; with the
+    // green alder as a second the Tremola at km 4 had 118. Without the file a world draws the legs' two bushes
     static get SHRUBS() {
         return [
-            { kind: 'bush', name: 'bush_alder', node: 'alder', palette: 'alder', share: 0.6, high: 0.35 },
-            { kind: 'bush', name: 'bush_rose', node: 'rose', palette: 'rose', share: 0.4, high: 0.65 }
+            { kind: 'bush', name: 'bush_rose', node: 'rose', palette: 'rose', share: 1, high: 1 }
         ];
     }
     // How light a level's colours are against its kind's palette (Vegetation.shape). The near level's branches and leaf
@@ -198,7 +196,7 @@ class Scenery {
     // the window had counted four procedural bikes, 10 300, and stood 1 400 over at km 4 with a fifth)
     // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
     // where the rows before the junctions were 1 440)
-    // (The detail pass of the roadside models kept it: the nearest edge furniture's near shapes, up to about 1 000 more
+    // (The detail pass of the roadside models kept it: the nearest edge furniture's near shapes, up to about 600 more
     // triangles at a row of hairpins, are paid by fewer tufts (TUFT_CAP) and the stopping places' props drawn nearer
     // the bike (PlaceMesh reachM), so a window holds less of those than before. A cap of 122 000 drew about 100 fewer
     // far trees on the Tremola at km 4, which tests/unit/world-tree-count.test.js now holds against)
@@ -246,9 +244,9 @@ class Scenery {
     static get STONE_CAP() { return 140; }
     // Of the stones drawn, the STONE_NEAR_CAP nearest within STONE_NEAR_M are drawn in their near shapes (chamfered
     // stone, a post's band and reflector, a steel post's section, the W-beam's profile: EdgeStyles.nearPiece, nearLink),
-    // at most about 1 000 triangles more than their far shapes, which TRIANGLE_CAP and the tufts pay
-    static get STONE_NEAR_CAP() { return 20; }
-    static get STONE_NEAR_M() { return 30; }
+    // at most about 600 triangles more than their far shapes, which the tufts pay (TUFT_CAP)
+    static get STONE_NEAR_CAP() { return 14; }
+    static get STONE_NEAR_M() { return 25; }
     // The pieces of kerb drawn, under the stones nearest the bike (6 triangles each): from further off a row is its
     // blocks. 140 blocks and 50 pieces are 1 700 triangles, where the 160 posts were 2 880 and the window of the
     // upper hairpins had 150 of them
@@ -299,8 +297,9 @@ class Scenery {
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
     // 4 or 6 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
-    // (500 at 3 and 4 triangles until a tuft was 4 and 6: 300 cost less, and a tuft is under a few pixels from 150 m)
-    static get TUFT_CAP() { return 300; }
+    // (500 at 3 and 4 triangles until a tuft was 4 and 6: 240 cost about 550 less, and pay for the near edge
+    // furniture; a tuft is a few pixels from 150 m)
+    static get TUFT_CAP() { return 240; }
     static get TUFTS_PER_TILE() { return 250; }
     static get TUFT_REACH_M() { return 7; }
     static get TUFT_TRIES() { return 6; }

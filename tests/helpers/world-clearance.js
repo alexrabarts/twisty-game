@@ -230,7 +230,7 @@ export function modelStandIns(THREE, readFileSync, root) {
     }
     // The shrubs at each of their levels (assets/trees/shrubs.glb, Scenery.SHRUBS), or the legs' bushes without them
     const shrubs = bounds('assets/trees/shrubs.glb');
-    for (const [name, node, palette, share, high] of [['bush_alder', 'alder', 'alder', 0.6, 0.35], ['bush_rose', 'rose', 'rose', 0.4, 0.65]]) {
+    for (const [name, node, palette, share, high] of [['bush_rose', 'rose', 'rose', 1, 1]]) {
         if (!shrubs.has(`${node}_mid`)) continue;
         const lods = Object.fromEntries(['near', 'mid', 'far'].filter(level => shrubs.has(`${node}_${level}`)).map(level => [level, part(shrubs.get(`${node}_${level}`))]));
         trees.push({ kind: 'bush', name, palette, share, high, parts: lods.mid, lods });

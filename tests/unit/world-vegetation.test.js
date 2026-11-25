@@ -107,7 +107,7 @@ describe('the world\'s modelled trees', () => {
     test('every shape loads, and every vertex colour of it is inside its kind\'s caps', () => {
         expect(models).toBeTruthy();
         expect(new Set(models.trees.map(s => s.kind))).toEqual(new Set(KINDS));
-        expect(models.trees).toHaveLength(8);
+        expect(models.trees).toHaveLength(7);
         for (const shape of models.trees) {
             for (const part of levels(shape)) {
                 expect(part.geometry.userData.vegetation).toBe(shape.kind);

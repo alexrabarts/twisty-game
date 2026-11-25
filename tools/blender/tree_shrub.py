@@ -1,4 +1,4 @@
-# The shrubs of a world (js/world/scenery.js, Scenery.SHRUBS): the bushes of the Gotthard's slopes (two species: each
+# The shrubs of a world (js/world/scenery.js, Scenery.SHRUBS): the bushes of the Gotthard's slopes (one species: each
 # is an instanced mesh at each level, and the window's meshes have little margin), each at three
 # levels of detail, as the trees are (tree_species.py, tree_alpine.py):
 #   near   stems out of the ground to every mass of leaves, and each mass a cluster of leaf clumps with sky between
@@ -30,8 +30,6 @@ GROUND = 0.2
 BARK = (srgb(0x3A2C20), srgb(0x6B5440))
 # Leaves: the shaded inside, the tips in the light, and the cast a patch may take
 GREENS = {
-    # Green alder: soft fresh leaves, the commonest shrub of the wet slopes
-    "alder": (srgb(0x1E3E1C), srgb(0x5E9440), srgb(0x84A044)),
     # Alpine rose: small dark glossy leaves in a dense dome
     "rose": (srgb(0x16301A), srgb(0x3E6A38), srgb(0x6A7A34)),
 }
@@ -39,10 +37,9 @@ GREENS = {
 # mass's outside is clothed in sprays of leaves, `sprays` for each square metre of its radius, each spray `leaves`
 # leaves fanned over `fan` radians; a leaf is `leaf` long and `narrow` of that wide
 SHRUBS = {
-    "alder": {"height": 1.9, "reach": 1.15, "masses": 5, "radius": (0.42, 0.6), "squash": 0.75, "stems": 7, "sprays": 46, "leaves": 4, "fan": 1.6, "leaf": (0.26, 0.36), "narrow": 0.6, "out": 0.6},
     "rose": {"height": 0.8, "reach": 0.8, "masses": 5, "radius": (0.3, 0.42), "squash": 0.7, "stems": 8, "sprays": 92, "leaves": 4, "fan": 2.0, "leaf": (0.17, 0.23), "narrow": 0.5, "out": 0.45},
 }
-SEEDS = {"alder": 611, "rose": 612}
+SEEDS = {"rose": 612}
 
 
 def leaves(greens, low, high):
