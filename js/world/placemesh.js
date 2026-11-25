@@ -16,7 +16,8 @@
 class PlaceMesh {
     static get KIT() {
         return {
-            reachM: 600,
+            // (600 until the props had round parts, slats and chamfers: a prop is a few pixels from 400 m)
+            reachM: 400,
             colors: { stone: [0.56, 0.55, 0.52], cap: [0.62, 0.61, 0.58], wood: [0.43, 0.31, 0.2], metal: [0.24, 0.26, 0.27], white: [0.9, 0.9, 0.87], band: [0.12, 0.12, 0.12], bin: [0.2, 0.31, 0.23], paint: [0.88, 0.88, 0.84], reflector: [0.95, 0.62, 0.12] },
             // The stone course: insetM in from the pad's outer edge, widthM across, heightM high, laid in pieces of
             // pieceM. The rail stands on it: posts every everyM, bars at `bars` over the stone

@@ -198,13 +198,14 @@ class Scenery {
     // the window had counted four procedural bikes, 10 300, and stood 1 400 over at km 4 with a fifth)
     // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
     // where the rows before the junctions were 1 440)
-    // (127 000 until the tufts took 5 and 10 triangles in place of 3 and 4, about 1 800 more in a window of 500, and the
-    // stopping places' props took round posts, tubes, slats and chamfers, about 1 000 more within 600 m of the bike,
-    // and the nearest edge furniture its near shapes, up to 2 200 more: Scenery.STONE_NEAR_CAP)
-    static get TRIANGLE_CAP() { return 122000; }
+    // (The detail pass of the roadside models kept it: the nearest edge furniture's near shapes, up to about 1 000 more
+    // triangles at a row of hairpins, are paid by fewer tufts (TUFT_CAP) and the stopping places' props drawn nearer
+    // the bike (PlaceMesh reachM), so a window holds less of those than before. A cap of 122 000 drew about 100 fewer
+    // far trees on the Tremola at km 4, which tests/unit/world-tree-count.test.js now holds against)
+    static get TRIANGLE_CAP() { return 127000; }
     // Boulders on rock and scree, nearest first
-    // (160 until a boulder was fractured granite of about 56 triangles, where it was 20)
-    static get BOULDER_CAP() { return 120; }
+    // (160 until a boulder was a broken block of 28 to 30 triangles, where it was 20: 110 of them cost what 160 did)
+    static get BOULDER_CAP() { return 110; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
     static get HOUSE_TRIANGLES() { return 80000; }
     // Marker stones: STONE_GAP_M apart along the road's edge, STONE_OUT_M past the verge, sunk STONE_SINK_M. Sawn
@@ -245,9 +246,9 @@ class Scenery {
     static get STONE_CAP() { return 140; }
     // Of the stones drawn, the STONE_NEAR_CAP nearest within STONE_NEAR_M are drawn in their near shapes (chamfered
     // stone, a post's band and reflector, a steel post's section, the W-beam's profile: EdgeStyles.nearPiece, nearLink),
-    // at most 2 200 triangles more than their far shapes, which TRIANGLE_CAP pays
-    static get STONE_NEAR_CAP() { return 36; }
-    static get STONE_NEAR_M() { return 45; }
+    // at most about 1 000 triangles more than their far shapes, which TRIANGLE_CAP and the tufts pay
+    static get STONE_NEAR_CAP() { return 20; }
+    static get STONE_NEAR_M() { return 30; }
     // The pieces of kerb drawn, under the stones nearest the bike (6 triangles each): from further off a row is its
     // blocks. 140 blocks and 50 pieces are 1 700 triangles, where the 160 posts were 2 880 and the window of the
     // upper hairpins had 150 of them
@@ -297,8 +298,9 @@ class Scenery {
     static get STONE_RULE() { return { dropM: 7, hairpinDropM: 4, reachM: 10, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75, wallMaxM: 4, wallShare: 0.6, wallLowM: 0.3 }; }
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
-    // 5 or 10 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
-    static get TUFT_CAP() { return 500; }
+    // 4 or 6 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
+    // (500 at 3 and 4 triangles until a tuft was 4 and 6: 300 cost less, and a tuft is under a few pixels from 150 m)
+    static get TUFT_CAP() { return 300; }
     static get TUFTS_PER_TILE() { return 250; }
     static get TUFT_REACH_M() { return 7; }
     static get TUFT_TRIES() { return 6; }
@@ -720,30 +722,43 @@ class Scenery {
         return sites;
     }
 
-    // A boulder: granite broken along fracture planes. Each of BOULDER_SHAPES shapes is a block cut by planes
-    // (Scenery.clipSolid): its eight corners knocked off, BOULDER_PLANES fractures at a seeded slant and depth, and a
-    // flat bed under the ground, then stood in the box the icosahedron it replaces had (a metre across, y -0.55 to
-    // 1.45). So the stone is a few large flat faces meeting in sharp edges, as a broken block is, not a ball. Each face
-    // is its own grey: lighter where it looks up at the sky and the weather has bleached it, darker under, with spots
-    // of lichen on the tops. Flat shaded, in vertex colours; 48 to 60 triangles (the 20 of the icosahedron read as a
-    // faceted ball)
+    // A boulder: a block of granite with a break. Each of BOULDER_SHAPES shapes is a six-sided block, wider at its foot,
+    // each corner at its own reach and height and the top turned on the foot, with BOULDER_PLANES fractures across a
+    // shoulder (Scenery.clipSolid), then stood in the box the icosahedron it replaces had (a metre across, y -0.55 to
+    // 1.45). So the stone is flat faces meeting in sharp edges, as a broken block is, not a ball. Each face is its own
+    // grey: lighter where it looks up at the sky and the weather has bleached it, darker under, with spots of lichen on
+    // the tops. Flat shaded, in vertex colours; 28 to 30 triangles, and BOULDER_CAP draws as many triangles of them as of
+    // the icosahedra of 20, so the trees keep their share of the cap (a block cut by thirteen planes was 48 to 60
+    // triangles, and with a lower cap cost the Tremola about 100 far trees at km 4)
     static get BOULDER_SHAPES() { return 3; }
-    static get BOULDER_PLANES() { return 5; }
+    static get BOULDER_PLANES() { return 1; }
     static boulderPart(shape = 0) {
         Scenery.boulders = Scenery.boulders || [];
         if (!Scenery.boulders[shape]) {
             const h = k => Scenery.hash(shape + 1, k, 97);
             const V = (x, y, z) => new THREE.Vector3(x, y, z);
-            let faces = [[V(-1, -1, -1), V(1, -1, -1), V(1, 1, -1), V(-1, 1, -1)], [V(-1, -1, 1), V(-1, 1, 1), V(1, 1, 1), V(1, -1, 1)],
-                [V(-1, -1, -1), V(-1, 1, -1), V(-1, 1, 1), V(-1, -1, 1)], [V(1, -1, -1), V(1, -1, 1), V(1, 1, 1), V(1, 1, -1)],
-                [V(-1, 1, -1), V(1, 1, -1), V(1, 1, 1), V(-1, 1, 1)], [V(-1, -1, -1), V(-1, -1, 1), V(1, -1, 1), V(1, -1, -1)]];
-            const planes = [];
-            for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) planes.push({ n: V(x, y, z).normalize(), d: 0.9 + 0.12 * h(planes.length + 50) });
-            for (let k = 0; k < Scenery.BOULDER_PLANES; k++) {
-                const u = h(k * 3) * Math.PI * 2, v = Math.acos(1 - 2 * (0.1 + 0.75 * h(k * 3 + 1)));
-                planes.push({ n: V(Math.sin(v) * Math.cos(u), Math.cos(v), Math.sin(v) * Math.sin(u)), d: 0.62 + 0.25 * h(k * 3 + 2) });
+            // A six-sided block, wider at its foot, each corner at its own reach and the top turned on the foot
+            const foot = [], top = [];
+            const turn = 0.5 * (h(70) - 0.5);
+            for (let k = 0; k < 6; k++) {
+                const a = (k / 6) * Math.PI * 2 + 0.35 * (h(60 + k) - 0.5);
+                const r0 = 0.85 + 0.3 * h(80 + k), r1 = r0 * (0.5 + 0.25 * h(90 + k));
+                foot.push(V(Math.cos(a) * r0, -1, Math.sin(a) * r0));
+                top.push(V(Math.cos(a + turn) * r1, 0.6 + 0.4 * h(100 + k), Math.sin(a + turn) * r1));
             }
-            planes.push({ n: V(0, -1, 0), d: 0.6 });
+            let faces = [foot.slice(), top.slice().reverse()];
+            for (let k = 0; k < 6; k++) {
+                const j = (k + 1) % 6;
+                faces.push([foot[k], top[k], top[j], foot[j]]);
+            }
+            // The side faces are not flat (each top corner at its own height): each is two triangles, and one
+            // fracture across a shoulder cuts the block as a break does
+            faces = faces.flatMap(f => (f.length === 4 ? [[f[0], f[1], f[2]], [f[0], f[2], f[3]]] : [f]));
+            const planes = [];
+            for (let k = 0; k < Scenery.BOULDER_PLANES; k++) {
+                const u = h(k * 3) * Math.PI * 2, v = Math.acos(1 - 2 * (0.1 + 0.4 * h(k * 3 + 1)));
+                planes.push({ n: V(Math.sin(v) * Math.cos(u), Math.cos(v), Math.sin(v) * Math.sin(u)), d: 0.45 + 0.2 * h(k * 3 + 2) });
+            }
             for (const plane of planes) faces = Scenery.clipSolid(faces, plane.n, plane.d);
             // Into the icosahedron's box: a metre in radius across, from y -0.55 to 1.45
             let reach = 0, lo = Infinity, hi = -Infinity;
@@ -1818,8 +1833,8 @@ class Scenery {
     static tuftHeight(green, size) { return (green ? 0.28 : 0.7) * size; }
 
     // The tufts of a tile as one mesh (no instances: the window's instance budget is the trees'). A tussock is a
-    // spray of five pointed blades of dry grass leaning out from its foot, each its own length and lean (5 triangles);
-    // a green clump is a rosette of five broad leaves, each folded on its midrib and lifted at its tip (10). Two crossed
+    // spray of four pointed blades of dry grass leaning out from its foot, each its own length and lean (4 triangles);
+    // a green clump is a rosette of three broad leaves, each folded on its midrib and lifted at its tip (6). Two crossed
     // cards (4) read as a green cross from the saddle. Colours from the photos: pale straw over a darker foot, and the
     // dull green of the low broad-leaved plants, dark at the heart and lighter at the tips
     static tuftMesh(sites) {
@@ -1832,9 +1847,9 @@ class Scenery {
             // Each tuft's own uneven leaves and blades, from its turn (no draw of its own)
             const jit = k => 0.5 + 0.5 * Math.sin(t.turn * 7.3 + k * 2.39);
             if (t.green) {
-                for (let k = 0; k < 5; k++) {
-                    const a = t.turn + k * Math.PI * 2 / 5 + 0.4 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
-                    const long = reach * (0.55 + 0.3 * jit(k + 5)), w = long * 0.62, up = h * (0.7 + 0.3 * jit(k + 9));
+                for (let k = 0; k < 3; k++) {
+                    const a = t.turn + k * Math.PI * 2 / 3 + 0.4 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
+                    const long = reach * (0.6 + 0.3 * jit(k + 5)), w = long * 0.75, up = h * (0.7 + 0.3 * jit(k + 9));
                     const base = [t.x + cos * 0.03, t.y, t.z + sin * 0.03];
                     const end = [t.x + cos * long, t.y + up, t.z + sin * long];
                     // The midrib is the fold: the leaf's edges stand a little lower than it
@@ -1845,10 +1860,10 @@ class Scenery {
                 }
                 continue;
             }
-            for (let k = 0; k < 5; k++) {
-                const a = t.turn + k * Math.PI * 2 / 5 + 0.5 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
+            for (let k = 0; k < 4; k++) {
+                const a = t.turn + k * Math.PI * 2 / 4 + 0.5 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
                 // Uneven, so no two blades stand alike: the tallest nearly upright, the others lower and further out
-                const lean = (k + jit(k)) / 5, out_ = reach * (0.25 + 0.75 * lean), up = h * (1 - 0.5 * lean) * (0.85 + 0.15 * jit(k + 3)), w = 0.07 * t.size;
+                const lean = (k + jit(k)) / 4, out_ = reach * (0.25 + 0.75 * lean), up = h * (1 - 0.5 * lean) * (0.85 + 0.15 * jit(k + 3)), w = 0.07 * t.size;
                 const bx = t.x + cos * 0.04 * t.size, bz = t.z + sin * 0.04 * t.size;
                 tri([bx + sin * w, t.y, bz - cos * w], [bx - sin * w, t.y, bz + cos * w], [t.x + cos * out_, t.y + up, t.z + sin * out_], foot, foot, k % 2 ? straw : pale);
             }
