@@ -733,6 +733,24 @@ describe('the boy on the bicycle', () => {
         expect(rider.legs.map(l => l.side).sort()).toEqual([-1, 1]);
     });
 
+    test('the basket is willow with a low bentwood handle and no lamp, the weave laid on it in metres', () => {
+        // No lamp anywhere on the bicycle (the stills have none)
+        expect(rider.parts.headlight).toBeUndefined();
+        const willow = [];
+        rider.parts.basket.traverse(o => { if (o.isMesh && /^wicker/.test(o.material.name)) willow.push(o); });
+        expect(willow.length).toBeGreaterThan(0);
+        // The handle: the basket's top is its handle's top, at most 0.25 m over its rim (the loaves' crowns between)
+        const box = new THREE.Box3().setFromObject(rider.parts.basket), loaves = new THREE.Box3();
+        rider.parts.basket.traverse(o => { if (o.isMesh && o.material.name === 'loaf') loaves.expandByObject(o); });
+        expect(box.max.y - loaves.max.y).toBeGreaterThan(0.08);
+        expect(box.max.y - loaves.max.y).toBeLessThan(0.2);
+        // The weave's UVs: a face's UVs span its size in metres, from the side it faces
+        const uv = HillRider.boxUV(new THREE.BoxGeometry(0.5, 0.3, 0.7)).attributes.uv;
+        let most = 0;
+        for (let i = 0; i < uv.count; i++) most = Math.max(most, Math.abs(uv.getX(i)), Math.abs(uv.getY(i)));
+        expect(most).toBeCloseTo(0.35, 6);
+    });
+
     test('a fall throws the loaves out of the basket; they land on the lane, come to rest, and R puts them back', () => {
         const HillSpill = new Function('THREE', 'HillLane', 'console', `${loadScript('hill/spill.js')}\nreturn HillSpill;`)(THREE, HillLane, console);
         const where = new HillLane();

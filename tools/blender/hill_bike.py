@@ -50,8 +50,8 @@ COLOURS = {"paint": 0x0E0E10, "paint_dark": 0x060607, "accent": 0xE8E0C8, "rim":
 EXTRA = {
     # The frame plate, cream and blank
     "plate_cream": (0xE6DCC0, 0.6, 0.0),
-    "wicker": (0x9A7546, 0.9, 0.0),
-    "wicker_dark": (0x6E5030, 0.9, 0.0),
+    "wicker": (0xA89A80, 0.9, 0.0),
+    "wicker_dark": (0x786A54, 0.9, 0.0),
     "skin": (0xE2B596, 0.7, 0.0),
     "cap": (0x2C2A28, 0.95, 0.0),
     "jumper": (0xB4AA98, 0.95, 0.0),
@@ -59,7 +59,7 @@ EXTRA = {
     "apron": (0xD8D0BC, 0.9, 0.0),
     "shorts": (0x34322F, 0.95, 0.0),
     "sock": (0x26241F, 0.95, 0.0),
-    "loaf": (0xA8743E, 0.85, 0.0),
+    "loaf": (0x8C5A36, 0.85, 0.0),
     "boot": (0x18181A, 0.6, 0.0),
     "hair": (0x5A3A20, 0.9, 0.0),
     "leather": (0x5A3A22, 0.7, 0.0),
@@ -114,34 +114,39 @@ def front(k):
         k.tube([(side * 0.2, 0.64, 0.46), (side * 0.05, FRONT[1], FRONT[2] - 0.01)], 0.009, "paint", seg=6)
         k.tube([(side * 0.2, 0.64, 0.98), (side * 0.05, FRONT[1], FRONT[2] + 0.02)], 0.009, "paint", seg=6)
     k.box((0.44, 0.012, 0.54), (0, 0.64, 0.72), "paint", bevel=0.003)
-    # The big square wicker basket: a tray, four walls of woven strands, a rolled rim, and the plain loaves in it
+    # The big square wicker basket, as the stills have it: a deep willow basket, longer than it is wide, its walls
+    # flared a little to a thick rolled rim, a stake up each corner, and a bentwood handle arching low over the loaves
+    # from the front rim to the back. Its weave is the game's (js/hill/rider.js lays HillTextures' wicker on the
+    # willow finishes), so the walls are plain here, with no bands that would read as slats
     k.begin("basket")
     k.keep = True
-    z0, z1, lo, hi, half = 0.43, 1.01, 0.655, 0.96, 0.25
+    z0, z1, lo, hi, half = 0.4, 1.06, 0.655, 0.95, 0.26
+    flare = 0.025
     mid = (z0 + z1) / 2
     k.box((half * 2, 0.02, z1 - z0), (0, lo, mid), "wicker_dark", bevel=0.006)
-    for z in (z0, z1):
-        k.box((half * 2 + 0.02, hi - lo, 0.018), (0, (lo + hi) / 2, z), "wicker", bevel=0.004)
+    # Each wall leans out by `flare` from its foot to the rim
+    lean = math.atan2(flare, hi - lo)
+    for z, sign in ((z0, -1), (z1, 1)):
+        k.box((half * 2 + flare, hi - lo, 0.02), (0, (lo + hi) / 2, z + sign * flare / 2), "wicker", rot=(sign * lean, 0, 0), bevel=0.004)
     for side in (-1, 1):
-        k.box((0.018, hi - lo, z1 - z0), (side * half, (lo + hi) / 2, mid), "wicker", bevel=0.004)
-    # The weave: bands round the walls, a little proud, and uprights between them
-    for i in range(6):
-        y = lo + 0.03 + i * 0.048
-        for z in (z0 - 0.01, z1 + 0.01):
-            k.box((half * 2 + 0.03, 0.012, 0.006), (0, y, z), "wicker_dark", bevel=0)
-        for side in (-1, 1):
-            k.box((0.006, 0.012, z1 - z0 + 0.01), (side * (half + 0.009), y, mid), "wicker_dark", bevel=0)
-    k.tube([(-half, hi, z0), (half, hi, z0), (half, hi, z1), (-half, hi, z1), (-half, hi, z0)], 0.013, "wicker_dark", seg=6)
-    # The handle: a tall wicker loop from the front wall to the back, over the middle of the loaves
-    loop = [(0, hi + 0.27 * math.sin(math.pi * i / 10), mid - (z1 - z0 - 0.08) / 2 * math.cos(math.pi * i / 10)) for i in range(11)]
-    k.tube(loop, 0.011, "wicker", seg=6)
-    # Plain loaves, two rows of three, their crowns over the rim
-    for x in (-0.16, 0.0, 0.16):
-        for z in (0.5, 0.75):
+        k.box((0.02, hi - lo, z1 - z0 + flare), (side * (half + flare / 2), (lo + hi) / 2, mid), "wicker", rot=(0, 0, -side * lean), bevel=0.004)
+    hx, z0r, z1r = half + flare, z0 - flare, z1 + flare
+    k.tube([(-hx, hi, z0r), (hx, hi, z0r), (hx, hi, z1r), (-hx, hi, z1r), (-hx, hi, z0r)], 0.017, "wicker", seg=8)
+    k.tube([(-half, lo + 0.01, z0), (half, lo + 0.01, z0), (half, lo + 0.01, z1), (-half, lo + 0.01, z1), (-half, lo + 0.01, z0)], 0.011, "wicker_dark", seg=6)
+    for sx in (-1, 1):
+        for zz, sz in ((z0, -1), (z1, 1)):
+            k.tube([(sx * half, lo, zz), (sx * hx, hi, zz + sz * flare)], 0.012, "wicker_dark", seg=6)
+    # The handle: a bentwood hoop from the front rim to the back, low over the middle of the loaves
+    span = (z1 - z0) * 0.62
+    loop = [(0, hi + 0.2 * math.sin(math.pi * i / 12), mid - span / 2 * math.cos(math.pi * i / 12)) for i in range(13)]
+    k.tube(loop, 0.014, "wicker", seg=8)
+    # Plain tin loaves laid along the basket, four across and three deep: straight sides, a domed crown over the rim
+    for x in (-0.18, -0.06, 0.06, 0.18):
+        for z in (z0 + 0.02, z0 + 0.235, z0 + 0.45):
             # A section is (z, bottom, top, half width, top and bottom roundness, middle, top and bottom narrowing, centre x)
-            k.loft([(z, hi - 0.1, hi + 0.04, 0.05, 2.4, 3, 0.5, 1, 1, x), (z + 0.03, hi - 0.1, hi + 0.075, 0.07, 2.4, 3, 0.5, 1, 1, x),
-                    (z + 0.17, hi - 0.1, hi + 0.075, 0.07, 2.4, 3, 0.5, 1, 1, x), (z + 0.2, hi - 0.1, hi + 0.04, 0.05, 2.4, 3, 0.5, 1, 1, x)], "loaf", ring=12,
-                   steps=2)
+            k.loft([(z, hi - 0.09, hi + 0.035, 0.045, 2.6, 6, 0.55, 1, 1, x), (z + 0.02, hi - 0.09, hi + 0.06, 0.055, 2.6, 6, 0.55, 1, 1, x),
+                    (z + 0.17, hi - 0.09, hi + 0.06, 0.055, 2.6, 6, 0.55, 1, 1, x), (z + 0.19, hi - 0.09, hi + 0.035, 0.045, 2.6, 6, 0.55, 1, 1, x)], "loaf",
+                   ring=12, steps=2)
     k.keep = False
 
     # The fork, the front mudguard, the stem and the bars turn with the steering about the head tube: a node of their
@@ -161,12 +166,8 @@ def front(k):
         # The rod brake's lever under the bar, its rod down the head tube to the stirrup
         k.box((0.012, 0.01, 0.12), (side * (GRIP[0] - 0.02), GRIP[1] - 0.03, GRIP[2] + 0.06), "chrome", bevel=0.002)
         k.tube([(side * 0.1, stem[0] - 0.01, stem[1]), (side * 0.03, CROWN[0] + 0.04, CROWN[1] + 0.02)], 0.004, "chrome", seg=4)
-    # The bell on the bar, then the lamp on the basket's front
+    # The bell on the bar; no lamp on the basket (the stills have none)
     k.lathe([(0, 0), (0.028, 0.0), (0.03, 0.012), (0.02, 0.025), (0, 0.028)], (-0.18, GRIP[1] + 0.02, GRIP[2] + 0.06), "chrome", seg=12)
-    k.begin("body")
-    k.cylinder(0.035, 0.05, (0, 0.8, 1.05), "chrome", axis="z", seg=12)
-    k.begin("headlight", (0, 0.8, 1.08))
-    k.cylinder(0.03, 0.006, (0, 0.8, 1.076), "headlight", axis="z", seg=12)
     k.begin("body")
 
 

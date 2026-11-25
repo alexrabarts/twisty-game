@@ -14,7 +14,8 @@ class HillTextures {
             slate: { metres: 1.6, size: 512, relief: 4 },
             tile: { metres: 1.2, size: 512, relief: 4 },
             door: { metres: 1, size: 256, relief: 4 },
-            grass: { metres: 2, size: 256, relief: 1 }
+            grass: { metres: 2, size: 256, relief: 1 },
+            wicker: { metres: 0.12, size: 256, relief: 6 }
         });
     }
 
@@ -132,6 +133,28 @@ class HillTextures {
                     const e = Math.min(x, w - 1 - x, y, h - 1 - y) / 8;
                     put(x0 + x, y0 + y, 0.8 - 0.5 * Math.min(1, e), [0.84, 0.84, 0.84]);
                 }
+            }
+        } else if (name === 'wicker') {
+            // Willow woven round upright stakes: round weavers laid in rows, each passing in front of one stake and
+            // behind the next (the row below the other way), the stakes showing where it goes behind; pale buff willow,
+            // dark in the gaps
+            const stakes = 8, rows = 16, sw = N / stakes, rh = N / rows;
+            for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+                const row = Math.floor(y / rh), v = (y % rh) / rh, col = Math.floor(x / sw), u = (x % sw) / sw;
+                const front = (row + col) % 2 === 0;
+                // (the weaver dips towards the stake it goes behind)
+                const dip = front ? 0 : Math.max(0, 1 - Math.abs(u - 0.5) / 0.28);
+                const round = Math.sin(Math.PI * v);
+                let h = 0.3 + 0.55 * round - 0.35 * dip;
+                const tone = 0.8 + ((row * 7 + col * 3) % 5) * 0.035 + (rand() - 0.5) * 0.05;
+                let c = [tone, tone * 0.86, tone * 0.66];
+                if (dip > 0.6 && Math.abs(u - 0.5) < 0.12) {
+                    // The stake, seen in the gap
+                    h = 0.45;
+                    c = [tone * 0.78, tone * 0.66, tone * 0.48];
+                }
+                if (v < 0.08 || v > 0.92) c = c.map(k => k * 0.45);
+                put(x, y, h, c);
             }
         } else if (name === 'grass') {
             for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {

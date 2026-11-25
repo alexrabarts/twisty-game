@@ -60,7 +60,16 @@ class HillRider {
             const pivot = new THREE.Group();
             pivot.name = name;
             pivot.position.copy(lod.places.get(name));
-            for (const { geometry, material } of primitives) {
+            for (const primitive of primitives) {
+                let { geometry, material } = primitive;
+                // The basket's willow: woven (HillTextures' wicker), laid on each face in metres
+                if (material && /^wicker/.test(material.name)) {
+                    const woven = HillRider.wicker(material);
+                    if (woven !== material) {
+                        geometry = HillRider.boxUV(geometry);
+                        material = woven;
+                    }
+                }
                 const mesh = new THREE.Mesh(geometry, material);
                 mesh.castShadow = true;
                 mesh.receiveShadow = true;
@@ -114,6 +123,37 @@ class HillRider {
             this.parts.boy.add(head);
             head.position.sub(r.boy);
         }
+    }
+
+    // The model's willow finish with the weave on it (one for each of the model's willow finishes); the finish as it is
+    // where there are no textures (no page)
+    static wicker(material) {
+        if (typeof HillTextures === 'undefined' || typeof document === 'undefined') return material;
+        HillRider.woven = HillRider.woven || new Map();
+        if (!HillRider.woven.has(material)) {
+            const T = HillTextures.all().wicker, woven = material.clone();
+            woven.map = T.map;
+            woven.normalMap = T.normalMap;
+            woven.roughness = 0.85;
+            woven.needsUpdate = true;
+            HillRider.woven.set(material, woven);
+        }
+        return HillRider.woven.get(material);
+    }
+
+    // A copy of `geometry` with UVs in metres laid on each face from the side it faces most (a box's projection)
+    static boxUV(geometry) {
+        const g = geometry.clone(), p = g.attributes.position, n = g.attributes.normal;
+        if (!n) return geometry;
+        const uv = new Float32Array(p.count * 2);
+        for (let i = 0; i < p.count; i++) {
+            const ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i)), az = Math.abs(n.getZ(i));
+            const [u, v] = ax >= ay && ax >= az ? [p.getZ(i), p.getY(i)] : az >= ay ? [p.getX(i), p.getY(i)] : [p.getX(i), p.getZ(i)];
+            uv[i * 2] = u;
+            uv[i * 2 + 1] = v;
+        }
+        g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        return g;
     }
 
     // The boy's parts that leave the bicycle in a fall
