@@ -55,9 +55,10 @@ describe('the Tremola slice: no scenery in a road', () => {
         }
         // No stone stands alone: another of its row is one spacing from it on the same edge, along the ride (a row at a
         // drop) or along the edge itself (a row round the outside of a hairpin, where that is less of the ride's metres)
-        const gap = game.Scenery.STONE_GAP_M;
+        // (a style's pieces stand at every step-th station: a delineator post every four, EdgeStyles)
+        const gaps = [...new Set(Object.values(game.EdgeStyles.STYLES).filter(t => t.piece).map(t => t.step * game.Scenery.STONE_GAP_M))];
         stones.forEach((stone, i) => {
-            expect(stones.some((other, j) => j !== i && Math.sign(at[j].lateral) === Math.sign(at[i].lateral) && (Math.abs(Math.abs(at[j].s - at[i].s) - gap) < 0.3 || Math.abs(Math.hypot(other.x - stone.x, other.z - stone.z) - gap) < 0.3))).toBe(true);
+            expect(stones.some((other, j) => j !== i && Math.sign(at[j].lateral) === Math.sign(at[i].lateral) && gaps.some(gap => Math.abs(Math.abs(at[j].s - at[i].s) - gap) < 0.3 || Math.abs(Math.hypot(other.x - stone.x, other.z - stone.z) - gap) < 0.3))).toBe(true);
         });
     });
 

@@ -763,9 +763,19 @@ class Scenery {
             rotation.setFromEuler(lean.set(-Math.atan2(dy, flat), Math.atan2(dx, dz), 0));
             q.kerbMatrix = new THREE.Matrix4().compose(position.set(q.x + dx / 2, y + dy / 2, q.z + dz / 2), rotation, scale.set(1, 1, Math.hypot(flat, dy)));
         }
-        this.instanced([Scenery.stonePart()], sites.map(q => q.matrix), 'stones', group);
-        const kerbs = sites.filter(q => q.next);
-        if (kerbs.length) this.instanced([Scenery.kerbPart()], kerbs.map(q => q.kerbMatrix), 'stone-kerbs', group);
+        // One mesh for each piece and each link the tile's styles use (EdgeStyles), the stones and the kerbs as before
+        for (const piece of new Set(sites.map(q => q.piece))) {
+            const part = EdgeStyles.piece(piece);
+            this.instanced([part], sites.filter(q => q.piece === piece).map(q => q.matrix), 'stones', group);
+            const mesh = group.children[group.children.length - 1];
+            Object.assign(mesh.userData, { piece, height: part.height, triangles: part.triangles });
+        }
+        for (const link of new Set(sites.filter(q => q.next).map(q => q.link))) {
+            const part = EdgeStyles.link(link);
+            this.instanced([part], sites.filter(q => q.next && q.link === link).map(q => q.kerbMatrix), 'stone-kerbs', group);
+            const mesh = group.children[group.children.length - 1];
+            Object.assign(mesh.userData, { link, triangles: part.geometry.attributes.position.count / 3 });
+        }
         return sites;
     }
 
@@ -778,33 +788,58 @@ class Scenery {
         const last = this.rankBike;
         if (!force && last && Math.hypot(bike.x - last.x, bike.z - last.z) < Scenery.STONE_RANK_M) return;
         this.rankBike = { x: bike.x, z: bike.z };
+        // The caps are triangles: STONE_CAP blocks of 10 and KERB_CAP pieces of kerb of 6, whatever the styles drawn
         const far = q => Math.hypot(q.x - bike.x, q.z - bike.z);
         const all = [];
-        for (const held of this.perTile.values()) for (const q of held.stoneSites || []) all.push(far(q));
-        all.sort((a, b) => a - b);
-        const reach = all.length > Scenery.STONE_CAP ? all[Scenery.STONE_CAP - 1] : Infinity;
-        const kerbReach = all.length > Scenery.KERB_CAP ? all[Scenery.KERB_CAP - 1] : Infinity;
-        this.stoneCount = 0;
-        this.kerbCount = 0;
         for (const held of this.perTile.values()) {
             if (!held.stoneSites || !held.stoneSites.length) continue;
-            const stones = held.group.children.find(o => o.name === 'stones'), kerbs = held.group.children.find(o => o.name === 'stone-kerbs');
-            let n = 0, k = 0;
-            for (const q of held.stoneSites) {
-                // (stones as far as the last one taken could pass the cap by one or two: the count holds it)
-                if (far(q) > reach || this.stoneCount + n >= Scenery.STONE_CAP) continue;
-                stones.setMatrixAt(n++, q.matrix);
-                if (q.next && far(q) <= kerbReach && far(q.next) <= reach && this.kerbCount + k < Scenery.KERB_CAP) kerbs.setMatrixAt(k++, q.kerbMatrix);
+            const meshes = new Map(held.group.children.filter(o => o.name === 'stones').map(o => [o.userData.piece, o]));
+            const links = new Map(held.group.children.filter(o => o.name === 'stone-kerbs').map(o => [o.userData.link, o]));
+            for (const q of held.stoneSites) all.push({ q, d: far(q), mesh: meshes.get(q.piece), link: q.next ? links.get(q.link) : null, held });
+        }
+        all.sort((a, b) => a.d - b.d);
+        let pieceRoom = Scenery.STONE_CAP * 10, linkRoom = Scenery.KERB_CAP * 6;
+        const drawn = new Set();
+        for (const e of all) {
+            const t = e.mesh ? e.mesh.userData.triangles || 10 : 10;
+            if (t > pieceRoom) break;
+            pieceRoom -= t;
+            drawn.add(e.q);
+            e.drawn = true;
+        }
+        // (a link is drawn only where both its ends are)
+        const at = q => `${q.x.toFixed(2)},${q.z.toFixed(2)}`;
+        const ends = new Set([...drawn].map(at));
+        for (const e of all) {
+            if (!e.drawn || !e.link) continue;
+            const t = e.link.userData.triangles || 6;
+            if (t > linkRoom || !ends.has(at(e.q.next))) continue;
+            linkRoom -= t;
+            e.linkDrawn = true;
+        }
+        const counts = new Map();
+        for (const held of this.perTile.values()) for (const o of held.group.children) if (o.name === 'stones' || o.name === 'stone-kerbs') counts.set(o, 0);
+        this.stoneCount = 0;
+        this.kerbCount = 0;
+        for (const held of this.perTile.values()) held.stones = 0;
+        for (const e of all) {
+            if (e.drawn && e.mesh) {
+                const n = counts.get(e.mesh);
+                e.mesh.setMatrixAt(n, e.q.matrix);
+                counts.set(e.mesh, n + 1);
+                e.held.stones++;
+                this.stoneCount++;
             }
-            stones.count = n;
-            stones.instanceMatrix.needsUpdate = true;
-            if (kerbs) {
-                kerbs.count = k;
-                kerbs.instanceMatrix.needsUpdate = true;
+            if (e.linkDrawn) {
+                const k = counts.get(e.link);
+                e.link.setMatrixAt(k, e.q.kerbMatrix);
+                counts.set(e.link, k + 1);
+                this.kerbCount++;
             }
-            held.stones = n;
-            this.stoneCount += n;
-            this.kerbCount += k;
+        }
+        for (const [mesh, n] of counts) {
+            mesh.count = n;
+            mesh.instanceMatrix.needsUpdate = true;
         }
     }
 
@@ -1182,7 +1217,7 @@ class Scenery {
         for (const h of this.hairpins()) {
             if (!Scenery.hairpinUsed(h)) continue;
             const p = this.ground.route.sample(h.apex, loc), reach = m / 2 + (h.s1 - h.s0) / 2 + p.width + 8;
-            if (Math.abs(p.x - (tile.tx + 0.5) * m) <= reach && Math.abs(p.z - (tile.tz + 0.5) * m) <= reach) runs.push(...this.hairpinRuns(h));
+            if (Math.abs(p.x - (tile.tx + 0.5) * m) <= reach && Math.abs(p.z - (tile.tz + 0.5) * m) <= reach) runs.push(...this.hairpinRuns(h).map(run => Object.assign(run, { hairpin: h })));
         }
         const inTile = q => Math.floor(q.x / m) === tile.tx && Math.floor(q.z / m) === tile.tz;
         // (a run read from two spans of rows is one run)
@@ -1191,30 +1226,67 @@ class Scenery {
         const stand = (q) => {
             const turn = q.heading + (Scenery.hash(q.seed, q.side, 41) - 0.5) * 0.12;
             // (on a wall's coping the stone is seated on stone)
-            if (q.wall) return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, turn, lean: 0, next: null, kind: 'wall' };
+            if (q.wall) return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, s: q.s, turn, lean: 0, next: null, kind: 'wall' };
             let low = q.y;
             for (const [a, c] of [[-half, -half], [half, -half], [half, half], [-half, half]]) {
                 const x = q.x + a * Math.cos(turn) + c * Math.sin(turn), z = q.z - a * Math.sin(turn) + c * Math.cos(turn);
                 if (this.ground.tileHeight(x, z) !== null) low = Math.min(low, this.ground.groundY(x, z, { start: q.index - 4, end: q.index + 4 }, false, loc));
             }
             if (q.y - low > Scenery.STONE_RULE.footM) return null;
-            return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, turn, lean: (Scenery.hash(q.seed, q.side, 42) - 0.5) * 0.04, next: null, kind: q.n === undefined ? 'drop' : 'hairpin' };
+            return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, s: q.s, turn, lean: (Scenery.hash(q.seed, q.side, 42) - 0.5) * 0.04, next: null, kind: q.n === undefined ? 'drop' : 'hairpin' };
         };
         for (const run of runs) {
             const id = `${run[0].side}:${run[0].x.toFixed(2)},${run[0].z.toFixed(2)}`;
             if (taken.has(id) || !run.some(inTile)) continue;
             taken.add(id);
+            // The run's style (EdgeStyles.pick): one for the whole stretch, row or wall
+            const S = EdgeStyles.STYLES[this.edgeStyle(run)];
+            if (!S.piece) continue;
+            const P = EdgeStyles.PIECES[S.piece];
             const stood = run.map(stand);
             // No stone stands alone: one whose neighbours are both left out goes with them
             const stones = stood.map((q, i) => (q && (stood[i - 1] || stood[i + 1]) ? q : null));
+            // One piece in every step stations, counted from the run's start: the first of them the ground has room for
+            const kept = stones.map((q, i) => {
+                if (!q) return null;
+                const from = i - i % S.step;
+                for (let j = from; j < i; j++) if (stones[j]) return null;
+                return q;
+            });
             run.forEach((q, i) => {
-                if (!stones[i] || !inTile(q)) return;
-                // (the kerb course under a hairpin's row only: at a drop and on a wall the blocks stand alone)
-                if (run.kerb && stones[i + 1]) stones[i].next = { x: run[i + 1].x, y: run[i + 1].seat, z: run[i + 1].z };
-                sites.push(stones[i]);
+                if (!kept[i] || !inTile(q)) return;
+                const site = kept[i];
+                site.style = run.style;
+                site.piece = S.piece;
+                site.height = P.size[1];
+                // The link from a piece to the next kept one of its run, where the style has one
+                const j = kept.findIndex((x, n) => n > i && x);
+                if (S.link && j > 0 && j - i <= S.step) {
+                    site.next = { x: run[j].x, y: run[j].seat, z: run[j].z };
+                    site.link = S.link;
+                }
+                sites.push(site);
             });
         }
         return sites;
+    }
+
+    // The style of a run (EdgeStyles.pick), kept on it: its edge (a hairpin's row, a wall's top, else a drop), its
+    // place for the region rule (the world's LV95 origin from its manifest; a world with none has the alpine mix) and
+    // its own seed: a hairpin's (so its whole row is one style), a wall's first row, a stretch's first station
+    edgeStyle(run) {
+        if (run.style) return run.style;
+        const first = run[0];
+        const edge = run.hairpin ? 'hairpin' : first.wall ? 'wall' : 'drop';
+        const origin = this.data && this.data.manifest && this.data.manifest.origin;
+        const at = origin ? EdgeStyles.latLon(origin, first.x, first.z) : null;
+        const seed = run.hairpin ? Scenery.hash(Math.round(run.hairpin.apex), run.hairpin.sign, 92)
+            : edge === 'wall' ? Scenery.hash(run.start || 0, first.side, 93) : Scenery.hash(first.k === undefined ? Math.round(first.s || 0) : first.k, first.side, 94);
+        let style = EdgeStyles.pick(edge, at, seed);
+        // A stoned wall has lost its parapet (WorldEnvironment.wallStoned): something of Scenery's stands on it
+        if (edge === 'wall' && !EdgeStyles.STYLES[style].piece) style = EdgeStyles.pick(edge, null, seed);
+        run.style = style;
+        return style;
     }
 
     // A marker stone: a sawn granite block, STONE_HEIGHT_M over its seat and STONE_ROOT_M on under it. It has no

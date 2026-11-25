@@ -142,9 +142,10 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
                     if (stones.has(key)) continue;
                     const under = t.poly.map(([px, pz]) => env.ground.groundY(px, pz, null));
                     // (where the stone itself was put: its lean moves the middle of its foot)
-                    stones.set(key, { x, z, y0: t.y0, y1: t.y1, low: Math.min(...under), middle: env.ground.groundY(x, z, null) });
+                    stones.set(key, { x, z, y0: t.y0, y1: t.y1, low: Math.min(...under), middle: env.ground.groundY(x, z, null), height: mesh.userData.height === undefined ? Scenery.STONE_HEIGHT_M : mesh.userData.height, piece: mesh.userData.piece });
                 }
-                if (mesh.name === 'stone-kerbs') for (let i = 0; i < mesh.count; i++) {
+                // (the granite's kerb course; the rails of the other styles are read by their pieces' places only)
+                if (mesh.name === 'stone-kerbs' && (mesh.userData.link === undefined || mesh.userData.link === 'kerb')) for (let i = 0; i < mesh.count; i++) {
                     mesh.getMatrixAt(i, matrix);
                     const at = (y, along) => { v.set(0, y, along).applyMatrix4(matrix); return [v.x, v.y, v.z]; };
                     const a = at(0, -0.5), b = at(0, 0.5), key = `${a[0].toFixed(2)},${a[2].toFixed(2)}`;
@@ -157,7 +158,7 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
             for (const q of held.stoneSites || []) {
                 sites++;
                 const key = `${q.x.toFixed(2)},${q.z.toFixed(2)}`;
-                if (!all.has(key)) all.set(key, { x: q.x, z: q.z, kind: q.kind, next: q.next });
+                if (!all.has(key)) all.set(key, { x: q.x, z: q.z, kind: q.kind, next: q.next, style: q.style, link: q.link });
                 if (!shown.some(([x, z]) => Math.abs(x - q.x) < 0.02 && Math.abs(z - q.z) < 0.02)) hidden = Math.min(hidden, Math.hypot(q.x - bike.x, q.z - bike.z));
             }
         }
@@ -190,7 +191,7 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
                 const first = places[0], across = env.route.project(first.x, first.z, { start: first.index - 4, end: first.index + 4 }, {});
                 const m = env.route.sample(first.s, {});
                 const mirror = { ...first, side: -side, x: m.x - across.lateral * Math.cos(m.heading), z: m.z + across.lateral * Math.sin(m.heading) };
-                stretches.push({ start: run[0].k, side, used: Scenery.stoneUsed(run[0].k, side), places, faults: places.flatMap(q => words(q, groundFaults(game, env, q))), mirror: groundFaults(game, env, mirror) });
+                stretches.push({ start: run[0].k, side, used: Scenery.stoneUsed(run[0].k, side), places, ...styled(env, game, run, places), faults: places.flatMap(q => words(q, groundFaults(game, env, q))), mirror: groundFaults(game, env, mirror) });
             }
             const i0 = env.route.indexAt(Math.max(0, at - stepM / 2)), i1 = env.route.indexAt(Math.min(env.route.length, at + stepM / 2));
             for (const run of env.scenery.wallRuns(i0, i1, side)) {
@@ -198,7 +199,7 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
                 if (found.has(id)) continue;
                 found.add(id);
                 const places = run.map(q => ({ ...q }));
-                walls.push({ start: run.start, side, used: Scenery.wallUsed(run.start, side), places, faults: places.flatMap(q => words(q, wallFaults(game, env, q))) });
+                walls.push({ start: run.start, side, used: Scenery.wallUsed(run.start, side), places, ...styled(env, game, run, places), faults: places.flatMap(q => words(q, wallFaults(game, env, q))) });
             }
         }
         // And the hairpins it has reached
@@ -211,7 +212,8 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
                 const first = places[0], across = env.route.project(first.x, first.z, { start: first.index - 4, end: first.index + 4 }, {});
                 const m = env.route.sample(first.s, {});
                 const mirror = { ...first, side: -first.side, x: m.x - across.lateral * Math.cos(m.heading), z: m.z + across.lateral * Math.sin(m.heading) };
-                rows.push({ hairpin: h, side: first.side, used: h.used, places, faults: places.flatMap(q => words(q, groundFaults(game, env, q, spans))), mirror: groundFaults(game, env, mirror, spans) });
+                run.hairpin = env.route.hairpins().find(x => x.apex === h.apex);
+                rows.push({ hairpin: h, side: first.side, used: h.used, places, ...styled(env, game, run, places), faults: places.flatMap(q => words(q, groundFaults(game, env, q, spans))), mirror: groundFaults(game, env, mirror, spans) });
             }
         }
     }
@@ -221,6 +223,16 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
     stretches.sort((a, b) => a.places[0].s - b.places[0].s || a.side - b.side);
     walls.sort((a, b) => a.start - b.start || a.side - b.side);
     return { env, stretches, rows, walls, hairpins, spans, stones: [...stones.values()], kerbs: [...kerbs.values()], sites: [...sites.values()], windows, most };
+}
+
+// A run's style (Scenery.edgeStyle, EdgeStyles) and the places of it that have a piece: every step-th from its start,
+// none for a style with no piece
+function styled(env, game, run, places) {
+    const style = env.scenery.edgeStyle(run), S = game.EdgeStyles.STYLES[style];
+    // (for a style with a step, one piece in each window of step places: any of them)
+    const windows = [];
+    if (S.piece) for (let i = 0; i < places.length; i += S.step) windows.push(places.slice(i, i + S.step));
+    return { style, windows, expected: windows.map(w => w[0]) };
 }
 
 // What a low wall's row (Scenery.wallRuns) fails where it is drawn, the bike by it: the answer of

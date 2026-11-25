@@ -6,7 +6,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { fakeData, allTiles, samplesOf, straight } from '../helpers/world-synthetic.js';
 
 const game = loadGame();
-const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, WorldGround, WorldRoute, WorldData, WorldPhysics, Route } = game;
+const { THREE, RoadMesh, RoadSurface, TerrainMesh, Horizon, FarLand, LandShade, Scenery, EdgeStyles, WorldGround, WorldRoute, WorldData, WorldPhysics, Route } = game;
 
 const finite = geometry => Array.from(geometry.attributes.position.array).every(Number.isFinite);
 const row = (x, z, heading, over = {}) => ({ x, y: 100, z, heading, width: 10, bits: 0, ...over });
@@ -848,7 +848,10 @@ describe('Scenery', () => {
         // A chosen stretch has a stone at every station of it, and no kerb course under them: a drop's row is its blocks
         const used = Scenery.stoneUsed;
         Scenery.stoneUsed = () => true;
+        // (one style held for this: the short blocks, which stand alone)
+        EdgeStyles.forced = 'short';
         const group = scenery.buildTile(fall.tile('0,0'), null, [], { x: 100, z: 100 });
+        EdgeStyles.forced = null;
         Scenery.stoneUsed = () => false;
         const none = scenery.stoneSites(fall.tile('0,0'));
         Scenery.stoneUsed = used;
@@ -859,7 +862,7 @@ describe('Scenery', () => {
         expect(stones.count).toBe(Math.min(stretch.length, Scenery.STONE_CAP));
         expect(stones.geometry.attributes.position.count / 3).toBe(10);
         stones.geometry.computeBoundingBox();
-        expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, Scenery.STONE_SINK_M + Scenery.STONE_HEIGHT_M].map(n => expect.closeTo(n, 5)));
+        expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, Scenery.STONE_SINK_M + EdgeStyles.PIECES.short.size[1]].map(n => expect.closeTo(n, 5)));
         const matrix = new THREE.Matrix4(), at = new THREE.Vector3();
         const along = [];
         for (let i = 0; i < stones.count; i++) {

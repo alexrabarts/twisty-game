@@ -12,7 +12,7 @@ const KINDS = ['conifer', 'broadleaf', 'bush'];
 
 function load() {
     const THREE = realThree();
-    const files = ['terrain.js', 'world/route.js', 'world/legroute.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js', 'world/data.js', 'world/landshade.js', 'world/terrainmesh.js', 'world/vegetation.js', 'world/scenery.js'];
+    const files = ['terrain.js', 'world/route.js', 'world/legroute.js', 'vehicle.js', 'environment.js', 'tours.js', 'sceneassets.js', 'world/data.js', 'world/landshade.js', 'world/terrainmesh.js', 'world/vegetation.js', 'world/edgestyles.js', 'world/scenery.js'];
     const source = files.map(loadScript).join('\n;\n');
     const fetch = async url => {
         const bytes = readFileSync(new URL(url, root));

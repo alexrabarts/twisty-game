@@ -6174,7 +6174,8 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
         });
         // The kerb under the rows: the foot of each piece, at its ends and its middle, against the drawn ground
         env.sceneryGroup.traverse(o => {
-            if (!o.isInstancedMesh || o.name !== 'stone-kerbs') return;
+            // (the kerb course of the granite style; the rails of the other styles carry no root to measure)
+            if (!o.isInstancedMesh || o.name !== 'stone-kerbs' || (o.userData.link && o.userData.link !== 'kerb')) return;
             for (let i = 0; i < o.count; i++) {
                 o.getMatrixAt(i, matrix);
                 world.multiplyMatrices(o.matrixWorld, matrix);
@@ -6190,9 +6191,12 @@ WORLD['world-stones'] = page => page.evaluate(async (placeSource, hairpinSource,
                     over = Math.max(over, y === null ? Infinity : v.y - y);
                 }
                 if (over > 0) kerb.floats = over === Infinity ? 'no ground drawn under it' : Math.round(over * 100) / 100;
-                // (the kerb course is a hairpin's row's only)
+                // A piece of kerb is a granite row's (EdgeStyles: on a drop or round a hairpin): its middle is between two
+                // granite stones of the scenery's sites
                 const along = route.project(at.x, at.z, null, {}).s;
-                if (!apexes.some(a => Math.abs(a - along) <= hairpinM)) kerb.stray = Math.round(along);
+                let granite = false;
+                for (const held of env.scenery.perTile.values()) for (const q of held.stoneSites || []) if (q.link === 'kerb' && q.next && Math.hypot((q.x + q.next.x) / 2 - at.x, (q.z + q.next.z) / 2 - at.z) < 0.2) granite = true;
+                if (!granite) kerb.stray = Math.round(along);
             }
         });
     }
@@ -6216,7 +6220,7 @@ function stoneChecks(results, failures) {
     if (!stones) return;
     if (!(stones.stones > 0)) failures.push(`world-stones: no marker stone was seen at ${stones.places} places`);
     if (!(stones.hairpinsWithRow > 0)) failures.push(`world-stones: no row of stones at any of the ${stones.hairpins} hairpins`);
-    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, noEdge: `stones on a hairpin with no drop of ${stones.hairpinDropM} m drawn within ${stones.reachM} m behind them`, inside: 'stones on the inside of a hairpin', guarded: 'stones off a wall where a wall or a parapet is drawn at the edge', offTop: 'stones on a wall with a corner off its coping', railed: 'stones on a wall with a parapet', wallHigh: `stones on a wall that drops ${stones.wallMaxM} m or more`, kerbFloats: 'pieces of kerb with their foot over the drawn ground', kerbStray: 'pieces of kerb away from every hairpin' };
+    const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, noEdge: `stones on a hairpin with no drop of ${stones.hairpinDropM} m drawn within ${stones.reachM} m behind them`, inside: 'stones on the inside of a hairpin', guarded: 'stones off a wall where a wall or a parapet is drawn at the edge', offTop: 'stones on a wall with a corner off its coping', railed: 'stones on a wall with a parapet', wallHigh: `stones on a wall that drops ${stones.wallMaxM} m or more`, kerbFloats: 'pieces of kerb with their foot over the drawn ground', kerbStray: 'pieces of kerb not between two granite stones of a row' };
     for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
 }
 
@@ -6588,6 +6592,76 @@ function groupEye(kind) {
     game.graphics.render(game.scene, game.camera);
     return { png: game.graphics.renderer.domElement.toDataURL('image/png'), eye: [eye.x, eye.y, eye.z].map(n => Math.round(n)) };
 }
+
+// world-edge-shots: the edge furniture (EdgeStyles, Scenery.stoneSites) in pictures: for each style that stands
+// somewhere on the stage, the first piece of it the ride passes, seen from the road 9 m before it
+// (`<tag>-<style>.png`), and the stretch at km 2.8 from the chase view (`<tag>-km2.8.png`). Reports the styles found
+// and how many pieces of each stand on the stage.
+//   node tools/terrain-check.mjs world-edge-shots --world tremola --gpu [--out <dir>] [--tag <name>]
+async function edgeShots(placeSource, stretchS) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, g = game.graphics, v = game.vehicle;
+    game.worldLinger = false;
+    const shots = {}, counts = {}, seen = new Set();
+    const styles = typeof EdgeStyles === 'undefined' ? [] : Object.keys(EdgeStyles.STYLES).filter(id => EdgeStyles.STYLES[id].piece);
+    const frame = () => g.renderer.domElement.toDataURL('image/png');
+    for (let s = env.startS + 50; s < env.endS && seen.size < styles.length; s += 350) {
+        await placeAt(s);
+        const sites = [];
+        for (const held of env.scenery.perTile.values()) for (const q of held.stoneSites || []) sites.push(q);
+        for (const q of sites) {
+            const key = `${q.x.toFixed(1)},${q.z.toFixed(1)}`;
+            if (!counts[key]) counts[key] = q.style || 'blocks';
+        }
+        for (const id of styles) {
+            if (seen.has(id)) continue;
+            const found = sites.filter(x => x.style === id && x.s !== undefined)[0];
+            if (!found) continue;
+            // The bike put down 12 m before it, so what stands there is drawn in full (the stones stand on the
+            // nearest tiles only), then the piece of that style nearest it
+            await placeAt(Math.max(10, found.s - 12));
+            const near = [];
+            for (const held of env.scenery.perTile.values()) for (const x of held.stoneSites || []) if (x.style === id && x.s !== undefined) near.push(x);
+            const q = near.sort((a, b) => Math.abs(a.s - found.s) - Math.abs(b.s - found.s))[0] || found;
+            const qs = q.s;
+            const p = route.sample(Math.max(0, qs - 8), {});
+            const side = Math.sign((q.x - p.x) * Math.cos(p.heading) - (q.z - p.z) * Math.sin(p.heading)) || 1;
+            // From the road, a little to the piece's side of its middle, a rider's eye high
+            const lat = side * 0.8;
+            game.camera.position.set(p.x + lat * Math.cos(p.heading), p.y + 1.6, p.z - lat * Math.sin(p.heading));
+            game.camera.lookAt(q.x, q.y + 0.5, q.z);
+            game.camera.updateMatrixWorld(true);
+            env.scenery.rankStones({ x: q.x, z: q.z }, true);
+            g.render(game.scene, game.camera);
+            shots[id] = frame();
+            seen.add(id);
+        }
+    }
+    // A stretch (--at <s>, by default km 2.8): the bike standing 15 m before it, the chase view
+    await placeAt(Math.max(10, stretchS - 15));
+    game.worldCamera.reset(v.yawAngle);
+    for (let i = 0; i < 40; i++) twistyDev.step(1, { render: true });
+    shots[`s${Math.round(stretchS)}`] = frame();
+    const first = [];
+    for (const held of env.scenery.perTile.values()) for (const q of held.stoneSites || []) if (q.kind === 'drop' && q.s !== undefined) first.push(Math.round(q.s));
+    const tally = {};
+    for (const style of Object.values(counts)) tally[style] = (tally[style] || 0) + 1;
+    return { shots, found: [...seen], tally, dropsNear: first.sort((a, b) => a - b).slice(0, 5) };
+}
+WORLD_PROBES.push('world-edge-shots');
+WORLD['world-edge-shots'] = async (page) => {
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+    const result = await page.evaluate(edgeShots, placeAt.toString(), Number(option('at') || 2800));
+    const dir = option('out') || join(process.env.HOME || '.', 'Library/Caches/twisty-world/edge-shots');
+    mkdirSync(dir, { recursive: true });
+    const files = [];
+    for (const [k, data] of Object.entries(result.shots)) {
+        const file = join(dir, `${option('tag') || 'edge'}-${k}.png`);
+        writeFileSync(file, Buffer.from(data.split(',')[1], 'base64'));
+        files.push(file);
+    }
+    return { found: result.found, tally: result.tally, dropsNear: result.dropsNear, files };
+};
 
 // world-flash: no world mesh changes colour as the bike comes up to it. It rides up to a stopping place (its props,
 // PlaceMesh, are built near the bike only) and to a hairpin's row of marker stones (the kerbs, Scenery.setStones by the

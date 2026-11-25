@@ -18,7 +18,7 @@ import { diskFetch } from '../helpers/world-fetch.js';
 import { rideStones, lowWallFaults } from '../helpers/world-stones.js';
 
 const game = loadGame();
-const { Scenery } = game;
+const { Scenery, EdgeStyles } = game;
 const rule = Scenery.STONE_RULE;
 // The share of the stretches of drop that may have stones: "sometimes used", not always and not rarely
 const SHARE = [0.5, 0.7];
@@ -130,8 +130,10 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
     test('a chosen stretch has its stones over all of it, an unchosen one none, but the stones the ground under them leaves out', () => {
         const at = q => read.stones.some(stone => near(q, stone));
         const used = read.stretches.filter(t => t.used), unused = read.stretches.filter(t => !t.used);
-        const missing = used.flatMap(t => t.places).filter(q => !at(q));
+        // (a style's pieces stand at every step-th place of its stretch: EdgeStyles)
+        const missing = used.flatMap(t => t.windows).filter(w => !w.some(at));
         // (the fixture world's hillside is steeper than a fill from end to end: footM leaves out more of its stones)
+        // (out of the places of the chosen stretches, as before the styles: a window of a stepped style is its places)
         if (world.id === 'tremola') expect(missing.length).toBeLessThanOrEqual(used.flatMap(t => t.places).length * 0.05);
         expect(unused.flatMap(t => t.places).filter(at)).toEqual([]);
     });
@@ -207,15 +209,16 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
     });
 
     test('no stone floats: no corner of its foot over the drawn ground, and its top out of the ground by its height at least and a step of the road at most more', () => {
-        const off = read.stones.filter(stone => stone.y0 > stone.low + FLOAT_M || stone.y1 < stone.middle + Scenery.STONE_HEIGHT_M - 0.05 || stone.y1 > stone.middle + Scenery.STONE_HEIGHT_M + Scenery.ROADSIDE_STEP_M + 0.05);
+        const off = read.stones.filter(stone => stone.y0 > stone.low + FLOAT_M || stone.y1 < stone.middle + stone.height - 0.05 || stone.y1 > stone.middle + stone.height + Scenery.ROADSIDE_STEP_M + 0.05);
         expect(off.map(stone => `(${stone.x.toFixed(1)}, ${stone.z.toFixed(1)}): foot ${stone.y0.toFixed(2)}, lowest ground ${stone.low.toFixed(2)}, ground at its middle ${stone.middle.toFixed(2)}`)).toEqual([]);
     });
 
-    test('the kerb course is under a hairpin\'s row only: no stone of a stretch or a wall has one, every stone of a hairpin\'s row but its last does', () => {
-        expect(read.sites.filter(q => q.kind !== 'hairpin' && q.next)).toEqual([]);
+    test('a piece is linked to the next only where its style has a link (the granite\'s kerb, a rail), and then every piece of a hairpin\'s row but its last is', () => {
+        const S = EdgeStyles.STYLES;
+        expect(read.sites.filter(q => q.next && !S[q.style].link)).toEqual([]);
         expect(read.sites.some(q => q.kind === 'drop')).toBe(true);
         const hairpin = read.sites.filter(q => q.kind === 'hairpin');
-        for (const t of read.rows.filter(r => r.used)) {
+        for (const t of read.rows.filter(r => r.used && S[r.style].link)) {
             const mine = t.places.map(q => hairpin.find(site => near(q, site))).filter(Boolean);
             // (each stone with a neighbour drawn after it carries the piece to it)
             expect(mine.filter(site => site.next).length).toBeGreaterThanOrEqual(mine.length - 1 - t.places.filter(q => !hairpin.some(site => near(q, site))).length);
@@ -224,7 +227,7 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
 
     test('the kerb course runs from a stone to the next of its row, at their seat and down into the ground', () => {
         // (a piece is drawn under the stones nearest the bike only: the ride's steps pass some rows by)
-        const rowStones = read.stones.filter(stone => read.rows.some(t => t.used && t.places.some(q => near(q, stone))));
+        const rowStones = read.stones.filter(stone => stone.piece === 'granite');
         if (rowStones.length) expect(read.kerbs.length).toBeGreaterThan(0);
         expect(read.kerbs.length).toBeLessThan(Math.max(1, rowStones.length));
         const at = ([x, z]) => read.stones.some(stone => Math.hypot(stone.x - x, stone.z - z) < 0.05);
@@ -248,7 +251,9 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
     test('the cap takes the stones nearest the bike: at every place of the ride no stone left out is nearer than one drawn', () => {
         expect(read.most).toBeLessThanOrEqual(Scenery.STONE_CAP);
         for (const w of read.windows) {
-            expect(w.shown).toBe(Math.min(w.sites, Scenery.STONE_CAP));
+            // (the cap is triangles: STONE_CAP blocks of 10; a post with its band is 18)
+            expect(w.shown).toBeLessThanOrEqual(Math.min(w.sites, Scenery.STONE_CAP));
+            if (w.sites <= Scenery.STONE_CAP / 2) expect(w.shown).toBe(w.sites);
             expect(w.kerbs).toBeLessThanOrEqual(Scenery.KERB_CAP);
             // (a drawn stone's place is read back from 32-bit numbers)
             expect(w.nearestHidden).toBeGreaterThanOrEqual(w.farthestShown - 0.01);
@@ -257,9 +262,12 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
         if (read.stones.length > Scenery.STONE_CAP * 2) expect(read.windows.some(w => w.sites > Scenery.STONE_CAP)).toBe(true);
     });
 
-    test('a stone is 10 triangles and a piece of kerb 6, and the two caps together are within what the posts could take', () => {
+    test('a block is 10 triangles, a banded post 18, a piece of kerb or a rail 6 a bar, and the two caps together are within what the posts could take', () => {
         const stone = Scenery.stonePart().geometry.attributes.position.count / 3, kerb = Scenery.kerbPart().geometry.attributes.position.count / 3;
         expect([stone, kerb]).toEqual([10, 6]);
+        // (the caps are triangles, Scenery.rankStones: a style's pieces and links fill them as the blocks and the kerb did)
+        for (const id of Object.keys(EdgeStyles.PIECES)) expect(EdgeStyles.piece(id).triangles).toBe(EdgeStyles.PIECES[id].band ? 18 : 10);
+        for (const [id, L] of Object.entries(EdgeStyles.LINKS)) if (L) expect(EdgeStyles.link(id).triangles).toBe(6 * L.bars.length);
         // (120 stones of 24 triangles was the cap before the drops, 160 of 18 before the hairpins)
         expect(Scenery.STONE_CAP * stone + Scenery.KERB_CAP * kerb).toBeLessThanOrEqual(1700);
         expect(1700).toBeLessThan(120 * 24);
@@ -267,9 +275,9 @@ describe.each(worlds)('marker stones on %s', (name, world) => {
 
     if (world.id === 'tremola') {
         test('on the shipped stage every place of a stretch or a row with stones had its stone as the bike came by, and the second ride drew the same stones', () => {
-            const places = read.stretches.concat(read.rows, read.walls).filter(t => t.used).flatMap(t => t.places);
+            const places = read.stretches.concat(read.rows, read.walls).filter(t => t.used).flatMap(t => t.windows);
             // (a stone the ground falls more than footM under is left out of its row: Scenery.stoneSites)
-            const missing = places.filter(q => !read.stones.some(stone => near(q, stone)));
+            const missing = places.filter(w => !w.some(q => read.stones.some(stone => near(q, stone))));
             expect(missing.length).toBeLessThan(places.length * 0.05);
             const sign = r => r.stones.map(stone => `${stone.x.toFixed(2)},${stone.z.toFixed(2)},${stone.y0.toFixed(3)}`).sort();
             expect(sign(again)).toEqual(sign(read));
