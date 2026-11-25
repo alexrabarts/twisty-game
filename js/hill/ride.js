@@ -767,9 +767,14 @@ class HillRide {
         }
         if (this.hold && this.hold.phase === 'ease') {
             // From the opening shot to the view as he pushes off: the camera cranes up and back, the aim and the lens
-            // follow, all eased, no cut
-            const t = Math.min(1, this.hold.t / HillRide.HOLD.easeS), k = t * t * t * (t * (6 * t - 15) + 10);
-            cam.position.copy(this.hold.from).lerp(this.camTarget, k);
+            // follow, all eased, no cut. It eases to the view's own damped camera, run all through the ease, not to
+            // the place the view wants: at the end the camera is then that camera, lag and speed and all, and the
+            // view takes over without the stall of a damped camera that starts with no lag behind a rolling bicycle
+            const h = this.hold;
+            if (!h.chase) h.chase = this.camTarget.clone();
+            else h.chase.lerp(this.camTarget, blend);
+            const t = Math.min(1, h.t / HillRide.HOLD.easeS), k = t * t * t * (t * (6 * t - 15) + 10);
+            cam.position.copy(h.from).lerp(h.chase, k);
             this.look.copy(this.hold.lookFrom).lerp(this.look, k);
             fov = this.hold.fovFrom + (fov - this.hold.fovFrom) * k;
         } else cam.position.lerp(this.camTarget, blend);

@@ -600,6 +600,40 @@ describe('the end of the ride', () => {
     });
 });
 
+describe('the opening shot to the chase view', () => {
+    test.each(['follow', 'front'])('the camera eases from the opening onto the %s view with no stall or jump in its speed as the view takes over', id => {
+        const lane = new HillLane(), bike = new HillBicycle(lane);
+        const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);
+        const ride = Object.assign(Object.create(HillRide.prototype), {
+            lane, bike, game: { camera }, view: HillRide.VIEWS.findIndex(v => v.id === id), look: new THREE.Vector3(), camTarget: new THREE.Vector3(),
+            sample: {}, rider: null, hold: { phase: 'hold', t: 0 }, ending: null
+        });
+        bike.reset(lane.rule.startM, lane.rule.opening.startAcross);
+        ride.placeCamera(1);
+        const H = HillRide.HOLD, frame = 1 / 60;
+        ride.hold = { phase: 'ease', t: 0, from: camera.position.clone(), lookFrom: ride.look.clone(), fovFrom: camera.fov };
+        const speeds = [], last = camera.position.clone();
+        let endAt = null;
+        for (let t = 0; t < H.easeS + 1.5; t += frame) {
+            if (ride.hold) {
+                ride.hold.t += frame;
+                if (ride.hold.t >= H.easeS) ride.hold = null, endAt = speeds.length;
+            }
+            for (let k = 0; k < 2; k++) bike.step(DT, { pedal: t < H.pushS ? H.push : 0, brake: 0, steer: 0 });
+            ride.placeCamera(Math.min(1, frame * 6));
+            speeds.push(camera.position.distanceTo(last) / frame);
+            last.copy(camera.position);
+        }
+        expect(bike.speed).toBeGreaterThan(2);
+        // Over the handover the camera keeps its speed: no frame under 80 % or over 125 % of the frame before
+        const window = speeds.slice(endAt - 15, endAt + 30);
+        for (let i = 1; i < window.length; i++) {
+            expect(window[i]).toBeGreaterThan(window[i - 1] * 0.8);
+            expect(window[i]).toBeLessThan(window[i - 1] * 1.25);
+        }
+    });
+});
+
 describe('the cinematic cameras', () => {
     test('down a whole ride the bicycle is always in frame and in clear view until the ending, and the cuts are spaced', () => {
         const lane = new HillLane(), bike = new HillBicycle(lane);
