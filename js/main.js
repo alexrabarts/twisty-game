@@ -2577,7 +2577,8 @@ class Game {
             this.shownWorldGates = gates.passed;
             this.hud.setGates(gates.passed, gates.total);
         }
-        this.hud.setProgress(HudRules.stageShare(s, span.from, span.to), HudRules.kmText(s, this.environment.route.length), line);
+        // (the distance is the leg's own: a folder of several legs holds the others' road too)
+        this.hud.setProgress(HudRules.stageShare(s, span.from, span.to), HudRules.kmText(Math.max(0, s - from), to - from), line);
     }
 
     updateWheelieIndicator() {
