@@ -2070,6 +2070,45 @@ class Game {
         const now = Number.isFinite(graphics.adaptation) ? graphics.adaptation : 1;
         const tau = goal > now ? L.inS : L.outS;
         graphics.adaptation = !(dt > 0) ? now : now + (goal - now) * (1 - Math.exp(-dt / tau));
+        this.updateTubeMovers();
+    }
+
+    // The bike, the riders of the group and the traffic in a tube are lit by it (TubeShade.patchMover): each frame the
+    // nearest MOVERS of them to the camera are written with the tube's light share and the lamps' light where each
+    // stands (TubeShade.moverAt); their materials are patched as they appear (every 30 frames, and a model loaded or
+    // swapped since is caught then). The land and the world keep their light, so the open air seen through a
+    // portal is not dimmed
+    tubeMoverRoots() {
+        const roots = [];
+        if (this.vehicle && this.vehicle.group) roots.push(this.vehicle.group);
+        const traffic = this.traffic;
+        if (traffic) {
+            for (const bike of traffic.motorcycles || []) if (bike.bikeGroup) roots.push(bike.bikeGroup);
+            for (const car of traffic.cars || []) if (car.carGroup) roots.push(car.carGroup);
+        }
+        return roots;
+    }
+
+    updateTubeMovers() {
+        const env = this.environment;
+        if (!env || !env.isWorld || typeof TubeShade === 'undefined' || !env.tubeInfo) return;
+        const roots = this.tubeMoverRoots();
+        this.tubeMoverTick = ((this.tubeMoverTick || 0) + 1) % 30;
+        if (this.tubeMoverTick === 1) {
+            for (const root of roots) root.traverse(o => { if (o.material) [].concat(o.material).forEach(m => TubeShade.patchMover(m)); });
+        }
+        const cam = this.camera ? this.camera.position : null;
+        const p = new THREE.Vector3();
+        const list = [];
+        for (const root of roots) {
+            if (!root.visible) continue;
+            root.getWorldPosition(p);
+            const hint = root.userData.tubeHint || (root.userData.tubeHint = { index: -1 });
+            const at = TubeShade.moverAt(env, p.x, p.y, p.z, hint);
+            list.push({ x: p.x, z: p.z, share: at.share, lamp: at.lamp, d: cam ? Math.hypot(p.x - cam.x, p.z - cam.z) : 0 });
+        }
+        list.sort((a, b) => a.d - b.d);
+        TubeShade.writeMovers(list);
     }
 
     // Height of the tunnel roof over the bike, or null in the open. The

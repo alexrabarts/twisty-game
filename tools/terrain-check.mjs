@@ -6194,7 +6194,7 @@ WORLD['world-tunnels'] = async (page) => {
 // rider's would (Graphics.adaptation). --level N holds that graphics level (js/quality.js) for every picture. The files
 // are <tag>-<run s>-<view>.png and <tag>-s<s>-chase.png in --out, with <tag>-index.json (each view and the window's
 // counts)
-//   node tools/terrain-check.mjs world-tube-shots --world gotthard-north --gpu [--at 9100] [--level 4] [--out <dir>] [--tag T]
+//   node tools/terrain-check.mjs world-tube-shots --world gotthard-north --gpu [--at 9100 [--at-only]] [--level 4] [--out <dir>] [--tag T]
 const TUBE_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/tunnel-shots');
 WORLD_PROBES.push('world-tube-shots');
 WORLD['world-tube-shots'] = async (page) => {
@@ -6208,7 +6208,8 @@ WORLD['world-tube-shots'] = async (page) => {
         return [...route.ranges('tunnel').map(r => ({ ...r, kind: 'tunnel' })), ...route.ranges('gallery').map(r => ({ ...r, kind: 'gallery' }))].sort((a, b) => a.s0 - b.s0);
     });
     const views = [];
-    for (const run of runs) {
+    // (--at-only: the --at stations alone)
+    for (const run of flag('at-only') ? [] : runs) {
         const mid = run.s0 + Math.min((run.s1 - run.s0) / 2, 200);
         views.push({ run, s: Math.max(10, run.s0 - 30), mode: 2, name: `${Math.round(run.s0)}-entry` });
         views.push({ run, s: mid, mode: 2, name: `${Math.round(run.s0)}-chase` });

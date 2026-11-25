@@ -484,7 +484,11 @@ class TubeShade {
                 uTubeLamp: { value: new THREE.Color().setRGB(L.color[0], L.color[1], L.color[2], THREE.LinearSRGBColorSpace) },
                 uTubeLight: { value: new THREE.Vector4(T.lampM, T.entranceM, L.strength, L.lampH) },
                 uTubeFill: { value: L.fill },
-                uTubeDetail: { value: 1 }
+                uTubeDetail: { value: 1 },
+                // The vehicles and riders near the camera (TubeShade.movers): x, z, the tube's light share and the
+                // lamps' light where each stands
+                uTubeMovers: { value: Array.from({ length: TubeShade.MOVERS }, () => new THREE.Vector4(0, 0, 0, 0)) },
+                uTubeMoverCount: { value: 0 }
             };
         }
         return TubeShade.shared;
@@ -492,6 +496,107 @@ class TubeShade {
 
     // The fine relief and the stains are drawn at every level; the relief's normals only where the level can pay
     // for them (Game.applyQuality: Low and Lowest draw the tube flat-lit)
+    // The most vehicles and riders the shader reads, nearest the camera first; an object farther than MOVER_M from
+    // every entry keeps the open air's light
+    static get MOVERS() { return 16; }
+    static get MOVER_M() { return 6; }
+
+    // The tube's light where a vehicle or a rider stands at (x, y, z): {share, lamp, s}. The share is the lining's
+    // (TubeLining.share: none at a portal, all of it dayM in, galleryShare in a gallery) where the point lies within
+    // the ride's tube (inside its walls, under its roof); the lamp is the lamps' light on a body there
+    // (TubeShade.lampsAt). `hint` is the last projection of the same object
+    static moverAt(env, x, y, z, hint = null) {
+        const none = { share: 0, lamp: 0, s: null };
+        if (!env || !env.route || !env.tubeInfo) return none;
+        const route = env.route, out = hint || {};
+        route.project(x, z, hint && hint.index >= 0 ? hint : null, out);
+        if (!(out.index >= 0)) return none;
+        const point = route.points[out.index];
+        if (Math.abs(out.lateral) > point.width / 2 + RoadMesh.TUBE_WALL_M || y > out.y + WorldRoute.ROOF_M || y < out.y - 2) return { ...none, s: out.s };
+        const info = env.tubeInfo(), k = Math.max(0, Math.min(route.points.length - 2, Math.floor(route.toUnits(out.s))));
+        const t = Math.min(1, Math.max(0, route.toUnits(out.s) - k));
+        const inM = info.inM[k] + (info.inM[k + 1] - info.inM[k]) * t;
+        const share = env.tubeShareAt(out.s);
+        return { share, lamp: inM > 0 ? TubeShade.lampsAt(out.s, out.lateral, 1.2, inM) : 0, s: out.s };
+    }
+
+    // The lamps' light on a body at `s` metres along, `lat` across, `h` over the floor, `inM` in from a portal: the
+    // shader's lamps (LAMPS_GLSL) on a face turned a little toward each, and the fill
+    static lampsAt(s, lat, h, inM) {
+        const T = TubeLining.TUBE, L = TubeShade.LIGHT;
+        const at = ls => {
+            const d = [ls - s, -lat, L.lampH - h];
+            const r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2] + 0.25, r = Math.sqrt(r2);
+            return 0.7 * Math.max(d[2] / r, 0) / r2;
+        };
+        const k = Math.floor(s / T.lampM);
+        let e = 0;
+        for (let i = -1; i <= 2; i++) e += at((k + i) * T.lampM);
+        const entrance = 1 - Math.min(1, Math.max(0, (inM - (T.entranceM - 4)) / 8));
+        if (entrance > 0) for (let i = -1; i <= 1; i++) e += at((k + i + 0.5) * T.lampM) * entrance;
+        return e * L.strength + L.fill * (1 + entrance);
+    }
+
+    // Writes the movers ([{x, z, share, lamp}], nearest the camera first) for every patched material
+    static writeMovers(list) {
+        const u = TubeShade.uniforms, n = Math.min(list.length, TubeShade.MOVERS);
+        for (let i = 0; i < n; i++) u.uTubeMovers.value[i].set(list[i].x, list[i].z, list[i].share, list[i].lamp);
+        u.uTubeMoverCount.value = n;
+    }
+
+    // A vehicle's or a rider's material, patched in place once: the shader finds its object's entry among the movers
+    // (the one nearest the object's origin, within MOVER_M) and holds out the sun and the sky by its share, lit by the
+    // lamps instead, as the lining is. A material the movers do not name keeps the open air's light, so the land seen
+    // through a portal is not dimmed. Lit built-in materials only (an unlit one has no light to hold out)
+    static patchMover(material) {
+        if (!material || material.userData.tubeMover) return false;
+        if (!(material.isMeshStandardMaterial || material.isMeshLambertMaterial || material.isMeshPhongMaterial || material.isMeshToonMaterial)) return false;
+        material.userData.tubeMover = true;
+        const before = material.onBeforeCompile;
+        const key = material.customProgramCacheKey();
+        const N = TubeShade.MOVERS, M = TubeShade.MOVER_M;
+        material.onBeforeCompile = (shader, renderer) => {
+            if (before) before.call(material, shader, renderer);
+            TubeShade.injectMover(shader, N, M);
+        };
+        material.customProgramCacheKey = () => `${key}|tube-mover`;
+        material.needsUpdate = true;
+        return true;
+    }
+
+    // The mover's light in a compiling shader (TubeShade.patchMover): the entry is found once per vertex (all of an
+    // object's vertices share its origin), and the light is changed before the reflected light is summed
+    static injectMover(shader, N = TubeShade.MOVERS, M = TubeShade.MOVER_M) {
+        const u = TubeShade.uniforms;
+        Object.assign(shader.uniforms, { uTubeMovers: u.uTubeMovers, uTubeMoverCount: u.uTubeMoverCount, uTubeLamp: u.uTubeLamp });
+        shader.vertexShader = shader.vertexShader
+            .replace('#include <common>', `#include <common>
+uniform vec4 uTubeMovers[${N}];
+uniform int uTubeMoverCount;
+varying vec2 vTubeMover;`)
+            .replace('#include <project_vertex>', `#include <project_vertex>
+{
+    vec2 origin = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xz;
+    float best = ${M.toFixed(1)};
+    vTubeMover = vec2(0.0);
+    for (int i = 0; i < ${N}; i++) {
+        if (i >= uTubeMoverCount) break;
+        float d = distance(origin, uTubeMovers[i].xy);
+        if (d < best) { best = d; vTubeMover = uTubeMovers[i].zw; }
+    }
+}`);
+        shader.fragmentShader = shader.fragmentShader
+            .replace('#include <common>', `#include <common>
+uniform vec3 uTubeLamp;
+varying vec2 vTubeMover;`)
+            .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+// (in a tunnel or a gallery: the sun and the sky held out by the share, the tube's lamps in their place)
+reflectedLight.directDiffuse *= 1.0 - vTubeMover.x;
+reflectedLight.directSpecular *= 1.0 - vTubeMover.x;
+reflectedLight.indirectDiffuse = reflectedLight.indirectDiffuse * (1.0 - vTubeMover.x) + diffuseColor.rgb * uTubeLamp * vTubeMover.y;
+reflectedLight.indirectSpecular *= 1.0 - 0.8 * vTubeMover.x;`);
+    }
+
     static setDetail(on) {
         TubeShade.uniforms.uTubeDetail.value = on ? 1 : 0;
     }
