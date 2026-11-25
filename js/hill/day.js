@@ -360,6 +360,17 @@ class HillDay {
         } else f.run = 0;
     }
 
+    // The horse and cart drawn from their model (HillHorse) in place of the plain blocks built with the day
+    dressCart(horse) {
+        if (!this.cartMesh || !horse) return false;
+        const at = this.cartMesh.parent;
+        if (at) at.remove(this.cartMesh);
+        this.cartMesh = horse.group;
+        this.horse = horse;
+        if (at) at.add(horse.group);
+        return true;
+    }
+
     // The thrown loaves drawn as the basket's own (HillSpill.wear): its loaves' `material` and their mean colour `crust`
     wearLoaves(material, crust) {
         if (!material || !crust || !this.loafMeshes || !this.loafMeshes.length) return false;
@@ -730,9 +741,19 @@ class HillDay {
             leg.scale.y = 1 - (1 - HillDay.catFold(u)) * track.run;
         }
         const cart = this.cart, cartAt = lane.at(cart.s, cart.across, 0, {}), kp = lane.sample(cart.s);
+        // Its speed from how far it went since the last drawing (the horse's stride and the wheels are matched to it)
+        const was = this.cartWas === undefined ? cart.s : this.cartWas;
+        const speed = Math.abs(was - cart.s) / (this.drawDt || 1 / 60);
+        this.cartWas = cart.s;
         this.cartMesh.position.set(cartAt.x, cartAt.y, cartAt.z);
-        // Facing up the lane
+        // Facing up the lane, pitched up its grade
+        this.cartMesh.rotation.set(0, 0, 0);
+        this.cartMesh.rotation.order = 'YXZ';
         this.cartMesh.rotation.y = kp.heading + Math.PI;
+        if (this.horse) {
+            this.cartMesh.rotation.x = Math.atan(kp.grade || 0);
+            this.horse.update(this.drawDt || 1 / 60, speed, this.eye || null);
+        }
         for (const sheet of this.sheets) {
             const at = lane.at(sheet.s, H.washing.side * this.washLine, HillDay.WASHING.upM, {}), sp = lane.sample(sheet.s);
             sheet.pivot.position.set(at.x, at.y, at.z);

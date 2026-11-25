@@ -433,6 +433,14 @@ class HillRide {
         this.spill = typeof HillSpill !== 'undefined' ? new HillSpill(this.lane, this.rider) : null;
         if (this.spill) game.scene.add(this.spill.group);
         if (this.day) game.scene.add(this.day.build());
+        // The horse and cart from their model; without it the day keeps its plain blocks, and says why
+        if (this.day && typeof HillHorse !== 'undefined') {
+            try {
+                this.day.dressCart(new HillHorse(await SceneAssets.loadModel(HillHorse.FILE)));
+            } catch (error) {
+                console.error('HillRide: the horse and cart did not load; the plain ones stand in:', error);
+            }
+        }
         // Every loose loaf, spilt or thrown, as the basket's own
         if (this.day && this.spill && this.spill.crust) this.day.wearLoaves(this.spill.loaves[0].mesh.material, this.spill.crust);
         game.graphics.fixColorSpaces();
@@ -1084,6 +1092,7 @@ class HillRide {
         this.showStart();
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
+            this.day.eye = game.camera.position;
             this.day.draw(dt || 1 / 60);
             // The basket: full up the climb, as he brings the bread up to the cart, then as many as are left
             const basket = this.spill ? this.spill.inBasket : null;

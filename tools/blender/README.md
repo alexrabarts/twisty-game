@@ -109,6 +109,8 @@ Rules for a change to a car:
 
 `hill_bike.py` builds the hill ride's bicycle and its rider (`.agent/system/hill.md`) into `assets/hill/bicycle.glb` with the bike kit (`bikes/_kit_E.py`), with no far file. The file has two 26 inch wheels, the basket of plain loaves, a blank plate, the cranks and each pedal as nodes, and the boy, whose legs are nodes too (thigh, shin and foot each side, each hanging straight down from its pivot), so the game poses them.
 
+`hill_horse.py` builds the hill ride's horse and cart into `assets/hill/horse.glb` with the same kit, at two levels (`lod0`, `lod1`). Every part the game moves is a node built hanging from its pivot: the body, the neck, the head, each ear, the tail, each leg in three (from the elbow or stifle, the knee or hock, the fetlock), the cart's bed, each wheel and the carter. `js/hill/horse.js` poses them.
+
 ## Animals
 
 | Script | Output | What it makes |
