@@ -2,7 +2,7 @@
  * @jest-environment node
  */
 // The hill ride's day (HillDay, js/hill/day.js; HillRide's climb and day step, js/hill/ride.js): the climb to the cart
-// at the top seen from the opening's camera, the doors the boy throws bread at, the loaves in the basket, the fair
+// at the top seen as the stills cut it, the doors the boy throws bread at, the loaves in the basket, the fair
 // hazards and the freewheel, ridden on the real lane and bicycle.
 import { describe, test, expect } from '@jest/globals';
 import { loadGame, loadScript, realThree } from '../helpers/load-game.js';
@@ -224,57 +224,68 @@ describe('the freewheel', () => {
 });
 
 describe('the climb', () => {
-    test('from the bend up to the cart in 20 to 40 s, in sight most of the way, cut as the stills are, wheeled in to the cart at the end', () => {
+    test('from the bend up to the stall in 20 to 40 s, in sight most of the way, cut as the stills are, wheeled in to the stall side on at the end', () => {
         const C = HillDay.CLIMB;
         const bike = new HillBicycle(lane);
         bike.reset(C.fromS, C.across);
         bike.vehicle.yawAngle += Math.PI;
         const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);
         const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, game: { camera }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(), climb: { phase: 'climb', t: 0 }, sample: {}, view: 0 });
-        let t = 0, seen = 0, frames = 0, crashes = 0, wide = 0, top = 0;
+        let t = 0, seen = 0, frames = 0, crashes = 0, wide = 0, track = 0, stopped = 0;
         const hidden = [];
-        const S = HillRide.CLIMB_SHOTS, opening = new THREE.Vector3(), aim = new THREE.Vector3(), topAt = lane.at(S.top[0], S.top[1], S.top[2], {});
-        HillRide.shot(lane, 'opening', opening, aim);
-        for (; t < 90 && bike.s > C.triggerS; t += DT) {
+        const S = HillRide.CLIMB_SHOTS, wideAt = new THREE.Vector3(), aim = new THREE.Vector3(), stopAt = lane.at(S.stop[0], S.stop[1], S.stop[2], {});
+        HillRide.shot(lane, S.wide, wideAt, aim);
+        const frameAt = () => 2 * camera.position.distanceTo(ride.look) * Math.tan(camera.fov * Math.PI / 360);
+        const most = Math.max(...S.frames.map(f => f[1])), least = Math.min(...S.frames.map(f => f[1]));
+        for (; t < 90 && ride.climb.phase === 'climb'; t += DT) {
             const input = pilot(bike, { dir: -1, across: C.across });
             input.pedal = 1;
             input.brake = 0;
             // The player steers as the camera sees him, which the climb turns back (climbStep)
             input.steer = -input.steer;
             ride.climbStep(DT, input);
+            if (ride.climb.phase !== 'climb') break;
             const down = bike.crashed;
             bike.step(DT, input);
             if (!down && bike.crashed) crashes++;
             if (Math.round(t / DT) % 12 === 0) {
                 ride.placeCamera(1);
                 frames++;
-                // First the opening shot held still, then the camera by the cart, its long lens keeping him about
-                // frameFarM to frameNearM of the picture's height
+                // First the wide shot held still, then the long lens head on, going back up the lane ahead of him with
+                // trackFrameM of picture height at his distance, then stopped a pace from the stall, the lens opening out
                 if (C.fromS - bike.s < S.wideM) {
-                    expect(camera.position.distanceTo(opening)).toBeLessThan(1e-6);
+                    expect(camera.position.distanceTo(wideAt)).toBeLessThan(1e-6);
                     wide++;
+                } else if (camera.position.distanceTo(new THREE.Vector3(stopAt.x, stopAt.y, stopAt.z)) < 1e-6) {
+                    expect(frameAt()).toBeGreaterThan(least - 0.05);
+                    expect(frameAt()).toBeLessThan(most + 0.05);
+                    stopped++;
                 } else {
-                    expect(camera.position.distanceTo(new THREE.Vector3(topAt.x, topAt.y, topAt.z))).toBeLessThan(1e-6);
-                    const d = camera.position.distanceTo(bike.vehicle.position), frame = 2 * d * Math.tan(camera.fov * Math.PI / 360);
-                    expect(frame).toBeGreaterThan(S.frameFarM - 0.2);
-                    expect(frame).toBeLessThan(S.frameNearM + 0.2);
-                    top++;
+                    // (on the lane, trackM up it from him)
+                    const at = lane.project(camera.position.x, camera.position.z, bike.s - S.trackM, {});
+                    expect(Math.abs(at.s - (bike.s - S.trackM))).toBeLessThan(0.05);
+                    expect(frameAt()).toBeCloseTo(S.trackFrameM, 2);
+                    track++;
                 }
                 if (HillRide.seen(camera, lane, HillRide.points(lane, bike))) seen++;
                 else hidden.push(Math.round(bike.s));
             }
         }
-        console.log(`hill climb: ${t.toFixed(1)} s from s ${C.fromS} to ${C.triggerS}, in sight ${(seen / frames * 100).toFixed(0)} % of the time (hidden at s ${[...new Set(hidden)].join(' ')}), ${crashes} falls`);
-        expect(bike.s).toBeLessThanOrEqual(C.triggerS);
+        console.log(`hill climb: ${t.toFixed(1)} s from s ${C.fromS} to s ${bike.s.toFixed(1)}, in sight ${(seen / frames * 100).toFixed(0)} % of the time (hidden at s ${[...new Set(hidden)].join(' ')}), ${crashes} falls; wide ${wide}, head on ${track}, stopped ${stopped}`);
+        expect(ride.climb.phase).toBe('restock');
         expect(t).toBeGreaterThan(20);
         expect(t).toBeLessThan(40);
         expect(crashes).toBe(0);
         expect(seen / frames).toBeGreaterThan(0.8);
         expect(wide).toBeGreaterThan(0);
-        expect(top).toBeGreaterThan(wide);
-        // Wheeled in towards the cart, whatever the keys said
-        console.log(`hill climb: at the cart on the line ${bike.across.toFixed(2)}`);
-        expect(bike.across).toBeGreaterThan(C.across + 0.8);
+        expect(track).toBeGreaterThan(0);
+        expect(stopped).toBeGreaterThan(0);
+        // Wheeled in to the stall, whatever the keys said: at its meeting place, turned well across the lane
+        const meet = lane.at(C.meet[0], C.meet[1], 0, {}), p = lane.sample(bike.s);
+        const turned = Math.abs(Math.atan2(Math.sin(bike.vehicle.yawAngle - p.heading - Math.PI), Math.cos(bike.vehicle.yawAngle - p.heading - Math.PI)));
+        console.log(`hill climb: at the stall on the line ${bike.across.toFixed(2)}, turned ${(turned * 180 / Math.PI).toFixed(0)} degrees off the lane`);
+        expect(Math.hypot(meet.x - bike.vehicle.position.x, meet.z - bike.vehicle.position.z)).toBeLessThan(C.meetM + 0.05);
+        expect(turned).toBeGreaterThan(0.5);
     });
 
     test('the climb ends at the cart: the steer keys are turned for the camera, the basket is made up, then the hold at the top', () => {

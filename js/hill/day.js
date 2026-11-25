@@ -20,11 +20,14 @@ class HillDay {
     // the cart stands just above), starting on the line `across`. The hill is too steep to ride: he walks beside the
     // bicycle and pushes it at about walkMs while the pedal key is held (the push is walkBase of the drive, more by
     // walkGain for each m/s under walkMs, and by walkHold, which builds up for each m/s over a second and holds the pace
-    // on any grade), and holds it on the brake when the key is let go. Over the last turnInM he wheels it in to the
-    // cart, to the line turnAcross
+    // on any grade), and holds it on the brake when the key is let go. The stall stands at `stall` ([s, across] of its
+    // middle, its long side along the lane). Over the last turnInM before `meet` ([s, across]: in front of the stall)
+    // he wheels the bicycle in to it, whatever the keys say, steering for `meet` (turnGain of the steer for each radian
+    // off), so it comes to the stall nearly across the lane, as the last stills have it; the climb ends within meetM
+    // of `meet`, or at triggerS
     static get CLIMB() {
-        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, turnInM: 6, turnAcross: 1.0, restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2,
-            walkHold: 0.6 });
+        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, stall: [28.6, 2.65], meet: [28.6, 1.15], turnInM: 5.5, turnGain: 2.0, meetM: 0.4,
+            restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
     }
 
     // The loaves the basket holds when full
@@ -433,7 +436,7 @@ class HillDay {
         line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z).normalize());
         g.add(line);
         // The bakery's cart at the top, where the climb ends: a handcart with trays of loaves
-        const C = HillDay.CLIMB, top = lane.at(C.triggerS - 3, 2.2, 0, {}), p = lane.sample(C.triggerS - 3);
+        const C = HillDay.CLIMB, top = lane.at(C.stall[0], C.stall[1], 0, {}), p = lane.sample(C.stall[0]);
         const handcart = new THREE.Group();
         const tray = box(1.0, 0.12, 0.7, wood);
         tray.position.y = 0.85;
