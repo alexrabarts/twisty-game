@@ -445,6 +445,20 @@ describe('bench.mjs', () => {
         expect([9, 11, 13].map(x => gentle.ground(x, 80).zone)).toEqual([ZONE.terrain, ZONE.terrain, ZONE.terrain]);
     });
 
+    test('past a bridge\'s end the land meets the road\'s line, and under the deck it stays under the deck', () => {
+        // A bridge for the first 76 m of a road that climbs at 6 %, a bank all round
+        const e = edge(4, 1000);
+        for (let i = 0; i < e.y.length; i++) e.y[i] = 1000 + 0.06 * i * 4;
+        for (let i = 0; i < 20; i++) e.flags[i] = FLAG.bridge;
+        const b = createBencher({ edges: [e], demAt: () => 1100 });
+        const road = z => 1000 + 0.06 * z;
+        // (under the deck, the deck less 0.15 m at the node's own place)
+        for (const gj of [3, 6, 9]) for (const gi of [0, 1]) expect(b.node(gi, gj).y).toBeLessThanOrEqual(road(gj * CELL_M) - 0.15 + 1e-6);
+        // Past its end (z 76) the nodes whose cells reach under the deck stand at the road's line, within 0.15 m: held
+        // to the deck's height where the deck was read, they stood 0.6 to 0.9 m under the road there
+        for (const gj of [10, 11]) for (const gi of [0, 1]) expect(b.node(gi, gj).y).toBeGreaterThan(road(gj * CELL_M) - 0.16);
+    });
+
     test('nothing is carved under a bridge or over a tunnel', () => {
         const e = edge(0, 1050);
         e.flags.fill(FLAG.tunnel);

@@ -72,7 +72,7 @@ describe('the shipped stage', () => {
         again.forEach((s, i) => expect(Math.abs(s - shipped[i])).toBeLessThan(0.5));
     });
 
-    test('only the station files of world/ differ from the data before, and the land under the found places carved since: every other file is the same bytes', () => {
+    test('only the station files of world/ differ from the data before, and the land under the found places, the stops, the bridges\' ends and the junctions laid since: every other file is the same bytes', () => {
         const sums = text => new Map(text.trim().split('\n').map(line => { const [hash, file] = line.trim().split(/\s+/); return [file, hash]; }));
         const before = sums(execFileSync('git', ['show', `${BEFORE}:world/SHA256SUMS`], { cwd: REPO, encoding: 'utf8', maxBuffer: 1 << 26 }));
         const now = sums(readFileSync(path.join(REPO, 'world', 'SHA256SUMS'), 'utf8'));
@@ -91,6 +91,19 @@ describe('the shipped stage', () => {
                 }
             }
         }
+        // (and the land the re-import of 2026-11-25 laid by the importer's rules of 6f: at a bridge's ends, where no land
+        // stands over the deck and the land meets the road's line past it (bench.mjs BRIDGE_UNDER_M), and round a
+        // junction, where the ride owns the nodes just past its verge against a lower side road (RIDE_OWN_PAST_M); with
+        // the horizon's sinks under the tiles, far/sink0.bin)
+        const reachM = 25;
+        const near = [];
+        for (const e of world.edges) for (let i = 0; i < e.x.length; i++) {
+            const on = e.flags[i] & 2, before = i > 0 && e.flags[i - 1] & 2, after = i + 1 < e.x.length && e.flags[i + 1] & 2;
+            if (on && (!before || !after)) near.push([e.x[i], e.z[i]]);
+        }
+        for (const n of world.nodes) if (n.degree >= 3) near.push([n.x, n.z]);
+        for (const [x, z] of near) for (let dx = -reachM; dx <= reachM; dx += reachM) for (let dz = -reachM; dz <= reachM; dz += reachM) carved.add(`height/h-${tile(Math.floor((x + dx) / 512))}_${tile(Math.floor((z + dz) / 512))}.bin`);
+        carved.add('far/sink0.bin');
         // (and the land the stops' areas are laid on: tools/world/bench.mjs `pads`, a few metres past each outline)
         for (const stop of world.manifest.stops || []) for (const [x, z] of stop.ring) for (const [dx, dz] of [[0, 0], [16, 0], [-16, 0], [0, 16], [0, -16]]) carved.add(`height/h-${tile(Math.floor((x + dx) / 512))}_${tile(Math.floor((z + dz) / 512))}.bin`);
         expect(changed).toEqual(expect.arrayContaining(['manifest.json', 'ride.json']));

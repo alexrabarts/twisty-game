@@ -34,8 +34,11 @@ export const STRAND_GAP_M = 60;
 const CLAIM_MARGIN_M = 0.5;
 // At a junction the ride owns the nodes this far past its verge too, against a side road within JOIN_M of it, where
 // the node is on no other road's own carriageway and verge: a node left at the side road's lower height pulled the
-// land under the ride's verge, a gap between the two roads 0.3 to 0.7 m under both
-const RIDE_OWN_PAST_M = 8;
+// land under the ride's verge, a gap between the two roads 0.3 to 0.7 m under both. Half a cell: at a cell (8 m) the
+// re-import of the Tremola left a side road's wall end open beside the land the ride held (3.1 m, at its start)
+const RIDE_OWN_PAST_M = 4;
+// ... and only where no side road among the claims stands more than this over the ride there
+const RIDE_OWN_OVER_M = 0.1;
 // On a bridge the land is not carved, but no land stands over the deck: every node of a triangle that reaches into a
 // bridge's strip is held this far under the deck's surface (a bank that rises to an abutment came up through the deck's
 // last metres: 0.96 m over the carriageway's edge at a bridge end of the run-in from the north)
@@ -290,7 +293,11 @@ export function createBencher({ edges, demAt, coverAt = () => 0, pads = [] }) {
       // The lowest road owns the node, so no land stands over any road; but under its own carriageway and verge the
       // ride owns it when it is within JOIN_M of the lowest (a junction: the side road is drawn under the ride there)
       const onOther = list.some(c => !c.ride && c.d <= c.w / 2 + c.v);
-      const own = list.filter(c => c.ride && c.d <= c.w / 2 + c.v + (onOther ? 0 : RIDE_OWN_PAST_M) && c.y <= low + JOIN_M).sort(byNear);
+      // (past its verge only against side roads that lie under it: where one climbs over the ride's height there, the
+      // node held at the ride's left that road's edge hanging over the land, 3.7 m at the Tremola's km 12.4, and a wall
+      // end open beside it at the start, as the re-import of the Tremola showed)
+      const besideLower = c => !list.some(o => !o.ride && o.y > c.y + RIDE_OWN_OVER_M);
+      const own = list.filter(c => c.ride && c.d <= c.w / 2 + c.v + (onOther || !besideLower(c) ? 0 : RIDE_OWN_PAST_M) && c.y <= low + JOIN_M).sort(byNear);
       const lowest = [...list].sort((p, q) => p.y - q.y || byNear(p, q))[0];
       // The ride is one road across its edges: where the lowest claim is the ride, the nearest piece of the ride
       // within JOIN_M of it owns the node (two edges of the ride meet at a node at one height)
@@ -363,13 +370,20 @@ export function createBencher({ edges, demAt, coverAt = () => 0, pads = [] }) {
       const along = Math.max(1, Math.ceil(run / CLAIM_STEP_M)), across = Math.max(1, Math.ceil((2 * Math.max(ha, hb)) / CLAIM_STEP_M));
       const ca = Math.cos(e.heading[i]), sa = Math.sin(e.heading[i]), cb = Math.cos(e.heading[i + 1]), sb = Math.sin(e.heading[i + 1]);
       for (let a = 0; a <= along; a++) {
-        const t = a / along, top = e.y[i] + (e.y[i + 1] - e.y[i]) * t - BRIDGE_UNDER_M;
+        const t = a / along;
         for (let b = 0; b <= across; b++) {
           const f = (b / across) * 2 - 1;
           const xa = e.x[i] + f * ha * ca, za = e.z[i] - f * ha * sa, xb = e.x[i + 1] + f * hb * cb, zb = e.z[i + 1] - f * hb * sb;
           for (const [gi, gj] of corners((xa + (xb - xa) * t) / CELL_M, (za + (zb - za) * t) / CELL_M)) {
+            // The deck's height over the node itself, along the segment, and past the deck's end the road's line carried
+            // on at its grade (a node there, whose cell reaches under the deck's last metres, is the road's beyond it).
+            // Held to the deck's height where the band point lay, a node 8 m on up a grade stood 0.75 m under the road
+            // there, a dip at every deck's end (the Tremola's layby p5 lost 6 m to it)
+            const nx = gi * CELL_M - e.x[i], nz = gj * CELL_M - e.z[i], sx = e.x[i + 1] - e.x[i], sz = e.z[i + 1] - e.z[i];
+            const u = (nx * sx + nz * sz) / (run * run || 1);
+            const own = e.y[i] + (e.y[i + 1] - e.y[i]) * u - BRIDGE_UNDER_M;
             const key = nodeKey(gi, gj);
-            if (!(decks.get(key) <= top)) decks.set(key, top);
+            if (!(decks.get(key) <= own)) decks.set(key, own);
           }
         }
       }
