@@ -6122,24 +6122,31 @@ function junctionChecks(results, failures) {
 // of a portal, or land over the roof behind a portal with nothing drawn to front it (TUNNEL_LIMITS). With --out, three
 // views of every portal it found are saved, the frame alone: from the road 28 m out, from 22 m out and 12 m to the side
 // and 9 m up, and from 14 m inside looking out (`<tag>-<road>-<x>_<z>-<view>.png`, with an index.json).
-//   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T] [--portals <index.json>]
+//   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T] [--portals <index.json>] [--eyes s:lat:up:toS:toLat:toUp,...] [--from s --to s]
 WORLD_PROBES.push('world-tunnels');
 WORLD['world-tunnels'] = async (page) => {
     const every = Number(option('every') || 200);
-    const read = await page.evaluate(async (windowSource, reportSource, placeSource, every) => {
-        const window = new Function(`return (${windowSource})`)(), report = new Function(`return (${reportSource})`)();
-        const placeAt = new Function('game', `return (${placeSource})`)(game);
-        const env = game.environment, store = {};
-        game.worldLinger = false;
-        for (let s = env.startS + 1; s < env.endS; s += every) {
+    // (one call a place, the store kept in the page between them: one call for the whole stage outran the protocol's
+    // time on a busy machine; --from and --to read a stretch of the stage only)
+    const span = await page.evaluate(() => [game.environment.startS + 1, game.environment.endS]);
+    const from = Math.max(span[0], Number(option('from') || 0)), to = Math.min(span[1], Number(option('to') || Infinity));
+    for (let s = from; s < to; s += every) {
+        await page.evaluate(async (windowSource, placeSource, s, every) => {
+            const window = new Function(`return (${windowSource})`)();
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            game.worldLinger = false;
+            const store = globalThis.tunnelStore || (globalThis.tunnelStore = {});
             const p = await placeAt(s);
-            window({ THREE }, env, store, p, { nearM: Math.max(every, 500) });
-        }
+            window({ THREE }, game.environment, store, p, { nearM: Math.max(every, 500) });
+        }, tunnelWindow.toString(), placeAt.toString(), s, every);
+    }
+    const read = await page.evaluate((reportSource) => {
+        const report = new Function(`return (${reportSource})`)(), env = game.environment;
         // (each portal with the ride distance it is seen from)
-        const out = report(store);
+        const out = report(globalThis.tunnelStore || {});
         for (const portal of out.portalList) portal.at = portal.s !== null ? portal.s : env.route.sArray[env.route.project(portal.x, portal.z, null, {}).index];
         return out;
-    }, tunnelWindow.toString(), tunnelReport.toString(), placeAt.toString(), every);
+    }, tunnelReport.toString());
     const out = option('out');
     const views = [];
     if (out) {
@@ -6161,6 +6168,13 @@ WORLD['world-tunnels'] = async (page) => {
                 writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
                 views.push({ portal: portal.key, run: portal.run, view: name, file });
             }
+        }
+        // (--eyes s:lat:up:toS:toLat:toUp,...: more views along the ride, in its own metres)
+        for (const spec of (option('eyes') ? option('eyes').split(',') : [])) {
+            const png = await page.evaluate(junctionEye, placeAt.toString(), spec.split(':').map(Number));
+            const file = join(out, `${tag}-eye-${spec.replace(/[:.]/g, '_')}.png`);
+            writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+            views.push({ eye: spec, file });
         }
         writeFileSync(join(out, 'index.json'), JSON.stringify({ report: { ...read, portalList: undefined }, portals: read.portalList, views }, null, 1));
     }

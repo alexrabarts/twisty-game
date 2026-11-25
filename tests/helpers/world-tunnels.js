@@ -5,7 +5,8 @@
 // A tube is the box RoadMesh draws round a road over a run of tunnel or gallery rows: the ride's from each row's
 // centre WALL_M past half its width either side (RoadMesh.tunnel), a side road's from its verge's outer edges
 // (RoadMesh.sideStructures), from the road up WorldRoute.ROOF_M. Every place of the window's tubes is read against the
-// drawn land (the tiles' land and the faces that close their cuts, at the level of detail they are drawn at):
+// drawn land (the tiles' land and the faces that close their cuts, at the level of detail they are drawn at, and the
+// far grid and far land drawn under them):
 //   inside  land in the box: higher than the floor and lower than the roof, by more than `tolM`
 //   floor   a place across the floor between the road's drawn edge and the wall with no surface drawn at the floor
 //           (a slot down to the land)
@@ -24,12 +25,12 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
 
     // Triangles of a mesh in plan, hashed by 4 m cells: ys(x, z) gives the height of each over (x, z)
     store.grids = store.grids || new Map();
-    const gridOf = (mesh, ranges) => {
-        const id = `g:${mesh.geometry.uuid}:${ranges.map(r => r.join('+')).join(',')}`;
+    const gridOf = (mesh, ranges, cell = 4) => {
+        const id = `g:${mesh.geometry.uuid}:${cell}:${ranges.map(r => r.join('+')).join(',')}`;
         if (store.grids.has(id)) return store.grids.get(id);
         mesh.updateMatrixWorld(true);
         const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
-        const tris = [], hash = new Map(), cell = 4;
+        const tris = [], hash = new Map();
         for (const [start, count] of ranges) {
             for (let i = start; i + 2 < start + count; i += 3) {
                 const t = new Float64Array(9);
@@ -92,6 +93,13 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
         return found;
     };
     if (!anyNear()) return store;
+    // (only the grids of meshes drawn now are kept: a ride along a stage builds thousands, and the page ran out of
+    // memory holding them all)
+    const live = new Set();
+    for (const tile of env.tileMeshes.values()) { const mesh = tile.mesh || tile; if (mesh && mesh.geometry) live.add(mesh.geometry.uuid); }
+    for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) group.traverse(o => { if (o.isMesh && o.geometry) live.add(o.geometry.uuid); });
+    for (const mesh of [env.horizon, ...(env.farLand || [])]) if (mesh && mesh.geometry) live.add(mesh.geometry.uuid);
+    for (const id of [...store.grids.keys()]) if (!live.has(id.split(':')[1])) store.grids.delete(id);
     // The drawn land: every tile's land and closing faces as drawn now (not its skirts, under its edge)
     const land = [];
     for (const tile of env.tileMeshes.values()) {
@@ -99,6 +107,13 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
         if (!mesh || !mesh.isMesh || !mesh.visible) continue;
         const parts = mesh.userData.parts || { land: mesh.geometry.index ? mesh.geometry.index.count : 0, faces: [0, 0] };
         land.push(gridOf(mesh, [[0, parts.land], parts.faces]));
+    }
+    // and the far grid and the far land under the tiles: cut away, a tile shows what lies under it (km 13.2 of the
+    // Gotthard leg: the far grid stood in the tube where the tiles' land was cut, and no tile read it)
+    for (const mesh of [env.horizon, ...(env.farLand || [])]) {
+        if (!mesh || !mesh.isMesh || !mesh.visible || !mesh.geometry.index) continue;
+        // (in cells of 100 m: its triangles are 100 m and more across)
+        land.push(gridOf(mesh, [[0, mesh.geometry.index.count]], 100));
     }
     // The floors (every ribbon and every road's works) and the upright structure faces (the works' concrete and stone)
     const floors = [], uprights = [];

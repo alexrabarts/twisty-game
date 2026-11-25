@@ -281,6 +281,13 @@ class WorldEnvironment {
             this.horizon = horizon.mesh;
             this.triangleCount += horizon.triangles;
             this.group.add(this.horizon);
+            // (cut to the tubes' boxes as the tiles are: under a tile cut away in a tube, the far grid drawn a few
+            // metres under the land stood in the tube, a mound across the lane at km 13.2 of the Gotthard leg)
+            // (its colours made linear here, once, as a tile's are: the geometry is built again at each cut)
+            const linear = Float32Array.from(horizon.mesh.geometry.attributes.color.array, v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+            horizon.mesh.geometry.userData.linearColors = true;
+            this.horizonWhole = { positions: Float32Array.from(horizon.mesh.geometry.attributes.position.array), shades: linear, index: Uint32Array.from(horizon.mesh.geometry.index.array) };
+            this.clipHorizon();
             // The mountains out to 40 km: the camera's far plane reaches them (WorldEnvironment.FAR_PLANE_M)
             this.farLand = FarLand.build(this.data.farLevels || [], this.data.far).map(({ mesh, triangles }) => {
                 this.triangleCount += triangles;
@@ -2675,6 +2682,29 @@ class WorldEnvironment {
         return list;
     }
 
+    // The far grid (Horizon) less every tube's box (TerrainMesh.tubeClip), the ride's and the side roads' drawn now:
+    // made again from the whole grid when the side roads' tubes change (setSideTubes)
+    clipHorizon() {
+        if (!this.horizon || !this.horizonWhole) return;
+        const whole = this.horizonWhole, geometry = this.horizon.geometry;
+        const tubes = [...this.rideTubes(), ...[...this.sideTubes.values()].flat()];
+        const clipped = tubes.length ? TerrainMesh.tubeClip(whole.positions, whole.shades, [whole.index], tubes) : null;
+        const before = geometry.index.count / 3;
+        if (clipped) {
+            geometry.setAttribute('position', new THREE.BufferAttribute(clipped.positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(clipped.shades, 3));
+            geometry.setIndex(new THREE.BufferAttribute(clipped.lists[0], 1));
+        } else {
+            geometry.setAttribute('position', new THREE.BufferAttribute(whole.positions, 3));
+            geometry.setAttribute('color', new THREE.BufferAttribute(whole.shades, 3));
+            geometry.setIndex(new THREE.BufferAttribute(whole.index, 1));
+        }
+        geometry.computeVertexNormals();
+        geometry.computeBoundingSphere();
+        this.triangleCount += geometry.index.count / 3 - before;
+        this.onMeshBuilt(this.horizon);
+    }
+
     // The tubes whose boxes reach tile `key`: the ride's and those of the side roads drawn now
     tubesNear(key) {
         if (!this.tubeCache) this.tubeCache = new Map();
@@ -2698,6 +2728,7 @@ class WorldEnvironment {
         if (boxes.length) this.sideTubes.set(k, boxes);
         else this.sideTubes.delete(k);
         if (this.tubeCache) this.tubeCache.clear();
+        if (this.streamer) this.streamer.enqueue('tube:horizon', WorldEnvironment.LATER, () => this.clipHorizon());
         const m = WorldData.TILE_M, keys = new Set();
         for (const b of old.concat(boxes)) for (let tx = Math.floor(b.box[0] / m); tx <= Math.floor(b.box[2] / m); tx++) for (let tz = Math.floor(b.box[1] / m); tz <= Math.floor(b.box[3] / m); tz++) keys.add(`${tx},${tz}`);
         for (const key of keys) {
