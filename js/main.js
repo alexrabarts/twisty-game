@@ -507,6 +507,8 @@ class Game {
         document.body.classList.toggle('free-roam', this.freeRoam);
         if (!this.freeRoam) {
             this.roam = null;
+            if (this.sideTraffic) this.sideTraffic.clear();
+            this.sideTraffic = null;
             this.discoveries = null;
             this.roamStyle = null;
             this.showDiscoveries();
@@ -519,6 +521,17 @@ class Game {
         let store = null;
         try { store = window.localStorage; } catch (error) { console.warn('Discoveries: no storage in this page', error); }
         this.discoveries = typeof WorldDiscoveries !== 'undefined' ? new WorldDiscoveries(environment, store) : null;
+        // Traffic on the side roads (js/world/sidetraffic.js): a car on each side road near the bike, the ride's car
+        // model, its colour drawn from the ride's
+        if (this.sideTraffic) this.sideTraffic.clear();
+        this.sideTraffic = typeof SideTraffic !== 'undefined' && environment.graph && environment.graph.sideStubs ? new SideTraffic(environment.graph, (x, z) => environment.ground.groundY(x, z, null), (draw) => {
+            const holder = { scene: this.scene, color: Game.SIDE_CAR_COLORS[Math.floor(draw * Game.SIDE_CAR_COLORS.length)] };
+            Car.prototype.createCarModel.call(holder);
+            return holder.carGroup;
+        }, (group) => {
+            this.scene.remove(group);
+            if (typeof disposeGroupResources === 'function') disposeGroupResources(group);
+        }, Traffic.sizeOf('car'), 7) : null;
         // The style ride (js/world/style.js): each wheelie measured, the bests kept
         this.roamStyle = typeof RoamStyle !== 'undefined' ? new RoamStyle(environment.config && environment.config.id, store) : null;
         this.showDiscoveries();
@@ -554,6 +567,14 @@ class Game {
 
     updateFreeRoam(dt) {
         const v = this.vehicle;
+        if (this.sideTraffic) {
+            const hit = this.sideTraffic.step(v, dt);
+            if (hit === 'crash') v.worldCrash('Rode into a car', 'lowside', 'car');
+            else if (hit === 'stop' && v.velocity && v.velocity.set) {
+                v.speed = 0;
+                v.velocity.set(0, v.velocity.y || 0, 0);
+            }
+        }
         if (this.roamStyle) {
             const shown = this.roamStyle.text();
             const done = this.roamStyle.step(v, this.score, dt);
@@ -4980,6 +5001,8 @@ Game.WORLD_OVERCAST_SKY = 3.6;
 Game.DEBUG_SKIP_BEFORE_M = 40;
 
 // What free roam tells the rider (Game.updateFreeRoam, restartRoam)
+// The colours of the side roads' cars (SideTraffic): the plain colours of country cars
+Game.SIDE_CAR_COLORS = [0xf2f2f0, 0x2b2f36, 0x8a9199, 0x7a1d1d, 0x1f3f6b, 0x3d5a3a];
 Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 'edge-back': 'Turned back at the edge of the map' };
 
 // What leaving a world ride for the menu asks

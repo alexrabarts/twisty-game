@@ -145,7 +145,7 @@ describe('the pause panel', () => {
     });
 
     test('the game hands the pause the bike\'s speed', () => {
-        expect(read('js/main.js')).toMatch(/WorldCredits\.showPause\(this\.environment, .*, this\.vehicle \? this\.vehicle\.speed : 0\);/);
+        expect(read('js/main.js')).toMatch(/WorldCredits\.showPause\(this\.environment, .*, this\.vehicle \? this\.vehicle\.speed : 0[,)]/);
     });
 });
 

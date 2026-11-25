@@ -6756,6 +6756,23 @@ async function roamRun(placeSource) {
         }
         out.trace = trace;
         out.findsSide = finds();
+        // Traffic on the side roads (js/world/sidetraffic.js): the cars out, their distance to the bike, how far each
+        // stands over the drawn ground; a picture of the nearest from beside and above it
+        const st = game.sideTraffic;
+        if (st) {
+            const cars = st.cars.map(c => ({ m: Math.round(Math.hypot(c.x - v.position.x, c.z - v.position.z)), over: +(c.group.position.y - 0.32 - env.ground.groundY(c.x, c.z, null)).toFixed(2), speed: +c.speed.toFixed(1) }));
+            out.sideCars = { cars, crashedOnCar: v.crashCause === 'Rode into a car' };
+            const near = st.cars.slice().sort((a, b) => Math.hypot(a.x - v.position.x, a.z - v.position.z) - Math.hypot(b.x - v.position.x, b.z - v.position.z))[0];
+            if (near) {
+                const cam = game.camera, keep = { p: cam.position.clone(), q: cam.quaternion.clone() };
+                cam.position.set(near.x - 9 * Math.sin(near.heading) + 4 * Math.cos(near.heading), near.group.position.y + 4, near.z - 9 * Math.cos(near.heading) - 4 * Math.sin(near.heading));
+                cam.lookAt(near.x, near.group.position.y, near.z);
+                (game.graphics || game.renderer).render(game.scene, cam);
+                out.shots.sidecar = frame();
+                cam.position.copy(keep.p);
+                cam.quaternion.copy(keep.q);
+            }
+        }
         out.sideRide = { furthest: Math.round(most), crashed, restarts: (game.restarts || 0) - before, nan: !Number.isFinite(v.position.x + v.position.y + v.position.z), speed: +v.speed.toFixed(1), moved: Math.round(most) };
         if (!out.shots.side) out.shots.side = frame();
     }
@@ -6812,6 +6829,7 @@ WORLD['world-roam'] = async (page) => {
     if (!result.findsStart || !result.findsStart.total || !result.findsSide || !result.findsSide.found.some(id => id.startsWith('side:')) || !/^Discoveries \d+\/\d+$/.test(result.findsSide.line)) failures.push(`the side road ridden is not a discovery: ${JSON.stringify(result.findsSide)}`);
     if (result.style && (!result.style.last || result.style.last.m < 5 || !(result.style.scored > 0) || !/Best wheelie/.test(result.style.line))) failures.push(`the wheelie not measured or scored: ${JSON.stringify(result.style)}`);
     if (result.photo && (!result.photo.opened || !(result.photo.ahead > 0) || !result.photo.saved || result.photo.saved.bytes < 100000 || !result.photo.back)) failures.push(`photo mode: ${JSON.stringify(result.photo)}`);
+    if (result.sideCars && (!result.sideCars.cars.length || result.sideCars.cars.some(c => Math.abs(c.over) > 0.3) || result.sideCars.crashedOnCar)) failures.push(`side road traffic: ${JSON.stringify(result.sideCars)}`);
     if (result.crewRide && result.crewRide.mostAhead > 0) failures.push(`a rider of the group ${result.crewRide.mostAhead} m ahead of the leading player`);
     if (result.crewSide && result.crewSide.waiting < result.crewSide.riders) failures.push(`riders not waiting while the player is down a side road: ${JSON.stringify(result.crewSide)}`);
     return { ok: failures.length === 0, failures, ...result, dir };
