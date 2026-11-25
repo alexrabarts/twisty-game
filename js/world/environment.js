@@ -2154,6 +2154,80 @@ class WorldEnvironment {
         };
     }
 
+    // Whether a paved or road surface is drawn at (x, z) over or within `tolM` under `y`: a road's ribbon, a
+    // junction's paving (the works' group 3), a stop's hard standing; or the ground the works lay (group 0) over `y`.
+    // The ground cover grows on none of them
+    // (GroundCover.site). Each mesh is read once into a grid of its triangles
+    pavedAt(x, z, y, tolM = 0.3) {
+        if (!this.pavedCache) this.pavedCache = new Map();
+        const v = this.pavedV || (this.pavedV = new THREE.Vector3());
+        const gridOf = (mesh, groups) => {
+            const key = mesh.geometry.uuid;
+            if (this.pavedCache.has(key)) return this.pavedCache.get(key);
+            const pos = mesh.geometry.attributes.position, idx = mesh.geometry.index, cell = 4, hash = new Map(), tris = [];
+            mesh.updateMatrixWorld(true);
+            for (const [start, count] of groups) {
+                for (let i = start; i + 2 < start + count; i += 3) {
+                    const t = new Float64Array(9);
+                    for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, idx ? idx.getX(i + k) : i + k).applyMatrix4(mesh.matrixWorld); t[k * 3] = v.x; t[k * 3 + 1] = v.y; t[k * 3 + 2] = v.z; }
+                    const ref = tris.push(t) - 1;
+                    for (let cx = Math.floor(Math.min(t[0], t[3], t[6]) / cell); cx <= Math.floor(Math.max(t[0], t[3], t[6]) / cell); cx++) for (let cz = Math.floor(Math.min(t[2], t[5], t[8]) / cell); cz <= Math.floor(Math.max(t[2], t[5], t[8]) / cell); cz++) { const h = cx * 65536 + cz; (hash.get(h) || hash.set(h, []).get(h)).push(ref); }
+                }
+            }
+            const grid = { hash, tris };
+            this.pavedCache.set(key, grid);
+            return grid;
+        };
+        const covers = (grid, low = y - tolM) => {
+            for (const ref of grid.hash.get(Math.floor(x / 4) * 65536 + Math.floor(z / 4)) || []) {
+                const t = grid.tris[ref];
+                const d = (t[5] - t[8]) * (t[0] - t[6]) + (t[6] - t[3]) * (t[2] - t[8]);
+                if (Math.abs(d) < 1e-9) continue;
+                const a = ((t[5] - t[8]) * (x - t[6]) + (t[6] - t[3]) * (z - t[8])) / d, b = ((t[8] - t[2]) * (x - t[6]) + (t[0] - t[6]) * (z - t[8])) / d, c = 1 - a - b;
+                if (a < -1e-9 || b < -1e-9 || c < -1e-9) continue;
+                const h = a * t[1] + b * t[4] + c * t[7];
+                if (h > low && h < y + 2) return true;
+            }
+            return false;
+        };
+        let found = false;
+        const look = o => {
+            if (found || !o.isMesh || !o.geometry || !o.visible) return;
+            const whole = [[0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count]];
+            if (/road-(ribbon|side)/.test(o.name)) found = covers(gridOf(o, whole));
+            else if (o.name === 'road-works') {
+                const groups = o.geometry.groups || [];
+                found = covers(gridOf(o, groups.filter(g => g.materialIndex === 3).map(g => [g.start, g.count])))
+                    // (and the ground the works lay, group 0, where it lies over the land: a tuft grew under it and through it)
+                    || covers(this.worksGround(o), y + 0.05);
+            }
+        };
+        for (const group of this.roadMeshes.values()) { group.traverse(look); if (found) return true; }
+        for (const group of this.sideMeshes.values()) { group.traverse(look); if (found) return true; }
+        for (const mesh of this.stopMeshes || []) { if (mesh.isMesh && covers(gridOf(mesh, [[0, mesh.geometry.index ? mesh.geometry.index.count : mesh.geometry.attributes.position.count]]))) return true; }
+        return false;
+    }
+
+    // The ground group (0) of a works mesh as a grid (pavedAt), cached by its geometry
+    worksGround(o) {
+        if (!this.worksGroundCache) this.worksGroundCache = new Map();
+        const key = o.geometry.uuid;
+        if (this.worksGroundCache.has(key)) return this.worksGroundCache.get(key);
+        const v = new THREE.Vector3(), pos = o.geometry.attributes.position, idx = o.geometry.index, hash = new Map(), tris = [];
+        o.updateMatrixWorld(true);
+        for (const g of (o.geometry.groups || []).filter(gr => gr.materialIndex === 0)) {
+            for (let i = g.start; i + 2 < g.start + g.count; i += 3) {
+                const t = new Float64Array(9);
+                for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, idx ? idx.getX(i + k) : i + k).applyMatrix4(o.matrixWorld); t[k * 3] = v.x; t[k * 3 + 1] = v.y; t[k * 3 + 2] = v.z; }
+                const ref = tris.push(t) - 1;
+                for (let cx = Math.floor(Math.min(t[0], t[3], t[6]) / 4); cx <= Math.floor(Math.max(t[0], t[3], t[6]) / 4); cx++) for (let cz = Math.floor(Math.min(t[2], t[5], t[8]) / 4); cz <= Math.floor(Math.max(t[2], t[5], t[8]) / 4); cz++) { const h = cx * 65536 + cz; (hash.get(h) || hash.set(h, []).get(h)).push(ref); }
+            }
+        }
+        const grid = { hash, tris };
+        this.worksGroundCache.set(key, grid);
+        return grid;
+    }
+
     // The height of the side roads' ribbons as drawn at (x, z), the one nearest `near` within 0.5 m, or null where no
     // ribbon of a resident chunk is drawn there. Each chunk's ribbons are read once into a grid of their triangles
     sideDrawnY(x, z, near) {

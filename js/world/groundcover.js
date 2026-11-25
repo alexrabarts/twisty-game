@@ -13,7 +13,9 @@
 // Nothing of the scatter is solid: a tuft is at most TUFT_H_M high and a stone STONE_H_M over the ground, and the
 // physics reads neither (the fairness rule: solid only where something solid is drawn; these are ground cover). They
 // stand only on land the physics calls runoff: never on a road or its verge, a stopping place, a side road's mouth
-// (RoadClearance, CLEAR_M past every band), a bench, wall, drop or water node, or a retaining wall's coping or face.
+// (RoadClearance, CLEAR_M past every band), a bench, wall, drop or water node, or a retaining wall's coping or face,
+// nor in a tunnel's box or on a paved surface drawn there: a junction's paving, a stop's hard standing
+// (WorldEnvironment.pavedAt).
 //
 // Off, the uniform is 0, the shader takes no branch of its own and the scatter is not in the scene: the land is drawn
 // as before, to the bit.
@@ -328,6 +330,13 @@ if (coverNear > 0.0) {
 
     // The plain land at (x, z) for a thing of plan radius `radius`: its height on the drawn tile and the tile's colour
     // there (linear), or null
+    // Whether (x, z) lies in the box of a stop's area (manifest.stops)
+    inStop(env, x, z) {
+        if (!env.stops || !env.stops.length) return false;
+        if (!env.stopBoxes) env.stopBoxes = env.stops.map(s => { const xs = s.ring.map(p => p[0]), zs = s.ring.map(p => p[1]); return [Math.min(...xs) - 2, Math.min(...zs) - 2, Math.max(...xs) + 2, Math.max(...zs) + 2]; });
+        return env.stopBoxes.some(b => x >= b[0] && x <= b[2] && z >= b[1] && z <= b[3]);
+    },
+
     site(env, x, z, radius, out) {
         const m = WorldData.TILE_M, n = WorldData.TILE_N, cell = WorldData.CELL_M;
         const tx = Math.floor(x / m), tz = Math.floor(z / m), key = `${tx},${tz}`;
@@ -348,7 +357,8 @@ if (coverNear > 0.0) {
         const mesh = held.mesh;
         const roads = env.scenery && env.scenery.roads, clear = radius + GroundCover.CLEAR_M, near = GroundCover.near || (GroundCover.near = {});
         near.segment = null;
-        if (roads && roads.clearance(x, z, GroundCover.WALL_REACH_M, null, false, near) < clear) return null;
+        const clearance = roads ? roads.clearance(x, z, GroundCover.WALL_REACH_M, null, false, near) : Infinity;
+        if (clearance < clear) return null;
         if (env.ground.sideRoadY(x, z, clear) !== null) return null;
         // Beside the ride, not on a retaining wall's coping or against its face: WALL_CLEAR_M past the wall's band, and
         // past the parapet of a road that stands on a wall
@@ -364,6 +374,9 @@ if (coverNear > 0.0) {
         if (!Number.isFinite(out.y)) return null;
         // (none in a tunnel's or a gallery's box: the land there is cut away, TerrainMesh.tubeClip)
         if (env.tubesNear && TerrainMesh.inTube(env.tubesNear(key), x, out.y, z)) return null;
+        // (nor on a road, a junction's paving or a stop's hard standing drawn there, over the land or just under it)
+        // (read near the ride, where its junctions' paving and works lie, and in a stop's area: elsewhere none is drawn)
+        if (env.pavedAt && (clearance < GroundCover.WALL_REACH_M || env.ground.sideRoadY(x, z, GroundCover.WALL_REACH_M) !== null || GroundCover.inStop(env, x, z)) && env.pavedAt(x, z, out.y)) return null;
         // The land is the top of what is drawn here: the ground the physics reads (the fill beside the road, a
         // stopping place, a side road) is the tile itself, within LAND_TOL_M; a carved node is drawn SINK_M under it
         // (only by the ride: past WALL_REACH_M of it, and beside a side road, the ground is the tile's)
