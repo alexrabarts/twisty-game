@@ -77,6 +77,14 @@ class HillRider {
             pivot.position.copy(lod.places.get(name));
             for (const primitive of primitives) {
                 let { geometry, material } = primitive;
+                // His face: painted on its shell, from the front
+                if (material && material.name === 'face') {
+                    const painted = HillRider.face(material);
+                    if (painted !== material) {
+                        geometry = HillRider.faceUV(geometry);
+                        material = painted;
+                    }
+                }
                 // The basket's willow: woven (HillTextures' wicker), laid on each face in metres
                 if (material && /^wicker/.test(material.name)) {
                     const woven = HillRider.wicker(material);
@@ -164,6 +172,86 @@ class HillRider {
             HillRider.woven.set(material, woven);
         }
         return HillRider.woven.get(material);
+    }
+
+    // The face as painted (FACE): where its features sit, as shares of the face across (u, 0.5 the middle) and up it (v,
+    // 0 the chin, 1 the crown); the face's span in metres about its centre (the head's middle in the head node), which
+    // the UVs are laid over from the front
+    static get FACE() {
+        return Object.freeze({ centre: [0, 0.155, 0.02], wideM: 0.16, highM: 0.205, eyes: [0.16, 0.53], brows: [0.6, 0.33, 0.46], mouth: [0.26, 0.42, 0.58], cheeks: [0.27, 0.4] });
+    }
+
+    // His face, painted from scratch on a canvas: soft brows, eyes, a mouth and a little ruddy colour in the cheeks over
+    // the skin (white here: the finish's own colour is the skin's). Simple, so it reads at the camera's distance and is
+    // no one's face. The finish as it is where there is no page
+    static face(material) {
+        if (typeof document === 'undefined' || !document.createElement) return material;
+        if (HillRider.painted) return HillRider.painted;
+        const F = HillRider.FACE, N = 256, c = document.createElement('canvas');
+        c.width = c.height = N;
+        const g = c.getContext && c.getContext('2d');
+        if (!g || !g.createRadialGradient) return material;
+        const X = u => u * N, Y = v => (1 - v) * N;
+        g.fillStyle = '#ffffff';
+        g.fillRect(0, 0, N, N);
+        g.filter = 'blur(1.5px)';
+        for (const side of [-1, 1]) {
+            const cx = X(0.5 + side * F.cheeks[0]), cy = Y(F.cheeks[1]), r = g.createRadialGradient(cx, cy, 0, cx, cy, 34);
+            r.addColorStop(0, 'rgba(214, 120, 108, 0.42)');
+            r.addColorStop(1, 'rgba(214, 120, 108, 0)');
+            g.fillStyle = r;
+            g.fillRect(cx - 40, cy - 40, 80, 80);
+            // A brow: a soft arched stroke
+            g.strokeStyle = 'rgba(92, 64, 44, 0.85)';
+            g.lineWidth = 6;
+            g.lineCap = 'round';
+            g.beginPath();
+            const b0 = X(0.5 + side * F.brows[1]), b1 = X(0.5 + side * (F.brows[2] - 0.12)), by = Y(F.brows[0]);
+            g.moveTo(b0, by + 3);
+            g.quadraticCurveTo((b0 + b1) / 2, by - 4, b1, by + 2);
+            g.stroke();
+            // An eye: a dark almond under a lid line
+            const ex = X(0.5 + side * F.eyes[0]), ey = Y(F.eyes[1]);
+            g.fillStyle = 'rgba(58, 44, 36, 0.9)';
+            g.beginPath();
+            g.ellipse(ex, ey, 8, 5.5, 0, 0, Math.PI * 2);
+            g.fill();
+            g.strokeStyle = 'rgba(120, 80, 60, 0.6)';
+            g.lineWidth = 3;
+            g.beginPath();
+            g.moveTo(ex - 11, ey - 3);
+            g.quadraticCurveTo(ex, ey - 10, ex + 11, ey - 3);
+            g.stroke();
+        }
+        // The mouth: a soft, slightly closed line
+        g.strokeStyle = 'rgba(168, 92, 82, 0.8)';
+        g.lineWidth = 5;
+        g.beginPath();
+        g.moveTo(X(F.mouth[1]), Y(F.mouth[0]));
+        g.quadraticCurveTo(X(0.5), Y(F.mouth[0] - 0.015), X(F.mouth[2]), Y(F.mouth[0]));
+        g.stroke();
+        const map = new THREE.CanvasTexture(c);
+        map.encoding = THREE.sRGBEncoding;
+        const painted = material.clone();
+        painted.map = map;
+        painted.needsUpdate = true;
+        HillRider.painted = painted;
+        return painted;
+    }
+
+    // A copy of the face's shell with UVs laid on it from the front over the face's span (FACE); what faces away takes
+    // the plain skin at the canvas's corner
+    static faceUV(geometry) {
+        const F = HillRider.FACE, g = geometry.clone(), p = g.attributes.position, n = g.attributes.normal;
+        if (!n) return geometry;
+        const uv = new Float32Array(p.count * 2);
+        for (let i = 0; i < p.count; i++) {
+            const front = n.getZ(i) > 0.55;
+            uv[i * 2] = front ? 0.5 + (p.getX(i) - F.centre[0]) / F.wideM : 0.02;
+            uv[i * 2 + 1] = front ? 0.5 + (p.getY(i) - F.centre[1]) / F.highM : 0.02;
+        }
+        g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+        return g;
     }
 
     // A copy of `geometry` with UVs in metres laid on each face from the side it faces most (a box's projection)

@@ -720,6 +720,27 @@ describe('the boy on the bicycle', () => {
         expect(rider.legs.map(l => l.side).sort()).toEqual([-1, 1]);
     });
 
+    test('his head has the stills\' proportions: the face about 0.72 as wide as high, the cap about 1.28 as wide as the face, and a face finish to paint on', () => {
+        let shell = null, cap = null;
+        rider.parts.head.traverse(o => {
+            if (o.isMesh && o.material.name === 'face') shell = o;
+            if (o.isMesh && o.material.name === 'cap') cap = o;
+        });
+        expect(shell).toBeTruthy();
+        const face = new THREE.Box3().setFromBufferAttribute(shell.geometry.attributes.position), size = face.getSize(new THREE.Vector3());
+        const capSize = new THREE.Box3().setFromBufferAttribute(cap.geometry.attributes.position).getSize(new THREE.Vector3());
+        console.log(`hill head: face ${(size.x / size.y).toFixed(2)} as wide as high, cap ${(capSize.x / size.x).toFixed(2)} as wide as the face`);
+        expect(size.x / size.y).toBeGreaterThan(0.67);
+        expect(size.x / size.y).toBeLessThan(0.77);
+        expect(capSize.x / size.x).toBeGreaterThan(1.18);
+        expect(capSize.x / size.x).toBeLessThan(1.38);
+        // The painted features sit on the face's front, inside its span
+        const F = HillRider.FACE;
+        expect(F.centre[1] - F.highM / 2).toBeGreaterThan(face.min.y - 0.01);
+        expect(F.centre[1] + F.highM / 2).toBeLessThan(face.max.y + 0.01);
+        expect(F.wideM / 2).toBeGreaterThan(size.x / 2 - 0.01);
+    });
+
     test('the basket is willow with a low bentwood handle and no lamp, the weave laid on it in metres', () => {
         // No lamp anywhere on the bicycle (the stills have none)
         expect(rider.parts.headlight).toBeUndefined();

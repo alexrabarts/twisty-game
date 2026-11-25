@@ -53,6 +53,8 @@ EXTRA = {
     "wicker": (0xA89A80, 0.9, 0.0),
     "wicker_dark": (0x786A54, 0.9, 0.0),
     "skin": (0xE2B596, 0.7, 0.0),
+    # The face's shell: the skin's colour, painted by the game
+    "face": (0xE2B596, 0.75, 0.0),
     "cap": (0x3A3530, 0.95, 0.0),
     "jumper": (0x7E7A72, 0.95, 0.0),
     "scarf": (0x2A2826, 0.95, 0.0),
@@ -229,25 +231,35 @@ def boy(k):
 
     # Neck, head, ears, hair at the back, the flat cap with its peak: a node of its own, its pivot at the foot of the
     # neck, so the game can lift his head while he bends over the bars on foot
+    # The head as the stills have it, by their ratios only: the face 0.72 as wide as it is high (chin to crown), deeper
+    # than wide; the cap 1.28 as wide as the face and set forward and low on the brow, its crown 0.74 of the face's
+    # height; the neck short under the scarf; the head about a seventh of his height. Its shell is its own finish,
+    # `face`, so the game can paint the face on it (js/hill/rider.js), drawn from scratch and no one's
     k.begin("head", (0, NECK[1] - 0.04, NECK[2]))
-    k.tube([(0, NECK[1] - 0.04, NECK[2]), (0, HEAD[1] - 0.06, HEAD[2])], 0.04, "skin", seg=10)
-    k.lathe([(0, -0.1), (0.05, -0.095), (0.085, -0.06), (0.095, 0.0), (0.09, 0.05), (0.06, 0.09), (0, 0.1)], HEAD, "skin", seg=16)
+    hx, hy, hz = HEAD
+    k.tube([(0, NECK[1] - 0.04, NECK[2]), (0, hy - 0.07, hz - 0.01)], 0.036, "skin", seg=10)
+    # A section is (y, back, front, half width, top and bottom roundness): the chin, the jaw, the cheeks, the temples,
+    # the crown
+    k.loft([(hy - 0.105, hz - 0.01, hz + 0.05, 0.026, 2.2, 2.2), (hy - 0.075, hz - 0.07, hz + 0.082, 0.056, 2.3, 2.3),
+            (hy - 0.025, hz - 0.09, hz + 0.093, 0.07, 2.4, 2.4), (hy + 0.03, hz - 0.095, hz + 0.09, 0.074, 2.4, 2.4),
+            (hy + 0.07, hz - 0.08, hz + 0.07, 0.066, 2.4, 2.4), (hy + 0.1, hz - 0.035, hz + 0.03, 0.025, 2.2, 2.2)], "face", axis="y", ring=18, steps=2)
     for side in (-1, 1):
-        k.lathe([(0, -0.02), (0.018, -0.012), (0.02, 0.012), (0, 0.02)], (side * 0.093, HEAD[1], HEAD[2] - 0.005), "skin", axis="x", seg=8)
-    # A plain nose; no other feature (the face is no one's)
-    k.loft([(HEAD[2] + 0.085, HEAD[1] - 0.04, HEAD[1] + 0.01, 0.016, 2.4, 2.4, 0.3), (HEAD[2] + 0.108, HEAD[1] - 0.035, HEAD[1] - 0.005, 0.012, 2.4, 2.4, 0.3)], "skin",
-           ring=8, steps=1)
-    k.loft([(HEAD[2] - 0.1, HEAD[1] - 0.05, HEAD[1] + 0.06, 0.088, 2.4, 2.4), (HEAD[2] - 0.07, HEAD[1] - 0.07, HEAD[1] + 0.08, 0.09, 2.4, 2.4)], "hair",
-           ring=12, steps=1)
-    # The cap: a soft crown pulled forward over the brow, and the short peak
-    k.loft([(HEAD[2] - 0.11, HEAD[1] + 0.03, HEAD[1] + 0.09, 0.085, 2.4, 2.4), (HEAD[2] - 0.02, HEAD[1] + 0.04, HEAD[1] + 0.115, 0.105, 2.6, 2.4),
-            (HEAD[2] + 0.07, HEAD[1] + 0.035, HEAD[1] + 0.1, 0.1, 2.6, 2.4), (HEAD[2] + 0.1, HEAD[1] + 0.035, HEAD[1] + 0.07, 0.07)], "cap", ring=16, steps=2)
+        k.lathe([(0, -0.02), (0.016, -0.012), (0.018, 0.012), (0, 0.02)], (side * 0.074, hy, hz - 0.01), "skin", axis="x", seg=8)
+    # A plain nose; the rest of the face is painted
+    k.loft([(hz + 0.086, hy - 0.036, hy - 0.004, 0.01, 2.4, 2.4, 0.3), (hz + 0.1, hy - 0.032, hy - 0.014, 0.007, 2.4, 2.4, 0.3)], "skin", ring=8, steps=1)
+    k.loft([(hz - 0.1, hy - 0.05, hy + 0.06, 0.07, 2.4, 2.4), (hz - 0.07, hy - 0.06, hy + 0.08, 0.073, 2.4, 2.4)], "hair", ring=12, steps=1)
+    # The cap: a soft, full crown pulled forward and low over the brow, wider than the head, and its short peak
+    k.loft([(hz - 0.105, hy + 0.035, hy + 0.09, 0.08, 2.4, 2.4), (hz - 0.02, hy + 0.035, hy + 0.118, 0.095, 2.6, 2.4),
+            (hz + 0.07, hy + 0.03, hy + 0.105, 0.094, 2.6, 2.4), (hz + 0.105, hy + 0.03, hy + 0.07, 0.07)], "cap", ring=16, steps=2)
 
     def peak(u, v):
         across = (v - 0.5) * 2
-        return (across * (0.085 - 0.02 * u), HEAD[1] + 0.045 - 0.025 * u - 0.01 * across * across, HEAD[2] + 0.085 + 0.06 * u)
+        return (across * (0.082 - 0.018 * u), hy + 0.04 - 0.022 * u - 0.01 * across * across, hz + 0.09 + 0.055 * u)
 
     k.sheet(peak, "cap", nu=3, nv=6, thick=0.008)
+    # The scarf up round his neck to under the chin
+    k.loft([(NECK[1] - 0.02, NECK[2] - 0.06, NECK[2] + 0.07, 0.065, 2.4, 2.4), (NECK[1] + 0.03, NECK[2] - 0.05, NECK[2] + 0.06, 0.05, 2.4, 2.4)], "scarf",
+           axis="y", ring=12, steps=1)
 
     # The arms, each segment hanging straight down from its pivot (shoulder, elbow), the hand at the forearm's end: the
     # game puts the hands on the grips as the bars turn
