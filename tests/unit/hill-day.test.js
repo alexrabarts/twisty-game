@@ -342,6 +342,23 @@ describe('the climb', () => {
         expect(Math.abs(right)).toBeGreaterThan(0.1);
     });
 
+    test('a plain prompt names the key at the start of the climb, and goes once he moves off', () => {
+        const P = HillRide.START_PROMPT;
+        expect(P.keys).toMatch(/\u2191 or W/);
+        expect(P.touch).toMatch(/GAS/);
+        const bike = new HillBicycle(lane);
+        const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day: new HillDay(lane), game: { camera: new THREE.PerspectiveCamera() }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(), sample: {}, view: 0 });
+        ride.beginClimb();
+        expect(ride.startPromptShown()).toBe(true);
+        // Not while he stands there
+        for (let t = 0; t < 1; t += DT) { const input = { pedal: 0, brake: 0, steer: 0, wheelie: 0 }; ride.climbStep(DT, input); bike.step(DT, input); }
+        expect(ride.startPromptShown()).toBe(true);
+        for (let t = 0; t < 1; t += DT) { const input = { pedal: 1, brake: 0, steer: 0, wheelie: 0 }; ride.climbStep(DT, input); bike.step(DT, input); }
+        expect(ride.startPromptShown()).toBe(false);
+        ride.climb = null;
+        expect(ride.startPromptShown()).toBe(false);
+    });
+
     test('on foot: the pedal key walks him up at about walkMs, and let go he holds the bicycle where it is', () => {
         const C = HillDay.CLIMB;
         const bike = new HillBicycle(lane);

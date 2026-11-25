@@ -784,6 +784,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 
 - 2026-11-25: his legs no longer poke through his apron (the owner). Measured first with the new test: on foot the legs went up to 3.4 cm through the long apron, and on the saddle the knees came up through the lap apron at most crank angles. The apron is now one apron in two parts in every pose (`apron_long` and `apron_hem`, `HillRider.APRON`): the upper part swings forward just over the thighs and knees, the hem hangs from it clear of the shins; the least clearance over every pose is now 1.1 cm. Pictures before and after from the side and the front: `~/Library/Caches/twisty-world/hill-fixes/apron-before/`, `apron-after/`.
 
+- 2026-11-25: a start prompt on the climb (the owner: "clearer instructions on how to get started"): "Press ↑ or W to push the bicycle up the hill", or "Hold GAS to push the bicycle up the hill" on a touch screen, until he moves off 0.3 m. It is styled in the hill's own code (css/ui.css is outside this order's files).
+
 ## The two Gotthard legs made one (6f, owner's order 1)
 
 - Job: the owner's "combine the first two legs". The run-in from the north and the lookout leg are now one leg, `gotthard-north`, "Andermatt over the Gotthard to the lookout over Airolo": 14.50 km to the finish line, 6 checkpoints, the stop scene at the lookout. The hospice square at the summit is a stop on the way (`route.json` `stops.via`, `at: 'via'` in `manifest.stops`): the importer finds it by the same rule round the ride's sample nearest its coordinate, it is drawn with its tables, and it moves no stage end.

@@ -231,6 +231,16 @@ class HillRide {
         return shot;
     }
 
+    // The prompt at the start of the climb, until he has come goneM up the lane: the keys, or the touch screen's button
+    static get START_PROMPT() {
+        return Object.freeze({ keys: 'Press \u2191 or W to push the bicycle up the hill', touch: 'Hold GAS to push the bicycle up the hill', goneM: 0.3 });
+    }
+
+    // Whether the start prompt shows now: on the climb, before he has moved off
+    startPromptShown() {
+        return !!this.climb && this.climb.phase === 'climb' && HillDay.CLIMB.fromS - this.bike.s < HillRide.START_PROMPT.goneM;
+    }
+
     static get KEYS_NOTE() {
         return 'Up or W pedals · Down or S brakes · Left and Right steer · Q and E throw a loaf left and right · Space wheelies · Z changes the view · R starts the day again · M sound · Esc leaves';
     }
@@ -410,7 +420,17 @@ class HillRide {
         this.endNote.append(title, this.card.time, this.card.best, this.card.round, this.card.board, buttons, line);
         this.endNote.style.display = 'none';
         note.append(this.viewNote, keys);
-        document.body.append(note, this.fade, this.endNote);
+        // The start prompt: plain, in the middle of the picture's top, the touch form on a touch screen
+        this.startNote = document.createElement('div');
+        this.startNote.className = 'hill-start';
+        const touch = typeof HudRules !== 'undefined' && HudRules.isTouch(window);
+        this.startNote.textContent = touch ? HillRide.START_PROMPT.touch : HillRide.START_PROMPT.keys;
+        Object.assign(this.startNote.style, {
+            position: 'fixed', left: '50%', top: '16%', transform: 'translateX(-50%)', padding: '8px 16px', maxWidth: 'calc(100% - 32px)',
+            background: 'rgba(30, 26, 20, 0.62)', color: '#f4efe2', font: '600 16px/1.4 system-ui, sans-serif', borderRadius: '6px',
+            textAlign: 'center', pointerEvents: 'none', display: 'none'
+        });
+        document.body.append(note, this.startNote, this.fade, this.endNote);
         this.showView();
     }
 
@@ -882,6 +902,7 @@ class HillRide {
     // Poses the bicycle, moves the camera and the sun with it, and draws
     draw(dt) {
         const game = this.game;
+        if (this.startNote) this.startNote.style.display = this.startPromptShown() ? '' : 'none';
         // The climb's own light while he climbs, the descent's otherwise (and for a descent shot a tool holds)
         const climbLight = !!this.climb && !this.forcedShot;
         if (this.litClimb !== climbLight) this.light(climbLight);
