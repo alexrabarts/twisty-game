@@ -159,11 +159,21 @@ The Tremola slice stays in `world/`, byte for byte. A later import that is not t
 A leg starts and ends at a real stop: a hotel, a restaurant, a lookout, a fuel station or a car park (`STOP_KINDS`), where the group pulls in and parks. A slice of `route.json` names each stop by its kind and the coordinate of the evidence for it (`stops.start`, `stops.end`, and `stops.via`, a list of stops on the way that move no stage end and are looked for round the ride's sample nearest the coordinate: where the owner's photos cluster as a stop, or a building with a use). Everything else is found by rule (`tools/world/stops.mjs`, `STOP`):
 
 - **The area.** The public car park or rest area (`AREA_KINDS` of `places.mjs`) nearest the coordinate, within `areaReachM` (300 m).
-- **The way in.** `direct` when the area comes within `directM` (16 m) of the ride's edge within `searchM` (800 m) of the stage's end: the turn-in is the first sample of the run of such samples nearest the end. `road` otherwise: the shortest way along the side roads from a node of the ride to a side-road sample within `laneM` (6 m) of the area, at most `pathMaxM` (400 m).
+- **The way in.** `direct` when the area comes within `directM` (16 m) of the ride's edge within `searchM` (800 m) of the stage's end: the turn-in is the first sample of the run of such samples nearest the end. `road` otherwise: the shortest way along the side roads from a node of the ride to a side-road sample within `laneM` (6 m) of the area, at most `pathMaxM` (400 m), or `startPathMaxM` (800 m) for a stop at a stage's start: the group gathers there and rides out to the start line, and a station's or a village's car park lies further off the through road. The importer looks for areas round each stop's coordinate as well as round the ride. Re-importing `worlds/gotthard` after this change gives the same bytes: no stop of it is gained or lost.
+- **A line that stays.** `keepLine: true` on an end stop (a leg whose board is already ridden) leaves the stage's end where it is: the stop may lie behind the line, and the stop scene turns the group round at the line (`StopScene.wayIn`).
 - **The finish line.** A stop at a stage's end moves the end, and the next stage's start, to `leadM` (60 m) before the turn-in: the timed ride ends before the pull-in, so a stage is not a parking contest. The ride itself runs on to the turn-in (the data holds it; no stage covers it).
 - **The slots.** `slots` (8) bikes side by side, `slotGapM` (1.6 m) apart, along the area's long axis through its middle (rows `rowGapM` either side where one row has no room), each `marginM` (1.2 m) inside the outline. An area with no room for the group stops the import.
 - **What the manifest holds.** `manifest.stops`: `{ id, kind, stage, at, s, side, access, x, z, ring, path, slots }` (`ring` the outline, at most 32 points; `path` the way in from the ride to the slots' row). A map place that is a stop's own area carries `stop` (the stop's id), and `WorldPlaces` keeps it open at its stage's end.
 - **What swissTLM3D 2026-02 has for a stop.** No hotel, restaurant or fuel class in a village. Buildings with a use: `nutzung` `Gasthof abgelegen` (a remote inn; 5 492 in the file), also `Aussichtsturm`, `Schutzhuette`, `Parkhaus`. `tlm_strassen_strasseninfo` `Raststaette` (174) has `tankstelle` and `restaurant` flags: motorway services only. So the evidence for a stop's kind is the owner's photos and those uses; the place to park is always a public car park or rest area.
+
+### The stops of `world/` (the Tremola)
+
+| Stop | Kind | Area | Way in |
+| --- | --- | --- | --- |
+| Start | `carpark` | the station's public car park at Airolo | by road, 617 m from the start node |
+| End, behind the kept line (s 12 542.7, the line at s 13 187.4) | `restaurant` | the hospice square, the same area as the Gotthard leg's stop on the way | direct |
+
+The stops were laid on the shipped data, not imported whole: `world/` was imported before the bench rules of 6f, and a new import changes 9 more height tiles and one found layby (p5, s 3 750.7 to 3 759.3, 32 m to 25.9 m long) under those rules. Only the manifest's `stops` and the nodes the stops' areas level on three tiles (`h-3_22`, `h-m3_16`, `h-m4_16`, 71 nodes) changed; the ride, the stations, the places and the board row `world-tremola-v1` are the same.
 
 ### The stops of `worlds/gotthard`
 

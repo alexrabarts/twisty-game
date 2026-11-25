@@ -59,7 +59,7 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     credit: CREDIT,
     sources: { tlm: TLM_NAME.replace(/^swisstlm3d_|_2056_5728\.gpkg\.zip$/g, ''), alti3d: [] },
     keptRoadClasses: null,
-    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
+    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0), ...(w.keepLine ? { keepLine: true } : {}) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
     edges,
     demAt: (x, z) => dem.sample(x + e0, n0 - z),
     // Makes sure every tile under the box is in the cache (downloading what is missing) and loaded.
@@ -87,8 +87,12 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     },
     // The mapped traffic areas (car parks, rest areas) round the ride, for places.mjs: the class, the public name
     // where the map has one, and the outer ring
-    areas(samples) {
-      const box = [Math.min(...samples.x) - 100, Math.min(...samples.z) - 100, Math.max(...samples.x) + 100, Math.max(...samples.z) + 100];
+    // (and round each stop's coordinate, `around`, as far as a stop's area may lie: stops.mjs STOP.areaReachM)
+    areas(samples, around = []) {
+      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+      for (let i = 0; i < samples.x.length; i++) { x0 = Math.min(x0, samples.x[i]); x1 = Math.max(x1, samples.x[i]); z0 = Math.min(z0, samples.z[i]); z1 = Math.max(z1, samples.z[i]); }
+      for (const p of around) { x0 = Math.min(x0, p.x - 400); x1 = Math.max(x1, p.x + 400); z0 = Math.min(z0, p.z - 400); z1 = Math.max(z1, p.z + 400); }
+      const box = [x0 - 100, z0 - 100, x1 + 100, z1 + 100];
       const out = [];
       for (const row of gpkg.query('tlm_areale_verkehrsareal', lvBox(box))) {
         const polys = row.geom.type === 'Polygon' ? [row.geom.coordinates] : row.geom.type === 'MultiPolygon' ? row.geom.coordinates : [];
@@ -254,7 +258,7 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
 
   // The stopping places the map has beside the ride widen its verge there, before the land is carved (places.mjs)
   const mouths = mouthsOf(junctions, samples);
-  const areas = source.areas ? source.areas(samples) : [];
+  const areas = source.areas ? source.areas(samples, source.stages.flatMap(st => Object.values(st.stops ?? {}).flat())) : [];
   const mapped = mapPlaces(areas, samples, mouths, edges);
   applyPads(edges, ride, mapped);
   // The stops at the stages' ends (stops.mjs): each moves its stage's end to before its turn-in. A stop on the way

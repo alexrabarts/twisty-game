@@ -41,6 +41,11 @@ class StopScene {
     static get RIDE_MS() { return 7; }
     static get ARRIVE_GAP_S() { return 1.6; }
     static get BRAKE_M() { return 9; }
+    // How hard a rider brakes into its slot on a long way in (m/s^2), how long the longest way in takes, and how far
+    // past where it is a rider turns round for a stop behind it
+    static get BRAKE_MS2() { return 3; }
+    static get WAY_MOST_S() { return 24; }
+    static get TURN_M() { return 12; }
     static get GET_OFF_S() { return 0.8; }
     static get STAND_SIDE_M() { return 0.75; }
     // A rider not near the stop when the scene starts comes in from this far back along the ride
@@ -119,14 +124,26 @@ class StopScene {
     // Each rider's way in: the ride from `fromS` to the turn-in (on the right half of the road), then the stop's own
     // path, then the rider's slot. `route.sample(s, out)` gives {x, y, z, heading, width}. Returns [{x, z}] with the
     // metres along each point (`m`) and the total
+    // A stop behind the rider (a stop that keeps its stage's line, tools/world/stops.mjs `keepLine`: the Tremola's
+    // hospice square, 644 m before its line) is reached by turning round: on TURN_M past where the rider is, a half
+    // circle across the road, and back along the other half to the turn-in
     static wayIn(stop, route, fromS, slot) {
         const pts = [];
         const p = {};
-        const s0 = Math.min(fromS, stop.s);
-        for (let s = s0; s < stop.s; s += 2) {
-            route.sample(s, p);
-            const lane = -p.width / 4;
-            pts.push({ x: p.x + lane * Math.cos(p.heading), z: p.z - lane * Math.sin(p.heading) });
+        const at = (s, lane) => { route.sample(s, p); return { x: p.x + lane * Math.cos(p.heading), z: p.z - lane * Math.sin(p.heading) }; };
+        if (fromS > stop.s + 1) {
+            route.sample(fromS, p);
+            const w = p.width / 4, turn = fromS + StopScene.TURN_M;
+            for (let s = fromS; s < turn; s += 2) pts.push(at(s, -w));
+            for (let k = 0; k <= 8; k++) {
+                const a = (Math.PI * k) / 8;
+                route.sample(turn, p);
+                const lane = -w * Math.cos(a), ahead = w * Math.sin(a);
+                pts.push({ x: p.x + lane * Math.cos(p.heading) + ahead * Math.sin(p.heading), z: p.z - lane * Math.sin(p.heading) + ahead * Math.cos(p.heading) });
+            }
+            for (let s = turn; s > stop.s; s -= 2) pts.push(at(s, w));
+        } else {
+            for (let s = fromS; s < stop.s; s += 2) { route.sample(s, p); pts.push(at(s, -p.width / 4)); }
         }
         for (const [x, z] of stop.path) pts.push({ x, z });
         // The slot from behind: a point back along its heading, then the slot itself
@@ -145,7 +162,8 @@ class StopScene {
     // Where a rider is on its way in after `t` seconds: {x, z, heading, speed, parked}. It rides at RIDE_MS and slows
     // over the last BRAKE_M (v^2 = 2 a d), so it stops at its slot; parked, it faces its slot's heading
     static along(way, t, slot) {
-        const L = way.length, v = StopScene.RIDE_MS, brake = StopScene.BRAKE_M;
+        // (a long way in, turned round at the line, is ridden in WAY_MOST_S at the most)
+        const L = way.length, v = Math.max(StopScene.RIDE_MS, (L - StopScene.BRAKE_M) / StopScene.WAY_MOST_S), brake = Math.max(StopScene.BRAKE_M, (v * v) / (2 * StopScene.BRAKE_MS2));
         const a = v * v / (2 * brake);
         const cruise = Math.max(0, L - brake);
         const tCruise = cruise / v, tStop = tCruise + v / a;
@@ -179,18 +197,21 @@ class StopScene {
         this.seed = seed;
         this.riders = riders.map((r, k) => {
             const slot = stop.slots[Math.min(stop.slots.length - 1, k)];
-            const fromS = Math.max(stop.s - StopScene.BACK_M - (k === 0 ? 0 : 0), Math.min(stop.s, Number.isFinite(r.s) ? r.s : stop.s - StopScene.BACK_M));
+            // (the player from where it is: past a stop behind it, it turns round; StopScene.wayIn)
+            const here = Number.isFinite(r.s) ? r.s : stop.s - StopScene.BACK_M;
+            const fromS = stop.keepLine && here > stop.s ? here : Math.max(stop.s - StopScene.BACK_M, Math.min(stop.s, here));
             const way = StopScene.wayIn(stop, route, k === 0 ? fromS : stop.s - StopScene.BACK_M, slot);
             const actions = (r.bike.character && r.bike.character.stop) || [];
             return { ...r, slot, way, start: k * StopScene.ARRIVE_GAP_S, stood: false, actions, nextPuff: StopScene.PUFF_EVERY_S * (0.3 + ((k * 7 + seed) % 5) / 10) };
         });
-        const last = this.riders[this.riders.length - 1];
-        this.allParkedS = last ? last.start + StopScene.along(last.way, 1e9, last.slot).arriveS : 0;
+        // (the last to park: the last to start, or the player turned round for a stop behind it, whose way is longest)
+        this.allParkedS = Math.max(0, ...this.riders.map(r => r.start + StopScene.along(r.way, 1e9, r.slot).arriveS));
         this.playerParkedS = this.riders.length ? StopScene.along(this.riders[0].way, 1e9, this.riders[0].slot).arriveS : 0;
     }
 
     // When the card comes up
-    get cardAt() { return this.playerParkedS + StopScene.CARD_AFTER_S; }
+    // (and not before the last rider is off: a player turned round for a stop behind it parks last)
+    get cardAt() { return Math.max(this.playerParkedS + StopScene.CARD_AFTER_S, this.allParkedS + StopScene.GET_OFF_S); }
 
     // Skips to where the scene rests: everyone parked and stood, the card up
     skip() {

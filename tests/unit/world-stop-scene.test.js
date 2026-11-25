@@ -63,6 +63,27 @@ describe('the scene', () => {
         }
     });
 
+    test('a stop that keeps its line, behind the player: it turns round past the line and rides back on the other half', () => {
+        const behind = { ...stop, keepLine: true };
+        const scene = new StopScene({ stop: behind, route, riders: [{ bike: {}, s: 1140, player: true }], ground: flat });
+        const way = scene.riders[0].way;
+        // (on past where it was on its own half of the road, -x here as every way in rides, across the road, then back
+        // on the other half: +x)
+        expect(Math.max(...way.points.map(p => p.z))).toBeGreaterThan(1140 + StopScene.TURN_M - 1);
+        const back = way.points.filter(p => p.z < 1100 && p.z > 600);
+        expect(back.length).toBeGreaterThan(50);
+        for (const p of back) expect(p.x).toBeCloseTo(2.5, 5);
+        expect(way.points[0].x).toBeCloseTo(-2.5, 5);
+        const end = StopScene.along(way, 1e9, scene.riders[0].slot);
+        expect(end.parked).toBe(true);
+        expect(Math.hypot(end.x - scene.riders[0].slot.x, end.z - scene.riders[0].slot.z)).toBeLessThan(0.01);
+        // (a long way in is ridden in WAY_MOST_S at the most)
+        expect(end.arriveS).toBeLessThan(StopScene.WAY_MOST_S + 10);
+        // A stop that does not keep its line puts the player at most BACK_M before it, as before
+        const ahead = new StopScene({ stop, route, riders: [{ bike: {}, s: 1140, player: true }], ground: flat });
+        expect(ahead.riders[0].way.points[0].z).toBeLessThanOrEqual(500);
+    });
+
     test('the camera follows the player in, then takes the kind\'s path from where it parked, over the ground', () => {
         const riders = [{ bike: { character: { id: 'p' } }, s: 470, player: true }];
         const scene = new StopScene({ stop, route, riders, ground: flat });

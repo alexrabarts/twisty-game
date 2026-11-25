@@ -91,6 +91,8 @@ describe('the shipped stage', () => {
                 }
             }
         }
+        // (and the land the stops' areas are laid on: tools/world/bench.mjs `pads`, a few metres past each outline)
+        for (const stop of world.manifest.stops || []) for (const [x, z] of stop.ring) for (const [dx, dz] of [[0, 0], [16, 0], [-16, 0], [0, 16], [0, -16]]) carved.add(`height/h-${tile(Math.floor((x + dx) / 512))}_${tile(Math.floor((z + dz) / 512))}.bin`);
         expect(changed).toEqual(expect.arrayContaining(['manifest.json', 'ride.json']));
         expect(changed.filter(file => !['manifest.json', 'ride.json'].includes(file) && !carved.has(file))).toEqual([]);
     });

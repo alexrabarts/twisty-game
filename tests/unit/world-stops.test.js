@@ -92,6 +92,33 @@ describe('the rule', () => {
     });
 });
 
+describe('the Tremola\'s stops (world/)', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'world', 'manifest.json'), 'utf8'));
+    const ride = JSON.parse(fs.readFileSync(path.join(REPO, 'world', 'ride.json'), 'utf8'));
+    const courses = JSON.parse(fs.readFileSync(path.join(REPO, 'functions', 'world-courses.json'), 'utf8'));
+
+    test('a stop at each end: the station car park by road at its start, the hospice square behind its kept line', () => {
+        const start = manifest.stops.find(s => s.at === 'start'), end = manifest.stops.find(s => s.at === 'end');
+        expect(start).toMatchObject({ id: 'tremola-start', kind: 'carpark', access: 'road', s: 0 });
+        expect(end).toMatchObject({ id: 'tremola-end', kind: 'restaurant', keepLine: true });
+        for (const stop of [start, end]) {
+            expect(stop.slots).toHaveLength(STOP.slots);
+            for (const slot of stop.slots) expect(areaDistance(stop.ring, slot.x, slot.z)).toBe(0);
+        }
+        // (the way in from the start is longer than an end's may be, within a start's)
+        let way = 0;
+        for (let i = 1; i < start.path.length; i++) way += Math.hypot(start.path[i][0] - start.path[i - 1][0], start.path[i][1] - start.path[i - 1][1]);
+        expect(way).toBeGreaterThan(STOP.pathMaxM);
+        expect(way).toBeLessThanOrEqual(STOP.startPathMaxM + 100);
+    });
+
+    test('the line, the stage and the board stay as they were', () => {
+        expect(ride.stages).toEqual([{ id: 'tremola', name: 'Tremola, Airolo to the Gotthard summit', from: 0, to: 13187.4 }]);
+        expect(manifest.stops.find(s => s.at === 'end').s).toBeLessThan(ride.stages[0].to - 500);
+        expect(courses['world-tremola-v1']).toMatchObject({ gates: 6, metres: 13187, floorMs: 208315 });
+    });
+});
+
 describe('the shipped stops (worlds/gotthard)', () => {
     const dir = path.join(REPO, 'worlds', 'gotthard');
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));

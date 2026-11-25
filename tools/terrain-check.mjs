@@ -8035,7 +8035,7 @@ WORLD['world-stop-shots'] = async (page) => {
     // (then on until every rider has parked and got off, for the checks)
     await page.evaluate(() => {
         const env = game.environment, scene = game.stopScene;
-        while (scene && scene.t < scene.allParkedS + StopScene.GET_OFF_S + 0.5) {
+        while (scene && scene.t < Math.max(scene.allParkedS + StopScene.GET_OFF_S + 0.5, scene.cardAt + 0.1)) {
             game.stepStopScene(1 / 30);
             env.update(game.vehicle.position, scene.stop.s, null, Infinity, 1 / 30);
         }
