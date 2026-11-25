@@ -944,13 +944,25 @@ class HillScene {
         const [f0, f1, fa] = o.fence, timber = rgb(0x3a3028), tops = [];
         for (let s = f0; s <= f1 + 1e-6; s += o.fenceStepM) {
             const f = frame(s), c = p(s, fa, 0), top = c.y + 0.1 + 1.02;
-            HillScene.standing(lane, repeats, 'fence post', meshes.plain, [c.x, c.z], [f.alongX * 0.065, f.alongZ * 0.065], [f.leftX * 0.065, f.leftZ * 0.065], top, timber);
+            HillScene.standing(lane, repeats, 'fence post', meshes.plain, [c.x, c.z], [f.alongX * 0.06, f.alongZ * 0.06], [f.leftX * 0.06, f.leftZ * 0.06], top, timber);
             tops.push([c.x, top - 0.07, c.z, f.leftX, f.leftZ]);
         }
         for (let i = 1; i < tops.length; i++) {
             const a = tops[i - 1], b = tops[i];
             meshes.plain.box([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], [(b[0] - a[0]) / 2, (b[1] - a[1]) / 2, (b[2] - a[2]) / 2], [0, 0.04, 0],
                 [a[3] * 0.04, 0, a[4] * 0.04], timber);
+        }
+        // The high wall on the inside of the bend, behind the top wall, and its buttresses stepping out to the flags
+        const [w0, w1, wa, wu] = o.buttressWall, dark = rgb(0x6e685c);
+        for (let s = w0; s < w1 - 1e-6; s += 1) {
+            const e = Math.min(s + 1, w1), f = frame((s + e) / 2), c = p((s + e) / 2, wa - 0.3, 0);
+            HillScene.standing(lane, repeats, 'wall', meshes.rubble, [c.x, c.z], [f.alongX * (e - s) / 2, f.alongZ * (e - s) / 2], [f.leftX * 0.3, f.leftZ * 0.3], c.y + wu, dark, { sink: 0.3 });
+        }
+        for (const b of o.buttresses) {
+            // (each a block and a narrower one over it, set back: the stepped face of an old buttress)
+            const f = frame(b), lo = p(b, wa + 0.35, 0), hi = p(b, wa + 0.2, 0);
+            HillScene.standing(lane, repeats, 'buttress', meshes.rubble, [lo.x, lo.z], [f.alongX * 0.45, f.alongZ * 0.45], [f.leftX * 0.35, f.leftZ * 0.35], lo.y + wu * 0.55, dark, { sink: 0.3 });
+            HillScene.standing(lane, repeats, 'buttress', meshes.rubble, [hi.x, hi.z], [f.alongX * 0.38, f.alongZ * 0.38], [f.leftX * 0.2, f.leftZ * 0.2], hi.y + wu * 0.9, dark, { sink: 0.3 });
         }
         // By the cottages the climb's wide shot sees: a sawhorse trestle on the flags, its legs splayed to them
         const [ts, ta] = o.trestle, wood = rgb(0x5a4632);
@@ -1164,7 +1176,7 @@ class HillScene {
         const greens = [0x4e6236, 0x5d7440, 0x445a30], blooms = [0xc8463a, 0xe0c04a, 0xe8e2d8, 0xd87a9a];
         const rand = HillLane.random(Math.round(c.from * 17) + c.side * 3);
         for (let storey = 0; storey < c.storeys; storey++) {
-            const y = c.floor + 1.55 + storey * 2.1;
+            const y = cottagey && storey > 0 ? Math.min(c.floor + 3.65, c.eaves - 1.05) : c.floor + 1.55 + storey * 2.1;
             for (let i = 0; i < windows; i++) {
                 const along = -hw + (i + 0.5) * c.wide / windows + offsets[i] * (storey > 0 ? 0.6 : 1);
                 if (storey === 0 && Math.abs(along - doorAt) < 1.15) continue;

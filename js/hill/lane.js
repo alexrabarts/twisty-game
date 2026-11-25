@@ -74,7 +74,7 @@ class HillLane {
                     [16, 39.95, 2, 'tile', 'rubble', 5.1, 7.6, [[30, 9.2]]],
                     [39.95, 50.4, 2, 'tile', 'rubble', 5.14, 7.52, []],
                     [50.4, 60.8, 2, 'tile', 'rubble', 5.14, 7.52, [[56.6, 9.29]]],
-                    [60.8, 79.05, 2, 'thatch', 'rubble', 5.08, 10.5, [[66.5, 11.75], [75.75, 12.2]]],
+                    [60.8, 79.05, 2, 'thatch', 'rubble', 4.45, 10.5, [[66.5, 11.75], [75.75, 12.2]]],
                     [79.05, 90, 2, 'thatch', 'lime', 5.4, 10.2, []],
                     [90, 101.5, 2, 'tile', 'lime', 6.02, 12, [[96.45, 13.05]]],
                     [101.5, 112.75, 2, 'tile', 'stone', 5.6, 10.8, [[108, 12]]]
@@ -82,11 +82,14 @@ class HillLane {
                 churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], stones: [16, 31, 2.55],
                 // The cottage on the right, in the sun's shadow: [from, to, eaves, ridge, roof, wall, set back from the flags];
                 // its near top corner is where the still's dark shape has it
-                right: [29.2, 37.5, 4.3, 6.6, 'thatch', 'rubble', 0], fence: [24, 62, -2.95], fenceStepM: 1.15,
+                right: [29.2, 37.5, 4.3, 6.6, 'thatch', 'rubble', 0], fence: [24, 62, -2.95], fenceStepM: 1.6,
                 // What the climb's wide shot sees by the cottages on the left, as its stills have it: a sawhorse trestle on
                 // the flags [s, across], a short iron railing beside a door's step [s, across, length], ivy up the
                 // cottages that start at these s
                 trestle: [58.2, 3.35], railing: [70.3, 3.55, 1.4], ivy: [39.95, 60.8],
+                // The old high wall on the inside of the bend behind the top wall, dark in its own shade, with its
+                // buttresses: [from, to, across of its face, up], and the buttresses' s
+                buttressWall: [45, 57, -4.45, 4.2], buttresses: [46.2, 50.8, 55.4],
                 tree: [109, 18.4, 17.2, 4.2]
             },
             // The end: past stopS the camera eases over endEaseS to a fixed point high behind the bicycle (at s, across,
