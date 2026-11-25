@@ -225,10 +225,11 @@ class WorldEnvironment {
             // and a ride stepped faster than real time still lets go of what it has left behind
             clock: () => this.streamClockMs,
             hooks: {
-                buildTile: (key, lod) => this.buildTile(key, lod),
-                buildScenery: (key, lod) => this.buildScenery(key, lod),
+                buildTile: (key, lod) => this.buildTileSteps(key, lod),
+                // (both in steps: WorldStreamer takes one a few milliseconds at a time)
+                buildScenery: (key, lod) => this.buildSceneryAsStreamed(key, lod),
                 disposeTile: key => this.disposeTile(key),
-                buildRoad: (section, lod) => this.buildRoad(section, lod),
+                buildRoad: (section, lod) => this.buildRoadSteps(section, lod),
                 disposeRoad: section => this.disposeRoad(section),
                 buildSide: (k, near) => this.buildSide(k, near),
                 sidePieces: k => this.sidePieces(k),
@@ -348,7 +349,19 @@ class WorldEnvironment {
         this.group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
     }
 
-    buildTile(key, lod) {
+    // The land in two steps: at full detail the land's cut to the walls first (cutsOf), a step of its own, then the
+    // mesh; the old mesh stays drawn until the new one replaces it
+    *buildTileSteps(key, lod) {
+        if (lod === 0 && this.data.tile(key)) {
+            this.cutCache.delete(key);
+            yield* this.cutsOfSteps(key);
+            yield;
+        }
+        this.buildTile(key, lod, lod === 0);
+    }
+
+    // `cutsMade`: the land's cut was made for this build already (buildTileSteps)
+    buildTile(key, lod, cutsMade = false) {
         const tile = this.data.tile(key);
         const cover = this.data.cover(key);
         const old = this.tileMeshes.get(key);
@@ -359,7 +372,7 @@ class WorldEnvironment {
         }
         // A carved cell inside the ride's band can hold a side road's height (a junction); drawn, it stays under the ride
         // At full detail the land is cut to the retaining walls that cross the tile (cutsOf), made again with the tile
-        if (lod === 0) this.cutCache.delete(key);
+        if (lod === 0 && !cutsMade) this.cutCache.delete(key);
         const built = TerrainMesh.build(tile, cover, lod, (x, y, z) => {
             const low = this.rideSurfaceAt(x, z, y);
             return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
@@ -411,7 +424,7 @@ class WorldEnvironment {
             if (kind === 'walls') { this.dropRideWalls(index); continue; }
             this.streamer.enqueue(`works:${id}`, 0, () => {
                 const held = this.streamer.roads.get(index);
-                if (kind === 'road' && held && this.roadMeshes.has(index)) this.buildRoad(this.streamer.sections[index], held.lod);
+                if (kind === 'road' && held && this.roadMeshes.has(index)) return this.buildRoadSteps(this.streamer.sections[index], held.lod);
                 else if (kind === 'side' && this.sideMeshes.has(index)) {
                     const held = this.streamer.sides.get(index);
                     this.disposeSide(index);
@@ -435,6 +448,17 @@ class WorldEnvironment {
 
     // Trees and houses stand on the detailed tiles only (a step of its own: the streamer queues it after the land)
     buildScenery(key, lod) {
+        return WorldStreamer.drain(this.buildScenerySteps(key, lod));
+    }
+
+    // As the streamer builds it, in steps: a tile let go of while its scenery was under way has none left standing
+    *buildSceneryAsStreamed(key, lod) {
+        yield* this.buildScenerySteps(key, lod);
+        if (!this.streamer.tiles.has(key)) this.scenery.disposeTile(key);
+    }
+
+    // The same in steps (Scenery.buildTileSteps, Scenery.setStonesSteps)
+    *buildScenerySteps(key, lod) {
         if (lod > 1) {
             this.scenery.disposeTile(key);
             return;
@@ -444,7 +468,12 @@ class WorldEnvironment {
         // What stands is not built again when the tile's detail changes, but its marker stones stand on the nearest
         // tiles only (Scenery.setStones)
         if (this.scenery.perTile.has(key)) {
-            for (const mesh of this.scenery.setStones(tile, lod === 0, this.lastBike)) {
+            const [sx, sz] = key.split(',').map(Number), sm = WorldData.TILE_M;
+            if (lod === 0) {
+                yield* this.wallPlansNear([sx * sm, sz * sm, (sx + 1) * sm, (sz + 1) * sm]);
+                yield* this.cutsNear([sx * sm, sz * sm, (sx + 1) * sm, (sz + 1) * sm]);
+            }
+            for (const mesh of yield* this.scenery.setStonesSteps(tile, lod === 0, this.lastBike)) {
                 mesh.userData.skipCulling = true;
                 this.onMeshBuilt(mesh);
             }
@@ -472,8 +501,12 @@ class WorldEnvironment {
             (this.sceneryHeld = this.sceneryHeld || new Set()).add(key);
             return;
         }
+        yield* this.wallPlansNear([tx * m, tz * m, (tx + 1) * m, (tz + 1) * m]);
+        yield* this.cutsNear([tx * m, tz * m, (tx + 1) * m, (tz + 1) * m]);
         const houses = (this.data.buildings || []).filter(b => b.x >= tx * m && b.x < (tx + 1) * m && b.z >= tz * m && b.z < (tz + 1) * m);
-        const group = this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike, lod === 0);
+        // (a test that leaves the scenery out replaces buildTile: it is then called as it is)
+        const own = this.scenery.buildTile === Scenery.prototype.buildTile;
+        const group = own ? yield* this.scenery.buildTileSteps(tile, this.data.cover(key), houses, this.lastBike, lod === 0) : this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike, lod === 0);
         if (group) {
             group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
             this.sceneryGroup.add(group);
@@ -486,7 +519,7 @@ class WorldEnvironment {
         if (!this.streamer.tiles.has(key)) return;
         this.streamer.enqueue(`scenery:${key}`, this.streamer.tileDistance(key, this.lastBike) + 0.5, () => {
             const current = this.streamer.tiles.get(key);
-            if (current) this.buildScenery(key, current.lod);
+            return current ? this.buildSceneryAsStreamed(key, current.lod) : null;
         });
     }
 
@@ -528,31 +561,68 @@ class WorldEnvironment {
         map.texture.needsUpdate = true;
     }
 
-    rowsOf(from, to) {
+    // A row has no verge on a side where a junction's paving lies (edgeFoot `gore`: the same test lays the paving):
+    // a side road that leaves at a shallow angle runs beside the ride for tens of metres past the node's own
+    // mouth, and the ride's verge lay between the two as a strip of grass in the junction
+    // (kept for each row until the side roads in residence change: setSideEdges)
+    // (and the stretch of its verge a side road crosses, mouthCut: read near a junction's mouth, by the junction's
+    // record within a few rows, or where the paving lies)
+    goreRow(i) {
+        return WorldStreamer.drain(this.goreRowSteps(i));
+    }
+
+    // The same in steps (mouthCutSteps)
+    *goreRowSteps(i) {
         const styles = this.roadStyles();
-        // A row has no verge on a side where a junction's paving lies (edgeFoot `gore`: the same test lays the paving):
-        // a side road that leaves at a shallow angle runs beside the ride for tens of metres past the node's own
-        // mouth, and the ride's verge lay between the two as a strip of grass in the junction
         const foot = this.goreFoot || (this.goreFoot = this.edgeFoot());
         if (!this.goreRows) this.goreRows = new Map();
         const points = this.route.points;
-        // (kept for each row until the side roads in residence change: setSideEdges)
-        // (and the stretch of its verge a side road crosses, mouthCut: read near a junction's mouth, by the junction's
-        // record within a few rows, or where the paving lies)
         const near = (i, flag) => { for (let j = Math.max(0, i - WorldEnvironment.MOUTH_CUT_ROWS); j <= Math.min(points.length - 1, i + WorldEnvironment.MOUTH_CUT_ROWS); j++) if (styles[j][flag]) return true; return false; };
-        const goreAt = i => {
-            const p = points[i];
-            if (!p || p.bits & 7) return null;
-            let held = this.goreRows.get(i);
-            if (!held) {
-                const cos = Math.cos(p.heading), sin = Math.sin(p.heading), half = p.width / 2;
-                const edges = { l: [p.x - half * cos, p.y, p.z + half * sin, -cos, sin], r: [p.x + half * cos, p.y, p.z - half * sin, cos, -sin] };
-                held = { l: !!foot.gore(...edges.l), r: !!foot.gore(...edges.r), edges };
-                held.cut = { l: held.l || near(i, 'mouthL') ? this.mouthCut(i, -1) : null, r: held.r || near(i, 'mouthR') ? this.mouthCut(i, 1) : null };
-                this.goreRows.set(i, held);
+        const p = points[i];
+        if (!p || p.bits & 7) return null;
+        let held = this.goreRows.get(i);
+        if (!held) {
+            const cos = Math.cos(p.heading), sin = Math.sin(p.heading), half = p.width / 2;
+            const edges = { l: [p.x - half * cos, p.y, p.z + half * sin, -cos, sin], r: [p.x + half * cos, p.y, p.z - half * sin, cos, -sin] };
+            held = { l: !!foot.gore(...edges.l), r: !!foot.gore(...edges.r), edges };
+            const cutL = held.l || near(i, 'mouthL') ? yield* this.mouthCutSteps(i, -1) : null;
+            const cutR = held.r || near(i, 'mouthR') ? yield* this.mouthCutSteps(i, 1) : null;
+            held.cut = { l: cutL, r: cutR };
+            // (a row read whole meanwhile is the one kept)
+            if (this.goreRows.has(i)) return this.goreRows.get(i);
+            this.goreRows.set(i, held);
+        }
+        return held;
+    }
+
+    // The ride's wall plans near a box [x0, z0, x1, z1] made ahead, each in steps (rideWallsSteps): the land cut to
+    // the walls (cutsOf, wallRunsNear) reads every section's plan within its reach, and a plan made at once in the
+    // middle of a build was the longest step of a road or a tile's scenery (world-steps)
+    *wallPlansNear(box) {
+        if (!box || !this.streamer) return;
+        const reach = TerrainMesh.CUT_TAPER_M + 30 + WorldData.TILE_M;
+        for (const section of this.streamer.sections) {
+            const b = section.bbox;
+            if (!b || this.rideWallCache.has(section.index) || b[2] < box[0] - reach || b[0] > box[2] + reach || b[3] < box[1] - reach || b[1] > box[3] + reach) continue;
+            yield* this.rideWallsSteps(section.index);
+        }
+    }
+
+    // Each row's gore read ahead, a row at a time, so rowsOf reads them kept (a road built in steps)
+    *goreRowsSteps(from, to) {
+        for (let i = Math.max(0, from - 1); i <= Math.min(this.route.points.length - 1, to + 1); i++) {
+            if (!this.goreRows || !this.goreRows.has(i)) {
+                yield* this.goreRowSteps(i);
+                yield;
             }
-            return held;
-        };
+        }
+    }
+
+    rowsOf(from, to) {
+        const styles = this.roadStyles();
+        const foot = this.goreFoot || (this.goreFoot = this.edgeFoot());
+        const points = this.route.points;
+        const goreAt = i => this.goreRow(i);
         return points.slice(from, to + 1).map((p, i) => {
             const row = { x: p.x, y: p.y, z: p.z, heading: p.heading, width: p.width, bits: p.bits, s: p.s, i: from + i, ...styles[from + i] };
             // A viaduct's rows carry its layout, and are kept at every level of detail: its stone is laid on them
@@ -586,14 +656,20 @@ class WorldEnvironment {
     // fixed grid of metres (MOUTH_CUT_STEP_M), so every row near one mouth carries the same stretch and the cut between
     // two rows is one line
     mouthCut(i, sign) {
+        return WorldStreamer.drain(this.mouthCutSteps(i, sign));
+    }
+
+    // The same in steps, a few metres of the ride at a time
+    *mouthCutSteps(i, sign) {
         const s = this.route.sArray[i], step = WorldEnvironment.MOUTH_CUT_STEP_M, pad = WorldEnvironment.MOUTH_CUT_PAD_M, reach = WorldEnvironment.MOUTH_CUT_REACH_M;
         const at = {};
         // The runs of metres along the ride where a side road lies `out` past the carriageway's edge (its carriageway,
         // and `more` past its edges), the union of those within `pad` of the row
-        const runs = (out, more) => {
+        const runs = function* (out, more) {
             const list = [];
             let open = null;
             for (let g = Math.floor((s - pad - reach) / step); g <= Math.ceil((s + pad + reach) / step); g++) {
+                if (g % 8 === 0) yield;
                 const t = g * step;
                 let hit = false;
                 if (t >= 0 && t <= this.route.length) {
@@ -610,7 +686,7 @@ class WorldEnvironment {
             return kept.length ? [Math.min(...kept.map(r => r[0])) - step / 2, Math.max(...kept.map(r => r[1])) + step / 2] : null;
         };
         const V = RoadSurface.VERGE_M;
-        const inner = runs(0.02, 0), outer = runs(V - 0.02, V);
+        const inner = yield* runs.call(this, 0.02, 0), outer = yield* runs.call(this, V - 0.02, V);
         if (!inner && !outer) return null;
         const a = inner || outer, b = outer || inner;
         return [a[0], b[0], a[1], b[1]];
@@ -718,6 +794,11 @@ class WorldEnvironment {
     // WALL_PLAN_M past each end so two sections agree on the rows they share; `runs` are the walls of its own segments
     // (RoadMesh.wallRuns). Kept until a tile or a chunk it was made without arrives (rebuildWaiting)
     rideWalls(index) {
+        return WorldStreamer.drain(this.rideWallsSteps(index));
+    }
+
+    // The same in steps: the rows' gores a row at a time, then the plan a row at a time (RoadMesh.wallPlanSteps)
+    *rideWallsSteps(index) {
         const held = this.rideWallCache.get(index);
         if (held) return held;
         const section = this.streamer.sections[index];
@@ -728,8 +809,12 @@ class WorldEnvironment {
         const missing = new Set();
         // The viaducts in these rows first (surveyViaducts): their rows are a structure's, and no wall stands on one
         this.surveyViaducts(a, b, missing, index);
+        yield* this.goreRowsSteps(a, b);
         const sides = RoadMesh.vergeSides(this.rowsOf(a, b), null, true);
-        const all = RoadMesh.wallPlan(sides, this.edgeFoot(missing), this.carriageways.guard(-1));
+        yield;
+        const all = yield* RoadMesh.wallPlanSteps(sides, this.edgeFoot(missing), this.carriageways.guard(-1));
+        // (a plan made in steps may meet one made whole for the same section meanwhile: the first kept is the one)
+        if (this.rideWallCache.has(index)) return this.rideWallCache.get(index);
         const base = Math.max(0, section.from - 1), top = Math.min(last, section.to + 1);
         const cut = list => list.slice(base - a, top - a + 1);
         const plan = { base, row: { l: cut(all.row.l), r: cut(all.row.r) }, seg: { l: cut(all.seg.l), r: cut(all.seg.r) }, end: { l: cut(all.end.l), r: cut(all.end.r) }, past: { l: cut(all.past.l), r: cut(all.past.r) } };
@@ -1323,13 +1408,28 @@ class WorldEnvironment {
     }
 
     buildRoad(section, lod) {
-        this.disposeRoad(section);
+        return WorldStreamer.drain(this.buildRoadSteps(section, lod));
+    }
+
+    // The same in steps: the rows' gores, the wall plan and the edge works a row at a time (RoadMesh.sectionSteps).
+    // The old section stays drawn until the new one replaces it
+    *buildRoadSteps(section, lod) {
         // Edge works built before a tile under them arrived are built again when it does (buildTile)
         const missing = new Set();
         // A row of each neighbour either side: read for the bend and the runs, drawn by the neighbour (RoadMesh.section)
         const last = this.route.points.length - 1;
         const from = Math.max(0, section.from - 1), to = Math.min(last, section.to + 1);
-        const group = RoadMesh.section(this.tubeRows(this.rowsOf(from, to)), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing), roads: this.carriageways, head: section.from - from, tail: to - section.to, plan: this.rideWalls(section.index).plan });
+        // (what a whole build read after it let the old section go: the caches kept by faceStamp start again)
+        if (this.roadMeshes.has(section.index)) this.faceStamp++;
+        yield* this.goreRowsSteps(from, to);
+        yield* this.wallPlansNear(section.bbox);
+        yield* this.cutsNear(section.bbox);
+        const rows = this.tubeRows(this.rowsOf(from, to));
+        const foot = this.edgeFoot(missing);
+        yield;
+        const plan = (yield* this.rideWallsSteps(section.index)).plan;
+        const group = yield* RoadMesh.sectionSteps(rows, lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot, roads: this.carriageways, head: section.from - from, tail: to - section.to, plan });
+        this.disposeRoad(section);
         // Its works keep out of the side roads' carriageways (Carriageways): built before a side road's chunk is here,
         // it is built again when that chunk is (buildSide)
         if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
@@ -2095,23 +2195,48 @@ class WorldEnvironment {
 
     // The cuts of a tile's land to the retaining walls that cross it (TerrainMesh.cuts), or null: made when first
     // asked for from the walls of the ride's sections and of the side chunks here, and again when those change
-    cutsOf(key) {
+    // The same in steps (TerrainMesh.cutsSteps). The walls near the tile are read at once, under the same guard against
+    // reading itself as the whole one has; the cut is then made a piece at a time, and a reader that asks for the tile
+    // meanwhile has it made whole, which is the one kept
+    *cutsOfSteps(key) {
         if (this.cutCache.has(key)) return this.cutCache.get(key);
         const tile = this.data.tile(key);
         if (!tile) return null;
-        // Nothing the walls are planned from reads the cut land; were it asked for meanwhile, it is the nodes' own
         this.cutCache.set(key, null);
-        // The highest road surface between two points, read every metre and a half (a road's carriageway and verge)
-        const roadOver = (ax, az, bx, bz) => {
+        const roadOver = this.roadOverFn || (this.roadOverFn = (ax, az, bx, bz) => {
             let high = -Infinity;
             const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 1.5));
-            // (not at the first point itself: a node just outside the edge of the road its wall holds up)
             for (let k = 1; k <= steps; k++) this.carriageways.each(ax + ((bx - ax) * k) / steps, az + ((bz - az) * k) / steps, RoadSurface.VERGE_M, r => { if (r.y > high) high = r.y; });
             return high;
-        };
-        const cuts = TerrainMesh.cuts(tile, this.wallRunsNear(tile), this.nearTile, roadOver, this.pitsNear(tile));
+        });
+        const runs = this.wallRunsNear(tile), pits = this.pitsNear(tile);
+        this.cutCache.delete(key);
+        const cuts = yield* TerrainMesh.cutsSteps(tile, runs, this.nearTile, roadOver, pits);
+        if (this.cutCache.has(key)) return this.cutCache.get(key);
         this.cutCache.set(key, cuts);
         return cuts;
+    }
+
+    // The land's cut of each tile under a box [x0, z0, x1, z1] made ahead, each in steps (cutsOfSteps): a road or a
+    // tile's scenery reads the land there, and a cut made at once in the middle of one was its longest step
+    *cutsNear(box) {
+        if (!box || !this.streamer) return;
+        const m = WorldData.TILE_M, pad = RoadSurface.VERGE_M + 30;
+        for (let tx = Math.floor((box[0] - pad) / m); tx <= Math.floor((box[2] + pad) / m); tx++) {
+            for (let tz = Math.floor((box[1] - pad) / m); tz <= Math.floor((box[3] + pad) / m); tz++) {
+                const key = `${tx},${tz}`;
+                if (this.cutCache.has(key) || !this.data.tile(key)) continue;
+                yield* this.cutsOfSteps(key);
+            }
+        }
+    }
+
+    // The land a tile's retaining walls cut (TerrainMesh.cuts), kept until the walls near it change (dropCuts).
+    // Nothing the walls are planned from reads the cut land; were it asked for meanwhile, it is the nodes' own. The
+    // highest road surface between two points is read every metre and a half (a road's carriageway and verge), not at
+    // the first point itself: a node just outside the edge of the road its wall holds up
+    cutsOf(key) {
+        return WorldStreamer.drain(this.cutsOfSteps(key));
     }
 
     // The retaining walls' top lines within reach of a tile (RoadMesh.wallRuns): the ride's, a run that goes on from
@@ -2244,7 +2369,7 @@ class WorldEnvironment {
             if (!b || !this.roadMeshes.has(section.index) || b[2] < box[0] - reach || b[0] > box[2] + reach || b[3] < box[1] - reach || b[1] > box[3] + reach) continue;
             this.streamer.enqueue(`works:road:${section.index}`, WorldEnvironment.LATER, () => {
                 const held = this.streamer.roads.get(section.index);
-                if (held && this.roadMeshes.has(section.index)) this.buildRoad(section, held.lod);
+                return held && this.roadMeshes.has(section.index) ? this.buildRoadSteps(section, held.lod) : null;
             });
         }
     }

@@ -16,7 +16,10 @@
 //     from SIDE_NEAR_M + SIDE_PAD_M of the bike and LOD1 again past SIDE_SLACK_M more, and the chunk is built again
 //     only when its set of LOD0 pieces changes.
 //   - Builds go through a queue, nearest first, at most BUDGET_MS a frame
-//     (one step at least, so a queue always drains).
+//     (one step at least, so a queue always drains). A build may come in steps: a task whose run returns an iterator
+//     (a generator) is taken one step at a time, as the budget allows, over as many frames as it needs, and no other
+//     task runs until it is done (WorldStreamer.drain runs one whole, for a caller that needs it now). A step is a few
+//     milliseconds at the most, so no frame waits on one whole build (tools/terrain-check.mjs world-steps).
 //   - A tile whose data does not come (a failed fetch, a server gone, a network that drops) is asked for again after
 //     each wait of FETCH_RETRY_MS, then given up as lost. landState says what the rider is told: the land near the
 //     bike missing, the bike's own tile missing, or lost.
@@ -53,6 +56,17 @@ class WorldStreamer {
     static get NEAR_LAND_M() { return 300; }
     static get NOTE_AFTER_MS() { return 1500; }
 
+    // Runs a build that may come in steps (an iterator) to its end, or passes a plain value through: its result
+    static drain(value) {
+        if (!value || typeof value.next !== 'function') return value;
+        let step = value.next();
+        while (!step.done) step = value.next();
+        return step.value;
+    }
+
+    // Whether a task is queued or a build is under way
+    get busy() { return this.queue.length > 0 || !!this.active; }
+
     constructor({ data, route, hooks, now = null, clock = null }) {
         this.data = data;
         // The tiles' level-of-detail distances in force: TILE_LOD_M, or the stop scene's held shot's (Game.raiseShot)
@@ -70,6 +84,8 @@ class WorldStreamer {
         this.sides = new Map();
         this.queue = [];
         this.queued = new Set();
+        // The build under way in steps: {id, iter}
+        this.active = null;
         this.loading = new Set();
         // key -> {tries, nextAt, lost}: the tiles whose data did not come; key -> when the land near the bike first
         // missed it (landState)
@@ -266,14 +282,25 @@ class WorldStreamer {
         if (!this.refs.has(key) || !this.data.tile(key)) return;
         const held = this.tiles.get(key);
         if (held && held.lod === lod) return;
-        this.hooks.buildTile(key, lod, !!held);
+        const built = this.hooks.buildTile(key, lod, !!held);
+        if (built && typeof built.next === 'function') return this.tileInSteps(built, key, lod);
+        this.tileBuilt(key, lod);
+    }
+
+    // A tile's land built in steps (the hook's iterator): it counts as built once the last step is done
+    *tileInSteps(steps, key, lod) {
+        yield* steps;
+        this.tileBuilt(key, lod);
+    }
+
+    tileBuilt(key, lod) {
         this.tiles.set(key, { lod, zeroSince: null });
         this.stats.builds++;
         // What stands on the tile is its own step, so one frame never builds the land and its trees together
         if (this.hooks.buildScenery) {
             this.enqueue(`scenery:${key}`, this.tileDistance(key, this.bike) + 0.5, () => {
                 const current = this.tiles.get(key);
-                if (current) this.hooks.buildScenery(key, current.lod);
+                return current ? this.hooks.buildScenery(key, current.lod) : null;
             });
         }
     }
@@ -292,12 +319,14 @@ class WorldStreamer {
             const held = this.roads.get(index);
             if (held) held.zeroSince = null;
             if (!held || held.lod !== want.lod) {
-                this.enqueue(`road:${index}`, want.d, () => {
-                    const prior = this.roads.get(index);
+                const streamer = this;
+                this.enqueue(`road:${index}`, want.d, function* () {
+                    const prior = streamer.roads.get(index);
                     if (prior && prior.lod === want.lod) return;
-                    this.hooks.buildRoad(this.sections[index], want.lod, !!prior);
-                    this.roads.set(index, { lod: want.lod, zeroSince: null });
-                    this.stats.builds++;
+                    const built = streamer.hooks.buildRoad(streamer.sections[index], want.lod, !!prior);
+                    if (built && typeof built.next === 'function') yield* built;
+                    streamer.roads.set(index, { lod: want.lod, zeroSince: null });
+                    streamer.stats.builds++;
                 });
             }
         }
@@ -379,22 +408,32 @@ class WorldStreamer {
         this.queue.push({ id, priority, run });
     }
 
-    // Runs queued builds, nearest first, until `budgetMs` is spent (one step at least). Returns the steps run.
+    // Runs queued builds, nearest first, until `budgetMs` is spent (one step at least). Returns the steps run. A build
+    // in steps under way goes on first; each of its slices counts as a step
     pump(budgetMs = WorldStreamer.BUDGET_MS) {
-        if (!this.queue.length) {
+        if (!this.queue.length && !this.active) {
             this.stats.frameBuildMs = 0;
             return 0;
         }
         this.queue.sort((p, q) => p.priority - q.priority);
         const frameStart = this.now();
         let steps = 0;
-        while (this.queue.length) {
-            const task = this.queue.shift();
-            this.queued.delete(task.id);
+        while (this.active || this.queue.length) {
+            let entry = this.active;
             const stepStart = this.now();
-            task.run();
+            if (!entry) {
+                const task = this.queue.shift();
+                this.queued.delete(task.id);
+                const out = task.run();
+                entry = { id: task.id, iter: out && typeof out.next === 'function' ? out : null };
+            }
+            let done = !entry.iter;
+            if (entry.iter) {
+                do done = entry.iter.next().done; while (!done && this.now() - frameStart < budgetMs);
+            }
+            this.active = done ? null : entry;
             const stepMs = this.now() - stepStart;
-            const kind = task.id.slice(0, task.id.indexOf(':'));
+            const kind = entry.id.slice(0, entry.id.indexOf(':'));
             this.stats.maxStepMs = Math.max(this.stats.maxStepMs, stepMs);
             this.stats.maxStepByKind[kind] = Math.max(this.stats.maxStepByKind[kind] || 0, stepMs);
             steps++;
@@ -433,10 +472,10 @@ class WorldStreamer {
     async settle(bike, s, maxRounds = 200) {
         for (let round = 0; round < maxRounds; round++) {
             this.update(bike, s);
-            while (this.queue.length) this.pump(Infinity);
-            if (!this.loading.size && !this.queue.length) {
+            while (this.busy) this.pump(Infinity);
+            if (!this.loading.size && !this.busy) {
                 this.update(bike, s);
-                if (!this.queue.length) {
+                if (!this.busy) {
                     this.resetStepStats();
                     return round;
                 }

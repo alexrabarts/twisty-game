@@ -1164,13 +1164,29 @@ class RoadMesh {
     // Then the runs are made whole (WALL_GAP_M, WALL_RUN_M). `past[key][k]` is how far row k lies along the edge past
     // the nearest wall's end behind it and before the one ahead, and how deep those walls stand at their ends
     // ([behind, ahead, deep behind, deep ahead], RoadMesh.pastEnds): where a wall's face tapers out. Null when `foot` plans no walls (it has no `wall`)
+    // A build in steps (a generator) run to its end: its result (WorldStreamer.drain)
+    static drain(steps) {
+        let step = steps.next();
+        while (!step.done) step = steps.next();
+        return step.value;
+    }
+
     static wallPlan(sides, foot, guard = null) {
+        return RoadMesh.drain(RoadMesh.wallPlanSteps(sides, foot, guard));
+    }
+
+    // The same in steps, a row at a time (WorldStreamer: a build no frame waits on whole)
+    static *wallPlanSteps(sides, foot, guard = null) {
         if (!foot || !foot.wall) return null;
         const n = sides.length;
         const plan = { row: { l: [], r: [] }, seg: { l: [], r: [] }, end: { l: [], r: [] }, past: { l: [], r: [] } };
         const g = guard ? guard.walls || guard : null;
         for (const key of ['l', 'r']) {
-            const end = sides.map(side => RoadMesh.wallEnd(side, key, foot, guard));
+            const end = [];
+            for (const side of sides) {
+                end.push(RoadMesh.wallEnd(side, key, foot, guard));
+                yield;
+            }
             const row = end.map(e => !!e && !e.blocked);
             // A wall goes on from its last row while the land still asks for one there (a side road's edge that stands
             // over the land with no slope under it: it ends where the land meets the edge; the ride's edge over the
@@ -1206,7 +1222,11 @@ class RoadMesh {
             // A wall between two rows is tested every metre against the other carriageways (a side road's edge beside
             // the ride's at a junction)
             // A row at a side road's mouth (RoadMesh.atMouth): no wall's segment reaches it, the mouth stays open
-            const mouth = sides.map(side => RoadMesh.atMouth(sides, side, key, foot));
+            const mouth = [];
+            for (const side of sides) {
+                mouth.push(RoadMesh.atMouth(sides, side, key, foot));
+                yield;
+            }
             // A side road's walled row in the ride's road next to one clear of it stands at the place between the two
             // where its edge leaves the ride's verge (`foot.inRide`): the wall starts there, at the ride's wall's end
             if (sides.owner >= 0 && foot.inRide) {
@@ -1245,7 +1265,7 @@ class RoadMesh {
                 }
                 return true;
             };
-            const segs = () => { const seg = []; for (let k = 0; k + 1 < n; k++) seg.push((row[k] || row[k + 1]) && clear(k) && !(wingEnd[k] === 1 && !row[k + 1]) && !(wingEnd[k + 1] === -1 && !row[k])); return seg; };
+            const segs = function* () { const seg = []; for (let k = 0; k + 1 < n; k++) { seg.push((row[k] || row[k + 1]) && clear(k) && !(wingEnd[k] === 1 && !row[k + 1]) && !(wingEnd[k + 1] === -1 && !row[k])); yield; } return seg; };
             const runsOf = seg => {
                 const out = [];
                 for (let k = 0; k < seg.length; k++) {
@@ -1258,7 +1278,7 @@ class RoadMesh {
                 return out;
             };
             // Two runs less than WALL_GAP_M apart are one: the rows between them stand on the wall too, where one can stand
-            let seg = segs();
+            let seg = yield* segs();
             const runs = runsOf(seg);
             let filled = false;
             for (let r = 0; r + 1 < runs.length; r++) {
@@ -1275,7 +1295,7 @@ class RoadMesh {
                 }
                 for (const [k, e] of forced) { end[k] = e; row[k] = true; filled = true; }
             }
-            if (filled) seg = segs();
+            if (filled) seg = yield* segs();
             // A run shorter than WALL_RUN_M is no wall. A run that reaches the first or the last row goes on past it
             // (the rows a wall only goes on to are not counted: a wall too short to stand does not stand because it
             // went on, 12 m of stone on an open bank with the land it levelled a pit at its foot)
@@ -1305,7 +1325,10 @@ class RoadMesh {
                     }
                     return true;
                 };
-                for (let k = 0; k + 1 < n; k++) if (seg[k] && faces[k] && faces[k + 1] && facesAll(k)) { seg[k] = false; cut[k] = true; }
+                for (let k = 0; k + 1 < n; k++) {
+                    if (seg[k] && faces[k] && faces[k + 1] && facesAll(k)) { seg[k] = false; cut[k] = true; }
+                    yield;
+                }
                 // (and a piece of such a run left shorter than WALL_RUN_M is none, as any run that short: two stubs of
                 // wall either side of the ride's, where the roads meet and part)
                 for (const [from, to] of runsOf(seg)) {
@@ -1431,6 +1454,11 @@ class RoadMesh {
     }
 
     static edgeWorks(sides, foot = null, guard = null) {
+        return RoadMesh.drain(RoadMesh.edgeWorksSteps(sides, foot, guard));
+    }
+
+    // The same in steps, a row at a time
+    static *edgeWorksSteps(sides, foot = null, guard = null) {
         const apron = { positions: [], shades: [] }, wall = { positions: [], shades: [] }, stone = { positions: [], shades: [], face: [] }, paving = { positions: [], shades: [] };
         // The metres along each edge at each row, from the first row's own metres of road: where a wall's courses lie
         const alongMemo = { l: null, r: null };
@@ -1444,7 +1472,7 @@ class RoadMesh {
         };
         // Where the retaining walls stand: the ride's plan as its section was given it (`sides.plan`, read for these
         // rows), else this road's own. With a plan no edge point decides a wall by itself
-        const plan = sides.plan ? (sides.plan.base !== undefined ? RoadMesh.planFor(sides, sides.plan, foot, guard) : sides.plan) : RoadMesh.wallPlan(sides, foot, guard);
+        const plan = sides.plan ? (sides.plan.base !== undefined ? RoadMesh.planFor(sides, sides.plan, foot, guard) : sides.plan) : yield* RoadMesh.wallPlanSteps(sides, foot, guard);
         const colors = RoadMesh.COLORS;
         const rank = { apron: 1, wall: 2, deck: 3 };
         // A slope's foot stands on the land at its own place (`foot.land`, the land as it is drawn): between two rows
@@ -1495,7 +1523,7 @@ class RoadMesh {
             for (let t = 1; t < run; t += 1) d = worst(d, guard.depth(p[0] + o[0] * t, p[2] + o[1] * t, f.y, p[1] - t * RoadMesh.BATTER));
             return worst(d, guard.depth(p[0] + o[0] * run, p[2] + o[1] * run, f.y, f.y + 0.1));
         };
-        const ends = sides.map((side, k) => {
+        const endOfRow = (side, k) => {
             if (side.bits & 7) {
                 // A structure's row where a wall's run ends (wallPlan): the wall stands there as deep as at the row before
                 if (!plan) return null;
@@ -1541,7 +1569,12 @@ class RoadMesh {
             };
             const beside = key => (plan && plan.row[key][k] && !(plan.seg[key][k - 1] && plan.seg[key][k]) ? read(key, true) : null);
             return { l: read('l'), r: read('r'), beside: { l: beside('l'), r: beside('r') } };
-        });
+        };
+        const ends = [];
+        for (let k = 0; k < sides.length; k++) {
+            ends.push(endOfRow(sides[k], k));
+            yield;
+        }
         // The end a segment of a kind reads at a row: a wall's segment its wall end, a slope's what the row stands on
         // beside its wall. Without a plan, the row's one end
         const endOf = (k, key, wall) => {
@@ -1700,6 +1733,7 @@ class RoadMesh {
             return false;
         };
         for (let k = 0; k + 1 < sides.length; k++) {
+            yield;
             const ea = ends[k], eb = ends[k + 1];
             if (!ea || !eb) continue;
             const drawn = k >= drawFrom && k < drawTo;
@@ -2106,6 +2140,11 @@ class RoadMesh {
     // `extra` are structure parts ({positions, shades}, sRGB) drawn in the same mesh when it is made at all.
     // `roads` (Carriageways) keeps each run's works out of every other road's carriageway (RoadMesh.edgeWorks guard)
     static addEdgeWorks(group, sides, foot, extra = [], roads = null, join = null) {
+        return RoadMesh.drain(RoadMesh.addEdgeWorksSteps(group, sides, foot, extra, roads, join));
+    }
+
+    // The same in steps (edgeWorksSteps)
+    static *addEdgeWorksSteps(group, sides, foot, extra = [], roads = null, join = null) {
         const runs = sides.length && Array.isArray(sides[0]) ? sides : [sides];
         const works = { apron: { positions: [], shades: [] }, wall: { positions: [], shades: [] }, stone: { positions: [], shades: [] }, paving: { positions: [], shades: [] }, arch: { positions: [], shades: [] }, vault: { positions: [], shades: [] } };
         const face = [];
@@ -2118,18 +2157,20 @@ class RoadMesh {
         const own = (key, count, owner) => { for (let t = 0; t < count / 9; t++) owners[key].push(owner); };
         // The runs of retaining wall drawn here (RoadMesh.wallRuns), for the land that is cut to them
         const walls = group.userData.walls = [];
-        const parts = runs.map(run => RoadMesh.edgeWorks(run, foot, roads ? roads.guard(run.owner ?? -1) : null));
+        const parts = [];
+        for (const run of runs) parts.push(yield* RoadMesh.edgeWorksSteps(run, foot, roads ? roads.guard(run.owner ?? -1) : null));
         // A road drawn in pieces (a side road's stub and the road on from it) cuts a wall that runs across the joint in
         // two: one piece's wall carried a parapet and stopped at the joint, the other's ran on as a bare coping. A wall
         // that carries one in a piece carries it in the other too (edgeWorks `railedEnds`)
         const railedEnds = parts.map(part => part.walls.filter(w => w.rail.some(Boolean)).flatMap(w => [w.points[0], w.points[w.points.length - 1]]));
-        runs.forEach((run, i) => {
+        for (let i = 0; i < runs.length; i++) {
+            const run = runs[i];
             const others = runs.flatMap((other, j) => (j !== i && (other.owner ?? -1) === (run.owner ?? -1) ? railedEnds[j] : []));
             const meets = w => [w.points[0], w.points[w.points.length - 1]].some(p => others.some(q => Math.hypot(p[0] - q[0], p[2] - q[2]) < 0.05));
-            if (!others.length || !parts[i].walls.some(w => !w.rail.some(Boolean) && meets(w))) return;
+            if (!others.length || !parts[i].walls.some(w => !w.rail.some(Boolean) && meets(w))) continue;
             run.railedEnds = others;
-            parts[i] = RoadMesh.edgeWorks(run, foot, roads ? roads.guard(run.owner ?? -1) : null);
-        });
+            parts[i] = yield* RoadMesh.edgeWorksSteps(run, foot, roads ? roads.guard(run.owner ?? -1) : null);
+        }
         runs.forEach((run, i) => {
             const part = parts[i];
             for (const wall of part.walls) walls.push(Object.assign(wall, { owner: run.owner ?? -1 }));
@@ -2490,7 +2531,12 @@ class RoadMesh {
     // `head` and `tail` rows at each end are the neighbouring sections' (read for the bend, the runs of walls, tunnels and
     // bridges, drawn by those sections): a section draws from its first row to its last, and shares those with its
     // neighbours, so no segment, cap or portal is laid twice in one plane where two sections meet
-    static section(rows, lod, { groundAt = null, roof = 6.5, foot = null, roads = null, head = 0, tail = 0, plan = null } = {}) {
+    static section(rows, lod, options = {}) {
+        return RoadMesh.drain(RoadMesh.sectionSteps(rows, lod, options));
+    }
+
+    // The same in steps: the ribbon, each structure, the edge works a row at a time
+    static *sectionSteps(rows, lod, { groundAt = null, roof = 6.5, foot = null, roads = null, head = 0, tail = 0, plan = null } = {}) {
         const group = new THREE.Group();
         group.name = 'world-road-section';
         const first = head, last = rows.length - 1 - tail;
@@ -2530,6 +2576,7 @@ class RoadMesh {
         // The ride's walls stand where the plan of all its rows puts them, at every level of detail
         if (plan) ribbon.sides.plan = plan;
         group.add(RoadMesh.ribbonMesh(ribbon, 'road-ribbon'));
+        yield;
         let triangles = ribbon.triangles;
         const structures = [];
         const guard = roads ? roads.guard(-1) : null;
@@ -2537,12 +2584,18 @@ class RoadMesh {
         const clip = mask => RoadMesh.runs(rows, mask).map(([from, to]) => [Math.max(from, first), Math.min(to, last), [from >= first, to <= last]]).filter(([from, to]) => to > from);
         // (the tubes' lining and fittings: two meshes of their own material, TubeShade)
         const lining = TubeLining.parts();
-        for (const [from, to, ends] of clip(1 | 4)) structures.push([RoadMesh.tunnel(rows, from, to, roof, ends, groundAt, lining, lod), 'tunnel']);
+        for (const [from, to, ends] of clip(1 | 4)) {
+            structures.push([RoadMesh.tunnel(rows, from, to, roof, ends, groundAt, lining, lod), 'tunnel']);
+            yield;
+        }
         triangles += TubeLining.addMeshes(group, lining);
         // (a viaduct's rows carry its layout, WorldEnvironment.viaducts: its stone in place of a bridge's concrete)
-        for (const [from, to, ends] of clip(2)) structures.push(rows[from].viaduct ? [RoadMesh.viaduct(rows, from, to, rows[from].viaduct, { lod, land: foot && foot.land ? foot.land : null, ends }), 'viaduct'] : [RoadMesh.bridge(rows, from, to, groundAt, guard, ends), 'bridge']);
+        for (const [from, to, ends] of clip(2)) {
+            structures.push(rows[from].viaduct ? [RoadMesh.viaduct(rows, from, to, rows[from].viaduct, { lod, land: foot && foot.land ? foot.land : null, ends }), 'viaduct'] : [RoadMesh.bridge(rows, from, to, groundAt, guard, ends), 'bridge']);
+            yield;
+        }
         // With edge works the tunnels and bridges join their mesh (same material: the window counts meshes)
-        const works = RoadMesh.addEdgeWorks(group, ribbon.sides, foot, structures.map(([parts]) => parts), roads);
+        const works = yield* RoadMesh.addEdgeWorksSteps(group, ribbon.sides, foot, structures.map(([parts]) => parts), roads);
         if (works) triangles += works;
         else {
             for (const [parts, name] of structures) {

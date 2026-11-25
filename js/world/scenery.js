@@ -648,11 +648,24 @@ class Scenery {
 
     // Tree sites of a tile: [{x, y, z, shape, scale, turn}] in cell order, capped
     treeSites(tile, cover) {
+        return Scenery.drain(this.treeSitesSteps(tile, cover));
+    }
+
+    // A build in steps (a generator) run to its end: its result (WorldStreamer.drain)
+    static drain(steps) {
+        let step = steps.next();
+        while (!step.done) step = steps.next();
+        return step.value;
+    }
+
+    // The same in steps, a row of cells at a time (WorldStreamer: a build no frame waits on whole)
+    *treeSitesSteps(tile, cover) {
         const sites = [];
         if (!cover) return sites;
         const n = WorldData.COVER_N;
         const cell = WorldData.TILE_M / n;
         for (let cj = 0; cj < n; cj++) {
+            yield;
             for (let ci = 0; ci < n; ci++) {
                 const cls = cover[cj * n + ci];
                 const chance = cls === 1 ? 0.55 : cls === 2 ? 0.2 : cls === 5 ? 0.025 : 0;
@@ -822,6 +835,11 @@ class Scenery {
     // The trees and houses of a tile as one group, or null when it has none. `bike` ranks the tile's share of the caps.
     // `markers`: whether its marker stones stand (Scenery.setStones)
     buildTile(tile, cover, buildings, bike, markers = true) {
+        return Scenery.drain(this.buildTileSteps(tile, cover, buildings, bike, markers));
+    }
+
+    // The same in steps: a house, a row of tree cells, a stretch of marker stones, a tuft's row at a time
+    *buildTileSteps(tile, cover, buildings, bike, markers = true) {
         this.disposeTile(tile.key);
         const group = new THREE.Group();
         group.name = `world-scenery-${tile.key}`;
@@ -841,6 +859,7 @@ class Scenery {
         const footingCost = Scenery.FOOTING_TRIANGLES;
         const nearest = buildings.slice().sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
         for (const b of nearest) {
+            yield;
             if (Math.hypot(b.x - bike.x, b.z - bike.z) > Scenery.BUILDING_REACH_M) continue;
             if (this.ground.kindAt(b.x, b.z) !== 'runoff') continue;
             // The mapped footprint (b.w across its heading, b.d along it) stays off every road band
@@ -877,7 +896,7 @@ class Scenery {
         // Every tree site of the tile is kept; Scenery.rankTrees chooses the ones drawn, over the whole window, nearest
         // the bike first. (The caps were taken here, in the order the tiles were built: a tile built while the far
         // tiles of the last window still held the caps never had a tree)
-        const taken = this.treeSites(tile, cover);
+        const taken = yield* this.treeSitesSteps(tile, cover);
         for (const site of taken) {
             rotation.setFromAxisAngle(up, site.turn);
             position.set(site.x, site.y - 0.2, site.z);
@@ -907,11 +926,11 @@ class Scenery {
 
         // The marker stones of this tile, where it is near enough to have them
         held.stoneOn = markers;
-        held.stoneSites = markers ? this.plantStones(tile, group) : null;
+        held.stoneSites = markers ? yield* this.plantStonesSteps(tile, group) : null;
         held.stones = 0;
 
         // The tufts beside the ride, nearest the bike first
-        const tufts = this.tuftSites(tile).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Math.min(Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP - (this.tuftCount || 0))));
+        const tufts = (yield* this.tuftSitesSteps(tile)).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Math.min(Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP - (this.tuftCount || 0))));
         if (tufts.length) group.add(Scenery.tuftMesh(tufts));
         held.tufts = tufts.length;
 
@@ -951,7 +970,11 @@ class Scenery {
     // the tile and for every piece of kerb, none of them drawn until Scenery.rankStones chooses. Returns the sites
     // (Scenery.stoneSites), each with its `matrix` and, where the kerb goes on from it, its `kerbMatrix`
     plantStones(tile, group) {
-        const sites = this.stoneSites(tile);
+        return Scenery.drain(this.plantStonesSteps(tile, group));
+    }
+
+    *plantStonesSteps(tile, group) {
+        const sites = yield* this.stoneSitesSteps(tile);
         if (!sites.length) return sites;
         const rotation = new THREE.Quaternion(), position = new THREE.Vector3(), scale = new THREE.Vector3();
         const lean = new THREE.Euler(0, 0, 0, 'YXZ');
@@ -1090,11 +1113,15 @@ class Scenery {
     // 700 m, and a whole pass with its hairpins is in the window at once: the stones stand on the tiles nearest the
     // bike only (WorldEnvironment.buildScenery). Returns the meshes it added
     setStones(tile, on, bike) {
+        return Scenery.drain(this.setStonesSteps(tile, on, bike));
+    }
+
+    *setStonesSteps(tile, on, bike) {
         const held = this.perTile.get(tile.key);
         if (!held || !!held.stoneOn === on) return [];
         held.stoneOn = on;
         const before = held.group.children.length;
-        if (on) held.stoneSites = this.plantStones(tile, held.group);
+        if (on) held.stoneSites = yield* this.plantStonesSteps(tile, held.group);
         else {
             for (const mesh of held.group.children.filter(o => o.name === 'stones' || o.name === 'stone-kerbs')) {
                 held.group.remove(mesh);
@@ -1442,15 +1469,21 @@ class Scenery {
     // whole run of stations next to each other where a stone may stand at a drop, read on past k0 and k1 to its ends,
     // at least minM long. A stretch is chosen or not as one (stoneUsed, from its first station)
     stoneStretches(k0, k1, side) {
+        return Scenery.drain(this.stoneStretchesSteps(k0, k1, side));
+    }
+
+    // The same in steps, a station at a time
+    *stoneStretchesSteps(k0, k1, side) {
         const rule = Scenery.STONE_RULE, least = Math.ceil(rule.minM / Scenery.STONE_GAP_M) + 1;
         const last = Math.floor(this.ground.route.length / Scenery.STONE_GAP_M);
         const memo = new Map(), at = k => (memo.has(k) ? memo.get(k) : memo.set(k, k >= 0 && k <= last ? this.stonePlace(k, side) : null).get(k));
         let a = Math.max(0, k0), b = Math.min(last, k1);
-        while (a > 0 && at(a) && at(a - 1)) a--;
-        while (b < last && at(b) && at(b + 1)) b++;
+        while (a > 0 && at(a) && at(a - 1)) { a--; yield; }
+        while (b < last && at(b) && at(b + 1)) { b++; yield; }
         const runs = [];
         let run = [];
         for (let k = a; k <= b + 1; k++) {
+            yield;
             const place = k <= b ? at(k) : null;
             if (place) { run.push(place); continue; }
             if (run.length >= least) runs.push(run);
@@ -1599,6 +1632,10 @@ class Scenery {
     // [{x, y, z, turn, lean, next, kind}]: `kind` is 'drop', 'hairpin' or 'wall'; `next` is the seat of the stone
     // after it in a hairpin's row, where both stand: the kerb course runs from one to the other
     stoneSites(tile) {
+        return Scenery.drain(this.stoneSitesSteps(tile));
+    }
+
+    *stoneSitesSteps(tile) {
         const sites = [];
         if (!this.roads) return sites;
         const m = WorldData.TILE_M, points = this.ground.route.points, gap = Scenery.STONE_GAP_M;
@@ -1614,12 +1651,14 @@ class Scenery {
         const runs = [];
         for (const [i0, i1] of spans) {
             for (const side of [Route.RIGHT, Route.LEFT]) {
-                for (const run of this.stoneStretches(Math.floor(points[i0].s / gap), Math.ceil(points[i1 + 1].s / gap), side)) if (Scenery.stoneUsed(run[0].k, side)) runs.push(run);
+                for (const run of yield* this.stoneStretchesSteps(Math.floor(points[i0].s / gap), Math.ceil(points[i1 + 1].s / gap), side)) if (Scenery.stoneUsed(run[0].k, side)) runs.push(run);
                 for (const run of this.wallRuns(i0, i1, side)) if (Scenery.wallUsed(run.start, side)) runs.push(run);
+                yield;
             }
         }
         // A hairpin whose arc has a place in the tile: its ends and its apex are within half its arc of each one
         for (const h of this.hairpins()) {
+            yield;
             if (!Scenery.hairpinUsed(h)) continue;
             const p = this.ground.route.sample(h.apex, loc), reach = m / 2 + (h.s1 - h.s0) / 2 + p.width + 8;
             if (Math.abs(p.x - (tile.tx + 0.5) * m) <= reach && Math.abs(p.z - (tile.tz + 0.5) * m) <= reach) runs.push(...this.hairpinRuns(h).map(run => Object.assign(run, { hairpin: h })));
@@ -1641,6 +1680,7 @@ class Scenery {
             return { x: q.x, y: q.seat - Scenery.STONE_SINK_M, z: q.z, s: q.s, turn, lean: (Scenery.hash(q.seed, q.side, 42) - 0.5) * 0.04, next: null, kind: q.n === undefined ? 'drop' : 'hairpin' };
         };
         for (const run of runs) {
+            yield;
             const id = `${run[0].side}:${run[0].x.toFixed(2)},${run[0].z.toFixed(2)}`;
             if (taken.has(id) || !run.some(inTile)) continue;
             taken.add(id);
@@ -1648,7 +1688,11 @@ class Scenery {
             const S = EdgeStyles.STYLES[this.edgeStyle(run)];
             if (!S.piece) continue;
             const P = EdgeStyles.PIECES[S.piece];
-            const stood = run.map(stand);
+            const stood = [];
+            for (let i = 0; i < run.length; i++) {
+                stood.push(stand(run[i], i, run));
+                yield;
+            }
             // No stone stands alone: one whose neighbours are both left out goes with them
             const stones = stood.map((q, i) => (q && (stood[i - 1] || stood[i + 1]) ? q : null));
             // One piece in every step stations, counted from the run's start: the first of them the ground has room for
@@ -1727,6 +1771,11 @@ class Scenery {
     // in the tile, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge, clear of every road band, each on
     // the drawn ground at its own place (Scenery.footY)
     tuftSites(tile) {
+        return Scenery.drain(this.tuftSitesSteps(tile));
+    }
+
+    // The same in steps, a point of the ride at a time
+    *tuftSitesSteps(tile) {
         const sites = [];
         if (!this.roads) return sites;
         const m = WorldData.TILE_M, points = this.ground.route.points;
@@ -1736,6 +1785,7 @@ class Scenery {
             const p = points[i];
             // A tuft of this point lies within the reach and one spacing of it
             if (Math.abs(p.x - (tile.tx + 0.5) * m) > m / 2 + reach + p.width + 8 || Math.abs(p.z - (tile.tz + 0.5) * m) > m / 2 + reach + p.width + 8) continue;
+            yield;
             const q = points[i + 1];
             for (const side of [-1, 1]) {
                 for (let k = 0; k < Scenery.TUFT_TRIES; k++) {

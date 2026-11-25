@@ -8620,6 +8620,92 @@ WORLD['world-stop-shots'] = async (page) => {
     return { ...begun, last: at, shots, ...end };
 };
 
+// world-steps: every streaming step of a ride, timed. The land is streamed along the stage every STEPS_M as the ride
+// does (the streamer's own budget a frame), and each step is timed with its parts (the rows, the wall plans, the land's
+// cut, the land, the scenery). A step is what one frame's pump ran of one task: a whole build, or a slice of a build in
+// steps. The steps of a road section or a tile's scenery (built in steps: WorldStreamer) are about 12 ms at the most;
+// it fails on one over STEPS_MOST_MS,
+// and on any step over STEPS_ANY_MS, which with the frame's own work makes a frame over 50 ms.
+//   node tools/terrain-check.mjs world-steps --world tremola --gpu [--every 1] [--parts deep]
+const STEPS_M = 1;
+const STEPS_MOST_MS = 15;
+const STEPS_ANY_MS = 38;
+const STEPPED = /^(road:|works:road:|scenery:)/;
+WORLD_PROBES.push('world-steps');
+WORLD['world-steps'] = async (page) => page.evaluate(async (every, deep) => {
+    const env = game.environment, route = env.route;
+    const now = () => performance.now();
+    const parts = {};
+    const wrap = (obj, name, label) => {
+        const f = obj[name];
+        if (typeof f !== 'function') return;
+        obj[name] = function (...a) { const t = now(); try { return f.apply(this, a); } finally { parts[label] = (parts[label] || 0) + now() - t; } };
+    };
+    // (the parts timed are the coarse ones: a wrapper on a call made thousands of times a step, as the ground's height
+    // is, costs more than the call and swells the step; --parts deep adds those to find where a step goes)
+    for (const m of ['rowsOf', 'tubeRows', 'rideWalls', 'buildTile', 'buildSide', 'cutsOf']) wrap(env, m, `env.${m}`);
+    for (const m of ['ribbon', 'tunnel', 'bridge', 'viaduct']) wrap(RoadMesh, m, `road.${m}`);
+    wrap(TerrainMesh, 'build', 'land.build');
+    for (const m of ['rankTrees', 'rankStones', 'instanced']) wrap(env.scenery, m, `scenery.${m}`);
+    if (deep) {
+        for (const m of ['footY', 'stonePlace', 'wallRuns', 'hairpinRuns', 'wetUnder', 'clear']) wrap(env.scenery, m, `scenery.${m}`);
+        for (const m of ['tileHeight', 'groundY', 'sideRoadY', 'kindAt']) wrap(env.ground, m, `ground.${m}`);
+        for (const m of ['surveyViaducts', 'mouthCut', 'goreRow', 'wallRunsNear']) wrap(env, m, `env.${m}`);
+    }
+    // A step is what one pump ran of one task: a whole build, or the slice of a build in steps (WorldStreamer.pump)
+    const tasks = [];
+    const streamer = env.streamer, enqueue = streamer.enqueue.bind(streamer), pump = streamer.pump.bind(streamer);
+    let slices = new Map();
+    const slice = (id) => { if (!slices.has(id)) slices.set(id, { id, ms: 0, parts: {} }); return slices.get(id); };
+    const timed = (id, f) => {
+        for (const k of Object.keys(parts)) delete parts[k];
+        const t = now();
+        try { return f(); } finally {
+            const rec = slice(id);
+            rec.ms += now() - t;
+            for (const [k, v] of Object.entries(parts)) rec.parts[k] = (rec.parts[k] || 0) + v;
+        }
+    };
+    streamer.enqueue = (id, priority, run) => enqueue(id, priority, () => {
+        const out = timed(id, run);
+        if (!out || typeof out.next !== 'function') return out;
+        return { next: () => timed(id, () => out.next()), [Symbol.iterator]() { return this; } };
+    });
+    streamer.pump = (budget) => {
+        slices = new Map();
+        const n = pump(budget);
+        for (const rec of slices.values()) tasks.push({ id: rec.id, ms: rec.ms, parts: Object.fromEntries(Object.entries(rec.parts).map(([k, v]) => [k, Math.round(v * 10) / 10])) });
+        return n;
+    };
+    const stage = env.stage;
+    const from = (stage ? stage.from : 0) + 50, to = stage ? Math.min(route.length, stage.to + 100) : route.length;
+    const p0 = route.sample(from, {});
+    env.update(p0, from, null, Infinity);
+    await streamer.settle(p0, from);
+    tasks.length = 0;
+    let frames = 0;
+    for (let s = from; s <= to; s += every) {
+        const p = route.sample(s, {});
+        env.update(p, s, null, 4, every / 25);
+        frames++;
+        if (frames % 200 === 0) await new Promise(r => setTimeout(r, 0));
+    }
+    streamer.enqueue = enqueue;
+    streamer.pump = pump;
+    const kinds = {};
+    for (const t of tasks) { const k = t.id.split(':')[0]; (kinds[k] = kinds[k] || []).push(t.ms); }
+    const stat = v => { v.sort((a, b) => a - b); return { n: v.length, median: Math.round(v[v.length >> 1] * 10) / 10, p95: Math.round(v[Math.floor(v.length * 0.95)] * 10) / 10, max: Math.round(v[v.length - 1] * 10) / 10, over: v.filter(x => x > 12).length }; };
+    const byKind = Object.fromEntries(Object.entries(kinds).map(([k, v]) => [k, stat(v)]));
+    const sorted = tasks.sort((a, b) => b.ms - a.ms);
+    const slowest = sorted.slice(0, 25).map(t => ({ id: t.id, ms: Math.round(t.ms * 10) / 10, parts: t.parts }));
+    const slowestByKind = {};
+    for (const t of sorted) {
+        const k = t.id.split(':')[0], list = slowestByKind[k] || (slowestByKind[k] = []);
+        if (list.length < 4) list.push({ id: t.id, ms: Math.round(t.ms * 10) / 10, parts: t.parts });
+    }
+    return { frames, tasks: tasks.length, byKind, slowest, slowestByKind };
+}, Number(option('every') || STEPS_M), option('parts') === 'deep');
+
 // world-shot: the held shot at a leg's end (StopScene.flyAt, StopScene.holdOf, Game.raiseShot). The ride is ridden
 // into its finish line by the autopilot at SHOT_RIDE_MS with the chase camera, and the scene starts there as in a ride.
 // It saves the fly at each moment (--fly seconds), measures the step from the chase camera's last frame to the
@@ -8931,6 +9017,13 @@ function worldChecks(report) {
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
     shotChecks(results, failures);
+    const steps = results['world-steps'];
+    if (steps) {
+        for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) {
+            const most = STEPPED.test(t.id) ? STEPS_MOST_MS : STEPS_ANY_MS;
+            if (t.ms > most) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${most}: ${JSON.stringify(t.parts)}`);
+        }
+    }
     camWallChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);

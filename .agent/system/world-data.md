@@ -275,6 +275,26 @@ The plain page's menu rides the world: choosing a rider starts `RideMode.DEFAULT
 | `worldground.js` | Ground: road band = route height; tunnel = route height; side road = its own samples; elsewhere the tile on the same triangles the mesh draws, then `far.bin`, then the route. The zone is the tile's zone layer, and within `WORKS_REACH_M` of the carriageway the ride's works (tunnel rock, parapets, retaining walls). |
 | `streamer.js` | Tiles are reference counted by the bike (900 m) and by the ride window (600 m of [s-1 km, s+3 km]); disposed 3 s after the count is 0. Road sections and side chunks are resident by window or by place. Builds go through a 4 ms queue, nearest first. |
 
+**Builds in steps.** A road section, a tile's scenery and a tile's land at full detail are built in steps. A step is a few milliseconds of the build, and the streamer takes steps within its 4 ms budget a frame over as many frames as the build needs (`WorldStreamer.pump`). No other task runs until that build is done. A build is a generator (`buildRoadSteps`, `buildScenerySteps`, `buildTileSteps`, and under them `RoadMesh.sectionSteps`, `edgeWorksSteps`, `wallPlanSteps`, `Scenery.buildTileSteps`, `stoneSitesSteps`, `TerrainMesh.cutsSteps`). The whole build of the same code is `WorldStreamer.drain` of it, so a caller that needs a build at once gets the same result (`buildRoad`, `buildScenery`, `rideWalls`, `cutsOf`).
+
+- **Why.** Before, one build was one step. A road section with walls took up to 52 ms, a tile's marker stones 58 ms, a tile's tufts 46 ms (the browser's `world-steps` on the Tremola). The streamer's budget could not stop inside one, so the frame took that long.
+- **The caches a build reads are made ahead, in steps.** Most of a build's time was in data it made on first read: the wall plans of the sections near it (`rideWalls`), each row's junction gore and mouth cut (`goreRow`, `mouthCut`) and the land's cut to the walls of each tile under it (`cutsOf`). A build now makes them first, each in steps (`wallPlansNear`, `goreRowsSteps`, `cutsNear`). A reader that needs one of them while it is under way makes it whole, and that one is kept.
+- **The old mesh stays drawn** until the new one replaces it, so a build in steps leaves no hole.
+- **The result is the same.** `tests/unit/world-build-steps.test.js` builds every section near the bike at both levels of detail, every tile's land and scenery, and the marker stones on and off, whole and one step at a time, at five places on each world. The meshes are the same to the last bit, with the same counts.
+- **The measure.** `node tools/terrain-check.mjs world-steps --world <id> --gpu` streams the whole stage a metre a frame and times every step of every task with its parts. It fails on a step of a road or a tile's scenery over 15 ms (they are about 12 ms at the most) and on any step over 38 ms.
+
+| Step (the browser, the most in a ride) | Tremola before | Tremola after | Gotthard leg before | Gotthard leg after |
+|---|---|---|---|---|
+| Road section | 51.5 ms | 11.5 ms | 33.7 ms | 7.7 ms |
+| Road rebuilt (`works:road`) | 32 ms | under 14.5 ms | 45 ms | under 15.2 ms |
+| A tile's scenery | 58.3 ms | 10.8 ms | 31 ms | 9.9 ms |
+| A tile's land | 31.5 ms | 25.8 ms | 15.7 ms | 25.3 ms |
+
+(The runs drift by a few milliseconds from one to the next on the same machine.)
+
+- **Not in steps yet:** a side road's chunk (up to 29 ms) and its rebuild (`works:side`, up to 20 ms), the land's mesh at a level of detail (`TerrainMesh.build`, up to 25 ms) and the far grid's cut to the tubes (`tube:horizon`, 23 to 37 ms on the Gotthard leg). Each is under 38 ms.
+- **What the window holds can differ.** The caps of a tile's scenery (the houses, the boulders and the tufts nearest the bike) are taken in the order the tiles are built, as before. Built in steps, the tiles finish in a different order against the bike, so after a ride the window can hold other trees and tufts than before (`world-budget`). The window holds no more than its caps.
+
 **Tile data that stops coming during a ride** (a failed fetch, a server gone, a network that drops). One rule for every world:
 
 - The streamer asks for a failed tile again after 1, 2, 4, 6 and 7 s of ride time (`WorldStreamer.FETCH_RETRY_MS`, about 20 s). Then the tile is lost. A tile lost while it was far gets a new round of tries when it comes within 300 m of the bike.

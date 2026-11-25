@@ -391,8 +391,21 @@ class TerrainMesh {
     // lowered under a road that lies between it and the lower ground, so the land still meets that road's edge.
     // `pits` are the ground under the viaducts (TerrainMesh.pitCuts): each triangle they reach is cut again to them
     static cuts(tile, runs, near = null, roadOver = null, pits = null) {
+        return TerrainMesh.drain(TerrainMesh.cutsSteps(tile, runs, near, roadOver, pits));
+    }
+
+    // A build in steps (a generator) run to its end: its result (WorldStreamer.drain)
+    static drain(steps) {
+        let step = steps.next();
+        while (!step.done) step = steps.next();
+        return step.value;
+    }
+
+    // The same in steps, a piece of a wall's line and a node of its front at a time (WorldStreamer: a build no frame
+    // waits on whole)
+    static *cutsSteps(tile, runs, near = null, roadOver = null, pits = null) {
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
-        const walls = TerrainMesh.wallCuts(tile, runs, near, roadOver);
+        const walls = yield* TerrainMesh.wallCutsSteps(tile, runs, near, roadOver);
         if (!pits || !pits.length) return walls;
         const out = walls || Object.assign(new Map(), { lowered: new Map() });
         return TerrainMesh.pitCuts(tile, out, pits) || walls ? out : null;
@@ -400,10 +413,15 @@ class TerrainMesh {
 
     // The land a tile's retaining walls cut (TerrainMesh.cuts, before the viaducts' pits)
     static wallCuts(tile, runs, near = null, roadOver = null) {
+        return TerrainMesh.drain(TerrainMesh.wallCutsSteps(tile, runs, near, roadOver));
+    }
+
+    static *wallCutsSteps(tile, runs, near = null, roadOver = null) {
         const W = 4;
         // The land the walls stand in is the land laid back (TerrainMesh.laidBack): what a wall's levelling reads and
         // lowers further
         const laid = TerrainMesh.laidBack(tile, near, W);
+        yield;
         const none = () => { if (!laid.lowered.size) return null; const only = new Map(); only.lowered = laid.lowered; return only; };
         if (!runs || !runs.length) return none();
         const n = WorldData.TILE_N, cells = n - 1, c = WorldData.CELL_M;
@@ -485,6 +503,7 @@ class TerrainMesh {
         const front = new Map();
         for (const line of lines) {
             for (let k = 2; k + 3 < line.length; k++) {
+                yield;
                 const a = line[k], b = line[k + 1];
                 const i0 = Math.max(-W, Math.floor((Math.min(a.x, b.x) - reach - baseX) / c)), i1 = Math.min(cells + W, Math.ceil((Math.max(a.x, b.x) + reach - baseX) / c));
                 const j0 = Math.max(-W, Math.floor((Math.min(a.z, b.z) - reach - baseZ) / c)), j1 = Math.min(cells + W, Math.ceil((Math.max(a.z, b.z) + reach - baseZ) / c));
@@ -523,7 +542,9 @@ class TerrainMesh {
             }
             return most;
         };
+        let count = 0;
         for (const node of [...front.values()].sort((p, r) => r.d - p.d || p.j - r.j || p.i - r.i)) {
+            if (++count % 64 === 0) yield;
             const x = baseX + node.i * c, z = baseZ + node.j * c;
             const own = heightOf(node.i, node.j);
             let y = own;
