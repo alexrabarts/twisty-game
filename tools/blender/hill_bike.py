@@ -4,8 +4,8 @@
 # its main triangle, north-road bars swept back, rod brakes, a sprung leather saddle, full black mudguards and a
 # closed chain case. No maker's name, badge or wordmark anywhere; the plate is blank, the loaves plain.
 #
-# The boy is in a dark flat cap, a grey knitted jumper under a dark scarf, a long grey-cream apron (a node of its own,
-# in a shape for the saddle and one for on foot), dark breeches to below the knee and black boots to the middle of the
+# The boy is in a dark flat cap, a grey knitted jumper under a dark scarf, a long grey-cream apron (two nodes of its
+# own, the game hangs them clear of his knees and shins), dark breeches to below the knee and black boots to the middle of the
 # calf. No lamp and no reflector: the bicycle is of a time before them. His legs are nodes of
 # their own (thigh, shin and foot each side), each built hanging straight down from its pivot (hip, knee, ankle), so
 # the game poses them: on the pedals, or straight out to the sides on the way down the hill. The cranks and the pedals
@@ -204,31 +204,27 @@ def boy(k):
     k.box((0.07, 0.3, 0.018), (0.04, SHOULDER[1] - 0.3, SHOULDER[2] + 0.11), "scarf", rot=(0.15, 0, 0.08), bevel=0.006)
     k.loft([(hy + 0.08, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4), (hy + 0.12, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4)], "apron", axis="y", ring=14, steps=1)
 
-    # The apron, long and grey-cream, a node of its own in two shapes the game shows one at a time: on the saddle it
-    # lies over the lap and hangs past the saddle's nose; on foot it hangs from the waist to the middle of the shins,
-    # wider at the hem. Each built from its pivot at the middle of the waist's front; the game hangs the long one
-    # straight down whatever his bend, just clear of the knee ahead
+    # The apron, long and grey-cream, in two nodes the game hangs in every pose (on foot and on the saddle): `apron_long`
+    # from the middle of the waist's front down to about the knees (UPPER m), which the game swings forward over the
+    # knee that is furthest ahead, and `apron_hem` from there to the middle of the shins (HEM m), which hangs from it
+    # clear of the shins. Each is built hanging straight down from its pivot; the hem's pivot is the upper's foot
+    UPPER, HEM = 0.4, 0.3
     waist = (0, hy + 0.1, hz + 0.1)
-    k.begin("apron", waist)
-
-    def lap(u, v):
-        across = (v - 0.5) * 2
-        if u < 0.5:
-            t = u / 0.5
-            return (across * (0.17 + 0.03 * t), hy + 0.1 - 0.02 * t, hz + 0.1 + 0.16 * t)
-        t = (u - 0.5) / 0.5
-        return (across * (0.2 + 0.02 * t), hy + 0.08 - 0.2 * t, hz + 0.26 + 0.03 * t)
-
-    k.sheet(lap, "apron", nu=6, nv=6, thick=0.008)
     k.begin("apron_long", waist)
 
-    def hang(u, v):
+    def upper(u, v):
         across = (v - 0.5) * 2
         # (curved a little round him, the sides back)
-        wide = 0.18 + 0.06 * u
-        return (across * wide, waist[1] - 0.62 * u, waist[2] + 0.02 - 0.06 * across * across)
+        return (across * (0.18 + 0.03 * u), waist[1] - UPPER * u, waist[2] + 0.02 - 0.06 * across * across)
 
-    k.sheet(hang, "apron", nu=8, nv=6, thick=0.008)
+    k.sheet(upper, "apron", nu=5, nv=6, thick=0.008)
+    k.begin("apron_hem", (0, waist[1] - UPPER, waist[2]))
+
+    def hem(u, v):
+        across = (v - 0.5) * 2
+        return (across * (0.21 + 0.03 * u), waist[1] - UPPER - HEM * u, waist[2] + 0.02 - 0.06 * across * across)
+
+    k.sheet(hem, "apron", nu=4, nv=6, thick=0.008)
     k.begin("boy", (0, HIP[1], HIP[2]))
 
     # Neck, head, ears, hair at the back, the flat cap with its peak: a node of its own, its pivot at the foot of the

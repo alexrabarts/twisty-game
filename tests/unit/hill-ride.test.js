@@ -981,12 +981,6 @@ describe('the boy on the bicycle', () => {
         // His head lifted from the bend, looking up the lane ahead of him
         expect(2 * Math.acos(Math.min(1, Math.abs(rider.parts.head.quaternion.w)))).toBeCloseTo(W.headUpRad, 5);
         expect(rider.parts.head.quaternion.x).toBeLessThan(0);
-        // On foot the long apron, hanging straight down from his waist, swung forward at most apronMostRad; not the lap one
-        expect(rider.parts.apron_long.visible).toBe(true);
-        expect(rider.parts.apron.visible).toBe(false);
-        const hem = new THREE.Vector3(0, -1, 0).applyQuaternion(rider.parts.apron_long.getWorldQuaternion(new THREE.Quaternion()));
-        const plumb = new THREE.Vector3(0, -1, 0).applyQuaternion(rider.group.getWorldQuaternion(new THREE.Quaternion()));
-        expect(hem.angleTo(plumb)).toBeLessThan(W.apronMostRad + 1e-6);
         // Half way up he tires: his head down and his body further over, for the stretch WALK.down
         b.walkM = (W.down.fromM + W.down.toM) / 2;
         rider.update(b, where, 1 / 60);
@@ -1000,9 +994,49 @@ describe('the boy on the bicycle', () => {
         rider.update(b, lane, 1 / 60);
         expect(rider.parts.boy.position.distanceTo(rider.rest.boy)).toBeLessThan(1e-6);
         expect(rider.parts.head.quaternion.w).toBeCloseTo(1, 9);
-        // On the saddle the apron lies over his lap
-        expect(rider.parts.apron.visible).toBe(true);
-        expect(rider.parts.apron_long.visible).toBe(false);
+    });
+
+    test('his apron stays in front of his legs in every pose: on foot, stood, tired, pushing in a lunge, on the pedals, legs out and a foot down', () => {
+        const A = HillRider.APRON, legR = 0.055;
+        // How far each leg point (thigh's middle, knee, shin's middle, ankle) is behind the apron's sheet where the sheet
+        // is in front of it, at its own height and across; the least over both legs and both parts (+ is behind)
+        const least = () => {
+            let worst = Infinity;
+            rider.group.updateMatrixWorld(true);
+            for (const p of rider.legPoints) {
+                const at = rider.frame.localToWorld(p.clone());
+                for (const [part, long] of [[rider.parts.apron_long, A.upperM], [rider.parts.apron_hem, 0.3]]) {
+                    const q = part.worldToLocal(at.clone()), wide = 0.18 + 0.06 * Math.min(1, -q.y / 0.7);
+                    if (q.y > 0 || q.y < -long || Math.abs(q.x) > wide) continue;
+                    const sheet = 0.02 - 0.06 * (q.x / wide) ** 2;
+                    worst = Math.min(worst, sheet - (q.z + legR));
+                }
+            }
+            return worst;
+        };
+        const where = new HillLane();
+        const b = new HillBicycle(where);
+        let worst = Infinity;
+        const pose = (setup, label) => {
+            setup();
+            for (let i = 0; i < 3; i++) rider.update(b, where, 1 / 60);
+            const w = least();
+            if (w < worst) worst = w;
+            if (w < -0.005) console.log(`hill apron: a leg ${(-w * 100).toFixed(1)} cm through it, ${label}`);
+        };
+        b.reset(60);
+        b.vehicle.yawAngle += Math.PI;
+        b.walking = true;
+        for (let i = 0; i < 26; i++) pose(() => { b.vehicle.speed = 1.5; b.walkM = i * HillRider.WALK.strideM / 13; }, `on foot at ${(i / 13).toFixed(2)} of a pace`);
+        for (let i = 0; i < 6; i++) pose(() => { b.vehicle.speed = 1.5; b.walkM = 24 + i * 0.2; }, 'tired');
+        pose(() => { b.vehicle.speed = 0; }, 'stood');
+        b.walking = false;
+        b.reset(40);
+        for (let i = 0; i < 16; i++) pose(() => { b.vehicle.speed = 4; b.vehicle.footDown = false; b.legs = 0; b.crank = i * Math.PI / 8; }, `on the pedals at crank ${(i * 22.5).toFixed(0)} degrees`);
+        pose(() => { b.vehicle.speed = 9; b.legs = 1; }, 'legs out');
+        pose(() => { b.vehicle.speed = 0; b.legs = 0; b.vehicle.footDown = true; }, "a foot down");
+        console.log(`hill apron: the legs at least ${(worst * 100).toFixed(1)} cm behind it`);
+        expect(worst).toBeGreaterThan(-0.005);
     });
 });
 
