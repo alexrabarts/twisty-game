@@ -30,6 +30,9 @@ class HillBicycle {
     static get LEGS() {
         return Object.freeze({
             everyS: [2.5, 5], forS: [4, 9],
+            // The opening stretch, as in the stills: from the start down through the first right-hander the legs go out
+            // as soon as he stops pedalling over alwaysMs, and stay out, with no turn back to the pedals
+            alwaysToS: 66, alwaysMs: 2.5,
             spread: [0.74, 0.86], drop: [-0.55, -0.4], ahead: [0.2, 0.4], toe: [0.5, 0.8]
         });
     }
@@ -122,11 +125,18 @@ class HillBicycle {
 
         const pedal = Math.max(0, Math.min(1, input.pedal || 0));
         this.quietS = pedal > 0 ? 0 : this.quietS + dt;
-        if (!this.legsOut && v.speed > r.legsOutMs && p.grade < r.legsGrade && this.quietS >= r.legsQuietS && !v.isWheelie) this.legsOut = true;
-        else if (this.legsOut && (v.speed < r.legsInMs || (pedal > 0 && v.speed < v.pedalMostMs))) this.legsOut = false;
-        // While out: now and then back on the pedals for a moment, then out again in a new pose
         const L = HillBicycle.LEGS, pick = ([a, b]) => a + (b - a) * this.legRand();
-        if (this.legsOut) {
+        const opening = this.s < L.alwaysToS;
+        const quiet = this.quietS >= r.legsQuietS && !v.isWheelie;
+        if (!this.legsOut && quiet && (opening ? v.speed > L.alwaysMs : v.speed > r.legsOutMs && p.grade < r.legsGrade)) this.legsOut = true;
+        else if (this.legsOut && (v.speed < (opening ? L.alwaysMs * 0.6 : r.legsInMs) || (pedal > 0 && v.speed < v.pedalMostMs))) this.legsOut = false;
+        // While out: now and then back on the pedals for a moment, then out again in a new pose; on the opening stretch
+        // they stay out
+        if (this.legsOut && opening) {
+            if (this.visiting > 0) this.newPose();
+            this.visiting = 0;
+            this.visitIn = pick(L.everyS);
+        } else if (this.legsOut) {
             // He starts on the pedals and puts his legs out only after a while
             if (this.wasOut !== true) this.visiting = pick(L.forS);
             if (this.visiting > 0) {

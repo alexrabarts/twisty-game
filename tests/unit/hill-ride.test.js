@@ -790,6 +790,24 @@ describe('the boy on the bicycle', () => {
     });
 });
 
+describe('the opening stretch', () => {
+    test('the legs go out as soon as he stops pedalling on the way down from the start, and stay out to the first bend\'s end', () => {
+        const lane = new HillLane();
+        const bike = new HillBicycle(lane);
+        bike.reset(lane.rule.startM, lane.rule.opening.startAcross);
+        ride(bike, { pedal: 1, brake: 0, steer: 0 }, 1.2);
+        let outAt = null, back = 0;
+        while (bike.s < HillBicycle.LEGS.alwaysToS - 1) {
+            bike.step(DT, pilot(bike));
+            if (bike.legsOut && outAt === null) outAt = bike.s;
+            if (outAt !== null && (!bike.legsOut || bike.visiting > 0)) back++;
+        }
+        expect(outAt).not.toBeNull();
+        expect(outAt).toBeLessThan(lane.rule.startM + 12);
+        expect(back).toBe(0);
+    });
+});
+
 describe('the things in the street', () => {
     const lane = new HillLane();
 
