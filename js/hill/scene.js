@@ -263,7 +263,7 @@ class HillScene {
         // Parts repeated many times are instanced: railing posts, chimney pots, leaves and flowers, gravestones
         // `stands` is every piece that stands on the ground, with its footprint and its foot (HillScene.stand): the check
         // that nothing floats reads it
-        const repeats = { shrubRand: HillLane.random(lane.rule.seed + 71), posts: [], pots: [], leaves: [], shrubs: [], shrubsB: [], hedges: [], yews: [], crosses: [], flowers: [], stones: [], trunks: [], bare: [], leafy: [], stands: [] };
+        const repeats = { shrubRand: HillLane.random(lane.rule.seed + 71), posts: [], pots: [], leaves: [], shrubs: [], shrubsB: [], hedges: [], yews: [], crosses: [], planting: [], blooms: [], flowers: [], stones: [], trunks: [], bare: [], leafy: [], stands: [] };
         const step = 1;
 
         // The lane: a ribbon over the cobbles, laid in the height field's tiles, each mirrored as HillLane.cobble reads it
@@ -361,7 +361,7 @@ class HillScene {
             group.add(built);
         }
         const posts = HillScene.instanced(new THREE.BoxGeometry(0.035, 1, 0.035), C.iron, repeats.posts, 'hill-railing-posts');
-        const pots = HillScene.instanced(new THREE.CylinderGeometry(0.11, 0.13, 1, 8), C.pot, repeats.pots, 'hill-chimney-pots');
+        const pots = HillScene.instanced(HillScene.potShape(), C.pot, repeats.pots, 'hill-chimney-pots');
         const leaves = HillScene.instanced(new THREE.DodecahedronGeometry(1, 0), 0xffffff, repeats.leaves, 'hill-leaves', true);
         const flowers = HillScene.instanced(new THREE.IcosahedronGeometry(1, 0), 0xffffff, repeats.flowers, 'hill-flowers', true);
         const stones = HillScene.instanced(HillScene.headstoneShape(), 0xffffff, repeats.stones, 'hill-gravestones', true);
@@ -393,8 +393,10 @@ class HillScene {
         const shrubs = shrubbery(HillScene.shrubShape(613), repeats.shrubs, 'hill-shrubs');
         const shrubsB = shrubbery(HillScene.shrubShape(617), repeats.shrubsB, 'hill-shrubs-b');
         const hedges = shrubbery(HillScene.shrubShape(619, true), repeats.hedges, 'hill-hedges');
+        const planting = shrubbery(HillScene.windowPlants(false), repeats.planting, 'hill-window-plants');
+        const blooming = shrubbery(HillScene.windowPlants(true), repeats.blooms, 'hill-window-blooms');
         const yews = shrubbery(HillScene.yewShape(), repeats.yews, 'hill-yews');
-        for (const m of [posts, pots, leaves, shrubs, shrubsB, hedges, yews, flowers, stones, crosses, trunks, bare, leafy]) if (m) group.add(m);
+        for (const m of [posts, pots, leaves, shrubs, shrubsB, hedges, planting, blooming, yews, flowers, stones, crosses, trunks, bare, leafy]) if (m) group.add(m);
 
         // The land: round the village and out over the vale to low hills in the haze
         group.add(HillScene.vale(lane));
@@ -681,6 +683,57 @@ class HillScene {
 
     // The coping's bed (m deep), its ridge over the bed, and how far in from the bed's edges the saddle starts
     static get COPING() { return Object.freeze({ bedM: 0.05, ridgeM: 0.07, insetShare: 0.12 }); }
+
+    // A chimney pot, a unit high from its middle (scaled by each pot): a flared foot set in its flaunching, a body that
+    // narrows, a band, and a rolled rim at its mouth, open at the top
+    static potShape() {
+        // (six sides and five rings: a hundred and more stand on the roofs, and they are seen from the lane below)
+        const profile = [[0.16, -0.5], [0.115, -0.38], [0.11, 0.3], [0.13, 0.4], [0.12, 0.5], [0.08, 0.5]];
+        return new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), 6);
+    }
+
+    // A window box's planting, its middle on the box's top (x along the box, z out from the wall): `blooms` false the
+    // leaves and stems (greens of their own, some trailing over the front), true the flower heads (white, tinted by each
+    // box's colour), so the two draw as two meshes
+    static windowPlants(blooms) {
+        const rand = HillLane.random(blooms ? 733 : 739), positions = [], colours = [];
+        const add = (g, rgb) => {
+            const n = g.index ? g.toNonIndexed() : g, p = n.attributes.position;
+            n.computeVertexNormals();
+            const q = n.attributes.normal;
+            for (let i = 0; i < p.count; i++) {
+                positions.push(p.getX(i), p.getY(i), p.getZ(i));
+                const k = 0.75 + 0.25 * (q.getY(i) * 0.5 + 0.5);
+                colours.push(rgb[0] * k, rgb[1] * k, rgb[2] * k);
+            }
+        };
+        const greens = [0x4e6236, 0x5d7440, 0x3e5a2c].map(HillScene.rgb), white = HillScene.rgb(0xf4f0e8), eye = HillScene.rgb(0xe0b830);
+        if (!blooms) {
+            for (let i = 0; i < 5; i++) {
+                const x = -0.36 + i * 0.18 + (rand() - 0.5) * 0.04, r = 0.075 + rand() * 0.03;
+                add(new THREE.IcosahedronGeometry(r, 0).scale(1.2, 0.9, 1).translate(x, 0.07 + rand() * 0.04, (rand() - 0.5) * 0.06), greens[i % 3]);
+            }
+            // Trailing over the front and down
+            for (let i = 0; i < 3; i++) {
+                const x = -0.3 + i * 0.3 + (rand() - 0.5) * 0.08;
+                add(new THREE.IcosahedronGeometry(0.05, 0).scale(0.8, 1.6, 0.6).translate(x, -0.06 - rand() * 0.05, 0.12), greens[(i + 1) % 3]);
+            }
+            for (let i = 0; i < 4; i++) add(new THREE.CylinderGeometry(0.004, 0.005, 0.12, 3, 1, true).translate(-0.3 + i * 0.2, 0.12, (rand() - 0.5) * 0.05), greens[2]);
+        } else {
+            // Flower heads on the stems, a few lower in the leaves, each with a yellow eye
+            for (let i = 0; i < 7; i++) {
+                const x = -0.36 + i * 0.12 + (rand() - 0.5) * 0.03, y = 0.15 + (i % 3 === 1 ? -0.05 : 0.03) + rand() * 0.03, z = (rand() - 0.5) * 0.06;
+                add(new THREE.OctahedronGeometry(0.042 + rand() * 0.014, 0).scale(1, 0.6, 1).translate(x, y - 0.02, z + 0.02), white);
+                if (i % 2 === 0) add(new THREE.OctahedronGeometry(0.01, 0).translate(x, y + 0.012, z), eye);
+            }
+        }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        out.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+        out.computeVertexNormals();
+        out.userData.linearColors = true;
+        return out;
+    }
 
     // The gravestones' weathered tones (multiplied over the stone's own grey)
     static get STONE_TINTS() { return [0xb8b2a6, 0xa8a49a, 0xc4beb0, 0x9a968c, 0xb0aa98]; }
@@ -1489,6 +1542,8 @@ class HillScene {
             const top = ch.top, out = ch.out || 0;
             box(c.wall === 'brick' ? meshes.brick : meshes.rubble, ch.along, (base + top) / 2, out, 0.45, (top - base) / 2, 0.32, rgb(c.wall === 'brick' ? 0xffffff : shade(0xd2cbbd, 0.9)));
             box(meshes.dressed, ch.along, top + 0.05, out, 0.5, 0.06, 0.37, rgb(C.coping));
+            // (an oversailing course of stone under the cap, to throw the rain off the stack)
+            box(meshes.dressed, ch.along, top - 0.18, out, 0.49, 0.05, 0.36, rgb(shade(C.coping, 0.92)));
             // Thatch wraps round a chimney where it comes through
             if (thatch) box(roofMesh, ch.along, c.ridge - 0.05, out, 0.62, 0.3, 0.48, rgb(shade(C.thatch, 0.9)));
             // Pots of their own shapes: one to three on a stack, tall and thin or short and wide
@@ -1578,11 +1633,13 @@ class HillScene {
                 box(meshes.dressed, along, y + 0.57, face - 0.03, 0.44, 0.06, 0.045, sill);
                 if (c.boxes && storey === 0) {
                     box(meshes.plain, along, y - 0.6, face - 0.2, 0.45, 0.09, 0.1, rgb(0x5a4a38));
-                    for (let k = -2; k <= 2; k++) {
-                        const q = pt(along + k * 0.18, y - 0.45, face - 0.2);
-                        HillScene.leaf(repeats, q, 0.12, 0.1, 0.1, greens[(k + 2) % 3]);
-                        HillScene.flower(repeats, [q[0], q[1] + 0.08, q[2]], 0.045, blooms[Math.floor(rand() * blooms.length)]);
-                    }
+                    // Its planting as one piece: leaves and stems trailing over the front, and the blooms of one colour
+                    // (HillScene.windowPlants); the draws of the old clumps kept, so the village's random sequence is as it was
+                    for (let k = -2; k <= 2; k++) rand();
+                    const q = pt(along, y - 0.51, face - 0.2), turn = Math.atan2(-c.outX, -c.outZ);
+                    const m = new THREE.Matrix4().compose(new THREE.Vector3(q[0], q[1], q[2]), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn), new THREE.Vector3(1, 1, 1));
+                    repeats.planting.push({ m, colour: 0xffffff });
+                    repeats.blooms.push({ m, colour: blooms[Math.floor(repeats.shrubRand() * blooms.length)] });
                 }
             }
         }
