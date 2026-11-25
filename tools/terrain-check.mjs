@@ -1740,7 +1740,7 @@ const PROBES = {
         }, i);
     },
     // GPU pictures of a classic leg's props (the groups named `leg-prop:<kind>` in js/environment.js): the first of
-    // each kind on the leg, close (2.5 times its size off, at least 4 m) and from the road 25 m back, the bike
+    // each kind on the leg, close (1.4 times its size off, at least 4 m) and from the road 25 m back, the bike
     // hidden, into --out <dir> (MODEL_SHOTS_OUT/legs by default) as <leg>-<kind>-<view>.png
     'leg-model-shots': async (page, i, id) => {
         const out = option('out') || join(MODEL_SHOTS_OUT, 'legs');
@@ -1767,7 +1767,7 @@ const PROBES = {
                     box.setFromObject(o); box.getSize(size); box.getCenter(centre);
                     const at = env.roadPath[Math.min(env.roadPath.length - 1, Math.max(0, seg))];
                     const dx = at.x - centre.x, dz = at.z - centre.z, d = Math.hypot(dx, dz) || 1;
-                    const reach = Math.max(4, Math.max(size.x, size.y, size.z) * 2.5);
+                    const reach = Math.max(4, Math.max(size.x, size.y, size.z) * 1.4);
                     const look = (eye) => {
                         game.camera.position.copy(eye);
                         game.camera.lookAt(centre);
