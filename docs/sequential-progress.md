@@ -818,6 +818,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 
 - 2026-11-25: the model sweep, the washing. A sheet, a shirt with sleeves and a towel in soft folds on wooden pegs, in place of three flat sheets. The line stands in by the folds' depth and 1 cm for the lane's bend, and the test now samples every point as drawn: 15.6 cm clear at the least at the widest swing. Pictures: `~/Library/Caches/twisty-world/hill-fixes/models/washing-*`.
 
+- 2026-11-25: the model sweep, the boy. Shaded smooth, sleeves shaped with ribbed cuffs, hands with fingers and a thumb on the grips, a ribbed waistband, a knotted scarf with fringed ends. On the way: the new hands were first built at the body's middle (a loft's default centre, the boots' fault again) and floated before his apron; a test now holds every shape of an arm or a leg on its own limb's line. The bicycle already had its bell, rod brakes, chain case and guards, and is unchanged. Pictures: `~/Library/Caches/twisty-world/hill-fixes/models/boy-*`.
+
 ## The two Gotthard legs made one (6f, owner's order 1)
 
 - Job: the owner's "combine the first two legs". The run-in from the north and the lookout leg are now one leg, `gotthard-north`, "Andermatt over the Gotthard to the lookout over Airolo": 14.50 km to the finish line, 6 checkpoints, the stop scene at the lookout. The hospice square at the summit is a stop on the way (`route.json` `stops.via`, `at: 'via'` in `manifest.stops`): the importer finds it by the same rule round the ride's sample nearest its coordinate, it is drawn with its tables, and it moves no stage end.

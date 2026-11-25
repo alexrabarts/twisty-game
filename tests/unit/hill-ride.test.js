@@ -1002,6 +1002,14 @@ describe('the boy on the bicycle', () => {
             };
             expect(Math.abs(box('boot').x - box('sole').x)).toBeLessThan(0.01);
         }
+        // And every shape of an arm or a leg on its own limb's line: no shape of it left at the body's middle (the
+        // hands were once built there, and floated before his apron)
+        for (const name of ['upperarm_l', 'upperarm_r', 'forearm_l', 'forearm_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r']) {
+            for (const o of P[name].children.filter(c => c.isMesh)) {
+                const b = new THREE.Box3().setFromBufferAttribute(o.geometry.attributes.position);
+                expect([name, o.material.name, Math.abs(b.getCenter(new THREE.Vector3()).x) < 0.05]).toEqual([name, o.material.name, true]);
+            }
+        }
         const local = (part, out = new THREE.Vector3()) => frame.worldToLocal(part.getWorldPosition(out));
         const first = {}, feet = { l: [], r: [] };
         let nearest = Infinity, wander = 0;

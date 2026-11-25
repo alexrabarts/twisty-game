@@ -69,6 +69,33 @@ EXTRA = {
 }
 
 
+class HillKit(E.EKit):
+    # The boy is soft all over (knitted wool, cloth, skin): while `smooth` is set his shapes are shaded smooth unless an
+    # edge turns sharper than SMOOTH degrees; the bicycle's own parts keep the kit's crisp edges
+    SMOOTH = 75
+    smooth = False
+
+    def loft(self, sections, mat, **kw):
+        if self.smooth:
+            kw.setdefault("sharp", self.SMOOTH)
+        return super().loft(sections, mat, **kw)
+
+    def tube(self, points, radius, mat, **kw):
+        if self.smooth:
+            kw.setdefault("sharp", self.SMOOTH)
+        return super().tube(points, radius, mat, **kw)
+
+    def lathe(self, profile, at, mat, **kw):
+        if self.smooth:
+            kw.setdefault("sharp", self.SMOOTH)
+        return super().lathe(profile, at, mat, **kw)
+
+    def sheet(self, fn, mat, **kw):
+        if self.smooth:
+            kw.setdefault("sharp", self.SMOOTH)
+        return super().sheet(fn, mat, **kw)
+
+
 def wheels(k):
     k.begin("wheel_front", FRONT)
     E.wheel(k, FRONT, FRONT_R, 0.045, FRONT_R - 0.035, spokes="wire", count=32, hub=0.03, tread=False)
@@ -202,8 +229,22 @@ def boy(k):
     # A dark scarf crossed at the neck, its ends hanging down his front, and the apron's band round the waist
     k.loft([(NECK[1] - 0.09, NECK[2] - 0.07, NECK[2] + 0.08, 0.1, 2.4, 2.4), (NECK[1] - 0.02, NECK[2] - 0.06, NECK[2] + 0.07, 0.075, 2.4, 2.4)], "scarf", axis="y",
            ring=12, steps=1)
-    k.box((0.11, 0.18, 0.02), (0, SHOULDER[1] - 0.1, SHOULDER[2] + 0.095), "scarf", rot=(0.25, 0, 0), bevel=0.008)
-    k.box((0.07, 0.3, 0.018), (0.04, SHOULDER[1] - 0.3, SHOULDER[2] + 0.11), "scarf", rot=(0.15, 0, 0.08), bevel=0.006)
+    # (its two ends hang down his front from a knot, each a strip of knitting curving over his chest, fringed at its
+    # foot, the lower end a little to one side)
+    sy, sz = SHOULDER[1], SHOULDER[2]
+    k.lathe([(0, -0.03), (0.035, -0.025), (0.04, 0.0), (0.035, 0.025), (0, 0.03)], (0.01, sy - 0.02, sz + 0.105), "scarf", axis="z", seg=10)
+
+    def end(x0, lean, length, wide):
+        return lambda u, v: (x0 + (v - 0.5) * wide + lean * u, sy - 0.04 - length * u, sz + 0.105 + 0.012 * math.sin(math.pi * u) - 0.01 * u)
+
+    k.sheet(end(0.0, 0.02, 0.2, 0.1), "scarf", nu=4, nv=2, thick=0.016)
+    k.sheet(end(0.035, 0.03, 0.32, 0.075), "scarf", nu=5, nv=2, thick=0.014)
+    for i in range(4):
+        k.box((0.012, 0.035, 0.008), (0.045 + 0.03 + (i - 1.5) * 0.018, sy - 0.375, sz + 0.098), "scarf", bevel=0.002)
+    # The jumper's ribbed band at his waist and its rolled collar under the scarf
+    for j in range(3):
+        k.loft([(hy + 0.035 + j * 0.022, hz - 0.115, hz + 0.105, 0.157, 2.4, 2.4), (hy + 0.047 + j * 0.022, hz - 0.117, hz + 0.107, 0.16, 2.4, 2.4)], "jumper",
+               axis="y", ring=16, steps=1)
     k.loft([(hy + 0.08, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4), (hy + 0.12, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4)], "apron", axis="y", ring=14, steps=1)
 
     # The apron, long and grey-cream, in two nodes the game hangs in every pose (on foot and on the saddle): `apron_long`
@@ -265,12 +306,23 @@ def boy(k):
     # game puts the hands on the grips as the bars turn
     for side, tag in ((1, "r"), (-1, "l")):
         x, top = side * SHOULDER[0], SHOULDER[1]
+        # (the sleeve full at the shoulder and the elbow, slimmer between, so the arm reads as an arm in a sleeve)
         k.begin(f"upperarm_{tag}", (x, top, SHOULDER[2]))
-        k.tube([(x, top, SHOULDER[2]), (x, top - UPPER_ARM, SHOULDER[2])], 0.042, "jumper", seg=10)
+        k.tube([(x, top + 0.01, SHOULDER[2]), (x, top - 0.12, SHOULDER[2]), (x, top - UPPER_ARM + 0.03, SHOULDER[2]), (x, top - UPPER_ARM, SHOULDER[2])],
+               [0.047, 0.042, 0.039, 0.04], "jumper", seg=14)
         elbow = top - UPPER_ARM
         k.begin(f"forearm_{tag}", (x, elbow, SHOULDER[2]))
-        k.tube([(x, elbow, SHOULDER[2]), (x, elbow - FOREARM + 0.04, SHOULDER[2])], 0.036, "jumper", seg=10)
-        k.lathe([(0, -0.035), (0.03, -0.03), (0.035, 0.0), (0.03, 0.03), (0, 0.035)], (x, elbow - FOREARM, SHOULDER[2]), "skin", axis="x", seg=10)
+        k.tube([(x, elbow + 0.01, SHOULDER[2]), (x, elbow - 0.1, SHOULDER[2]), (x, elbow - FOREARM + 0.07, SHOULDER[2])], [0.039, 0.036, 0.031], "jumper", seg=14)
+        # The ribbed cuff, the wrist, and the hand: a palm, its fingers curled round as on a grip, and the thumb
+        k.lathe([(0.031, 0.0), (0.035, 0.005), (0.035, 0.035), (0.03, 0.04)], (x, elbow - FOREARM + 0.035, SHOULDER[2]), "jumper", seg=12)
+        k.tube([(x, elbow - FOREARM + 0.04, SHOULDER[2]), (x, elbow - FOREARM + 0.015, SHOULDER[2])], 0.022, "skin", seg=10)
+        hand = elbow - FOREARM
+        # (centred on the arm's own line, x, as every loft off the middle must be)
+        k.loft([(hand + 0.02, SHOULDER[2] - 0.022, SHOULDER[2] + 0.02, 0.026, 2.4, 2.4, 0.5, 1, 1, x), (hand - 0.01, SHOULDER[2] - 0.026, SHOULDER[2] + 0.03, 0.03, 2.4, 2.4, 0.5, 1, 1, x),
+                (hand - 0.04, SHOULDER[2] - 0.02, SHOULDER[2] + 0.034, 0.028, 2.4, 2.4, 0.5, 1, 1, x), (hand - 0.055, SHOULDER[2] - 0.005, SHOULDER[2] + 0.02, 0.022, 2.2, 2.2, 0.5, 1, 1, x)],
+               "skin", axis="y", ring=12, steps=2)
+        k.tube([(x - side * 0.018, hand + 0.0, SHOULDER[2] + 0.02), (x - side * 0.03, hand - 0.025, SHOULDER[2] + 0.04), (x - side * 0.022, hand - 0.045, SHOULDER[2] + 0.045)],
+               [0.011, 0.01, 0.008], "skin", seg=8)
     k.begin("boy", (0, HIP[1], HIP[2]))
 
     # The legs, each segment hanging straight down from its pivot: the game poses them
@@ -309,12 +361,16 @@ def draw(k):
     frame(k)
     front(k)
     drive(k)
-    boy(k)
+    k.smooth = True
+    try:
+        boy(k)
+    finally:
+        k.smooth = False
 
 
 def build():
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    k = E.EKit(seed=301, colours=COLOURS, extra=EXTRA)
+    k = HillKit(seed=301, colours=COLOURS, extra=EXTRA)
     for lod in E.LODS:
         k.level(lod)
         draw(k)
