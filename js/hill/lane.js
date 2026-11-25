@@ -82,7 +82,11 @@ class HillLane {
                 churn: [23.25, 1.9, 0], post: [23.64, 1.75, 1.8], stones: [16, 31, 2.55],
                 // The cottage on the right, in the sun's shadow: [from, to, eaves, ridge, roof, wall, set back from the flags];
                 // its near top corner is where the still's dark shape has it
-                right: [29.2, 37.5, 4.3, 6.6, 'thatch', 'rubble', 0], fence: [24, 44, -2.95],
+                right: [29.2, 37.5, 4.3, 6.6, 'thatch', 'rubble', 0], fence: [24, 62, -2.95], fenceStepM: 1.15,
+                // What the climb's wide shot sees by the cottages on the left, as its stills have it: a sawhorse trestle on
+                // the flags [s, across], a short iron railing beside a door's step [s, across, length], ivy up the
+                // cottages that start at these s
+                trestle: [58.2, 3.35], railing: [70.3, 3.55, 1.4], ivy: [39.95, 60.8],
                 tree: [109, 18.4, 17.2, 4.2]
             },
             // The end: past stopS the camera eases over endEaseS to a fixed point high behind the bicycle (at s, across,
@@ -498,7 +502,9 @@ class HillLane {
                 // (flags only at their fronts: the stills have no railing there)
                 const finish = this.finishes(rand, 'terrace'), prev = list[list.length - 1];
                 if (prev && prev.porch === finish.porch && prev.doorColour === finish.doorColour) finish.doorColour = (finish.doorColour + 1) % 5;
-                list.push({ ...f, kind: 'terrace', ...finish, front: 'flags', climber: false, storeys, roof, wall, gable: false, eaves: f.floor + eaves, ridge: f.floor + ridge,
+                // (ivy where the climb's stills have it; eyebrows over the upper windows of the thatched ones)
+                list.push({ ...f, kind: 'terrace', ...finish, front: 'flags', climber: r.opening.ivy.includes(from), dormers: roof === 'thatch', storeys, roof, wall, gable: false,
+                    eaves: f.floor + eaves, ridge: f.floor + ridge,
                     chimneys: chimneys.map(([cs, top]) => ({ along: cs - f.mid, top: f.floor + top })), opening: true });
             }
             s = r.opening.left[r.opening.left.length - 1][1];

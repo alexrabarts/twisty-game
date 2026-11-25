@@ -90,7 +90,7 @@ class HillRide {
     //   him as he wheels the bicycle in to the stall, side on
     static get CLIMB_SHOTS() {
         return Object.freeze({
-            wideM: 12, wide: { position: [32, -2.3, 0.9], target: [64, 2.5, 2.4], fov: 15 },
+            wideM: 12, wide: { position: [32, -2.0, 0.95], target: [64, 2.5, 2.4], fov: 15 },
             trackM: 16, up: 1.2, lookUpM: 0.85, trackFrameM: 1.4, stop: [25.0, -0.6, 1.25],
             frames: [[16, 1.4], [14.5, 1.5], [11.5, 3.0], [9, 3.2], [7, 2.7], [5.5, 2.4], [4.2, 2.0], [3, 1.65]]
         });

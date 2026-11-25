@@ -83,7 +83,7 @@ class HillScene {
         // brick (its colour is its texture's)
         return Object.freeze({
             rubble: 0xc9c5bb, dressed: 0xd5d0c5, honey: 0xd6ccb4, cream: 0xe4e0d6, blush: 0xe2d8cc, lime: 0xeeece6, brick: 0xd8d0cc, stone: 0xc9c5bb,
-            thatch: 0x9c907a, tile: 0x9a7a68, slate: 0x727880,
+            thatch: 0xaa9c82, tile: 0x9a7a68, slate: 0x727880,
             coping: 0xcfc6b4, gardenWall: 0xd6ccb8, flags: 0xc4beb2, kerb: 0xa8a294, step: 0xbdb4a2, sill: 0xd8d0be,
             frame: 0xf1ede3, glass: 0xc8ccd0, lit: 0x8a6a42, iron: 0x26262a, pot: 0xa0684a,
             doors: [0x3e5a44, 0x7a2e2a, 0x2e4058, 0x5a4430, 0x2c2c2e],
@@ -935,9 +935,51 @@ class HillScene {
             const h = 0.18 + rand() * 0.22;
             box(meshes.rubble, s, sa + (rand() - 0.5) * 0.3, h / 2 - 0.05, 0.22 + rand() * 0.12, h / 2 + 0.05, 0.25 + rand() * 0.12, rgb(0xb4aea2));
         }
-        const [f0, f1, fa] = o.fence;
-        for (let s = f0; s <= f1; s += 2) box(meshes.plain, s, fa, 0.5, 0.06, 0.5, 0.06, rgb(0x3a342c));
-        for (let s = f0; s < f1; s += 1) box(meshes.plain, s + 0.5, fa, 0.85, 0.52, 0.03, 0.03, rgb(0x3a342c));
+        // The fence on the right: thick dark timber posts close together on the flags, a round rail along their tops
+        // falling with them, post to post
+        const [f0, f1, fa] = o.fence, timber = rgb(0x3a3028), tops = [];
+        for (let s = f0; s <= f1 + 1e-6; s += o.fenceStepM) {
+            const f = frame(s), c = p(s, fa, 0), top = c.y + 0.1 + 1.02;
+            HillScene.standing(lane, repeats, 'fence post', meshes.plain, [c.x, c.z], [f.alongX * 0.065, f.alongZ * 0.065], [f.leftX * 0.065, f.leftZ * 0.065], top, timber);
+            tops.push([c.x, top - 0.07, c.z, f.leftX, f.leftZ]);
+        }
+        for (let i = 1; i < tops.length; i++) {
+            const a = tops[i - 1], b = tops[i];
+            meshes.plain.box([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2], [(b[0] - a[0]) / 2, (b[1] - a[1]) / 2, (b[2] - a[2]) / 2], [0, 0.04, 0],
+                [a[3] * 0.04, 0, a[4] * 0.04], timber);
+        }
+        // By the cottages the climb's wide shot sees: a sawhorse trestle on the flags, its legs splayed to them
+        const [ts, ta] = o.trestle, wood = rgb(0x5a4632);
+        {
+            // (its beam falls with the flags, each end 0.72 m over them)
+            const f = frame(ts), c = p(ts, ta, 0), ends = [-0.48, 0.48].map(end => [end, p(ts + end, ta, 0).y + 0.1]);
+            const lo = p(ts - 0.6, ta, 0.1 + 0.72), hi = p(ts + 0.6, ta, 0.1 + 0.72);
+            meshes.plain.box([(lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2], [(hi.x - lo.x) / 2, (hi.y - lo.y) / 2, (hi.z - lo.z) / 2], [0, 0.05, 0],
+                [f.leftX * 0.06, 0, f.leftZ * 0.06], wood);
+            for (const [end, floor] of ends) {
+                for (const out of [-1, 1]) {
+                    const top = [c.x + f.alongX * end, floor + 0.72, c.z + f.alongZ * end];
+                    const foot = [top[0] + f.leftX * out * 0.24, floor - 0.02, top[2] + f.leftZ * out * 0.24];
+                    const leg = [(top[0] - foot[0]) / 2, (top[1] - foot[1]) / 2, (top[2] - foot[2]) / 2];
+                    // (its thickness across the leg: square to the lane's way and to the leg)
+                    const n = [f.alongZ * leg[1], f.alongX * leg[2] - f.alongZ * leg[0], -f.alongX * leg[1]], nl = Math.hypot(...n) || 1;
+                    meshes.plain.box([(top[0] + foot[0]) / 2, (top[1] + foot[1]) / 2, (top[2] + foot[2]) / 2], [f.alongX * 0.035, 0, f.alongZ * 0.035], leg,
+                        n.map(v => v * 0.03 / nl), wood);
+                }
+            }
+            HillScene.stand(repeats, 'trestle', [c.x, c.z], [f.alongX, f.alongZ], 0.5, [f.leftX, f.leftZ], 0.26, Math.min(...ends.map(e => e[1])) - 0.02);
+        }
+        // A short iron railing on the flags beside a door's step: posts with knobs, a top rail and a bottom rail
+        const [rs, ra, rl] = o.railing;
+        for (let k = 0; k <= 4; k++) {
+            const s = rs - rl / 2 + rl * k / 4, f = frame(s), c = p(s, ra, 0);
+            HillScene.standing(lane, repeats, 'railing post', meshes.dark, [c.x, c.z], [f.alongX * 0.012, f.alongZ * 0.012], [f.leftX * 0.012, f.leftZ * 0.012], c.y + 0.1 + 0.95, rgb(C.iron));
+            box(meshes.dark, s, ra, 1.07, 0.025, 0.025, 0.025, rgb(C.iron));
+        }
+        for (const up of [0.2, 0.93]) {
+            const a = p(rs - rl / 2, ra, 0.1 + up), b = p(rs + rl / 2, ra, 0.1 + up), f = frame(rs);
+            meshes.dark.box([(a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2], [(b.x - a.x) / 2, (b.y - a.y) / 2, (b.z - a.z) / 2], [0, 0.012, 0], [f.leftX * 0.012, 0, f.leftZ * 0.012], rgb(C.iron));
+        }
         // The big tree: its crown where the frame has it (its foot was once tru - 2.2 trr over the lane), its trunk down
         // to the land, the tree scaled to reach
         const [trs, tra, tru, trr] = o.tree;
@@ -1019,9 +1061,10 @@ class HillScene {
                 }
                 // Eyebrow dormers: the thatch swept up and over each upper window that breaks the eave
                 if (c.dormers && c.storeys > 1) {
-                    const count = Math.max(1, Math.floor(c.wide / 2.3));
+                    const cottagey = c.opening && c.storeys > 1, count = Math.max(1, Math.floor(c.wide / (cottagey ? 3.4 : 2.3)));
+                    const shift = HillLane.random(Math.round(c.from * 31) + 7);
                     for (let i = 0; i < count; i++) {
-                        const along = -hw + (i + 0.5) * c.wide / count;
+                        const along = -hw + (i + 0.5) * c.wide / count + (cottagey ? (shift() - 0.5) * 0.9 * 0.6 : 0);
                         if (Math.abs(along) > hw - 0.7) continue;
                         box(roofMesh, along, eaveY + 0.1, -(hd + over * 0.5), 0.7, 0.2, 0.45, roof);
                     }
@@ -1107,14 +1150,19 @@ class HillScene {
 
         // Sash windows on each storey: a white frame, two sashes of panes, a stone sill and a lintel; a window box
         // under some ground-floor ones
-        const windows = Math.max(1, Math.floor(c.wide / 2.3));
+        // (a thatched cottage of the opening, as the climb's wide shot sees it: fewer windows, each a little off the
+        // even spacing)
+        const cottagey = c.opening && thatch && c.storeys > 1;
+        const windows = Math.max(1, Math.floor(c.wide / (cottagey ? 3.4 : 2.3)));
+        const shift = HillLane.random(Math.round(c.from * 31) + 7);
+        const offsets = Array.from({ length: windows }, () => (cottagey ? (shift() - 0.5) * 0.9 : 0));
         const frame = rgb(C.frame), sill = rgb(C.sill), glass = rgb(C.glass), lit = rgb(C.lit);
         const greens = [0x4e6236, 0x5d7440, 0x445a30], blooms = [0xc8463a, 0xe0c04a, 0xe8e2d8, 0xd87a9a];
         const rand = HillLane.random(Math.round(c.from * 17) + c.side * 3);
         for (let storey = 0; storey < c.storeys; storey++) {
             const y = c.floor + 1.55 + storey * 2.1;
             for (let i = 0; i < windows; i++) {
-                const along = -hw + (i + 0.5) * c.wide / windows;
+                const along = -hw + (i + 0.5) * c.wide / windows + offsets[i] * (storey > 0 ? 0.6 : 1);
                 if (storey === 0 && Math.abs(along - doorAt) < 1.15) continue;
                 if (storey === 0 && shop && along < doorAt) continue;
                 if (Math.abs(along) > hw - 0.55) continue;
