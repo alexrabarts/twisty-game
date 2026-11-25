@@ -36,6 +36,7 @@ The details where the eye goes from the chase view and the opening:
 - **Windows and doors.** Curtains drawn back at some panes, window boxes, a knocker on each door, a step worn hollow in its middle, and now and then an iron boot scraper by the step.
 - **Roofs.** Chimney pots of their own shapes, one to three to a stack. Gutters on the backs as on the fronts. Moss on the thatch and lichen on slate and tile, on the top face of the slope only.
 - **Walls.** Patched render and a crack or two on rendered fronts; moss here and there along wall copings.
+- **Trees.** A leafy tree is one shape (`HillScene.leafyTree`, instanced with its colours): a trunk that forks into four limbs rising and spreading, each ending in a cluster of small leaf clumps, and a few clumps over the top, so its crown is open and ragged against the sky. The green's big tree is two of them turned about each other. A bare tree forks three times, its twigs thin and open-ended. The village is 289,793 triangles in 23 draws with them (284,997 before).
 - **Gardens.** A border of flowers inside each front wall, clear of the gate; washing on a line across some gardens, its posts in the land; a cat on a garden wall on the left of the main straight (`HillScene.catWall`).
 
 The opening's buildings on the left are set by hand (`RULE.opening.left`): their ends, heights, roofs, walls and chimneys are fitted to the opening frame.

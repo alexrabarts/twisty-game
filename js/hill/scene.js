@@ -233,7 +233,7 @@ class HillScene {
         // Parts repeated many times are instanced: railing posts, chimney pots, leaves and flowers, gravestones
         // `stands` is every piece that stands on the ground, with its footprint and its foot (HillScene.stand): the check
         // that nothing floats reads it
-        const repeats = { posts: [], pots: [], leaves: [], flowers: [], stones: [], trunks: [], bare: [], stands: [] };
+        const repeats = { posts: [], pots: [], leaves: [], flowers: [], stones: [], trunks: [], bare: [], leafy: [], stands: [] };
         const step = 1;
 
         // The lane: a ribbon over the cobbles, laid in the height field's tiles, each mirrored as HillLane.cobble reads it
@@ -337,7 +337,15 @@ class HillScene {
         const stones = HillScene.instanced(new THREE.BoxGeometry(1, 1, 1), 0xb8b2a6, repeats.stones, 'hill-gravestones');
         const trunks = HillScene.instanced(new THREE.CylinderGeometry(0.6, 1, 1, 6).translate(0, 0.5, 0), 0x4a4038, repeats.trunks, 'hill-trunks');
         const bare = HillScene.instanced(HillScene.bareTree(), 0x4a4038, repeats.bare, 'hill-bare-trees');
-        for (const m of [posts, pots, leaves, flowers, stones, trunks, bare]) if (m) group.add(m);
+        let leafy = null;
+        if (repeats.leafy.length) {
+            leafy = new THREE.InstancedMesh(HillScene.leafyTree(), new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.9, flatShading: true }), repeats.leafy.length);
+            repeats.leafy.forEach((m, i) => leafy.setMatrixAt(i, m));
+            leafy.castShadow = true;
+            leafy.receiveShadow = true;
+            leafy.name = 'hill-leafy-trees';
+        }
+        for (const m of [posts, pots, leaves, flowers, stones, trunks, bare, leafy]) if (m) group.add(m);
 
         // The land: round the village and out over the vale to low hills in the haze
         group.add(HillScene.vale(lane));
@@ -368,7 +376,8 @@ class HillScene {
         const rand = HillLane.random(311);
         const limb = (from, dir, length, radius, depth) => {
             const to = from.clone().addScaledVector(dir, length);
-            const g = new THREE.CylinderGeometry(radius * 0.6, radius, length, 5);
+            // (the twigs thin and open-ended, so the finer outline costs little)
+            const g = new THREE.CylinderGeometry(radius * 0.6, radius, length, depth === 0 ? 4 : 5, 1, depth === 0);
             g.translate(0, length / 2, 0);
             g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir));
             g.translate(from.x, from.y, from.z);
@@ -380,9 +389,59 @@ class HillScene {
                 limb(to, d, length * (0.55 + rand() * 0.2), radius * 0.6, depth - 1);
             }
         };
-        limb(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0), 0.42, 0.035, 2);
+        limb(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 1, 0), 0.42, 0.035, 3);
         const merged = HillScene.mergeGeometries(parts);
         return merged;
+    }
+
+    // A leafy tree as one shape, a metre tall, for instancing, its colours in it: a trunk that forks into four limbs
+    // rising and spreading, each ending in a cluster of small leaf clumps, and a few clumps over the top, so the crown is
+    // open and ragged against the sky rather than one ball. Leaves in three greens, a clump's underside darker
+    static leafyTree() {
+        const rand = HillLane.random(523), positions = [], normals = [], colours = [];
+        const add = (g, hex, shade = null) => {
+            const n = g.index ? g.toNonIndexed() : g;
+            n.computeVertexNormals();
+            const c = new THREE.Color(hex), p = n.attributes.position, q = n.attributes.normal;
+            for (let i = 0; i < p.count; i++) {
+                positions.push(p.getX(i), p.getY(i), p.getZ(i));
+                normals.push(q.getX(i), q.getY(i), q.getZ(i));
+                const k = shade ? shade(q.getY(i)) : 1;
+                colours.push(c.r * k, c.g * k, c.b * k);
+            }
+        };
+        const bark = 0x4a4038, greens = [0x55693a, 0x4a5e34, 0x627646, 0x5a6e3e];
+        const limb = (from, to, radius, ends) => {
+            const d = to.clone().sub(from), length = d.length();
+            const g = new THREE.CylinderGeometry(radius * 0.6, radius, length, 5, 1, ends);
+            g.translate(0, length / 2, 0);
+            g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()));
+            g.translate(from.x, from.y, from.z);
+            add(g, bark);
+        };
+        const clump = (at, r) => {
+            const g = new THREE.IcosahedronGeometry(r, 0);
+            g.scale(1, 0.8, 1);
+            g.rotateY(rand() * Math.PI);
+            g.translate(at.x, at.y, at.z);
+            add(g, greens[Math.floor(rand() * greens.length)], ny => 0.72 + 0.28 * (ny * 0.5 + 0.5));
+        };
+        const fork = new THREE.Vector3(0, 0.42, 0);
+        limb(new THREE.Vector3(0, 0, 0), fork, 0.035, false);
+        for (let i = 0; i < 4; i++) {
+            const a = i * Math.PI / 2 + rand() * 0.6, out = 0.16 + rand() * 0.1, up = 0.6 + rand() * 0.14;
+            const end = new THREE.Vector3(Math.cos(a) * out, up, Math.sin(a) * out);
+            limb(fork, end, 0.02, true);
+            for (let k = 0; k < 3; k++) clump(end.clone().add(new THREE.Vector3((rand() - 0.5) * 0.22, (rand() - 0.2) * 0.14, (rand() - 0.5) * 0.22)), 0.11 + rand() * 0.07);
+        }
+        for (let k = 0; k < 4; k++) clump(new THREE.Vector3((rand() - 0.5) * 0.2, 0.8 + rand() * 0.12, (rand() - 0.5) * 0.2), 0.12 + rand() * 0.06);
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        out.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+        out.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+        // (its colours are linear already, as THREE.Color gives them with colour management on)
+        out.userData.linearColors = true;
+        return out;
     }
 
     static mergeGeometries(parts) {
@@ -407,12 +466,8 @@ class HillScene {
             repeats.bare.push(m.clone().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(height, height, height)));
             return;
         }
-        repeats.trunks.push(m.clone().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(0.22, height * 0.5, 0.22)));
-        const greens = [0x55693a, 0x4a5e34, 0x627646];
-        for (let i = 0; i < 4; i++) {
-            const r = height * (0.22 + rand() * 0.12);
-            repeats.leaves.push({ m: m.clone().compose(new THREE.Vector3(x + (rand() - 0.5) * height * 0.4, y + height * (0.55 + rand() * 0.3), z + (rand() - 0.5) * height * 0.4), q, new THREE.Vector3(r, r * 0.85, r)), colour: greens[i % 3] });
-        }
+        // (a little wider than tall, as the village's trees are)
+        repeats.leafy.push(m.clone().compose(new THREE.Vector3(x, y, z), q, new THREE.Vector3(height * (1.05 + rand() * 0.2), height, height * (1.05 + rand() * 0.2))));
     }
 
     // A clump of leaves (a shrub, a hedge piece, ivy on a wall, a window box's plants) at a point, sized sx, sy, sz
@@ -593,16 +648,13 @@ class HillScene {
             const s = gap.from + (gap.to - gap.from) * share, p = lane.sample(s), q = lane.at(s, gap.side * (edge + out), 0, {});
             return { x: q.x, z: q.z, a: [p.alongX, p.alongZ], o: [p.leftX * gap.side, p.leftZ * gap.side], heading: p.heading };
         };
-        // The tree: a broad trunk and a wide crown of clumps
+        // The tree: the leafy tree's limbs and clumps (HillScene.leafyTree), broad, two of them turned about each other so
+        // its crown is full and ragged
         const t = place(g.tree[0], g.tree[1]), high = g.tree[2];
         const ground = HillScene.lowestSurface(lane, t.x, t.z, [1, 0], 0.7, [0, 1], 0.7) - 0.1;
-        repeats.trunks.push(new THREE.Matrix4().compose(new THREE.Vector3(t.x, ground, t.z), new THREE.Quaternion(), new THREE.Vector3(0.55, high * 0.55, 0.55)));
         HillScene.stand(repeats, 'tree', [t.x, t.z], [1, 0], 0.3, [0, 1], 0.3, ground);
-        const rand = HillLane.random(Math.round(gap.from * 11));
-        for (let i = 0; i < 9; i++) {
-            const a = i / 9 * Math.PI * 2, reach = i === 0 ? 0 : 2.6 + rand() * 1.4, size = 2.6 + rand() * 1.4;
-            const centre = [t.x + Math.cos(a) * reach, ground + high * (0.62 + rand() * 0.22), t.z + Math.sin(a) * reach];
-            HillScene.leaf(repeats, centre, size, size * 0.8, size, [0x55693a, 0x4a5e34, 0x627646][i % 3]);
+        for (const [turn, wide] of [[0, 1.5], [0.8, 1.35]]) {
+            repeats.leafy.push(new THREE.Matrix4().compose(new THREE.Vector3(t.x, ground, t.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn), new THREE.Vector3(high * wide, high, high * wide)));
         }
         // The bench: two stone ends standing in the land, a timber seat and back between, along the lane
         const b = place(g.bench[0], g.bench[1]), wood = rgb(0x6a5440), stone = rgb(C.coping);

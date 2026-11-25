@@ -790,6 +790,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 
 - 2026-11-25: the cat's legs walk (the owner): a gallop from the ground she covers (a stride of 0.55 m), each foot fixed on the ground through its stance (the test holds it to 1e-9 m) and folded clear as it swings, straight legs when she stops. Pictures: `~/Library/Caches/twisty-world/hill-fixes/cat/`.
 
+- 2026-11-25: the village's trees in more detail (the owner): leafy trees are branched (a trunk, four limbs, each ending in a cluster of small clumps, more clumps over the top), so the crown is ragged against the sky, the green's big tree two of them; bare trees fork a third time into thin twigs. The village: 284,997 triangles before, 289,793 after, 23 draws (the budget test's cap is 300,000). The world's trees (js/treemodels.js) are not touched. Pictures before and after: `~/Library/Caches/twisty-world/hill-fixes/trees-before/`, `trees-after/`.
+
 ## The two Gotthard legs made one (6f, owner's order 1)
 
 - Job: the owner's "combine the first two legs". The run-in from the north and the lookout leg are now one leg, `gotthard-north`, "Andermatt over the Gotthard to the lookout over Airolo": 14.50 km to the finish line, 6 checkpoints, the stop scene at the lookout. The hospice square at the summit is a stop on the way (`route.json` `stops.via`, `at: 'via'` in `manifest.stops`): the importer finds it by the same rule round the ride's sample nearest its coordinate, it is drawn with its tables, and it moves no stage end.
