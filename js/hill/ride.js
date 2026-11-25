@@ -27,37 +27,25 @@ class HillRide {
         ]);
     }
 
-    // The light: a low golden sun (elevationDeg over the horizon) at the bottom end of the main straight, so it shines
-    // straight up the straight (alongS: a place on it, whose heading the sun lies along) and stands to the right of the
-    // start, raking across the house fronts on the left; through a warm haze
+    // The one light of the whole ride, the climb and the descent alike, so nothing changes when the camera hands over:
+    // a low golden sun (elevationDeg over the horizon) at world heading headingRad (+ towards +x), down the lane from the
+    // top: a little to the right going down the top stretch, so the boy climbing is lit from behind and the wet cobbles
+    // between him and the camera at the top glint, and a little to the left down the main straight, so the chase camera
+    // sees the cobbles glint ahead; through a warm haze, with a weak fill and the baked sky's share envIntensity. The
+    // cobbles are wet the whole ride: their roughness is cobbleRough of the dry one (each worn crown its own glint, its
+    // relief cobbleNormal times the dry one), their colour cobbleTone of it
     static get LIGHT() {
         return Object.freeze({
-            elevationDeg: 14, alongS: 126, sunColour: 0xf8dcb4, sunIntensity: 1.4,
-            haze: 0xdedcd6, hazeDensity: 0.0075, ambient: 0.15, sky: 0xcfccc4, ground: 0x6a604c, hemisphere: 0.45, envIntensity: 0.35
+            headingRad: -0.1, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 1.2,
+            haze: 0xe2ded4, hazeDensity: 0.01, ambient: 0.1, sky: 0xd8d4cc, ground: 0x726850, hemisphere: 0.32, envIntensity: 0.16,
+            cobbleRough: 0.45, cobbleNormal: 2, cobbleTone: 0.62
         });
     }
 
-    // The climb's light, as the stills of the boy pushing up have it: early, the sun lower and straight down the top
-    // stretch ahead of the camera at the top (headingRad off its heading, + to the left; further to the left the houses
-    // on the left shade the whole lane), so the boy is lit from behind and the wet cobbles between him and the camera
-    // glint; a thick bright haze, and a strong fill so the house fronts in its shade read pale. The cobbles are wet: their roughness is cobbleRough of the dry one
-    // (the worn tops shine, each crown its own glint: their relief cobbleNormal times the dry one), their colour
-    // cobbleTone of it, darker
-    static get CLIMB_LIGHT() {
-        return Object.freeze({
-            headingRad: 0.1, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 1.9,
-            haze: 0xe4dfd4, hazeDensity: 0.012, ambient: 0.16, sky: 0xdcd8d0, ground: 0x7a705c, hemisphere: 0.38, envIntensity: 0.2, cobbleRough: 0.28, cobbleNormal: 2, cobbleTone: 0.72
-        });
-    }
-
-    // The way to the sun from the lane (a unit vector): for the descent along the main straight, for the climb its own
-    static sunDirection(lane, out = new THREE.Vector3(), climb = false) {
-        if (climb) {
-            const L = HillRide.CLIMB_LIGHT, e = L.elevationDeg * Math.PI / 180;
-            return out.set(Math.cos(e) * Math.sin(L.headingRad), Math.sin(e), Math.cos(e) * Math.cos(L.headingRad));
-        }
-        const L = HillRide.LIGHT, p = lane.sample(L.alongS), e = L.elevationDeg * Math.PI / 180;
-        return out.set(Math.cos(e) * p.alongX, Math.sin(e), Math.cos(e) * p.alongZ);
+    // The way to the sun from the lane (a unit vector)
+    static sunDirection(lane, out = new THREE.Vector3()) {
+        const L = HillRide.LIGHT, e = L.elevationDeg * Math.PI / 180;
+        return out.set(Math.cos(e) * Math.sin(L.headingRad), Math.sin(e), Math.cos(e) * Math.cos(L.headingRad));
     }
 
     // The named shots: each a camera place and a point it looks at, both as [s, across (+ left going down), up] on the
@@ -107,6 +95,16 @@ class HillRide {
             }
         }
         return F[F.length - 1][1];
+    }
+
+    // The chase camera behind him (VIEWS' behind) for where he is now, into `at` and `look`; returns its field of view
+    followShot(at, look) {
+        const view = HillRide.VIEWS[0], bike = this.rider ? this.rider.group.position : this.lane.at(this.bike.s, this.bike.across, 0, {});
+        const back = this.lane.sample(Math.max(0, this.bike.s - view.back), {});
+        at.set(back.x + back.leftX * this.bike.across * 0.5, back.y + view.up, back.z + back.leftZ * this.bike.across * 0.5);
+        const ahead = this.lane.sample(this.bike.s + view.look, {});
+        look.set(ahead.x, ahead.y + 0.6, ahead.z).lerp(bike, 0.35);
+        return view.fov;
     }
 
     // The climb's camera for the boy now, into `at` and `look`; returns its field of view (degrees)
@@ -326,11 +324,9 @@ class HillRide {
         this.frameId = requestAnimationFrame(loop);
     }
 
-    // The light of the descent, or of the climb (CLIMB_LIGHT) with its wet cobbles
-    light(climb = false) {
-        const game = this.game, L = climb ? HillRide.CLIMB_LIGHT : HillRide.LIGHT;
-        this.lit = L;
-        this.litClimb = climb;
+    // The ride's one light (LIGHT) and its wet cobbles
+    light() {
+        const game = this.game, L = HillRide.LIGHT;
         game.scene.background = new THREE.Color(L.haze);
         game.scene.fog = new THREE.FogExp2(L.haze, L.hazeDensity);
         game.graphics.setTimeOfDay('golden');
@@ -339,9 +335,9 @@ class HillRide {
         game.graphics.setRingStrength(0);
         const cobbles = this.village && this.village.getObjectByName('hill-cobbles');
         if (cobbles) {
-            cobbles.material.roughness = climb ? L.cobbleRough : 1;
-            cobbles.material.color.setScalar(climb ? L.cobbleTone : 1);
-            cobbles.material.normalScale.setScalar(climb ? L.cobbleNormal : 1);
+            cobbles.material.roughness = L.cobbleRough;
+            cobbles.material.color.setScalar(L.cobbleTone);
+            cobbles.material.normalScale.setScalar(L.cobbleNormal);
         }
         // The baked sky lights everything too (Graphics: scene.environment): its share on what the ride draws, but
         // for the panes, which mirror a sky of their own
@@ -352,7 +348,7 @@ class HillRide {
                 if (m && m.isMeshStandardMaterial && !m.envMap) m.envMapIntensity = L.envIntensity;
             });
         }
-        this.sun = HillRide.sunDirection(this.lane, new THREE.Vector3(), climb);
+        this.sun = HillRide.sunDirection(this.lane);
         game.graphics.setSunOffset({ x: this.sun.x, y: this.sun.y, z: this.sun.z });
         // The far shadow cascade reads the sun's way and the bike's place (Cascades.follow)
         game.sunOffset = { x: this.sun.x * 100, y: this.sun.y * 100, z: this.sun.z * 100 };
@@ -473,6 +469,7 @@ class HillRide {
         this.bike.walking = true;
         this.hold = null;
         this.climb = { phase: 'climb', t: 0, hold: 0 };
+        this.handedOver = false;
         // Nothing to spill on the way up
         if (this.spill) this.spill.spilt = true;
     }
@@ -485,11 +482,15 @@ class HillRide {
             this.day.restock();
         }
         if (this.spill) this.spill.reset();
-        this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
+        // He gets on where he stands, facing down the lane: no jump. The camera is already behind him (the hand-over in
+        // placeCamera) and holds there until he pushes off
+        this.bike.reset(this.bike.s, this.bike.across);
         this.bike.walking = false;
+        // (the same bicycle going on: he gets on over the rider's blend, not at once)
+        if (this.rider) this.rider.rides = this.bike.rides;
         this.hold = { phase: 'hold', t: 0 };
+        this.handedOver = true;
         this.cinema = null;
-        this.placeCamera(1);
     }
 
     // The climb's part of a frame: the steer keys as seen from the camera ahead of him, and at the top the restock.
@@ -534,7 +535,20 @@ class HillRide {
         }
         if (climb.phase === 'restock') {
             Object.assign(controls, { pedal: 0, brake: 1, steer: 0, wheelie: 0 });
-            if (climb.t >= C.restockS) this.endClimb();
+            if (climb.t >= C.restockS) {
+                // He turns the bicycle round where he stands to face down the lane, the short way
+                const v = this.bike.vehicle, down = this.lane.sample(this.bike.s).heading;
+                climb.phase = 'turn';
+                climb.t = 0;
+                climb.yawFrom = v.yawAngle;
+                climb.yawTo = v.yawAngle + Math.atan2(Math.sin(down - v.yawAngle), Math.cos(down - v.yawAngle));
+            }
+        }
+        if (climb.phase === 'turn') {
+            Object.assign(controls, { pedal: 0, brake: 1, steer: 0, wheelie: 0 });
+            const k = Math.min(1, climb.t / C.turnS), e = k * k * (3 - 2 * k);
+            this.bike.vehicle.yawAngle = climb.yawFrom + (climb.yawTo - climb.yawFrom) * e;
+            if (climb.t >= C.turnS) this.endClimb();
         }
         return true;
     }
@@ -903,9 +917,6 @@ class HillRide {
     draw(dt) {
         const game = this.game;
         if (this.startNote) this.startNote.style.display = this.startPromptShown() ? '' : 'none';
-        // The climb's own light while he climbs, the descent's otherwise (and for a descent shot a tool holds)
-        const climbLight = !!this.climb && !this.forcedShot;
-        if (this.litClimb !== climbLight) this.light(climbLight);
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
             this.day.draw(dt || 1 / 60);
@@ -940,8 +951,8 @@ class HillRide {
             const at = this.rider.group.position;
             sun.position.copy(at).addScaledVector(this.sun, 120);
             sun.target.position.copy(at);
-            sun.color.set((this.lit || HillRide.LIGHT).sunColour);
-            sun.intensity = (this.lit || HillRide.LIGHT).sunIntensity;
+            sun.color.set(HillRide.LIGHT.sunColour);
+            sun.intensity = HillRide.LIGHT.sunIntensity;
         }
         sun.target.updateMatrixWorld();
         // The effects in force, as a world ride has them (js/effects.js), then the sky, the post-processing and the draw
@@ -952,7 +963,8 @@ class HillRide {
 
     // The camera for the view, moved `blend` of the way to where it should be (1 puts it there)
     placeCamera(blend) {
-        const cam = this.game.camera, view = HillRide.VIEWS[this.view];
+        // (held at the start after the hand-over, the camera stays behind him until he pushes off, whatever the view)
+        const cam = this.game.camera, view = HillRide.VIEWS[this.hold && this.hold.phase === 'hold' && this.handedOver ? 0 : this.view];
         if (this.loafShown && this.loaf) {
             const L = HillRide.LOAF;
             cam.position.copy(this.loaf.position).add(new THREE.Vector3().fromArray(L.camera));
@@ -968,7 +980,18 @@ class HillRide {
         // The climb: the wide shot held while he comes up into it, then the long lens head on, then the stop by the
         // stall (CLIMB_SHOTS)
         if (this.climb && !this.forcedShot) {
-            const fov = this.climbCamera(this.camTarget, this.look);
+            let fov = this.climbCamera(this.camTarget, this.look);
+            // The hand-over: from the stall's camera, while he restocks and turns the bicycle round, one smooth move to the
+            // chase camera behind him (VIEWS' behind), with no cut; the descent starts from there
+            const C = HillDay.CLIMB, climb = this.climb;
+            if (climb.phase !== 'climb') {
+                const t = (climb.phase === 'turn' ? C.restockS : 0) + climb.t, k = Math.min(1, t / (C.restockS + C.turnS)), e = k * k * k * (k * (6 * k - 15) + 10);
+                const at = this.handAt || (this.handAt = new THREE.Vector3()), aim = this.handLook || (this.handLook = new THREE.Vector3());
+                const chase = this.followShot(at, aim);
+                this.camTarget.lerp(at, e);
+                this.look.lerp(aim, e);
+                fov += (chase - fov) * e;
+            }
             cam.position.copy(this.camTarget);
             cam.up.set(0, 1, 0);
             if (cam.fov !== fov) {
@@ -980,7 +1003,7 @@ class HillRide {
             return null;
         }
         // A named shot held: the opening while the ride holds at the start, or one a tool asks for (forcedShot)
-        const held = this.forcedShot || (this.hold && this.hold.phase === 'hold' ? 'opening' : null);
+        const held = this.forcedShot || (this.hold && this.hold.phase === 'hold' && !this.handedOver ? 'opening' : null);
         if (held) {
             const shot = HillRide.shot(this.lane, held, this.camTarget, this.look);
             cam.position.copy(this.camTarget);
@@ -1013,10 +1036,7 @@ class HillRide {
         const bike = this.rider ? this.rider.group.position : this.lane.at(this.bike.s, 0, 0, {});
         let fov = view.fov;
         if (view.id === 'follow') {
-            const back = this.lane.sample(Math.max(0, this.bike.s - view.back), {});
-            this.camTarget.set(back.x + back.leftX * this.bike.across * 0.5, back.y + view.up, back.z + back.leftZ * this.bike.across * 0.5);
-            const ahead = this.lane.sample(this.bike.s + view.look, {});
-            this.look.set(ahead.x, ahead.y + 0.6, ahead.z).lerp(bike, 0.35);
+            this.followShot(this.camTarget, this.look);
         } else if (view.id === 'cinema') {
             // After a fall or a restart, the camera that sees him
             const down = this.bike.crashed;

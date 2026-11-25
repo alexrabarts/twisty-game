@@ -129,32 +129,17 @@ describe('the lane', () => {
         expect(Math.abs(r.end.s - H[7][0])).toBeLessThan(10);
     });
 
-    test('the low sun lies along the main straight: ahead down it, to the right at the start', () => {
-        const sun = HillRide.sunDirection(lane);
-        const flat = Math.hypot(sun.x, sun.z);
-        expect(Math.asin(sun.y) * 180 / Math.PI).toBeGreaterThanOrEqual(8);
-        expect(Math.asin(sun.y) * 180 / Math.PI).toBeLessThanOrEqual(15);
-        for (let s = lane.rule.mainStraight.fromS; s <= lane.rule.mainStraight.toS; s += 10) {
-            const p = lane.sample(s);
-            expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(0.995);
-        }
-        // At the start the sun is off to the right of the way down: the right of a heading is its left's opposite
-        const p = lane.sample(lane.rule.startM);
-        expect(-(sun.x * p.leftX + sun.z * p.leftZ) / flat).toBeGreaterThan(0.45);
-        expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(0.6);
-    });
-
-    test('the climb has its own light: the sun low and down the top stretch ahead of the camera at the top, so he is lit from behind', () => {
-        const sun = HillRide.sunDirection(lane, new THREE.Vector3(), true), L = HillRide.CLIMB_LIGHT;
+    test('one low sun for the whole ride: ahead down the lane from the top and down the main straight, so the climb is lit from behind and the cobbles glint ahead of the chase camera', () => {
+        const sun = HillRide.sunDirection(lane), L = HillRide.LIGHT;
         const flat = Math.hypot(sun.x, sun.z);
         expect(Math.asin(sun.y) * 180 / Math.PI).toBeCloseTo(L.elevationDeg, 6);
-        expect(Math.asin(sun.y) * 180 / Math.PI).toBeLessThan(HillRide.LIGHT.elevationDeg);
-        // Along the top stretch (down it within 8 degrees, a little to its left, where the glare path lies), where the
-        // climb's head-on camera looks down at him
-        const p = lane.sample(30);
-        expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(Math.cos(8 * Math.PI / 180));
-        expect(sun.x * p.leftX + sun.z * p.leftZ).toBeGreaterThan(0);
-        // Wet cobbles: smoother and darker than the dry ones
+        expect(L.elevationDeg).toBeLessThan(15);
+        for (const s of [30, (lane.rule.mainStraight.fromS + lane.rule.mainStraight.toS) / 2]) {
+            const p = lane.sample(s);
+            expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(Math.cos(35 * Math.PI / 180));
+        }
+        // No second light for the climb, and wet cobbles all the way: smoother and darker than dry ones
+        expect(HillRide.CLIMB_LIGHT).toBeUndefined();
         expect(L.cobbleRough).toBeLessThan(0.5);
         expect(L.cobbleTone).toBeLessThan(1);
     });
