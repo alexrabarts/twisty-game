@@ -147,7 +147,8 @@ describe('the lane', () => {
     test('a terrace stands on each side all the way down, end to end without overlapping, each side its own', () => {
         for (const side of [1, -1]) {
             const row = lane.cottages.filter(c => c.side === side);
-            expect(row.length).toBeGreaterThan(40);
+            // (fewer on the right, where the green and the view break the row)
+            expect(row.length).toBeGreaterThan(25);
             // Low walls stand only for short stretches
             for (const w of lane.walls.filter(g => g.side === side && g.kind === 'wall' && !g.upM)) expect(w.to - w.from).toBeLessThanOrEqual(3.01);
             // The left from the top; the right after the top wall
@@ -161,7 +162,8 @@ describe('the lane', () => {
             }
             for (const c of row) {
                 expect(c.foot).toBeLessThan(Math.min(lane.sample(c.from).y, lane.sample(c.to).y));
-                expect(c.ridge).toBeGreaterThan(c.eaves + 2);
+                // (a lean-to's roof is low and shallow)
+                expect(c.ridge).toBeGreaterThan(c.eaves + (c.kind === 'leanto' ? 1 : 2));
             }
         }
         // No two neighbours across the lane or along it alike in every finish

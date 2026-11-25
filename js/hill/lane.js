@@ -39,10 +39,26 @@ class HillLane {
             // semi-detached one stands between (m), the share of garden walls with a gate
             // Thatch on this share of the buildings before thatchToS
             thatchToS: 240, thatchShare: 0.75,
-            kinds: { terrace: 0.52, semi: 0.16, detached: 0.14, shop: 0.12, pub: 0.02, garden: 0.04 }, gardenM: [4, 9], gateShare: 0.4,
+            kinds: { terrace: 0.45, semi: 0.16, detached: 0.14, shop: 0.12, pub: 0.02, garden: 0.04, barn: 0.03, leanto: 0.04 }, gardenM: [4, 9], gateShare: 0.4,
+            // The share of two-storey buildings after the opening (the rest one storey, so the roofs step down); a barn's
+            // width and its low eaves and ridge, a lean-to's
+            twoStoreyShare: 0.55, barn: { wide: [14, 19], eavesUpM: 2.5, ridgeUpM: 2.2 }, leanto: { wide: [3, 4.2], eavesUpM: 2.3, ridgeUpM: 1.1 },
+            // Some buildings stand back behind a front garden with its wall or hedge and a gate: the share (a detached
+            // cottage more often), how far back (m), and from where along the lane
+            setBack: { share: 0.14, detachedShare: 0.6, backM: [3, 6], fromS: 95 },
+            // The village green, on the right opposite the church: the lane runs along it, houses stand back round it
+            // (the one at its top endBackM back, the rest deepM; a garden at its foot), a big tree, a bench and a pump on it
+            // The low sun comes from down the lane, so the houses round it and lowAfterM below it are one storey
+            green: { side: -1, fromS: 204, toS: 248, deepM: 22, endBackM: 9, lowAfterM: 26, tree: [0.5, 12, 13], bench: [0.36, 2.2], pump: [0.66, 3.4] },
+            // The view over the vale: a break in the houses on the downhill side of the main straight, a low wall with a
+            // railing on it, the land falling away below it (fallPerM) from just behind the wall
+            view: { side: -1, fromS: 124, toS: 164, wallUpM: 0.7, fallPerM: 0.6, easeM: 6 },
+            // Close again before the sharp right: from here to its start, two-storey terraces and shops on both sides,
+            // tall, with no gaps and none set back
+            tight: { fromS: 330, toS: 376, eavesUpM: 5.6 },
             // The church, set back behind its churchyard wall on one side: where along the lane, its frontage, how far
             // back, and its nave and tower
-            church: { side: 1, fromS: 205, frontageM: 34, backM: 9, nave: [17, 8, 6, 10.5], tower: [5, 5, 15], spire: 9 },
+            church: { side: 1, fromS: 205, frontageM: 34, backM: 15, nave: [17, 8, 6, 10.5], tower: [5, 5, 15], spire: 9 },
             // The cobbles: a sett's length along and width across the lane, how high the highest crown stands (each
             // sett its own height, settLeast of that at the least)
             settLongM: 0.17, settWideM: 0.14, settUpM: 0.014, settLeast: 0.45,
@@ -108,6 +124,9 @@ class HillLane {
         }
         this.bottomY = this.points[this.points.length - 1].y;
         this.walls = [];
+        // Where the land stays level with the lane further out than usual (HillLand), as { side, fromS, toS, bandM,
+        // easeM, fall }: round the green and the churchyard; and where it falls away sooner (the view)
+        this.bands = [];
         this.sideRoads = (rule.sideRoads || []).map(road => this.sideRoad(road));
         this.cottages = [...this.placeCottages(1), ...this.placeCottages(-1)];
         for (const road of this.sideRoads) this.lineSideRoad(road);
@@ -487,8 +506,23 @@ class HillLane {
         const kinds = Object.entries(r.kinds);
         const pickKind = () => { let x = rand(); for (const [k, share] of kinds) { if ((x -= share) < 0) return k; } return 'terrace'; };
         const C = r.church;
-        let pair = 0;
+        const zones = [r.green, r.view].filter(z => z && z.side === side);
+        const tight = at => r.tight && at + 1 > r.tight.fromS && at < r.tight.toS;
+        let pair = 0, pairBack = 0;
         while (s < lastM) {
+            // The green or the view: a garden wall up to it, then the place itself
+            const zone = zones.find(z => z.toS > s && z.fromS < s + r.cottageWide[1] + 3);
+            if (zone) {
+                if (zone.fromS - s > 0.3) this.walls.push({ side, from: s, to: zone.fromS, kind: 'garden', gate: false });
+                if (zone === r.green) this.placeGreen(side, zone, list, rand);
+                else {
+                    this.walls.push({ side, from: zone.fromS, to: zone.toS, kind: 'view', upM: zone.wallUpM });
+                    this.bands.push({ side, fromS: zone.fromS, toS: zone.toS, bandM: r.halfWidthM + r.flagsM + 0.6, easeM: zone.easeM, fall: zone.fallPerM });
+                }
+                s = Math.max(s, zone.toS);
+                pair = 0;
+                continue;
+            }
             // A side road's mouth: the frontage stops short of it, a garden wall to its edge, and goes on past it
             const mouth = this.sideRoads.find(m => m.side === side && m.to > s && m.from < s + r.cottageWide[1] + 3);
             if (mouth) {
@@ -503,18 +537,22 @@ class HillLane {
                 const to = Math.min(lastM, s + C.frontageM);
                 this.walls.push({ side, from: s, to, kind: 'churchyard', gate: true, upM: 1.2 });
                 this.church = { ...this.frame(side, s + 4, s + 4 + C.nave[0], C.nave[1], C.backM), kind: 'church' };
+                this.bands.push({ side, fromS: s, toS: to, bandM: r.halfWidthM + r.flagsM + C.backM + C.nave[1] + 6 });
                 s = to;
                 continue;
             }
             let kind = pair > 0 ? 'semi' : pickKind();
+            // Close before the sharp right: terraces and shops only
+            if (tight(s) && !['terrace', 'shop'].includes(kind)) kind = 'terrace';
             if (kind === 'garden') {
                 const gap = this.upTo(side, s, r.gardenM[0] + rand() * (r.gardenM[1] - r.gardenM[0]));
                 this.walls.push({ side, from: s, to: Math.min(s + gap, lastM), kind: 'garden', gate: rand() < r.gateShare });
                 s += gap;
                 continue;
             }
-            const wide = Math.min((kind === 'pub' ? 10 : kind === 'detached' ? 7 : r.cottageWide[0]) + rand() * (r.cottageWide[1] - r.cottageWide[0]), lastM - s);
-            if (wide < 3.5) break;
+            const span = kind === 'barn' ? r.barn.wide : kind === 'leanto' ? r.leanto.wide : [kind === 'pub' ? 10 : kind === 'detached' ? 7 : r.cottageWide[0], (kind === 'pub' ? 10 : kind === 'detached' ? 7 : r.cottageWide[0]) + r.cottageWide[1] - r.cottageWide[0]];
+            const wide = Math.min(span[0] + rand() * (span[1] - span[0]), lastM - s);
+            if (lastM - s < 3) break;
             // On the inside of a turn tighter than innerRadiusM no building fits: a low wall stands there instead
             if (!this.fits(s, s + wide, side)) {
                 const gap = Math.min(2, lastM - s);
@@ -522,20 +560,43 @@ class HillLane {
                 s += gap;
                 continue;
             }
-            const storeys = rand() < 0.75 || kind === 'pub' || kind === 'shop' ? 2 : 1;
-            const eaves = r.eavesUpM[storeys - 1];
-            const ridge = r.ridgeUpM[0] + rand() * (r.ridgeUpM[1] - r.ridgeUpM[0]);
-            const f = this.frame(side, s, s + wide, r.cottageDeepM);
+            const low = kind === 'barn' || kind === 'leanto';
+            const belowGreen = r.green && side === r.green.side && s >= r.green.toS && s < r.green.toS + r.green.lowAfterM;
+            const storeys = !low && !belowGreen && (rand() < r.twoStoreyShare || kind === 'pub' || kind === 'shop' || tight(s)) ? 2 : 1;
+            const eaves = kind === 'barn' ? r.barn.eavesUpM : kind === 'leanto' ? r.leanto.eavesUpM : tight(s) ? r.tight.eavesUpM : r.eavesUpM[storeys - 1];
+            const ridge = kind === 'barn' ? r.barn.ridgeUpM : kind === 'leanto' ? r.leanto.ridgeUpM : r.ridgeUpM[0] + rand() * (r.ridgeUpM[1] - r.ridgeUpM[0]);
+            // Set back behind a front garden now and then (a pair together), never in the tight stretch or the opening
+            let back = 0;
+            const B = r.setBack;
+            if (kind === 'semi' && pair > 0) back = pairBack;
+            else if (!low && kind !== 'shop' && kind !== 'pub' && s >= B.fromS && !tight(s) && !tight(s + wide) && rand() < (kind === 'detached' ? B.detachedShare : B.share)) back = B.backM[0] + rand() * (B.backM[1] - B.backM[0]);
+            if (kind === 'semi' && pair === 0) pairBack = back;
+            const f = this.frame(side, s, s + wide, r.cottageDeepM, back);
             const finish = this.finishes(rand, kind);
+            if (back > 0) {
+                finish.front = 'flags';
+                finish.porch = false;
+                this.walls.push({ side, from: s, to: s + wide, kind: 'front', deep: back, gateS: s + wide * finish.door });
+            }
+            if (low) {
+                finish.gable = false;
+                finish.chimney = 0;
+                finish.dormers = false;
+                finish.porch = false;
+                finish.front = 'flags';
+                if (kind === 'barn') finish.roof = ['slate', 'tile', 'thatch'][Math.floor(rand() * 3)];
+            }
             // Thatch over most of what the opening and the main straight see, as in the stills; tile and slate now and then
             if (f.mid < r.thatchToS && kind !== 'shop' && rand() < r.thatchShare) finish.roof = 'thatch';
             // No two neighbours alike in every finish: a like one takes another door colour
             const prev = list[list.length - 1];
             if (prev && ['wall', 'roof', 'gable', 'front', 'porch', 'doorColour'].every(k => prev[k] === finish[k])) finish.doorColour = (finish.doorColour + 1) % 5;
-            list.push({ ...f, kind, ...finish, eaves: f.floor + eaves, ridge: f.floor + eaves + ridge, storeys });
+            list.push({ ...f, kind, ...finish, eaves: f.floor + eaves, ridge: f.floor + eaves + ridge, storeys, back });
             s += wide;
-            // A semi-detached pair is two; a detached cottage, or the end of a pair, stands with a garden after it
+            // A semi-detached pair is two; a detached cottage, or the end of a pair, stands with a garden after it (none
+            // in the tight stretch)
             if (kind === 'semi') pair = pair > 0 ? 0 : 1;
+            if (tight(s)) continue;
             if (kind === 'detached' || (kind === 'semi' && pair === 0)) {
                 const gap = this.upTo(side, s, r.gardenM[0] + rand() * (r.gardenM[1] - r.gardenM[0]));
                 this.walls.push({ side, from: s, to: Math.min(s + gap, lastM), kind: 'garden', gate: rand() < r.gateShare });
@@ -547,6 +608,32 @@ class HillLane {
             }
         }
         return list;
+    }
+
+    // The village green (RULE.green) on `side`: open to the lane, with houses standing back round it (the end ones
+    // endBackM, the rest deepM back), facing the lane across it
+    placeGreen(side, g, list, rand) {
+        const r = this.rule;
+        this.walls.push({ side, from: g.fromS, to: g.toS, kind: 'green', deep: g.deepM });
+        this.bands.push({ side, fromS: g.fromS, toS: g.toS, bandM: r.halfWidthM + r.flagsM + g.deepM + r.cottageDeepM + 10 });
+        const end = 7.5, middle = g.toS - g.fromS - 2 * end, count = Math.max(1, Math.round(middle / 8.5));
+        const places = [[g.fromS, g.fromS + end, g.endBackM]];
+        for (let i = 0; i < count; i++) places.push([g.fromS + end + middle * i / count, g.fromS + end + middle * (i + 1) / count, g.deepM]);
+        // (its downhill end is a garden, not a house: the low sun comes from down the lane, and a house there would
+        // shade the whole green)
+        this.walls.push({ side, from: g.toS - end, to: g.toS, kind: 'garden', gate: true });
+        for (const [from, to, back] of places) {
+            const f = this.frame(side, from, to, r.cottageDeepM, back);
+            const finish = this.finishes(rand, 'terrace');
+            finish.front = 'flags';
+            // (one storey but at its top, uphill of the green, where its shadow falls away from it)
+            const storeys = back === g.endBackM && rand() < r.twoStoreyShare ? 2 : 1;
+            const eaves = r.eavesUpM[storeys - 1], ridge = r.ridgeUpM[0] + rand() * (r.ridgeUpM[1] - r.ridgeUpM[0]);
+            const prev = list[list.length - 1];
+            if (prev && ['wall', 'roof', 'gable', 'front', 'porch', 'doorColour'].every(k => prev[k] === finish[k])) finish.doorColour = (finish.doorColour + 1) % 5;
+            list.push({ ...f, kind: 'terrace', ...finish, eaves: f.floor + eaves, ridge: f.floor + eaves + ridge, storeys, back, green: true });
+        }
+        this.green = { ...g, sideOf: side };
     }
 
     // A length from `s` on `side`, cut short at the next side road's mouth
@@ -761,25 +848,28 @@ class HillLand {
     // The land's own height at (x, z), before it is drawn on a grid
     raw(x, z) {
         const R = HillLand.RULE;
-        const n = this.near(x, z);
-        const out = Math.max(0, n.d - R.bandM);
-        let y = n.y + R.liftM * (1 - HillLand.smooth(out / R.easeM));
+        const n = this.near(x, z), b = this.bandAt(x, z, n);
+        const out = Math.max(0, n.d - b.band);
+        let y = n.y + R.liftM * (1 - HillLand.smooth(out / b.ease));
         if (out > 0) {
             const towards = n.ux * this.vale.x + n.uz * this.vale.z;
-            const slope = towards > 0 ? -R.fall * towards : R.rise * -towards;
-            const eased = out < R.easeM ? out * out / (2 * R.easeM) : out - R.easeM / 2;
+            const slope = towards > 0 ? -b.fall * towards : R.rise * -towards;
+            const eased = out < b.ease ? out * out / (2 * b.ease) : out - b.ease / 2;
             const hills = 60 * HillLand.smooth((eased * towards - 1100) / 700);
             const ripple = 3 * Math.sin(x * 0.011) * Math.cos(z * 0.009) + 1.5 * Math.sin(x * 0.031 + z * 0.017);
             y += Math.max(-70, slope * eased) + hills + ripple * HillLand.smooth(out / 60);
         }
-        if (n.d > R.bandM + R.padEaseM + 12) return y;
+        if (n.d > b.band + R.padEaseM + 12) return y;
         // The levelled yards: inside one the land is its level; within padEaseM of one it eases back
         let wmax = 0, wsum = 0, ysum = 0, inside = null;
         for (const p of this.pads) {
             const dx = x - p.x, dz = z - p.z;
             if (dx * dx + dz * dz > p.reach2) continue;
             const a = dx * p.ax + dz * p.az, o = dx * p.ox + dz * p.oz;
-            const ea = Math.max(0, p.along0 - a, a - p.along1), eo = Math.max(0, p.out0 - o, o - p.out1);
+            // (a yard does not ease out in front of its house, nor beside its first 2 m: there the land meets the flags,
+            // the front garden or the green; under the house it is not seen)
+            if (o < p.out0 + 2) continue;
+            const ea = Math.max(0, p.along0 - a, a - p.along1), eo = Math.max(0, o - p.out1);
             if (ea >= R.padEaseM || eo >= R.padEaseM) continue;
             const e = Math.sqrt(ea * ea + eo * eo);
             if (e >= R.padEaseM) continue;
@@ -803,6 +893,25 @@ class HillLand {
         return c * c * (3 - 2 * c);
     }
 
+    // The band at (x, z) (`n` from HillLand.near): how far out the land stays level with the lane, how it eases into
+    // the hillside and how fast it then falls; wider round the green and the churchyard, narrow at the view, eased in
+    // over 8 m along the lane at their ends (HillLane.bands)
+    bandAt(x, z, n) {
+        const R = HillLand.RULE, bands = this.lane.bands || [];
+        const plain = { band: R.bandM, ease: R.easeM, fall: R.fall };
+        if (!bands.length || n.s === null || n.s === undefined) return plain;
+        const p = this.lane.sample(n.s), side = (x - p.x) * p.leftX + (z - p.z) * p.leftZ > 0 ? 1 : -1;
+        let k = 0, pick = null;
+        for (const b of bands) {
+            if (b.side !== side) continue;
+            const w = HillLand.smooth(1 - Math.max(0, b.fromS - n.s, n.s - b.toS) / 8);
+            if (w > k) { k = w; pick = b; }
+        }
+        if (!pick) return plain;
+        const mix = (a, v) => a + ((v === undefined ? a : v) - a) * k;
+        return { band: mix(R.bandM, pick.bandM), ease: mix(R.easeM, pick.easeM), fall: mix(R.fall, pick.fall) };
+    }
+
     // The coarse grid out to the hills, and the fine grid inside the coarse cells that come within reachM of the lane or
     // a side road: the fine grid's cells are cellM, a whole number to a coarse cell, so the two meet edge to edge; where
     // they meet the fine grid's edge takes the coarse grid's heights, so no gap opens between them
@@ -813,9 +922,10 @@ class HillLand {
         const x0 = mid.x + m.alongX * 500 - R.valeM / 2, z0 = mid.z + m.alongZ * 500 - R.valeM / 2;
         const heights = new Float32Array((n + 1) * (n + 1));
         for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) heights[i * (n + 1) + j] = this.raw(x0 + i * c, z0 + j * c);
-        // A coarse cell is fine when a path point comes within reachM of it
+        // A coarse cell is fine when a path point, or a corner of a yard, comes within reachM of it
         const covered = new Uint8Array(n * n);
-        for (const p of this.paths) {
+        const yards = this.pads.flatMap(p => [[p.along0, p.out0], [p.along1, p.out0], [p.along0, p.out1], [p.along1, p.out1]].map(([a, o]) => ({ x: p.x + p.ax * a + p.ox * o, z: p.z + p.az * a + p.oz * o })));
+        for (const p of [...this.paths, ...yards]) {
             const i0 = Math.max(0, Math.floor((p.x - R.reachM - x0) / c)), i1 = Math.min(n - 1, Math.floor((p.x + R.reachM - x0) / c));
             const j0 = Math.max(0, Math.floor((p.z - R.reachM - z0) / c)), j1 = Math.min(n - 1, Math.floor((p.z + R.reachM - z0) / c));
             for (let i = i0; i <= i1; i++) {
@@ -896,8 +1006,9 @@ class HillLand {
             for (const p of road.points) {
                 const dx = x - p.x, dz = z - p.z;
                 const along = dx * p.dirX + dz * p.dirZ, w = dx * p.crossX + dz * p.crossZ;
-                // (a point of the road's centre line beside this one, and the point within the road or `margin` of it)
-                if (Math.abs(along) > 0.26 && !(p.d === 0 && along < 0 && along >= -margin) && !(p === road.points[road.points.length - 1] && along > 0 && along <= margin)) continue;
+                // (a point of the road's centre line beside this one, with overlap round a bend, and the point within
+                // the road or `margin` of it)
+                if (Math.abs(along) > 0.4 && !(p.d === 0 && along < 0 && along >= -margin) && !(p === road.points[road.points.length - 1] && along > 0 && along <= margin)) continue;
                 if (Math.abs(w) > half + margin) continue;
                 // Over the steps, with a margin, the lowest tread in reach
                 const d = Math.max(0, Math.min(road.length, p.d + along - (low && road.kind === 'steps' ? margin : 0)));

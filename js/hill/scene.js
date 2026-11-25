@@ -321,6 +321,8 @@ class HillScene {
                 });
             }
             const built = mesh.mesh(material);
+            // (the lawns lie on the land: they take shadows but cast none, or they shade themselves in stripes)
+            if (key === 'grass') built.castShadow = false;
             built.name = `hill-${key}`;
             group.add(built);
         }
@@ -469,9 +471,12 @@ class HillScene {
         const r = lane.rule;
         const rand = HillScene.gapRandom(gap);
         const front = gap.side * (r.halfWidthM + r.flagsM + 0.15);
-        const hedge = gap.kind === 'garden' && rand() < 0.45;
-        const gateAt = gap.gate ? gap.from + (gap.to - gap.from) * (0.3 + rand() * 0.4) : null;
-        for (let s = gap.from; s < gap.to - 0.05; s += 1) {
+        const garden = gap.kind === 'garden' || gap.kind === 'front';
+        const hedge = garden && rand() < 0.45;
+        const gateAt = HillScene.gateAt(gap);
+        if (gap.gate) rand();
+        // The green is open to the lane: no wall along it
+        for (let s = gap.from; s < gap.to - 0.05 && gap.kind !== 'green'; s += 1) {
             const e = Math.min(s + 1, gap.to);
             if (gateAt !== null && Math.abs((s + e) / 2 - gateAt) < 0.6) {
                 // The gate: two stone piers and a wooden gate between, a little open
@@ -495,25 +500,39 @@ class HillScene {
             const top = mid.y + (gap.upM || r.lowWallUpM);
             HillScene.standing(lane, repeats, gap.kind === 'churchyard' ? 'churchyard wall' : 'wall', meshes.rubble, [at.x, at.z], [mid.alongX * half, mid.alongZ * half], [mid.leftX * 0.15, mid.leftZ * 0.15], top, rgb(C.gardenWall), { sink: 0.3, low: mid.y - 0.3 });
             meshes.dressed.box([at.x, top + 0.05, at.z], [mid.alongX * (half + 0.02), 0, mid.alongZ * (half + 0.02)], [0, 0.05, 0], [mid.leftX * 0.2, 0, mid.leftZ * 0.2], rgb(C.coping));
+            if (gap.kind === 'view') {
+                // The view's railing on the wall's coping: posts on it, a rail along their tops falling with the wall
+                const m = new THREE.Matrix4(), q = new THREE.Quaternion(), size = new THREE.Vector3(1, 0.85, 1);
+                for (let k = 0; k < 4; k++) {
+                    const pt = lane.at(s + (k + 0.5) * (e - s) / 4, front, 0, {}), y = lane.sample(s + (k + 0.5) * (e - s) / 4).y + gap.upM + 0.1;
+                    repeats.posts.push(m.clone().compose(new THREE.Vector3(pt.x, y + 0.425, pt.z), q, size));
+                }
+                const a = lane.at(s, front, 0, {}), b = lane.at(e, front, 0, {});
+                const ya = lane.sample(s).y + gap.upM + 0.92, yb = lane.sample(e).y + gap.upM + 0.92;
+                meshes.dark.box([(a.x + b.x) / 2, (ya + yb) / 2, (a.z + b.z) / 2], [(b.x - a.x) / 2, (yb - ya) / 2, (b.z - a.z) / 2], [0, 0.025, 0], [mid.leftX * 0.025, 0, mid.leftZ * 0.025], rgb(C.iron));
+            }
         }
-        if (gap.kind !== 'garden' && gap.kind !== 'churchyard') return;
-        // The lawn behind, as deep as a cottage, with shrubs and flowers along its edges and a tree
-        const deep = gap.kind === 'churchyard' ? r.church.backM + r.church.nave[1] + 4 : r.cottageDeepM;
-        // (laid on the land, a metre at a time each way, a little over it)
+        if (gap.kind === 'green') HillScene.green(lane, gap, meshes, repeats);
+        if (!garden && gap.kind !== 'churchyard' && gap.kind !== 'green') return;
+        // The garden behind, as deep as a cottage (a front garden to its house, the green and the churchyard their own),
+        // with shrubs and flowers along its edges and a tree
+        const deep = gap.kind === 'churchyard' ? r.church.backM + r.church.nave[1] + 4 : gap.kind === 'front' ? gap.deep - 0.15 : gap.deep || r.cottageDeepM;
+        // (the lawn is the land itself, drawn as grass; the path and the beds are laid on it)
         const land = lane.ground();
         const on = (s, across) => {
             const q = lane.at(s, across, 0, {});
             return [q.x, land.heightAt(q.x, q.z) + 0.05, q.z];
         };
-        const rows = Math.max(1, Math.ceil(deep - 0.2));
-        for (let s = gap.from; s < gap.to - 0.05; s += 1) {
-            const e = Math.min(s + 1, gap.to);
-            for (let k = 0; k < rows; k++) {
-                const a0 = front + gap.side * (0.2 + (deep - 0.2) * k / rows), a1 = front + gap.side * (0.2 + (deep - 0.2) * (k + 1) / rows);
-                meshes.grass.quad(on(s, a0), on(e, a0), on(e, a1), on(s, a1), rgb(0x7f9a5a));
+        if (gap.kind === 'churchyard' || gap.kind === 'green') return;
+        if (gap.kind === 'front' && gateAt !== null) {
+            // The path from the gate to the door, flags laid on the land
+            const flags = rgb(C.flags);
+            for (let k = 0; k < Math.ceil(deep); k++) {
+                const a0 = front + gap.side * (0.15 + k * deep / Math.ceil(deep)), a1 = front + gap.side * (0.15 + (k + 1) * deep / Math.ceil(deep));
+                const lift = (q) => [q[0], q[1] + 0.02, q[2]];
+                meshes.dressed.quad(lift(on(gateAt - 0.45, a0)), lift(on(gateAt + 0.45, a0)), lift(on(gateAt + 0.45, a1)), lift(on(gateAt - 0.45, a1)), flags);
             }
         }
-        if (gap.kind === 'churchyard') return;
         const greens = [0x4e6236, 0x5d7440, 0x445a30];
         const blooms = [0xc8463a, 0xe0c04a, 0xe8e2d8, 0x9a5aa0];
         for (let i = 0; i < 3 + Math.floor(rand() * 4); i++) {
@@ -526,10 +545,50 @@ class HillScene {
             HillScene.stand(repeats, 'shrub', [a.x, a.z], [1, 0], 0.1, [0, 1], 0.1, a.y - size * 0.8);
             if (rand() < 0.6) for (let k = 0; k < 4; k++) HillScene.flower(repeats, [a.x + (rand() - 0.5) * size, a.y + size * 0.6, a.z + (rand() - 0.5) * size], 0.06, blooms[Math.floor(rand() * blooms.length)]);
         }
-        if (gap.to - gap.from > 4 && rand() < 0.7) {
+        if (gap.kind === 'garden' && gap.to - gap.from > 4 && rand() < 0.7) {
             const s = (gap.from + gap.to) / 2, a = lane.at(s, front + gap.side * (deep - 1.5), 0, {});
             HillScene.tree(repeats, a.x, HillScene.lowestSurface(lane, a.x, a.z, [1, 0], 0.4, [0, 1], 0.4) - 0.1, a.z, 6 + rand() * 4, rand() < 0.5, rand);
         }
+    }
+
+    // The green's things (HillLane.RULE.green): a big tree, a bench facing the lane and an iron pump over a stone
+    // trough, each standing in the land
+    static green(lane, gap, meshes, repeats) {
+        const C = HillScene.COLOURS, rgb = HillScene.rgb, r = lane.rule, g = r.green, land = lane.ground();
+        const edge = r.halfWidthM + r.flagsM + 0.3;
+        const place = (share, out) => {
+            const s = gap.from + (gap.to - gap.from) * share, p = lane.sample(s), q = lane.at(s, gap.side * (edge + out), 0, {});
+            return { x: q.x, z: q.z, a: [p.alongX, p.alongZ], o: [p.leftX * gap.side, p.leftZ * gap.side], heading: p.heading };
+        };
+        // The tree: a broad trunk and a wide crown of clumps
+        const t = place(g.tree[0], g.tree[1]), high = g.tree[2];
+        const ground = HillScene.lowestSurface(lane, t.x, t.z, [1, 0], 0.7, [0, 1], 0.7) - 0.1;
+        repeats.trunks.push(new THREE.Matrix4().compose(new THREE.Vector3(t.x, ground, t.z), new THREE.Quaternion(), new THREE.Vector3(0.55, high * 0.55, 0.55)));
+        HillScene.stand(repeats, 'tree', [t.x, t.z], [1, 0], 0.3, [0, 1], 0.3, ground);
+        const rand = HillLane.random(Math.round(gap.from * 11));
+        for (let i = 0; i < 9; i++) {
+            const a = i / 9 * Math.PI * 2, reach = i === 0 ? 0 : 2.6 + rand() * 1.4, size = 2.6 + rand() * 1.4;
+            const centre = [t.x + Math.cos(a) * reach, ground + high * (0.62 + rand() * 0.22), t.z + Math.sin(a) * reach];
+            HillScene.leaf(repeats, centre, size, size * 0.8, size, [0x55693a, 0x4a5e34, 0x627646][i % 3]);
+        }
+        // The bench: two stone ends standing in the land, a timber seat and back between, along the lane
+        const b = place(g.bench[0], g.bench[1]), wood = rgb(0x6a5440), stone = rgb(C.coping);
+        // (the seat at the higher end's ground, so both ends reach it)
+        const ends = [-0.75, 0.75].map(k => [b.x + b.a[0] * k, b.z + b.a[1] * k]);
+        const seat = Math.max(...ends.map(at => land.surfaceAt(at[0], at[1])));
+        const top = seat + 0.45;
+        for (const k of [-0.75, 0.75]) HillScene.standing(lane, repeats, 'bench end', meshes.dressed, [b.x + b.a[0] * k, b.z + b.a[1] * k], [b.a[0] * 0.06, b.a[1] * 0.06], [b.o[0] * 0.22, b.o[1] * 0.22], top, stone);
+        meshes.plain.box([b.x, top + 0.03, b.z], [b.a[0] * 0.9, 0, b.a[1] * 0.9], [0, 0.03, 0], [b.o[0] * 0.24, 0, b.o[1] * 0.24], wood);
+        meshes.plain.box([b.x + b.o[0] * 0.22, top + 0.35, b.z + b.o[1] * 0.22], [b.a[0] * 0.9, 0, b.a[1] * 0.9], [0, 0.18, 0], [b.o[0] * 0.03, 0, b.o[1] * 0.03], wood);
+        // The pump: a stone trough and the iron column beside it, its spout over the trough and its handle
+        const p = place(g.pump[0], g.pump[1]);
+        const trough = HillScene.standing(lane, repeats, 'trough', meshes.dressed, [p.x, p.z], [p.a[0] * 0.6, p.a[1] * 0.6], [p.o[0] * 0.3, p.o[1] * 0.3], land.heightAt(p.x, p.z) + 0.5, stone);
+        const col = [p.x + p.o[0] * 0.55, p.z + p.o[1] * 0.55];
+        const colTop = trough + 0.3 + 1.45;
+        HillScene.standing(lane, repeats, 'pump', meshes.dark, col, [p.a[0] * 0.09, p.a[1] * 0.09], [p.o[0] * 0.09, p.o[1] * 0.09], colTop, rgb(C.iron));
+        meshes.dark.box([col[0] - p.o[0] * 0.2, colTop - 0.35, col[1] - p.o[1] * 0.2], [p.a[0] * 0.03, 0, p.a[1] * 0.03], [0, 0.03, 0], [p.o[0] * 0.2, 0, p.o[1] * 0.2], rgb(C.iron));
+        meshes.dark.box([col[0] + p.a[0] * 0.3, colTop - 0.1, col[1] + p.a[1] * 0.3], [p.a[0] * 0.3, 0.12, p.a[1] * 0.3], [0, 0.02, 0], [p.o[0] * 0.02, 0, p.o[1] * 0.02], rgb(C.iron));
+        meshes.dark.box([col[0], colTop + 0.06, col[1]], [p.a[0] * 0.12, 0, p.a[1] * 0.12], [0, 0.06, 0], [p.o[0] * 0.12, 0, p.o[1] * 0.12], rgb(C.iron));
     }
 
     // A gap's own random sequence (HillScene.gap draws from it in order: the hedge, then the gate's place)
@@ -539,6 +598,7 @@ class HillScene {
 
     // Where a gap's gate stands along the lane (s), or null
     static gateAt(gap) {
+        if (gap.gateS !== undefined) return gap.gateS;
         if (!gap.gate) return null;
         const rand = HillScene.gapRandom(gap);
         if (gap.kind === 'garden') rand();
@@ -588,19 +648,23 @@ class HillScene {
         // tower's door
         const land = lane.ground();
         const rand = HillLane.random(Math.round(c.from * 13));
-        for (let row = 0; row < 3; row++) for (let i = 0; i < 6; i++) {
+        for (let row = 0; row < 5; row++) for (let i = 0; i < 6; i++) {
             if (rand() < 0.3) continue;
             const along = -hw + 1 + i * (length - 2) / 5 + (rand() - 0.5) * 0.6;
             const turn = c.heading + (rand() - 0.5) * 0.2, high = 0.7 + rand() * 0.3;
             const at = pt(along, 0, -hd - 2 - row * 1.8);
             const ux = Math.sin(turn), uz = Math.cos(turn);
             const ground = HillScene.lowestSurface(lane, at[0], at[2], [ux, uz], 0.25, [uz, -ux], 0.05);
-            const m = new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + high / 2, at[2]), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn), new THREE.Vector3(0.5, high, 0.1));
-            repeats.stones.push(m);
+            const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn);
+            if (rand() < 0.3) {
+                // A plain cross: an upright and its arm
+                repeats.stones.push(new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + (high + 0.2) / 2, at[2]), q, new THREE.Vector3(0.12, high + 0.2, 0.1)));
+                repeats.stones.push(new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + high * 0.78, at[2]), q, new THREE.Vector3(0.5, 0.12, 0.1)));
+            } else repeats.stones.push(new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + high / 2, at[2]), q, new THREE.Vector3(0.5, high, 0.1)));
             HillScene.stand(repeats, 'gravestone', [at[0], at[2]], [ux, uz], 0.25, [uz, -ux], 0.05, ground - 0.12);
         }
-        for (const along of [-hw + 1, hw - 1]) {
-            const at = pt(along, 0, -hd - 7.5);
+        for (const [along, out] of [[-hw + 1, -hd - 11], [hw - 1, -hd - 11], [-hw - 4, -hd - 3], [hw + 1.5, -hd - 4]]) {
+            const at = pt(along, 0, out);
             const ground = HillScene.lowestSurface(lane, at[0], at[2], [c.alongX, c.alongZ], 0.8, [c.outX, c.outZ], 0.8);
             // A yew: a dark column of clumps narrowing to its top
             for (let k = 0; k < 4; k++) HillScene.leaf(repeats, [at[0], ground + 0.8 + k * 1.1, at[2]], 1.3 - k * 0.25, 0.9, 1.3 - k * 0.25, [0x2e3e26, 0x34462c][k % 2]);
@@ -1175,9 +1239,11 @@ class HillScene {
         for (let i = 0; i < count * 2 && placed < count; i++) {
             const ahead = -900 + rand() * 1800, aside = (rand() - 0.5) * 1800;
             const x = end.x + end.alongX * ahead + end.leftX * aside, z = end.z + end.alongZ * ahead + end.leftZ * aside;
-            // Not on the lane, its path or the cottages
+            // Not on the lane, its path or the cottages, nor in the band of houses and yards along it
             const near = HillScene.nearLane(lane, x, z);
             if (near < 18) continue;
+            const n = land.near(x, z);
+            if (n.d < land.bandAt(x, z, n).band + 6) continue;
             const size = 2.5 + rand() * 3.5, high = size * (0.8 + rand() * 0.5);
             // (the crown's foot a little into the land under it)
             const ground = land.heightAt(x, z);

@@ -22,7 +22,15 @@ The owner gave key frames of the scene he had in mind. The frames are private an
 
 The lane is 572 m long and falls more than 60 m over the ride.
 
-The buildings stand on each side behind a strip of flags. Each side has its own seed. They are of several kinds (`RULE.kinds`): terraces, semi-detached pairs, detached cottages with a garden after them, shops, a pub, and gardens behind a wall or a hedge, now and then with a gate. A low garden wall stands where no building can: in a gap, or on the inside of a turn tighter than `innerRadiusM`. The church (`RULE.church`) stands back behind its churchyard wall and gate, with a tower, a spire and gravestones.
+The buildings stand on each side behind a strip of flags. Each side has its own seed. They are of several kinds (`RULE.kinds`): terraces, semi-detached pairs, detached cottages with a garden after them, shops, a pub, long low barns, lean-tos, and gardens behind a wall or a hedge, now and then with a gate. A low garden wall stands where no building can: in a gap, or on the inside of a turn tighter than `innerRadiusM`.
+
+The street opens out in places, so it is not a tunnel:
+- **Lower roofs.** After the opening only `twoStoreyShare` (0.55) of the buildings have two storeys. Barns (`RULE.barn`) and lean-tos (`RULE.leanto`) are lower again.
+- **Set back.** Now and then a building stands 3 to 6 m back (`RULE.setBack`; a detached cottage more often, a pair together) behind a front garden with its wall or hedge, a gate at the door and a flagged path.
+- **The view** (`RULE.view`). On the downhill side of the main straight, from s 124 to 164, no buildings stand. A low wall with an iron railing runs along the flags, and the land falls away just behind it to the vale.
+- **The green** (`RULE.green`). Opposite the church, from s 204 to 248, the lane runs along a sloping green with a big tree, a bench and a pump. Houses stand back round it, and a garden is at its foot. The low sun comes from down the lane, so the houses round it and for `lowAfterM` below it have one storey, and the sun reaches the green.
+- **The church** (`RULE.church`) stands 15 m back behind its churchyard wall and gate, with a tower, a spire, gravestones, plain crosses and four yews. It faces the green.
+- **Close again** (`RULE.tight`). From s 330 to the sharp right, both sides are two-storey terraces and shops, taller (`eavesUpM` 5.6), with no gaps and none set back. The change from open to close makes the sharp right feel faster.
 
 The opening's buildings on the left are set by hand (`RULE.opening.left`): their ends, heights, roofs, walls and chimneys are fitted to the opening frame.
 

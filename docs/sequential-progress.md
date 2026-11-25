@@ -671,3 +671,13 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Every piece that stands on the ground has its foot in the land or the paving. A railing stands post by post on the flags; a back fence closes its yard on three sides.
 - `tests/unit/hill-ground.test.js` holds it. Before: 1401 of 2335 standing pieces were more than 5 cm over the land, and in open gaps the land was about 3 m under the flags' edge. After: none, and none.
 - The vale's far trees are plainer crowns, to keep the budget: 263,458 triangles of 300,000.
+
+## The hill ride: the street opens out
+
+- After a play test the owner found the lane a tunnel. Now it opens out in places; the course line and the sharp right do not change.
+- On the downhill side of the main straight a 40 m break in the houses has a low wall with a railing, and the land falls to the vale below it.
+- Opposite the church a sloping green has a big tree, a bench and a pump, with houses standing back round it. The houses round it and below it have one storey, so the low sun from down the lane reaches it.
+- The church stands further back, with more gravestones, plain crosses and four yews.
+- Some houses stand back behind front gardens with a gate and a path. More buildings have one storey, and long low barns and lean-tos are among them.
+- Before the sharp right both sides close in with tall terraces.
+- The lawns are now the drawn land itself. The village is 252,676 triangles.
