@@ -1,9 +1,10 @@
-// The ground cover effect (js/world/groundcover.js), a prototype. Held here:
+// The ground cover effect (js/world/groundcover.js). Held here:
 //   - its pattern is the same on every page (seeded noise, no image file)
 //   - off, the land's shader takes no branch of its own: the code is behind the uniform, which is 0
 //   - a tuft and a stone stay low (TUFT_H_M, STONE_H_M over the ground): ground cover, never a thing the bike meets
 //   - the tufts and stones take the haze of a world (LandShade.haze), as everything a world draws does
-//   - the row of Effects.LIST is off by default and in every preset until the owner has seen it
+//   - the row of Effects.LIST is on by default and in the Balanced and High presets, off in Low, and Auto keeps it to
+//     the Rich level
 // The drawn result (off is the old frame to the bit, the pictures, the cost) is the browser probes' (world-cover-off,
 // world-near-ground, world-effect-shots in tools/terrain-check.mjs)
 import { describe, test, expect } from '@jest/globals';
@@ -62,11 +63,14 @@ describe('the ground cover', () => {
         }
     });
 
-    test('its row is off by default and in every preset', () => {
+    test('its row is on by default, off only in Low, and Auto keeps it to the Rich level', () => {
         const row = Effects.LIST.find(effect => effect.id === 'groundCover');
         expect(row).toBeTruthy();
         expect(Effects.problems(row)).toEqual([]);
-        expect(row.default).toBe('off');
-        expect(Object.values(row.presets)).toEqual(['off', 'off', 'off']);
+        expect(row.default).toBe('on');
+        expect(row.presets).toEqual({ low: 'off', balanced: 'on', high: 'on' });
+        // The effectMs of the ladder's Rich and Full levels (js/quality.js)
+        expect(Effects.resolve({}, 0.7).groundCover).toBe('on');
+        expect(Effects.resolve({}, 0.4).groundCover).toBe('off');
     });
 });

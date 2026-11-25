@@ -48,7 +48,7 @@ Measured with `node tools/terrain-check.mjs world-quality --world tremola --gpu 
 | Land detail | 0.1 | 0 | 0 | 0.1 |
 | Reflections | 0.1 | 0 | 0.1 | 0.1 |
 | Ground texture low / medium / high (`world-quality --desk --measure --parts fx-groundTex` at s 1319, 1600 and 2600 by day, the most of the three; at the Balanced preset's 2160 x 1350 Medium is 0.7 to 1.0) | 0.3 / 1.7 / 2.3 | | | 0.3 / 1.7 / 2.3 (Medium kept as 0.7) |
-| Ground cover (prototype; s 1600, the defaults and `groundCover`, 5 rounds, two runs: 165,000 more triangles) | 1.0 and 1.3 (GPU 0.9, 1.1) | | | 1.3 |
+| Ground cover (s 1600, the defaults and `groundCover`, 5 rounds, two runs: 165,000 more triangles) | 1.0 and 1.3 (GPU 0.9, 1.1) | | | 1.3 |
 
 The whole frame with every effect on drew in 11.6 ms by day. For scale: the pixel ratio from 2 to 1.5 saved 3.4 ms, the samples 1.9 ms, the shadows 1.5 ms.
 

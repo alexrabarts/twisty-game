@@ -59,12 +59,15 @@ const Effects = {
             apply: (game, level) => { if (typeof GroundTex !== 'undefined') GroundTex.set(game, level); }
         },
         {
-            // A prototype: off in every preset until the owner has seen it. cpu: the draw submit; making the chunks as the
+            // On by default since the owner saw it with the ground textures. cpu: the draw submit; making the chunks as the
             // bike moves takes up to GroundCover.BUDGET_MS of a frame's update besides
             id: 'groundCover', name: 'Ground cover', group: 2,
             hint: 'Close by, grass clumps, soil and small stones on the ground, and tufts and stones standing on it',
-            levels: ['off', 'on'], default: 'off', presets: { low: 'off', balanced: 'off', high: 'off' },
+            levels: ['off', 'on'], default: 'on', presets: { low: 'off', balanced: 'on', high: 'on' },
             cost: { on: 1.3 }, cpu: 0.1, needs: null,
+            // Auto keeps it to the Rich level beside the ground texture's Medium, as that row does: by its cost alone
+            // only Ultra would draw it
+            keep: { on: 0.7 },
             switch: 'GroundCover.set(game, on): a uniform the land tiles read (LandShade.patch, detail), and the instanced tufts and stones round the camera (GroundCover.frame); no material compiles again',
             apply: (game, level) => { if (typeof GroundCover !== 'undefined') GroundCover.set(game, level === 'on'); }
         },

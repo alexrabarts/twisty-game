@@ -2254,18 +2254,26 @@ function effectsSpec(spec) {
 }
 
 // What the budget probe counts: every mesh drawn in the scene, and the instances in them
+// The ground cover (js/world/groundcover.js) is counted apart: it is an effect with fixed caps of its own
+// (GroundCover.MAX_TUFTS, MAX_STONES) and a measured cost (Effects.LIST), not a load of the world's data
 function countScene() {
-    let meshes = 0, triangles = 0, instances = 0;
+    let meshes = 0, triangles = 0, instances = 0, coverTriangles = 0;
     game.scene.traverse(o => {
         if (!o.isMesh) return;
-        for (let n = o.parent; n; n = n.parent) if (!n.visible) return;
+        let cover = false;
+        for (let n = o.parent; n; n = n.parent) {
+            if (!n.visible) return;
+            if (n.name === 'ground-cover') cover = true;
+        }
         const pos = o.geometry.attributes.position;
         const index = o.geometry.index;
+        const count = (index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+        if (cover) { coverTriangles += count; return; }
         meshes++;
-        triangles += (index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+        triangles += count;
         if (o.isInstancedMesh) instances += o.count;
     });
-    return { meshes, triangles: Math.round(triangles), instances };
+    return { meshes, triangles: Math.round(triangles), instances, coverTriangles: Math.round(coverTriangles) };
 }
 
 // Put the bike on the ride at s, build the ground round it and wait for the queue to drain
