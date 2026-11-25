@@ -1,7 +1,8 @@
 // The hill ride's bicycle and boy as drawn (assets/hill/bicycle.glb, tools/blender/hill_bike.py): the file's parts
 // hung on pivots, set each frame from the bicycle's state (js/hill/bicycle.js). The wheels spin by the road speed, the
 // cranks by their own angle, the pedals stay level, and each leg is put together from hip to ankle: on its pedal, or
-// straight out to the side when the boy has taken his feet off. Nothing is allocated a frame.
+// straight out to the side when the boy has taken his feet off. On the climb he is off it and walks it up the lane
+// (WALK). Nothing is allocated a frame.
 class HillRider {
     static get FILE() { return 'assets/hill/bicycle.glb'; }
 
@@ -14,6 +15,16 @@ class HillRider {
     // again once the lean is back under untuckRad
     static get LEGS_OUT() {
         return Object.freeze({ reach: 0.996, swayM: 0.017, swayHz: 0.35, lagS: 0.12, bounceGain: 1.7, leanGain: 0.12, tuckRad: 0.31, untuckRad: 0.23, tuckS: 0.25 });
+    }
+
+    // On foot, pushing the bicycle up the climb (HillBicycle.walking), as in the reference stills: beside it on its left
+    // (+x), his hips at `hip` in the frame, bent forward over the bars by bendRad and turned in towards them by turnRad,
+    // a hand on each grip (a shoulder reaching at most reachM forward to the far one). His steps: a pace of strideM (two
+    // steps), each foot on the cobbles for `stance` of it and lifted liftM as it swings, the feet footX out from the hips'
+    // middle and backM behind it. The bicycle leans in towards him by leanRad; on and off the saddle over blendS
+    static get WALK() {
+        return Object.freeze({ hip: [0.42, 0.8, -0.2], bendRad: 0.75, turnRad: 0.35, reachM: 0.2, strideM: 1.0, stance: 0.6, liftM: 0.09, footX: 0.11, backM: 0.12,
+            leanRad: 0.06, blendS: 0.4 });
     }
 
     // The ankle over its pedal, from the pedal's pivot
@@ -77,7 +88,7 @@ class HillRider {
                 thigh: this.parts[`thigh_${tag}`], shin: this.parts[`shin_${tag}`], foot: this.parts[`foot_${tag}`], pedalPart: this.parts[`pedal_${tag}`]
             };
         });
-        this.scratch = { ankle: new THREE.Vector3(), out: new THREE.Vector3(), knee: new THREE.Vector3(), pole: new THREE.Vector3(), toe: new THREE.Vector3(), up: new THREE.Vector3(), m: new THREE.Matrix4(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3() };
+        this.scratch = { hip: new THREE.Vector3(), walkFoot: new THREE.Vector3(), ankle: new THREE.Vector3(), out: new THREE.Vector3(), knee: new THREE.Vector3(), pole: new THREE.Vector3(), toe: new THREE.Vector3(), up: new THREE.Vector3(), m: new THREE.Matrix4(), x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3() };
         this.spin = { front: 0, rear: 0 };
         // The front wheel turns with the fork and the bars about the head tube
         const steer = this.parts.steer;
@@ -172,8 +183,10 @@ class HillRider {
     }
 
     // The bars turned to `bars` (radians) about the head tube, the shoulders turned a little with them, the body leaned
-    // into the turn past the bicycle's `lean`, each arm from its shoulder to its grip with the elbow bent out and down
-    steer(bars, lean = 0) {
+    // into the turn past the bicycle's `lean`, each arm from its shoulder to its grip with the elbow bent out and down.
+    // `walk` (0..1) takes him off the saddle to his place on foot beside it (WALK); his hips' place and turn are kept
+    // (boyAt, boyQ) for the legs
+    steer(bars, lean = 0, walk = 0) {
         const s = this.scratch, A = HillRider.ARMS, r = this.rest;
         this.steerQ.setFromAxisAngle(this.axis, bars);
         this.parts.steer.quaternion.copy(this.steerQ);
@@ -183,16 +196,29 @@ class HillRider {
         const into = Math.max(-A.bodyLeanMost, Math.min(A.bodyLeanMost, lean * A.bodyLean));
         s.q3 = s.q3 || new THREE.Quaternion();
         s.q2.multiply(s.q3.setFromAxisAngle(s.zAxis || (s.zAxis = new THREE.Vector3(0, 0, 1)), into));
+        // On foot: turned in towards the bars about the upright, then bent forward about his hips
+        const W = HillRider.WALK;
+        this.boyAt = this.boyAt || new THREE.Vector3();
+        this.boyQ = this.boyQ || new THREE.Quaternion();
+        this.boyAt.copy(r.boy);
+        if (walk > 0) {
+            s.q4 = s.q4 || new THREE.Quaternion();
+            s.q4.setFromAxisAngle(s.yAxis, -W.turnRad).multiply(s.q3.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), W.bendRad));
+            s.q2.slerp(s.q4, walk);
+            this.boyAt.lerp(s.walkHip || (s.walkHip = new THREE.Vector3().fromArray(W.hip)), walk);
+        }
+        this.boyQ.copy(s.q2);
         this.parts.boy.quaternion.copy(s.q2);
+        this.parts.boy.position.copy(this.boyAt);
         s.hand = s.hand || new THREE.Vector3();
         s.sh = s.sh || new THREE.Vector3();
         s.elbow = s.elbow || new THREE.Vector3();
         for (const arm of this.arms) {
             s.hand.copy(arm.grip).sub(r.steer).applyQuaternion(this.steerQ).add(r.steer);
-            s.sh.copy(arm.shoulder).sub(r.boy).applyQuaternion(s.q2).add(r.boy);
+            s.sh.copy(arm.shoulder).sub(r.boy).applyQuaternion(s.q2).add(this.boyAt);
             // A shoulder reaches forward to a grip past the arm's length
             const gap = s.sh.distanceTo(s.hand) - (arm.upper + arm.lower) * 0.97;
-            if (gap > 0) s.sh.addScaledVector(s.elbow.subVectors(s.hand, s.sh).normalize(), Math.min(gap, A.shoulderReachM));
+            if (gap > 0) s.sh.addScaledVector(s.elbow.subVectors(s.hand, s.sh).normalize(), Math.min(gap, A.shoulderReachM + (W.reachM - A.shoulderReachM) * walk));
             s.pole.set(arm.side, -0.6, -0.3);
             HillRider.knee(s.sh, s.hand, arm.upper, arm.lower, s.pole, s.elbow);
             s.up.set(0, 0, 1);
@@ -214,6 +240,27 @@ class HillRider {
         part.position.copy(from);
     }
 
+    // The ankle of `leg` on foot (WALK), in the frame, into `out`: on the cobbles through its stance, the cobbles under
+    // it moving back as he walks on, then swung forward and lifted. The left and the right half a pace apart
+    step(leg, bike, lane, out) {
+        const W = HillRider.WALK, s = this.scratch;
+        const u = ((bike.walkM || 0) / W.strideM + (leg.side > 0 ? 0 : 0.5)) % 1;
+        const half = W.stance * W.strideM / 2;
+        let along, lift = 0;
+        if (u < W.stance) along = half - 2 * half * u / W.stance;
+        else {
+            const w = (u - W.stance) / (1 - W.stance);
+            along = -half + 2 * half * w * w * (3 - 2 * w);
+            lift = W.liftM * Math.sin(Math.PI * w);
+        }
+        out.set(this.boyAt.x + leg.side * W.footX, 0, this.boyAt.z - W.backM + along);
+        // Onto the cobbles where it is, whatever the frame's lean and pitch
+        this.frame.localToWorld(out);
+        lane.project(out.x, out.z, bike.s, s.footAt || (s.footAt = {}));
+        out.y = lane.sample(s.footAt.s).y + lane.cobble(s.footAt.s, s.footAt.across) + HillRider.ANKLE_ON_PEDAL[1] + lift;
+        return this.frame.worldToLocal(out);
+    }
+
     // Sets every part from the bicycle's state (HillBicycle) on `lane` (HillLane). The frame is placed where the game's
     // bike is, along its heading, pitched with the lane's fall along that heading, leaned as the bike leans (+ to its
     // right, as Vehicle draws it), lifted about the rear axle in a wheelie, leaned onto a foot when it stands, and laid
@@ -227,7 +274,15 @@ class HillRider {
         const footTo = bike.footDown ? 1 : 0;
         const footStep = dt / Vehicle.FOOT_S;
         this.foot = this.foot === undefined ? footTo : this.foot + Math.max(-footStep, Math.min(footStep, footTo - this.foot));
-        const footShare = this.foot * this.foot * (3 - 2 * this.foot);
+        // On foot beside it (the climb): blended over WALK.blendS, at once when the bicycle has just been reset
+        const W = HillRider.WALK;
+        const walkTo = bike.walking && !bike.crashed ? 1 : 0;
+        if (this.ridden !== bike || this.rides !== bike.rides) this.walking = walkTo;
+        this.ridden = bike;
+        this.rides = bike.rides;
+        this.walking = (this.walking || 0) + Math.max(-dt / W.blendS, Math.min(dt / W.blendS, walkTo - (this.walking || 0)));
+        const walk = this.walking * this.walking * (3 - 2 * this.walking);
+        const footShare = this.foot * this.foot * (3 - 2 * this.foot) * (1 - walk);
         // Down after a fall: laid over to the side it went, over 0.45 s
         const fallTo = bike.crashed ? 1 : 0;
         const downStep = dt / 0.45;
@@ -235,7 +290,7 @@ class HillRider {
         const fallSide = Math.sign(v.crashAngle || v.leanAngle || 1);
         const roll = bike.crashed || this.down > 0
             ? fallSide * 1.35 * this.down + v.leanAngle * (1 - this.down)
-            : v.leanAngle - Vehicle.LEFT * Vehicle.FOOT_LEAN * footShare;
+            : v.leanAngle - Vehicle.LEFT * (Vehicle.FOOT_LEAN * footShare + W.leanRad * walk);
         this.group.rotation.set(Math.atan(-along) + bike.pitch, bike.yaw, roll, 'YXZ');
         // The wheelie: the frame turned nose up about the rear axle, the rear tyre kept on the ground
         const w = bike.wheelie;
@@ -259,7 +314,7 @@ class HillRider {
             return;
         }
         if (this.fallen) this.remount();
-        this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle);
+        this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle, walk);
 
         const out = HillRider.LEGS_OUT;
         const legsOut = bike.legs * bike.legs * (3 - 2 * bike.legs);
@@ -303,11 +358,14 @@ class HillRider {
                 this.frame.worldToLocal(s.foot);
                 on.lerp(s.foot, down);
             }
+            // On foot: the hip where his body has it, the foot at its place in the step on the cobbles
+            const hip = walk > 0 ? s.hip.copy(leg.hip).sub(this.rest.boy).applyQuaternion(this.boyQ).add(this.boyAt) : leg.hip;
+            if (walk > 0) on.lerp(this.step(leg, bike, lane, s.walkFoot), walk);
             // The knee bends forward over the pedal; held out straight, any pole will do, so it turns with the leg
             s.pole.set(0.15 * leg.side * (1 + legsShare * 3 + down * 2), 0.3 + legsShare * 0.5, 1);
-            HillRider.knee(leg.hip, on, leg.upper, leg.lower, s.pole, s.knee);
+            HillRider.knee(hip, on, leg.upper, leg.lower, s.pole, s.knee);
             s.up.set(0, 0, 1);
-            this.point(leg.thigh, leg.hip, s.knee, s.up);
+            this.point(leg.thigh, hip, s.knee, s.up);
             this.point(leg.shin, s.knee, on, s.up);
             // The boot along the pedal, or its toe up and out with the leg
             s.toe.set(0.25 * leg.side * legsShare, Math.sin(pose.toe) * legsShare, 1 - legsShare * (1 - Math.cos(pose.toe))).normalize();

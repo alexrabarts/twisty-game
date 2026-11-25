@@ -360,8 +360,9 @@ class HillRide {
         day.climbing = true;
         this.bike.reset(C.fromS, C.across);
         this.bike.vehicle.yawAngle += Math.PI;
+        this.bike.walking = true;
         this.hold = null;
-        this.climb = { phase: 'climb', t: 0 };
+        this.climb = { phase: 'climb', t: 0, hold: 0 };
         // Nothing to spill on the way up
         if (this.spill) this.spill.spilt = true;
     }
@@ -375,6 +376,7 @@ class HillRide {
         }
         if (this.spill) this.spill.reset();
         this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
+        this.bike.walking = false;
         this.hold = { phase: 'hold', t: 0 };
         this.cinema = null;
         this.placeCamera(1);
@@ -388,11 +390,19 @@ class HillRide {
         const C = HillDay.CLIMB;
         climb.t += dt;
         if (climb.phase === 'climb') {
-            // He rides towards the camera, so its left is his right
+            // He comes towards the camera, so its left is his right
             controls.steer = -controls.steer;
             controls.wheelie = 0;
-            // Stood on the pedals in a gear too tall for the hill: the push eases off towards mostMs
-            controls.pedal = Math.min(controls.pedal || 0, Math.max(0.35, Math.min(1, 0.65 + (C.mostMs - this.bike.speed) * 0.6)));
+            // On foot, pushing: the pedal key walks him on at walkMs, and let go he holds the bicycle where it is
+            this.bike.walking = true;
+            const short = C.walkMs - this.bike.speed;
+            if ((controls.pedal || 0) > 0) {
+                climb.hold = Math.max(-0.5, Math.min(0.6, (climb.hold || 0) + short * dt * C.walkHold));
+                controls.pedal = Math.max(0, Math.min(1, C.walkBase + short * C.walkGain + climb.hold));
+            } else {
+                controls.pedal = 0;
+                controls.brake = 1;
+            }
             // After a fall he stands up facing down the lane (HillBicycle.reset): on the climb, he turns to face up it
             const p = this.lane.sample(this.bike.s), v = this.bike.vehicle;
             if (!this.bike.crashed && v.speed < 0.3 && Math.cos(v.yawAngle - p.heading) > 0) v.yawAngle = p.heading + Math.PI;

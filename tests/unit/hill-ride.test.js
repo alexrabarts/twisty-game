@@ -908,6 +908,40 @@ describe('the boy on the bicycle', () => {
         expect(ankle.y - ground).toBeGreaterThan(HillRider.ANKLE_ON_PEDAL[1] - 0.03);
         expect(ankle.y - ground).toBeLessThan(HillRider.ANKLE_ON_PEDAL[1] + 0.03);
     });
+
+    test('on foot up the climb: beside the bicycle on its left, bent over the bars, a foot on the cobbles at every step and none under them; on the saddle again after', () => {
+        const where = new HillLane();
+        const b = new HillBicycle(where);
+        b.reset(60);
+        b.vehicle.yawAngle += Math.PI;
+        b.walking = true;
+        b.vehicle.speed = 1.5;
+        const W = HillRider.WALK, ankle = new THREE.Vector3();
+        let lifted = 0;
+        for (let i = 0; i < 40; i++) {
+            b.walkM = i * W.strideM / 20;
+            rider.update(b, where, 1 / 60);
+            // His hips and his body beside the frame on its left, bent forward
+            expect(rider.parts.boy.position.x).toBeCloseTo(W.hip[0], 5);
+            expect(rider.parts.boy.position.y).toBeLessThan(rider.rest.boy.y - 0.15);
+            const heights = rider.legs.map(leg => {
+                expect(leg.thigh.position.x).toBeGreaterThan(0.25);
+                world(leg.foot, ankle);
+                const p = where.project(ankle.x, ankle.z, b.s, {});
+                return ankle.y - where.sample(p.s).y - where.cobble(p.s, p.across);
+            });
+            for (const h of heights) expect(h).toBeGreaterThan(HillRider.ANKLE_ON_PEDAL[1] - 0.02);
+            expect(Math.min(...heights)).toBeLessThan(HillRider.ANKLE_ON_PEDAL[1] + 0.02);
+            if (Math.max(...heights) > HillRider.ANKLE_ON_PEDAL[1] + W.liftM * 0.8) lifted++;
+        }
+        // Each foot swings, lifted, now and then
+        expect(lifted).toBeGreaterThan(4);
+        // Reset onto the saddle for the descent: at once, the body where it was built
+        b.reset(20);
+        b.walking = false;
+        rider.update(b, lane, 1 / 60);
+        expect(rider.parts.boy.position.distanceTo(rider.rest.boy)).toBeLessThan(1e-6);
+    });
 });
 
 describe('the fall among the houses', () => {

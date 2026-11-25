@@ -3,7 +3,9 @@
 // heading and its height; the kerbs and the house fronts behind them are solid (a glancing touch is a brush, as against
 // a world's wall; more is a crash); the cobbles shake it. The boy's own state rides on top: the cranks (turned while he
 // pushes, still on the freewheel), his feet off the pedals and his legs out at speed downhill, a foot down when it
-// stands, and after a fall a short wait and the bicycle stood up again in place.
+// stands, and after a fall a short wait and the bicycle stood up again in place. While `walking` (the climb, set by
+// js/hill/ride.js) he is off the saddle and pushes it up the lane on foot: the cranks stay still, the legs stay in,
+// and walkM counts the metres walked, which set his steps.
 //
 // Past legsOutMs going downhill with the pedals left alone, the boy takes his feet off and holds his legs straight
 // out to the sides; he puts them back once the bicycle has slowed under legsInMs, or when he pedals at a speed his
@@ -162,6 +164,12 @@ class HillBicycle {
         const rate = dt / r.legsBlendS;
         this.legs = this.legs < toward ? Math.min(toward, this.legs + rate) : Math.max(toward, this.legs - rate);
 
+        // On foot beside it: nothing of the legs out
+        if (this.walking) {
+            this.legsOut = false;
+            this.legs = 0;
+            this.visiting = 0;
+        }
         const push = this.legsOut ? 0 : pedal;
         v.update(dt, input.steer || 0, push, input.brake || 0, input.wheelie || 0);
         this.kerbs(dt);
@@ -176,7 +184,8 @@ class HillBicycle {
         }
 
         // The cranks: turned with the wheel while he pushes, still on the freewheel otherwise
-        this.pushing = push > 0 && !v.crashed && v.speed < v.pedalMostMs;
+        this.pushing = push > 0 && !v.crashed && v.speed < v.pedalMostMs && !this.walking;
+        this.walkM = (this.walkM || 0) + (this.walking && !v.crashed ? v.speed * dt : 0);
         this.cadenceRpm = this.pushing ? v.speed / HillVehicle.DATA.developmentM * 60 : 0;
         this.crank = (this.crank + this.cadenceRpm / 60 * 2 * Math.PI * dt) % (2 * Math.PI);
         // Feet back on the pedals for a moment at speed: the cranks come level under them

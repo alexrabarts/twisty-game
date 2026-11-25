@@ -278,5 +278,33 @@ describe('the climb', () => {
         expect(bike.s).toBe(lane.rule.startM);
         expect(day.loaves).toBe(HillDay.BASKET);
         expect(day.climbing).toBe(false);
+        expect(bike.walking).toBe(false);
+    });
+
+    test('on foot: the pedal key walks him up at about walkMs, and let go he holds the bicycle where it is', () => {
+        const C = HillDay.CLIMB;
+        const bike = new HillBicycle(lane);
+        const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day: new HillDay(lane), game: { camera: new THREE.PerspectiveCamera() }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(), sample: {}, view: 0 });
+        ride.beginClimb();
+        expect(bike.walking).toBe(true);
+        const go = (pedal, seconds) => {
+            for (let t = 0; t < seconds; t += DT) {
+                const input = { pedal, brake: 0, steer: 0, wheelie: 0 };
+                ride.climbStep(DT, input);
+                bike.step(DT, input);
+            }
+        };
+        go(1, 8);
+        expect(bike.speed).toBeGreaterThan(C.walkMs - 0.2);
+        expect(bike.speed).toBeLessThan(C.walkMs + 0.2);
+        // No pedalling on foot: the cranks stay still and the legs stay in
+        expect(bike.cadenceRpm).toBe(0);
+        expect(bike.legs).toBe(0);
+        expect(bike.walkM).toBeGreaterThan(8);
+        go(0, 3);
+        const s = bike.s;
+        go(0, 3);
+        expect(bike.speed).toBeLessThan(0.05);
+        expect(Math.abs(bike.s - s)).toBeLessThan(0.05);
     });
 });
