@@ -295,9 +295,11 @@ class WorldEnvironment {
                 return mesh;
             });
         }
-        // The arch stands at the start and the finish only; each checkpoint between is a roadworks site (Roadworks)
+        // The arch stands at the start only. Each checkpoint between is a roadworks site (Roadworks), and the finish has
+        // no marker at all: the owner asked for no yellow finish gantry, the HUD shows the progress, and the line is timed
+        // where it was. Crossing it starts the stop scene (StopScene), which flies the camera to the leg's end stop
         const stations = this.stationGates || [];
-        const ends = stations.filter((st, i) => i === 0 || i === stations.length - 1);
+        const ends = stations.filter((st, i) => i === 0 && stations.length > 1);
         this.roadworks = new Roadworks(this, stations);
         if (this.roadworks.group) this.group.add(this.roadworks.group);
         // No rider waits in the works or under a gate: the places there are closed (WorldPlaces.close)
@@ -321,7 +323,7 @@ class WorldEnvironment {
             const postOut = q => q.width / 2 + 1.2;
             const p = this.route.sample(this.scenery.gateS(st.s, postOut, this.route), {});
             const half = postOut(p);
-            const color = st.kind === 'start' || st.kind === 'finish' ? [0.92, 0.92, 0.92] : [0.95, 0.75, 0.10];
+            const color = [0.92, 0.92, 0.92];
             for (const sign of [-1, 1]) RoadMesh.box(out, p.x + sign * half * Math.cos(p.heading), p.y + 2.6, p.z - sign * half * Math.sin(p.heading), 0.3, 5.2, 0.3, p.heading, post);
             RoadMesh.box(out, p.x, p.y + 5.3, p.z, half * 2 + 0.6, 0.8, 0.3, p.heading, color);
         }

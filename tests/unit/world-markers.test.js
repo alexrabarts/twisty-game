@@ -245,7 +245,7 @@ describe('the checkpoint roadworks sites', () => {
         if (bad.length) throw new Error(bad.slice(0, 20).join('\n'));
     });
 
-    test('no checkpoint keeps an arch; the start and the finish do', () => {
+    test('no checkpoint and no finish keeps an arch; the start does', () => {
         const pos = env.gateMesh.geometry.attributes.position;
         const near = (st, r) => {
             for (let i = 0; i < pos.count; i++) if (Math.hypot(pos.getX(i) - st.position.x, pos.getZ(i) - st.position.z) < r) return true;
@@ -255,6 +255,23 @@ describe('the checkpoint roadworks sites', () => {
         expect(arches).toEqual([]);
         const start = env.route.sample(env.stationGates[0].s, {});
         expect(near({ position: start }, game.Scenery.GATE_SHIFT_M + 12)).toBe(true);
-        expect(near(env.finishGate, game.Scenery.GATE_SHIFT_M + 12)).toBe(true);
+        expect(near(env.finishGate, game.Scenery.GATE_SHIFT_M + 12)).toBe(false);
+    });
+
+    // The owner: "let's not have any finish line markers in yellow". The finish is still a timed line (finishGate)
+    test('the finish builds no marker and no part of the gates is yellow', () => {
+        expect(env.finishGate).toBeTruthy();
+        const col = env.gateMesh.geometry.attributes.color;
+        let yellow = 0;
+        for (let i = 0; i < col.count; i++) if (col.getX(i) > 0.6 && col.getY(i) > 0.5 && col.getZ(i) < 0.3) yellow++;
+        expect(yellow).toBe(0);
+        const finish = env.finishGate.position;
+        const nearFinish = [];
+        env.group.traverse((o) => {
+            if (!o.isMesh || !/gate|finish|banner/i.test(o.name)) return;
+            const pos = o.geometry.attributes.position;
+            for (let i = 0; i < pos.count; i++) if (Math.hypot(pos.getX(i) - finish.x, pos.getZ(i) - finish.z) < 40) { nearFinish.push(o.name); break; }
+        });
+        expect(nearFinish).toEqual([]);
     });
 });
