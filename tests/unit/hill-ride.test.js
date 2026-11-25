@@ -739,7 +739,8 @@ describe('the boy on the bicycle', () => {
             expect(Math.sign(ankle.x)).toBe(leg.side);
             expect(Math.abs(ankle.x)).toBeGreaterThan(0.55);
             expect(ankle.y).toBeLessThan(hip.y);
-            expect(ankle.y).toBeGreaterThan(0.4);
+            // About the wheels' hubs, as in the stills, the boot well clear of the cobbles
+            expect(ankle.y).toBeGreaterThan(0.25);
         }
     });
 

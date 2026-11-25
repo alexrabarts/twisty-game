@@ -33,7 +33,8 @@ class HillBicycle {
             // The opening stretch, as in the stills: from the start down through the first right-hander the legs go out
             // as soon as he stops pedalling over alwaysMs, and stay out, with no turn back to the pedals
             alwaysToS: 66, alwaysMs: 2.5,
-            spread: [0.74, 0.86], drop: [-0.55, -0.4], ahead: [0.2, 0.4], toe: [0.5, 0.8]
+            // Seen from behind, each leg 37 to 44 degrees out from straight down, as the stills measure (about 35 to 50)
+            spread: [0.6, 0.7], drop: [-0.8, -0.72], ahead: [0.15, 0.3], toe: [0.5, 0.8]
         });
     }
 
