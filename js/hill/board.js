@@ -92,6 +92,12 @@ class HillBoard {
     get running() { return this.state === 'running'; }
     get finished() { return this.state === 'finished'; }
 
+    // A cost on the clock while it runs (a missed door, HillDay.MISS_MS): it is in every later gate time and the finish,
+    // so the proof chain signs it
+    penalise(ms) {
+        if (this.running) this.ms += ms;
+    }
+
     // One physics step of dt seconds, the bicycle now at s; fell is true on the step a fall begins. Returns what
     // happened: { gate: index, ms } for a gate, { finish: ms } at the finish, { fell: true } for a fall, or null
     step(dt, s, fell = false) {

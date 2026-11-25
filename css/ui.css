@@ -2782,6 +2782,26 @@ body.hill-on .hud {
     font-size: 15px;
     opacity: 0.8;
 }
+.virtual-button-throw {
+    display: none;
+}
+
+body.hill-on .virtual-button-throw {
+    display: flex;
+    bottom: calc(12px + 48px + 12px + env(safe-area-inset-bottom, 0px));
+    font-size: 8px;
+}
+
+body.hill-on .virtual-button-throw.left {
+    right: auto;
+    left: calc(12px + 68px + 12px + env(safe-area-inset-left, 0px));
+}
+
+.hill-end-round {
+    font-size: 15px;
+    margin-bottom: 10px;
+}
+
 .hill-end-time {
     font-size: 22px;
     font-variant-numeric: tabular-nums;

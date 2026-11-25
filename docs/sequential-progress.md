@@ -700,3 +700,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Moss on thatch and copings, lichen on slate and tile, patched render and cracks on rendered fronts.
 - Flower borders in the front gardens, washing on a line in some gardens, and a cat on a wall on the main straight.
 - Every new piece that stands on the ground passes the land check. The village is 274,680 triangles.
+
+## The hill ride: a day's work
+
+- Job: by the owner's word, "do all the gameplay but keep the opener cinematic", then "like paperboy... throw the bread at the door". Each day starts with a climb from s 78 to the bakery's cart at s 27, seen from the opening's camera; the basket fills; the descent starts as before. Q and E throw a loaf to the left and the right at four plain doors (a lit lamp marks the next). A missed door adds 5 s to the clock, so the board's signed time holds it; the loaves, the freewheel and the clean mark show on the end card only. Fair hazards (a cat, a horse and cart, washing), the same on every ride. G goes round again, a day on. Details: `.agent/system/hill.md`, "The day".
+- Check: `tests/unit/hill-day.test.js` (13 tests), `tests/unit/hill-card.test.js` (9 tests). At 10 m/s a throw 6 to 9 m before the door delivers. The climb takes 23.5 s with the autopilot, in sight 86 % of the time. A whole day on the real page (GPU, `tools/hill-day-look.js`): climb 24.9 s, four doors delivered, 2 loaves left, a clean round, 0:39.642. Pictures: ~/Library/Caches/twisty-world/hill-shots/day/.
+- Left: the boy pedals up the climb; he does not walk and push the bicycle (that needs a pose in js/hill/rider.js). The hazards are plain block shapes. A fall throws six loose loaves whatever the basket held (js/hill/spill.js).

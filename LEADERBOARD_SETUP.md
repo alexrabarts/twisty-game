@@ -188,7 +188,7 @@ It holds one row, `village-hill-v1`: 3 gates, and a floor and a ceiling for each
 | Protocol | 2 |
 | Store | `/courseBoards/village-hill-v1` |
 | Gates | exactly 3 |
-| Ranks on | the finish-line time, which includes 5 s per fall |
+| Ranks on | the finish-line time, which includes 5 s per fall and 5 s per door missed (both signed in the proof chain) |
 | Limits | each part at most 30 m/s and at least 0.5 m/s (plus 15 s per restart); the whole at least the sum of the floors plus 5 s per restart, at most 15 min; session 30 min |
 
 Deploy (the user's step; an agent never runs it):

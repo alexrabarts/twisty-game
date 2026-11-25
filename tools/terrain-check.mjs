@@ -8002,7 +8002,9 @@ WORLD['hill-compare'] = async (page) => {
 
 // hill-look: one picture of the hill ride after a script of the caller's (--script <file>: the body of an async
 // function given `ride`, `game` and `THREE`, run in the page before the picture; what it returns is reported), from
-// the camera as the script leaves it. For looking into a question of the light or the scene.
+// the camera as the script leaves it. For looking into a question of the light or the scene. The script may return
+// `pictures` (name to a canvas PNG data URL) and `page` (a name for a screenshot of the page with its DOM); they are
+// written beside --out.
 //   node tools/terrain-check.mjs hill-look --gpu --script <file> [--out <file.png>]
 WORLD_PROBES.push('hill-look');
 WORLD['hill-look'] = async (page) => {
@@ -8019,7 +8021,24 @@ WORLD['hill-look'] = async (page) => {
     }, body);
     const file = option('out') || join(HILL_SHOTS_OUT, 'hill-look.png');
     writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
-    return { said: result.said, file };
+    // A script may hand back more pictures (said.pictures: name to a PNG data URL) and ask for the page as the rider
+    // sees it, with the DOM over the canvas (said.page: a name); each is written beside --out
+    const said = result.said && typeof result.said === 'object' ? result.said : null;
+    const files = [file];
+    if (said && said.pictures) {
+        for (const [name, png] of Object.entries(said.pictures)) {
+            const extra = join(dirname(file), `${name}.png`);
+            writeFileSync(extra, Buffer.from(png.split(',')[1], 'base64'));
+            files.push(extra);
+        }
+        delete said.pictures;
+    }
+    if (said && said.page) {
+        const shot = join(dirname(file), `${said.page}.png`);
+        writeFileSync(shot, await page.screenshot());
+        files.push(shot);
+    }
+    return { said: result.said, file, files };
 };
 
 // hill-overlay: the opening shot (HillRide.SHOTS.opening, from HillLane.RULE.opening) beside the reference frame it was
@@ -8169,10 +8188,13 @@ async function hillShots() {
         bike.vehicle.footDown = speed === 0;
         ride.ending = null;
         ride.hold = null;
+        ride.climb = null;
     };
     const L = lane.rule;
-    // The start hold: the opening shot, a foot down, the sun to the right
+    // The start hold: the opening shot, a foot down, the sun to the right (the day's climb is passed over: hill-look's
+    // scripts picture it)
     ride.restart();
+    if (ride.climb) ride.endClimb();
     run(0.6, () => ({ pedal: 0, brake: 1, steer: 0 }));
     ride.hold = { phase: 'hold', t: 0 };
     shoot('hold-opening', 0, 'opening');

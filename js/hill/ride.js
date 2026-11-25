@@ -160,7 +160,7 @@ class HillRide {
     }
 
     static get KEYS_NOTE() {
-        return 'Up or W pedals · Down or S brakes · Left and Right steer · Space wheelies · Z changes the view · R starts again from the top · M sound · Esc leaves';
+        return 'Up or W pedals · Down or S brakes · Left and Right steer · Q and E throw a loaf left and right · Space wheelies · Z changes the view · R starts the day again · M sound · Esc leaves';
     }
 
     // The local best on this device, in seconds, as the legs keep theirs (Game.bestTimeKey)
@@ -195,6 +195,9 @@ class HillRide {
         // The clock and the board's session for this run (HillBoard); the session opens at the roll-off
         this.board = typeof HillBoard !== 'undefined' ? new HillBoard(this.lane) : null;
         this.session = null;
+        // The day's round: the climb, the restock, the doors, the loaves, the hazards (HillDay)
+        this.day = typeof HillDay !== 'undefined' ? new HillDay(this.lane) : null;
+        this.climb = null;
     }
 
     async start() {
@@ -218,6 +221,7 @@ class HillRide {
         // The loaves thrown out of the basket when he comes off
         this.spill = typeof HillSpill !== 'undefined' ? new HillSpill(this.lane, this.rider) : null;
         if (this.spill) game.scene.add(this.spill.group);
+        if (this.day) game.scene.add(this.day.build());
         game.graphics.fixColorSpaces();
         this.light();
         this.overlay();
@@ -227,8 +231,7 @@ class HillRide {
             if (event.code === 'Escape') window.location.assign(window.location.pathname);
         };
         document.addEventListener('keydown', this.keys);
-        this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
-        this.hold = { phase: 'hold', t: 0 };
+        this.beginClimb();
         this.rider.update(this.bike, this.lane, 0);
         this.placeCamera(1);
         this.running = true;
@@ -286,7 +289,7 @@ class HillRide {
         title.textContent = 'Down the hill';
         const line = document.createElement('div');
         line.className = 'hill-end-keys';
-        line.textContent = 'R rides it again · Esc leaves';
+        line.textContent = 'G goes round again · R starts again from the first day · Esc leaves';
         // The time, the best and the board: filled when the card opens (showCard)
         const part = (tag, className) => {
             const el = document.createElement(tag);
@@ -304,15 +307,17 @@ class HillRide {
         this.card = {
             time: part('div', 'hill-end-time'),
             best: part('div', 'hill-end-best'),
+            round: part('div', 'hill-end-round'),
             board: part('div', 'hill-end-board'),
             name: button('Put my name on the board', 'KeyN', 'primary', () => this.enterName()),
+            next: button('Next day', 'KeyG', '', () => this.restart(true)),
             again: button('Ride again', 'KeyR', '', () => this.restart()),
             leave: button('Leave', 'Escape', '', () => window.location.assign(window.location.pathname))
         };
         this.card.name.hidden = true;
         const buttons = part('div', 'hill-end-buttons');
-        buttons.append(this.card.name, this.card.again, this.card.leave);
-        this.endNote.append(title, this.card.time, this.card.best, this.card.board, buttons, line);
+        buttons.append(this.card.name, this.card.next, this.card.again, this.card.leave);
+        this.endNote.append(title, this.card.time, this.card.best, this.card.round, this.card.board, buttons, line);
         this.endNote.style.display = 'none';
         note.append(this.viewNote, keys);
         document.body.append(note, this.fade, this.endNote);
@@ -323,21 +328,95 @@ class HillRide {
         if (this.viewNote) this.viewNote.textContent = `View: ${HillRide.VIEWS[this.view].name}`;
     }
 
-    restart() {
+    // R: the whole ride again from the first day's climb. `nextDay` instead goes round again: the same, a day on
+    restart(nextDay = false) {
         this.closeCard();
         this.dropSession();
         if (this.board) this.board.reset();
-        this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
+        if (this.day) this.day.day = nextDay ? this.day.day + 1 : 1;
         if (this.props) this.props.reset();
         if (this.spill) this.spill.reset();
         if (this.loafShown) this.showLoaf(false);
-        this.hold = { phase: 'hold', t: 0 };
+        this.beginClimb();
         this.accumulated = 0;
         this.ending = null;
         this.cinema = null;
         if (this.endNote) this.endNote.style.display = 'none';
         if (this.fade) this.fade.style.opacity = '0';
         this.placeCamera(1);
+    }
+
+    // The climb: the boy low on the top stretch facing up the lane, the basket empty, seen from the opening's camera.
+    // Without the day (HillDay not loaded) the ride opens on the hold at the top as before
+    beginClimb() {
+        const day = this.day;
+        if (!day) {
+            this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
+            this.hold = { phase: 'hold', t: 0 };
+            return;
+        }
+        const C = HillDay.CLIMB;
+        day.restock();
+        day.climbing = true;
+        this.bike.reset(C.fromS, C.across);
+        this.bike.vehicle.yawAngle += Math.PI;
+        this.hold = null;
+        this.climb = { phase: 'climb', t: 0 };
+        // Nothing to spill on the way up
+        if (this.spill) this.spill.spilt = true;
+    }
+
+    // At the cart: the basket is full, and the ride goes to the opening hold at the top, facing down
+    endClimb() {
+        this.climb = null;
+        if (this.day) {
+            this.day.climbing = false;
+            this.day.restock();
+        }
+        if (this.spill) this.spill.reset();
+        this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
+        this.hold = { phase: 'hold', t: 0 };
+        this.cinema = null;
+        this.placeCamera(1);
+    }
+
+    // The climb's part of a frame: the steer keys as seen from the camera ahead of him, and at the top the restock.
+    // Changes `controls`; true while the climb holds the ride
+    climbStep(dt, controls) {
+        const climb = this.climb;
+        if (!climb) return false;
+        const C = HillDay.CLIMB;
+        climb.t += dt;
+        if (climb.phase === 'climb') {
+            // He rides towards the camera, so its left is his right
+            controls.steer = -controls.steer;
+            controls.wheelie = 0;
+            // Stood on the pedals in a gear too tall for the hill: the push eases off towards mostMs
+            controls.pedal = Math.min(controls.pedal || 0, Math.max(0.35, Math.min(1, 0.65 + (C.mostMs - this.bike.speed) * 0.6)));
+            // After a fall he stands up facing down the lane (HillBicycle.reset): on the climb, he turns to face up it
+            const p = this.lane.sample(this.bike.s), v = this.bike.vehicle;
+            if (!this.bike.crashed && v.speed < 0.3 && Math.cos(v.yawAngle - p.heading) > 0) v.yawAngle = p.heading + Math.PI;
+            if (this.bike.s <= C.triggerS) {
+                climb.phase = 'restock';
+                climb.t = 0;
+            }
+        }
+        if (climb.phase === 'restock') {
+            Object.assign(controls, { pedal: 0, brake: 1, steer: 0, wheelie: 0 });
+            if (climb.t >= C.restockS) this.endClimb();
+        }
+        return true;
+    }
+
+    // The day's step after the bicycle's: a missed door costs time on the clock; knocks sound
+    dayStep(dt, controls) {
+        const events = this.day.step(dt, this.bike, controls);
+        for (const event of events) {
+            if (event.missed !== undefined && this.board) this.board.penalise(HillDay.MISS_MS);
+            const sound = this.game.soundManager;
+            if ((event.knock || event.hazard || event.delivered !== undefined) && typeof HillProps !== 'undefined') HillProps.clatter(sound, event.hazard === 'cart' ? 0.8 : 0.15, false);
+        }
+        return events;
     }
 
     // The roll-off: the clock starts, and a run that may go to the board opens its session with the server (times
@@ -347,6 +426,7 @@ class HillRide {
         if (!this.board) return;
         this.dropSession();
         this.board.begin(this.bike.s);
+        if (this.day) this.day.begin();
         const tuned = typeof Tuning !== 'undefined' && typeof Tuning.beginRide === 'function' && Tuning.beginRide();
         const search = typeof window !== 'undefined' && window.location ? window.location.search : '';
         if (!HillBoard.allowed(search, tuned) || this.forcedShot) {
@@ -410,7 +490,11 @@ class HillRide {
         const timed = board.finished && board.trusted;
         const ms = board.finished ? board.finishMs : null;
         const falls = board.restarts > 0 ? ` (${board.restarts} ${board.restarts === 1 ? 'fall' : 'falls'}, +${board.restarts * HillBoard.LIMITS.penaltyMs / 1000} s)` : '';
-        card.time.textContent = ms !== null ? `Your time ${HillBoard.format(ms)}${falls}` : 'Not timed';
+        const sum = this.day ? this.day.summary() : null;
+        const missed = sum && sum.missed > 0 ? ` (${sum.missed} ${sum.missed === 1 ? 'door' : 'doors'} missed, +${sum.missMs / 1000} s)` : '';
+        const clean = sum && sum.clean ? ' · a clean round' : '';
+        card.time.textContent = ms !== null ? `Your time ${HillBoard.format(ms)}${falls}${missed}${clean}` : 'Not timed';
+        card.round.replaceChildren(...(sum ? this.roundLines(sum) : []));
         const before = this.keepBest(null);
         const best = timed ? this.keepBest(ms) : before;
         card.best.textContent = best === null ? 'No best yet' : `Your best ${HillBoard.format(best)}${timed && best === ms && before !== ms ? ' · a new best' : ''}`;
@@ -436,6 +520,28 @@ class HillRide {
         if (ran !== this.cardRun || !open) return;
         card.name.hidden = false;
         card.name.focus({ preventScroll: true });
+    }
+
+    // The day on the card: the doors, the loaves, the freewheel and its best on this device, the day
+    roundLines(sum) {
+        let best = sum.freewheelM;
+        try {
+            const kept = parseFloat(window.localStorage.getItem(HillDay.FREEWHEEL_KEY));
+            if (kept > best) best = kept;
+            else window.localStorage.setItem(HillDay.FREEWHEEL_KEY, String(best));
+        } catch (error) {
+            console.warn('Hill ride: the freewheel best cannot be kept on this device:', error);
+        }
+        return [
+            `Day ${sum.day}`,
+            `Bread delivered ${sum.delivered} of ${sum.doors}`,
+            `Loaves left ${sum.loaves}${sum.lost > 0 ? ` (${sum.lost} lost)` : ''}`,
+            `Longest freewheel ${sum.freewheelM} m · best ${Math.round(best)} m`
+        ].map(text => {
+            const el = document.createElement('div');
+            el.textContent = text;
+            return el;
+        });
     }
 
     // The board's top 10 into the card; a board that cannot be read says so and the time stays
@@ -617,6 +723,11 @@ class HillRide {
         }
         if (input.checkSoundToggle() && game.soundManager) game.soundManager.setSetting('muted', !game.soundManager.getSetting('muted'));
         const controls = { pedal: input.getThrottleInput(), brake: input.getBrakeInput(), steer: input.getSteeringInput(HillVehicle.WORLD.steerKeys), wheelie: input.getWheelieInput() };
+        // The climb to the cart at the top, then the restock
+        this.climbStep(dt, controls);
+        // A loaf thrown at a door, once the descent is on (Q left, E right)
+        const thrown = typeof input.checkThrow === 'function' ? input.checkThrow() : 0;
+        if (thrown && this.day && !this.climb && !(this.hold && this.hold.phase === 'hold')) this.day.throw(thrown, this.bike);
         // The hold at the start: braked, a foot down, until it is over
         if (this.hold) {
             this.hold.t += dt;
@@ -644,6 +755,7 @@ class HillRide {
             const down = this.bike.crashed;
             this.bike.step(HillRide.STEP_S, controls);
             if (this.board) this.timeStep(HillRide.STEP_S, !down && this.bike.crashed);
+            if (this.day && !this.climb) this.dayStep(HillRide.STEP_S, controls);
             if (this.props) {
                 this.props.knock(this.bike, game.soundManager);
                 this.props.step(HillRide.STEP_S);
@@ -660,6 +772,15 @@ class HillRide {
     draw(dt) {
         const game = this.game;
         this.rider.update(this.bike, this.lane, dt);
+        if (this.day) {
+            this.day.draw();
+            // The basket: empty on the climb, filling at the cart, then as many as are left
+            const basket = this.spill ? this.spill.inBasket : null;
+            if (this.climb) {
+                const full = this.climb.phase === 'restock' ? Math.min(1, this.climb.t / (HillDay.CLIMB.restockS * 0.8)) : 0;
+                if (basket) basket.forEach((o, i) => { o.visible = i < Math.round(full * basket.length); });
+            } else this.day.showBasket(basket, this.spill && this.spill.spilt);
+        }
         if (this.props) {
             this.props.draw();
             const puff = this.props.puff;
@@ -707,6 +828,23 @@ class HillRide {
                 cam.updateProjectionMatrix();
             }
             cam.lookAt(this.loaf.position.x, this.loaf.position.y + 0.08, this.loaf.position.z);
+            cam.updateMatrixWorld();
+            return null;
+        }
+        // The climb: the opening's camera at the top, turned to follow him up the lane, its lens closing in as he nears
+        if (this.climb && !this.forcedShot) {
+            const shot = HillRide.shot(this.lane, 'opening', this.camTarget, this.look);
+            const v = this.bike.vehicle.position;
+            cam.position.copy(this.camTarget);
+            this.look.set(v.x, v.y + 0.9, v.z);
+            const d = this.camTarget.distanceTo(this.look);
+            const fov = Math.max(14, Math.min(shot.fov * 1.6, 2 * Math.atan(3.6 / 2 / Math.max(1, d)) * 180 / Math.PI * 1.6));
+            cam.up.set(0, 1, 0);
+            if (cam.fov !== fov) {
+                cam.fov = fov;
+                cam.updateProjectionMatrix();
+            }
+            cam.lookAt(this.look);
             cam.updateMatrixWorld();
             return null;
         }

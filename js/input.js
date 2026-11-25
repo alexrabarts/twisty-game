@@ -110,6 +110,10 @@ class InputHandler {
                 console.log('C key pressed - checkpoint restart triggered');
             }
 
+            // A loaf thrown to the left or the right (the hill ride's deliveries; nothing else reads them)
+            if (event.code === 'KeyQ') this.throwPressed = 1;
+            if (event.code === 'KeyE') this.throwPressed = -1;
+
             // Check for camera mode switch
             if (event.code === 'KeyZ') {
                 this.cameraSwitchPressed = true;
@@ -314,6 +318,17 @@ class InputHandler {
             return true;
         }
         return false;
+    }
+
+    // A throw asked for since the last frame: 1 to the left (Q), -1 to the right (E), 0 for none; the touch buttons too
+    checkThrow() {
+        const touches = this.virtualControls && this.virtualControls.touches;
+        let side = this.throwPressed || 0;
+        if (touches && touches.KeyQ) side = 1;
+        if (touches && touches.KeyE) side = -1;
+        if (touches) touches.KeyQ = touches.KeyE = false;
+        this.throwPressed = 0;
+        return side;
     }
 
     checkPause() {

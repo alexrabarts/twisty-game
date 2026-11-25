@@ -2,7 +2,7 @@
 
 The hill ride is a short ride of its own. The address key `RideMode.HILL_KEY` (js/ridemode.js) opens it; that file is the only place the key is written. It shows no menu.
 
-A boy on a heavy delivery bicycle starts at the top of a steep cobbled lane through a stone village. The ride holds on the opening shot, then he rides down. Near the bottom the camera stops and the bicycle rolls on round the last curve and out of sight. The picture fades to a loaf on a board, the band plays its last chord, and the end card shows the time, the best and the board.
+A boy on a heavy delivery bicycle climbs the top of a steep cobbled lane through a stone village to the bakery's cart, where his basket fills with loaves. The ride then holds on the opening shot, and he rides down. On the way down he throws bread at the doors that wait for it (see "The day"). Near the bottom the camera stops and the bicycle rolls on round the last curve and out of sight. The picture fades to a loaf on a board, the band plays its last chord, and the end card shows the time, the best and the board.
 
 The ride is timed, but no clock shows during the ride. The time shows only on the end card (see "The time and the board"). The classic legs and the world are not touched. If its model does not load, the classic legs open with `RideMode.HILL_FAIL_NOTE`.
 
@@ -165,7 +165,8 @@ The ending (`HillLane.RULE.end`, `HillRide.updateEnding`) goes through these pha
 - **The gates.** Three timing lines, `HillBoard.GATES_S`: s 120 on the main straight, s 230 and s 340 before the sharp right.
 - **The clock.** It counts physics time, one step of 1/120 s at a time (`HillBoard.step`), so a slow frame changes nothing.
 - **A fall.** The in-place restart adds 5 s to the clock and counts one restart, as on a world ride (`LIMITS.penaltyMs`).
-- **R.** R starts the ride, the clock and the run again from the top. It drops the open session.
+- **A missed door.** A door passed without its loaf adds 5 s to the clock (`HillDay.MISS_MS`, `HillBoard.penalise`). The cost is in every later gate time and in the finish, so the proof chain signs it. The board ranks this time. The loaves, the freewheel and the clean mark are not on the board: they show on the end card only.
+- **R.** R starts the ride, the clock and the run again from the first day's climb. It drops the open session.
 - **No clock on screen.** The HUD is hidden on the hill ride, and nothing draws the time until the card. `tests/unit/hill-board.test.js` holds this.
 
 The end card (`HillRide.showCard`) is a dialog of the one stack (js/modals.js). It shows:
@@ -194,6 +195,24 @@ The card never shows an error for the board:
 - The server has no row for the board (the functions are not deployed): "Board unavailable: the online board for this ride is not open yet". Nothing is sent.
 - The session failed (offline, rate limited): the card reads the board, but it shows no name entry.
 
+## The day
+
+`HillDay` (js/hill/day.js) runs the ride as a day's work. `HillRide` calls it in `beginClimb`, `climbStep`, `endClimb` and `dayStep`.
+
+- **The climb.** The boy starts at s 78 on the top stretch, facing up the lane, with an empty basket (`HillDay.CLIMB`). The player pedals and steers him up to the cart at s 27. The camera is the opening's own, at the top. It turns to follow him, and its lens closes in as he comes near. The steer keys are turned for that camera, so the left key moves him to the left of the picture. The one tall gear is too tall for the hill: stood on the pedals, he makes about 2.2 m/s (`mostMs`). The climb takes about 24 s. After a fall he stands up and turns to face up the lane. The climb is not timed.
+- **The restock.** At the cart, the bicycle stops and the basket fills over 1.1 s (`restockS`). Then the ride goes to the opening hold, and the descent starts as before.
+- **The doors.** Four front doors wait for bread (`HillDay.DOORS`): s 104 on the left, s 174 on the right, s 259 on the left, s 343 on the right. Each has an empty bread crate on its step. A lamp over the door is lit for the next door only. Nothing else marks it.
+- **The throw.** Q throws a loaf to the left, and E throws one to the right. On a touch screen, two buttons do the same (`VirtualControls`, shown on the hill ride only). The loaf leaves the basket with the bicycle's speed, plus 5.2 m/s to the side and 2.4 m/s up (`HillDay.THROW`). It flies, bounces and slides. If it comes to the doorstep or the door, that door has its bread, and the loaf lies on the step. A loaf that hits a house front gives a knock and drops into the street. Nothing breaks. At 10 m/s, a throw 6 to 9 m before the door delivers.
+- **The loaves.** The basket holds 6. Each throw takes one. A fall spills what is left. A knock on a kerb over 5 m/s shakes one out. A loaf in the street stays there, and a wheel that hits it knocks it and loses a little speed. A clean round is every door delivered and no loaf lost.
+- **The hazards.** They are the same on every ride, so the board stays fair, and each leaves room to pass (`HillDay.HAZARDS`):
+  - a cat at s 205 runs across the lane when the bicycle is 30 m short of it. A wheel into it is a wobble;
+  - a horse and cart sets off up the lane from s 262 at the roll-off, at 1.2 m/s, on the right going down. Into it over 4 m/s is a fall;
+  - washing on a line along the left house fronts at s 318 blows out over the left of the lane, on a 5 s cycle. The middle of the lane is always clear. Through it is a wobble.
+- **The freewheel.** The longest distance ridden with the legs out, no pedal and no brake.
+- **The loop.** On the end card, G (Next day) goes round again: the climb, the restock and the descent, a day on. R starts again from the first day.
+
+The end card adds the day, the bread delivered out of the doors, the loaves left and lost, and the longest freewheel with its best on this device. A clean round shows beside the time.
+
 ## The music
 
 `HillMusic` (js/hill/music.js) plays the slow theme of the Largo from Dvorak's Ninth Symphony, which is in the public domain. It is set for cornet, two horns and tuba, and every voice is synthesised through the game's sound graph. It follows Mute and Volume.
@@ -201,6 +220,8 @@ The card never shows an error for the board:
 ## Checks
 
 - `tests/unit/hill-board.test.js` checks the clock, the server's row against `HillBoard.row`, and rides down the lane (pushed all the way, with no brake, calm, with falls) against each part's floor and ceiling. A ride signed by the game's `RunSession` goes onto the board through the real handlers. It also checks the rides that are never sent.
+- `tests/unit/hill-day.test.js` checks the day on the real lane and bicycle: the doors; a throw at the right moment delivers, and too early, too late or to the wrong side does not; each throw takes a loaf; a missed door costs 5 s on the clock; falls, knocks and loaves in the street; each hazard passed on the clear line and met on its own line; the freewheel; and the climb (20 to 40 s, in sight of the camera most of the way, then the restock and the hold).
+- `node tools/terrain-check.mjs hill-look --gpu --script tools/hill-day-look.js --out <dir>/hill-last.png` rides a whole day on the real page and writes pictures of the climb, the restock, a throw, a delivery, the next door's lamp, the cart, the washing and the end card.
 - `tests/unit/hill-card.test.js` checks the end card in a page: no time during the ride; the time, the best and the top 10 at the end; N, R and Esc through the stack; and the words for a board that cannot be read.
 - `functions/test/hill.test.js` (`cd functions && npm test`) checks the hill rows and the handlers' limits for each part.
 - `tests/unit/hill-ride.test.js` checks these things:

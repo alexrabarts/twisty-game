@@ -4,8 +4,8 @@
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 import { loadScript } from '../helpers/load-game.js';
 
-const { Modals, HillLane, HillBoard, HillRide } = new Function('THREE',
-    `${loadScript('modals.js')}\n${['lane', 'board', 'ride'].map(n => loadScript(`hill/${n}.js`)).join('\n')}\nreturn { Modals, HillLane, HillBoard, HillRide };`
+const { Modals, HillLane, HillBoard, HillDay, HillRide, InputHandler } = new Function('THREE',
+    `${loadScript('modals.js')}\n${['lane', 'board', 'day', 'ride'].map(n => loadScript(`hill/${n}.js`)).join('\n')}\n${loadScript('input.js')}\nreturn { Modals, HillLane, HillBoard, HillDay, HillRide, InputHandler };`
 )({});
 const lane = new HillLane();
 const TIME = /\d+:\d\d\.\d{3}/;
@@ -119,5 +119,46 @@ describe('the end card', () => {
         expect(ride.card.board.textContent).toBe(HillRide.BOARD_NOTES.untimed);
         expect(read.fetchLeaderboard).not.toHaveBeenCalled();
         expect(localStorage.getItem(HillRide.BEST_KEY)).toBe(null);
+    });
+
+    test('the day on the card: the doors, the loaves left, the freewheel and its best, the clean mark; G goes round again', async () => {
+        const { ride } = makeRide({ service: service(), session: openSession(), restarts: 0 });
+        ride.day = new HillDay(lane);
+        Object.assign(ride.day, { day: 2, loaves: HillDay.BASKET - ride.day.doors.length });
+        ride.day.states = ride.day.doors.map(() => 'delivered');
+        ride.day.freewheel.best = 84.4;
+        localStorage.setItem(HillDay.FREEWHEEL_KEY, '120');
+        ride.restart = jest.fn(() => ride.closeCard());
+        await ride.showCard();
+        expect(ride.card.time.textContent).toBe('Your time 0:41.234 · a clean round');
+        expect([...ride.card.round.children].map(el => el.textContent)).toEqual(['Day 2', 'Bread delivered 4 of 4', 'Loaves left 2', 'Longest freewheel 84 m · best 120 m']);
+        key('KeyG');
+        expect(ride.restart).toHaveBeenCalledWith(true);
+    });
+
+    test('missed doors show beside the time, with the seconds they cost', async () => {
+        const { ride } = makeRide({ service: service(), session: openSession(), restarts: 0 });
+        ride.day = new HillDay(lane);
+        ride.day.states = ['delivered', 'missed', 'missed', 'delivered'];
+        ride.day.loaves = 0;
+        ride.day.lost = 2;
+        await ride.showCard();
+        expect(ride.card.time.textContent).toBe('Your time 0:41.234 (2 doors missed, +10 s)');
+        expect(ride.card.round.children[2].textContent).toBe('Loaves left 0 (2 lost)');
+    });
+});
+
+describe('the throw keys', () => {
+    test('Q throws to the left and E to the right, once a press, from the keys or the touch buttons', () => {
+        const input = Object.create(InputHandler.prototype);
+        input.throwPressed = 1;
+        expect(input.checkThrow()).toBe(1);
+        expect(input.checkThrow()).toBe(0);
+        input.throwPressed = -1;
+        expect(input.checkThrow()).toBe(-1);
+        input.virtualControls = { touches: { KeyE: true } };
+        expect(input.checkThrow()).toBe(-1);
+        expect(input.virtualControls.touches.KeyE).toBe(false);
+        expect(input.checkThrow()).toBe(0);
     });
 });

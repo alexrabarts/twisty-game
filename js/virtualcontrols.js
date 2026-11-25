@@ -57,10 +57,23 @@ class VirtualControls {
         this.bindTap(pause, 'KeyP');
         this.buttons.KeyP = pause;
 
+        // The hill ride's throws, left and right (shown only there: css body.hill-on)
+        const throws = [['KeyQ', 'Throw left', 'left'], ['KeyE', 'Throw right', 'right']].map(([key, label, side]) => {
+            const button = document.createElement('div');
+            button.className = `virtual-button-camera virtual-button-throw ${side}`;
+            button.setAttribute('role', 'button');
+            button.setAttribute('aria-label', label);
+            button.textContent = side === 'left' ? 'THROW L' : 'THROW R';
+            this.bindTap(button, key);
+            this.buttons[key] = button;
+            return button;
+        });
+
         document.body.appendChild(left);
         document.body.appendChild(right);
         document.body.appendChild(camera);
         document.body.appendChild(pause);
+        throws.forEach(button => document.body.appendChild(button));
         document.body.classList.add('touch');
     }
 
