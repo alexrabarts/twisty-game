@@ -290,8 +290,10 @@ class HillDay {
         if (!bike.crashed && Math.abs(bike.s - cart.s) < H.cart.halfL + 0.6 && Math.abs(bike.across - cart.across) < H.cart.halfW + 0.35) {
             if (!cart.hit) events.push({ hazard: 'cart', fall: v.speed > 4 });
             cart.hit = true;
-            if (v.speed > 4) v.crashed = true;
-            else v.speed = 0;
+            if (v.speed > 4) {
+                v.crashed = true;
+                v.crashWhy = 'obstacle';
+            } else v.speed = 0;
         } else cart.hit = false;
         // The washing: blows out from the side on its cycle; through it at head height is a wobble
         const wash = this.washing, t = this.since / H.washing.periodS;
