@@ -9,6 +9,7 @@
 //   &mode=roam        a world ridden in free roam (GameModes; open in debug mode only); time trial otherwise
 //   &start=<where>    free roam's start: place (a stopping place) or summit; the start otherwise
 //   &group=alone      free roam without the group; with it (the player leading) otherwise
+//   &time=<t>&weather=<w>  free roam's time of day (dawn, day, sunset, night) and weather (clear, fog, rain)
 const RideMode = {
     // The world a rider chosen on the menu rides: the Tremola slice (world/manifest.json)
     DEFAULT_WORLD: 'tremola',
@@ -36,6 +37,9 @@ const RideMode = {
         if (roam.mode && ['place', 'summit'].includes(params.get('start'))) roam.start = params.get('start');
         // (and alone, without the group: `group=alone`)
         if (roam.mode && params.get('group') === 'alone') roam.group = 'alone';
+        // (its time of day and weather: `time=dawn|day|sunset|night`, `weather=clear|fog|rain`)
+        if (roam.mode && ['dawn', 'day', 'sunset', 'night'].includes(params.get('time'))) roam.time = params.get('time');
+        if (roam.mode && ['clear', 'fog', 'rain'].includes(params.get('weather'))) roam.weather = params.get('weather');
         if (asked) return { kind: 'world', world: asked, direct: true, ...roam };
         if (params.has('legs')) return { kind: 'legs', world: null, direct: false };
         return { kind: 'world', world: RideMode.DEFAULT_WORLD, direct: false, ...roam };

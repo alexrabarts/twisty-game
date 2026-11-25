@@ -6741,8 +6741,8 @@ WORLD['world-roam'] = async (page) => {
     await new Promise(r => setTimeout(r, 1500));
     await page.screenshot({ path: join(dir, 'roam-menu.png') });
     result.menuRow = await page.evaluate(() => [...document.querySelectorAll('[data-game-mode]')].map(b => `${b.dataset.gameMode}:${b.disabled ? 'locked' : 'open'}`));
-    // Free roam's rows (Start at, Ride with) show with free roam chosen only
-    const shown = () => page.evaluate(() => [...document.querySelectorAll('.game-start-row, .game-group-row')].map(r => r.getBoundingClientRect().height > 0));
+    // Free roam's rows (Start at, Ride with, Time of day, Weather) show with free roam chosen only
+    const shown = () => page.evaluate(() => [...document.querySelectorAll('.game-start-row, .game-group-row, .game-time-row, .game-weather-row')].map(r => r.getBoundingClientRect().height > 0));
     result.roamRows = { trial: await shown() };
     await page.click('[data-game-mode="roam"]').catch(() => null);
     await new Promise(r => setTimeout(r, 300));

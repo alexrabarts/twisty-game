@@ -15,6 +15,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const read = name => readFileSync(join(root, 'js', name), 'utf8');
 const { GameModes } = new Function(`${read('gamemodes.js')}\nreturn { GameModes };`)();
 const { FreeRoam } = new Function(`${read('world/freeroam.js')}\nreturn { FreeRoam };`)();
+const { WorldLooks } = new Function(`${read('world/looks.js')}\nreturn { WorldLooks };`)();
 const game = loadGame();
 
 describe('the mode', () => {
@@ -164,5 +165,42 @@ describe('start anywhere', () => {
         expect(GameModes.startAt).toBe('summit');
         GameModes.chosen = 'trial';
         GameModes.startAt = 'start';
+    });
+});
+
+describe('time of day and weather', () => {
+    test('every part of every stage takes the chosen time and weather; "as the road" keeps the stage\'s own', () => {
+        const looks = WorldLooks.pick('');
+        expect(WorldLooks.fixed(looks, 'stage', 'stage')).toBe(looks);
+        const night = WorldLooks.fixed(looks, 'night', 'rain');
+        for (const id of Object.keys(looks)) {
+            expect(night[id].length).toBe(looks[id].length);
+            for (const part of night[id]) expect(part.look).toMatchObject({ timeOfDay: 'night', weather: 'rain', weatherIntensity: 1 });
+        }
+        const dawn = WorldLooks.fixed(looks, 'dawn', 'stage');
+        expect(dawn.tremola.map(p => p.look.weather)).toEqual(looks.tremola.map(p => p.look.weather));
+        expect(dawn.tremola.every(p => p.look.timeOfDay === 'dawn')).toBe(true);
+        // (the stage's own table is not changed)
+        expect(looks.tremola[0].look.timeOfDay).toBe('day');
+    });
+
+    test('the pickers offer no snow (its grip under the hairpin bound) and every weather has a strength', () => {
+        expect(GameModes.WEATHERS.map(w => w.id)).not.toContain('snow');
+        for (const w of GameModes.WEATHERS) if (w.id !== 'stage') expect(Number.isFinite(WorldLooks.strength[w.id])).toBe(true);
+        expect(WorldLooks.grip.rain.lateral * 0.85).toBeGreaterThanOrEqual(WorldLooks.hairpinGrip);
+    });
+
+    test('the rider screen shows the time and weather rows with free roam only', () => {
+        const box = GameModes.control(document, { debug: true });
+        const rows = [...box.querySelectorAll('.game-time-row, .game-weather-row')];
+        expect(rows.length).toBe(2);
+        expect(rows.every(r => r.hidden)).toBe(true);
+        box.querySelector('[data-game-mode="roam"]').click();
+        expect(rows.every(r => !r.hidden)).toBe(true);
+        box.querySelector('[data-game-time="night"]').click();
+        box.querySelector('[data-game-weather="fog"]').click();
+        expect([GameModes.time, GameModes.weather]).toEqual(['night', 'fog']);
+        GameModes.chosen = 'trial';
+        GameModes.time = GameModes.weather = 'stage';
     });
 });

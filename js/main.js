@@ -416,7 +416,10 @@ class Game {
         this.camera.updateProjectionMatrix();
         this.graphics.setHorizonSpan(WorldLooks.horizonSpan);
 
-        this.atmosphereTrack = AtmosphereTrack.forWorld(environment.route.stages, environment.route, WorldLooks.pick(window.location.search));
+        // (free roam: its own time of day and weather, GameModes.TIMES and WEATHERS, from the menu or the address)
+        const roamLook = typeof GameModes !== 'undefined' && GameModes.active(this.rideMode, Game.debugEnabled(window.location.search)) === 'roam';
+        const looks = WorldLooks.pick(window.location.search);
+        this.atmosphereTrack = AtmosphereTrack.forWorld(environment.route.stages, environment.route, roamLook ? WorldLooks.fixed(looks, (this.rideMode && this.rideMode.time) || GameModes.time, (this.rideMode && this.rideMode.weather) || GameModes.weather) : looks);
         if (typeof WeatherSystem !== 'undefined') {
             if (this.weatherSystem) this.weatherSystem.dispose();
             this.weatherSystem = new WeatherSystem(this.scene, this.camera, AtmosphereTrack.seededRandom(`world-${environment.config.id}`));

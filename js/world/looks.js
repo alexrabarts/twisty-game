@@ -77,6 +77,29 @@ Object.defineProperties(WorldLooks, {
             }
         }
     },
+    // Free roam's pickers (GameModes.TIMES, GameModes.WEATHERS): every part of every stage of `looks` at one time of day
+    // and one weather; 'stage' keeps a stage's own. The weather's strength is `strength` (rain at full, fog as the
+    // cloud variant's). No snow: its grip (grip.snow, lateral 0.4) puts a rider at full lock in a hairpin on the
+    // road, under hairpinGrip
+    strength: { value: Object.freeze({ clear: 0, fog: 0.5, rain: 1 }) },
+    fixed: {
+        value(looks, time = 'stage', weather = 'stage') {
+            if (time === 'stage' && weather === 'stage') return looks;
+            const out = { ...looks };
+            for (const [id, parts] of Object.entries(looks)) {
+                out[id] = parts.map(part => {
+                    const look = { ...part.look };
+                    if (time !== 'stage') look.timeOfDay = time;
+                    if (weather !== 'stage') {
+                        look.weather = weather;
+                        look.weatherIntensity = WorldLooks.strength[weather];
+                    }
+                    return { ...part, look };
+                });
+            }
+            return out;
+        }
+    },
     // The looks table for a page: a named variant over the stage defaults, or the defaults
     pick: {
         value(search) {

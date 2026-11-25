@@ -28,6 +28,23 @@ const GameModes = {
     ]),
     group: 'with',
 
+    // Free roam's time of day and weather (WorldLooks.fixed): 'stage' keeps the world's own look along the ride
+    TIMES: Object.freeze([
+        Object.freeze({ id: 'stage', name: 'As the road' }),
+        Object.freeze({ id: 'dawn', name: 'Dawn' }),
+        Object.freeze({ id: 'day', name: 'Day' }),
+        Object.freeze({ id: 'sunset', name: 'Sunset' }),
+        Object.freeze({ id: 'night', name: 'Night' })
+    ]),
+    time: 'stage',
+    WEATHERS: Object.freeze([
+        Object.freeze({ id: 'stage', name: 'As the road' }),
+        Object.freeze({ id: 'clear', name: 'Clear' }),
+        Object.freeze({ id: 'fog', name: 'Fog' }),
+        Object.freeze({ id: 'rain', name: 'Rain' })
+    ]),
+    weather: 'stage',
+
     // Whether a mode may be chosen: free roam only in debug mode
     open(id, debug) {
         const mode = GameModes.MODES.find(m => m.id === id);
@@ -76,61 +93,44 @@ const GameModes = {
             row.appendChild(button);
             return button;
         });
-        // Free roam's start, shown when free roam is chosen
-        const starts = doc.createElement('div');
-        starts.className = 'mode-picker-row game-start-row';
-        starts.setAttribute('role', 'radiogroup');
-        starts.setAttribute('aria-label', 'Start at');
-        const startButtons = GameModes.STARTS.map((start) => {
-            const button = doc.createElement('button');
-            button.type = 'button';
-            button.className = 'mode-btn';
-            button.dataset.gameStart = start.id;
-            button.setAttribute('role', 'radio');
-            button.textContent = start.name.toUpperCase();
-            button.addEventListener('click', (event) => {
-                event.stopPropagation();
-                GameModes.startAt = start.id;
-                box.refresh();
-                if (after) after(start);
+        // Free roam's own rows, shown when free roam is chosen: where it starts, with whom, the time of day, the weather
+        const rows = [
+            { list: GameModes.STARTS, key: 'startAt', data: 'gameStart', cls: 'game-start-row', label: 'Start at' },
+            { list: GameModes.GROUPS, key: 'group', data: 'gameGroup', cls: 'game-group-row', label: 'Ride with' },
+            { list: GameModes.TIMES, key: 'time', data: 'gameTime', cls: 'game-time-row', label: 'Time of day' },
+            { list: GameModes.WEATHERS, key: 'weather', data: 'gameWeather', cls: 'game-weather-row', label: 'Weather' }
+        ].map((spec) => {
+            const element = doc.createElement('div');
+            element.className = `mode-picker-row ${spec.cls}`;
+            element.setAttribute('role', 'radiogroup');
+            element.setAttribute('aria-label', spec.label);
+            const buttons = spec.list.map((item) => {
+                const button = doc.createElement('button');
+                button.type = 'button';
+                button.className = 'mode-btn';
+                button.dataset[spec.data] = item.id;
+                button.setAttribute('role', 'radio');
+                button.textContent = item.name.toUpperCase();
+                button.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    GameModes[spec.key] = item.id;
+                    box.refresh();
+                    if (after) after(item);
+                });
+                element.appendChild(button);
+                return button;
             });
-            starts.appendChild(button);
-            return button;
-        });
-        // And with the group or alone
-        const groups = doc.createElement('div');
-        groups.className = 'mode-picker-row game-group-row';
-        groups.setAttribute('role', 'radiogroup');
-        groups.setAttribute('aria-label', 'Ride with');
-        const groupButtons = GameModes.GROUPS.map((group) => {
-            const button = doc.createElement('button');
-            button.type = 'button';
-            button.className = 'mode-btn';
-            button.dataset.gameGroup = group.id;
-            button.setAttribute('role', 'radio');
-            button.textContent = group.name.toUpperCase();
-            button.addEventListener('click', (event) => {
-                event.stopPropagation();
-                GameModes.group = group.id;
-                box.refresh();
-                if (after) after(group);
-            });
-            groups.appendChild(button);
-            return button;
+            return { spec, element, buttons };
         });
         box.refresh = () => {
-            groups.hidden = GameModes.chosen !== 'roam';
-            for (const button of groupButtons) {
-                const on = button.dataset.gameGroup === GameModes.group;
-                button.classList.toggle('on', on);
-                button.setAttribute('aria-checked', on ? 'true' : 'false');
-            }
             const mode = GameModes.MODES.find(m => m.id === GameModes.chosen) || GameModes.MODES[0];
-            starts.hidden = mode.id !== 'roam';
-            for (const button of startButtons) {
-                const on = button.dataset.gameStart === GameModes.startAt;
-                button.classList.toggle('on', on);
-                button.setAttribute('aria-checked', on ? 'true' : 'false');
+            for (const { spec, element, buttons: own } of rows) {
+                element.hidden = mode.id !== 'roam';
+                for (const button of own) {
+                    const on = button.dataset[spec.data] === GameModes[spec.key];
+                    button.classList.toggle('on', on);
+                    button.setAttribute('aria-checked', on ? 'true' : 'false');
+                }
             }
             for (const button of buttons) {
                 const on = button.dataset.gameMode === mode.id;
@@ -140,7 +140,7 @@ const GameModes = {
             const locked = GameModes.MODES.some(m => !GameModes.open(m.id, debug));
             line.textContent = locked && mode.id === 'trial' ? `${mode.hint} ${GameModes.LOCKED_TEXT}` : mode.hint;
         };
-        box.append(label, row, starts, groups, line);
+        box.append(label, row, ...rows.map(r => r.element), line);
         box.refresh();
         return box;
     }
