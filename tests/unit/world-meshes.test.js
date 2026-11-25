@@ -1030,17 +1030,23 @@ describe('Scenery', () => {
         const none = scenery.stoneSites(fall.tile('0,0'));
         Scenery.stoneUsed = used;
         expect(none).toEqual([]);
-        const stones = group.children.find(m => m.name === 'stones');
+        // The far blocks, and the nearest STONE_NEAR_CAP of them in their near shape: the same foot, root and top
+        const meshes = group.children.filter(m => m.name === 'stones');
+        const stones = meshes.find(m => !m.userData.near), near = meshes.find(m => m.userData.near);
         expect(stones.isInstancedMesh).toBe(true);
         expect(group.children.find(m => m.name === 'stone-kerbs')).toBeUndefined();
-        expect(stones.count).toBe(Math.min(stretch.length, Scenery.STONE_CAP));
+        expect(meshes.reduce((n, m) => n + m.count, 0)).toBe(Math.min(stretch.length, Scenery.STONE_CAP));
+        expect(near.count).toBeGreaterThan(0);
+        expect(near.count).toBeLessThanOrEqual(Scenery.STONE_NEAR_CAP);
         expect(stones.geometry.attributes.position.count / 3).toBe(10);
-        stones.geometry.computeBoundingBox();
-        expect([stones.geometry.boundingBox.min.y, stones.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, Scenery.STONE_SINK_M + EdgeStyles.PIECES.short.size[1]].map(n => expect.closeTo(n, 5)));
+        for (const mesh of meshes) {
+            mesh.geometry.computeBoundingBox();
+            expect([mesh.geometry.boundingBox.min.y, mesh.geometry.boundingBox.max.y]).toEqual([-Scenery.STONE_ROOT_M, Scenery.STONE_SINK_M + EdgeStyles.PIECES.short.size[1]].map(n => expect.closeTo(n, 5)));
+        }
         const matrix = new THREE.Matrix4(), at = new THREE.Vector3();
         const along = [];
-        for (let i = 0; i < stones.count; i++) {
-            stones.getMatrixAt(i, matrix);
+        for (const [i, mesh] of meshes.flatMap(m => Array.from({ length: m.count }, (_, k) => [k, m]))) {
+            mesh.getMatrixAt(i, matrix);
             at.setFromMatrixPosition(matrix);
             expect(Math.sign(lateral(at))).toBe(down);
             // In the ground: sunk under its seat (the verge's edge beside it, at the road's height: the fill falls

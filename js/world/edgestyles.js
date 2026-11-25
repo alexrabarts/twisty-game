@@ -157,6 +157,131 @@ class EdgeStyles {
         return part;
     }
 
+    // A piece as it is drawn near the bike (Scenery.rankStones: the STONE_NEAR_CAP nearest within STONE_NEAR_M), in
+    // the far piece's size, seat, top and root, so a stone keeps its place and its outline when it changes level:
+    //   granite, short  a block with its edges chamfered and its head dressed to a low dome, each face its own grey
+    //   post            a white post with chamfered edges, the black band and a reflector on each face along the road
+    //   railPost        a steel post of C section (two flanges and a web) and the spacer block the beam is bolted to
+    //   timberPost      a round post of eight faces with a pointed head
+    //   tubePost        a round steel post of six faces with a closed head
+    // 40 to 60 triangles: the far pieces' 10 and 18 read as boxes from the saddle
+    static nearPiece(id) {
+        const cache = EdgeStyles.nearPieces || (EdgeStyles.nearPieces = new Map());
+        if (cache.has(id)) return cache.get(id);
+        const P = EdgeStyles.PIECES[id];
+        const [w, h, d] = P.size, sink = Scenery.STONE_SINK_M, root = Scenery.STONE_ROOT_M, top = sink + h;
+        const positions = [], shades = [];
+        let face = 0;
+        // Each face a little lighter or darker than its colour, as dressed stone and weathered paint are
+        const tone = (colour, k = 0.04) => { const f = 1 + k * Math.sin(face++ * 2.39 + id.length); return colour.map(c => Math.min(1, c * f)); };
+        const tri = (a, b, e, colour) => { positions.push(...a, ...b, ...e); shades.push(...colour, ...colour, ...colour); };
+        // A ring of points round the post's axis at height y: a rectangle `sx` by `sz` with its corners cut by `cut`, or a
+        // circle of `round` points
+        const ring = (y, sx, sz, cut = 0, round = 0) => {
+            if (round) return Array.from({ length: round }, (_, k) => { const t = -Math.PI * 3 / 4 + (k / round) * Math.PI * 2; return [Math.cos(t) * sx / 2, y, Math.sin(t) * sz / 2]; });
+            const x = sx / 2, z = sz / 2, c = Math.min(cut, x * 0.9, z * 0.9);
+            if (!c) return [[-x, y, -z], [x, y, -z], [x, y, z], [-x, y, z]];
+            return [[-x + c, y, -z], [x - c, y, -z], [x, y, -z + c], [x, y, z - c], [x - c, y, z], [-x + c, y, z], [-x, y, z - c], [-x, y, -z + c]];
+        };
+        // The sides between two rings of as many points, wound to face out (as EdgeStyles.piece)
+        const band = (lo, hi, colour, k) => {
+            for (let i = 0; i < lo.length; i++) {
+                const j = (i + 1) % lo.length, c = tone(colour, k);
+                tri(lo[i], hi[j], lo[j], c);
+                tri(lo[i], hi[i], hi[j], c);
+            }
+        };
+        // A head over a ring: a fan to a point `rise` over the ring's middle
+        const head = (hi, rise, colour, k) => {
+            const y = hi[0][1] + rise, c = [0, y, 0];
+            for (let i = 0; i < hi.length; i++) tri(c, hi[(i + 1) % hi.length], hi[i], tone(colour, k));
+        };
+        // A box from its middle (x, y, z) and its size, no underside (for the steel's flanges and the spacer)
+        const box = (x, y, z, sx, sy, sz, colour) => {
+            const out = { positions: [], shades: [] };
+            RoadMesh.box(out, x, y, z, sx, sy, sz, 0, tone(colour, 0.06));
+            positions.push(...out.positions.slice(0, -18));
+            shades.push(...out.shades.slice(0, -18));
+        };
+        const scale = (y) => 1 - (1 - P.top) * (y + root) / (top + root);
+        if (id === 'granite' || id === 'short') {
+            const cut = 0.035, crown = top - 0.085;
+            const foot = ring(-root, w, d, cut), shoulder = ring(crown, w * scale(crown), d * scale(crown), cut);
+            const brow = ring(top - 0.025, w * scale(top) - 0.07, d * scale(top) - 0.07, cut);
+            band(foot, shoulder, P.colour, 0.05);
+            band(shoulder, brow, P.colour, 0.07);
+            head(brow, 0.025, P.colour, 0.05);
+        } else if (id === 'post') {
+            const split = top - P.bandM, cut = 0.025;
+            const foot = ring(-root, w, d, cut), low = ring(split, w * scale(split), d * scale(split), cut), high = ring(top - 0.02, w * scale(top), d * scale(top), cut);
+            band(foot, low, P.colour, 0.02);
+            band(low, high, P.band, 0.02);
+            head(high, 0.02, P.colour, 0.02);
+            // The reflector on the band, on each face along the road, a hand proud of it
+            const y0 = split + 0.05, y1 = top - 0.06, x = w * scale(top) / 2 - cut - 0.005;
+            for (const z of [-1, 1]) {
+                const zz = z * (d * scale(top) / 2 + 0.004), a = [-x, y0, zz], b = [x, y0, zz], c = [x, y1, zz], e = [-x, y1, zz];
+                const lamp = [0.95, 0.6, 0.12];
+                if (z < 0) { tri(a, e, c, lamp); tri(a, c, b, lamp); } else { tri(a, b, c, lamp); tri(a, c, e, lamp); }
+            }
+        } else if (id === 'railPost') {
+            // Two flanges along the road and the web on the side away from it; the spacer between the post and the beam
+            const fl = 0.012, half = d / 2;
+            box(0, (top - root) / 2, -half + fl / 2, w, top + root, fl, P.colour);
+            box(0, (top - root) / 2, half - fl / 2, w, top + root, fl, P.colour);
+            box(w / 2 - fl / 2, (top - root) / 2, 0, fl, top + root, d - fl * 2, P.colour);
+            const beam = EdgeStyles.LINKS.wBeam, [up, tall] = beam.bars[0];
+            box(-w / 2 - 0.04, sink + up - tall / 2, 0, 0.08, 0.22, 0.09, P.colour.map(c => c * 0.9));
+        } else if (id === 'timberPost') {
+            const foot = ring(-root, w, d, 0, 8), high = ring(top - 0.05, w * scale(top), d * scale(top), 0, 8);
+            band(foot, high, P.colour, 0.08);
+            head(high, 0.05, P.colour.map(c => c * 0.9), 0.08);
+        } else {
+            const foot = ring(-root, w, d, 0, 6), high = ring(top, w, d, 0, 6);
+            band(foot, high, P.colour, 0.05);
+            head(high, 0, P.colour, 0.05);
+        }
+        const part = { geometry: RoadMesh.geometry(positions, shades), material: EdgeStyles.piece(id).material, height: h, triangles: positions.length / 9 };
+        cache.set(id, part);
+        return part;
+    }
+
+    // A link as it is drawn near the bike, a metre along z as the far link: the W-beam in its own profile, two ridges,
+    // seen from both faces; the tubes round. The timber rails and the kerb are the far ones (null)
+    static nearLink(id) {
+        if (id !== 'wBeam' && id !== 'tubes') return null;
+        const cache = EdgeStyles.nearLinks || (EdgeStyles.nearLinks = new Map());
+        if (cache.has(id)) return cache.get(id);
+        const L = EdgeStyles.LINKS[id], sink = Scenery.STONE_SINK_M;
+        const positions = [], shades = [];
+        const tri = (a, b, e, colour) => { positions.push(...a, ...b, ...e); shades.push(...colour, ...colour, ...colour); };
+        const strip = (points, colourOf, both) => {
+            for (let k = 0; k + 1 < points.length; k++) {
+                const [x0, y0] = points[k], [x1, y1] = points[k + 1], c = colourOf(k);
+                const a = [x0, y0, -0.5], b = [x1, y1, -0.5], e = [x1, y1, 0.5], f = [x0, y0, 0.5];
+                // (`both` false: the outside of a ring walked anticlockwise in x, y)
+                tri(a, b, e, c); tri(a, e, f, c);
+                if (both) { tri(a, e, b, c); tri(a, f, e, c); }
+            }
+        };
+        if (id === 'wBeam') {
+            const [up, tall] = L.bars[0], mid = sink + up - tall / 2, half = tall / 2;
+            // Across the beam (x out from the posts, y up): a flat edge, a ridge, the valley, a ridge, a flat edge
+            const profile = [[0, -half], [-0.07, -half + 0.06], [-0.07, -0.045], [-0.02, 0], [-0.07, 0.045], [-0.07, half - 0.06], [0, half]];
+            const points = profile.map(([x, y]) => [L.out + 0.03 + x, mid + y]);
+            strip(points, k => L.colour.map(c => c * (k % 3 === 0 ? 0.92 : k % 3 === 1 ? 1.04 : 0.98)), true);
+        } else {
+            for (const [up, tall] of L.bars) {
+                const r = tall / 2, y = sink + up - r, n = 6;
+                const points = Array.from({ length: n + 1 }, (_, k) => { const t = (k / n) * Math.PI * 2; return [L.out + Math.cos(t) * r, y + Math.sin(t) * r]; });
+                strip(points, k => L.colour.map(c => c * (0.92 + 0.1 * Math.sin(k * Math.PI / 3 + 1.2))), false);
+            }
+        }
+        const part = { geometry: RoadMesh.geometry(positions, shades), material: EdgeStyles.link(id).material, triangles: positions.length / 9 };
+        cache.set(id, part);
+        return part;
+    }
+
     // A link's geometry (cached): a metre along z (an instance is as long as its two pieces are apart), each bar its
     // two sides and its top, no ends; 6 triangles a bar
     static link(id) {

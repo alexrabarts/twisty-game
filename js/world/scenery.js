@@ -199,8 +199,9 @@ class Scenery {
     // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
     // where the rows before the junctions were 1 440)
     // (127 000 until the tufts took 5 and 10 triangles in place of 3 and 4, about 1 800 more in a window of 500, and the
-    // stopping places' props took round posts, tubes, slats and chamfers, about 1 000 more within 600 m of the bike)
-    static get TRIANGLE_CAP() { return 124000; }
+    // stopping places' props took round posts, tubes, slats and chamfers, about 1 000 more within 600 m of the bike,
+    // and the nearest edge furniture its near shapes, up to 2 200 more: Scenery.STONE_NEAR_CAP)
+    static get TRIANGLE_CAP() { return 122000; }
     // Boulders on rock and scree, nearest first
     // (160 until a boulder was fractured granite of about 56 triangles, where it was 20)
     static get BOULDER_CAP() { return 120; }
@@ -242,6 +243,11 @@ class Scenery {
     // the bike: Scenery.rankStones. With 140 the rows are drawn to 190 m from the bike at the least, where the
     // hairpins stand closest; with 100 to 83 m)
     static get STONE_CAP() { return 140; }
+    // Of the stones drawn, the STONE_NEAR_CAP nearest within STONE_NEAR_M are drawn in their near shapes (chamfered
+    // stone, a post's band and reflector, a steel post's section, the W-beam's profile: EdgeStyles.nearPiece, nearLink),
+    // at most 2 200 triangles more than their far shapes, which TRIANGLE_CAP pays
+    static get STONE_NEAR_CAP() { return 36; }
+    static get STONE_NEAR_M() { return 45; }
     // The pieces of kerb drawn, under the stones nearest the bike (6 triangles each): from further off a row is its
     // blocks. 140 blocks and 50 pieces are 1 700 triangles, where the 160 posts were 2 880 and the window of the
     // upper hairpins had 150 of them
@@ -885,6 +891,8 @@ class Scenery {
         // Boulders on the rock and scree cells, as many as the cap leaves
         const stones = this.boulderSites(tile, cover).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Scenery.BOULDER_CAP - (this.boulderCount || 0)));
         if (stones.length) {
+            // The tile's boulders are one of the shapes, by a hash of the tile, each turned and sized its own way: one
+            // instanced mesh for the tile, as before (a mesh for each shape put the window over its meshes' margin)
             const matrices = stones.map((b) => {
                 rotation.setFromAxisAngle(up, b.turn);
                 position.set(b.x, b.y, b.z);
@@ -895,8 +903,6 @@ class Scenery {
             this.instanced([Scenery.boulderPart(shape)], matrices, 'boulders', group);
         }
         held.boulders = stones.length;
-            // The tile's boulders are one of the shapes, by a hash of the tile, each turned and sized its own way: one
-            // instanced mesh for the tile, as before (a mesh for each shape put the window over its meshes' margin)
         held.boulderTriangles = stones.length * (stones.length ? Scenery.boulderPart(Math.floor(Scenery.hash(tile.tx, tile.tz, 36) * Scenery.BOULDER_SHAPES)).triangles : 0);
 
         // The marker stones of this tile, where it is near enough to have them
@@ -988,8 +994,9 @@ class Scenery {
         const all = [];
         for (const held of this.perTile.values()) {
             if (!held.stoneSites || !held.stoneSites.length) continue;
-            const meshes = new Map(held.group.children.filter(o => o.name === 'stones').map(o => [o.userData.piece, o]));
-            const links = new Map(held.group.children.filter(o => o.name === 'stone-kerbs').map(o => [o.userData.link, o]));
+            // (the far meshes: a near one is chosen below, and its triangles are not the cap's)
+            const meshes = new Map(held.group.children.filter(o => o.name === 'stones' && !o.userData.near).map(o => [o.userData.piece, o]));
+            const links = new Map(held.group.children.filter(o => o.name === 'stone-kerbs' && !o.userData.near).map(o => [o.userData.link, o]));
             for (const q of held.stoneSites) all.push({ q, d: far(q), mesh: meshes.get(q.piece), link: q.next ? links.get(q.link) : null, held });
         }
         all.sort((a, b) => a.d - b.d);
@@ -1012,30 +1019,71 @@ class Scenery {
             linkRoom -= t;
             e.linkDrawn = true;
         }
+        // The nearest drawn pieces are drawn in their near shapes (EdgeStyles.nearPiece), and a link between two near
+        // pieces in its near shape where it has one: a tile's near meshes are in its group only while they draw any
+        let near = 0;
+        const close = new Set();
+        for (const e of all) {
+            if (!e.drawn || near >= Scenery.STONE_NEAR_CAP || e.d > Scenery.STONE_NEAR_M) continue;
+            e.near = true;
+            near++;
+            close.add(at(e.q));
+        }
         const counts = new Map();
-        for (const held of this.perTile.values()) for (const o of held.group.children) if (o.name === 'stones' || o.name === 'stone-kerbs') counts.set(o, 0);
+        for (const held of this.perTile.values()) {
+            for (const o of held.group.children) if (o.name === 'stones' || o.name === 'stone-kerbs') counts.set(o, 0);
+            for (const o of (held.nearEdges || new Map()).values()) counts.set(o, 0);
+        }
         this.stoneCount = 0;
         this.kerbCount = 0;
+        this.nearStoneCount = 0;
         for (const held of this.perTile.values()) held.stones = 0;
         for (const e of all) {
             if (e.drawn && e.mesh) {
-                const n = counts.get(e.mesh);
-                e.mesh.setMatrixAt(n, e.q.matrix);
-                counts.set(e.mesh, n + 1);
+                const mesh = e.near ? this.nearEdge(e.held, 'stones', e.q.piece) : e.mesh;
+                const n = counts.get(mesh) || 0;
+                mesh.setMatrixAt(n, e.q.matrix);
+                counts.set(mesh, n + 1);
                 e.held.stones++;
                 this.stoneCount++;
+                if (e.near) this.nearStoneCount++;
             }
             if (e.linkDrawn) {
-                const k = counts.get(e.link);
-                e.link.setMatrixAt(k, e.q.kerbMatrix);
-                counts.set(e.link, k + 1);
+                const closeLink = e.near && close.has(at(e.q.next)) && EdgeStyles.nearLink(e.q.link);
+                const mesh = closeLink ? this.nearEdge(e.held, 'stone-kerbs', e.q.link) : e.link;
+                const k = counts.get(mesh) || 0;
+                mesh.setMatrixAt(k, e.q.kerbMatrix);
+                counts.set(mesh, k + 1);
                 this.kerbCount++;
             }
         }
         for (const [mesh, n] of counts) {
             mesh.count = n;
             mesh.instanceMatrix.needsUpdate = true;
+            // A near mesh with nothing to draw leaves its tile's group, so it is not a mesh of the window
+            if (mesh.userData.near) {
+                if (n && !mesh.parent) mesh.userData.held.group.add(mesh);
+                else if (!n && mesh.parent) mesh.parent.remove(mesh);
+            }
         }
+    }
+
+    // A tile's instanced mesh of the near shape of a piece (`name` 'stones') or a link ('stone-kerbs'), made the first
+    // time it is asked for, with room for every site of the tile; named and marked as the far one is, and `near`
+    nearEdge(held, name, id) {
+        held.nearEdges = held.nearEdges || new Map();
+        const key = `${name}:${id}`;
+        let mesh = held.nearEdges.get(key);
+        if (!mesh) {
+            const part = name === 'stones' ? EdgeStyles.nearPiece(id) : EdgeStyles.nearLink(id);
+            mesh = new THREE.InstancedMesh(part.geometry, part.material, Math.max(1, held.stoneSites.length));
+            mesh.count = 0;
+            mesh.name = name;
+            mesh.frustumCulled = false;
+            Object.assign(mesh.userData, { world: 'scenery', near: true, held, triangles: part.triangles }, name === 'stones' ? { piece: id, height: part.height } : { link: id });
+            held.nearEdges.set(key, mesh);
+        }
+        return mesh;
     }
 
     // Puts up or takes down the marker stones of a tile whose scenery is drawn. A stone is smaller than a pixel from
@@ -1052,6 +1100,11 @@ class Scenery {
                 held.group.remove(mesh);
                 mesh.dispose();
             }
+            for (const mesh of (held.nearEdges || new Map()).values()) {
+                if (mesh.parent) mesh.parent.remove(mesh);
+                mesh.dispose();
+            }
+            held.nearEdges = null;
             held.stoneSites = null;
             held.stones = 0;
         }
@@ -1114,6 +1167,8 @@ class Scenery {
             if (child.isInstancedMesh) child.dispose();
             else if (child.userData.footings || child.userData.tileOwned) child.geometry.dispose();
         });
+        // (the near edge meshes out of the group: theirs is a shared geometry, their instances their own)
+        for (const mesh of (held.nearEdges || new Map()).values()) if (!mesh.parent) mesh.dispose();
         if (held.group.parent) held.group.parent.remove(held.group);
         this.houseInstances -= held.house;
         this.houseTriangles -= held.houseTriangles;
@@ -1724,6 +1779,8 @@ class Scenery {
         const tri = (a, b, c, ka, kb, kc) => { out.positions.push(...a, ...b, ...c); out.shades.push(...ka, ...kb, ...kc); };
         for (const t of sites) {
             const reach = Scenery.tuftRadius(t.green, t.size), h = Scenery.tuftHeight(t.green, t.size);
+            // Each tuft's own uneven leaves and blades, from its turn (no draw of its own)
+            const jit = k => 0.5 + 0.5 * Math.sin(t.turn * 7.3 + k * 2.39);
             if (t.green) {
                 for (let k = 0; k < 5; k++) {
                     const a = t.turn + k * Math.PI * 2 / 5 + 0.4 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
@@ -1784,8 +1841,6 @@ class Scenery {
     // of every road band and no part of it stands on drawn water (Scenery.wetUnder). Of those, the one nearest the
     // landmark's mapped point (x, z; else the ride at its s) is taken. null when nowhere near is clear and dry.
     landmarkPlace(l, route, shape = null) {
-            // Each tuft's own uneven leaves and blades, from its turn (no draw of its own)
-            const jit = k => 0.5 + 0.5 * Math.sin(t.turn * 7.3 + k * 2.39);
         const margin = Scenery.CLEAR_M.landmark;
         // The model's own plan where it is loaded, else the size landmarks.json gives
         let plan = { width: l.size[0], depth: l.size[2], centre: [0, 0] };
