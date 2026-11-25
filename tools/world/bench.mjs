@@ -32,6 +32,10 @@ export const VERGE_M = 1.1;
 export const JOIN_M = 1.5;
 export const STRAND_GAP_M = 60;
 const CLAIM_MARGIN_M = 0.5;
+// At a junction the ride owns the nodes this far past its verge too, against a side road within JOIN_M of it, where
+// the node is on no other road's own carriageway and verge: a node left at the side road's lower height pulled the
+// land under the ride's verge, a gap between the two roads 0.3 to 0.7 m under both
+const RIDE_OWN_PAST_M = 8;
 // On a bridge the land is not carved, but no land stands over the deck: every node of a triangle that reaches into a
 // bridge's strip is held this far under the deck's surface (a bank that rises to an abutment came up through the deck's
 // last metres: 0.96 m over the carriageway's edge at a bridge end of the run-in from the north)
@@ -283,7 +287,8 @@ export function createBencher({ edges, demAt, coverAt = () => 0, pads = [] }) {
       const low = Math.min(...list.map(c => c.y));
       // The lowest road owns the node, so no land stands over any road; but under its own carriageway and verge the
       // ride owns it when it is within JOIN_M of the lowest (a junction: the side road is drawn under the ride there)
-      const own = list.filter(c => c.ride && c.d <= c.w / 2 + c.v && c.y <= low + JOIN_M).sort(byNear);
+      const onOther = list.some(c => !c.ride && c.d <= c.w / 2 + c.v);
+      const own = list.filter(c => c.ride && c.d <= c.w / 2 + c.v + (onOther ? 0 : RIDE_OWN_PAST_M) && c.y <= low + JOIN_M).sort(byNear);
       const lowest = [...list].sort((p, q) => p.y - q.y || byNear(p, q))[0];
       // The ride is one road across its edges: where the lowest claim is the ride, the nearest piece of the ride
       // within JOIN_M of it owns the node (two edges of the ride meet at a node at one height)

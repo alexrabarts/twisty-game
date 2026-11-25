@@ -25,7 +25,7 @@ import { buildFarLand, horizonSinks, COPERNICUS_NOTICE } from './farland.mjs';
 import { TILE_N } from './bench.mjs';
 import { RIDE_WIDTH_M, classWidth, narrowRide } from './widths.mjs';
 import { mapPlaces, foundPlaces, applyPads, mouthsOf, numberPlaces } from './places.mjs';
-import { findStops } from './stops.mjs';
+import { findStops, layLanes } from './stops.mjs';
 
 export { RIDE_WIDTH_M, classWidth };
 
@@ -261,6 +261,7 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
   const stopDefs = source.stages.flatMap((st, k) => Object.entries(st.stops ?? {}).map(([at, d]) => ({ stage: k, at, ...d })));
   const stops = stopDefs.length ? findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt }) : [];
   for (const stop of stops) log(`stop: ${stop.kind} at the ${stop.at} of ${stop.stage}, ${stop.access}, turn-in at s ${stop.s}, ${stop.slots.length} slots`);
+  if (stops.length) log(`stops: ${layLanes(edges, stops)} side-road samples laid on a stop's ground`);
 
   const placed = placeStations(samples, bounds, junctions.flatMap(j => j.passes.map(p => p.sIn)), { spacingM: stationSpacingM, places: mapped });
   for (const d of placed.dropped) log(`station: no full roadworks site within reach of s ${Math.round(d.target)} in ${d.stage} (${d.reason}); no checkpoint there`);
