@@ -244,7 +244,8 @@ class Scenery {
     static get STONE_CAP() { return 140; }
     // Of the stones drawn, the STONE_NEAR_CAP nearest within STONE_NEAR_M are drawn in their near shapes (chamfered
     // stone, a post's band and reflector, a steel post's section, the W-beam's profile: EdgeStyles.nearPiece, nearLink),
-    // at most about 600 triangles more than their far shapes, which the tufts pay (TUFT_CAP)
+    // at most about 600 triangles more than their far shapes, which the tufts pay (TUFT_CAP); one mesh of the window for
+    // each near shape (Scenery.nearEdge)
     static get STONE_NEAR_CAP() { return 14; }
     static get STONE_NEAR_M() { return 25; }
     // The pieces of kerb drawn, under the stones nearest the bike (6 triangles each): from further off a row is its
@@ -1057,7 +1058,8 @@ class Scenery {
             e.linkDrawn = true;
         }
         // The nearest drawn pieces are drawn in their near shapes (EdgeStyles.nearPiece), and a link between two near
-        // pieces in its near shape where it has one: a tile's near meshes are in its group only while they draw any
+        // pieces in its near shape where it has one: one mesh of the window for each shape (a mesh a tile added the
+        // window's margin of meshes), in the group of the tile of its nearest piece while it draws any
         let near = 0;
         const close = new Set();
         for (const e of all) {
@@ -1069,15 +1071,17 @@ class Scenery {
         const counts = new Map();
         for (const held of this.perTile.values()) {
             for (const o of held.group.children) if (o.name === 'stones' || o.name === 'stone-kerbs') counts.set(o, 0);
-            for (const o of (held.nearEdges || new Map()).values()) counts.set(o, 0);
         }
+        for (const o of (this.nearEdges || new Map()).values()) counts.set(o, 0);
+        const homes = new Map();
         this.stoneCount = 0;
         this.kerbCount = 0;
         this.nearStoneCount = 0;
         for (const held of this.perTile.values()) held.stones = 0;
         for (const e of all) {
             if (e.drawn && e.mesh) {
-                const mesh = e.near ? this.nearEdge(e.held, 'stones', e.q.piece) : e.mesh;
+                const mesh = e.near ? this.nearEdge('stones', e.q.piece) : e.mesh;
+                if (e.near && !homes.has(mesh)) homes.set(mesh, e.held);
                 const n = counts.get(mesh) || 0;
                 mesh.setMatrixAt(n, e.q.matrix);
                 counts.set(mesh, n + 1);
@@ -1087,7 +1091,8 @@ class Scenery {
             }
             if (e.linkDrawn) {
                 const closeLink = e.near && close.has(at(e.q.next)) && EdgeStyles.nearLink(e.q.link);
-                const mesh = closeLink ? this.nearEdge(e.held, 'stone-kerbs', e.q.link) : e.link;
+                const mesh = closeLink ? this.nearEdge('stone-kerbs', e.q.link) : e.link;
+                if (closeLink && !homes.has(mesh)) homes.set(mesh, e.held);
                 const k = counts.get(mesh) || 0;
                 mesh.setMatrixAt(k, e.q.kerbMatrix);
                 counts.set(mesh, k + 1);
@@ -1097,30 +1102,35 @@ class Scenery {
         for (const [mesh, n] of counts) {
             mesh.count = n;
             mesh.instanceMatrix.needsUpdate = true;
-            // A near mesh with nothing to draw leaves its tile's group, so it is not a mesh of the window
+            // A near mesh with nothing to draw leaves the scene, so it is not a mesh of the window
             if (mesh.userData.near) {
-                if (n && !mesh.parent) mesh.userData.held.group.add(mesh);
+                if (n && mesh.parent !== homes.get(mesh).group) homes.get(mesh).group.add(mesh);
                 else if (!n && mesh.parent) mesh.parent.remove(mesh);
             }
         }
     }
 
-    // A tile's instanced mesh of the near shape of a piece (`name` 'stones') or a link ('stone-kerbs'), made the first
-    // time it is asked for, with room for every site of the tile; named and marked as the far one is, and `near`
-    nearEdge(held, name, id) {
-        held.nearEdges = held.nearEdges || new Map();
+    // The window's instanced mesh of the near shape of a piece (`name` 'stones') or a link ('stone-kerbs'), made the
+    // first time it is asked for, with room for STONE_NEAR_CAP; named and marked as the far one is, and `near`
+    nearEdge(name, id) {
+        this.nearEdges = this.nearEdges || new Map();
         const key = `${name}:${id}`;
-        let mesh = held.nearEdges.get(key);
+        let mesh = this.nearEdges.get(key);
         if (!mesh) {
             const part = name === 'stones' ? EdgeStyles.nearPiece(id) : EdgeStyles.nearLink(id);
-            mesh = new THREE.InstancedMesh(part.geometry, part.material, Math.max(1, held.stoneSites.length));
+            mesh = new THREE.InstancedMesh(part.geometry, part.material, Scenery.STONE_NEAR_CAP);
             mesh.count = 0;
             mesh.name = name;
             mesh.frustumCulled = false;
-            Object.assign(mesh.userData, { world: 'scenery', near: true, held, triangles: part.triangles }, name === 'stones' ? { piece: id, height: part.height } : { link: id });
-            held.nearEdges.set(key, mesh);
+            Object.assign(mesh.userData, { world: 'scenery', near: true, triangles: part.triangles }, name === 'stones' ? { piece: id, height: part.height } : { link: id });
+            this.nearEdges.set(key, mesh);
         }
         return mesh;
+    }
+
+    // Takes the window's near meshes out of a tile's group (they outlive it), so a tile let go keeps none of them
+    releaseNearEdges(held) {
+        for (const mesh of (this.nearEdges || new Map()).values()) if (mesh.parent === held.group) held.group.remove(mesh);
     }
 
     // Puts up or takes down the marker stones of a tile whose scenery is drawn. A stone is smaller than a pixel from
@@ -1141,11 +1151,7 @@ class Scenery {
                 held.group.remove(mesh);
                 mesh.dispose();
             }
-            for (const mesh of (held.nearEdges || new Map()).values()) {
-                if (mesh.parent) mesh.parent.remove(mesh);
-                mesh.dispose();
-            }
-            held.nearEdges = null;
+            this.releaseNearEdges(held);
             held.stoneSites = null;
             held.stones = 0;
         }
@@ -1204,12 +1210,12 @@ class Scenery {
     disposeTile(key) {
         const held = this.perTile.get(key);
         if (!held) return;
+        // (the window's near edge meshes are not the tile's: they go on with the next tile that has a near stone)
+        this.releaseNearEdges(held);
         held.group.traverse(child => {
             if (child.isInstancedMesh) child.dispose();
             else if (child.userData.footings || child.userData.tileOwned) child.geometry.dispose();
         });
-        // (the near edge meshes out of the group: theirs is a shared geometry, their instances their own)
-        for (const mesh of (held.nearEdges || new Map()).values()) if (!mesh.parent) mesh.dispose();
         if (held.group.parent) held.group.parent.remove(held.group);
         this.houseInstances -= held.house;
         this.houseTriangles -= held.houseTriangles;

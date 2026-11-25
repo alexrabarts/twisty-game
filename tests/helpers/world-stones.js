@@ -155,6 +155,10 @@ export async function rideStones(game, { id = 'tremola', search = '', fetchFn, s
                     kerbs.set(key, { a: [a[0], a[2]], b: [b[0], b[2]], ends });
                 }
             }
+        }
+        // (after every tile's meshes: the near shapes of the stones nearest the bike are one mesh of the window, in the
+        // group of one tile, Scenery.nearEdge)
+        for (const held of env.scenery.perTile.values()) {
             for (const q of held.stoneSites || []) {
                 sites++;
                 const key = `${q.x.toFixed(2)},${q.z.toFixed(2)}`;
