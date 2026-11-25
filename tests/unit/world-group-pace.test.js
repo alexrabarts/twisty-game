@@ -55,11 +55,13 @@ function measure(rider) {
     const each = [...rows.entries()].map(([r, row]) => ({
         place: row.name, metres: Math.round(sOf(r) - row.s0), meanMs: Math.round((sOf(r) - row.s0) / (row.frames / 60) * 100) / 100,
         movingMs: Math.round((sOf(r) - row.s0) / (row.moving / 60) * 100) / 100,
+        stopped: Math.round((1 - row.moving / row.frames) * 1000) / 1000,
         nearMost: Math.round(row.near / row.frames * 100) / 100, bent: Math.round(row.bent / row.frames * 100) / 100, limit: Math.round(row.limit * 1000) / 1000
     })).sort((a, b) => a.place - b.place);
     const group = each.reduce((sum, e) => sum + e.meanMs, 0) / each.length;
     const moving = each.reduce((sum, e) => sum + e.movingMs, 0) / each.length;
-    return { seconds: Math.round(frames / 60), group: Math.round(group * 100) / 100, moving: Math.round(moving * 100) / 100, each, over, overlaps: ride.overlaps, events: ride.traffic.group.events };
+    const stopped = each.reduce((sum, e) => sum + e.stopped, 0) / each.length;
+    return { seconds: Math.round(frames / 60), group: Math.round(group * 100) / 100, moving: Math.round(moving * 100) / 100, stopped: Math.round(stopped * 1000) / 1000, each, over, overlaps: ride.overlaps, events: ride.traffic.group.events };
 }
 
 describe('the group\'s pace', () => {
@@ -73,6 +75,10 @@ describe('the group\'s pace', () => {
         // Nobody is held for good: riders that waited on the roadside for the back, with the back queued behind them,
         // once stood there for the rest of the ride (1.8 km of the slice ridden in 1400 s)
         for (const e of [...a.each, ...b.each]) expect(e.metres).toBeGreaterThan(route.length / 2);
+        // The owner's order (2026-11-25): a quicker group that stands less. With the slowest rider in it the crew stood
+        // 35 % of the ride at 10.92 m/s; the roadworks lights alone hold it about 16 % of the ride
+        expect(b.stopped).toBeLessThan(0.31);
+        expect(b.group).toBeGreaterThan(12);
     }, 900000);
 
     test('every rider of the group rides the group\'s pace: its traits\' pace times GROUP.pace, its bends at the square of it, held at gripMost, its braking planned at planMost at most', () => {
@@ -89,6 +95,10 @@ describe('the group\'s pace', () => {
             // (it never plans to stop in less room than its hard braking stops it in, which the following rule reads)
             expect(r.drive.plan).toBeLessThanOrEqual(r.drive.brake);
             expect(r.drive.lateral).toBeLessThanOrEqual(4 * grip + 1e-9);
+            // (its cornering is the crew's narrowed to GROUP.cornerSpan of its spread, so the slowest still corners least)
+            const corner = 4 - (4 - pace.corner) * G.cornerSpan;
+            expect(r.drive.lateral).toBeLessThanOrEqual(corner * grip * Math.max(1, r.ride.own.most) ** 2 + 1e-9);
+            expect(r.drive.lateral).toBeGreaterThan(Traffic.PACES[0].corner * grip * r.ride.own.least ** 2);
         }
     }, 300000);
 });

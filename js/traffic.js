@@ -111,6 +111,10 @@ const GROUP = {
     // braking (LANE_DRIVE.bike.brake, 6), which the following rule reads for the vehicle ahead. A plan harder than the
     // brake asks for room the rider cannot stop in: it arrives too fast at a bend and at the back of the one ahead
     planMost: 5.88,
+    // The share of the crew's spread of cornering (CREW_PACES corner, from LANE_DRIVE.bike.lateral down) a rider of the
+    // group keeps: at 0.5 the slowest corners at 3.2 m/s^2 before the grip, not 2.4, and the quickest at 4 as before.
+    // The group waited for its slowest rider in every bend: at 1 the crew without place 1 stood 35 % of the ride
+    cornerSpan: 0.5,
     // The row a character without `group` rides by
     rider: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: null, passPerS: 0.2, stop: null },
     // The line: a rider keeps its time gap (at its own speed, and no less than gapMinM) to whoever is next ahead of it on
@@ -119,7 +123,7 @@ const GROUP = {
     // eased in over easeS; one that would pass the one ahead closes up to gapMinM. With nobody ahead within lookM it
     // leads, at its own pace, and waits for the back: as the last of the line on the road (a rider or the player) drops
     // from backFromM to backToM behind it, it eases to waitShare of its pace, below its least, so the front does not ride
-    // away and one that stopped catches up
+    // away and one that stopped catches up. One with a rider ahead further off than lookM rides at its most to close up
     line: { gapMinM: 8, gain: 0.6, easeS: 2.5, lookM: 300, frontM: 4, backFromM: 150, backToM: 450, waitShare: 0.7 },
     // Every everyS a rider draws a new pace share within its `wander`, and a new gap from its `gapSpread` below its gap
     // to twice that above it; each eases in over easeS
@@ -803,7 +807,9 @@ class CrewGroup {
                 const keen = ride.state === 'ride' && this.wants(ride, ahead);
                 const want = keen ? L.gapMinM : Math.max(L.gapMinM, ride.gap * Math.max(bike.currentSpeed || 0, 0.5 * bike.baseSpeed));
                 share = 1 + L.gain * (ahead.s - ride.s - want) / want;
-            }
+            } else if (ahead && ride.state === 'ride' && !ride.pass.phase) share = own.most;
+            // (one further than lookM behind the next rider ahead presses on at its most to close up, as the gap rule
+            // does at lookM; at its own pace it fell further behind, and the riders ahead stood to wait for it)
         }
         share *= ride.noise;
         if (ride.spurtS > 0 && own.spurt) share *= own.spurt.gain;
@@ -2865,7 +2871,9 @@ class AIMotorcycle {
         this.drive.turnIn = LANE_DRIVE.bike.turnIn * grip;
         // (a rider of the group at a share of its pace takes its bends at that share of their speed)
         const share = this.ride ? this.ride.factor : 1;
-        this.drive.lateral = Math.min(LANE_DRIVE.bike.lateral * grip, pace.corner * grip * share * share);
+        // (the group narrows the crew's spread of cornering to GROUP.cornerSpan of it, up from the slowest)
+        const corner = this.ride ? LANE_DRIVE.bike.lateral - (LANE_DRIVE.bike.lateral - pace.corner) * GROUP.cornerSpan : pace.corner;
+        this.drive.lateral = Math.min(LANE_DRIVE.bike.lateral * grip, corner * grip * share * share);
     }
 
     update(deltaTime, playerPosition, allBikes, allCars) {

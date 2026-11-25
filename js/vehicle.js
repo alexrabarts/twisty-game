@@ -352,7 +352,7 @@ const CHARACTERS = [
         traits: { country: 2, mountain: 2, hairpins: 2, daring: 1 },
         // Toward the back, sometimes last, at a distance from the others
         place: 5,
-        group: { gapS: 4.5, gapSpread: 0.6, least: 0.8, most: 1.2, wander: 0.06, spurt: { perKm: 0.25, seconds: 25, gain: 1.15, country: 1, mountain: 1, hairpin: 1 }, passPerS: 0.1, stop: { chance: 0.04, waitS: [15, 40] } },
+        group: { gapS: 4.5, gapSpread: 0.6, least: 0.8, most: 1.2, wander: 0.06, spurt: { perKm: 0.25, seconds: 25, gain: 1.15, country: 1, mountain: 1, hairpin: 1 }, passPerS: 0.1, stop: { chance: 0.03, waitS: [8, 20] } },
         physics: {
             comfortShake: 0.3,      // Plush armchair ride
             maxSpeed: 0.75,        // 51 m/s
@@ -461,7 +461,7 @@ const CHARACTERS = [
         traits: { country: 1, mountain: 1, hairpins: 1, daring: 1 },
         // Last, and stops often
         place: 6,
-        group: { gapS: 3, gapSpread: 0.5, least: 0.85, most: 1.15, wander: 0.04, spurt: null, passPerS: 0.05, stop: { chance: 0.3, waitS: [25, 70] } },
+        group: { gapS: 3, gapSpread: 0.5, least: 0.85, most: 1.15, wander: 0.04, spurt: null, passPerS: 0.05, stop: { chance: 0.12, waitS: [10, 25] } },
         physics: {
             comfortShake: 0.7,
             maxSpeed: 0.92,        // 62.6 m/s

@@ -171,8 +171,9 @@ describe('the player\'s pace', () => {
         expect(fast.over).toEqual([]);
         expect(slow.over).toEqual([]);
         // (the rider next behind a fast player rode at 1.088 of its pace on the mean at a pace of 1.5 with its bends at 0.8 g,
-        // 1.079 at 1.6 and 0.9 g: it loses less to the player in the bends, so it needs less pull to keep its gap)
-        if (!(fast.next > 1.07 && slow.next < 0.95 && fast.all > slow.all + 0.1)) throw new Error(`the player's pace did not pull: ${JSON.stringify(report)}`);
+        // 1.079 at 1.6 and 0.9 g, 1.065 with the crew's cornering narrowed to GROUP.cornerSpan 0.5: it loses less to the
+        // player in the bends, so it needs less pull to keep its gap)
+        if (!(fast.next > 1.06 && slow.next < 0.95 && fast.all > slow.all + 0.1)) throw new Error(`the player's pace did not pull: ${JSON.stringify(report)}`);
         // Nobody whose place is behind the player passes it, fast or slow
         expect(fast.passedPlayer).toBe(0);
         expect(slow.passedPlayer).toBe(0);
