@@ -1160,9 +1160,9 @@ describe('Scenery', () => {
         // One mesh and no instances, 3 triangles a tussock and 4 a green clump, nearest the bike first within the caps
         expect(mesh.isInstancedMesh).toBeFalsy();
         expect(scenery.tuftCount).toBe(Math.min(sites.length, Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP));
-        expect(mesh.geometry.attributes.position.count).toBe(mesh.userData.tufts.length * 9 + mesh.userData.tufts.filter(s => s.green).length * 3);
+        expect(mesh.geometry.attributes.position.count).toBe(mesh.userData.tufts.length * 15 + mesh.userData.tufts.filter(s => s.green).length * 15);
         expect(mesh.userData.tufts).toHaveLength(scenery.tuftCount);
-        expect(Scenery.TUFT_CAP * 4).toBeLessThanOrEqual(140000 - Scenery.TRIANGLE_CAP);
+        expect(Scenery.TUFT_CAP * 10).toBeLessThanOrEqual(140000 - Scenery.TRIANGLE_CAP);
         scenery.disposeTile('0,0');
         expect(scenery.tuftCount).toBe(0);
     });

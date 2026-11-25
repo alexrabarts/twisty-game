@@ -198,7 +198,8 @@ class Scenery {
     // the window had counted four procedural bikes, 10 300, and stood 1 400 over at km 4 with a fifth)
     // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
     // where the rows before the junctions were 1 440)
-    static get TRIANGLE_CAP() { return 127000; }
+    // (127 000 until the tufts took 5 and 10 triangles in place of 3 and 4: about 1 800 more in a window of 500)
+    static get TRIANGLE_CAP() { return 125000; }
     // Boulders on rock and scree, nearest first
     // (160 until a boulder was fractured granite of about 56 triangles, where it was 20)
     static get BOULDER_CAP() { return 120; }
@@ -289,7 +290,7 @@ class Scenery {
     static get STONE_RULE() { return { dropM: 7, hairpinDropM: 4, reachM: 10, share: 0.6, minM: 7.5, mouthM: 8, worksM: 5, footM: 0.6, hairpinShare: 0.75, wallMaxM: 4, wallShare: 0.6, wallLowM: 0.3 }; }
     // Tufts: the dry tussock grass and the low green clumps the photos show right beside the roads, on the strip the
     // trees and boulders leave open. TUFT_TRIES places a side for each point of the ride, a TUFT_SHARE of them taken, out to TUFT_REACH_M past the verge,
-    // 3 or 4 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
+    // 5 or 10 triangles each (the window is within 1 000 triangles of its budget where the land is densest), at most TUFT_CAP in a window and TUFTS_PER_TILE in a tile, nearest the bike first
     static get TUFT_CAP() { return 500; }
     static get TUFTS_PER_TILE() { return 250; }
     static get TUFT_REACH_M() { return 7; }
@@ -1711,32 +1712,37 @@ class Scenery {
     static tuftHeight(green, size) { return (green ? 0.28 : 0.7) * size; }
 
     // The tufts of a tile as one mesh (no instances: the window's instance budget is the trees'). A tussock is a
-    // spray of three pointed blades of dry grass leaning out from its foot (3 triangles); a green clump is two low
-    // crossed leaves, broader at the top (4). Colours from the photos: pale straw over a darker foot, and the dull
-    // green of the low broad-leaved plants
+    // spray of five pointed blades of dry grass leaning out from its foot, each its own length and lean (5 triangles);
+    // a green clump is a rosette of five broad leaves, each folded on its midrib and lifted at its tip (10). Two crossed
+    // cards (4) read as a green cross from the saddle. Colours from the photos: pale straw over a darker foot, and the
+    // dull green of the low broad-leaved plants, dark at the heart and lighter at the tips
     static tuftMesh(sites) {
         const out = { positions: [], shades: [] };
-        const foot = [0.42, 0.39, 0.25], straw = [0.68, 0.62, 0.44];
-        const green = [[0.15, 0.21, 0.11], [0.15, 0.21, 0.11], [0.27, 0.37, 0.19], [0.27, 0.37, 0.19]];
+        const foot = [0.42, 0.39, 0.25], straw = [0.68, 0.62, 0.44], pale = [0.62, 0.58, 0.4];
+        const heart = [0.12, 0.16, 0.09], leaf = [0.2, 0.28, 0.15], tip = [0.24, 0.32, 0.17];
+        const tri = (a, b, c, ka, kb, kc) => { out.positions.push(...a, ...b, ...c); out.shades.push(...ka, ...kb, ...kc); };
         for (const t of sites) {
             const reach = Scenery.tuftRadius(t.green, t.size), h = Scenery.tuftHeight(t.green, t.size);
             if (t.green) {
-                const low = 0.3 * t.size;
-                for (let k = 0; k < 2; k++) {
-                    const a = t.turn + k * Math.PI / 2, cos = Math.cos(a), sin = Math.sin(a);
-                    RoadMesh.quad(out,
-                        [t.x - cos * low, t.y, t.z - sin * low], [t.x + cos * low, t.y, t.z + sin * low],
-                        [t.x + cos * reach, t.y + h, t.z + sin * reach], [t.x - cos * reach, t.y + h, t.z - sin * reach], green);
+                for (let k = 0; k < 5; k++) {
+                    const a = t.turn + k * Math.PI * 2 / 5 + 0.4 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
+                    const long = reach * (0.55 + 0.3 * jit(k + 5)), w = long * 0.62, up = h * (0.7 + 0.3 * jit(k + 9));
+                    const base = [t.x + cos * 0.03, t.y, t.z + sin * 0.03];
+                    const end = [t.x + cos * long, t.y + up, t.z + sin * long];
+                    // The midrib is the fold: the leaf's edges stand a little lower than it
+                    const mx = t.x + cos * long * 0.5, mz = t.z + sin * long * 0.5, my = t.y + up * 0.55;
+                    const left = [mx - sin * w / 2, my - w * 0.25, mz + cos * w / 2], right = [mx + sin * w / 2, my - w * 0.25, mz - cos * w / 2];
+                    tri(base, left, end, heart, leaf, tip);
+                    tri(base, end, right, heart, tip, leaf);
                 }
                 continue;
             }
-            for (let k = 0; k < 3; k++) {
-                const a = t.turn + k * Math.PI * 2 / 3, cos = Math.cos(a), sin = Math.sin(a);
+            for (let k = 0; k < 5; k++) {
+                const a = t.turn + k * Math.PI * 2 / 5 + 0.5 * (jit(k) - 0.5), cos = Math.cos(a), sin = Math.sin(a);
                 // Uneven, so no two blades stand alike: the tallest nearly upright, the others lower and further out
-                const out_ = reach * (0.35 + 0.65 * k / 2), up = h * (1 - 0.45 * k / 2), w = 0.13 * t.size;
+                const lean = (k + jit(k)) / 5, out_ = reach * (0.25 + 0.75 * lean), up = h * (1 - 0.5 * lean) * (0.85 + 0.15 * jit(k + 3)), w = 0.07 * t.size;
                 const bx = t.x + cos * 0.04 * t.size, bz = t.z + sin * 0.04 * t.size;
-                out.positions.push(bx + sin * w, t.y, bz - cos * w, bx - sin * w, t.y, bz + cos * w, t.x + cos * out_, t.y + up, t.z + sin * out_);
-                out.shades.push(...foot, ...foot, ...straw);
+                tri([bx + sin * w, t.y, bz - cos * w], [bx - sin * w, t.y, bz + cos * w], [t.x + cos * out_, t.y + up, t.z + sin * out_], foot, foot, k % 2 ? straw : pale);
             }
         }
         if (!Scenery.tuftMaterial) Scenery.tuftMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
@@ -1777,6 +1783,8 @@ class Scenery {
     // of every road band and no part of it stands on drawn water (Scenery.wetUnder). Of those, the one nearest the
     // landmark's mapped point (x, z; else the ride at its s) is taken. null when nowhere near is clear and dry.
     landmarkPlace(l, route, shape = null) {
+            // Each tuft's own uneven leaves and blades, from its turn (no draw of its own)
+            const jit = k => 0.5 + 0.5 * Math.sin(t.turn * 7.3 + k * 2.39);
         const margin = Scenery.CLEAR_M.landmark;
         // The model's own plan where it is loaded, else the size landmarks.json gives
         let plan = { width: l.size[0], depth: l.size[2], centre: [0, 0] };
