@@ -66,6 +66,10 @@ All with `GROUP` numbers.
 7. **The crew still obey the roadworks.** The lights and queues are as before (`Traffic.holdForRoadworks`). A rider off the road is in no queue. A rider going into or standing in a place follows only those beside the road with it, and nothing on the road follows it. A rider pulling out follows what is on the road ahead.
 8. **Crew riders still do not fall**, and contact is as before (`world.md`, "Contact"). A rider waiting in a place is solid. `Traffic.clearRiders` (a restart in place) leaves a rider in a place where it is. A rider it moves rides on its lane, in no pass or wait.
 
+## Free roam
+
+In free roam (`Traffic.roam`, `GROUP.roam`) the player leads: the crew starts behind it, counts it as in front wherever it is across the road, never passes it, and rides no faster than 0.9 of its speed when alongside or ahead. A player off the ride (down a side road) has stopped for the group, and every rider waits in a place. `world.md`, "Free roam", has the rest.
+
 ## Randomness and the seed
 
 Each rider has its own stream (mulberry32), seeded from the world's `groupSeed` when set. Otherwise the seed comes from the riders' own pace draws, so the group adds no draw from `Math.random`. The draws are the noise every 9 s and, once a second, a spell, a pass and a stop at a place. The same seed rides the same ride (`tests/unit/world-group.test.js`). The per-frame work allocates nothing; the group's line and its entries are built once and reused.

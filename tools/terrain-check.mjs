@@ -6606,6 +6606,16 @@ async function roamRun(placeSource) {
     const env = game.environment, v = game.vehicle, out = { shots: {} };
     const frame = () => game.renderer.domElement.toDataURL('image/jpeg', 0.9);
     out.freeRoam = !!game.freeRoam;
+    // The group with the player (GROUP.roam): how many ride, and after the ride how they stand
+    const crew = () => {
+        const tr = game.traffic, route = game.environment.route;
+        if (!tr) return null;
+        const ps = route.project(v.position.x, v.position.z, null, {}).s;
+        const riders = tr.motorcycles.filter(b => b.bikeGroup.visible);
+        return { riders: riders.length, roam: !!tr.roam, aheadM: riders.map(b => Math.round(route.fromUnits(b.currentSegment + b.segmentProgress) - ps)), waiting: riders.filter(b => b.ride && (b.ride.state === 'wait' || b.ride.state === 'toWait')).length, halted: !!(tr.group && tr.group.halted) };
+    };
+    out.crewStart = crew();
+    window.roamCrew = crew;
     // (where the ride started: --query '...&start=summit' starts it at the summit)
     out.startedAt = { s: Math.round(game.environment.route.project(v.position.x, v.position.z, null, {}).s), start: game.rideMode && game.rideMode.start || 'start' };
     out.guideRoam = !!env.guide.roam;
@@ -6618,6 +6628,25 @@ async function roamRun(placeSource) {
     game.cameraMode = Number(window.roamCameraMode ?? 2);
     for (let i = 0; i < 60; i++) twistyDev.step(1, { render: true });
     out.shots.start = frame();
+    // The group on the ride (GROUP.roam): 45 s at 9 m/s on the autopilot. The player leads: no rider ahead of it, and
+    // a picture from 14 m ahead of the bike, looking back at the line behind it
+    if (out.crewStart && out.crewStart.riders) {
+        twistyDev.autopilot({ speed: 9 });
+        let most = -Infinity;
+        for (let i = 0; i < 60 * 45; i++) {
+            twistyDev.step(1, { render: i % 30 === 29 });
+            most = Math.max(most, ...crew().aheadM);
+        }
+        out.crewRide = { ...crew(), mostAhead: most };
+        const cam = game.camera, keep = { p: cam.position.clone(), q: cam.quaternion.clone() };
+        cam.position.set(v.position.x + 14 * Math.sin(v.yawAngle), v.position.y + 4, v.position.z + 14 * Math.cos(v.yawAngle));
+        cam.lookAt(v.position.x - 20 * Math.sin(v.yawAngle), v.position.y, v.position.z - 20 * Math.cos(v.yawAngle));
+        // (through the game's own pipeline: its exposure and colour)
+        (game.graphics || game.renderer).render(game.scene, cam);
+        out.shots.group = frame();
+        cam.position.copy(keep.p);
+        cam.quaternion.copy(keep.q);
+    }
     // A side road, ridden onto from the ride as a rider would: the junction whose side road runs furthest, the bike put
     // 60 m before it on the ride, steered along the ride and then along the side road (the autopilot rides the ride only)
     const graph = env.graph, route = env.route;
@@ -6673,6 +6702,7 @@ async function roamRun(placeSource) {
                 // Where the bike is in the frame (-1 to 1 each way; 0 is the middle) and how fast it goes
                 const ndc = new THREE.Vector3(v.position.x, v.position.y + 0.8, v.position.z).project(game.camera);
                 out.framed = { x: +ndc.x.toFixed(2), y: +ndc.y.toFixed(2), speed: +v.speed.toFixed(1) };
+                out.crewSide = crew();
             }
         }
         out.trace = trace;
@@ -6721,6 +6751,8 @@ WORLD['world-roam'] = async (page) => {
     // (the bike well in the frame on the side road, not at its edge: WorldCamera.followRider's look)
     if (result.framed && (Math.abs(result.framed.x) > 0.6 || Math.abs(result.framed.y) > 0.6)) failures.push(`the bike at the edge of the frame on the side road: ${JSON.stringify(result.framed)}`);
     if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
+    if (result.crewRide && result.crewRide.mostAhead > 0) failures.push(`a rider of the group ${result.crewRide.mostAhead} m ahead of the leading player`);
+    if (result.crewSide && result.crewSide.waiting < result.crewSide.riders) failures.push(`riders not waiting while the player is down a side road: ${JSON.stringify(result.crewSide)}`);
     return { ok: failures.length === 0, failures, ...result, dir };
 };
 

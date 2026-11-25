@@ -64,7 +64,8 @@ class FreeRoam {
             const p = route.sample(Math.max(0, Math.min(route.length, s)), {});
             list.push({ id, name, kind, s, x: p.x, y: p.y, z: p.z, heading: p.heading });
         };
-        on('start', 'The start', 'start', environment.startS);
+        // (the start: room behind it for the crew, which rides behind the player: Traffic.gridBehind)
+        on('start', 'The start', 'start', environment.startS + FreeRoam.START_ROOM_M);
         const words = { layby: 'Lay-by', viewpoint: 'Viewpoint', carpark: 'Car park' };
         for (const place of (environment.places && environment.places.list) || []) {
             if (place.s <= environment.startS || place.s >= environment.endS) continue;
@@ -88,6 +89,10 @@ class FreeRoam {
         }
         return list[0];
     }
+
+    // Metres past the stage's start where free roam starts: room for the crew behind the player (GROUP.roam: 14 m and
+    // four gaps of 12 m)
+    static get START_ROOM_M() { return 70; }
 
     // Where a restart puts the bike: the last pose on a road taken BACK_S or more before now, else the oldest kept;
     // null before any. A restart at the edge turns the bike round as well (it rode out that way)

@@ -148,7 +148,7 @@ describe('start anywhere', () => {
     });
 
     test("the menu's start: the start, the stopping place nearest the middle, the summit", () => {
-        expect(FreeRoam.startFor(environment, 'start').id).toBe('start');
+        expect(FreeRoam.startFor(environment, 'start')).toMatchObject({ id: 'start', s: FreeRoam.START_ROOM_M });
         expect(FreeRoam.startFor(environment, 'place').id).toBe('p2');
         expect(FreeRoam.startFor(environment, 'summit').id).toBe('summit');
         expect(FreeRoam.startFor({ ...environment, places: { list: [] } }, 'place').id).toBe('start');

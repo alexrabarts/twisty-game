@@ -145,6 +145,14 @@ const GROUP = {
     // most; then it falls in behind the player and passes back toward its place as after any wait. With no place in
     // reach it eases to the player's pace on its lane (never a wait on the carriageway), and looks again each tick
     ahead: { aheadM: 350, reachM: 600, maxS: 300 },
+    // Free roam (Traffic.roam): the player leads. The crew starts behind it (Traffic.gridBehind: backM behind, gapM
+    // apart, place 1 nearest), follows it by the line and never passes it. A player gone off the ride (down a side
+    // road: traffic reads no lead) has stopped for the group, and every rider, behind it too, waits for it in the next
+    // place on its side, then falls in behind it as it comes past. (Riders gridded ahead and held to a share of the
+    // player's pace stood the player and the crew still on the road: a player that follows what is ahead of it stops
+    // as it stops.) A rider alongside or ahead of a riding player (within alongM behind its origin, or further on)
+    // rides no faster than holdShare of its speed, so it drops behind and the player stays in front.
+    roam: { backM: 14, gapM: 12, alongM: 4, holdShare: 0.9 },
     // The roadside where no place is in reach: the first straight of straightM (bends under pass.curveMax, no hairpin,
     // no roadworks) looked for every stepM; riders slotM apart, each edgeM in from the carriageway's edge
     roadside: { straightM: 40, stepM: 10, slotM: 5, edgeM: 0.5 },
@@ -216,8 +224,8 @@ class CrewGroup {
         this.env = traffic.environment;
         this.seed = seed >>> 0;
         const player = CHARACTERS.find(c => c.name === traffic.playerRiderName);
-        // The player's own place in the group, or none: then nobody passes it to take a place
-        this.playerPlace = player && Number.isFinite(player.place) ? player.place : null;
+        // The player's own place in the group, or none: then nobody passes it to take a place (free roam: the player leads)
+        this.playerPlace = !traffic.roam && player && Number.isFinite(player.place) ? player.place : null;
         this.boxM = Traffic.sizeOf('bike').length;
         this.riders = [];
         this.entries = [];
@@ -316,14 +324,27 @@ class CrewGroup {
     // faster than goMs
     watchPlayer(dt, player) {
         const P = GROUP.player, lead = this.lead;
-        // A player who fell off the road is still where it fell along the ride
-        const s = lead ? lead.s : player && player.crashed && Number.isFinite(player.routeS) ? player.routeS : null;
+        // A player who fell off the road is still where it fell along the ride; in free roam so is one gone down a side
+        // road (GROUP.roam): the group waits for it there
+        const away = !lead && !!this.traffic.roam && !!player && Number.isFinite(player.routeS);
+        const s = lead ? lead.s : player && (player.crashed || away) && Number.isFinite(player.routeS) ? player.routeS : null;
         if (s === null || !player) {
             this.stoppedS = 0;
             this.standing = this.halted = false;
             return;
         }
         const speed = lead ? lead.speed : 0;
+        this.away = away;
+        if (away && !this.halted) {
+            // (gone down a side road: stopped for the group at once)
+            this.standing = true;
+            this.standS = s;
+            this.halted = true;
+            this.haltS = s;
+            this.events.halts++;
+            return;
+        }
+        if (away) return;
         if (!player.crashed && speed >= P.stopMs) {
             this.standing = false;
             if (speed > P.goMs) {
@@ -430,8 +451,8 @@ class CrewGroup {
         const G = GROUP, own = ride.own;
         const passing = ride.pass.phase === 'out' || ride.pass.phase === 'by' || ride.pass.phase === 'back';
         if (!passing) {
-            if (this.halted && ride.s > this.haltS) return this.toWait(ride, 'player');
-            if (this.standing && ride.s < this.standS && this.standS - ride.s < G.hold.behindM) {
+            if (this.halted && (ride.s > this.haltS || this.away)) return this.toWait(ride, 'player');
+            if (this.standing && !this.away && ride.s < this.standS && this.standS - ride.s < G.hold.behindM) {
                 // (one already closer than its gap stands where it is: holdOf)
                 const v = ride.bike.currentSpeed || 0;
                 if (this.standS - ride.s - 2 * Roadworks.BIKE_HALF_M - Roadworks.QUEUE_GAP_M >= v * v / (2 * G.hold.brake)) {
@@ -472,6 +493,8 @@ class CrewGroup {
         this.passing(ride, tick);
         // (one too far ahead with no place in reach rides no faster than the player)
         if (ride.easing && this.lead && !ride.pass.phase) ride.capMs = Math.min(ride.capMs, this.lead.speed);
+        // (free roam: the player leads, and none rides alongside it or on ahead of it)
+        if (this.traffic.roam && this.lead && !this.halted && ride.s > this.lead.s - GROUP.roam.alongM) ride.capMs = Math.min(ride.capMs, this.lead.speed * GROUP.roam.holdShare);
     }
 
     // A rider more than GROUP.ahead.aheadM ahead of a riding player: off to the next place on its side within reach
@@ -657,6 +680,8 @@ class CrewGroup {
     inFront(ride, entry) {
         const ahead = entry.s - ride.s;
         if (ahead > this.boxM + GROUP.line.frontM) return true;
+        // (free roam: the player leads, so a player ahead anywhere across the road is followed)
+        if (this.traffic.roam && ahead > 0) return true;
         return ahead > CONTACT.follow.aheadM && !!this.lead && Math.abs(this.traffic.leadOff(this.lead, ride.bike.direction) - (ride.bike.nudge || 0)) < CONTACT.follow.bandM;
     }
 
@@ -1116,7 +1141,48 @@ class Traffic {
         }
     }
     
+    // Free roam: the crew behind the player at s (GROUP.roam), place 1 nearest, each riding again
+    gridBehind(s) {
+        const route = this.environment.route, R = GROUP.roam;
+        if (!route.laneCurve) return;
+        const range = legSegmentRange(this.environment);
+        const riders = this.motorcycles.filter(bike => bike.direction === 1).sort((a, b) => (a.character.place || 99) - (b.character.place || 99));
+        riders.forEach((bike, k) => {
+            if (bike.ride && this.group) {
+                this.group.placed(bike.ride);
+                bike.ride.state = 'ride';
+                bike.ride.why = null;
+                bike.ride.aside = false;
+                bike.ride.off = 0;
+            }
+            bike.nudge = bike.nudgeWant = 0;
+            bike.laneMoving = false;
+            bike.bikeGroup.visible = true;
+            const u = Math.max(range.start, route.toUnits(Math.max(0, s - R.backM - k * R.gapM)));
+            bike.currentSegment = Math.floor(u);
+            bike.segmentProgress = u - Math.floor(u);
+            bike.currentSpeed = 0;
+            bike.updatePosition();
+        });
+        if (this.group) {
+            this.group.halted = this.group.standing = this.group.away = false;
+            this.group.stoppedS = 0;
+        }
+    }
+
+    // Free roam ridden alone (GameModes.group 'alone'): the crew goes, and stays gone after a restart
+    dropCrew() {
+        this.noCrew = true;
+        this.motorcycles.forEach(motorcycle => motorcycle.remove());
+        this.motorcycles = [];
+        this.group = null;
+    }
+
     initializeMotorcycles() {
+        if (this.noCrew) {
+            this.group = null;
+            return;
+        }
         const range = legSegmentRange(this.environment);
 
         // The touring crew are the characters the player did not pick, each on its own bike (BikeModels.crewBike:

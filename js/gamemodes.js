@@ -21,6 +21,13 @@ const GameModes = {
     ]),
     startAt: 'start',
 
+    // Free roam with the group (the player leads: Traffic.roam, GROUP.roam) or alone
+    GROUPS: Object.freeze([
+        Object.freeze({ id: 'with', name: 'With the group' }),
+        Object.freeze({ id: 'alone', name: 'Alone' })
+    ]),
+    group: 'with',
+
     // Whether a mode may be chosen: free roam only in debug mode
     open(id, debug) {
         const mode = GameModes.MODES.find(m => m.id === id);
@@ -90,7 +97,34 @@ const GameModes = {
             starts.appendChild(button);
             return button;
         });
+        // And with the group or alone
+        const groups = doc.createElement('div');
+        groups.className = 'mode-picker-row game-group-row';
+        groups.setAttribute('role', 'radiogroup');
+        groups.setAttribute('aria-label', 'Ride with');
+        const groupButtons = GameModes.GROUPS.map((group) => {
+            const button = doc.createElement('button');
+            button.type = 'button';
+            button.className = 'mode-btn';
+            button.dataset.gameGroup = group.id;
+            button.setAttribute('role', 'radio');
+            button.textContent = group.name.toUpperCase();
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                GameModes.group = group.id;
+                box.refresh();
+                if (after) after(group);
+            });
+            groups.appendChild(button);
+            return button;
+        });
         box.refresh = () => {
+            groups.hidden = GameModes.chosen !== 'roam';
+            for (const button of groupButtons) {
+                const on = button.dataset.gameGroup === GameModes.group;
+                button.classList.toggle('on', on);
+                button.setAttribute('aria-checked', on ? 'true' : 'false');
+            }
             const mode = GameModes.MODES.find(m => m.id === GameModes.chosen) || GameModes.MODES[0];
             starts.hidden = mode.id !== 'roam';
             for (const button of startButtons) {
@@ -106,7 +140,7 @@ const GameModes = {
             const locked = GameModes.MODES.some(m => !GameModes.open(m.id, debug));
             line.textContent = locked && mode.id === 'trial' ? `${mode.hint} ${GameModes.LOCKED_TEXT}` : mode.hint;
         };
-        box.append(label, row, starts, line);
+        box.append(label, row, starts, groups, line);
         box.refresh();
         return box;
     }

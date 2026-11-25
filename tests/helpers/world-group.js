@@ -10,7 +10,7 @@ const FAR = { x: 1e9, y: 0, z: 1e9 };
 // A ride of the group. `rider` is the player's character (the crew is the rest); `at` puts the crew's riders at these
 // ride distances by place (front first: the lowest place takes the first); `player` is {s, pace(t, s), drive}: a careful
 // player on the lane line (it stops at red lights and never rides into what is on the road ahead of it), or none.
-// `cars` keeps the world's car. `onFrame({t, traffic, riders, proxy, playerS})` sees each frame; the ride ends at
+// `cars` keeps the world's car. `onFrame({t, traffic, riders, proxy, mine, playerS})` (`mine` the player as traffic reads it) sees each frame; the ride ends at
 // `seconds` or when `until` says so. Returns {traffic, riders, proxy, overlaps, draws}.
 export function groupRide(game, env, { rider, seed = 11, at = null, player = null, cars = false, seconds = 600, onFrame = null, until = null }) {
     const { THREE, Traffic, Roadworks } = game;
@@ -82,7 +82,7 @@ export function groupRide(game, env, { rider, seed = 11, at = null, player = nul
                     if (deep > 0 && overlaps.length < 20) overlaps.push({ t: Math.round(t * 10) / 10, a: all[i].riderName || 'car/player', b: all[j].riderName || 'car/player', deep: Math.round(deep * 100) / 100 });
                 }
             }
-            if (onFrame) onFrame({ t, traffic, riders, proxy, playerS, overlaps });
+            if (onFrame) onFrame({ t, traffic, riders, proxy, mine, playerS, overlaps });
             if (until && until({ t, traffic, riders, proxy, playerS, overlaps })) break;
         }
         return { traffic, riders, proxy, overlaps, draws: drawn() - start };

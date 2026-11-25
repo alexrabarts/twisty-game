@@ -511,9 +511,16 @@ class Game {
         this.roam = new FreeRoam(tiles, WorldData.TILE_M);
         environment.guide.roam = true;
         this.worldCamera.followRider = true;
-        // Start anywhere (the menu's Start at): the start, a stopping place or the summit
-        const start = FreeRoam.startFor(environment, (this.rideMode && this.rideMode.start) || GameModes.startAt);
-        if (start && start.id !== 'start') this.travelTo(start, false);
+        // The group rides with the player, the player leading (GROUP.roam), or the player rides alone
+        if (this.traffic) {
+            this.traffic.roam = true;
+            const alone = ((this.rideMode && this.rideMode.group) || GameModes.group) === 'alone';
+            if (alone) this.traffic.dropCrew();
+            else if (this.traffic.group) this.traffic.group.playerPlace = null;
+        }
+        // Start anywhere (the menu's Start at): the start, a stopping place or the summit. The crew rides behind the
+        // player wherever it starts (travelTo grids it there)
+        this.travelTo(FreeRoam.startFor(environment, (this.rideMode && this.rideMode.start) || GameModes.startAt), false);
         // The roadworks' lights work one lane for the ride's own direction: in free roam the sites are off
         if (environment.roadworks) {
             if (environment.roadworks.group) environment.roadworks.group.visible = false;
@@ -1262,10 +1269,10 @@ class Game {
         }
         this.resetRunState();
         if (this.environment.isWorld) {
-            // Free roam rides again from its own start (the menu's Start at)
+            // Free roam rides again from its own start (the menu's Start at), the crew (made again) behind it (travelTo)
             if (this.freeRoam && this.roam) {
-                const start = FreeRoam.startFor(this.environment, (this.rideMode && this.rideMode.start) || GameModes.startAt);
-                if (start && start.id !== 'start') this.travelTo(start, false);
+                if (this.traffic && this.traffic.group) this.traffic.group.playerPlace = null;
+                this.travelTo(FreeRoam.startFor(this.environment, (this.rideMode && this.rideMode.start) || GameModes.startAt), false);
             }
             this.armWorldStart();
             this.environment.guide.reset();
@@ -4591,7 +4598,10 @@ class Game {
         if (this.roam) this.roam.poses = [];
         this.lastCheckpointPosition = new THREE.Vector3(vehicle.position.x, vehicle.position.y, vehicle.position.z);
         this.lastCheckpointHeading = dest.heading;
-        if (this.traffic) this.traffic.clearAround(environment.route.toUnits(dest.s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / environment.route.unitM));
+        if (this.traffic) {
+            this.traffic.clearAround(environment.route.toUnits(dest.s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / environment.route.unitM));
+            this.traffic.gridBehind(dest.s);
+        }
         if (this.atmosphereTrack) this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(dest.s), { environment, weatherSystem: this.weatherSystem });
         if (say) showCallout(dest.name, 'good', Game.CALLOUT_MS.restart);
     }
