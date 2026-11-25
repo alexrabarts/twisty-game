@@ -9,7 +9,7 @@
 //   - what the weather writes along the ride (shares, fog, grip, the road's wetness) moves by no more than one step
 //     of the 1.5 km blend between two road samples 10 m apart
 import { describe, test, expect } from '@jest/globals';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { canvasStub, loadGame, loadScript, realThree } from '../helpers/load-game.js';
@@ -43,6 +43,14 @@ describe('every stage changes its weather or its light along it', () => {
             const changes = track.changesWithin(stage.from / UNIT, stage.to / UNIT);
             changes.forEach(change => expect(change.from).not.toBe(change.to));
         });
+    });
+
+    test('every other shipped folder (worlds/*): its stages build one track and each changes along it', () => {
+        for (const name of readdirSync(path.join(REPO, 'worlds'))) {
+            const stages = JSON.parse(readFileSync(path.join(REPO, 'worlds', name, 'manifest.json'), 'utf8')).stages;
+            const track = trackOf(WorldLooks, stages);
+            expect(stagesWithoutChange(track, stages)).toEqual([]);
+        }
     });
 
     test('the Tremola goes from clear air to cloud to rain, and back to clear air before the top', () => {

@@ -18,8 +18,8 @@ const store = (initial = null) => {
 };
 
 describe('the legs and their folders', () => {
-    test('the new run-in from the north is leg 1, the Tremola after it', () => {
-        expect(WorldLegs.LIST.map(l => l.id)).toEqual(['gotthard-north', 'tremola']);
+    test('the new run-in from the north is leg 1, the lookout leg 2, the Tremola after them', () => {
+        expect(WorldLegs.LIST.map(l => l.id)).toEqual(['gotthard-north', 'gotthard-lookout', 'tremola']);
         expect(WorldLegs.groups().map(g => g.pass)).toEqual(['Gotthard']);
     });
 
@@ -42,18 +42,20 @@ describe('the legs and their folders', () => {
 });
 
 describe('which legs are open', () => {
-    test('a new rider: leg 1 and the Tremola are open, and leg 1 is offered first until it is finished', () => {
+    test('a new rider: leg 1 and the Tremola are open, the lookout opens after leg 1 is finished', () => {
         const s = store();
         expect(WorldLegs.isOpen('gotthard-north', { storage: s })).toBe(true);
         expect(WorldLegs.isOpen('tremola', { storage: s })).toBe(true);
+        expect(WorldLegs.isOpen('gotthard-lookout', { storage: s })).toBe(false);
         expect(WorldLegs.suggested({ storage: s })).toBe('gotthard-north');
         expect(WorldLegs.markFinished('gotthard-north', s)).toBe(true);
         expect(WorldLegs.markFinished('gotthard-north', s)).toBe(false);
-        expect(WorldLegs.suggested({ storage: s })).toBe('tremola');
+        expect(WorldLegs.isOpen('gotthard-lookout', { storage: s })).toBe(true);
+        expect(WorldLegs.suggested({ storage: s })).toBe('gotthard-lookout');
     });
 
     test('debug mode opens every leg and saves nothing; unreadable progress starts from leg 1', () => {
-        expect(WorldLegs.isOpen('tremola', { unlockAll: true, storage: store() })).toBe(true);
+        expect(WorldLegs.isOpen('gotthard-lookout', { unlockAll: true, storage: store() })).toBe(true);
         expect(WorldLegs.finished(store('not json'))).toEqual([]);
         expect(WorldLegs.markFinished('nowhere', store())).toBe(false);
     });

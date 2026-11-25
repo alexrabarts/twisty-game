@@ -36,6 +36,8 @@ const CLAIM_MARGIN_M = 0.5;
 // bridge's strip is held this far under the deck's surface (a bank that rises to an abutment came up through the deck's
 // last metres: 0.96 m over the carriageway's edge at a bridge end of the run-in from the north)
 const BRIDGE_UNDER_M = 0.15;
+// A stop's levelled ground reaches this far past its outline (stops.mjs groundPlane, `pads`)
+const PAD_FLAT_M = 4;
 const CLAIM_STEP_M = 0.5;
 const SAME_STRAND_M = 2 * CELL_M;
 const LOWER_PASSES = 4;
@@ -63,6 +65,26 @@ function padAt(e, i, t, x, z) {
   const dx = e.x[i + 1] - e.x[i], dz = e.z[i + 1] - e.z[i];
   const pad = (x - (e.x[i] + dx * t)) * dz - (z - (e.z[i] + dz * t)) * dx >= 0 ? e.padP : e.padN;
   return pad ? pad[i] + (pad[i + 1] - pad[i]) * t : 0;
+}
+
+function insidePad(ring, x, z) {
+  let c = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, zi] = ring[i], [xj, zj] = ring[j];
+    if ((zi > z) !== (zj > z) && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) c = !c;
+  }
+  return c;
+}
+
+function padEdge(ring, x, z) {
+  let best = Infinity;
+  for (let i = 0; i + 1 < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[i + 1];
+    const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+    const t = l2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / l2)) : 0;
+    best = Math.min(best, Math.hypot(ax + t * dx - x, az + t * dz - z));
+  }
+  return best;
 }
 
 // A hash of every segment outside a structure, for "which strands lie near (x, z)": near(x, z) gives, per edge and
@@ -115,7 +137,33 @@ export function segmentIndex(edges, reach = 0) {
 }
 
 
-export function createBencher({ edges, demAt, coverAt = () => 0 }) {
+// `pads`: the stops' areas (stops.mjs), [{ring, x, z, plane: {y, gx, gz}}]: a node no road claims inside an area is the
+// area's plane, and past its outline the land is held within the batter of the plane's edge out to EARTHWORK_M, as
+// beside a road
+export function createBencher({ edges, demAt, coverAt = () => 0, pads = [] }) {
+  // A stop's area: the plane inside it, and the land held to the batter from its edge out to EARTHWORK_M (null: no pad)
+  const padGround = (x, z, dem) => {
+    let best = null;
+    for (const pad of pads) {
+      // (a node within PAD_FLAT_M of the outline is on the plane too, so no 8 m triangle that reaches into the area
+      // lifts the land over it)
+      const inRing = insidePad(pad.ring, x, z) || padEdge(pad.ring, x, z) <= PAD_FLAT_M;
+      const d = inRing ? 0 : padEdge(pad.ring, x, z) - PAD_FLAT_M;
+      if (d > EARTHWORK_M) continue;
+      const y = pad.plane.y + pad.plane.gx * (x - pad.x) + pad.plane.gz * (z - pad.z);
+      const held = inRing || Number.isNaN(dem) ? y : Math.max(y - d * BATTER, Math.min(y + d * BATTER, dem));
+      if (!best || d < best.d) best = { d, y: held, zone: inRing ? ZONE.bench : ZONE.terrain };
+    }
+    return best;
+  };
+
+  // The land at (x, z): a stop's levelled ground where one reaches, else the DEM
+  const landAt = (x, z) => {
+    const dem = demAt(x, z);
+    const pad = pads.length ? padGround(x, z, dem) : null;
+    return pad ? pad.y : dem;
+  };
+
   const hash = new Map();
   const insert = (ci, cj, ref) => {
     const key = ci * 65536 + cj;
@@ -250,7 +298,7 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
       const past = win.d - (win.w / 2 + win.v);
       let y = win.y;
       if (past > 0) {
-        const dem = demAt(gi * CELL_M, gj * CELL_M);
+        const dem = landAt(gi * CELL_M, gj * CELL_M);
         y = Number.isNaN(dem) ? win.y : Math.min(win.y, Math.max(dem, win.y - BATTER * past));
       }
       out = { y, zone, edge: win.edge };
@@ -331,7 +379,10 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
 
   // Height and zone at one point, by distance from the roads (a node of the grid takes node() instead).
   function ground(x, z) {
-    const dem = demAt(x, z);
+    const dem0 = demAt(x, z);
+    const pad = pads.length ? padGround(x, z, dem0) : null;
+    const dem = pad ? pad.y : dem0;
+    if (pad && pad.d === 0 && !candidates(x, z).some(c => c.d <= c.w / 2 + c.v)) return { y: pad.y, zone: pad.zone };
     const cands = candidates(x, z);
     if (!cands.length) return { y: dem, zone: ZONE.terrain };
     cands.sort((p, q) => p.d - q.d || p.edge - q.edge || p.arc - q.arc);

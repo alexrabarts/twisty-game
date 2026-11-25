@@ -8,7 +8,7 @@ import { describe, test, expect } from '@jest/globals';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findStops, slotsIn, areaDistance, STOP } from '../../tools/world/stops.mjs';
+import { findStops, slotsIn, areaDistance, groundPlane, viewOf, STOP } from '../../tools/world/stops.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -66,6 +66,19 @@ describe('the rule', () => {
         expect(run([{ cls: 'Oeffentliches Parkplatzareal', ring: box(-12, 1925, -7, 1930) }])).toThrow(/room for/);
     });
 
+    test('the ground of an area is the plane of its land, its grade held to gradeMax; the view is where the land falls', () => {
+        const ring = box(0, 0, 40, 20);
+        const plane = groundPlane(ring, 20, 10, (x, z) => 1000 + 0.02 * x - 0.01 * z);
+        expect(plane.y).toBeCloseTo(1000 + 0.02 * 20 - 0.01 * 10, 1);
+        expect(plane.gx).toBeCloseTo(0.02, 3);
+        expect(plane.gz).toBeCloseTo(-0.01, 3);
+        const steep = groundPlane(ring, 20, 10, (x) => 1000 + 0.3 * x);
+        expect(Math.hypot(steep.gx, steep.gz)).toBeCloseTo(STOP.gradeMax, 4);
+        // Land that falls away to +x (heading pi/2) past the area
+        const view = viewOf(ring, 20, 10, { y: 1000, gx: 0, gz: 0 }, (x) => (x > 40 ? 1000 - (x - 40) : 1000));
+        expect(view).toBeCloseTo(Math.PI / 2, 3);
+    });
+
     test('slots stand side by side along the area\'s long axis, inside it by the margin', () => {
         const slots = slotsIn(box(0, 0, 40, 10));
         expect(slots).toHaveLength(STOP.slots);
@@ -102,6 +115,15 @@ describe('the shipped stops (worlds/gotthard)', () => {
             expect(stage.to).toBeCloseTo(stop.s - STOP.leadM, 1);
             expect(ride.length).toBeGreaterThanOrEqual(stop.s - 0.1);
         }
+    });
+
+    test('every stop has its levelled ground, and the lookout faces the land that falls away from it', () => {
+        for (const stop of manifest.stops) {
+            expect(stop.plane).toBeDefined();
+            expect(Math.hypot(stop.plane.gx, stop.plane.gz)).toBeLessThanOrEqual(STOP.gradeMax + 1e-4);
+        }
+        const lookout = manifest.stops.find(s => s.kind === 'lookout');
+        expect(Number.isFinite(lookout.view)).toBe(true);
     });
 
     test('the start stop is the map place it parks in, kept open at the stage start', () => {

@@ -32,10 +32,12 @@ const WorldLooks = {
         { from: 0.85, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } }
     ],
     // The summit down the modern road to the lookout over Airolo (1,931 m): the thin cloud of the summit through the
-    // galleries, then the clear morning of the lookout photos (clear sky with fair-weather cumulus, haze in the valley)
+    // galleries, then the clear morning of the lookout photos (clear sky with fair-weather cumulus, haze in the valley).
+    // A part is at least 1.5 km (AtmosphereTrack): the leg is 2.9 km, so the cloud clears at 0.55 (s 1,610 m of it),
+    // the last 1.3 km clear
     'gotthard-lookout': [
-        { from: 0, to: 0.3, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
-        { from: 0.3, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+        { from: 0, to: 0.55, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
+        { from: 0.55, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the

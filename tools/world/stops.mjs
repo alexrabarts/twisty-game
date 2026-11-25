@@ -15,7 +15,11 @@
 //   slots    where the bikes park: STOP.slots bikes side by side, STOP.slotGapM apart, along the area's long axis,
 //            each nose to the area's middle line, every slot STOP.marginM inside the area's outline.
 //
-// A stop: { id, kind, stage, at, s: turnS, side, access, x, z, ring, path, slots }. Nothing here names a place.
+//   plane    the area's ground: the plane of the land inside it (groundPlane), on which the importer lays that land
+//            and the game draws the area as hard standing.
+//   view     the heading in which the land falls away furthest from the area (viewOf): a lookout's rail and camera
+//
+// A stop: { id, kind, stage, at, s: turnS, side, access, x, z, ring, path, slots, plane }. Nothing here names a place.
 import { AREA_KINDS } from './places.mjs';
 
 export const STOP_KINDS = Object.freeze(['hotel', 'restaurant', 'lookout', 'fuel', 'carpark']);
@@ -29,12 +33,16 @@ export const STOP = Object.freeze({
   searchM: 800,
   leadM: 60,
   slots: 8,
-  slotGapM: 1.6,
+  slotGapM: 2.2,
   rowGapM: 3,
   marginM: 1.2,
   // a parked bike's half length and half width, for the outline test
   bikeHalfM: [1.1, 0.5],
-  ringMax: 32
+  ringMax: 32,
+  // the steepest a stop's levelled ground may be
+  gradeMax: 0.06,
+  // the view: bearings read round the area, and the reach past the outline they read the land at
+  viewBearings: 24, viewFromM: 40, viewToM: 160
 });
 
 const r2 = v => Math.round(v * 100) / 100;
@@ -173,9 +181,60 @@ function wayIn(edges, adjacency, from, ring) {
   return { length: found.length, pts: [...chain, ...(chain.length ? found.pts.slice(1) : found.pts)] };
 }
 
+// The ground of a stop's area: the least-squares plane of the land inside its outline (the DEM every 2 m), its grade
+// held to STOP.gradeMax. {y, gx, gz} with the height y at the stop's middle (x, z) and the rise per metre along x and z.
+// The importer lays the land inside the outline on it (bench.mjs `pads`) and the game draws the area on it
+export function groundPlane(ring, cx, cz, demAt) {
+  const xs = ring.map(p => p[0]), zs = ring.map(p => p[1]);
+  let n = 0, sx = 0, sz = 0, sy = 0, sxx = 0, szz = 0, sxz = 0, sxy = 0, szy = 0;
+  for (let x = Math.min(...xs); x <= Math.max(...xs); x += 2) {
+    for (let z = Math.min(...zs); z <= Math.max(...zs); z += 2) {
+      if (!inside(ring, x, z)) continue;
+      const y = demAt(x, z);
+      if (!Number.isFinite(y)) continue;
+      const u = x - cx, v = z - cz;
+      n++; sx += u; sz += v; sy += y; sxx += u * u; szz += v * v; sxz += u * v; sxy += u * y; szy += v * y;
+    }
+  }
+  if (n < 3) return null;
+  // Normal equations of y = a + b u + c v
+  const m = [[n, sx, sz], [sx, sxx, sxz], [sz, sxz, szz]], r = [sy, sxy, szy];
+  const det = M => M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1]) - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0]) + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0]);
+  const d = det(m);
+  if (Math.abs(d) < 1e-9) return { y: Math.round((sy / n) * 100) / 100, gx: 0, gz: 0 };
+  const col = k => m.map((row, i) => row.map((v, j) => (j === k ? r[i] : v)));
+  let [a, b, c] = [0, 1, 2].map(k => det(col(k)) / d);
+  const grade = Math.hypot(b, c);
+  if (grade > STOP.gradeMax) { b *= STOP.gradeMax / grade; c *= STOP.gradeMax / grade; }
+  return { y: Math.round(a * 100) / 100, gx: Math.round(b * 1e4) / 1e4, gz: Math.round(c * 1e4) / 1e4 };
+}
+
+// The way the view goes from a stop: the bearing (heading, atan2(dx, dz)) of the VIEW_BEARINGS round the area's middle
+// in which the land falls furthest under the area's plane, read on the DEM from viewFromM to viewToM past the outline.
+// A lookout's rail stands on that side and its camera looks that way
+export function viewOf(ring, cx, cz, plane, demAt) {
+  let best = null;
+  for (let k = 0; k < STOP.viewBearings; k++) {
+    const h = (2 * Math.PI * k) / STOP.viewBearings, sx = Math.sin(h), cz2 = Math.cos(h);
+    // the outline's distance on this bearing
+    let edge = 0;
+    while (edge < 400 && inside(ring, cx + sx * (edge + 1), cz + cz2 * (edge + 1))) edge++;
+    let drop = 0, n = 0;
+    for (let d = STOP.viewFromM; d <= STOP.viewToM; d += 10) {
+      const x = cx + sx * (edge + d), z = cz + cz2 * (edge + d);
+      const y = demAt(x, z);
+      if (!Number.isFinite(y)) continue;
+      drop += plane.y + plane.gx * (x - cx) + plane.gz * (z - cz) - y;
+      n++;
+    }
+    if (n && (!best || drop / n > best.drop)) best = { h, drop: drop / n };
+  }
+  return best ? Math.round(Math.atan2(Math.sin(best.h), Math.cos(best.h)) * 1e4) / 1e4 : null;
+}
+
 // stopDefs: [{ stage (index), at: 'start'|'end', kind, x, z }] in local metres. bounds: the stages' [{ id, from, to }].
 // Returns the stops, and moves each stage end with a stop to STOP.leadM before its turn-in (bounds are changed).
-export function findStops({ stopDefs, samples, edges, ride, areas, bounds }) {
+export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt = null }) {
   const adjacency = new Map();
   for (const e of edges) {
     for (const [node, other] of [[e.a, e.b], [e.b, e.a]]) {
@@ -231,12 +290,14 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds }) {
     const slots = slotsIn(made.a.ring);
     if (slots.length < STOP.slots) throw new Error(`stop ${def.kind} at the ${def.at} of ${stage.id}: room for ${slots.length} bikes, not ${STOP.slots}`);
     const [cx, cz] = centroid(made.a.ring);
+    const plane = demAt ? groundPlane(made.a.ring, cx, cz, demAt) : null;
+    const view = plane ? viewOf(made.a.ring, cx, cz, plane, demAt) : null;
     // The way in ends at the middle of the slots' row
     const row = slots.reduce((p, q) => [p[0] + q.x / slots.length, p[1] + q.z / slots.length], [0, 0]);
     const path = [...made.path, [cx, cz], row].map(([x, z]) => [r2(x), r2(z)]).filter((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 0.5);
     stops.push({
       id: `${stage.id}-${def.at}`, kind: def.kind, stage: stage.id, at: def.at, s: Math.round(made.s * 10) / 10, side: made.side, access: made.access,
-      x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots
+      x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots, ...(plane ? { plane } : {}), ...(view !== null ? { view } : {})
     });
   }
   // A stop at a stage's end moves the end (and the next stage's start) to leadM before the turn-in

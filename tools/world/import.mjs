@@ -259,7 +259,7 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
   applyPads(edges, ride, mapped);
   // The stops at the stages' ends (stops.mjs): each moves its stage's end to before its turn-in
   const stopDefs = source.stages.flatMap((st, k) => Object.entries(st.stops ?? {}).map(([at, d]) => ({ stage: k, at, ...d })));
-  const stops = stopDefs.length ? findStops({ stopDefs, samples, edges, ride, areas, bounds }) : [];
+  const stops = stopDefs.length ? findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt }) : [];
   for (const stop of stops) log(`stop: ${stop.kind} at the ${stop.at} of ${stop.stage}, ${stop.access}, turn-in at s ${stop.s}, ${stop.slots.length} slots`);
 
   const placed = placeStations(samples, bounds, junctions.flatMap(j => j.passes.map(p => p.sIn)), { spacingM: stationSpacingM, places: mapped });
@@ -279,7 +279,9 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
   const tiles = new Map();
   const polys = source.coverPolys(box);
   const cover = rasterizeCover(polys, tileList);
-  const bencher = createBencher({ edges, demAt, coverAt: coverLookup(cover) });
+  // (a stop's area is laid on its plane: bench.mjs pads)
+  const pads = stops.filter(st => st.plane).map(st => ({ ring: st.ring, x: st.x, z: st.z, plane: st.plane }));
+  const bencher = createBencher({ edges, demAt, coverAt: coverLookup(cover), pads });
   let missing = 0;
   for (const [tx, tz] of tileList) { const t = bencher.tile(tx, tz); missing += t.missing; tiles.set(`${tx},${tz}`, t); }
 
@@ -290,7 +292,7 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
   // A found place is carved as a map place is: its pad goes on the ride's edges and the land is benched again (a tile
   // no pad reaches comes out the same bytes)
   if (applyPads(edges, ride, found)) {
-    const carver = createBencher({ edges, demAt, coverAt: coverLookup(cover) });
+    const carver = createBencher({ edges, demAt, coverAt: coverLookup(cover), pads });
     missing = 0;
     for (const [tx, tz] of tileList) { const t = carver.tile(tx, tz); missing += t.missing; tiles.set(`${tx},${tz}`, t); }
   }
