@@ -4,9 +4,9 @@
 # its main triangle, north-road bars swept back, rod brakes, a sprung leather saddle, full black mudguards and a
 # closed chain case. No maker's name, badge or wordmark anywhere; the plate is blank, the loaves plain.
 #
-# The boy is in a dark flat cap, an oatmeal knitted jumper under a dark scarf, a long cream apron to the knees, dark
-# breeches to below the knee, dark socks and black boots. No lamp at the back and no reflector: the bicycle is of a
-# time before them. His legs are nodes of
+# The boy is in a dark flat cap, a grey knitted jumper under a dark scarf, a long grey-cream apron (a node of its own,
+# in a shape for the saddle and one for on foot), dark breeches to below the knee and black boots to the middle of the
+# calf. No lamp and no reflector: the bicycle is of a time before them. His legs are nodes of
 # their own (thigh, shin and foot each side), each built hanging straight down from its pivot (hip, knee, ankle), so
 # the game poses them: on the pedals, or straight out to the sides on the way down the hill. The cranks and the pedals
 # are nodes too, turned by the game; the wheels spin on their axles.
@@ -53,14 +53,14 @@ EXTRA = {
     "wicker": (0xA89A80, 0.9, 0.0),
     "wicker_dark": (0x786A54, 0.9, 0.0),
     "skin": (0xE2B596, 0.7, 0.0),
-    "cap": (0x2C2A28, 0.95, 0.0),
-    "jumper": (0xB4AA98, 0.95, 0.0),
+    "cap": (0x3A3530, 0.95, 0.0),
+    "jumper": (0x9A958C, 0.95, 0.0),
     "scarf": (0x2A2826, 0.95, 0.0),
-    "apron": (0xD8D0BC, 0.9, 0.0),
+    "apron": (0xC4BCAC, 0.9, 0.0),
     "shorts": (0x34322F, 0.95, 0.0),
     "sock": (0x26241F, 0.95, 0.0),
     "loaf": (0x8C5A36, 0.85, 0.0),
-    "boot": (0x18181A, 0.6, 0.0),
+    "boot": (0x1E1C1A, 0.55, 0.0),
     "hair": (0x5A3A20, 0.9, 0.0),
     "leather": (0x5A3A22, 0.7, 0.0),
 }
@@ -196,22 +196,39 @@ def boy(k):
     k.loft([(hy + 0.04, hz - 0.11, hz + 0.1, 0.15, 2.4, 2.4), (hy + 0.2, hz - 0.1, hz + 0.1, 0.16, 2.4, 2.4), (hy + 0.36, hz - 0.06, hz + 0.12, 0.18, 2.4, 2.4),
             (SHOULDER[1] + 0.01, SHOULDER[2] - 0.08, SHOULDER[2] + 0.08, 0.17, 2.2, 2.2), (SHOULDER[1] + 0.05, SHOULDER[2] - 0.05, SHOULDER[2] + 0.05, 0.08)],
            "jumper", axis="y", ring=16, steps=2)
-    # A dark scarf crossed at the neck, and the long cream apron tied at the waist, over the lap and hanging past it
+    # A dark scarf crossed at the neck, its ends hanging down his front, and the apron's band round the waist
     k.loft([(NECK[1] - 0.09, NECK[2] - 0.07, NECK[2] + 0.08, 0.1, 2.4, 2.4), (NECK[1] - 0.02, NECK[2] - 0.06, NECK[2] + 0.07, 0.075, 2.4, 2.4)], "scarf", axis="y",
            ring=12, steps=1)
     k.box((0.11, 0.18, 0.02), (0, SHOULDER[1] - 0.1, SHOULDER[2] + 0.095), "scarf", rot=(0.25, 0, 0), bevel=0.008)
+    k.box((0.07, 0.3, 0.018), (0.04, SHOULDER[1] - 0.3, SHOULDER[2] + 0.11), "scarf", rot=(0.15, 0, 0.08), bevel=0.006)
+    k.loft([(hy + 0.08, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4), (hy + 0.12, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4)], "apron", axis="y", ring=14, steps=1)
 
-    def apron(u, v):
+    # The apron, long and grey-cream, a node of its own in two shapes the game shows one at a time: on the saddle it
+    # lies over the lap and hangs past the saddle's nose; on foot it hangs from the waist to the middle of the shins,
+    # wider at the hem. Each built from its pivot at the middle of the waist's front; the game hangs the long one
+    # straight down whatever his bend, just clear of the knee ahead
+    waist = (0, hy + 0.1, hz + 0.1)
+    k.begin("apron", waist)
+
+    def lap(u, v):
         across = (v - 0.5) * 2
-        # Over the lap from the waist, then down past the saddle's nose
         if u < 0.5:
             t = u / 0.5
             return (across * (0.17 + 0.03 * t), hy + 0.1 - 0.02 * t, hz + 0.1 + 0.16 * t)
         t = (u - 0.5) / 0.5
         return (across * (0.2 + 0.02 * t), hy + 0.08 - 0.2 * t, hz + 0.26 + 0.03 * t)
 
-    k.sheet(apron, "apron", nu=6, nv=6, thick=0.008)
-    k.loft([(hy + 0.08, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4), (hy + 0.12, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4)], "apron", axis="y", ring=14, steps=1)
+    k.sheet(lap, "apron", nu=6, nv=6, thick=0.008)
+    k.begin("apron_long", waist)
+
+    def hang(u, v):
+        across = (v - 0.5) * 2
+        # (curved a little round him, the sides back)
+        wide = 0.18 + 0.06 * u
+        return (across * wide, waist[1] - 0.62 * u, waist[2] + 0.02 - 0.06 * across * across)
+
+    k.sheet(hang, "apron", nu=8, nv=6, thick=0.008)
+    k.begin("boy", (0, HIP[1], HIP[2]))
 
     # Neck, head, ears, hair at the back, the flat cap with its peak: a node of its own, its pivot at the foot of the
     # neck, so the game can lift his head while he bends over the bars on foot
@@ -220,6 +237,9 @@ def boy(k):
     k.lathe([(0, -0.1), (0.05, -0.095), (0.085, -0.06), (0.095, 0.0), (0.09, 0.05), (0.06, 0.09), (0, 0.1)], HEAD, "skin", seg=16)
     for side in (-1, 1):
         k.lathe([(0, -0.02), (0.018, -0.012), (0.02, 0.012), (0, 0.02)], (side * 0.093, HEAD[1], HEAD[2] - 0.005), "skin", axis="x", seg=8)
+    # A plain nose; no other feature (the face is no one's)
+    k.loft([(HEAD[2] + 0.085, HEAD[1] - 0.04, HEAD[1] + 0.01, 0.016, 2.4, 2.4, 0.3), (HEAD[2] + 0.108, HEAD[1] - 0.035, HEAD[1] - 0.005, 0.012, 2.4, 2.4, 0.3)], "skin",
+           ring=8, steps=1)
     k.loft([(HEAD[2] - 0.1, HEAD[1] - 0.05, HEAD[1] + 0.06, 0.088, 2.4, 2.4), (HEAD[2] - 0.07, HEAD[1] - 0.07, HEAD[1] + 0.08, 0.09, 2.4, 2.4)], "hair",
            ring=12, steps=1)
     # The cap: a soft crown pulled forward over the brow, and the short peak
@@ -254,8 +274,10 @@ def boy(k):
         k.begin(f"shin_{tag}", (x, knee, HIP[2]))
         k.lathe([(0, 0.0), (0.054, 0.005), (0.056, 0.03), (0.0, 0.035)], (x, knee - 0.035, HIP[2]), "shorts", seg=10)
         k.tube([(x, knee - 0.02, HIP[2]), (x, knee - 0.12, HIP[2])], 0.05, "shorts", seg=10)
-        k.tube([(x, knee - 0.12, HIP[2]), (x, knee - SHIN + 0.03, HIP[2])], 0.043, "sock", seg=10)
+        k.tube([(x, knee - 0.12, HIP[2]), (x, knee - 0.2, HIP[2])], 0.043, "sock", seg=10)
         k.box((0.1, 0.03, 0.1), (x, knee - 0.12, HIP[2]), "sock", bevel=0.012)
+        # The boot's leg to the middle of the calf
+        k.tube([(x, knee - 0.2, HIP[2]), (x, knee - SHIN + 0.02, HIP[2])], 0.05, "boot", seg=10)
         ankle = knee - SHIN
         k.begin(f"foot_{tag}", (x, ankle, HIP[2]))
         k.loft([(HIP[2] - 0.05, ankle - 0.06, ankle + 0.04, 0.042, 3, 3), (HIP[2] + 0.04, ankle - 0.065, ankle + 0.02, 0.048, 3, 3),

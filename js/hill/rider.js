@@ -18,14 +18,24 @@ class HillRider {
     }
 
     // On foot, pushing the bicycle up the climb (HillBicycle.walking), as in the reference stills: beside it on its left
-    // (+x), his hips at `hip` in the frame, bent forward over the bars by bendRad and turned in towards them by turnRad,
-    // a hand on each grip (a shoulder reaching at most reachM forward to the far one). His steps: a pace of strideM (two
-    // steps), each foot on the cobbles for `stance` of it and lifted liftM as it swings, the feet footX out from the hips'
-    // middle and backM behind it. His head is lifted headUpRad from the bend, so he looks up the lane ahead of him. The
-    // bicycle leans in towards him by leanRad; on and off the saddle over blendS
+    // (+x), his hips at `hip` in the frame, leaning far over the bars by bendRad and turned in towards them by turnRad,
+    // a hand on each grip (a shoulder reaching at most reachM forward to the far one). His steps: a long pace of strideM
+    // (two steps), each foot on the cobbles for `stance` of it and lifted liftM as it swings, the feet footX out from the
+    // hips' middle and backM behind it, so he pushes from behind. His head is lifted headUpRad from the bend, so he looks
+    // up the lane ahead of him. Half way up he tires: from `down.fromM` to `down.toM` walked he drops his head
+    // (down.headUpRad) and leans further over (down.bendRad), eased over down.easeM. The long apron hangs straight down
+    // from his waist, apronClearM clear of the knee ahead (swung forward apronMostRad at most). The bicycle leans in towards him by leanRad; on and off the
+    // saddle over blendS
     static get WALK() {
-        return Object.freeze({ hip: [0.42, 0.8, -0.2], bendRad: 0.75, turnRad: 0.35, headUpRad: 0.6, reachM: 0.2, strideM: 1.0, stance: 0.6, liftM: 0.09, footX: 0.11,
-            backM: 0.12, leanRad: 0.06, blendS: 0.4 });
+        return Object.freeze({ hip: [0.36, 0.82, -0.45], bendRad: 0.62, turnRad: 0.35, headUpRad: 0.72, reachM: 0.22, strideM: 1.3, stance: 0.6, liftM: 0.1, footX: 0.11,
+            backM: 0.08, leanRad: 0.06, blendS: 0.4, apronClearM: 0.03, apronMostRad: 0.35, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.88 } });
+    }
+
+    // How far into his tired stretch he is at `walkM` metres walked (0..1, eased: WALK.down)
+    static tired(walkM) {
+        const D = HillRider.WALK.down;
+        const k = Math.max(0, Math.min(1, (walkM - D.fromM) / D.easeM, (D.toM - walkM) / D.easeM));
+        return k * k * (3 - 2 * k);
     }
 
     // The ankle over its pedal, from the pedal's pivot
@@ -116,12 +126,14 @@ class HillRider {
             };
         });
         this.steerQ = new THREE.Quaternion();
-        // The head (a model file without it has the head in the body): hung on the body, so it goes where he goes
-        const head = this.parts.head;
-        if (head) {
-            this.frame.remove(head);
-            this.parts.boy.add(head);
-            head.position.sub(r.boy);
+        // The head and the aprons (a model file without them has them in the body): hung on the body, so they go where
+        // he goes
+        for (const name of ['head', 'apron', 'apron_long']) {
+            const part = this.parts[name];
+            if (!part) continue;
+            this.frame.remove(part);
+            this.parts.boy.add(part);
+            part.position.sub(r.boy);
         }
     }
 
@@ -176,6 +188,7 @@ class HillRider {
             this.parts.boy.position.set(0, 0, 0);
             this.parts.boy.quaternion.identity();
             if (this.parts.head) this.parts.head.quaternion.identity();
+            this.dress(0);
         }
         // (where the vehicle's rider is now drawn, in the world)
         v.group.updateMatrixWorld(true);
@@ -235,7 +248,16 @@ class HillRider {
     // into the turn past the bicycle's `lean`, each arm from its shoulder to its grip with the elbow bent out and down.
     // `walk` (0..1) takes him off the saddle to his place on foot beside it (WALK); his hips' place and turn are kept
     // (boyAt, boyQ) for the legs
-    steer(bars, lean = 0, walk = 0) {
+    // The apron for the saddle or for on foot (`walk` over a half)
+    dress(walk) {
+        const { apron, apron_long: long } = this.parts;
+        if (!apron || !long) return;
+        apron.visible = walk < 0.5;
+        long.visible = walk >= 0.5;
+        if (!long.visible) long.quaternion.identity();
+    }
+
+    steer(bars, lean = 0, walk = 0, tired = 0) {
         const s = this.scratch, A = HillRider.ARMS, r = this.rest;
         this.steerQ.setFromAxisAngle(this.axis, bars);
         this.parts.steer.quaternion.copy(this.steerQ);
@@ -252,14 +274,17 @@ class HillRider {
         this.boyAt.copy(r.boy);
         if (walk > 0) {
             s.q4 = s.q4 || new THREE.Quaternion();
-            s.q4.setFromAxisAngle(s.yAxis, -W.turnRad).multiply(s.q3.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), W.bendRad));
+            const bend = W.bendRad + (W.down.bendRad - W.bendRad) * tired;
+            s.q4.setFromAxisAngle(s.yAxis, -W.turnRad).multiply(s.q3.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), bend));
             s.q2.slerp(s.q4, walk);
             this.boyAt.lerp(s.walkHip || (s.walkHip = new THREE.Vector3().fromArray(W.hip)), walk);
         }
         this.boyQ.copy(s.q2);
         this.parts.boy.quaternion.copy(s.q2);
         this.parts.boy.position.copy(this.boyAt);
-        if (this.parts.head) this.parts.head.quaternion.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), -W.headUpRad * walk);
+        const headUp = W.headUpRad + (W.down.headUpRad - W.headUpRad) * tired;
+        if (this.parts.head) this.parts.head.quaternion.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), -headUp * walk);
+        this.dress(walk);
         s.hand = s.hand || new THREE.Vector3();
         s.sh = s.sh || new THREE.Vector3();
         s.elbow = s.elbow || new THREE.Vector3();
@@ -364,7 +389,8 @@ class HillRider {
             return;
         }
         if (this.fallen) this.remount();
-        this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle, walk);
+        this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle, walk, walk > 0 ? HillRider.tired(bike.walkM || 0) : 0);
+        this.kneeAhead = -Infinity;
 
         const out = HillRider.LEGS_OUT;
         const legsOut = bike.legs * bike.legs * (3 - 2 * bike.legs);
@@ -414,6 +440,10 @@ class HillRider {
             // The knee bends forward over the pedal; held out straight, any pole will do, so it turns with the leg
             s.pole.set(0.15 * leg.side * (1 + legsShare * 3 + down * 2), 0.3 + legsShare * 0.5, 1);
             HillRider.knee(hip, on, leg.upper, leg.lower, s.pole, s.knee);
+            if (s.knee.z > this.kneeAhead) {
+                this.kneeAhead = s.knee.z;
+                this.kneeAheadY = s.knee.y;
+            }
             s.up.set(0, 0, 1);
             this.point(leg.thigh, hip, s.knee, s.up);
             this.point(leg.shin, s.knee, on, s.up);
@@ -427,6 +457,21 @@ class HillRider {
             s.m.makeBasis(s.x, s.y, s.z);
             leg.foot.quaternion.setFromRotationMatrix(s.m);
         }
+        this.hangApron(walk);
+    }
+
+    // On foot the long apron hangs straight down from his waist, whatever his bend, its hem swung forward just clear
+    // of the knee that is furthest ahead (WALK.apronClearM)
+    hangApron(walk) {
+        const long = this.parts.apron_long;
+        if (!long || !long.visible || walk <= 0) return;
+        const s = this.scratch, W = HillRider.WALK;
+        const waist = (s.waist || (s.waist = new THREE.Vector3())).copy(long.position).applyQuaternion(this.boyQ).add(this.boyAt);
+        const below = Math.max(0.2, waist.y - this.kneeAheadY);
+        const swing = Math.max(0.04, Math.min(W.apronMostRad, Math.atan2(this.kneeAhead - waist.z + W.apronClearM, below)));
+        s.qa = s.qa || new THREE.Quaternion();
+        s.qa.setFromAxisAngle(s.xAxis, -swing);
+        long.quaternion.copy(this.boyQ).invert().multiply(s.qa);
     }
 }
 

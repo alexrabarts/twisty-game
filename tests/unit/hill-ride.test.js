@@ -942,7 +942,7 @@ describe('the boy on the bicycle', () => {
         expect(ankle.y - ground).toBeLessThan(HillRider.ANKLE_ON_PEDAL[1] + 0.03);
     });
 
-    test('on foot up the climb: beside the bicycle on its left, bent over the bars, a foot on the cobbles at every step and none under them; on the saddle again after', () => {
+    test('on foot up the climb: beside the bicycle on its left, bent over the bars, a foot on the cobbles at every step and none under them, the long apron hanging, his head down half way up; on the saddle again after', () => {
         const where = new HillLane();
         const b = new HillBicycle(where);
         b.reset(60);
@@ -972,12 +972,28 @@ describe('the boy on the bicycle', () => {
         // His head lifted from the bend, looking up the lane ahead of him
         expect(2 * Math.acos(Math.min(1, Math.abs(rider.parts.head.quaternion.w)))).toBeCloseTo(W.headUpRad, 5);
         expect(rider.parts.head.quaternion.x).toBeLessThan(0);
+        // On foot the long apron, hanging straight down from his waist, swung forward at most apronMostRad; not the lap one
+        expect(rider.parts.apron_long.visible).toBe(true);
+        expect(rider.parts.apron.visible).toBe(false);
+        const hem = new THREE.Vector3(0, -1, 0).applyQuaternion(rider.parts.apron_long.getWorldQuaternion(new THREE.Quaternion()));
+        const plumb = new THREE.Vector3(0, -1, 0).applyQuaternion(rider.group.getWorldQuaternion(new THREE.Quaternion()));
+        expect(hem.angleTo(plumb)).toBeLessThan(W.apronMostRad + 1e-6);
+        // Half way up he tires: his head down and his body further over, for the stretch WALK.down
+        b.walkM = (W.down.fromM + W.down.toM) / 2;
+        rider.update(b, where, 1 / 60);
+        expect(HillRider.tired(b.walkM)).toBe(1);
+        expect(2 * Math.acos(Math.min(1, Math.abs(rider.parts.head.quaternion.w)))).toBeCloseTo(W.down.headUpRad, 5);
+        expect(HillRider.tired(W.down.fromM - 1)).toBe(0);
+        expect(HillRider.tired(W.down.toM + 1)).toBe(0);
         // Reset onto the saddle for the descent: at once, the body where it was built
         b.reset(20);
         b.walking = false;
         rider.update(b, lane, 1 / 60);
         expect(rider.parts.boy.position.distanceTo(rider.rest.boy)).toBeLessThan(1e-6);
         expect(rider.parts.head.quaternion.w).toBeCloseTo(1, 9);
+        // On the saddle the apron lies over his lap
+        expect(rider.parts.apron.visible).toBe(true);
+        expect(rider.parts.apron_long.visible).toBe(false);
     });
 });
 
