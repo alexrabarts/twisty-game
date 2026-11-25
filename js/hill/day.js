@@ -31,6 +31,38 @@ class HillDay {
             restockS: 1.4, turnS: 1.6, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
     }
 
+    // The washing's sheets keep clearM from every house, porch and wall through their whole flap (tests/unit/hill-day.test.js):
+    // they hang plumb at rest and blow out only towards the lane, so their line stands clearM in from the nearest face
+    // of anything on its side along its length (HillDay.washingFaces), and never further out than lineM over the lane's
+    // edge
+    static get WASHING() { return Object.freeze({ clearM: 0.15, lineM: 0.1, upM: 2.6 }); }
+
+    // How far out from the lane's middle (m, on the washing's side) the nearest face stands along the washing's length:
+    // a front wall or railing at the flags' edge, a porch, a shop's bay, a house front, a wall in a gap
+    static washingFace(lane) {
+        const H = HillDay.HAZARDS.washing, r = lane.rule, edge = r.halfWidthM + r.flagsM;
+        let face = edge;
+        for (const c of lane.cottages) {
+            if (c.side !== H.side || c.to < H.s - 0.6 || c.from > H.s + H.lengthM + 0.6) continue;
+            const out = edge + (c.back || 0);
+            if (c.front === 'garden' || c.front === 'railing') face = Math.min(face, out - (r.flagsM - 0.15) - 0.15);
+            if (c.porch) face = Math.min(face, out - 1.0);
+            if (c.bay) face = Math.min(face, out - 0.5);
+            face = Math.min(face, out);
+        }
+        for (const w of lane.walls) {
+            if (w.side !== H.side || w.to < H.s - 0.6 || w.from > H.s + H.lengthM + 0.6) continue;
+            face = Math.min(face, edge + 0.15 - 0.15);
+        }
+        return face;
+    }
+
+    // Where the washing's line stands across the lane (m out from the middle, on its side)
+    static washingLine(lane) {
+        const W = HillDay.WASHING;
+        return Math.min(lane.rule.halfWidthM + W.lineM, HillDay.washingFace(lane) - W.clearM);
+    }
+
     // The loaves the basket holds when full
     static get BASKET() { return 6; }
 
@@ -469,7 +501,8 @@ class HillDay {
             g.add(pivot);
             this.sheets.push({ pivot, s: H.s + 0.7 + i * 1.3 });
         }
-        const a = lane.at(H.s, H.side * (lane.rule.halfWidthM + 0.1), 2.6, {}), b = lane.at(H.s + H.lengthM, H.side * (lane.rule.halfWidthM + 0.1), 2.6, {});
+        this.washLine = HillDay.washingLine(lane);
+        const a = lane.at(H.s, H.side * this.washLine, HillDay.WASHING.upM, {}), b = lane.at(H.s + H.lengthM, H.side * this.washLine, HillDay.WASHING.upM, {});
         const line = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z), 4), dark);
         line.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
         line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z).normalize());
@@ -690,7 +723,7 @@ class HillDay {
         // Facing up the lane
         this.cartMesh.rotation.y = kp.heading + Math.PI;
         for (const sheet of this.sheets) {
-            const at = lane.at(sheet.s, H.washing.side * (lane.rule.halfWidthM + 0.1), 2.6, {}), sp = lane.sample(sheet.s);
+            const at = lane.at(sheet.s, H.washing.side * this.washLine, HillDay.WASHING.upM, {}), sp = lane.sample(sheet.s);
             sheet.pivot.position.set(at.x, at.y, at.z);
             // The sheet hangs along the line, and is blown out about it towards the middle of the lane
             sheet.pivot.rotation.set(0, sp.heading + Math.PI / 2, 0);

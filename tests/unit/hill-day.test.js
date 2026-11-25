@@ -281,6 +281,47 @@ describe('the cat', () => {
     });
 });
 
+describe('the washing', () => {
+    test('the sheets on their line keep clear of every house, porch and wall through the whole of their flap', () => {
+        const day = new HillDay(lane);
+        const g = day.build();
+        // Every point of every sheet, at 11 places across and down it, at 41 moments of a cycle of the wind
+        const H = HillDay.HAZARDS.washing, clearM = HillDay.WASHING.clearM;
+        let worst = Infinity, where = '';
+        const inside = (c, p) => {
+            const dx = p.x - c.x, dz = p.z - c.z, along = dx * c.alongX + dz * c.alongZ, out = dx * c.outX + dz * c.outZ;
+            const porch = c.porch ? { at: -c.hw + c.wide * c.door, top: c.floor + 2.95 } : null;
+            // (how far inside the house's box, or its porch's, the point is; negative: how far out of it)
+            let d = Math.min(c.hw - Math.abs(along), c.hd - Math.abs(out), p.y < c.ridge && p.y > c.foot ? 1 : -1);
+            if (porch && p.y < porch.top) d = Math.max(d, Math.min(0.9 - Math.abs(along - porch.at), out + c.hd + 1.0, -c.hd - out + 1.0));
+            return d;
+        };
+        for (let k = 0; k <= 40; k++) {
+            day.washing.blow = Math.max(0, Math.sin(k / 40 * Math.PI * 2)) ** 2;
+            day.draw();
+            g.updateMatrixWorld(true);
+            for (const sheet of day.sheets) {
+                const mesh = sheet.pivot.children[0];
+                const w = mesh.geometry.parameters.width, h = mesh.geometry.parameters.height;
+                for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) {
+                    const p = mesh.localToWorld(new THREE.Vector3((i / 10 - 0.5) * w, (j / 10 - 0.5) * h, 0));
+                    const at = lane.project(p.x, p.z, sheet.s, {});
+                    for (const c of lane.cottages) {
+                        if (Math.abs(c.mid - sheet.s) > 20) continue;
+                        const d = -inside(c, p);
+                        if (d < worst) { worst = d; where = `a house at s ${c.mid.toFixed(1)}`; }
+                    }
+                    // The nearest face on its side: a front wall or railing at the flags' edge, a porch, a bay, a front
+                    const wall = H.side * at.across - HillDay.washingFace(lane);
+                    if (-wall < worst) { worst = -wall; where = 'the nearest face on its side'; }
+                }
+            }
+        }
+        console.log(`hill washing: the sheets keep ${(worst * 100).toFixed(0)} cm clear at the least (of ${where})`);
+        expect(worst).toBeGreaterThan(clearM - 1e-6);
+    });
+});
+
 describe('the climb', () => {
     test('from the bend up to the stall in 20 to 40 s, in sight most of the way, cut as the stills are, wheeled in to the stall side on at the end', () => {
         const C = HillDay.CLIMB;
