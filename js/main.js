@@ -507,11 +507,18 @@ class Game {
         document.body.classList.toggle('free-roam', this.freeRoam);
         if (!this.freeRoam) {
             this.roam = null;
+            this.discoveries = null;
+            this.showDiscoveries();
             return;
         }
         const environment = this.environment;
         const tiles = environment.data && environment.data.manifest && environment.data.manifest.tiles ? environment.data.manifest.tiles.height : [];
         this.roam = new FreeRoam(tiles, WorldData.TILE_M);
+        // Discoveries (js/world/discoveries.js): counted on the HUD, kept in this browser between rides
+        let store = null;
+        try { store = window.localStorage; } catch (error) { console.warn('Discoveries: no storage in this page', error); }
+        this.discoveries = typeof WorldDiscoveries !== 'undefined' ? new WorldDiscoveries(environment, store) : null;
+        this.showDiscoveries();
         environment.guide.roam = true;
         this.worldCamera.followRider = true;
         // The group rides with the player, the player leading (GROUP.roam), or the player rides alone
@@ -534,8 +541,21 @@ class Game {
 
     // One frame of free roam: the edge of the map. In the soft band the bike slows and is told; at the hard line it is
     // put back where it last was on a road, turned round
+    // The HUD's discoveries line in free roam (empty, so hidden, otherwise)
+    showDiscoveries() {
+        const line = document.getElementById('hudFinds');
+        if (line) line.textContent = this.freeRoam && this.discoveries ? this.discoveries.text() : '';
+    }
+
     updateFreeRoam(dt) {
         const v = this.vehicle;
+        if (this.discoveries && !v.crashed) {
+            const found = this.discoveries.step(v.position.x, v.position.z, dt);
+            if (found) {
+                showCallout(`Discovered: ${found.name}`, 'good', Game.CALLOUT_MS.restart);
+                this.showDiscoveries();
+            }
+        }
         // Off the ride the bike's place on it is found again each frame over the whole ride: its windowed search follows
         // a bike that rides along the ride, and one far down a side road outruns it, and then the ground is read off
         // the wrong strand of the ride (FreeRoam.FAR_M)

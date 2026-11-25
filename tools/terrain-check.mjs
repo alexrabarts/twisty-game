@@ -6615,6 +6615,9 @@ async function roamRun(placeSource) {
         return { riders: riders.length, roam: !!tr.roam, aheadM: riders.map(b => Math.round(route.fromUnits(b.currentSegment + b.segmentProgress) - ps)), waiting: riders.filter(b => b.ride && (b.ride.state === 'wait' || b.ride.state === 'toWait')).length, halted: !!(tr.group && tr.group.halted) };
     };
     out.crewStart = crew();
+    // Discoveries (js/world/discoveries.js): from none (a fresh page's store), and the HUD's line
+    const finds = () => game.discoveries ? { line: document.getElementById('hudFinds').textContent, found: [...game.discoveries.found], total: game.discoveries.total } : null;
+    out.findsStart = finds();
     window.roamCrew = crew;
     // (where the ride started: --query '...&start=summit' starts it at the summit)
     out.startedAt = { s: Math.round(game.environment.route.project(v.position.x, v.position.z, null, {}).s), start: game.rideMode && game.rideMode.start || 'start' };
@@ -6706,6 +6709,7 @@ async function roamRun(placeSource) {
             }
         }
         out.trace = trace;
+        out.findsSide = finds();
         out.sideRide = { furthest: Math.round(most), crashed, restarts: (game.restarts || 0) - before, nan: !Number.isFinite(v.position.x + v.position.y + v.position.z), speed: +v.speed.toFixed(1), moved: Math.round(most) };
         if (!out.shots.side) out.shots.side = frame();
     }
@@ -6759,6 +6763,7 @@ WORLD['world-roam'] = async (page) => {
     if (result.framed && (Math.abs(result.framed.x) > 0.6 || Math.abs(result.framed.y) > 0.6)) failures.push(`the bike at the edge of the frame on the side road: ${JSON.stringify(result.framed)}`);
     if (result.roamRows && (result.roamRows.trial.some(Boolean) || !result.roamRows.roam.every(Boolean))) failures.push(`free roam's rows on the rider screen: ${JSON.stringify(result.roamRows)}`);
     if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
+    if (!result.findsStart || !result.findsStart.total || !result.findsSide || !result.findsSide.found.some(id => id.startsWith('side:')) || !/^Discoveries \d+\/\d+$/.test(result.findsSide.line)) failures.push(`the side road ridden is not a discovery: ${JSON.stringify(result.findsSide)}`);
     if (result.crewRide && result.crewRide.mostAhead > 0) failures.push(`a rider of the group ${result.crewRide.mostAhead} m ahead of the leading player`);
     if (result.crewSide && result.crewSide.waiting < result.crewSide.riders) failures.push(`riders not waiting while the player is down a side road: ${JSON.stringify(result.crewSide)}`);
     return { ok: failures.length === 0, failures, ...result, dir };
