@@ -205,6 +205,9 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
             for (let i = group.start; i + 2 < group.start + group.count; i += 3) {
                 const tri = [];
                 for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, index ? index.getX(i + k) : i + k).applyMatrix4(mesh.matrixWorld); tri.push(v.x, v.y, v.z); }
+                // (a junction's paving, works group 3, is laid under the roads as they are drawn: it stands in a road
+                // only where it stands over that road's drawn surface, not over the importer's height under it)
+                if (group.materialIndex === 3 && env.sideDrawnY && [0, 3, 6].every(k => { const drawn = env.sideDrawnY(tri[k], tri[k + 2], tri[k + 1]) ?? env.rideSurfaceAt(tri[k], tri[k + 2], tri[k + 1]); return drawn === null || tri[k + 1] <= drawn + 0.02; })) continue;
                 test(tri, owners ? owners[i / 3] : ownerOf, kinds[group.materialIndex] || 'deck', source);
             }
         }

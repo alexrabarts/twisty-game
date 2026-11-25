@@ -193,6 +193,8 @@ class RoadMesh {
     // The ride's end of a junction's paving lies this far under its surface (under the side ribbons held there)
     static get PAVING_UNDER_M() { return 0.13; }
     static get PAVING_PIECE_M() { return 4; }
+    // How often the edge between two of the ride's rows is read for the side road a junction's paving reaches out to
+    static get PAVING_STEP_M() { return 0.5; }
     static get APRON_LINEAR() { return RoadMesh.COLORS.apron.map(v => Math.pow(v, 2.2)); }
 
     // The apron is land: lit as the land is, and pushed back in depth so the land wins where the two lie together
@@ -1683,25 +1685,57 @@ class RoadMesh {
             const apronOut = drawn ? apron : junk, wallOut = drawn ? wall : junk, stoneOut = drawn ? stone : junk, pavingOut = drawn ? paving : junk;
             let soffit = false;
             for (const key of ['l', 'r']) {
-                // (none from a lone paved row, with no paved row either side: where a side road that leaves at an angle
-                // crosses the gore's line at one row, it laid a triangle of paving into the corner beside the side road
-                // either way, a dark triangle in the mouth at km 1.8)
-                const lone = j => !(paved[j - 1] && paved[j - 1][key]) && !(paved[j + 1] && paved[j + 1][key]);
-                const ga = paved[k] && paved[k][key] && !lone(k) ? paved[k][key] : null, gb = paved[k + 1] && paved[k + 1][key] && !lone(k + 1) ? paved[k + 1][key] : null;
-                if (ga || gb) {
-                    // (each row's edge level with its own far edge where that lies lower, never over a side road that
-                    // falls away; level with the lower of the two rows', a row's paving lay under the ride's edge where
-                    // the two roads part)
-                    const edge = j => { const c = sides[j][key + 'c'], g = (j === k ? ga : gb) || ga || gb; return [c[0], Math.min(c[1] - RoadMesh.PAVING_UNDER_M, g[1]), c[2]]; };
-                    const c = RoadMesh.PAVING_LINEAR;
-                    // In pieces no longer than PAVING_PIECE_M either way (a far ribbon's rows are 16 m apart): no
-                    // large flat face
-                    const a0 = edge(k), b0 = edge(k + 1), a1 = ga || a0, b1 = gb || b0;
-                    const mix = (u, v, t) => [u[0] + (v[0] - u[0]) * t, u[1] + (v[1] - u[1]) * t, u[2] + (v[2] - u[2]) * t];
-                    const dist = (u, v) => Math.hypot(v[0] - u[0], v[2] - u[2]);
-                    const nu = Math.max(1, Math.ceil(Math.max(dist(a0, b0), dist(a1, b1)) / RoadMesh.PAVING_PIECE_M)), nv = Math.max(1, Math.ceil(Math.max(dist(a0, a1), dist(b0, b1)) / RoadMesh.PAVING_PIECE_M));
-                    const at = (i, j) => mix(mix(a0, b0, i / nu), mix(a1, b1, i / nu), j / nv);
-                    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) RoadMesh.quad(pavingOut, at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1), [c, c, c, c]);
+                // The paving is laid between the rows, not row by row: the edge between two rows is read every
+                // PAVING_STEP_M for the side road beside it (`foot.gore`), and each step paved out to it. The ride's rows
+                // are about 4 m apart, and a side road that leaves at an angle crossed the gore's reach between two of
+                // them: row by row, one row was paved alone and laid nothing (a lone row's triangle had reached into the
+                // corner past the side road), and the land lay in the corner between the two roads (the run-in's pits
+                // at km 1.1, 11.0 and 14.08)
+                const near = [k - 1, k, k + 1, k + 2].some(j => paved[j] && paved[j][key]);
+                if (!near || !foot || !foot.gore || sides[k].bits & 7 || sides[k + 1].bits & 7 || !sides[k].lc || !sides[k + 1].lc) continue;
+                const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
+                const oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
+                const steps = Math.max(1, Math.ceil(Math.hypot(cb[0] - ca[0], cb[2] - ca[2]) / RoadMesh.PAVING_STEP_M));
+                const line = [];
+                for (let j = 0; j <= steps; j++) {
+                    const u = j / steps;
+                    const c = [ca[0] + (cb[0] - ca[0]) * u, ca[1] + (cb[1] - ca[1]) * u, ca[2] + (cb[2] - ca[2]) * u];
+                    let ox = oa[0] + (ob[0] - oa[0]) * u, oz = oa[1] + (ob[1] - oa[1]) * u;
+                    const ol = Math.hypot(ox, oz) || 1;
+                    ox /= ol; oz /= ol;
+                    // (the rows' own reads at the ends, so two segments meet on one line)
+                    const g = j === 0 ? paved[k] && paved[k][key] : j === steps ? paved[k + 1] && paved[k + 1][key] : foot.gore(c[0], c[1], c[2], ox, oz);
+                    line.push({ c, g: g || null });
+                }
+                const c = RoadMesh.PAVING_LINEAR;
+                // (from the ride's edge, PAVING_UNDER_M under it, sloping to the side road's near edge where that lies
+                // lower: laid level with the lower, the paving lay a side road's fall under the ride's edge)
+                // (from the edge up to where it meets the side road, at that road's height there, then on under the road
+                // to the far edge: `near`, edgeFoot `gore`)
+                const nearOf = g => g.near || g;
+                const edgeOf = (q, g) => [q.c[0], Math.min(q.c[1] - RoadMesh.PAVING_UNDER_M, nearOf(g)[1] + RoadMesh.PAVING_UNDER_M), q.c[2]];
+                const mix = (u, v, s) => [u[0] + (v[0] - u[0]) * s, u[1] + (v[1] - u[1]) * s, u[2] + (v[2] - u[2]) * s];
+                const strip = (a0, b0, a1, b1) => {
+                    // In pieces no longer than PAVING_PIECE_M out from the edge: no large flat face
+                    const nv = Math.max(1, Math.ceil(Math.max(Math.hypot(a1[0] - a0[0], a1[2] - a0[2]), Math.hypot(b1[0] - b0[0], b1[2] - b0[2])) / RoadMesh.PAVING_PIECE_M));
+                    for (let v = 0; v < nv; v++) RoadMesh.quad(pavingOut, mix(a0, a1, v / nv), mix(b0, b1, v / nv), mix(b0, b1, (v + 1) / nv), mix(a0, a1, (v + 1) / nv), [c, c, c, c]);
+                };
+                for (let j = 0; j < steps; j++) {
+                    const qa = line[j], qb = line[j + 1];
+                    if (!qa.g && !qb.g) continue;
+                    // (where the side road comes into reach between two places, the paving closes to the edge there)
+                    const ga = qa.g || qb.g, gb = qb.g || qa.g;
+                    const a0 = edgeOf(qa, ga), b0 = edgeOf(qb, gb);
+                    const an = qa.g ? nearOf(qa.g) : a0, bn = qb.g ? nearOf(qb.g) : b0;
+                    strip(a0, b0, an, bn);
+                    // (then on under the side road's edge at its own height, PAVING_TUCK_M: the ribbon closes the rest. Laid
+                    // on under the whole road to its far edge, flat or along the road, it stood over the ribbon where the
+                    // road beside the ride bends or dips)
+                    const prof = (g, n) => (g && g.under && g.under.length ? [n, g.under[0]] : [n]);
+                    const pa = prof(qa.g, an), pb = prof(qb.g, bn), m = Math.max(pa.length, pb.length);
+                    if (m < 2) continue;
+                    const at = (list, i) => { const f = (i * (list.length - 1)) / (m - 1), lo = Math.floor(f), hi = Math.min(list.length - 1, lo + 1); return mix(list[lo], list[hi], f - lo); };
+                    for (let i = 0; i + 1 < m; i++) strip(at(pa, i), at(pb, i), at(pa, i + 1), at(pb, i + 1));
                 }
             }
             // The ground that closes a narrow gap between the ride and a side road beside it (WorldEnvironment.cleftAt),

@@ -60,7 +60,14 @@ class WorldEnvironment {
     // climbs away left a dip of land between the two, 0.3 m under both, where the junction is one surface)
     static get SIDE_GORE_M() { return 4.5; }
     static get SIDE_GORE_REACH_M() { return 16; }
-    static get SIDE_GORE_STEP_M() { return 0.25; }
+    // A side road's end row is turned to meet the next edge's where their widths differ by this much (buildSide `meet`)
+    static get MEET_WIDTH_M() { return 1; }
+    // How far under a side road the paving comes up to it where it first meets it (edgeFoot `gore`'s `near`): just
+    // under its ribbon there, so the paving between the two roads is no more than a hand under the line between them
+    static get SIDE_GORE_NEAR_M() { return 0.06; }
+    // How far on under the side road from its edge the paving reaches (RoadMesh.edgeWorks)
+    static get SIDE_GORE_TUCK_M() { return 1; }
+    static get SIDE_GORE_STEP_M() { return 0.35; }
     static get SIDE_GORE_RISE_M() { return 0.5; }
     // A side road beside the ride with its band (carriageway and verge) within CLEFT_GAP_M of the ride's verge, and the
     // land between the two more than CLEFT_DIP_M under the lower of them, has the gap closed by ground at the lower
@@ -1910,16 +1917,31 @@ class WorldEnvironment {
         // ride lays paving from its edge to there (RoadMesh.edgeWorks), under the side roads' ribbons: whatever lies
         // between the ride and a side road in a junction, and behind the piece that joins their walls, is road
         if (aprons) foot.gore = (x, y, z, ox, oz) => {
-            let last = 0, lastY = null;
-            for (let d = 0.5; d <= WorldEnvironment.SIDE_GORE_REACH_M && d - last <= WorldEnvironment.SIDE_GORE_M; d += 0.5) {
+            let last = 0, lastY = null, near = null, nearD = 0;
+            const under = [];
+            // (the first gap counts the ride's verge, as the junction check reads the ride's drawn edge: a side road
+            // 4.25 m past the verge, 5 m past the carriageway, was left unpaved at km 11.0)
+            for (let d = 0.5; d <= WorldEnvironment.SIDE_GORE_REACH_M && d - last <= WorldEnvironment.SIDE_GORE_M + (near === null ? RoadSurface.VERGE_M : 0); d += 0.5) {
                 const px = x + ox * d, pz = z + oz * d;
                 // (never on over another leg of the ride)
                 if (lastY !== null && d > 1 && this.rideSurfaceAt(px, pz, y) !== null) break;
-                const side = this.ground.sideRoadY(px, pz);
+                let side = this.ground.sideRoadY(px, pz);
                 if (side === null) continue;
+                // (as its ribbon is drawn, where it is: held under the ride and laid across its own slope, the ribbon lay
+                // up to 0.17 m under the centre-line height the physics reads at its edge, and the paving over it)
+                const drawn = this.sideDrawnY(px, pz, side);
+                if (drawn !== null) side = drawn;
                 // Only while the side road stands at the ride's height (in the band and at the foot of its ramp): past
                 // that the two are two roads again, each with its own edge
                 if (y - side > WorldEnvironment.SIDE_GORE_STEP_M || side - y > WorldEnvironment.SIDE_GORE_RISE_M) break;
+                // (where it first meets the side road, at that road's drawn height: the paving comes up to it there)
+                let low = side;
+                this.carriageways.each(px, pz, 0, r => { if (r.depth >= 0 && Math.abs(r.y - y) <= 1.5 && r.y < low) low = r.y; }, true);
+                // (under the road as drawn, not as the importer gives it: where the importer's height falls away from the
+                // drawn one, laid under that, the paving lay up to 0.9 m under both roads, a pit between them)
+                if (near === null) { near = [px, Math.min(y, side) - WorldEnvironment.SIDE_GORE_NEAR_M, pz]; nearD = d; }
+                // (and SIDE_GORE_TUCK_M on under the road at its own height: `under`)
+                if (!under.length && near && d - nearD >= WorldEnvironment.SIDE_GORE_TUCK_M) under.push({ d, p: [px, low - WorldEnvironment.SIDE_GORE_UNDER_M, pz] });
                 last = d;
                 lastY = lastY === null ? side : Math.min(lastY, side);
                 // (under the importer's own height for that road too, where it lies lower: the structures' guard
@@ -1929,7 +1951,13 @@ class WorldEnvironment {
             // (under the side road where it stands over the ride: held at the ride's height, the paving lay under a side
             // road that climbs away beside the ride by up to SIDE_GORE_STEP_M more than its own depth, a dip between the
             // two roads)
-            return lastY === null ? null : [x + ox * last, lastY - WorldEnvironment.SIDE_GORE_UNDER_M, z + oz * last];
+            // `near`: the first place on the side road (RoadMesh.edgeWorks lays the paving up to it at that road's own
+            // height, then on under the road; laid flat at the lowest of the road out to the far edge, it lay half a
+            // metre under the ride's edge and the side road's near edge: the run-in's pit at km 14.08)
+            if (lastY === null) return null;
+            // (each point of `under` SIDE_GORE_UNDER_M under the road there as drawn or as the importer has it, the lower)
+            const far = [x + ox * last, lastY - WorldEnvironment.SIDE_GORE_UNDER_M, z + oz * last];
+            return Object.assign(far, { near, under: under.map(u => u.p) });
         };
         // Whether a side road's wall ends within reach of the place (x, y, z), the end of one of the ride's walls: the
         // two are joined there (wallJoins), and the ride lays no slope from its wall's end into the mouth
@@ -2124,6 +2152,43 @@ class WorldEnvironment {
             if (low === null) low = this.rideBesideAt(x, z, y);
             return low === null ? y : low - under;
         };
+    }
+
+    // The height of the side roads' ribbons as drawn at (x, z), the one nearest `near` within 0.5 m, or null where no
+    // ribbon of a resident chunk is drawn there. Each chunk's ribbons are read once into a grid of their triangles
+    sideDrawnY(x, z, near) {
+        if (!this.sideDrawnCache) this.sideDrawnCache = new Map();
+        let best = null;
+        const v = this.sideDrawnV || (this.sideDrawnV = new THREE.Vector3());
+        for (const group of this.sideMeshes.values()) {
+            group.traverse(o => {
+                if (!o.isMesh || o.name !== 'road-side' || !o.geometry) return;
+                let grid = this.sideDrawnCache.get(o.geometry.uuid);
+                if (!grid) {
+                    const pos = o.geometry.attributes.position, idx = o.geometry.index, cell = 4, hash = new Map(), tris = [];
+                    o.updateMatrixWorld(true);
+                    const count = idx ? idx.count : pos.count;
+                    for (let i = 0; i + 2 < count; i += 3) {
+                        const t = new Float64Array(9);
+                        for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, idx ? idx.getX(i + k) : i + k).applyMatrix4(o.matrixWorld); t[k * 3] = v.x; t[k * 3 + 1] = v.y; t[k * 3 + 2] = v.z; }
+                        const ref = tris.push(t) - 1;
+                        for (let cx = Math.floor(Math.min(t[0], t[3], t[6]) / cell); cx <= Math.floor(Math.max(t[0], t[3], t[6]) / cell); cx++) for (let cz = Math.floor(Math.min(t[2], t[5], t[8]) / cell); cz <= Math.floor(Math.max(t[2], t[5], t[8]) / cell); cz++) { const h = cx * 65536 + cz; (hash.get(h) || hash.set(h, []).get(h)).push(ref); }
+                    }
+                    grid = { hash, tris };
+                    this.sideDrawnCache.set(o.geometry.uuid, grid);
+                }
+                for (const ref of grid.hash.get(Math.floor(x / 4) * 65536 + Math.floor(z / 4)) || []) {
+                    const t = grid.tris[ref];
+                    const d = (t[5] - t[8]) * (t[0] - t[6]) + (t[6] - t[3]) * (t[2] - t[8]);
+                    if (Math.abs(d) < 1e-9) continue;
+                    const a = ((t[5] - t[8]) * (x - t[6]) + (t[6] - t[3]) * (z - t[8])) / d, b = ((t[8] - t[2]) * (x - t[6]) + (t[0] - t[6]) * (z - t[8])) / d, c = 1 - a - b;
+                    if (a < -1e-9 || b < -1e-9 || c < -1e-9) continue;
+                    const y = a * t[1] + b * t[4] + c * t[7];
+                    if (Math.abs(y - near) <= 0.5 && (best === null || Math.abs(y - near) < Math.abs(best - near))) best = y;
+                }
+            });
+        }
+        return best;
     }
 
     // The rows a side road goes on as past the `end` ('a' or 'b') of `edge`, through the nodes it only passes (degree
@@ -2333,6 +2398,23 @@ class WorldEnvironment {
         const roads = [];
         // (`before` and `after`: the rows the road goes on as past its ends, so a tube that runs on past one has no portal there)
         const draw = (rows, stub, edge, guard, s0 = 0, before = [], after = []) => {
+            // Where the road goes on as another edge of another width, both end on one line at the node: its end row
+            // takes the heading half way to the onward row's. Each ended square to its own heading, and at a node where
+            // the road bends and narrows the two ribbons left a wedge open between them (the summit's hole, 0.5 m, where
+            // the hospice's 5 m access road goes on as a 3 m road)
+            // (only where the road narrows or widens there by MEET_WIDTH_M or more: the narrower ribbon's end left the
+            // wedge; where the two are one width their walls run on across the node, and a bent end row split a wall
+            // into a block at Airolo)
+            const meet = (row, other) => {
+                if (Math.abs(row.width - other.width) < WorldEnvironment.MEET_WIDTH_M) return row;
+                const turn = Math.atan2(Math.sin(other.heading - row.heading), Math.cos(other.heading - row.heading));
+                return { ...row, heading: row.heading + turn / 2 };
+            };
+            if (rows.length > 1) {
+                rows = rows.slice();
+                if (before.length) rows[0] = meet(rows[0], before[before.length - 1]);
+                if (after.length) rows[rows.length - 1] = meet(rows[rows.length - 1], after[0]);
+            }
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
             const through = [!!(before.length && before[before.length - 1].bits & 5), !!(after.length && after[0].bits & 5)];

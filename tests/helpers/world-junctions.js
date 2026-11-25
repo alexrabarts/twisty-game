@@ -53,13 +53,13 @@ export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0,
 // The faults the new leg (worlds/gotthard, 6f) still has: debt, not a pass. A new world passes with every count at
 // JUNCTION_LIMITS; this one shipped with the faults its junctions showed that no rule here closes yet
 // (.agent/system/world.md, "A side road meets the ride", the list under it). A count may only fall.
-//   gotthard-north: the Hospental junctions (km 2.64 to 2.66: a step of 0.7 m, an open edge of 0.6 m, pits of 0.54
-//   and 0.43 m, a strip of laid ground 2 cm over a side road), pits at km 1.1 (0.29), 11.0 (0.40), 11.2 (0.29), 11.6
-//   (0.27) and 14.08 (0.44), land 9 cm over a side road at km 3.3 and a hole of 0.5 m at the summit (km 11.56); 2
-//   steps in the physics ground at Hospental. (Until 2026-11-25 the summit to the lookout was a stage of its own,
-//   gotthard-lookout, which counted the summit's hole and its pit at km 11.6 again.)
+//   gotthard-north: Hospental, where three junctions of the ride (km 2.64 to 2.66) and two side roads that meet each
+//   other 10 m off it make a triangle: a step of 0.7 m where the two side roads' ribbons overlap at two heights, a strip
+//   of laid ground 2 cm over one, a pit of 0.54 m, an open edge of 0.68 m, and 2 steps in the physics ground. (Closed
+//   2026-11-25 by laying the paving between the rows: pits at km 1.1, 11.0, 11.2, 11.6, 14.08 and at Hospental's
+//   other junction, land 9 cm over a side road at km 3.3 and the summit's hole of 0.5 m)
 export const JUNCTION_OPEN = Object.freeze({
-    'gotthard-north': { steps: 1, holes: 1, sunk: 1, open: 1, strips: 1, pits: 7, physics: 2 }
+    'gotthard-north': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 }
 });
 export const junctionLimits = stage => ({ ...JUNCTION_LIMITS, physics: 0, ...(JUNCTION_OPEN[stage] || {}) });
 
