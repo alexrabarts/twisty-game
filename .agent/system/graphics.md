@@ -105,6 +105,42 @@ A desktop starts at Ultra (`Quality.START`), a phone where it did before (Low, M
 The settings dialog (`js/settings.js`) sets the preset: Auto releases the ladder (`quality.release`), Low, Balanced and High fix it (`quality.fix`) at `low`, `high` and `ultra`.
 
 
+## The held shot at a leg's end
+
+At a leg's end the camera flies to the stop's hold and holds there for the card (`StopScene`, [world.md](world.md), "The stop scene at a leg's end"). A view that holds still can draw more than a ride can. `StopScene.RAISE` gives, for each level, what the held shot raises over the level in force. `Game.raiseShot` puts it in force in two parts:
+
+- **From the scene's start:** what is built once. The land's level of detail by distance (`WorldStreamer.tileLodM` over `TILE_LOD_M`, 700 and 2 000 m), the share of trees and the near trees, the reach of the near and mid trees, and the trees' triangle cap (`Scenery.setShot`). The streamer builds it while the camera flies for 9 s, so nothing comes in after the camera holds.
+- **Once the camera holds:** what each frame draws. The pixel ratio, the shadow map (4 096, never over the GPU's largest texture), the samples and the effects up to `effectMs`. A new shadow map, render target or program can cost one frame of up to 200 ms. In the fly that showed as a jump of the picture. On a still view it does not show.
+
+The ladder holds its level through the scene (`Game.holdQuality`). `Game.dropShot` puts the level in force again at the end of the scene. A level fixed in the scene (the tuning panel, the settings dialog) keeps the raise over it (`Game.applyQuality`).
+
+| Level | Raise from the start | Raise once it holds |
+|---|---|---|
+| 0 Lowest | land 1 000 / 2 500 m, trees 0.6 | none |
+| 1 Low | land 1 200 / 3 000 m, trees 0.8 | none |
+| 2 Medium | land 1 500 / 4 000 m, all trees, mid trees to 600 m | none |
+| 3 High | land 2 000 / 5 000 m, all trees, 48 near, mid trees to 800 m, cap x 1.2 | none |
+| 4 Full, 5 Rich, 6 Ultra | land 2 500 / 6 000 m, all trees, 48 near, near trees to 220 m, mid to 1 000 m, cap x 1.4 | pixel ratio 2, shadow map 4 096, 4 samples, every effect the player chose |
+
+A phone or a tablet starts at Lowest to High (`Quality.START`). Those levels raise nothing that each frame pays for. With the pixel ratio 2 and the effects over High, the phone page's held frame went from 6.2 to 8.6 ms (worst 18 ms) on a computer's GPU, so a real phone would stall.
+
+Frame time of the held shot at the Gotthard lookout, without and with the raise (`node tools/terrain-check.mjs world-shot --world gotthard-north --gpu --desk --levels` on the Mac mini, one job alone, 1440 x 900 at a device pixel ratio of 2; the median of 40 frames: the scene's step, the land's update, the draw and its wait):
+
+| Level | Buffer | Frame ms, without / with | GPU ms, without / with | Triangles, without / with |
+|---|---|---|---|---|
+| 6 Ultra | 2880 x 1800 | 12.1 / 12.5 | 8.9 / 9.5 | 662 559 / 773 115 |
+| 5 Rich | 2880 x 1800 | 12.1 / 12.7 | 8.9 / 9.5 | 662 559 / 773 115 |
+| 4 Full | 2880 x 1800 | 14.0 / 15.3 | 8.4 / 9.5 | 242 315 / 549 575 |
+| 3 High | 2160 x 1350 | 6.9 / 6.8 | 4.8 / 4.8 | 242 315 / 275 837 |
+| 2 Medium | 1800 x 1125 | 3.8 / 4.0 | 2.0 / 2.4 | 240 649 / 269 103 |
+| 1 Low | 1440 x 900 | 2.6 / 2.6 | 1.3 / 1.4 | 199 767 / 216 873 |
+| 0 Lowest | 1080 x 675 | 2.2 / 2.8 | 0.8 / 0.7 | 187 203 / 216 855 |
+
+- Full, Rich and Ultra raise the effects to the player's choice: at Full that turns the ground cover on (the larger count of triangles).
+- The fly itself (the same run, every frame drawn): median frame 9.9 ms, the worst 28.1 ms. Before the raise was cut in two parts, frames of 160 and 205 ms came in the fly.
+- The phone page (`--phone`: 390 x 844 at 3, touch, the CPU 4 times slower; a computer's GPU), with the raise as it is now at Lowest to Medium: Lowest 4.1 / 4.5 ms, Low 5.5 / 5.7 ms, Medium 6.8 / 6.5 ms, without and with.
+- The pictures of each level are written next to the run (`~/Library/Caches/twisty-world/lookout-shots`, outside the repo).
+
 ## What a world frame costs
 
 Measured with `node tools/terrain-check.mjs world-quality --world tremola --gpu --phone --measure --rounds 5` at s 1319 in the chase view. `--phone` is a 390 x 844 view at device pixel ratio 3, touch, and the CPU 4 times slower (Chrome's CPU throttle). Chrome has no GPU throttle, so the GPU was an Apple M-series. The probe turns one part off at a time against the full frame. The GPU time comes from a timer query. The numbers drift by about 0.5 ms from run to run, so read only the order.

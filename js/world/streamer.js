@@ -55,6 +55,8 @@ class WorldStreamer {
 
     constructor({ data, route, hooks, now = null, clock = null }) {
         this.data = data;
+        // The tiles' level-of-detail distances in force: TILE_LOD_M, or the stop scene's held shot's (Game.raiseShot)
+        this.tileLodM = null;
         this.route = route;
         this.hooks = hooks;
         this.now = now || (typeof performance !== 'undefined' ? () => performance.now() : () => Date.now());
@@ -171,7 +173,7 @@ class WorldStreamer {
         const m = WorldData.TILE_M;
         const [tx, tz] = key.split(',').map(Number);
         const d = WorldStreamer.distanceToBox(bike.x, bike.z, [tx * m, tz * m, (tx + 1) * m, (tz + 1) * m]);
-        const limits = WorldStreamer.TILE_LOD_M;
+        const limits = this.tileLodM || WorldStreamer.TILE_LOD_M;
         return d < limits[0] ? 0 : d < limits[1] ? 1 : 2;
     }
 

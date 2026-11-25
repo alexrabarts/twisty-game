@@ -1036,6 +1036,13 @@ class Scenery {
 
     // The quality level's trees: the share of the window's trees drawn (the far ones go first) and the most drawn at
     // the near level. Draws them again at once when either changes
+    // The stop scene's held shot (Game.raiseShot): the near and mid trees reach further and the window's triangle cap
+    // is larger, for a view that holds still; null for the ride's own. Draws the trees again at once
+    setShot(shot) {
+        this.shot = shot || null;
+        this.rankTrees(this.treeBike || this.rankBike, true);
+    }
+
     setTrees(share, near) {
         const s = share === undefined ? 1 : share, n = near === undefined ? Scenery.TREE_NEAR_CAP : Math.min(near, Scenery.TREE_NEAR_CAP);
         if (s === this.treeShare && n === this.treeNear) return;
@@ -1104,7 +1111,9 @@ class Scenery {
         }
         all.sort((a, b) => a.d - b.d);
         const others = this.triangles - this.treeTriangles;
-        let room = Math.max(0, Scenery.TRIANGLE_CAP - others - Scenery.TREE_NEAR_KEPT * this.nearExtra());
+        const shot = this.shot || {};
+        const cap = Scenery.TRIANGLE_CAP * (shot.triangleScale || 1);
+        let room = Math.max(0, cap - others - Scenery.TREE_NEAR_KEPT * this.nearExtra());
         const total = this.perTile.size ? [...this.perTile.values()].reduce((n, held) => n + (held.trees || 0), 0) : 0;
         const want = Math.min(Scenery.TREE_CAP, Math.ceil(total * this.treeShare));
         let drawn = 0;
@@ -1115,9 +1124,9 @@ class Scenery {
             drawn++;
         }
         room += Scenery.TREE_NEAR_KEPT * this.nearExtra();
-        room = Math.min(room, Scenery.TRIANGLE_CAP - others - spent);
+        room = Math.min(room, cap - others - spent);
         const most = { near: this.treeNear, mid: Math.round(Scenery.TREE_MID_CAP * this.treeShare) };
-        const reach = { near: Scenery.TREE_NEAR_M, mid: Scenery.TREE_MID_M };
+        const reach = { near: shot.treeNearM || Scenery.TREE_NEAR_M, mid: shot.treeMidM || Scenery.TREE_MID_M };
         const counts = { near: 0, mid: 0, far: 0 };
         for (const mesh of this.forestMeshes.values()) mesh.userData.drawn = 0;
         const tint = new THREE.Color();

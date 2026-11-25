@@ -841,6 +841,8 @@ class Game {
         if (reason !== 'start') console.log(`Quality: ${Quality.describe(index, reason === 'fixed')} (${reason})`);
         this.showQuality();
         this.applyEffects();
+        // (a level fixed in the stop scene keeps the held shot's raise over it)
+        if (this.stopScene && this.stopScene.raised) this.raiseShot();
     }
 
     // The effects (js/effects.js) and the settings dialog (js/settings.js): the player's choice is read once, and a
@@ -4344,11 +4346,20 @@ class Game {
         if (!stop) return false;
         const route = env.route;
         const crew = this.traffic ? this.traffic.motorcycles.filter(bike => bike.direction === 1 && bike.bikeGroup && bike.bikeGroup.visible && bike.rider) : [];
-        const riders = [{ bike: this.vehicle, s: this.vehicle.routeS, player: true }, ...crew
+        const v = this.vehicle;
+        const riders = [{ bike: v, s: v.routeS, player: true, at: { x: v.position.x, z: v.position.z }, speed: v.speed }, ...crew
             .map(bike => ({ bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress) }))
             .sort((a, b) => b.s - a.s)];
         const ground = env.ground;
-        this.stopScene = new StopScene({ stop, route, riders, ground: (x, z) => ground.groundY(x, z, null) });
+        const groundY = (x, z) => ground.groundY(x, z, null);
+        // The fly starts on the chase camera as it was drawn last: its place beside the player, its aim, roll and lens
+        const cam = this.camera;
+        const aim = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
+        const under = groundY(v.position.x, v.position.z);
+        const lead = { x: v.position.x, y: Number.isFinite(under) ? under : 0, z: v.position.z };
+        const from = { offset: { x: cam.position.x - lead.x, y: cam.position.y - lead.y, z: cam.position.z - lead.z }, yaw: aim.y, pitch: aim.x, roll: aim.z, fov: cam.fov };
+        this.stopScene = new StopScene({ stop, route, riders, ground: groundY, camera: from, aspect: cam.aspect });
+        this.raiseShot();
         this.stopScene.view = { bars: StopScene.showBars(document), puffs: [] };
         document.body.classList.add('stop-scene');
         if (this.soundManager) this.soundManager.stopEngineSound();
@@ -4414,10 +4425,29 @@ class Game {
             if (r.stood && r.actions.includes('vape')) StopScene.puff(this.scene, scene, r, dt);
         });
         StopScene.stepPuffs(this.scene, scene, dt);
-        const cam = frame.camera;
-        this.camera.position.set(cam.eye.x, cam.eye.y, cam.eye.z);
-        this.camera.up.set(0, 1, 0);
-        this.camera.lookAt(cam.look.x, cam.look.y, cam.look.z);
+        // The camera on the fly (StopScene.flyAt): its place, aim, roll and lens, with no step from the chase camera
+        const cam = frame.camera, camera = this.camera;
+        if (camera.aspect !== scene.aspect) {
+            scene.aspect = camera.aspect;
+            scene.resize(camera.aspect);
+        }
+        camera.position.set(cam.eye.x, cam.eye.y, cam.eye.z);
+        camera.up.set(0, 1, 0);
+        camera.rotation.set(cam.pitch, cam.yaw, cam.roll, 'YXZ');
+        if (camera.fov !== cam.fov) {
+            camera.fov = cam.fov;
+            camera.updateProjectionMatrix();
+        }
+        // The sun's shadow box goes with the player into the stop, and the ladder holds its level through the scene
+        this.updateShadowCamera();
+        this.holdQuality(1000);
+        // The air eases to the hold's with the camera (StopScene.hazeAt), and the drawing raise comes once it holds
+        const haze = typeof LandShade !== 'undefined' ? StopScene.hazeAt(scene.hold, scene.t, LandShade.HAZE, scene.flyS) : null;
+        if (haze) LandShade.writeHaze(haze);
+        if (frame.held && !scene.drawRaised) {
+            scene.drawRaised = true;
+            this.raiseShot();
+        }
         if (frame.card && !scene.card) {
             scene.card = true;
             this.showStopCard(scene);
@@ -4468,6 +4498,59 @@ class Game {
         scene.riders.forEach(r => StopScene.seat(r));
         StopScene.hideBars(scene.view.bars);
         document.body.classList.remove('stop-scene');
+        this.camera.rotation.reorder('XYZ');
+        this.dropShot();
+    }
+
+    // The held shot at a leg's end: over the level in force, what StopScene.RAISE gives for it. What is built once (the
+    // land's detail, the trees) from the scene's start, so it is built while the camera flies; what each frame draws
+    // (the pixel ratio, the shadow map, the samples, the effects) once the camera holds (`scene.drawRaised`): a new
+    // shadow map, render target or program can cost a frame of 200 ms, and on a still view that does not show. Read
+    // again when the level changes in the scene (applyQuality); dropShot gives the level back
+    raiseShot() {
+        const scene = this.stopScene, env = this.environment;
+        if (!scene || !this.quality || typeof StopScene === 'undefined') return;
+        const level = Quality.LEVELS[this.quality.level];
+        const raise = StopScene.RAISE[level.id] || {};
+        const draw = !!scene.drawRaised;
+        scene.raised = { level: level.id, draw, ...raise };
+        const renderer = this.renderer;
+        if (env && env.isWorld) {
+            if (env.streamer) env.streamer.tileLodM = raise.tileLodM || null;
+            if (env.scenery && env.scenery.setShot) env.scenery.setShot({ treeNearM: raise.treeNearM, treeMidM: raise.treeMidM, triangleScale: raise.triangleScale });
+        }
+        this.treeShare = Math.max(level.treeShare, raise.treeShare || 0);
+        this.treeNear = Math.max(level.treeNear, raise.treeNear || 0);
+        if (env && env.isWorld) this.thinTrees(env.sceneryGroup);
+        if (!draw) return;
+        const ratio = Math.min(window.devicePixelRatio || 1, Math.max(level.pixelRatio, raise.pixelRatio || 0));
+        if (renderer && renderer.getPixelRatio() !== ratio) renderer.setPixelRatio(ratio);
+        const light = this.directionalLight;
+        const most = renderer ? renderer.capabilities.maxTextureSize : 0;
+        const map = Math.min(most, Math.max(level.shadowMap, raise.shadowMap || 0));
+        if (renderer && renderer.shadowMap.enabled && light && level.shadowMap > 0 && light.shadow.mapSize.x !== map) {
+            light.shadow.mapSize.set(map, map);
+            if (light.shadow.map) {
+                light.shadow.map.dispose();
+                light.shadow.map = null;
+            }
+        }
+        if (this.graphics) this.graphics.setQuality({ msaa: Math.max(level.msaa, raise.msaa || 0), bloom: level.bloom });
+        if (draw && this.effects && this.graphics && typeof Effects !== 'undefined' && (raise.effectMs || 0) > level.effectMs) {
+            Effects.prepare(this, this.effects.chosen);
+            Effects.apply(this, this.effects.inForce(raise.effectMs, effect => Effects.supported(effect, this.graphics, this)));
+        }
+    }
+
+    // The level in force again, as before the held shot
+    dropShot() {
+        const env = this.environment;
+        if (typeof LandShade !== 'undefined' && LandShade.uniforms) LandShade.writeHaze(LandShade.HAZE);
+        if (env && env.isWorld) {
+            if (env.streamer) env.streamer.tileLodM = null;
+            if (env.scenery && env.scenery.setShot) env.scenery.setShot(null);
+        }
+        if (this.quality) this.applyQuality(Quality.LEVELS[this.quality.level], this.quality.level, 'shot');
     }
 
     // One frame of a world ride: the stations in order, the finish, and the cut rule, all from the

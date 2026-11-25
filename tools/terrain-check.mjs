@@ -8215,6 +8215,234 @@ WORLD['world-stop-shots'] = async (page) => {
     return { ...begun, last: at, shots, ...end };
 };
 
+// world-shot: the held shot at a leg's end (StopScene.flyAt, StopScene.holdOf, Game.raiseShot). The ride is ridden
+// into its finish line by the autopilot at SHOT_RIDE_MS with the chase camera, and the scene starts there as in a ride.
+// It saves the fly at each moment (--fly seconds), measures the step from the chase camera's last frame to the
+// scene's first (place, aim, lens) and the worst frame of the fly, and the held shot. With --levels it fixes each
+// graphics level in turn and times the held shot without and with the raise (SHOT_FRAMES frames: the update, the
+// draw and its wait, the GPU timer), and saves the held shot at each. --phone is world-quality's phone (390 x 844 at
+// 3, touch, the CPU 4 times slower). It fails on a step from the chase camera (SHOT_STEP), no bars, or a held shot
+// with the camera under the ground.
+//   node tools/terrain-check.mjs world-shot --world gotthard-north --gpu [--desk] [--phone] [--levels] [--fly 0,1,3,5,7,9] [--out <dir>]
+const SHOT_RIDE_MS = 14;
+const SHOT_FRAMES = 40;
+// A step is a frame whose move (or turn, or change of lens) differs from the frame before's by more than this: the fly may
+// be fast (the Tremola's hold is 644 m back), never sudden. The first frame is held to the chase camera's own move
+const SHOT_STEP = { moveM: 0.1, aimDeg: 0.05, lensDeg: 0.02 };
+const SHOT_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/lookout-shots');
+WORLD_PROBES.push('world-shot');
+WORLD['world-shot'] = async (page) => {
+    const phone = flag('phone');
+    const throttle = phone ? QUALITY_THROTTLE : 1;
+    if (phone) {
+        await page.setViewport(QUALITY_PHONE);
+        await page.waitForFunction('window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun', { timeout: 120000 });
+        await page.evaluate(() => { window.game.adaptResolution = () => {}; });
+        await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+    }
+    const client = await page.target().createCDPSession();
+    const slow = rate => client.send('Emulation.setCPUThrottlingRate', { rate });
+    const out = option('out') || SHOT_OUT;
+    mkdirSync(out, { recursive: true });
+    const tag = `${option('tag') || option('world') || 'tremola'}${phone ? '-phone' : ''}`;
+    const moments = (option('fly') || '0,1,2,3,4.5,6,7.5,9,10').split(',').map(Number);
+    await page.addStyleTag({ content: '#finishBanner, .modal-backdrop { visibility: hidden !important; }' });
+    // --hold x,z,upM,bearing,pitch,hfov tries another hold for the stop (a candidate pose; the shipped table is not changed)
+    const tryHold = option('hold') ? option('hold').split(',').map(Number) : null;
+    // --no-raise: the scene with no raise at any level, to tell the raise's cost from the scene's own
+    if (flag('no-raise')) await page.evaluate(() => Object.defineProperty(StopScene, 'RAISE', { configurable: true, get: () => ({}) }));
+    const begun = await page.evaluate(async (placeSource, ride, tryHold) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment;
+        if (typeof StopScene === 'undefined' || !StopScene.stopAt(env)) return { error: `no stop at the end of ${env.stage ? env.stage.id : 'the ride'}` };
+        if (tryHold) {
+            const [x, z, upM, bearing, pitch, hfov] = tryHold;
+            const id = StopScene.stopAt(env).id;
+            Object.defineProperty(StopScene, 'HOLDS', { configurable: true, get: () => ({ [id]: { x, z, upM, bearing, pitch, hfov, vfovMost: 60 } }) });
+        }
+        game.worldLinger = false;
+        await placeAt(env.endS - 160);
+        twistyDev.autopilot({ speed: ride });
+        // Ridden to just short of the line with the chase camera (each step updates it), then over the line
+        const at = () => (Number.isFinite(game.vehicle.projection.s) ? game.vehicle.projection.s : game.vehicle.routeS);
+        let ridden = 0;
+        for (; ridden < 3000 && at() < env.endS - 1; ridden++) twistyDev.step(1);
+        if (ridden < 10) return { error: `the autopilot rode ${ridden} frames to the line (from s ${Math.round(at())}, the line at ${Math.round(env.endS)})` };
+        const cam = game.camera;
+        const aim = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
+        const before = { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: aim.y, pitch: aim.x, roll: aim.z, fov: cam.fov };
+        const speed = game.vehicle.speed;
+        game.finishRun();
+        if (!game.stopScene) return { error: 'the finish started no stop scene' };
+        return { stop: StopScene.stopAt(env).id, before, speed, hold: game.stopScene.hold, raised: game.stopScene.raised };
+    }, placeAt.toString(), SHOT_RIDE_MS, tryHold);
+    if (begun.error) return { error: begun.error };
+    // The fly, frame by frame at 60 frames a second, every frame drawn: the steps of the camera and the worst frame
+    const fly = await page.evaluate(async (moments) => {
+        const env = game.environment, scene = game.stopScene, cam = game.camera;
+        const pose = () => { const e = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ'); return { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: e.y, pitch: e.x, roll: e.z, fov: cam.fov }; };
+        const turn = (a, b) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
+        const step = (a, b) => ({ moveM: Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z), aimDeg: Math.max(turn(a.yaw, b.yaw), turn(a.pitch, b.pitch), turn(a.roll, b.roll)) * 180 / Math.PI, lensDeg: Math.abs(b.fov - a.fov) });
+        const poses = [];
+        const frames = [];
+        const marks = [];
+        let next = 0;
+        while (scene.t < Math.max(...moments) + 1 / 120) {
+            const t0 = performance.now();
+            game.stepStopScene(1 / 60);
+            env.update(game.vehicle.position, scene.stop.s, null, 4, 1 / 60);
+            game.graphics.render(game.scene, game.camera);
+            frames.push(performance.now() - t0);
+            poses.push(pose());
+            if (next < moments.length && scene.t >= moments[next] - 1e-6) { marks.push({ t: moments[next], k: poses.length - 1 }); next++; }
+        }
+        const steps = poses.slice(1).map((p, k) => step(poses[k], p));
+        const worst = key => Math.max(...steps.slice(1).map((st, k) => Math.abs(st[key] - steps[k][key])));
+        const big = steps.map((st, k) => ({ t: Math.round((k + 2) * 100 / 60) / 100, moveM: Math.round(st.moveM * 1000) / 1000, dy: Math.round((poses[k + 1].y - poses[k].y) * 1000) / 1000, aimDeg: Math.round(st.aimDeg * 1000) / 1000 })).sort((a, b) => b.moveM - a.moveM).slice(0, 4);
+        const sorted = [...frames].sort((a, b) => a - b);
+        const slowest = frames.indexOf(Math.max(...frames));
+        const top = frames.map((ms, k) => ({ t: Math.round((k + 1) * 100 / 60) / 100, ms: Math.round(ms * 10) / 10 })).sort((a, b) => b.ms - a.ms).slice(0, 6);
+        return { poses, marks, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
+    }, moments);
+    const first = fly.poses[0];
+    const turn = (a, b) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
+    const jump = { moveM: Math.hypot(first.x - begun.before.x, first.y - begun.before.y, first.z - begun.before.z), aimDeg: Math.max(turn(first.yaw, begun.before.yaw), turn(first.pitch, begun.before.pitch), turn(first.roll, begun.before.roll)) * 180 / Math.PI, lensDeg: Math.abs(first.fov - begun.before.fov) };
+    // The fly's frames again, drawn as they were, for the pictures (the scene is set back to each moment's pose)
+    const shots = [];
+    for (const mark of fly.marks) {
+        await page.evaluate((p) => {
+            const cam = game.camera;
+            cam.position.set(p.x, p.y, p.z);
+            cam.rotation.set(p.pitch, p.yaw, p.roll, 'YXZ');
+            cam.fov = p.fov;
+            cam.updateProjectionMatrix();
+            game.graphics.render(game.scene, game.camera);
+        }, fly.poses[mark.k]);
+        const file = join(out, `${tag}-fly-${String(mark.t).replace('.', '_').padStart(4, '0')}s.png`);
+        await page.screenshot({ path: file });
+        shots.push({ t: mark.t, file });
+    }
+    // The held shot, everything streamed
+    const held = await page.evaluate(async () => {
+        const env = game.environment, scene = game.stopScene;
+        while (scene.t < Math.max(scene.flyS + 0.5, scene.cardAt + 0.1)) {
+            game.stepStopScene(1 / 30);
+            env.update(game.vehicle.position, scene.stop.s, null, Infinity, 1 / 30);
+        }
+        await env.streamer.settle(game.vehicle.position, scene.stop.s);
+        game.stepStopScene(1 / 60);
+        game.graphics.render(game.scene, game.camera);
+        const cam = game.camera.position;
+        return { cameraOverGroundM: Math.round((cam.y - env.ground.groundY(cam.x, cam.z, null)) * 100) / 100, bars: [...document.querySelectorAll('.stop-bar')].map(b => b.getBoundingClientRect().height), card: !!document.querySelector('#finishBanner.stop-card'), buffer: [game.renderer.domElement.width, game.renderer.domElement.height], level: Quality.LEVELS[game.quality.level].id, raised: scene.raised };
+    });
+    const heldFile = join(out, `${tag}-held.png`);
+    await page.screenshot({ path: heldFile });
+    shots.push({ t: 'held', file: heldFile });
+    // --hazes 4400,7000: the held shot again under each haze depth (metres of LandShade.HAZE.perM's 1 / m), to set a
+    // hold's own `haze` against the photos; the shot's own haze is put back after
+    for (const m of (option('hazes') || '').split(',').filter(Boolean).map(Number)) {
+        await page.evaluate((m) => {
+            LandShade.writeHaze({ ...LandShade.HAZE, perM: 1 / m });
+            game.graphics.render(game.scene, game.camera);
+        }, m);
+        const file = join(out, `${tag}-held-haze-${m}.png`);
+        await page.screenshot({ path: file });
+        shots.push({ t: `haze ${m}`, file });
+    }
+    if (option('hazes')) await page.evaluate(() => { game.stepStopScene(0); game.graphics.render(game.scene, game.camera); });
+    const levels = [];
+    if (flag('levels')) {
+        const count = await page.evaluate(() => Quality.LEVELS.length);
+        for (let level = count - 1; level >= 0; level--) {
+            const row = { level };
+            for (const raise of [false, true]) {
+                await page.evaluate(async (lvl, raise) => {
+                    const env = game.environment, scene = game.stopScene;
+                    game.quality.fix(lvl);
+                    if (!raise) {
+                        scene.raised = null;
+                        env.streamer.tileLodM = null;
+                        env.scenery.setShot(null);
+                        game.applyQuality(Quality.LEVELS[lvl], lvl, 'fixed');
+                    } else game.raiseShot();
+                    await env.streamer.settle(game.vehicle.position, scene.stop.s);
+                    game.graphics.render(game.scene, game.camera);
+                }, level, raise);
+                await slow(throttle);
+                const timing = await page.evaluate(shotFrames, SHOT_FRAMES);
+                await slow(1);
+                row.id = timing.id;
+                row[raise ? 'raised' : 'base'] = timing;
+            }
+            const file = join(out, `${tag}-held-${row.id}.png`);
+            await page.screenshot({ path: file });
+            row.file = file;
+            levels.push(row);
+        }
+        await page.evaluate(() => game.quality.release(performance.now()));
+    }
+    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flyFrames: fly.frames, held, shots, levels, phone };
+    writeFileSync(join(out, `${tag}-shot.json`), JSON.stringify(result, null, 1));
+    return result;
+};
+
+// SHOT_FRAMES frames of the held shot: the scene's step and the land's update, the draw and the wait for it, the GPU
+// timer; medians, and what the frame draws. Runs in the page
+async function shotFrames(count) {
+    const renderer = game.graphics.renderer, gl = renderer.getContext();
+    const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    const pixel = new Uint8Array(4);
+    const median = list => (list.length ? [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)] : null);
+    const round = n => (n === null ? null : Math.round(n * 100) / 100);
+    const frame = [], render = [], queries = [];
+    let info = null;
+    renderer.info.autoReset = false;
+    for (let i = 0; i < count + 5; i++) {
+        const t0 = performance.now();
+        game.stepStopScene(1 / 60);
+        game.environment.update(game.vehicle.position, game.stopScene.stop.s, null, 4, 1 / 60);
+        renderer.info.reset();
+        const query = timer && i >= 5 ? gl.createQuery() : null;
+        const t1 = performance.now();
+        if (query) gl.beginQuery(timer.TIME_ELAPSED_EXT, query);
+        game.graphics.render(game.scene, game.camera);
+        if (query) { gl.endQuery(timer.TIME_ELAPSED_EXT); queries.push(query); }
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+        const t2 = performance.now();
+        info = { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles };
+        if (i < 5) continue;
+        frame.push(t2 - t0);
+        render.push(t2 - t1);
+    }
+    renderer.info.autoReset = true;
+    const gpu = [];
+    for (let tries = 0; tries < 50 && queries.length; tries++) {
+        await new Promise(done => setTimeout(done, 20));
+        for (let k = queries.length - 1; k >= 0; k--) {
+            if (!gl.getQueryParameter(queries[k], gl.QUERY_RESULT_AVAILABLE)) continue;
+            if (!gl.getParameter(timer.GPU_DISJOINT_EXT)) gpu.push(gl.getQueryParameter(queries[k], gl.QUERY_RESULT) / 1e6);
+            gl.deleteQuery(queries[k]);
+            queries.splice(k, 1);
+        }
+    }
+    const L = Quality.LEVELS[game.quality.level];
+    return { id: L.id, frameMs: round(median(frame)), worstMs: round(Math.max(...frame)), renderMs: round(median(render)), gpuMs: round(median(gpu)), buffer: [renderer.domElement.width, renderer.domElement.height], shadow: renderer.shadowMap.enabled ? game.directionalLight.shadow.mapSize.x : 0, samples: game.graphics.sceneTarget ? game.graphics.sceneTarget.samples : null, tileLodM: game.environment.streamer.tileLodM, trees: game.environment.scenery.treeShare, ...info };
+}
+
+function shotChecks(results, failures) {
+    const shot = results['world-shot'];
+    if (!shot) return;
+    if (shot.error) { failures.push(`world-shot: ${shot.error}`); return; }
+    // (the first frame moves as the bike does in one frame at the speed it crossed the line, and turns no more than most)
+    const first = { moveM: shot.speed / 60 + SHOT_STEP.moveM, aimDeg: SHOT_STEP.aimDeg, lensDeg: SHOT_STEP.lensDeg };
+    for (const [key, most] of Object.entries(SHOT_STEP)) {
+        if (!(shot.jump[key] <= first[key])) failures.push(`world-shot: the first frame of the scene is ${shot.jump[key].toFixed(3)} (${key}) from the chase camera's last, over ${first[key]}`);
+        if (!(shot.worstStep[key] <= most)) failures.push(`world-shot: a frame of the fly changes its ${key} by ${shot.worstStep[key].toFixed(3)} from the frame before, over ${most}`);
+    }
+    if (!shot.held.bars.every(h => h > 0)) failures.push(`world-shot: the bars are ${JSON.stringify(shot.held.bars)} px high`);
+    if (!(shot.held.cameraOverGroundM > 0.2)) failures.push(`world-shot: the held camera is ${shot.held.cameraOverGroundM} m over the ground`);
+}
+
 function stopChecks(results, failures) {
     const stop = results['world-stop-shots'];
     if (!stop) return;
@@ -8235,6 +8463,7 @@ function worldChecks(report) {
     const { results, failures } = report;
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
+    shotChecks(results, failures);
     camWallChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);
