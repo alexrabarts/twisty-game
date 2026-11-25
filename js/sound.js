@@ -437,6 +437,27 @@ class SoundManager {
         return next;
     }
 
+    // A ride's own default for one setting, used only while the player has never chosen it: applied at once and not
+    // saved, so the rest of the game keeps the table's default. Returns the value the setting holds
+    defaultTo(id, value) {
+        const row = Sound.SETTINGS.find(r => r.id === id);
+        if (!row) {
+            console.warn('Sound: no setting', id);
+            return undefined;
+        }
+        let stored = {};
+        try {
+            const text = this.storage ? this.storage.getItem(Sound.STORE_KEY) : null;
+            if (text) stored = JSON.parse(text) || {};
+        } catch (error) {
+            console.warn('Sound: settings unreadable, the ride default stands:', error);
+        }
+        if (id in stored) return this.settings[id];
+        this.settings[id] = Sound.settingValue(row, value);
+        this.applySettings();
+        return this.settings[id];
+    }
+
     // `fn(id, value)` after each change, so a menu shows a change the M key made
     watchSettings(fn) {
         this.watchers.push(fn);

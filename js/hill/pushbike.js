@@ -39,9 +39,9 @@ class HillVehicle extends Vehicle {
         HillVehicle.world = Object.freeze({
             ...WorldPhysics,
             leanCapDeg: 42,
-            // Quicker to lean than it was (0.6 of a motorbike's), the keys easing in more softly to it
-            leanRate: WorldPhysics.leanRate * 0.75,
-            steerKeys: Object.freeze({ ...WorldPhysics.steerKeys, keyS: WorldPhysics.steerKeys.keyS * 1.4, featherS: WorldPhysics.steerKeys.featherS * 1.4 }),
+            // Quick to lean (0.9 of a motorbike's), the keys easing in softly to it so a press starts gently
+            leanRate: WorldPhysics.leanRate * 0.9,
+            steerKeys: Object.freeze({ ...WorldPhysics.steerKeys, keyS: WorldPhysics.steerKeys.keyS * 1.9, featherS: WorldPhysics.steerKeys.featherS * 1.9 }),
             steerSpeed: 8,
             cobbleGrip: 0.72,
             radiusFloor: 3,

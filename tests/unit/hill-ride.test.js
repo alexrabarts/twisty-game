@@ -329,7 +329,7 @@ describe("the bicycle: the game's own bike with a delivery bicycle's numbers", (
         const bicycle = new HillVehicle();
         bicycle.surface.grade = 0;
         const bikeRate = rate(bicycle), motoRate = rate(motorbike);
-        expect(bikeRate).toBeLessThan(motoRate * 0.8);
+        expect(bikeRate).toBeLessThan(motoRate * 0.95);
         // Held hard over at 7 m/s: the tightest circle the grip on cobbles gives a bicycle
         const held = new HillVehicle();
         for (let t = 0; t < 3; t += DT) {
@@ -817,20 +817,23 @@ describe('the things in the street', () => {
         bike.reset(item.s - 6, item.across);
         bike.vehicle.speed = 5;
         let knocked = 0;
+        let before = 0, after = 0;
         for (let t = 0; t < 3 && knocked === 0; t += DT) {
             bike.step(DT, { pedal: 0, brake: 0, steer: 0 });
+            before = bike.speed;
             knocked = props.knock(bike, null);
+            after = bike.speed;
             props.step(DT);
         }
         expect(knocked).toBeGreaterThan(0);
-        const before = { x: item.x, z: item.z };
+        const from = { x: item.x, z: item.z };
         for (let t = 0; t < 0.5; t += DT) props.step(DT);
-        const moved = Math.hypot(item.x - before.x, item.z - before.z);
+        const moved = Math.hypot(item.x - from.x, item.z - from.z);
         expect(moved).toBeGreaterThan(0.2);
         const v = bike.vehicle;
         const away = (item.x - v.position.x) * Math.sin(v.yawAngle) + (item.z - v.position.z) * Math.cos(v.yawAngle);
         expect(away).toBeGreaterThan(0);
-        expect(bike.speed).toBeLessThan(5.2);
+        expect(after).toBeLessThan(before);
         props.reset();
         expect(props.items.length).toBe(props.places.length);
         expect(props.items.every((i, k) => i.x === props.places[k].x && i.z === props.places[k].z && !i.moving)).toBe(true);
@@ -851,6 +854,24 @@ describe('the things in the street', () => {
         expect(hit).toBeGreaterThan(0);
         expect(bike.crashed).toBe(true);
     });
+    test('the football moves only when the bicycle reaches it: a ride past it, out of reach, leaves it at rest', () => {
+        const props = new HillProps(lane);
+        const bike = new HillBicycle(lane);
+        const ball = props.items.find(i => i.kind === 'ball');
+        const reach = HillProps.radius(HillProps.KINDS.ball) + HillProps.RULE.reachM;
+        expect(Number.isFinite(reach)).toBe(true);
+        bike.reset(ball.s - 6, ball.across - Math.sign(ball.across) * 1.5);
+        for (let t = 0; t < 2; t += DT) {
+            bike.vehicle.speed = 8;
+            bike.step(DT, quiet);
+            props.knock(bike, null);
+            props.step(DT);
+        }
+        expect(bike.s).toBeGreaterThan(ball.s + 3);
+        expect(ball.moving).toBe(false);
+        expect(ball.vx).toBe(0);
+    });
+
     test('the football bounces off at a hit, lower each time, rolls on down the hill and never goes through a house front', () => {
         const props = new HillProps(lane);
         const bike = new HillBicycle(lane);

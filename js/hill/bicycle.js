@@ -7,9 +7,9 @@
 //
 // Past legsOutMs going downhill with the pedals left alone, the boy takes his feet off and holds his legs straight
 // out to the sides; he puts them back once the bicycle has slowed under legsInMs, or when he pedals at a speed his
-// feet can follow. The pose follows that state over legsBlendS (js/hill/rider.js). While they are out he now and then
-// (every LEGS.everyS, seeded for the ride) puts his feet back on the pedals for a moment (LEGS.forS), the cranks
-// level, and swings them out again in a pose of their own each time (LEGS ranges: spread, drop, how far ahead, the knee's
+// feet can follow. The pose follows that state over legsBlendS (js/hill/rider.js). Even then he keeps his feet on the
+// pedals most of the time (LEGS.forS, the cranks level) and only now and then swings them out (for LEGS.everyS,
+// seeded for the ride), in a pose of their own each time (LEGS ranges: spread, drop, how far ahead, the knee's
 // bend and the toe), the left and the right not mirror images.
 class HillBicycle {
     static get RULE() {
@@ -29,7 +29,7 @@ class HillBicycle {
     // share of the reach it takes), the toe up (rad). The rider draws them (HillRider.LEGS_OUT: sway, bounce, balance)
     static get LEGS() {
         return Object.freeze({
-            everyS: [5, 12], forS: [0.6, 1.2],
+            everyS: [2.5, 5], forS: [4, 9],
             spread: [0.74, 0.86], drop: [-0.55, -0.4], ahead: [0.2, 0.4], toe: [0.5, 0.8]
         });
     }
@@ -127,7 +127,8 @@ class HillBicycle {
         // While out: now and then back on the pedals for a moment, then out again in a new pose
         const L = HillBicycle.LEGS, pick = ([a, b]) => a + (b - a) * this.legRand();
         if (this.legsOut) {
-            if (this.wasOut !== true) this.visitIn = pick(L.everyS);
+            // He starts on the pedals and puts his legs out only after a while
+            if (this.wasOut !== true) this.visiting = pick(L.forS);
             if (this.visiting > 0) {
                 this.visiting -= dt;
                 if (this.visiting <= 0) {

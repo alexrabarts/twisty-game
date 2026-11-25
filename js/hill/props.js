@@ -28,6 +28,12 @@ class HillProps {
 
     // The football: where it rests (along the main straight at a share of its length, on the side, how far in from the
     // lane's edge), its bounce off the ground, a wall, a kerb or a thing, its rolling friction (1/s), the share of the
+    // How far a thing reaches from its middle on the ground: its radius when it is round (a can or the ball), else half
+    // its longer side. The ball has no width or depth, so reading those for it gives no number at all
+    static radius(kind) {
+        return 'r' in kind ? kind.r : Math.max(kind.w, kind.d) / 2;
+    }
+
     // fall it rolls with (a hollow ball), the lift a hit gives it for each m/s, and the bounce speed its thud starts at
     static get BALL() {
         return Object.freeze({ at: 0.42, side: 1, inM: 0.35, bounce: 0.7, roll: 0.08, rollFall: 0.6, lift: 0.3, thudMs: 0.4, restMs: 0.35 });
@@ -156,7 +162,7 @@ class HillProps {
         for (const item of this.items) {
             if (item.gone || item.hit > 0) continue;
             const kind = K[item.kind];
-            const radius = kind.shape === 'can' ? kind.r : Math.max(kind.w, kind.d) / 2;
+            const radius = HillProps.radius(kind);
             // The thing against the bicycle's line from its rear wheel to its front
             const dx = item.x - v.position.x, dz = item.z - v.position.z;
             const along = Math.max(-half, Math.min(half, dx * fx + dz * fz));
@@ -252,7 +258,7 @@ class HillProps {
         for (const other of this.items) {
             if (other === item || other.gone) continue;
             const o = HillProps.KINDS[other.kind];
-            const radius = o.shape === 'can' ? o.r : Math.max(o.w, o.d) / 2;
+            const radius = HillProps.radius(o);
             const dx = item.x - other.x, dz = item.z - other.z, d = Math.hypot(dx, dz);
             if (d >= radius + kind.r || d < 1e-6 || item.y > other.y + o.h) continue;
             const nx = dx / d, nz = dz / d;

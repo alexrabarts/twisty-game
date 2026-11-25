@@ -56,9 +56,9 @@ class HillRide {
         });
     }
 
-    // The hold at the start: the opening shot for holdS (or until he pedals, after leastS), then the camera eases over
+    // The hold at the start: the opening shot until the player pedals (not before leastS), then the camera eases over
     // easeS to the view chosen while the boy pushes off (push of the pedal for pushS, unless the rider rides himself)
-    static get HOLD() { return Object.freeze({ holdS: 3.5, leastS: 0.8, easeS: 2.6, pushS: 1.2, push: 0.7 }); }
+    static get HOLD() { return Object.freeze({ leastS: 0.8, easeS: 2.6, pushS: 1.2, push: 0.7 }); }
 
     // The opening shot from the lane's opening camera (HillLane.RULE.opening.camera: fitted to the reference frame):
     // its place, a point 30 m along its aim, its field of view
@@ -166,6 +166,8 @@ class HillRide {
         this.lane = new HillLane();
         this.bike = new HillBicycle(this.lane);
         this.music = typeof HillMusic !== 'undefined' ? new HillMusic(game.soundManager) : null;
+        // The band is part of the ride: sound is on here unless the player has chosen Mute themselves
+        if (game.soundManager) game.soundManager.defaultTo('muted', false);
         this.view = 0;
         this.accumulated = 0;
         this.sample = {};
@@ -409,7 +411,7 @@ class HillRide {
         if (this.hold) {
             this.hold.t += dt;
             const H = HillRide.HOLD;
-            if (this.hold.phase === 'hold' && (this.hold.t >= H.holdS || (this.hold.t >= H.leastS && controls.pedal > 0))) {
+            if (this.hold.phase === 'hold' && this.hold.t >= H.leastS && controls.pedal > 0) {
                 this.hold.phase = 'ease';
                 this.hold.t = 0;
                 this.hold.from = this.game.camera.position.clone();

@@ -651,3 +651,11 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: the owner saw the bins at stopping places and the kerbs flash a much lighter colour for about half a second as he came up to them. Cause, measured: `PlaceMesh.update` builds one mesh for every place within 600 m and builds it again each time a place comes into or goes out of that reach. The new mesh's float vertex colours (sRGB) were drawn as linear, pale, until the colour scan (`Graphics.fixColorSpaces`, every 1.5 s) found it: every other world mesh goes through `WorldEnvironment.onMeshBuilt`, this one did not. Fix at the rule: `Graphics.watchAdds` notes every object added anywhere, and `Graphics.render` dresses what now hangs in the scene before it draws (`dressAdded`; on a world, the world's own dressing).
 - Check: new probe `node tools/terrain-check.mjs world-flash --world tremola --gpu [--out <dir>]`. Before: 6 to 26 frames of the place's mesh drawn undecoded on the approach; the props rebuilt 12 m short of the place went from 0.195 to 0.375 luminance in one frame. After: no frame undressed, 0.180 to 0.239 at the rebuild (under the 0.06 limit), no jump at the place or at the hairpin's kerbs. Frames in ~/Library/Caches/twisty-world/flash/ (before-*, after-*). `tests/unit/dress-added.test.js` (2 tests).
 - Left: the kerbs showed no jump in the probe either before or after (they are dressed by `onMeshBuilt` when `setStones` puts them up); if the owner still sees them flash it is another cause. The rebuild still moves the place's mean luminance by 0.06 in one frame, cause not found.
+
+## The hill ride: owner fixes after play
+
+- The football moved by itself. Its kind has a radius but no width or depth, so its reach came out as no number, and the bicycle's knock test met it from any distance once the bicycle moved. `HillProps.radius` now reads a round thing's radius; a test rides past out of reach and the ball stays at rest.
+- The bicycle no longer rolls off by itself: the opening holds until the player pedals.
+- The band plays from the start: the ride sets the sound on unless the player has chosen Mute (`SoundManager.defaultTo`, not saved).
+- The lean is quicker (0.9 of a motorbike's) with a longer ease-in on the steer keys (1.9 times).
+- The boy keeps his feet on the pedals most of the time and puts his legs out only now and then.

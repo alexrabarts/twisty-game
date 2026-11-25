@@ -491,6 +491,23 @@ describe('the sound manager', () => {
         expect(Sound.readSettings(rubbish)).toEqual({ muted: true, master: 0.7, balance: 0.5 });
     });
 
+    test('a ride default holds only while the player has never chosen the setting, and is never saved', () => {
+        const storage = memoryStorage();
+        const fresh = new SoundManager({ context: () => null, storage, doc: null });
+        expect(fresh.defaultTo('muted', false)).toBe(false);
+        expect(fresh.enabled).toBe(true);
+        expect(storage.map.has(Sound.STORE_KEY)).toBe(false);
+        expect(new SoundManager({ context: () => null, storage, doc: null }).getSetting('muted')).toBe(true);
+        const chosen = memoryStorage();
+        const player = new SoundManager({ context: () => null, storage: chosen, doc: null });
+        player.setSetting('muted', false);
+        player.setSetting('muted', true);
+        const again = new SoundManager({ context: () => null, storage: chosen, doc: null });
+        expect(again.defaultTo('muted', false)).toBe(true);
+        expect(again.enabled).toBe(false);
+        expect(new SoundManager({ context: () => null, storage: brokenStorage, doc: null }).defaultTo('muted', false)).toBe(false);
+    });
+
     test('nothing throws without an AudioContext (node, an old browser)', () => {
         const none = new SoundManager({ context: () => null, storage: null, doc: null });
         none.setSetting('muted', false);
