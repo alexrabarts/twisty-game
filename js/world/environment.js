@@ -288,6 +288,9 @@ class WorldEnvironment {
             horizon.mesh.geometry.userData.linearColors = true;
             this.horizonWhole = { positions: Float32Array.from(horizon.mesh.geometry.attributes.position.array), shades: linear, index: Uint32Array.from(horizon.mesh.geometry.index.array) };
             this.clipHorizon();
+            // Where the drawn tiles end, a tile takes the far land's colour and normal (LandShade.EDGE_M)
+            this.edgeFar = Horizon.edgeTextures(this.horizon);
+            LandShade.setEdge(this.edgeFar, this.drawnTiles());
             // The mountains out to 40 km: the camera's far plane reaches them (WorldEnvironment.FAR_PLANE_M)
             this.farLand = FarLand.build(this.data.farLevels || [], this.data.far).map(({ mesh, triangles }) => {
                 this.triangleCount += triangles;
@@ -372,6 +375,7 @@ class WorldEnvironment {
         built.missing = around.filter(k => this.hasTileData(k) && !this.data.tile(k));
         this.tileMeshes.set(key, built);
         this.triangleCount += built.triangles;
+        this.markDrawn(key, true);
         for (const k of around) {
             const held = this.tileMeshes.get(k);
             if (!held || !held.missing || !held.missing.includes(key)) continue;
@@ -493,8 +497,35 @@ class WorldEnvironment {
             old.mesh.geometry.dispose();
             this.triangleCount -= old.triangles;
             this.tileMeshes.delete(key);
+            this.markDrawn(key, false);
         }
         this.scenery.disposeTile(key);
+    }
+
+    // The map of the tiles drawn now, a byte per tile of the data's (255 drawn), that the land's shader reads to find
+    // the window's edge (LandShade.setEdge)
+    drawnTiles() {
+        if (this.drawnMap) return this.drawnMap;
+        const tiles = (this.data.manifest && this.data.manifest.tiles && this.data.manifest.tiles.height) || [];
+        if (!tiles.length) return null;
+        const tx0 = Math.min(...tiles.map(t => t[0])), tz0 = Math.min(...tiles.map(t => t[1]));
+        const nx = Math.max(...tiles.map(t => t[0])) - tx0 + 1, nz = Math.max(...tiles.map(t => t[1])) - tz0 + 1;
+        const bytes = new Uint8Array(nx * nz * 4);
+        const texture = new THREE.DataTexture(bytes, nx, nz, THREE.RGBAFormat, THREE.UnsignedByteType);
+        texture.needsUpdate = true;
+        this.drawnMap = { texture, bytes, tx0, tz0, nx, nz };
+        for (const key of this.tileMeshes.keys()) this.markDrawn(key, true);
+        return this.drawnMap;
+    }
+
+    markDrawn(key, drawn) {
+        const map = this.drawnMap;
+        if (!map) return;
+        const [tx, tz] = key.split(',').map(Number);
+        const i = tx - map.tx0, j = tz - map.tz0;
+        if (i < 0 || j < 0 || i >= map.nx || j >= map.nz) return;
+        map.bytes[(j * map.nx + i) * 4] = drawn ? 255 : 0;
+        map.texture.needsUpdate = true;
     }
 
     rowsOf(from, to) {
@@ -2887,5 +2918,12 @@ class WorldEnvironment {
             if (o.geometry) o.geometry.dispose();
         });
         this.scene.remove(this.group);
+        // The edge's textures belong to this world: the land's shader stops reading them
+        if (this.edgeFar) {
+            LandShade.setEdge(null, null);
+            this.edgeFar.colour.dispose();
+            this.edgeFar.normal.dispose();
+            if (this.drawnMap) this.drawnMap.texture.dispose();
+        }
     }
 }

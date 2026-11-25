@@ -322,9 +322,108 @@ vec3 worldHaze(vec3 c, vec3 p) {
     // own place in the world, so its courses run on from one piece to the next
     static get INSTANCED() { return '\n#ifdef USE_INSTANCING\nvLandPos = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;\nvLandNormal = mat3(modelMatrix) * mat3(instanceMatrix) * objectNormal;\n#endif'; }
 
+    // The tiles drawn are a window round the bike; past its edge the far land (far.bin, Horizon) is drawn, a 100 m
+    // grid with colours and normals of its own. Within EDGE_M of a tile edge with no drawn tile beyond it a tile takes
+    // the far land's colour and normal, all of them at the edge, so the window's edge is no line of a new tone across
+    // a hillside. The tiles drawn are a map over the data's tiles (setEdge, `drawn`); a tile with no drawn neighbour on
+    // a side, or at a corner, meets the far land there
+    static get EDGE_M() { return 192; }
+
+    static get edgeUniforms() {
+        if (!LandShade.edgeShared) {
+            const blank = () => { const t = new THREE.DataTexture(new Uint8Array(4), 1, 1, THREE.RGBAFormat, THREE.UnsignedByteType); t.needsUpdate = true; return t; };
+            LandShade.edgeShared = {
+                tEdgeColour: { value: blank() },
+                tEdgeNormal: { value: blank() },
+                tEdgeTiles: { value: blank() },
+                uEdgeFar: { value: new THREE.Vector4(0, 0, 1, 1) },
+                uEdgeFarN: { value: new THREE.Vector2(1, 1) },
+                uEdgeTiles: { value: new THREE.Vector4(0, 0, 1, 1) },
+                uEdgeM: { value: 0 }
+            };
+        }
+        return LandShade.edgeShared;
+    }
+
+    // The far grid's textures (Horizon.edgeTextures) and the map of the tiles drawn: {texture, tx0, tz0, nx, nz}, a
+    // byte per tile (255 drawn). Without a far grid the edge is off
+    static setEdge(far, drawn) {
+        const u = LandShade.edgeUniforms;
+        if (!far || !drawn) { u.uEdgeM.value = 0; return; }
+        u.tEdgeColour.value = far.colour;
+        u.tEdgeNormal.value = far.normal;
+        u.uEdgeFar.value.set(far.box[0], far.box[1], far.box[2], far.box[3]);
+        u.uEdgeFarN.value.set(far.nx, far.nz);
+        u.tEdgeTiles.value = drawn.texture;
+        u.uEdgeTiles.value.set(drawn.tx0, drawn.tz0, drawn.nx, drawn.nz);
+        u.uEdgeM.value = LandShade.EDGE_M;
+    }
+
+    static get EDGE_COMMON() {
+        const m = typeof WorldData !== 'undefined' ? WorldData.TILE_M : 512;
+        const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
+        return `
+uniform sampler2D tEdgeColour;
+uniform sampler2D tEdgeNormal;
+uniform sampler2D tEdgeTiles;
+uniform vec4 uEdgeFar;
+uniform vec2 uEdgeFarN;
+uniform vec4 uEdgeTiles;
+uniform float uEdgeM;
+float edgeDrawn(vec2 t) {
+    vec2 uv = (t - uEdgeTiles.xy + 0.5) / uEdgeTiles.zw;
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return 0.0;
+    return texture2D(tEdgeTiles, uv).r;
+}
+// 1 at a tile edge with no drawn tile past it, 0 from EDGE_M in
+float edgeShare(vec2 xz) {
+    if (uEdgeM <= 0.0) return 0.0;
+    vec2 t = floor(xz / ${f(m)});
+    vec2 a = xz - t * ${f(m)}, b = ${f(m)} - a;
+    float d = 1e9;
+    if (edgeDrawn(t + vec2(-1.0, 0.0)) < 0.5) d = min(d, a.x);
+    if (edgeDrawn(t + vec2(1.0, 0.0)) < 0.5) d = min(d, b.x);
+    if (edgeDrawn(t + vec2(0.0, -1.0)) < 0.5) d = min(d, a.y);
+    if (edgeDrawn(t + vec2(0.0, 1.0)) < 0.5) d = min(d, b.y);
+    if (edgeDrawn(t + vec2(-1.0, -1.0)) < 0.5) d = min(d, length(a));
+    if (edgeDrawn(t + vec2(1.0, -1.0)) < 0.5) d = min(d, length(vec2(b.x, a.y)));
+    if (edgeDrawn(t + vec2(-1.0, 1.0)) < 0.5) d = min(d, length(vec2(a.x, b.y)));
+    if (edgeDrawn(t + vec2(1.0, 1.0)) < 0.5) d = min(d, length(b));
+    return 1.0 - smoothstep(0.0, uEdgeM, d);
+}
+vec2 edgeUv(vec2 xz) {
+    return ((xz - uEdgeFar.xy) / (uEdgeFar.zw - uEdgeFar.xy) * (uEdgeFarN - 1.0) + 0.5) / uEdgeFarN;
+}`;
+    }
+
+    // (before the detail's grain, which the far land takes too)
+    static get EDGE_COLOUR() {
+        return `
+float edgeAt = edgeShare(vLandPos.xz);
+vec2 edgeAtUv = edgeUv(vLandPos.xz);
+if (edgeAt > 0.0) {
+    vec4 edgeC = texture2D(tEdgeColour, edgeAtUv);
+    // (sRGB as the far grid was built; Graphics.fixColorSpaces decodes the far mesh's own the same way)
+    vec3 edgeLin = mix(edgeC.rgb / 12.92, pow((edgeC.rgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), edgeC.rgb));
+    if (edgeC.a > 0.99) diffuseColor.rgb = mix(diffuseColor.rgb, edgeLin, edgeAt);
+    else edgeAt = 0.0;
+}`;
+    }
+
+    static get EDGE_NORMAL() {
+        return `
+if (edgeAt > 0.0) {
+    vec3 farN = texture2D(tEdgeNormal, edgeAtUv).xyz * 2.0 - 1.0;
+    normal = normalize(mix(normal, normalize((viewMatrix * vec4(farN, 0.0)).xyz), edgeAt));
+    geometryNormal = normal;
+}`;
+    }
+
     // Patches a built-in material (Lambert or Standard) in place; `curvature` for far meshes, `detail` for the tiles,
     // `floor` scales the sky's floor (a structure's underside sees the light the land and the sky throw back)
-    static patch(material, { curvature = false, detail = false, stone = false, floor = 1 } = {}) {
+    // `edge` for the tiles: where a tile meets the far land at the window's edge it takes the far land's colour and
+    // normal (LandShade.EDGE_M, LandShade.setEdge)
+    static patch(material, { curvature = false, detail = false, stone = false, floor = 1, edge = false } = {}) {
         if (material.userData.landShade) return material;
         const S = LandShade.STONE;
         const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
@@ -333,6 +432,7 @@ vec3 worldHaze(vec3 c, vec3 p) {
         const shared = LandShade.uniforms;
         material.onBeforeCompile = (shader) => {
             Object.assign(shader.uniforms, shared);
+            if (edge) Object.assign(shader.uniforms, LandShade.edgeUniforms);
             shader.vertexShader = shader.vertexShader
                 .replace('#include <common>', `#include <common>\nuniform float uDrop;\nvarying vec3 vLandPos;${stone ? '\nvarying vec3 vLandNormal;\nattribute vec2 wallFace;\nvarying vec2 vWallFace;' : ''}`)
                 .replace('#include <begin_vertex>', curvature
@@ -351,7 +451,7 @@ float landNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(mix(landHash(i), landHash(i + vec2(1.0, 0.0)), u.x), mix(landHash(i + vec2(0.0, 1.0)), landHash(i + vec2(1.0, 1.0)), u.x), u.y);
-}`)
+}${edge ? LandShade.EDGE_COMMON : ''}`)
                 .replace('#include <color_fragment>', detail ? `#include <color_fragment>
 {
     float dist = length(vViewPosition);
@@ -401,6 +501,15 @@ float landNoise(vec2 p) {
     float far = smoothstep(30.0, 140.0, length(vViewPosition));
     diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)), far);
 }` : '#include <color_fragment>')
+                // The land is lit by its own normals from either side. A skirt (TerrainMesh.build) carries the normal of
+                // the land above it, and half the skirts face away from the eye: three's two-sided flip turned their
+                // normal down and drew each edge of the drawn tiles seen from behind as a dark line up the slope
+                .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>${detail ? `
+#if defined(DOUBLE_SIDED) && !defined(FLAT_SHADED)
+normal = normal * faceDirection;
+geometryNormal = normal;
+#endif` : ''}${edge ? LandShade.EDGE_NORMAL : ''}`)
+                .replace('#include <color_fragment>', edge ? `#include <color_fragment>${LandShade.EDGE_COLOUR}` : '#include <color_fragment>')
                 .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
 reflectedLight.indirectDiffuse *= uIndirect;
 // The sky's floor: a face turned from the sun still sees the sky, so it keeps uLandFloor of its albedo (all of it
@@ -417,7 +526,7 @@ reflectedLight.indirectDiffuse *= uIndirect;
             // The near ground of the ground cover prototype (js/world/groundcover.js), read only while it is on
             if (detail && typeof GroundCover !== 'undefined' && !GroundCover.bare) GroundCover.inject(shader);
         };
-        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${floor === 1 ? '' : `-${floor}`}${detail && typeof LandDetail !== 'undefined' ? '-grain' : ''}`;
+        const key = `land-${curvature ? 1 : 0}${detail ? 1 : 0}${stone ? 1 : 0}${edge ? 'e' : ''}${floor === 1 ? '' : `-${floor}`}${detail && typeof LandDetail !== 'undefined' ? '-grain' : ''}`;
         // Read at each compile: GroundTex.bare and GroundCover.bare leave each out (a probe's check that off is the old land)
         material.customProgramCacheKey = () => `${key}${detail && typeof GroundTex !== 'undefined' && !GroundTex.bare ? '-ground' : ''}${detail && typeof GroundCover !== 'undefined' && !GroundCover.bare ? '-cover' : ''}`;
         material.needsUpdate = true;

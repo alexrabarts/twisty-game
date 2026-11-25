@@ -581,6 +581,79 @@ describe('TerrainMesh', () => {
         expect(mesh.geometry.boundingBox.min.y).toBe(1000 - TerrainMesh.SKIRT_M);
     });
 
+    // Seen from behind, a skirt took three's two-sided flip: its normal (the land's above it) turned down and the window's
+    // tile edges on a slope 1 to 3 km off were drawn as dark lines up the hillside (gotthard-north, km 0.3). The skirt
+    // closed the step (world-watertight read it as closed); it was the light that failed, so it is held here
+    test('a skirt is lit as the land above it, from either side', () => {
+        const t = tile();
+        for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) t.heights[j * N + i] = 1000 + i * 3 + j * 1.5 + Math.sin(i * 0.4) * 4;
+        for (const lod of [0, 1, 2]) {
+            const { mesh } = TerrainMesh.build(t, null, lod);
+            const side = (N - 1) / (1 << lod) + 1, n = mesh.geometry.attributes.normal.array;
+            const edges = [k => k, k => (side - 1) * side + k, k => k * side, k => k * side + side - 1];
+            edges.forEach((edge, e) => {
+                for (let k = 0; k < side; k++) {
+                    const from = edge(k), to = side * side + e * side + k;
+                    for (let c = 0; c < 3; c++) expect(n[to * 3 + c]).toBeCloseTo(n[from * 3 + c], 6);
+                    expect(n[to * 3 + 1]).toBeGreaterThan(0.5);
+                }
+            });
+        }
+        // Three flips a two-sided material's normal on a back face; the land's materials take that back
+        expect(THREE.ShaderChunk.normal_fragment_begin).toContain('normal = normal * faceDirection');
+        for (const material of [TerrainMesh.material(), Horizon.material()]) {
+            expect(material.side).toBe(THREE.DoubleSide);
+            const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader };
+            material.onBeforeCompile(shader, null);
+            const after = shader.fragmentShader.split('#include <normal_fragment_begin>')[1];
+            expect(after).toBeDefined();
+            expect(after.trimStart()).toMatch(/^#if defined\(DOUBLE_SIDED\) && !defined\(FLAT_SHADED\)\s+normal = normal \* faceDirection;\s+geometryNormal = normal;\s+#endif/);
+        }
+    });
+
+    // Past the window of drawn tiles the far grid is drawn, with colours and normals of its own: the window's edge was a
+    // straight line of a new tone from a ridge down to the valley floor (gotthard-north, km 0.5). A tile meets it in
+    // the far grid's colour and normal (LandShade.EDGE_M); the far land is drawn as before
+    test('a tile takes the far land\'s colour and normal at the window\'s edge', () => {
+        const far = { x0: -200, z0: -100, nx: 6, nz: 5, cell: 100, data: Int16Array.from({ length: 30 }, (_, k) => 1500 + (k % 6) * 40 + Math.floor(k / 6) * 10) };
+        far.data[7] = -32768;
+        const { mesh } = Horizon.build(far);
+        const edge = Horizon.edgeTextures(mesh);
+        expect([edge.nx, edge.nz]).toEqual([6, 5]);
+        expect(edge.box).toEqual([-200, -100, 300, 300]);
+        const colours = mesh.geometry.attributes.color.array, normals = mesh.geometry.attributes.normal.array;
+        const c = edge.colour.image.data, n = edge.normal.image.data;
+        for (let v = 0; v < 30; v++) {
+            for (let k = 0; k < 3; k++) {
+                expect(Math.abs(c[v * 4 + k] / 255 - colours[v * 3 + k])).toBeLessThan(0.003);
+                expect(Math.abs((n[v * 4 + k] / 255) * 2 - 1 - normals[v * 3 + k])).toBeLessThan(0.01);
+            }
+            expect(c[v * 4 + 3]).toBe(v === 7 ? 0 : 255);
+        }
+        // Only the tiles' material reads the edge; the far land's does not
+        const compile = material => {
+            const shader = { uniforms: {}, vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader };
+            material.onBeforeCompile(shader, null);
+            return shader;
+        };
+        const tile = compile(TerrainMesh.material()), horizon = compile(Horizon.material());
+        expect(tile.fragmentShader).toContain('edgeShare(vLandPos.xz)');
+        expect(tile.uniforms.tEdgeColour).toBe(LandShade.edgeUniforms.tEdgeColour);
+        expect(horizon.fragmentShader).not.toContain('edgeShare');
+        // The colour is mixed before the grain both take, the normal after the two-sided flip is taken back
+        const f = tile.fragmentShader;
+        expect(f.indexOf('edgeShare(vLandPos.xz)')).toBeLessThan(f.indexOf('float tuft'));
+        expect(f.indexOf('normal = normal * faceDirection;\ngeometryNormal')).toBeLessThan(f.indexOf('texture2D(tEdgeNormal'));
+        // Off without a far grid; on, at EDGE_M, with one
+        LandShade.setEdge(null, null);
+        expect(LandShade.edgeUniforms.uEdgeM.value).toBe(0);
+        const drawn = { texture: new THREE.DataTexture(new Uint8Array(4), 1, 1), tx0: -1, tz0: -1, nx: 1, nz: 1 };
+        LandShade.setEdge(edge, drawn);
+        expect(LandShade.edgeUniforms.uEdgeM.value).toBe(LandShade.EDGE_M);
+        expect(LandShade.edgeUniforms.uEdgeFarN.value.toArray()).toEqual([6, 5]);
+        LandShade.setEdge(null, null);
+    });
+
     test('carved road and bench are drawn under the height the physics reads', () => {
         const t = tile();
         t.zones[10 * N + 10] = 1;
@@ -1179,7 +1252,7 @@ describe('FarLand', () => {
     test('far meshes drop with the curvature of the Earth in their shader, the tiles do not', () => {
         expect(LandShade.DROP_PER_M2 * 40000 * 40000).toBeCloseTo(109, 0);
         expect(Horizon.material().customProgramCacheKey()).toBe('land-110');
-        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-010');
+        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-010e');
         // Retaining walls: the land's lighting and the stone courses, flat (no curvature, no ground noise)
         expect(RoadMesh.stoneMaterial().customProgramCacheKey()).toBe('land-001');
     });

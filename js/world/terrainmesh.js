@@ -31,7 +31,7 @@ class TerrainMesh {
     static get SNOW() { return LandShade.PALETTE.snow; }
 
     static material() {
-        if (!TerrainMesh.sharedMaterial) TerrainMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), { detail: true });
+        if (!TerrainMesh.sharedMaterial) TerrainMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), { detail: true, edge: true });
         return TerrainMesh.sharedMaterial;
     }
 

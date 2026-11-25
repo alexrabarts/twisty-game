@@ -40,7 +40,7 @@ class Horizon {
     // A grid {x0, z0, nx, nz, cell} with height(i, j) (NaN for no data) and shares(v) (4 numbers 0 to 1, or null),
     // drawn every `stride` nodes. `sinkAt(x, z)` gives the metres a vertex is drawn under its height; `skipCell(x0, z0,
     // x1, z1)` leaves a cell out. Returns {mesh, triangles}.
-    static grid(grid, { height, shares = null, stride = 1, sinkAt = () => 0, skipCell = null, name }) {
+    static grid(grid, { height, shares = null, stride = 1, sinkAt = () => 0, skipCell = null, name, keep = false }) {
         const nx = Math.floor((grid.nx - 1) / stride) + 1, nz = Math.floor((grid.nz - 1) / stride) + 1;
         const positions = new Float32Array(nx * nz * 3);
         const colours = new Float32Array(nx * nz * 3);
@@ -87,7 +87,37 @@ class Horizon {
         const mesh = new THREE.Mesh(geometry, Horizon.material());
         mesh.name = name;
         mesh.frustumCulled = false;
+        // The grid as drawn, for the tiles' edge at the window (Horizon.edgeTextures): its colours as built (sRGB,
+        // before Graphics.fixColorSpaces decodes them in place) and its normals
+        if (keep) mesh.userData.drawn = { x0: grid.x0, z0: grid.z0, cell, nx, nz, colours: colours.slice(), normals: geometry.attributes.normal.array.slice(), missing };
         return { mesh, triangles: indices.length / 3 };
+    }
+
+    // The far grid's colour (sRGB, alpha 0 where it has no data) and normal (0.5 + n / 2) at each of its vertices, as
+    // two textures a tile's shader reads where it meets the far land (LandShade.patch `edge`), and the box they span:
+    // [x0, z0, x1, z1] of the vertices' centres
+    static edgeTextures(mesh) {
+        const d = mesh.userData.drawn;
+        if (!d) return null;
+        const count = d.nx * d.nz, colour = new Uint8Array(count * 4), normal = new Uint8Array(count * 4);
+        const byte = v => Math.max(0, Math.min(255, Math.round(v * 255)));
+        for (let v = 0; v < count; v++) {
+            for (let c = 0; c < 3; c++) {
+                colour[v * 4 + c] = byte(d.colours[v * 3 + c]);
+                normal[v * 4 + c] = byte(0.5 + d.normals[v * 3 + c] / 2);
+            }
+            colour[v * 4 + 3] = d.missing[v] ? 0 : 255;
+            normal[v * 4 + 3] = 255;
+        }
+        const texture = data => {
+            const t = new THREE.DataTexture(data, d.nx, d.nz, THREE.RGBAFormat, THREE.UnsignedByteType);
+            t.magFilter = THREE.LinearFilter;
+            t.minFilter = THREE.LinearFilter;
+            t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+            t.needsUpdate = true;
+            return t;
+        };
+        return { colour: texture(colour), normal: texture(normal), nx: d.nx, nz: d.nz, box: [d.x0, d.z0, d.x0 + (d.nx - 1) * d.cell, d.z0 + (d.nz - 1) * d.cell] };
     }
 
     // The 4 cover shares (0 to 1) of vertex v from a Uint8Array of 4 bytes per vertex
@@ -108,7 +138,8 @@ class Horizon {
             shares: cover && cover.length === far.nx * far.nz * 4 ? Horizon.sharesOf(cover) : null,
             stride: Horizon.strideFor(far),
             sinkAt: (x, z) => (sunk ? sunk[Math.round((z - far.z0) / far.cell) * far.nx + Math.round((x - far.x0) / far.cell)] : Horizon.SINK_M),
-            name: 'world-horizon'
+            name: 'world-horizon',
+            keep: true
         });
         built.mesh.userData.world = 'horizon';
         return built;

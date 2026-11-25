@@ -18,6 +18,8 @@
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T]   (no land in a tunnel's or gallery's box or across its portals; pictures of every portal)
 //   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
+//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes 1,2] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]   (no tile edge drawn as a dark line, no line of a new tone where the tiles meet the far land, out to the horizon)
+//   node tools/terrain-check.mjs world-look --world gotthard-north --gpu --script <file> [--out <dir>]   (a script of the caller's in a world page; its pictures saved)
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
 //   node tools/terrain-check.mjs world-ride-shots --world tremola --gpu --out <dir> [--tag T]   (the chase view at five points of the ride)
@@ -8596,6 +8598,7 @@ function worldChecks(report) {
     junctionChecks(results, failures);
     tunnelChecks(results, failures);
     stoneChecks(results, failures);
+    seamChecks(results, failures);
     stopChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
@@ -8991,6 +8994,351 @@ WORLD['hill-look'] = async (page) => {
     }
     return { said: result.said, file, files };
 };
+
+// world-look: a script of the caller's in a world page (--script <file>: the body of an async function given `game`,
+// `THREE` and `placeAt`), for looking into a question of the drawn world. What it returns is reported; its
+// `pictures` (name to a PNG data URL) are written into --out <dir>.
+//   node tools/terrain-check.mjs world-look --world gotthard-north --gpu --script <file> [--out <dir>]
+WORLD_PROBES.push('world-look');
+WORLD['world-look'] = async (page) => {
+    const script = option('script');
+    if (!script) return { error: 'name a script with --script <file>' };
+    const said = await page.evaluate(async (source, placeSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(window.game);
+        const run = new Function('game', 'THREE', 'placeAt', `return (async () => { ${source} })();`);
+        return run(window.game, THREE, placeAt);
+    }, readFileSync(script, 'utf8'), placeAt.toString());
+    const files = [];
+    if (said && typeof said === 'object' && said.pictures) {
+        const out = option('out') || '.';
+        mkdirSync(out, { recursive: true });
+        for (const [name, png] of Object.entries(said.pictures)) {
+            const file = join(out, `${name}.png`);
+            writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+            files.push(file);
+        }
+        delete said.pictures;
+    }
+    return { said, files };
+};
+
+// world-seams: no edge of the drawn land shows as a dark line. A tile's skirt (TerrainMesh.build) is lit as the land
+// above it, so in the frame as drawn a pixel of one is about as light as the land round it, whichever side it is seen
+// from. Every --every metres (SEAM_EVERY_M) of the stage the bike is put down
+// and the frame is read from the helmet and the chase camera (--modes), looking ahead and turned to each side
+// (--turns): the whole frame, out to the far land. Read in the light alone (the land's colours white): a pixel of skirt
+// seen from behind (with only land beside it) under SEAM_DARK of the median of the land within SEAM_REACH_PX of it,
+// and of the land straight over it, is dark; a tile
+// whose dark pixels in one view make a line (SEAM_LINE_PX or more, over SEAM_LINE_ROWS rows or more, one to every 2 px
+// of its length) is a seam, and one seam fails. The frame is drawn without cast shadows. The window's edge too: read every 8 m
+// along each tile edge with no drawn tile past it, where it is in view, the far land's tone less the tile's, averaged
+// over 5 points along the edge, is more than SEAM_TONE_STEP on the mean of SEAM_TONE_LINE_PX points or more of a
+// view, and one such view fails. --out <dir> saves each view with a seam or a tone line (and --at s,s views, with or without one).
+//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes 1,2] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]
+const SEAM_EVERY_M = 250;
+const SEAM_MODES = [1, 2];
+const SEAM_TURNS = [0, -60, 60];
+const SEAM_DARK = 0.7;
+const SEAM_REACH_PX = 6;
+const SEAM_LINE_PX = 8;
+const SEAM_LINE_ROWS = 6;
+const SEAM_TONE_STEP = 3.5;
+const SEAM_TONE_LINE_PX = 20;
+const SEAM_SIDE_M = 12;
+async function seamView(placeSource, s, mode, turnDeg, keep, rule) {
+    const DIST_CODE = 'floor(clamp(log2(max(vD, 1.0)) * 16.0, 0.0, 255.0) + 0.5) / 255.0';
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    game.worldLinger = false;
+    const env = game.environment, v = game.vehicle, renderer = game.graphics.renderer;
+    game.cameraMode = mode;
+    await placeAt(s);
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 60; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const cam = game.camera;
+    if (turnDeg) {
+        cam.rotation.order = 'YXZ';
+        cam.rotation.y += turnDeg * Math.PI / 180;
+        cam.updateMatrixWorld(true);
+    }
+    // Drawn without cast shadows: a skirt in a wall's or a house's shadow is dark for its own reason
+    const casting = [];
+    game.scene.traverse(o => { if (o.isLight && o.castShadow) { casting.push(o); o.castShadow = false; } });
+    game.graphics.render(game.scene, cam);
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const W = size.x, H = size.y;
+    const canvas = renderer.domElement, copy = document.createElement('canvas');
+    copy.width = W; copy.height = H;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const frame = ctx.getImageData(0, 0, W, H).data;
+    const png = keep ? copy.toDataURL('image/png') : null;
+    // The light alone: the frame again with every tile's colours white, so a skirt is read by how it is lit, not by
+    // the colour of the land it hangs from (a strip of dark forest beside light scree)
+    // (the far land too: where it stands in front of a skirt's foot the pass and the frame can disagree by a pixel)
+    const swapped = [];
+    for (const g of [...[...env.tileMeshes.values()].map(held => held.mesh.geometry), ...[env.horizon, ...(env.farLand || [])].filter(Boolean).map(m => m.geometry)]) {
+        const colour = g.attributes.color;
+        if (!colour) continue;
+        swapped.push([g, colour]);
+        g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colour.array.length).fill(1), colour.itemSize));
+    }
+    // (and without the far land's colour at the window's edge, LandShade.EDGE_M, which would tint the white)
+    const edge = LandShade.edgeShared ? LandShade.edgeShared.uEdgeM : null, edgeM = edge ? edge.value : 0;
+    if (edge) edge.value = 0;
+    game.graphics.render(game.scene, cam);
+    ctx.drawImage(canvas, 0, 0);
+    const shade = ctx.getImageData(0, 0, W, H).data;
+    if (edge) edge.value = edgeM;
+    for (const [g, colour] of swapped) g.setAttribute('color', colour);
+    casting.forEach(o => { o.castShadow = true; });
+    // The pass of kinds: land 1, skirt or closing face 2, the far land 3, anything else 0; the tile in green and blue
+    const tiles = [];
+    const flags = new WeakMap();
+    const skirtOf = mesh => {
+        const g = mesh.geometry;
+        if (flags.has(g)) return;
+        const count = g.attributes.position.count, out = new Float32Array(count);
+        const side = (WorldData.TILE_N - 1) / (1 << (mesh.userData.lod || 0)) + 1, ground = side * side + side * 4;
+        // (past the ground's vertices: a cut's own land, or a forest clump when the tile has no cuts; the faces that
+        // close a cut's step stand at a wall's foot, in its shadow, and are read by world-walls: kind 4, not read here)
+        for (let k = side * side; k < count; k++) out[k] = k < ground ? 1 : mesh.userData.cuts ? 0 : 2;
+        if (mesh.userData.cuts) for (const k of mesh.userData.closing || []) out[k] = 3;
+        g.setAttribute('seamSkirt', new THREE.BufferAttribute(out, 1));
+        flags.set(g, true);
+    };
+    const landMat = id => new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { id: { value: id } },
+        vertexShader: 'attribute float seamSkirt; varying float vSkirt; varying float vD; void main(){ vSkirt = seamSkirt; vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: `uniform float id; varying float vSkirt; varying float vD; void main(){ float k = vSkirt > 2.5 ? 4.0 : vSkirt > 1.5 ? 0.0 : vSkirt > 0.5 ? (gl_FrontFacing ? 2.0 : 5.0) : 1.0; gl_FragColor = vec4(k / 255.0, mod(id, 256.0) / 255.0, ${DIST_CODE}, 1.0); }`
+    });
+    // The far land: kind 3, and its distance as the land's; dropped with the Earth's curvature as it is drawn
+    // (LandShade.patch `curvature`), or the far land just past a tile's edge stood in front of its skirt in the pass
+    const far = new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { uDrop: LandShade.uniforms.uDrop },
+        vertexShader: 'uniform float uDrop; varying float vD; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vec2 d = w.xz - cameraPosition.xz; w.y -= dot(d, d) * uDrop; vec4 mv = viewMatrix * w; vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: `varying float vD; void main(){ gl_FragColor = vec4(3.0 / 255.0, 0.0, ${DIST_CODE}, 1.0); }`
+    });
+    const other = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide, fog: false });
+    const saved = new Map(), hidden = [], made = [], offsets = new Map();
+    const bike = v.group;
+    game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    bike.traverse(o => { if (o.isMesh) { saved.set(o, o.material); o.material = other; } });
+    const inside = (o, group) => { for (let n = o; n; n = n.parent) if (n === group) return true; return false; };
+    env.group.traverse(o => {
+        if (!o.isMesh) return;
+        saved.set(o, o.material);
+        if (inside(o, env.tileGroup) && o.userData.world === 'terrain') {
+            skirtOf(o);
+            const m = landMat(tiles.length);
+            tiles.push(o.userData.tile);
+            made.push(m);
+            o.material = m;
+        } else if (o === env.horizon || (env.farLand || []).includes(o)) o.material = far;
+        else {
+            // (a road drawn with a polygon offset over the land keeps it, or the land under it wins the pass)
+            const own = Array.isArray(saved.get(o)) ? saved.get(o)[0] : saved.get(o);
+            if (own && own.polygonOffset) {
+                const key = `${own.polygonOffsetFactor},${own.polygonOffsetUnits}`;
+                if (!offsets.has(key)) offsets.set(key, Object.assign(other.clone(), { polygonOffset: true, polygonOffsetFactor: own.polygonOffsetFactor, polygonOffsetUnits: own.polygonOffsetUnits }));
+                o.material = offsets.get(key);
+            } else o.material = other;
+        }
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    const target = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const ids = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, ids);
+    renderer.setRenderTarget(null);
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    game.scene.background = background;
+    game.scene.fog = fog;
+    target.dispose();
+    made.forEach(m => m.dispose());
+    offsets.forEach(m => m.dispose());
+    far.dispose(); other.dispose();
+    // (the pass's rows run bottom up, the frame's top down)
+    const kind = (x, y) => ids[((H - 1 - y) * W + x) * 4];
+    const tileAt = (x, y) => ids[((H - 1 - y) * W + x) * 4 + 1];
+    // (the distance in steps of 1/16 of a doubling, about 4.4%: DIST_CODE)
+    const distAt = (x, y) => ids[((H - 1 - y) * W + x) * 4 + 2];
+    const lum = (x, y) => { const at = (y * W + x) * 4; return 0.2126 * frame[at] + 0.7152 * frame[at + 1] + 0.0722 * frame[at + 2]; };
+    const lit = (x, y) => { const at = (y * W + x) * 4; return 0.2126 * shade[at] + 0.7152 * shade[at + 1] + 0.0722 * shade[at + 2]; };
+    // (the reach is in pixels of a 900 px high frame)
+    const R = Math.max(2, Math.round(rule.reachPx * H / 900));
+    const byTile = new Map();
+    let skirtPx = 0, darkPx = 0;
+    const around = [], above = [];
+    for (let y = R; y < H - R; y++) {
+        for (let x = R; x < W - R; x++) {
+            // (a skirt seen from behind, kind 5: three's two-sided flip turned its light down; one seen from in front
+            // is lit as the land in any case)
+            const k = kind(x, y);
+            if (k === 2 || k === 5) skirtPx++;
+            if (k !== 5) continue;
+            // (a pixel beside anything but land is a blend of the two in the frame as drawn, which is smoothed: a wall's
+            // dark stone or a tree beside a closing face is no seam)
+            let clear = true;
+            for (let dy = -1; dy <= 1 && clear; dy++) for (let dx = -1; dx <= 1; dx++) if (kind(x + dx, y + dy) === 0) { clear = false; break; }
+            if (!clear) continue;
+            around.length = 0;
+            for (let dy = -R; dy <= R; dy += 2) for (let dx = -R; dx <= R; dx += 2) if (kind(x + dx, y + dy) === 1) around.push(lit(x + dx, y + dy));
+            if (around.length < 6) continue;
+            around.sort((a, b) => a - b);
+            const median = around[around.length >> 1], l = lit(x, y);
+            // (and darker than the land straight over it on screen, which it hangs from)
+            above.length = 0;
+            for (let dy = 1; dy <= R; dy++) if (kind(x, y - dy) === 1) above.push(lit(x, y - dy));
+            above.sort((a, b) => a - b);
+            const over = above.length >= 2 ? above[above.length >> 1] : median;
+            if (l < rule.dark * median && l < rule.dark * over && median - l > 12) {
+                darkPx++;
+                const t = tiles[tileAt(x, y)];
+                const held = byTile.get(t) || byTile.set(t, { tile: t, px: 0, x0: x, x1: x, y0: y, y1: y, l: 0, median: 0 }).get(t);
+                held.px++; held.l += l; held.median += median;
+                held.x0 = Math.min(held.x0, x); held.x1 = Math.max(held.x1, x); held.y0 = Math.min(held.y0, y); held.y1 = Math.max(held.y1, y);
+            }
+        }
+    }
+    // The window's edge: every edge of a drawn tile with no drawn tile past it, read every 8 m where it is in view.
+    // The land's tone rule.sideM in from the edge on the tile and rule.sideM out on the far land (both seen there: the
+    // pass's distance within 2 steps of their own), each the mean of 3 x 3 px. In metres, so a frame of any size reads
+    // the same land; the slope's own shading changes little over twice rule.sideM. The grain of the land differs
+    // place to place, and a step in tone changes its sign along a hillside as the light does: (far - tile) is averaged
+    // over 5 points running along each edge, and a line of a new tone is a mean of that size over rule.toneLinePx or
+    // more points in a view more than rule.toneStep in luminance (0 to 255)
+    let edgePairs = 0, tonePx = 0, signed = 0, runSum = 0, runCount = 0;
+    const steps = [], edgePoints = [];
+    const M = WorldData.TILE_M;
+    const project = (x, y, z) => { const p = new THREE.Vector3(x, y, z).project(cam); return p.z < 1 && p.z > -1 ? [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H] : null; };
+    const codeOf = (x, y, z) => Math.round(Math.log2(Math.max(1, cam.position.distanceTo(new THREE.Vector3(x, y, z)))) * 16);
+    // The far land as drawn: its grid's own vertices (Horizon.grid, every `stride` nodes of far.bin), read bilinear
+    const farData = env.horizon && env.data.far;
+    const farStride = farData ? Horizon.strideFor(farData) : 1;
+    const drawnFar = farData ? { x0: farData.x0, z0: farData.z0, cell: farData.cell * farStride, nx: Math.floor((farData.nx - 1) / farStride) + 1, nz: Math.floor((farData.nz - 1) / farStride) + 1 } : null;
+    // (the grid whole: the drawn mesh may be cut to the tubes' boxes, WorldEnvironment.clipHorizon)
+    const farPos = env.horizon ? (env.horizonWhole ? env.horizonWhole.positions : env.horizon.geometry.attributes.position.array) : null;
+    const farY = (x, z) => {
+        const g = drawnFar;
+        const fx = (x - g.x0) / g.cell, fz = (z - g.z0) / g.cell;
+        const i = Math.max(0, Math.min(g.nx - 2, Math.floor(fx))), j = Math.max(0, Math.min(g.nz - 2, Math.floor(fz)));
+        const u = fx - i, w = fz - j, Y = (a, b) => farPos[((j + b) * g.nx + i + a) * 3 + 1];
+        return (Y(0, 0) * (1 - u) + Y(1, 0) * u) * (1 - w) + (Y(0, 1) * (1 - u) + Y(1, 1) * u) * w;
+    };
+    // The tone at a world point seen in the frame as `want`, or null
+    const toneAt = (x, y, z, want) => {
+        const q = project(x, y, z);
+        if (!q || q[0] < 2 || q[1] < 2 || q[0] >= W - 2 || q[1] >= H - 2) return null;
+        const u = Math.round(q[0]), w = Math.round(q[1]);
+        if (Math.abs(distAt(u, w) - codeOf(x, y, z)) > 2) return null;
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (kind(u + dx, w + dy) !== want) return null; sum += lum(u + dx, w + dy); }
+        return { tone: sum / 9, at: [u, w] };
+    };
+    for (const [key, held] of (drawnFar ? env.tileMeshes : [])) {
+        const [tx, tz] = key.split(',').map(Number);
+        const mesh = held.mesh;
+        // [neighbour dx, dz, edge point (m along), inward direction]
+        const sides = [[-1, 0, m => [tx * M, tz * M + m], [1, 0]], [1, 0, m => [(tx + 1) * M, tz * M + m], [-1, 0]], [0, -1, m => [tx * M + m, tz * M], [0, 1]], [0, 1, m => [tx * M + m, (tz + 1) * M], [0, -1]]];
+        for (const [dx, dz, at, inward] of sides) {
+            if (env.tileMeshes.has(`${tx + dx},${tz + dz}`)) continue;
+            const run = [];
+            for (let m = 4; m < M; m += 8) {
+                const [x, z] = at(m);
+                if (cam.position.distanceTo(new THREE.Vector3(x, TerrainMesh.drawnAt(mesh, x + inward[0] * 0.5, z + inward[1] * 0.5), z)) < 300) continue;
+                const ix = x + inward[0] * rule.sideM, iz = z + inward[1] * rule.sideM, ox = x - inward[0] * rule.sideM, oz = z - inward[1] * rule.sideM;
+                const tile = toneAt(ix, TerrainMesh.drawnAt(mesh, ix, iz), iz, 1);
+                const far = tile && toneAt(ox, farY(ox, oz), oz, 3);
+                if (!tile || !far) continue;
+                const step = far.tone - tile.tone;
+                edgePairs++;
+                if (edgePoints.length < 400) edgePoints.push([...tile.at, ...far.at, Math.round(tile.tone), Math.round(far.tone), key]);
+                steps.push(Math.abs(step));
+                signed += step;
+                run.push(step);
+                if (Math.abs(step) > rule.toneStep) tonePx++;
+            }
+            for (let i = 2; i + 2 < run.length; i++) {
+                runSum += Math.abs((run[i - 2] + run[i - 1] + run[i] + run[i + 1] + run[i + 2]) / 5);
+                runCount++;
+            }
+        }
+    }
+    steps.sort((a, b) => a - b);
+    const toneMedian = steps.length ? Math.round(steps[steps.length >> 1] * 10) / 10 : null;
+    const toneP90 = steps.length ? Math.round(steps[Math.floor(steps.length * 0.9)] * 10) / 10 : null;
+    const toneMean = runCount ? Math.round((runSum / runCount) * 10) / 10 : 0;
+    const toneLine = runCount >= rule.toneLinePx && toneMean > rule.toneStep;
+    // (a line: rule.linePx pixels or more, rule.lineRows rows or more, and at least one to every 2 px of its length,
+    // where a patch of dark forest beside light scree is scattered)
+    const seams = [...byTile.values()].filter(t => t.px >= rule.linePx && t.y1 - t.y0 + 1 >= rule.lineRows && t.px >= Math.max(t.x1 - t.x0, t.y1 - t.y0) / 2).map(t => ({ tile: t.tile, px: t.px, box: [t.x0, t.y0, t.x1, t.y1], lum: Math.round(t.l / t.px), land: Math.round(t.median / t.px) }));
+    const lods = {};
+    for (const [k, h] of env.tileMeshes) lods[k] = h.mesh.userData.lod;
+    for (const seam of seams) seam.lod = lods[seam.tile];
+    return { s, mode, turn: turnDeg, w: W, h: H, skirtPx, darkPx, seams, edgePairs, toneRuns: runCount, tonePx, toneMean, toneMedian, toneP90, toneLine, edgePoints: toneLine || keep ? edgePoints : undefined, png: keep || seams.length || toneLine ? (png || copy.toDataURL('image/png')) : null };
+}
+WORLD_PROBES.push('world-seams');
+WORLD['world-seams'] = async (page) => {
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'seams';
+    const span = await page.evaluate(() => { const e = game.environment; return e.stage ? [e.stage.from, e.stage.to] : [0, e.route.length - 1]; });
+    const every = Number(option('every') || SEAM_EVERY_M);
+    const modes = option('modes') ? option('modes').split(',').map(Number) : SEAM_MODES;
+    const turns = option('turns') ? option('turns').split(',').map(Number) : SEAM_TURNS;
+    const at = option('at') ? option('at').split(',').map(Number) : [];
+    const stations = [];
+    for (let s = span[0] + 50; s <= span[1]; s += every) stations.push(Math.round(s));
+    for (const s of at) if (!stations.includes(s)) stations.push(s);
+    stations.sort((a, b) => a - b);
+    const tunnels = await page.evaluate(list => list.filter(s => { const p = game.environment.route.sample(s, {}); return p.flags.tunnel || p.flags.gallery; }), stations);
+    await page.evaluate(`window.seamView = ${seamView.toString()}`);
+    const rule = { dark: SEAM_DARK, reachPx: SEAM_REACH_PX, linePx: SEAM_LINE_PX, lineRows: SEAM_LINE_ROWS, toneStep: SEAM_TONE_STEP, toneLinePx: SEAM_TONE_LINE_PX, sideM: SEAM_SIDE_M };
+    const views = [];
+    let skirtPx = 0, darkPx = 0, edgePairs = 0, tonePx = 0;
+    for (const s of stations) {
+        if (tunnels.includes(s)) continue;
+        for (const mode of modes) {
+            for (const turn of turns) {
+                const keep = !!out && at.includes(s);
+                const view = await page.evaluate((placeSource, s, mode, turn, keep, rule) => window.seamView(placeSource, s, mode, turn, keep, rule), placeAt.toString(), s, mode, turn, keep, rule);
+                skirtPx += view.skirtPx;
+                darkPx += view.darkPx;
+                edgePairs += view.edgePairs;
+                tonePx += view.tonePx;
+                let file = null;
+                if (out && view.png) {
+                    file = join(out, `${tag}-s${s}-${mode === 1 ? 'helmet' : mode === 2 ? 'chase' : `mode${mode}`}${turn ? `-turn${turn}` : ''}.png`);
+                    writeFileSync(file, Buffer.from(view.png.split(',')[1], 'base64'));
+                }
+                delete view.png;
+                if (view.seams.length || view.toneLine || file) views.push({ ...view, file });
+            }
+        }
+    }
+    const seams = views.reduce((n, v) => n + v.seams.length, 0);
+    const toneLines = views.filter(v => v.toneLine).length;
+    return { stations: stations.length, modes, turns, skirtPx, darkPx, seams, seamViews: views.filter(v => v.seams.length).length, edgePairs, tonePx, toneLines, views };
+};
+
+function seamChecks(results, failures) {
+    const seams = results['world-seams'];
+    if (!seams) return;
+    if (!(seams.stations > 0)) failures.push('world-seams: no view was read');
+    if (!(seams.skirtPx > 0)) failures.push('world-seams: no skirt was seen in any view (the pass reads nothing)');
+    if (seams.toneLines) failures.push(`world-seams: the window's edge shows as a line of a new tone in ${seams.toneLines} views (the far land's tone less the tile's, averaged over 5 points along the edge, more than ${SEAM_TONE_STEP} of 255 on the mean): ${JSON.stringify(seams.views.filter(v => v.toneLine).slice(0, 6).map(v => ({ s: v.s, mode: v.mode, turn: v.turn, runs: v.toneRuns, mean: v.toneMean })))}`);
+    if (seams.seams) failures.push(`world-seams: ${seams.seams} dark lines along the drawn land's tile edges in ${seams.seamViews} views (${seams.darkPx} pixels): ${JSON.stringify(seams.views.filter(v => v.seams.length).slice(0, 6).map(v => ({ s: v.s, mode: v.mode, turn: v.turn, seams: v.seams.slice(0, 3) })))}`);
+}
 
 // hill-overlay: the opening shot (HillRide.SHOTS.opening, from HillLane.RULE.opening) beside the reference frame it was
 // fitted to: a sheet of the frame, the game at the frame's own shape, and the two at half each, with the frame's key
