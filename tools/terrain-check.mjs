@@ -8103,6 +8103,171 @@ function finishSeeds() {
     return Array.from({ length: count }, (_, i) => first + i);
 }
 
+// world-model-shots: the models a world ride draws, group by group, with their counts and GPU pictures. At each
+// station (--at s,s, or every --every metres of the stage) the bike is put down and every drawn mesh is sorted into a
+// group by its name or the name of what holds it (MODEL_GROUPS): its meshes, its copies and its triangles. For each
+// group the copy nearest the ride's edge is pictured twice with the bike hidden: close (2.5 times its size off, at
+// least 3 m, from the road's side) and at play distance (from the ride MODEL_PLAY_M back, 2.6 m up, as the chase view
+// sees it). --groups a,b takes only those groups. <tag>-index.json holds the inventory by station and the views
+//   node tools/terrain-check.mjs world-model-shots --world tremola --gpu --desk [--at s,s] [--every m] [--groups a,b] [--out <dir>] [--tag T]
+const MODEL_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/model-shots');
+const MODEL_PLAY_M = 22;
+// A group's id from a drawn mesh's name, or (@) the name of a group that holds it; the first match wins
+const MODEL_GROUPS = [
+    ['bush', '^trees:bush'], ['tree', '^trees:'], ['tufts', '^tufts$'], ['boulders', '^boulders$'], ['houses', '^houses:'],
+    ['stones', '^stones$'], ['kerbs', '^stone-kerbs$'], ['landmarks', '^landmark:'], ['roadworks', '^roadworks:'],
+    ['places', '@^world-places$'], ['stops', '^stop-'], ['marmots', '^marmot'], ['cars', '@^probe-car$'],
+    ['crew', '@^probe-crew$'], ['player', '@^probe-player$'], ['cover', '@^ground-cover$'],
+    ['road', '@^world-road-section$|^world-side-'], ['world', '@^world$']
+];
+WORLD_PROBES.push('world-model-shots');
+WORLD['world-model-shots'] = async (page) => {
+    const out = option('out') || join(MODEL_SHOTS_OUT, 'shots');
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'models';
+    const only = option('groups') ? option('groups').split(',') : null;
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+    const stations = option('at') ? option('at').split(',').map(Number) : await page.evaluate(every => {
+        const env = game.environment, stage = env.stage, route = env.route;
+        const from = stage ? stage.from : 0, to = stage ? stage.to : route.length;
+        return Array.from({ length: Math.floor((to - from - 200) / every) + 1 }, (_, k) => Math.round(from + 100 + k * every));
+    }, Number(option('every') || 600));
+    // Each station and each picture is a call of its own: one call for the whole ride ran past the protocol's timeout
+    const inventory = [], best = {};
+    for (const s of stations) {
+        const station = await page.evaluate(modelStation, placeAt.toString(), countScene.toString(), MODEL_GROUPS, s, only);
+        inventory.push({ s, counts: station.counts, groups: station.groups });
+        for (const [g, c] of Object.entries(station.best)) if (!best[g] || c.score < best[g].score) best[g] = c;
+    }
+    const views = {};
+    for (const [group, b] of Object.entries(best)) {
+        const pngs = await page.evaluate(modelPictures, placeAt.toString(), b, MODEL_PLAY_M, group);
+        views[group] = { s: Math.round(b.near.s), at: b.s, distance: Math.round(b.near.d * 10) / 10, size: Math.round(b.copy.size * 100) / 100, triangles: b.triangles, name: b.name, files: {} };
+        for (const [name, png] of Object.entries(pngs)) {
+            const file = join(out, `${tag}-${group}-${name}.png`);
+            writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
+            views[group].files[name] = file;
+        }
+    }
+    writeFileSync(join(out, `${tag}-index.json`), JSON.stringify({ stations: inventory, views }, null, 1));
+    return { out, stations: inventory.map(st => ({ s: st.s, counts: st.counts, groups: Object.fromEntries(Object.entries(st.groups).map(([g, r]) => [g, `${r.meshes} meshes, ${r.instances} copies, ${r.triangles} triangles`])) })), views: Object.fromEntries(Object.entries(views).map(([g, r]) => [g, { s: r.s, name: r.name, triangles: r.triangles, distance: r.distance }])) };
+};
+
+// In the page: the bike put down at s, every drawn mesh sorted into its group with its counts, and for each group
+// pictured the copy nearest the ride's edge: {counts, groups, best: {group: {score, s, copy, near, name, triangles}}}
+async function modelStation(placeSource, countSource, groupRules, s, only) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const count = new Function(`return (${countSource})`)();
+    const env = game.environment, route = env.route, v = game.vehicle;
+    const rules = groupRules.map(([id, pattern]) => ({ id, held: pattern.startsWith('@'), re: new RegExp(pattern.replace(/^@/, '')) }));
+    // The vehicles' groups have no names: give them the probe's own, once, where they have none
+    const name = (o, id) => { if (o && !o.name) o.name = id; };
+    const label = () => {
+        name(v.group, 'probe-player');
+        if (game.traffic) {
+            for (const car of game.traffic.cars || []) name(car.carGroup, 'probe-car');
+            for (const bike of game.traffic.motorcycles || []) name(bike.bikeGroup, 'probe-crew');
+        }
+    };
+    const groupOf = o => {
+        for (const rule of rules) {
+            if (!rule.held) { if (rule.re.test(o.name)) return rule.id; continue; }
+            for (let n = o.parent; n; n = n.parent) if (rule.re.test(n.name)) return rule.id;
+        }
+        return 'scene';
+    };
+    const visible = o => { for (let n = o; n; n = n.parent) if (!n.visible) return false; return true; };
+    const m = new THREE.Matrix4(), box = new THREE.Box3(), size = new THREE.Vector3(), centre = new THREE.Vector3();
+    await placeAt(s);
+    await placeAt(s);
+    for (let i = 0; i < 30; i++) twistyDev.step(1);
+    label();
+    const bike = v.position;
+    // The copies of a mesh nearest the bike, at most 60: [{x, y, z, size, top, foot}]
+    const copies = o => {
+        o.updateMatrixWorld(true);
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        const list = [];
+        const push = matrix => {
+            box.copy(o.geometry.boundingBox).applyMatrix4(matrix);
+            box.getSize(size); box.getCenter(centre);
+            list.push({ x: centre.x, y: centre.y, z: centre.z, size: Math.max(size.x, size.y, size.z), top: box.max.y, foot: box.min.y });
+        };
+        if (o.isInstancedMesh) for (let i = 0; i < o.count; i++) { o.getMatrixAt(i, m); push(m.premultiply(o.matrixWorld)); }
+        else if (o.userData.tufts) for (const t of o.userData.tufts) list.push({ x: t.x, y: t.y + t.height / 2, z: t.z, size: Math.max(t.radius * 2, t.height), top: t.y + t.height, foot: t.y });
+        // (a stopping place's props are one mesh: each solid prop of it, a bench, a bin or a post, is a copy)
+        else if (o.userData.places && env.placeMesh) for (const w of env.placeMesh.solids) {
+            const y = env.ground.tileHeight(w.x, w.z);
+            if (y !== null) list.push({ x: w.x, y: y + 0.5, z: w.z, size: Math.max(w.along, w.across, 1), top: y + 1, foot: y });
+        }
+        else push(o.matrixWorld);
+        return list.sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, 60);
+    };
+    const pictured = ['bush', 'tufts', 'boulders', 'houses', 'stones', 'kerbs', 'landmarks', 'roadworks', 'places', 'stops', 'marmots', 'cars', 'crew'];
+    const groups = {}, best = {};
+    game.scene.traverse(o => {
+        if (!o.isMesh || !visible(o)) return;
+        const g = groupOf(o);
+        const pos = o.geometry.attributes.position, index = o.geometry.index;
+        const each = Math.round((index ? index.count : pos.count) / 3);
+        const n = o.isInstancedMesh ? o.count : 1;
+        const r = groups[g] || (groups[g] = { meshes: 0, instances: 0, triangles: 0, names: {} });
+        r.meshes++; r.instances += n; r.triangles += each * n;
+        const key = o.name || (o.parent && o.parent.name) || '(none)';
+        r.names[key] = Math.max(r.names[key] || 0, each);
+        if (!pictured.includes(g) || (only && !only.includes(g)) || !n) return;
+        for (const c of copies(o)) {
+            const at = route.project(c.x, c.z, null, {});
+            if (!at || !Number.isFinite(at.s)) continue;
+            const p = route.sample(at.s, {});
+            const d = Math.hypot(p.x - c.x, p.z - c.z) - p.width / 2 - c.size / 2;
+            // A copy beside the ride: the nearest to the road's edge, not on it (a car or a rider on it is taken)
+            if (d > 40 || (d < 0.5 && !['cars', 'crew', 'roadworks', 'places'].includes(g))) continue;
+            const score = Math.max(d, 0) + Math.abs(at.s - s) * 0.01;
+            if (!best[g] || score < best[g].score) best[g] = { score, s, copy: c, near: { s: at.s, d: Math.hypot(p.x - c.x, p.z - c.z), p: { x: p.x, y: p.y, z: p.z } }, name: key, triangles: each };
+        }
+    });
+    return { counts: count(), groups, best };
+}
+
+// In the page: the close and the play-distance pictures of one copy (modelStation's `best`), the bike hidden
+async function modelPictures(placeSource, b, playM, group) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const env = game.environment, route = env.route, v = game.vehicle;
+    game.cameraMode = 2;
+    // (the bike beside the copy, so its level of detail is the one a rider passing it sees)
+    await placeAt(b.near.s);
+    await placeAt(b.near.s);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    v.speed = 0;
+    for (let i = 0; i < 30; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const shown = v.group ? v.group.visible : null;
+    if (v.group) v.group.visible = false;
+    const shot = () => game.graphics.renderer.domElement.toDataURL('image/png');
+    const look = (eye, target) => {
+        game.camera.position.copy(eye);
+        game.camera.lookAt(target);
+        game.camera.updateMatrixWorld(true);
+        game.graphics.render(game.scene, game.camera);
+        return shot();
+    };
+    const c = b.copy, p = b.near.p;
+    const dx = p.x - c.x, dz = p.z - c.z, d = Math.hypot(dx, dz) || 1;
+    const reach = Math.max(3, c.size * 2.5);
+    const ex = c.x + dx / d * reach, ez = c.z + dz / d * reach;
+    const ground = env.ground.tileHeight(ex, ez);
+    const ey = Math.max(ground === null ? c.foot : ground, c.foot) + Math.max(1.2, Math.min(c.size * 0.6, 6));
+    const target = new THREE.Vector3(c.x, c.foot + (c.top - c.foot) * 0.45, c.z);
+    const pngs = { close: look(new THREE.Vector3(ex, ey, ez), target) };
+    const back = route.sample(Math.max(0, b.near.s - playM), {});
+    pngs.play = look(new THREE.Vector3(back.x, back.y + 2.6, back.z), target);
+    if (v.group) v.group.visible = shown;
+    return pngs;
+}
+
 async function worldMain() {
     const executablePath = chromePath();
     const gpu = flag('gpu');
