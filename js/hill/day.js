@@ -359,6 +359,10 @@ class HillDay {
         };
         const yawOf = (x, z) => Math.atan2(x, z);
         this.lamps = [];
+        this.waiters = [];
+        this.halls = [];
+        this.pools = [];
+        const WAIT = HillDay.WAITING;
         for (const d of this.doors) {
             const crate = box(0.5, 0.28, 0.36, wood);
             crate.position.set(d.x + d.outX * 0.32 - d.alongX * 0.2, d.y + 0.14, d.z + d.outZ * 0.32 - d.alongZ * 0.2);
@@ -370,6 +374,29 @@ class HillDay {
             lamp.rotation.y = crate.rotation.y;
             g.add(lamp);
             this.lamps.push(lamp);
+            const woman = HillDay.waiting(mat, box, this.doors.indexOf(d));
+            // (on the door's uphill side, so the rider coming down sees her first)
+            const lp = lane.sample(d.s);
+            d.waitSide = d.alongX * lp.alongX + d.alongZ * lp.alongZ > 0 ? -1 : 1;
+            woman.position.set(d.x + d.outX * WAIT.outM + d.alongX * WAIT.alongM * d.waitSide, d.y, d.z + d.outZ * WAIT.outM + d.alongZ * WAIT.alongM * d.waitSide);
+            woman.rotation.y = crate.rotation.y;
+            g.add(woman);
+            this.waiters.push(woman);
+            // The door stands open on a warm lit hall while it waits (WAITING.glow), and shuts once served
+            const hall = box(0.84, 1.95, 0.02, new THREE.MeshStandardMaterial({ color: 0x2a1c10, emissive: 0xffb466, emissiveIntensity: 0 }));
+            hall.position.set(d.x + d.outX * 0.11, d.y + 0.99, d.z + d.outZ * 0.11);
+            hall.rotation.y = crate.rotation.y;
+            hall.castShadow = false;
+            g.add(hall);
+            this.halls.push(hall);
+            // The hall's light thrown out on the flags before the door: a soft warm pool, seen from the chase camera at
+            // speed when the door itself is edge on to it
+            const pool = new THREE.Mesh(new THREE.CircleGeometry(WAIT.poolM, 24), new THREE.MeshBasicMaterial({ color: 0xffc27a, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }));
+            const px = d.x + d.outX * WAIT.poolOutM, pz = d.z + d.outZ * WAIT.poolOutM;
+            pool.position.set(px, lane.ground().surfaceAt(px, pz) + 0.02, pz);
+            pool.rotation.x = -Math.PI / 2;
+            g.add(pool);
+            this.pools.push(pool);
         }
         const loafGeometry = new THREE.CapsuleGeometry(T.r, 0.16, 4, 10);
         loafGeometry.rotateX(Math.PI / 2);
@@ -532,12 +559,64 @@ class HillDay {
         return group;
     }
 
+    // Who waits at a door for its bread, so the door reads from the descent at speed with no sign: a woman on the
+    // flags beside the door on its uphill side, in a dress of her own colour and a white apron (outM out from the door,
+    // alongM along it), the door open on a warm lit hall (glow: its light, waiting and for the next door), and its light
+    // a soft pool on the flags (pool: its strength, the same; poolM across, poolOutM out from the door).
+    // At the next door she waves (waveHz); once her bread is delivered she steps back in over inS and is gone
+    static get WAITING() { return Object.freeze({ glow: [0.55, 1.6], pool: [0.18, 0.45], poolM: 1.1, poolOutM: 1.0, outM: 0.85, alongM: 0.75, waveHz: 1.6, inS: 0.8, inM: 0.8, dresses: [0x7a2e2a, 0x2e4a6a, 0x3e5a3a, 0x6a4a6a] }); }
+
+    // A woman as built for WAITING: her feet at the origin, facing +z (out from the door)
+    static waiting(mat, box, i) {
+        const W = HillDay.WAITING, g = new THREE.Group();
+        g.name = 'hill-door-waiting';
+        const dress = mat(W.dresses[i % W.dresses.length]), white = mat(0xeee8dc), skin = mat(0xe2b596), hair = mat(0x4a3424);
+        const part = (mesh, x, y, z) => { mesh.position.set(x, y, z); mesh.castShadow = true; g.add(mesh); return mesh; };
+        part(new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.3, 0.82, 12), dress), 0, 0.41, 0);
+        part(new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.5, 12), dress), 0, 1.07, 0);
+        part(box(0.3, 0.62, 0.02, white), 0, 0.62, 0.2).rotation.x = -0.12;
+        part(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.05, 0.1, 8), skin), 0, 1.36, 0);
+        part(new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), skin), 0, 1.5, 0.01);
+        part(new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hair), 0, 1.52, -0.01);
+        part(new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), hair), 0, 1.52, -0.11);
+        // Her arms: the left at her side, the right on a pivot at its shoulder, which waves
+        part(box(0.07, 0.5, 0.07, dress), -0.2, 1.05, 0).rotation.z = 0.12;
+        const arm = new THREE.Group();
+        arm.position.set(0.2, 1.28, 0);
+        const sleeve = box(0.07, 0.5, 0.07, dress);
+        sleeve.position.y = -0.25;
+        sleeve.castShadow = true;
+        arm.add(sleeve);
+        g.add(arm);
+        g.userData.arm = arm;
+        return g;
+    }
+
     // Moves the drawing to the state
     draw() {
         if (!this.group) return;
         const lane = this.lane, H = HillDay.HAZARDS, next = this.next;
         const pulse = 0.5 + 0.5 * Math.sin((this.since || 0) * 3);
         this.lamps.forEach((lamp, i) => { lamp.material.emissiveIntensity = i === next && !this.climbing ? 1.2 + pulse * 0.8 : 0; });
+        // The woman at each door: waving at the next one, gone in once her bread has come
+        const WAIT = HillDay.WAITING, now = this.since || 0;
+        this.servedAt = this.servedAt || [];
+        this.waiters.forEach((woman, i) => {
+            const state = this.states[i];
+            if (state !== 'delivered') this.servedAt[i] = undefined;
+            else if (this.servedAt[i] === undefined) this.servedAt[i] = now;
+            const gone = state === 'delivered' ? Math.min(1, (now - this.servedAt[i]) / WAIT.inS) : 0;
+            const d = this.doors[i];
+            woman.visible = gone < 1 && state !== 'missed';
+            const side = WAIT.alongM * (d.waitSide || 1);
+            woman.position.set(d.x + d.outX * (WAIT.outM - WAIT.inM * gone) + d.alongX * side, d.y, d.z + d.outZ * (WAIT.outM - WAIT.inM * gone) + d.alongZ * side);
+            const wave = i === next && !this.climbing && state === 'waiting';
+            const lit = state === 'waiting' && !this.climbing, k = i === next ? 0.85 + 0.15 * pulse : 1;
+            this.halls[i].material.emissiveIntensity = lit ? WAIT.glow[i === next ? 1 : 0] * k : 0;
+            this.pools[i].material.opacity = lit ? WAIT.pool[i === next ? 1 : 0] * k : 0;
+            this.pools[i].visible = lit;
+            woman.userData.arm.rotation.z = wave ? 2.5 + 0.45 * Math.sin(now * WAIT.waveHz * 2 * Math.PI) : 0.12;
+        });
         // The latest loaves, as many as there are meshes
         const shown = this.loose.filter(l => !l.gone).slice(-this.loafMeshes.length);
         this.loafMeshes.forEach((mesh, i) => {

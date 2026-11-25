@@ -223,6 +223,35 @@ describe('the freewheel', () => {
     });
 });
 
+describe('the doors that wait', () => {
+    test('each waits with a woman on its uphill side and its door open on a lit hall, the next one brightest and her arm waving; served, she goes in and the door shuts', () => {
+        const day = new HillDay(lane);
+        day.build();
+        day.begin();
+        day.since = 0.3;
+        day.draw();
+        const W = HillDay.WAITING;
+        day.doors.forEach((d, i) => {
+            expect(day.waiters[i].visible).toBe(true);
+            expect(day.halls[i].material.emissiveIntensity).toBeGreaterThan(0);
+            expect(day.pools[i].material.opacity).toBeGreaterThan(0);
+            // (uphill of the door: nearer the top of the lane than the door)
+            const at = lane.project(day.waiters[i].position.x, day.waiters[i].position.z, d.s, {});
+            expect(at.s).toBeLessThan(d.s);
+        });
+        expect(day.halls[0].material.emissiveIntensity).toBeGreaterThan(day.halls[1].material.emissiveIntensity);
+        expect(day.waiters[0].userData.arm.rotation.z).toBeGreaterThan(1.5);
+        expect(day.waiters[1].userData.arm.rotation.z).toBeLessThan(0.5);
+        day.states[0] = 'delivered';
+        day.draw();
+        expect(day.halls[0].material.emissiveIntensity).toBe(0);
+        expect(day.pools[0].visible).toBe(false);
+        day.since += W.inS + 0.01;
+        day.draw();
+        expect(day.waiters[0].visible).toBe(false);
+    });
+});
+
 describe('the climb', () => {
     test('from the bend up to the stall in 20 to 40 s, in sight most of the way, cut as the stills are, wheeled in to the stall side on at the end', () => {
         const C = HillDay.CLIMB;
