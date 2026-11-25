@@ -332,7 +332,8 @@ describe('the places of the Tremola slice', () => {
         props.update({ x: at.x, z: at.z });
         expect(props.mesh).toBeTruthy();
         expect(props.mesh.userData.places).toContain(place.id);
-        expect(props.triangles).toBeLessThan(2000);
+        // (2 000 until the props had round posts, tubes, slats and chamfers: Scenery.TRIANGLE_CAP pays the 1 000 more)
+        expect(props.triangles).toBeLessThan(3000);
         expect(props.mesh.geometry.attributes.position.count / 3).toBe(props.triangles);
     });
 });

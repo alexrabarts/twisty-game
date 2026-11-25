@@ -198,8 +198,9 @@ class Scenery {
     // the window had counted four procedural bikes, 10 300, and stood 1 400 over at km 4 with a fifth)
     // (128 000 until the marker stones stood along the drops: the rows of a window are 2 300 triangles at the most,
     // where the rows before the junctions were 1 440)
-    // (127 000 until the tufts took 5 and 10 triangles in place of 3 and 4: about 1 800 more in a window of 500)
-    static get TRIANGLE_CAP() { return 125000; }
+    // (127 000 until the tufts took 5 and 10 triangles in place of 3 and 4, about 1 800 more in a window of 500, and the
+    // stopping places' props took round posts, tubes, slats and chamfers, about 1 000 more within 600 m of the bike)
+    static get TRIANGLE_CAP() { return 124000; }
     // Boulders on rock and scree, nearest first
     // (160 until a boulder was fractured granite of about 56 triangles, where it was 20)
     static get BOULDER_CAP() { return 120; }
