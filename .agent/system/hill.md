@@ -47,6 +47,21 @@ Five side roads (`RULE.sideRoads`, `HillLane.sideRoad`) leave the lane on both s
 
 At the top, on the right, a stone wall stands instead of cottages, 1.5 m high, to s 90 (`topWallToS`, `topWallUpM`). This is how the reference frames have it. With cottages there, the low sun from the right put the whole start in shade.
 
+## The houses at the top
+
+The houses where the climb ends and the descent starts are drawn to the stills' numbers (`RULE.opening.left`). The numbers were measured by perspective against the lane's width (5.6 m) and the boy's height (1.6 m): the climb's wide shot sees the cottages about 30 m off, about 80 pixels a metre in a 639 pixel high frame. Heights are over each house's floor; doors and windows are shares of the frontage from its uphill end. Left of the lane going down, in order:
+
+| s | What the stills show | Storeys | Eaves, ridge (m) | Roof | Walls | Front |
+|---|---|---|---|---|---|---|
+| 39.95 to 50.4 | a cottage, ivy up its uphill corner | 2 | 3.8, 6.0 | clay tile, about 45 degrees | pale rubble | door 0.5; windows 0.22 and 0.78 below, 0.25 and 0.75 above |
+| 50.4 to 60.8 | a low cottage under a tiled roof, a trestle in front | 2 | 3.6, 5.7 | clay tile, about 45 degrees | pale rubble | a boarded door 0.62; window 0.28 below, 0.3 and 0.68 above |
+| 60.8 to 79.05 | a long thatched pair: the first door up steps with an iron railing, the second boarded under a porch hood, a window glowing above | 2 | 3.9, 7.4 | thatch, thick, rolled over the eaves, swept up over two upper windows | pale rubble | doors 0.22 and 0.62; windows 0.08 and 0.76 below, 0.12, 0.34, 0.71 and 0.9 above; eyebrows over 0.34 and 0.71 |
+| 79.05 to 90 | a thatched cottage, lime washed | 2 | 3.8, 7.0 | thatch, eyebrows over both upper windows | lime render | door 0.5; window 0.24 below, 0.3 and 0.7 above |
+
+On the right going down: the top wall, behind it the old high wall with three stepped buttresses (4.2 m), and the fence (see "The course"). The houses step down the slope with the lane: each stands on its own floor at the lane's height there.
+
+Thatch is drawn as one rounded mass along each thatched building (`HillScene.thatchMass`, `THATCH`): its cross-section thick and soft, rolled over at the eaves front and back, a little full on the slope and rounded over the ridge, drawn in at each end like a half hip, and swept up in an eyebrow over each upper window that breaks the eave. A building's windows come from its layout or by the rule (`HillScene.windowPlaces`). The houses further down keep the rule's layout.
+
 ## The land
 
 `HillLand` (js/hill/lane.js, `lane.ground()`) holds the land as data. These are its rules:

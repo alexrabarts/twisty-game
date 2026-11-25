@@ -69,13 +69,18 @@ class HillLane {
             // ridge, chimneys as [s, top (m over its floor)]], and the pieces near the camera
             opening: {
                 camera: [16.92, 1.03, 1.34, -0.126, -0.151, 26.1], startAcross: -0.25,
+                // The cottages the climb's stills and the descent's opening see, by the stills' numbers (measured by
+                // perspective against the lane's width and the boy's height; .agent/system/hill.md, "The houses at the top"):
+                // a last element gives the front's layout, as shares of the frontage from its uphill end: its doors,
+                // its windows as [share, storey], and the upper windows the thatch sweeps up over (eyebrows)
                 left: [
                     [-6, 16, 2, 'slate', 'rubble', 5, 7.6, [[4, 9.2]]],
                     [16, 39.95, 2, 'tile', 'rubble', 5.1, 7.6, [[30, 9.2]]],
-                    [39.95, 50.4, 2, 'tile', 'rubble', 5.14, 7.52, []],
-                    [50.4, 60.8, 2, 'tile', 'rubble', 5.14, 7.52, [[56.6, 9.29]]],
-                    [60.8, 79.05, 2, 'thatch', 'rubble', 4.45, 10.5, [[66.5, 11.75], [75.75, 12.2]]],
-                    [79.05, 90, 2, 'thatch', 'lime', 5.4, 10.2, []],
+                    [39.95, 50.4, 2, 'tile', 'rubble', 3.8, 6.0, [[45.2, 7.3]], { doors: [0.5], windows: [[0.22, 0], [0.78, 0], [0.25, 1], [0.75, 1]] }],
+                    [50.4, 60.8, 2, 'tile', 'rubble', 3.6, 5.7, [[56.6, 7.0]], { doors: [0.62], windows: [[0.28, 0], [0.3, 1], [0.68, 1]] }],
+                    [60.8, 79.05, 2, 'thatch', 'rubble', 3.9, 7.4, [[66.5, 8.7], [75.75, 8.9]],
+                        { doors: [0.22, 0.62], windows: [[0.08, 0], [0.12, 1], [0.34, 1], [0.76, 0], [0.71, 1], [0.9, 1]], eyebrows: [0.34, 0.71], porch: true }],
+                    [79.05, 90, 2, 'thatch', 'lime', 3.8, 7.0, [], { doors: [0.5], windows: [[0.24, 0], [0.3, 1], [0.7, 1]], eyebrows: [0.3, 0.7] }],
                     [90, 101.5, 2, 'tile', 'lime', 6.02, 12, [[96.45, 13.05]]],
                     [101.5, 112.75, 2, 'tile', 'stone', 5.6, 10.8, [[108, 12]]]
                 ],
@@ -86,7 +91,7 @@ class HillLane {
                 // What the climb's wide shot sees by the cottages on the left, as its stills have it: a sawhorse trestle on
                 // the flags [s, across], a short iron railing beside a door's step [s, across, length], ivy up the
                 // cottages that start at these s
-                trestle: [58.2, 3.35], railing: [70.3, 3.55, 1.4], ivy: [39.95, 60.8],
+                trestle: [58.2, 3.35], railing: [64.0, 3.55, 1.2], ivy: [39.95, 60.8],
                 // The old high wall on the inside of the bend behind the top wall, dark in its own shade, with its
                 // buttresses: [from, to, across of its face, up], and the buttresses' s
                 buttressWall: [45, 57, -4.45, 4.2], buttresses: [46.2, 50.8, 55.4],
@@ -500,7 +505,7 @@ class HillLane {
             list.push({ ...f, kind: 'terrace', ...this.finishes(HillLane.random(r.seed + 211), 'terrace'), front: 'flags', climber: false, storeys: 1, roof, wall, gable: false,
                 eaves: f.floor + eaves, ridge: f.floor + ridge, chimney: 1, opening: true });
         } else {
-            for (const [from, to, storeys, roof, wall, eaves, ridge, chimneys] of r.opening.left) {
+            for (const [from, to, storeys, roof, wall, eaves, ridge, chimneys, layout] of r.opening.left) {
                 const f = this.frame(side, from, to, r.cottageDeepM);
                 // (flags only at their fronts: the stills have no railing there)
                 const finish = this.finishes(rand, 'terrace'), prev = list[list.length - 1];
@@ -508,7 +513,8 @@ class HillLane {
                 // (ivy where the climb's stills have it; eyebrows over the upper windows of the thatched ones)
                 list.push({ ...f, kind: 'terrace', ...finish, front: 'flags', climber: r.opening.ivy.includes(from), dormers: roof === 'thatch', storeys, roof, wall, gable: false,
                     eaves: f.floor + eaves, ridge: f.floor + ridge,
-                    chimneys: chimneys.map(([cs, top]) => ({ along: cs - f.mid, top: f.floor + top })), opening: true });
+                    chimneys: chimneys.map(([cs, top]) => ({ along: cs - f.mid, top: f.floor + top })), opening: true, layout: layout || null,
+                    ...(layout ? { door: layout.doors[0], porch: !!layout.porch, boxes: false } : {}) });
             }
             s = r.opening.left[r.opening.left.length - 1][1];
         }

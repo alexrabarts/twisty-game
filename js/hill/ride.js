@@ -75,11 +75,12 @@ class HillRide {
     //   over the bicycle, keeping trackFrameM of picture height at his distance. It goes back up the lane as he comes on;
     // - at `stop`, uphill of the stall and in line with its front, it stays. As he comes on the lens opens out and then
     //   closes in to his distance (`frames`: [his distance in m, the picture's height there in m], eased between), and
-    //   it turns with him, aimed stallAim of the way to the stall's front, as he wheels the bicycle in to it, side on
+    //   it turns with him, aimed up to stallAim of the way to the stall's front as he comes within aimNearM of it, as he
+    //   wheels the bicycle in to it, side on
     static get CLIMB_SHOTS() {
         return Object.freeze({
             wideM: 12, wide: { position: [32, -2.0, 0.95], target: [64, 2.5, 2.4], fov: 15 },
-            trackM: 16, up: 1.2, lookUpM: 0.85, trackFrameM: 1.4, stop: [23.6, 1.4, 1.3], stallAim: 0.5,
+            trackM: 16, up: 1.2, lookUpM: 0.85, trackFrameM: 1.4, stop: [23.6, 1.4, 1.3], stallAim: 0.5, aimNearM: [5, 9],
             frames: [[16, 1.4], [14.5, 1.5], [11.5, 3.0], [9, 3.2], [7, 2.7], [5.5, 2.4], [4.2, 2.0], [3, 1.65]]
         });
     }
@@ -125,10 +126,12 @@ class HillRide {
         const d = Math.max(0.5, at.distanceTo(look));
         // Aimed stallAim of the way from him to the stall's front, so the stall runs away at the left of the picture
         // as he comes in to it
+        // (only as he comes near it: from aimNearM[0] out to aimNearM[1] the aim turns from him alone to the share)
         const C = HillDay.CLIMB, front = lane.at(C.stall[0], C.stall[1] - 0.4, 1.0, this.stallAt || (this.stallAt = {}));
-        look.x += (front.x - look.x) * S.stallAim;
-        look.y += (front.y - look.y) * S.stallAim;
-        look.z += (front.z - look.z) * S.stallAim;
+        const near = Math.max(0, Math.min(1, (S.aimNearM[1] - d) / (S.aimNearM[1] - S.aimNearM[0]))), share = S.stallAim * near * near * (3 - 2 * near);
+        look.x += (front.x - look.x) * share;
+        look.y += (front.y - look.y) * share;
+        look.z += (front.z - look.z) * share;
         return 2 * Math.atan(HillRide.climbFrame(d) / 2 / d) * 180 / Math.PI;
     }
 

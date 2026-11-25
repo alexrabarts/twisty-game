@@ -1057,6 +1057,81 @@ class HillScene {
         HillScene.stand(repeats, 'tree', [t.x, t.z], [1, 0], 0.15, [0, 1], 0.15, ground);
     }
 
+    // Where a building's windows go, each { along (m from its middle), storey, y (the window's middle) }: from its
+    // layout (the top's cottages, HillLane.RULE.opening.left) or by the rule, evenly (the opening's thatched cottages a
+    // little off the even spacing, and fewer). A cottage's upper windows sit under its eaves, those under an eyebrow up in
+    // the thatch's sweep
+    static windowPlaces(c) {
+        const hw = c.wide / 2, list = [];
+        const upper = c.opening ? Math.min(c.floor + 3.65, c.eaves - 0.8) : c.floor + 3.65;
+        const brows = c.layout && c.layout.eyebrows ? c.layout.eyebrows.map(u => -hw + c.wide * u) : [];
+        const y = (storey, along) => storey === 0 ? c.floor + 1.55 : brows.some(b => Math.abs(b - along) < 0.3) ? Math.min(c.floor + 3.65, c.eaves - 0.45) : upper;
+        if (c.layout) {
+            for (const [u, storey] of c.layout.windows) list.push({ along: -hw + c.wide * u, storey, y: y(storey, -hw + c.wide * u) });
+            return list;
+        }
+        const cottagey = c.opening && c.roof === 'thatch' && c.storeys > 1;
+        const windows = Math.max(1, Math.floor(c.wide / (cottagey ? 3.4 : 2.3)));
+        const shift = HillLane.random(Math.round(c.from * 31) + 7);
+        const offsets = Array.from({ length: windows }, () => (cottagey ? (shift() - 0.5) * 0.9 : 0));
+        for (let storey = 0; storey < c.storeys; storey++) {
+            for (let i = 0; i < windows; i++) {
+                const along = -hw + (i + 0.5) * c.wide / windows + offsets[i] * (storey > 0 ? 0.6 : 1);
+                list.push({ along, storey, y: storey === 0 ? c.floor + 1.55 : cottagey ? Math.min(c.floor + 3.65, c.eaves - 1.05) : c.floor + 1.55 + storey * 2.1 });
+            }
+        }
+        return list;
+    }
+
+    // A thatched roof as one rounded mass along the building (THATCH): its cross-section the stills' thatch, thick and
+    // soft, rolled over at the eaves front and back and rounded over the ridge, run from end to end and rounded in at
+    // each end like a half hip; over each window in `brows` (along, m) the front eave sweeps up in an eyebrow. `pt` maps
+    // (along, height, out) to the world; colours: the thatch, its ridge (darker), its eave rolls (lighter)
+    static get THATCH() { return Object.freeze({ endM: 0.45, rollM: 0.32, ridgeM: 0.5, browUpM: 0.75, browWideM: 1.1, stepM: 1000 }); }
+
+    static thatchMass(mesh, pt, c, hw, hd, over, brows, colour, ridgeColour, rollColour) {
+        const T = HillScene.THATCH, e = c.eaves - 0.35, R = c.ridge;
+        // The cross-section, front to back, as [out, height]: under the eave at the wall, the eave's lip, its roll, the
+        // slope, the rounded ridge; then the same behind
+        // (the slope a little full, as laid reed is, between the roll and the ridge)
+        const slope = (t, bulge) => [-(hd + over) * (1 - t) + 0.1 * (1 - t), e + 0.42 + (R + T.ridgeM * 0.7 - e - 0.42) * t + bulge];
+        const front = [[-hd + 0.02, c.eaves - 0.02], [-hd - over, e - 0.2], [-hd - over - T.rollM * 0.5, e + T.rollM * 0.4],
+            [-hd - over + 0.1, e + 0.42], slope(0.33, 0.16), slope(0.66, 0.16), [-0.35, R + T.ridgeM * 0.7], [0, R + T.ridgeM]];
+        const section = [...front, ...front.slice(0, -1).reverse().map(([o, y]) => [-o, y])];
+        const n = section.length;
+        const tone = i => (i >= 6 && i <= n - 8 ? ridgeColour : i === 1 || i === 2 || i === n - 3 || i === n - 4 ? rollColour : colour);
+        // Along: from end to end in steps, the ends drawn in over endM
+        // (only at the ends and through each eyebrow, where the shape changes: along the plain run it is the same)
+        const L = hw + over * 0.6, stations = [-L, L];
+        for (let a = -L; a < L; a += T.stepM) stations.push(a);
+        for (const sign of [-1, 1]) for (let k = 1; k <= 2; k++) stations.push(sign * (L - T.endM * k / 2));
+        for (const b of brows) for (let k = -2; k <= 2; k++) stations.push(b + k * T.browWideM / 2);
+        stations.sort((p, q) => p - q);
+        for (let i = stations.length - 1; i > 0; i--) if (stations[i] - stations[i - 1] < 0.05 || Math.abs(stations[i]) > L) stations.splice(i, 1);
+        const at = (a) => {
+            const end = Math.max(0, (Math.abs(a) - (L - T.endM)) / T.endM), k = 1 - 0.55 * end * end;
+            const brow = brows.reduce((m, b) => Math.max(m, Math.max(0, 1 - ((a - b) / T.browWideM) ** 2)), 0) ** 1.5;
+            return section.map(([o, y], i) => {
+                // (the eyebrow lifts the front eave and its roll; the ends round in towards the ridge's line and down)
+                const lift = i >= 1 && i <= 3 ? T.browUpM * brow * (i === 3 ? 0.7 : 1) : 0;
+                return pt(a * (1 - 0.0 * end), y + lift - (R - y) * 0 - end * end * 0.3 * (y > e ? (y - e) / (R - e + 1e-6) : 0), o * k);
+            });
+        };
+        let prev = at(stations[0]);
+        // The ends: each closed with a fan from the section's middle
+        const cap = (ring, a) => {
+            const mid = pt(a, (e + R) / 2, 0);
+            for (let i = 0; i < ring.length - 1; i++) mesh.tri(mid, ring[i], ring[i + 1], colour);
+        };
+        cap(prev, stations[0]);
+        for (let j = 1; j < stations.length; j++) {
+            const next = at(stations[j]);
+            for (let i = 0; i < section.length - 1; i++) mesh.quad(prev[i], next[i], next[i + 1], prev[i + 1], tone(i));
+            prev = next;
+        }
+        cap(prev, stations[stations.length - 1]);
+    }
+
     // One building, from its data (HillLane.placeCottages): walls in rubble or dressed stone, lime render or brick, with
     // a plinth and, for stone, quoins; a pitched roof with overhang and ridge in thatch (with its thick rounded eave),
     // clay tile or slate; chimneys with pots; a panelled door in its frame with a step and a fanlight, now and then a
@@ -1112,32 +1187,22 @@ class HillScene {
             roofMesh.box([mid[0] + nx, mid[1] + ny, mid[2] + nz], across, [nx, ny, nz], down.map(v => v * (len + 0.02) / len), roof);
         };
         const eaveY = c.eaves - (thatch ? 0.35 : 0.05);
-        if (!c.gable) {
+        // The upper windows the thatch sweeps up over (the layout's eyebrows, or the rule's)
+        const brows = thatch && c.storeys > 1 && (c.dormers || (c.layout && c.layout.eyebrows))
+            ? (c.layout && c.layout.eyebrows ? c.layout.eyebrows.map(u => -hw + c.wide * u) : HillScene.windowPlaces(c).filter(w => w.storey > 0).map(w => w.along)) : [];
+        if (!c.gable && thatch) {
+            HillScene.thatchMass(roofMesh, pt, c, hw, hd, over, brows, roof, rgb(shade(C.thatch, 0.82)), rgb(shade(C.thatch, 1.08)));
+            for (const end of [-1, 1]) {
+                wallMesh.tri(pt(end * hw, c.eaves, -hd), pt(end * hw, c.eaves, hd), pt(end * hw, c.ridge - 0.15, 0), wall);
+                wallMesh.tri(pt(end * hw, c.eaves, hd), pt(end * hw, c.eaves, -hd), pt(end * hw, c.ridge - 0.15, 0), wall);
+            }
+        } else if (!c.gable) {
             for (const side of [-1, 1]) slab(0, side * (hd + over), eaveY - over * 0.45, 0, 0, c.ridge, hw + over * 0.6, 'along');
             for (const end of [-1, 1]) {
                 wallMesh.tri(pt(end * hw, c.eaves, -hd), pt(end * hw, c.eaves, hd), pt(end * hw, c.ridge - 0.15, 0), wall);
                 wallMesh.tri(pt(end * hw, c.eaves, hd), pt(end * hw, c.eaves, -hd), pt(end * hw, c.ridge - 0.15, 0), wall);
             }
-            if (thatch) {
-                // The thatch's thick ridge, its cap a darker band laid over it, and its deep rounded eave along the
-                // front and the back, a second roll over it
-                box(roofMesh, 0, c.ridge + 0.14, 0, hw + over * 0.6, 0.24, 0.36, rgb(shade(C.thatch, 0.85)));
-                for (const side of [-1, 1]) box(roofMesh, 0, c.ridge - 0.02, side * 0.38, hw + over * 0.55, 0.12, 0.14, rgb(shade(C.thatch, 0.7)));
-                for (const side of [-1, 1]) {
-                    box(roofMesh, 0, eaveY - over * 0.45 - 0.08, side * (hd + over * 0.95), hw + over * 0.6, 0.24, 0.26, roof);
-                    box(roofMesh, 0, eaveY - over * 0.45 + 0.14, side * (hd + over * 0.7), hw + over * 0.6, 0.16, 0.2, rgb(shade(C.thatch, 1.06)));
-                }
-                // Eyebrow dormers: the thatch swept up and over each upper window that breaks the eave
-                if (c.dormers && c.storeys > 1) {
-                    const cottagey = c.opening && c.storeys > 1, count = Math.max(1, Math.floor(c.wide / (cottagey ? 3.4 : 2.3)));
-                    const shift = HillLane.random(Math.round(c.from * 31) + 7);
-                    for (let i = 0; i < count; i++) {
-                        const along = -hw + (i + 0.5) * c.wide / count + (cottagey ? (shift() - 0.5) * 0.9 * 0.6 : 0);
-                        if (Math.abs(along) > hw - 0.7) continue;
-                        box(roofMesh, along, eaveY + 0.1, -(hd + over * 0.5), 0.7, 0.2, 0.45, roof);
-                    }
-                }
-            } else {
+            {
                 box(roofMesh, 0, c.ridge + 0.06, 0, hw + over * 0.6, 0.08, 0.12, rgb(shade(C[c.roof] || C.tile, 0.8)));
                 box(meshes.dark, 0, eaveY - over * 0.45 - 0.04, -(hd + over * 0.8), hw + over * 0.5, 0.045, 0.06, rgb(C.iron));
             }
@@ -1181,6 +1246,13 @@ class HillScene {
         box(meshes.dressed, doorAt, c.floor + 0.062, face - 0.32, 0.32, 0.004, 0.17, rgb(shade(C.step, 0.86)));
         if (c.kind !== 'barn' && c.kind !== 'shop') box(meshes.dark, doorAt, c.floor + 1.32, face - 0.1, 0.04, 0.05, 0.015, rgb(0x8a7444));
         if (HillLane.random(Math.round(c.from * 19) + 3)() < 0.4) stand('boot scraper', meshes.dark, doorAt + 0.85, face - 0.25, 0.14, 0.04, c.floor + 0.12, rgb(C.iron), c.floor - 0.1);
+        // The layout's other doors, each with its frame and step
+        for (const u of c.layout ? c.layout.doors.slice(1) : []) {
+            const at = -hw + c.wide * u;
+            box(meshes.trim, at, c.floor + 1.1, face - 0.03, 0.55, 1.12, 0.04, rgb(C.frame));
+            box(meshes.door, at, c.floor + 0.98, face - 0.06, 0.45, 0.98, 0.03, rgb(C.doors[(c.doorColour + 2) % 5]));
+            stand('door step', meshes.dressed, at, face - 0.3, 0.62, 0.3, c.floor + 0.06, rgb(C.step), c.floor - 0.18);
+        }
         if (c.porch) {
             const y = c.floor + 2.45;
             for (const k of [-1, 1]) {
@@ -1218,20 +1290,12 @@ class HillScene {
 
         // Sash windows on each storey: a white frame, two sashes of panes, a stone sill and a lintel; a window box
         // under some ground-floor ones
-        // (a thatched cottage of the opening, as the climb's wide shot sees it: fewer windows, each a little off the
-        // even spacing)
-        const cottagey = c.opening && thatch && c.storeys > 1;
-        const windows = Math.max(1, Math.floor(c.wide / (cottagey ? 3.4 : 2.3)));
-        const shift = HillLane.random(Math.round(c.from * 31) + 7);
-        const offsets = Array.from({ length: windows }, () => (cottagey ? (shift() - 0.5) * 0.9 : 0));
         const frame = rgb(C.frame), sill = rgb(C.sill), glass = rgb(C.glass), lit = rgb(C.lit);
         const greens = [0x4e6236, 0x5d7440, 0x445a30], blooms = [0xc8463a, 0xe0c04a, 0xe8e2d8, 0xd87a9a];
         const rand = HillLane.random(Math.round(c.from * 17) + c.side * 3);
-        for (let storey = 0; storey < c.storeys; storey++) {
-            const y = cottagey && storey > 0 ? Math.min(c.floor + 3.65, c.eaves - 1.05) : c.floor + 1.55 + storey * 2.1;
-            for (let i = 0; i < windows; i++) {
-                const along = -hw + (i + 0.5) * c.wide / windows + offsets[i] * (storey > 0 ? 0.6 : 1);
-                if (storey === 0 && Math.abs(along - doorAt) < 1.15) continue;
+        for (const { along, storey, y } of HillScene.windowPlaces(c)) {
+            {
+                if (!c.layout && storey === 0 && Math.abs(along - doorAt) < 1.15) continue;
                 if (storey === 0 && shop && along < doorAt) continue;
                 if (Math.abs(along) > hw - 0.55) continue;
                 // Small casements, as the stills have them
