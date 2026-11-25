@@ -835,6 +835,8 @@ class Game {
             }
         }
         if (this.graphics) this.graphics.setQuality({ msaa: level.msaa, bloom: level.bloom });
+        // A tube's relief is drawn where the level has a shadow map (Medium and over): a uniform, nothing compiles
+        if (typeof TubeShade !== 'undefined') TubeShade.setDetail(level.shadowMap > 0);
         this.treeShare = level.treeShare;
         this.treeNear = level.treeNear;
         if (this.environment && this.environment.isWorld) this.thinTrees(this.environment.sceneryGroup);
@@ -2053,6 +2055,21 @@ class Game {
         // Wide FOV with speed rush
         this.camera.fov = 95 + speedRatio * 12;
         this.camera.updateProjectionMatrix();
+    }
+
+    // The eye adapts to a tunnel or a gallery (TubeShade.LIGHT): the exposure (Graphics.adaptation) goes toward `adapt`
+    // by the tube's light share where the camera is (WorldEnvironment.tubeShareAt, 4 m behind the bike), over inS going
+    // in and outS coming out, so a portal reads as riding into a tunnel and out of one, with no step. Simulated time,
+    // so a stepped ride adapts as a played one does
+    updateTubeAdaptation(dt) {
+        const graphics = this.graphics, env = this.environment;
+        if (!graphics || !env || !env.isWorld || typeof TubeShade === 'undefined' || !env.tubeShareAt) return;
+        const L = TubeShade.LIGHT;
+        const share = this.vehicle ? env.tubeShareAt(Math.max(0, (this.vehicle.routeS || 0) - 4)) : 0;
+        const goal = 1 + (L.adapt - 1) * share;
+        const now = Number.isFinite(graphics.adaptation) ? graphics.adaptation : 1;
+        const tau = goal > now ? L.inS : L.outS;
+        graphics.adaptation = !(dt > 0) ? now : now + (goal - now) * (1 - Math.exp(-dt / tau));
     }
 
     // Height of the tunnel roof over the bike, or null in the open. The
@@ -4066,6 +4083,7 @@ class Game {
             // (the ride distance it streams by is the accepted progress, not the raw projection; free roam has none, and
             // streams by the nearest place on the ride as well as round the bike: Game.worldStreamS)
             this.environment.update(this.vehicle.position, this.worldStreamS(), this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
+            this.updateTubeAdaptation(simulatedThisFrame);
             this.watchLand();
             // (watchLand can hand the ride to the legs a task later; the world is still here this frame)
             const marmots = this.environment && this.environment.marmots;

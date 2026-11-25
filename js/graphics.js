@@ -822,6 +822,8 @@ class Graphics {
         this.weatherType = 'clear';
         this.speedRatio = 0;
         this.flash = 0;
+        // What the eye gains in a tunnel (Game.updateTubeAdaptation): a factor on the exposure, 1 in the open
+        this.adaptation = 1;
         this.sunDirection = new THREE.Vector3(0.5, 0.8, 0).normalize();
         this.lastColorScan = 0;
         this.linearFogColor = new THREE.Color();
@@ -1626,7 +1628,11 @@ class Graphics {
                 fogColor.convertLinearToSRGB();
             }
             this.renderer.setRenderTarget(null);
+            // (the eye's adaptation to a tunnel, Game.updateTubeAdaptation, on the renderer's own tone map here)
+            const exposure = this.renderer.toneMappingExposure;
+            if (Number.isFinite(this.adaptation)) this.renderer.toneMappingExposure = exposure * this.adaptation;
             this.renderer.render(scene, camera);
+            this.renderer.toneMappingExposure = exposure;
             if (fogColor) fogColor.copy(this.linearFogColor);
             this.renderedAt = performance.now();
             return;
@@ -1648,7 +1654,8 @@ class Graphics {
         this.renderEffects(camera);
         c.tScene.value = this.sceneTarget.texture;
         c.tBloom.value = targets[0].texture;
-        c.uExposure.value = renderer.toneMappingExposure;
+        // (and the eye's adaptation to a tunnel: Game.updateTubeAdaptation)
+        c.uExposure.value = renderer.toneMappingExposure * (Number.isFinite(this.adaptation) ? this.adaptation : 1);
         c.uBloom.value = this.bloomOn === false ? 0 : this.grade.bloom / this.bloomLevels * 1.6;
         c.uSaturation.value = this.grade.saturation;
         c.uContrast.value = this.grade.contrast;

@@ -385,6 +385,10 @@ class RoadMesh {
         const edge = new Float32Array(n * W * 4);
         const pad = new Float32Array(n * W * 3);
         const cutL = new Float32Array(n * W * 4), cutR = new Float32Array(n * W * 4);
+        // The light of a tunnel or gallery over the road (TubeShade): its share and the metres in from the nearest portal,
+        // the ride's from its whole route (WorldEnvironment.tubeRows), a side road's from its own rows
+        const tubeAt = new Float32Array(n * W * 2);
+        const depth = rows.some(row => row.bits & 5 && row.tubeIn === undefined) ? TubeLining.depths(rows, along) : null;
         let clamped = 0;
         const sides = [];
         const sett = RoadMesh.feather(rows, along, row => (row.bits & 8) !== 0);
@@ -418,6 +422,8 @@ class RoadMesh {
                 edge.set([brokenAt(row.left, row.mouthL), brokenAt(row.right, row.mouthR), bare[0] ? 1 : 0, bare[1] ? 1 : 0], at * 4);
                 if (row.cutL) cutL.set(row.cutL.map(m => m - base * period), at * 4);
                 if (row.cutR) cutR.set(row.cutR.map(m => m - base * period), at * 4);
+                const inM = row.tubeIn !== undefined ? row.tubeIn : depth ? depth[k] : -60;
+                tubeAt.set([TubeLining.share(inM, row.tubeCap !== undefined ? row.tubeCap : (row.bits & 5) === 4), inM], at * 2);
             });
             const l = k * W * 3, r = (k * W + W - 1) * 3;
             const at = c => [positions[c], positions[c + 1], positions[c + 2]];
@@ -444,6 +450,7 @@ class RoadMesh {
         geometry.setAttribute('roadCutL', new THREE.BufferAttribute(cutL, 4));
         geometry.setAttribute('roadCutR', new THREE.BufferAttribute(cutR, 4));
         geometry.setAttribute('roadBase', new THREE.BufferAttribute(new Float32Array(n * W).fill(base), 1));
+        geometry.setAttribute('roadTube', new THREE.BufferAttribute(tubeAt, 2));
         geometry.setIndex(index);
         geometry.computeVertexNormals();
         geometry.computeBoundingSphere();
@@ -574,21 +581,35 @@ class RoadMesh {
     //             on a hillside stands on its wall, not over a gap)
     //   headwall  over a portal's beam, a face in the portal's plane up to the land behind it, at most TUBE_HEAD_M
     // `groundAt(x, z)` is the land (null where it is not known: no footing and no headwall there)
-    static tunnel(rows, from, to, roof, ends = [true, true], groundAt = null) {
+    // The walls, the roof and the walkways (the floor out to the walls) are the lining's (TubeLining.run, into
+    // `lining`): concrete in pour bays, rock on the mountain side, a gallery's openings, and at LOD0 the fittings. Each
+    // row may carry `tubeIn` (metres in from the nearest portal of the whole ride) and `tubeRun` (its run's kind and
+    // sides, WorldEnvironment.tubeInfo); without them the rows' own flags give both
+    static tunnel(rows, from, to, roof, ends = [true, true], groundAt = null, lining = null, lod = 0) {
         const out = { positions: [], shades: [] };
-        const colors = RoadMesh.COLORS;
         const side = (row, sign, o = row.width / 2 + RoadMesh.TUBE_WALL_M) => [row.x + sign * o * Math.cos(row.heading), row.y, row.z - sign * o * Math.sin(row.heading)];
         for (let i = from; i < to; i++) {
             const a = rows[i], b = rows[i + 1];
             const la = side(a, -1), ra = side(a, 1), lb = side(b, -1), rb = side(b, 1);
-            const up = (p) => [p[0], p[1] + roof, p[2]];
-            RoadMesh.quad(out, la, lb, up(lb), up(la), colors.tunnel);
-            RoadMesh.quad(out, rb, ra, up(ra), up(rb), colors.tunnel);
-            RoadMesh.quad(out, up(la), up(lb), up(rb), up(ra), colors.tunnel);
-            RoadMesh.tubeWorks(out, { la, ra, lb, rb, roof }, groundAt, {
-                l: [side(a, -1, a.width / 2 + RoadMesh.TUBE_FLOOR_M), side(b, -1, b.width / 2 + RoadMesh.TUBE_FLOOR_M)],
-                r: [side(a, 1, a.width / 2 + RoadMesh.TUBE_FLOOR_M), side(b, 1, b.width / 2 + RoadMesh.TUBE_FLOOR_M)]
-            });
+            RoadMesh.tubeWorks(out, { la, ra, lb, rb, roof }, groundAt);
+        }
+        if (lining) {
+            // (metres along: the ride's own, else measured from the first row)
+            const along = [];
+            rows.forEach((row, i) => along.push(Number.isFinite(row.s) ? row.s : i === 0 ? 0 : along[i - 1] + Math.hypot(row.x - rows[i - 1].x, row.z - rows[i - 1].z)));
+            const depth = rows.slice(from, to + 1).some(row => row.tubeIn === undefined) ? TubeLining.depths(rows, along, ends) : null;
+            const plain = row => ({ gallery: (row.bits & 5) === 4, rock: 0, open: 0, shotcrete: false, tube: [along[from], along[to]] });
+            const floor = row => ({ l: side(row, -1, row.width / 2 + RoadMesh.TUBE_FLOOR_M), r: side(row, 1, row.width / 2 + RoadMesh.TUBE_FLOOR_M) });
+            const tubeRows = [];
+            for (let i = from; i <= to; i++) {
+                const row = rows[i], run = row.tubeRun || plain(row);
+                // (a row where the section's drawing starts or ends, or the tube's kind changes, keeps the rock's face
+                // on the wall's line, so a neighbour at another level of detail or of another kind meets it)
+                const turn = i > from && (rows[i - 1].tubeRun || plain(rows[i - 1])) !== run && !!(row.tubeRun && rows[i - 1].tubeRun);
+                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete });
+            }
+            const whole = (rows[from].tubeRun || plain(rows[from])).tube;
+            TubeLining.run(lining, tubeRows, { lod, groundAt, run: whole });
         }
         for (const [row, inward] of [[ends[0] ? rows[from] : null, 1], [ends[1] ? rows[to] : null, -1]]) {
             if (!row) continue;
@@ -2377,6 +2398,7 @@ class RoadMesh {
         const down = (p, m) => [p[0], p[1] - m, p[2]];
         const rails = { l: [], r: [] };
         const tubes = [];
+        const tubeRuns = [];
         // The deck's centre line, run by run, for the piers
         const runs = [];
         let run = null;
@@ -2388,9 +2410,10 @@ class RoadMesh {
                     const over = guard ? guard.ceiling(p[0], p[2], p[1]) : null;
                     return [p[0], p[1] + (over === null ? roof : Math.max(1, Math.min(roof, over - D - p[1]))), p[2]];
                 };
-                RoadMesh.quad(out, a.l, b.l, up(b.l), up(a.l), colors.tunnel);
-                RoadMesh.quad(out, b.r, a.r, up(a.r), up(b.r), colors.tunnel);
-                RoadMesh.quad(out, up(a.l), up(b.l), up(b.r), up(a.r), colors.tunnel);
+                // (its walls and roof are the lining's: TubeLining.run, after the loop)
+                const last = tubeRuns[tubeRuns.length - 1];
+                if (last && last[last.length - 1] === k - 1) last.push(k);
+                else tubeRuns.push([k]);
                 // (the land is cut to the tube's box: its lowest roof over the segment; its walls stand on the land, and
                 // where the run ends, a portal: RoadMesh.tubeWorks, sidePortal)
                 const low = Math.min(...[a.l, a.r, b.l, b.r].map(p => up(p)[1] - p[1]));
@@ -2426,7 +2449,34 @@ class RoadMesh {
         RoadMesh.rails(out, rails.l, RoadMesh.PARAPET_W_M, H, colors.concrete);
         RoadMesh.rails(out, rails.r, RoadMesh.PARAPET_W_M, H, colors.concrete);
         const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard });
-        return { parts: out.positions.length ? [out] : [], piers, tubes, sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };
+        // The lining of each tube run: metres along from the road's first row, metres in from its portals (none where
+        // it goes on past the drawn rows), its rock on the side where the land outside stands higher. A side road is
+        // seen from the ride, so it has its lining and no fittings
+        const lining = TubeLining.parts();
+        if (tubeRuns.length) {
+            const along = [0];
+            for (let k = 1; k < sides.length; k++) along.push(along[k - 1] + Math.hypot(sides[k].l[0] + sides[k].r[0] - sides[k - 1].l[0] - sides[k - 1].r[0], sides[k].l[2] + sides[k].r[2] - sides[k - 1].l[2] - sides[k - 1].r[2]) / 2);
+            const depth = TubeLining.depths(sides, along, [!through[0], !through[1]]);
+            for (const segs of tubeRuns) {
+                const first = segs[0], last = segs[segs.length - 1] + 1;
+                const roofAt = k => Math.min(...segs.filter(j => j === k || j === k - 1).map(j => tubes.find(t => t.la === sides[j].l).roof));
+                const rows = [];
+                for (let k = first; k <= last; k++) rows.push({ l: sides[k].l, r: sides[k].r, s: along[k], inM: depth[k], roof: roofAt(k), floor: null });
+                const sideRock = () => {
+                    if (!groundAt) return 0;
+                    let lean = 0;
+                    for (const row of rows) {
+                        const dx = row.r[0] - row.l[0], dz = row.r[2] - row.l[2], span = Math.hypot(dx, dz) || 1;
+                        const gl = groundAt(row.l[0] - dx / span * 8, row.l[2] - dz / span * 8), gr = groundAt(row.r[0] + dx / span * 8, row.r[2] + dz / span * 8);
+                        if (Number.isFinite(gl) && Number.isFinite(gr)) lean += gr - gl;
+                    }
+                    return lean > 0 ? 1 : lean < 0 ? -1 : 0;
+                };
+                const rock = sideRock(), gallery = (sides[first].bits & 5) === 4;
+                TubeLining.run(lining, rows, { gallery, rock, open: gallery ? -rock : 0, shotcrete: gallery, lod: 1, groundAt, run: [along[first], along[last]], fittings: false });
+            }
+        }
+        return { parts: out.positions.length ? [out] : [], lining, piers, tubes, sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };
     }
 
     static structureMesh(parts, name) {
@@ -2485,7 +2535,10 @@ class RoadMesh {
         const guard = roads ? roads.guard(-1) : null;
         // A run clipped to the drawn rows; it ends where it really ends, not where it goes on into a neighbour
         const clip = mask => RoadMesh.runs(rows, mask).map(([from, to]) => [Math.max(from, first), Math.min(to, last), [from >= first, to <= last]]).filter(([from, to]) => to > from);
-        for (const [from, to, ends] of clip(1 | 4)) structures.push([RoadMesh.tunnel(rows, from, to, roof, ends, groundAt), 'tunnel']);
+        // (the tubes' lining and fittings: two meshes of their own material, TubeShade)
+        const lining = TubeLining.parts();
+        for (const [from, to, ends] of clip(1 | 4)) structures.push([RoadMesh.tunnel(rows, from, to, roof, ends, groundAt, lining, lod), 'tunnel']);
+        triangles += TubeLining.addMeshes(group, lining);
         // (a viaduct's rows carry its layout, WorldEnvironment.viaducts: its stone in place of a bridge's concrete)
         for (const [from, to, ends] of clip(2)) structures.push(rows[from].viaduct ? [RoadMesh.viaduct(rows, from, to, rows[from].viaduct, { lod, land: foot && foot.land ? foot.land : null, ends }), 'viaduct'] : [RoadMesh.bridge(rows, from, to, groundAt, guard, ends), 'bridge']);
         // With edge works the tunnels and bridges join their mesh (same material: the window counts meshes)
@@ -2516,7 +2569,7 @@ class RoadMesh {
         group.add(RoadMesh.ribbonMesh(ribbon, 'road-side'));
         const built = RoadMesh.sideStructures(ribbon.sides, groundAt, roof, footAt, guard);
         // Without a foot the edge works and structures are left to the caller, which draws those of many side roads as one mesh
-        const triangles = ribbon.triangles + (foot ? RoadMesh.addEdgeWorks(group, Object.assign(built.sides, { owner: guard ? guard.owner : -1 }), foot, built.parts) : 0);
+        const triangles = ribbon.triangles + (foot ? RoadMesh.addEdgeWorks(group, Object.assign(built.sides, { owner: guard ? guard.owner : -1 }), foot, built.parts) + TubeLining.addMeshes(group, built.lining) : 0);
         group.userData.triangles = triangles;
         group.userData.sides = built.sides;
         group.userData.structures = built.parts;

@@ -551,10 +551,10 @@ class RoadSurface {
         material.userData.roadUniforms = uniforms;
         material.onBeforeCompile = (shader, renderer) => {
             land(shader, renderer);
-            Object.assign(shader.uniforms, uniforms);
+            Object.assign(shader.uniforms, uniforms, TubeShade.uniforms);
             RoadSurface.shader(shader);
         };
-        material.customProgramCacheKey = () => 'world-road-near-6';
+        material.customProgramCacheKey = () => 'world-road-near-7';
         if (RoadSurface.works) RoadSurface.setWorks(RoadSurface.works);
         RoadSurface.near = material;
         return material;
@@ -612,7 +612,12 @@ varying vec3 vRoadArc;
 varying vec2 vRoadPlane;
 varying vec4 vRoadCutL;
 varying vec4 vRoadCutR;`);
+        // The light of a tunnel or gallery over the road (TubeShade): its share and metres in from a portal (RoadMesh: roadTube)
+        shader.vertexShader = RoadSurface.swap(shader.vertexShader, '#include <common>', `#include <common>
+attribute vec2 roadTube;
+varying vec2 vRoadTube;`);
         shader.vertexShader = RoadSurface.swap(shader.vertexShader, '#include <uv_vertex>', `#include <uv_vertex>
+vRoadTube = roadTube;
 vRoad = road;
 vEdge = edge;
 vRoadBase = roadBase;
@@ -956,6 +961,22 @@ if (roadVerge > 0.0) {
 diffuseColor.rgb *= roadAlbedo;
 diffuseColor.a *= roadAlpha;
 `);
+        // Under a tunnel's or a gallery's roof the sun and the sky are held out by the tube's share and its lamps light
+        // the road (TubeShade.LAMPS_GLSL, the lining's own light): a road in a tube does not take the sky's blue
+        shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <common>', `#include <common>
+varying vec2 vRoadTube;
+${TubeShade.LAMPS_GLSL}`);
+        shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <aomap_fragment>', `#include <aomap_fragment>
+if (vRoadTube.y > -59.0) {
+    float tubeShare = vRoadTube.x;
+    vec3 tubeLight = tubeLamps(roadAlong, roadLat, 0.0, vec3(0.0, 0.0, 1.0), vRoadTube.y);
+    reflectedLight.directDiffuse *= 1.0 - tubeShare;
+    reflectedLight.directSpecular *= 1.0 - tubeShare;
+    reflectedLight.indirectDiffuse = reflectedLight.indirectDiffuse * (1.0 - tubeShare) + diffuseColor.rgb * tubeLight;
+    // (the lamps' sheen on the surface, more on a wet road, in place of the sky's)
+    float tubeGraze = pow(1.0 - clamp(dot(normal, normalize(-vViewPosition)), 0.0, 1.0), 3.0);
+    reflectedLight.indirectSpecular = reflectedLight.indirectSpecular * (1.0 - tubeShare) + tubeLight * (0.05 + 0.25 * tubeGraze) * (1.15 - roughnessFactor) * tubeShare;
+}`);
         // An opaque material writes alpha 1; the verge needs its alpha for alpha-to-coverage
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <output_fragment>', 'gl_FragColor = vec4(outgoingLight, roadAlpha);');
         shader.fragmentShader = RoadSurface.swap(shader.fragmentShader, '#include <roughnessmap_fragment>', `float roughnessFactor = clamp(roadRough, mix(0.2, ${f(W.floor)}, roadWater), 1.0);`);

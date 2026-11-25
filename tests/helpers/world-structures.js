@@ -263,6 +263,7 @@ function drawnSurfaces(game, env, done = null) {
                 const tri = [];
                 for (let k = 0; k < 3; k++) { v.fromBufferAttribute(pos, index ? index.getX(i + k) : i + k).applyMatrix4(mesh.matrixWorld); tri.push(v.x, v.y, v.z); }
                 tri.mesh = meshId;
+                tri.name = mesh.name;
                 tri.kind = kind;
                 tri.owner = owners ? owners[i / 3] : null;
                 tri.fresh = fresh;
@@ -271,8 +272,10 @@ function drawnSurfaces(game, env, done = null) {
         }
     };
     const works = m => (m === 0 || m === 3 ? null : m === 2 ? 'stone' : 'structure');
-    for (const group of env.roadMeshes.values()) group.traverse(o => { if (o.isMesh) take(o, o.name === 'road-ribbon' ? () => 'ribbon' : o.name === 'road-works' ? works : () => 'structure'); });
-    for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh) take(o, o.name === 'road-side' ? () => 'side-ribbon' : o.name === 'road-works' ? works : () => 'structure'); });
+    // (a tube's fittings, its lamps, trays and fans, are boxes of their own hung a hand off the lining: not a structure's
+    // surface, so not read for seams or shared planes; their own rule is tests/unit/world-tube-lining.test.js)
+    for (const group of env.roadMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'tube-fittings') take(o, o.name === 'road-ribbon' ? () => 'ribbon' : o.name === 'road-works' ? works : () => 'structure'); });
+    for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'tube-fittings') take(o, o.name === 'road-side' ? () => 'side-ribbon' : o.name === 'road-works' ? works : () => 'structure'); });
     return out;
 }
 
@@ -289,7 +292,7 @@ export function structureSeams(game, env, { seen = new Set(), done = new Set(), 
         if (!tri.fresh || (tri.kind !== 'structure' && tri.kind !== 'stone')) continue;
         for (let k = 0; k < 9; k += 3) {
             const key = `${tri.mesh}:${tri.owner}:${Math.round(tri[k] * 1000)},${Math.round(tri[k + 1] * 1000)},${Math.round(tri[k + 2] * 1000)}`;
-            if (!corners.has(key)) corners.set(key, { x: tri[k], y: tri[k + 1], z: tri[k + 2], group: `${tri.mesh}:${tri.owner}`, kind: tri.kind });
+            if (!corners.has(key)) corners.set(key, { x: tri[k], y: tri[k + 1], z: tri[k + 2], group: `${tri.mesh}:${tri.owner}`, kind: tri.kind, name: tri.name });
         }
     }
     const hash = new Map();
@@ -310,7 +313,7 @@ export function structureSeams(game, env, { seen = new Set(), done = new Set(), 
                 if (seen.has(key)) continue;
                 seen.add(key);
                 out.pairs++;
-                if (out.worst.length < detail) out.worst.push({ x: Math.round(c.x * 10) / 10, y: Math.round(c.y * 10) / 10, z: Math.round(c.z * 10) / 10, apartM: Math.round(d * 1000) / 1000, kind: c.kind, s: Math.round(env.route.project(c.x, c.z, null, {}).s) });
+                if (out.worst.length < detail) out.worst.push({ x: Math.round(c.x * 10) / 10, y: Math.round(c.y * 10) / 10, z: Math.round(c.z * 10) / 10, apartM: Math.round(d * 1000) / 1000, kind: c.kind, mesh: c.name, s: Math.round(env.route.project(c.x, c.z, null, {}).s) });
             }
         }
     }
@@ -398,9 +401,12 @@ export function coplanarOverlaps(game, env, { seen = new Set(), done = new Set()
                 out.pairs++;
                 const kinds = [ti.kind, tj.kind].sort().join('/');
                 out.byKinds[kinds] = (out.byKinds[kinds] || 0) + 1;
+                const meshes = [ti.name, tj.name].sort().join('/');
+                out.byMeshes = out.byMeshes || {};
+                out.byMeshes[meshes] = (out.byMeshes[meshes] || 0) + 1;
                 if (out.worst.length < detail) {
                     const cx = (ti[0] + ti[3] + ti[6]) / 3, cz = (ti[2] + ti[5] + ti[8]) / 3;
-                    out.worst.push({ kinds, x: Math.round(cx * 10) / 10, y: Math.round((ti[1] + ti[4] + ti[7]) / 3 * 10) / 10, z: Math.round(cz * 10) / 10, areaM2: Math.round(area * 1000) / 1000, s: Math.round(env.route.project(cx, cz, null, {}).s) });
+                    out.worst.push({ kinds, x: Math.round(cx * 10) / 10, y: Math.round((ti[1] + ti[4] + ti[7]) / 3 * 10) / 10, z: Math.round(cz * 10) / 10, areaM2: Math.round(area * 1000) / 1000, meshes, s: Math.round(env.route.project(cx, cz, null, {}).s) });
                 }
             }
         }

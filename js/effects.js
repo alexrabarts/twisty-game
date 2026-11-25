@@ -301,7 +301,7 @@ const Cascades = {
     FAR_EVERY: 2,
     // Names of the world meshes that cast while the cascades are on: the trees and houses of a tile (Scenery.buildTile),
     // a section's edge works (walls, aprons, parapets: RoadMesh.addEdgeWorks) and its tunnels and bridges, the stones
-    CASTERS: /^(trees:|houses:|landmark:|road-works$|tunnel$|bridge$|stones$|stone-kerbs$|boulders$)/,
+    CASTERS: /^(trees:|houses:|landmark:|road-works$|tube-lining$|tunnel$|bridge$|stones$|stone-kerbs$|boulders$)/,
 
     set(game, on) {
         const far = game.distantLight;

@@ -23,6 +23,7 @@ The lowest level is index 0. Full is the game as it was drawn before the ladder.
 - `treeShare` is the share of a world window's trees that the game draws. `Scenery.rankTrees` puts the trees in order from the bike, so the far trees go first. `Game.thinTrees` gives the share to the scenery (`Scenery.setTrees`). A tree is never solid. A classic leg has its own trees and does not use it.
 - `treeNear` is the most trees of a world window that the game draws at the near level of detail (see "The trees' levels of detail"). Low and Lowest draw none: their nearest trees are at the mid level, the shapes the legs draw.
 - `effectMs` is the most GPU time (ms, as measured) one effect may cost under the Auto preset. An effect dearer than it is held at a cheaper level, or off (`Effects.resolve`). A fixed preset does not read it.
+- A tube's relief (the normals of its concrete and rock, `TubeShade.setDetail`) is drawn only at a level with a shadow map (Medium and over); its colours, bays and stains at every level. A uniform: nothing compiles.
 - `Quality.FIELDS` holds the permitted values. A lower level never has more of a setting than a higher level. `tests/unit/quality.test.js` holds both rules.
 
 To add a setting, add a column to every level and a row to `Quality.FIELDS`, then read it in `Game.applyQuality`. Keep the Full level equal to the game before the change.

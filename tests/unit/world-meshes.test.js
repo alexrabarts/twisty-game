@@ -253,11 +253,15 @@ describe('RoadMesh', () => {
     test('a tunnel run gets a tube and portals, a bridge run a deck, parapets and piers', () => {
         const rows = line(40).map((r, i) => ({ ...r, bits: i >= 5 && i < 15 ? 1 : i >= 20 && i < 30 ? 2 : 0 }));
         const group = RoadMesh.section(rows, 0, { groundAt: () => 60 });
-        // The structures share one mesh (the window counts meshes), in the structures' material group
+        // The structures share one mesh (the window counts meshes), in the structures' material group; the tube's
+        // lining and fittings are two of their own (TubeLining, in their own material)
         const names = group.children.map(c => c.name);
-        expect(names).toEqual(['road-ribbon', 'road-works']);
+        expect(names).toEqual(['road-ribbon', 'tube-lining', 'tube-fittings', 'road-works']);
         for (const child of group.children) expect(finite(child.geometry)).toBe(true);
-        const works = group.children[1].geometry;
+        const works = group.children.find(c => c.name === 'road-works').geometry;
+        const lining = group.children.find(c => c.name === 'tube-lining').geometry;
+        lining.computeBoundingBox();
+        expect(lining.boundingBox.max.y).toBeCloseTo(100 + WorldRoute.ROOF_M, 4);
         expect(works.groups.filter(g => g.count > 0).map(g => g.materialIndex)).toEqual([1]);
         // Piers stand from the deck to the ground 40 m below
         works.computeBoundingBox();

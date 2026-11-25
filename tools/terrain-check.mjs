@@ -2898,6 +2898,9 @@ async function hazeView(placeSource, s, turnDeg, eyeM, bands, skyOver) {
     cam.rotation.z = 0;
     cam.position.set(v.position.x, v.position.y + eyeM, v.position.z);
     cam.updateMatrixWorld(true);
+    // (the eye stands eyeM over the road, in the open air, even where the bike stands in a gallery: it has the open
+    // air's exposure, not the tube's, Game.updateTubeAdaptation)
+    if (game.graphics) game.graphics.adaptation = 1;
     const renderer = game.graphics.renderer;
     const bike = v.group, bikeShown = bike.visible;
     bike.visible = false;
@@ -3183,7 +3186,10 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
             const x = o.x + d.x * t, y = o.y + d.y * t, z = o.z + d.z * t;
             const land = drawnLand(x, z);
             if (land === null) return false;
-            if (y < land - tol) return { t: Math.round(t), x: Math.round(x), z: Math.round(z), key: `${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`, underM: Math.round((land - y) * 10) / 10 };
+            const key = `${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`;
+            // (inside a tunnel's or a gallery's box the land over the roof is not a gap: a ray in through a portal and
+            // out through a gallery's opening passed under it there, TerrainMesh.tubeClip)
+            if (y < land - tol && !(env.tubesNear && TerrainMesh.inTube(env.tubesNear(key), x, y, z))) return { t: Math.round(t), x: Math.round(x), z: Math.round(z), key, underM: Math.round((land - y) * 10) / 10 };
         }
         return null;
     };
@@ -6179,6 +6185,61 @@ WORLD['world-tunnels'] = async (page) => {
         writeFileSync(join(out, 'index.json'), JSON.stringify({ report: { ...read, portalList: undefined }, portals: read.portalList, views }, null, 1));
     }
     return { ...read, views };
+};
+
+// world-tube-shots: pictures inside the ride's tunnels and galleries, the frame alone, as a rider sees them: for each
+// run the chase view riding up to its first portal (`entry`, 30 m out), in the middle of the run from the chase view
+// (`chase`) and the helmet (`helmet`), and riding out of it (`exit`, 25 m before its last portal), with each --at
+// station shot from the chase view too. The bike is ridden in at 18 m/s from 140 m back, so the eye has adapted as a
+// rider's would (Graphics.adaptation). --level N holds that graphics level (js/quality.js) for every picture. The files
+// are <tag>-<run s>-<view>.png and <tag>-s<s>-chase.png in --out, with <tag>-index.json (each view and the window's
+// counts)
+//   node tools/terrain-check.mjs world-tube-shots --world gotthard-north --gpu [--at 9100] [--level 4] [--out <dir>] [--tag T]
+const TUBE_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/tunnel-shots');
+WORLD_PROBES.push('world-tube-shots');
+WORLD['world-tube-shots'] = async (page) => {
+    const out = option('out') || TUBE_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'tube';
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+    const level = option('level') !== undefined ? Number(option('level')) : null;
+    const runs = await page.evaluate(() => {
+        const route = game.environment.route;
+        return [...route.ranges('tunnel').map(r => ({ ...r, kind: 'tunnel' })), ...route.ranges('gallery').map(r => ({ ...r, kind: 'gallery' }))].sort((a, b) => a.s0 - b.s0);
+    });
+    const views = [];
+    for (const run of runs) {
+        const mid = run.s0 + Math.min((run.s1 - run.s0) / 2, 200);
+        views.push({ run, s: Math.max(10, run.s0 - 30), mode: 2, name: `${Math.round(run.s0)}-entry` });
+        views.push({ run, s: mid, mode: 2, name: `${Math.round(run.s0)}-chase` });
+        views.push({ run, s: mid, mode: 1, name: `${Math.round(run.s0)}-helmet` });
+        views.push({ run, s: Math.max(run.s0 + 5, run.s1 - 25), mode: 2, name: `${Math.round(run.s0)}-exit` });
+    }
+    for (const s of (option('at') ? option('at').split(',').map(Number) : [])) views.push({ run: null, s, mode: 2, name: `s${s}-chase` });
+    const index = [];
+    for (const view of views) {
+        const at = await page.evaluate(async (placeSource, pilotSource, countSource, view, level) => {
+            const placeAt = new Function('game', `return (${placeSource})`)(game);
+            const v = game.vehicle;
+            if (level !== null && game.quality) game.quality.fix(level);
+            game.cameraMode = view.mode;
+            await placeAt(Math.max(10, view.s - 140));
+            game.worldCamera.reset(v.yawAngle);
+            new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
+            let ticks = 0;
+            while (v.routeS < view.s && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
+            game.environment.streamer.pump(Infinity);
+            if (typeof Effects !== 'undefined' && game.effectLevels) { Effects.frame(game); game.graphics.easeEffects(10); }
+            twistyDev.step(1, { render: true });
+            const counts = new Function(`return (${countSource})`)()();
+            return { s: Math.round(v.routeS), crashed: v.crashed, level: game.quality ? game.quality.level : null, adapt: game.graphics.adaptation ?? null, counts };
+        }, placeAt.toString(), pilotWorld.toString(), countScene.toString(), view, level);
+        const file = join(out, `${tag}-${view.name}.png`);
+        await page.screenshot({ path: file });
+        index.push({ ...view, file, ...at });
+    }
+    writeFileSync(join(out, `${tag}-index.json`), JSON.stringify(index, null, 1));
+    return { shots: index.length, index: index.map(e => ({ name: e.name, s: e.s, crashed: e.crashed, level: e.level, adapt: e.adapt, ...e.counts })) };
 };
 
 function tunnelChecks(results, failures) {

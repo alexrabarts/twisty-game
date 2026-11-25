@@ -1228,6 +1228,69 @@ class WorldEnvironment {
         return !!walls.plan.seg[sign > 0 ? 'r' : 'l'][index - walls.plan.base];
     }
 
+    // The ride's tunnels and galleries (TubeLining), once: metres in from the nearest portal at each row (negative
+    // outside, to 60 m out); the most of the tube's light at each row (`cap`: 1 in a tunnel, galleryShare in a gallery,
+    // eased over 12 m either side of a change); and the runs of one kind, a tube that is a gallery and then a tunnel
+    // being two. The mountain side of a run is the one where the far land 40 m out stands higher over it: a tunnel
+    // shows its rock there, a gallery its rock or shotcrete there and its openings on the other side. `tube` is the
+    // whole tube's metres along, for its fans and niches
+    tubeInfo() {
+        if (this.tubes) return this.tubes;
+        const points = this.route.points, along = this.route.sArray;
+        const inM = TubeLining.depths(points, along);
+        const run = new Int32Array(points.length).fill(-1);
+        const runs = [];
+        const gallery = i => (points[i].bits & 5) === 4;
+        for (const [from, to] of RoadMesh.runs(points, 1 | 4)) {
+            const tube = [along[from], along[to]];
+            let a = from;
+            for (let i = from; i <= to; i++) {
+                if (i < to && gallery(i + 1) === gallery(a)) continue;
+                let lean = 0;
+                for (let j = a; j <= i; j++) {
+                    const p = points[j], c = Math.cos(p.heading), sn = Math.sin(p.heading);
+                    const right = this.data.farHeight(p.x + 40 * c, p.z - 40 * sn), left = this.data.farHeight(p.x - 40 * c, p.z + 40 * sn);
+                    if (Number.isFinite(right) && Number.isFinite(left)) lean += right - left;
+                }
+                const g = gallery(a), rock = lean >= 0 ? 1 : -1;
+                for (let j = a; j <= i; j++) run[j] = runs.length;
+                // (a gallery's mountain side is rock or sprayed concrete, by the run)
+                runs.push({ s0: along[a], s1: along[i], tube, gallery: g, rock, open: g ? -rock : 0, shotcrete: g && LandShade.hash(a, i, 7) > 0.5 });
+                a = i + 1;
+            }
+        }
+        const T = TubeLining.TUBE;
+        const raw = points.map((p, i) => (run[i] >= 0 && runs[run[i]].gallery ? T.galleryShare : 1));
+        const cap = new Float32Array(points.length);
+        for (let i = 0; i < points.length; i++) {
+            let sum = 0, weight = 0;
+            for (let j = i; j >= 0 && along[i] - along[j] <= 12; j--) { sum += raw[j]; weight++; }
+            for (let j = i + 1; j < points.length && along[j] - along[i] <= 12; j++) { sum += raw[j]; weight++; }
+            cap[i] = sum / weight;
+        }
+        this.tubes = { inM, cap, run, runs };
+        return this.tubes;
+    }
+
+    // The rows with their tube's depth, light and run (RoadMesh.tunnel, RoadMesh.nearRibbon's light), near a tube only
+    tubeRows(rows) {
+        const info = this.tubeInfo();
+        return rows.map(row => {
+            const k = row.i;
+            if (!(info.inM[k] > -60)) return row;
+            return { ...row, tubeIn: info.inM[k], tubeCap: info.cap[k], tubeRun: info.run[k] >= 0 ? info.runs[info.run[k]] : null };
+        });
+    }
+
+    // The tube's light share at s along the ride (TubeLining.share), for the eye's adaptation (Game.updateTubeAdaptation)
+    tubeShareAt(s) {
+        const info = this.tubeInfo(), route = this.route;
+        const k = Math.max(0, Math.min(route.points.length - 2, Math.floor(route.toUnits(s))));
+        const s0 = route.sArray[k], s1 = route.sArray[k + 1];
+        const t = s1 > s0 ? Math.min(1, Math.max(0, (s - s0) / (s1 - s0))) : 0;
+        return TubeLining.share(info.inM[k] + (info.inM[k + 1] - info.inM[k]) * t, info.cap[k] + (info.cap[k + 1] - info.cap[k]) * t);
+    }
+
     buildRoad(section, lod) {
         this.disposeRoad(section);
         // Edge works built before a tile under them arrived are built again when it does (buildTile)
@@ -1235,7 +1298,7 @@ class WorldEnvironment {
         // A row of each neighbour either side: read for the bend and the runs, drawn by the neighbour (RoadMesh.section)
         const last = this.route.points.length - 1;
         const from = Math.max(0, section.from - 1), to = Math.min(last, section.to + 1);
-        const group = RoadMesh.section(this.rowsOf(from, to), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing), roads: this.carriageways, head: section.from - from, tail: to - section.to, plan: this.rideWalls(section.index).plan });
+        const group = RoadMesh.section(this.tubeRows(this.rowsOf(from, to)), lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot: this.edgeFoot(missing), roads: this.carriageways, head: section.from - from, tail: to - section.to, plan: this.rideWalls(section.index).plan });
         // Its works keep out of the side roads' carriageways (Carriageways): built before a side road's chunk is here,
         // it is built again when that chunk is (buildSide)
         if (section.bbox && this.data.manifest && this.data.manifest.chunks) {
@@ -2479,6 +2542,8 @@ class WorldEnvironment {
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
         // detail, as the ride's do, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
+        // (the tubes' lining of every road here, one mesh: TubeLining)
+        const lining = TubeLining.parts();
         // (`before` and `after`: the rows the road goes on as past its ends, so a tube that runs on past one has no portal there)
         const draw = (rows, stub, edge, guard, s0 = 0, before = [], after = []) => {
             // Where the road goes on as another edge of another width, both end on one line at the node: its end row
@@ -2507,6 +2572,11 @@ class WorldEnvironment {
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
             sides.push(Object.assign(built.sides, { owner: edge.id }));
             structures.push(...built.parts.map(part => Object.assign(part, { owner: edge.id })));
+            for (const key of ['lining', 'fittings']) {
+                const part = built.lining[key];
+                for (const [name, list] of Object.entries(part)) lining[key][name] = lining[key][name].concat(list);
+                lining[key].owners = (lining[key].owners || []).concat(new Array(part.positions.length / 9).fill(edge.id));
+            }
             group.add(road);
             roads.push(road);
         };
@@ -2561,6 +2631,7 @@ class WorldEnvironment {
         const ends = box ? this.rideWallEnds(box, WorldEnvironment.WALL_JOIN_M + 60, missing) : [];
         foot.joined = (x, y, z) => ends.some(end => { const d = Math.hypot(end.p[0] - x, end.p[2] - z); return d < WorldEnvironment.WALL_JOIN_M && d > 0.05 && Math.abs(end.p[1] - y) <= 1; });
         triangles += RoadMesh.addEdgeWorks(group, sides, foot, structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
+        triangles += TubeLining.addMeshes(group, lining);
         // The land is cut to their walls (setSideWalls) and to their tubes (setSideTubes)
         this.setSideWalls(k, group.userData.walls || []);
         this.setSideTubes(k, roads.flatMap(road => road.userData.tubes || []));
