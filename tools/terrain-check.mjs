@@ -2341,6 +2341,8 @@ function worldHairpins(route) {
 // 258, 1081, 6756 and 6930: land turned from the sun drew near black (LAND_BLACK_SHARE).
 // 1731, 5133, 6458, 6505 and 6533: the Gotthard road's bridges over the ride drew as black slabs (the structures'
 // near-black share, the same limit as the land's).
+const FLOATING_VIEW_STEP_M = 1500;
+const FLOATING_VIEW_CLEAR_M = 150;
 const FLOATING_VIEWS = [100, 258, 1081, 1300, 1731, 3257, 3600, 4657, 5133, 6458, 6505, 6533, 6756, 6930, 7800, 7900, 7990, 9500, 10900];
 // The share of a view's land pixels that may be near black (luminance under 10 of 255), and of its structures' (under
 // 32: floatingCount's STRUCTURE_DARK)
@@ -2391,7 +2393,9 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
     const sideSeen = new Map(), horizonSeen = new Map();
     let checked = 0, missing = 0, upChecked = 0;
     const r2 = v => Math.round(v * 100) / 100;
-    for (let s0 = every / 2; s0 < route.length; s0 += every) {
+    // (the stage's own road and its stop: a folder of several stages holds the others too)
+    const span = env.stage ? [env.stage.from, Math.min(route.length, env.stage.to + 200)] : [0, route.length];
+    for (let s0 = span[0] + every / 2; s0 < span[1]; s0 += every) {
         const bike = await placeAt(s0);
         const works = o => o.name === 'road-works';
         const skirts = [...meshes(env.roadGroup, works), ...meshes(env.sideGroup, works)];
@@ -3199,6 +3203,8 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
     const jointOpen = [];
     const lodAt = (x, z) => { const held = env.tileMeshes.get(`${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`); return held ? Number(/lod(\d)/.exec(held.mesh.name)[1]) : 0; };
     const stations = [];
+    // (by default the stage's own road and its stop: a folder of several stages holds the others too)
+    if (from === 0 && to === Infinity && env.stage) { from = env.stage.from; to = env.stage.to + 200; }
     for (let s = from; s <= Math.min(to, route.length - 1); s += every) stations.push(Math.round(s));
     for (const s of shotsAt) if (!stations.includes(s)) stations.push(s);
     stations.sort((a, b) => a - b);
@@ -3470,7 +3476,19 @@ const WORLD = {
         if (out) mkdirSync(out, { recursive: true });
         const tag = option('tag') || 'floating';
         const views = [];
-        for (const s of (option('views') ? option('views').split(',').map(Number) : FLOATING_VIEWS)) {
+        // (the Tremola's named views; another stage is seen every FLOATING_VIEW_STEP_M of its own road)
+        // (not within FLOATING_VIEW_CLEAR_M of a tunnel or a gallery: a view into one is dark for its own reason)
+        const span = await page.evaluate(() => (game.environment.stage ? [game.environment.stage.from, game.environment.stage.to, (game.environment.data.manifest.structures || []).filter(st => st.kind !== 'bridge').map(st => [st.s0, st.s1])] : null));
+        const clear = v => !span[2].some(([a, b]) => v > a - FLOATING_VIEW_CLEAR_M && v < b + FLOATING_VIEW_CLEAR_M);
+        const own = !span || (option('world') || 'tremola') === 'tremola' ? FLOATING_VIEWS : Array.from({ length: Math.max(1, Math.floor((span[1] - span[0]) / FLOATING_VIEW_STEP_M)) }, (_, k) => {
+            const v = span[0] + 250 + k * FLOATING_VIEW_STEP_M;
+            for (let d = 0; d < FLOATING_VIEW_STEP_M / 2; d += 50) {
+                if (clear(v + d) && v + d < span[1]) return Math.round(v + d);
+                if (clear(v - d) && v - d > span[0]) return Math.round(v - d);
+            }
+            return Math.round(v);
+        }).filter(clear);
+        for (const s of (option('views') ? option('views').split(',').map(Number) : own)) {
             await page.evaluate(`window.laneLines = ${laneLines.toString()}`);
             const at = await page.evaluate(floatingView, placeAt.toString(), pilotWorld.toString(), s);
             let file = null;
@@ -3489,9 +3507,11 @@ const WORLD = {
         const rows = await page.evaluate(async (step, bikeTileM, countSource, placeSource, meshCap) => {
             const countScene = new Function(`return (${countSource})`)();
             const placeAt = new Function('game', `return (${placeSource})`)(game);
-            const route = game.environment.route;
+            const route = game.environment.route, stage = game.environment.stage;
             const out = [];
-            for (let s = 0; s <= route.length; s += step) {
+            // (the stage's own road and its stop past the finish line: a folder of several stages holds the others too)
+            const from = stage ? stage.from : 0, to = stage ? Math.min(route.length, stage.to + 200) : route.length;
+            for (let s = from; s <= to; s += step) {
                 const p = await placeAt(s);
                 const env = game.environment;
                 const near = [...env.streamer.refs.keys()].length;
