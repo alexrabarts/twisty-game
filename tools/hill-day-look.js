@@ -40,10 +40,9 @@ ride.restart();
 const said = { climb: null, restock: false, deliveries: [], events: [] };
 let frames = 0, t = 0;
 const step = () => { ride.frame(1 / 60); frames++; t += 1 / 60; };
-// The climb: the player steers as the camera sees him
+// The climb: the steer keys turn him to his own left and right, as on the descent
 while (ride.climb && frames < 60 * 60) {
-    const p = pilot(-1, Infinity);
-    now = { steer: -p.steer, brake: 0 };
+    now = { steer: pilot(-1, Infinity).steer, brake: 0 };
     step();
     if (!pictures['hill-climb'] && ride.climb && bike.s < 52) snap('hill-climb');
     if (ride.climb && ride.climb.phase === 'restock' && ride.climb.t > 1.05 && !pictures['hill-restock']) snap('hill-restock');
