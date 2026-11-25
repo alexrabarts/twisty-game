@@ -29,12 +29,13 @@ const { THREE, WorldEnvironment, WorldGround } = game;
 
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
 
-describe('the Tremola slice: every side road meets the ride', () => {
+// Every shipped stage: a new world passes with every count at its limit before it ships
+for (const stage of ['tremola', 'gotthard-north']) describe(`the ${stage} stage: every side road meets the ride`, () => {
     let env, found;
     const physics = [];
     beforeAll(async () => {
         const { fetchFn } = diskFetch();
-        env = await WorldEnvironment.load(new THREE.Scene(), { id: 'tremola', fetchFn, models: null, digest: async () => '0' });
+        env = await WorldEnvironment.load(new THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
         env.scenery.buildTile = () => null;
         const store = {};
         for (const junction of env.graph.junctions) {

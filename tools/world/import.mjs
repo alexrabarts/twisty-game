@@ -25,6 +25,7 @@ import { buildFarLand, horizonSinks, COPERNICUS_NOTICE } from './farland.mjs';
 import { TILE_N } from './bench.mjs';
 import { RIDE_WIDTH_M, classWidth, narrowRide } from './widths.mjs';
 import { mapPlaces, foundPlaces, applyPads, mouthsOf, numberPlaces } from './places.mjs';
+import { findStops } from './stops.mjs';
 
 export { RIDE_WIDTH_M, classWidth };
 
@@ -58,7 +59,7 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     credit: CREDIT,
     sources: { tlm: TLM_NAME.replace(/^swisstlm3d_|_2056_5728\.gpkg\.zip$/g, ''), alti3d: [] },
     keptRoadClasses: null,
-    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0) })) })),
+    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => [at, { kind: d.kind, x: d.e - e0, z: -(d.n - n0) }])) : null })),
     edges,
     demAt: (x, z) => dem.sample(x + e0, n0 - z),
     // Makes sure every tile under the box is in the cache (downloading what is missing) and loaded.
@@ -253,8 +254,13 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
 
   // The stopping places the map has beside the ride widen its verge there, before the land is carved (places.mjs)
   const mouths = mouthsOf(junctions, samples);
-  const mapped = source.areas ? mapPlaces(source.areas(samples), samples, mouths, edges) : [];
+  const areas = source.areas ? source.areas(samples) : [];
+  const mapped = mapPlaces(areas, samples, mouths, edges);
   applyPads(edges, ride, mapped);
+  // The stops at the stages' ends (stops.mjs): each moves its stage's end to before its turn-in
+  const stopDefs = source.stages.flatMap((st, k) => Object.entries(st.stops ?? {}).map(([at, d]) => ({ stage: k, at, ...d })));
+  const stops = stopDefs.length ? findStops({ stopDefs, samples, edges, ride, areas, bounds }) : [];
+  for (const stop of stops) log(`stop: ${stop.kind} at the ${stop.at} of ${stop.stage}, ${stop.access}, turn-in at s ${stop.s}, ${stop.slots.length} slots`);
 
   const placed = placeStations(samples, bounds, junctions.flatMap(j => j.passes.map(p => p.sIn)), { spacingM: stationSpacingM, places: mapped });
   for (const d of placed.dropped) log(`station: no full roadworks site within reach of s ${Math.round(d.target)} in ${d.stage} (${d.reason}); no checkpoint there`);
@@ -289,6 +295,12 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
     for (const [tx, tz] of tileList) { const t = carver.tile(tx, tz); missing += t.missing; tiles.set(`${tx},${tz}`, t); }
   }
   const places = numberPlaces([...mapped, ...found]);
+  // A map place that is a stop's own area stays open at its stage's end (WorldPlaces.close)
+  for (const stop of stops) {
+    if (stop.access !== 'direct') continue;
+    const own = places.find(p => p.source === 'map' && p.side === stop.side && stop.s >= p.s - 20 && stop.s <= p.s + p.length + 20);
+    if (own) own.stop = stop.id;
+  }
   log(`places: ${mapped.length} from the map, ${places.length - mapped.length} found`);
 
   const far = (() => {
@@ -324,7 +336,7 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
 
   return {
     origin: source.origin, credit, notice, sources: farLand ? { ...source.sources, far: farLand.copernicus ? ['alti3d', 'copernicus-glo30'] : ['alti3d'] } : source.sources, spacingM: 4, stationSpacingM, keptRoadClasses: source.keptRoadClasses ?? [...new Set(edges.map(e => e.cls))].sort(),
-    nodes, edges, ride, junctions, stages, stations, tiles, cover, far, farLand, buildings, landmarks, places, structures: structureRuns(samples),
+    nodes, edges, ride, junctions, stages, stations, tiles, cover, far, farLand, buildings, landmarks, places, stops, structures: structureRuns(samples),
     samples, stats: { ...stats, corridor, tilesMissingHeight: missing, droppedStations: placed.dropped, maxStationGapM: placed.maxGapM, snaps: g.snaps }
   };
 }
@@ -371,7 +383,9 @@ export async function main(argv) {
   fs.mkdirSync(out, { recursive: true });
   const files = writeWorld(world, out);
   const courses = path.resolve(opt.courses ?? (opt.synthetic ? path.join(out, 'world-courses.json') : path.join(REPO_ROOT, 'functions', 'world-courses.json')));
-  writeCourses(world, courses, readBoardVersions());
+  // A folder under worlds/ names its own tour row (encode.mjs courseRows)
+  const tour = path.basename(path.dirname(out)) === 'worlds' ? `tour-${path.basename(out)}` : 'tour';
+  writeCourses(world, courses, readBoardVersions(), tour);
   const bytes = [...files.values()].reduce((p, b) => p + b.length, 0);
   log(`wrote ${files.size} files, ${(bytes / 1e6).toFixed(2)} MB to ${out}; courses to ${courses}`);
   return world;

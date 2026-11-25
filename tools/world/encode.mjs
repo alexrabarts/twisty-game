@@ -211,6 +211,8 @@ export function encodeFiles(world) {
     structures: world.structures,
     landmarks: world.landmarks,
     places: world.places ?? [],
+    // The stops at the stages' ends (tools/world/stops.mjs), in a manifest that has any
+    ...(world.stops && world.stops.length ? { stops: world.stops } : {}),
     ...(world.farLand ? { farLevels: world.farLand.levels.map((l, k) => ({ file: `far/l${k + 1}.bin`, cell: l.cell, nx: l.nx, nz: l.nz })) } : {}),
     counts: { nodes: world.nodes.length, edges: world.edges.length, samples: chunks.reduce((p, c) => p + c.count, 0), buildings: world.buildings.length },
     dataHash
@@ -238,7 +240,9 @@ export function writeWorld(world, outDir) {
 
 // The stage and tour board rows for functions/world-courses.json. Nothing in functions/ reads that file yet: it is
 // wired in with the world leaderboards (R6), and until then the server has no row for a world board.
-export function courseRows(world, versions = {}) {
+// `tour` names the row of the whole ride when it has two stages or more: `tour` for the shipped world/, the data
+// folder's name for another (worlds/<name>/), so two folders' tours never share a board
+export function courseRows(world, versions = {}, tour = 'tour') {
   const rows = {};
   const ver = id => versions[id] ?? 1;
   for (const s of world.stages) {
@@ -246,14 +250,20 @@ export function courseRows(world, versions = {}) {
   }
   if (world.stages.length > 1) {
     const gateFloorsMs = world.stages.map(s => s.floorMs);
-    rows[`world-tour-v${ver('tour')}`] = { kind: 'tour', gates: world.stages.length - 1, metres: Math.round(world.stages[world.stages.length - 1].to - world.stages[0].from), floorMs: gateFloorsMs.reduce((p, q) => p + q, 0), gateFloorsMs };
+    rows[`world-${tour}-v${ver(tour)}`] = { kind: 'tour', gates: world.stages.length - 1, metres: Math.round(world.stages[world.stages.length - 1].to - world.stages[0].from), floorMs: gateFloorsMs.reduce((p, q) => p + q, 0), gateFloorsMs };
   }
   return Object.fromEntries(Object.entries(rows).sort((a, b) => (a[0] < b[0] ? -1 : 1)));
 }
 
-export function writeCourses(world, file, versions) {
+// The rows of one data folder go into the file beside the rows of every other folder's stages: a folder's import
+// replaces its own rows only (its stages' and its tour's), so the Tremola's row stays as it is
+export function writeCourses(world, file, versions, tour = 'tour') {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(courseRows(world, versions), null, 2)}\n`);
+  const rows = courseRows(world, versions, tour);
+  const own = new Set([...world.stages.map(s => `world-${s.id}-`), `world-${tour}-`]);
+  const kept = fs.existsSync(file) ? Object.entries(JSON.parse(fs.readFileSync(file, 'utf8'))).filter(([id]) => ![...own].some(prefix => id.startsWith(prefix) && /^v\d+$/.test(id.slice(prefix.length)))) : [];
+  const all = Object.fromEntries([...kept, ...Object.entries(rows)].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
+  fs.writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`);
 }
 
 // ---- decode ----

@@ -1,4 +1,18 @@
 {
+  "world-gotthard-north-v1": {
+    "kind": "stage",
+    "gates": 5,
+    "metres": 11577,
+    "floorMs": 140272,
+    "gateFloorsMs": [
+      20124,
+      26398,
+      23239,
+      27913,
+      20875,
+      21723
+    ]
+  },
   "world-tremola-v1": {
     "kind": "stage",
     "gates": 6,

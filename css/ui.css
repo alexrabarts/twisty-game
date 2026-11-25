@@ -1037,6 +1037,97 @@ body.world-loading-on .hud {
     opacity: 0.8;
 }
 
+.world-legs {
+    position: fixed;
+    inset: 0;
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    box-sizing: border-box;
+    background: rgba(0, 0, 0, 0.55);
+}
+
+.world-legs-box {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(560px, 100%);
+    max-height: calc(100vh - 32px);
+    padding: 20px 24px;
+    box-sizing: border-box;
+    color: #fff;
+    background: rgba(14, 16, 20, 0.94);
+    font: 14px/1.45 system-ui, sans-serif;
+}
+
+.world-legs-box h2 {
+    margin: 0;
+    font-size: 20px;
+}
+
+.world-legs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+}
+
+.world-legs-pass {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.7;
+}
+
+.world-legs-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.05);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.world-legs-row:focus-visible,
+.world-legs-row:hover:not([disabled]) {
+    border-color: var(--c-gold, #f5c542);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.world-legs-row[disabled] {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.world-legs-name {
+    font-weight: 700;
+}
+
+.world-legs-meta {
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.world-legs-state {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-gold, #f5c542);
+}
+
+.world-legs-back {
+    align-self: flex-start;
+}
+
 .world-pause {
     position: fixed;
     left: 50%;

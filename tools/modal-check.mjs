@@ -62,16 +62,25 @@ const pause = { eval: () => game.pauseRace(), touch: '.virtual-button-pause', to
 const finish = { eval: () => game.finishRun(), top: 'finishBanner' };
 // A world ride is up: the world's environment, the bike and the run
 const WORLD_READY = 'window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun';
-// The world chosen on the menu is the one ?world=tremola gives: its environment, stage and rider, with no query
+// The world chosen on the menu is the leg picked on the leg list (js/world/legs.js): leg 1, the run-in from the north
 const worldFromMenu = () => {
     const problems = [];
     const env = game.environment;
     if (!env || env.constructor.name !== 'WorldEnvironment') problems.push(`the environment is ${env && env.constructor.name}, not WorldEnvironment`);
-    if (env && env.config.id !== 'tremola') problems.push(`the stage is ${env.config.id}, not tremola`);
+    if (env && env.config.id !== 'gotthard-north') problems.push(`the stage is ${env.config.id}, not gotthard-north`);
     if (location.search) problems.push(`the page has a query: ${location.search}`);
     const chosen = game.tourSystem.selectedCharacterId;
     if (!game.selectedCharacter || game.selectedCharacter.id !== chosen) problems.push(`the ride has rider ${game.selectedCharacter && game.selectedCharacter.id}, the menu chose ${chosen}`);
     if (document.querySelector('.tour-selector-overlay') && getComputedStyle(document.querySelector('.tour-selector-overlay')).display !== 'none') problems.push('the menu is still shown');
+    return problems;
+};
+// The leg list: grouped by pass, leg 1 focused, each open leg a button
+const legsListed = () => {
+    const problems = [];
+    const rows = [...document.querySelectorAll('#world-legs .world-legs-row')];
+    if (!rows.length) problems.push('the leg list has no legs');
+    if (!document.querySelector('#world-legs .world-legs-pass')) problems.push('the leg list names no pass');
+    if (document.activeElement !== document.querySelector('#world-legs [data-leg="gotthard-north"]')) problems.push('leg 1 is not focused');
     return problems;
 };
 const creditShown = () => {
@@ -306,7 +315,8 @@ const SEQUENCES = [
         { top: MENU },
         { click: '#riderNextBtn', top: MENU },
         { click: '#riderPrevBtn', top: MENU },
-        { click: '#riderContinueBtn', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
+        { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
+        { click: '#world-legs [data-leg="gotthard-north"]', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
         pause,
         { click: '#world-pause [data-credits]', top: 'world-credits', check: creditShown },
         { click: '#world-credits button', top: 'world-pause' },
@@ -320,8 +330,14 @@ const SEQUENCES = [
         { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
     ] },
     // A host that does not serve the world: the legs take over with the note, and a leg rides
+    // The leg list goes back to the rider screen with Back (Escape)
+    { name: 'menu-world-legs-back', page: 'menu', steps: [
+        { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
+        { click: '#world-legs .world-legs-back', top: MENU }
+    ] },
     { name: 'menu-world-fallback', page: 'menu', noWorld: true, steps: [
-        { click: '#riderContinueBtn', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
+        { click: '#riderContinueBtn', top: 'world-legs' },
+        { click: '#world-legs [data-leg="gotthard-north"]', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
         { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
     ] },
 
@@ -395,7 +411,7 @@ async function openPage(browser, port, kind, variant, errors, noWorld = false) {
         const target = new URL(request.url());
         if (BLOCKED_HOSTS.some(host => target.hostname.endsWith(host))) {
             request.abort();
-        } else if (noWorld && target.pathname.startsWith('/world/')) {
+        } else if (noWorld && (target.pathname.startsWith('/world/') || target.pathname.startsWith('/worlds/'))) {
             request.respond({ status: 404, contentType: 'text/plain', body: 'not served' });
         } else if (/jsdelivr\.net\/npm\/three@0\.150\.0\/build\/three\.min\.js/.test(request.url())) {
             request.respond({ status: 200, contentType: 'text/javascript', body: readFileSync(join(root, 'node_modules/three/build/three.min.js')) });

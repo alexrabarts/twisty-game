@@ -1874,8 +1874,8 @@ async function main() {
     }
     if (state.injected) report.notes.push('js/sceneassets.js was injected: index.html does not load it');
     report.failures.length && (exit = exit || 1);
-    console.log(JSON.stringify(report, null, 1));
-    process.exit(exit);
+    // Exit once the report has drained: process.exit cuts a piped stdout at 64 KB
+    process.stdout.write(`${JSON.stringify(report, null, 1)}\n`, () => process.exit(exit));
 }
 
 // Per-probe expectations, then baseline comparison and writes
@@ -5620,6 +5620,12 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
     return { every, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
 }, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100), roadworksWindow.toString());
 
+// The least number of hairpins a stage's probes must find: the stage's own count by tools/world/verify.mjs
+// findHairpins, so a finder that finds nothing fails where the data has hairpins and a stage with none (the run-in
+// from the north) is not failed for having none. The Tremola has 31; the probes ask for 20 of them, as before.
+const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'gotthard-lookout': 1 };
+const hairpinsLeast = () => HAIRPINS_LEAST[option('world') || 'tremola'] ?? 1;
+
 function fairnessChecks(results, failures) {
     const fair = results['world-fairness'];
     if (!fair) return;
@@ -5627,7 +5633,7 @@ function fairnessChecks(results, failures) {
     if (fair.widthCount) failures.push(`world-fairness: ${fair.widthCount} points where the physics band is over 0.1 m off the drawn ribbon (worst ${fair.worstWidthM} m): ${JSON.stringify(fair.width.slice(0, 10))}`);
     if (fair.solidCount) failures.push(`world-fairness: ${fair.solidCount} wall or fall points on the drawn road with nothing drawn within 0.5 m: ${JSON.stringify(fair.solid.slice(0, 10))}`);
     if (fair.runoffCount) failures.push(`world-fairness: ${fair.runoffCount} run-off points on the drawn carriageway: ${JSON.stringify(fair.runoff.slice(0, 10))}`);
-    if (!(fair.hairpins >= 20 && fair.rides === fair.hairpins * 4)) failures.push(`world-fairness: ${fair.rides} rides over ${fair.hairpins} hairpins`);
+    if (!(fair.hairpins >= hairpinsLeast() && fair.rides === fair.hairpins * 4)) failures.push(`world-fairness: ${fair.rides} rides over ${fair.hairpins} hairpins, want ${hairpinsLeast()} hairpins or more`);
     if (fair.crashes.length) failures.push(`world-fairness: ${fair.crashes.length} crashes in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.crashes.slice(0, 10))}`);
     if (fair.restarts.length) failures.push(`world-fairness: ${fair.restarts.length} restarts in the hairpins at 5 and 7 m/s: ${JSON.stringify(fair.restarts.slice(0, 10))}`);
     const works = fair.works || {};
@@ -6220,7 +6226,7 @@ function stoneChecks(results, failures) {
     const stones = results['world-stones'];
     if (!stones) return;
     if (!(stones.stones > 0)) failures.push(`world-stones: no marker stone was seen at ${stones.places} places`);
-    if (!(stones.hairpinsWithRow > 0)) failures.push(`world-stones: no row of stones at any of the ${stones.hairpins} hairpins`);
+    if (stones.hairpins > 0 && !(stones.hairpinsWithRow > 0)) failures.push(`world-stones: no row of stones at any of the ${stones.hairpins} hairpins`);
     const says = { floats: 'stones with a corner over the drawn ground', buried: 'stones under the drawn ground', flat: `stones off every hairpin with no drop of ${stones.dropM} m drawn within ${stones.reachM} m on their side`, noEdge: `stones on a hairpin with no drop of ${stones.hairpinDropM} m drawn within ${stones.reachM} m behind them`, inside: 'stones on the inside of a hairpin', guarded: 'stones off a wall where a wall or a parapet is drawn at the edge', offTop: 'stones on a wall with a corner off its coping', railed: 'stones on a wall with a parapet', wallHigh: `stones on a wall that drops ${stones.wallMaxM} m or more`, kerbFloats: 'pieces of kerb with their foot over the drawn ground', kerbStray: 'pieces of kerb not between two granite stones of a row' };
     for (const [kind, text] of Object.entries(says)) if (stones[kind].length) failures.push(`world-stones: ${text}: ${JSON.stringify(stones[kind])}`);
 }
@@ -7169,7 +7175,7 @@ function camWallChecks(results, failures) {
     const walls = results['world-camera-walls'];
     if (!walls || walls.files) return;
     if (walls.error) { failures.push(`world-camera-walls: ${walls.error}`); return; }
-    if (!(walls.frames > 0)) failures.push('world-camera-walls: no frame was read');
+    if (!(walls.frames > 0) && hairpinsLeast() > 0) failures.push('world-camera-walls: no frame was read');
     if (walls.short.length) failures.push(`world-camera-walls: under 100 frames at ${JSON.stringify(walls.short)}`);
     const says = { works: 'a wall, a parapet or a deck', land: 'the land', house: 'a house', road: "a road's surface" };
     for (const [kind, text] of Object.entries(says)) if (walls[kind]) failures.push(`world-camera-walls: ${text} stood between the camera and the bike on ${walls[kind]} of ${walls.frames} frames: ${JSON.stringify(walls.bad.filter(r => r[kind]).slice(0, 8))}`);
@@ -7843,8 +7849,8 @@ async function worldMain() {
     if (state.effects) report.effects = state.effects;
     if (state.consoleErrors) report.consoleErrors = state.consoleErrors;
     report.failures.length && (exit = exit || 1);
-    console.log(JSON.stringify(report, null, 1));
-    process.exit(exit);
+    // Exit once the report has drained: process.exit cuts a piped stdout at 64 KB
+    process.stdout.write(`${JSON.stringify(report, null, 1)}\n`, () => process.exit(exit));
 }
 
 function isAllowedRequest(url, port) {
@@ -8004,7 +8010,7 @@ function worldChecks(report) {
     if (frustum) {
         if (frustum.crashed) failures.push(`world-frustum: the ride crashed at s ${frustum.reached}`);
         if (frustum.reached < frustum.end) failures.push(`world-frustum: the ride stopped at s ${frustum.reached}, before ${frustum.end}`);
-        if (frustum.hairpins.length < 20) failures.push(`world-frustum: ${frustum.hairpins.length} hairpins found, want 20 or more`);
+        if (frustum.hairpins.length < hairpinsLeast()) failures.push(`world-frustum: ${frustum.hairpins.length} hairpins found, want ${hairpinsLeast()} or more`);
         if (frustum.out) failures.push(`world-frustum: the bike was within ${frustum.margin} of the screen edge or out of view on ${frustum.out} of ${frustum.frames} frames (worst ${frustum.least} at s ${frustum.worstAt})`);
         frustum.hairpins.forEach(h => { if (!(h.frames > 0)) failures.push(`world-frustum: no frames at the hairpin at s ${h.s}`); });
     }
@@ -8023,7 +8029,7 @@ function worldChecks(report) {
     const assist = results['world-hairpin-assist'];
     if (assist) {
         const normal = assist.levels.normal;
-        if (assist.bends < 20) failures.push(`world-hairpin-assist: ${assist.bends} hairpins found, want 20 or more`);
+        if (assist.bends < hairpinsLeast()) failures.push(`world-hairpin-assist: ${assist.bends} hairpins found, want ${hairpinsLeast()} or more`);
         if (normal.crashes) failures.push(`world-hairpin-assist: the scripted rider crashed on ${normal.crashes} hairpins with the assist at normal: ${JSON.stringify(normal.bad)}`);
     }
     const models = results['world-models'];

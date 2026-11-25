@@ -19,7 +19,9 @@ export function stageDefs(route, ids) {
     const a = wp.indexOf(boundaries[k]), b = wp.indexOf(boundaries[k + 1]);
     all.push({ id: `${slug(boundaries[k].name)}-${slug(boundaries[k + 1].name)}`, name: `${boundaries[k].name} to ${boundaries[k + 1].name}`, waypoints: wp.slice(a, b + 1) });
   }
-  const slices = Object.entries(route.slices ?? {}).map(([id, s]) => ({ id, name: s.name, waypoints: s.waypoints.map(i => wp.find(w => w.id === i)) }));
+  // A slice names waypoints of the route and points off it (route.points: stops the D1 line does not pass)
+  const named = [...wp, ...(route.points ?? [])];
+  const slices = Object.entries(route.slices ?? {}).map(([id, s]) => ({ id, name: s.name, waypoints: s.waypoints.map(i => named.find(w => w.id === i)), stops: s.stops ?? null }));
   if (ids.length === 1 && ids[0] === 'all') return all;
   return ids.map(id => {
     const found = slices.find(s => s.id === id) ?? all.find(s => s.id === id);

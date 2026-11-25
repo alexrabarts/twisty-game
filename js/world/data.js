@@ -25,7 +25,16 @@ class WorldData {
     static get BUILDING_BYTES() { return 16; }
     static get FORMAT() { return 1; }
     static get SHIPPED_BASE() { return 'world/'; }
-    static get ALLOWED_BASES() { return ['world/', 'tests/fixtures/world/']; }
+    // Every shipped data folder and the stages it holds: one continuous ride a folder. The Tremola stays in world/;
+    // the legs a later import added are in their own folder under worlds/, so world/ never changes for them
+    static get FOLDERS() { return { 'world/': ['tremola'], 'worlds/gotthard/': ['gotthard-north', 'gotthard-lookout'] }; }
+    static get ALLOWED_BASES() { return ['world/', 'worlds/', 'tests/fixtures/world/']; }
+
+    // The shipped folder that holds stage `id` ('all' and an unknown id: world/)
+    static baseFor(id) {
+        for (const [base, stages] of Object.entries(WorldData.FOLDERS)) if (stages.includes(id)) return base;
+        return WorldData.SHIPPED_BASE;
+    }
     static get MAX_TILES() { return 160; }
     static get MAX_CHUNKS() { return 96; }
     static get ZONE() { return { terrain: 0, road: 1, bench: 2, wall: 3, drop: 4, water: 5 }; }
@@ -33,9 +42,9 @@ class WorldData {
     // The folder a `?worldData=` value names, or an error. Only a relative
     // path under an allowed folder passes: no scheme, no `//`, no `..`, no
     // backslash, no leading slash.
-    static resolveBase(param) {
+    static resolveBase(param, id = null) {
         if (param === null || param === undefined || param === '') {
-            return { base: WorldData.SHIPPED_BASE, overridden: false };
+            return { base: id === null ? WorldData.SHIPPED_BASE : WorldData.baseFor(id), overridden: false };
         }
         const text = String(param);
         const refused = /^[a-z][a-z0-9+.-]*:/i.test(text) || text.includes('//') || text.includes('\\') ||
@@ -43,7 +52,7 @@ class WorldData {
         const allowed = WorldData.ALLOWED_BASES.some(base => text.startsWith(base));
         if (refused || !allowed) return { base: null, overridden: true, error: `worldData must be a relative path under ${WorldData.ALLOWED_BASES.join(' or ')}` };
         const base = text.endsWith('/') ? text : `${text}/`;
-        return { base, overridden: base !== WorldData.SHIPPED_BASE };
+        return { base, overridden: !(base in WorldData.FOLDERS) };
     }
 
     constructor({ base = WorldData.SHIPPED_BASE, overridden = false, fetchFn = null, digest = null } = {}) {
@@ -98,17 +107,17 @@ class WorldData {
         return this;
     }
 
-    // Trusted: read from the shipped folder, and the manifest is the one that
-    // the shipped world/SHA256SUMS lists
+    // Trusted: read from a shipped folder, and the manifest is the one that
+    // that folder's SHA256SUMS lists
     async checkTrust(manifestBuffer) {
-        if (this.overridden || this.base !== WorldData.SHIPPED_BASE) return false;
+        if (this.overridden || !(this.base in WorldData.FOLDERS)) return false;
         const digest = this.digest || (typeof crypto !== 'undefined' && crypto.subtle ? async (buffer) => {
             const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
             return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
         } : null);
         if (!digest) return false;
         try {
-            const sums = new TextDecoder().decode(await this.fetchBuffer('SHA256SUMS', WorldData.SHIPPED_BASE));
+            const sums = new TextDecoder().decode(await this.fetchBuffer('SHA256SUMS', this.base));
             const line = sums.split('\n').find(row => row.trim().endsWith('manifest.json'));
             return !!line && line.trim().split(/\s+/)[0] === await digest(manifestBuffer);
         } catch (error) {

@@ -34,9 +34,9 @@ class WorldPlaces {
         return place.depth * (place.taper > 0 ? Math.min(1, into / place.taper) : 1);
     }
 
-    constructor(list, route, { from = 0, to = Infinity } = {}) {
+    constructor(list, route, { from = 0, to = Infinity, stage = null } = {}) {
         this.route = route;
-        this.all = (list || []).map(p => ({ ...p, slots: WorldPlaces.slotsOf(p), open: p.s >= from && p.s + p.length <= to }))
+        this.all = (list || []).map(p => ({ ...p, slots: WorldPlaces.slotsOf(p), open: (p.s >= from && p.s + p.length <= to) || (!!p.stop && p.stop.startsWith(`${stage}-`)) }))
             .sort((a, b) => a.s - b.s || a.side - b.side);
         this.list = this.all.filter(p => p.open);
         this.apply();
@@ -73,6 +73,8 @@ class WorldPlaces {
     close(spans) {
         const clear = WorldPlaces.WORKS_CLEAR_M;
         for (const place of this.all) {
+            // A stop's own place (manifest.stops) stays open at its stage's end: the group parks there
+            if (place.stop) continue;
             if (spans.some(span => place.s <= span.s1 + clear && place.s + place.length >= span.s0 - clear)) place.open = false;
         }
         this.list = this.all.filter(p => p.open);

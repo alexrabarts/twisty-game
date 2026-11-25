@@ -646,7 +646,8 @@ describe('the board rows', () => {
         for (const [id, row] of Object.entries(rows)) {
             if (!/^world-.*-v\d+$/.test(id)) problems.push(`${id}: bad id`);
             if (!['stage', 'tour'].includes(row.kind)) problems.push(`${id}: kind`);
-            if (!(row.gates > 0)) problems.push(`${id}: gates`);
+            // (a stage shorter than twice the station spacing has no checkpoint: 0 gates, one floor)
+            if (!(row.gates >= 0) || (row.kind === 'tour' && !(row.gates > 0))) problems.push(`${id}: gates`);
             if (row.gateFloorsMs.length !== row.gates + 1) problems.push(`${id}: gateFloorsMs length`);
             if (row.gateFloorsMs.some(f => !(f > 0) || f >= POLICY.maxGateMs)) problems.push(`${id}: a gate floor`);
             if (row.floorMs < row.gateFloorsMs.reduce((p, q) => p + q, 0)) problems.push(`${id}: floorMs under the sum`);
@@ -669,11 +670,18 @@ describe('the board rows', () => {
         expect(problemsOf(broken, manifest).length).toBeGreaterThan(0);
     });
 
-    test('functions/world-courses.json holds the committed slice and equals its manifest', () => {
-        const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'world', 'manifest.json'), 'utf8'));
+    test('functions/world-courses.json holds every shipped folder\'s stages and equals their manifests', () => {
+        const folders = ['world', ...fs.readdirSync(path.join(REPO, 'worlds')).map(name => path.join('worlds', name))];
         const rows = JSON.parse(fs.readFileSync(path.join(REPO, 'functions', 'world-courses.json'), 'utf8'));
-        expect(Object.keys(rows)).toEqual(manifest.stages.map(s => `world-${s.id}-v1`));
-        expect(problemsOf(rows, manifest)).toEqual([]);
+        const ids = [];
+        for (const folder of folders) {
+            const manifest = JSON.parse(fs.readFileSync(path.join(REPO, folder, 'manifest.json'), 'utf8'));
+            const tour = folder === 'world' ? 'tour' : `tour-${path.basename(folder)}`;
+            const own = Object.fromEntries(Object.entries(rows).filter(([id]) => manifest.stages.some(s => id === `world-${s.id}-v1`) || id === `world-${tour}-v1`));
+            expect(problemsOf(own, manifest)).toEqual([]);
+            ids.push(...manifest.stages.map(s => `world-${s.id}-v1`), ...(manifest.stages.length > 1 ? [`world-${tour}-v1`] : []));
+        }
+        expect(Object.keys(rows).sort()).toEqual(ids.sort());
     });
 });
 

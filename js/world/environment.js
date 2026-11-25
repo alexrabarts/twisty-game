@@ -112,7 +112,7 @@ class WorldEnvironment {
     static get LANDMARK_REACH_M() { return 3000; }
 
     static async load(scene, { id = 'all', search = '', fetchFn = null, models = undefined, digest = null } = {}) {
-        const resolved = WorldData.resolveBase(new URLSearchParams(search).get('worldData'));
+        const resolved = WorldData.resolveBase(new URLSearchParams(search).get('worldData'), id);
         if (resolved.error) throw new Error(resolved.error);
         const data = new WorldData({ base: resolved.base, overridden: resolved.overridden, fetchFn, digest });
         await data.load();
@@ -139,7 +139,9 @@ class WorldEnvironment {
         if (!samples) throw new Error('world ride is not resident');
         this.route = new WorldRoute(samples, { stations: data.ride.stations, stages: data.ride.stages, graph: this.graph });
         // The stopping places beside the ride (WorldPlaces), on the route's points before anything reads a verge
-        this.places = new WorldPlaces(data.manifest.places || [], this.route, stage ? { from: stage.from, to: stage.to } : {});
+        this.places = new WorldPlaces(data.manifest.places || [], this.route, stage ? { from: stage.from, to: stage.to, stage: stage.id } : {});
+        // The stops at the stages' ends (tools/world/stops.mjs): where the group parks after the finish line
+        this.stops = data.manifest.stops || [];
         this.ground = new WorldGround(this.route, data);
         // The physics reads the land as it is drawn: cut to the retaining walls (cutsOf)
         this.ground.cutsOf = key => this.cutsOf(key);

@@ -18,7 +18,7 @@
 // under it. Where two strands are near and the height between them cannot be closed at the batter, the node is a
 // cliff face (`wall`, nearer the lower road) or a drop (nearer the upper road). Road is
 // never carved under bridges, galleries or over tunnels.
-import { ROOFED } from './profile.mjs';
+import { ROOFED, FLAG } from './profile.mjs';
 
 export const TILE_M = 512;
 export const CELL_M = 8;
@@ -32,6 +32,10 @@ export const VERGE_M = 1.1;
 export const JOIN_M = 1.5;
 export const STRAND_GAP_M = 60;
 const CLAIM_MARGIN_M = 0.5;
+// On a bridge the land is not carved, but no land stands over the deck: every node of a triangle that reaches into a
+// bridge's strip is held this far under the deck's surface (a bank that rises to an abutment came up through the deck's
+// last metres: 0.96 m over the carriageway's edge at a bridge end of the run-in from the north)
+const BRIDGE_UNDER_M = 0.15;
 const CLAIM_STEP_M = 0.5;
 const SAME_STRAND_M = 2 * CELL_M;
 const LOWER_PASSES = 4;
@@ -293,9 +297,36 @@ export function createBencher({ edges, demAt, coverAt = () => 0 }) {
     if (!moved) break;
   }
 
-  // Height and zone at a node of the 8 m grid: a claimed node as resolved, any other the land by distance from the roads
+  // The most each node under a bridge's strip may stand: the deck's surface less BRIDGE_UNDER_M (bridges only: a tunnel
+  // and a gallery have their land over them)
+  const decks = new Map();
+  edges.forEach(e => {
+    for (let i = 0; i + 1 < e.x.length; i++) {
+      if (!((e.flags[i] | e.flags[i + 1]) & FLAG.bridge) || (e.flags[i] | e.flags[i + 1]) & (FLAG.tunnel | FLAG.gallery)) continue;
+      const run = Math.hypot(e.x[i + 1] - e.x[i], e.z[i + 1] - e.z[i]);
+      const ha = stripHalf(e.width[i]), hb = stripHalf(e.width[i + 1]);
+      const along = Math.max(1, Math.ceil(run / CLAIM_STEP_M)), across = Math.max(1, Math.ceil((2 * Math.max(ha, hb)) / CLAIM_STEP_M));
+      const ca = Math.cos(e.heading[i]), sa = Math.sin(e.heading[i]), cb = Math.cos(e.heading[i + 1]), sb = Math.sin(e.heading[i + 1]);
+      for (let a = 0; a <= along; a++) {
+        const t = a / along, top = e.y[i] + (e.y[i + 1] - e.y[i]) * t - BRIDGE_UNDER_M;
+        for (let b = 0; b <= across; b++) {
+          const f = (b / across) * 2 - 1;
+          const xa = e.x[i] + f * ha * ca, za = e.z[i] - f * ha * sa, xb = e.x[i + 1] + f * hb * cb, zb = e.z[i + 1] - f * hb * sb;
+          for (const [gi, gj] of corners((xa + (xb - xa) * t) / CELL_M, (za + (zb - za) * t) / CELL_M)) {
+            const key = nodeKey(gi, gj);
+            if (!(decks.get(key) <= top)) decks.set(key, top);
+          }
+        }
+      }
+    }
+  });
+
+  // Height and zone at a node of the 8 m grid: a claimed node as resolved, any other the land by distance from the roads,
+  // and no higher than a bridge's deck over it
   function node(gi, gj) {
-    return claimed(gi, gj) ?? ground(gi * CELL_M, gj * CELL_M);
+    const g = claimed(gi, gj) ?? ground(gi * CELL_M, gj * CELL_M);
+    const top = decks.get(nodeKey(gi, gj));
+    return top !== undefined && g.y > top ? { ...g, y: top } : g;
   }
 
   // Height and zone at one point, by distance from the roads (a node of the grid takes node() instead).

@@ -275,6 +275,18 @@ class Game {
     // The menu's world: a leg ridden on this page has left its systems built, so the world starts on a fresh page
     // (the rider and bike are kept in localStorage); a page that has ridden nothing starts it here
     chooseWorld() {
+        // With more than one world leg the menu asks which (WorldLegs: grouped by pass, the next open leg focused)
+        if (typeof WorldLegs !== 'undefined' && WorldLegs.LIST.length > 1 && !this.rideMode.legPicked) {
+            WorldLegs.open(document, {
+                unlockAll: Game.debugEnabled(window.location.search),
+                onPick: (id) => {
+                    this.rideMode = { ...this.rideMode, world: id, legPicked: true };
+                    this.chooseWorld();
+                },
+                onBack: () => { this.tourSystem.legSelectorActive = true; }
+            });
+            return;
+        }
         if (this.environment) {
             window.location.assign(RideMode.worldUrl(window.location, this.rideMode.world, typeof GameModes !== 'undefined' ? GameModes.chosen : 'trial'));
             return;
@@ -2620,6 +2632,8 @@ class Game {
     // The end of a world stage: the time and the restarts, and R to ride it again. Boards, unlocks and the
     // next stage belong to the run flow of the world, not to this page.
     showWorldFinish() {
+        // A finished leg opens the next on the menu (WorldLegs)
+        if (typeof WorldLegs !== 'undefined' && this.environment.stage) WorldLegs.markFinished(this.environment.stage.id);
         const banner = document.createElement('div');
         banner.id = 'finishBanner';
         banner.className = 'finish-banner';

@@ -144,6 +144,35 @@ So the map gives the ridden old road one place, 650 m before the summit. The res
 
 The Tremola slice has 21 places: 1 car park from the map and 20 found: 16 laybys and 4 viewpoints (s 1 594, 4 693, 6 960 and 12 078, all on the right), 15 on the right and 6 on the left, 383 to 1 029 m apart (559 m from the start to the first, 648 m from the last to the finish; the 1 029 m is s 8 182 to 9 210). The runtime closes 2 of them for the roadworks (s 9 210 and 11 507, each inside a site), which leaves 19 open, at most 1 660 m apart (s 8 182 to 9 842, the stacked hairpins). The re-import that carved them changed `manifest.json`, `SHA256SUMS` and the 11 height tiles their pads reach (`h-0_20` to `h-0_22`, `h-m1_19` to `h-m1_21`, `h-m2_19`, `h-m3_16` to `h-m3_19`); every other file is the same bytes and `functions/world-courses.json` is unchanged. The mini fixture has its car park on its first straight (s 304, the rider's right) and 5 found viewpoints (4 on the right, 1 on the left: its land is a slope that falls away from the road).
 
+## More legs: a data folder for each import
+
+The Tremola slice stays in `world/`, byte for byte. A later import that is not the same ride goes into its own folder under `worlds/`: the run-in from the north and the lookout leg are one continuous ride in `worlds/gotthard/` (`node tools/world/import.mjs --stages gotthard-north,gotthard-lookout --out worlds/gotthard`). The rules:
+
+- **One ride a folder.** A folder holds one continuous ride (`ride.json`), cut into its stages. Two legs that do not follow each other on the road (the Tremola runs up from Airolo, the run-in from the north comes down to the same summit) are two folders.
+- **A stage names its folder.** `WorldData.FOLDERS` lists each shipped folder and its stages; `WorldData.baseFor(id)` gives the folder of stage `id` (`world/` for `all` and an unknown id). `?world=<id>` reads that folder; `?worldData=worlds/<name>` names one directly (under `worlds/` or `tests/fixtures/world/` only). A shipped folder is trusted when its manifest is the one its own `SHA256SUMS` lists.
+- **The board rows.** `functions/world-courses.json` holds the rows of every folder: an import replaces its own stages' rows and its tour's (`world-tour-<name>-v1` for `worlds/<name>`) and keeps the rest (`writeCourses`). A stage shorter than twice the station spacing has no checkpoint: `gates` 0 and one floor.
+- **Stops off the D1 line.** `route.json` `points` holds places the D1 waypoints do not pass (`id` after the waypoints); only slices name them. `snap: "nearest"` takes the nearest road of any class.
+- **The menu.** `WorldLegs.LIST` (js/world/legs.js) holds the legs in ride order, grouped by pass ("The legs on the menu" in `world.md`).
+
+## The stops at a leg's ends
+
+A leg starts and ends at a real stop: a hotel, a restaurant, a lookout, a fuel station or a car park (`STOP_KINDS`), where the group pulls in and parks. A slice of `route.json` names each stop by its kind and the coordinate of the evidence for it (`stops.start`, `stops.end`: where the owner's photos cluster as a stop, or a building with a use). Everything else is found by rule (`tools/world/stops.mjs`, `STOP`):
+
+- **The area.** The public car park or rest area (`AREA_KINDS` of `places.mjs`) nearest the coordinate, within `areaReachM` (300 m).
+- **The way in.** `direct` when the area comes within `directM` (16 m) of the ride's edge within `searchM` (800 m) of the stage's end: the turn-in is the first sample of the run of such samples nearest the end. `road` otherwise: the shortest way along the side roads from a node of the ride to a side-road sample within `laneM` (6 m) of the area, at most `pathMaxM` (400 m).
+- **The finish line.** A stop at a stage's end moves the end, and the next stage's start, to `leadM` (60 m) before the turn-in: the timed ride ends before the pull-in, so a stage is not a parking contest. The ride itself runs on to the turn-in (the data holds it; no stage covers it).
+- **The slots.** `slots` (8) bikes side by side, `slotGapM` (1.6 m) apart, along the area's long axis through its middle (rows `rowGapM` either side where one row has no room), each `marginM` (1.2 m) inside the outline. An area with no room for the group stops the import.
+- **What the manifest holds.** `manifest.stops`: `{ id, kind, stage, at, s, side, access, x, z, ring, path, slots }` (`ring` the outline, at most 32 points; `path` the way in from the ride to the slots' row). A map place that is a stop's own area carries `stop` (the stop's id), and `WorldPlaces` keeps it open at its stage's end.
+- **What swissTLM3D 2026-02 has for a stop.** No hotel, restaurant or fuel class in a village. Buildings with a use: `nutzung` `Gasthof abgelegen` (a remote inn; 5 492 in the file), also `Aussichtsturm`, `Schutzhuette`, `Parkhaus`. `tlm_strassen_strasseninfo` `Raststaette` (174) has `tankstelle` and `restaurant` flags: motorway services only. So the evidence for a stop's kind is the owner's photos and those uses; the place to park is always a public car park or rest area.
+
+### The stops of `worlds/gotthard`
+
+| Stop | Kind | Area | Way in |
+| --- | --- | --- | --- |
+| Start of `gotthard-north` | `hotel` | the public car park (2 869 m2) at the south-west edge of Andermatt, beside the Gotthard road | direct, at the start |
+| End of `gotthard-north`, start of `gotthard-lookout` | `restaurant` | the public car park (2 194 m2) by the hospice and the two remote inns on the summit | by road, 226 m from the modern road over the hospice's access road |
+| End of `gotthard-lookout` | `lookout` | the outer public car park (1 847 m2) at the hairpin of the lookout over Airolo, with the kiosk | direct |
+
 ## The far land (realism round 1)
 
 The photo match (round 1) found the game's skyline 4 to 8 degrees under the real one: the real skyline stands 9 to 13 km away (up to 49 km), and the world stopped at far.bin. `tools/world/farland.mjs` builds two more levels round far.bin, centred on it:

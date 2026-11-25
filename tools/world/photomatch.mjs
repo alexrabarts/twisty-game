@@ -3,6 +3,7 @@
 //   node tools/world/photomatch.mjs [--round 1] [--only <file>] [--no-game] [--margin 300] [--max <n>]
 //   node tools/world/photomatch.mjs coverage
 //   node tools/world/photomatch.mjs haze [--round 5]
+//   --data <folder> reads the drawn world of another data folder (worlds/gotthard with --world gotthard-lookout)
 //
 // For every row of every geo CSV (~/Pictures/twisty-reference/geo/*.csv, "file;lat;lng"):
 //   1. WGS84 -> LV95 (swisstopo's approximate formulas) -> local metres of world/manifest.json; the nearest point
@@ -53,8 +54,9 @@ const round1 = v => Math.round(v * 10) / 10;
 const round2 = v => Math.round(v * 100) / 100;
 
 // ---------------------------------------------------------------- inputs
+// The drawn world of a data folder (--data, default world/: the Tremola; worlds/<name>/ for a later import)
 function loadWorld() {
-  const manifest = readJson(path.join(ROOT, 'world', 'manifest.json'));
+  const manifest = readJson(path.join(ROOT, option('data', 'world'), 'manifest.json'));
   const origin = manifest.origin;
   const size = manifest.tiles.sizeM;
   const squares = manifest.tiles.height.map(([i, j]) => ({ x0: i * size, z0: j * size, size }));
@@ -522,7 +524,8 @@ async function main() {
   const notes = fs.existsSync(notesFile) ? readJson(notesFile) : [];
   const stops = stopsOf(rows, world, matched, notes);
   const summary = writeSummary(roundDir, round, entries, stops, world);
-  writeCoverage(rows, world);
+  // coverage.json measures the photos against the shipped world/ (the importer's sizing): another folder's round leaves it
+  if (!option('data')) writeCoverage(rows, world);
   fs.rmSync(tmpDir, { recursive: true, force: true });
   console.log(JSON.stringify({ roundDir, photos: summary.photos, matched: summary.matched, highConfidence: summary.highConfidence, awaitingImport: summary.awaitingImport, missingFile: summary.missingFile, stops: stops.length, renderer: game ? game.info.renderer : null, blocked: game ? game.blocked.length : 0, pageErrors: game ? game.errors : [] }, null, 1));
 }

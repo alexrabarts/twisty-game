@@ -24,6 +24,19 @@ const WorldLooks = {
     default: [
         { from: 0, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
+    // Andermatt (1,437 m) up the north side to the Gotthard summit (2,093 m): the first leg, clear and bright (the
+    // owner's word), in the owner's photos of the stops on it a clear afternoon. A thin cloud lies on the summit
+    // plateau from 0.85 (s 9,840 m), as the clouds over the pass in the lookout photos: the leg's one change
+    'gotthard-north': [
+        { from: 0, to: 0.85, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.85, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } }
+    ],
+    // The summit down the modern road to the lookout over Airolo (1,931 m): the thin cloud of the summit through the
+    // galleries, then the clear morning of the lookout photos (clear sky with fair-weather cumulus, haze in the valley)
+    'gotthard-lookout': [
+        { from: 0, to: 0.3, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
+        { from: 0.3, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
     // boundary at 0.53 (s 6,989 m, road 1,677 m) blends over 1.5 km, so the first drops fall at s 6,240 m

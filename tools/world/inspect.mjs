@@ -253,7 +253,8 @@ export function snapWaypoints(kept, waypoints) {
     for (let r = 100; r <= 3200 && !best; r *= 2) {
       for (const [e, i] of vIndex.near(w.e, w.n, r)) {
         const d = dist([w.e, w.n], e.pts[i]);
-        const score = d + (e.traffic === 'Durchgangsstrasse' ? 0 : THROUGH_ROAD_BONUS_M);
+        // (a waypoint with `snap: 'nearest'` takes the nearest road of any kind: a stop's own lane)
+        const score = d + (e.traffic === 'Durchgangsstrasse' || w.snap === 'nearest' ? 0 : THROUGH_ROAD_BONUS_M);
         if (d <= r && (!best || score < best.score)) best = { d, score, e, i };
       }
     }
