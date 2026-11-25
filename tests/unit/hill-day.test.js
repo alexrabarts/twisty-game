@@ -466,6 +466,60 @@ describe('the climb', () => {
         expect(ride.startPromptShown()).toBe(false);
     });
 
+    test('only the first day starts with the climb on foot: the next day, and R on it, start on the bicycle at the stall, faded up and glided to the chase camera', () => {
+        const bike = new HillBicycle(lane);
+        const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);
+        const input = {
+            checkPause() {}, checkCheckpointRestart() {}, checkCameraSwitch: () => false, checkSoundToggle: () => false, checkThrow: () => 0,
+            getThrottleInput: () => 0, getBrakeInput: () => 1, getSteeringInput: () => 0, getWheelieInput: () => 0
+        };
+        const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day: new HillDay(lane), game: { camera, input }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(),
+            endLook: new THREE.Vector3(), sample: {}, view: 0, accumulated: 0, ending: null, music: null });
+        ride.draw = dt => ride.placeCamera(Math.min(1, dt * 6));
+        ride.closeCard = ride.dropSession = () => {};
+        // The first day: the climb, on foot, below the stall
+        ride.restart();
+        expect(ride.day.day).toBe(1);
+        expect(ride.climb.phase).toBe('climb');
+        expect(bike.walking).toBe(true);
+        expect(ride.startPrompt()).toBe('push');
+        const C = HillDay.CLIMB, meet = lane.at(C.meet[0], C.meet[1], 0, {});
+        const starts = [];
+        for (const [name, next] of [['next day', true], ['R on that day', false]]) {
+            ride.restart(next);
+            expect(ride.day.day).toBe(2);
+            // In the dark at first, at the stall; the first frame gets him on and the picture comes up
+            expect(ride.curtainShare()).toBe(1);
+            ride.placeCamera(1);
+            const before = camera.position.clone();
+            let walked = false, most = 0, last = camera.position.clone();
+            for (let t = 0; t < 4; t += 1 / 60) {
+                ride.frame(1 / 60);
+                ride.cameraStep(0);
+                if (bike.walking) walked = true;
+                if (ride.curtainShare() < 0.02) most = Math.max(most, camera.position.distanceTo(last));
+                last.copy(camera.position);
+            }
+            const heading = lane.sample(bike.s).heading;
+            starts.push(`${name}: at s ${bike.s.toFixed(1)}, ${Math.hypot(bike.vehicle.position.x - meet.x, bike.vehicle.position.z - meet.z).toFixed(2)} m from the stall, facing down ${Math.cos(bike.vehicle.yawAngle - heading).toFixed(2)}, camera moved ${before.distanceTo(camera.position).toFixed(1)} m, at most ${(most * 100).toFixed(0)} cm a frame`);
+            expect(ride.climb).toBe(null);
+            expect(walked).toBe(false);
+            expect(bike.walking).toBe(false);
+            expect(ride.hold && ride.hold.phase).toBe('hold');
+            expect(Math.hypot(bike.vehicle.position.x - meet.x, bike.vehicle.position.z - meet.z)).toBeLessThan(0.5);
+            expect(Math.cos(bike.vehicle.yawAngle - heading)).toBeGreaterThan(0.9);
+            expect(ride.day.loaves).toBe(HillDay.BASKET);
+            expect(ride.curtainShare()).toBeLessThan(0.02);
+            expect(before.distanceTo(camera.position)).toBeGreaterThan(1);
+            expect(most).toBeLessThan(0.8);
+            expect(ride.startPrompt()).toBe('ride');
+        }
+        console.log(`hill days: ${starts.join('; ')}`);
+        const P = HillRide.START_PROMPT;
+        expect(P.rideKeys).toMatch(/\u2191 or W/);
+        expect(P.rideTouch).toMatch(/GAS/);
+    });
+
     test.each([['behind', 0], ['cinematic', 1]])('the whole day is one shot with the %s view: the camera never steps in place, aim or lens between two frames, but in the fades when he gets off and on', (name, view) => {
         const bike = new HillBicycle(lane);
         const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);

@@ -360,6 +360,17 @@ class HillDay {
         } else f.run = 0;
     }
 
+    // The thrown loaves drawn as the basket's own (HillSpill.wear): its loaves' `material` and their mean colour `crust`
+    wearLoaves(material, crust) {
+        if (!material || !crust || !this.loafMeshes || !this.loafMeshes.length) return false;
+        const geometry = HillSpill.wear(this.loafMeshes[0].geometry, crust, HillDay.THROW.r);
+        for (const mesh of this.loafMeshes) {
+            mesh.geometry = geometry;
+            mesh.material = material;
+        }
+        return true;
+    }
+
     // The basket as the loaves left: `inBasket` the model's loaf meshes (HillSpill); after a spill they stay hidden
     showBasket(inBasket, spilt) {
         if (!inBasket || spilt) return;

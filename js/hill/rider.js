@@ -18,7 +18,8 @@ class HillRider {
     }
 
     // On foot, pushing the bicycle up the climb (HillBicycle.walking), as in the reference stills: beside it on its left
-    // (+x), his hips at `hip` in the frame, leaning far over the bars by bendRad and turned in towards them by turnRad,
+    // (+x), his hips at `hip` in the frame, leaning over the bars by bendRad (half what it was: the owner found him bent
+    // too far) and turned in towards them by turnRad,
     // a hand on each grip (a shoulder reaching at most reachM forward to the far one). His steps: a long pace of strideM
     // (two steps), each foot on the cobbles for `stance` of it and lifted liftM as it swings, the feet footX out from the
     // hips' middle and backM behind it, so he pushes from behind. Each boot rolls through its step (`foot`): over the
@@ -31,9 +32,9 @@ class HillRider {
     // from his waist clear of his legs (APRON). The bicycle leans in towards him by leanRad; on and off the
     // saddle over blendS
     static get WALK() {
-        return Object.freeze({ hip: [0.36, 0.78, -0.45], bendRad: 0.62, turnRad: 0.35, headUpRad: 0.72, reachM: 0.22, strideM: 1.25, stance: 0.6, liftM: 0.1, footX: 0.11,
+        return Object.freeze({ hip: [0.36, 0.78, -0.45], bendRad: 0.31, turnRad: 0.35, headUpRad: 0.41, reachM: 0.22, strideM: 1.25, stance: 0.6, liftM: 0.1, footX: 0.11,
             foot: { rollShare: 0.2, toeOffRad: 0.55, heelRad: 0.18, toeM: 0.15, heelM: 0.07, standM: 0.1, stepMs: 0.8, settleS: 0.35 },
-            backM: 0.14, leanRad: 0.06, blendS: 0.4, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.88 } });
+            backM: 0.14, leanRad: 0.06, blendS: 0.4, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.44 } });
     }
 
     // How far into his tired stretch he is at `walkM` metres walked (0..1, eased: WALK.down)

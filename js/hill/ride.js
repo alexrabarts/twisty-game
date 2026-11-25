@@ -292,12 +292,33 @@ class HillRide {
 
     // The prompt at the start of the climb, until he has come goneM up the lane: the keys, or the touch screen's button
     static get START_PROMPT() {
-        return Object.freeze({ keys: 'Press \u2191 or W to push the bicycle up the hill', touch: 'Hold GAS to push the bicycle up the hill', goneM: 0.3 });
+        return Object.freeze({
+            keys: 'Press \u2191 or W to push the bicycle up the hill', touch: 'Hold GAS to push the bicycle up the hill', goneM: 0.3,
+            // A day that starts on the bicycle at the top, and the top after the climb: the same, to ride off
+            rideKeys: 'Press \u2191 or W to ride down the hill', rideTouch: 'Hold GAS to ride down the hill', clearShare: 0.05
+        });
     }
 
-    // Whether the start prompt shows now: on the climb, before he has moved off
+    // The start prompt now: 'push' on the climb before he has moved off, 'ride' held at the top before he pushes off
+    // (once the picture is up), else null
+    startPrompt() {
+        const P = HillRide.START_PROMPT;
+        if (this.climb) return this.climb.phase === 'climb' && HillDay.CLIMB.fromS - this.bike.s < P.goneM ? 'push' : null;
+        if (this.hold && this.hold.phase === 'hold' && !this.ending && this.curtainShare() < P.clearShare) return 'ride';
+        return null;
+    }
+
     startPromptShown() {
-        return !!this.climb && this.climb.phase === 'climb' && HillDay.CLIMB.fromS - this.bike.s < HillRide.START_PROMPT.goneM;
+        return this.startPrompt() !== null;
+    }
+
+    // The start prompt on the page: its words for the push or the ride, the touch form on a touch screen
+    showStart() {
+        if (!this.startNote) return;
+        const which = this.startPrompt(), P = HillRide.START_PROMPT;
+        this.startNote.style.display = which ? '' : 'none';
+        const words = !which ? '' : which === 'push' ? (this.startTouch ? P.touch : P.keys) : (this.startTouch ? P.rideTouch : P.rideKeys);
+        if (which && this.startNote.textContent !== words) this.startNote.textContent = words;
     }
 
     static get KEYS_NOTE() {
@@ -318,13 +339,62 @@ class HillRide {
         });
     }
 
+    // The hill's own mute (the owner: the music on by default here). The game's mute (Sound, its default on) is not
+    // read or changed: the hill keeps its own choice under `key`, off unless the player pressed M on the hill, and puts
+    // it on the sound manager for this page only. The first key or tap wakes the sound (Sound's own listener)
+    static get SOUND() {
+        return Object.freeze({ key: 'twistyHillSound', muted: false });
+    }
+
+    static storage() {
+        try {
+            return typeof window !== 'undefined' && window.localStorage ? window.localStorage : null;
+        } catch (error) {
+            console.warn('HillRide: no storage, the hill\'s mute lasts for this page only:', error);
+            return null;
+        }
+    }
+
+    static hillMuted(storage) {
+        try {
+            const text = storage ? storage.getItem(HillRide.SOUND.key) : null;
+            const stored = text ? JSON.parse(text) : null;
+            return stored && typeof stored.muted === 'boolean' ? stored.muted : HillRide.SOUND.muted;
+        } catch (error) {
+            console.warn('HillRide: the hill\'s mute unreadable, the default stands:', error);
+            return HillRide.SOUND.muted;
+        }
+    }
+
+    // On the sound manager for this page, not kept in the game's settings
+    static applyMute(sound, muted) {
+        if (!sound) return muted;
+        sound.settings.muted = muted;
+        if (muted) sound.stopEngineSound();
+        sound.applySettings();
+        return muted;
+    }
+
+    static toggleMute(sound, storage) {
+        const muted = !HillRide.hillMuted(storage);
+        try {
+            if (storage) storage.setItem(HillRide.SOUND.key, JSON.stringify({ muted }));
+        } catch (error) {
+            console.warn('HillRide: the hill\'s mute not saved:', error);
+        }
+        HillRide.applyMute(sound, muted);
+        if (!muted && sound) sound.wake();
+        if (typeof showCallout === 'function') showCallout(`Sound ${muted ? 'off' : 'on'}`, muted ? 'info' : 'good', 1000);
+        return muted;
+    }
+
     constructor(game) {
         this.game = game;
         this.lane = new HillLane();
         this.bike = new HillBicycle(this.lane);
         this.music = typeof HillMusic !== 'undefined' ? new HillMusic(game.soundManager) : null;
-        // The band is part of the ride: sound is on here unless the player has chosen Mute themselves
-        if (game.soundManager) game.soundManager.defaultTo('muted', false);
+        // The band is part of the ride: sound is on here unless the player has muted it on this ride (HillRide.SOUND)
+        HillRide.applyMute(game.soundManager, HillRide.hillMuted(HillRide.storage()));
         this.view = 0;
         this.accumulated = 0;
         this.sample = {};
@@ -363,6 +433,8 @@ class HillRide {
         this.spill = typeof HillSpill !== 'undefined' ? new HillSpill(this.lane, this.rider) : null;
         if (this.spill) game.scene.add(this.spill.group);
         if (this.day) game.scene.add(this.day.build());
+        // Every loose loaf, spilt or thrown, as the basket's own
+        if (this.day && this.spill && this.spill.crust) this.day.wearLoaves(this.spill.loaves[0].mesh.material, this.spill.crust);
         game.graphics.fixColorSpaces();
         HillScene.bumpsBothSides(game.scene);
         this.light();
@@ -482,7 +554,7 @@ class HillRide {
         this.startNote = document.createElement('div');
         this.startNote.className = 'hill-start';
         const touch = typeof HudRules !== 'undefined' && HudRules.isTouch(window);
-        this.startNote.textContent = touch ? HillRide.START_PROMPT.touch : HillRide.START_PROMPT.keys;
+        this.startTouch = touch;
         Object.assign(this.startNote.style, {
             position: 'fixed', left: '50%', top: '16%', transform: 'translateX(-50%)', padding: '8px 16px', maxWidth: 'calc(100% - 32px)',
             background: 'rgba(30, 26, 20, 0.62)', color: '#f4efe2', font: '600 16px/1.4 system-ui, sans-serif', borderRadius: '6px',
@@ -496,12 +568,14 @@ class HillRide {
         if (this.viewNote) this.viewNote.textContent = `View: ${HillRide.VIEWS[this.view].name}`;
     }
 
-    // R: the whole ride again from the first day's climb. `nextDay` instead goes round again: the same, a day on
+    // R: the day again, from its start. `nextDay` goes round again a day on. Only the first day of the page starts with
+    // the climb on foot (the owner); the days after start on the bicycle at the top (beginClimb). The day's number lives
+    // in this page's HillDay and is not kept: a new page is the first day
     restart(nextDay = false) {
         this.closeCard();
         this.dropSession();
         if (this.board) this.board.reset();
-        if (this.day) this.day.day = nextDay ? this.day.day + 1 : 1;
+        if (this.day && nextDay) this.day.day += 1;
         if (this.props) this.props.reset();
         if (this.spill) this.spill.reset();
         if (this.loafShown) this.showLoaf(false);
@@ -515,7 +589,9 @@ class HillRide {
     }
 
     // The climb: the boy at the bend below the top stretch facing up the lane, the basket full (CLIMB_SHOTS sees him).
-    // Without the day (HillDay not loaded) the ride opens on the hold at the top as before
+    // Without the day (HillDay not loaded) the ride opens on the hold at the top as before. From the second day he
+    // starts at the stall, the restock done: in the dark, as at the end of the climb, so the picture comes up and the
+    // camera glides from the stall to the chase camera (endClimb)
     beginClimb() {
         const day = this.day;
         if (!day) {
@@ -524,11 +600,26 @@ class HillRide {
             return;
         }
         const C = HillDay.CLIMB;
+        if (day.day > 1) {
+            day.restock();
+            day.climbing = true;
+            this.bike.reset(C.meet[0], C.meet[1]);
+            this.bike.vehicle.yawAngle += Math.PI;
+            this.bike.walking = true;
+            this.hold = null;
+            this.climb = { phase: 'mount', t: HillRide.FADES.outS, hold: 0 };
+            this.handedOver = false;
+            this.glide = null;
+            this.curtain = { from: 1, to: 1, t: 0, s: HillRide.FADES.inS };
+            if (this.spill) this.spill.spilt = true;
+            return;
+        }
         day.restock();
         day.climbing = true;
         this.bike.reset(C.fromS, C.across);
         this.bike.vehicle.yawAngle += Math.PI;
         this.bike.walking = true;
+        this.bike.crank = HillBicycle.WALK_CRANK;
         this.hold = null;
         this.climb = { phase: 'climb', t: 0, hold: 0 };
         this.handedOver = false;
@@ -937,7 +1028,7 @@ class HillRide {
             this.showView();
             this.glideFrom(HillRide.GLIDE.viewS);
         }
-        if (input.checkSoundToggle() && game.soundManager) game.soundManager.setSetting('muted', !game.soundManager.getSetting('muted'));
+        if (input.checkSoundToggle() && game.soundManager) HillRide.toggleMute(game.soundManager, HillRide.storage());
         this.cameraStep(dt);
         const controls = { pedal: input.getThrottleInput(), brake: input.getBrakeInput(), steer: input.getSteeringInput(HillVehicle.WORLD.steerKeys), wheelie: input.getWheelieInput() };
         // The climb to the cart at the top, then the restock
@@ -990,7 +1081,7 @@ class HillRide {
     // Poses the bicycle, moves the camera and the sun with it, and draws
     draw(dt) {
         const game = this.game;
-        if (this.startNote) this.startNote.style.display = this.startPromptShown() ? '' : 'none';
+        this.showStart();
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
             this.day.draw(dt || 1 / 60);

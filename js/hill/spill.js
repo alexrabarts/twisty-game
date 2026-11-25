@@ -36,16 +36,9 @@ class HillSpill {
         // The model's loaf takes its colour from its vertex colours (the material's own colour is only a dark base),
         // so the loose loaf carries them too: their mean, the crown a little lighter and the base a little darker
         const crust = HillSpill.meanColour(this.inBasket);
-        if (crust) {
-            const position = geometry.attributes.position, colours = new Float32Array(position.count * 3);
-            for (let i = 0; i < position.count; i++) {
-                const k = 0.85 + 0.3 * (position.getY(i) / R.r + 1) / 2;
-                colours[i * 3] = crust.r * k;
-                colours[i * 3 + 1] = crust.g * k;
-                colours[i * 3 + 2] = crust.b * k;
-            }
-            geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
-        } else material = null;
+        this.crust = crust;
+        if (crust) HillSpill.wear(geometry, crust, R.r);
+        else material = null;
         material = material || new THREE.MeshStandardMaterial({ color: 0xa8743e, roughness: 0.85 });
         this.loaves = [];
         for (let i = 0; i < 6; i++) {
@@ -73,6 +66,24 @@ class HillSpill {
             loaf.mesh.visible = false;
             loaf.moving = false;
         }
+    }
+
+    // Colours a loose loaf's `geometry` (radius r, its crown up) as the basket's loaves: their mean `crust`, the crown a
+    // little lighter and the base a little darker. Every loose loaf, spilt or thrown, is coloured here and drawn with the
+    // basket loaves' material, so it draws as they do
+    static wear(geometry, crust, r) {
+        const position = geometry.attributes.position, colours = new Float32Array(position.count * 3);
+        for (let i = 0; i < position.count; i++) {
+            const k = 0.85 + 0.3 * (position.getY(i) / r + 1) / 2;
+            colours[i * 3] = crust.r * k;
+            colours[i * 3 + 1] = crust.g * k;
+            colours[i * 3 + 2] = crust.b * k;
+        }
+        geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+        // (the model's colours are linear, as glTF keeps them, and so is their mean: marked so the page does not decode
+        // them a second time, which drew the loose loaves dark the moment they fell out)
+        geometry.userData.linearColors = true;
+        return geometry;
     }
 
     // The mean of the vertex colours of `meshes` (linear, as stored), or null when they carry none

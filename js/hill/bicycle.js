@@ -14,6 +14,9 @@
 // seeded for the ride), in a pose of their own each time (LEGS ranges: spread, drop, how far ahead, the knee's
 // bend and the toe), the left and the right not mirror images.
 class HillBicycle {
+    // The cranks' angle while he pushes it on foot: the pedal on his side (the left, +x) up and forward of the bracket
+    static get WALK_CRANK() { return Math.PI / 4; }
+
     static get RULE() {
         return Object.freeze({
             legsOutMs: 6.5, legsInMs: 4.2, legsGrade: -0.04, legsQuietS: 0.4, legsBlendS: 0.3,
@@ -188,6 +191,12 @@ class HillBicycle {
         this.walkM = (this.walkM || 0) + (this.walking && !v.crashed ? v.speed * dt : 0);
         this.cadenceRpm = this.pushing ? v.speed / HillVehicle.DATA.developmentM * 60 : 0;
         this.crank = (this.crank + this.cadenceRpm / 60 * 2 * Math.PI * dt) % (2 * Math.PI);
+        // Pushed on foot, the cranks are parked with his side's pedal up and forward, out of his boots' way: the low
+        // pedal hung at the height of his feet, just inside them, and from the side it looked like a plate under a boot
+        if (this.walking) {
+            const off = Math.atan2(Math.sin(HillBicycle.WALK_CRANK - this.crank), Math.cos(HillBicycle.WALK_CRANK - this.crank));
+            this.crank = (this.crank + off * Math.min(1, dt * 4) + 2 * Math.PI) % (2 * Math.PI);
+        }
         // Feet back on the pedals for a moment at speed: the cranks come level under them
         if (this.visiting > 0) {
             const level = Math.abs(this.crank - Math.PI / 2) < Math.abs(this.crank - 3 * Math.PI / 2) ? Math.PI / 2 : 3 * Math.PI / 2;

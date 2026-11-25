@@ -766,7 +766,7 @@ describe('the boy on the bicycle', () => {
         expect(most).toBeCloseTo(0.35, 6);
     });
 
-    test('a fall throws the loaves out of the basket; they land on the lane, come to rest, and R puts them back', () => {
+    test('a fall throws the loaves out of the basket, coloured as in it after the page decodes its colours; they land on the lane, come to rest, and R puts them back', () => {
         const HillSpill = new Function('THREE', 'HillLane', 'console', `${loadScript('hill/spill.js')}\nreturn HillSpill;`)(THREE, HillLane, console);
         const where = new HillLane();
         const b = new HillBicycle(where);
@@ -778,10 +778,28 @@ describe('the boy on the bicycle', () => {
         // The loose loaves wear the basket loaves' own colours: the shared material reads vertex colours
         const loose = spill.loaves[0].mesh;
         expect(loose.material.vertexColors).toBe(true);
+        // ...after the page decodes the scene's colours (Graphics.fixColorSpaces, as the ride runs it): the model's
+        // colours are linear bytes and the loose copy is marked linear, so neither is decoded and they still match
+        const { Graphics } = new Function('THREE', `${loadScript('graphics.js')}\nreturn { Graphics };`)(THREE);
+        // The thrown loaves (HillDay) drawn as the basket's own too
+        const HillDay = new Function('THREE', 'HillLane', 'HillSpill', 'HillTextures', 'HillScene', 'console', `${loadScript('hill/day.js')}\nreturn HillDay;`)(THREE, HillLane, HillSpill, HillTextures, HillScene, console);
+        const day = new HillDay(where);
+        const dayGroup = day.build();
+        expect(day.wearLoaves(loose.material, spill.crust)).toBe(true);
+        const dressed = new THREE.Group();
+        dressed.add(rider.group.clone(), spill.group, dayGroup);
+        Graphics.prototype.fixColorSpaces.call({ seenTextures: new WeakSet(), seenGeometries: new WeakSet() }, dressed);
         const mean = HillSpill.meanColour(spill.inBasket), own = HillSpill.meanColour([loose]);
         expect(own.r).toBeCloseTo(mean.r, 1);
         expect(own.g).toBeCloseTo(mean.g, 1);
         expect(own.b).toBeCloseTo(mean.b, 1);
+        expect(loose.geometry.userData.linearColors).toBe(true);
+        const thrown = day.loafMeshes[0];
+        expect(thrown.material).toBe(loose.material);
+        const flown = HillSpill.meanColour([thrown]);
+        expect(flown.r).toBeCloseTo(mean.r, 1);
+        expect(flown.g).toBeCloseTo(mean.g, 1);
+        expect(flown.b).toBeCloseTo(mean.b, 1);
         spill.step(b, DT);
         expect(spill.spilt).toBe(false);
         b.vehicle.crashed = true;
@@ -955,6 +973,60 @@ describe('the boy on the bicycle', () => {
         const ground = where.sample(p.s).y + where.cobble(p.s, p.across);
         expect(ankle.y - ground).toBeGreaterThan(HillRider.ANKLE_ON_PEDAL[1] - 0.03);
         expect(ankle.y - ground).toBeLessThan(HillRider.ANKLE_ON_PEDAL[1] + 0.03);
+    });
+
+    test('pushed on foot, the pedals stay on the bicycle\'s crank circle, parked with his side\'s pedal up and forward, clear of his boots; nothing of the bicycle moves with his feet', () => {
+        const where = new HillLane();
+        const b = new HillBicycle(where);
+        b.reset(60);
+        b.vehicle.yawAngle += Math.PI;
+        b.walking = true;
+        for (let t = 0; t < 2; t += DT) b.step(DT, { pedal: 0.6, brake: 0, steer: 0, wheelie: 0 });
+        const W = HillRider.WALK, bb = rider.bb, P = rider.parts, frame = rider.frame;
+        const bike = ['wheel_front', 'wheel_rear', 'cranks', 'pedal_l', 'pedal_r', 'steer'].filter(n => P[n]);
+        // Nothing of the bicycle hangs from his legs
+        for (const name of bike) {
+            let up = P[name].parent;
+            while (up && up !== frame) {
+                expect([name, ['foot_l', 'foot_r', 'shin_l', 'shin_r', 'thigh_l', 'thigh_r'].includes(up.name)]).toEqual([name, false]);
+                up = up.parent;
+            }
+        }
+        // Each boot stands on its own sole: the boot and the sole across the foot's node at the same place (the boot was
+        // once built 9 cm inside it, between the legs, and its sole showed beside it like a plate under the foot)
+        for (const tag of ['l', 'r']) {
+            const box = name => {
+                const b = new THREE.Box3();
+                P[`foot_${tag}`].children.filter(o => o.isMesh && o.material.name === name).forEach(o => b.union(new THREE.Box3().setFromBufferAttribute(o.geometry.attributes.position)));
+                return b.getCenter(new THREE.Vector3());
+            };
+            expect(Math.abs(box('boot').x - box('sole').x)).toBeLessThan(0.01);
+        }
+        const local = (part, out = new THREE.Vector3()) => frame.worldToLocal(part.getWorldPosition(out));
+        const first = {}, feet = { l: [], r: [] };
+        let nearest = Infinity, wander = 0;
+        for (let i = 0; i < 40; i++) {
+            b.walkM = 10 + i * W.strideM / 20;
+            rider.update(b, where, 1 / 60);
+            rider.group.updateMatrixWorld(true);
+            for (const tag of ['l', 'r']) {
+                const pedal = local(P[`pedal_${tag}`]);
+                expect(Math.hypot(pedal.y - bb.y, pedal.z - bb.z)).toBeCloseTo(rider.legs.find(l => l.tag === tag).crank, 3);
+                if (!first[tag]) first[tag] = pedal.clone();
+                wander = Math.max(wander, pedal.distanceTo(first[tag]));
+                feet[tag].push(local(P[`foot_${tag}`]));
+                for (const foot of ['l', 'r']) nearest = Math.min(nearest, local(P[`foot_${foot}`]).distanceTo(pedal));
+            }
+        }
+        const spread = list => Math.max(...list.map(p => p.distanceTo(list[0])));
+        console.log(`hill push: the pedals moved ${(wander * 1000).toFixed(1)} mm while the feet moved ${(spread(feet.l) * 100).toFixed(0)} and ${(spread(feet.r) * 100).toFixed(0)} cm; the nearest boot ${(nearest * 100).toFixed(0)} cm from a pedal; his side's pedal at height ${local(P.pedal_l).y.toFixed(2)} m, ${local(P.pedal_l).z.toFixed(2)} m forward`);
+        expect(wander).toBeLessThan(0.001);
+        expect(spread(feet.l)).toBeGreaterThan(0.4);
+        expect(nearest).toBeGreaterThan(0.2);
+        // His side's pedal (+x) up and forward of the bracket
+        expect(local(P.pedal_l).x).toBeGreaterThan(0);
+        expect(local(P.pedal_l).y).toBeGreaterThan(bb.y);
+        expect(local(P.pedal_l).z).toBeGreaterThan(bb.z);
     });
 
     test('on foot up the climb: beside the bicycle on its left, bent over the bars, a boot on the cobbles at every step, rolling heel to toe, and none under them, the long apron hanging, his head down half way up; on the saddle again after', () => {
@@ -1360,5 +1432,40 @@ describe('the stones are domes, not hollows', () => {
         });
         console.log(`hill stones: ${seen.size} normal-mapped materials patched; the lane's first normal y ${faceDown.toFixed(2)} (wound face down, so drawn from its back face)`);
         expect(seen.size).toBeGreaterThan(5);
+    });
+});
+
+describe('the hill\'s own sound', () => {
+    const { Sound, SoundManager } = (0, eval)(`(function () { ${loadScript('sound.js')}\nreturn { Sound, SoundManager }; })()`);
+    const memory = () => {
+        const map = new Map();
+        return { map, getItem: k => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: k => map.delete(k) };
+    };
+
+    test('the music plays on the hill by default, even when the game is muted; M on the hill mutes it and is kept, and the game\'s own mute is never changed', () => {
+        const storage = memory();
+        // The game muted, as it starts, and the player's choice kept there
+        storage.setItem(Sound.STORE_KEY, JSON.stringify({ muted: true, master: 0.7, balance: 0.5 }));
+        const sound = new SoundManager({ context: () => null, storage, doc: null });
+        expect(sound.enabled).toBe(false);
+        HillRide.applyMute(sound, HillRide.hillMuted(storage));
+        expect(sound.enabled).toBe(true);
+        // M on the hill: muted, kept under the hill's key, the game's settings as they were
+        expect(HillRide.toggleMute(sound, storage)).toBe(true);
+        expect(sound.enabled).toBe(false);
+        expect(JSON.parse(storage.getItem(HillRide.SOUND.key))).toEqual({ muted: true });
+        expect(JSON.parse(storage.getItem(Sound.STORE_KEY)).muted).toBe(true);
+        // The next page on the hill keeps the hill's choice; M again unmutes it
+        const next = new SoundManager({ context: () => null, storage, doc: null });
+        HillRide.applyMute(next, HillRide.hillMuted(storage));
+        expect(next.enabled).toBe(false);
+        expect(HillRide.toggleMute(next, storage)).toBe(false);
+        expect(next.enabled).toBe(true);
+        // The motorcycle game, on a page of its own, still starts from its own mute
+        expect(new SoundManager({ context: () => null, storage, doc: null }).enabled).toBe(false);
+        expect(Sound.SETTINGS.find(r => r.id === 'muted').default).toBe(true);
+        // No storage, or a broken one: the hill's default, sound on
+        expect(HillRide.hillMuted(null)).toBe(false);
+        expect(HillRide.hillMuted({ getItem: () => '{not json' })).toBe(false);
     });
 });

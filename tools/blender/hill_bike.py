@@ -293,11 +293,13 @@ def boy(k):
         # A black leather boot as the stills have it: a rounded toe cap, the instep rising to the ankle, the heel's
         # back round behind the ankle and up round it (so the boot's leg on the shin meets it whatever the foot's turn),
         # on a sole and a low heel of darker leather. Its sole is the ground under the ankle (ANKLE_ON_PEDAL)
+        # (each section centred on the leg's own line, x: left at the loft's default of 0, every boot stood 9 cm inside
+        # its sole, between the legs, and its sole showed beside it like a plate)
         z, sole = HIP[2], ankle - 0.065
-        k.loft([(z - 0.075, sole + 0.02, ankle + 0.07, 0.036, 2.6, 4, 0.3), (z - 0.05, sole + 0.012, ankle + 0.085, 0.045, 2.6, 4, 0.3),
-                (z + 0.0, sole + 0.012, ankle + 0.075, 0.048, 2.6, 4, 0.3), (z + 0.06, sole + 0.012, ankle + 0.025, 0.049, 2.6, 4, 0.3),
-                (z + 0.12, sole + 0.012, ankle - 0.012, 0.046, 2.2, 4, 0.3), (z + 0.165, sole + 0.014, ankle - 0.03, 0.038, 2.2, 4, 0.3),
-                (z + 0.19, sole + 0.02, ankle - 0.042, 0.022, 2.2, 3, 0.3)], "boot", ring=14, steps=2)
+        k.loft([(z - 0.075, sole + 0.02, ankle + 0.07, 0.036, 2.6, 4, 0.3, 1, 1, x), (z - 0.05, sole + 0.012, ankle + 0.085, 0.045, 2.6, 4, 0.3, 1, 1, x),
+                (z + 0.0, sole + 0.012, ankle + 0.075, 0.048, 2.6, 4, 0.3, 1, 1, x), (z + 0.06, sole + 0.012, ankle + 0.025, 0.049, 2.6, 4, 0.3, 1, 1, x),
+                (z + 0.12, sole + 0.012, ankle - 0.012, 0.046, 2.2, 4, 0.3, 1, 1, x), (z + 0.165, sole + 0.014, ankle - 0.03, 0.038, 2.2, 4, 0.3, 1, 1, x),
+                (z + 0.19, sole + 0.02, ankle - 0.042, 0.022, 2.2, 3, 0.3, 1, 1, x)], "boot", ring=14, steps=2)
         k.box((0.096, 0.014, 0.25), (x, sole + 0.007, z + 0.055), "sole", bevel=0.005)
         k.box((0.08, 0.02, 0.06), (x, sole + 0.012, z - 0.05), "sole", bevel=0.004)
 
