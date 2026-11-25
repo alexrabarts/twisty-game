@@ -132,6 +132,9 @@ def front(k):
         for side in (-1, 1):
             k.box((0.006, 0.012, z1 - z0 + 0.01), (side * (half + 0.009), y, mid), "wicker_dark", bevel=0)
     k.tube([(-half, hi, z0), (half, hi, z0), (half, hi, z1), (-half, hi, z1), (-half, hi, z0)], 0.013, "wicker_dark", seg=6)
+    # The handle: a tall wicker loop from the front wall to the back, over the middle of the loaves
+    loop = [(0, hi + 0.27 * math.sin(math.pi * i / 10), mid - (z1 - z0 - 0.08) / 2 * math.cos(math.pi * i / 10)) for i in range(11)]
+    k.tube(loop, 0.011, "wicker", seg=6)
     # Plain loaves, two rows of three, their crowns over the rim
     for x in (-0.16, 0.0, 0.16):
         for z in (0.5, 0.75):
@@ -209,7 +212,9 @@ def boy(k):
     k.sheet(apron, "apron", nu=6, nv=6, thick=0.008)
     k.loft([(hy + 0.08, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4), (hy + 0.12, hz - 0.13, hz + 0.12, 0.165, 2.4, 2.4)], "apron", axis="y", ring=14, steps=1)
 
-    # Neck, head, ears, hair at the back, the flat cap with its peak
+    # Neck, head, ears, hair at the back, the flat cap with its peak: a node of its own, its pivot at the foot of the
+    # neck, so the game can lift his head while he bends over the bars on foot
+    k.begin("head", (0, NECK[1] - 0.04, NECK[2]))
     k.tube([(0, NECK[1] - 0.04, NECK[2]), (0, HEAD[1] - 0.06, HEAD[2])], 0.04, "skin", seg=10)
     k.lathe([(0, -0.1), (0.05, -0.095), (0.085, -0.06), (0.095, 0.0), (0.09, 0.05), (0.06, 0.09), (0, 0.1)], HEAD, "skin", seg=16)
     for side in (-1, 1):

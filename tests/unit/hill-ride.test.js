@@ -712,9 +712,11 @@ describe('the boy on the bicycle', () => {
 
     test('loads the model with every part the pose moves', async () => {
         rider = new HillRider(await SceneAssets.loadModel(HillRider.FILE));
-        for (const name of ['wheel_front', 'wheel_rear', 'cranks', 'pedal_l', 'pedal_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r', 'boy', 'basket', 'plate']) {
+        for (const name of ['wheel_front', 'wheel_rear', 'cranks', 'pedal_l', 'pedal_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r', 'boy', 'head', 'basket', 'plate']) {
             expect(rider.parts[name]).toBeTruthy();
         }
+        // The head hangs on the body, so it goes where he goes, in a fall too
+        expect(rider.parts.head.parent).toBe(rider.parts.boy);
         expect(rider.legs.map(l => l.side).sort()).toEqual([-1, 1]);
     });
 
@@ -936,11 +938,15 @@ describe('the boy on the bicycle', () => {
         }
         // Each foot swings, lifted, now and then
         expect(lifted).toBeGreaterThan(4);
+        // His head lifted from the bend, looking up the lane ahead of him
+        expect(2 * Math.acos(Math.min(1, Math.abs(rider.parts.head.quaternion.w)))).toBeCloseTo(W.headUpRad, 5);
+        expect(rider.parts.head.quaternion.x).toBeLessThan(0);
         // Reset onto the saddle for the descent: at once, the body where it was built
         b.reset(20);
         b.walking = false;
         rider.update(b, lane, 1 / 60);
         expect(rider.parts.boy.position.distanceTo(rider.rest.boy)).toBeLessThan(1e-6);
+        expect(rider.parts.head.quaternion.w).toBeCloseTo(1, 9);
     });
 });
 

@@ -62,6 +62,15 @@ class HillRide {
     // easeS to the view chosen while the boy pushes off (push of the pedal for pushS, unless the rider rides himself)
     static get HOLD() { return Object.freeze({ leastS: 0.8, easeS: 2.6, pushS: 1.2, push: 0.7 }); }
 
+    // The climb's shots, cut as the reference stills of the boy pushing the bicycle up are: the opening shot held still
+    // while he comes up into it from the foot of the lane, until he has walked wideM; then `top`, a camera by the cart at
+    // the top ([s, across, up] on the lane) aimed lookUpM over the bicycle. Its long lens keeps frameFarM of picture
+    // height at his distance while he is farM off or more, widening to frameNearM by nearM, and it turns with him as he
+    // wheels the bicycle in to the cart
+    static get CLIMB_SHOTS() {
+        return Object.freeze({ wideM: 12, top: [21, 0.2, 1.3], lookUpM: 0.85, frameFarM: 1.8, frameNearM: 3.4, farM: 26, nearM: 8 });
+    }
+
     // The opening shot from the lane's opening camera (HillLane.RULE.opening.camera: fitted to the reference frame):
     // its place, a point 30 m along its aim, its field of view
     static openingShot() {
@@ -346,7 +355,7 @@ class HillRide {
         this.placeCamera(1);
     }
 
-    // The climb: the boy low on the top stretch facing up the lane, the basket empty, seen from the opening's camera.
+    // The climb: the boy at the bend below the top stretch facing up the lane, the basket full (CLIMB_SHOTS sees him).
     // Without the day (HillDay not loaded) the ride opens on the hold at the top as before
     beginClimb() {
         const day = this.day;
@@ -402,6 +411,14 @@ class HillRide {
             } else {
                 controls.pedal = 0;
                 controls.brake = 1;
+            }
+            // The last turnInM to the cart: he wheels the bicycle in to it, to the line turnAcross, whatever the steer keys
+            const into = Math.max(0, Math.min(1, (C.triggerS + C.turnInM - this.bike.s) / C.turnInM));
+            const across = this.bike.across, drift = climb.across === undefined ? 0 : (across - climb.across) / dt;
+            climb.across = across;
+            if (into > 0) {
+                const turn = Math.max(-1, Math.min(1, -(C.turnAcross - across) * 2 + drift * 1.5));
+                controls.steer = controls.steer * (1 - into) + turn * into;
             }
             // After a fall he stands up facing down the lane (HillBicycle.reset): on the climb, he turns to face up it
             const p = this.lane.sample(this.bike.s), v = this.bike.vehicle;
@@ -784,11 +801,10 @@ class HillRide {
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
             this.day.draw();
-            // The basket: empty on the climb, filling at the cart, then as many as are left
+            // The basket: full up the climb, as he brings the bread up to the cart, then as many as are left
             const basket = this.spill ? this.spill.inBasket : null;
             if (this.climb) {
-                const full = this.climb.phase === 'restock' ? Math.min(1, this.climb.t / (HillDay.CLIMB.restockS * 0.8)) : 0;
-                if (basket) basket.forEach((o, i) => { o.visible = i < Math.round(full * basket.length); });
+                if (basket) basket.forEach(o => { o.visible = true; });
             } else this.day.showBasket(basket, this.spill && this.spill.spilt);
         }
         if (this.props) {
@@ -841,14 +857,21 @@ class HillRide {
             cam.updateMatrixWorld();
             return null;
         }
-        // The climb: the opening's camera at the top, turned to follow him up the lane, its lens closing in as he nears
+        // The climb: the opening shot held while he comes up into it, then the camera by the cart (CLIMB_SHOTS)
         if (this.climb && !this.forcedShot) {
-            const shot = HillRide.shot(this.lane, 'opening', this.camTarget, this.look);
-            const v = this.bike.vehicle.position;
+            const S = HillRide.CLIMB_SHOTS;
+            let fov;
+            if (HillDay.CLIMB.fromS - this.bike.s < S.wideM) fov = HillRide.shot(this.lane, 'opening', this.camTarget, this.look).fov;
+            else {
+                const v = this.bike.vehicle.position, at = this.lane.at(S.top[0], S.top[1], S.top[2], this.climbAt || (this.climbAt = {}));
+                this.camTarget.set(at.x, at.y, at.z);
+                this.look.set(v.x, v.y + S.lookUpM, v.z);
+                const d = Math.max(1, this.camTarget.distanceTo(this.look));
+                const near = Math.max(0, Math.min(1, (S.farM - d) / (S.farM - S.nearM)));
+                const frame = S.frameFarM + (S.frameNearM - S.frameFarM) * near * near * (3 - 2 * near);
+                fov = 2 * Math.atan(frame / 2 / d) * 180 / Math.PI;
+            }
             cam.position.copy(this.camTarget);
-            this.look.set(v.x, v.y + 0.9, v.z);
-            const d = this.camTarget.distanceTo(this.look);
-            const fov = Math.max(14, Math.min(shot.fov * 1.6, 2 * Math.atan(3.6 / 2 / Math.max(1, d)) * 180 / Math.PI * 1.6));
             cam.up.set(0, 1, 0);
             if (cam.fov !== fov) {
                 cam.fov = fov;

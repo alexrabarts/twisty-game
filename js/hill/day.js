@@ -1,7 +1,8 @@
 // HillDay: the hill ride's round as a day's work (js/hill/ride.js runs it). Each day:
-//   - the climb: the boy starts low on the top stretch and pushes the bicycle up the lane on foot to the bakery's cart
-//     at the top, seen from the opening's own camera (CLIMB). The climb is not timed;
-//   - the restock: at the cart the basket fills (BASKET loaves), then the ride goes to the opening hold and down;
+//   - the climb: the boy comes up into the opening shot from the bend and pushes the bicycle up the lane on foot, the
+//     basket full, to the bakery's cart at the top, seen as the reference stills cut it (CLIMB, HillRide.CLIMB_SHOTS).
+//     The climb is not timed;
+//   - the restock: at the cart the basket is made up (BASKET loaves), then the ride goes to the opening hold and down;
 //   - the deliveries: plain doors down the lane wait for bread (DOORS), each with an empty bread crate on its step. The
 //     next one has a lamp lit over it. Q throws a loaf to the left, E to the right; the loaf leaves the basket with the
 //     bicycle's speed and the throw (THROW) and flies, bounces and slides. One that comes to the doorstep or the door is
@@ -15,12 +16,15 @@
 //   - the freewheel: the longest distance ridden with the legs out, no pedal and no brake.
 // Nothing of this shows during the ride but the lamp over the next door; the end card shows the rest (summary).
 class HillDay {
-    // The climb: from fromS up to triggerS (s on the lane; the cart stands just above), held to the line `across`. The
-    // hill is too steep to ride: he walks beside the bicycle and pushes it at about walkMs while the pedal key is held
-    // (the push is walkBase of the drive, more by walkGain for each m/s under walkMs, and by walkHold, which builds up
-    // for each m/s over a second and holds the pace on any grade), and holds it on the brake when the key is let go
+    // The climb: from fromS (just out of the opening shot, behind the wall at the bend) up to triggerS (s on the lane;
+    // the cart stands just above), starting on the line `across`. The hill is too steep to ride: he walks beside the
+    // bicycle and pushes it at about walkMs while the pedal key is held (the push is walkBase of the drive, more by
+    // walkGain for each m/s under walkMs, and by walkHold, which builds up for each m/s over a second and holds the pace
+    // on any grade), and holds it on the brake when the key is let go. Over the last turnInM he wheels it in to the
+    // cart, to the line turnAcross
     static get CLIMB() {
-        return Object.freeze({ fromS: 78, triggerS: 27, across: -0.6, restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
+        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, turnInM: 6, turnAcross: 1.0, restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2,
+            walkHold: 0.6 });
     }
 
     // The loaves the basket holds when full

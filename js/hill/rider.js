@@ -21,10 +21,11 @@ class HillRider {
     // (+x), his hips at `hip` in the frame, bent forward over the bars by bendRad and turned in towards them by turnRad,
     // a hand on each grip (a shoulder reaching at most reachM forward to the far one). His steps: a pace of strideM (two
     // steps), each foot on the cobbles for `stance` of it and lifted liftM as it swings, the feet footX out from the hips'
-    // middle and backM behind it. The bicycle leans in towards him by leanRad; on and off the saddle over blendS
+    // middle and backM behind it. His head is lifted headUpRad from the bend, so he looks up the lane ahead of him. The
+    // bicycle leans in towards him by leanRad; on and off the saddle over blendS
     static get WALK() {
-        return Object.freeze({ hip: [0.42, 0.8, -0.2], bendRad: 0.75, turnRad: 0.35, reachM: 0.2, strideM: 1.0, stance: 0.6, liftM: 0.09, footX: 0.11, backM: 0.12,
-            leanRad: 0.06, blendS: 0.4 });
+        return Object.freeze({ hip: [0.42, 0.8, -0.2], bendRad: 0.75, turnRad: 0.35, headUpRad: 0.6, reachM: 0.2, strideM: 1.0, stance: 0.6, liftM: 0.09, footX: 0.11,
+            backM: 0.12, leanRad: 0.06, blendS: 0.4 });
     }
 
     // The ankle over its pedal, from the pedal's pivot
@@ -106,6 +107,13 @@ class HillRider {
             };
         });
         this.steerQ = new THREE.Quaternion();
+        // The head (a model file without it has the head in the body): hung on the body, so it goes where he goes
+        const head = this.parts.head;
+        if (head) {
+            this.frame.remove(head);
+            this.parts.boy.add(head);
+            head.position.sub(r.boy);
+        }
     }
 
     // The boy's parts that leave the bicycle in a fall
@@ -127,6 +135,7 @@ class HillRider {
             }
             this.parts.boy.position.set(0, 0, 0);
             this.parts.boy.quaternion.identity();
+            if (this.parts.head) this.parts.head.quaternion.identity();
         }
         // (where the vehicle's rider is now drawn, in the world)
         v.group.updateMatrixWorld(true);
@@ -210,6 +219,7 @@ class HillRider {
         this.boyQ.copy(s.q2);
         this.parts.boy.quaternion.copy(s.q2);
         this.parts.boy.position.copy(this.boyAt);
+        if (this.parts.head) this.parts.head.quaternion.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), -W.headUpRad * walk);
         s.hand = s.hand || new THREE.Vector3();
         s.sh = s.sh || new THREE.Vector3();
         s.elbow = s.elbow || new THREE.Vector3();
