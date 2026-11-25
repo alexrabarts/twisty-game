@@ -2803,6 +2803,9 @@ class WorldEnvironment {
             geometry.setAttribute('color', new THREE.BufferAttribute(whole.shades, 3));
             geometry.setIndex(new THREE.BufferAttribute(whole.index, 1));
         }
+        // (normals made anew at the new vertex count: computeVertexNormals keeps an old normal attribute at its old
+        // length, and a draw with an attribute shorter than the positions draws nothing, the whole far grid gone)
+        geometry.deleteAttribute('normal');
         geometry.computeVertexNormals();
         geometry.computeBoundingSphere();
         this.triangleCount += geometry.index.count / 3 - before;

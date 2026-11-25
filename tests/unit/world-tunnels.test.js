@@ -58,10 +58,10 @@ describe('the rule (TerrainMesh.tubeClip)', () => {
 const list = (items, kind, n = 8) => items.filter(r => r[kind] > 0).slice(0, n).map(r => JSON.stringify({ key: r.key, kind: r.kind, s: r.s, lengthM: r.lengthM, [kind]: r[kind], worst: r.worst[kind] })).join('\n');
 
 for (const stage of ['tremola', 'gotthard-north']) describe(`the ${stage} stage: no land in a tube or across its portals`, () => {
-    let found;
+    let found, env;
     beforeAll(async () => {
         const { fetchFn } = diskFetch();
-        const env = await WorldEnvironment.load(new THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
+        env = await WorldEnvironment.load(new THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
         env.scenery.buildTile = () => null;
         const store = {};
         for (let s = env.startS + 1; s < env.endS; s += WALK_M) {
@@ -73,6 +73,27 @@ for (const stage of ['tremola', 'gotthard-north']) describe(`the ${stage} stage:
         found = tunnelReport(store);
         console.log(`tunnels: ${found.runs} runs, ${found.portals} portals, ${found.places} places; ${found.inside} with land inside, ${found.floor} with no floor, ${found.mouth} with land in front of a mouth, ${found.face} with land unfronted across a portal\n${JSON.stringify(found.list.slice(0, 12).map(r => ({ key: r.key, kind: r.kind, lengthM: r.lengthM, inside: r.inside, floor: r.floor, mouth: r.mouth, face: r.face })))}`);
     }, 3600000);
+
+    test('the far grid is cut only in the tubes\' boxes: every triangle clear of them is kept whole, every attribute at the vertex count', () => {
+        const whole = env.horizonWhole, geometry = env.horizon.geometry, tubes = [...env.rideTubes(), ...[...env.sideTubes.values()].flat()];
+        const count = geometry.attributes.position.count;
+        for (const name of Object.keys(geometry.attributes)) expect([name, geometry.attributes[name].count]).toEqual([name, count]);
+        const clear = (positions, a, b, c) => {
+            const xs = [a, b, c].map(v => positions[v * 3]), zs = [a, b, c].map(v => positions[v * 3 + 2]);
+            const x0 = Math.min(...xs), x1 = Math.max(...xs), z0 = Math.min(...zs), z1 = Math.max(...zs);
+            return !tubes.some(({ box }) => box[2] >= x0 && box[0] <= x1 && box[3] >= z0 && box[1] <= z1);
+        };
+        const kept = (positions, index, base) => {
+            const out = new Set();
+            for (let i = 0; i < index.length; i += 3) if (index[i] < base && index[i + 1] < base && index[i + 2] < base && clear(positions, index[i], index[i + 1], index[i + 2])) out.add(`${index[i]},${index[i + 1]},${index[i + 2]}`);
+            return out;
+        };
+        const base = whole.positions.length / 3, before = kept(whole.positions, whole.index, base), after = kept(geometry.attributes.position.array, geometry.index.array, base);
+        expect(before.size).toBeGreaterThan(0);
+        expect([...before].filter(k => !after.has(k))).toEqual([]);
+        // (the grid's own vertices where they were: the cut adds vertices after them and moves none)
+        expect(Array.from(geometry.attributes.position.array.subarray(0, base * 3))).toEqual(Array.from(whole.positions));
+    });
 
     test('no land in a tube, between its floor and its roof', () => {
         if (found.inside > TUNNEL_LIMITS.inside) throw new Error(`${found.inside} places with land inside a tube:\n${list(found.list, 'inside')}`);
