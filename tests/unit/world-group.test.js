@@ -45,10 +45,12 @@ const groupRide = options => rideGroup(game, env, options);
 
 // The places in the group, front first, of the riders on the road
 const orderOf = riders => riders.filter(r => r.bikeGroup.visible).sort((a, b) => sOf(b) - sOf(a)).map(r => r.character.place);
-// How far each rider is from its own place among the riders, on the mean
+// How far each rider is from where it wants to be among the riders (its rank: its place moved by its mood,
+// GROUP.mood), on the mean
 function displacement(riders) {
-    const order = orderOf(riders), wish = order.slice().sort((a, b) => a - b);
-    return order.reduce((sum, place, k) => sum + Math.abs(wish.indexOf(place) - k), 0) / order.length;
+    const on = riders.filter(r => r.bikeGroup.visible);
+    const order = on.slice().sort((a, b) => sOf(b) - sOf(a)), wish = on.slice().sort((a, b) => a.ride.rank - b.ride.rank);
+    return order.reduce((sum, r, k) => sum + Math.abs(wish.indexOf(r) - k), 0) / order.length;
 }
 const nearEnd = riders => riders.some(r => sOf(r) > route.length - 400);
 // The crew near the start, by place: in place order (place 1 the furthest up the road), and the reverse of it
@@ -97,25 +99,28 @@ describe('the line', () => {
         held = { ...rideOf('held', IN_PLACE), rows: rows.held };
     }, 600000);
 
-    test('from the reverse of their places the riders pass each other into place order, and stay near it', () => {
+    test('from the reverse of their places the riders pass each other into the order they want, and stay near it', () => {
         const rows = reverse.rows, half = Math.floor(rows.length / 2);
         const mean = part => part.reduce((sum, r) => sum + r.d, 0) / part.length;
         const first = mean(rows.slice(0, half)), second = mean(rows.slice(half));
         const report = { first, second, passes: reverse.traffic.group.events.passes, aborts: reverse.traffic.group.events.aborts, orders: rows.filter((r, k) => k % 25 === 0).map(r => r.order) };
         expect(rows[0].order).toBe('54321');
-        if (!(second < first && second <= 0.6)) throw new Error(`the line did not form: ${JSON.stringify(report)}`);
+        // (a pass needs a safe straight, and the moods move what each rider wants over minutes: the line does not
+        // reach the order its moods want as near as it reached place order, 0.6)
+        if (!(second < first && second <= 1.5)) throw new Error(`the line did not form: ${JSON.stringify(report)}`);
         expect(report.passes).toBeGreaterThanOrEqual(5);
         expect(reverse.overlaps).toEqual([]);
     });
 
-    test('from their places the line holds within a band: near place order all the ride, nobody ever more than two places off', () => {
+    test('from their places the order changes with the riders\' moods, and each stays near where its mood wants it', () => {
         const rows = held.rows;
-        const off = r => r.order.split('').map((p, k) => Math.abs(Number(p) - 1 - k));
-        // In place order, or two neighbours swapped
-        const near = rows.filter(r => off(r).reduce((a, b) => a + b, 0) <= 2).length / rows.length;
-        const worst = Math.max(...rows.map(r => Math.max(...off(r))));
+        const changes = rows.filter((r, k) => k > 0 && r.order.length === rows[k - 1].order.length && r.order !== rows[k - 1].order).length;
+        const inPlace = rows.filter(r => r.order === r.order.split('').sort().join('')).length / rows.length;
         const mean = rows.reduce((sum, r) => sum + r.d, 0) / rows.length;
-        if (!(near >= 0.8 && worst <= 2 && mean <= 0.6)) throw new Error(`near order ${near}, worst ${worst}, mean ${mean}: ${rows.filter((r, k) => k % 25 === 0).map(r => r.order).join(' ')}`);
+        const report = { changes, inPlace, mean, orders: rows.filter((r, k) => k % 25 === 0).map(r => r.order).join(' ') };
+        console.log(`ORDER ${JSON.stringify(report)}`);
+        // Not one order all the ride (the owner: "a little too orderly"), and yet a group that sorts itself
+        if (!(changes >= 3 && inPlace < 0.8 && mean <= 1)) throw new Error(`the order: ${JSON.stringify(report)}`);
         expect(held.overlaps).toEqual([]);
     });
 
@@ -170,10 +175,12 @@ describe('the player\'s pace', () => {
         const report = { fast: { next: fast.next, all: fast.all }, slow: { next: slow.next, all: slow.all } };
         expect(fast.over).toEqual([]);
         expect(slow.over).toEqual([]);
+        // (a slow player's rider behind it is held by the following rule; its share, which the test reads, keeps its
+        // mood's part, up to 0.15: GROUP.mood)
         // (the rider next behind a fast player rode at 1.088 of its pace on the mean at a pace of 1.5 with its bends at 0.8 g,
         // 1.079 at 1.6 and 0.9 g, 1.065 with the crew's cornering narrowed to GROUP.cornerSpan 0.5: it loses less to the
         // player in the bends, so it needs less pull to keep its gap)
-        if (!(fast.next > 1.06 && slow.next < 0.95 && fast.all > slow.all + 0.1)) throw new Error(`the player's pace did not pull: ${JSON.stringify(report)}`);
+        if (!(fast.next > 1.06 && slow.next < 0.97 && fast.all > slow.all + 0.1)) throw new Error(`the player's pace did not pull: ${JSON.stringify(report)}`);
         // Nobody whose place is behind the player passes it, fast or slow
         expect(fast.passedPlayer).toBe(0);
         expect(slow.passedPlayer).toBe(0);
@@ -337,6 +344,129 @@ describe('the slowest rider', () => {
         for (const stop of done) if (!(stop.least < Math.max(60, stop.backGap / 2))) throw new Error(`no catch-up after a stop: ${JSON.stringify(report)}`);
         expect(ride.overlaps).toEqual([]);
     }, 300000);
+});
+
+describe('mood and road position', () => {
+    // The whole crew but the slowest, from their places, for ten minutes: each rider's mood each second, and where it
+    // rides across its lane each frame
+    let ride, moods, pairs, alone, sides, drifts;
+    beforeAll(() => {
+        moods = new Map();
+        pairs = [];
+        alone = [];
+        sides = new Map();
+        drifts = [];
+        const R = G.road;
+        ride = groupRide({
+            rider: byPlace(6), at: IN_PLACE, seconds: 600,
+            onFrame: ({ t, riders, traffic }) => {
+                const line = traffic.group.line;
+                for (const r of riders) {
+                    const ride = r.ride;
+                    if (Math.round(t * 60) % 60 === 0) {
+                        if (!moods.has(r)) moods.set(r, []);
+                        moods.get(r).push({ mood: ride.mood, rank: ride.rank });
+                    }
+                    if (ride.state !== 'ride' || ride.pass.phase || ride.single || r.inSingleLane || r.currentSpeed < 3) continue;
+                    drifts.push(ride.drift);
+                    const me = across(r);
+                    const i = ride.index, ahead = i > 0 ? line[i - 1] : null;
+                    const lane = laneLateral(sOf(r));
+                    // (on open road: in a hairpin the lane's room is too narrow for the whole stagger)
+                    if (ride.roomIn < R.inM || (ahead && ahead.ride && ahead.ride.roomIn < R.inM)) continue;
+                    if (ahead && ahead.ride && ahead.s - ride.s < R.followM && ahead.ride.state === 'ride' && !ahead.ride.pass.phase && !ahead.ride.yielding && !ride.yielding) {
+                        const other = across(ahead.ride.bike);
+                        // (settled: the spring has had time since the target last moved much)
+                        if (Math.abs(ride.drift - ride.driftTo) < 0.1) pairs.push({ apart: Math.abs((me.lateral - lane) - (other.lateral - laneLateral(ahead.s))), side: Math.sign(ride.drift - ahead.ride.driftShown) });
+                        const was = sides.get(r);
+                        const side = Math.sign(ride.drift - ahead.ride.driftShown);
+                        if (was && side && was.side !== side) was.swaps++;
+                        if (side) sides.set(r, { side, swaps: was ? was.swaps : 0 });
+                    }
+                    if (!ahead || ahead.s - ride.s > 2 * R.followM) alone.push(me.lateral - lane);
+                }
+            }
+        });
+    }, 600000);
+
+    test('each rider\'s mood walks slowly within its bounds, moves its place in the group, and the moods differ', () => {
+        const M = G.mood;
+        const report = [];
+        for (const [r, rows] of moods) {
+            const ride = r.ride, daring = r.character.traits.daring;
+            expect(ride.moodPace).toBeCloseTo(M.pace[0] + M.pace[1] * daring, 9);
+            expect(ride.moodPlaces).toBeCloseTo(M.places[0] + M.places[1] * daring, 9);
+            const values = rows.map(x => x.mood);
+            for (let k = 0; k < rows.length; k++) {
+                expect(Math.abs(rows[k].mood)).toBeLessThanOrEqual(1);
+                expect(Math.abs(rows[k].rank - ride.place)).toBeLessThanOrEqual(ride.moodPlaces + 1e-9);
+                // (a second moves it by one draw and the pull back to 0 at most: minutes to cross its range)
+                if (k > 0) expect(Math.abs(rows[k].mood - rows[k - 1].mood)).toBeLessThanOrEqual(M.kick + 1 / M.tauS + 1e-9);
+            }
+            report.push({ place: ride.place, low: Math.min(...values), high: Math.max(...values) });
+        }
+        // Each mood moves over ten minutes, and the riders are not of one mood
+        for (const x of report) expect(x.high - x.low).toBeGreaterThan(0.2);
+        const ends = report.map(x => x.high);
+        expect(Math.max(...ends) - Math.min(...ends)).toBeGreaterThan(0.1);
+        expect(ride.overlaps).toEqual([]);
+    });
+
+    test('nobody rides the lane line: one close behind another rides staggered beside it and swaps sides now and then; one alone wanders off the line', () => {
+        const R = G.road;
+        const apart = pairs.filter(p => p.apart >= 0.5).length / pairs.length;
+        const swaps = [...sides.values()].reduce((sum, x) => sum + x.swaps, 0);
+        const onLine = alone.filter(x => Math.abs(x) < 0.1).length / alone.length;
+        const report = { pairs: pairs.length, apart, swaps, alone: alone.length, onLine };
+        if (!(pairs.length > 600 && apart > 0.8 && swaps >= 2 && alone.length > 600 && onLine < 0.5)) throw new Error(`no stagger: ${JSON.stringify(report)}`);
+        // Within its lane's room: never further out than outM, never further in than inM
+        expect(Math.min(...drifts)).toBeGreaterThanOrEqual(-R.outM - 1e-6);
+        expect(Math.max(...drifts)).toBeLessThanOrEqual(R.inM + 1e-6);
+    });
+});
+
+describe('a stopping place', () => {
+    test('each rider waits on a spot of its own: moved along and across, some side by side, turned, all inside the place and clear of each other', () => {
+        const S = G.spot;
+        const ride = groupRide({ rider: byPlace(6), seconds: 1 });
+        const group = ride.traffic.group, rides = group.riders;
+        const size = Traffic.sizeOf('bike');
+        const bad = [], yaws = [];
+        let abreast = 0, spots = 0;
+        for (const place of env.places.list.filter(p => p.slots >= 3)) {
+            for (const r of rides) { r.state = 'ride'; r.at.place = null; }
+            for (const r of rides) {
+                r.s = place.s - 60;
+                r.bike.currentSpeed = 0;
+                if (!group.book(r, place, 200)) continue;
+                r.state = 'wait';
+            }
+            const mine = rides.filter(r => r.at.place === place);
+            for (const r of mine) {
+                spots++;
+                yaws.push(r.at.yaw);
+                const p = route.sample(r.at.s, {});
+                const foot = size.length / 2 * Math.abs(Math.sin(r.at.yaw)) + size.width / 2 * Math.cos(r.at.yaw);
+                if (Math.abs(r.at.yaw) > S.yawMax + 1e-9 || Math.sign(r.at.lateral) !== place.side || Math.abs(r.at.lateral) - foot < p.width / 2) bad.push({ place: place.id, s: r.at.s, lateral: r.at.lateral, yaw: r.at.yaw });
+                if (r.at.s < place.s || r.at.s > place.s + place.length) bad.push({ place: place.id, s: r.at.s, why: 'outside' });
+                for (const o of mine) {
+                    if (o === r) continue;
+                    const q = route.sample(o.at.s, {});
+                    const box = (x, at) => Traffic.box(x.x + at.lateral * Math.cos(x.heading), x.z - at.lateral * Math.sin(x.heading), x.heading + at.yaw, size);
+                    if (Traffic.overlap(box(p, r.at), box(q, o.at)) > 0) bad.push({ place: place.id, a: r.at.slot, b: o.at.slot, why: 'touch' });
+                    if (Math.abs(r.at.s - o.at.s) < size.length / 2 && Math.abs(r.at.lateral - o.at.lateral) >= size.width) abreast++;
+                }
+            }
+        }
+        for (const r of rides) { r.state = 'ride'; r.at.place = null; }
+        if (bad.length) throw new Error(`${bad.length} spots off their place or touching:\n${list(bad)}`);
+        expect(spots).toBeGreaterThan(20);
+        // Turned both ways, by varied angles, and some side by side
+        expect(Math.min(...yaws)).toBeLessThan(-0.1);
+        expect(Math.max(...yaws)).toBeGreaterThan(0.1);
+        expect(new Set(yaws.map(y => Math.round(y * 20))).size).toBeGreaterThan(5);
+        expect(abreast).toBeGreaterThan(0);
+    });
 });
 
 describe('the same ride', () => {

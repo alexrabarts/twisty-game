@@ -6571,7 +6571,8 @@ WORLD['world-fall-shots'] = async (page) => {
     return { files };
 };
 
-// world-group-shots: the group ride (CrewGroup, .agent/system/group.md) in pictures: the crew at the start, in line on a
+// world-group-shots: the group ride (CrewGroup, .agent/system/group.md) in pictures (a straight also from high behind the
+// line, for the riders' stagger): the crew at the start, in line on a
 // straight, round a hairpin (from the chase view and from above), and waiting in a stopping place for a player who
 // stopped (from the chase view and from across the road). Each picture comes with where each rider is and what it does.
 //   node tools/terrain-check.mjs world-group-shots --world tremola --gpu [--out <dir>] [--tag <name>]
@@ -6598,7 +6599,7 @@ WORLD['world-group-shots'] = async (page) => {
     for (const kind of ['straight', 'hairpin', 'waiting']) {
         const info = await page.evaluate(groupScene, placeAt.toString(), kind);
         files.push({ shot: kind, file: await shoot(kind), ...info });
-        if (kind !== 'straight') {
+        {
             const view = await page.evaluate(groupEye, kind);
             files.push({ shot: `${kind}-view`, file: save(`${kind}-view`, view.png), eye: view.eye });
         }
@@ -6636,8 +6637,11 @@ async function groupScene(placeSource, kind) {
         settle();
         byPlace().forEach((bike, k) => put(bike, s0 + 70 - k * 13));
         twistyDev.autopilot({ speed: 14 });
-        for (let i = 0; i < 120; i++) twistyDev.step(1);
+        // (long enough for the riders to take their stagger: GROUP.road)
+        for (let i = 0; i < 360; i++) twistyDev.step(1);
         note = { straightFrom: s0 };
+        const ahead = byPlace().map(sOf);
+        window.groupEyeAt = { s: Math.min(...ahead), front: Math.max(...ahead) };
     } else if (kind === 'hairpin') {
         const h = route.hairpins().find(p => p.s0 > 2200) || route.hairpins()[0];
         await placeAt(h.s0 - 150);
@@ -6690,6 +6694,10 @@ function groupEye(kind) {
     if (kind === 'hairpin') {
         eye = point(at.s - 30, 0, 45);
         look = point(at.s, 0, 0);
+    } else if (kind === 'straight') {
+        // From high behind the last rider, down the line: the stagger across the lane
+        eye = point(at.s - 12, 0, 7);
+        look = point(at.s + 30, 0, 0);
     } else {
         const side = at.place.side;
         eye = point(at.s - 22, -side * (p.width / 2 + 3), 3.2);
