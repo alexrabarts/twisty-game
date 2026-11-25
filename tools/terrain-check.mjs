@@ -6679,6 +6679,23 @@ async function roamRun(placeSource) {
         twistyDev.step(1, { render: false });
         out.style = { last: game.roamStyle.last, best: game.roamStyle.best, line: document.getElementById('hudStyleBest').textContent, scored: game.score - scoreBefore, crashed: !!v.crashed };
     }
+    // Photo mode (js/world/photo.js): opened while riding, the camera taken round to the bike's front left and up, a
+    // picture of what it sees, the picture saved (a PNG), then back to the ride
+    if (game.openPhoto) {
+        for (let i = 0; i < 60; i++) twistyDev.step(1, { render: false });
+        game.openPhoto();
+        const opened = !!game.photo && game.paused && document.body.classList.contains('photo-mode');
+        for (const act of ['left', 'left', 'left', 'left', 'left', 'left', 'left', 'up', 'up', 'closer']) document.querySelector(`#photo-bar [data-photo="${act}"]`).click();
+        // (twistyDev.step unpauses the ride for its frame: the paused frame is drawn here as the game draws it)
+        game.photo.apply(game.camera);
+        game.graphics.render(game.scene, game.camera);
+        out.shots.photo = frame();
+        const cam = game.camera.position, front = Math.cos(v.yawAngle) * (cam.z - v.position.z) + Math.sin(v.yawAngle) * (cam.x - v.position.x);
+        document.querySelector('#photo-bar [data-photo="save"]').click();
+        out.photo = { opened, ahead: +front.toFixed(1), saved: game.lastPhoto || null };
+        document.querySelector('#photo-bar [data-photo="done"]').click();
+        out.photo.back = !game.photo && !game.paused && !document.body.classList.contains('photo-mode');
+    }
     // A side road, ridden onto from the ride as a rider would: the junction whose side road runs furthest, the bike put
     // 60 m before it on the ride, steered along the ride and then along the side road (the autopilot rides the ride only)
     const graph = env.graph, route = env.route;
@@ -6794,6 +6811,7 @@ WORLD['world-roam'] = async (page) => {
     if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
     if (!result.findsStart || !result.findsStart.total || !result.findsSide || !result.findsSide.found.some(id => id.startsWith('side:')) || !/^Discoveries \d+\/\d+$/.test(result.findsSide.line)) failures.push(`the side road ridden is not a discovery: ${JSON.stringify(result.findsSide)}`);
     if (result.style && (!result.style.last || result.style.last.m < 5 || !(result.style.scored > 0) || !/Best wheelie/.test(result.style.line))) failures.push(`the wheelie not measured or scored: ${JSON.stringify(result.style)}`);
+    if (result.photo && (!result.photo.opened || !(result.photo.ahead > 0) || !result.photo.saved || result.photo.saved.bytes < 100000 || !result.photo.back)) failures.push(`photo mode: ${JSON.stringify(result.photo)}`);
     if (result.crewRide && result.crewRide.mostAhead > 0) failures.push(`a rider of the group ${result.crewRide.mostAhead} m ahead of the leading player`);
     if (result.crewSide && result.crewSide.waiting < result.crewSide.riders) failures.push(`riders not waiting while the player is down a side road: ${JSON.stringify(result.crewSide)}`);
     return { ok: failures.length === 0, failures, ...result, dir };

@@ -236,6 +236,24 @@ const SEQUENCES = [
         { key: 'KeyG', tap: '#world-pause [data-travel-open]', top: 'fast-travel' },
         { click: '#fast-travel [data-travel="summit"]', top: 'none' }
     ] },
+    // Free roam's photo mode (js/world/photo.js): its bar from the pause panel and with V while riding; its buttons keep
+    // it on top, Escape goes back to where it opened from
+    { name: 'roam-pause-photo', page: 'roam', steps: [
+        pause,
+        { click: '#world-pause [data-photo-open]', top: 'photo-bar' },
+        { click: '#photo-bar [data-photo="left"]', top: 'photo-bar' },
+        { key: 'KeyW', tap: '#photo-bar [data-photo="up"]', top: 'photo-bar' },
+        { key: 'Escape', tap: '#photo-bar [data-photo="done"]', top: 'world-pause', focus: '#world-pause [data-photo-open]' },
+        { key: 'KeyV', tap: '#world-pause [data-photo-open]', top: 'photo-bar' },
+        { click: '#photo-bar [data-photo="done"]', top: 'world-pause' },
+        { click: '#world-pause [data-resume]', top: 'none' }
+    ] },
+    { name: 'roam-photo-key', page: 'roam', steps: [
+        { key: 'KeyV', top: 'photo-bar' },
+        { key: 'KeyA', top: 'photo-bar' },
+        { key: 'Equal', top: 'photo-bar' },
+        { key: 'Escape', top: 'none' }
+    ] },
     // (keys only: a touch screen opens it from the pause panel, roam-pause-travel)
     { name: 'roam-travel-key', page: 'roam', steps: [
         { key: 'KeyG', top: 'fast-travel' },

@@ -1244,7 +1244,7 @@ class Game {
         // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
         // in the middle of a ride
         if (panel && this.hud) this.hud.recallHint(true);
-        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null, this.vehicle ? this.vehicle.speed : 0, this.freeRoam && typeof FastTravel !== 'undefined' ? () => this.openTravel() : null);
+        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null, this.vehicle ? this.vehicle.speed : 0, this.freeRoam && typeof FastTravel !== 'undefined' ? () => this.openTravel() : null, this.freeRoam && typeof PhotoMode !== 'undefined' ? () => this.openPhoto() : null);
     }
 
     // Restart leg from the pause panel of a world ride (a world crash opens no card to offer it): it asks first, and
@@ -3718,6 +3718,8 @@ class Game {
         // Skip all game logic if paused, but continue rendering
         if (this.paused) {
             this.soundManager.stopEngineSound();
+            // (photo mode: its own camera round the bike, js/world/photo.js)
+            if (this.photo) this.photo.apply(this.camera);
             this.graphics.render(this.scene, this.camera);
             return;
         }
@@ -4634,6 +4636,55 @@ class Game {
         });
     }
 
+    // Photo mode (js/world/photo.js): from the pause panel, or with its key while riding (the ride pauses under it). The
+    // HUD goes, a camera of the rider's own goes round the bike; Back returns to where it was opened from
+    openPhoto() {
+        if (!this.freeRoam || !this.environment || typeof PhotoMode === 'undefined' || this.photo) return;
+        const fromRide = !this.paused;
+        if (fromRide) this.pauseRace({ panel: false });
+        const ground = this.environment.ground;
+        this.photo = new PhotoMode(this.vehicle, (x, z) => ground.groundY(x, z, null));
+        document.body.classList.add('photo-mode');
+        const bar = PhotoMode.bar(document, (name) => {
+            const photo = this.photo;
+            if (!photo) return;
+            if (name === 'left') photo.orbit(-1);
+            else if (name === 'right') photo.orbit(1);
+            else if (name === 'up') photo.tilt(1);
+            else if (name === 'down') photo.tilt(-1);
+            else if (name === 'closer') photo.zoom(-1);
+            else if (name === 'further') photo.zoom(1);
+            else if (name === 'save') this.savePhoto();
+            else if (name === 'done') done();
+        });
+        const done = () => {
+            Modals.close(bar);
+            document.body.classList.remove('photo-mode');
+            this.photo = null;
+            if (fromRide) this.resumeRace();
+        };
+        Modals.open(bar, { cancel: done, under: 'hide' });
+    }
+
+    // The picture as the photo camera sees it, drawn and read in one go (the canvas keeps no frame between draws), and
+    // handed to the browser as a PNG to save
+    savePhoto() {
+        try {
+            this.photo.apply(this.camera);
+            this.graphics.render(this.scene, this.camera);
+            const url = this.renderer.domElement.toDataURL('image/png');
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = PhotoMode.fileName(new Date());
+            link.click();
+            this.lastPhoto = { bytes: url.length, name: link.download };
+            showCallout('Picture saved', 'good', Game.CALLOUT_MS.restart);
+        } catch (error) {
+            console.error('Photo mode: the picture could not be saved', error);
+            showCallout('The picture could not be saved', 'warn', Game.CALLOUT_MS.restart);
+        }
+    }
+
     // Free roam puts the bike at a destination (FreeRoam.destinations): standing, facing along the ride, the camera, the
     // guide and the crew set again. The promise settles once the land round it is in (WorldStreamer.settle), and the
     // bike is put on that land. `say` tells the rider where they are
@@ -5007,6 +5058,15 @@ document.addEventListener('keydown', (event) => {
     if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
     if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
     window.game.openTravel();
+});
+
+// Photo mode's key in a free-roam ride (Game.openPhoto). Not while a dialog is open: the pause panel's Photo button
+// holds the key there (js/modals.js). Not while a name is typed
+document.addEventListener('keydown', (event) => {
+    if (typeof PhotoMode === 'undefined' || event.code !== PhotoMode.KEY || event.repeat || event.ctrlKey || event.metaKey || event.altKey || !window.game || !window.game.freeRoam) return;
+    if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
+    if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
+    window.game.openPhoto();
 });
 
 // The rider mode's key in a ride (Game.stepRiderMode). Not while a dialog is open: the dialog stack owns the keys

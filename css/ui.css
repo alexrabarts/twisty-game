@@ -2896,3 +2896,26 @@ body.free-roam #hudStageText {
     color: var(--c-text-dim);
     white-space: nowrap;
 }
+
+/* Photo mode (js/world/photo.js): no HUD, and its bar along the foot of the screen */
+body.photo-mode #hud,
+body.photo-mode .virtual-controls-left,
+body.photo-mode .virtual-controls-right,
+body.photo-mode .virtual-button-camera,
+body.photo-mode .virtual-button-pause {
+    visibility: hidden;
+}
+
+.photo-bar {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 12px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+}
