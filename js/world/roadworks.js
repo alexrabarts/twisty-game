@@ -755,6 +755,19 @@ class Roadworks {
         if (top) f(out, [x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], color);
     }
 
+    // A colour made lighter or darker by k
+    static shade(color, k) { return color.map(c => Math.min(1, c * k)); }
+
+    // A flat disc square to x at (x, y, z), `r` round, facing +x when `out` (a wheel's hub, a drum's end)
+    static disc(out, x, y, z, r, sides, color, facing = true) {
+        for (let k = 0; k < sides; k++) {
+            const a0 = (k / sides) * Math.PI * 2, a1 = ((k + 1) / sides) * Math.PI * 2;
+            const p = a => [x, y + r * Math.cos(a), z + r * Math.sin(a)];
+            if (facing) Roadworks.tri(out, [x, y, z], p(a1), p(a0), color);
+            else Roadworks.tri(out, [x, y, z], p(a0), p(a1), color);
+        }
+    }
+
     // A prism with `sides` faces round the x axis (a drum or a roller), from x0 to x1, centred at (y, z)
     static drum(out, x0, x1, y, z, r, sides, color) {
         for (let k = 0; k < sides; k++) {
@@ -930,29 +943,63 @@ class Roadworks {
             B(out, -0.02, 0.02, 0.2, 0.24, -1.72, 1.72, C.metal);
             B(out, -0.005, 0.005, 0.24, 1.96, -1.7, 1.7, C.mesh, false);
         });
-        // Three pallets with sacks on top
+        // Two pallets stacked, each a deck of five boards on three runners, and six sacks on top in two rows, each its
+        // own height, in the box the two blocks and the sack block had
+        // (`boards` false: the deck as one board, for a pallet whose load hides it)
+        const pallet = (out, y, boards = true) => {
+            for (const x of [-0.4, -0.05, 0.3]) B(out, x, x + 0.1, y, y + 0.1, -0.6, 0.6, Roadworks.shade(C.wood, 0.85));
+            if (!boards) return B(out, -0.4, 0.4, y + 0.1, y + 0.15, -0.6, 0.6, C.wood);
+            for (let k = 0; k < 5; k++) B(out, -0.4, 0.4, y + 0.1, y + 0.15, -0.6 + k * 0.26, -0.6 + k * 0.26 + 0.16, C.wood);
+            B(out, -0.4, 0.4, y + 0.1, y + 0.15, 0.44, 0.6, C.wood);
+        };
         geo.pallets = make(out => {
-            for (let k = 0; k < 2; k++) B(out, -0.4, 0.4, 0.01 + k * 0.15, 0.15 + k * 0.15, -0.6, 0.6, C.wood);
-            B(out, -0.36, 0.36, 0.31, 0.7, -0.55, 0.55, C.sack);
+            pallet(out, 0.01);
+            pallet(out, 0.16);
+            for (let r = 0; r < 2; r++) {
+                for (let k = 0; k < 3; k++) {
+                    const x0 = -0.36 + r * 0.37, z0 = -0.55 + k * 0.37, top = 0.6 + 0.1 * ((r + k) % 2);
+                    B(out, x0, x0 + 0.35, 0.31, top, z0, z0 + 0.35, Roadworks.shade(C.sack, 0.92 + 0.08 * ((r * 3 + k) % 3)));
+                }
+            }
+            B(out, -0.36, 0.36, 0.69, 0.7, -0.2, 0.2, Roadworks.shade(C.sack, 0.96));
         });
-        // A small roller: two drums, a yellow frame, a seat
+        // A small roller: two drums of twelve faces with their end discs, a yellow frame and the engine under a hood with
+        // its grille, the seat and its back, the steering column and wheel, and the side rails
         geo.roller = make(out => {
-            for (const z of [-0.75, 0.75]) Roadworks.drum(out, -0.6, 0.6, 0.38, z, 0.37, 8, C.steel);
+            for (const z of [-0.75, 0.75]) {
+                Roadworks.drum(out, -0.6, 0.6, 0.38, z, 0.37, 12, C.steel);
+                for (const x of [-0.6, 0.6]) Roadworks.disc(out, x, 0.38, z, 0.37, 12, Roadworks.shade(C.steel, 0.8), x > 0);
+            }
             B(out, -0.5, 0.5, 0.45, 1.05, -0.45, 0.45, C.yellow);
-            B(out, -0.25, 0.25, 1.05, 1.55, -0.2, 0.2, C.black);
+            B(out, -0.42, 0.42, 0.62, 0.95, 0.45, 0.47, C.black, false);
+            B(out, -0.25, 0.25, 1.05, 1.15, -0.2, 0.2, C.black);
+            B(out, -0.25, 0.25, 1.15, 1.55, -0.2, -0.12, C.black);
+            B(out, -0.02, 0.02, 1.05, 1.42, 0.25, 0.29, C.metal);
+            B(out, -0.15, 0.15, 1.42, 1.45, 0.17, 0.37, C.black);
             B(out, -0.6, -0.55, 0.75, 1.0, -1.12, 1.12, C.yellow);
             B(out, 0.55, 0.6, 0.75, 1.0, -1.12, 1.12, C.yellow);
         });
-        // A mini digger: tracks, body, cab and the arm folded over the front with its bucket down
+        // A mini digger: two tracks, each a frame with rollers and the drive wheel at its end; the body with its
+        // counterweight; the cab of four posts round tinted glass under its roof; the boom and the dipper folded over
+        // the front with the bucket down, a ram on the boom; the dozer blade at the front of the tracks
         geo.digger = make(out => {
-            B(out, -0.75, -0.4, 0.01, 0.45, -1.15, 1.15, C.black);
-            B(out, 0.4, 0.75, 0.01, 0.45, -1.15, 1.15, C.black);
+            for (const [x0, x1] of [[-0.75, -0.4], [0.4, 0.75]]) {
+                B(out, x0 + 0.004, x1 - 0.004, 0.06, 0.4, -1.08, 1.08, C.black);
+                B(out, x0, x1, 0.01, 0.06, -0.95, 0.95, C.black);
+                for (const z of [-1.0, 1.0]) Roadworks.drum(out, x0, x1, 0.2, z, 0.15, 8, C.black);
+                for (const z of [-0.55, -0.18, 0.18, 0.55]) Roadworks.disc(out, x0 < 0 ? x0 + 0.002 : x1 - 0.002, 0.16, z, 0.09, 6, C.metal, x0 > 0);
+            }
+            B(out, -0.75, 0.75, 0.42, 0.45, -1.15, 1.15, C.black);
             B(out, -0.65, 0.65, 0.45, 1.25, -0.8, 0.7, C.yellow);
-            B(out, -0.55, 0.35, 1.25, 2.3, -0.75, 0.1, C.glass);
+            B(out, -0.62, 0.62, 0.5, 1.1, -0.8, -0.78, C.black, false);
+            for (const [x, z] of [[-0.55, -0.75], [0.33, -0.75], [-0.55, 0.08], [0.33, 0.08]]) B(out, x, x + 0.04, 1.25, 2.3, z, z + 0.04, C.yellow);
+            B(out, -0.53, 0.35, 1.3, 2.25, -0.73, 0.1, C.glass);
             B(out, -0.6, 0.4, 2.3, 2.38, -0.8, 0.15, C.yellow);
             B(out, 0.4, 0.6, 1.0, 2.0, 0.6, 0.85, C.yellow);
+            B(out, 0.44, 0.56, 1.5, 1.95, 0.85, 0.92, C.metal);
             B(out, 0.42, 0.58, 0.35, 1.1, 0.9, 1.1, C.yellow);
             B(out, 0.3, 0.7, 0.05, 0.4, 0.85, 1.2, C.metal);
+            B(out, 0.32, 0.68, 0.06, 0.1, 1.16, 1.2, C.black);
         });
         // A stack of pipes on two timber bearers: three and two on top, six-sided, open at the ends, 3 m along the road
         geo.pipes = make(out => {
@@ -965,22 +1012,35 @@ class Roadworks {
                 }
             }
         });
-        // Kerb stones on a pallet: a full layer and a part layer
+        // Kerb stones on a pallet: a full layer of five and a part layer of three, each stone its own block with a
+        // gap to the next and its own grey, and a strap round the full layer
         geo.kerbs = make(out => {
-            B(out, -0.4, 0.4, 0.01, 0.15, -0.6, 0.6, C.wood);
-            B(out, -0.38, 0.38, 0.15, 0.4, -0.5, 0.5, C.concrete);
-            B(out, -0.38, 0.12, 0.4, 0.65, -0.5, 0.5, C.concrete);
+            pallet(out, 0.01, false);
+            for (let k = 0; k < 5; k++) B(out, -0.38 + k * 0.152, -0.38 + k * 0.152 + 0.14, 0.15, 0.4, -0.5, 0.5, Roadworks.shade(C.concrete, 0.9 + 0.05 * (k % 3)));
+            for (let k = 0; k < 3; k++) B(out, -0.38 + k * 0.17, -0.38 + k * 0.17 + 0.16, 0.4, 0.65, -0.5, 0.5, Roadworks.shade(C.concrete, 0.95 - 0.04 * k));
+            B(out, -0.385, 0.385, 0.24, 0.27, -0.505, 0.505, C.black, false);
         });
-        // Setts on a pallet: a banded block of them and a loose row on top
+        // Setts on a pallet: a banded block of them, its two straps, and a loose row of setts on top, each its own
         geo.setts = make(out => {
-            B(out, -0.4, 0.4, 0.01, 0.15, -0.6, 0.6, C.wood);
+            pallet(out, 0.01, false);
             B(out, -0.37, 0.37, 0.15, 0.72, -0.55, 0.55, C.granite);
-            B(out, -0.37, 0.37, 0.72, 0.84, -0.2, 0.55, C.granite);
+            for (const y of [0.3, 0.55]) B(out, -0.375, 0.375, y, y + 0.03, -0.555, 0.555, C.black, false);
+            for (let k = 0; k < 6; k++) {
+                const x0 = -0.37 + (k % 3) * 0.25, z0 = -0.2 + Math.floor(k / 3) * 0.38;
+                B(out, x0, x0 + 0.22, 0.72, 0.84, z0, z0 + 0.35, Roadworks.shade(C.granite, 0.88 + 0.06 * (k % 3)));
+            }
         });
-        // A towed compressor: one axle, a green housing, the tow bar and its jockey leg
+        // A towed compressor: one axle on two wheels, a green housing with its louvres and a lid seam, the tow bar and
+        // its jockey leg
         geo.compressor = make(out => {
-            B(out, -0.5, 0.5, 0.01, 0.5, -0.02, 0.38, C.black);
+            for (const x of [-0.5, 0.36]) {
+                Roadworks.drum(out, x, x + 0.14, 0.255, 0.18, 0.245, 10, C.black);
+                Roadworks.disc(out, x < 0 ? x : x + 0.14, 0.255, 0.18, 0.12, 6, C.metal, x > 0);
+            }
+            B(out, -0.36, 0.36, 0.22, 0.28, 0.15, 0.21, C.metal);
             B(out, -0.42, 0.42, 0.3, 1.15, -0.5, 0.9, C.green);
+            for (let k = 0; k < 3; k++) for (const x of [-0.425, 0.42]) B(out, x, x + 0.005, 0.6 + k * 0.12, 0.64 + k * 0.12, -0.3, 0.6, Roadworks.shade(C.green, 0.6), false);
+            B(out, -0.425, 0.425, 1.0, 1.02, -0.5, 0.9, Roadworks.shade(C.green, 0.75), false);
             B(out, -0.04, 0.04, 0.36, 0.44, -1.1, -0.5, C.metal);
             B(out, -0.03, 0.03, 0.01, 0.36, -1.02, -0.96, C.metal);
         });

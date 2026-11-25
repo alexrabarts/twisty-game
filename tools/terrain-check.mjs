@@ -8349,7 +8349,8 @@ const MODEL_PLAY_M = 22;
 // A group's id from a drawn mesh's name, or (@) the name of a group that holds it; the first match wins
 const MODEL_GROUPS = [
     ['bush', '^trees:bush'], ['tree', '^trees:'], ['tufts', '^tufts$'], ['boulders', '^boulders$'], ['houses', '^houses:'],
-    ['stones', '^stones$'], ['kerbs', '^stone-kerbs$'], ['landmarks', '^landmark:'], ['roadworks', '^roadworks:'],
+    ['stones', '^stones$'], ['kerbs', '^stone-kerbs$'], ['landmarks', '^landmark:'],
+    ['plant', '^roadworks:(digger|roller|compressor)$'], ['stores', '^roadworks:(pallets|kerbs|setts|pipes)$'], ['roadworks', '^roadworks:'],
     ['places', '@^world-places$'], ['stops', '^stop-'], ['marmots', '^marmot'], ['cars', '@^probe-car$'],
     ['crew', '@^probe-crew$'], ['player', '@^probe-player$'], ['cover', '@^ground-cover$'],
     ['road', '@^world-road-section$|^world-side-'], ['world', '@^world$']
@@ -8442,7 +8443,7 @@ async function modelStation(placeSource, countSource, groupRules, s, only) {
         else push(o.matrixWorld);
         return list.sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, 60);
     };
-    const pictured = ['bush', 'tufts', 'boulders', 'houses', 'stones', 'kerbs', 'landmarks', 'roadworks', 'places', 'stops', 'marmots', 'cars', 'crew'];
+    const pictured = ['bush', 'tufts', 'boulders', 'houses', 'stones', 'kerbs', 'landmarks', 'plant', 'stores', 'roadworks', 'places', 'stops', 'marmots', 'cars', 'crew'];
     const groups = {}, best = {};
     game.scene.traverse(o => {
         if (!o.isMesh || !visible(o)) return;
@@ -8461,7 +8462,7 @@ async function modelStation(placeSource, countSource, groupRules, s, only) {
             const p = route.sample(at.s, {});
             const d = Math.hypot(p.x - c.x, p.z - c.z) - p.width / 2 - c.size / 2;
             // A copy beside the ride: the nearest to the road's edge, not on it (a car or a rider on it is taken)
-            if (d > 40 || (d < 0.5 && !['cars', 'crew', 'roadworks', 'places'].includes(g))) continue;
+            if (d > 40 || (d < 0.5 && !['cars', 'crew', 'roadworks', 'plant', 'stores', 'places'].includes(g))) continue;
             const score = Math.max(d, 0) + Math.abs(at.s - s) * 0.01;
             if (!best[g] || score < best[g].score) best[g] = { score, s, copy: c, near: { s: at.s, d: Math.hypot(p.x - c.x, p.z - c.z), p: { x: p.x, y: p.y, z: p.z } }, name: key, triangles: each };
         }
