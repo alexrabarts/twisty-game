@@ -37,8 +37,25 @@ class HillRide {
         });
     }
 
-    // The way to the sun from the lane (a unit vector)
-    static sunDirection(lane, out = new THREE.Vector3()) {
+    // The climb's light, as the stills of the boy pushing up have it: early, the sun lower and straight down the top
+    // stretch ahead of the camera at the top (headingRad off its heading, + to the left; further to the left the houses
+    // on the left shade the whole lane), so the boy is lit from behind and the wet cobbles between him and the camera
+    // glint; a thick bright haze, and a strong fill so the house fronts in its shade read pale. The cobbles are wet: their roughness is cobbleRough of the dry one
+    // (the worn tops shine, each crown its own glint: their relief cobbleNormal times the dry one), their colour
+    // cobbleTone of it, darker
+    static get CLIMB_LIGHT() {
+        return Object.freeze({
+            headingRad: 0.02, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 2.6,
+            haze: 0xe4dfd4, hazeDensity: 0.012, ambient: 0.5, sky: 0xdcd8d0, ground: 0x7a705c, hemisphere: 1.05, cobbleRough: 0.28, cobbleNormal: 2, cobbleTone: 0.72
+        });
+    }
+
+    // The way to the sun from the lane (a unit vector): for the descent along the main straight, for the climb its own
+    static sunDirection(lane, out = new THREE.Vector3(), climb = false) {
+        if (climb) {
+            const L = HillRide.CLIMB_LIGHT, e = L.elevationDeg * Math.PI / 180;
+            return out.set(Math.cos(e) * Math.sin(L.headingRad), Math.sin(e), Math.cos(e) * Math.cos(L.headingRad));
+        }
         const L = HillRide.LIGHT, p = lane.sample(L.alongS), e = L.elevationDeg * Math.PI / 180;
         return out.set(Math.cos(e) * p.alongX, Math.sin(e), Math.cos(e) * p.alongZ);
     }
@@ -293,15 +310,24 @@ class HillRide {
         this.frameId = requestAnimationFrame(loop);
     }
 
-    light() {
-        const game = this.game, L = HillRide.LIGHT;
+    // The light of the descent, or of the climb (CLIMB_LIGHT) with its wet cobbles
+    light(climb = false) {
+        const game = this.game, L = climb ? HillRide.CLIMB_LIGHT : HillRide.LIGHT;
+        this.lit = L;
+        this.litClimb = climb;
         game.scene.background = new THREE.Color(L.haze);
         game.scene.fog = new THREE.FogExp2(L.haze, L.hazeDensity);
         game.graphics.setTimeOfDay('golden');
         // The reference frames' sky: pale and hazy, the sun's glow soft in it
         game.graphics.setWeather('fog');
         game.graphics.setRingStrength(0);
-        this.sun = HillRide.sunDirection(this.lane);
+        const cobbles = this.village && this.village.getObjectByName('hill-cobbles');
+        if (cobbles) {
+            cobbles.material.roughness = climb ? L.cobbleRough : 1;
+            cobbles.material.color.setScalar(climb ? L.cobbleTone : 1);
+            cobbles.material.normalScale.setScalar(climb ? L.cobbleNormal : 1);
+        }
+        this.sun = HillRide.sunDirection(this.lane, new THREE.Vector3(), climb);
         game.graphics.setSunOffset({ x: this.sun.x, y: this.sun.y, z: this.sun.z });
         // The far shadow cascade reads the sun's way and the bike's place (Cascades.follow)
         game.sunOffset = { x: this.sun.x * 100, y: this.sun.y * 100, z: this.sun.z * 100 };
@@ -838,6 +864,9 @@ class HillRide {
     // Poses the bicycle, moves the camera and the sun with it, and draws
     draw(dt) {
         const game = this.game;
+        // The climb's own light while he climbs, the descent's otherwise (and for a descent shot a tool holds)
+        const climbLight = !!this.climb && !this.forcedShot;
+        if (this.litClimb !== climbLight) this.light(climbLight);
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
             this.day.draw();
@@ -872,8 +901,8 @@ class HillRide {
             const at = this.rider.group.position;
             sun.position.copy(at).addScaledVector(this.sun, 120);
             sun.target.position.copy(at);
-            sun.color.set(HillRide.LIGHT.sunColour);
-            sun.intensity = HillRide.LIGHT.sunIntensity;
+            sun.color.set((this.lit || HillRide.LIGHT).sunColour);
+            sun.intensity = (this.lit || HillRide.LIGHT).sunIntensity;
         }
         sun.target.updateMatrixWorld();
         // The effects in force, as a world ride has them (js/effects.js), then the sky, the post-processing and the draw

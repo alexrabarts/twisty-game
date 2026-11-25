@@ -144,6 +144,19 @@ describe('the lane', () => {
         expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(0.6);
     });
 
+    test('the climb has its own light: the sun low and down the top stretch ahead of the camera at the top, so he is lit from behind', () => {
+        const sun = HillRide.sunDirection(lane, new THREE.Vector3(), true), L = HillRide.CLIMB_LIGHT;
+        const flat = Math.hypot(sun.x, sun.z);
+        expect(Math.asin(sun.y) * 180 / Math.PI).toBeCloseTo(L.elevationDeg, 6);
+        expect(Math.asin(sun.y) * 180 / Math.PI).toBeLessThan(HillRide.LIGHT.elevationDeg);
+        // Along the top stretch (straight down it within 5 degrees), where the climb's head-on camera looks down at him
+        const p = lane.sample(30);
+        expect((sun.x * p.alongX + sun.z * p.alongZ) / flat).toBeGreaterThan(Math.cos(5 * Math.PI / 180));
+        // Wet cobbles: smoother and darker than the dry ones
+        expect(L.cobbleRough).toBeLessThan(0.5);
+        expect(L.cobbleTone).toBeLessThan(1);
+    });
+
     test('a terrace stands on each side all the way down, end to end without overlapping, each side its own', () => {
         for (const side of [1, -1]) {
             const row = lane.cottages.filter(c => c.side === side);

@@ -135,6 +135,13 @@ The legs come out at 6.5 m/s downhill after 0.4 s without pedalling. They come b
 - a warm grey haze, and the sky's fog preset, as pale as the reference frames' sky;
 - a weak sky and ground fill.
 
+The climb has its own light (`HillRide.CLIMB_LIGHT`), as its stills have it. It is early in the day:
+- the sun is 10 degrees up, straight down the top stretch, so it is ahead of the camera at the top and behind the boy, and lights him from behind;
+- the haze is thicker and brighter, and the sky and ground fill is stronger, so the house fronts in the shade read pale;
+- the cobbles are wet: smoother (`cobbleRough`, 0.28 of the dry roughness), with more relief on each crown (`cobbleNormal`), and darker (`cobbleTone`). Each crown has its own glint, and the glints make a glare path between him and the sun.
+
+`HillRide.draw` changes to the climb's light while he climbs and back to the descent's light after. A descent shot that a tool holds (`forcedShot`) gets the descent's light.
+
 The ride runs the same effects that a world ride runs (js/effects.js): the cascaded shadows (the bike is `game.vehicle`, the sun is `game.sunOffset`), bloom, the grade, the ambient occlusion, the sky's sun glow, and the Quality ladder (`Game.adaptResolution`). The window panes are mirror glass on a sky of their own (`HillScene.paneSky`): a golden band on the horizon, brightest towards the sun. A pane facing the sun glints gold.
 
 ## The camera
