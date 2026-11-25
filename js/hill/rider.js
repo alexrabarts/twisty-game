@@ -163,19 +163,24 @@ class HillRider {
 
     // The arms and the bars: the head tube's rake, where each hand holds its grip (on +x, mirrored), the forearm's
     // length to the hand's middle, the shoulders' turn with the bars (a share of their angle), and how far a shoulder
-    // reaches forward to a far grip (m)
+    // reaches forward to a far grip (m), and how far his body leans into a turn past the bicycle's own lean (a share of
+    // it, about the saddle, at most bodyLeanMost rad)
     static get ARMS() {
-        return Object.freeze({ rakeDeg: 20, grip: [0.27, 1.02, 0.2], forearmM: 0.31, shoulderTurn: 0.3, shoulderReachM: 0.06 });
+        return Object.freeze({ rakeDeg: 20, grip: [0.27, 1.02, 0.2], forearmM: 0.31, shoulderTurn: 0.3, shoulderReachM: 0.06, bodyLean: 0.35, bodyLeanMost: 0.25 });
     }
 
-    // The bars turned to `bars` (radians) about the head tube, the shoulders turned a little with them, each arm from its
-    // shoulder to its grip with the elbow bent out and down
-    steer(bars) {
+    // The bars turned to `bars` (radians) about the head tube, the shoulders turned a little with them, the body leaned
+    // into the turn past the bicycle's `lean`, each arm from its shoulder to its grip with the elbow bent out and down
+    steer(bars, lean = 0) {
         const s = this.scratch, A = HillRider.ARMS, r = this.rest;
         this.steerQ.setFromAxisAngle(this.axis, bars);
         this.parts.steer.quaternion.copy(this.steerQ);
         s.q2 = s.q2 || new THREE.Quaternion();
         s.q2.setFromAxisAngle(s.yAxis || (s.yAxis = new THREE.Vector3(0, 1, 0)), bars * A.shoulderTurn);
+        // The roll is about the frame's own forward axis, the way the frame itself leans (Vehicle draws +z roll)
+        const into = Math.max(-A.bodyLeanMost, Math.min(A.bodyLeanMost, lean * A.bodyLean));
+        s.q3 = s.q3 || new THREE.Quaternion();
+        s.q2.multiply(s.q3.setFromAxisAngle(s.zAxis || (s.zAxis = new THREE.Vector3(0, 0, 1)), into));
         this.parts.boy.quaternion.copy(s.q2);
         s.hand = s.hand || new THREE.Vector3();
         s.sh = s.sh || new THREE.Vector3();
@@ -252,7 +257,7 @@ class HillRider {
             return;
         }
         if (this.fallen) this.remount();
-        this.steer(v.barsDrawn ? v.barsDrawn() : 0);
+        this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle);
 
         const out = HillRider.LEGS_OUT;
         const legsShare = bike.legs * bike.legs * (3 - 2 * bike.legs);

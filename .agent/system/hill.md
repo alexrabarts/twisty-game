@@ -61,6 +61,7 @@ Its numbers (`HillVehicle.DATA`, `HillVehicle.WORLD`) are a delivery bicycle's:
 - a 20 kg bike and a 40 kg boy;
 - 26 inch wheels and a 1.15 m wheelbase;
 - a lean rate 0.9 of the world's (about 1.33 rad/s against a motorbike's 1.48), with the steer keys' ease-in 1.9 times as long, so a press starts gently and builds to the quick lean;
+- the boy's body leaning into a turn past the bicycle's own lean (`HillRider.ARMS.bodyLean` 0.35 of it, at most 0.25 rad, about the saddle; none with a foot down);
 - a lean cap of 42 degrees, and 0.72 of the grip on cobbles;
 - tighter turns at walking pace;
 - no engine braking;
