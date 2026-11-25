@@ -105,6 +105,33 @@ class HillVehicle extends Vehicle {
         return this.lane.sample(at.s).y + (Math.abs(at.across) > r.halfWidthM ? 0.1 : this.lane.cobble(at.s, at.across));
     }
 
+    // The rider kept out of what is solid in his fall (Vehicle.holdRiderOut), and out of the village's buildings: a
+    // body (RIDER_FALL.bodyM) inside a building's footprint is put back out through its nearest wall and loses the
+    // speed into it, so a fall never slides him through a house
+    holdRiderOut(fromX, fromZ, deltaTime) {
+        super.holdRiderOut(fromX, fromZ, deltaTime);
+        const rf = this.riderFall, lane = this.lane;
+        if (!rf || !lane || !lane.solids) return;
+        const p = rf.p, v = rf.v, body = Vehicle.RIDER_FALL.bodyM;
+        for (const c of lane.solids) {
+            const dx = p.x - c.x, dz = p.z - c.z, far = c.hw + c.hd + body;
+            if (Math.abs(dx) > far || Math.abs(dz) > far) continue;
+            const u = dx * c.alongX + dz * c.alongZ, w = dx * c.outX + dz * c.outZ;
+            const inU = c.hw + body - Math.abs(u), inW = c.hd + body - Math.abs(w);
+            if (inU <= 0 || inW <= 0) continue;
+            const nx = inU < inW ? Math.sign(u || 1) * c.alongX : Math.sign(w || -1) * c.outX;
+            const nz = inU < inW ? Math.sign(u || 1) * c.alongZ : Math.sign(w || -1) * c.outZ;
+            const push = Math.min(inU, inW);
+            p.x += nx * push;
+            p.z += nz * push;
+            const into = -(v.x * nx + v.z * nz);
+            if (into > 0) {
+                v.x += nx * into;
+                v.z += nz * into;
+            }
+        }
+    }
+
     // The share of the turn the bars give at speed v: 1 to directMs, 0 from counterMs, a smoothstep between (no step in
     // the yaw rate, the bars or the lean limit)
     lowSpeedShare(v) {

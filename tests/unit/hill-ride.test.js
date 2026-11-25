@@ -835,6 +835,23 @@ describe('the boy on the bicycle', () => {
     });
 });
 
+describe('the fall among the houses', () => {
+    test('a boy thrown into a house front is put back out through its nearest wall, and loses the speed into it', () => {
+        const where = new HillLane();
+        const v = new HillVehicle();
+        v.lane = where;
+        const c = where.solids.find(h => h.side === 1);
+        // Just inside the front wall, sliding into the house
+        const p = new THREE.Vector3(c.x - c.outX * (c.hd - 0.2), c.floor, c.z - c.outZ * (c.hd - 0.2));
+        const speed = new THREE.Vector3(c.outX * 4, 0, c.outZ * 4);
+        v.riderFall = { on: true, p, v: speed, heading: c.heading, located: {}, projection: {}, hint: {}, index: 0 };
+        v.holdRiderOut(p.x, p.z, DT);
+        const w = (p.x - c.x) * c.outX + (p.z - c.z) * c.outZ;
+        expect(w).toBeLessThanOrEqual(-(c.hd + Vehicle.RIDER_FALL.bodyM) + 1e-6);
+        expect(speed.x * c.outX + speed.z * c.outZ).toBeLessThanOrEqual(1e-9);
+    });
+});
+
 describe('the opening stretch', () => {
     test('the legs go out as soon as he stops pedalling on the way down from the start, and stay out to the first bend\'s end', () => {
         const lane = new HillLane();

@@ -175,3 +175,5 @@ The ending (`HillLane.RULE.end`, `HillRide.updateEnding`) goes through these pha
 ## The loaves spill
 
 When the boy comes off, the basket's loaves fly out (`js/hill/spill.js`, `HillSpill`): the model's loaves (the `loaf` material on the `basket` node) are hidden, and six loose loaves leave the basket with three quarters of the bicycle's speed, a lift of 1.6 to 2.8 m/s and a tumble. They bounce low off the cobbles, slide to rest on the lane's fall, and the house fronts turn them back. They lie where they fell, with the basket empty, until R puts them back. A second fall with an empty basket throws nothing. The throw is seeded, so it is the same for the same fall.
+
+In a fall the boy never passes through a building: `HillVehicle.holdRiderOut` puts his body (`RIDER_FALL.bodyM`) back out through the nearest wall of any footprint in `HillLane.solids` (the cottages and the side roads' houses) and takes away his speed into it.
