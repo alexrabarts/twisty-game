@@ -765,7 +765,7 @@ class HillLand {
             // straight and a little to its right (valeCross of its right)
             fall: 0.22, rise: 0.3, valeCross: 0.7,
             // The coarse grid: its size and cells (a whole number of fine cells to each)
-            valeM: 2400, valeCells: 100,
+            valeM: 2400, valeCells: 80,
             // A foot reaches footM under the lowest land under it
             footM: 0.3
         });

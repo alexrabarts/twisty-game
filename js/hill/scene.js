@@ -650,6 +650,38 @@ class HillScene {
         return out;
     }
 
+    // A wall's coping on `mesh`: a bed of dressed stone `bedM` deep, overhanging both faces (the drip, so the rain falls
+    // clear of the wall), and over it a saddleback rising `ridgeM` to a ridge along the wall. `o` is the bed's middle at
+    // the wall's top, `ax` half its length along, `az` half its width across (with the overhang)
+    static coping(mesh, o, ax, az, colour) {
+        const K = HillScene.COPING, ay = [0, K.bedM / 2, 0];
+        const mid = [o[0], o[1] + K.bedM / 2, o[2]];
+        mesh.box(mid, ax, ay, az, colour);
+        const c = (sx, sz, up) => [mid[0] + ax[0] * sx + az[0] * sz, mid[1] + K.bedM / 2 + up, mid[2] + ax[2] * sx + az[2] * sz];
+        const inset = K.insetShare;
+        const e = [-1, 1].map(sx => [c(sx, -1 + inset, 0), c(sx, 1 - inset, 0), c(sx, 0, K.ridgeM)]);
+        mesh.quad(e[0][1], e[1][1], e[1][2], e[0][2], colour);
+        mesh.quad(e[0][2], e[1][2], e[1][0], e[0][0], colour);
+        mesh.tri(e[0][0], e[0][1], e[0][2], colour);
+        mesh.tri(e[1][1], e[1][0], e[1][2], colour);
+    }
+
+    // A gate pier's cap on `mesh`: a slab overhanging the pier all round, and a low pyramid over it. `o` is the pier's
+    // top, `ax` and `az` its half sizes
+    static pierCap(mesh, o, ax, az, colour) {
+        const grow = (v, k) => [v[0] * k, v[1] * k, v[2] * k];
+        const bx = grow(ax, 1 + 0.05 / Math.max(1e-6, Math.hypot(...ax))), bz = grow(az, 1 + 0.05 / Math.max(1e-6, Math.hypot(...az)));
+        mesh.box([o[0], o[1] + 0.04, o[2]], bx, [0, 0.04, 0], bz, colour);
+        const c = (sx, sz) => [o[0] + bx[0] * sx + bz[0] * sz, o[1] + 0.08, o[2] + bx[2] * sx + bz[2] * sz], apex = [o[0], o[1] + 0.2, o[2]];
+        mesh.tri(c(-1, 1), c(1, 1), apex, colour);
+        mesh.tri(c(1, 1), c(1, -1), apex, colour);
+        mesh.tri(c(1, -1), c(-1, -1), apex, colour);
+        mesh.tri(c(-1, -1), c(-1, 1), apex, colour);
+    }
+
+    // The coping's bed (m deep), its ridge over the bed, and how far in from the bed's edges the saddle starts
+    static get COPING() { return Object.freeze({ bedM: 0.05, ridgeM: 0.07, insetShare: 0.12 }); }
+
     // The gravestones' weathered tones (multiplied over the stone's own grey)
     static get STONE_TINTS() { return [0xb8b2a6, 0xa8a49a, 0xc4beb0, 0x9a968c, 0xb0aa98]; }
 
@@ -759,7 +791,9 @@ class HillScene {
                 // The gate: two stone piers and a wooden gate between, a little open
                 const p = lane.sample(gateAt), at = lane.at(gateAt, front, 0, {});
                 for (const k of [-0.65, 0.65]) {
-                    HillScene.standing(lane, repeats, 'gate pier', meshes.dressed, [at.x + p.alongX * k, at.z + p.alongZ * k], [p.alongX * 0.15, p.alongZ * 0.15], [p.leftX * 0.18, p.leftZ * 0.18], at.y + 1.25, rgb(C.coping));
+                    const o = [at.x + p.alongX * k, at.z + p.alongZ * k];
+                    HillScene.standing(lane, repeats, 'gate pier', meshes.dressed, o, [p.alongX * 0.15, p.alongZ * 0.15], [p.leftX * 0.18, p.leftZ * 0.18], at.y + 1.25, rgb(C.coping));
+                    HillScene.pierCap(meshes.dressed, [o[0], at.y + 1.25, o[1]], [p.alongX * 0.15, 0, p.alongZ * 0.15], [p.leftX * 0.18, 0, p.leftZ * 0.18], rgb(C.coping));
                 }
                 meshes.plain.box([at.x, at.y + 0.55, at.z], [p.alongX * 0.48, 0, p.alongZ * 0.48], [0, 0.42, 0], [p.leftX * 0.025, 0, p.leftZ * 0.025], rgb(0x4a5a46));
                 continue;
@@ -777,7 +811,7 @@ class HillScene {
             }
             const top = mid.y + (gap.upM || r.lowWallUpM);
             HillScene.standing(lane, repeats, gap.kind === 'churchyard' ? 'churchyard wall' : 'wall', meshes.rubble, [at.x, at.z], [mid.alongX * half, mid.alongZ * half], [mid.leftX * 0.15, mid.leftZ * 0.15], top, rgb(C.gardenWall), { sink: 0.3, low: mid.y - 0.3 });
-            meshes.dressed.box([at.x, top + 0.05, at.z], [mid.alongX * (half + 0.02), 0, mid.alongZ * (half + 0.02)], [0, 0.05, 0], [mid.leftX * 0.2, 0, mid.leftZ * 0.2], rgb(C.coping));
+            HillScene.coping(meshes.dressed, [at.x, top, at.z], [mid.alongX * (half + 0.02), 0, mid.alongZ * (half + 0.02)], [mid.leftX * 0.2, 0, mid.leftZ * 0.2], rgb(C.coping));
             // Moss along the coping here and there
             if (rand() < 0.22) HillScene.leaf(repeats, [at.x + mid.alongX * (rand() - 0.5) * half, top + 0.1, at.z + mid.alongZ * (rand() - 0.5) * half], half * 0.5, 0.035, 0.16, [0x4a5a30, 0x56683a][Math.floor(rand() * 2)], mid.heading);
             if (gap === HillScene.catWall(lane) && Math.abs((s + e) / 2 - HillScene.catAt(gap)) < 0.5) HillScene.cat(meshes, at, top + 0.1, mid, gap.side);
@@ -1168,7 +1202,7 @@ class HillScene {
                 }
                 const top = y + (steps ? 2.2 : 1.6);
                 HillScene.standing(lane, repeats, 'wall', meshes.rubble, [a[0], a[2]], [p.dirX * (e - d) / 2, p.dirZ * (e - d) / 2], [p.crossX * 0.2, p.crossZ * 0.2], top, rgb(C.gardenWall), { sink: 0.3, low: Math.min(y, road.y0) - 0.4 });
-                meshes.dressed.box([a[0], top + 0.05, a[2]], [p.dirX * ((e - d) / 2 + 0.02), 0, p.dirZ * ((e - d) / 2 + 0.02)], [0, 0.05, 0], [p.crossX * 0.25, 0, p.crossZ * 0.25], rgb(C.coping));
+                HillScene.coping(meshes.dressed, [a[0], top, a[2]], [p.dirX * ((e - d) / 2 + 0.02), 0, p.dirZ * ((e - d) / 2 + 0.02)], [p.crossX * 0.25, 0, p.crossZ * 0.25], rgb(C.coping));
             }
         }
         if (!road.ride) return;
@@ -1179,6 +1213,7 @@ class HillScene {
             for (const sgn of [-1, 1]) {
                 const q = at(road.ride, sgn * (half + 0.1));
                 HillScene.standing(lane, repeats, 'gate pier', meshes.dressed, [q[0], q[2]], [p.crossX * 0.22, p.crossZ * 0.22], [p.dirX * 0.22, p.dirZ * 0.22], y + 1.85, rgb(C.coping));
+                HillScene.pierCap(meshes.dressed, [q[0], y + 1.85, q[2]], [p.crossX * 0.22, 0, p.crossZ * 0.22], [p.dirX * 0.22, 0, p.dirZ * 0.22], rgb(C.coping));
             }
             for (const up of [0.25, 0.75, 1.25]) meshes.plain.box([c[0], y + up, c[2]], [p.crossX * (half - 0.1), 0, p.crossZ * (half - 0.1)], [0, 0.06, 0], [p.dirX * 0.03, 0, p.dirZ * 0.03], rgb(0x5a4a38));
             for (let k = -2; k <= 2; k++) {
@@ -1625,7 +1660,7 @@ class HillScene {
             for (const [from, to] of [[-hw, doorAt - 0.7], [doorAt + 0.7, hw]]) {
                 if (to - from < 0.3) continue;
                 stand('front wall', meshes.rubble, (from + to) / 2, line, (to - from) / 2, 0.15, c.floor + 0.75, rgb(C.gardenWall), c.foot + 0.3);
-                box(meshes.dressed, (from + to) / 2, c.floor + 0.8, line, (to - from) / 2 + 0.02, 0.05, 0.19, rgb(C.coping));
+                HillScene.coping(meshes.dressed, pt((from + to) / 2, c.floor + 0.75, line), vec((to - from) / 2 + 0.02, 0, 0), vec(0, 0, 0.19), rgb(C.coping));
             }
         }
     }
