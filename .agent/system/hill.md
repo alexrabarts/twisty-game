@@ -132,14 +132,19 @@ The basket is as the stills have it: a deep willow basket, longer than it is wid
 
 ## The light and the effects
 
+The village's colours are decoded from sRGB once, in `HillScene.rgb`. Each mesh says that its colours are linear (`geometry.userData.linearColors`), so `Graphics.fixColorSpaces` leaves it alone. Before 2026-11-25 each colour was decoded three times (by `THREE.Color`, by `HillScene.rgb` and by `fixColorSpaces`): the thatch 0xaa9c82, 0.40 once decoded, came to the shader as 0.016, and the light was set far too strong to make up for it.
+
 `HillRide.LIGHT`:
-- a sun 14 degrees up, pale gold (0xffd09a), along the main straight;
+- a sun 14 degrees up, pale gold, along the main straight (intensity 1.4);
 - a warm grey haze, and the sky's fog preset, as pale as the reference frames' sky;
-- a weak sky and ground fill.
+- a weak sky and ground fill (ambient 0.15, hemisphere 0.45);
+- the baked sky's share of the light on what the ride draws (`envIntensity`, 0.35; the panes keep their own sky). The game's sky lights every standard material through `scene.environment`, and at its full share it washed the true colours out.
+
+`hill-compare` measures the mean colour of the lit house fronts in each still and in the game. On the four descent opening sheets the game was 32 levels from the stills before the fix (too dark) and is 7 after it.
 
 The climb has its own light (`HillRide.CLIMB_LIGHT`), as its stills have it. It is early in the day:
 - the sun is 10 degrees up, straight down the top stretch, so it is ahead of the camera at the top and behind the boy, and lights him from behind;
-- the haze is thicker and brighter, and the sky and ground fill is stronger, so the house fronts in the shade read pale;
+- the haze is thicker and brighter. The fill is weak (ambient 0.12, hemisphere 0.3, the sky's share 0.15), so the house fronts in the shade read as the stills have them, and the boy is dark against the glare;
 - the cobbles are wet: smoother (`cobbleRough`, 0.28 of the dry roughness), with more relief on each crown (`cobbleNormal`), and darker (`cobbleTone`). Each crown has its own glint, and the glints make a glare path between him and the sun.
 
 `HillRide.draw` changes to the climb's light while he climbs and back to the descent's light after. A descent shot that a tool holds (`forcedShot`) gets the descent's light.

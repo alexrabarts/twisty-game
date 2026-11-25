@@ -32,8 +32,8 @@ class HillRide {
     // start, raking across the house fronts on the left; through a warm haze
     static get LIGHT() {
         return Object.freeze({
-            elevationDeg: 14, alongS: 126, sunColour: 0xf8dcb4, sunIntensity: 2.0,
-            haze: 0xdedcd6, hazeDensity: 0.0075, ambient: 0.33, sky: 0xcfccc4, ground: 0x6a604c, hemisphere: 0.82
+            elevationDeg: 14, alongS: 126, sunColour: 0xf8dcb4, sunIntensity: 1.4,
+            haze: 0xdedcd6, hazeDensity: 0.0075, ambient: 0.15, sky: 0xcfccc4, ground: 0x6a604c, hemisphere: 0.45, envIntensity: 0.35
         });
     }
 
@@ -45,8 +45,8 @@ class HillRide {
     // cobbleTone of it, darker
     static get CLIMB_LIGHT() {
         return Object.freeze({
-            headingRad: 0.02, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 2.6,
-            haze: 0xe4dfd4, hazeDensity: 0.012, ambient: 0.5, sky: 0xdcd8d0, ground: 0x7a705c, hemisphere: 1.05, cobbleRough: 0.28, cobbleNormal: 2, cobbleTone: 0.72
+            headingRad: 0.02, elevationDeg: 10, sunColour: 0xffe4bc, sunIntensity: 1.9,
+            haze: 0xe4dfd4, hazeDensity: 0.012, ambient: 0.12, sky: 0xdcd8d0, ground: 0x7a705c, hemisphere: 0.3, envIntensity: 0.15, cobbleRough: 0.28, cobbleNormal: 2, cobbleTone: 0.72
         });
     }
 
@@ -326,6 +326,15 @@ class HillRide {
             cobbles.material.roughness = climb ? L.cobbleRough : 1;
             cobbles.material.color.setScalar(climb ? L.cobbleTone : 1);
             cobbles.material.normalScale.setScalar(climb ? L.cobbleNormal : 1);
+        }
+        // The baked sky lights everything too (Graphics: scene.environment): its share on what the ride draws, but
+        // for the panes, which mirror a sky of their own
+        for (const group of [this.village, this.props && this.props.group, this.day && this.day.group, this.rider && this.rider.group]) {
+            if (!group) continue;
+            group.traverse(o => {
+                const m = o.material;
+                if (m && m.isMeshStandardMaterial && !m.envMap) m.envMapIntensity = L.envIntensity;
+            });
         }
         this.sun = HillRide.sunDirection(this.lane, new THREE.Vector3(), climb);
         game.graphics.setSunOffset({ x: this.sun.x, y: this.sun.y, z: this.sun.z });

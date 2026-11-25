@@ -67,6 +67,8 @@ class HillMesh {
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.position, 3));
         geometry.setAttribute('normal', new THREE.Float32BufferAttribute(this.normal, 3));
         geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.color, 3));
+        // (linear already: HillScene.rgb)
+        geometry.userData.linearColors = true;
         geometry.setAttribute('uv', new THREE.Float32BufferAttribute(this.uv, 2));
         geometry.computeBoundingSphere();
         const mesh = new THREE.Mesh(geometry, material);
@@ -92,11 +94,13 @@ class HillScene {
         });
     }
 
+    // An sRGB hex colour as the linear vertex colour the shader reads, decoded once here and nowhere else: the meshes
+    // say so (HillMesh.mesh, `linearColors`), so Graphics.fixColorSpaces leaves them alone. (THREE.Color(hex) is not
+    // used: with colour management on it decodes already, and decoding that again, then again in fixColorSpaces, put
+    // the thatch's albedo at 0.016 for 0.40)
     static rgb(hex) {
-        const c = new THREE.Color(hex);
-        // Vertex colours are read linear
-        c.convertSRGBToLinear();
-        return [c.r, c.g, c.b];
+        const decode = v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+        return [decode(((hex >> 16) & 255) / 255), decode(((hex >> 8) & 255) / 255), decode((hex & 255) / 255)];
     }
 
     // The cobbles' maps, baked from the lane's one height field (HillLane.field, the same the bicycle rides over) over a
