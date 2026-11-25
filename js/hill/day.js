@@ -655,27 +655,88 @@ class HillDay {
         };
         const rand = HillLane.random(4271);
         const greens = [0x5e7a3a, 0x6e8a44, 0x4e6a30], roots = [0xd8ccb0, 0xc8b898, 0xe0d4bc];
-        const fill = (x, z, r, rim, colours, size) => {
+        // The goods' shapes: a cabbage (a firm head in cupped outer leaves), a turnip or an onion (a bulb narrowing to its
+        // top, a tuft or a dry tip), an apple (a little flat, a stalk)
+        const cabbage = (size, colour) => {
+            const g = new THREE.Group(), leaf = mat(colour), heart = mat(new THREE.Color(colour).lerp(new THREE.Color(0xc8d890), 0.35).getHex());
+            g.add(new THREE.Mesh(new THREE.SphereGeometry(size * 0.72, 10, 8), heart));
+            for (let k = 0; k < 5; k++) {
+                const cup = new THREE.Mesh(new THREE.SphereGeometry(size, 8, 6, 0, Math.PI * 0.8, Math.PI * 0.35, Math.PI * 0.5), leaf);
+                cup.material.side = THREE.DoubleSide;
+                cup.rotation.set(0, k * 1.26 + rand() * 0.3, 0);
+                g.add(cup);
+            }
+            return g;
+        };
+        const bulb = (size, colour, onion) => {
+            const g = new THREE.Group();
+            const profile = [[0, -1], [0.55, -0.85], [0.95, -0.3], [0.9, 0.2], [0.55, 0.65], [0.18, 0.95], [0, 1]].map(([r, y]) => new THREE.Vector2(r * size, y * size));
+            g.add(new THREE.Mesh(new THREE.LatheGeometry(profile, 10), mat(colour)));
+            const tip = new THREE.Mesh(new THREE.ConeGeometry(size * (onion ? 0.12 : 0.3), size * (onion ? 0.5 : 1.1), 5), mat(onion ? 0x9a7a4a : 0x5a7a34));
+            tip.position.y = size * (onion ? 1.15 : 1.4);
+            g.add(tip);
+            return g;
+        };
+        const fill = (x, z, r, rim, make, size) => {
             for (let i = 0; i < 7; i++) {
                 const a = i * 2.4, d = i === 0 ? 0 : r * 0.55;
-                const m = new THREE.Mesh(new THREE.IcosahedronGeometry(size * (0.85 + rand() * 0.3), 1), mat(colours[i % colours.length]));
-                put(m, x + Math.cos(a) * d, rim - size * 0.2 + rand() * size * 0.3, z + Math.sin(a) * d);
+                const m = make(i, size * (0.85 + rand() * 0.3));
+                m.rotation.set((rand() - 0.5) * 0.6, rand() * 6.28, (rand() - 0.5) * 0.6);
+                m.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+                m.position.set(x + Math.cos(a) * d, rim - size * 0.2 + rand() * size * 0.3, z + Math.sin(a) * d);
+                group.add(m);
             }
         };
-        fill(-0.1, -0.22, 0.24, basket(-0.1, -0.22, 0.27, 0.2), greens, 0.1);
-        fill(0.42, -0.22, 0.2, basket(0.42, -0.22, 0.23, 0.18), roots, 0.065);
-        fill(-0.5, 0.12, 0.17, basket(-0.5, 0.12, 0.19, 0.14, top), greens, 0.08);
+        fill(-0.1, -0.22, 0.24, basket(-0.1, -0.22, 0.27, 0.2), (i, size) => cabbage(size, greens[i % greens.length]), 0.1);
+        fill(0.42, -0.22, 0.2, basket(0.42, -0.22, 0.23, 0.18), (i, size) => bulb(size, roots[i % roots.length], i % 2 === 1), 0.065);
+        fill(-0.5, 0.12, 0.17, basket(-0.5, 0.12, 0.19, 0.14, top), (i, size) => {
+            // Apples, red and russet, each with its stalk
+            const g = new THREE.Group();
+            g.add(new THREE.Mesh(new THREE.SphereGeometry(size * 0.62, 10, 8).scale(1, 0.88, 1), mat([0xa8322a, 0x8a5a2a, 0xb8442e][i % 3])));
+            const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.004, size * 0.35, 4), mat(0x4a3424));
+            stalk.position.y = size * 0.6;
+            g.add(stalk);
+            return g;
+        }, 0.08);
         // A big basket tipped up against the back, its mouth to the lane
         const tipped = put(new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.27, 0.38, 18, 1, true), willow), -0.62, shelf + 0.32, -0.26, -1.05);
         tipped.material.side = THREE.DoubleSide;
         // Carrots in a row along the front, a marrow beside them
-        const carrot = new THREE.ConeGeometry(0.022, 0.18, 6), orange = mat(0xd0722a);
-        for (let i = 0; i < 9; i++) put(new THREE.Mesh(carrot, orange), -0.25 + i * 0.05, top + 0.025, 0.27, 0, 0, Math.PI / 2 + (rand() - 0.5) * 0.3);
-        put(new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.24, 4, 10), mat(0x3e5a2a)), 0.35, top + 0.06, 0.2, 0, 0.3, Math.PI / 2);
+        // (each carrot with its feathery top, tied in a bunch at the root end)
+        const carrot = new THREE.ConeGeometry(0.022, 0.18, 6), orange = mat(0xd0722a), fronds = mat(0x4e7a2e);
+        const frond = new THREE.ConeGeometry(0.018, 0.12, 4);
+        for (let i = 0; i < 9; i++) {
+            const turn = Math.PI / 2 + (rand() - 0.5) * 0.3, x = -0.25 + i * 0.05;
+            put(new THREE.Mesh(carrot, orange), x, top + 0.025, 0.27, 0, 0, turn);
+            put(new THREE.Mesh(frond, fronds), x - 0.012, top + 0.03, 0.27 - 0.14, -Math.PI / 2 + (rand() - 0.5) * 0.5, 0, (rand() - 0.5) * 0.4);
+        }
+        put(new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.012, 8), mat(0x8a6a4a)), -0.05, top + 0.03, 0.15, Math.PI / 2, 0, 0);
+        // The marrow, dark and striped with pale bands, its stalk at one end
+        const marrow = put(new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.24, 4, 12), mat(0x3e5a2a)), 0.35, top + 0.06, 0.2, 0, 0.3, Math.PI / 2);
+        for (const k of [-0.08, 0, 0.08]) {
+            const band = new THREE.Mesh(new THREE.CylinderGeometry(0.0605, 0.0605, 0.025, 12, 1, true), mat(0x8aa060));
+            band.position.y = k;
+            marrow.add(band);
+        }
+        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.014, 0.05, 6), mat(0x5a6a3a));
+        stem.position.y = 0.17;
+        marrow.add(stem);
+        // A tray of brown eggs by the scales
+        put(box(0.2, 0.025, 0.14, mat(0xc8b8a0)), -half + 0.62, top + 0.0125, 0.22);
+        const egg = new THREE.SphereGeometry(0.022, 8, 6).scale(1, 1.3, 1), shell = mat(0xc89a6a);
+        for (let i = 0; i < 6; i++) put(new THREE.Mesh(egg, shell), -half + 0.55 + (i % 3) * 0.065, top + 0.045, 0.19 + Math.floor(i / 3) * 0.06);
         // The bakery's loaves in a shallow willow tray at the downhill end
         put(box(0.5, 0.06, 0.4, willow), 0.62, top + 0.03, 0.08);
-        const tin = new THREE.BoxGeometry(0.2, 0.1, 0.11), baked = mat(0x8c5a36);
-        for (let i = 0; i < 6; i++) put(new THREE.Mesh(tin, baked), 0.5 + (i % 3) * 0.12, top + 0.11, -0.02 + Math.floor(i / 3) * 0.2, 0, Math.PI / 2);
+        // Tin loaves: the tin's square sides and a crown risen over them, a little wider, darker where it is baked hardest
+        const tin = new THREE.BoxGeometry(0.2, 0.08, 0.11), crown = new THREE.CylinderGeometry(0.062, 0.062, 0.2, 10, 1, false, -Math.PI / 2, Math.PI).rotateZ(Math.PI / 2).rotateX(-Math.PI / 2).scale(1, 0.75, 1);
+        const baked = mat(0x8c5a36), browned = mat(0x6e4026);
+        for (let i = 0; i < 6; i++) {
+            const loaf = put(new THREE.Mesh(tin, baked), 0.5 + (i % 3) * 0.12, top + 0.1, -0.02 + Math.floor(i / 3) * 0.2, 0, Math.PI / 2);
+            const dome = new THREE.Mesh(crown, browned);
+            dome.position.y = 0.04;
+            dome.castShadow = true;
+            loaf.add(dome);
+        }
         // Under it: a churn and a crate
         const churn = put(new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.55, 14), mat(0x8a8a86, { roughness: 0.5, metalness: 0.4 })), -0.4, ground(-0.4) + 0.275, 0.1);
         put(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.15, 0.12, 14), churn.material), -0.4, ground(-0.4) + 0.61, 0.1);
