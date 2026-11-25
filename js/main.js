@@ -511,6 +511,9 @@ class Game {
         this.roam = new FreeRoam(tiles, WorldData.TILE_M);
         environment.guide.roam = true;
         this.worldCamera.followRider = true;
+        // Start anywhere (the menu's Start at): the start, a stopping place or the summit
+        const start = FreeRoam.startFor(environment, (this.rideMode && this.rideMode.start) || GameModes.startAt);
+        if (start && start.id !== 'start') this.travelTo(start, false);
         // The roadworks' lights work one lane for the ride's own direction: in free roam the sites are off
         if (environment.roadworks) {
             if (environment.roadworks.group) environment.roadworks.group.visible = false;
@@ -540,10 +543,15 @@ class Game {
     // A world ride starts on the start line (a restart is in place: restartInPlace)
     armWorldStart() {
         const start = this.environment.startPosition();
-        this.lastCheckpointPosition = new THREE.Vector3(start.x, start.y, start.z);
-        this.lastCheckpointHeading = start.heading;
         this.worldRun.begin(this.environment.startS);
-        this.worldCamera.reset(start.heading);
+        // (free roam may start elsewhere: Game.startFreeRoam put the bike there)
+        if (this.freeRoam) {
+            this.worldCamera.reset(this.vehicle.yawAngle);
+        } else {
+            this.lastCheckpointPosition = new THREE.Vector3(start.x, start.y, start.z);
+            this.lastCheckpointHeading = start.heading;
+            this.worldCamera.reset(start.heading);
+        }
         // Each ride draws its own chance of a marmot crossing the road (Marmots.CROSSING)
         if (this.environment.marmots) this.environment.marmots.seed(Math.floor(Math.random() * 1e9));
     }
@@ -1254,6 +1262,11 @@ class Game {
         }
         this.resetRunState();
         if (this.environment.isWorld) {
+            // Free roam rides again from its own start (the menu's Start at)
+            if (this.freeRoam && this.roam) {
+                const start = FreeRoam.startFor(this.environment, (this.rideMode && this.rideMode.start) || GameModes.startAt);
+                if (start && start.id !== 'start') this.travelTo(start, false);
+            }
             this.armWorldStart();
             this.environment.guide.reset();
         }
@@ -4557,6 +4570,30 @@ class Game {
         });
         // (a crash has said its cause and its cost during the fall)
         if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
+    }
+
+    // Free roam puts the bike at a destination (FreeRoam.destinations): standing, facing along the ride, the land under it
+    // held until it is here, the camera and the guide set again. `say` tells the rider where they are
+    travelTo(dest, say = true) {
+        const { environment, vehicle } = this;
+        const distanceSoFar = vehicle.distanceTraveled;
+        vehicle.reset();
+        vehicle.distanceTraveled = distanceSoFar;
+        const y = environment.ground.groundY(dest.x, dest.z, null);
+        vehicle.position.set(dest.x, Number.isFinite(y) ? y : dest.y, dest.z);
+        vehicle.yawAngle = dest.heading;
+        vehicle.speed = 0;
+        vehicle.findNearestRoadSegment();
+        vehicle.updateMesh();
+        environment.place(dest.s);
+        environment.guide.reset();
+        this.worldCamera.reset(dest.heading);
+        if (this.roam) this.roam.poses = [];
+        this.lastCheckpointPosition = new THREE.Vector3(vehicle.position.x, vehicle.position.y, vehicle.position.z);
+        this.lastCheckpointHeading = dest.heading;
+        if (this.traffic) this.traffic.clearAround(environment.route.toUnits(dest.s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / environment.route.unitM));
+        if (this.atmosphereTrack) this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(dest.s), { environment, weatherSystem: this.weatherSystem });
+        if (say) showCallout(dest.name, 'good', Game.CALLOUT_MS.restart);
     }
 
     // A restart in free roam: back where the bike last was on a road (the ride or a side road), a second before the

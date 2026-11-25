@@ -132,3 +132,37 @@ describe('the streamer', () => {
         expect(held).toContain(`0,${Math.floor(1000 / m)}`);
     });
 });
+
+describe('start anywhere', () => {
+    // A stand-in world: a straight ride of 2 km, three stopping places, the stage from 0 to 2000
+    const route = { length: 2000, sample: (s, out = {}) => Object.assign(out, { x: 0, y: s / 10, z: s, heading: 0, width: 6 }) };
+    const places = { list: [{ id: 'p1', kind: 'layby', s: 400 }, { id: 'p2', kind: 'viewpoint', s: 1100 }, { id: 'p3', kind: 'carpark', s: 1800 }],
+        stopAt: (place, slot, ground, out) => Object.assign(out, { s: place.s + 10, x: 5, y: (place.s + 10) / 10, z: place.s + 10, heading: 0 }) };
+    const environment = { route, places, startS: 0, endS: 2000, ground: null };
+
+    test('the destinations: the start, every stopping place in order, the summit', () => {
+        const list = FreeRoam.destinations(environment);
+        expect(list.map(d => d.id)).toEqual(['start', 'p1', 'p2', 'p3', 'summit']);
+        expect(list[2].name).toBe('Viewpoint, km 1.1');
+        for (const d of list) for (const k of ['s', 'x', 'y', 'z', 'heading']) expect(Number.isFinite(d[k])).toBe(true);
+    });
+
+    test("the menu's start: the start, the stopping place nearest the middle, the summit", () => {
+        expect(FreeRoam.startFor(environment, 'start').id).toBe('start');
+        expect(FreeRoam.startFor(environment, 'place').id).toBe('p2');
+        expect(FreeRoam.startFor(environment, 'summit').id).toBe('summit');
+        expect(FreeRoam.startFor({ ...environment, places: { list: [] } }, 'place').id).toBe('start');
+    });
+
+    test('the rider screen shows the start row with free roam only', () => {
+        const box = GameModes.control(document, { debug: true });
+        const row = box.querySelector('.game-start-row');
+        expect(row.hidden).toBe(true);
+        box.querySelector('[data-game-mode="roam"]').click();
+        expect(row.hidden).toBe(false);
+        box.querySelector('[data-game-start="summit"]').click();
+        expect(GameModes.startAt).toBe('summit');
+        GameModes.chosen = 'trial';
+        GameModes.startAt = 'start';
+    });
+});

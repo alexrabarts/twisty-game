@@ -6606,6 +6606,8 @@ async function roamRun(placeSource) {
     const env = game.environment, v = game.vehicle, out = { shots: {} };
     const frame = () => game.renderer.domElement.toDataURL('image/jpeg', 0.9);
     out.freeRoam = !!game.freeRoam;
+    // (where the ride started: --query '...&start=summit' starts it at the summit)
+    out.startedAt = { s: Math.round(game.environment.route.project(v.position.x, v.position.z, null, {}).s), start: game.rideMode && game.rideMode.start || 'start' };
     out.guideRoam = !!env.guide.roam;
     out.follow = !!game.worldCamera.followRider;
     const barriers = [];

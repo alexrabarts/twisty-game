@@ -63,6 +63,8 @@ describe('the mode a URL asks for', () => {
         expect(RideMode.resolve('?world=tremola&mode=roam&debug')).toEqual({ kind: 'world', world: 'tremola', direct: true, mode: 'roam' });
         expect(RideMode.resolve('?mode=roam')).toEqual({ kind: 'world', world: 'tremola', direct: false, mode: 'roam' });
         expect(RideMode.resolve('?world=tremola&mode=race').mode).toBe(undefined);
+        expect(RideMode.resolve('?world=tremola&mode=roam&start=summit')).toEqual({ kind: 'world', world: 'tremola', direct: true, mode: 'roam', start: 'summit' });
+        expect(RideMode.resolve('?world=tremola&start=summit').start).toBe(undefined);
         // A fresh page for free roam keeps the mode and debug mode (free roam is open in debug mode only)
         expect(RideMode.worldUrl({ pathname: '/', search: '?debug' }, 'tremola', 'roam')).toBe('/?world=tremola&mode=roam&debug=');
     });

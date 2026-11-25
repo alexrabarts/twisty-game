@@ -7,6 +7,7 @@
 //   ?legs             the menu as it was before the world: the rider goes on to the leg screen
 //   ?<HILL_KEY>       the hill ride (js/hill/ride.js) at once, without the menu: a ride of its own, timed only on its end card (js/hill/board.js)
 //   &mode=roam        a world ridden in free roam (GameModes; open in debug mode only); time trial otherwise
+//   &start=<where>    free roam's start: place (a stopping place) or summit; the start otherwise
 const RideMode = {
     // The world a rider chosen on the menu rides: the Tremola slice (world/manifest.json)
     DEFAULT_WORLD: 'tremola',
@@ -30,6 +31,8 @@ const RideMode = {
         const asked = params.get('world');
         // (free roam is named only when asked for: a time trial is the mode an object without it rides)
         const roam = params.get('mode') === 'roam' ? { mode: 'roam' } : {};
+        // (and where it starts: `start=place` or `start=summit`, GameModes.STARTS)
+        if (roam.mode && ['place', 'summit'].includes(params.get('start'))) roam.start = params.get('start');
         if (asked) return { kind: 'world', world: asked, direct: true, ...roam };
         if (params.has('legs')) return { kind: 'legs', world: null, direct: false };
         return { kind: 'world', world: RideMode.DEFAULT_WORLD, direct: false, ...roam };

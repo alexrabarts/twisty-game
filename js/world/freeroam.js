@@ -55,6 +55,40 @@ class FreeRoam {
         return { zone: this.zone, drag, distance: d };
     }
 
+    // The places a free-roam ride can start at or travel to, in ride order: the start, every open stopping place
+    // (WorldPlaces: where a rider stands in it, facing along the ride) and the summit (the stage's end). Each
+    // {id, name, kind, s, x, y, z, heading}
+    static destinations(environment) {
+        const route = environment.route, list = [];
+        const on = (id, name, kind, s) => {
+            const p = route.sample(Math.max(0, Math.min(route.length, s)), {});
+            list.push({ id, name, kind, s, x: p.x, y: p.y, z: p.z, heading: p.heading });
+        };
+        on('start', 'The start', 'start', environment.startS);
+        const words = { layby: 'Lay-by', viewpoint: 'Viewpoint', carpark: 'Car park' };
+        for (const place of (environment.places && environment.places.list) || []) {
+            if (place.s <= environment.startS || place.s >= environment.endS) continue;
+            const at = environment.places.stopAt(place, 0, environment.ground, {});
+            list.push({ id: place.id, name: `${words[place.kind] || 'Stopping place'}, km ${(at.s / 1000).toFixed(1)}`, kind: place.kind, s: at.s, x: at.x, y: at.y, z: at.z, heading: at.heading });
+        }
+        // (the summit: a little short of the stage's end, on the road)
+        on('summit', 'The summit', 'summit', environment.endS - 30);
+        return list;
+    }
+
+    // The destination for a start chosen on the menu (GameModes.startAt): 'start', 'summit', or 'place', the stopping
+    // place nearest the middle of the stage
+    static startFor(environment, startAt) {
+        const list = FreeRoam.destinations(environment);
+        if (startAt === 'summit') return list[list.length - 1];
+        if (startAt === 'place') {
+            const middle = (environment.startS + environment.endS) / 2;
+            const places = list.filter(d => d.kind !== 'start' && d.kind !== 'summit');
+            if (places.length) return places.reduce((a, b) => (Math.abs(b.s - middle) < Math.abs(a.s - middle) ? b : a));
+        }
+        return list[0];
+    }
+
     // Where a restart puts the bike: the last pose on a road taken BACK_S or more before now, else the oldest kept;
     // null before any. A restart at the edge turns the bike round as well (it rode out that way)
     restartPose(turn = false) {

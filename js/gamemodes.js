@@ -13,6 +13,14 @@ const GameModes = {
     // The mode chosen on this page ('trial' until the rider picks another)
     chosen: 'trial',
 
+    // Where a free-roam ride starts (FreeRoam.startFor): the start, a stopping place, the summit
+    STARTS: Object.freeze([
+        Object.freeze({ id: 'start', name: 'Start' }),
+        Object.freeze({ id: 'place', name: 'Stopping place' }),
+        Object.freeze({ id: 'summit', name: 'Summit' })
+    ]),
+    startAt: 'start',
+
     // Whether a mode may be chosen: free roam only in debug mode
     open(id, debug) {
         const mode = GameModes.MODES.find(m => m.id === id);
@@ -61,8 +69,35 @@ const GameModes = {
             row.appendChild(button);
             return button;
         });
+        // Free roam's start, shown when free roam is chosen
+        const starts = doc.createElement('div');
+        starts.className = 'mode-picker-row game-start-row';
+        starts.setAttribute('role', 'radiogroup');
+        starts.setAttribute('aria-label', 'Start at');
+        const startButtons = GameModes.STARTS.map((start) => {
+            const button = doc.createElement('button');
+            button.type = 'button';
+            button.className = 'mode-btn';
+            button.dataset.gameStart = start.id;
+            button.setAttribute('role', 'radio');
+            button.textContent = start.name.toUpperCase();
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                GameModes.startAt = start.id;
+                box.refresh();
+                if (after) after(start);
+            });
+            starts.appendChild(button);
+            return button;
+        });
         box.refresh = () => {
             const mode = GameModes.MODES.find(m => m.id === GameModes.chosen) || GameModes.MODES[0];
+            starts.hidden = mode.id !== 'roam';
+            for (const button of startButtons) {
+                const on = button.dataset.gameStart === GameModes.startAt;
+                button.classList.toggle('on', on);
+                button.setAttribute('aria-checked', on ? 'true' : 'false');
+            }
             for (const button of buttons) {
                 const on = button.dataset.gameMode === mode.id;
                 button.classList.toggle('on', on);
@@ -71,7 +106,7 @@ const GameModes = {
             const locked = GameModes.MODES.some(m => !GameModes.open(m.id, debug));
             line.textContent = locked && mode.id === 'trial' ? `${mode.hint} ${GameModes.LOCKED_TEXT}` : mode.hint;
         };
-        box.append(label, row, line);
+        box.append(label, row, starts, line);
         box.refresh();
         return box;
     }
