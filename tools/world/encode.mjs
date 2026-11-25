@@ -257,10 +257,12 @@ export function courseRows(world, versions = {}, tour = 'tour') {
 
 // The rows of one data folder go into the file beside the rows of every other folder's stages: a folder's import
 // replaces its own rows only (its stages' and its tour's), so the Tremola's row stays as it is
-export function writeCourses(world, file, versions, tour = 'tour') {
+// `retired`: the stage ids the folder held before this import (its old manifest): a stage the new import no longer
+// has (two legs made one) takes its row with it
+export function writeCourses(world, file, versions, tour = 'tour', retired = []) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const rows = courseRows(world, versions, tour);
-  const own = new Set([...world.stages.map(s => `world-${s.id}-`), `world-${tour}-`]);
+  const own = new Set([...world.stages.map(s => `world-${s.id}-`), ...retired.map(id => `world-${id}-`), `world-${tour}-`]);
   const kept = fs.existsSync(file) ? Object.entries(JSON.parse(fs.readFileSync(file, 'utf8'))).filter(([id]) => ![...own].some(prefix => id.startsWith(prefix) && /^v\d+$/.test(id.slice(prefix.length)))) : [];
   const all = Object.fromEntries([...kept, ...Object.entries(rows)].sort((a, b) => (a[0] < b[0] ? -1 : 1)));
   fs.writeFileSync(file, `${JSON.stringify(all, null, 2)}\n`);

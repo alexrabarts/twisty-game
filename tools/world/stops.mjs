@@ -1,7 +1,8 @@
 // The stops at the ends of a leg: a real place where the group pulls in and parks (a hotel, a restaurant, a lookout,
 // a fuel station, a car park). route.json names each stop by its kind and a coordinate (a slice's `stops.start` and
 // `stops.end`: where the owner's photos cluster as a stop, or a building with a use); everything else is found here by
-// rule from the map:
+// rule from the map. A slice's `stops.via` lists stops on the way: a stopping place the ride passes (at: 'via'), found
+// by the same rules round the ride's sample nearest its coordinate, that moves no stage's end:
 //
 //   area     the public car park or rest area (tlm_areale_verkehrsareal, AREA_KINDS of places.mjs) nearest the
 //            coordinate, within STOP.areaReachM of it.
@@ -124,6 +125,16 @@ export function slotsIn(ring, count = STOP.slots) {
   return slots.slice(0, count);
 }
 
+// The ride distance of the sample nearest (x, z)
+function nearestS(samples, x, z) {
+  let best = 0, least = Infinity;
+  for (let i = 0; i < samples.s.length; i++) {
+    const d = Math.hypot(samples.x[i] - x, samples.z[i] - z);
+    if (d < least) { least = d; best = samples.s[i]; }
+  }
+  return best;
+}
+
 // The ride's nodes with the ride distance at each
 function rideNodes(edges, ride) {
   const out = [];
@@ -232,7 +243,7 @@ export function viewOf(ring, cx, cz, plane, demAt) {
   return best ? Math.round(Math.atan2(Math.sin(best.h), Math.cos(best.h)) * 1e4) / 1e4 : null;
 }
 
-// stopDefs: [{ stage (index), at: 'start'|'end', kind, x, z }] in local metres. bounds: the stages' [{ id, from, to }].
+// stopDefs: [{ stage (index), at: 'start'|'end'|'via', kind, x, z }] in local metres. bounds: the stages' [{ id, from, to }].
 // Returns the stops, and moves each stage end with a stop to STOP.leadM before its turn-in (bounds are changed).
 export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt = null }) {
   const adjacency = new Map();
@@ -247,7 +258,8 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
   for (const def of stopDefs) {
     if (!STOP_KINDS.includes(def.kind)) throw new Error(`stop kind "${def.kind}" is not one of ${STOP_KINDS.join(', ')}`);
     const stage = bounds[def.stage];
-    const boundaryS = def.at === 'start' ? stage.from : stage.to;
+    // A stop on the way is looked for round the ride's sample nearest its coordinate
+    const boundaryS = def.at === 'start' ? stage.from : def.at === 'end' ? stage.to : nearestS(samples, def.x, def.z);
     const candidates = areas.filter(a => AREA_KINDS[a.cls]).map(a => ({ a, d: areaDistance(a.ring, def.x, def.z) })).filter(c => c.d <= STOP.areaReachM).sort((p, q) => p.d - q.d);
     if (!candidates.length) throw new Error(`stop ${def.kind} at the ${def.at} of ${stage.id}: no public car park or rest area within ${STOP.areaReachM} m of its coordinate`);
     let made = null;
@@ -295,8 +307,9 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
     // The way in ends at the middle of the slots' row
     const row = slots.reduce((p, q) => [p[0] + q.x / slots.length, p[1] + q.z / slots.length], [0, 0]);
     const path = [...made.path, [cx, cz], row].map(([x, z]) => [r2(x), r2(z)]).filter((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 0.5);
+    const via = stops.filter(st => st.stage === stage.id && st.at === 'via').length;
     stops.push({
-      id: `${stage.id}-${def.at}`, kind: def.kind, stage: stage.id, at: def.at, s: Math.round(made.s * 10) / 10, side: made.side, access: made.access,
+      id: def.at === 'via' ? `${stage.id}-via-${via + 1}` : `${stage.id}-${def.at}`, kind: def.kind, stage: stage.id, at: def.at, s: Math.round(made.s * 10) / 10, side: made.side, access: made.access,
       x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots, ...(plane ? { plane } : {}), ...(view !== null ? { view } : {})
     });
   }

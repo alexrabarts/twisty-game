@@ -19,7 +19,7 @@ import { createBencher, ZONE, TILE_N, TILE_M, CELL_M, BATTER, VERGE_M } from '..
 import { savitzkyGolay, FLAG } from '../../tools/world/profile.mjs';
 import { rideSamples, placeStations } from '../../tools/world/stations.mjs';
 import { linkFloorMs, stageFloors, TOP_SPEED, FLOOR_FACTOR } from '../../tools/world/floors.mjs';
-import { encodeFiles, writeWorld, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
+import { encodeFiles, writeWorld, writeCourses, decodeWorld, courseRows, sumsOf, MAX_CHUNK_SAMPLES, MAX_CHUNK_EXTENT_M } from '../../tools/world/encode.mjs';
 import { rasterizeCover, coverLookup, COVER } from '../../tools/world/landcover.mjs';
 import { orientedBox, clearOfRoads, roadBands, boxesOverlap, ROAD_CLEAR_M, NUDGE_MAX_M } from '../../tools/world/buildings.mjs';
 import { findHairpins, checkHairpins, checkSize, checkStacked, checkStations, checkCrests, checkGraph, checkBuildings, checkHorizon, checkLandmarks, LIMITS } from '../../tools/world/verify.mjs';
@@ -640,6 +640,10 @@ describe('floors.mjs', () => {
 
 describe('the board rows', () => {
     const POLICY = { maxGateMs: 20 * 60 * 1000, maxTotalMs: 2 * 60 * 60 * 1000 };
+    // The version of each board (tools/world/boards.json; 1 for a board it does not name)
+    const BOARDS = path.join(REPO, 'tools', 'world', 'boards.json');
+    const versions = fs.existsSync(BOARDS) ? JSON.parse(fs.readFileSync(BOARDS, 'utf8')) : {};
+    const key = id => `world-${id}-v${versions[id]?.version ?? 1}`;
 
     const problemsOf = (rows, manifest) => {
         const problems = [];
@@ -653,7 +657,7 @@ describe('the board rows', () => {
             if (row.floorMs < row.gateFloorsMs.reduce((p, q) => p + q, 0)) problems.push(`${id}: floorMs under the sum`);
             if (row.floorMs >= POLICY.maxTotalMs) problems.push(`${id}: floorMs over the policy`);
             if (row.kind === 'stage') {
-                const stage = manifest.stages.find(s => id === `world-${s.id}-v1`);
+                const stage = manifest.stages.find(s => id === key(s.id));
                 if (!stage) problems.push(`${id}: no such stage in the manifest`);
                 else if (stage.gates !== row.gates || Math.round(stage.length) !== row.metres) problems.push(`${id}: differs from the manifest`);
             }
@@ -677,11 +681,27 @@ describe('the board rows', () => {
         for (const folder of folders) {
             const manifest = JSON.parse(fs.readFileSync(path.join(REPO, folder, 'manifest.json'), 'utf8'));
             const tour = folder === 'world' ? 'tour' : `tour-${path.basename(folder)}`;
-            const own = Object.fromEntries(Object.entries(rows).filter(([id]) => manifest.stages.some(s => id === `world-${s.id}-v1`) || id === `world-${tour}-v1`));
+            const own = Object.fromEntries(Object.entries(rows).filter(([id]) => manifest.stages.some(s => id === key(s.id)) || id === key(tour)));
             expect(problemsOf(own, manifest)).toEqual([]);
-            ids.push(...manifest.stages.map(s => `world-${s.id}-v1`), ...(manifest.stages.length > 1 ? [`world-${tour}-v1`] : []));
+            ids.push(...manifest.stages.map(s => key(s.id)), ...(manifest.stages.length > 1 ? [key(tour)] : []));
         }
         expect(Object.keys(rows).sort()).toEqual(ids.sort());
+    });
+
+    test('a changed course has a new board id: the combined Gotthard leg is version 2, and its old rows are gone', () => {
+        const rows = JSON.parse(fs.readFileSync(path.join(REPO, 'functions', 'world-courses.json'), 'utf8'));
+        expect(versions['gotthard-north'].version).toBe(2);
+        expect(Object.keys(rows)).toContain('world-gotthard-north-v2');
+        for (const old of ['world-gotthard-north-v1', 'world-gotthard-lookout-v1', 'world-tour-gotthard-v1']) expect(Object.keys(rows)).not.toContain(old);
+    });
+
+    test('an import replaces its folder\'s rows: a stage the folder no longer has (two legs made one) loses its row', () => {
+        const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'twisty-courses-')), 'world-courses.json');
+        const row = { kind: 'stage', gates: 0, metres: 900, floorMs: 1000, gateFloorsMs: [1000] };
+        fs.writeFileSync(file, JSON.stringify({ 'world-a-v1': row, 'world-b-v1': row, 'world-tour-x-v1': { ...row, kind: 'tour' }, 'world-other-v1': row }));
+        const world = { stages: [{ id: 'a', from: 0, to: 1900, gates: 0, floorMs: 2000, gateFloorsMs: [2000] }] };
+        writeCourses(world, file, { a: 2 }, 'tour-x', ['a', 'b']);
+        expect(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')))).toEqual(['world-a-v2', 'world-other-v1']);
     });
 });
 

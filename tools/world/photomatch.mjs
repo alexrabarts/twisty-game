@@ -3,7 +3,7 @@
 //   node tools/world/photomatch.mjs [--round 1] [--only <file>] [--no-game] [--margin 300] [--max <n>]
 //   node tools/world/photomatch.mjs coverage
 //   node tools/world/photomatch.mjs haze [--round 5]
-//   --data <folder> reads the drawn world of another data folder (worlds/gotthard with --world gotthard-lookout);
+//   --data <folder> reads the drawn world of another data folder (worlds/gotthard with --world gotthard-north);
 //   --stage <id> keeps the photos on that stage of its ride (a leg's own numbers)
 //
 // For every row of every geo CSV (~/Pictures/twisty-reference/geo/*.csv, "file;lat;lng"):

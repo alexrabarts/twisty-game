@@ -108,7 +108,7 @@ Keep the rectangles and their overlays under `matches/round-<n>/ref-rects/`, nev
 
 ### Each leg's own numbers
 
-A leg is measured on its own photos: `node tools/world/photomatch.mjs haze --round <name> --data worlds/gotthard --stage gotthard-lookout`. `--data` reads the drawn world of another data folder (default `world/`), and `--stage` keeps the photos whose nearest point of that folder's ride lies on the stage (to the next stage's start, the last stage to the ride's end: the stop past its finish line is its own). A round with `--data` leaves `coverage.json` as it is. The numbers go into `WorldLooks.stageAir` (js/world/looks.js) with the count of photos; a stage with no photo of distant land names the stage it takes its air from (`from`). The game sets the stage's air when the leg loads (`LandShade.setAir`).
+A leg is measured on its own photos: `node tools/world/photomatch.mjs haze --round <name> --data worlds/gotthard --stage gotthard-north`. `--data` reads the drawn world of another data folder (default `world/`), and `--stage` keeps the photos whose nearest point of that folder's ride lies on the stage (to the next stage's start, the last stage to the ride's end: the stop past its finish line is its own). A round with `--data` leaves `coverage.json` as it is. The numbers go into `WorldLooks.stageAir` (js/world/looks.js) with the count of photos; a stage with no photo of distant land names the stage it takes its air from (`from`). The game sets the stage's air when the leg loads (`LandShade.setAir`).
 
 ## 5. After an import grows the world
 

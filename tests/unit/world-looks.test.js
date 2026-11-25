@@ -64,7 +64,7 @@ describe('every stage changes its weather or its light along it', () => {
                 expect(WorldLooks.airOf(stage.id) === null || Number.isFinite(WorldLooks.airOf(stage.id).s)).toBe(true);
             }
         }
-        expect(WorldLooks.airOf('gotthard-north')).toBeNull();
+        expect(WorldLooks.airOf('gotthard-north')).toEqual({ s: 0.45, v: 0.55 });
         expect(Object.keys(WorldLooks)).not.toContain('stageAir');
     });
 

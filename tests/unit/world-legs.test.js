@@ -18,8 +18,8 @@ const store = (initial = null) => {
 };
 
 describe('the legs and their folders', () => {
-    test('the new run-in from the north is leg 1, the lookout leg 2, the Tremola after them', () => {
-        expect(WorldLegs.LIST.map(l => l.id)).toEqual(['gotthard-north', 'gotthard-lookout', 'tremola']);
+    test('the run-in from the north over the summit to the lookout is leg 1, the Tremola after it', () => {
+        expect(WorldLegs.LIST.map(l => l.id)).toEqual(['gotthard-north', 'tremola']);
         expect(WorldLegs.groups().map(g => g.pass)).toEqual(['Gotthard']);
     });
 
@@ -42,20 +42,30 @@ describe('the legs and their folders', () => {
 });
 
 describe('which legs are open', () => {
-    test('a new rider: leg 1 and the Tremola are open, the lookout opens after leg 1 is finished', () => {
+    test('a new rider: leg 1 and the Tremola are open; leg 1 finished, the Tremola is offered next', () => {
         const s = store();
         expect(WorldLegs.isOpen('gotthard-north', { storage: s })).toBe(true);
         expect(WorldLegs.isOpen('tremola', { storage: s })).toBe(true);
-        expect(WorldLegs.isOpen('gotthard-lookout', { storage: s })).toBe(false);
         expect(WorldLegs.suggested({ storage: s })).toBe('gotthard-north');
         expect(WorldLegs.markFinished('gotthard-north', s)).toBe(true);
         expect(WorldLegs.markFinished('gotthard-north', s)).toBe(false);
-        expect(WorldLegs.isOpen('gotthard-lookout', { storage: s })).toBe(true);
-        expect(WorldLegs.suggested({ storage: s })).toBe('gotthard-lookout');
+        expect(WorldLegs.suggested({ storage: s })).toBe('tremola');
+    });
+
+    test('a leg that opens after another stays shut until that leg is finished', () => {
+        const leg = { id: 'later', pass: 'Gotthard', name: 'Later', km: 1, note: '', from: 'A', to: 'B', opensAfter: 'gotthard-north' };
+        WorldLegs.LIST.push(leg);
+        try {
+            const s = store();
+            expect(WorldLegs.isOpen('later', { storage: s })).toBe(false);
+            WorldLegs.markFinished('gotthard-north', s);
+            expect(WorldLegs.isOpen('later', { storage: s })).toBe(true);
+            expect(WorldLegs.isOpen('later', { unlockAll: true, storage: store() })).toBe(true);
+        } finally { WorldLegs.LIST.pop(); }
     });
 
     test('debug mode opens every leg and saves nothing; unreadable progress starts from leg 1', () => {
-        expect(WorldLegs.isOpen('gotthard-lookout', { unlockAll: true, storage: store() })).toBe(true);
+        expect(WorldLegs.isOpen('gotthard-north', { unlockAll: true, storage: store() })).toBe(true);
         expect(WorldLegs.finished(store('not json'))).toEqual([]);
         expect(WorldLegs.markFinished('nowhere', store())).toBe(false);
     });

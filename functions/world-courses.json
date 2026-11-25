@@ -1,35 +1,17 @@
 {
-  "world-gotthard-lookout-v1": {
+  "world-gotthard-north-v2": {
     "kind": "stage",
-    "gates": 0,
-    "metres": 2926,
-    "floorMs": 33685,
-    "gateFloorsMs": [
-      33685
-    ]
-  },
-  "world-gotthard-north-v1": {
-    "kind": "stage",
-    "gates": 5,
-    "metres": 11578,
-    "floorMs": 140291,
-    "gateFloorsMs": [
-      20123,
-      26418,
-      23237,
-      27915,
-      20918,
-      21680
-    ]
-  },
-  "world-tour-gotthard-v1": {
-    "kind": "tour",
-    "gates": 1,
+    "gates": 6,
     "metres": 14504,
-    "floorMs": 173976,
+    "floorMs": 173555,
     "gateFloorsMs": [
-      140291,
-      33685
+      23864,
+      26504,
+      21872,
+      30864,
+      22761,
+      21676,
+      26014
     ]
   },
   "world-tremola-v1": {

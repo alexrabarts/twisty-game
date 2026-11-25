@@ -5652,7 +5652,7 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
 // findHairpins, so a finder that finds nothing fails where the data has hairpins and a stage with none (the run-in
 // from the north, and the lookout leg, whose one hairpin is past its finish line at the stop) is not failed for having
 // none. The Tremola has 31; the probes ask for 20 of them, as before.
-const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'gotthard-lookout': 0 };
+const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0 };
 const hairpinsLeast = () => HAIRPINS_LEAST[option('world') || 'tremola'] ?? 1;
 
 function fairnessChecks(results, failures) {
@@ -7929,7 +7929,7 @@ function treeChecks(results, failures) {
 // fails on a stage with no stop at its end, a rider not parked in its slot (over STOP_SLOT_M off it) or not stood
 // off its bike at the end, a bike or a standing rider's boots off the ground (STOP_GROUND_M), the camera under the
 // ground, and no card at the end.
-//   node tools/terrain-check.mjs world-stop-shots --world gotthard-lookout --gpu [--out <dir>] [--at 1,4,8,12,16,20]
+//   node tools/terrain-check.mjs world-stop-shots --world gotthard-north --gpu [--out <dir>] [--at 1,4,8,12,16,20]
 const STOP_SHOTS_BACK_M = 20;
 const STOP_SLOT_M = 0.3;
 const STOP_GROUND_M = 0.15;

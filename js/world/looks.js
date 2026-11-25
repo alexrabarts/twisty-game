@@ -24,20 +24,16 @@ const WorldLooks = {
     default: [
         { from: 0, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
-    // Andermatt (1,437 m) up the north side to the Gotthard summit (2,093 m): the first leg, clear and bright (the
-    // owner's word), in the owner's photos of the stops on it a clear afternoon. A thin cloud lies on the summit
-    // plateau from 0.85 (s 9,840 m), as the clouds over the pass in the lookout photos: the leg's one change
+    // Andermatt (1,437 m) up the north side to the Gotthard summit (2,093 m), past the hospice square and down the
+    // modern road to the lookout over Airolo (1,931 m), 14.5 km. Clear and bright up the north side (the owner's word),
+    // as the owner's photos of the stops at Andermatt, a clear afternoon. A thin cloud lies on the summit plateau from
+    // 0.678 (s 9,840 m), as the clouds over the pass in the lookout photos, and stays through the galleries; it clears
+    // at 0.909 (s 13,188 m) for the clear morning of the lookout photos (clear sky with fair-weather cumulus, haze in
+    // the valley), the last 1.3 km clear. (The places of the two changes are the two old legs' own.)
     'gotthard-north': [
-        { from: 0, to: 0.85, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
-        { from: 0.85, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } }
-    ],
-    // The summit down the modern road to the lookout over Airolo (1,931 m): the thin cloud of the summit through the
-    // galleries, then the clear morning of the lookout photos (clear sky with fair-weather cumulus, haze in the valley).
-    // A part is at least 1.5 km (AtmosphereTrack): the leg is 2.9 km, so the cloud clears at 0.55 (s 1,610 m of it),
-    // the last 1.3 km clear
-    'gotthard-lookout': [
-        { from: 0, to: 0.55, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
-        { from: 0.55, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+        { from: 0, to: 0.678, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.678, to: 0.909, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
+        { from: 0.909, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
@@ -97,16 +93,14 @@ Object.defineProperties(WorldLooks, {
     // camera that can be trusted, distant land by its real distance). A stage with no photo of distant land takes the
     // air of the stage it names in `from`, and says so. The Tremola's is LandShade.HAZE.air itself (19 photos: land
     // 8 km on at saturation 0.46, value 0.67; 3 to 8 km 0.37, 0.47).
-    //   gotthard-lookout  13 photos at the lookout: 8 km on 96, 126, 161 (hue 212, saturation 0.41, value 0.63), 3 to
-    //                     8 km 84, 101, 117 (hue 209, 0.28, 0.46), sky over the skyline 191, 205, 221. Greyer air than
-    //                     the Tremola's: its air's saturation and value scaled by the far band's (0.41 / 0.46, 0.63 /
-    //                     0.67)
-    //   gotthard-north    4 photos, all of the village at the start in the evening, its land reddened by the low sun and
-    //                     one photo of land 8 km off: no measure of the ramp's air, so the Tremola's
+    //   gotthard-north    13 photos at the lookout at its end: 8 km on 96, 126, 161 (hue 212, saturation 0.41, value
+    //                     0.63), 3 to 8 km 84, 101, 117 (hue 209, 0.28, 0.46), sky over the skyline 191, 205, 221.
+    //                     Greyer air than the Tremola's: its air's saturation and value scaled by the far band's (0.41 /
+    //                     0.46, 0.63 / 0.67). The north ramp has no photo of distant land of its own (its 4 photos are
+    //                     of the village at the start in the evening), so the leg's one measure is the lookout's
     stageAir: {
         value: Object.freeze({
-            'gotthard-lookout': Object.freeze({ s: 0.45, v: 0.55, photos: 13 }),
-            'gotthard-north': Object.freeze({ from: 'tremola', photos: 0 })
+            'gotthard-north': Object.freeze({ s: 0.45, v: 0.55, photos: 13 })
         })
     },
     // The air of a stage: its own, its `from` stage's, or null (LandShade.HAZE.air)

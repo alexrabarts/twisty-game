@@ -1,5 +1,5 @@
 {
- "comment": "D1 figure-of-8 waypoints in LV95 (EPSG:2056). Hand-placed from WGS84, then moved onto the swissTLM3D through road: pass summits use the TLM Strassenpass points, the two Tremola points sit on the old Via Tremola (4m Strasse, Verbindungsstrasse), which the shortest path would otherwise leave for the modern Durchgangsstrasse. inspect.mjs snaps each one to the nearest TLM_STRASSE vertex (through roads preferred). boundary=true marks a stage boundary; boundary=false is a via point that keeps the shortest path on the intended road. The last Gletsch is the FINISH. Airolo, Ulrichen, Oberwald and Guttannen sit on the junction where the ride leaves the village road, so the shortest path never runs into a spur and back. slices: stage-sized runs of waypoints (by id) for the playable slice. The Tremola slice rides uphill from Airolo, the opposite way to D1. points: places off the D1 line (by id, after the waypoints) that only slices name; `snap: nearest` takes the nearest road of any class. A slice's `stops` name the stop at its start and its end: a kind (tools/world/stops.mjs STOP_KINDS) and the coordinate of the evidence for it (a cluster of the owner's photos marked as a stop, or a building with a use). The importer finds the car park or rest area by rule.",
+ "comment": "D1 figure-of-8 waypoints in LV95 (EPSG:2056). Hand-placed from WGS84, then moved onto the swissTLM3D through road: pass summits use the TLM Strassenpass points, the two Tremola points sit on the old Via Tremola (4m Strasse, Verbindungsstrasse), which the shortest path would otherwise leave for the modern Durchgangsstrasse. inspect.mjs snaps each one to the nearest TLM_STRASSE vertex (through roads preferred). boundary=true marks a stage boundary; boundary=false is a via point that keeps the shortest path on the intended road. The last Gletsch is the FINISH. Airolo, Ulrichen, Oberwald and Guttannen sit on the junction where the ride leaves the village road, so the shortest path never runs into a spur and back. slices: stage-sized runs of waypoints (by id) for the playable slice. The Tremola slice rides uphill from Airolo, the opposite way to D1. points: places off the D1 line (by id, after the waypoints) that only slices name; `snap: nearest` takes the nearest road of any class. A slice's `stops` name the stop at its start and its end, and `via` the stops on the way (a stopping place, not a leg's end), each a kind (tools/world/stops.mjs STOP_KINDS) and the coordinate of the evidence for it (a cluster of the owner's photos marked as a stop, or a building with a use). The importer finds the car park or rest area by rule.",
  "waypoints": [
   {
    "id": 0,
@@ -203,12 +203,13 @@
    ]
   },
   "gotthard-north": {
-   "name": "Andermatt to the Gotthard summit",
+   "name": "Andermatt over the Gotthard to the lookout over Airolo",
    "waypoints": [
     28,
     5,
     6,
-    29
+    29,
+    27
    ],
    "stops": {
     "start": {
@@ -216,25 +217,13 @@
      "e": 2688484,
      "n": 1165283
     },
-    "end": {
-     "kind": "restaurant",
-     "e": 2686509,
-     "n": 1156616
-    }
-   }
-  },
-  "gotthard-lookout": {
-   "name": "The Gotthard summit to the lookout over Airolo",
-   "waypoints": [
-    29,
-    27
-   ],
-   "stops": {
-    "start": {
-     "kind": "restaurant",
-     "e": 2686509,
-     "n": 1156616
-    },
+    "via": [
+     {
+      "kind": "restaurant",
+      "e": 2686509,
+      "n": 1156616
+     }
+    ],
     "end": {
      "kind": "lookout",
      "e": 2687167,

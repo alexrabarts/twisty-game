@@ -146,17 +146,17 @@ The Tremola slice has 21 places: 1 car park from the map and 20 found: 16 laybys
 
 ## More legs: a data folder for each import
 
-The Tremola slice stays in `world/`, byte for byte. A later import that is not the same ride goes into its own folder under `worlds/`: the run-in from the north and the lookout leg are one continuous ride in `worlds/gotthard/` (`node tools/world/import.mjs --stages gotthard-north,gotthard-lookout --out worlds/gotthard`). The rules:
+The Tremola slice stays in `world/`, byte for byte. A later import that is not the same ride goes into its own folder under `worlds/`: the Gotthard leg, Andermatt over the summit to the lookout over Airolo, is the ride of `worlds/gotthard/` (`node tools/world/import.mjs --stages gotthard-north --out worlds/gotthard`). It was two stages, the run-in (`gotthard-north`, to the hospice square) and the lookout leg (`gotthard-lookout`), until the owner had them made one (2026-11-25). The rules:
 
 - **One ride a folder.** A folder holds one continuous ride (`ride.json`), cut into its stages. Two legs that do not follow each other on the road (the Tremola runs up from Airolo, the run-in from the north comes down to the same summit) are two folders.
 - **A stage names its folder.** `WorldData.FOLDERS` lists each shipped folder and its stages; `WorldData.baseFor(id)` gives the folder of stage `id` (`world/` for `all` and an unknown id). `?world=<id>` reads that folder; `?worldData=worlds/<name>` names one directly (under `worlds/` or `tests/fixtures/world/` only). A shipped folder is trusted when its manifest is the one its own `SHA256SUMS` lists.
-- **The board rows.** `functions/world-courses.json` holds the rows of every folder: an import replaces its own stages' rows and its tour's (`world-tour-<name>-v1` for `worlds/<name>`) and keeps the rest (`writeCourses`). A stage shorter than twice the station spacing has no checkpoint: `gates` 0 and one floor.
+- **The board rows.** `functions/world-courses.json` holds the rows of every folder: an import replaces its own stages' rows, the rows of the stages its folder held before (its old manifest: two legs made one lose their rows) and its tour's (`world-tour-<name>-v1` for `worlds/<name>`, written for two stages or more), and keeps the rest (`writeCourses`). A course that changes gets a new board id: the next `version` of its stage in `tools/world/boards.json`, with the reason (`gotthard-north` is 2: the leg runs on to the lookout). A stage shorter than twice the station spacing has no checkpoint: `gates` 0 and one floor.
 - **Stops off the D1 line.** `route.json` `points` holds places the D1 waypoints do not pass (`id` after the waypoints); only slices name them. `snap: "nearest"` takes the nearest road of any class.
 - **The menu.** `WorldLegs.LIST` (js/world/legs.js) holds the legs in ride order, grouped by pass ("The legs on the menu" in `world.md`).
 
 ## The stops at a leg's ends
 
-A leg starts and ends at a real stop: a hotel, a restaurant, a lookout, a fuel station or a car park (`STOP_KINDS`), where the group pulls in and parks. A slice of `route.json` names each stop by its kind and the coordinate of the evidence for it (`stops.start`, `stops.end`: where the owner's photos cluster as a stop, or a building with a use). Everything else is found by rule (`tools/world/stops.mjs`, `STOP`):
+A leg starts and ends at a real stop: a hotel, a restaurant, a lookout, a fuel station or a car park (`STOP_KINDS`), where the group pulls in and parks. A slice of `route.json` names each stop by its kind and the coordinate of the evidence for it (`stops.start`, `stops.end`, and `stops.via`, a list of stops on the way that move no stage end and are looked for round the ride's sample nearest the coordinate: where the owner's photos cluster as a stop, or a building with a use). Everything else is found by rule (`tools/world/stops.mjs`, `STOP`):
 
 - **The area.** The public car park or rest area (`AREA_KINDS` of `places.mjs`) nearest the coordinate, within `areaReachM` (300 m).
 - **The way in.** `direct` when the area comes within `directM` (16 m) of the ride's edge within `searchM` (800 m) of the stage's end: the turn-in is the first sample of the run of such samples nearest the end. `road` otherwise: the shortest way along the side roads from a node of the ride to a side-road sample within `laneM` (6 m) of the area, at most `pathMaxM` (400 m).
@@ -170,8 +170,8 @@ A leg starts and ends at a real stop: a hotel, a restaurant, a lookout, a fuel s
 | Stop | Kind | Area | Way in |
 | --- | --- | --- | --- |
 | Start of `gotthard-north` | `hotel` | the public car park (2 869 m2) at the south-west edge of Andermatt, beside the Gotthard road | direct, at the start |
-| End of `gotthard-north`, start of `gotthard-lookout` | `restaurant` | the public car park (2 194 m2) by the hospice and the two remote inns on the summit | by road, 226 m from the modern road over the hospice's access road |
-| End of `gotthard-lookout` | `lookout` | the outer public car park (1 847 m2) at the hairpin of the lookout over Airolo, with the kiosk | direct |
+| On the way (`via`), turn-in at s 11 637.8 | `restaurant` | the public car park (2 194 m2) by the hospice and the two remote inns on the summit | by road, 226 m from the modern road over the hospice's access road |
+| End of `gotthard-north` (finish line s 14 504.2) | `lookout` | the outer public car park (1 847 m2) at the hairpin of the lookout over Airolo, with the kiosk | direct |
 
 ## The far land (realism round 1)
 

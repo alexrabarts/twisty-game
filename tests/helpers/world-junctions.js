@@ -50,17 +50,16 @@
 // on the Tremola slice, the ground under the ride's verge 1 to 6 cm over the side road, and the paving 0.3 to 0.7 m
 // under both roads)
 export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0, walls: 0, blocked: 0, cliffs: 3, strips: 0, pits: 0, clefts: 0 };
-// The faults the new legs (worlds/gotthard, 6f) still have, by stage: debt, not a pass. A new world passes with every
-// count at JUNCTION_LIMITS; these two shipped with the faults their junctions showed that no rule here closes yet
+// The faults the new leg (worlds/gotthard, 6f) still has: debt, not a pass. A new world passes with every count at
+// JUNCTION_LIMITS; this one shipped with the faults its junctions showed that no rule here closes yet
 // (.agent/system/world.md, "A side road meets the ride", the list under it). A count may only fall.
 //   gotthard-north: the Hospental junctions (km 2.64 to 2.66: a step of 0.7 m, an open edge of 0.6 m, pits of 0.54
-//   and 0.43 m, a strip of laid ground 2 cm over a side road), pits at km 1.1 (0.29), 11.0 (0.40), 11.2 (0.29) and
-//   11.6 (0.27), land 9 cm over a side road at km 3.3 and a hole of 0.5 m at the summit (km 11.56); 2 steps in the
-//   physics ground at Hospental
-//   gotthard-lookout: the summit's hole (km 11.56) and pits at km 11.6 (0.28) and 14.08 (0.44)
+//   and 0.43 m, a strip of laid ground 2 cm over a side road), pits at km 1.1 (0.29), 11.0 (0.40), 11.2 (0.29), 11.6
+//   (0.27) and 14.08 (0.44), land 9 cm over a side road at km 3.3 and a hole of 0.5 m at the summit (km 11.56); 2
+//   steps in the physics ground at Hospental. (Until 2026-11-25 the summit to the lookout was a stage of its own,
+//   gotthard-lookout, which counted the summit's hole and its pit at km 11.6 again.)
 export const JUNCTION_OPEN = Object.freeze({
-    'gotthard-north': { steps: 1, holes: 1, sunk: 1, open: 1, strips: 1, pits: 6, physics: 2 },
-    'gotthard-lookout': { holes: 1, pits: 2, physics: 0 }
+    'gotthard-north': { steps: 1, holes: 1, sunk: 1, open: 1, strips: 1, pits: 7, physics: 2 }
 });
 export const junctionLimits = stage => ({ ...JUNCTION_LIMITS, physics: 0, ...(JUNCTION_OPEN[stage] || {}) });
 

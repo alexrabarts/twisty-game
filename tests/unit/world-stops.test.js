@@ -97,6 +97,30 @@ describe('the shipped stops (worlds/gotthard)', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
     const ride = JSON.parse(fs.readFileSync(path.join(dir, 'ride.json'), 'utf8'));
 
+    test('the hospice square is a stop on the way: found by the same rule, within the stage, moving no end', () => {
+        const via = manifest.stops.filter(s => s.at === 'via');
+        expect(via.map(s => s.kind)).toEqual(['restaurant']);
+        for (const stop of via) {
+            const stage = ride.stages.find(s => s.id === stop.stage);
+            expect(stop.s).toBeGreaterThan(stage.from + 500);
+            expect(stop.s).toBeLessThan(stage.to - 500);
+            expect(stop.slots).toHaveLength(STOP.slots);
+            for (const slot of stop.slots) expect(areaDistance(stop.ring, slot.x, slot.z)).toBe(0);
+        }
+        expect(manifest.stages).toHaveLength(1);
+    });
+
+    test('a stop on the way is looked for round the ride sample nearest its coordinate and moves no stage end', () => {
+        const { samples, ride } = straight();
+        const bounds = [{ id: 'a', from: 0, to: 2000 }];
+        const areas = [{ cls: 'Oeffentliches Parkplatzareal', name: null, ring: box(-30, 900, -7, 960) }];
+        const stops = findStops({ stopDefs: [{ stage: 0, at: 'via', kind: 'restaurant', x: -20, z: 930 }], samples, edges: [ride], ride: [{ edgeId: 0, dir: 1 }], areas, bounds });
+        expect(stops[0]).toMatchObject({ id: 'a-via-1', at: 'via', access: 'direct' });
+        expect(stops[0].s).toBeGreaterThanOrEqual(880);
+        expect(stops[0].s).toBeLessThanOrEqual(900);
+        expect(bounds[0]).toEqual({ id: 'a', from: 0, to: 2000 });
+    });
+
     test('every stage has a stop at its start and its end, with room for the group in its area', () => {
         for (const stage of manifest.stages) {
             for (const at of ['start', 'end']) {

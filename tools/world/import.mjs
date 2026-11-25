@@ -59,7 +59,7 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     credit: CREDIT,
     sources: { tlm: TLM_NAME.replace(/^swisstlm3d_|_2056_5728\.gpkg\.zip$/g, ''), alti3d: [] },
     keptRoadClasses: null,
-    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => [at, { kind: d.kind, x: d.e - e0, z: -(d.n - n0) }])) : null })),
+    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
     edges,
     demAt: (x, z) => dem.sample(x + e0, n0 - z),
     // Makes sure every tile under the box is in the cache (downloading what is missing) and loaded.
@@ -257,8 +257,9 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
   const areas = source.areas ? source.areas(samples) : [];
   const mapped = mapPlaces(areas, samples, mouths, edges);
   applyPads(edges, ride, mapped);
-  // The stops at the stages' ends (stops.mjs): each moves its stage's end to before its turn-in
-  const stopDefs = source.stages.flatMap((st, k) => Object.entries(st.stops ?? {}).map(([at, d]) => ({ stage: k, at, ...d })));
+  // The stops at the stages' ends (stops.mjs): each moves its stage's end to before its turn-in. A stop on the way
+  // (`via`, a list) is a stopping place and moves nothing
+  const stopDefs = source.stages.flatMap((st, k) => Object.entries(st.stops ?? {}).flatMap(([at, d]) => (Array.isArray(d) ? d : [d]).map(def => ({ stage: k, at, ...def }))));
   const stops = stopDefs.length ? findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt }) : [];
   for (const stop of stops) log(`stop: ${stop.kind} at the ${stop.at} of ${stop.stage}, ${stop.access}, turn-in at s ${stop.s}, ${stop.slots.length} slots`);
 
@@ -383,11 +384,14 @@ export async function main(argv) {
   const world = await buildWorld(source, { stationSpacingM: spacing, log });
   source.close?.();
   fs.mkdirSync(out, { recursive: true });
+  // The stages the folder held before: a stage this import no longer has loses its board row (writeCourses)
+  const before = path.join(out, 'manifest.json');
+  const retired = fs.existsSync(before) ? (JSON.parse(fs.readFileSync(before, 'utf8')).stages ?? []).map(s => s.id) : [];
   const files = writeWorld(world, out);
   const courses = path.resolve(opt.courses ?? (opt.synthetic ? path.join(out, 'world-courses.json') : path.join(REPO_ROOT, 'functions', 'world-courses.json')));
   // A folder under worlds/ names its own tour row (encode.mjs courseRows)
   const tour = path.basename(path.dirname(out)) === 'worlds' ? `tour-${path.basename(out)}` : 'tour';
-  writeCourses(world, courses, readBoardVersions(), tour);
+  writeCourses(world, courses, readBoardVersions(), tour, retired);
   const bytes = [...files.values()].reduce((p, b) => p + b.length, 0);
   log(`wrote ${files.size} files, ${(bytes / 1e6).toFixed(2)} MB to ${out}; courses to ${courses}`);
   return world;

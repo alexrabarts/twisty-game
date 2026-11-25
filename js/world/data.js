@@ -27,7 +27,7 @@ class WorldData {
     static get SHIPPED_BASE() { return 'world/'; }
     // Every shipped data folder and the stages it holds: one continuous ride a folder. The Tremola stays in world/;
     // the legs a later import added are in their own folder under worlds/, so world/ never changes for them
-    static get FOLDERS() { return { 'world/': ['tremola'], 'worlds/gotthard/': ['gotthard-north', 'gotthard-lookout'] }; }
+    static get FOLDERS() { return { 'world/': ['tremola'], 'worlds/gotthard/': ['gotthard-north'] }; }
     static get ALLOWED_BASES() { return ['world/', 'worlds/', 'tests/fixtures/world/']; }
 
     // The shipped folder that holds stage `id` ('all' and an unknown id: world/)

@@ -11,8 +11,7 @@ const WorldLegs = {
     STORE: 'twistyWorldLegs',
 
     LIST: [
-        { id: 'gotthard-north', pass: 'Gotthard', name: 'Andermatt to the Gotthard summit', km: 11.6, note: 'A gentle run-in from the north. No hairpins.', from: 'A hotel car park in Andermatt', to: 'The hospice square at the summit' },
-        { id: 'gotthard-lookout', pass: 'Gotthard', name: 'The summit to the lookout over Airolo', km: 2.9, note: 'Down the modern pass road, through the galleries.', from: 'The hospice square at the summit', to: 'The lookout over Airolo', opensAfter: 'gotthard-north' },
+        { id: 'gotthard-north', pass: 'Gotthard', name: 'Andermatt over the Gotthard to the lookout over Airolo', km: 14.5, note: 'A gentle run-in from the north, past the hospice square, then down the modern pass road through the galleries.', from: 'A hotel car park in Andermatt', to: 'The lookout over Airolo' },
         { id: 'tremola', pass: 'Gotthard', name: 'Tremola, Airolo to the Gotthard summit', km: 13.2, note: 'The old cobbled road and its hairpins.', from: 'Airolo', to: 'The Gotthard summit', open: true }
     ],
 

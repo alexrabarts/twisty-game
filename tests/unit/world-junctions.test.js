@@ -30,7 +30,7 @@ const { THREE, WorldEnvironment, WorldGround } = game;
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
 
 // Every shipped stage: a new world passes with every count at its limit before it ships
-for (const stage of ['tremola', 'gotthard-north', 'gotthard-lookout']) describe(`the ${stage} stage: every side road meets the ride`, () => {
+for (const stage of ['tremola', 'gotthard-north']) describe(`the ${stage} stage: every side road meets the ride`, () => {
     // (the new legs' open faults are their stage's debt: junctionLimits)
     const JUNCTION_LIMITS = junctionLimits(stage);
     let env, found;
