@@ -247,6 +247,8 @@ window.twistyDev = {
                 game.paused = false;
                 game.accumulatedTime = 0;
                 game.animate();
+                // (and a frame that crossed the finish line and began it)
+                if (game.stopScene && game.endStopScene) game.endStopScene();
             }
         } finally {
             graphics.render = render;

@@ -311,26 +311,3 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
   }
   return stops;
 }
-
-// The lanes in a stop's area lie on its ground: every sample of a side road inside the outline takes the area's plane,
-// and over LANE_BLEND_M outside it the road goes back to its own height (the ride is never moved). A car park's lanes
-// kept their own heights over the levelled area: a step, a pit and land over a lane at the lookout's hairpin
-export const LANE_BLEND_M = 10;
-export function layLanes(edges, stops) {
-  let moved = 0;
-  for (const stop of stops) {
-    if (!stop.plane) continue;
-    const planeY = (x, z) => stop.plane.y + stop.plane.gx * (x - stop.x) + stop.plane.gz * (z - stop.z);
-    for (const e of edges) {
-      if (e.onRide) continue;
-      for (let i = 0; i < e.x.length; i++) {
-        const d = areaDistance(stop.ring, e.x[i], e.z[i]);
-        if (d >= LANE_BLEND_M) continue;
-        const t = d / LANE_BLEND_M, w = 1 - t * t * (3 - 2 * t);
-        e.y[i] += (planeY(e.x[i], e.z[i]) - e.y[i]) * w;
-        moved++;
-      }
-    }
-  }
-  return moved;
-}

@@ -142,8 +142,8 @@ export function segmentIndex(edges, reach = 0) {
 
 
 // `pads`: the stops' areas (stops.mjs), [{ring, x, z, plane: {y, gx, gz}}]: a node no road claims inside an area is the
-// area's plane, and past its outline the land is held within the batter of the plane's edge out to EARTHWORK_M, as
-// beside a road
+// area's plane, and past its outline a bank that rises over the plane is cut back to the batter out to EARTHWORK_M;
+// land that falls away keeps its fall
 export function createBencher({ edges, demAt, coverAt = () => 0, pads = [] }) {
   // A stop's area: the plane inside it, and the land held to the batter from its edge out to EARTHWORK_M (null: no pad)
   const padGround = (x, z, dem) => {
@@ -155,7 +155,9 @@ export function createBencher({ edges, demAt, coverAt = () => 0, pads = [] }) {
       const d = inRing ? 0 : padEdge(pad.ring, x, z) - PAD_FLAT_M;
       if (d > EARTHWORK_M) continue;
       const y = pad.plane.y + pad.plane.gx * (x - pad.x) + pad.plane.gz * (z - pad.z);
-      const held = inRing || Number.isNaN(dem) ? y : Math.max(y - d * BATTER, Math.min(y + d * BATTER, dem));
+      // (past the outline only a bank that rises is cut back to the batter; land that falls away keeps its fall: a
+      // lookout's view starts at its rail, and held to the batter the land stood up in front of it as a shelf)
+      const held = inRing || Number.isNaN(dem) ? y : Math.min(y + d * BATTER, dem);
       if (!best || d < best.d) best = { d, y: held, zone: inRing ? ZONE.bench : ZONE.terrain };
     }
     return best;

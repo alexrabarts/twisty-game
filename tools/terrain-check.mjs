@@ -57,7 +57,7 @@ import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
 import { fairnessWindow, roadworksWindow } from '../tests/helpers/world-fairness.js';
 import { wallWindow, wallRuns, WALL_LIMITS } from '../tests/helpers/world-walls.js';
-import { junctionWindow, junctionReport, JUNCTION_LIMITS } from '../tests/helpers/world-junctions.js';
+import { junctionWindow, junctionReport, junctionLimits } from '../tests/helpers/world-junctions.js';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const FROZEN = join(root, 'tests/golden/browser-baseline.json');
@@ -5617,7 +5617,7 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
         console.log = log;
         game.restartFromCheckpoint = restart;
     }
-    return { every, stageM: Math.round(env.endS - env.startS), gates: (env.checkpoints || []).length, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
+    return { every, stageM: Math.round(env.endS - env.startS), openM: Math.round((env.endS - env.startS) - (env.data.manifest.structures || []).filter(st => st.kind !== 'bridge').reduce((m, st) => m + Math.max(0, Math.min(st.s1, env.endS) - Math.max(st.s0, env.startS)), 0)), gates: (env.checkpoints || []).length, ...sweep, width: sweep.width.slice(0, 20), solid: sweep.solid.slice(0, 20), runoff: sweep.runoff.slice(0, 20), hairpins: hairpins.length, rides, crashes, restarts, works, siteRides, siteCrashes };
 }, fairnessWindow.toString(), placeAt.toString(), worldHairpins.toString(), Number(option('every') || 100), roadworksWindow.toString());
 
 // The least number of hairpins a stage's probes must find: the stage's own count by tools/world/verify.mjs
@@ -5630,8 +5630,9 @@ const hairpinsLeast = () => HAIRPINS_LEAST[option('world') || 'tremola'] ?? 1;
 function fairnessChecks(results, failures) {
     const fair = results['world-fairness'];
     if (!fair) return;
-    // (the Tremola's 13.2 km read over 500 000 points: 38 a metre of stage; a shorter stage has fewer)
-    const least = Number.isFinite(fair.stageM) ? 30 * fair.stageM : 500000;
+    // (the Tremola's 13.2 km read over 500 000 points: 38 a metre of stage outside its tunnels and galleries; a shorter
+    // stage has fewer, and a tunnel's road is not read)
+    const least = Number.isFinite(fair.openM) ? 30 * fair.openM : 500000;
     if (!(fair.points > least)) failures.push(`world-fairness: only ${fair.points} points of the drawn road read, want over ${least}`);
     if (fair.widthCount) failures.push(`world-fairness: ${fair.widthCount} points where the physics band is over 0.1 m off the drawn ribbon (worst ${fair.worstWidthM} m): ${JSON.stringify(fair.width.slice(0, 10))}`);
     if (fair.solidCount) failures.push(`world-fairness: ${fair.solidCount} wall or fall points on the drawn road with nothing drawn within 0.5 m: ${JSON.stringify(fair.solid.slice(0, 10))}`);
@@ -6029,7 +6030,8 @@ WORLD['world-junctions'] = async (page) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment, store = {};
         game.worldLinger = false;
-        for (const junction of env.graph.junctions) {
+        // (the junctions the stage rides past: a folder of several stages holds the others' too)
+        for (const junction of env.graph.junctions.filter(j => !env.stage || j.passes.some(q => q.sIn >= env.stage.from - 1 && q.sIn <= env.stage.to + 1))) {
             const p = await placeAt(Math.max(env.startS + 1, Math.min(env.endS - 1, junction.passes[0].sIn)));
             window({ THREE }, env, store, p);
         }
@@ -6037,9 +6039,11 @@ WORLD['world-junctions'] = async (page) => {
         // Where each side road is seen from: over the road 22 m out looking back at the node, and from the ride
         out.eyes = [...store.roads.values()].map(road => {
             const { rows } = env.graph.chainFrom(road.edge, env.graph.junctions.find(j => j.id === road.junction).node, 24);
+            // (a side road with no drawn rows from its node has no view)
+            if (!rows.length) return null;
             const node = rows[0], far = rows[rows.length - 1];
             return { junction: road.junction, edge: road.edge, s: Math.max(env.startS + 1, road.s), back: [far.x, far.y + 7, far.z, node.x, node.y, node.z] };
-        });
+        }).filter(Boolean);
         for (const kind of ['steps', 'holes', 'sunk', 'decks', 'open', 'walls', 'blocked', 'cliffs', 'strips', 'pits', 'clefts']) out[kind] = { count: out[kind].length, worst: out[kind].slice(0, 12) };
         return out;
     }, junctionWindow.toString(), junctionReport.toString(), placeAt.toString());
@@ -6075,6 +6079,8 @@ function junctionChecks(results, failures) {
     const roadsLeast = (option('world') || 'tremola') === 'tremola' ? 20 : 1;
     if (!(junctions.roads >= roadsLeast)) failures.push(`world-junctions: only ${junctions.roads} side roads were read`);
     const says = { steps: 'side roads with a step in their surface', holes: 'side roads with a hole in their surface', sunk: 'side roads with land over their surface', decks: 'side roads with a deck or parapet in their mouth', open: 'side roads whose edge hangs open in their mouth', walls: 'side roads with a wall of the ride drawn across their mouth', blocked: 'side roads whose mouth the physics shuts with the ride\'s wall', cliffs: 'side roads with a face of laid ground beside the other road in their mouth', strips: 'side roads with land, laid ground or the ride\'s verge drawn over them in their mouth', pits: 'side roads with a gap under the line between them and the ride beside them', clefts: 'side roads with a narrow gap open to the land between them and the ride beside them' };
+    // (the new legs' open faults are their stage's debt: tests/helpers/world-junctions.js JUNCTION_OPEN)
+    const JUNCTION_LIMITS = junctionLimits(option('world') || 'tremola');
     for (const [kind, text] of Object.entries(says)) {
         if (junctions[kind].count > JUNCTION_LIMITS[kind]) failures.push(`world-junctions: ${junctions[kind].count} ${text} (at most ${JUNCTION_LIMITS[kind]}): ${JSON.stringify(junctions[kind].worst.slice(0, 5))}`);
     }

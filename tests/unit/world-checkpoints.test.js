@@ -98,7 +98,8 @@ describe('the shipped stage', () => {
     test('the board of the stage keeps its id: the row has the new gates and floors under the same key', () => {
         const row = text => JSON.parse(text);
         const before = row(execFileSync('git', ['show', `${BEFORE}:functions/world-courses.json`], { cwd: REPO, encoding: 'utf8' }));
-        const now = row(readFileSync(path.join(REPO, 'functions', 'world-courses.json'), 'utf8'));
+        // (the rows of the other data folders, worlds/*, stand beside it: the Tremola's own rows are the ones of world/)
+        const now = Object.fromEntries(Object.entries(row(readFileSync(path.join(REPO, 'functions', 'world-courses.json'), 'utf8'))).filter(([id]) => /^world-(tremola|tour)-v\d+$/.test(id)));
         expect(Object.keys(now)).toEqual(Object.keys(before));
         expect(Object.keys(now)).toEqual(['world-tremola-v1']);
         expect([before['world-tremola-v1'].gates, now['world-tremola-v1'].gates]).toEqual([12, 6]);
