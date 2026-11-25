@@ -21,13 +21,18 @@ class HillRider {
     // (+x), his hips at `hip` in the frame, leaning far over the bars by bendRad and turned in towards them by turnRad,
     // a hand on each grip (a shoulder reaching at most reachM forward to the far one). His steps: a long pace of strideM
     // (two steps), each foot on the cobbles for `stance` of it and lifted liftM as it swings, the feet footX out from the
-    // hips' middle and backM behind it, so he pushes from behind. His head is lifted headUpRad from the bend, so he looks
+    // hips' middle and backM behind it, so he pushes from behind. Each boot rolls through its step (`foot`): over the
+    // last rollShare of the stance the heel comes up to toeOffRad onto the toe (toeM ahead of the ankle), the toe
+    // staying on the cobbles; swung forward, the toe comes up by heelRad so the heel (heelM behind the ankle) comes
+    // down first, never under the cobbles. Under stepMs he stops striding (over settleS): his feet come together
+    // under him, standM ahead and behind. His head is lifted headUpRad from the bend, so he looks
     // up the lane ahead of him. Half way up he tires: from `down.fromM` to `down.toM` walked he drops his head
     // (down.headUpRad) and leans further over (down.bendRad), eased over down.easeM. The long apron hangs straight down
     // from his waist, apronClearM clear of the knee ahead (swung forward apronMostRad at most). The bicycle leans in towards him by leanRad; on and off the
     // saddle over blendS
     static get WALK() {
         return Object.freeze({ hip: [0.36, 0.82, -0.45], bendRad: 0.62, turnRad: 0.35, headUpRad: 0.72, reachM: 0.22, strideM: 1.3, stance: 0.6, liftM: 0.1, footX: 0.11,
+            foot: { rollShare: 0.2, toeOffRad: 0.55, heelRad: 0.18, toeM: 0.15, heelM: 0.07, standM: 0.1, stepMs: 0.8, settleS: 0.35 },
             backM: 0.08, leanRad: 0.06, blendS: 0.4, apronClearM: 0.03, apronMostRad: 0.35, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.88 } });
     }
 
@@ -321,13 +326,28 @@ class HillRider {
         const W = HillRider.WALK, s = this.scratch;
         const u = ((bike.walkM || 0) / W.strideM + (leg.side > 0 ? 0 : 0.5)) % 1;
         const half = W.stance * W.strideM / 2;
-        let along, lift = 0;
-        if (u < W.stance) along = half - 2 * half * u / W.stance;
-        else {
+        let along, lift = 0, pitch = 0;
+        const F = W.foot, roll = W.stance - F.rollShare;
+        if (u < W.stance) {
+            along = half - 2 * half * u / W.stance;
+            // The heel comes up at the end of the stance and the boot rolls onto its toe, the toe kept on the cobbles
+            if (u > roll) pitch = F.toeOffRad * (u - roll) / F.rollShare;
+        } else {
             const w = (u - W.stance) / (1 - W.stance);
             along = -half + 2 * half * w * w * (3 - 2 * w);
             lift = W.liftM * Math.sin(Math.PI * w);
+            // Swung forward the toe comes up, ready for the heel to come down first
+            pitch = F.toeOffRad * (1 - w) * (1 - w) - F.heelRad * w * w * (3 - 2 * w);
         }
+        // Stood still (at the stall, or held on the brake) his feet come together under him, one a little ahead
+        const m = this.striding === undefined ? 1 : this.striding;
+        along = along * m + (leg.side > 0 ? F.standM : -F.standM) * (1 - m);
+        lift *= m;
+        pitch *= m;
+        // (the ankle as high as the toe on the cobbles needs when the heel is up, and the heel when the toe is up)
+        lift += Math.max(0, Math.sin(pitch)) * F.toeM + Math.max(0, -Math.sin(pitch)) * F.heelM;
+        this.footPitch = this.footPitch || {};
+        this.footPitch[leg.tag] = pitch;
         out.set(this.boyAt.x + leg.side * W.footX, 0, this.boyAt.z - W.backM + along);
         // Onto the cobbles where it is, whatever the frame's lean and pitch
         this.frame.localToWorld(out);
@@ -357,6 +377,8 @@ class HillRider {
         this.rides = bike.rides;
         this.walking = (this.walking || 0) + Math.max(-dt / W.blendS, Math.min(dt / W.blendS, walkTo - (this.walking || 0)));
         const walk = this.walking * this.walking * (3 - 2 * this.walking);
+        const F = W.foot, strideTo = Math.min(1, bike.speed / F.stepMs);
+        this.striding = this.striding === undefined ? strideTo : this.striding + Math.max(-dt / F.settleS, Math.min(dt / F.settleS, strideTo - this.striding));
         const footShare = this.foot * this.foot * (3 - 2 * this.foot) * (1 - walk);
         // Down after a fall: laid over to the side it went, over 0.45 s
         const fallTo = bike.crashed ? 1 : 0;
@@ -450,6 +472,12 @@ class HillRider {
             // The boot along the pedal, or its toe up and out with the leg
             s.toe.set(0.25 * leg.side * legsShare, Math.sin(pose.toe) * legsShare, 1 - legsShare * (1 - Math.cos(pose.toe))).normalize();
             s.up.set(0, 1, 0).lerp(s.out.set(leg.side * 0.4, 0.2, -0.9), legsShare).normalize();
+            // On foot the boot rolls through the step (WALK.foot): heel up onto the toe, then the toe up as it swings
+            const pitch = walk > 0 && this.footPitch ? (this.footPitch[leg.tag] || 0) * walk : 0;
+            if (pitch) {
+                s.toe.set(0, -Math.sin(pitch), Math.cos(pitch));
+                s.up.set(0, Math.cos(pitch), Math.sin(pitch));
+            }
             leg.foot.position.copy(on);
             s.z.copy(s.toe);
             s.x.crossVectors(s.up, s.z).normalize();

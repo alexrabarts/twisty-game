@@ -942,7 +942,7 @@ describe('the boy on the bicycle', () => {
         expect(ankle.y - ground).toBeLessThan(HillRider.ANKLE_ON_PEDAL[1] + 0.03);
     });
 
-    test('on foot up the climb: beside the bicycle on its left, bent over the bars, a foot on the cobbles at every step and none under them, the long apron hanging, his head down half way up; on the saddle again after', () => {
+    test('on foot up the climb: beside the bicycle on its left, bent over the bars, a boot on the cobbles at every step, rolling heel to toe, and none under them, the long apron hanging, his head down half way up; on the saddle again after', () => {
         const where = new HillLane();
         const b = new HillBicycle(where);
         b.reset(60);
@@ -957,15 +957,22 @@ describe('the boy on the bicycle', () => {
             // His hips and his body beside the frame on its left, bent forward
             expect(rider.parts.boy.position.x).toBeCloseTo(W.hip[0], 5);
             expect(rider.parts.boy.position.y).toBeLessThan(rider.rest.boy.y - 0.15);
-            const heights = rider.legs.map(leg => {
-                expect(leg.thigh.position.x).toBeGreaterThan(0.25);
-                world(leg.foot, ankle);
-                const p = where.project(ankle.x, ankle.z, b.s, {});
-                return ankle.y - where.sample(p.s).y - where.cobble(p.s, p.across);
-            });
-            for (const h of heights) expect(h).toBeGreaterThan(HillRider.ANKLE_ON_PEDAL[1] - 0.02);
-            expect(Math.min(...heights)).toBeLessThan(HillRider.ANKLE_ON_PEDAL[1] + 0.02);
-            if (Math.max(...heights) > HillRider.ANKLE_ON_PEDAL[1] + W.liftM * 0.8) lifted++;
+            // Each boot's sole at its heel and its toe (WALK.foot: heelM behind the ankle, toeM ahead), over the cobbles
+            const F = W.foot, over = point => {
+                rider.group.updateMatrixWorld(true);
+                const at = leg => leg.foot.localToWorld(ankle.set(0, -HillRider.ANKLE_ON_PEDAL[1], point));
+                return rider.legs.map(leg => {
+                    const q = at(leg), p = where.project(q.x, q.z, b.s, {});
+                    return q.y - where.sample(p.s).y - where.cobble(p.s, p.across);
+                });
+            };
+            for (const leg of rider.legs) expect(leg.thigh.position.x).toBeGreaterThan(0.25);
+            const heels = over(-F.heelM), toes = over(F.toeM);
+            const lowest = heels.map((h, i) => Math.min(h, toes[i]));
+            // Never under the cobbles; one boot on them at every step, flat or on its toe or heel
+            for (const h of lowest) expect(h).toBeGreaterThan(-0.02);
+            expect(Math.min(...lowest)).toBeLessThan(0.02);
+            if (Math.max(...lowest) > W.liftM * 0.8) lifted++;
         }
         // Each foot swings, lifted, now and then
         expect(lifted).toBeGreaterThan(4);

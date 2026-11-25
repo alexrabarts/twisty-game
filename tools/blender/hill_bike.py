@@ -54,13 +54,14 @@ EXTRA = {
     "wicker_dark": (0x786A54, 0.9, 0.0),
     "skin": (0xE2B596, 0.7, 0.0),
     "cap": (0x3A3530, 0.95, 0.0),
-    "jumper": (0x9A958C, 0.95, 0.0),
+    "jumper": (0x7E7A72, 0.95, 0.0),
     "scarf": (0x2A2826, 0.95, 0.0),
-    "apron": (0xC4BCAC, 0.9, 0.0),
+    "apron": (0xB4AC9C, 0.9, 0.0),
     "shorts": (0x34322F, 0.95, 0.0),
     "sock": (0x26241F, 0.95, 0.0),
     "loaf": (0x8C5A36, 0.85, 0.0),
     "boot": (0x1E1C1A, 0.55, 0.0),
+    "sole": (0x121110, 0.8, 0.0),
     "hair": (0x5A3A20, 0.9, 0.0),
     "leather": (0x5A3A22, 0.7, 0.0),
 }
@@ -277,11 +278,20 @@ def boy(k):
         k.tube([(x, knee - 0.12, HIP[2]), (x, knee - 0.2, HIP[2])], 0.043, "sock", seg=10)
         k.box((0.1, 0.03, 0.1), (x, knee - 0.12, HIP[2]), "sock", bevel=0.012)
         # The boot's leg to the middle of the calf
-        k.tube([(x, knee - 0.2, HIP[2]), (x, knee - SHIN + 0.02, HIP[2])], 0.05, "boot", seg=10)
+        k.lathe([(0.0, -0.01), (0.044, -0.005), (0.047, 0.06), (0.05, 0.16), (0.055, SHIN - 0.2), (0.058, SHIN - 0.19), (0.0, SHIN - 0.19)],
+                (x, knee - SHIN, HIP[2]), "boot", seg=12)
         ankle = knee - SHIN
         k.begin(f"foot_{tag}", (x, ankle, HIP[2]))
-        k.loft([(HIP[2] - 0.05, ankle - 0.06, ankle + 0.04, 0.042, 3, 3), (HIP[2] + 0.04, ankle - 0.065, ankle + 0.02, 0.048, 3, 3),
-                (HIP[2] + 0.15, ankle - 0.065, ankle - 0.01, 0.045, 3, 3), (HIP[2] + 0.18, ankle - 0.06, ankle - 0.02, 0.03)], "boot", ring=12, steps=2)
+        # A black leather boot as the stills have it: a rounded toe cap, the instep rising to the ankle, the heel's
+        # back round behind the ankle and up round it (so the boot's leg on the shin meets it whatever the foot's turn),
+        # on a sole and a low heel of darker leather. Its sole is the ground under the ankle (ANKLE_ON_PEDAL)
+        z, sole = HIP[2], ankle - 0.065
+        k.loft([(z - 0.075, sole + 0.02, ankle + 0.07, 0.036, 2.6, 4, 0.3), (z - 0.05, sole + 0.012, ankle + 0.085, 0.045, 2.6, 4, 0.3),
+                (z + 0.0, sole + 0.012, ankle + 0.075, 0.048, 2.6, 4, 0.3), (z + 0.06, sole + 0.012, ankle + 0.025, 0.049, 2.6, 4, 0.3),
+                (z + 0.12, sole + 0.012, ankle - 0.012, 0.046, 2.2, 4, 0.3), (z + 0.165, sole + 0.014, ankle - 0.03, 0.038, 2.2, 4, 0.3),
+                (z + 0.19, sole + 0.02, ankle - 0.042, 0.022, 2.2, 3, 0.3)], "boot", ring=14, steps=2)
+        k.box((0.096, 0.014, 0.25), (x, sole + 0.007, z + 0.055), "sole", bevel=0.005)
+        k.box((0.08, 0.02, 0.06), (x, sole + 0.012, z - 0.05), "sole", bevel=0.004)
 
 
 def draw(k):
