@@ -6650,6 +6650,35 @@ async function roamRun(placeSource) {
         cam.position.copy(keep.p);
         cam.quaternion.copy(keep.q);
     }
+    // The style ride (js/world/style.js): a wheelie on the ride from 4 m/s (a wheelie pops at low speed, the more so on
+    // a bike with power to spare: Vehicle.popShare), held up on the throttle 2.5 s, then the front down. A picture in
+    // the middle of it, and the wheelie as measured
+    if (game.roamStyle) {
+        const scoreBefore = game.score;
+        // (the probe's rider is on a scooter, which has no power to spare to lift its front: the wheelie is ridden on a
+        // superbike's facts, Vehicle.wheelieOf, and the rider's own are put back after)
+        const facts = v.wheelieBike;
+        v.wheelieBike = Vehicle.wheelieOf('bike13_panigale', v.riderKg);
+        twistyDev.autopilot({ speed: 4 });
+        for (let i = 0; i < 60 * 4; i++) twistyDev.step(1, { render: false });
+        // (the key pops the front; the throttle holds it up: Vehicle.updateWheelie)
+        const throttle = game.input.getThrottleInput, brake = game.input.getBrakeInput;
+        game.input.getBrakeInput = () => 0;
+        let hold = 0;
+        game.input.getWheelieInput = () => (hold < 8 ? 1 : 0);
+        game.input.getThrottleInput = () => (v.isWheelie ? (v.wheelieAngle > 0.5 ? 0.4 : 1) : 0.5);
+        for (; hold < 60 * 2.5; hold++) {
+            twistyDev.step(1, { render: hold % 30 === 29 });
+            if (hold === 70) out.shots.wheelie = frame();
+        }
+        game.input.getWheelieInput = () => 0;
+        game.input.getThrottleInput = throttle;
+        game.input.getBrakeInput = brake;
+        v.wheelieBike = facts;
+        for (let i = 0; i < 60 * 6 && v.isWheelie; i++) twistyDev.step(1, { render: false });
+        twistyDev.step(1, { render: false });
+        out.style = { last: game.roamStyle.last, best: game.roamStyle.best, line: document.getElementById('hudStyleBest').textContent, scored: game.score - scoreBefore, crashed: !!v.crashed };
+    }
     // A side road, ridden onto from the ride as a rider would: the junction whose side road runs furthest, the bike put
     // 60 m before it on the ride, steered along the ride and then along the side road (the autopilot rides the ride only)
     const graph = env.graph, route = env.route;
@@ -6764,6 +6793,7 @@ WORLD['world-roam'] = async (page) => {
     if (result.roamRows && (result.roamRows.trial.some(Boolean) || !result.roamRows.roam.every(Boolean))) failures.push(`free roam's rows on the rider screen: ${JSON.stringify(result.roamRows)}`);
     if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
     if (!result.findsStart || !result.findsStart.total || !result.findsSide || !result.findsSide.found.some(id => id.startsWith('side:')) || !/^Discoveries \d+\/\d+$/.test(result.findsSide.line)) failures.push(`the side road ridden is not a discovery: ${JSON.stringify(result.findsSide)}`);
+    if (result.style && (!result.style.last || result.style.last.m < 5 || !(result.style.scored > 0) || !/Best wheelie/.test(result.style.line))) failures.push(`the wheelie not measured or scored: ${JSON.stringify(result.style)}`);
     if (result.crewRide && result.crewRide.mostAhead > 0) failures.push(`a rider of the group ${result.crewRide.mostAhead} m ahead of the leading player`);
     if (result.crewSide && result.crewSide.waiting < result.crewSide.riders) failures.push(`riders not waiting while the player is down a side road: ${JSON.stringify(result.crewSide)}`);
     return { ok: failures.length === 0, failures, ...result, dir };

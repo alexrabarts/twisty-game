@@ -508,6 +508,7 @@ class Game {
         if (!this.freeRoam) {
             this.roam = null;
             this.discoveries = null;
+            this.roamStyle = null;
             this.showDiscoveries();
             return;
         }
@@ -518,6 +519,8 @@ class Game {
         let store = null;
         try { store = window.localStorage; } catch (error) { console.warn('Discoveries: no storage in this page', error); }
         this.discoveries = typeof WorldDiscoveries !== 'undefined' ? new WorldDiscoveries(environment, store) : null;
+        // The style ride (js/world/style.js): each wheelie measured, the bests kept
+        this.roamStyle = typeof RoamStyle !== 'undefined' ? new RoamStyle(environment.config && environment.config.id, store) : null;
         this.showDiscoveries();
         environment.guide.roam = true;
         this.worldCamera.followRider = true;
@@ -545,10 +548,18 @@ class Game {
     showDiscoveries() {
         const line = document.getElementById('hudFinds');
         if (line) line.textContent = this.freeRoam && this.discoveries ? this.discoveries.text() : '';
+        const style = document.getElementById('hudStyleBest');
+        if (style) style.textContent = this.freeRoam && this.roamStyle ? this.roamStyle.text() : '';
     }
 
     updateFreeRoam(dt) {
         const v = this.vehicle;
+        if (this.roamStyle) {
+            const shown = this.roamStyle.text();
+            const done = this.roamStyle.step(v, this.score, dt);
+            if (done) showCallout(RoamStyle.callout(done), done.best ? 'good' : 'info', Game.CALLOUT_MS.restart);
+            if (this.roamStyle.text() !== shown) this.showDiscoveries();
+        }
         if (this.discoveries && !v.crashed) {
             const found = this.discoveries.step(v.position.x, v.position.z, dt);
             if (found) {
