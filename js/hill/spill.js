@@ -33,6 +33,19 @@ class HillSpill {
         const R = HillSpill.RULE;
         const geometry = new THREE.CapsuleGeometry(R.r, R.lengthM, 4, 10);
         geometry.rotateX(Math.PI / 2);
+        // The model's loaf takes its colour from its vertex colours (the material's own colour is only a dark base),
+        // so the loose loaf carries them too: their mean, the crown a little lighter and the base a little darker
+        const crust = HillSpill.meanColour(this.inBasket);
+        if (crust) {
+            const position = geometry.attributes.position, colours = new Float32Array(position.count * 3);
+            for (let i = 0; i < position.count; i++) {
+                const k = 0.85 + 0.3 * (position.getY(i) / R.r + 1) / 2;
+                colours[i * 3] = crust.r * k;
+                colours[i * 3 + 1] = crust.g * k;
+                colours[i * 3 + 2] = crust.b * k;
+            }
+            geometry.setAttribute('color', new THREE.BufferAttribute(colours, 3));
+        } else material = null;
         material = material || new THREE.MeshStandardMaterial({ color: 0xa8743e, roughness: 0.85 });
         this.loaves = [];
         for (let i = 0; i < 6; i++) {
@@ -60,6 +73,22 @@ class HillSpill {
             loaf.mesh.visible = false;
             loaf.moving = false;
         }
+    }
+
+    // The mean of the vertex colours of `meshes` (linear, as stored), or null when they carry none
+    static meanColour(meshes) {
+        let r = 0, g = 0, b = 0, n = 0;
+        for (const mesh of meshes) {
+            const colour = mesh.geometry && mesh.geometry.attributes.color;
+            if (!colour) continue;
+            for (let i = 0; i < colour.count; i++) {
+                r += colour.getX(i);
+                g += colour.getY(i);
+                b += colour.getZ(i);
+                n++;
+            }
+        }
+        return n ? { r: r / n, g: g / n, b: b / n } : null;
     }
 
     static seeded(seed) {

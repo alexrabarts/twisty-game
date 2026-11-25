@@ -683,6 +683,13 @@ describe('the boy on the bicycle', () => {
         rider.update(b, where, 0);
         const spill = new HillSpill(where, rider);
         expect(spill.inBasket.length).toBeGreaterThan(0);
+        // The loose loaves wear the basket loaves' own colours: the shared material reads vertex colours
+        const loose = spill.loaves[0].mesh;
+        expect(loose.material.vertexColors).toBe(true);
+        const mean = HillSpill.meanColour(spill.inBasket), own = HillSpill.meanColour([loose]);
+        expect(own.r).toBeCloseTo(mean.r, 1);
+        expect(own.g).toBeCloseTo(mean.g, 1);
+        expect(own.b).toBeCloseTo(mean.b, 1);
         spill.step(b, DT);
         expect(spill.spilt).toBe(false);
         b.vehicle.crashed = true;
