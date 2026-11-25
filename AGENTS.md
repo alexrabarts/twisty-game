@@ -3,6 +3,7 @@
 Twisty Game is a browser motorcycle racing game: classic scripts under `js/`, three r150, no build step. Project notes for agents live in `.agent/` (start with `.agent/README.md`).
 
 ## Build/Test Commands
+- Install: `just deps` (the Firebase CLI through Homebrew if it is missing, then `npm ci` here and in `functions/`)
 - Serve locally: `npm run serve` (http://localhost:8080)
 - Run all tests: `node --experimental-vm-modules node_modules/.bin/jest`
 - Run one file: `node --experimental-vm-modules node_modules/.bin/jest tests/unit/vehicle.test.js`
