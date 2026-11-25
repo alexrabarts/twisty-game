@@ -908,7 +908,7 @@ class HillRide {
         if (this.litClimb !== climbLight) this.light(climbLight);
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
-            this.day.draw();
+            this.day.draw(dt || 1 / 60);
             // The basket: full up the climb, as he brings the bread up to the cart, then as many as are left
             const basket = this.spill ? this.spill.inBasket : null;
             if (this.climb) {

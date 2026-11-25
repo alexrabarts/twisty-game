@@ -788,6 +788,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 
 - 2026-11-25: the doors that wait read from the descent at speed (the owner: "make the target doors a bit clearer"): the door open on a warm lit hall, a soft pool of its light on the flags, and a woman in a coloured dress and white apron on its uphill side who waves at the next door; served, she goes in and the door shuts. A door seen edge on from the chase camera still shows little of its hall, so the pool and the woman carry it. Pictures 35 m and 18 m short of each door, before and after: `~/Library/Caches/twisty-world/hill-fixes/doors-before/`, `doors-after/`.
 
+- 2026-11-25: the cat's legs walk (the owner): a gallop from the ground she covers (a stride of 0.55 m), each foot fixed on the ground through its stance (the test holds it to 1e-9 m) and folded clear as it swings, straight legs when she stops. Pictures: `~/Library/Caches/twisty-world/hill-fixes/cat/`.
+
 ## The two Gotthard legs made one (6f, owner's order 1)
 
 - Job: the owner's "combine the first two legs". The run-in from the north and the lookout leg are now one leg, `gotthard-north`, "Andermatt over the Gotthard to the lookout over Airolo": 14.50 km to the finish line, 6 checkpoints, the stop scene at the lookout. The hospice square at the summit is a stop on the way (`route.json` `stops.via`, `at: 'via'` in `manifest.stops`): the importer finds it by the same rule round the ride's sample nearest its coordinate, it is drawn with its tables, and it moves no stage end.

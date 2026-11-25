@@ -417,8 +417,19 @@ class HillDay {
         const tail = box(0.03, 0.03, 0.3, dark);
         tail.position.set(0, 0.3, -0.3);
         tail.rotation.x = -0.6;
-        const legs = [-1, 1].flatMap(a => [-1, 1].map(b => { const l = box(0.04, 0.16, 0.04, dark); l.position.set(a * 0.05, 0.08, b * 0.14); return l; }));
-        cat.add(body, head, tail, ...legs);
+        // Each leg on a pivot at its hip or shoulder (CAT_GAIT), the leg hanging from it
+        const G = HillDay.CAT_GAIT;
+        this.catLegs = [-1, 1].flatMap(a => [-1, 1].map(b => {
+            const pivot = new THREE.Group();
+            pivot.position.set(a * 0.05, G.legM, b * 0.14);
+            const l = box(0.04, G.legM, 0.04, dark);
+            l.position.y = -G.legM / 2;
+            pivot.add(l);
+            // (a gallop: the fore legs a little apart, the hind legs half a stride on)
+            pivot.userData.phase = (b > 0 ? 0 : 0.5) + (a > 0 ? 0.08 : 0);
+            return pivot;
+        }));
+        cat.add(body, head, tail, ...this.catLegs);
         this.catMesh = cat;
         g.add(cat);
         // The horse and cart: the horse ahead, up the lane, the cart behind with two wheels
@@ -559,6 +570,33 @@ class HillDay {
         return group;
     }
 
+    // The cat's legs as she runs: a gallop whose stride matches her speed over the ground. Each foot is on the ground
+    // for `stance` of a stride and sweeps back under her at her speed, so it does not slide: the leg (legM long) turns
+    // from swingRad ahead to swingRad behind while the cat goes stance × strideM, so strideM = 2 legM sin(swingRad) /
+    // stance; then it swings forward, folded `fold` shorter, off the ground. Stopped, her legs stand straight (settleS)
+    static get CAT_GAIT() { return Object.freeze({ legM: 0.16, swingRad: 0.5, stance: 0.35, fold: 0.4, settleS: 0.2 }); }
+
+    static catStride() {
+        const G = HillDay.CAT_GAIT;
+        return 2 * G.legM * Math.sin(G.swingRad) / G.stance;
+    }
+
+    // A leg's turn (+ its foot back) at `u` (0..1) of its stride: the stance with its foot fixed on the ground, then
+    // the swing forward
+    static catLeg(u) {
+        const G = HillDay.CAT_GAIT, reach = G.legM * Math.sin(G.swingRad);
+        if (u < G.stance) return Math.asin((-reach + 2 * reach * u / G.stance) / G.legM);
+        const w = (u - G.stance) / (1 - G.stance);
+        return G.swingRad - 2 * G.swingRad * w * w * (3 - 2 * w);
+    }
+
+    // The leg's length as a share of legM at `u`: whole on the ground, folded up to foldShare shorter as it swings,
+    // so the foot clears the ground
+    static catFold(u) {
+        const G = HillDay.CAT_GAIT;
+        return u < G.stance ? 1 : 1 - G.fold * Math.sin(Math.PI * (u - G.stance) / (1 - G.stance));
+    }
+
     // Who waits at a door for its bread, so the door reads from the descent at speed with no sign: a woman on the
     // flags beside the door on its uphill side, in a dress of her own colour and a white apron (outM out from the door,
     // alongM along it), the door open on a warm lit hall (glow: its light, waiting and for the next door), and its light
@@ -593,8 +631,9 @@ class HillDay {
     }
 
     // Moves the drawing to the state
-    draw() {
+    draw(dt = 1 / 60) {
         if (!this.group) return;
+        this.drawDt = dt;
         const lane = this.lane, H = HillDay.HAZARDS, next = this.next;
         const pulse = 0.5 + 0.5 * Math.sin((this.since || 0) * 3);
         this.lamps.forEach((lamp, i) => { lamp.material.emissiveIntensity = i === next && !this.climbing ? 1.2 + pulse * 0.8 : 0; });
@@ -631,6 +670,20 @@ class HillDay {
         this.catMesh.visible = cat.state !== 'gone';
         this.catMesh.position.set(catAt.x, catAt.y, catAt.z);
         this.catMesh.rotation.y = cp.heading + (H.cat.side > 0 ? -Math.PI / 2 : Math.PI / 2);
+        // Her gait from the ground she has covered since the last drawing (drawDt: the time it took, from HillDay.draw's
+        // caller)
+        const track = this.catTrack || (this.catTrack = { x: catAt.x, z: catAt.z, phase: 0, run: 0 });
+        const moved = Math.hypot(catAt.x - track.x, catAt.z - track.z);
+        track.x = catAt.x;
+        track.z = catAt.z;
+        if (moved < 1) track.phase = (track.phase + moved / HillDay.catStride()) % 1;
+        const running = cat.state === 'running' && moved > 1e-4;
+        track.run = running ? 1 : Math.max(0, track.run - (this.drawDt || 1 / 60) / HillDay.CAT_GAIT.settleS);
+        for (const leg of this.catLegs) {
+            const u = (track.phase + leg.userData.phase) % 1;
+            leg.rotation.x = HillDay.catLeg(u) * track.run;
+            leg.scale.y = 1 - (1 - HillDay.catFold(u)) * track.run;
+        }
         const cart = this.cart, cartAt = lane.at(cart.s, cart.across, 0, {}), kp = lane.sample(cart.s);
         this.cartMesh.position.set(cartAt.x, cartAt.y, cartAt.z);
         // Facing up the lane

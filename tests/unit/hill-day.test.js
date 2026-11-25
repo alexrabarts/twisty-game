@@ -252,6 +252,35 @@ describe('the doors that wait', () => {
     });
 });
 
+describe('the cat', () => {
+    test('gallops with a stride that matches her speed: each foot stays put on the ground through its stance, swings clear of it, and stands still when she stops', () => {
+        const G = HillDay.CAT_GAIT, S = HillDay.catStride();
+        // Through the stance the foot's place on the ground (the body's travel less the foot's reach back) does not move
+        const foot = u => u * S - G.legM * Math.sin(HillDay.catLeg(u));
+        const at0 = foot(0);
+        for (let u = 0; u <= G.stance; u += G.stance / 20) expect(Math.abs(foot(u) - at0)).toBeLessThan(1e-9);
+        // Swung forward, the foot is off the ground: the leg folded and turned
+        for (let u = G.stance + 0.05; u < 0.97; u += 0.05) expect(G.legM * HillDay.catFold(u) * Math.cos(HillDay.catLeg(u))).toBeLessThan(G.legM * Math.cos(G.swingRad) - 0.002);
+        // The stride closes: the end of the swing is the start of the stance
+        expect(HillDay.catLeg(0.999999)).toBeCloseTo(HillDay.catLeg(0), 4);
+        // In the day: running, her legs move with the ground she covers; stopped, they stand straight
+        const day = new HillDay(lane);
+        day.build();
+        day.draw(1 / 60);
+        day.cat.state = 'running';
+        const angles = [];
+        for (let i = 0; i < 30; i++) {
+            day.cat.across -= 3.5 / 60 * (HillDay.HAZARDS.cat.side);
+            day.draw(1 / 60);
+            angles.push(day.catLegs[0].rotation.x);
+        }
+        expect(Math.max(...angles) - Math.min(...angles)).toBeGreaterThan(G.swingRad);
+        day.cat.state = 'gone';
+        for (let i = 0; i < 30; i++) day.draw(1 / 60);
+        for (const leg of day.catLegs) expect(Math.abs(leg.rotation.x)).toBeLessThan(1e-9);
+    });
+});
+
 describe('the climb', () => {
     test('from the bend up to the stall in 20 to 40 s, in sight most of the way, cut as the stills are, wheeled in to the stall side on at the end', () => {
         const C = HillDay.CLIMB;
