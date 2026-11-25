@@ -24,8 +24,8 @@ class HillLane {
                 [371, -0.08], [406, -0.07], [446, -0.06], [521, -0.04], [572, -0.02]],
             // The line: the heading (radians, + towards +x, the left) as [s, heading] knots: the start, the gentle
             // right-hander (rightHanderRad off the start), the main straight into the sun, the left curve, the fast part,
-            // the sharp right (sharpRight), the last gentle left
-            heading: [[0, 0], [40, 0], [66, -0.61], [186, -0.61], [246, -0.11], [376, -0.11], [394, -1.51], [436, -1.51], [521, -0.61], [572, -0.61]],
+            // the sharp right (sharpRight), the last gentle left. The left curve turns in 43 m (its least radius about 57 m)
+            heading: [[0, 0], [40, 0], [66, -0.61], [186, -0.61], [229, -0.11], [376, -0.11], [394, -1.51], [436, -1.51], [521, -0.61], [572, -0.61]],
             // The parts by name, as data the tests and the light read: the main straight (the sun lies along it) and the
             // sharp right (from, to, and the tightest radius its knots give the lane's centre)
             mainStraight: { fromS: 68, toS: 184 },

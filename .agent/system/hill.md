@@ -15,7 +15,7 @@ The owner gave key frames of the scene he had in mind. The frames are private an
 1. The start (s 22). The low sun is to the right of the view.
 2. A right-hander, 0.61 rad (35 degrees, the angle the opening frame has the sun off the view) from s 40 to 66. It is tighter than a gentle bend (about 28 m at its tightest), because the opening frame shows the lane bending that sharply below the start.
 3. The main straight (`mainStraight`, s 68 to 184), straight into the sun.
-4. A left curve.
+4. A left curve, from s 186 to 229. Its least radius is about 57 m.
 5. A fast steep part at a grade of 0.26.
 6. The sharp right (`sharpRight`, s 376 to 394). Its tightest radius is 7 to 11 m.
 7. The last gentle left, where the camera holds (`end`).

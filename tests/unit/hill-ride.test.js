@@ -102,10 +102,18 @@ describe('the lane', () => {
         for (let s = H[1][0]; s <= H[2][0]; s++) expect(Math.abs(lane.radiusAt(s))).toBeGreaterThan(25);
         straight(r.mainStraight.fromS, r.mainStraight.toS);
         straight(H[4][0] + 2, r.sharpRight.fromS - 2);
-        // The left curve between them
-        let left = 0;
-        for (let s = H[3][0]; s <= H[4][0]; s++) if (lane.radiusAt(s) > 0) left++;
-        expect(left).toBeGreaterThan(50);
+        // The left curve between them: over 40 m, its least radius 50 to 65 m (tightened by the owner from 80 m)
+        let left = 0, leastLeft = Infinity;
+        for (let s = H[3][0]; s <= H[4][0]; s++) {
+            const radius = lane.radiusAt(s);
+            if (radius > 0) {
+                left++;
+                leastLeft = Math.min(leastLeft, radius);
+            }
+        }
+        expect(left).toBeGreaterThan(40);
+        expect(leastLeft).toBeGreaterThan(50);
+        expect(leastLeft).toBeLessThan(65);
         // The sharp right: its tightest radius as the rule gives it, and it turns right (the radius is negative)
         const { fromS, toS, leastRadiusM } = r.sharpRight;
         let least = Infinity;
