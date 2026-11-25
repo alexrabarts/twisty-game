@@ -25,10 +25,10 @@ class HillDay {
     // he wheels the bicycle in to it, whatever the keys say, steering for `meet` (turnGain of the steer for each radian
     // off), so it comes to the stall nearly across the lane, as the last stills have it; the climb ends within meetM
     // of `meet`, or at triggerS. He slows as he wheels it in, to slowM of his pace at `meet`. After the restock (restockS)
-    // he turns the bicycle round where he stands over turnS, and the descent starts from there
+    // he gets on in a fade to black (HillRide.FADES), turned round where he stands, and the descent starts from there
     static get CLIMB() {
         return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, stall: [28.1, 2.65], meet: [28.6, 1.15], turnInM: 5.5, turnGain: 2.0, meetM: 0.4, slowM: 0.55,
-            restockS: 1.4, turnS: 1.6, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
+            restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
     }
 
     // The washing's sheets keep clearM from every house, porch and wall through their whole flap (tests/unit/hill-day.test.js):

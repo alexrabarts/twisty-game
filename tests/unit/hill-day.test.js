@@ -350,9 +350,12 @@ describe('the climb', () => {
                 frames++;
                 // First the wide shot held still, then the long lens head on, going back up the lane ahead of him with
                 // trackFrameM of picture height at his distance, then stopped a pace from the stall, the lens opening out
-                if (C.fromS - bike.s < S.wideM) {
+                const walked = C.fromS - bike.s, G = HillRide.GLIDE;
+                if (walked < G.wideM[0]) {
                     expect(camera.position.distanceTo(wideAt)).toBeLessThan(1e-6);
                     wide++;
+                } else if (walked < G.wideM[1]) {
+                    // (the wide shot gliding into the long lens: one shot)
                 } else if (camera.position.distanceTo(new THREE.Vector3(stopAt.x, stopAt.y, stopAt.z)) < 1e-6) {
                     // (the picture's height at his distance: the camera aims between him and the stall)
                     const v = bike.vehicle.position, d = camera.position.distanceTo(new THREE.Vector3(v.x, v.y + S.lookUpM, v.z));
@@ -403,7 +406,7 @@ describe('the climb', () => {
         ride.climbStep(DT, {});
         expect(ride.climb.phase).toBe('restock');
         const held = {}, at = bike.s, across = bike.across;
-        for (let t = 0; t < HillDay.CLIMB.restockS + HillDay.CLIMB.turnS + 0.1; t += DT) ride.climbStep(DT, held);
+        for (let t = 0; t < HillDay.CLIMB.restockS + HillRide.FADES.outS + 0.1; t += DT) ride.climbStep(DT, held);
         expect(ride.climb).toBe(null);
         expect(ride.hold).toMatchObject({ phase: 'hold' });
         // He gets on where he stood, turned round to face down the lane: no jump
@@ -463,38 +466,47 @@ describe('the climb', () => {
         expect(ride.startPromptShown()).toBe(false);
     });
 
-    test('the hand-over: from the stall\'s camera to the chase camera behind him in one smooth move, no cut and no jump, and on into the descent', () => {
-        const C = HillDay.CLIMB, H = HillRide.HOLD;
+    test.each([['behind', 0], ['cinematic', 1]])('the whole day is one shot with the %s view: the camera never steps in place, aim or lens between two frames, but in the fades when he gets off and on', (name, view) => {
         const bike = new HillBicycle(lane);
         const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);
-        const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day: new HillDay(lane), game: { camera }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(), sample: {}, view: 0 });
+        let now = { pedal: 1, brake: 0, steer: 0 };
+        const input = {
+            checkPause() {}, checkCheckpointRestart() {}, checkCameraSwitch: () => false, checkSoundToggle: () => false, checkThrow: () => 0,
+            getThrottleInput: () => now.pedal, getBrakeInput: () => now.brake, getSteeringInput: () => now.steer, getWheelieInput: () => 0
+        };
+        const ride = Object.assign(Object.create(HillRide.prototype), { lane, bike, day: new HillDay(lane), game: { camera, input }, look: new THREE.Vector3(), camTarget: new THREE.Vector3(),
+            endLook: new THREE.Vector3(), sample: {}, view, accumulated: 0, ending: null, music: null });
+        ride.draw = dt => ride.placeCamera(Math.min(1, dt * 6));
         ride.beginClimb();
-        // Near the stall, coming in to it
-        bike.reset(C.meet[0] + 1.2, C.meet[1] - 0.6);
-        bike.vehicle.yawAngle += Math.PI;
-        const path = [];
-        const note = () => { ride.placeCamera(Math.min(1, DT * 6)); path.push({ p: camera.position.clone(), fov: camera.fov, s: bike.s, across: bike.across, v: bike.speed }); };
-        for (let t = 0; t < 12 && ride.climb; t += DT) {
-            const input = { pedal: 1, brake: 0, steer: 0, wheelie: 0 };
-            ride.climbStep(DT, input);
-            if (ride.climb) bike.step(DT, input);
-            note();
+        ride.placeCamera(1);
+        const dir = new THREE.Vector3();
+        let last = null, worst = { pos: 0, aim: 0, fov: 0 }, frames = 0, broke = 0, end = 0;
+        const steps = [];
+        for (let t = 0; t < 240; t += 1 / 60) {
+            // The pilot: up the lane on the climb (the turn-in to the stall is the ride's own), then down it
+            const p = pilot(bike, ride.climb ? { dir: -1, across: HillDay.CLIMB.across } : { most: 12, bend: 7 });
+            now = ride.climb ? { pedal: 1, brake: 0, steer: p.steer } : ride.hold && ride.hold.phase === 'hold' && ride.hold.t < 1 ? { pedal: 0, brake: 1, steer: 0 } : { pedal: p.brake ? 0 : 0.6, brake: p.brake, steer: p.steer };
+            ride.frame(1 / 60);
+            ride.cameraStep(0);
+            frames++;
+            camera.getWorldDirection(dir);
+            const here = { pos: camera.position.clone(), dir: dir.clone(), fov: camera.fov, black: ride.curtainShare() > 0.02 || (ride.ending && ride.ending.phase !== 'stopping' && ride.ending.phase !== 'watching') };
+            if (last && !here.black && !last.black) {
+                const step = { pos: here.pos.distanceTo(last.pos), aim: here.dir.angleTo(last.dir), fov: Math.abs(here.fov - last.fov) };
+                if (step.pos > 0.8 || step.aim > 0.1 || step.fov > 2) steps.push(`${t.toFixed(2)} s ${ride.climb ? ride.climb.phase : ride.hold ? 'hold ' + ride.hold.phase : ride.ending ? 'ending ' + ride.ending.phase : 'ride'} s ${bike.s.toFixed(1)}: ${(step.pos * 100).toFixed(0)} cm, ${(step.aim * 180 / Math.PI).toFixed(1)} deg, lens ${step.fov.toFixed(2)}`);
+                worst.pos = Math.max(worst.pos, step.pos);
+                worst.aim = Math.max(worst.aim, step.aim);
+                worst.fov = Math.max(worst.fov, step.fov);
+            } else if (last) broke++;
+            last = here;
+            if (ride.ending && ride.ending.phase === 'done') { end = t; break; }
         }
-        expect(ride.hold).toMatchObject({ phase: 'hold' });
-        // Held a second, then he pushes off and the camera eases to the view as the ride does (HillRide.frame)
-        for (let t = 0; t < 1; t += DT) { bike.step(DT, { pedal: 0, brake: 1, steer: 0 }); note(); }
-        ride.hold = { phase: 'ease', t: 0, from: camera.position.clone(), lookFrom: ride.look.clone(), fovFrom: camera.fov };
-        for (let t = 0; t < H.easeS; t += DT) { ride.hold.t += DT; bike.step(DT, { pedal: t < H.pushS ? H.push : 0, brake: 0, steer: 0 }); note(); }
-        let most = 0, mostFov = 0, mostBike = 0;
-        for (let i = 1; i < path.length; i++) {
-            most = Math.max(most, path[i].p.distanceTo(path[i - 1].p));
-            mostFov = Math.max(mostFov, Math.abs(path[i].fov - path[i - 1].fov));
-            mostBike = Math.max(mostBike, Math.hypot(path[i].s - path[i - 1].s, path[i].across - path[i - 1].across) - Math.max(path[i].v, path[i - 1].v) * DT);
-        }
-        console.log(`hill hand-over: the camera moved at most ${(most * 100).toFixed(1)} cm and ${mostFov.toFixed(2)} degrees of lens in a step of ${(DT * 1000).toFixed(1)} ms; the bicycle at most ${(mostBike * 100).toFixed(1)} cm more than its speed takes it`);
-        expect(most).toBeLessThan(0.12);
-        expect(mostFov).toBeLessThan(0.5);
-        expect(mostBike).toBeLessThan(0.01);
+        console.log(`hill one shot (${name}): ${frames} frames to the card at ${end.toFixed(0)} s; between frames the camera moved at most ${(worst.pos * 100).toFixed(0)} cm, turned ${(worst.aim * 180 / Math.PI).toFixed(1)} degrees, its lens ${worst.fov.toFixed(2)} degrees; ${broke} frames in a fade`);
+        if (steps.length) console.log(`hill one shot (${name}), the steps:\n${steps.slice(0, 12).join('\n')}`);
+        expect(end).toBeGreaterThan(0);
+        expect(worst.pos).toBeLessThan(0.8);
+        expect(worst.aim).toBeLessThan(0.1);
+        expect(worst.fov).toBeLessThan(2);
     });
 
     test('on foot: the pedal key walks him up at about walkMs, and let go he holds the bicycle where it is', () => {

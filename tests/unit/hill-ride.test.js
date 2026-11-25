@@ -635,7 +635,7 @@ describe('the opening shot to the chase view', () => {
 });
 
 describe('the cinematic cameras', () => {
-    test('down a whole ride the bicycle is always in frame and in clear view until the ending, and the cuts are spaced', () => {
+    test('down a whole ride the bicycle is always in frame and in clear view of each camera until the ending, nearly always through the glides between them, and the changes are spaced', () => {
         const lane = new HillLane(), bike = new HillBicycle(lane);
         const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 3000);
         const ride = Object.assign(Object.create(HillRide.prototype), {
@@ -644,11 +644,12 @@ describe('the cinematic cameras', () => {
         });
         const frustum = new THREE.Frustum(), m = new THREE.Matrix4(), q = new THREE.Vector3();
         const cuts = [];
-        let last = null, frames = 0, out = 0, hidden = 0;
+        let last = null, frames = 0, out = 0, hidden = 0, glideOut = 0, glideHidden = 0, glideFrames = 0;
         for (let t = 0; t < 200 && bike.s < lane.rule.end.stopS; t += DT) {
             const input = pilot(bike, { bend: 8, before: 60 });
             if (t < 1.5) input.pedal = 1;
             bike.step(DT, input);
+            ride.cameraStep(DT);
             ride.placeCamera(1);
             if (ride.cinema !== last) {
                 cuts.push(bike.timeS);
@@ -658,15 +659,21 @@ describe('the cinematic cameras', () => {
             camera.updateMatrixWorld();
             frustum.setFromProjectionMatrix(m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
             const points = HillRide.bikePoints(bike);
-            if (!points.every(p => frustum.containsPoint(q.set(p.x, p.y, p.z)))) out++;
-            if (points.some(p => lane.blocks(camera.position, p))) hidden++;
+            // (strict on each camera; through a glide from one to the next, counted apart)
+            const gliding = !!ride.glide;
+            if (!points.every(p => frustum.containsPoint(q.set(p.x, p.y, p.z)))) { if (gliding) glideOut++; else out++; }
+            if (points.some(p => lane.blocks(camera.position, p))) { if (gliding) glideHidden++; else hidden++; }
+            if (gliding) glideFrames++;
         }
-        console.log(`hill cinema: ${cuts.length} cameras over ${frames} frames; out of frame ${out}, hidden ${hidden}; shortest shot ${Math.min(...cuts.slice(1).map((c, i) => c - cuts[i])).toFixed(2)} s`);
+        console.log(`hill cinema: ${cuts.length} cameras over ${frames} frames; out of frame ${out}, hidden ${hidden}; shortest shot ${Math.min(...cuts.slice(1).map((c, i) => c - cuts[i])).toFixed(2)} s; in ${glideFrames} frames of glides, out of frame ${glideOut}, hidden ${glideHidden}`);
         expect(bike.s).toBeGreaterThanOrEqual(lane.rule.end.stopS);
         expect(out).toBe(0);
         expect(hidden).toBe(0);
         for (let i = 1; i < cuts.length; i++) expect(cuts[i] - cuts[i - 1]).toBeGreaterThanOrEqual(HillRide.CUTS.gapS - 1e-9);
         expect(cuts.length).toBeGreaterThan(6);
+        // Through the glides he is in frame and in view nearly all the time
+        expect(glideOut).toBeLessThan(glideFrames * 0.05 + 1);
+        expect(glideHidden).toBeLessThan(glideFrames * 0.1 + 1);
     });
 });
 

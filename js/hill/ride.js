@@ -85,6 +85,47 @@ class HillRide {
         });
     }
 
+    // The only breaks in the picture: a fade to black and up again when he gets off the bicycle (the climb starts in
+    // black and comes up over inS) and when he gets on it at the stall (down over outS, up over inS)
+    static get FADES() { return Object.freeze({ outS: 0.5, inS: 0.7 }); }
+
+    // The camera never cuts: a change of camera glides there, eased (a smootherstep of place, aim and lens). handS: from
+    // the stall to the chase camera after he gets on; cutS: from one cinematic camera to the next, longer when they are far
+    // apart (speedMs, the glide's mean speed at most); viewS: to the view
+    // chosen with Z; wideM: the climb's wide shot glides into the long lens head on over the metres he walks from
+    // wideM[0] to wideM[1]
+    static get GLIDE() { return Object.freeze({ handS: 2.6, cutS: 1.2, viewS: 0.9, speedMs: 18, arcM: 0.2, arcMostM: 6, wideM: [9, 15] }); }
+
+    // How black the picture is now (0 to 1)
+    curtainShare() {
+        const c = this.curtain;
+        if (!c) return 0;
+        const k = Math.min(1, c.t / c.s), e = k * k * (3 - 2 * k);
+        return c.from + (c.to - c.from) * e;
+    }
+
+    curtainTo(to, seconds) {
+        this.curtain = { from: this.curtainShare(), to, t: 0, s: seconds };
+    }
+
+    // A glide from where the camera is now, over `seconds`
+    glideFrom(seconds) {
+        const cam = this.game.camera, v = this.bike.vehicle.position;
+        // (the aim kept as an offset from him, so it follows him through the glide; the place lifted in an arc over the
+        // roofs between two cameras far apart: arcM for each metre between them, at most arcMostM)
+        this.glide = { pos: cam.position.clone(), lookOff: this.look.clone().sub(v), fov: cam.fov, t: 0, s: seconds };
+    }
+
+    // The camera's time: the fades and the glides run on it
+    cameraStep(dt) {
+        if (this.curtain) this.curtain.t += dt;
+        if (this.glide) {
+            this.glide.t += dt;
+            if (this.glide.t >= this.glide.s) this.glide = null;
+        }
+        if (this.fade && !this.ending) this.fade.style.opacity = String(this.curtainShare());
+    }
+
     // The picture's height (m) at `d` m from the climb's stopped camera (CLIMB_SHOTS.frames, smoothstepped between knots)
     static climbFrame(d) {
         const F = HillRide.CLIMB_SHOTS.frames;
@@ -110,8 +151,25 @@ class HillRide {
 
     // The climb's camera for the boy now, into `at` and `look`; returns its field of view (degrees)
     climbCamera(at, look) {
+        const S = HillRide.CLIMB_SHOTS, G = HillRide.GLIDE, bike = this.bike, lane = this.lane, v = bike.vehicle.position;
+        const walked = HillDay.CLIMB.fromS - bike.s;
+        if (walked < G.wideM[0]) return HillRide.shot(lane, S.wide, at, look).fov;
+        if (walked < G.wideM[1]) {
+            // The wide shot glides into the long lens head on: one shot, its place, aim and lens eased together
+            const wideAt = this.wideAt || (this.wideAt = new THREE.Vector3()), wideLook = this.wideLook || (this.wideLook = new THREE.Vector3());
+            const wideFov = HillRide.shot(lane, S.wide, wideAt, wideLook).fov;
+            const k = (walked - G.wideM[0]) / (G.wideM[1] - G.wideM[0]), e = k * k * k * (k * (6 * k - 15) + 10);
+            const trackFov = this.trackCamera(at, look);
+            at.lerpVectors(wideAt, at, e);
+            look.lerpVectors(wideLook, look, e);
+            return wideFov + (trackFov - wideFov) * e;
+        }
+        return this.trackCamera(at, look);
+    }
+
+    // The climb's camera after the wide shot: head on, then stopped by the stall
+    trackCamera(at, look) {
         const S = HillRide.CLIMB_SHOTS, bike = this.bike, lane = this.lane, v = bike.vehicle.position;
-        if (HillDay.CLIMB.fromS - bike.s < S.wideM) return HillRide.shot(lane, S.wide, at, look).fov;
         look.set(v.x, v.y + S.lookUpM, v.z);
         const s = bike.s - S.trackM;
         if (s > S.stop[0]) {
@@ -451,7 +509,7 @@ class HillRide {
         this.ending = null;
         this.cinema = null;
         if (this.endNote) this.endNote.style.display = 'none';
-        if (this.fade) this.fade.style.opacity = '0';
+        if (this.fade) this.fade.style.opacity = String(this.curtainShare());
         this.placeCamera(1);
     }
 
@@ -473,6 +531,9 @@ class HillRide {
         this.hold = null;
         this.climb = { phase: 'climb', t: 0, hold: 0 };
         this.handedOver = false;
+        this.glide = null;
+        // He is off the bicycle: the day comes up from black (FADES)
+        this.curtain = { from: 1, to: 0, t: 0, s: HillRide.FADES.inS };
         // Nothing to spill on the way up
         if (this.spill) this.spill.spilt = true;
     }
@@ -494,6 +555,9 @@ class HillRide {
         this.hold = { phase: 'hold', t: 0 };
         this.handedOver = true;
         this.cinema = null;
+        // Up from the black where the camera was, and from there one smooth move to the chase camera behind him (GLIDE)
+        this.glideFrom(HillRide.GLIDE.handS);
+        this.curtainTo(0, HillRide.FADES.inS);
     }
 
     // The climb's part of a frame: the steer keys as seen from the camera ahead of him, and at the top the restock.
@@ -539,19 +603,20 @@ class HillRide {
         if (climb.phase === 'restock') {
             Object.assign(controls, { pedal: 0, brake: 1, steer: 0, wheelie: 0 });
             if (climb.t >= C.restockS) {
-                // He turns the bicycle round where he stands to face down the lane, the short way
-                const v = this.bike.vehicle, down = this.lane.sample(this.bike.s).heading;
-                climb.phase = 'turn';
+                // He gets on: the picture fades to black (FADES), and in the dark he turns the bicycle round to face down
+                // the lane and mounts
+                climb.phase = 'mount';
                 climb.t = 0;
-                climb.yawFrom = v.yawAngle;
-                climb.yawTo = v.yawAngle + Math.atan2(Math.sin(down - v.yawAngle), Math.cos(down - v.yawAngle));
+                this.curtainTo(1, HillRide.FADES.outS);
             }
         }
-        if (climb.phase === 'turn') {
+        if (climb.phase === 'mount') {
             Object.assign(controls, { pedal: 0, brake: 1, steer: 0, wheelie: 0 });
-            const k = Math.min(1, climb.t / C.turnS), e = k * k * (3 - 2 * k);
-            this.bike.vehicle.yawAngle = climb.yawFrom + (climb.yawTo - climb.yawFrom) * e;
-            if (climb.t >= C.turnS) this.endClimb();
+            if (climb.t >= HillRide.FADES.outS) {
+                const v = this.bike.vehicle;
+                v.yawAngle = this.lane.sample(this.bike.s).heading;
+                this.endClimb();
+            }
         }
         return true;
     }
@@ -819,7 +884,8 @@ class HillRide {
         const end = this.lane.rule.end;
         if (!this.ending) {
             if (this.bike.s < end.stopS) return null;
-            this.ending = { phase: 'stopping', t: 0, hidden: 0, from: this.game.camera.position.clone(), lookFrom: this.look.clone() };
+            this.ending = { phase: 'stopping', t: 0, hidden: 0, from: this.game.camera.position.clone(), lookFrom: this.look.clone(), fovFrom: this.game.camera.fov };
+            this.glide = null;
         }
         const e = this.ending;
         e.t += dt;
@@ -867,9 +933,10 @@ class HillRide {
         if (input.checkCameraSwitch()) {
             this.view = (this.view + 1) % HillRide.VIEWS.length;
             this.showView();
-            this.placeCamera(1);
+            this.glideFrom(HillRide.GLIDE.viewS);
         }
         if (input.checkSoundToggle() && game.soundManager) game.soundManager.setSetting('muted', !game.soundManager.getSetting('muted'));
+        this.cameraStep(dt);
         const controls = { pedal: input.getThrottleInput(), brake: input.getBrakeInput(), steer: input.getSteeringInput(HillVehicle.WORLD.steerKeys), wheelie: input.getWheelieInput() };
         // The climb to the cart at the top, then the restock
         this.climbStep(dt, controls);
@@ -888,6 +955,8 @@ class HillRide {
                 this.hold.from = this.game.camera.position.clone();
                 this.hold.lookFrom = this.look.clone();
                 this.hold.fovFrom = this.game.camera.fov;
+                // (the ease takes over from the camera as it is: no glide on top of it)
+                this.glide = null;
             } else if (this.hold.phase === 'ease' && this.hold.t >= H.easeS) {
                 this.hold = null;
             }
@@ -983,18 +1052,7 @@ class HillRide {
         // The climb: the wide shot held while he comes up into it, then the long lens head on, then the stop by the
         // stall (CLIMB_SHOTS)
         if (this.climb && !this.forcedShot) {
-            let fov = this.climbCamera(this.camTarget, this.look);
-            // The hand-over: from the stall's camera, while he restocks and turns the bicycle round, one smooth move to the
-            // chase camera behind him (VIEWS' behind), with no cut; the descent starts from there
-            const C = HillDay.CLIMB, climb = this.climb;
-            if (climb.phase !== 'climb') {
-                const t = (climb.phase === 'turn' ? C.restockS : 0) + climb.t, k = Math.min(1, t / (C.restockS + C.turnS)), e = k * k * k * (k * (6 * k - 15) + 10);
-                const at = this.handAt || (this.handAt = new THREE.Vector3()), aim = this.handLook || (this.handLook = new THREE.Vector3());
-                const chase = this.followShot(at, aim);
-                this.camTarget.lerp(at, e);
-                this.look.lerp(aim, e);
-                fov += (chase - fov) * e;
-            }
+            const fov = this.climbCamera(this.camTarget, this.look);
             cam.position.copy(this.camTarget);
             cam.up.set(0, 1, 0);
             if (cam.fov !== fov) {
@@ -1027,8 +1085,10 @@ class HillRide {
             cam.position.copy(e.from).lerp(this.camTarget, k);
             this.look.copy(e.lookFrom).lerp(this.endLook, k);
             cam.up.set(0, 1, 0);
-            if (cam.fov !== 50) {
-                cam.fov = 50;
+            // (its lens eased too)
+            const lens = (e.fovFrom === undefined ? 50 : e.fovFrom) + (50 - (e.fovFrom === undefined ? 50 : e.fovFrom)) * k;
+            if (cam.fov !== lens) {
+                cam.fov = lens;
                 cam.updateProjectionMatrix();
             }
             cam.lookAt(this.look);
@@ -1045,7 +1105,13 @@ class HillRide {
             const down = this.bike.crashed;
             const force = this.cinema === undefined || this.cinema === null || (this.wasDown && !down) || (this.bike.timeS || 0) < (this.cinemaCutAt || 0);
             this.wasDown = down;
-            const top = HillRide.cinemaAt(this.lane, HillRide.CINEMA[this.cinemaPick(force)], {});
+            const before = this.cinema, pick = this.cinemaPick(force);
+            // (a new camera: glide to it, never cut)
+            const top = HillRide.cinemaAt(this.lane, HillRide.CINEMA[pick], {});
+            if (before !== undefined && before !== null && pick !== before) {
+                const far = Math.hypot(top.x - cam.position.x, top.y - cam.position.y, top.z - cam.position.z);
+                this.glideFrom(Math.max(HillRide.GLIDE.cutS, far / HillRide.GLIDE.speedMs));
+            }
             const v = this.bike.vehicle.position;
             this.camTarget.set(top.x, top.y, top.z);
             this.look.set(v.x, v.y + 0.9, v.z);
@@ -1068,9 +1134,22 @@ class HillRide {
             else h.chase.lerp(this.camTarget, blend);
             const t = Math.min(1, h.t / HillRide.HOLD.easeS), k = t * t * t * (t * (6 * t - 15) + 10);
             cam.position.copy(h.from).lerp(h.chase, k);
-            this.look.copy(this.hold.lookFrom).lerp(this.look, k);
+            // (to the view's aim: from where the aim was at the push-off)
+            const aim = this.easeLook || (this.easeLook = new THREE.Vector3());
+            aim.copy(this.look);
+            this.look.copy(this.hold.lookFrom).lerp(aim, k);
             fov = this.hold.fovFrom + (fov - this.hold.fovFrom) * k;
         } else cam.position.lerp(this.camTarget, blend);
+        // A glide (GLIDE): from where the camera was to where the view has it, eased, place, aim and lens together
+        if (this.glide) {
+            const g = this.glide, k = Math.min(1, g.t / g.s), e = k * k * k * (k * (6 * k - 15) + 10), G = HillRide.GLIDE;
+            const far = g.pos.distanceTo(cam.position), from = this.glideLook || (this.glideLook = new THREE.Vector3());
+            cam.position.lerpVectors(g.pos, cam.position, e);
+            cam.position.y += Math.min(G.arcMostM, far * G.arcM) * Math.sin(Math.PI * e);
+            from.copy(this.bike.vehicle.position).add(g.lookOff);
+            this.look.lerpVectors(from, this.look, e);
+            fov = g.fov + (fov - g.fov) * e;
+        }
         cam.up.set(0, 1, 0);
         if (cam.fov !== fov) {
             cam.fov = fov;
