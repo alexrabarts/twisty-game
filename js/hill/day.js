@@ -26,7 +26,7 @@ class HillDay {
     // off), so it comes to the stall nearly across the lane, as the last stills have it; the climb ends within meetM
     // of `meet`, or at triggerS
     static get CLIMB() {
-        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, stall: [28.6, 2.65], meet: [28.6, 1.15], turnInM: 5.5, turnGain: 2.0, meetM: 0.4,
+        return Object.freeze({ fromS: 64, triggerS: 27, across: -0.6, stall: [28.1, 2.65], meet: [28.6, 1.15], turnInM: 5.5, turnGain: 2.0, meetM: 0.4,
             restockS: 1.4, walkMs: 1.5, walkBase: 0.4, walkGain: 1.2, walkHold: 0.6 });
     }
 
@@ -435,27 +435,97 @@ class HillDay {
         line.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
         line.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z).normalize());
         g.add(line);
-        // The bakery's cart at the top, where the climb ends: a handcart with trays of loaves
-        const C = HillDay.CLIMB, top = lane.at(C.stall[0], C.stall[1], 0, {}), p = lane.sample(C.stall[0]);
-        const handcart = new THREE.Group();
-        const tray = box(1.0, 0.12, 0.7, wood);
-        tray.position.y = 0.85;
-        const legsCart = [-1, 1].map(k => { const l = box(0.06, 0.8, 0.06, wood); l.position.set(k * 0.45, 0.4, -0.3); return l; });
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.06, 14), dark);
-        wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(0, 0.3, 0.3);
-        handcart.add(tray, ...legsCart, wheel);
-        for (let i = 0; i < 6; i++) {
-            const loaf = new THREE.Mesh(loafGeometry, crust);
-            loaf.position.set(-0.3 + (i % 3) * 0.3, 0.98, -0.15 + Math.floor(i / 3) * 0.3);
-            handcart.add(loaf);
-        }
-        handcart.position.set(top.x, top.y, top.z);
-        handcart.rotation.y = p.heading + Math.PI / 2;
-        g.add(handcart);
+        // The stall at the top, where the climb ends (HillDay.stall)
+        g.add(HillDay.stall(lane, { mat, box, dark }));
         this.group = g;
         this.draw();
         return g;
+    }
+
+    // The stall at the top where the climb ends, as the last stills have it: a trestle table along the lane's edge on
+    // the left going down (CLIMB.stall: its middle, long side along the lane), its top level and each leg down to the
+    // cobbles under it; on it a pair of scales with a brass pan, willow baskets of greens, cabbages and roots, carrots
+    // and a marrow along its front, a tray of the bakery's loaves, a big basket tipped up at the back; a churn and a
+    // crate under it; and over it a blank board hung from an iron arm on a post (no words on it). Local axes: x down the
+    // lane, z out towards its middle, y up
+    static stall(lane, { mat, box, dark }) {
+        const C = HillDay.CLIMB, [s0, a0] = C.stall, p = lane.sample(s0), at = lane.at(s0, a0, 0, {});
+        const group = new THREE.Group();
+        group.name = 'hill-stall';
+        group.position.set(at.x, at.y, at.z);
+        group.rotation.y = p.heading - Math.PI / 2;
+        const ground = x => lane.at(s0 + x, a0, 0, {}).y - at.y;
+        const put = (mesh, x, y, z, rx = 0, ry = 0, rz = 0) => {
+            mesh.position.set(x, y, z);
+            mesh.rotation.set(rx, ry, rz);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            group.add(mesh);
+            return mesh;
+        };
+        const T = typeof HillTextures !== 'undefined' && typeof document !== 'undefined' && document.createElement ? HillTextures.all().wicker : null;
+        const willow = mat(0xa89a80, T ? { map: T.map, normalMap: T.normalMap } : {});
+        const boards = mat(0x6a5440), iron = mat(0x2a2826, { roughness: 0.6, metalness: 0.3 }), brass = mat(0xb08a4a, { roughness: 0.35, metalness: 0.7 });
+        const half = 0.9, deep = 0.38, high = Math.max(ground(-half), ground(half)) + 0.86;
+        // The top, level, and the trestles, each leg to the cobbles under it
+        put(box(half * 2, 0.05, deep * 2, boards), 0, high, 0);
+        for (const x of [-half + 0.12, half - 0.12]) {
+            for (const z of [-deep + 0.06, deep - 0.06]) {
+                const foot = ground(x), leg = high - foot;
+                put(box(0.06, leg, 0.06, boards), x, foot + leg / 2, z, z > 0 ? -0.08 : 0.08);
+            }
+            put(box(0.05, 0.05, deep * 2 - 0.1, boards), x, (high + ground(x)) / 2, 0);
+        }
+        const top = high + 0.025;
+        // The scales at the uphill end: an iron foot and pillar, a brass pan, a brass plate for the weights
+        put(box(0.3, 0.05, 0.16, iron), -half + 0.3, top + 0.025, 0.12);
+        put(new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.035, 0.16, 8), iron), -half + 0.2, top + 0.13, 0.12);
+        put(new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.09, 0.07, 16, 1, true), brass), -half + 0.2, top + 0.24, 0.12).material.side = THREE.DoubleSide;
+        put(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.015, 12), brass), -half + 0.42, top + 0.07, 0.12);
+        // Willow baskets of greens, cabbages and roots along the back
+        const basket = (x, z, r, h) => {
+            const b = put(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.85, h, 18, 1, true), willow), x, top + h / 2, z);
+            b.material.side = THREE.DoubleSide;
+            put(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.85, r * 0.85, 0.01, 18), willow), x, top + 0.005, z);
+            put(new THREE.Mesh(new THREE.TorusGeometry(r, 0.014, 6, 24), willow), x, top + h, z, Math.PI / 2);
+            return top + h;
+        };
+        const rand = HillLane.random(4271);
+        const greens = [0x5e7a3a, 0x6e8a44, 0x4e6a30], roots = [0xd8ccb0, 0xc8b898, 0xe0d4bc];
+        const fill = (x, z, r, rim, colours, size) => {
+            for (let i = 0; i < 7; i++) {
+                const a = i * 2.4, d = i === 0 ? 0 : r * 0.55;
+                const m = new THREE.Mesh(new THREE.IcosahedronGeometry(size * (0.85 + rand() * 0.3), 1), mat(colours[i % colours.length]));
+                put(m, x + Math.cos(a) * d, rim - size * 0.2 + rand() * size * 0.3, z + Math.sin(a) * d);
+            }
+        };
+        fill(-0.15, -0.16, 0.2, basket(-0.15, -0.16, 0.22, 0.16), greens, 0.085);
+        fill(0.32, -0.18, 0.17, basket(0.32, -0.18, 0.19, 0.14), roots, 0.055);
+        // A big basket tipped up against the back, its mouth to the lane
+        const tipped = put(new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.24, 0.34, 18, 1, true), willow), -0.62, top + 0.3, -0.24, -1.05);
+        tipped.material.side = THREE.DoubleSide;
+        // Carrots in a row along the front, a marrow beside them
+        const carrot = new THREE.ConeGeometry(0.022, 0.18, 6), orange = mat(0xd0722a);
+        for (let i = 0; i < 9; i++) put(new THREE.Mesh(carrot, orange), -0.25 + i * 0.05, top + 0.025, 0.27, 0, 0, Math.PI / 2 + (rand() - 0.5) * 0.3);
+        put(new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.24, 4, 10), mat(0x3e5a2a)), 0.35, top + 0.06, 0.2, 0, 0.3, Math.PI / 2);
+        // The bakery's loaves in a shallow willow tray at the downhill end
+        put(box(0.5, 0.06, 0.4, willow), 0.62, top + 0.03, 0.08);
+        const tin = new THREE.BoxGeometry(0.2, 0.1, 0.11), baked = mat(0x8c5a36);
+        for (let i = 0; i < 6; i++) put(new THREE.Mesh(tin, baked), 0.5 + (i % 3) * 0.12, top + 0.11, -0.02 + Math.floor(i / 3) * 0.2, 0, Math.PI / 2);
+        // Under it: a churn and a crate
+        const churn = put(new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.17, 0.55, 14), mat(0x8a8a86, { roughness: 0.5, metalness: 0.4 })), -0.4, ground(-0.4) + 0.275, 0.1);
+        put(new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.15, 0.12, 14), churn.material), -0.4, ground(-0.4) + 0.61, 0.1);
+        put(box(0.45, 0.28, 0.35, boards), 0.45, ground(0.45) + 0.14, -0.05);
+        // The sign: an iron post at the back uphill corner, its arm out over the stall, a blank board hung from it
+        const postX = -half + 0.05, postFoot = ground(postX), signTop = high + 1.75;
+        put(box(0.05, signTop - postFoot, 0.05, iron), postX, (signTop + postFoot) / 2, -deep - 0.04);
+        put(box(0.03, 0.03, 0.75, iron), postX, signTop - 0.05, -deep + 0.3);
+        put(box(0.02, 0.32, 0.02, iron), postX, signTop - 0.24, -deep + 0.08, 0.6);
+        const board = put(box(0.04, 0.62, 0.5, mat(0x3c2e24)), postX, signTop - 0.5, -deep + 0.4);
+        put(box(0.045, 0.56, 0.44, mat(0x4a3a2c)), postX, signTop - 0.5, -deep + 0.4);
+        for (const z of [-0.18, 0.18]) put(box(0.008, 0.12, 0.008, dark), postX, signTop - 0.13, -deep + 0.4 + z);
+        board.name = 'hill-stall-sign';
+        return group;
     }
 
     // Moves the drawing to the state
