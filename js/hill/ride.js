@@ -196,6 +196,9 @@ class HillRide {
         this.puff.visible = false;
         game.scene.add(this.puff);
         game.scene.add(this.rider.group);
+        // The loaves thrown out of the basket when he comes off
+        this.spill = typeof HillSpill !== 'undefined' ? new HillSpill(this.lane, this.rider) : null;
+        if (this.spill) game.scene.add(this.spill.group);
         game.graphics.fixColorSpaces();
         this.light();
         this.overlay();
@@ -279,6 +282,7 @@ class HillRide {
     restart() {
         this.bike.reset(this.lane.rule.startM, this.lane.rule.opening.startAcross);
         if (this.props) this.props.reset();
+        if (this.spill) this.spill.reset();
         if (this.loafShown) this.showLoaf(false);
         this.hold = { phase: 'hold', t: 0 };
         this.accumulated = 0;
@@ -433,6 +437,7 @@ class HillRide {
                 this.props.knock(this.bike, game.soundManager);
                 this.props.step(HillRide.STEP_S);
             }
+            if (this.spill) this.spill.step(this.bike, HillRide.STEP_S);
             this.accumulated -= HillRide.STEP_S;
         }
         const phase = this.updateEnding(dt);

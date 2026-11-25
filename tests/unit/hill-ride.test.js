@@ -674,6 +674,43 @@ describe('the boy on the bicycle', () => {
         expect(rider.legs.map(l => l.side).sort()).toEqual([-1, 1]);
     });
 
+    test('a fall throws the loaves out of the basket; they land on the lane, come to rest, and R puts them back', () => {
+        const HillSpill = new Function('THREE', 'HillLane', 'console', `${loadScript('hill/spill.js')}\nreturn HillSpill;`)(THREE, HillLane, console);
+        const where = new HillLane();
+        const b = new HillBicycle(where);
+        b.reset(120);
+        b.vehicle.speed = 8;
+        rider.update(b, where, 0);
+        const spill = new HillSpill(where, rider);
+        expect(spill.inBasket.length).toBeGreaterThan(0);
+        spill.step(b, DT);
+        expect(spill.spilt).toBe(false);
+        b.vehicle.crashed = true;
+        spill.step(b, DT);
+        expect(spill.spilt).toBe(true);
+        expect(spill.inBasket.every(o => !o.visible)).toBe(true);
+        for (let t = 0; t < 6; t += DT) spill.step(b, DT);
+        const at = {};
+        for (const loaf of spill.loaves) {
+            expect(loaf.mesh.visible).toBe(true);
+            expect(loaf.moving).toBe(false);
+            where.project(loaf.x, loaf.z, loaf.s, at);
+            expect(Math.abs(at.across)).toBeLessThan(where.rule.halfWidthM + where.rule.flagsM);
+            expect(loaf.y).toBeGreaterThanOrEqual(where.sample(at.s).y);
+            expect(loaf.y).toBeLessThan(where.sample(at.s).y + 0.3);
+            expect(at.s).toBeGreaterThan(120);
+        }
+        // A second fall with an empty basket throws nothing
+        b.vehicle.crashed = false;
+        spill.step(b, DT);
+        b.vehicle.crashed = true;
+        spill.step(b, DT);
+        expect(spill.loaves.some(l => l.moving)).toBe(false);
+        spill.reset();
+        expect(spill.loaves.every(l => !l.mesh.visible)).toBe(true);
+        expect(spill.inBasket.every(o => o.visible)).toBe(true);
+    });
+
     test('pedalling, each ankle is on its pedal, the leg keeps its length and nothing goes into the ground', () => {
         const hip = new THREE.Vector3(), knee = new THREE.Vector3(), ankle = new THREE.Vector3(), pedal = new THREE.Vector3();
         for (let k = 0; k < 12; k++) {

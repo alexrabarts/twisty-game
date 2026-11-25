@@ -659,3 +659,7 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - The band plays from the start: the ride sets the sound on unless the player has chosen Mute (`SoundManager.defaultTo`, not saved).
 - The lean is quicker (0.9 of a motorbike's) with a longer ease-in on the steer keys (1.9 times).
 - The boy keeps his feet on the pedals most of the time and puts his legs out only now and then.
+
+## The hill ride: the loaves spill in a fall
+
+- When the boy comes off, the six loaves fly out of the basket, land on the lane and lie there, the basket empty, until R (`HillSpill`). A test throws them in a fall on the real lane and checks that they rest on the lane, inside the house fronts, and that R puts them back.

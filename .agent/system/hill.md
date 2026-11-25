@@ -171,3 +171,7 @@ The ending (`HillLane.RULE.end`, `HillRide.updateEnding`) goes through these pha
 - `node tools/terrain-check.mjs hill-overlay --gpu --still <file>` draws the opening frame, the game's opening shot at the frame's shape, and the two at half each, with the frame's key points (yellow) and the game's (cyan), and gives the mean distance between them in pixels of an 857 px high frame.
 - `node tools/terrain-check.mjs hill-shots --gpu` takes the ride's pictures, each with its mean luminance, into `~/Library/Caches/twisty-world/hill-shots/`.
 - `node tools/terrain-check.mjs hill-compare --gpu --stills <dir>` makes side-by-side sheets of the reference stills (private) and the game from the matching shots, with the mean colour of the lit house faces in both. They go into `~/Library/Caches/twisty-world/hill-shots/compare/`.
+
+## The loaves spill
+
+When the boy comes off, the basket's loaves fly out (`js/hill/spill.js`, `HillSpill`): the model's loaves (the `loaf` material on the `basket` node) are hidden, and six loose loaves leave the basket with three quarters of the bicycle's speed, a lift of 1.6 to 2.8 m/s and a tumble. They bounce low off the cobbles, slide to rest on the lane's fall, and the house fronts turn them back. They lie where they fell, with the basket empty, until R puts them back. A second fall with an empty basket throws nothing. The throw is seeded, so it is the same for the same fall.
