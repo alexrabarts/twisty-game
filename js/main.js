@@ -836,6 +836,7 @@ class Game {
         }
         if (this.graphics) this.graphics.setQuality({ msaa: level.msaa, bloom: level.bloom });
         this.treeShare = level.treeShare;
+        this.treeNear = level.treeNear;
         if (this.environment && this.environment.isWorld) this.thinTrees(this.environment.sceneryGroup);
         if (reason !== 'start') console.log(`Quality: ${Quality.describe(index, reason === 'fixed')} (${reason})`);
         this.showQuality();
@@ -891,16 +892,11 @@ class Game {
         };
     }
 
-    // A world tile's trees, nearest the bike first in each mesh (Scenery.buildTile), drawn to the level's share: the
-    // far ones go first. Only what is drawn changes; a tree is never solid
+    // A world's trees drawn to the level's share, the far ones first, and the level's number of near trees
+    // (Scenery.rankTrees chooses which). Only what is drawn changes; a tree is never solid
     thinTrees(root) {
-        if (!root) return;
-        const share = this.treeShare === undefined ? 1 : this.treeShare;
-        root.traverse(o => {
-            if (!o.isInstancedMesh || !o.name.startsWith('trees:')) return;
-            if (o.userData.allTrees === undefined) o.userData.allTrees = o.count;
-            o.count = Math.ceil(o.userData.allTrees * share);
-        });
+        if (!root || !this.environment || !this.environment.scenery || !this.environment.scenery.setTrees) return;
+        this.environment.scenery.setTrees(this.treeShare === undefined ? 1 : this.treeShare, this.treeNear);
     }
 
     // The tuning panel's graphics row: Auto (the frame time) or one level fixed, to test a level by eye. A fixed level

@@ -159,6 +159,65 @@ describe('the tree and bush files', () => {
     });
 });
 
+// A world's trees (assets/trees/alpine.glb, tools/blender/tree_alpine.py): each species at three levels of detail,
+// in the budgets of tools/blender/tree_species.py, the mid level the same shape the legs draw, and the outline the
+// same at every level, so the game can swap one level for the next as the bike nears
+describe('the world\'s tree levels', () => {
+    const game = load();
+    const SPECIES = ['spruce', 'fir', 'pine', 'larch', 'beech', 'ash'];
+    const LEVELS = { near: 1400, mid: 220, far: 70 };
+    const LEGS = { spruce: 'conifer_spruce', fir: 'conifer_fir', pine: 'conifer_pine', beech: 'broadleaf_beech', ash: 'broadleaf_ash' };
+    let alpine, legs;
+
+    beforeAll(async () => {
+        alpine = await game.SceneAssets.loadModel('assets/trees/alpine.glb');
+        legs = { conifer: await game.SceneAssets.loadModel(game.TreeModels.FILES.conifer), broadleaf: await game.SceneAssets.loadModel(game.TreeModels.FILES.broadleaf) };
+    });
+
+    const geometryOf = name => {
+        const primitives = alpine.meshes.get(name);
+        expect({ name, found: !!primitives }).toEqual({ name, found: true });
+        expect(primitives).toHaveLength(1);
+        return primitives[0].geometry;
+    };
+
+    test('every species has its three levels, each in its budget, the near level the most detailed', () => {
+        for (const species of SPECIES) {
+            const counts = Object.fromEntries(Object.keys(LEVELS).map(level => [level, triangles(geometryOf(`${species}_${level}`))]));
+            for (const [level, most] of Object.entries(LEVELS)) expect({ species, level, over: counts[level] > most }).toEqual({ species, level, over: false });
+            expect(counts.near).toBeGreaterThan(counts.mid * 3);
+            expect(counts.mid).toBeGreaterThan(counts.far * 2);
+        }
+    });
+
+    test('the mid level is the shape the legs draw', () => {
+        for (const [species, name] of Object.entries(LEGS)) {
+            const leg = legs[name.split('_')[0]].meshes.get(name)[0].geometry;
+            expect(triangles(geometryOf(`${species}_mid`))).toBe(triangles(leg));
+        }
+    });
+
+    test('every level stands in the same outline: its height and its spread near the mid level\'s', () => {
+        for (const species of SPECIES) {
+            const box = level => { const g = geometryOf(`${species}_${level}`); g.computeBoundingBox(); return g.boundingBox; };
+            const spread = bb => Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z);
+            const mid = box('mid');
+            for (const level of ['near', 'far']) {
+                const b = box(level);
+                expect({ species, level, height: Math.abs(b.max.y / mid.max.y - 1) < 0.2 }).toEqual({ species, level, height: true });
+                expect({ species, level, spread: Math.abs(spread(b) / spread(mid) - 1) < 0.3 }).toEqual({ species, level, spread: true });
+            }
+        }
+    });
+
+    test('the file carries no texture and stays small', () => {
+        const bytes = readFileSync(new URL('assets/trees/alpine.glb', root));
+        const json = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString());
+        expect(json.images || []).toHaveLength(0);
+        expect(statSync(new URL('assets/trees/alpine.glb', root)).size).toBeLessThanOrEqual(300 * 1024);
+    });
+});
+
 describe.each([[STORM, 'storm-valley'], [VALLEY, 'valley-run'], [WINTER, 'winter-pass']])('dressing leg %i (%s)', (legIndex) => {
     const game = load();
     const env = build(game, legIndex);

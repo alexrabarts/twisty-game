@@ -220,11 +220,16 @@ export function modelStandIns(THREE, readFileSync, root) {
         geometry.translate((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
         return [{ geometry, material }];
     };
+    // A world's species at each of their levels (assets/trees/alpine.glb, Scenery.SPECIES), and the bushes at one
     const trees = [];
-    for (const [file, kind, names] of [['assets/trees/conifer.glb', 'conifer', ['conifer_spruce', 'conifer_fir', 'conifer_pine']], ['assets/trees/broadleaf.glb', 'broadleaf', ['broadleaf_oak', 'broadleaf_beech', 'broadleaf_ash']], ['assets/trees/bush.glb', 'bush', ['bush_round', 'bush_low']]]) {
-        const found = bounds(file);
-        for (const name of names) if (found.has(name)) trees.push({ kind, name, parts: part(found.get(name)) });
+    const alpine = bounds('assets/trees/alpine.glb');
+    for (const [kind, name, node, share, high] of [['conifer', 'conifer_spruce', 'spruce', 0.45, 0.3], ['conifer', 'conifer_larch', 'larch', 0.2, 0.45], ['conifer', 'conifer_pine', 'pine', 0.2, 0.15], ['conifer', 'conifer_fir', 'fir', 0.15, 0.1], ['broadleaf', 'broadleaf_beech', 'beech', 0.55, 0.55], ['broadleaf', 'broadleaf_ash', 'ash', 0.45, 0.45]]) {
+        if (!alpine.has(`${node}_mid`)) continue;
+        const lods = Object.fromEntries(['near', 'mid', 'far'].filter(level => alpine.has(`${node}_${level}`)).map(level => [level, part(alpine.get(`${node}_${level}`))]));
+        trees.push({ kind, name, share, high, parts: lods.mid, lods });
     }
+    const bushes = bounds('assets/trees/bush.glb');
+    for (const name of ['bush_round', 'bush_low']) if (bushes.has(name)) trees.push({ kind: 'bush', name, parts: part(bushes.get(name)) });
     const houses = [...bounds('assets/village/houses.glb')].filter(([name]) => name.startsWith('house_') && !name.includes(':')).sort((p, q) => p[0].localeCompare(q[0])).map(([name, b]) => ({ name, parts: part(b) }));
     // The landmark models (WorldEnvironment.load reads models.landmarks in place of loading them): asset -> {meshes}
     const assets = JSON.parse(readFileSync(new URL('tools/world/landmarks.json', root), 'utf8')).map(l => l.asset).filter(a => /\.glb$/.test(a));

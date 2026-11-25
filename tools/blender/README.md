@@ -101,8 +101,9 @@ Rules for a change to a car:
 | Script | Output | What it makes |
 |---|---|---|
 | `tree_conifer.py` | `trees/conifer.glb` | `conifer_spruce`, `conifer_fir`, `conifer_pine`, and each again under snow (`_snow`) for the winter leg. |
-| `tree_broadleaf.py` | `trees/broadleaf.glb` | `broadleaf_oak`, `broadleaf_beech`, `broadleaf_ash` (two crowns on a fork). |
+| `tree_broadleaf.py` | `trees/broadleaf.glb` | `broadleaf_oak`, `broadleaf_beech`, `broadleaf_ash` (two crowns on a fork), each crown a leaf clump to a lobe. |
 | `tree_bush.py` | `trees/bush.glb` | `bush_round`, `bush_low`, and each again under snow. |
+| `tree_alpine.py` | `trees/alpine.glb` | A world's species, `spruce`, `fir`, `pine`, `larch`, `beech` and `ash`, each at three levels: `<species>_near` (at most 1,400 triangles: the trunk to the leader, each branch a spray with a sawtooth edge, leaf clumps with sky between them), `<species>_mid` (the legs' shape, at most 220) and `<species>_far` (at most 70). |
 
 ## The hill ride's bicycle
 
@@ -125,6 +126,7 @@ Rules for a change to a plant:
 - A bush is modelled like the ball it replaces: centred on its origin, about a metre in radius, reaching 0.3 below it.
 - The vertex colours are the plant's own colours, written linear (16 bits a channel, as the exporter writes them). The game multiplies a tree by its instance tint and a bush by one of two tones (`BUSH_TONES`); the snow variants of a bush are not tinted.
 - A new shape needs its node name and its share in `SHAPES` in `js/treemodels.js`. A conifer needs its `_snow` twin.
+- A species is written once, in `tree_species.py`, from one layout (its heights, its spread, its lobes), and each level is made from that layout: the outline stays the same when the game swaps one level for the next. `tree_conifer.py` and `tree_broadleaf.py` write the mid level for the legs, `tree_alpine.py` all three for a world. A world's species needs its row in `Scenery.SPECIES` (`js/world/scenery.js`). `tests/unit/treemodels.test.js` holds each level's budget, that the mid level is the legs' shape, and that a level's height and spread stay within a fifth and three tenths of the mid level's.
 - Set `TWISTY_PREVIEW=<directory>` to render the plants of a file in a row after the export.
 - High-pass keeps the procedural trees (`KEPT` in `js/treemodels.js`): the frozen golden binds that leg's mesh count, triangle count and vertices.
 

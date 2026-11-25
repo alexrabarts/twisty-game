@@ -717,25 +717,122 @@ describe('Scenery', () => {
         const bike = { x: 100, z: 100 };
         const group = scenery.buildTile(tile, forest, [], bike);
         expect(group).not.toBeNull();
-        const count = group.children.filter(mesh => mesh.name.startsWith('trees:')).reduce((n, mesh) => n + mesh.count, 0);
-        expect(count).toBe(scenery.treeCount);
+        // The trees are drawn in the forest, across the tiles (Scenery.rankTrees)
+        const drawn = () => scenery.forest.children.filter(mesh => mesh.name.startsWith('trees:')).reduce((n, mesh) => n + mesh.count, 0);
+        expect(drawn()).toBe(scenery.treeCount);
+        expect(scenery.perTile.get('0,0').treeSites).toHaveLength(scenery.treeCount);
         expect(scenery.treeCount).toBeLessThanOrEqual(Scenery.TREES_PER_TILE);
         expect(scenery.triangles).toBeLessThanOrEqual(Scenery.TRIANGLE_CAP);
-        const shape = group.children[0].geometry;
+        const shape = scenery.forest.children[0].geometry;
         scenery.disposeTile('0,0');
         expect(scenery.treeCount).toBe(0);
         expect(scenery.triangles).toBe(0);
         expect(scenery.perTile.size).toBe(0);
+        expect(drawn()).toBe(0);
         // The shared geometry is still usable
         expect(shape.attributes.position.count).toBeGreaterThan(0);
     });
 
-    test('the tree cap holds across tiles', () => {
+    test('the tree cap holds across tiles, and the trees drawn are the nearest of the window', () => {
         const scenery = new Scenery(ground, data);
-        scenery.treeCount = Scenery.TREE_CAP - 10;
-        const group = scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
-        expect(scenery.treeCount).toBeLessThanOrEqual(Scenery.TREE_CAP);
-        expect(group.children.filter(mesh => mesh.name.startsWith('trees:')).reduce((n, mesh) => n + mesh.count, 0)).toBeLessThanOrEqual(10);
+        const cap = Object.getOwnPropertyDescriptor(Scenery, 'TREE_CAP');
+        Object.defineProperty(Scenery, 'TREE_CAP', { get: () => 10, configurable: true });
+        try {
+            const bike = { x: 100, z: 100 };
+            scenery.buildTile(tile, forest, [], bike);
+            expect(scenery.treeCount).toBe(10);
+            const sites = scenery.perTile.get('0,0').treeSites;
+            expect(sites.length).toBeGreaterThan(10);
+            const nearest = sites.map(q => Math.hypot(q.x - bike.x, q.z - bike.z)).sort((a, b) => a - b)[9];
+            const m = new THREE.Matrix4();
+            for (const mesh of scenery.forest.children) for (let i = 0; i < mesh.count; i++) {
+                mesh.getMatrixAt(i, m);
+                expect(Math.hypot(m.elements[12] - bike.x, m.elements[14] - bike.z)).toBeLessThanOrEqual(nearest + 1e-3);
+            }
+        } finally {
+            Object.defineProperty(Scenery, 'TREE_CAP', cap);
+        }
+    });
+
+    // Modelled shapes at three levels, each level its own number of triangles: near 300, mid 60, far 12
+    const levelled = () => {
+        const material = new THREE.MeshBasicMaterial();
+        const part = (n) => {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 9).map((_, i) => (i % 3 === 1 ? (i % 9) / 3 + 1 : (i % 9) * 0.1)), 3));
+            return [{ geometry, material }];
+        };
+        const lods = { near: part(300), mid: part(60), far: part(12) };
+        return { trees: [{ kind: 'conifer', name: 'conifer_test', share: 1, parts: lods.mid, lods }, { kind: 'broadleaf', name: 'broadleaf_test', share: 1, parts: lods.mid, lods }, { kind: 'bush', name: 'bush_test', parts: part(8) }], houses: [] };
+    };
+    const levelsDrawn = (scenery) => {
+        const out = { near: 0, mid: 0, far: 0 };
+        for (const mesh of scenery.forest.children) out[mesh.userData.treeLevel] += mesh.count;
+        return out;
+    };
+
+    test('the trees nearest the bike are drawn at the near level, the next at the mid level, the rest far', () => {
+        const scenery = new Scenery(ground, data, levelled());
+        const bike = { x: 100, z: 100 };
+        scenery.buildTile(tile, forest, [], bike);
+        const sites = scenery.perTile.get('0,0').treeSites;
+        expect(sites.length).toBeGreaterThan(100);
+        const counts = levelsDrawn(scenery);
+        expect(counts.near + counts.mid + counts.far).toBe(sites.length);
+        const within = sites.filter(q => Math.hypot(q.x - bike.x, q.z - bike.z) <= Scenery.TREE_NEAR_M).length;
+        expect(within).toBeGreaterThan(20);
+        expect(counts.near).toBe(Math.min(Scenery.TREE_NEAR_CAP, within));
+        expect(counts).toEqual(scenery.treeLevelCounts);
+        // Each tree counts in the cap at the level it is drawn at
+        expect(scenery.triangles).toBe(counts.near * 300 + counts.mid * 60 + counts.far * 12);
+        expect(scenery.treeTriangles).toBe(scenery.triangles);
+        // The near ones are the nearest
+        const near = scenery.forest.children.filter(m => m.userData.treeLevel === 'near');
+        const m = new THREE.Matrix4();
+        const nearest = sites.map(q => Math.hypot(q.x - bike.x, q.z - bike.z)).sort((a, b) => a - b);
+        for (const mesh of near) for (let i = 0; i < mesh.count; i++) {
+            mesh.getMatrixAt(i, m);
+            expect(Math.hypot(m.elements[12] - bike.x, m.elements[14] - bike.z)).toBeLessThanOrEqual(nearest[counts.near - 1] + 1e-3);
+        }
+        // Each tree its own tint, inside 1 in every channel
+        expect(near[0].instanceColor).toBeTruthy();
+    });
+
+    test('the bike moving on chooses again, and the quality level draws fewer near trees and a share of the rest', () => {
+        const scenery = new Scenery(ground, data, levelled());
+        scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
+        const before = scenery.forest.children.filter(m => m.userData.treeLevel === 'near').map(m => Array.from(m.instanceMatrix.array.slice(0, m.count * 16))).flat();
+        scenery.rankTrees({ x: 100, z: 100 + Scenery.TREE_RANK_M / 2 });
+        expect(scenery.treeBike.z).toBe(100);
+        scenery.rankTrees({ x: 100, z: 220 });
+        const after = scenery.forest.children.filter(m => m.userData.treeLevel === 'near').map(m => Array.from(m.instanceMatrix.array.slice(0, m.count * 16))).flat();
+        expect(after).not.toEqual(before);
+        const all = scenery.treeCount;
+        scenery.setTrees(0.4, 0);
+        const counts = levelsDrawn(scenery);
+        expect(counts.near).toBe(0);
+        expect(counts.near + counts.mid + counts.far).toBe(Math.ceil(all * 0.4));
+    });
+
+    test('a tree is moved up a level only while the triangle cap has room', () => {
+        const scenery = new Scenery(ground, data, levelled());
+        scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
+        const all = scenery.treeCount;
+        // (as if the houses had taken all but 3 000 of the cap)
+        scenery.triangles = scenery.treeTriangles + Scenery.TRIANGLE_CAP - 3000;
+        scenery.rankTrees({ x: 100, z: 100 }, true);
+        const counts = levelsDrawn(scenery);
+        expect(scenery.triangles).toBeLessThanOrEqual(Scenery.TRIANGLE_CAP);
+        expect(scenery.treeTriangles).toBe(counts.near * 300 + counts.mid * 60 + counts.far * 12);
+        expect(scenery.treeTriangles).toBeLessThanOrEqual(3000);
+        expect(scenery.treeCount).toBeLessThan(all);
+    });
+
+    test('each tree has its own girth and tint, and its tint never lifts a colour', () => {
+        const sites = new Scenery(ground, data).treeSites(tile, forest);
+        expect(new Set(sites.map(s => s.width.toFixed(3))).size).toBeGreaterThan(20);
+        expect(new Set(sites.map(s => s.tint.map(c => c.toFixed(3)).join())).size).toBeGreaterThan(20);
+        for (const s of sites) for (const c of s.tint) { expect(c).toBeLessThanOrEqual(1); expect(c).toBeGreaterThan(0.7); }
     });
 
     test('houses stand on open ground within reach, nearest first, capped by their triangles', () => {

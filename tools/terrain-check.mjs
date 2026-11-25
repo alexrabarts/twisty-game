@@ -7659,6 +7659,123 @@ WORLD['world-ground-flip'] = async (page) => {
 // render); each is the median of --frames frames. --measure turns each part off or down by itself against the full
 // frame (the order of the ladder comes from it); without it each level is set and timed, and --out <dir> saves its picture.
 //   node tools/terrain-check.mjs world-quality --world tremola --gpu [--phone] [--throttle N] [--measure] [--at s] [--frames N] [--out <dir>]
+// world-tree-shots: pictures of a world's trees, the frame alone. At each station (--at s,s, or by default the three
+// stations with the most trees within 45 m of the ride, 400 m apart at the least) the chase view with the bike
+// standing, a close view of the nearest tree (12 m from it, at a rider's eye) and a middle view of the densest group 60
+// to 110 m out, with the counts of the window (countScene) in index.json. The views are chosen from where the trees
+// stand, not from their shapes, so a change of shape keeps the same views
+//   node tools/terrain-check.mjs world-tree-shots --world tremola --gpu --desk [--at s,s] [--out <dir>] [--tag T]
+const TREE_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/tree-shots');
+WORLD_PROBES.push('world-tree-shots');
+WORLD['world-tree-shots'] = async (page) => {
+    const out = option('out') || TREE_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'trees';
+    await page.addStyleTag({ content: 'body * { visibility: hidden !important; } canvas { visibility: visible !important; }' });
+    const chosen = option('at') ? option('at').split(',').map(Number) : await page.evaluate(treeStations, placeAt.toString(), treeFeet.toString());
+    const index = [];
+    for (const s of chosen) {
+        const views = await page.evaluate(treeViews, placeAt.toString(), countScene.toString(), treeFeet.toString(), s);
+        const entry = { s, counts: views.counts, trees: views.trees, views: {} };
+        for (const [name, view] of Object.entries(views.views)) {
+            const file = join(out, `${tag}-s${s}-${name}.png`);
+            writeFileSync(file, Buffer.from(view.png.split(',')[1], 'base64'));
+            entry.views[name] = { file, eye: view.eye, at: view.at };
+        }
+        index.push(entry);
+    }
+    writeFileSync(join(out, `${tag}-index.json`), JSON.stringify(index, null, 1));
+    return { out, index: index.map(e => ({ s: e.s, counts: e.counts, trees: e.trees })) };
+};
+
+// In the page: every drawn tree's foot and scale, from the instanced meshes named trees:* (not the bushes)
+function treeFeet() {
+    const feet = [];
+    const m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), k = new THREE.Vector3();
+    const seen = new Set();
+    game.environment.group.traverse(o => {
+        if (!o.isInstancedMesh || !o.name.startsWith('trees:') || o.name.includes('bush')) return;
+        o.updateMatrixWorld(true);
+        for (let i = 0; i < o.count; i++) {
+            o.getMatrixAt(i, m);
+            m.premultiply(o.matrixWorld).decompose(p, q, k);
+            const key = `${p.x.toFixed(2)},${p.z.toFixed(2)}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            feet.push({ x: p.x, y: p.y, z: p.z, scale: k.y });
+        }
+    });
+    return feet;
+}
+
+// In the page: the three stations with the most trees within 45 m of the ride, 400 m apart at the least
+async function treeStations(placeSource, feetSource) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const feetOf = new Function(`return (${feetSource})`)();
+    const route = game.environment.route;
+    const scored = [];
+    for (let s = 200; s < route.length - 200; s += 400) {
+        await placeAt(s);
+        const feet = feetOf();
+        for (let t = s - 200; t < s + 200; t += 50) {
+            const p = route.sample(t, {});
+            scored.push({ s: t, n: feet.filter(f => Math.hypot(f.x - p.x, f.z - p.z) < 45).length });
+        }
+    }
+    scored.sort((a, b) => b.n - a.n || a.s - b.s);
+    const picked = [];
+    for (const c of scored) {
+        if (c.n === 0 || picked.length >= 3) break;
+        if (picked.every(s => Math.abs(s - c.s) >= 400)) picked.push(c.s);
+    }
+    return picked.sort((a, b) => a - b);
+}
+
+// In the page: the chase, close and middle views at station s
+async function treeViews(placeSource, countSource, feetSource, s) {
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    const count = new Function(`return (${countSource})`)();
+    const feetOf = new Function(`return (${feetSource})`)();
+    const env = game.environment, route = env.route, v = game.vehicle;
+    game.cameraMode = 2;
+    // (twice: a tile's scenery waits for the side roads round it, which the first put-down only asks for)
+    await placeAt(s);
+    await placeAt(s);
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    v.speed = 0;
+    for (let i = 0; i < 90; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const shot = () => game.graphics.renderer.domElement.toDataURL('image/png');
+    const views = { chase: { png: shot() } };
+    const counts = count();
+    const p = route.sample(s, {});
+    const feet = feetOf();
+    const near = feet.map(f => ({ f, d: Math.hypot(f.x - p.x, f.z - p.z) })).filter(e => e.d > 6 && e.d < 60).sort((a, b) => a.d - b.d)[0];
+    const look = (eye, at, name) => {
+        game.camera.position.copy(eye);
+        game.camera.lookAt(at);
+        game.camera.updateMatrixWorld(true);
+        game.graphics.render(game.scene, game.camera);
+        views[name] = { png: shot(), eye: [eye.x, eye.y, eye.z].map(n => Math.round(n * 10) / 10), at: [at.x, at.y, at.z].map(n => Math.round(n * 10) / 10) };
+    };
+    const shown = v.group ? v.group.visible : null;
+    if (v.group) v.group.visible = false;
+    if (near) {
+        const f = near.f, dx = p.x - f.x, dz = p.z - f.z, d = Math.hypot(dx, dz);
+        const ex = f.x + dx / d * 12, ez = f.z + dz / d * 12;
+        const ground = env.ground.tileHeight(ex, ez);
+        const ey = Math.max(ground === null ? p.y : ground, p.y) + 1.6;
+        look(new THREE.Vector3(ex, ey, ez), new THREE.Vector3(f.x, f.y + 4.2 * f.scale, f.z), 'close');
+    }
+    const ring = feet.filter(f => { const d = Math.hypot(f.x - p.x, f.z - p.z); return d > 60 && d < 110; });
+    const dense = ring.map(f => ({ f, n: ring.filter(g => Math.hypot(g.x - f.x, g.z - f.z) < 25).length })).sort((a, b) => b.n - a.n)[0];
+    if (dense) look(new THREE.Vector3(p.x, p.y + 1.6, p.z), new THREE.Vector3(dense.f.x, dense.f.y + 3, dense.f.z), 'middle');
+    if (v.group) v.group.visible = shown;
+    return { counts, trees: feet.length, views };
+}
+
 const QUALITY_AT_SHARE = 0.1;
 const QUALITY_THROTTLE = 4;
 const QUALITY_PHONE = { width: 390, height: 844, deviceScaleFactor: 3, isMobile: true, hasTouch: true };

@@ -6,25 +6,62 @@ The quality ladder is in `js/quality.js`. It has one table of graphics levels, `
 
 The lowest level is index 0. Full is the game as it was drawn before the ladder. The two levels over it add only the dearer effects of `js/effects.js` (see "The effects on the ladder").
 
-| Level | `pixelRatio` | `shadowMap` | `msaa` | `bloom` | `treeShare` | `effectMs` |
-|---|---|---|---|---|---|---|
-| 0 Lowest | 0.75 | 0 (none) | 0 | off | 0.4 | 0.2 |
-| 1 Low | 1 | 0 (none) | 0 | on | 0.6 | 0.2 |
-| 2 Medium | 1.25 | 1024 | 0 | on | 0.8 | 0.2 |
-| 3 High | 1.5 | 2048 | 4 | on | 1 | 0.2 |
-| 4 Full | 2 | 2048 | 4 | on | 1 | 0.4 |
-| 5 Rich | 2 | 2048 | 4 | on | 1 | 0.7 |
-| 6 Ultra | 2 | 2048 | 4 | on | 1 | 99 |
+| Level | `pixelRatio` | `shadowMap` | `msaa` | `bloom` | `treeShare` | `treeNear` | `effectMs` |
+|---|---|---|---|---|---|---|---|
+| 0 Lowest | 0.75 | 0 (none) | 0 | off | 0.4 | 0 | 0.2 |
+| 1 Low | 1 | 0 (none) | 0 | on | 0.6 | 0 | 0.2 |
+| 2 Medium | 1.25 | 1024 | 0 | on | 0.8 | 16 | 0.2 |
+| 3 High | 1.5 | 2048 | 4 | on | 1 | 32 | 0.2 |
+| 4 Full | 2 | 2048 | 4 | on | 1 | 48 | 0.4 |
+| 5 Rich | 2 | 2048 | 4 | on | 1 | 48 | 0.7 |
+| 6 Ultra | 2 | 2048 | 4 | on | 1 | 48 | 99 |
 
 - `pixelRatio` is a cap. The game never draws more device pixels than the screen has.
 - `shadowMap` is the size of the sun's shadow map. 0 turns the shadows off. Every material compiles again once at that change.
 - `msaa` is the sample count of `Graphics.sceneTarget`. A change makes the target again on the next frame (`Graphics.setQuality`).
 - `bloom` off skips the five bloom passes. The composite then adds no bloom.
-- `treeShare` is the share of each world tile's trees that the game draws. Each tree mesh is in order from the bike (`Scenery.buildTile`), so the far trees go first. `Game.thinTrees` changes only the instance count. A tree is never solid. A classic leg has its own trees and does not use it.
+- `treeShare` is the share of a world window's trees that the game draws. `Scenery.rankTrees` puts the trees in order from the bike, so the far trees go first. `Game.thinTrees` gives the share to the scenery (`Scenery.setTrees`). A tree is never solid. A classic leg has its own trees and does not use it.
+- `treeNear` is the most trees of a world window that the game draws at the near level of detail (see "The trees' levels of detail"). Low and Lowest draw none: their nearest trees are at the mid level, the shapes the legs draw.
 - `effectMs` is the most GPU time (ms, as measured) one effect may cost under the Auto preset. An effect dearer than it is held at a cheaper level, or off (`Effects.resolve`). A fixed preset does not read it.
 - `Quality.FIELDS` holds the permitted values. A lower level never has more of a setting than a higher level. `tests/unit/quality.test.js` holds both rules.
 
 To add a setting, add a column to every level and a row to `Quality.FIELDS`, then read it in `Game.applyQuality`. Keep the Full level equal to the game before the change.
+
+## The trees' levels of detail
+
+A world draws each species of tree (`Scenery.SPECIES`: spruce, larch, pine, fir, beech and ash) at three levels from `assets/trees/alpine.glb` (`tools/blender/tree_alpine.py`, `tree_species.py`):
+
+| Level | Triangles | What it has | Drawn for |
+|---|---|---|---|
+| near | 750 to 1 270 | the trunk to the leader, each branch a spray with a sawtooth edge, leaf clumps with sky between them | the `treeNear` nearest trees within 140 m (`TREE_NEAR_M`) |
+| mid | 164 to 212 | skirts of boughs, or one leaf clump to a lobe: the shapes the legs draw | the next 200 times the share within 420 m (`TREE_MID_CAP`, `TREE_MID_M`) |
+| far | 44 to 66 | three notched skirts, or three clumps on the trunk | the rest |
+
+- One instanced mesh for each part of each shape at each level holds the window's trees (`Scenery.forest`, `trees:<shape>:<level>`). Before, each tile had a mesh for each shape. The window thus has fewer meshes and draw calls.
+- `Scenery.rankTrees` chooses again when a tile comes or goes and for every 8 m the bike moves. It draws the nearest trees first. At their far level they share the triangle cap (`TRIANGLE_CAP`) with the houses and the boulders, after room for 16 near trees (`TREE_NEAR_KEPT`). A tree moves up a level only while the cap has room for it. So the window never holds more than the cap.
+- Each tree has its own girth (0.88 to 1.12 of its height's width) and its own tint (`Scenery.treeTint`: 0.8 to 1 of its colours, toward blue or yellow). The tint is never over 1 in a channel, so no tree goes past its kind's caps.
+- The near level is drawn darker against the palette (`Scenery.LEVEL_SHADE`). Its branches look up more than the mid level's skirts and the sky lights them more. At the palette's middle a near spruce stood lighter and yellower than the same tree one level further off.
+- The larch has its own palette (`Vegetation.PALETTE.larch`), a lighter and yellower green. Over 1 650 m (`LARCH_FROM_M`) it takes a larger share of the conifers.
+- Before the levels, a tile took its trees when it was built, at about 200 triangles each, until the caps were full. A tile built while the far tiles of the last window held the caps had no trees. Now every tile keeps its tree sites and the rank chooses over the window, so the nearest trees are always drawn.
+
+Measured before and after on the same machine (Apple M-series GPU, the frame time as `world-quality` reads it, `world-budget --every 1000`):
+
+| Measure | Before | After |
+|---|---|---|
+| Tremola, `world-budget` peak: triangles, instances, meshes | 469 783, 873, 685 | 458 375, 1 239, 673 |
+| Gotthard leg, `world-budget` peak: triangles, instances, meshes | 448 971, 1 130, 605 | 448 289, 1 314, 596 |
+| Trees drawn in a window, at the most (Tremola, Gotthard leg) | 529, 872 | 900, 900 |
+| 2880 x 1800 at s 1319 (`--desk --measure`): frame, GPU | 14.8 ms, 10.2 ms | 13.4 ms, 9.7 ms |
+| 960 x 540 at s 1319 (`--measure`): frame, GPU | 9.2 ms, 4.7 ms | 8.1 ms, 4.5 ms |
+| Phone (`--phone`, two runs): Low frame | 11.7 and 9.0 ms | 10.9 and 9.5 ms |
+| Phone (`--phone`, two runs): Lowest frame | 10.5 and 8.8 ms | 9.6 and 9.1 ms |
+
+- The quality level was held at its start (Ultra on the desk) for every count.
+- The Tremola is still over 450 000 triangles at km 2 and km 4. It was over by more before the change. The houses and the roads hold most of it there.
+- A tree costs about 0.1 ms or less of GPU time to draw at s 1319 in each run (`trees-none`). The runs drift by more than that.
+- On a phone, Low and Lowest draw no near trees, and their far trees are cheaper than before. The frame time at each level stays inside the runs' drift.
+
+`node tools/terrain-check.mjs world-tree-shots --world tremola --gpu --desk [--at s,s] [--out <dir>]` takes the chase view, a close view of the nearest tree and a middle view of the densest group 60 to 110 m out, at each station, with the window's counts. `tests/unit/treemodels.test.js` holds the levels' budgets and outlines, `tests/unit/world-meshes.test.js` the rank.
 
 ## The effects on the ladder
 

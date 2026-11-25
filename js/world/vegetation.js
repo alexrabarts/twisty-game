@@ -19,10 +19,12 @@
 //
 // Colours are sRGB, 0 to 1, as everywhere in the game; the caps are HSV of those.
 class Vegetation {
-    // Each kind's foliage and wood
+    // Each kind's foliage and wood, and a species' own where it differs from its kind (Scenery.SPECIES `palette`): the
+    // larch's soft needles are a lighter, yellower green than the spruce's in the photos of the upper Leventina
     static get PALETTE() {
         return {
             conifer: { foliage: [0.22, 0.29, 0.26], wood: [0.26, 0.22, 0.18] },
+            larch: { foliage: [0.27, 0.33, 0.24], wood: [0.28, 0.22, 0.17] },
             broadleaf: { foliage: [0.28, 0.34, 0.25], wood: [0.29, 0.24, 0.19] },
             bush: { foliage: [0.26, 0.31, 0.23], wood: [0.27, 0.23, 0.18] }
         };
@@ -74,18 +76,19 @@ class Vegetation {
     static toLinear(c) { return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
     static toSrgb(c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055; }
 
-    // The colour of a part of a kind (foliage or wood) at a shading (1 the palette's own), sRGB, inside the caps
-    static colour(kind, part, shade = 1) {
+    // The colour of a part of a kind (foliage or wood) at a shading (1 the palette's own), sRGB, inside the kind's caps.
+    // `palette` names a species' own palette (Vegetation.PALETTE), the kind's when it is not given
+    static colour(kind, part, shade = 1, palette = kind) {
         const [lo, hi] = Vegetation.SHADE;
         const k = Math.min(hi, Math.max(lo, shade));
         // The shading scales light, so it works in linear
-        const rgb = Vegetation.PALETTE[kind][part].map(c => Vegetation.toSrgb(Vegetation.toLinear(c) * k));
+        const rgb = Vegetation.PALETTE[palette || kind][part].map(c => Vegetation.toSrgb(Vegetation.toLinear(c) * k));
         return Vegetation.capped(kind, rgb);
     }
 
     // A shape's vertex colours (linear, as glTF stores them) in the world's palette: a new colour attribute, linear
     // 16-bit shares, so Graphics.fixColorSpaces leaves it as it is. Wood is a vertex whose green does not lead.
-    static recolour(geometry, kind) {
+    static recolour(geometry, kind, palette = kind, shade = 1) {
         const stored = geometry.attributes.color;
         const n = geometry.attributes.position.count;
         const out = new Uint16Array(n * 3);
@@ -107,7 +110,7 @@ class Vegetation {
         for (let i = 0; i < n; i++) {
             const c = read(i);
             const part = wood(c) ? 'wood' : 'foliage';
-            const rgb = Vegetation.colour(kind, part, lum(c) / mid[part]);
+            const rgb = Vegetation.colour(kind, part, lum(c) / mid[part] * shade, palette);
             for (let k = 0; k < 3; k++) out[i * 3 + k] = Math.round(Math.min(1, Vegetation.toLinear(rgb[k])) * 65535);
         }
         const copy = geometry.clone();
@@ -142,8 +145,9 @@ class Vegetation {
         return Vegetation.plains[kind];
     }
 
-    // A modelled shape's parts as a world draws them: each part's geometry recoloured, each drawn with its kind's material
-    static shape(parts, kind) {
-        return parts.map(part => ({ geometry: Vegetation.recolour(part.geometry, kind), material: Vegetation.material(kind) }));
+    // A modelled shape's parts as a world draws them: each part's geometry recoloured (in a species' own palette where
+    // it has one, at `shade` of its middle: Scenery.LEVEL_SHADE), each drawn with its kind's material
+    static shape(parts, kind, palette = kind, shade = 1) {
+        return parts.map(part => ({ geometry: Vegetation.recolour(part.geometry, kind, palette, shade), material: Vegetation.material(kind) }));
     }
 }

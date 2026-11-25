@@ -10,7 +10,8 @@
 //   shadowMap    the size of the sun's shadow map in texels, 0 for no shadows
 //   msaa         the samples of the HDR scene target (Graphics.sceneTarget), 0 for none
 //   bloom        whether the bloom passes run (the glare round the sun and bright paint)
-//   treeShare    the share of each tile's trees drawn in a world ride (the rest are not drawn; a leg has its own trees)
+//   treeShare    the share of a world window's trees drawn, the far ones first (the rest are not drawn; a leg has its own trees)
+//   treeNear     the most trees of a world window drawn at the near level, the nearest (js/world/scenery.js Scenery.rankTrees)
 //   effectMs     under the Auto preset, the most GPU time one effect of js/effects.js may cost (Effects.resolve): an
 //                effect dearer than it is held at a cheaper level or off
 const Quality = {
@@ -19,13 +20,13 @@ const Quality = {
     // as measured (world-quality --measure): the dearest effects first, then the pixel ratio, then the shadows and the
     // samples, then the trees and the bloom
     LEVELS: [
-        { id: 'lowest', label: 'Lowest', pixelRatio: 0.75, shadowMap: 0, msaa: 0, bloom: false, treeShare: 0.4, effectMs: 0.2 },
-        { id: 'low', label: 'Low', pixelRatio: 1, shadowMap: 0, msaa: 0, bloom: true, treeShare: 0.6, effectMs: 0.2 },
-        { id: 'medium', label: 'Medium', pixelRatio: 1.25, shadowMap: 1024, msaa: 0, bloom: true, treeShare: 0.8, effectMs: 0.2 },
-        { id: 'high', label: 'High', pixelRatio: 1.5, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 0.2 },
-        { id: 'full', label: 'Full', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 0.4 },
-        { id: 'rich', label: 'Rich', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 0.7 },
-        { id: 'ultra', label: 'Ultra', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, effectMs: 99 }
+        { id: 'lowest', label: 'Lowest', pixelRatio: 0.75, shadowMap: 0, msaa: 0, bloom: false, treeShare: 0.4, treeNear: 0, effectMs: 0.2 },
+        { id: 'low', label: 'Low', pixelRatio: 1, shadowMap: 0, msaa: 0, bloom: true, treeShare: 0.6, treeNear: 0, effectMs: 0.2 },
+        { id: 'medium', label: 'Medium', pixelRatio: 1.25, shadowMap: 1024, msaa: 0, bloom: true, treeShare: 0.8, treeNear: 16, effectMs: 0.2 },
+        { id: 'high', label: 'High', pixelRatio: 1.5, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, treeNear: 32, effectMs: 0.2 },
+        { id: 'full', label: 'Full', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, treeNear: 48, effectMs: 0.4 },
+        { id: 'rich', label: 'Rich', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, treeNear: 48, effectMs: 0.7 },
+        { id: 'ultra', label: 'Ultra', pixelRatio: 2, shadowMap: 2048, msaa: 4, bloom: true, treeShare: 1, treeNear: 48, effectMs: 99 }
     ],
 
     // What each setting may be. `values`: the only ones allowed; `min`/`max`: a number in the range; `type`: a boolean.
@@ -36,6 +37,7 @@ const Quality = {
         msaa: { values: [0, 2, 4], better: 'more' },
         bloom: { type: 'boolean', better: 'more' },
         treeShare: { min: 0.1, max: 1, better: 'more' },
+        treeNear: { min: 0, max: 48, better: 'more' },
         effectMs: { min: 0, max: 99, better: 'more' }
     },
 

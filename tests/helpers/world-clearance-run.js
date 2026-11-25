@@ -26,6 +26,13 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
     env.scenery.buildTile = (tile, ...rest) => {
         const group = build(tile, ...rest);
         if (group) take(group, tile.key);
+        // The trees are drawn in the forest across the tiles (Scenery.rankTrees): each of the tile's, at its widest level
+        const held = env.scenery.perTile.get(tile.key);
+        if (held && held.treeSites && held.treeSites.length) {
+            const trees = game.Scenery.treeMeshes(held.treeSites, 'near');
+            take(trees, tile.key);
+            trees.traverse(o => { if (o.isInstancedMesh) o.dispose(); });
+        }
         return group;
     };
     for (let s = env.startS; s <= env.endS; s += stepM) {

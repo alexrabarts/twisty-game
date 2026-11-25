@@ -126,8 +126,8 @@ class RoadClearance {
 }
 
 // Scenery: what stands on the land of a world, all instanced, none of it random.
-//   trees       from the land cover classes (forest, open forest, grass), with the
-//               modelled shapes of js/treemodels.js's files when they are loaded
+//   trees       from the land cover classes (forest, open forest, grass), each species at three levels of detail
+//               from assets/trees/alpine.glb when it is loaded (Scenery.rankTrees)
 //   buildings   from buildings.bin, in the modelled houses of assets/village/houses.glb
 //   landmarks   the boxes of landmarks.json beside the road
 //   stones      rows of granite marker stones on the edge of the ride where the land drops sharply from it
@@ -139,11 +139,44 @@ class RoadClearance {
 // (RoadClearance: the ride and every side road, each sample's own width plus the verge), and a
 // tile's scenery waits for the side roads round it (WorldEnvironment.buildScenery).
 // Counts are capped against the window budget of 1 400 instances,
-// nearest first (tiles are built nearest first): TREE_CAP trees, BUILDING_CAP
-// instances of house parts, STONE_CAP marker stones (the nearest to the bike, chosen
-// again as it moves: Scenery.rankStones).
+// nearest first (tiles are built nearest first): BUILDING_CAP instances of house parts,
+// TREE_CAP trees and STONE_CAP marker stones (the nearest to the bike, chosen
+// again as it moves: Scenery.rankTrees, Scenery.rankStones).
 class Scenery {
-    static get TREE_CAP() { return 1000; }
+    // (1000 until the far trees were drawn at their far level: at about 60 triangles a tree the triangle cap no longer
+    // holds the count, and the Gotthard leg stood at 1 414 instances at km 4 with 1000 trees, over the window's 1 400)
+    static get TREE_CAP() { return 900; }
+    // The levels a world draws its trees at (tools/blender/tree_species.py): `near` for the trees nearest the bike
+    // (the trunk to the top, each branch, the foliage in clumps), `mid` past them (the shapes the legs draw) and `far`
+    // for the rest (a few faces in the same outline). Scenery.rankTrees chooses again for every TREE_RANK_M the bike
+    // moves: of the trees drawn, the TREE_NEAR_CAP nearest within TREE_NEAR_M are near (the quality level may take
+    // fewer, Quality treeNear), the TREE_MID_CAP after them within TREE_MID_M are mid, while the triangle cap has room
+    static get TREE_LEVELS() { return ['near', 'mid', 'far']; }
+    static get TREE_NEAR_CAP() { return 48; }
+    static get TREE_NEAR_M() { return 140; }
+    static get TREE_MID_CAP() { return 200; }
+    static get TREE_MID_M() { return 420; }
+    static get TREE_RANK_M() { return 8; }
+    // The near trees the triangle cap keeps room for when a tile is built: the houses and the far trees take the rest
+    static get TREE_NEAR_KEPT() { return 16; }
+    // The species of a world's trees: its kind, the node of each level in assets/trees/alpine.glb (`<node>_<level>`),
+    // its palette (js/world/vegetation.js) and its share of its kind's trees. Over LARCH_FROM_M the larch's share is
+    // `high`: the larch takes over the upper slopes of the Gotthard, the spruce the valley floors
+    static get SPECIES() {
+        return [
+            { kind: 'conifer', name: 'conifer_spruce', node: 'spruce', share: 0.45, high: 0.3 },
+            { kind: 'conifer', name: 'conifer_larch', node: 'larch', palette: 'larch', share: 0.2, high: 0.45 },
+            { kind: 'conifer', name: 'conifer_pine', node: 'pine', share: 0.2, high: 0.15 },
+            { kind: 'conifer', name: 'conifer_fir', node: 'fir', share: 0.15, high: 0.1 },
+            { kind: 'broadleaf', name: 'broadleaf_beech', node: 'beech', share: 0.55, high: 0.55 },
+            { kind: 'broadleaf', name: 'broadleaf_ash', node: 'ash', share: 0.45, high: 0.45 }
+        ];
+    }
+    static get LARCH_FROM_M() { return 1650; }
+    // How light a level's colours are against its kind's palette (Vegetation.shape). The near level's branches and leaf
+    // clumps look up more than the mid level's skirts and lobes, so the sky lights them more: drawn at the palette's
+    // own middle they stood lighter and yellower than the same tree a step further off
+    static get LEVEL_SHADE() { return { conifer: { near: 0.78 }, broadleaf: { near: 0.9 } }; }
     static get BUILDING_CAP() { return 300; }
     // Triangles the trees and houses may add up to in a window (the window budget is 450 000 in all)
     // (200 000 until the far land took about 50 000 of the window: js/world/horizon.js FarLand)
@@ -293,17 +326,22 @@ class Scenery {
     // loadModel: SceneAssets.loadModel (a path to a promise of {meshes, places})
     static async loadModels(loadModel) {
         try {
-            const [conifer, broadleaf, bush, houses] = await Promise.all([
-                loadModel('assets/trees/conifer.glb'), loadModel('assets/trees/broadleaf.glb'), loadModel('assets/trees/bush.glb'), loadModel('assets/village/houses.glb')
+            const [alpine, bush, houses] = await Promise.all([
+                loadModel('assets/trees/alpine.glb'), loadModel('assets/trees/bush.glb'), loadModel('assets/village/houses.glb')
             ]);
             // A world draws the shapes in its own palette and light (js/world/vegetation.js); the legs keep the files' colours
             // and materials: a house draws with world copies of them, which take the haze (LandShade.adopt)
-            const pick = (model, kind, names) => names.filter(name => model.meshes.get(name)).map(name => ({ kind, name, parts: Vegetation.shape(model.meshes.get(name), kind) }));
-            const trees = [
-                ...pick(conifer, 'conifer', ['conifer_spruce', 'conifer_fir', 'conifer_pine']),
-                ...pick(broadleaf, 'broadleaf', ['broadleaf_oak', 'broadleaf_beech', 'broadleaf_ash']),
-                ...pick(bush, 'bush', ['bush_round', 'bush_low'])
-            ];
+            const trees = [];
+            for (const species of Scenery.SPECIES) {
+                const lods = {};
+                for (const level of Scenery.TREE_LEVELS) {
+                    const parts = alpine.meshes.get(`${species.node}_${level}`);
+                    if (parts) lods[level] = Vegetation.shape(parts, species.kind, species.palette, (Scenery.LEVEL_SHADE[species.kind] || {})[level] || 1);
+                }
+                if (!lods.mid) continue;
+                trees.push({ kind: species.kind, name: species.name, node: species.node, share: species.share, high: species.high, parts: lods.mid, lods });
+            }
+            for (const name of ['bush_round', 'bush_low']) if (bush.meshes.get(name)) trees.push({ kind: 'bush', name, parts: Vegetation.shape(bush.meshes.get(name), 'bush') });
             const homes = [...houses.meshes.keys()].filter(name => name.startsWith('house_') && !name.includes(':')).sort().map(name => ({ name, parts: LandShade.adopt(houses.meshes.get(name)) }));
             if (!trees.length || !homes.length) return null;
             return { trees, houses: homes };
@@ -318,13 +356,25 @@ class Scenery {
         this.data = data;
         this.models = models;
         this.perTile = new Map();
+        // The trees drawn (Scenery.rankTrees) and their triangles, which `triangles` includes
         this.treeCount = 0;
+        this.treeTriangles = 0;
         this.houseInstances = 0;
         this.houseTriangles = 0;
         this.triangles = 0;
         this.fallback = null;
         // The road bands everything here keeps clear of (null for a ground with no route: nothing to keep clear of)
         this.roads = ground && ground.route && ground.route.points ? new RoadClearance(ground.route, data) : null;
+        // Every tree of the window, at the level Scenery.rankTrees chose: an instanced mesh for each part of each
+        // shape at each level, over all the tiles (WorldEnvironment puts the group under its scenery)
+        this.forest = new THREE.Group();
+        this.forest.name = 'world-forest';
+        this.forestMeshes = new Map();
+        // The share of the window's trees drawn and the most drawn at the near level (the quality level: Game.thinTrees)
+        this.treeShare = 1;
+        this.treeNear = Scenery.TREE_NEAR_CAP;
+        this.treesDirty = false;
+        this.treeLevelCounts = { near: 0, mid: 0, far: 0 };
     }
 
     // Whether a thing of plan radius `radius` at (x, z) keeps `margin` clear of every road band
@@ -336,7 +386,8 @@ class Scenery {
     static planRadius(shape) {
         if (shape.planRadius === undefined) {
             let x = 0, z = 0;
-            for (const part of shape.parts) {
+            // (every level: the near level's branches reach a little past the mid level's skirts)
+            for (const part of Object.values(Scenery.levelsOf(shape)).flat()) {
                 part.geometry.computeBoundingBox();
                 const box = part.geometry.boundingBox;
                 x = Math.max(x, Math.abs(box.min.x), Math.abs(box.max.x));
@@ -372,6 +423,26 @@ class Scenery {
     set() { return this.models || this.plain(); }
 
     shapesOf(kind) { return this.set().trees.filter(s => s.kind === kind); }
+
+    // A shape's parts at each level (Scenery.TREE_LEVELS); a shape made at one level only (a bush, a plain shape) is
+    // the same at all three
+    static levelsOf(shape) {
+        const lods = shape.lods || {};
+        return { near: lods.near || shape.parts, mid: lods.mid || shape.parts, far: lods.far || lods.mid || shape.parts };
+    }
+
+    // One of a kind's shapes by `at` (0 to 1), each taking its share (`high` over LARCH_FROM_M), equal shares where a
+    // shape has none
+    static pickShape(shapes, at, y) {
+        const weights = shapes.map(s => (y > Scenery.LARCH_FROM_M && s.high !== undefined ? s.high : s.share) ?? 1);
+        const total = weights.reduce((a, b) => a + b, 0);
+        let sum = 0;
+        for (let n = 0; n < shapes.length; n++) {
+            sum += weights[n] / total;
+            if (at < sum) return shapes[n];
+        }
+        return shapes[shapes.length - 1];
+    }
 
     // Whether the land drawn round (x, z) shows water: a node of the 8 m cell under it, or of the cells beside it, is a
     // water node or takes its colour from a water cover cell. TerrainMesh.colours colours every other node from the
@@ -564,11 +635,14 @@ class Scenery {
                 const kind = cls === 5 ? 'bush' : y > 1750 || roll < 0.6 ? (cls === 2 && roll < 0.2 ? 'bush' : 'conifer') : 'broadleaf';
                 const shapes = this.shapesOf(kind);
                 if (!shapes.length) continue;
-                const shape = shapes[Math.floor(Scenery.hash(ix, iz, 5) * shapes.length)];
+                const shape = Scenery.pickShape(shapes, Scenery.hash(ix, iz, 5), y);
                 const scale = 0.8 + 0.6 * Scenery.hash(ix, iz, 6);
+                // Each tree its own girth and its own green: a crown 0.88 to 1.12 as wide for its height, and a tint
+                // (Scenery.treeTint) darker or lighter and toward yellow or blue
+                const width = 0.88 + 0.24 * Scenery.hash(ix, iz, 8);
                 // The whole crown keeps clear of every road band, not only the trunk
-                if (!this.clear(x, z, Scenery.planRadius(shape) * scale, Scenery.CLEAR_M.tree)) continue;
-                sites.push({ x, y, z, shape, scale, turn: Scenery.hash(ix, iz, 7) * Math.PI * 2 });
+                if (!this.clear(x, z, Scenery.planRadius(shape) * scale * Math.max(1, width), Scenery.CLEAR_M.tree)) continue;
+                sites.push({ x, y, z, shape, scale, width, turn: Scenery.hash(ix, iz, 7) * Math.PI * 2, tint: Scenery.treeTint(Scenery.hash(ix, iz, 9), Scenery.hash(ix, iz, 10)) });
                 if (sites.length >= Scenery.TREES_PER_TILE) return sites;
             }
         }
@@ -638,7 +712,7 @@ class Scenery {
         const up = new THREE.Vector3(0, 1, 0);
         const position = new THREE.Vector3();
         const scale = new THREE.Vector3();
-        const held = { trees: 0, house: 0, treeTriangles: 0, houseTriangles: 0 };
+        const held = { trees: 0, house: 0, houseTriangles: 0 };
 
         // Trees take the triangles the houses leave, nearest first; the houses are the village and come first
         const houseRoom = Math.max(0, Scenery.HOUSE_TRIANGLES - this.houseTriangles);
@@ -683,29 +757,19 @@ class Scenery {
         // The footings of exactly the houses drawn, as one mesh in stone
         if (footings.length) group.add(Scenery.footingMesh(footings, 'houses:footing'));
 
-        let sites = this.treeSites(tile, cover);
-        sites.sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
-        const treeRoom = Math.max(0, Scenery.TRIANGLE_CAP - this.triangles - held.houseTriangles);
-        const taken = [];
-        let spent = 0;
-        for (const site of sites) {
-            const cost = Scenery.trianglesOf(site.shape.parts);
-            if (this.treeCount + taken.length >= Scenery.TREE_CAP || spent + cost > treeRoom) break;
-            taken.push(site);
-            spent += cost;
-        }
-        const byShape = new Map();
+        // Every tree site of the tile is kept; Scenery.rankTrees chooses the ones drawn, over the whole window, nearest
+        // the bike first. (The caps were taken here, in the order the tiles were built: a tile built while the far
+        // tiles of the last window still held the caps never had a tree)
+        const taken = this.treeSites(tile, cover);
         for (const site of taken) {
             rotation.setFromAxisAngle(up, site.turn);
             position.set(site.x, site.y - 0.2, site.z);
-            scale.set(site.scale, site.scale, site.scale);
-            const list = byShape.get(site.shape) || [];
-            list.push(new THREE.Matrix4().compose(position, rotation, scale));
-            byShape.set(site.shape, list);
+            scale.set(site.scale * site.width, site.scale, site.scale * site.width);
+            site.matrix = new THREE.Matrix4().compose(position, rotation, scale);
+            site.cost = Scenery.trianglesOf(Scenery.levelsOf(site.shape).far);
         }
-        for (const [shape, matrices] of byShape) this.instanced(shape.parts, matrices, `trees:${shape.name}`, group);
+        held.treeSites = taken;
         held.trees = taken.length;
-        held.treeTriangles = spent;
 
         // Boulders on the rock and scree cells, as many as the cap leaves
         const stones = this.boulderSites(tile, cover).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Scenery.BOULDER_CAP - (this.boulderCount || 0)));
@@ -731,18 +795,35 @@ class Scenery {
         if (tufts.length) group.add(Scenery.tuftMesh(tufts));
         held.tufts = tufts.length;
 
-        if (!group.children.length) return null;
+        if (!group.children.length && !taken.length) return null;
         this.boulderCount = (this.boulderCount || 0) + held.boulders;
         this.tuftCount = (this.tuftCount || 0) + held.tufts;
         this.triangles += held.boulderTriangles;
-        this.treeCount += held.trees;
         this.houseInstances += held.house;
         this.houseTriangles += held.houseTriangles;
-        this.triangles += held.treeTriangles + held.houseTriangles;
+        this.triangles += held.houseTriangles;
         this.perTile.set(tile.key, { group, walls: standing, ...held });
         // (counts every change of the houses that stand: WorldEnvironment.cameraFaces lists their walls)
         this.stamp = (this.stamp || 0) + 1;
         if (held.stoneSites && held.stoneSites.length) this.rankStones(bike, true);
+        if (taken.length) this.rankTrees(bike, true);
+        return group;
+    }
+
+    // The trees of a list of sites (a tile's `treeSites`) as a group of their own, each shape's at `level`, apart from
+    // the forest: what a check of where trees stand reads (tests/helpers/world-clearance-run.js). The caller frees it
+    static treeMeshes(sites, level = 'near') {
+        const group = new THREE.Group();
+        const byShape = new Map();
+        for (const site of sites) byShape.set(site.shape, (byShape.get(site.shape) || []).concat(site));
+        for (const [shape, list] of byShape) {
+            for (const part of Scenery.levelsOf(shape)[level]) {
+                const mesh = new THREE.InstancedMesh(part.geometry, part.material, list.length);
+                list.forEach((site, i) => mesh.setMatrixAt(i, site.matrix));
+                mesh.name = `trees:${shape.name}`;
+                group.add(mesh);
+            }
+        }
         return group;
     }
 
@@ -920,16 +1001,162 @@ class Scenery {
             else if (child.userData.footings || child.userData.tileOwned) child.geometry.dispose();
         });
         if (held.group.parent) held.group.parent.remove(held.group);
-        this.treeCount -= held.trees;
         this.houseInstances -= held.house;
         this.houseTriangles -= held.houseTriangles;
-        this.triangles -= held.treeTriangles + held.houseTriangles + (held.boulderTriangles || 0);
+        this.triangles -= held.houseTriangles + (held.boulderTriangles || 0);
         this.boulderCount = (this.boulderCount || 0) - (held.boulders || 0);
         this.tuftCount = (this.tuftCount || 0) - (held.tufts || 0);
         this.perTile.delete(key);
         this.stamp = (this.stamp || 0) + 1;
         // The stones it gives up are another tile's to draw
         if (held.stones) this.rankStones(this.rankBike, true);
+        if (held.trees) this.rankTrees(this.treeBike, true);
+    }
+
+    // The most triangles a tree adds at the near level over its far level, of the shapes loaded (measured once)
+    nearExtra() {
+        if (this.nearExtraOf === undefined) {
+            this.nearExtraOf = 0;
+            for (const shape of this.set().trees) {
+                const levels = Scenery.levelsOf(shape);
+                this.nearExtraOf = Math.max(this.nearExtraOf, Scenery.trianglesOf(levels.near) - Scenery.trianglesOf(levels.far));
+            }
+        }
+        return this.nearExtraOf;
+    }
+
+    // A tree's tint, which the game multiplies into its colours (instanceColor): from `light` (0 to 1) darker or
+    // lighter, from `cast` (0 to 1) toward blue or yellow. Never over 1 in a channel, so no tree is lifted past its
+    // kind's caps (js/world/vegetation.js)
+    static treeTint(light, cast) {
+        const v = 0.8 + 0.2 * light;
+        const shift = 0.07 * (cast - 0.5);
+        return [v * (1 - Math.max(0, -shift) * 2), v * (1 - Math.abs(shift) * 0.5), v * (1 - Math.max(0, shift) * 2)];
+    }
+
+    // The quality level's trees: the share of the window's trees drawn (the far ones go first) and the most drawn at
+    // the near level. Draws them again at once when either changes
+    setTrees(share, near) {
+        const s = share === undefined ? 1 : share, n = near === undefined ? Scenery.TREE_NEAR_CAP : Math.min(near, Scenery.TREE_NEAR_CAP);
+        if (s === this.treeShare && n === this.treeNear) return;
+        this.treeShare = s;
+        this.treeNear = n;
+        this.rankTrees(this.treeBike || this.rankBike, true);
+    }
+
+    // The forest mesh of one part of a shape at a level, made the first time it is asked for, with room for every tree
+    // the level can hold
+    forestMesh(shape, level, k, part) {
+        const key = `${shape.name}:${level}:${k}`;
+        let mesh = this.forestMeshes.get(key);
+        if (!mesh) {
+            const room = level === 'near' ? Scenery.TREE_NEAR_CAP : level === 'mid' ? Scenery.TREE_MID_CAP : Scenery.TREE_CAP;
+            mesh = new THREE.InstancedMesh(part.geometry, part.material, room);
+            mesh.setColorAt(0, new THREE.Color(1, 1, 1));
+            mesh.count = 0;
+            mesh.visible = false;
+            mesh.name = `trees:${shape.name}:${level}`;
+            mesh.frustumCulled = false;
+            mesh.userData.world = 'scenery';
+            mesh.userData.skipCulling = true;
+            mesh.userData.treeLevel = level;
+            mesh.userData.drawn = 0;
+            this.forestMeshes.set(key, mesh);
+            this.forest.add(mesh);
+        }
+        return mesh;
+    }
+
+    // Draws the window's trees, each at its level. Of the trees of every tile, nearest the bike first: the share the
+    // quality level draws, at most TREE_CAP, while the triangle cap has room for each at its far level after
+    // TREE_NEAR_KEPT near trees' worth of it (the houses, the boulders and the stones come first). Then, out of the
+    // room left and nearest first, the trees within TREE_NEAR_M at the near level (treeNear of them at the most) and
+    // the next within TREE_MID_M at the mid level (TREE_MID_CAP times the share), the rest far. So the nearest trees are
+    // always drawn, and the window never holds more than the cap. Read again when the tiles change and for every
+    // TREE_RANK_M the bike moves
+    rankTrees(bike, force = false) {
+        if (!bike) return;
+        const last = this.treeBike;
+        if (!force && !this.treesDirty && last && Math.hypot(bike.x - last.x, bike.z - last.z) < Scenery.TREE_RANK_M) return;
+        this.treeBike = { x: bike.x, z: bike.z };
+        this.treesDirty = false;
+        // The tiles nearest first, and their trees until the cap is sure to be among them: a tile whose nearest point
+        // is past the furthest tree taken so far, once the cap is reached, holds none of the nearest
+        const half = WorldData.TILE_M / 2;
+        const tiles = [];
+        for (const [key, held] of this.perTile) {
+            if (!held.treeSites || !held.treeSites.length) continue;
+            const [tx, tz] = key.split(',').map(Number);
+            const dx = Math.max(0, Math.abs(bike.x - (tx * WorldData.TILE_M + half)) - half);
+            const dz = Math.max(0, Math.abs(bike.z - (tz * WorldData.TILE_M + half)) - half);
+            tiles.push({ held, d: Math.hypot(dx, dz) });
+        }
+        tiles.sort((a, b) => a.d - b.d);
+        const all = [];
+        let furthest = 0;
+        for (const { held, d } of tiles) {
+            if (all.length >= Scenery.TREE_CAP && d > furthest) break;
+            for (const site of held.treeSites) {
+                site.d = Math.hypot(site.x - bike.x, site.z - bike.z);
+                furthest = Math.max(furthest, site.d);
+                all.push(site);
+            }
+        }
+        all.sort((a, b) => a.d - b.d);
+        const others = this.triangles - this.treeTriangles;
+        let room = Math.max(0, Scenery.TRIANGLE_CAP - others - Scenery.TREE_NEAR_KEPT * this.nearExtra());
+        const total = this.perTile.size ? [...this.perTile.values()].reduce((n, held) => n + (held.trees || 0), 0) : 0;
+        const want = Math.min(Scenery.TREE_CAP, Math.ceil(total * this.treeShare));
+        let drawn = 0;
+        let spent = 0;
+        while (drawn < want && drawn < all.length && all[drawn].cost <= room) {
+            room -= all[drawn].cost;
+            spent += all[drawn].cost;
+            drawn++;
+        }
+        room += Scenery.TREE_NEAR_KEPT * this.nearExtra();
+        room = Math.min(room, Scenery.TRIANGLE_CAP - others - spent);
+        const most = { near: this.treeNear, mid: Math.round(Scenery.TREE_MID_CAP * this.treeShare) };
+        const reach = { near: Scenery.TREE_NEAR_M, mid: Scenery.TREE_MID_M };
+        const counts = { near: 0, mid: 0, far: 0 };
+        for (const mesh of this.forestMeshes.values()) mesh.userData.drawn = 0;
+        const tint = new THREE.Color();
+        for (let i = 0; i < drawn; i++) {
+            const site = all[i];
+            const levels = Scenery.levelsOf(site.shape);
+            let level = 'far';
+            if (site.shape.lods) {
+                for (const up of ['near', 'mid']) {
+                    if (counts[up] >= most[up] || site.d > reach[up]) continue;
+                    const extra = Scenery.trianglesOf(levels[up]) - site.cost;
+                    if (extra > room) continue;
+                    room -= extra;
+                    spent += extra;
+                    level = up;
+                    break;
+                }
+            }
+            counts[level]++;
+            tint.setRGB(site.tint[0], site.tint[1], site.tint[2]);
+            levels[level].forEach((part, k) => {
+                const mesh = this.forestMesh(site.shape, level, k, part);
+                const n = mesh.userData.drawn++;
+                mesh.setMatrixAt(n, site.matrix);
+                mesh.setColorAt(n, tint);
+            });
+        }
+        for (const mesh of this.forestMeshes.values()) {
+            // (shown or hidden only as it fills or empties: what hides a drawn mesh for a while, as world-quality
+            // does to measure the trees, keeps it hidden)
+            if ((mesh.count > 0) !== (mesh.userData.drawn > 0)) mesh.visible = mesh.userData.drawn > 0;
+            mesh.count = mesh.userData.drawn;
+            mesh.instanceMatrix.needsUpdate = true;
+            if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+        }
+        this.treeCount = drawn;
+        this.triangles = others + spent;
+        this.treeTriangles = spent;
+        this.treeLevelCounts = counts;
     }
 
     // The chunks of the side roads round the junctions and the landmarks, which the fixtures are placed clear of:

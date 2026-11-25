@@ -67,6 +67,8 @@ A rock, a rock cluster, an outcrop and a roadside bush are seated on the drawn r
 - High-pass keeps its procedural trees and bushes (`TreeModels.KEPT`). The frozen golden binds its mesh count, its triangle count and each mesh's vertices (see "Golden bindings").
 - No other builder makes a tree. The cone trees of `createDetailedHill` are never built: nothing calls it. The menu preview builds an `Environment`, so it gets the same forest.
 
+A world does not use `js/treemodels.js`. `Scenery` (`js/world/scenery.js`) plants its trees from the land cover and draws each species at three levels of detail from `assets/trees/alpine.glb`. The mid level is the shape a leg draws. See [graphics.md](graphics.md), "The trees' levels of detail".
+
 ## Run-off legs
 
 `forest` (leg 6) is built with `Terrain.heightfieldSide`: a list of stations (distance past the road edge, height relative to the road) joined linearly, with an optional rolling undulation along the road. The ribbon rows sit on the stations, so the drawn ground and the physics `base()` agree to 0.10. Both sides are run-off to 25 past the road edge, then a wall. A side must end in an unbounded wall or fall band, so `Terrain.rideableLimit()` is always finite.

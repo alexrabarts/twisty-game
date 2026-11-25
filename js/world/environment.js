@@ -206,6 +206,7 @@ class WorldEnvironment {
         this.sidePieceCache = new Map();
         this.scenery = new Scenery(this.ground, data, models);
         this.scenery.landmarkModels = landmarks;
+        this.sceneryGroup.add(this.scenery.forest);
         this.triangleCount = 0;
         this.lastBike = { x: this.route.sample(this.startS, {}).x, z: this.route.sample(this.startS, {}).z };
 
@@ -2569,6 +2570,7 @@ class WorldEnvironment {
         }
         this.streamer.pump(budgetMs);
         this.scenery.rankStones(position);
+        this.scenery.rankTrees(position);
         if (state) this.guide.update(state);
     }
 

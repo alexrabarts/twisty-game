@@ -91,7 +91,9 @@ describe('the vegetation palette', () => {
 
 describe('the world\'s modelled trees', () => {
     let models, fileColours;
-    const files = { conifer: 'assets/trees/conifer.glb', broadleaf: 'assets/trees/broadleaf.glb', bush: 'assets/trees/bush.glb' };
+    const files = { conifer: 'assets/trees/conifer.glb', broadleaf: 'assets/trees/broadleaf.glb', bush: 'assets/trees/bush.glb', alpine: 'assets/trees/alpine.glb' };
+    // A world's species are drawn from the levels of assets/trees/alpine.glb, its bushes from bush.glb
+    const levels = shape => (shape.lods ? Object.values(shape.lods).flat() : shape.parts);
     beforeAll(async () => {
         // The parsed files, as the legs' TreeModels reads them (SceneAssets keeps one parse per file)
         fileColours = new Map();
@@ -107,17 +109,29 @@ describe('the world\'s modelled trees', () => {
         expect(new Set(models.trees.map(s => s.kind))).toEqual(new Set(KINDS));
         expect(models.trees).toHaveLength(8);
         for (const shape of models.trees) {
-            for (const part of shape.parts) {
+            for (const part of levels(shape)) {
                 expect(part.geometry.userData.vegetation).toBe(shape.kind);
                 expect({ shape: shape.name, outside: outside(shape.kind, vertexColours(part.geometry)) }).toEqual({ shape: shape.name, outside: [] });
             }
         }
+        // Every species of the world at all three levels
+        for (const shape of models.trees.filter(s => s.kind !== 'bush')) expect(Object.keys(shape.lods).sort()).toEqual(['far', 'mid', 'near']);
+    });
+
+    test('the larch takes its own palette: a lighter, yellower green than the spruce', () => {
+        const mean = name => {
+            const all = models.trees.find(s => s.name === name).lods.mid.flatMap(part => vertexColours(part.geometry));
+            return [0, 1, 2].map(c => all.reduce((sum, rgb) => sum + rgb[c], 0) / all.length);
+        };
+        const larch = mean('conifer_larch'), spruce = mean('conifer_spruce');
+        expect(larch[1]).toBeGreaterThan(spruce[1]);
+        expect(larch[0] / larch[2]).toBeGreaterThan(spruce[0] / spruce[2]);
     });
 
     test('the files\' own colours were outside the caps (what the world drew before)', () => {
         let over = 0, all = 0;
         for (const shape of models.trees) {
-            const parts = fileColours.get(shape.name);
+            const parts = fileColours.get(shape.node ? `${shape.node}_mid` : shape.name);
             for (const colours of parts) {
                 for (let i = 0; i < colours.length; i += 3) {
                     all++;
@@ -136,7 +150,7 @@ describe('the world\'s modelled trees', () => {
 
     test('each kind is drawn with one Lambert material lit as the land, which takes no sky reflection', () => {
         for (const shape of models.trees) {
-            for (const part of shape.parts) {
+            for (const part of levels(shape)) {
                 expect(part.material).toBe(Vegetation.material(shape.kind));
                 expect(part.material.isMeshLambertMaterial).toBe(true);
                 expect(part.material.userData.landShade).toBe(true);
