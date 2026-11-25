@@ -730,3 +730,32 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Data. The Tremola stays in `world/`, byte for byte: its board `world-tremola-v1`, its stations and every pinned probe and test stay as they are. The two new legs are one continuous ride in a second data folder, `worlds/gotthard/`. A stage id names its folder (`WorldData.baseFor`). The first trial import is 2.5 MB in 390 files, under the 3.5 MB slice budget.
 - Per-leg parameters from the photos. Leg 1 has the 27 photos of the Andermatt stops and 1 photo near the summit. The north ramp has no photos, so the ramp inherits the Tremola's measured haze and palette and is marked so. Leg 2 has the 25 lookout photos (and 4 more nearby): its haze and colours are measured on them.
 - The Tremola's own stops: its start in Airolo and its end at the summit get no stop in this job. Its finish line is the pass point, 650 m past its car park, and the data ends there. A stop after the line needs a re-import of the Tremola, which changes its data. That is a decision for the owner (in the report).
+
+## Leg 1: the run-in from the north (6f)
+
+- Job: the first piece of 6f. `tools/world/route.json` gets `points` (stops the D1 line does not pass) and two slices; the importer finds each stop by rule (`tools/world/stops.mjs`); the run-in is imported into its own folder, `worlds/gotthard/`, so `world/` stays byte for byte. A stage names its folder (`WorldData.FOLDERS`, `baseFor`), and a shipped folder is trusted by its own `SHA256SUMS`. The menu's RIDE opens a leg list grouped by pass (`WorldLegs`, js/world/legs.js): leg 1 first, the Tremola never locked again.
+- What it is: Andermatt (the car park at the village's south-west edge, kind `hotel`) to the hospice square at the Gotthard summit (kind `restaurant`, reached by its 226 m access road), 11.58 km to the finish line, 1 437 m to 2 093 m, 5 checkpoints, no hairpin. The finish line stands 60 m before the turn-in to the stop.
+- Found and fixed on the way: a bank came up through a bridge deck's last metres (0.96 m over the carriageway's edge at km 3.2): no land now stands over a deck (`bench.mjs` `BRIDGE_UNDER_M`). Course rows of each folder are merged, not overwritten. Each probe asks a stage for its own hairpin count (the run-in has none; the Tremola keeps 20). A probe report over 64 KB was cut off: it now drains before the exit.
+- Check: `tests/unit/world-stops.test.js`, `world-legs.test.js`, `world-importer.test.js` (the course rows of every folder), `node tools/modal-check.mjs` 0 of 58 sequences failed (`menu-world-ride` picks leg 1 on the list).
+
+## Leg 2: the summit to the lookout over Airolo (6f)
+
+- Job: the second piece. The same folder, the second stage: the hospice square down the modern pass road to the lookout at the hairpin above Airolo (kind `lookout`, the outer car park with the kiosk). 2.93 km to the finish line, 2 093 m to 1 931 m, 1.6 km of it under two galleries and a tunnel, no checkpoint (shorter than twice the 2 km spacing). It opens when leg 1 is finished.
+- Each stop is drawn as such: the importer levels its area on the plane of its land (`groundPlane`; the land past its edge keeps its fall), finds its view (`viewOf`: the heading in which the land falls away furthest), and the game draws the area as hard standing with the asphalt's texture, a lookout's timber rail on the sides that face the view, and a restaurant's tables.
+- Its weather: the summit's thin cloud through the galleries, clear from 0.55 (an atmosphere part is at least 1.5 km). The looks test now builds the track of every folder: the first page of the leg failed on that rule and fell back to the classic legs.
+
+## The stop scene (6f)
+
+- Job: the owner's "the lookout should be the end of the leg so we can stop, add a cinematic scene, potentially some interactive stuff like getting off the bike having a vape (three of the riders, by name) or taking a photo", with letterbox bars and helmets on, visors up. `StopScene` (js/world/stopscene.js): bars in, the HUD out, the camera behind the player as it rides in and then the kind's path over the stop and its view, the group in riding order into its slots, the riders off beside their bikes, the vape clouds of the three named riders, the card in the lower bar (Next leg, Photo, Restart, Menu), any key skips. Details: `.agent/system/world.md`, "The stop scene at a leg's end".
+- Check: `tests/unit/world-stop-scene.test.js` (7 tests), the new GPU probe `world-stop-shots` on both legs (every rider in its slot, off its bike, drawn, on the ground; the bars and the card). Pictures: ~/Library/Caches/twisty-world/6f-shots/stop/.
+- Found on the way: the crew came in from wherever the distance cull had hidden it; the scene shows it again from its first frame.
+
+## Each leg's own air from its photos (6f)
+
+- `photomatch.mjs haze` reads another folder (`--data`) and one stage's photos (`--stage`). The 13 trusted photos at the lookout: land 8 km on at hue 212, saturation 0.41, value 0.63 (the Tremola's 0.46, 0.67), 3 to 8 km 0.28, 0.46: the lookout leg's air is greyer (`WorldLooks.stageAir`, `LandShade.setAir`). Leg 1's 4 photos are all of its start village in evening light: it takes the Tremola's air and says so.
+- The photo match round on the lookout photos (25 matched, 8 high): the view down to Airolo and the Tremola hairpins lines up; the game's camera stands at each photo's GPS point, a few metres short of the rim, so the near ground fills more of the frame than in the photo, and the valley floor has no village (outside the corridor's data).
+
+## Junctions of the new legs (6f)
+
+- The run-in showed a gap of land 0.67 m under the ride and a side road (km 1.1) and a cleft 1.46 m deep (km 8.4): the bencher gave a node just past the ride's verge to the lower side road. The ride now owns such a node against a side road within 1.5 m of it, unless the node lies on that road's own strip. world-junctions on the run-in: pits 9 to 6, clefts 1 to 0.
+- Left, as each stage's debt (`JUNCTION_OPEN`, a count may only fall; `.agent/system/world.md`, "A side road meets the ride"): on the run-in the Hospental junctions (a step of 0.7 m, an open edge of 0.6 m, two pits, a strip of 2 cm, 2 steps in the physics ground), 4 more pits of 0.27 to 0.40 m, land 9 cm over a side road at km 3.3 and a hole of 0.5 m at the summit; on the lookout leg the same hole and 2 pits.
