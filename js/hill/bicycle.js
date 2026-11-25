@@ -14,7 +14,7 @@
 class HillBicycle {
     static get RULE() {
         return Object.freeze({
-            legsOutMs: 6.5, legsInMs: 4.2, legsGrade: -0.04, legsQuietS: 0.4, legsBlendS: 0.8,
+            legsOutMs: 6.5, legsInMs: 4.2, legsGrade: -0.04, legsQuietS: 0.4, legsBlendS: 0.3,
             // How near the kerb the wheels go: the kerb stands at the lane's edge
             kerbM: 0.3,
             // After a fall: how long he lies before the bicycle is stood up again in place

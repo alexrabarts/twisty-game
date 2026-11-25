@@ -81,7 +81,7 @@ Only the drive is its own, and the other differences are overrides or opt-in hoo
 - the cranks and the freewheel;
 - the stand-up after a fall, in place, with a foot down.
 
-The legs come out at 6.5 m/s downhill after 0.4 s without pedalling. They come back under 4.2 m/s, or when he pedals at a speed his feet can follow. Even then he keeps his feet on the pedals most of the time: he starts on them, holds them there for 4 to 9 s with the cranks level, then puts his legs out for only 2.5 to 5 s, each time in a new pose eased over 0.8 s (`HillBicycle.LEGS`, seeded for each ride). Each leg has its own spread, drop, reach ahead and toe, in narrow ranges. Out, each leg is straight: one line from the hip, its knee bent about 10 degrees at most (`LEGS_OUT.reach`). The sway is 17 mm at 0.35 Hz.
+The legs come out at 6.5 m/s downhill after 0.4 s without pedalling. They come back under 4.2 m/s, or when he pedals at a speed his feet can follow. Even then he keeps his feet on the pedals most of the time: he starts on them, holds them there for 4 to 9 s with the cranks level, then puts his legs out for only 2.5 to 5 s, each time in a new pose, swung out over 0.3 s (`HillBicycle.LEGS`, seeded for each ride). Each leg has its own spread, drop, reach ahead and toe, in narrow ranges. Out, each leg is straight: one line from the hip, its knee bent about 10 degrees at most (`LEGS_OUT.reach`). The sway is 17 mm at 0.35 Hz.
 
 `HillRider` (js/hill/rider.js) draws `assets/hill/bicycle.glb` (tools/blender/hill_bike.py) from the state:
 - **The frame.** It follows the bike's heading, its lean (positive to the right, as `Vehicle` draws it) and the lane's fall. A wheelie lifts it about the rear axle.
