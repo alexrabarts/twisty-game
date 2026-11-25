@@ -500,6 +500,9 @@ class HillScene {
             const top = mid.y + (gap.upM || r.lowWallUpM);
             HillScene.standing(lane, repeats, gap.kind === 'churchyard' ? 'churchyard wall' : 'wall', meshes.rubble, [at.x, at.z], [mid.alongX * half, mid.alongZ * half], [mid.leftX * 0.15, mid.leftZ * 0.15], top, rgb(C.gardenWall), { sink: 0.3, low: mid.y - 0.3 });
             meshes.dressed.box([at.x, top + 0.05, at.z], [mid.alongX * (half + 0.02), 0, mid.alongZ * (half + 0.02)], [0, 0.05, 0], [mid.leftX * 0.2, 0, mid.leftZ * 0.2], rgb(C.coping));
+            // Moss along the coping here and there
+            if (rand() < 0.22) HillScene.leaf(repeats, [at.x + mid.alongX * (rand() - 0.5) * half, top + 0.1, at.z + mid.alongZ * (rand() - 0.5) * half], half * 0.5, 0.035, 0.16, [0x4a5a30, 0x56683a][Math.floor(rand() * 2)], mid.heading);
+            if (gap === HillScene.catWall(lane) && Math.abs((s + e) / 2 - HillScene.catAt(gap)) < 0.5) HillScene.cat(meshes, at, top + 0.1, mid, gap.side);
             if (gap.kind === 'view') {
                 // The view's railing on the wall's coping: posts on it, a rail along their tops falling with the wall
                 const m = new THREE.Matrix4(), q = new THREE.Quaternion(), size = new THREE.Vector3(1, 0.85, 1);
@@ -535,6 +538,32 @@ class HillScene {
         }
         const greens = [0x4e6236, 0x5d7440, 0x445a30];
         const blooms = [0xc8463a, 0xe0c04a, 0xe8e2d8, 0x9a5aa0];
+        if (gap.kind === 'front') {
+            // A border of flowers inside the front wall, clear of the gate
+            for (let s = gap.from + 0.5; s < gap.to - 0.4; s += 1.2) {
+                if (gateAt !== null && Math.abs(s - gateAt) < 0.9) continue;
+                const a = lane.at(s, front + gap.side * 0.45, 0, {}), ground = HillScene.lowestSurface(lane, a.x, a.z, [1, 0], 0.2, [0, 1], 0.2);
+                HillScene.leaf(repeats, [a.x, ground + 0.15, a.z], 0.3, 0.2, 0.2, greens[Math.floor(rand() * 3)]);
+                HillScene.stand(repeats, 'shrub', [a.x, a.z], [1, 0], 0.1, [0, 1], 0.1, ground - 0.05);
+                for (let k = 0; k < 2; k++) HillScene.flower(repeats, [a.x + (rand() - 0.5) * 0.4, ground + 0.36, a.z + (rand() - 0.5) * 0.3], 0.05, blooms[Math.floor(rand() * blooms.length)]);
+            }
+        }
+        if (gap.kind === 'garden' && gap.to - gap.from > 5 && rand() < 0.35) {
+            // Washing on a line across the garden, its posts in the land
+            const out = front + gap.side * 3.2, wood = rgb(0x6a5a48), p = lane.sample((gap.from + gap.to) / 2);
+            const ends = [gap.from + 1, gap.to - 1].map(s => lane.at(s, out, 0, {}));
+            const tops = ends.map(a => {
+                const top = land.surfaceAt(a.x, a.z) + 2;
+                HillScene.standing(lane, repeats, 'washing post', meshes.plain, [a.x, a.z], [p.alongX * 0.04, p.alongZ * 0.04], [p.leftX * 0.04, p.leftZ * 0.04], top, wood);
+                return top - 0.1;
+            });
+            const [a, b] = ends;
+            meshes.plain.box([(a.x + b.x) / 2, (tops[0] + tops[1]) / 2, (a.z + b.z) / 2], [(b.x - a.x) / 2, (tops[1] - tops[0]) / 2, (b.z - a.z) / 2], [0, 0.006, 0], [p.leftX * 0.006, 0, p.leftZ * 0.006], rgb(0xe8e4dc));
+            for (let k = 0; k < 4; k++) {
+                const t = 0.2 + k * 0.2 + (rand() - 0.5) * 0.06, x = a.x + (b.x - a.x) * t, z = a.z + (b.z - a.z) * t, y = tops[0] + (tops[1] - tops[0]) * t;
+                meshes.plain.box([x, y - 0.26, z], [p.alongX * (0.2 + rand() * 0.1), 0, p.alongZ * (0.2 + rand() * 0.1)], [0, 0.25, 0], [p.leftX * 0.01, 0, p.leftZ * 0.01], rgb([0xe8e4dc, 0xc8b8a0, 0x9aa8b8, 0xd0c0c8][k]));
+            }
+        }
         for (let i = 0; i < 3 + Math.floor(rand() * 4); i++) {
             const s = gap.from + 0.5 + rand() * (gap.to - gap.from - 1);
             const a = lane.at(s, front + gap.side * (0.8 + rand() * (deep - 1.6)), 0.4, {});
@@ -589,6 +618,31 @@ class HillScene {
         meshes.dark.box([col[0] - p.o[0] * 0.2, colTop - 0.35, col[1] - p.o[1] * 0.2], [p.a[0] * 0.03, 0, p.a[1] * 0.03], [0, 0.03, 0], [p.o[0] * 0.2, 0, p.o[1] * 0.2], rgb(C.iron));
         meshes.dark.box([col[0] + p.a[0] * 0.3, colTop - 0.1, col[1] + p.a[1] * 0.3], [p.a[0] * 0.3, 0.12, p.a[1] * 0.3], [0, 0.02, 0], [p.o[0] * 0.02, 0, p.o[1] * 0.02], rgb(C.iron));
         meshes.dark.box([col[0], colTop + 0.06, col[1]], [p.a[0] * 0.12, 0, p.a[1] * 0.12], [0, 0.06, 0], [p.o[0] * 0.12, 0, p.o[1] * 0.12], rgb(C.iron));
+    }
+
+    // The wall the cat sits on: the first garden or front wall on the left between s 96 and 180 at least 3 m long,
+    // seen from the chase view down the main straight
+    static catWall(lane) {
+        if (lane.catWall === undefined) lane.catWall = lane.walls.find(w => w.side === 1 && (w.kind === 'garden' || w.kind === 'front') && w.from >= 96 && w.to <= 180 && w.to - w.from >= 3) || null;
+        return lane.catWall;
+    }
+
+    // Where along the cat's wall it sits: at the end away from the gate
+    static catAt(gap) {
+        const gate = HillScene.gateAt(gap), mid = (gap.from + gap.to) / 2;
+        return gate !== null && gate < mid ? gap.to - 0.8 : gap.from + 0.8;
+    }
+
+    // A cat sitting on a wall's coping (`y` its top), side on to the lane, its tail down the wall's face
+    static cat(meshes, at, y, p, side) {
+        const fur = HillScene.rgb(0x9a5a2a), dark = HillScene.rgb(0x5a3418);
+        const A = [p.alongX, p.alongZ], L = [p.leftX * side, p.leftZ * side];
+        const box = (along, up, out, ha, hu, ho, colour) => meshes.plain.box([at.x + A[0] * along + L[0] * out, y + up, at.z + A[1] * along + L[1] * out], [A[0] * ha, 0, A[1] * ha], [0, hu, 0], [L[0] * ho, 0, L[1] * ho], colour);
+        box(0, 0.09, 0, 0.11, 0.09, 0.07, fur);
+        box(0.08, 0.17, 0, 0.05, 0.12, 0.06, fur);
+        box(0.1, 0.31, 0, 0.055, 0.05, 0.055, fur);
+        for (const k of [-1, 1]) box(0.1, 0.38, k * 0.035, 0.012, 0.025, 0.012, dark);
+        box(-0.1, -0.12, -0.23, 0.015, 0.14, 0.015, fur);
     }
 
     // A gap's own random sequence (HillScene.gap draws from it in order: the hedge, then the gate's place)
@@ -721,7 +775,8 @@ class HillScene {
                     box(meshes.dressed, along, y - 0.45, back + 0.07, 0.38, 0.04, 0.08, rgb(C.sill));
                 }
             }
-            // The drainpipe and the soil stack
+            // The gutter along the back's eave (thatch has none), the drainpipe and the soil stack
+            if (c.roof !== 'thatch' && !c.gable) box(meshes.dark, 0, c.eaves - 0.05 - 0.135 - 0.04, back + 0.24, hw + 0.15, 0.045, 0.06, iron);
             box(meshes.dark, hw - 0.2, (c.floor + c.eaves) / 2, back + 0.08, 0.04, (c.eaves - c.floor) / 2, 0.04, iron);
             box(meshes.dark, -hw * 0.2, (c.floor + c.eaves + 0.6) / 2, back + 0.1, 0.06, (c.eaves + 0.6 - c.floor) / 2, 0.06, iron);
             // A lean-to shed against the back, its roof sloping away
@@ -995,9 +1050,13 @@ class HillScene {
             box(meshes.dressed, ch.along, top + 0.05, out, 0.5, 0.06, 0.37, rgb(C.coping));
             // Thatch wraps round a chimney where it comes through
             if (thatch) box(roofMesh, ch.along, c.ridge - 0.05, out, 0.62, 0.3, 0.48, rgb(shade(C.thatch, 0.9)));
-            for (const k of [-1, 1]) {
-                const q = pt(ch.along + k * 0.2, top + 0.3, out);
-                repeats.pots.push(pot.clone().compose(new THREE.Vector3(q[0], q[1], q[2]), new THREE.Quaternion(), new THREE.Vector3(1, 0.45, 1)));
+            // Pots of their own shapes: one to three on a stack, tall and thin or short and wide
+            const potRand = HillLane.random(Math.round(c.from * 7 + ch.along * 13) + 5);
+            const count = 1 + Math.floor(potRand() * 3);
+            for (let k = 0; k < count; k++) {
+                const wide = 0.8 + potRand() * 0.5, high = 0.3 + potRand() * 0.45;
+                const q = pt(ch.along + (k - (count - 1) / 2) * 0.28, top + 0.1 + high / 2, out);
+                repeats.pots.push(pot.clone().compose(new THREE.Vector3(q[0], q[1], q[2]), new THREE.Quaternion(), new THREE.Vector3(wide, high, wide)));
             }
         }
 
@@ -1007,6 +1066,10 @@ class HillScene {
         box(meshes.door, doorAt, c.floor + 0.98, face - 0.06, 0.45, 0.98, 0.03, rgb(C.doors[c.doorColour]));
         box(meshes.glass, doorAt, c.floor + 2.07, face - 0.06, 0.42, 0.1, 0.03, rgb(C.glass));
         stand('door step', meshes.dressed, doorAt, face - 0.3, 0.62, 0.3, c.floor + 0.06, rgb(C.step), c.floor - 0.18);
+        // The step worn hollow in its middle, a knocker on the door, and now and then an iron boot scraper beside it
+        box(meshes.dressed, doorAt, c.floor + 0.062, face - 0.32, 0.32, 0.004, 0.17, rgb(shade(C.step, 0.86)));
+        if (c.kind !== 'barn' && c.kind !== 'shop') box(meshes.dark, doorAt, c.floor + 1.32, face - 0.1, 0.04, 0.05, 0.015, rgb(0x8a7444));
+        if (HillLane.random(Math.round(c.from * 19) + 3)() < 0.4) stand('boot scraper', meshes.dark, doorAt + 0.85, face - 0.25, 0.14, 0.04, c.floor + 0.12, rgb(C.iron), c.floor - 0.1);
         if (c.porch) {
             const y = c.floor + 2.45;
             for (const k of [-1, 1]) {
@@ -1058,6 +1121,11 @@ class HillScene {
                 // Small casements, as the stills have them
                 box(meshes.trim, along, y, face - 0.02, 0.36, 0.5, 0.025, frame);
                 box(meshes.glass, along, y, face - 0.05, 0.31, 0.45, 0.01, c.lit && storey === 0 ? lit : glass);
+                // Curtains drawn back to each side of some panes
+                if (rand() < 0.45) {
+                    const cloth = rgb([0xe8dcc8, 0x9a3a32, 0x4a5a7a, 0xd8c890, 0x6a7a5a][Math.floor(rand() * 5)]);
+                    for (const k of [-1, 1]) box(meshes.plain, along + k * 0.24, y + 0.02, face - 0.063, 0.065, 0.42, 0.003, cloth);
+                }
                 box(meshes.trim, along, y, face - 0.065, 0.31, 0.022, 0.008, frame);
                 box(meshes.trim, along, y, face - 0.065, 0.014, 0.45, 0.008, frame);
                 for (const k of [-1, 1]) box(meshes.trim, along, y + k * 0.22, face - 0.065, 0.31, 0.01, 0.008, frame);
@@ -1073,6 +1141,44 @@ class HillScene {
                 }
             }
         }
+        // Weathering: patched render and a crack or two on a rendered front; moss on thatch, lichen on slate and tile
+        if (c.wall === 'lime' || c.wall === 'cream' || c.wall === 'blush') {
+            for (let k = 0; k < 2; k++) {
+                if (rand() < 0.4) continue;
+                const along = (rand() - 0.5) * (c.wide - 1.6), up = c.floor + 0.4 + rand() * (c.eaves - c.floor - 1.4);
+                box(wallMesh, along, up, face - 0.006, 0.3 + rand() * 0.5, 0.2 + rand() * 0.35, 0.004, rgb(shade(wallHex, 0.9 + rand() * 0.06)));
+            }
+            if (rand() < 0.6) {
+                // A crack: two short strokes, each leaning its own way, from under a window's sill
+                let along = (rand() - 0.5) * (c.wide - 2), up = c.floor + 1.0;
+                for (let k = 0; k < 2; k++) {
+                    const lean = (rand() - 0.5) * 0.16, high = 0.18 + rand() * 0.12;
+                    const mid = pt(along + lean / 2, up - high, face - 0.008);
+                    meshes.dark.box(mid, vec(0.006, 0, 0), [A[0] * lean / 2, high, A[2] * lean / 2], vec(0, 0, 0.003), rgb(0x7a7266));
+                    along += lean;
+                    up -= 2 * high;
+                }
+            }
+        }
+        {
+            const patches = thatch ? 4 : c.roof === 'slate' || c.roof === 'tile' ? 3 : 0;
+            const spots = c.gable ? 0 : patches;
+            for (let k = 0; k < spots; k++) {
+                // A spot on the front slope, from its eave towards its ridge
+                // (on the slope's top face: its underside line, raised by the thickness along the slope's normal)
+                const t = 0.35 + rand() * 0.5, along = (rand() - 0.5) * 2 * (hw - 0.3);
+                const run = hd + over, rise = c.ridge - (eaveY - over * 0.45);
+                const outAt = -run * (1 - t), y = (eaveY - over * 0.45) + rise * t + thick * Math.hypot(run, rise) / run + 0.01;
+                const at = pt(along, y, outAt);
+                if (thatch) HillScene.leaf(repeats, at, 0.35 + rand() * 0.3, 0.04, 0.12, [0x46522e, 0x4e5c34, 0x3c4828][k % 3], c.heading);
+                else {
+                    // (lichen: a flat pale disc on the slates)
+                    const size = 0.12 + rand() * 0.1;
+                    repeats.flowers.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(at[0], at[1], at[2]), new THREE.Quaternion(), new THREE.Vector3(size, size * 0.25, size)), colour: [0x8e8c70, 0x84866a, 0x9a9474][k % 3] });
+                }
+            }
+        }
+
         // Ivy up the front from one corner
         if (c.climber) {
             const end = rand() < 0.5 ? -1 : 1;

@@ -983,7 +983,7 @@ class HillLand {
     // surface), else null; `low` gives the lane's own height under its flags, `hint` an s near the point
     pavedAt(x, z, margin = 0, low = false, hint = null) {
         const lane = this.lane, r = lane.rule;
-        const at = lane.project(x, z, hint);
+        const at = lane.project(x, z, hint === null ? this.near(x, z).s : hint);
         if (Math.abs(at.across) <= r.halfWidthM + r.flagsM + 0.3 + margin && at.s > 0 && at.s < r.lengthM) {
             const onMouth = lane.sideRoads.some(m => Math.sign(at.across) === m.side && m.kind !== 'steps' && at.s > m.from && at.s < m.to && Math.abs(at.across) > r.halfWidthM);
             if (!onMouth) {

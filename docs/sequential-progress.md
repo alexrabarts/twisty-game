@@ -693,3 +693,10 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Job: by the owner's word, "add the time leaderboard for this level but only show the time at the end". The ride is timed from the roll-off to the finish on the last left (`HillLane.RULE.end.stopS`, s 444). No clock shows during the ride. The end card shows the time, the best on this device and the board's top 10 (`village-hill-v1`), with the game's own name entry. Each fall adds 5 s and counts one restart. The server holds each of the 4 parts to a floor (30 m/s) and a ceiling (0.5 m/s). Details: `.agent/system/hill.md`, "The time and the board".
 - Check: `tests/unit/hill-board.test.js` (14 tests) and `tests/unit/hill-card.test.js` (6 tests); `functions/test/hill.test.js` (3 tests). The fastest autopilot ride is 0:29.725 (parts 9.7, 6.1, 5.9, 8.1 s against floors of 3.3 to 3.7 s); with no brake, 0:35.3 with one fall. A ride on the real page (GPU, `hill-look`) reached the card with no time on the page during the ride. With the functions blocked, the card showed the time and "Board unavailable".
 - Left, for the owner: `cd functions && npm ci && npm test && firebase deploy --only functions`. Until then, the card says the board is not open, and nothing is sent.
+
+## The hill ride: one more round of detail
+
+- Curtains, door knockers, worn steps and boot scrapers at the fronts; chimney pots of their own shapes; gutters on the backs.
+- Moss on thatch and copings, lichen on slate and tile, patched render and cracks on rendered fronts.
+- Flower borders in the front gardens, washing on a line in some gardens, and a cat on a wall on the main straight.
+- Every new piece that stands on the ground passes the land check. The village is 274,680 triangles.

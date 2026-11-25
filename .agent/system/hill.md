@@ -32,6 +32,12 @@ The street opens out in places, so it is not a tunnel:
 - **The church** (`RULE.church`) stands 15 m back behind its churchyard wall and gate, with a tower, a spire, gravestones, plain crosses and four yews. It faces the green.
 - **Close again** (`RULE.tight`). From s 330 to the sharp right, both sides are two-storey terraces and shops, taller (`eavesUpM` 5.6), with no gaps and none set back. The change from open to close makes the sharp right feel faster.
 
+The details where the eye goes from the chase view and the opening:
+- **Windows and doors.** Curtains drawn back at some panes, window boxes, a knocker on each door, a step worn hollow in its middle, and now and then an iron boot scraper by the step.
+- **Roofs.** Chimney pots of their own shapes, one to three to a stack. Gutters on the backs as on the fronts. Moss on the thatch and lichen on slate and tile, on the top face of the slope only.
+- **Walls.** Patched render and a crack or two on rendered fronts; moss here and there along wall copings.
+- **Gardens.** A border of flowers inside each front wall, clear of the gate; washing on a line across some gardens, its posts in the land; a cat on a garden wall on the left of the main straight (`HillScene.catWall`).
+
 The opening's buildings on the left are set by hand (`RULE.opening.left`): their ends, heights, roofs, walls and chimneys are fitted to the opening frame.
 
 As in the stills, most buildings before `thatchToS` (s 240) have thatch (`thatchShare` 0.75): a thick ridge with a darker cap band, a deep rounded eave with a second roll over it, thatch round each chimney, and eyebrow dormers over the upper windows on some. The walls are grey rubble, grey dressed stone and whitened render; brick is rare. The windows are small casements. The opening has no railings: on its left, rough stones lie along the lane's edge by the churn and the iron post (`opening.stones`); on its right, behind the top wall, stands a thatched rubble cottage in the sun's shadow (`opening.right`), its near top corner where the still's dark shape has it. The shadow fill (`LIGHT.ambient`, `hemisphere`) is set so that house reads as the still does: `hill-overlay` gives the mean luminance of that part of the frame in both (`shade`). The churn is dull, dented grey metal. The bicycle has no reflector, and the boy wears dark breeches to his boots.
