@@ -364,6 +364,7 @@ class HillRide {
         if (this.spill) game.scene.add(this.spill.group);
         if (this.day) game.scene.add(this.day.build());
         game.graphics.fixColorSpaces();
+        HillScene.bumpsBothSides(game.scene);
         this.light();
         this.overlay();
         this.keys = (event) => {
@@ -856,6 +857,7 @@ class HillRide {
         group.visible = false;
         this.game.scene.add(group);
         this.game.graphics.fixColorSpaces(group);
+        HillScene.bumpsBothSides(group);
         this.loaf = group;
         return group;
     }

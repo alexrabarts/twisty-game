@@ -1278,3 +1278,87 @@ describe('the village within its budget', () => {
         expect(triangles).toBeLessThan(300000);
     });
 });
+
+describe('the stones are domes, not hollows', () => {
+    // A document whose canvases keep the pixels put on them, so the maps can be read back
+    const recording = {
+        createElement(tag) {
+            if (tag !== 'canvas') throw new Error(`document.createElement('${tag}') is not stubbed`);
+            const canvas = { width: 300, height: 150, style: {}, pixels: null };
+            const context = new Proxy({}, {
+                get(target, key) {
+                    if (key in target) return target[key];
+                    if (key === 'createImageData' || key === 'getImageData') return (x, y, w, h) => ({ width: w === undefined ? x : w, height: h === undefined ? y : h, data: new Uint8ClampedArray(Math.max(1, (w === undefined ? x * y : w * h) * 4)) });
+                    if (key === 'putImageData') return image => { canvas.pixels = image.data; };
+                    if (key === 'createLinearGradient' || key === 'createRadialGradient') return () => ({ addColorStop() {} });
+                    if (key === 'measureText') return () => ({ width: 0 });
+                    return () => {};
+                },
+                set(target, key, value) { target[key] = value; return true; }
+            });
+            canvas.getContext = () => context;
+            return canvas;
+        }
+    };
+    const kit = new Function('THREE', 'Vehicle', 'WorldPhysics', 'CHARACTERS', 'document',
+        `${['lane', 'textures', 'scene'].map(n => loadScript(`hill/${n}.js`)).join('\n')}\nreturn { HillLane, HillScene, HillTextures };`
+    )(THREE, Vehicle, WorldPhysics, CHARACTERS, recording);
+
+    // On the flank of each stone the map's normal leans downhill, away from the stone's top: its (x, y) against the
+    // height's slope along the canvas (x right, y down the rows, as the maps are laid with flipY off)
+    const domes = (map) => {
+        const { data: h, width: W, height: H } = map.userData.height, px = map.image.pixels;
+        let flank = 0, wrong = 0;
+        for (let y = 1; y < H - 1; y += 2) for (let x = 1; x < W - 1; x += 2) {
+            const gx = h[y * W + x + 1] - h[y * W + x - 1], gy = h[(y + 1) * W + x] - h[(y - 1) * W + x];
+            if (Math.hypot(gx, gy) < 0.02) continue;
+            const i = (y * W + x) * 4, nx = px[i] / 255 * 2 - 1, ny = px[i + 1] / 255 * 2 - 1;
+            flank++;
+            if (nx * gx + ny * gy >= 0) wrong++;
+        }
+        return { flank, wrong };
+    };
+
+    test('every stone map, the cobbles and each wall, flag and roof finish, leans each flank away from its stone\'s top', () => {
+        const lane = new kit.HillLane();
+        const maps = { cobbles: kit.HillScene.cobbleTextures(lane, 1).normalMap };
+        for (const [name, kind] of Object.entries(kit.HillTextures.KINDS)) maps[name] = kit.HillTextures.make(name, kind, 1).normalMap;
+        const said = [];
+        for (const [name, map] of Object.entries(maps)) {
+            const { flank, wrong } = domes(map);
+            said.push(`${name} ${wrong}/${flank}`);
+            expect([name, flank > 100, wrong]).toEqual([name, true, 0]);
+        }
+        console.log(`hill stones: flank pixels that lean the wrong way, of all: ${said.join(', ')}`);
+    });
+
+    test('each normal-mapped surface of the village draws its bumps the same way up from either side: the shader\'s second turn on a back face is gone', () => {
+        const keep = [HillScene.cobbleTextures, HillScene.fieldTexture, HillScene.paneSky];
+        const bump = new THREE.Texture();
+        HillScene.cobbleTextures = () => ({ map: null, normalMap: bump, aoMap: null, roughnessMap: null });
+        HillScene.fieldTexture = () => null;
+        HillScene.paneSky = () => null;
+        HillTextures.made = new Proxy({}, { get: () => ({ map: null, normalMap: bump }) });
+        let group;
+        try {
+            group = HillScene.build(new HillLane()).group;
+        } finally {
+            [HillScene.cobbleTextures, HillScene.fieldTexture, HillScene.paneSky] = keep;
+            HillTextures.made = null;
+        }
+        HillScene.bumpsBothSides(group);
+        const seen = new Set();
+        let faceDown = 0;
+        group.traverse(o => {
+            if (!o.isMesh || !o.material.normalMap || seen.has(o.material)) return;
+            seen.add(o.material);
+            const shader = { fragmentShader: '#include <normalmap_pars_fragment>\nvoid main() {}', vertexShader: '', uniforms: {} };
+            o.material.onBeforeCompile(shader);
+            expect([o.name, shader.fragmentShader.includes('faceDirection * inversesqrt( det )'), shader.fragmentShader.includes('inversesqrt( det )')]).toEqual([o.name, false, true]);
+            expect(o.material.customProgramCacheKey()).toContain('bumps-both-sides');
+            if (o.name === 'hill-cobbles') faceDown = o.geometry.attributes.normal.getY(0);
+        });
+        console.log(`hill stones: ${seen.size} normal-mapped materials patched; the lane's first normal y ${faceDown.toFixed(2)} (wound face down, so drawn from its back face)`);
+        expect(seen.size).toBeGreaterThan(5);
+    });
+});

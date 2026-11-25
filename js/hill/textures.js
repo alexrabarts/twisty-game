@@ -191,7 +191,10 @@ class HillTextures {
             t.anisotropy = anisotropy;
             return t;
         };
-        return { map: texture(colourCanvas, true), normalMap: texture(normalCanvas, false) };
+        const normalMap = texture(normalCanvas, false);
+        // (the height it was drawn from, for the tests that check each stone is a dome)
+        normalMap.userData.height = { data: height, width: N, height: N };
+        return { map: texture(colourCanvas, true), normalMap };
     }
 }
 

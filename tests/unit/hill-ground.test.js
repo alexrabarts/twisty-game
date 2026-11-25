@@ -57,6 +57,25 @@ describe('the hill ride\'s land', () => {
         expect(floating).toEqual([]);
     });
 
+    test('every piece that stands stands on land that is drawn: none past the land\'s edge, hung in the sky', () => {
+        const off = stands.filter(f => HillLand.onGrid(land.coarse, f.x, f.z) === null);
+        console.log(`hill ground: ${off.length} standing pieces past the drawn land${off.length ? `: ${off.slice(0, 5).map(f => `${f.kind} at (${f.x.toFixed(0)}, ${f.z.toFixed(0)})`).join(', ')}` : ''}`);
+        expect(off).toEqual([]);
+    });
+
+    test('the far trees, a crown of few faces on a trunk, stand only far from the lane, where their faces do not show', () => {
+        const repeats = { stands: [] }, trees = HillScene.trees(lane, repeats), m = new THREE.Matrix4(), p = new THREE.Vector3();
+        let nearest = Infinity;
+        for (let i = 0; i < trees.count; i++) {
+            trees.getMatrixAt(i, m);
+            p.setFromMatrixPosition(m);
+            nearest = Math.min(nearest, HillScene.nearLane(lane, p.x, p.z));
+        }
+        console.log(`hill ground: ${trees.count} far trees, the nearest ${nearest.toFixed(0)} m from the lane`);
+        expect(nearest).toBeGreaterThanOrEqual(HillScene.FAR_TREE.nearM);
+        expect(trees.geometry.attributes.color).toBeDefined();
+    });
+
     test('the land never shows through the lane, its flags or a side road, and meets their edges where nothing stands', () => {
         const through = [], apart = [];
         const covered = (x, z) => stands.some(f => inside(f, x, z, 0.35));

@@ -299,3 +299,11 @@ The end card adds the day, the bread delivered out of the doors, the loaves left
 When the boy comes off, the basket's loaves fly out (`js/hill/spill.js`, `HillSpill`): the model's loaves (the `loaf` material on the `basket` node) are hidden, and six loose loaves leave the basket with three quarters of the bicycle's speed, a lift of 1.6 to 2.8 m/s and a tumble. They bounce low off the cobbles, slide to rest on the lane's fall, and the house fronts turn them back. They lie where they fell, with the basket empty, until R puts them back. A second fall with an empty basket throws nothing. The throw is seeded, so it is the same for the same fall.
 
 In a fall the boy never passes through a building: `HillVehicle.holdRiderOut` puts his body (`RIDER_FALL.bodyM`) back out through the nearest wall of any footprint in `HillLane.solids` (the cottages and the side roads' houses) and takes away his speed into it.
+
+## The stones are domes from either side
+
+three r150 draws a normal map inside out on the back face of a two-sided surface: it builds the tangent frame from the normal already turned to the viewer, then turns it again by the face's side. The lane is wound face down, so each cobble was lit on the side away from the sun: a hollow, not a dome. `HillScene.bumpsBothSides` drops the second turn in each normal-mapped hill material (the village, the rider, the day's things and the last loaf), so a surface shows its stones the same way from either side. The maps were right: on every stone map (the cobbles and each finish of `HillTextures`) each flank leans away from its stone's top. `tests/unit/hill-ride.test.js` ("the stones are domes, not hollows") checks the maps and the patch on every material. If three's chunk changes, the patch throws and names the check to make again.
+
+## The far trees
+
+The far trees (`HillScene.trees`, `FAR_TREE`) are a crown of 20 faces on a trunk of three, each turned its own way, with no tree nearer the lane than 100 m (`nearM`) and none past the drawn land. Nearer, the crown's few faces read as a grey shape in the haze, and a crown alone looked hung in the air.

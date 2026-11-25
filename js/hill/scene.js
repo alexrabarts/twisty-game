@@ -103,6 +103,33 @@ class HillScene {
         return [decode(((hex >> 16) & 255) / 255), decode(((hex >> 8) & 255) / 255), decode((hex & 255) / 255)];
     }
 
+    // three r150 turns a normal map inside out on the back face of a two-sided surface: its tangent frame is built from
+    // the normal already turned to the viewer, then turned again by the face's side (perturbNormal2Arb's scale). The
+    // lane is wound face down, so every cobble showed lit on the side away from the sun, a hollow, not a dome. This
+    // drops the second turn for each normal-mapped material under root, so a stone is a dome from either side
+    static bumpsBothSides(root) {
+        const wrong = 'faceDirection * inversesqrt( det )';
+        root.traverse(o => {
+            const list = !o.material ? [] : Array.isArray(o.material) ? o.material : [o.material];
+            for (const m of list) {
+                if (!m.normalMap || m.userData.bumpsBothSides) continue;
+                m.userData.bumpsBothSides = true;
+                const before = m.onBeforeCompile;
+                m.onBeforeCompile = (shader, renderer) => {
+                    if (before) before.call(m, shader, renderer);
+                    if (!shader.fragmentShader.includes('#include <normalmap_pars_fragment>')) return;
+                    const pars = THREE.ShaderChunk.normalmap_pars_fragment;
+                    if (!pars.includes(wrong)) throw new Error('HillScene.bumpsBothSides: three\'s tangent frame has changed; check the back face again');
+                    shader.fragmentShader = shader.fragmentShader.replace('#include <normalmap_pars_fragment>', pars.replace(wrong, 'inversesqrt( det )'));
+                };
+                const key = m.customProgramCacheKey;
+                m.customProgramCacheKey = () => key.call(m) + '|bumps-both-sides';
+                m.needsUpdate = true;
+            }
+        });
+        return root;
+    }
+
     // The cobbles' maps, baked from the lane's one height field (HillLane.field, the same the bicycle rides over) over a
     // tile: the stones' colours (each its own grey or brown, a little darker towards its edge, the mortar dark), a
     // tangent-space normal map from the field's slopes, an occlusion that darkens the gaps, and a roughness that keeps
@@ -187,7 +214,10 @@ class HillScene {
             return t;
         };
         const aoRough = texture(packed, false);
-        return { map: texture(colour, true), normalMap: texture(normal, false), aoMap: aoRough, roughnessMap: aoRough };
+        const normalMap = texture(normal, false);
+        // (the height it was drawn from, canvas row by row, for the tests that check each stone is a dome)
+        normalMap.userData.height = { data: height, width: W, height: H };
+        return { map: texture(colour, true), normalMap, aoMap: aoRough, roughnessMap: aoRough };
     }
 
     // The vale's fields as a canvas: a patchwork of greens with dark hedges between
@@ -1515,9 +1545,10 @@ class HillScene {
         const land = lane.ground();
         const rand = HillLane.random(lane.rule.seed + 41);
         const end = lane.sample(lane.rule.lengthM / 2);
-        // (the plainest crown: far off in the haze its faces do not show, and the land round the village needs the budget)
-        const crown = new THREE.IcosahedronGeometry(1, 0);
-        const material = new THREE.MeshStandardMaterial({ color: HillScene.COLOURS.tree, roughness: 1, flatShading: true });
+        // (the plainest crown: far off in the haze its faces do not show, and the land round the village needs the budget;
+        // a crown alone read as a grey shape hung in the air, so each stands on a trunk, three faces, to the ground)
+        const crown = HillScene.farTree();
+        const material = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 1, flatShading: true });
         const count = 520;
         const trees = new THREE.InstancedMesh(crown, material, count);
         const m = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), at = new THREE.Vector3();
@@ -1525,17 +1556,21 @@ class HillScene {
         for (let i = 0; i < count * 2 && placed < count; i++) {
             const ahead = -900 + rand() * 1800, aside = (rand() - 0.5) * 1800;
             const x = end.x + end.alongX * ahead + end.leftX * aside, z = end.z + end.alongZ * ahead + end.leftZ * aside;
-            // Not on the lane, its path or the cottages, nor in the band of houses and yards along it
+            // Not on the lane, its path or the cottages, nor in the band of houses and yards along it; and not within
+            // nearM of the lane, where its few faces read as a grey shape in the haze (the leafy and bare trees stand there)
             const near = HillScene.nearLane(lane, x, z);
-            if (near < 18) continue;
+            if (near < HillScene.FAR_TREE.nearM) continue;
+            // Only where land is drawn: past the coarse grid's edge there is none, and a crown there hung in the sky
+            if (HillLand.onGrid(land.coarse, x, z) === null) continue;
             const n = land.near(x, z);
             if (n.d < land.bandAt(x, z, n).band + 6) continue;
             const size = 2.5 + rand() * 3.5, high = size * (0.8 + rand() * 0.5);
-            // (the crown's foot a little into the land under it)
-            const ground = land.heightAt(x, z);
-            at.set(x, ground + high * 0.9, z);
+            // (the trunk's foot a little into the land under it; each crown turned its own way, so no two show one outline)
+            const ground = land.heightAt(x, z), F = HillScene.FAR_TREE;
+            at.set(x, ground + high * F.upM, z);
             s.set(size, high, size);
-            HillScene.stand(repeats, 'crown', [x, z], [1, 0], 0.1, [0, 1], 0.1, ground - high * 0.1);
+            HillScene.stand(repeats, 'crown', [x, z], [1, 0], 0.1, [0, 1], 0.1, ground - high * F.sinkM);
+            q.setFromEuler(new THREE.Euler((rand() - 0.5) * F.tiltRad, rand() * Math.PI * 2, (rand() - 0.5) * F.tiltRad));
             m.compose(at, q, s);
             trees.setMatrixAt(placed++, m);
         }
@@ -1543,6 +1578,37 @@ class HillScene {
         trees.castShadow = true;
         trees.name = 'hill-trees';
         return trees;
+    }
+
+    // A far tree in a unit of its size (its crown 1 across, scaled by the tree's size and height): the crown's centre
+    // upM over the ground, its trunk down from inside the crown to sinkM under the ground, trunkM across; none nearer
+    // the lane than nearM
+    static get FAR_TREE() {
+        return Object.freeze({ nearM: 100, upM: 1.25, sinkM: 0.1, trunkM: 0.09, tiltRad: 0.3, crown: 0x4c5636, bark: 0x4a4038 });
+    }
+
+    static farTree() {
+        const F = HillScene.FAR_TREE;
+        const crown = new THREE.IcosahedronGeometry(1, 0);
+        const position = Array.from(crown.attributes.position.array), colour = [];
+        const leaf = HillScene.rgb(F.crown), bark = HillScene.rgb(F.bark);
+        for (let i = 0; i < position.length / 3; i++) colour.push(...leaf);
+        // The trunk: three faces from inside the crown to the foot
+        const top = -0.5, foot = -F.upM - F.sinkM, r = F.trunkM / 2;
+        const ring = [0, 1, 2].map(k => [Math.cos(k * 2.094) * r, Math.sin(k * 2.094) * r]);
+        for (let k = 0; k < 3; k++) {
+            const [ax, az] = ring[k], [bx, bz] = ring[(k + 1) % 3];
+            position.push(ax, foot, az, bx, top, bz, ax, top, az, ax, foot, az, bx, foot, bz, bx, top, bz);
+            for (let i = 0; i < 6; i++) colour.push(...bark);
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colour, 3));
+        geometry.computeVertexNormals();
+        // (its colours already decoded once, HillScene.rgb)
+        geometry.userData.linearColors = true;
+        crown.dispose();
+        return geometry;
     }
 
     static nearLane(lane, x, z) {
