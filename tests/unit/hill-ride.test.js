@@ -798,6 +798,37 @@ describe('the boy on the bicycle', () => {
         }
     });
 
+    test.each([['right', 1], ['left', -1]])('leaned hard over to the %s with his legs out, the low leg goes back on its pedal and no boot meets the cobbles', (_, way) => {
+        const ankle = new THREE.Vector3(), O = HillRider.LEGS_OUT;
+        rider.foot = 0;
+        rider.tuck = null;
+        rider.tucked = null;
+        const lean = (deg, seconds) => {
+            const b = bike(0, 1);
+            b.vehicle.leanAngle = way * deg * Math.PI / 180;
+            for (let t = 0; t < seconds; t += DT) rider.update(b, lane, DT);
+            return b;
+        };
+        // Under the angle both legs stay out
+        lean(O.tuckRad * 180 / Math.PI - 3, 0.5);
+        for (const leg of rider.legs) expect(Math.abs(leg.foot.position.x)).toBeGreaterThan(0.55);
+        // Past it, from the lean of the boot's first touch on, the low leg is on its pedal, the high one still out
+        for (const deg of [30, 40, 45]) {
+            lean(deg, O.tuckS + 0.1);
+            for (const leg of rider.legs) {
+                world(leg.foot, ankle);
+                expect(ankle.y - lane.sample(20).y).toBeGreaterThan(0.03);
+                const low = -leg.side * way > 0;
+                const pedal = leg.pedalPart.position.clone().add(new THREE.Vector3().fromArray(HillRider.ANKLE_ON_PEDAL));
+                if (low) expect(leg.foot.position.distanceTo(pedal)).toBeLessThan(0.02);
+                else expect(Math.abs(leg.foot.position.x)).toBeGreaterThan(0.55);
+            }
+        }
+        // Back under the lower angle, the leg goes out again
+        lean(O.untuckRad * 180 / Math.PI - 3, O.tuckS + 0.1);
+        for (const leg of rider.legs) expect(Math.abs(leg.foot.position.x)).toBeGreaterThan(0.55);
+    });
+
     test('held out over a long run, he brings his feet back now and then and no two poses out are alike; never through the frame or the ground', () => {
         const where = new HillLane();
         const b = new HillBicycle(where);

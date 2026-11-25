@@ -9,9 +9,11 @@ class HillRider {
     // way the boot's toe points; the share of the leg's length they reach
     // The pose itself comes from the bicycle (HillBicycle.LEGS, legPose); here how it lives while held out: a slow sway
     // (swayM at swayHz, each leg its own phase), the cobbles' bounce answered after lagS, times bounceGain, and a
-    // balance against the lean (leanGain m for each rad)
+    // balance against the lean (leanGain m for each rad). Leaned over past tuckRad, the leg on the low side would meet
+    // the cobbles (its boot is there at about 29 degrees), so he lifts it back onto its pedal over tuckS, and puts it out
+    // again once the lean is back under untuckRad
     static get LEGS_OUT() {
-        return Object.freeze({ reach: 0.996, swayM: 0.017, swayHz: 0.35, lagS: 0.12, bounceGain: 1.7, leanGain: 0.12 });
+        return Object.freeze({ reach: 0.996, swayM: 0.017, swayHz: 0.35, lagS: 0.12, bounceGain: 1.7, leanGain: 0.12, tuckRad: 0.31, untuckRad: 0.23, tuckS: 0.25 });
     }
 
     // The ankle over its pedal, from the pedal's pivot
@@ -260,11 +262,19 @@ class HillRider {
         this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle);
 
         const out = HillRider.LEGS_OUT;
-        const legsShare = bike.legs * bike.legs * (3 - 2 * bike.legs);
+        const legsOut = bike.legs * bike.legs * (3 - 2 * bike.legs);
         // The legs' own life while out: the time, the cobbles' bounce after a lag
         this.t = (this.t || 0) + dt;
         this.legBounce = (this.legBounce || 0) + (bike.bounce - (this.legBounce || 0)) * Math.min(1, dt / out.lagS);
+        this.tuck = this.tuck || { l: 0, r: 0 };
+        this.tucked = this.tucked || { l: false, r: false };
         for (const leg of this.legs) {
+            // The low side's leg back on its pedal while he leans over (a lean to the right, +, drops the leg on -x)
+            const low = -leg.side * v.leanAngle;
+            this.tucked[leg.tag] = low > (this.tucked[leg.tag] ? out.untuckRad : out.tuckRad);
+            const tuckStep = dt / out.tuckS;
+            const t = this.tuck[leg.tag] = Math.max(0, Math.min(1, this.tuck[leg.tag] + (this.tucked[leg.tag] ? tuckStep : -tuckStep)));
+            const legsShare = legsOut * (1 - t * t * (3 - 2 * t));
             // The pedal at its crank's angle, level whatever the angle
             const a = bike.crank + leg.start;
             leg.pedalPart.position.set(leg.pedalX, this.bb.y - Math.cos(a) * leg.crank, this.bb.z - Math.sin(a) * leg.crank);
