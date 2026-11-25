@@ -6611,6 +6611,9 @@ async function roamRun(placeSource) {
     const barriers = [];
     game.scene.traverse(o => { if (/barrier/i.test(o.name || '')) barriers.push(o.name); });
     out.barriers = barriers;
+    // The chase view (Standard): a page starts in the view the rider last chose, Onboard on a fresh one, where the
+    // bike is the bars at the foot of the frame
+    game.cameraMode = Number(window.roamCameraMode ?? 2);
     for (let i = 0; i < 60; i++) twistyDev.step(1, { render: true });
     out.shots.start = frame();
     // A side road, ridden onto from the ride as a rider would: the junction whose side road runs furthest, the bike put
@@ -6665,6 +6668,9 @@ async function roamRun(placeSource) {
             if (!out.shots.side && off > 120) {
                 for (let k = 0; k < 20; k++) twistyDev.step(1, { render: true });
                 out.shots.side = frame();
+                // Where the bike is in the frame (-1 to 1 each way; 0 is the middle) and how fast it goes
+                const ndc = new THREE.Vector3(v.position.x, v.position.y + 0.8, v.position.z).project(game.camera);
+                out.framed = { x: +ndc.x.toFixed(2), y: +ndc.y.toFixed(2), speed: +v.speed.toFixed(1) };
             }
         }
         out.trace = trace;
@@ -6710,6 +6716,8 @@ WORLD['world-roam'] = async (page) => {
     else if (result.sideRide.nan || result.sideRide.furthest < 100) failures.push(`the side road ride: ${JSON.stringify(result.sideRide)}`);
     // (the bike rides on the side road's own surface, not the ride's height beside it: Vehicle.surfaceAt)
     if (result.trace && result.trace.some(([, over]) => Math.abs(over) > 1)) failures.push(`the bike off the side road's surface: ${JSON.stringify(result.trace.filter(([, over]) => Math.abs(over) > 1).slice(0, 4))}`);
+    // (the bike well in the frame on the side road, not at its edge: WorldCamera.followRider's look)
+    if (result.framed && (Math.abs(result.framed.x) > 0.6 || Math.abs(result.framed.y) > 0.6)) failures.push(`the bike at the edge of the frame on the side road: ${JSON.stringify(result.framed)}`);
     if (result.edge && result.edge.putBack < 50) failures.push(`not turned back at the edge: ${JSON.stringify(result.edge)}`);
     return { ok: failures.length === 0, failures, ...result, dir };
 };
