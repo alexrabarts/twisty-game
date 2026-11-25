@@ -76,6 +76,56 @@ describe('the hill ride\'s land', () => {
         expect(trees.geometry.attributes.color).toBeDefined();
     });
 
+    test('the shrubs have a broken leafy outline over stems at the foot, in sizes and tones of their own; the yews taper; the gravestones are arched and the crosses stepped', () => {
+        const S = HillScene.SHRUB, shape = HillScene.shrubShape(613), p = shape.attributes.position, c = shape.attributes.color;
+        // The outline round it: the farthest leaf in each of 24 directions, which a ball would keep the same
+        const reach = new Array(24).fill(0);
+        let stems = 0;
+        const bark = HillScene.rgb(S.bark);
+        for (let i = 0; i < p.count; i++) {
+            const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+            if (Math.abs(c.getX(i) - bark[0]) < 1e-6 && Math.abs(c.getZ(i) - bark[2]) < 1e-6) {
+                if (y < -0.6) stems++;
+                continue;
+            }
+            const k = Math.floor(((Math.atan2(z, x) + Math.PI) / (2 * Math.PI)) * 24) % 24;
+            reach[k] = Math.max(reach[k], Math.hypot(x, z));
+        }
+        const shrubs = [], tints = new Set();
+        const village = build(lane).group;
+        for (const name of ['hill-shrubs', 'hill-shrubs-b']) {
+            const mesh = village.getObjectByName(name), m = new THREE.Matrix4(), at = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), col = new THREE.Color();
+            for (let i = 0; i < mesh.count; i++) {
+                mesh.getMatrixAt(i, m);
+                m.decompose(at, q, sc);
+                shrubs.push(sc.y / sc.x);
+                mesh.getColorAt(i, col);
+                tints.add(col.getHexString());
+            }
+        }
+        console.log(`hill shrubs: ${shrubs.length}, the outline's reach from ${Math.min(...reach).toFixed(2)} to ${Math.max(...reach).toFixed(2)}, ${stems} stem points at the foot, ${tints.size} tints`);
+        expect(Math.max(...reach) / Math.min(...reach)).toBeGreaterThan(1.15);
+        expect(stems).toBeGreaterThan(3);
+        expect(tints.size).toBeGreaterThanOrEqual(3);
+        expect(Math.max(...shrubs) - Math.min(...shrubs)).toBeGreaterThan(0.1);
+        // The yew narrows from its foot to its top
+        const yew = HillScene.yewShape().attributes.position, rows = [[0.5, 1.5], [3, 4.5]].map(([lo, hi]) => {
+            let most = 0;
+            for (let i = 0; i < yew.count; i++) if (yew.getY(i) >= lo && yew.getY(i) < hi) most = Math.max(most, Math.hypot(yew.getX(i), yew.getZ(i)));
+            return most;
+        });
+        expect(rows[1]).toBeLessThan(rows[0] * 0.8);
+        // A headstone's top is arched: its corners lower than its middle
+        const stone = HillScene.headstoneShape().attributes.position;
+        let middle = -Infinity, corner = -Infinity;
+        for (let i = 0; i < stone.count; i++) {
+            if (Math.abs(stone.getX(i)) < 0.05) middle = Math.max(middle, stone.getY(i));
+            if (Math.abs(stone.getX(i)) > 0.45) corner = Math.max(corner, stone.getY(i));
+        }
+        expect(middle - corner).toBeGreaterThan(0.1);
+        expect(village.getObjectByName('hill-crosses').count).toBeGreaterThan(0);
+    });
+
     test('the land never shows through the lane, its flags or a side road, and meets their edges where nothing stands', () => {
         const through = [], apart = [];
         const covered = (x, z) => stands.some(f => inside(f, x, z, 0.35));

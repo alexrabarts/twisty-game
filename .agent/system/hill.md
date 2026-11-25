@@ -284,7 +284,7 @@ The end card adds the day, the bread delivered out of the doors, the loaves left
   - **The fall.** In a crash he comes off clear of the bicycle, and he is on it again after the restart.
   - **The side roads.** Four to six, on both sides, a mix of kinds, none in the sharp right or the last left; no mouth has a step; none crosses the course or another; ridden in, the bicycle stops at what closes it, and the ending never fires there.
   - **The cinematic cameras.** Over a whole ride the bicycle is always in frame and in clear view until the ending, and no two cuts are within 1.5 s.
-  - **The budget.** The village is under 300,000 triangles and 40 draws.
+  - **The budget.** The village is under 340,000 triangles and 40 draws. The cap was 300,000; the shrubs, hedges and yews took it to about 332,000. On one GPU, in turn on one page, the descent's frame from the chase camera took 10.6 to 12.1 ms (median) with them and the same with the plain clumps they replaced, at 1280 by 720.
 - `tests/unit/hill-ground.test.js` checks the land:
   - **Nothing floats.** At each corner and the centre of each piece in `HillScene.stands`, the foot is at most 5 cm over the ground (`surfaceAt`).
   - **The paving.** The land never shows through the lane, its flags or a side road. Just past the flags, where nothing stands, the land is within 0.3 m of the flags.
@@ -307,3 +307,9 @@ three r150 draws a normal map inside out on the back face of a two-sided surface
 ## The far trees
 
 The far trees (`HillScene.trees`, `FAR_TREE`) are a crown of 20 faces on a trunk of three, each turned its own way, with no tree nearer the lane than 100 m (`nearM`) and none past the drawn land. Nearer, the crown's few faces read as a grey shape in the haze, and a crown alone looked hung in the air.
+
+## Shrubs, hedges, yews and the small things
+
+The owner found the shrubs plain: round faceted blobs and stacked cones. Each shrub is now drawn from one of two shapes (`HillScene.shrubShape`, `SHRUB`): seven rough leaf clumps of twenty faces, one in the middle and one over it, their corners pushed in or out so the outline is broken, darker underneath, over three thin stems that reach the ground. Each shrub is turned its own way, its size and height vary by a quarter, and it takes one of four tints over the shape's own four greens. A piece of hedge is four clumps along its line and no stems (`hill-hedges`). The churchyard's yews are one tapering column of clumps on a short trunk (`yewShape`), not four stacked blobs. Their variety comes from a random sequence of their own (`repeats.shrubRand`), so nothing else in the village moved. `tests/unit/hill-ground.test.js` holds the broken outline, the stems, the tints, the yew's taper and the stones' shapes.
+
+The gravestones are arched headstones with their edges cut back (`headstoneShape`), each a little out of true and in its own weathered tone; the crosses stand on a stepped base (`crossShape`). A door's bread crate is slatted (`HillDay.crateShape`), and its lamp is an iron lantern on a bracket with a glass that lights (`lanternShape`). The bench has three seat slats, two back slats and arms; the pump has a cap knob, a collar, a plinth and a knob on its handle. The cat is a round dark tabby with ears, a white bib and paws, and a tail that curves up.

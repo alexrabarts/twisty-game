@@ -360,6 +360,42 @@ class HillDay {
         } else f.run = 0;
     }
 
+    // Boxes (each [w, h, d, x, y, z]) as one shape
+    static boxes(list) {
+        const positions = [], normals = [];
+        for (const [w, h, d, x, y, z] of list) {
+            const n = new THREE.BoxGeometry(w, h, d).translate(x, y, z).toNonIndexed();
+            positions.push(...n.attributes.position.array);
+            normals.push(...n.attributes.normal.array);
+        }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        out.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+        return out;
+    }
+
+    // A baker's bread crate on the step, its foot at 0: a slatted floor, a post at each corner, two slats along each
+    // side with a gap between, a hand hole's bar at each end
+    static crateShape() {
+        const w = 0.5, h = 0.28, d = 0.36, t = 0.018, list = [[w, t, d, 0, t / 2, 0]];
+        for (const a of [-1, 1]) for (const b of [-1, 1]) list.push([0.035, h, 0.035, a * (w / 2 - 0.018), h / 2, b * (d / 2 - 0.018)]);
+        for (const y of [0.07, 0.2]) {
+            for (const b of [-1, 1]) list.push([w - 0.04, 0.07, t, 0, y, b * (d / 2 - t / 2)]);
+            for (const a of [-1, 1]) list.push([t, 0.07, d - 0.04, a * (w / 2 - t / 2), y, 0]);
+        }
+        return HillDay.boxes(list);
+    }
+
+    // The door lamp's iron: a cap over the glass, a base under it, the four corner bars, and the bracket back to the
+    // wall with its stay (the glass is a box of its own, lit by the day)
+    static lanternShape() {
+        const list = [[0.18, 0.03, 0.18, 0, 0.1, 0], [0.11, 0.04, 0.11, 0, 0.135, 0], [0.04, 0.05, 0.04, 0, 0.17, 0], [0.16, 0.025, 0.16, 0, -0.095, 0]];
+        for (const a of [-1, 1]) for (const b of [-1, 1]) list.push([0.014, 0.18, 0.014, a * 0.068, 0, b * 0.068]);
+        // (the bracket from the lamp's top back to the wall, and the stay under it)
+        list.push([0.02, 0.02, 0.22, 0, 0.2, -0.11], [0.016, 0.14, 0.016, 0, 0.14, -0.2]);
+        return HillDay.boxes(list);
+    }
+
     // The horse and cart drawn from their model (HillHorse) in place of the plain blocks built with the day
     dressCart(horse) {
         if (!this.cartMesh || !horse) return false;
@@ -418,14 +454,23 @@ class HillDay {
         this.halls = [];
         this.pools = [];
         const WAIT = HillDay.WAITING;
+        const crateShape = HillDay.crateShape(), lanternShape = HillDay.lanternShape(), iron = mat(0x23201c, { roughness: 0.6, metalness: 0.4 });
         for (const d of this.doors) {
-            const crate = box(0.5, 0.28, 0.36, wood);
-            crate.position.set(d.x + d.outX * 0.32 - d.alongX * 0.2, d.y + 0.14, d.z + d.outZ * 0.32 - d.alongZ * 0.2);
+            const crate = new THREE.Mesh(crateShape, wood);
+            crate.castShadow = true;
+            crate.receiveShadow = true;
+            crate.position.set(d.x + d.outX * 0.32 - d.alongX * 0.2, d.y, d.z + d.outZ * 0.32 - d.alongZ * 0.2);
             crate.rotation.y = yawOf(d.outX, d.outZ);
             g.add(crate);
-            // The lamp over the door: lit for the next door only
-            const lamp = box(0.18, 0.24, 0.12, new THREE.MeshStandardMaterial({ color: 0x302820, emissive: 0xffb050, emissiveIntensity: 0 }));
-            lamp.position.set(d.x + d.outX * 0.12, d.y + 2.35, d.z + d.outZ * 0.12);
+            // The lamp over the door, on its iron bracket: its glass lit for the next door only
+            const lantern = new THREE.Mesh(lanternShape, iron);
+            lantern.position.set(d.x + d.outX * 0.2, d.y + 2.35, d.z + d.outZ * 0.2);
+            lantern.rotation.y = crate.rotation.y;
+            lantern.castShadow = true;
+            g.add(lantern);
+            const lamp = box(0.13, 0.17, 0.13, new THREE.MeshStandardMaterial({ color: 0x302820, emissive: 0xffb050, emissiveIntensity: 0, roughness: 0.2 }));
+            lamp.castShadow = false;
+            lamp.position.copy(lantern.position);
             lamp.rotation.y = crate.rotation.y;
             g.add(lamp);
             this.lamps.push(lamp);
@@ -463,28 +508,49 @@ class HillDay {
             g.add(mesh);
             this.loafMeshes.push(mesh);
         }
-        // The cat: a low dark body, a head and a tail
+        // The cat: a dark tabby, long and low: a round body deeper at the chest, a round head with its ears up and a short
+        // muzzle, a white bib, the tail curving up behind
         const cat = new THREE.Group();
-        const body = box(0.14, 0.14, 0.4, dark);
+        const tabby = mat(0x3a332c), bib = mat(0xd8d0c2), part = (geometry, m) => {
+            const mesh = new THREE.Mesh(geometry, m);
+            mesh.castShadow = true;
+            return mesh;
+        };
+        const body = part(new THREE.CapsuleGeometry(0.075, 0.24, 4, 10).rotateX(Math.PI / 2).scale(0.95, 1, 1), tabby);
         body.position.y = 0.2;
-        const head = box(0.12, 0.12, 0.12, dark);
+        const chest = part(new THREE.SphereGeometry(0.068, 10, 8).scale(1, 1.1, 0.9), bib);
+        chest.position.set(0, 0.19, 0.15);
+        const head = new THREE.Group();
         head.position.set(0, 0.3, 0.24);
-        const tail = box(0.03, 0.03, 0.3, dark);
-        tail.position.set(0, 0.3, -0.3);
-        tail.rotation.x = -0.6;
+        head.add(part(new THREE.SphereGeometry(0.062, 12, 10).scale(1.05, 0.95, 1), tabby));
+        const snout = part(new THREE.SphereGeometry(0.03, 8, 6).scale(1.2, 0.8, 1), bib);
+        snout.position.set(0, -0.02, 0.05);
+        head.add(snout);
+        for (const a of [-1, 1]) {
+            const ear = part(new THREE.ConeGeometry(0.024, 0.05, 4), tabby);
+            ear.position.set(a * 0.035, 0.06, 0.0);
+            ear.rotation.z = -a * 0.25;
+            head.add(ear);
+        }
+        const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0.22, -0.18), new THREE.Vector3(0, 0.26, -0.3), new THREE.Vector3(0, 0.36, -0.38), new THREE.Vector3(0, 0.46, -0.36)]);
+        const tail = part(new THREE.TubeGeometry(curve, 10, 0.016, 6, false), tabby);
         // Each leg on a pivot at its hip or shoulder (CAT_GAIT), the leg hanging from it
         const G = HillDay.CAT_GAIT;
         this.catLegs = [-1, 1].flatMap(a => [-1, 1].map(b => {
             const pivot = new THREE.Group();
             pivot.position.set(a * 0.05, G.legM, b * 0.14);
-            const l = box(0.04, G.legM, 0.04, dark);
+            const l = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.016, G.legM, 6), tabby);
+            l.castShadow = true;
             l.position.y = -G.legM / 2;
             pivot.add(l);
+            const paw = new THREE.Mesh(new THREE.SphereGeometry(0.02, 6, 4).scale(1, 0.6, 1.3), b > 0 ? bib : tabby);
+            paw.position.set(0, -G.legM + 0.008, 0.008);
+            pivot.add(paw);
             // (a gallop: the fore legs a little apart, the hind legs half a stride on)
             pivot.userData.phase = (b > 0 ? 0 : 0.5) + (a > 0 ? 0.08 : 0);
             return pivot;
         }));
-        cat.add(body, head, tail, ...this.catLegs);
+        cat.add(body, chest, head, tail, ...this.catLegs);
         this.catMesh = cat;
         g.add(cat);
         // The horse and cart: the horse ahead, up the lane, the cart behind with two wheels
@@ -673,14 +739,26 @@ class HillDay {
         part(new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), skin), 0, 1.5, 0.01);
         part(new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 10, 0, Math.PI * 2, 0, Math.PI * 0.55), hair), 0, 1.52, -0.01);
         part(new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), hair), 0, 1.52, -0.11);
-        // Her arms: the left at her side, the right on a pivot at its shoulder, which waves
-        part(box(0.07, 0.5, 0.07, dress), -0.2, 1.05, 0).rotation.z = 0.12;
+        // A knitted shawl over her shoulders, the apron's band and its ties at her waist, her shoes under the hem
+        const shawl = mat(0x5a5048);
+        part(new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.23, 0.2, 14, 1, true), shawl), 0, 1.25, 0).material.side = THREE.DoubleSide;
+        part(new THREE.Mesh(new THREE.CylinderGeometry(0.168, 0.168, 0.04, 14), white), 0, 0.9, 0);
+        part(new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.16, 0.012), white), 0.03, 0.82, -0.17).rotation.z = 0.2;
+        for (const x of [-0.07, 0.07]) part(new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6).scale(0.8, 0.5, 1.4), mat(0x2a2420)), x, 0.03, 0.18);
+        // Her arms in their sleeves, a hand at each: the left at her side, the right on a pivot at its shoulder, which
+        // waves
+        const sleeveShape = new THREE.CylinderGeometry(0.045, 0.036, 0.46, 8), handShape = new THREE.SphereGeometry(0.035, 8, 6);
+        const left = part(new THREE.Mesh(sleeveShape, dress), -0.2, 1.05, 0);
+        left.rotation.z = 0.12;
+        part(new THREE.Mesh(handShape, skin), -0.23, 0.8, 0);
         const arm = new THREE.Group();
         arm.position.set(0.2, 1.28, 0);
-        const sleeve = box(0.07, 0.5, 0.07, dress);
-        sleeve.position.y = -0.25;
+        const sleeve = new THREE.Mesh(sleeveShape, dress);
+        sleeve.position.y = -0.23;
         sleeve.castShadow = true;
-        arm.add(sleeve);
+        const hand = new THREE.Mesh(handShape, skin);
+        hand.position.y = -0.49;
+        arm.add(sleeve, hand);
         g.add(arm);
         g.userData.arm = arm;
         return g;

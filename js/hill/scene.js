@@ -263,7 +263,7 @@ class HillScene {
         // Parts repeated many times are instanced: railing posts, chimney pots, leaves and flowers, gravestones
         // `stands` is every piece that stands on the ground, with its footprint and its foot (HillScene.stand): the check
         // that nothing floats reads it
-        const repeats = { posts: [], pots: [], leaves: [], flowers: [], stones: [], trunks: [], bare: [], leafy: [], stands: [] };
+        const repeats = { shrubRand: HillLane.random(lane.rule.seed + 71), posts: [], pots: [], leaves: [], shrubs: [], shrubsB: [], hedges: [], yews: [], crosses: [], flowers: [], stones: [], trunks: [], bare: [], leafy: [], stands: [] };
         const step = 1;
 
         // The lane: a ribbon over the cobbles, laid in the height field's tiles, each mirrored as HillLane.cobble reads it
@@ -364,7 +364,8 @@ class HillScene {
         const pots = HillScene.instanced(new THREE.CylinderGeometry(0.11, 0.13, 1, 8), C.pot, repeats.pots, 'hill-chimney-pots');
         const leaves = HillScene.instanced(new THREE.DodecahedronGeometry(1, 0), 0xffffff, repeats.leaves, 'hill-leaves', true);
         const flowers = HillScene.instanced(new THREE.IcosahedronGeometry(1, 0), 0xffffff, repeats.flowers, 'hill-flowers', true);
-        const stones = HillScene.instanced(new THREE.BoxGeometry(1, 1, 1), 0xb8b2a6, repeats.stones, 'hill-gravestones');
+        const stones = HillScene.instanced(HillScene.headstoneShape(), 0xffffff, repeats.stones, 'hill-gravestones', true);
+        const crosses = HillScene.instanced(HillScene.crossShape(), 0xffffff, repeats.crosses, 'hill-crosses', true);
         const trunks = HillScene.instanced(new THREE.CylinderGeometry(0.6, 1, 1, 6).translate(0, 0.5, 0), 0x4a4038, repeats.trunks, 'hill-trunks');
         const bare = HillScene.instanced(HillScene.bareTree(), 0x4a4038, repeats.bare, 'hill-bare-trees');
         let leafy = null;
@@ -375,7 +376,25 @@ class HillScene {
             leafy.receiveShadow = true;
             leafy.name = 'hill-leafy-trees';
         }
-        for (const m of [posts, pots, leaves, flowers, stones, trunks, bare, leafy]) if (m) group.add(m);
+        // The shrubs and hedges in two shapes, each shrub tinted its own way; the churchyard's yews
+        const shrubbery = (shape, list, name) => {
+            if (!list.length) return null;
+            const mesh = new THREE.InstancedMesh(shape, new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.9, flatShading: true }), list.length);
+            const tint = new THREE.Color();
+            list.forEach((o, i) => {
+                mesh.setMatrixAt(i, o.m || o);
+                if (o.colour !== undefined) mesh.setColorAt(i, tint.setHex(o.colour));
+            });
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            mesh.name = name;
+            return mesh;
+        };
+        const shrubs = shrubbery(HillScene.shrubShape(613), repeats.shrubs, 'hill-shrubs');
+        const shrubsB = shrubbery(HillScene.shrubShape(617), repeats.shrubsB, 'hill-shrubs-b');
+        const hedges = shrubbery(HillScene.shrubShape(619, true), repeats.hedges, 'hill-hedges');
+        const yews = shrubbery(HillScene.yewShape(), repeats.yews, 'hill-yews');
+        for (const m of [posts, pots, leaves, shrubs, shrubsB, hedges, yews, flowers, stones, crosses, trunks, bare, leafy]) if (m) group.add(m);
 
         // The land: round the village and out over the vale to low hills in the haze
         group.add(HillScene.vale(lane));
@@ -506,6 +525,175 @@ class HillScene {
         repeats.leaves.push({ m, colour });
     }
 
+    // A shrub (or a piece of hedge) at a point, sized sx, sy, sz as a leaf clump is: drawn from the shrub shape
+    // (HillScene.shrubShape), turned its own way, one of its tints (SHRUB.tints) over the shape's own greens. Its variety
+    // comes from the shrubs' own random sequence (repeats.shrubRand), so the places of everything else are as they were
+    static shrub(repeats, at, sx, sy, sz, turn = 0, hedge = false) {
+        const rand = repeats.shrubRand, S = HillScene.SHRUB, k = 1 + (rand() - 0.5) * S.sizeShare;
+        // (a hedge's piece keeps its line along the hedge, turned end for end at most)
+        const spin = hedge ? (rand() < 0.5 ? 0 : Math.PI) : rand() * Math.PI * 2;
+        const m = new THREE.Matrix4().compose(new THREE.Vector3(at[0], at[1], at[2]), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn + spin),
+            new THREE.Vector3(sx * k, sy * k * (1 + (rand() - 0.5) * S.sizeShare), sz * k));
+        const list = hedge ? repeats.hedges : rand() < 0.5 ? repeats.shrubs : repeats.shrubsB;
+        list.push({ m, colour: S.tints[Math.floor(rand() * S.tints.length)] });
+    }
+
+    // A churchyard yew, clipped to a tapering column, its foot at `at`
+    static yew(repeats, at) {
+        const rand = repeats.shrubRand;
+        const m = new THREE.Matrix4().compose(new THREE.Vector3(at[0], at[1], at[2]), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rand() * Math.PI * 2),
+            new THREE.Vector3(1, 0.95 + rand() * 0.15, 1));
+        repeats.yews.push(m);
+    }
+
+    // The shrubs: a broken leafy outline of clumps over a few stems at the foot. sizeShare: how much each shrub's size
+    // varies; tints: what each shrub's greens are multiplied by, for variety of tone
+    static get SHRUB() {
+        return Object.freeze({ clumps: 7, hedgeClumps: 4, roughShare: 0.16, stems: 3, sizeShare: 0.25,
+            greens: [0x4e6236, 0x5d7440, 0x445a30, 0x52683a], bark: 0x4a3c30, tints: [0xffffff, 0xe6eedc, 0xf4ecd8, 0xd8e0d0] });
+    }
+
+    // The shrub's shape, a unit across like the leaf clump it replaces (its foot at y -1): leaf clumps, each a rough ball
+    // of twenty faces, round a middle one and over it, darker underneath; three thin stems under them to the ground.
+    // `seed` makes the two shapes the shrubs are drawn from
+    static shrubShape(seed, hedge = false) {
+        const S = HillScene.SHRUB, rand = HillLane.random(seed), positions = [], colours = [];
+        const add = (g, hex, shade) => {
+            const n = g.index ? g.toNonIndexed() : g, c = HillScene.rgb(hex), p = n.attributes.position;
+            n.computeVertexNormals();
+            const q = n.attributes.normal;
+            for (let i = 0; i < p.count; i++) {
+                positions.push(p.getX(i), p.getY(i), p.getZ(i));
+                const k = shade ? shade(q.getY(i), p.getY(i)) : 1;
+                colours.push(c[0] * k, c[1] * k, c[2] * k);
+            }
+        };
+        const clump = (x, y, z, r) => {
+            const g = new THREE.IcosahedronGeometry(r, 0), p = g.attributes.position;
+            // (each corner pushed in or out, the same corner of every face alike, so the clump is rough and closed)
+            const moved = new Map();
+            for (let i = 0; i < p.count; i++) {
+                const key = `${p.getX(i).toFixed(4)},${p.getY(i).toFixed(4)},${p.getZ(i).toFixed(4)}`;
+                if (!moved.has(key)) moved.set(key, 1 + (rand() - 0.5) * 2 * S.roughShare);
+                const k = moved.get(key);
+                p.setXYZ(i, p.getX(i) * k, p.getY(i) * k, p.getZ(i) * k);
+            }
+            g.rotateY(rand() * Math.PI);
+            g.translate(x, y, z);
+            add(g, S.greens[Math.floor(rand() * S.greens.length)], (ny, py) => (0.68 + 0.32 * (ny * 0.5 + 0.5)) * (0.85 + 0.15 * Math.min(1, (py + 1) / 1.6)));
+        };
+        if (hedge) {
+            // A hedge's piece: clumps along it (its length is x), filled out to its ends, no stems (the hedge is dense)
+            for (let i = 0; i < S.hedgeClumps; i++) {
+                const x = -0.75 + 1.5 * i / (S.hedgeClumps - 1);
+                clump(x + (rand() - 0.5) * 0.15, (rand() - 0.5) * 0.2, (rand() - 0.5) * 0.3, 0.42 + rand() * 0.12);
+            }
+        } else {
+            clump(0, 0.05, 0, 0.58);
+            for (let i = 0; i < S.clumps - 2; i++) {
+                const a = (i + rand() * 0.6) * 2 * Math.PI / (S.clumps - 2), out = 0.46 + rand() * 0.14;
+                clump(Math.cos(a) * out, -0.22 + rand() * 0.42, Math.sin(a) * out, 0.36 + rand() * 0.14);
+            }
+            clump((rand() - 0.5) * 0.3, 0.48, (rand() - 0.5) * 0.3, 0.38);
+        }
+        for (let i = 0; i < (hedge ? 0 : S.stems); i++) {
+            const a = (i + rand() * 0.5) * 2 * Math.PI / S.stems, x = Math.cos(a) * 0.12, z = Math.sin(a) * 0.12;
+            const g = new THREE.CylinderGeometry(0.025, 0.04, 0.62, 3, 1, true);
+            g.translate(0, -0.69, 0);
+            g.rotateZ((rand() - 0.5) * 0.4);
+            g.translate(x, 0, z);
+            add(g, S.bark);
+        }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        out.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+        out.computeVertexNormals();
+        // (its colours decoded once already, HillScene.rgb)
+        out.userData.linearColors = true;
+        return out;
+    }
+
+    // A clipped yew in metres, its foot at 0: a short trunk under a tapering column of leaf clumps, 4.4 m high
+    static yewShape() {
+        const rand = HillLane.random(907), positions = [], colours = [];
+        const greens = [0x2e3e26, 0x34462c, 0x2a3822];
+        const add = (g, hex, shade) => {
+            const n = g.index ? g.toNonIndexed() : g, c = HillScene.rgb(hex), p = n.attributes.position;
+            n.computeVertexNormals();
+            const q = n.attributes.normal;
+            for (let i = 0; i < p.count; i++) {
+                positions.push(p.getX(i), p.getY(i), p.getZ(i));
+                const k = shade ? shade(q.getY(i)) : 1;
+                colours.push(c[0] * k, c[1] * k, c[2] * k);
+            }
+        };
+        add(new THREE.CylinderGeometry(0.12, 0.16, 0.7, 5, 1, true).translate(0, 0.35, 0), HillScene.SHRUB.bark);
+        const rows = 6;
+        for (let k = 0; k < rows; k++) {
+            const y = 0.75 + k * 0.62, wide = 1.15 * (1 - k / (rows + 1.2)), count = k < rows - 1 ? 6 : 3;
+            for (let i = 0; i < count; i++) {
+                const a = (i + rand() * 0.5 + k * 0.4) * 2 * Math.PI / count, out = wide * (0.55 + rand() * 0.2), r = 0.32 + wide * 0.22 + rand() * 0.08;
+                const g = new THREE.IcosahedronGeometry(r, 0);
+                g.scale(1, 0.85, 1);
+                g.rotateY(rand() * Math.PI);
+                g.translate(Math.cos(a) * out, y + (rand() - 0.5) * 0.15, Math.sin(a) * out);
+                add(g, greens[Math.floor(rand() * greens.length)], ny => 0.7 + 0.3 * (ny * 0.5 + 0.5));
+            }
+            add(new THREE.IcosahedronGeometry(wide * 0.62, 0).translate(0, y, 0), greens[k % 2], ny => 0.7 + 0.3 * (ny * 0.5 + 0.5));
+        }
+        add(new THREE.IcosahedronGeometry(0.3, 0).translate(0, 0.75 + rows * 0.62, 0), greens[1], ny => 0.75 + 0.25 * (ny * 0.5 + 0.5));
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        out.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+        out.computeVertexNormals();
+        out.userData.linearColors = true;
+        return out;
+    }
+
+    // The gravestones' weathered tones (multiplied over the stone's own grey)
+    static get STONE_TINTS() { return [0xb8b2a6, 0xa8a49a, 0xc4beb0, 0x9a968c, 0xb0aa98]; }
+
+    // A headstone a unit across, high and thick (scaled by each stone): its face and back flat, its top rounded in an
+    // arch with shoulders, its edges cut back a little
+    static headstoneShape() {
+        const shape = new THREE.Shape(), w = 0.5, h = 0.5, shoulder = 0.22;
+        shape.moveTo(-w, -h);
+        shape.lineTo(w, -h);
+        shape.lineTo(w, h - shoulder);
+        shape.lineTo(w * 0.9, h - shoulder);
+        shape.absarc(0, h - shoulder, w * 0.9, 0, Math.PI, false);
+        shape.lineTo(-w, h - shoulder);
+        shape.lineTo(-w, -h);
+        const g = new THREE.ExtrudeGeometry(shape, { depth: 0.84, bevelEnabled: true, bevelThickness: 0.08, bevelSize: 0.04, bevelSegments: 1, curveSegments: 7 });
+        g.translate(0, 0, -0.5);
+        // (the arch's top within the unit: the stone's height is its scale)
+        g.computeBoundingBox();
+        const b = g.boundingBox;
+        g.translate(0, -(b.max.y + b.min.y) / 2, 0);
+        g.scale(1 / (b.max.x - b.min.x), 1 / (b.max.y - b.min.y), 1);
+        return g;
+    }
+
+    // A plain stone cross on a two-stepped base, its foot at 0, 1 high (scaled by each cross's height)
+    static crossShape() {
+        const parts = [
+            new THREE.BoxGeometry(0.46, 0.08, 0.3).translate(0, 0.04, 0),
+            new THREE.BoxGeometry(0.32, 0.07, 0.22).translate(0, 0.115, 0),
+            new THREE.BoxGeometry(0.11, 0.86, 0.09).translate(0, 0.15 + 0.43, 0),
+            new THREE.BoxGeometry(0.44, 0.1, 0.09).translate(0, 0.76, 0)
+        ];
+        const positions = [], normals = [];
+        for (const g of parts) {
+            const n = g.toNonIndexed();
+            positions.push(...n.attributes.position.array);
+            normals.push(...n.attributes.normal.array);
+        }
+        const out = new THREE.BufferGeometry();
+        out.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        out.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+        return out;
+    }
+
     static flower(repeats, at, size, colour) {
         const m = new THREE.Matrix4().compose(new THREE.Vector3(at[0], at[1], at[2]), new THREE.Quaternion(), new THREE.Vector3(size, size, size));
         repeats.flowers.push({ m, colour });
@@ -582,7 +770,8 @@ class HillScene {
             if (hedge) {
                 // A hedge's foot a little into the lowest ground under it
                 const ground = HillScene.lowestSurface(lane, at.x, at.z, [mid.alongX, mid.alongZ], half, [mid.leftX, mid.leftZ], 0.3);
-                HillScene.leaf(repeats, [at.x, ground + 0.55, at.z], half * 1.1, 0.6, 0.35, [0x4a5e34, 0x55693a][Math.floor(rand() * 2)], mid.heading);
+                rand();
+                HillScene.shrub(repeats, [at.x, ground + 0.55, at.z], half * 1.1, 0.6, 0.35, mid.heading, true);
                 HillScene.stand(repeats, 'hedge', [at.x, at.z], [mid.alongX, mid.alongZ], half, [mid.leftX, mid.leftZ], 0.3, ground - 0.05);
                 continue;
             }
@@ -632,7 +821,8 @@ class HillScene {
             for (let s = gap.from + 0.5; s < gap.to - 0.4; s += 1.2) {
                 if (gateAt !== null && Math.abs(s - gateAt) < 0.9) continue;
                 const a = lane.at(s, front + gap.side * 0.45, 0, {}), ground = HillScene.lowestSurface(lane, a.x, a.z, [1, 0], 0.2, [0, 1], 0.2);
-                HillScene.leaf(repeats, [a.x, ground + 0.15, a.z], 0.3, 0.2, 0.2, greens[Math.floor(rand() * 3)]);
+                rand();
+                HillScene.shrub(repeats, [a.x, ground + 0.15, a.z], 0.3, 0.2, 0.2);
                 HillScene.stand(repeats, 'shrub', [a.x, a.z], [1, 0], 0.1, [0, 1], 0.1, ground - 0.05);
                 for (let k = 0; k < 2; k++) HillScene.flower(repeats, [a.x + (rand() - 0.5) * 0.4, ground + 0.36, a.z + (rand() - 0.5) * 0.3], 0.05, blooms[Math.floor(rand() * blooms.length)]);
             }
@@ -659,7 +849,7 @@ class HillScene {
             const size = 0.4 + rand() * 0.6;
             // A shrub: its foot a little into the lowest land under it
             a.y = HillScene.lowestSurface(lane, a.x, a.z, [1, 0], size * 0.5, [0, 1], size * 0.5) + size * 0.7;
-            HillScene.leaf(repeats, [a.x, a.y, a.z], size, size * 0.8, size, greens[i % 3]);
+            HillScene.shrub(repeats, [a.x, a.y, a.z], size, size * 0.8, size);
             HillScene.stand(repeats, 'shrub', [a.x, a.z], [1, 0], 0.1, [0, 1], 0.1, a.y - size * 0.8);
             if (rand() < 0.6) for (let k = 0; k < 4; k++) HillScene.flower(repeats, [a.x + (rand() - 0.5) * size, a.y + size * 0.6, a.z + (rand() - 0.5) * size], 0.06, blooms[Math.floor(rand() * blooms.length)]);
         }
@@ -693,8 +883,10 @@ class HillScene {
         const seat = Math.max(...ends.map(at => land.surfaceAt(at[0], at[1])));
         const top = seat + 0.45;
         for (const k of [-0.75, 0.75]) HillScene.standing(lane, repeats, 'bench end', meshes.dressed, [b.x + b.a[0] * k, b.z + b.a[1] * k], [b.a[0] * 0.06, b.a[1] * 0.06], [b.o[0] * 0.22, b.o[1] * 0.22], top, stone);
-        meshes.plain.box([b.x, top + 0.03, b.z], [b.a[0] * 0.9, 0, b.a[1] * 0.9], [0, 0.03, 0], [b.o[0] * 0.24, 0, b.o[1] * 0.24], wood);
-        meshes.plain.box([b.x + b.o[0] * 0.22, top + 0.35, b.z + b.o[1] * 0.22], [b.a[0] * 0.9, 0, b.a[1] * 0.9], [0, 0.18, 0], [b.o[0] * 0.03, 0, b.o[1] * 0.03], wood);
+        // (the seat three slats with gaps between, the back two, leaning back a little, an arm along each end)
+        for (const across of [-0.16, 0, 0.16]) meshes.plain.box([b.x + b.o[0] * across, top + 0.03, b.z + b.o[1] * across], [b.a[0] * 0.9, 0, b.a[1] * 0.9], [0, 0.025, 0], [b.o[0] * 0.065, 0, b.o[1] * 0.065], wood);
+        for (const [up, back] of [[0.24, 0.22], [0.44, 0.25]]) meshes.plain.box([b.x + b.o[0] * back, top + up, b.z + b.o[1] * back], [b.a[0] * 0.9, 0, b.a[1] * 0.9], [b.o[0] * 0.012, 0.06, b.o[1] * 0.012], [b.o[0] * 0.02, 0, b.o[1] * 0.02], wood);
+        for (const k of [-0.75, 0.75]) meshes.plain.box([b.x + b.a[0] * k, top + 0.25, b.z + b.a[1] * k], [b.a[0] * 0.04, 0, b.a[1] * 0.04], [0, 0.025, 0], [b.o[0] * 0.24, 0, b.o[1] * 0.24], wood);
         // The pump: a stone trough and the iron column beside it, its spout over the trough and its handle
         const p = place(g.pump[0], g.pump[1]);
         const trough = HillScene.standing(lane, repeats, 'trough', meshes.dressed, [p.x, p.z], [p.a[0] * 0.6, p.a[1] * 0.6], [p.o[0] * 0.3, p.o[1] * 0.3], land.heightAt(p.x, p.z) + 0.5, stone);
@@ -704,6 +896,11 @@ class HillScene {
         meshes.dark.box([col[0] - p.o[0] * 0.2, colTop - 0.35, col[1] - p.o[1] * 0.2], [p.a[0] * 0.03, 0, p.a[1] * 0.03], [0, 0.03, 0], [p.o[0] * 0.2, 0, p.o[1] * 0.2], rgb(C.iron));
         meshes.dark.box([col[0] + p.a[0] * 0.3, colTop - 0.1, col[1] + p.a[1] * 0.3], [p.a[0] * 0.3, 0.12, p.a[1] * 0.3], [0, 0.02, 0], [p.o[0] * 0.02, 0, p.o[1] * 0.02], rgb(C.iron));
         meshes.dark.box([col[0], colTop + 0.06, col[1]], [p.a[0] * 0.12, 0, p.a[1] * 0.12], [0, 0.06, 0], [p.o[0] * 0.12, 0, p.o[1] * 0.12], rgb(C.iron));
+        // (its cap's knob, a collar under the cap, a plinth at its foot, the handle's knob)
+        meshes.dark.box([col[0], colTop + 0.15, col[1]], [p.a[0] * 0.05, 0, p.a[1] * 0.05], [0, 0.03, 0], [p.o[0] * 0.05, 0, p.o[1] * 0.05], rgb(C.iron));
+        meshes.dark.box([col[0], colTop - 0.06, col[1]], [p.a[0] * 0.11, 0, p.a[1] * 0.11], [0, 0.025, 0], [p.o[0] * 0.11, 0, p.o[1] * 0.11], rgb(C.iron));
+        meshes.dark.box([col[0], trough - 0.4, col[1]], [p.a[0] * 0.14, 0, p.a[1] * 0.14], [0, 0.1, 0], [p.o[0] * 0.14, 0, p.o[1] * 0.14], rgb(C.iron));
+        meshes.dark.box([col[0] + p.a[0] * 0.58, colTop - 0.06, col[1] + p.a[1] * 0.58], [p.a[0] * 0.035, 0, p.a[1] * 0.035], [0, 0.035, 0], [p.o[0] * 0.035, 0, p.o[1] * 0.035], rgb(C.iron));
     }
 
     // The wall the cat sits on: the first garden or front wall on the left between s 96 and 180 at least 3 m long,
@@ -796,18 +993,20 @@ class HillScene {
             const ux = Math.sin(turn), uz = Math.cos(turn);
             const ground = HillScene.lowestSurface(lane, at[0], at[2], [ux, uz], 0.25, [uz, -ux], 0.05);
             const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), turn);
+            // Each its own weathered tone (STONE_TINTS), a little out of true as old stones are; its foot in the land
+            const tint = HillScene.STONE_TINTS[Math.floor(repeats.shrubRand() * HillScene.STONE_TINTS.length)];
+            q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), (repeats.shrubRand() - 0.5) * 0.08));
             if (rand() < 0.3) {
-                // A plain cross: an upright and its arm
-                repeats.stones.push(new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + (high + 0.2) / 2, at[2]), q, new THREE.Vector3(0.12, high + 0.2, 0.1)));
-                repeats.stones.push(new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + high * 0.78, at[2]), q, new THREE.Vector3(0.5, 0.12, 0.1)));
-            } else repeats.stones.push(new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + high / 2, at[2]), q, new THREE.Vector3(0.5, high, 0.1)));
+                // A plain cross on a stepped base (HillScene.crossShape: its foot at 0, 1 high and 0.5 across)
+                repeats.crosses.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12, at[2]), q, new THREE.Vector3(1, high + 0.2, 1)), colour: tint });
+            } else repeats.stones.push({ m: new THREE.Matrix4().compose(new THREE.Vector3(at[0], ground - 0.12 + high / 2, at[2]), q, new THREE.Vector3(0.5, high, 0.1)), colour: tint });
             HillScene.stand(repeats, 'gravestone', [at[0], at[2]], [ux, uz], 0.25, [uz, -ux], 0.05, ground - 0.12);
         }
         for (const [along, out] of [[-hw + 1, -hd - 11], [hw - 1, -hd - 11], [-hw - 4, -hd - 3], [hw + 1.5, -hd - 4]]) {
             const at = pt(along, 0, out);
             const ground = HillScene.lowestSurface(lane, at[0], at[2], [c.alongX, c.alongZ], 0.8, [c.outX, c.outZ], 0.8);
             // A yew: a dark column of clumps narrowing to its top
-            for (let k = 0; k < 4; k++) HillScene.leaf(repeats, [at[0], ground + 0.8 + k * 1.1, at[2]], 1.3 - k * 0.25, 0.9, 1.3 - k * 0.25, [0x2e3e26, 0x34462c][k % 2]);
+            HillScene.yew(repeats, [at[0], ground - 0.1, at[2]]);
             HillScene.stand(repeats, 'yew', [at[0], at[2]], [c.alongX, c.alongZ], 0.3, [c.outX, c.outZ], 0.3, ground - 0.1);
         }
         const gate = lane.walls.find(w => w.kind === 'churchyard');
@@ -963,7 +1162,8 @@ class HillScene {
                 const a = at(mid, wall.side * (half + 0.25));
                 const y = lane.roadY(road, mid, 0);
                 if (wall.hedge) {
-                    HillScene.leaf(repeats, [a[0], y + 0.8, a[2]], (e - d) / 2 * 1.15, 0.85, 0.4, [0x4a5e34, 0x55693a][Math.floor(rand() * 2)], Math.atan2(p.dirX, p.dirZ));
+                    rand();
+                    HillScene.shrub(repeats, [a[0], y + 0.8, a[2]], (e - d) / 2 * 1.15, 0.85, 0.4, Math.atan2(p.dirX, p.dirZ), true);
                     continue;
                 }
                 const top = y + (steps ? 2.2 : 1.6);
