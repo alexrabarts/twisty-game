@@ -652,7 +652,10 @@ class StopScene {
                 geometry.setAttribute('color', new THREE.Float32BufferAttribute(g.colors, 3));
                 if (g.uvs) geometry.setAttribute('uv', new THREE.Float32BufferAttribute(g.uvs, 2));
                 geometry.computeVertexNormals();
-                const material = name === 'stop-area' ? StopScene.areaMaterial() : new THREE.MeshLambertMaterial({ vertexColors: true });
+                // (the props' shadow is drawn two-sided, as the world's other casters are: drawn from the back only they
+                // needed a depth program of their own, compiled on the first frame they met the sun's shadow box, which
+                // in the Tremola's fly was a frame of 460 to 590 ms; world-shot)
+                const material = name === 'stop-area' ? StopScene.areaMaterial() : new THREE.MeshLambertMaterial({ vertexColors: true, shadowSide: THREE.DoubleSide });
                 const mesh = new THREE.Mesh(geometry, material);
                 mesh.name = name;
                 mesh.receiveShadow = true;

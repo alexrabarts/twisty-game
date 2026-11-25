@@ -8287,7 +8287,11 @@ WORLD['world-stop-shots'] = async (page) => {
 // with the camera under the ground.
 //   node tools/terrain-check.mjs world-shot --world gotthard-north --gpu [--desk] [--phone] [--levels] [--fly 0,1,3,5,7,9] [--out <dir>]
 const SHOT_RIDE_MS = 14;
+// The ride into the line starts this far before it, so the scene's kinds of mesh have been drawn as in a real ride
+const SHOT_APPROACH_M = 800;
 const SHOT_FRAMES = 40;
+// No frame of the fly may take longer than this (the scene's step, the land's update, the cull and the draw)
+const SHOT_FRAME_MS = 50;
 // A step is a frame whose move (or turn, or change of lens) differs from the frame before's by more than this: the fly may
 // be fast (the Tremola's hold is 644 m back), never sudden. The first frame is held to the chase camera's own move
 const SHOT_STEP = { moveM: 0.1, aimDeg: 0.05, lensDeg: 0.02 };
@@ -8313,7 +8317,7 @@ WORLD['world-shot'] = async (page) => {
     const tryHold = option('hold') ? option('hold').split(',').map(Number) : null;
     // --no-raise: the scene with no raise at any level, to tell the raise's cost from the scene's own
     if (flag('no-raise')) await page.evaluate(() => Object.defineProperty(StopScene, 'RAISE', { configurable: true, get: () => ({}) }));
-    const begun = await page.evaluate(async (placeSource, ride, tryHold) => {
+    const begun = await page.evaluate(async (placeSource, ride, tryHold, SHOT_APPROACH_M) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment;
         if (typeof StopScene === 'undefined' || !StopScene.stopAt(env)) return { error: `no stop at the end of ${env.stage ? env.stage.id : 'the ride'}` };
@@ -8323,24 +8327,28 @@ WORLD['world-shot'] = async (page) => {
             Object.defineProperty(StopScene, 'HOLDS', { configurable: true, get: () => ({ [id]: { x, z, upM, bearing, pitch, hfov, vfovMost: 60 } }) });
         }
         game.worldLinger = false;
-        await placeAt(env.endS - 160);
+        await placeAt(env.endS - SHOT_APPROACH_M);
         twistyDev.autopilot({ speed: ride });
         // Ridden to just short of the line with the chase camera (each step updates it), then over the line
         const at = () => (Number.isFinite(game.vehicle.projection.s) ? game.vehicle.projection.s : game.vehicle.routeS);
         let ridden = 0;
-        for (; ridden < 3000 && at() < env.endS - 1; ridden++) twistyDev.step(1);
+        for (; ridden < 8000 && at() < env.endS - 1; ridden++) twistyDev.step(1);
         if (ridden < 10) return { error: `the autopilot rode ${ridden} frames to the line (from s ${Math.round(at())}, the line at ${Math.round(env.endS)})` };
+        // (and what is in the scene is compiled, as a ride over the whole stage would have. A depth program of the sun's
+        // shadow is not compiled here: the stop's own casters must not need one of their own)
+        game.graphics.renderer.compile(game.scene, game.camera);
         const cam = game.camera;
         const aim = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
         const before = { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: aim.y, pitch: aim.x, roll: aim.z, fov: cam.fov };
         const speed = game.vehicle.speed;
         game.finishRun();
         if (!game.stopScene) return { error: 'the finish started no stop scene' };
-        return { stop: StopScene.stopAt(env).id, before, speed, hold: game.stopScene.hold, raised: game.stopScene.raised };
-    }, placeAt.toString(), SHOT_RIDE_MS, tryHold);
+        const depthPrograms = (game.graphics.renderer.info.programs || []).filter(pr => pr.name === 'MeshDepthMaterial').map(pr => String(pr.cacheKey).slice(0, 120));
+        return { warmed: game.stopShadowsWarmed || null, depthPrograms, shadowsOn: game.renderer.shadowMap.enabled, cascades: !!(game.distantLight && game.distantLight.castShadow), stop: StopScene.stopAt(env).id, before, speed, hold: game.stopScene.hold, raised: game.stopScene.raised };
+    }, placeAt.toString(), SHOT_RIDE_MS, tryHold, SHOT_APPROACH_M);
     if (begun.error) return { error: begun.error };
     // The fly, frame by frame at 60 frames a second, every frame drawn: the steps of the camera and the worst frame
-    const fly = await page.evaluate(async (moments) => {
+    const fly = await page.evaluate(async (moments, frameMs) => {
         const env = game.environment, scene = game.stopScene, cam = game.camera;
         const pose = () => { const e = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ'); return { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: e.y, pitch: e.x, roll: e.z, fov: cam.fov }; };
         const turn = (a, b) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
@@ -8348,13 +8356,65 @@ WORLD['world-shot'] = async (page) => {
         const poses = [];
         const frames = [];
         const marks = [];
+        // What each slow frame spent its time on: the scene's step, the land's update and each build task in it (by id),
+        // the cull, the draw, and the programs the draw compiled
+        const tasks = [];
+        const streamer = env.streamer, enqueue = streamer.enqueue.bind(streamer);
+        streamer.enqueue = (id, priority, run) => enqueue(id, priority, () => { const a = performance.now(); run(); tasks.push({ id, ms: performance.now() - a }); });
+        const renderer = game.graphics.renderer;
+        const slow = [];
         let next = 0;
+        // The shadow casters near the player (the sun's box follows it): the ones that came in this frame
+        let near = new Set();
+        const wp = new THREE.Vector3();
+        const casters = () => {
+            // (every caster that has been inside a shadow camera's box: the sun's near one and the far cascade's)
+            const out = new Map();
+            const boxes = [game.directionalLight, game.distantLight].filter(l => l && l.castShadow).map((l) => {
+                l.shadow.camera.updateMatrixWorld();
+                const f = new THREE.Frustum();
+                f.setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(l.shadow.camera.projectionMatrix, l.shadow.camera.matrixWorldInverse));
+                return f;
+            });
+            game.scene.traverseVisible((o) => {
+                if (!o.isMesh || !o.castShadow) return;
+                if (o.isInstancedMesh ? o.count > 0 && boxes.length : boxes.some(f => f.intersectsObject(o))) out.set(o.uuid, `${o.name || o.type}${o.parent && o.parent.name ? ' < ' + o.parent.name : ''}${o.isInstancedMesh ? ' instanced' : ''}${o.isSkinnedMesh ? ' skinned' : ''}`);
+            });
+            for (const k of near) if (!out.has(k)) out.set(k, '');
+            return out;
+        };
         while (scene.t < Math.max(...moments) + 1 / 120) {
+            tasks.length = 0;
+            const before = near;
+            const programs = renderer.info.programs ? renderer.info.programs.length : 0;
+            const states = () => scene.riders.map(r => `${r.stood ? 'S' : ''}${(r.player ? r.bike.group : r.bike.bikeGroup || {}).visible ? 'V' : ''}`).join(',') + ` puffs ${scene.puffs.length} drawRaised ${!!scene.drawRaised}`;
+            const was = states();
             const t0 = performance.now();
             game.stepStopScene(1 / 60);
+            const t1 = performance.now();
+            const is = states();
             env.update(game.vehicle.position, scene.stop.s, null, 4, 1 / 60);
+            const t2 = performance.now();
+            game.updatePerformanceCulling();
+            const t3 = performance.now();
             game.graphics.render(game.scene, game.camera);
-            frames.push(performance.now() - t0);
+            const t4 = performance.now();
+            frames.push(t4 - t0);
+            // (a program compiled in the draw: which objects draw with it)
+            const known = renderer.info.programs ? new Set(renderer.info.programs.slice(0, programs)) : new Set();
+            const compiled = renderer.info.programs ? renderer.info.programs.filter(pr => !known.has(pr)) : [];
+            const users = [];
+            if (compiled.length) game.scene.traverse((o) => {
+                if (!o.material || users.length >= 6) return;
+                for (const m of [].concat(o.material)) {
+                    const props = renderer.properties.get(m);
+                    if (props && compiled.includes(props.currentProgram)) users.push(`${o.name || o.type} (${m.name || m.type})`);
+                }
+            });
+            const nowNear = frameMs < Infinity ? casters() : new Map();
+            const came = [...nowNear.keys()].filter(k => !before.has(k)).map(k => nowNear.get(k));
+            near = new Set(nowNear.keys());
+            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
             poses.push(pose());
             if (next < moments.length && scene.t >= moments[next] - 1e-6) { marks.push({ t: moments[next], k: poses.length - 1 }); next++; }
         }
@@ -8364,8 +8424,9 @@ WORLD['world-shot'] = async (page) => {
         const sorted = [...frames].sort((a, b) => a - b);
         const slowest = frames.indexOf(Math.max(...frames));
         const top = frames.map((ms, k) => ({ t: Math.round((k + 1) * 100 / 60) / 100, ms: Math.round(ms * 10) / 10 })).sort((a, b) => b.ms - a.ms).slice(0, 6);
-        return { poses, marks, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
-    }, moments);
+        streamer.enqueue = enqueue;
+        return { poses, marks, slow, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
+    }, moments, SHOT_FRAME_MS);
     const first = fly.poses[0];
     const turn = (a, b) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
     const jump = { moveM: Math.hypot(first.x - begun.before.x, first.y - begun.before.y, first.z - begun.before.z), aimDeg: Math.max(turn(first.yaw, begun.before.yaw), turn(first.pitch, begun.before.pitch), turn(first.roll, begun.before.roll)) * 180 / Math.PI, lensDeg: Math.abs(first.fov - begun.before.fov) };
@@ -8443,7 +8504,7 @@ WORLD['world-shot'] = async (page) => {
         }
         await page.evaluate(() => game.quality.release(performance.now()));
     }
-    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flyFrames: fly.frames, held, shots, levels, phone };
+    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyFrames: fly.frames, held, shots, levels, phone };
     writeFileSync(join(out, `${tag}-shot.json`), JSON.stringify(result, null, 1));
     return result;
 };
@@ -8501,6 +8562,7 @@ function shotChecks(results, failures) {
         if (!(shot.jump[key] <= first[key])) failures.push(`world-shot: the first frame of the scene is ${shot.jump[key].toFixed(3)} (${key}) from the chase camera's last, over ${first[key]}`);
         if (!(shot.worstStep[key] <= most)) failures.push(`world-shot: a frame of the fly changes its ${key} by ${shot.worstStep[key].toFixed(3)} from the frame before, over ${most}`);
     }
+    if (!(shot.flyFrameWorstMs <= SHOT_FRAME_MS)) failures.push(`world-shot: a frame of the fly took ${shot.flyFrameWorstMs} ms, over ${SHOT_FRAME_MS}: ${JSON.stringify((shot.flySlow || []).slice(0, 3))}`);
     if (!shot.held.bars.every(h => h > 0)) failures.push(`world-shot: the bars are ${JSON.stringify(shot.held.bars)} px high`);
     if (!(shot.held.cameraOverGroundM > 0.2)) failures.push(`world-shot: the held camera is ${shot.held.cameraOverGroundM} m over the ground`);
 }
