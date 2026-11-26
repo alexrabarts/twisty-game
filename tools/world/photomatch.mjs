@@ -4,7 +4,8 @@
 //   node tools/world/photomatch.mjs coverage
 //   node tools/world/photomatch.mjs haze [--round 5]
 //   --data <folder> reads the drawn world of another data folder (worlds/gotthard with --world gotthard-north);
-//   --stage <id> keeps the photos on that stage of its ride (a leg's own numbers)
+//   --stage <id> keeps the photos on that stage of its ride (a leg's own numbers); --out <dir> writes the round there
+//   (outside the repo: a leg's shots, ~/Library/Caches/twisty-world/tour-shots/<leg>/)
 //
 // For every row of every geo CSV (~/Pictures/twisty-reference/geo/*.csv, "file;lat;lng"):
 //   1. WGS84 -> LV95 (swisstopo's approximate formulas) -> local metres of world/manifest.json; the nearest point
@@ -81,19 +82,22 @@ function stageFilter(margin) {
   if (!id) return () => true;
   const dir = path.join(ROOT, option('data', 'world'));
   const world = decodeWorld(dir);
-  const stage = world.ride.stages.find(st => st.id === id);
+  const stage = world.manifest.stages.find(st => st.id === id);
   if (!stage) throw new Error(`no stage ${id} in ${dir}`);
   const samples = rideSamples(world.edges, world.ride.path);
-  // (a stage runs on to the next one's start, and the last to the ride's end: its stop past the finish line is its own)
-  const next = world.ride.stages.find(st => st.from >= stage.to - 1e-6 && st.id !== id);
-  const to = next ? next.from : Infinity;
+  // (a stage runs on to the next one's start, and the last to the ride's end: its stop past the finish line is its own;
+  // a leg of the tour, js/world/tour.js, holds its stops at both ends, within STOP_REACH_M past its line)
+  const STOP_REACH_M = 200;
+  const next = stage.base ? null : world.ride.stages.find(st => st.from >= stage.to - 1e-6 && st.id !== id);
+  const to = stage.base ? stage.to + STOP_REACH_M : next ? next.from : Infinity;
+  const from = stage.base ? stage.from - STOP_REACH_M : stage.from;
   return (x, z) => {
     let best = Infinity, at = 0;
     for (let i = 0; i < samples.s.length; i += 2) {
       const d = Math.hypot(samples.x[i] - x, samples.z[i] - z);
       if (d < best) { best = d; at = samples.s[i]; }
     }
-    return best <= margin && at >= stage.from && at <= to;
+    return best <= margin && at >= from && at <= to;
   };
 }
 
@@ -493,7 +497,9 @@ async function main() {
     return;
   }
   const round = option('round', '1');
-  const roundDir = path.join(REFERENCE_DIR, 'matches', `round-${round}`);
+  // (`--out <dir>`: the round's pictures and numbers somewhere else, outside the repo: a leg's own folder of shots)
+  const roundDir = option('out') ? path.resolve(option('out')) : path.join(REFERENCE_DIR, 'matches', `round-${round}`);
+  if (roundDir.startsWith(`${ROOT}${path.sep}`)) throw new Error('--out must be outside the repo: the photos are private');
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'photomatch-'));
   const cacheDir = resolveCacheDir();
   const only = option('only');
