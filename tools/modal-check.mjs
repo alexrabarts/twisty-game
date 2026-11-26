@@ -63,12 +63,12 @@ const pause = { eval: () => game.pauseRace(), touch: '.virtual-button-pause', to
 const finish = { eval: () => { game.finishRun(); if (game.stopScene) game.skipStopScene(); }, top: 'finishBanner' };
 // A world ride is up: the world's environment, the bike and the run
 const WORLD_READY = 'window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun';
-// The world chosen on the menu is the leg picked on the leg list (js/world/legs.js): leg 1, the run-in from the north
+// The world chosen on the menu is the leg picked on the leg list (js/world/legs.js): leg 1 of the tour, Airolo up the pass road to the lookout (js/world/tour.js)
 const worldFromMenu = () => {
     const problems = [];
     const env = game.environment;
     if (!env || env.constructor.name !== 'WorldEnvironment') problems.push(`the environment is ${env && env.constructor.name}, not WorldEnvironment`);
-    if (env && env.config.id !== 'gotthard-north') problems.push(`the stage is ${env.config.id}, not gotthard-north`);
+    if (env && env.config.id !== 'airolo-lookout') problems.push(`the stage is ${env.config.id}, not airolo-lookout`);
     if (location.search) problems.push(`the page has a query: ${location.search}`);
     const chosen = game.tourSystem.selectedCharacterId;
     if (!game.selectedCharacter || game.selectedCharacter.id !== chosen) problems.push(`the ride has rider ${game.selectedCharacter && game.selectedCharacter.id}, the menu chose ${chosen}`);
@@ -81,7 +81,7 @@ const legsListed = () => {
     const rows = [...document.querySelectorAll('#world-legs .world-legs-row')];
     if (!rows.length) problems.push('the leg list has no legs');
     if (!document.querySelector('#world-legs .world-legs-pass')) problems.push('the leg list names no pass');
-    if (document.activeElement !== document.querySelector('#world-legs [data-leg="gotthard-north"]')) problems.push('leg 1 is not focused');
+    if (document.activeElement !== document.querySelector('#world-legs [data-leg="airolo-lookout"]')) problems.push('leg 1 is not focused');
     return problems;
 };
 const creditShown = () => {
@@ -317,7 +317,7 @@ const SEQUENCES = [
         { click: '#riderNextBtn', top: MENU },
         { click: '#riderPrevBtn', top: MENU },
         { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
-        { click: '#world-legs [data-leg="gotthard-north"]', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
+        { click: '#world-legs [data-leg="airolo-lookout"]', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
         pause,
         { click: '#world-pause [data-credits]', top: 'world-credits', check: creditShown },
         { click: '#world-credits button', top: 'world-pause' },
@@ -338,7 +338,7 @@ const SEQUENCES = [
     ] },
     { name: 'menu-world-fallback', page: 'menu', noWorld: true, steps: [
         { click: '#riderContinueBtn', top: 'world-legs' },
-        { click: '#world-legs [data-leg="gotthard-north"]', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
+        { click: '#world-legs [data-leg="airolo-lookout"]', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
         { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
     ] },
 

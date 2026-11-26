@@ -152,7 +152,8 @@ The Tremola slice stays in `world/`, byte for byte. A later import that is not t
 - **A stage names its folder.** `WorldData.FOLDERS` lists each shipped folder and its stages; `WorldData.baseFor(id)` gives the folder of stage `id` (`world/` for `all` and an unknown id). `?world=<id>` reads that folder; `?worldData=worlds/<name>` names one directly (under `worlds/` or `tests/fixtures/world/` only). A shipped folder is trusted when its manifest is the one its own `SHA256SUMS` lists.
 - **The board rows.** `functions/world-courses.json` holds the rows of every folder: an import replaces its own stages' rows, the rows of the stages its folder held before (its old manifest: two legs made one lose their rows) and its tour's (`world-tour-<name>-v1` for `worlds/<name>`, written for two stages or more), and keeps the rest (`writeCourses`). A course that changes gets a new board id: the next `version` of its stage in `tools/world/boards.json`, with the reason (`gotthard-north` is 2: the leg runs on to the lookout). A stage shorter than twice the station spacing has no checkpoint: `gates` 0 and one floor.
 - **Stops off the D1 line.** `route.json` `points` holds places the D1 waypoints do not pass (`id` after the waypoints); only slices name them. `snap: "nearest"` takes the nearest road of any class.
-- **The menu.** `WorldLegs.LIST` (js/world/legs.js) holds the legs in ride order, grouped by pass ("The legs on the menu" in `world.md`).
+- **The menu.** `WorldLegs.LIST` (js/world/legs.js) holds the legs in ride order, grouped by pass, from the tour's table ("The legs on the menu" and "The tour" in `world.md`).
+- **A leg of the tour from a ride a folder holds.** A leg that rides a stage a folder already holds, the other way or a part of it, is not a new folder: js/world/tour.js names its `base` stage, its `dir` and its two stops, and `node tools/world/tour.mjs` writes it into that folder as a stage of its own (its stations, its floors, its board row; `world.md`, "The tour" and "A stage ridden either way"). Only an import makes a ride: leg 1 (`airolo-lookout`, Airolo up the modern road to the lookout) is the ride of `worlds/airolo` (`node tools/world/import.mjs --stages airolo-lookout --out worlds/airolo`, then `node tools/world/tour.mjs`): 10.7 km, 4 checkpoints, 17 found places, 58 height tiles, 1.29 MB. Its first 3.7 km are the Tremola's first 3.7 km (the two rides share the road out of Airolo); the folders overlap there and each draws its own copy.
 
 ## The stops at a leg's ends
 
@@ -175,6 +176,16 @@ A leg starts and ends at a real stop: a hotel, a restaurant, a lookout, a fuel s
 
 The stops were laid on the shipped data, not imported whole: `world/` was imported before the bench rules of 6f, and a new import changes 9 more height tiles and one found layby (p5, s 3 750.7 to 3 759.3, 32 m to 25.9 m long) under those rules. Only the manifest's `stops` and the nodes the stops' areas level on three tiles (`h-3_22`, `h-m3_16`, `h-m4_16`, 71 nodes) changed; the ride, the stations, the places and the board row `world-tremola-v1` are the same.
 
+- **Where a leg of the tour starts.** A stop on the way may be where a leg starts (`legStart: true` in route.json): the group gathers there, so its way in may be `startPathMaxM` long. A stop records `s1`, the far end of the run of the ride beside its area (a `direct` stop): a stage ridden the other way turns in there.
+- **A held shot in the data.** A stop's `hold` in route.json (the eye at LV95 `e`, `n`, `upM` over the drawn ground, `bearing`, `pitch`, `hfov`, `vfovMost`, `haze`) goes into the manifest in local metres; the stop scene flies there (`StopScene.holdOf`).
+
+### The stops of `worlds/airolo`
+
+| Stop | Kind | Area | Way in |
+| --- | --- | --- | --- |
+| Start of `airolo-lookout` | `carpark` | the station's public car park at Airolo (the Tremola's start stop) | by road |
+| End of `airolo-lookout` (finish line s 10 695) | `lookout` | the outer public car park at the hairpin of the lookout over Airolo (the Gotthard leg's end stop), with the lookout's photo-matched hold | direct, turn-in at s 10 755 |
+
 ### The stops of `worlds/gotthard`
 
 | Stop | Kind | Area | Way in |
@@ -182,6 +193,9 @@ The stops were laid on the shipped data, not imported whole: `world/` was import
 | Start of `gotthard-north` | `hotel` | the public car park (2 869 m2) at the south-west edge of Andermatt, beside the Gotthard road | direct, at the start |
 | On the way (`via`), turn-in at s 11 637.8 | `restaurant` | the public car park (2 194 m2) by the hospice and the two remote inns on the summit | by road, 226 m from the modern road over the hospice's access road |
 | End of `gotthard-north` (finish line s 14 504.2) | `lookout` | the outer public car park (1 847 m2) at the hairpin of the lookout over Airolo, with the kiosk | direct |
+| On the way (`via`, `legStart`), turn-in at s 2 650 | `carpark` | the public car park at the west edge of Hospental, on the Furka road, where leg 11 of the tour starts (and leg 10 will end) | by road |
+
+The Hospental stop was laid on the shipped data, as the Tremola's were: a re-import with it gives the same ride and graph and levels 20 nodes of two tiles (`h-m4_2`, `h-m4_3`) more than a re-import without it; only those nodes and the manifest's stops changed. A whole re-import would also bring the newer land rules into 35 more tiles and change the far land's sinks.
 
 ## The far land (realism round 1)
 
