@@ -34,15 +34,13 @@ import { stagesFor } from '../helpers/world-stages.js';
 
 // The stages that fail today, each with its exact count of places. The table may only shrink, and must end empty: a
 // count that rises fails, a count that falls fails until the table is brought down to it. No other way passes a stage.
-// Measured 2026-11-26 (lod0, lod1, far, physics places in each). No stage has land of a tile over its road: the far
-// grid over worlds/susten's road, and the physics 2 to 3 cm off the ribbon down the Tremola, are what is left
+// Measured 2026-11-26 (lod0, lod1, far, physics places in each). No stage has land of a tile over its road, and with the
+// far grid sunk at the stride it is drawn at none has the far grid over it (worlds/susten: 3, 17 and 5 places before):
+// the physics 2 to 3 cm off the ribbon down the Tremola is what is left
 const KNOWN = {
     'tremola': 11, // 0, 0, 0, 11
     'summit-airolo': 12, // 0, 0, 0, 12
-    'airolo-lookout': 2, // 0, 0, 0, 2
-    'andermatt-goeschenen': 3, // 0, 0, 3, 0
-    'goeschenen-susten': 17, // 0, 0, 17, 0
-    'susten-gadmen': 5 // 0, 0, 5, 0
+    'airolo-lookout': 2 // 0, 0, 0, 2
 };
 
 const STEP_M = 2;
