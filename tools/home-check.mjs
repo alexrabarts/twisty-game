@@ -232,7 +232,8 @@ async function run(browser, port, name) {
     await shot('map');
     // Hover: a leg not yet built shows in the card as coming later; an open one with its numbers
     const hover = async (id, label) => {
-        const point = await page.evaluate(sel => { const el = document.querySelector(sel); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, `#world-legs .map-pin[data-leg="${id}"]`);
+        // (a phone's map pans: the pin is brought into view first, as a player would)
+        const point = await page.evaluate(sel => { const el = document.querySelector(sel); if (!el) return null; el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }, `#world-legs .map-pin[data-leg="${id}"]`);
         if (!point) { failures.push(`map: no pin for ${id}`); return; }
         if (viewport.hasTouch) await page.touchscreen.tap(point.x, point.y);
         else await page.mouse.move(point.x, point.y);

@@ -19,17 +19,15 @@ const store = (finished = [], best = null) => {
 const press = (code) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { code, bubbles: true, cancelable: true }));
 
 describe('the map data', () => {
-    test('every leg of the tour has a line of its own, starting where the leg before it ends', () => {
+    test('every leg of the tour has a line of its own, starting where the leg before it ends (run tools/world/tourmap.mjs when a leg is built or its ends move)', () => {
         for (const leg of WorldTour.LEGS) {
             const line = WorldMapData.legs[leg.n];
             expect([leg.n, Array.isArray(line) && line.length >= 10]).toEqual([leg.n, true]);
             line.forEach(p => expect(p.every(Number.isFinite)).toBe(true));
-            // (the loop's own close is the exception: leg 12 ends in Airolo, leg 1 starts at its station 1.2 km on)
-            if (leg.n === 1) continue;
-            const before = WorldMapData.legs[leg.n - 1];
+            const before = WorldMapData.legs[leg.n === 1 ? 12 : leg.n - 1];
             const [ex, ez] = before[before.length - 1], [sx, sz] = line[0];
-            // (the plan's legs join within a few hundred metres: a stop's turn-in, the lookout's lay-by)
-            expect([leg.n, Math.hypot(ex - sx, ez - sz) < 400]).toEqual([leg.n, true]);
+            // (they join within a few hundred metres: a stop's way in and out, a built leg beside a planned one)
+            expect([leg.n, Math.hypot(ex - sx, ez - sz) < 600]).toEqual([leg.n, true]);
         }
     });
 
@@ -59,7 +57,8 @@ describe('the map data', () => {
         const tremola = WorldMap.lineOf(WorldLegs.find('tremola'));
         const twelve = WorldMapData.legs[12];
         expect(tremola[0]).toEqual(twelve[twelve.length - 1]);
-        expect(WorldMap.climb(tremola).up).toBe(WorldMap.climb(twelve).down);
+        // (the 10 m step counts from the line's own start, so the two ways agree to a step or so)
+        expect(Math.abs(WorldMap.climb(tremola).up - WorldMap.climb(twelve).down)).toBeLessThanOrEqual(WorldMap.CLIMB_STEP_M);
     });
 });
 

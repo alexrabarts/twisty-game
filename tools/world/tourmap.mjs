@@ -1,15 +1,20 @@
 // The tour map's lines (js/world/tourmap-data.js): the road of each of the tour's twelve legs, simplified, with the
-// ground height at each point, and the places the map names. The menu draws them over a relief of the far land
-// (js/world/tourmap.js). Safe to run again: the same input gives the same bytes.
+// height at each point, and the places the map names. The menu draws them over a relief of the far land
+// (js/world/tourmap.js). Safe to run again: the same input gives the same bytes. Run it again when a leg is built or
+// its ends move (js/world/tour.js).
 //   node tools/world/tourmap.mjs --plan <tour plan json> [--cache <dir>] [--out js/world/tourmap-data.js]
 //
-// The plan is the tour's planning file: `legs[k].pts`, the road of leg k + 1 as LV95 [E, N] points, and `W`, named
-// points as LV95 [E, N]. Only coordinates are read from it. Heights come from the 50 m pooled swissALTI3D cache
-// (`alti3d/far50`, tools/world/cache.mjs alti3d-far), as a mean over each 50 m cell.
+// A built leg (a row of the tour with a folder) is its stage's own ride, as the game rides it, from its folder's data.
+// A leg not built yet is its road in the plan, the tour's planning file: `legs[k].pts`, the road of leg k + 1 as LV95
+// [E, N] points, and `W`, named points as LV95 [E, N]. Only coordinates are read from the plan. Its heights come from
+// the 50 m pooled swissALTI3D cache (`alti3d/far50`, tools/world/cache.mjs alti3d-far), as a mean over each 50 m cell.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decodeWorld } from './encode.mjs';
+import { rideSamples } from './stations.mjs';
+import { readTour } from './tour.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
@@ -101,14 +106,33 @@ export function heightModel(cacheDir) {
     };
 }
 
-export function build(plan, height) {
-    const legs = plan.legs.map((leg, k) => {
+// A built leg's ride as [x, z, y] points in the order it is ridden: its stage of its folder's ride (the forward frame's
+// `from` to `to`, turned round for a stage ridden the other way)
+export function rideLine(root, leg) {
+    const world = decodeWorld(path.join(root, leg.folder));
+    const stage = world.manifest.stages.find(st => st.id === leg.id);
+    if (!stage) throw new Error(`leg ${leg.n} (${leg.id}): no stage of that id in ${leg.folder}`);
+    const samples = rideSamples(world.edges, world.ride.path);
+    const points = [];
+    for (let i = 0; i < samples.s.length; i++) {
+        if (samples.s[i] >= stage.from - 1e-6 && samples.s[i] <= stage.to + 1e-6) points.push([samples.x[i], samples.z[i], samples.y[i]]);
+    }
+    return stage.dir === -1 ? points.reverse() : points;
+}
+
+const round = ([x, z, y]) => [Math.round(x / ROUND_M) * ROUND_M, Math.round(z / ROUND_M) * ROUND_M, Math.round(y)];
+
+export function build(plan, height, tour = readTour(), root = ROOT) {
+    const legs = tour.LEGS.map((row) => {
+        if (row.folder) return { n: row.n, line: simplify(rideLine(root, row), TOLERANCE_M).map(round) };
+        const leg = plan.legs[row.n - 1];
+        if (!leg) throw new Error(`leg ${row.n}: neither built nor in the plan`);
         const line = simplify(leg.pts.map(p => [...toWorld(p), p]), TOLERANCE_M).map(([x, z, p]) => {
             const y = height(p);
-            if (!Number.isFinite(y)) throw new Error(`leg ${k + 1}: no height at ${p.join(',')}`);
-            return [Math.round(x / ROUND_M) * ROUND_M, Math.round(z / ROUND_M) * ROUND_M, Math.round(y)];
+            if (!Number.isFinite(y)) throw new Error(`leg ${row.n}: no height at ${p.join(',')}`);
+            return round([x, z, y]);
         });
-        return { n: k + 1, line };
+        return { n: row.n, line };
     });
     const places = PLACES.map(place => {
         const at = plan.W[place.key];
@@ -124,7 +148,8 @@ export function render({ legs, places }) {
     const named = places.map(p => `        { name: '${p.name}', kind: '${p.kind}', side: '${p.side}', x: ${p.x}, z: ${p.z} }`).join(',\n');
     return `// WorldMapData: the tour map's lines and places, written by tools/world/tourmap.mjs (do not edit by hand). Each leg of the
 // tour (js/world/tour.js, by its number) is its road as [x, z, y] points in metres in the world's frame (x east, z
-// south, y the ground's height), simplified to ${TOLERANCE_M} m and rounded to ${ROUND_M} m. The places are the passes and the towns the
+// south, y the height): a built leg's own ride, a leg not built yet its planned road, simplified to ${TOLERANCE_M} m and
+// rounded to ${ROUND_M} m. The places are the passes and the towns the
 // map names, with the side their label stands on.
 const WorldMapData = Object.freeze({
     legs: Object.freeze({
