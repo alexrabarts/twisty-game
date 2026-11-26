@@ -299,15 +299,12 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
 // overhangs and 1 low top are its folder's. A leg ridden against its stage reads more than the stage does where the
 // same road is laid the other way: 7 more overhangs and 2 more flaps on the Tremola down (summit-airolo against
 // tremola), 9 and 1 on leg 2 against the Gotthard leg (.agent/system/world.md, "A stage ridden either way")
-// (overhangs on four legs one or two more since 2026-11-26: the far ribbons keep the rows beside a structure, and the
-// verge edges of the far sections this check reads over full-detail tiles moved by a row, some new and some gone; on
-// the Gotthard leg 6 new and 5 gone. Before that, the far slope taken down to the coarse land had made 85 to 121 more)
 const TOUR_LIMITS = {
-    'gotthard-north': { beside: 44, setback: 201, overhangs: 21, flaps: 2, low: 1 },
+    'gotthard-north': { beside: 44, setback: 201, overhangs: 20, flaps: 2, low: 1 },
     'airolo-lookout': { beside: 111, setback: 578, overhangs: 14, flaps: 3 },
-    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 31, flaps: 3, low: 1 },
-    'hospental-summit': { beside: 25, setback: 174, overhangs: 12, flaps: 1, low: 1 },
-    'summit-airolo': { beside: 115, setback: 355, overhangs: 14, flaps: 4 },
+    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 29, flaps: 3, low: 1 },
+    'hospental-summit': { beside: 25, setback: 174, overhangs: 10, flaps: 1, low: 1 },
+    'summit-airolo': { beside: 115, setback: 355, overhangs: 13, flaps: 4 },
     // (worlds/susten, measured 2026-11-26: land stretched beside the ride as on the other legs; its overhangs, flaps,
     // thin copings, jogs and bare faces are open faults, held at the Tremola's limits until they are fixed)
     'andermatt-goeschenen': { beside: 100, setback: 130 },

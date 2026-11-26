@@ -1909,7 +1909,25 @@ class RoadMesh {
                     // The slope from the verge's edge has no place there either: it stood in the side road as a sliver
                     // of land, a dark line along the junction
                     if (paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key]) continue;
-                    if (ca && cb && !overOther) groundUnder(apronOut, ca, cb, pb, pa, topColor(fa), topColor(fb));
+                    if (ca && cb && !overOther) {
+                        groundUnder(apronOut, ca, cb, pb, pa, topColor(fa), topColor(fb));
+                        // Where the next segment lays no slope (a structure's, a wall's, or none), the ground under the
+                        // verge ends at the row with its side open: a face closes it down to the land, as drawn there
+                        // (the lowest drawn at any level under a far section: the kept row beside a bridge's first row
+                        // left a 1.1 m edge 1 to 2 m over the land, world-spikes' overhangs)
+                        const close = (j, c, p, color) => {
+                            if (kindOf(j, key) === 'apron') return;
+                            const far = !!(fa && fa.deep) || !!(fb && fb.deep);
+                            const lands = [c, p].map(q => (far && landLow ? landLow(q[0], q[2]) : landAt ? landAt(q[0], q[2]) : null));
+                            if (lands.some(l => l === null)) return;
+                            const top = [c, p].map(q => underAt(q));
+                            const low = top.map((q, i) => [q[0], Math.min(q[1], lands[i] - 0.2), q[2]]);
+                            if (top.every((q, i) => q[1] - low[i][1] < 0.05)) return;
+                            RoadMesh.quad(apronOut, top[0], top[1], low[1], low[0], color);
+                        };
+                        close(k - 1, ca, pa, topColor(fa));
+                        close(k + 1, cb, pb, topColor(fb));
+                    }
                     // Then from the verge's edge out and down at the batter to the land's height, in strips no longer
                     // than APRON_STRIP_M along the edge, so no apron triangle grows into a large flat face
                     const foot = (f, p, way = o) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + way[0] * run, Math.min(y, under(p)[1]), p[2] + way[1] * run]; };
