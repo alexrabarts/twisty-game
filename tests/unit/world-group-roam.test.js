@@ -75,12 +75,23 @@ describe('the group in free roam', () => {
         group.watchPlayer(1 / 60, away);
         expect(group.halted).toBe(true);
         expect(group.haltS).toBeCloseTo(at, 3);
-        // (every rider, behind the player too, goes to wait; none stands on the road)
+        // (every rider near it, behind it too, rides on at a crawl; none pulls over or stands on the road: GROUP.far)
+        // (after its grace: a restart in place takes 5 s)
+        group.haltedS = G.far.graceS + 1;
+        group.frameS = 1 / 60;
         for (const ride of group.riders) {
             ride.tickT = 0;
             group.rideOn(ride, 1 / 60);
-            expect(['toWait', 'wait']).toContain(ride.state);
+            expect(ride.state).toBe('ride');
+            expect(ride.creep).toBe(true);
+            expect(ride.capMs).toBeLessThanOrEqual(G.far.creepMs);
         }
+        // (one far ahead of it, past where it is seen, goes to wait)
+        const far = group.riders[0];
+        far.s = at + G.far.sightM + 10;
+        far.tickT = 0;
+        group.rideOn(far, 1 / 60);
+        expect(['toWait', 'wait']).toContain(far.state);
         // (and a time trial does not: there a player off the ride is a crash or nothing)
         group.halted = group.standing = false;
         group.traffic.roam = false;

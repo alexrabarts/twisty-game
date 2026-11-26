@@ -105,12 +105,15 @@ const GROUP = {
     // gripMost, about 0.9 g in a bend (LANE_DRIVE.bike lateral 4 m/s^2 times it): a quicker pace is quicker on the
     // straights and holds its bends at that. The pace alone was spent at 1.5 (the riders' mean moving speed 17.68 m/s
     // at 1.5, 18.06 at 1.6, 17.86 at 1.7 with the bends at 0.8 g); the bends at 0.9 g with 1.6 ride quicker
-    pace: 1.6,
-    gripMost: 2.25,
+    pace: 1.9,
+    gripMost: 2.45,
     // The hardest a rider of the group plans its braking (m/s^2), for a bend and for the vehicle ahead: under its hard
     // braking (LANE_DRIVE.bike.brake, 6), which the following rule reads for the vehicle ahead. A plan harder than the
     // brake asks for room the rider cannot stop in: it arrives too fast at a bend and at the back of the one ahead
-    planMost: 5.88,
+    planMost: 7.35,
+    // A rider of the group's hard braking (m/s^2; LANE_DRIVE.bike.brake for the rest), which the following rule reads
+    // for it as the vehicle ahead. With the bends at 1 g (gripMost 2.45) the group brakes as hard as a quick road rider
+    brakeMs: 7.5,
     // The share of the crew's spread of cornering (CREW_PACES corner, from LANE_DRIVE.bike.lateral down) a rider of the
     // group keeps: at 0.3 the slowest corners at 3.52 m/s^2 before the grip, not 2.4, and the quickest at 4 as before.
     // The group waited for its slowest rider in every bend: at 1 the crew without place 1 stood 35 % of the ride. The
@@ -127,8 +130,9 @@ const GROUP = {
     // followM behind another bike on its lane, a stagger: staggerM to one side of that bike, the side swapped every
     // swapS (a range). The target is held within outM toward the edge and inM toward the centre (hairpinInM in a
     // hairpin), 0 in a single lane, 0 for one that stands behind a stopped player, and toward the edge (yieldM) for one
-    // being passed. The drift moves to it as a damped spring (spring, at most rateMs across), so the heading has no step
-    road: { outM: 0.3, inM: 0.9, hairpinInM: 0.4, biasM: 0.25, wanderM: 0.35, wanderS: 20, followM: 45, staggerM: 0.8, swapS: [20, 60], yieldM: -0.3, spring: 0.4, rateMs: 0.35 },
+    // being passed. The drift moves to it within GROUP.move.drift, so its lateral speed has no step. It never moves
+    // toward a player within besideM of alongside it, and stops such a move at stopMs2
+    road: { outM: 0.3, inM: 0.9, hairpinInM: 0.4, biasM: 0.25, wanderM: 0.35, wanderS: 20, followM: 45, staggerM: 0.8, swapS: [20, 60], yieldM: -0.3, besideM: 3, stopMs2: 2 },
     // A rider's spot in a stopping place varies around its slot (WorldPlaces.stopAt): forward by up to alongM, across
     // within the place's ground, some side by side (abreastM apart across, at the slot of the one beside it, both nearly
     // square), half turned by up to yawMax (radians) toward the kerb or away, nose in, half within squareMax of square. Each spot is drawn up to `tries` times and kept only when
@@ -137,7 +141,7 @@ const GROUP = {
     spot: { alongM: 0.7, abreastM: 1.2, abreast: 0.5, yawMax: 0.5, squareMax: 0.12, edgeM: 0.3, clearM: 0.35, tries: 8 },
     // The share of its pace a rider takes its bends at: its share (`factor`) to this power. At 2 a rider at 0.85 of its
     // pace took its bends at 0.72 of their grip, and the leader waiting for the back at 0.49
-    bendPower: 1,
+    bendPower: 0.5,
     // The row a character without `group` rides by
     rider: { gapS: 2, gapSpread: 0.4, least: 0.85, most: 1.15, wander: 0.05, spurt: null, passPerS: 0.2, stop: null },
     // The line: a rider keeps its time gap (at its own speed, and no less than gapMinM) to whoever is next ahead of it on
@@ -145,9 +149,10 @@ const GROUP = {
     // its lane line). Each share its gap is off moves its pace by `gain` of that share, between its least and its most,
     // eased in over easeS; one that would pass the one ahead closes up to gapMinM. With nobody ahead within lookM it
     // leads, at its own pace, and waits for the back: as the last of the line on the road (a rider or the player) drops
-    // from backFromM to backToM behind it, it eases to waitShare of its pace, below its least, so the front does not ride
-    // away and one that stopped catches up. One with a rider ahead further off than lookM rides at its most to close up
-    line: { gapMinM: 8, gain: 0.6, easeS: 2.5, lookM: 300, frontM: 4, backFromM: 250, backToM: 600, waitShare: 0.8 },
+    // from backFromM to backToM behind it, it eases to waitShare of its pace, below its least, and on to farShare as the
+    // back drops on to farM, so the front does not ride away (and pulls over far less: GROUP.far) and one that stopped
+    // catches up. One with a rider ahead further off than lookM rides at its most to close up
+    line: { gapMinM: 8, gain: 0.6, easeS: 2.5, lookM: 300, frontM: 4, backFromM: 250, backToM: 600, waitShare: 0.8, farM: 900, farShare: 0.65 },
     // Every everyS a rider draws a new pace share within its `wander`, and a new gap from its `gapSpread` below its gap
     // to twice that above it; each eases in over easeS
     noise: { everyS: 9, easeS: 6 },
@@ -166,6 +171,17 @@ const GROUP = {
     // is within reach. Where there is none, on the roadside. A rider moves off its lane into the place over the last
     // pullM, and has arrived within arriveM of its slot. In the place a rider follows another with slotGapM more than
     // the two halves between them (the slots are WorldPlaces.SLOT_M apart), not a queue's gap
+    // A rider pulls over to wait (for the player, or for the last rider of the line) only when it is far ahead of the
+    // one it waits for: farS or more ahead of it (the gap over that one's speed, paceMs at the least) and out of its
+    // sight (the land, as far.bin draws it, clearM or more over the line between their eyes, eyeM up, looked at every
+    // stepM; or sightM or more apart). Nearer, it eases: ahead of a stopped player it rides on, after graceS (a restart in
+    // place takes 5 s) slowing at easeMs2 to creepMs,
+    // ahead of a riding player no faster than it (GROUP.ahead), ahead of the back as the leader's wait eases it (line)
+    far: { farS: 75, paceMs: 15, sightM: 1500, eyeM: 1.3, stepM: 20, clearM: 1, creepMs: 8, graceS: 10, easeMs2: 1 },
+    // Every sideways move of a rider is a smooth ease: a pass's swing out and back (pass), the move into a stopping place
+    // and out of it (place), and its drift across its lane (drift: GROUP.road). An eased move takes at least the time
+    // that keeps its lateral speed under rateMs and its lateral acceleration under accelMs2, so at speed it is longer
+    move: { pass: { rateMs: 1.6, accelMs2: 1.5 }, place: { rateMs: 1.2, accelMs2: 1 }, drift: { rateMs: 0.3, accelMs2: 0.15 } },
     wait: { regroupM: 700, reachM: 1500, leadM: 15, pullM: 25, arriveM: 0.6, backMaxS: 240, slotGapM: 0 },
     // A rider more than aheadM up the road from the player pulls in at the next stopping place on its own side within
     // reachM (past the room it needs to stop) and waits there until the player is rejoin.joinM past it, or for maxS at
@@ -197,13 +213,13 @@ const GROUP = {
     // within apartM, and the road is safe for the whole pass: every bend gentler than curveMax and no hairpin (kindAt
     // under hairpinMax) every stepM, no roadworks single lane in it or sightM past it, nothing coming the other way
     // within it, the distance that covers at carMs meanwhile and sightM more. Then it passes with its `passPerS` chance
-    // a second. It swings swingM toward the centre line over inM, holds there until it is clearM past the other's
+    // a second. It swings swingM toward the centre line over inM (longer at speed: GROUP.move.pass), and closes on the other only once it is acrossM clear of it across, holds there until it is clearM past the other's
     // front, and swings back over inM; the other eases to `yield` of its pace meanwhile, and for letS once it sees one
     // close behind it that would pass it at the start of a straight of letM. A pass that would ride more than byMaxM
     // alongside is not started. One that meets an unsafe road while still behind swings back in; one that runs slackM
     // past its plan drops back to backM behind the other before it swings in. The player is passed only at playerMs or
     // more and on its lane line (within bandM of it)
-    pass: { lookM: 35, gainMs: 6, gainMinMs: 2, roomM: 25, slackM: 60, backM: 3, apartM: 120, curveMax: 0.012, hairpinMax: 0.02, stepM: 5, carMs: 12, sightM: 60, swingM: 2.2, inM: 16, clearM: 5, yield: 0.9, letM: 100, letS: 8, byMaxM: 220, playerMs: 4, bandM: 0.6 },
+    pass: { lookM: 35, gainMs: 6, gainMinMs: 2, roomM: 25, slackM: 60, backM: 3, apartM: 120, curveMax: 0.012, hairpinMax: 0.02, stepM: 5, carMs: 12, sightM: 60, swingM: 2.2, inM: 16, acrossM: 0.4, clearM: 5, yield: 0.9, letM: 100, letS: 8, byMaxM: 220, playerMs: 4, bandM: 0.6 },
     // A rider is off the road (in no line and no queue) while it stands in a place, or while its box, as its offset
     // turns it, is clearM or more clear of a bike on its lane line. One waiting on the roadside is on the road
     aside: { clearM: 0.25 }
@@ -241,8 +257,11 @@ class CrewGroup {
         if (!t.active) { ride.offRate = 0; return; }
         t.at = Math.min(t.len, t.at + Math.max(0, metres));
         const x = t.len > 0 ? t.at / t.len : 1;
-        ride.off = t.from + (t.to - t.from) * x * x * x * (10 - 15 * x + 6 * x * x);
-        ride.offRate = t.len > 0 && x < 1 ? (t.to - t.from) * 30 * x * x * (1 - x) * (1 - x) / t.len : 0;
+        // (a move begun while another runs keeps the rate it had: rate0, metres across a metre, so its lateral speed
+        // has no step; the quintic x - 6x^3 + 8x^4 - 3x^5 carries it, 0 with its rate and its change at both ends)
+        const lift = (t.rate0 || 0) * t.len;
+        ride.off = t.from + (t.to - t.from) * x * x * x * (10 - 15 * x + 6 * x * x) + lift * x * (1 - 6 * x * x + 8 * x * x * x - 3 * x * x * x * x);
+        ride.offRate = t.len > 0 && x < 1 ? ((t.to - t.from) * 30 * x * x * (1 - x) * (1 - x) + lift * (1 - 18 * x * x + 32 * x * x * x - 15 * x * x * x * x)) / t.len : 0;
         if (x >= 1) t.active = false;
     }
 
@@ -295,7 +314,7 @@ class CrewGroup {
             noise: 1, noiseTo: 1, gap: own.gapS, gapTo: own.gapS, noiseT: random() * GROUP.noise.everyS, tickT: random() * GROUP.tickS,
             spurtS: 0, decided: null, waitS: 0, letS: 0, waitFor: null, waitedS: 0,
             off: 0, offRate: 0, tr: { from: 0, to: 0, len: 0, at: 0, active: false },
-            pass: { target: null, phase: null, startS: 0, gain: 0, planM: 0 },
+            pass: { target: null, phase: null, startS: 0, gain: 0, planM: 0, clear: false },
             yielding: false, floorMs: 0, capMs: Infinity, stand: false, aside: false, easing: false,
             at: { s: 0, lateral: 0, y: NaN, off: 0, place: null, slot: 0, yaw: 0 }
         };
@@ -323,8 +342,17 @@ class CrewGroup {
         ride.driftTo = 0;
     }
 
+    // The metres an eased move of `delta` across takes at `speed` within its caps (GROUP.move): a smootherstep over T
+    // seconds peaks at 1.875 delta / T across and 5.77 delta / T^2 of acceleration
+    static moveM(delta, speed, caps) {
+        const d = Math.abs(delta);
+        const T = Math.max(1.875 * d / caps.rateMs, Math.sqrt(5.7735 * d / caps.accelMs2));
+        return T * Math.max(0, speed);
+    }
+
     static ease(ride, to, len) {
         const t = ride.tr;
+        t.rate0 = t.active ? ride.offRate : 0;
         t.from = ride.off;
         t.to = to;
         t.len = Math.max(0.5, len);
@@ -353,6 +381,8 @@ class CrewGroup {
     step(dt, player, lead) {
         const route = this.env.route;
         this.sync();
+        this.haltedS = this.halted ? (this.haltedS || 0) + dt : 0;
+        this.frameS = dt;
         this.player = player;
         this.lead = lead && lead.direction === 1 ? lead : null;
         this.anyLead = lead;
@@ -494,6 +524,9 @@ class CrewGroup {
         else if (ride.state === 'out' && !ride.tr.active) {
             ride.state = 'ride';
             ride.why = null;
+        } else if (ride.state === 'out') {
+            // (it moves back onto its lane at a crawl, so its move across keeps within GROUP.move.place)
+            ride.capMs = GROUP.far.creepMs;
         }
         this.paceOf(ride, dt);
         this.holdOf(ride);
@@ -529,7 +562,8 @@ class CrewGroup {
         }
         if (tick || ride.roomIn === undefined) {
             // (looked at ahead, so the room is narrow before the hairpin or the single lane, not in it)
-            const ahead = ride.s + Math.max(20, 2 * (bike.currentSpeed || 0));
+            // (far enough ahead for the drift to come in at its rate: GROUP.move.drift)
+            const ahead = ride.s + Math.max(40, 5 * (bike.currentSpeed || 0));
             const hairpin = route.kindAt ? Math.max(route.kindAt(ride.s, this.kindSample).hairpin, route.kindAt(ahead, this.kindSample).hairpin) : 0;
             ride.roomIn = R.inM + (R.hairpinInM - R.inM) * Math.min(1, hairpin / 0.3);
             ride.single = !!works && (!!works.siteAt(ride.s, Roadworks.BLEND_M) || !!works.siteAhead(ride.s, bike.direction, ahead - ride.s));
@@ -544,16 +578,28 @@ class CrewGroup {
             to = d + ride.side * R.staggerM;
             if (to > inM || to < -R.outM) to = d - ride.side * R.staggerM;
         }
+        // (never across toward a player alongside it: the player's bump moves it, CONTACT.nudge)
+        // (and it stops a move toward it at stopMs2, harder than its own ease)
+        let stopping = false;
+        if (this.lead && Math.abs(this.lead.s - ride.s) < this.boxM + R.besideM) {
+            const toward = Math.sign(this.playerDrift(bike.direction) - ride.drift);
+            to = toward > 0 ? Math.min(to, ride.drift) : Math.max(to, ride.drift);
+            if (Math.sign(ride.driftRate) === toward) {
+                ride.driftRate -= Math.sign(ride.driftRate) * Math.min(Math.abs(ride.driftRate), R.stopMs2 * dt);
+                stopping = true;
+            }
+        }
         const passing = ride.pass.phase === 'out' || ride.pass.phase === 'by' || ride.pass.phase === 'back';
         if (ride.single || bike.inSingleLane || ride.state === 'hold' || passing) to = 0;
         else if (ride.yielding) to = R.yieldM;
         to = Math.max(-R.outM, Math.min(inM, to));
         ride.driftTo = to;
-        const k = R.spring;
-        ride.driftRate += (k * (to - ride.drift) - 2 * Math.sqrt(k) * ride.driftRate) * dt;
-        // (a bike that stands does not move across)
-        const most = R.rateMs * Math.min(1, (bike.currentSpeed || 0) / 2);
-        ride.driftRate = Math.max(-most, Math.min(most, ride.driftRate));
+        // Toward the target at no more than rateMs across (less at a crawl: a bike that stands does not move across),
+        // gathering and losing that speed at accelMs2 at the most, so it arrives with no step
+        const M = GROUP.move.drift, e = to - ride.drift;
+        const most = M.rateMs * Math.min(1, (bike.currentSpeed || 0) / 4);
+        const want = Math.sign(e) * Math.min(most, Math.sqrt(2 * M.accelMs2 * Math.abs(e)));
+        if (!stopping) ride.driftRate += Math.max(-M.accelMs2 * dt, Math.min(M.accelMs2 * dt, want - ride.driftRate));
         ride.drift += ride.driftRate * dt;
         // Into a stopping place and out of it the drift fades as the rider moves across to its spot
         let fade = 1;
@@ -565,7 +611,12 @@ class CrewGroup {
         const G = GROUP, own = ride.own;
         const passing = ride.pass.phase === 'out' || ride.pass.phase === 'by' || ride.pass.phase === 'back';
         if (!passing) {
-            if (this.halted && (ride.s > this.haltS || this.away)) return this.toWait(ride, 'player');
+            // A stopped player: one far ahead of it waits for it in a place; nearer, it rides on at a crawl (GROUP.far)
+            ride.creep = false;
+            if (this.halted && (ride.s > this.haltS || this.away)) {
+                if (tick && this.far(ride, this.haltS, 0)) return this.toWait(ride, 'player');
+                ride.creep = true;
+            }
             if (this.standing && !this.away && ride.s < this.standS && this.standS - ride.s < G.hold.behindM) {
                 // (one already closer than its gap stands where it is: holdOf)
                 const v = ride.bike.currentSpeed || 0;
@@ -577,9 +628,12 @@ class CrewGroup {
             }
             // Too far ahead of the player: it waits for it in the next place, or rides at its pace (GROUP.ahead)
             if (tick && this.aheadOf(ride)) return;
-            // Far ahead of the last rider of the line, with the player not behind it: it waits for that rider
+            // Far ahead of the last rider of the line, with the player not behind it: it waits for that rider when it is
             const tail = this.line.length ? this.line[this.line.length - 1] : null;
-            if (!this.halted && tail && tail.ride && ride.index >= 0 && tail.ride !== ride && ride.s - tail.s > G.wait.regroupM) return this.toWait(ride, 'back', null, tail.ride);
+            // far ahead of it and out of its sight (GROUP.far); nearer, the leader's wait for the back eases it (rule 1)
+            if (!this.halted && tail && tail.ride && ride.index >= 0 && tail.ride !== ride && ride.s - tail.s > G.wait.regroupM) {
+                if (tick && this.far(ride, tail.s, tail.speed)) return this.toWait(ride, 'back', null, tail.ride);
+            }
         }
         if (tick && own.spurt && ride.spurtS === 0) {
             const kind = this.env.route.kindAt ? this.env.route.kindAt(ride.s, this.kindSample) : { country: 1, mountain: 0, hairpin: 0 };
@@ -605,8 +659,11 @@ class CrewGroup {
         if (tick && !ride.pass.phase) this.tryPass(ride);
         if (tick) this.letBy(ride);
         this.passing(ride, tick);
-        // (one too far ahead with no place in reach rides no faster than the player)
+        // (one too far ahead of the player, not yet far, rides no faster than the player; one ahead of a stopped player
+        // crawls on)
+        const F = GROUP.far;
         if (ride.easing && this.lead && !ride.pass.phase) ride.capMs = Math.min(ride.capMs, this.lead.speed);
+        if (ride.creep && !ride.pass.phase && this.haltedS > F.graceS) ride.capMs = Math.min(ride.capMs, Math.max(F.creepMs, (ride.bike.currentSpeed || 0) - F.easeMs2 * (this.frameS || 0)));
         // (free roam: the player leads, and none rides alongside it or on ahead of it)
         if (this.traffic.roam && this.lead && !this.halted && ride.s > this.lead.s - GROUP.roam.alongM) ride.capMs = Math.min(ride.capMs, this.lead.speed * GROUP.roam.holdShare);
     }
@@ -619,7 +676,8 @@ class CrewGroup {
             ride.easing = false;
             return false;
         }
-        if (!ride.pass.phase && this.book(ride, null, A.reachM)) {
+        // (it pulls in only when it is far ahead of the player, out of its sight: GROUP.far)
+        if (!ride.pass.phase && this.far(ride, lead.s, lead.speed) && this.book(ride, null, A.reachM)) {
             ride.easing = false;
             this.events.aheads++;
             this.toWait(ride, 'ahead', null, null, true);
@@ -628,6 +686,32 @@ class CrewGroup {
         if (!ride.easing) this.events.eases++;
         ride.easing = true;
         return false;
+    }
+
+    // Whether a rider is far ahead of the one it would wait for, at ride distance s moving at `speed` (GROUP.far): farS
+    // or more ahead of it and out of its sight
+    far(ride, s, speed) {
+        const F = GROUP.far, gap = ride.s - s;
+        if (gap <= 0 || gap / Math.max(speed || 0, F.paceMs) < F.farS) return false;
+        return gap >= F.sightM || !this.sees(ride, s);
+    }
+
+    // Whether the eye of a rider at ride distance s sees the rider (the land of far.bin, the world's 100 m grid, held
+    // clearM under the line between their eyes; the land the world draws is near it)
+    sees(ride, s) {
+        const F = GROUP.far, route = this.env.route, data = this.env.data;
+        if (!data || typeof data.farHeight !== 'function') return true;
+        const a = route.sample(ride.s, this.seeA || (this.seeA = {}));
+        const ax = a.x, ay = a.y + F.eyeM, az = a.z;
+        const b = route.sample(s, this.seeB || (this.seeB = {}));
+        const bx = b.x, by = b.y + F.eyeM, bz = b.z;
+        const length = Math.hypot(bx - ax, bz - az);
+        for (let d = F.stepM; d < length - F.stepM; d += F.stepM) {
+            const k = d / length;
+            const h = data.farHeight(ax + (bx - ax) * k, az + (bz - az) * k);
+            if (Number.isFinite(h) && h > ay + (by - ay) * k + F.clearM) return false;
+        }
+        return true;
     }
 
     // Off to wait: a slot in a stopping place ahead (`place`, or the next on its side), else the roadside. `booked`: the
@@ -672,12 +756,34 @@ class CrewGroup {
                     this.spot(ride, place, slot, at, from - W.leadM);
                     this.aim(ride, at.s, at.lateral, at.y, place, slot);
                     ride.at.yaw = at.yaw;
+                    this.reslot(place, ride);
                     return true;
                 }
             }
             place = places.next(place.s + place.length + 0.01, side);
         }
         return false;
+    }
+
+    // The riders still going to a place take its free slots in the order they come to it, front first: one that booked
+    // after another but is ahead of it on the road took the slot behind it, and each waited for the other to move
+    reslot(place, ride) {
+        const W = GROUP.wait, places = this.env.places;
+        ride.state = 'toWait';
+        const going = this.riders.filter(o => o.at.place === place && o.state === 'toWait');
+        if (going.length < 2) return;
+        const slots = going.map(o => o.at.slot).sort((a, b) => a - b);
+        const order = going.slice().sort((a, b) => b.s - a.s);
+        if (order.every((o, k) => o.at.slot === slots[k])) return;
+        for (const o of going) o.at.place = null;
+        const ground = this.env.ground && this.env.ground.groundY ? this.env.ground : null;
+        order.forEach((o, k) => {
+            const at = places.stopAt(place, slots[k], ground, this.stopSample);
+            at.yaw = 0;
+            this.spot(o, place, slots[k], at, o.s + this.roomOf(o) - W.leadM);
+            this.aim(o, at.s, at.lateral, at.y, place, slots[k]);
+            o.at.yaw = at.yaw;
+        });
     }
 
     // Whether two riders going to or waiting in one place have spots side by side across it (GROUP.spot)
@@ -799,7 +905,10 @@ class CrewGroup {
 
     going(ride) {
         const W = GROUP.wait, d = ride.at.s - ride.s;
-        if (!ride.tr.active && ride.off !== ride.at.off && d <= W.pullM) CrewGroup.ease(ride, ride.at.off, d - 0.3);
+        // (over the room the move takes at the speed it comes in at, W.pullM at the least)
+        const len = Math.max(W.pullM, CrewGroup.moveM(ride.at.off - ride.off, ride.bike.currentSpeed || 0, GROUP.move.place));
+        // (and again when its spot moved: CrewGroup.reslot)
+        if ((!ride.tr.active || ride.tr.to !== ride.at.off) && ride.off !== ride.at.off && d <= len + 0.3) CrewGroup.ease(ride, ride.at.off, d - 0.3);
         if (d <= W.arriveM && (ride.bike.currentSpeed || 0) < 0.3) {
             ride.state = 'wait';
             ride.tr.active = false;
@@ -829,7 +938,8 @@ class CrewGroup {
         ride.stand = false;
         ride.at.place = null;
         this.events.rejoins++;
-        CrewGroup.ease(ride, 0, J.pullM);
+        // (it gathers speed as it moves out: the move is long enough for the speed it reaches, creepMs)
+        CrewGroup.ease(ride, 0, Math.max(J.pullM, CrewGroup.moveM(ride.off, GROUP.far.creepMs, GROUP.move.place)));
     }
 
     // Whether a rider whose place is behind this one's comes within GROUP.rejoin.backM of where it waits
@@ -907,17 +1017,23 @@ class CrewGroup {
         // The metres it rides alongside: the gap and both bikes and clearM, and what it loses while it gathers speed
         const by = (gap + this.boxM + P.clearM + gain * gain / (2 * LANE_DRIVE.bike.accel)) * (ahead.speed + gain) / gain;
         if (by > P.byMaxM) return;
-        if (!this.clearRoad(ride.s, 2 * P.inM + by, Math.max(bike.currentSpeed || 0, ahead.speed, 1))) return;
+        const swing = this.swingM(ride, Math.max(bike.currentSpeed || 0, ahead.speed + gain, bike.baseSpeed * ride.factor));
+        if (!this.clearRoad(ride.s, 2 * swing + by, Math.max(bike.currentSpeed || 0, ahead.speed, 1))) return;
         // The rider's keenness: its chance a second of safe road behind one it would pass
         if (ride.random() >= ride.own.passPerS * GROUP.tickS) return;
         ride.pass.target = ahead.ride || 'player';
         ride.pass.phase = 'out';
         ride.pass.startS = ride.s;
         ride.pass.gain = gain;
-        ride.pass.planM = 2 * P.inM + by;
+        ride.pass.planM = 2 * swing + by;
         if (ahead.ride) ahead.ride.yielding = true;
-        CrewGroup.ease(ride, -Route.keepRight(bike.direction) * P.swingM, P.inM);
+        CrewGroup.ease(ride, -Route.keepRight(bike.direction) * P.swingM, swing);
         this.events.passes++;
+    }
+
+    // The metres a pass's swing out (or back) takes at `speed`: inM at the least, longer at speed (GROUP.move.pass)
+    swingM(ride, speed) {
+        return Math.max(GROUP.pass.inM, CrewGroup.moveM(GROUP.pass.swingM, speed, GROUP.move.pass));
     }
 
     // Whether a pass from s over `length` at `speed` is safe (GROUP.pass)
@@ -954,14 +1070,18 @@ class CrewGroup {
             if (behind) this.endPass(ride, false);
             return;
         }
-        ride.floorMs = Math.min(ride.bike.baseSpeed * ride.own.most, tv + pass.gain);
+        // It closes on the other only once it is out beside it, clear across (its box and clearM): an eased swing at
+        // speed is long, and closing before it is out ran it into the other's back
+        const across = Math.abs(this.sideOf(ride) - (target === 'player' ? this.traffic.leadOff(lead, ride.bike.direction) : this.sideOf(target)));
+        pass.clear = across >= Traffic.sizeOf('bike', ride.bike.model).width + P.acrossM;
+        ride.floorMs = pass.clear ? Math.min(ride.bike.baseSpeed * ride.own.most, tv + pass.gain) : 0;
         if (pass.phase === 'out' && !ride.tr.active) pass.phase = 'by';
         if (ride.s - ts >= this.boxM + P.clearM) return this.endPass(ride, false);
         if (!tick) return;
         // A pass that runs long (the other did not yield, or something ahead holds the rider) drops back behind; one that
         // meets an unsafe road drops back in while it is still behind, and goes on by once alongside
         const long = ride.s - pass.startS > pass.planM + P.slackM;
-        if (!long && this.clearRoad(ride.s, 2 * P.inM + this.boxM + P.clearM, ride.bike.currentSpeed || 1)) return;
+        if (!long && this.clearRoad(ride.s, 2 * this.swingM(ride, ride.bike.currentSpeed || 0) + this.boxM + P.clearM, ride.bike.currentSpeed || 1)) return;
         this.events.aborts++;
         if (behind) return this.endPass(ride, false);
         if (!long) return;
@@ -970,14 +1090,21 @@ class CrewGroup {
         if (target !== 'player') target.yielding = false;
     }
 
+    // Where a rider of the group rides across the road off its lane line (+ is Route.LEFT): its offset and its drift
+    sideOf(ride) {
+        return ride.off + AIMotorcycle.sideOf(ride.bike);
+    }
+
     endPass(ride, abort) {
         const pass = ride.pass;
+        pass.clear = false;
         if (pass.target && pass.target !== 'player') pass.target.yielding = false;
         pass.phase = 'in';
         ride.floorMs = 0;
         ride.capMs = Infinity;
         if (abort) this.events.aborts++;
-        CrewGroup.ease(ride, 0, GROUP.pass.inM);
+        // (over the room for the speed it may gather on the way back: its pace)
+        CrewGroup.ease(ride, 0, this.swingM(ride, Math.max(ride.bike.currentSpeed || 0, ride.bike.baseSpeed * ride.factor)));
     }
 
     // The rider's share of its own pace: its gap to the one ahead, the one behind, its noise and a spurt, between its
@@ -1009,7 +1136,9 @@ class CrewGroup {
         if (i >= 0 && i < line.length - 1 && (i === 0 || line[i - 1].s - ride.s >= L.lookM)) {
             const back = ride.s - line[line.length - 1].s;
             if (back > L.backFromM) {
-                const wait = 1 - (1 - L.waitShare) * Math.min(1, (back - L.backFromM) / (L.backToM - L.backFromM));
+                // (and on to farShare as the back drops on to farM: it eases rather than pulls over, GROUP.far)
+                let wait = 1 - (1 - L.waitShare) * Math.min(1, (back - L.backFromM) / (L.backToM - L.backFromM));
+                if (back > L.backToM && L.farM > L.backToM) wait -= (L.waitShare - L.farShare) * Math.min(1, (back - L.backToM) / (L.farM - L.backToM));
                 least = Math.min(least, wait);
                 share = Math.min(share, wait);
             }
@@ -1205,7 +1334,7 @@ class Traffic {
         const list = [];
         for (const car of this.cars) list.push({ vehicle: car, s: route.fromUnits(car.currentSegment + car.segmentProgress), direction: car.direction, half: Roadworks.CAR_HALF_M, brake: LANE_DRIVE.car.brake, speed: car.currentSpeed || 0 });
         // (a rider that finished the ride is parked out of sight at its end: nothing queues behind it)
-        for (const bike of this.motorcycles) list.push({ vehicle: bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress), direction: bike.direction, half: Roadworks.BIKE_HALF_M, brake: LANE_DRIVE.bike.brake, speed: bike.currentSpeed || 0, parked: !bike.bikeGroup.visible, aside: !!(bike.ride && bike.ride.aside), verge: !!(bike.ride && bike.ride.aside && (bike.ride.state === 'toWait' || bike.ride.state === 'wait')) });
+        for (const bike of this.motorcycles) list.push({ vehicle: bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress), direction: bike.direction, half: Roadworks.BIKE_HALF_M, brake: bike.drive ? bike.drive.brake : LANE_DRIVE.bike.brake, speed: bike.currentSpeed || 0, parked: !bike.bikeGroup.visible, aside: !!(bike.ride && bike.ride.aside), verge: !!(bike.ride && bike.ride.aside && (bike.ride.state === 'toWait' || bike.ride.state === 'wait')) });
         return list;
     }
 
@@ -1261,7 +1390,8 @@ class Traffic {
             const passing = ride && (ride.pass.phase === 'out' || ride.pass.phase === 'by' || ride.pass.phase === 'back') ? ride.pass.target : null;
             for (const o of queue) {
                 if (o === v || o.direction !== v.direction || o.parked || (o.rider && moving)) continue;
-                if (passing && o.vehicle && o.vehicle.ride === passing) continue;
+                // (once it is out beside it, clear across: CrewGroup.passing; until then it follows it)
+                if (passing && ride.pass.clear && o.vehicle && o.vehicle.ride === passing) continue;
                 // A rider of the group going into a stopping place, or in it, follows only those beside the road with it;
                 // nothing on the road follows a rider off it (CrewGroup.offRoad)
                 if (v.verge ? !o.verge : o.aside) continue;
@@ -1274,7 +1404,7 @@ class Traffic {
                 hold = Math.min(hold, room);
                 plan = Math.min(plan, room + (o.speed > 0 ? o.speed * o.speed / (2 * o.brake) : 0));
             }
-            if (lead && lead.direction === v.direction && passing !== 'player' && !v.verge) {
+            if (lead && lead.direction === v.direction && (passing !== 'player' || !ride.pass.clear) && !v.verge) {
                 const ahead = (lead.s - v.s) * v.direction;
                 if (ahead > CONTACT.follow.aheadM && Math.abs(this.leadOff(lead, v.direction) - AIMotorcycle.sideOf(v.vehicle)) < CONTACT.follow.bandM) {
                     plan = Math.min(plan, ahead - v.half - Roadworks.BIKE_HALF_M - Roadworks.QUEUE_GAP_M + lead.speed * lead.speed / (2 * CONTACT.follow.playerBrake));
@@ -3074,6 +3204,7 @@ class AIMotorcycle {
         this.baseSpeed = (pace.speed + this.pace.luck * pace.spread) * this.pace.scale * group;
         if (!this.drive) this.drive = { ...LANE_DRIVE.bike };
         this.drive.plan = Math.min(LANE_DRIVE.bike.plan * grip, this.ride ? GROUP.planMost : Infinity);
+        this.drive.brake = this.ride ? GROUP.brakeMs : LANE_DRIVE.bike.brake;
         this.drive.accel = LANE_DRIVE.bike.accel * grip;
         this.drive.turnIn = LANE_DRIVE.bike.turnIn * grip;
         // (a rider of the group at a share of its pace takes its bends at that share of their speed)

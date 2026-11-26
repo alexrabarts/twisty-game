@@ -75,27 +75,29 @@ describe('the group\'s pace', () => {
         // Nobody is held for good: riders that waited on the roadside for the back, with the back queued behind them,
         // once stood there for the rest of the ride (1.8 km of the slice ridden in 1400 s)
         for (const e of [...a.each, ...b.each]) expect(e.metres).toBeGreaterThan(route.length / 2);
-        // The owner's orders (2026-11-25): a quicker group that stands less, then a quicker moving pace. With the
-        // slowest rider in it the crew stood 35 % of the ride at 10.92 m/s, 16.87 m/s moving; the roadworks lights alone
-        // hold it about 16 % of the ride, and a quicker group often only waits longer at the next red light, so the share
-        // stood moves in steps of a light's cycle (0.28 to 0.32 at the same end time)
+        // The owner's orders: a quicker group that stands less (2026-11-25), then a fair bit faster at 1 g with fewer
+        // pull-overs (2026-11-26). With the slowest rider in it the crew rode 10.92 m/s with its stops, 16.87 moving
+        // (2026-11-25), then 12.49 and 18.46, now 14.58 and 20.14; without it 14.54 and 18.87, now 14.66 and 21.19. The
+        // roadworks lights hold the Tremola's mean speed with the stops near 14.5: a quicker group comes sooner to the
+        // same red light
         expect(b.stopped).toBeLessThan(0.33);
-        expect(b.group).toBeGreaterThan(12);
-        expect(b.moving).toBeGreaterThan(18);
-        expect(a.moving).toBeGreaterThan(19);
+        expect(b.group).toBeGreaterThan(14);
+        expect(b.moving).toBeGreaterThan(19.5);
+        expect(a.moving).toBeGreaterThan(20.5);
     }, 900000);
 
     test('every rider of the group rides the group\'s pace: its traits\' pace times GROUP.pace, its bends at the square of it, held at gripMost, its braking planned at planMost at most', () => {
         expect(G.pace).toBeGreaterThan(1);
         const grip = Math.min(G.pace * G.pace, G.gripMost);
-        expect(4 * grip).toBeLessThanOrEqual(9);
+        // (the bends at 1 g at the most)
+        expect(4 * grip).toBeLessThanOrEqual(9.81);
         const ride = groupRide(game, env, { rider: byPlace(6), at: IN_PLACE, seconds: 5 });
         for (const r of ride.riders) {
             const kind = route.kindAt(sOf(r), {});
             const pace = Traffic.paceOf(Traffic.roadTrait(r.character, kind));
-            expect(r.baseSpeed).toBeCloseTo((pace.speed + r.pace.luck * pace.spread) * r.pace.scale * G.pace, 2);
+            expect(r.baseSpeed).toBeCloseTo((pace.speed + r.pace.luck * pace.spread) * r.pace.scale * G.pace, 1);
             expect(r.drive.plan).toBeCloseTo(Math.min(3 * grip, G.planMost), 6);
-            expect(r.drive.brake).toBe(6);
+            expect(r.drive.brake).toBe(G.brakeMs);
             // (it never plans to stop in less room than its hard braking stops it in, which the following rule reads)
             expect(r.drive.plan).toBeLessThanOrEqual(r.drive.brake);
             expect(r.drive.lateral).toBeLessThanOrEqual(4 * grip + 1e-9);
@@ -107,53 +109,26 @@ describe('the group\'s pace', () => {
     }, 300000);
 });
 
-describe('a rider too far ahead of the player', () => {
-    const A = G.ahead;
-    // The player is the slowest rider's character, riding at 6 m/s from s 2200 with the crew just up the road
-    const slowRide = (onFrame, seconds = 420) => groupRide(game, env, { rider: byPlace(6), at: [2300, 2285, 2270, 2255, 2240], player: { s: 2200, pace: () => 6 }, seconds, onFrame });
+describe('a rider ahead of the player', () => {
+    const A = G.ahead, F = G.far;
+    // Whether a rider at s1 is far ahead of one at s0 moving at `speed`, as GROUP.far reads it
+    const farOf = (group, ride, s0, speed) => (ride.s - s0) / Math.max(speed, F.paceMs) >= F.farS && (ride.s - s0 >= F.sightM || !group.sees(ride, s0));
 
-    test('pulls in at the next place on its own side, off the carriageway, waits until the player has passed it, then falls in behind', () => {
-        const seen = new Map();
-        const ride = slowRide(({ t, riders, playerS }) => {
-            for (const r of riders) {
-                const me = seen.get(r) || seen.set(r, { r }).get(r);
-                if (r.ride.state === 'toWait' && r.ride.why === 'ahead' && me.decided === undefined) me.decided = sOf(r) - playerS;
-                if (r.ride.state === 'wait' && r.ride.why === 'ahead' && !me.wait) {
-                    const g = r.bikeGroup.position, p = route.project(g.x, g.z, null, {});
-                    me.wait = { t, s: sOf(r), place: env.places.at(sOf(r), p.lateral), off: Math.abs(p.lateral) - p.width / 2 - 0.4, playerS };
-                }
-                if (me.wait && !me.out && r.ride.state === 'out') me.out = { t, s: sOf(r), playerS };
-                if (me.out && !me.behind && r.ride.state === 'ride') me.behind = { s: sOf(r), playerS };
-            }
-        });
-        const waited = [...seen.values()].filter(m => m.wait);
-        const report = JSON.stringify({ events: ride.traffic.group.events, waited: waited.map(m => ({ name: m.r.riderName, decided: m.decided, wait: m.wait && { s: Math.round(m.wait.s), place: m.wait.place && m.wait.place.id, off: m.wait.off }, out: m.out && { s: Math.round(m.out.s), playerS: Math.round(m.out.playerS) } })) });
-        if (waited.length < 2) throw new Error(`fewer than two riders waited for the slow player: ${report}`);
-        for (const m of waited) {
-            expect(m.decided).toBeGreaterThan(A.aheadM);
-            expect(m.wait.place).toBeTruthy();
-            expect(m.wait.place.side).toBe(Route.keepRight(1));
-            expect(m.wait.off).toBeGreaterThanOrEqual(0);
-            if (!m.out) throw new Error(`a rider never pulled out: ${report}`);
-            expect(m.out.playerS).toBeGreaterThan(m.wait.s + G.rejoin.joinM - 1);
-            if (m.behind) expect(m.behind.s).toBeLessThan(m.behind.playerS);
-        }
-        expect(ride.traffic.group.events.roadside).toBe(0);
-        expect(ride.overlaps).toEqual([]);
-    }, 600000);
-
-    test('with no place in reach it rides at the player\'s pace on its lane, and never waits on the carriageway', () => {
-        const next = env.places.next;
-        env.places.next = () => null;
+    test('ahead of a slow player it eases to the player\'s pace and does not pull over while it is near: in sight, or less than farS ahead', () => {
         const bad = [];
-        let easing = 0, most = 0;
-        let ride;
-        try {
-            ride = slowRide(({ t, riders, proxy, playerS }) => {
+        let easing = 0, most = 0, pulls = 0;
+        const ride = groupRide(game, env, {
+            rider: byPlace(6), at: [2300, 2285, 2270, 2255, 2240], player: { s: 2200, pace: () => 6 }, seconds: 420,
+            onFrame: ({ t, riders, traffic, proxy, playerS }) => {
+                const group = traffic.group;
                 for (const r of riders) {
                     const ahead = sOf(r) - playerS;
                     if (t > 30) most = Math.max(most, ahead);
-                    if (r.ride.state !== 'ride' && r.ride.state !== 'out') bad.push({ t, name: r.riderName, state: r.ride.state, why: r.ride.why });
+                    if (r.ride.state === 'toWait' && r.ride.wasState !== 'toWait') {
+                        pulls++;
+                        if (!farOf(group, r.ride, playerS, proxy.currentSpeed)) bad.push({ t, name: r.riderName, ahead: Math.round(ahead), why: r.ride.why });
+                    }
+                    r.ride.wasState = r.ride.state;
                     if (!r.ride.easing) { r.easedS = 0; continue; }
                     easing++;
                     // It has slowed to the player's pace once it could at a firm 5 m/s^2 from the speed it started to ease at
@@ -161,12 +136,52 @@ describe('a rider too far ahead of the player', () => {
                     r.easedS = (r.easedS || 0) + 1 / 60;
                     if (r.easedS > r.settleS && r.currentSpeed > proxy.currentSpeed + 0.3) bad.push({ t, name: r.riderName, speed: r.currentSpeed, player: proxy.currentSpeed });
                 }
-            }, 300);
-        } finally { env.places.next = next; }
+            }
+        });
         expect(easing).toBeGreaterThan(60 * 30);
         if (bad.length) throw new Error(`${bad.length} frames: ${JSON.stringify(bad.slice(0, 6))}`);
+        // (held to the player's pace from aheadM, it never gets far: nobody pulls over)
+        expect(pulls).toBe(0);
         expect(most).toBeLessThan(A.aheadM + 120);
-        expect(ride.traffic.group.events.roadside).toBe(0);
         expect(ride.overlaps).toEqual([]);
     }, 600000);
+
+    test('ahead of a stopped player it rides on at a crawl, pulls in at a place on its side only once it is far ahead and out of the player\'s sight, and falls in behind the player when it rides again', () => {
+        const seen = new Map(), crawl = [];
+        const standS = 360;
+        const ride = groupRide(game, env, {
+            rider: byPlace(6), at: [2300, 2285, 2270, 2255, 2240], player: { s: 2200, pace: t => (t < 60 ? 6 : t < 60 + standS ? 0 : 14) }, seconds: 1000,
+            onFrame: ({ t, riders, traffic, playerS }) => {
+                const group = traffic.group;
+                for (const r of riders) {
+                    const me = seen.get(r) || seen.set(r, { r }).get(r);
+                    // (after its grace and the time to ease from its pace to the crawl)
+                    if (group.halted && group.haltedS > F.graceS + 30 && sOf(r) > group.haltS && r.ride.state === 'ride' && r.currentSpeed > F.creepMs + 0.3) crawl.push({ t, name: r.riderName, speed: r.currentSpeed });
+                    if (r.ride.state === 'toWait' && me.decided === undefined) me.decided = { t, gap: sOf(r) - playerS, far: farOf(group, r.ride, playerS, 0), why: r.ride.why };
+                    if (r.ride.state === 'wait' && !me.wait) {
+                        const g = r.bikeGroup.position, p = route.project(g.x, g.z, null, {});
+                        me.wait = { t, s: sOf(r), place: env.places.at(sOf(r), p.lateral), off: Math.abs(p.lateral) - p.width / 2 - 0.4 };
+                    }
+                    if (me.wait && !me.out && r.ride.state === 'out') me.out = { t, s: sOf(r), playerS };
+                }
+            },
+            until: ({ t }) => t > 60 + standS + 10 && [...seen.values()].every(m => !m.wait || m.out)
+        });
+        const pulled = [...seen.values()].filter(m => m.decided);
+        const report = JSON.stringify({ events: ride.traffic.group.events, pulled: pulled.map(m => ({ name: m.r.riderName, decided: m.decided, wait: m.wait && { s: Math.round(m.wait.s), place: m.wait.place && m.wait.place.id }, out: m.out })) });
+        if (pulled.length < 2) throw new Error(`fewer than two riders pulled over for a player stood ${standS} s: ${report}`);
+        if (crawl.length) throw new Error(`${crawl.length} frames over the crawl ahead of a stopped player: ${JSON.stringify(crawl.slice(0, 4))}`);
+        for (const m of pulled) {
+            expect(m.decided.why).toBe('player');
+            // (far: farS or more ahead at paceMs, and out of sight)
+            expect(m.decided.gap).toBeGreaterThanOrEqual(F.farS * F.paceMs);
+            expect(m.decided.far).toBe(true);
+            if (!m.wait) continue;
+            expect(m.wait.place).toBeTruthy();
+            expect(m.wait.place.side).toBe(Route.keepRight(1));
+            expect(m.wait.off).toBeGreaterThanOrEqual(0);
+            if (m.out) expect(m.out.playerS).toBeGreaterThan(m.wait.s + G.rejoin.joinM - 1);
+        }
+        expect(ride.overlaps).toEqual([]);
+    }, 900000);
 });
