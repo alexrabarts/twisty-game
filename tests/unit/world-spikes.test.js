@@ -304,7 +304,12 @@ const TOUR_LIMITS = {
     'airolo-lookout': { beside: 111, setback: 578, overhangs: 14, flaps: 3 },
     'lookout-andermatt': { beside: 41, setback: 201, overhangs: 29, flaps: 3, low: 1 },
     'hospental-summit': { beside: 25, setback: 174, overhangs: 10, flaps: 1, low: 1 },
-    'summit-airolo': { beside: 115, setback: 355, overhangs: 13, flaps: 4 }
+    'summit-airolo': { beside: 115, setback: 355, overhangs: 13, flaps: 4 },
+    // (worlds/susten, measured 2026-11-26: land stretched beside the ride as on the other legs; its overhangs, flaps,
+    // thin copings, jogs and bare faces are open faults, held at the Tremola's limits until they are fixed)
+    'andermatt-goeschenen': { beside: 100, setback: 130 },
+    'goeschenen-susten': { beside: 152, setback: 1480 },
+    'susten-gadmen': { beside: 337, setback: 1082 }
 };
 const KINDS = ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays', 'piers', 'soffits'];
 
