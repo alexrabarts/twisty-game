@@ -59,7 +59,7 @@ Measured before and after on the same machine (Apple M-series GPU, the frame tim
 | Phone (`--phone`, two runs): Lowest frame | 10.5 and 8.8 ms | 9.6 and 9.1 ms |
 
 - The quality level was held at its start (Ultra on the desk) for every count.
-- The Tremola is still over 450 000 triangles at km 2 and km 4. It was over by more before the change. The houses and the roads hold most of it there.
+- The Tremola was still over 450 000 triangles at km 2 and km 4 after this change. The window's room now holds every world under it: `.agent/system/world-data.md`, "The window's room".
 - A tree costs about 0.1 ms or less of GPU time to draw at s 1319 in each run (`trees-none`). The runs drift by more than that.
 - On a phone, Low and Lowest draw no near trees, and their far trees are cheaper than before. The frame time at each level stays inside the runs' drift.
 

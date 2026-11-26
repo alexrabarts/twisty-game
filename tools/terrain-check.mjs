@@ -2387,6 +2387,7 @@ function effectsSpec(spec) {
 // (GroundCover.MAX_TUFTS, MAX_STONES) and a measured cost (Effects.LIST), not a load of the world's data
 function countScene() {
     let meshes = 0, triangles = 0, instances = 0, coverTriangles = 0;
+    const kinds = {};
     game.scene.traverse(o => {
         if (!o.isMesh) return;
         let cover = false;
@@ -2401,8 +2402,14 @@ function countScene() {
         meshes++;
         triangles += count;
         if (o.isInstancedMesh) instances += o.count;
+        // (by kind: the mesh's name to its first ':' or digit, under the nearest named group of the world)
+        let group = '';
+        for (let n = o.parent; n && n !== game.scene; n = n.parent) if (n.name && /^world-/.test(n.name)) group = n.name.replace(/[-\d,m]+$/, '');
+        const kind = `${group}/${String(o.name || o.type).split(':')[0].replace(/[-_]?\d.*$/, '')}`;
+        kinds[kind] = (kinds[kind] || 0) + count;
     });
-    return { meshes, triangles: Math.round(triangles), instances, coverTriangles: Math.round(coverTriangles) };
+    const byKind = Object.fromEntries(Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => [k, Math.round(v)]));
+    return { meshes, triangles: Math.round(triangles), instances, coverTriangles: Math.round(coverTriangles), trianglesByKind: byKind };
 }
 
 // Put the bike on the ride at s, build the ground round it and wait for the queue to drain
@@ -2424,6 +2431,16 @@ async function placeAt(s) {
     // What the new place no longer holds goes after the streamer's 3 s of grace
     if (game.worldLinger !== false) await new Promise(resolve => setTimeout(resolve, 3200));
     await env.streamer.settle(p, s);
+    // (and the room the window leaves its houses and trees, measured now as the ride measures it each second, the
+    // houses chosen again for it: Game.budgetWindow)
+    // (until the room holds: what the settle built is counted next time)
+    for (let k = 0; k < 4 && game.budgetWindow && env.scenery && env.scenery.setWindowRoom; k++) {
+        const room = env.scenery.windowRoom;
+        game.budgetWindow(true);
+        if (k > 0 && env.scenery.windowRoom === room) break;
+        env.update(p, s, null, Infinity);
+        await env.streamer.settle(p, s);
+    }
     return p;
 }
 
@@ -3667,7 +3684,7 @@ const WORLD = {
                 const m = env.tileMeshes;
                 const bike = [...env.streamer.tilesNear(p.x, p.z, bikeTileM)];
                 const counted = countScene();
-                out.push({ s: Math.round(s), ...counted, meshMargin: meshCap - counted.meshes, tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
+                out.push({ s: Math.round(s), ...counted, meshMargin: meshCap - counted.meshes, tiles: m.size, refTiles: near, bikeTilesMissing: bike.filter(key => !env.streamer.refs.has(key) || !m.has(key)).length, sections: env.roadMeshes.size, sides: env.sideMeshes.size, trees: env.scenery.treeCount, windowRoom: env.scenery.windowRoom, houseCap: env.scenery.houseCap ? env.scenery.houseCap() : null, loopAt: game.windowBudgetAt ? Math.round(performance.now() - game.windowBudgetAt) : null, byKind: { ...env.streamer.stats.maxStepByKind }, maxStepMs: Math.round(env.streamer.stats.maxStepMs * 100) / 100 });
             }
             return out;
         }, every, WORLD_BIKE_TILE_M, countScene.toString(), placeAt.toString(), LEG_BUDGET.meshes);

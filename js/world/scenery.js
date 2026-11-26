@@ -208,6 +208,15 @@ class Scenery {
     // (77 000, what the windows spent while the tiles' build order chose the houses: chosen over the window, nearest
     // first, they fill the cap to the last house, and at 80 000 drew about 10 fewer far trees on the Tremola's first km)
     static get HOUSE_TRIANGLES() { return 77000; }
+    // The whole window's triangles the scenery's caps keep under: 3% under LEG_BUDGET (tools/terrain-check.mjs,
+    // 450 000), so the window holds it whatever the land, the roads and the riders draw. Game.budgetWindow measures
+    // what all but the houses, boulders and trees draw (`rest`), and the room left (setWindowRoom) is shared by rule:
+    // the trees keep TREE_ROOM, the houses give way first, the furthest first, down to HOUSE_FLOOR, then the trees, the
+    // furthest first. The models pass's detail stays where it shows most, on the nearest houses
+    // (with the models pass's cap of 127 000 the Tremola stood at 459 000 at km 2 and the Gotthard leg at 451 000)
+    static get WINDOW_TRIANGLES() { return 436000; }
+    static get TREE_ROOM() { return 50000; }
+    static get HOUSE_FLOOR() { return 32000; }
     // Marker stones: STONE_GAP_M apart along the road's edge, STONE_OUT_M past the verge, sunk STONE_SINK_M. Sawn
     // granite blocks stand along the edge of the pass roads in the photos, on a low kerb course of granite setts; no
     // yellow sign does. A block is STONE_WIDTH_M square and its top STONE_HEIGHT_M over its seat (in the photos
@@ -1242,8 +1251,32 @@ class Scenery {
     // the near level. Draws them again at once when either changes
     // The stop scene's held shot (Game.raiseShot): the near and mid trees reach further and the window's triangle cap
     // is larger, for a view that holds still; null for the ride's own. Draws the trees again at once
+    // The houses' share of the window: HOUSE_TRIANGLES, less where the window's room is short (WINDOW_TRIANGLES)
+    houseCap() {
+        if (this.windowRoom === null || this.windowRoom === undefined || this.shot) return Scenery.HOUSE_TRIANGLES;
+        return Math.min(Scenery.HOUSE_TRIANGLES, Math.max(Scenery.HOUSE_FLOOR, this.windowRoom - Scenery.TREE_ROOM));
+    }
+
+    // The room the rest of the window leaves the houses, boulders and trees (Game.budgetWindow); null for none. Less
+    // room is taken at once from WINDOW_ROOM_STEP; more only from WINDOW_ROOM_RISE, so the window does not hunt while a
+    // build's old mesh stands beside its new one for a moment
+    static get WINDOW_ROOM_STEP() { return 1500; }
+    static get WINDOW_ROOM_RISE() { return 6000; }
+
+    setWindowRoom(room) {
+        const was = this.windowRoom === undefined ? null : this.windowRoom;
+        if (room === was) return false;
+        if (room !== null && was !== null && (room < was ? was - room < Scenery.WINDOW_ROOM_STEP : room - was < Scenery.WINDOW_ROOM_RISE)) return false;
+        this.windowRoom = room;
+        this.capsDirty = true;
+        this.treesDirty = true;
+        return true;
+    }
+
     setShot(shot) {
         this.shot = shot || null;
+        // (the houses' share is the whole HOUSE_TRIANGLES in a held shot: houseCap)
+        this.capsDirty = true;
         this.rankTrees(this.treeBike || this.rankBike, true);
     }
 
@@ -1310,6 +1343,7 @@ class Scenery {
         this.capsDirty = false;
         const d = (x, z) => Math.hypot(x - at.x, z - at.z);
         const order = (p, q) => p.d - q.d || p.x - q.x || p.z - q.z;
+        const houseCap = this.houseCap();
         const tiles = [...this.perTile].filter(([, h]) => h.candidates);
         const houses = [], boulders = [], tufts = [];
         for (const [key, h] of tiles) {
@@ -1324,7 +1358,7 @@ class Scenery {
         let instances = 0, triangles = 0;
         for (const e of houses) {
             if (e.d > Scenery.BUILDING_REACH_M) break;
-            if (instances + e.c.parts > Scenery.BUILDING_CAP || triangles + e.c.cost > Scenery.HOUSE_TRIANGLES) continue;
+            if (instances + e.c.parts > Scenery.BUILDING_CAP || triangles + e.c.cost > houseCap) continue;
             instances += e.c.parts;
             triangles += e.c.cost;
             chosen.get(e.key).houses.push(e.i);
@@ -1543,7 +1577,9 @@ class Scenery {
         const others = this.triangles - this.treeTriangles;
         const shot = this.shot || {};
         // (and the stage's own share of it, WorldLooks.viewOf `sceneryScale`: a leg whose land is denser keeps LEG_BUDGET)
-        const cap = Scenery.TRIANGLE_CAP * (shot.triangleScale || 1) * (this.stageScale || 1);
+        let cap = Scenery.TRIANGLE_CAP * (shot.triangleScale || 1) * (this.stageScale || 1);
+        // (and no more than the window's room: setWindowRoom; the held shot keeps its own raise)
+        if (!this.shot && this.windowRoom !== null && this.windowRoom !== undefined) cap = Math.min(cap, this.windowRoom);
         let room = Math.max(0, cap - others - Scenery.TREE_NEAR_KEPT * this.nearExtra());
         const total = this.perTile.size ? [...this.perTile.values()].reduce((n, held) => n + (held.trees || 0), 0) : 0;
         const want = Math.min(Scenery.TREE_CAP, Math.ceil(total * this.treeShare));

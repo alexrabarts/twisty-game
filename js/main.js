@@ -989,6 +989,32 @@ class Game {
     // Every house model, boulder shape and tuft the window's caps may put in view later (Scenery.warmGroup), drawn once
     // into the frame and the sun's shadow, behind the loading screen: a model first drawn in a ride compiled its
     // programs on that frame (world-shot: 230 ms)
+    // What the window draws besides the scenery's houses, boulders and trees, measured once a second, and the room it
+    // leaves them under Scenery.WINDOW_TRIANGLES (Scenery.setWindowRoom). As LEG_BUDGET counts: every mesh drawn in
+    // the scene, the ground cover apart (tools/terrain-check.mjs countScene)
+    budgetWindow(force = false) {
+        const scenery = this.environment && this.environment.scenery;
+        if (!scenery || !scenery.setWindowRoom) return;
+        const now = performance.now();
+        if (!force && this.windowBudgetAt && now - this.windowBudgetAt < Game.WINDOW_BUDGET_MS) return;
+        this.windowBudgetAt = now;
+        const skip = new Set([scenery.boulderGroup, scenery.forest]);
+        let rest = 0;
+        // (a mesh hidden itself is counted, as LEG_BUDGET counts it: only a hidden group hides what is in it)
+        const walk = (o) => {
+            if (skip.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
+            if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === scenery.houseGroup && o.name !== 'houses:footing')) {
+                const g = o.geometry;
+                rest += (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+            }
+            for (const child of o.children) walk(child);
+        };
+        walk(this.scene);
+        scenery.setWindowRoom(Math.max(0, Math.round(Scenery.WINDOW_TRIANGLES - rest)));
+    }
+
+    static get WINDOW_BUDGET_MS() { return 1000; }
+
     prewarmWorldScenery() {
         const scenery = this.environment && this.environment.scenery;
         if (!this.graphics || !this.graphics.renderer || !scenery || !scenery.warmGroup) return;
@@ -4306,6 +4332,7 @@ class Game {
         // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
         // frame, before it is first drawn (js/world/landshade.js)
         if (this.environment.isWorld) LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
+        if (this.environment.isWorld) this.budgetWindow();
         if (this.effectLevels) Effects.frame(this);
         this.graphics.update(
             rawDeltaTime,

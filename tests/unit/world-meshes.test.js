@@ -906,6 +906,32 @@ describe('Scenery', () => {
         expect(scenery.treeCount).toBeLessThan(all);
     });
 
+    test('the window\'s room takes the houses\' share first, down to its floor, then the trees\'; the held shot keeps its own', () => {
+        const scenery = new Scenery(ground, data, levelled());
+        scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
+        const all = scenery.treeCount;
+        expect(scenery.houseCap()).toBe(Scenery.HOUSE_TRIANGLES);
+        // (room for the trees and 40 000 more: the houses take the 40 000)
+        expect(scenery.setWindowRoom(Scenery.TREE_ROOM + 40000)).toBe(true);
+        expect(scenery.houseCap()).toBe(40000);
+        // (a little more room is not taken, so the window does not hunt; a little less is)
+        expect(scenery.setWindowRoom(Scenery.TREE_ROOM + 40000 + Scenery.WINDOW_ROOM_RISE - 1)).toBe(false);
+        expect(scenery.setWindowRoom(Scenery.TREE_ROOM + 40000 - Scenery.WINDOW_ROOM_STEP)).toBe(true);
+        // (short of room the houses keep their floor, and the trees give way)
+        expect(scenery.setWindowRoom(3000)).toBe(true);
+        expect(scenery.houseCap()).toBe(Scenery.HOUSE_FLOOR);
+        scenery.rankTrees({ x: 100, z: 100 }, true);
+        expect(scenery.triangles).toBeLessThanOrEqual(3000);
+        expect(scenery.treeCount).toBeLessThan(all);
+        // The held shot keeps the whole shares (Game.raiseShot)
+        scenery.setShot({});
+        expect(scenery.houseCap()).toBe(Scenery.HOUSE_TRIANGLES);
+        expect(scenery.treeCount).toBe(all);
+        scenery.setShot(null);
+        scenery.setWindowRoom(null);
+        expect(scenery.houseCap()).toBe(Scenery.HOUSE_TRIANGLES);
+    });
+
     test('each tree has its own girth and tint, and its tint never lifts a colour', () => {
         const sites = new Scenery(ground, data).treeSites(tile, forest);
         expect(new Set(sites.map(s => s.width.toFixed(3))).size).toBeGreaterThan(20);
