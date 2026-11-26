@@ -1175,7 +1175,7 @@ class Roadworks {
     // retaining wall's coping starts nearer (WorldGround.wallBand), so its `reach` (half its width across the road) stays
     // in front of the coping. Where the coping starts at the carriageway's edge that is a step in onto the road's edge
     // (negative): a gate stood half on the coping
-    vergeOut(s, sign, out, reach) {
+    vergeOut(s, sign, out, reach, open = false) {
         const ground = this.env && this.env.ground;
         const route = this.route;
         if (!ground || typeof ground.wallBand !== 'function' || typeof route.indexAt !== 'function') return out;
@@ -1185,7 +1185,11 @@ class Roadworks {
         const loc = ground.locate(p.x + lat * Math.cos(p.heading), p.z - lat * Math.sin(p.heading), { start: index - 2, end: index + 2 });
         const band = ground.wallBand(loc, loc.width / 2);
         if (!band) return out;
-        return Math.min(out, band.from - loc.width / 2 - reach - Roadworks.COPING_CLEAR_M);
+        // (never into the lane the traffic rides, `open`: a wall at the lane's very edge, as a site ridden the other way
+        // meets on the open side of a bend, drew a gate's box 0.3 m into it; it stands against the wall's face instead.
+        // On the closed side the works' own lane takes it)
+        const fit = Math.min(out, band.from - loc.width / 2 - reach - Roadworks.COPING_CLEAR_M);
+        return open ? Math.max(reach, fit) : fit;
     }
 
     // Puts a site's verge pieces (the gates, their triangle, the lights) where vergeOut gives today. True when one moved
@@ -1196,7 +1200,7 @@ class Roadworks {
             if (!e.verge) continue;
             const v = e.verge;
             this.route.sample(Math.max(0, Math.min(this.route.length, e.s)), p);
-            const lat = v.sign * (p.width / 2 + this.vergeOut(e.s, v.sign, v.out, v.reach));
+            const lat = v.sign * (p.width / 2 + this.vergeOut(e.s, v.sign, v.out, v.reach, v.sign === site.open));
             if (Math.abs(lat - e.lat) < 1e-6) continue;
             e.lat = lat;
             e.x = p.x + lat * Math.cos(p.heading);
@@ -1238,7 +1242,7 @@ class Roadworks {
                 for (const sign of [Route.LEFT, Route.RIGHT]) {
                     const half = route.sample(gate.s, p).width / 2;
                     const verge = { sign, out: Roadworks.GROUP_OUT_M, reach: reach('gate') };
-                    const lat = sign * (half + this.vergeOut(gate.s, sign, verge.out, verge.reach));
+                    const lat = sign * (half + this.vergeOut(gate.s, sign, verge.out, verge.reach, sign === site.open));
                     keep(place(site, 'gate', gate.s, lat, yaw, { verge }));
                     // The triangle on the closed lane's side, in front of the boards toward the arriving traffic
                     if (sign === site.side) keep(place(site, 'triangle', gate.s, lat, yaw, { role: 'none', verge }));
@@ -1247,7 +1251,7 @@ class Roadworks {
             for (const light of site.lights) {
                 const yaw = light.facing > 0 ? 0 : Math.PI;
                 const verge = { sign: site.open, out: Roadworks.LIGHT_OUT_M, reach: reach('light') };
-                light.lat = site.open * (route.sample(light.s, p).width / 2 + this.vergeOut(light.s, verge.sign, verge.out, verge.reach));
+                light.lat = site.open * (route.sample(light.s, p).width / 2 + this.vergeOut(light.s, verge.sign, verge.out, verge.reach, true));
                 const body = keep(place(site, 'light', light.s, light.lat, yaw, { verge }));
                 body.direction = light.direction;
                 light.element = body;
