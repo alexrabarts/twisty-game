@@ -118,6 +118,9 @@ class WorldEnvironment {
     // goes: the tile as built is held a little lower again under the ride (buildTile's holdY), and a foot at the land
     // read from the nodes stood over it by up to 0.3 m, open at the bottom
     static get COARSE_UNDER_M() { return 0.5; }
+    // How far the land drawn coarser may lie under a side road's edge before a face closes the gap (foot.coarse): a far
+    // ribbon is 400 m and more off, where a metre is two or three pixels
+    static get SIDE_COARSE_M() { return 1; }
 
     // Metres from the bike within which a landmark is drawn
     static get LANDMARK_REACH_M() { return 3000; }
@@ -2228,6 +2231,17 @@ class WorldEnvironment {
             return low;
         };
         if (aprons) foot.mouth = atMouth;
+        // A side road's edge where the land at full detail meets it but a coarser level is drawn lower (its far ribbon is
+        // drawn from SIDE_NEAR_M on): how deep a face under the edge goes, the lowest land there less COARSE_UNDER_M, or
+        // null (RoadMesh.edgeWorks)
+        // (only where the land at full detail meets the edge: where it falls away there too, a face of ground under the
+        // edge stood over it near the road, an overhang of `world-spikes`)
+        if (!aprons) foot.coarse = (x, y, z, ox, oz) => {
+            const near = landNear(x + ox * 0.5, z + oz * 0.5);
+            if (near === null || near < y - WorldEnvironment.MEET_M - RoadMesh.APRON_UNDER_M) return null;
+            const low = this.landLowAt(x + ox * 0.1, z + oz * 0.1, missing);
+            return low !== null && low < y - WorldEnvironment.SIDE_COARSE_M ? low - WorldEnvironment.COARSE_UNDER_M : null;
+        };
         // A side road's edge that faces the ride's wall across a cleft: its wall plan leaves the wall out there
         // (RoadMesh.wallPlan), after its runs are judged, so the wall's other runs stand as they did
         if (!aprons) foot.facesRide = facesRideWall;

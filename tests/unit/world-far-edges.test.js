@@ -30,17 +30,18 @@ import { stagesFor } from '../helpers/world-stages.js';
 // Measured 2026-11-26. Before the far slope's rule (WorldEnvironment.edgeFoot `far`): 674 places, 16 086 open edges,
 // the worst 37.6 m (susten-gadmen). After it, and the faces under a far segment with no slope, the rows kept beside a
 // structure, the slopes tested against a carriageway at their drawn top, and this check's own reading (the streamer's
-// stale sections let go, the rays half a metre along and a pixel down): 18 places, 24 edges. What is left is named in
+// stale sections let go, the rays half a metre along and a pixel down): 18 places, 24 edges; with the far slope laid as at
+// full detail and a face hung from its foot (world-spikes' overhangs), 20 places. What is left is named in
 // .agent/system/world.md, "A far section's slope goes down to the land at every level"
 const KNOWN = {
-    'summit-airolo': 1,
-    'gotthard-north': 3,
+    'summit-airolo': 2,
+    'gotthard-north': 2,
     'lookout-andermatt': 3,
     'hospental-summit': 1,
-    'airolo-lookout': 2,
+    'airolo-lookout': 1,
     'andermatt-goeschenen': 1,
-    'goeschenen-susten': 5,
-    'susten-gadmen': 2
+    'goeschenen-susten': 6,
+    'susten-gadmen': 4
 };
 
 const WALK_M = 1000;

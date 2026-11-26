@@ -2560,6 +2560,9 @@ const FLOAT_SEAM_SHARE = 0.1;
 // (the LOD each tile and each road section is drawn at from there). Returns per-LOD counts and the worst cases.
 async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
     const SIDE_FLOAT_M = sideFloatM;
+    // The edges' rays (as tests/unit/world-far-edges.test.js reads them): how far along the edge from the row, and the
+    // highest under the edge (in the page: the function is passed as source)
+    const FLOAT_AT_M = 0.5, FLOAT_PIXEL_M = 0.3;
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment;
     const route = env.route;
@@ -2688,45 +2691,15 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                     }
                 }
                 if (structureNear(k, 7)) continue;
-                // Down: the drawn land meets each drawn edge, or a skirt closes the gap
+                // (the physics beside the road is read at the ride's own rows; the edges are read below, at the rows each
+                // section draws)
                 const offsets = RoadMesh.hold(held.lod === 0 ? [-h - VERGE, h + VERGE] : [-h, h], curve).offsets;
                 for (const [side, edge] of [[-1, offsets[0]], [1, offsets[1]]]) {
                     const out = place(p, edge + side * 0.05);
                     const land = drawnLand(out.x, out.z);
-                    if (!land) { missing++; continue; }
-                    checked++;
-                    const gap = roadY - land.y;
-                    let open = false;
-                    if (gap > tol) {
-                        // Another road drawn under the edge (a junction, a road below) is ground too
-                        raycaster.set(new THREE.Vector3(out.x, roadY + 0.3, out.z), down);
-                        raycaster.far = gap + 0.3;
-                        const under = raycaster.intersectObjects(roads, false).find(hit => hit.point.y < roadY - 0.01);
-                        const top = under ? Math.max(land.y, under.point.y) : land.y;
-                        if (roadY - top > tol) {
-                            // The edge works under the edge (an apron at the batter, a wall, a deck side): a ray from under
-                            // the road, out across the edge, at three heights of the gap, must meet them
-                            const from = place(p, edge - side * 0.5);
-                            const dir = new THREE.Vector3(Math.cos(p.heading) * side, 0, -Math.sin(p.heading) * side);
-                            raycaster.far = 0.6 + 1.6 * (roadY - top);
-                            open = [0.2, 0.5, 0.8].some(f => {
-                                raycaster.set(new THREE.Vector3(from.x, roadY - (roadY - top) * f, from.z), dir);
-                                return !raycaster.intersectObjects(skirts, false).length;
-                            });
-                        }
-                    }
-                    const key = `${k}:${side}:${held.lod}:${land.lod}`;
-                    const was = edges.get(key);
-                    // What the edge works were built on there (WorldEnvironment.edgeFoot), for an open edge
-                    let foot;
-                    if (open && env.edgeFoot) {
-                        const at = place(p, edge);
-                        const f = env.edgeFoot()(at.x, roadY, at.z, Math.cos(p.heading) * side, -Math.sin(p.heading) * side);
-                        foot = f ? { kind: f.kind, y: f.y !== undefined ? r2(f.y - roadY) : null } : null;
-                    }
-                    if (!was || was.gapM < gap) edges.set(key, { s: Math.round(p.s), side: side > 0 ? 'right' : 'left', roadLod: held.lod, landLod: land.lod, gapM: r2(gap), open, foot });
+                    if (!land) continue;
                     // Physics: the ground the bike reads beside the road against the drawn land, where the land is drawn at LOD0
-                    if (land.lod === 0 && Math.abs(k - bikeK) < 120 && !open) {
+                    if (land.lod === 0 && Math.abs(k - bikeK) < 120) {
                         for (const o of [h + 0.3, h + VERGE]) {
                             const q = place(p, side * o);
                             const near = drawnLand(q.x, q.z);
@@ -2743,6 +2716,69 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                             physics.push({ s: Math.round(p.s), side: side > 0 ? 'right' : 'left', offset: r2(o), deltaM: r2(ground - drawn) });
                         }
                     }
+                }
+            }
+        }
+        // Down: the drawn land meets each drawn edge, or the edge works close the gap. Read at the rows and edges each
+        // section draws (its ribbon's sides, RoadMesh.sectionSteps `userData.sides`: a far ribbon keeps more rows than
+        // RoadMesh.decimate of all the rows, round a wall's end, a mouth and a structure), as tests/unit/world-far-edges
+        // reads them: rays from under the road out across the edge, FLOAT_AT_M along toward each row beside it (on the
+        // row's own line a ray ran along the edge two slopes share, or into the sliver of a few centimetres left between
+        // two feet at a bend), no higher than FLOAT_PIXEL_M under the edge (a 6 cm lip under the ribbon's edge is no gap
+        // anyone sees), and not toward a row past the section's drawn rows where no section is held beside it (the
+        // window's end, where the road ends)
+        for (const [index, held] of env.streamer.roads) {
+            const group = env.roadMeshes.get(index), sides = group && group.userData.sides;
+            if (!sides) continue;
+            const [from, to] = sides.draw || [0, sides.length - 1];
+            for (let k = from; k <= to; k++) {
+                const row = sides[k];
+                if (!Number.isFinite(row.s) || row.s < span[0] || row.s > span[1]) continue;
+                // (a structure's row and the rows beside it: a deck has no works under its edge)
+                if ([k - 1, k, k + 1].some(j => sides[j] && (sides[j].bits & 7))) continue;
+                const outs = RoadMesh.outward(row);
+                for (const key of ['l', 'r']) {
+                    const e = row[key], o = outs[key], side = key === 'l' ? -1 : 1;
+                    const roadY = e[1];
+                    const out = { x: e[0] + o[0] * 0.05, z: e[2] + o[1] * 0.05 };
+                    const land = drawnLand(out.x, out.z);
+                    if (!land) { missing++; continue; }
+                    checked++;
+                    const gap = roadY - land.y;
+                    let open = false;
+                    if (gap > tol) {
+                        // Another road drawn under the edge (a junction, a road below) is ground too
+                        raycaster.set(new THREE.Vector3(out.x, roadY + 0.3, out.z), down);
+                        raycaster.far = gap + 0.3;
+                        const under = raycaster.intersectObjects(roads, false).find(hit => hit.point.y < roadY - 0.01);
+                        const top = under ? Math.max(land.y, under.point.y) : land.y;
+                        if (roadY - top > tol) {
+                            const ways = [];
+                            for (const [j, nb] of [[k - 1, index - 1], [k + 1, index + 1]]) {
+                                if ((j < from || j > to) && !env.streamer.roads.has(nb)) continue;
+                                const q = sides[j] && sides[j][key];
+                                if (!q) continue;
+                                const len = Math.hypot(q[0] - e[0], q[2] - e[2]);
+                                if (len > 1e-6) ways.push([(q[0] - e[0]) / len * Math.min(FLOAT_AT_M, len / 2), (q[2] - e[2]) / len * Math.min(FLOAT_AT_M, len / 2)]);
+                            }
+                            const dir = new THREE.Vector3(o[0], 0, o[1]);
+                            raycaster.far = 0.6 + 1.6 * (roadY - top);
+                            open = [0.2, 0.5, 0.8].some(f => ways.some(w => {
+                                const depth = Math.min(roadY - top, Math.max(FLOAT_PIXEL_M, (roadY - top) * f));
+                                raycaster.set(new THREE.Vector3(e[0] - o[0] * 0.5 + w[0], roadY - depth, e[2] - o[1] * 0.5 + w[1]), dir);
+                                return !raycaster.intersectObjects(skirts, false).length;
+                            }));
+                        }
+                    }
+                    const id = `${Math.round(row.s * 10)}:${side}:${held.lod}:${land.lod}`;
+                    const was = edges.get(id);
+                    // What the edge works were built on there (WorldEnvironment.edgeFoot), for an open edge
+                    let foot;
+                    if (open && env.edgeFoot) {
+                        const f = env.edgeFoot(null, { far: held.lod > 0 })(e[0], roadY, e[2], o[0], o[1]);
+                        foot = f ? { kind: f.kind, y: f.y !== undefined ? r2(f.y - roadY) : null } : null;
+                    }
+                    if (!was || was.gapM < gap) edges.set(id, { s: Math.round(row.s), side: side > 0 ? 'right' : 'left', roadLod: held.lod, landLod: land.lod, gapM: r2(gap), open, foot });
                 }
             }
         }
