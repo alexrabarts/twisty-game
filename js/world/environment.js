@@ -1504,7 +1504,18 @@ class WorldEnvironment {
         const foot = this.edgeFoot(missing, { far: lod > 0 });
         yield;
         const plan = (yield* this.rideWallsSteps(section.index)).plan;
-        const group = yield* RoadMesh.sectionSteps(rows, lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot, roads: this.carriageways, head: section.from - from, tail: to - section.to, plan });
+        // (the land its tubes' portals and footings read: a tile the data has and that is not here yet is waited on, so
+        // the section is built again when it comes. Read as no land, a portal built first had no headwall, and the
+        // land drawn after stood over its roof unfronted: 101 places on the three legs of worlds/susten)
+        const groundAt = (x, z) => {
+            const y = this.ground.tileHeight(x, z);
+            if (y === null) {
+                const key = `${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`;
+                if (this.hasTileData(key)) missing.add(key);
+            }
+            return y ?? undefined;
+        };
+        const group = yield* RoadMesh.sectionSteps(rows, lod, { groundAt, roof: WorldRoute.ROOF_M, foot, roads: this.carriageways, head: section.from - from, tail: to - section.to, plan });
         this.disposeRoad(section);
         // Its works keep out of the side roads' carriageways (Carriageways): built before a side road's chunk is here,
         // it is built again when that chunk is (buildSide)
