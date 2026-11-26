@@ -67,6 +67,22 @@ const WorldLooks = {
         { from: 0.2, to: 0.4, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } },
         { from: 0.4, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
+    // Legs 3 to 5 (worlds/susten): clear all the way, as every photo within 1 km of them (two trips, early September,
+    // mornings and late afternoons), in the morning's low light for their first part. Leg 3 down the Schöllenen to
+    // Göschenen, 6.4 km; leg 4 down to Wassen and up the Meiental to the Susten pass, 21.9 km (a cloud first set over the
+    // pass put its skyline 3.3 degrees from the photos'); leg 5 down to Gadmen, 15.8 km (likewise its first 3 km)
+    'andermatt-goeschenen': [
+        { from: 0, to: 0.3, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.3, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
+    'goeschenen-susten': [
+        { from: 0, to: 0.1, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.1, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
+    'susten-gadmen': [
+        { from: 0, to: 0.1, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.1, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
     // boundary at 0.53 (s 6,989 m, road 1,677 m) blends over 1.5 km, so the first drops fall at s 6,240 m
@@ -137,7 +153,10 @@ Object.defineProperties(WorldLooks, {
             // no photo of distant land, leg 12 is the Tremola's own land)
             'airolo-lookout': Object.freeze({ from: 'gotthard-north', photos: 0 }),
             'lookout-andermatt': Object.freeze({ from: 'gotthard-north', photos: 0 }),
-            'hospental-summit': Object.freeze({ from: 'gotthard-north', photos: 0 })
+            'hospental-summit': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'andermatt-goeschenen': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'goeschenen-susten': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'susten-gadmen': Object.freeze({ from: 'gotthard-north', photos: 0 })
         })
     },
     // The look of each stage's land, haze and sky, measured on the photos within 1 km of it (tools/world/photomatch.mjs
@@ -145,8 +164,9 @@ Object.defineProperties(WorldLooks, {
     //   horizonSpan  how high the horizon's pale colour reaches up the sky (Graphics.setHorizonSpan; else horizonSpan)
     //   hazePerM     the haze's depth (LandShade.HAZE.perM; else HAZE's)
     //   palette      the land's colours (sRGB, over LandShade.PALETTE's)
-    //   sceneryScale the share of Scenery.TRIANGLE_CAP its scenery may take (else 1): a leg whose land and roads are
-    //                denser keeps LEG_BUDGET by drawing fewer trees where the cap holds
+    //   sceneryScale the share of Scenery.TRIANGLE_CAP its scenery may take (else 1). No leg needs less now:
+    //                Game.budgetWindow fits the houses and trees to the window's budget by rule (world-window at 1 on
+    //                legs 1, 3 and 12: at most 435 889, 435 772 and 435 865 triangles)
     // `from` takes another stage's row (a leg with no photos of its own); `photos` the count measured on. A stage with
     // no row has the shared values.
     stageView: {
@@ -158,7 +178,7 @@ Object.defineProperties(WorldLooks, {
             // to 37.6 (drier grass: its green share 0.58 to 0.30, the photos' 0.29), the whole picture 28.9 to 19.9.
             // The land 0.6 to 3 km stayed at 23 to 25 (the photos' forest there is darker and bluer). The skyline is the
             // height data's: 0.47 degrees from the photos' (the photos' own fit to the data 0.43)
-            'airolo-lookout': Object.freeze({ sceneryScale: 0.84, horizonSpan: 0.15, hazePerM: 1 / 6000, palette: Object.freeze({ grass: [0.33, 0.31, 0.2], dry: [0.44, 0.39, 0.26] }), photos: 10 }),
+            'airolo-lookout': Object.freeze({ horizonSpan: 0.15, hazePerM: 1 / 6000, palette: Object.freeze({ grass: [0.33, 0.31, 0.2], dry: [0.44, 0.39, 0.26] }), photos: 10 }),
             // Legs 2 and 12: most of their photos are the same view (the lookout, where all three legs pass): leg 1's
             // land, haze and sky, at the shared scenery's full share. Leg 2 (19 photos, the lookout and the hotel at
             // Andermatt): whole picture 37.3 to 34.7, sky 66.8 to 58.4, land from 3 km 53.2 to 48.5, near 42.3 to 41.6,
@@ -167,9 +187,20 @@ Object.defineProperties(WorldLooks, {
             // near 35.9 to 36.4. A haze of their own (1 / 7 000 m, 1 / 8 000 m) and leg 2's greener grass were tried in
             // a third round: each moved its legs by under 3 points, the land 0.6 to 3 km the wrong way
             'lookout-andermatt': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 19 }),
-            // (leg 12's scenery at 0.9 of the shared share: down the Tremola the window held 458 142 triangles at
-            // s 9 638, where the Tremola up holds about 450 000)
-            'summit-airolo': Object.freeze({ from: 'airolo-lookout', sceneryScale: 0.9, photos: 17 }),
+            'summit-airolo': Object.freeze({ from: 'airolo-lookout', photos: 17 }),
+            // Legs 3 to 5 (worlds/susten), on the photos within 1 km of each (two trips, early September, mornings and
+            // late afternoons). Leg 3, 15 photos, nearly all over the Schöllenen at km 2.5: five rounds; leg 1's values
+            // and the gorge's granite darker (rock, scree) took the whole picture from 68.5 to 57.9, the sky 73.1 to
+            // 67.2, land from 3 km 60.7 to 55.5 and the near ground 80.1 to 68.0; the land 0.6 to 3 km went 53.1 to 72.5
+            // (the photos' slopes there are grey rock in shade, the game's golden grass), and a sky with its pale band a
+            // half as high again (0.08) and a deeper haze moved nothing by more than 3 points. Leg 4, 17 photos, all at
+            // km 26 under the pass (one 3 km on): whole 42.7 to 39.4, sky 80.0 to 46.6, 0.6 to 3 km 54.2 to 46.0, near
+            // 39.5 to 38.9. Its skyline is 3.3 degrees from the photos' where the game draws a retaining wall at the
+            // photos' place on the grass slope, which hides the view. Leg 5, 22 photos: whole 41.8 to 36.4, sky 60.1
+            // to 54.5, from 3 km 75.6 to 55.4, 0.6 to 3 km 53.6 to 36.9, near 49.7 to 47.3; skyline 0.82 degrees
+            'andermatt-goeschenen': Object.freeze({ from: 'airolo-lookout', palette: Object.freeze({ grass: [0.33, 0.31, 0.2], dry: [0.44, 0.39, 0.26], rock: [0.33, 0.33, 0.32], scree: [0.42, 0.41, 0.38] }), photos: 15 }),
+            'goeschenen-susten': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 17 }),
+            'susten-gadmen': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 22 }),
             // Leg 11: one photo, at the summit, a clear morning. The bluer sky (17.2 from the photo's, 38.2 under the
             // Gotthard leg's cloud) and the shared land colours and haze: leg 1's drier grass and thinner haze drew that
             // view's slopes 52 points yellower than the photo. The slopes 0.6 to 3 km off stay 49 points apart: in the

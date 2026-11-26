@@ -275,10 +275,12 @@ class Game {
     // The menu's world: a leg ridden on this page has left its systems built, so the world starts on a fresh page
     // (the rider and bike are kept in localStorage); a page that has ridden nothing starts it here
     chooseWorld() {
-        // With more than one world leg the menu asks which (WorldLegs: grouped by pass, the next open leg focused)
-        if (typeof WorldLegs !== 'undefined' && WorldLegs.LIST.length > 1 && !this.rideMode.legPicked) {
-            WorldLegs.open(document, {
-                unlockAll: Game.debugEnabled(window.location.search),
+        // With more than one world leg the menu asks which, on the map of the tour (WorldMap: the next open leg chosen)
+        if (typeof WorldMap !== 'undefined' && WorldLegs.LIST.length > 1 && !this.rideMode.legPicked) {
+            const debug = Game.debugEnabled(window.location.search);
+            WorldMap.open(document, {
+                unlockAll: debug,
+                roam: typeof GameModes !== 'undefined' && GameModes.active(this.rideMode, debug) === 'roam',
                 onPick: (id) => {
                     this.rideMode = { ...this.rideMode, world: id, legPicked: true };
                     this.chooseWorld();
@@ -2588,10 +2590,9 @@ class Game {
         return input;
     }
 
-    updateShadowCamera() {
-        // Make the directional lights' shadow cameras follow the player,
+    updateShadowCamera(playerPos = this.vehicle.position) {
+        // Make the directional lights' shadow cameras follow the player (the free-fly camera's ground while it flies),
         // preserving the time-of-day sun direction (low sun = long shadows)
-        const playerPos = this.vehicle.position;
         const sunOffset = this.sunOffset || { x: 50, y: 80 };
 
         // Update near shadow light position to stay relative to player
@@ -3619,10 +3620,20 @@ class Game {
         const c = CHARACTERS.find(character => character.id === characterId);
         this.scene.remove(old.group);
         old.onModel = null;
-        old.group.traverse(o => {
-            if (o.isMesh && o.material && o.material !== this.showcaseSilhouette && o.material.dispose) o.material.dispose();
-        });
         this.buildShowcaseBike(c, old.position.x);
+        // What the old bike held is freed, but for what a bike still on the stage wears (the silhouette, a part
+        // shared between bikes): a bike stepped through on the menu leaves nothing on the GPU
+        const kept = new Set([this.showcaseSilhouette]);
+        Object.values(this.showcaseBikes).forEach(v => v.group.traverse((o) => {
+            if (o.geometry) kept.add(o.geometry);
+            (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m && kept.add(m));
+        }));
+        old.group.traverse((o) => {
+            if (o.geometry && !kept.has(o.geometry)) o.geometry.dispose();
+            (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+                if (m && !kept.has(m) && m.dispose) m.dispose();
+            });
+        });
         if (this.showcaseFocusId === characterId) this.focusRiderShowcase(characterId);
     }
 
@@ -3706,6 +3717,9 @@ class Game {
 
     endMenuShowcase() {
         this.showcaseMode = null;
+        // The ride's camera draws the whole window again
+        if (this.camera) this.camera.clearViewOffset();
+        this.homeView = null;
         if (this.menuShowcaseRAF) {
             cancelAnimationFrame(this.menuShowcaseRAF);
             this.menuShowcaseRAF = null;
@@ -3725,25 +3739,27 @@ class Game {
             const dt = Math.min((now - this.lastShowcaseTime) / 1000, 0.05);
             this.lastShowcaseTime = now;
 
+            // The menu's stage box (HomeStage): the rider is drawn in it, beside the choices; no box in view, no frame
+            const fov = this.showcaseMode === 'rider' ? Game.SHOWCASE_FOV : 55;
+            const view = this.frameHomeStage(dt, fov);
+            if (!view) return;
             if (this.showcaseMode === 'rider' && this.showcaseBikes) {
-                // Slow orbit around the focused bike
-                this.showcaseOrbitAngle += dt * 0.45;
+                // A slow turn round the focused bike, as far off as the box needs for the whole bike
+                this.showcaseOrbitAngle += dt * Game.SHOWCASE_TURN;
                 const focus = this.showcaseBikes[this.showcaseFocusId] || Object.values(this.showcaseBikes)[0];
                 const target = focus.position;
-                const r = 4.2;
+                const r = view.distance;
                 const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
                 const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;
                 // Ease toward the orbit point so focus changes glide across
-                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
+                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 0.9 + r * 0.3, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
                 this.showcaseSnap = false;
                 // The sun and its shadow frustum follow the stage
                 this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
                 this.directionalLight.target.position.copy(target);
                 this.directionalLight.target.updateMatrixWorld();
                 this.camera.up.set(0, 1, 0);
-                this.camera.fov = 50;
-                this.camera.updateProjectionMatrix();
-                this.camera.lookAt(target.x, target.y + 0.65, target.z);
+                this.camera.lookAt(target.x, target.y + 0.7, target.z);
             } else if (this.showcaseMode === 'track' && this.previewEnv) {
                 // Slow swaying arc over the valley side of a mid-leg viewpoint,
                 // close to the road, looking back at the course and cliff
@@ -3758,8 +3774,6 @@ class Game {
                     c.z + Math.sin(angle) * r
                 );
                 this.camera.up.set(0, 1, 0);
-                this.camera.fov = 55;
-                this.camera.updateProjectionMatrix();
                 this.camera.lookAt(c.x, c.y + 1.5, c.z);
             }
 
@@ -3767,6 +3781,26 @@ class Game {
             this.graphics.render(this.scene, this.camera);
         };
         this.menuShowcaseRAF = requestAnimationFrame(loop);
+    }
+
+    // Frames the showcase in the menu's stage box (HomeStage.frame): the camera's view is shifted so the box's centre
+    // is the view's centre, eased so a layout change (the map opening beside the rider) glides. Returns the view
+    // ({ distance }), or null when the box is too small to draw in
+    frameHomeStage(dt, fov) {
+        const width = window.innerWidth, height = window.innerHeight;
+        const box = typeof HomeStage !== 'undefined' ? HomeStage.box(document) : null;
+        const want = box ? HomeStage.frame(box, { w: width, h: height }, fov) : { offsetX: 0, offsetY: 0, distance: 4.2, shown: true };
+        if (!want.shown) return null;
+        const view = this.homeView;
+        const k = !view || this.showcaseSnap ? 1 : Math.min(1, dt * 6);
+        this.homeView = view ? {
+            offsetX: view.offsetX + (want.offsetX - view.offsetX) * k,
+            offsetY: view.offsetY + (want.offsetY - view.offsetY) * k,
+            distance: view.distance + (want.distance - view.distance) * k
+        } : { ...want };
+        this.camera.fov = fov;
+        this.camera.setViewOffset(width, height, this.homeView.offsetX, this.homeView.offsetY, width, height);
+        return this.homeView;
     }
 
     showLeaderboardError(message) {
@@ -3871,6 +3905,8 @@ class Game {
             this.soundManager.stopEngineSound();
             // (photo mode: its own camera round the bike, js/world/photo.js)
             if (this.photo) this.photo.apply(this.camera);
+            // (the free-fly camera of debug mode, and the world streamed round it: Game.stepFreeFly)
+            if (this.freeFly) this.stepFreeFly(rawDeltaTime);
             this.graphics.render(this.scene, this.camera);
             return;
         }
@@ -4451,8 +4487,9 @@ class Game {
             this.leaderboardService.recordFinish(Math.round(finishTime))
                 .catch(error => console.error('Failed to record finish:', error));
         }
-        // A finished leg opens the next on the menu (WorldLegs)
+        // A finished leg opens the next on the menu (WorldLegs), and a time that may be trusted is the map's best when it beats it
         if (world && typeof WorldLegs !== 'undefined' && this.environment.stage && !this.freeRoam) WorldLegs.markFinished(this.environment.stage.id);
+        if (world && typeof WorldMap !== 'undefined' && this.environment.stage && !this.freeRoam && this.environment.submitAllowed && !this.rideTuned) WorldMap.recordBest(this.environment.stage.id, finishTime);
         // A leg that ends at a stop rides on into it: the stop scene (js/world/stopscene.js) shows the card in its bar
         if (world && !this.freeRoam && this.startStopScene()) return;
         this.showFinishScreen();
@@ -5077,6 +5114,138 @@ class Game {
         }
     }
 
+    // The free-fly camera of debug mode (js/world/freefly.js; .agent/system/ui.md, the free-fly camera): FreeFly.KEY
+    // in a world ride with `?debug`. The ride pauses under it (the bike, the clock, the group and the traffic hold
+    // still), and the world streams round the camera (stepFreeFly). Back gives the chase camera back as it was and
+    // the ride goes on; B puts the bike down on the ride nearest the camera first. A flown ride keeps no time
+    openFreeFly() {
+        if (!Game.debugEnabled(window.location.search) || typeof FreeFly === 'undefined') return false;
+        const env = this.environment;
+        if (!env || !env.isWorld || !this.vehicle || this.freeFly || this.photo || this.stopScene || this.finished || this.worldConfirm) return false;
+        const fromRide = !this.paused;
+        if (fromRide) this.pauseRace({ panel: false });
+        env.trusted = false;
+        const cam = this.camera;
+        const saved = { position: cam.position.clone(), quaternion: cam.quaternion.clone(), up: cam.up.clone(), fov: cam.fov };
+        const euler = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
+        const ground = env.ground;
+        const fly = new FreeFly({ x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: euler.y, pitch: euler.x, roll: euler.z }, (x, z) => ground.groundY(x, z, null));
+        const held = {}, look = { yaw: 0, pitch: 0 }, canvas = this.renderer.domElement, off = [];
+        const on = (target, type, handler, options) => {
+            target.addEventListener(type, handler, options);
+            off.push(() => target.removeEventListener(type, handler, options));
+        };
+        // (the dialog stack hears every keydown and hands this camera's keys to onKey below; a keyup reaches the page)
+        on(window, 'keyup', (event) => { delete held[event.code]; }, true);
+        on(window, 'blur', () => { for (const code of Object.keys(held)) delete held[code]; });
+        on(canvas, 'mousedown', () => {
+            if (document.pointerLockElement !== canvas && canvas.requestPointerLock) canvas.requestPointerLock();
+        });
+        on(document, 'mousemove', (event) => {
+            if (document.pointerLockElement !== canvas && !(event.buttons & 1)) return;
+            look.yaw -= (event.movementX || 0) * FreeFly.TURN.mouseRad;
+            look.pitch -= (event.movementY || 0) * FreeFly.TURN.mouseRad;
+        });
+        on(window, 'wheel', (event) => {
+            event.preventDefault();
+            if (event.deltaY) fly.scaleSpeed(event.deltaY < 0 ? 1 : -1);
+        }, { passive: false });
+        const bar = FreeFly.bar(document, (name) => {
+            if (name === 'ground') fly.hold = !fly.hold;
+            else if (name === 'bike') this.closeFreeFly({ putDown: true });
+            else if (name === 'done') this.closeFreeFly();
+        });
+        bar.tabIndex = -1;
+        this.freeFly = { fly, held, look, saved, euler, fromRide, bar, off, at: new THREE.Vector3(), sun: new THREE.Vector3(), near: null, readAt: -Infinity, origin: (env.data && env.data.manifest && env.data.manifest.origin) || FreeFly.ORIGIN };
+        // (from the helmet view the rider was hidden round the camera: Vehicle.hideAround)
+        if (typeof Vehicle !== 'undefined' && Vehicle.hideAround) Vehicle.hideAround(this.vehicle.rider || this.vehicle.group, null, cam.near);
+        document.body.classList.add('free-fly');
+        Modals.open(bar, {
+            cancel: () => this.closeFreeFly(),
+            focus: bar,
+            onKey: (event) => {
+                if (!FreeFly.reads(event.code)) return false;
+                held[event.code] = true;
+                if (!event.repeat) {
+                    if (FreeFly.BINDINGS.level.includes(event.code)) fly.level();
+                    if (FreeFly.BINDINGS.faster.includes(event.code)) fly.scaleSpeed(1);
+                    if (FreeFly.BINDINGS.slower.includes(event.code)) fly.scaleSpeed(-1);
+                }
+                return true;
+            }
+        });
+        this.stepFreeFly(0);
+        return true;
+    }
+
+    // Back from the free fly: the chase camera as it was when the fly began, the world streamed round the bike again
+    // from the next frame, the ride paused only if it was before. `putDown`: the bike first goes to the ride nearest
+    // the camera (Game.debugPutDown)
+    closeFreeFly({ putDown = false } = {}) {
+        const state = this.freeFly;
+        if (!state) return false;
+        this.freeFly = null;
+        state.off.forEach(remove => remove());
+        if (document.pointerLockElement && document.exitPointerLock) document.exitPointerLock();
+        Modals.close(state.bar);
+        document.body.classList.remove('free-fly');
+        const cam = this.camera;
+        cam.position.copy(state.saved.position);
+        cam.quaternion.copy(state.saved.quaternion);
+        cam.up.copy(state.saved.up);
+        cam.fov = state.saved.fov;
+        cam.updateProjectionMatrix();
+        cam.updateMatrixWorld();
+        if (putDown) this.debugPutDown(state.fly.x, state.fly.z);
+        this.updateShadowCamera();
+        if (this.input && this.input.clearActions) this.input.clearActions();
+        if (state.fromRide) this.resumeRace();
+        return true;
+    }
+
+    // One frame of the free fly (the paused branch of Game.animate): the camera moves, and the world streams round
+    // it as it streams round the bike in a ride: the tiles, the roads and side roads, the scenery's caps and the
+    // window's triangle budget, by the camera's place and the ride's nearest place to it. The stream's clock moves on
+    // (a tile left behind is let go) but the ride's does not: dtSec 0 holds the roadworks' lights
+    stepFreeFly(dt) {
+        const state = this.freeFly;
+        if (!state) return;
+        const { fly, look } = state;
+        const controls = FreeFly.controlsOf(state.held);
+        const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+        const pad = pads ? [...pads].find(p => p && p.connected) : null;
+        if (pad) FreeFly.addPad(controls, pad);
+        fly.step(dt, controls, look);
+        look.yaw = look.pitch = 0;
+
+        const cam = this.camera;
+        cam.position.set(fly.x, fly.y, fly.z);
+        state.euler.set(fly.pitch, fly.yaw, fly.roll, 'YXZ');
+        cam.quaternion.setFromEuler(state.euler);
+        cam.updateMatrixWorld();
+
+        const env = this.environment;
+        const at = state.at.set(fly.x, fly.y, fly.z);
+        state.near = env.route.project(fly.x, fly.z, state.near, state.near || {});
+        const s = state.near.index >= 0 ? state.near.s : env.startS;
+        if (dt > 0) env.streamClockMs += dt * 1000;
+        env.update(at, s, null, Game.SECTION_BUDGET_MS, 0);
+        // (the sun's shadow round the ground under the camera)
+        const floor = fly.ground(fly.x, fly.z);
+        this.updateShadowCamera(Number.isFinite(floor) ? state.sun.set(fly.x, Math.min(fly.y, floor), fly.z) : at);
+        if (typeof LandShade !== 'undefined') LandShade.update(this.scene, this.graphics, this.weatherSystem, env.group);
+        this.budgetWindow();
+
+        const now = performance.now();
+        if (now - state.readAt >= 250) {
+            state.readAt = now;
+            const readout = state.bar.querySelector('[data-fly-readout]');
+            if (readout) readout.textContent = fly.readout(state.origin, state.near.index >= 0 ? state.near.s : null).text;
+            const ground = state.bar.querySelector('[data-fly="ground"]');
+            if (ground) ground.setAttribute('aria-pressed', fly.hold ? 'true' : 'false');
+        }
+    }
+
     // Free roam puts the bike at a destination (FreeRoam.destinations): standing, facing along the ride, the camera, the
     // guide and the crew set again. The promise settles once the land round it is in (WorldStreamer.settle), and the
     // bike is put on that land. `say` tells the rider where they are
@@ -5260,11 +5429,39 @@ class Game {
     debugSkipToNextGate() {
         const { environment, vehicle, worldRun } = this;
         if (!environment || !environment.isWorld || this.finished || !worldRun) return false;
-        const route = environment.route, before = Game.DEBUG_SKIP_BEFORE_M;
+        const before = Game.DEBUG_SKIP_BEFORE_M;
         // (a station the bike already stands before is skipped: a second press goes on to the one after)
         const at = environment.stationGates.findIndex(st => st.s - before > vehicle.routeS + 10);
         if (at < 0) return false;
         const s = Math.max(environment.startS, environment.stationGates[at].s - before);
+        // Every station before the one ahead counts as passed
+        this.debugPlace(s, Math.max(worldRun.stationIndex, at - 1));
+        showCallout(`Debug: before gate ${at} of ${environment.stationGates.length - 1} (no time is kept)`, 'warn', 2000);
+        return true;
+    }
+
+    // The free-fly camera's put-down (Game.closeFreeFly): the bike on the ride at the place nearest (x, z), on a
+    // rolling start. Every station before it counts as passed and none after, so the gates ahead are passed as any
+    // other; a place past the last station's DEBUG_SKIP_BEFORE_M is held to it, so the put-down never ends the stage
+    debugPutDown(x, z) {
+        const { environment, worldRun } = this;
+        if (!environment || !environment.isWorld || this.finished || !worldRun) return false;
+        const gates = environment.stationGates, last = gates[gates.length - 1];
+        const near = environment.route.project(x, z, null, {});
+        if (!(near.index >= 0)) return false;
+        const s = Math.max(environment.startS, Math.min(near.s, last.s - Game.DEBUG_SKIP_BEFORE_M));
+        let passed = 0;
+        while (passed + 1 < gates.length - 1 && gates[passed + 1].s <= s) passed++;
+        this.debugPlace(s, passed);
+        showCallout(`Debug: the bike put down at s ${Math.round(s)} (no time is kept)`, 'warn', 2000);
+        return true;
+    }
+
+    // The bike put down at ride s on a rolling start, `stationIndex` the last station passed: the debug skip's and
+    // the free fly's put-down. The world is no longer trusted
+    debugPlace(s, stationIndex) {
+        const { environment, vehicle, worldRun } = this;
+        const route = environment.route;
         const point = route.sample(s, {});
         environment.trusted = false;
 
@@ -5280,14 +5477,12 @@ class Game {
 
         this.removeRunOverlays();
         environment.guide.reset();
-        // Every station before the one ahead counts as passed, and progress starts again at s (no cut is read)
-        worldRun.stationIndex = Math.max(worldRun.stationIndex, at - 1);
+        // (progress starts again at s: no cut is read)
+        worldRun.stationIndex = stationIndex;
         worldRun.restartAt(s);
         this.worldCamera.reset(point.heading);
         if (this.traffic) this.traffic.clearAround(route.toUnits(s), Math.ceil(Game.RESTART_CLEAR_SEGMENTS * 20 / route.unitM));
         this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(s), { environment, weatherSystem: this.weatherSystem });
-        showCallout(`Debug: before gate ${at} of ${environment.stationGates.length - 1} (no time is kept)`, 'warn', 2000);
-        return true;
     }
 
     // Back to the last gate passed, on a rolling start. Costs 5 s and a
@@ -5376,6 +5571,10 @@ Game.DEBUG_SKIP_BEFORE_M = 40;
 Game.SIDE_CAR_COLORS = [0xf2f2f0, 0x2b2f36, 0x8a9199, 0x7a1d1d, 0x1f3f6b, 0x3d5a3a];
 Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 'edge-back': 'Turned back at the edge of the map' };
 
+// The menu's rider: the camera's field of view (degrees) and how fast it turns round the bike (rad/s)
+Game.SHOWCASE_FOV = 38;
+Game.SHOWCASE_TURN = 0.22;
+
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
 
@@ -5454,6 +5653,15 @@ document.addEventListener('keydown', (event) => {
     if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
     if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
     window.game.openTravel();
+});
+
+// The free-fly camera's key, in a world ride in debug mode only (Game.openFreeFly). Not while a dialog is open: its bar
+// is one, and it answers the key itself to go back (js/modals.js). Not while a name is typed
+document.addEventListener('keydown', (event) => {
+    if (typeof FreeFly === 'undefined' || event.code !== FreeFly.KEY || event.repeat || event.ctrlKey || event.metaKey || event.altKey || !window.game || !Game.debugEnabled(window.location.search)) return;
+    if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
+    if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
+    window.game.openFreeFly();
 });
 
 // Photo mode's key in a free-roam ride (Game.openPhoto). Not while a dialog is open: the pause panel's Photo button

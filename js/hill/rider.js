@@ -32,9 +32,9 @@ class HillRider {
     // from his waist clear of his legs (APRON). The bicycle leans in towards him by leanRad; on and off the
     // saddle over blendS
     static get WALK() {
-        return Object.freeze({ hip: [0.36, 0.78, -0.45], bendRad: 0.31, turnRad: 0.35, headUpRad: 0.41, reachM: 0.22, strideM: 1.25, stance: 0.6, liftM: 0.1, footX: 0.11,
+        return Object.freeze({ hip: [0.36, 0.86, -0.45], bendRad: 0.31, turnRad: 0.35, headUpRad: 0.41, reachM: 0.22, strideM: 1.25, stance: 0.6, liftM: 0.1, footX: 0.11,
             foot: { rollShare: 0.2, toeOffRad: 0.55, heelRad: 0.18, toeM: 0.15, heelM: 0.07, standM: 0.1, stepMs: 0.8, settleS: 0.35 },
-            backM: 0.14, leanRad: 0.06, blendS: 0.4, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.44 } });
+            backM: 0.19, leanRad: 0.06, blendS: 0.4, down: { fromM: 20, toM: 29, easeM: 1.5, headUpRad: 0.05, bendRad: 0.44 } });
     }
 
     // How far into his tired stretch he is at `walkM` metres walked (0..1, eased: WALK.down)
@@ -72,20 +72,25 @@ class HillRider {
         this.frame = new THREE.Group();
         this.group.add(this.frame);
         this.parts = {};
+        // The boy is drawn as one skinned body (HillBoy, js/hill/boy.js) on the model's rig: his parts are pivots
+        // only, whether the file has shapes for them or not
+        const skinned = typeof HillBoy !== 'undefined';
+        const rig = new Set(HillRider.BODY.concat(['head', 'apron_long', 'apron_hem']));
+        for (const name of rig) {
+            if (lod.meshes.has(name) || !lod.places.has(name)) continue;
+            const pivot = new THREE.Group();
+            pivot.name = name;
+            pivot.position.copy(lod.places.get(name));
+            this.frame.add(pivot);
+            this.parts[name] = pivot;
+        }
         for (const [name, primitives] of lod.meshes) {
             const pivot = new THREE.Group();
             pivot.name = name;
             pivot.position.copy(lod.places.get(name));
             for (const primitive of primitives) {
+                if (skinned && rig.has(name)) break;
                 let { geometry, material } = primitive;
-                // His face: painted on its shell, from the front
-                if (material && material.name === 'face') {
-                    const painted = HillRider.face(material);
-                    if (painted !== material) {
-                        geometry = HillRider.faceUV(geometry);
-                        material = painted;
-                    }
-                }
                 // The basket's willow: woven (HillTextures' wicker), laid on each face in metres
                 if (material && /^wicker/.test(material.name)) {
                     const woven = HillRider.wicker(material);
@@ -156,7 +161,16 @@ class HillRider {
             long.add(hem);
             hem.position.sub(long.position).sub(r.boy);
         }
-        this.legPoints = Array.from({ length: 8 }, () => new THREE.Vector3());
+        // (and two points of the top tube under him on the saddle, which the apron drapes over: HillRider.TUBE)
+        this.legPoints = Array.from({ length: 10 }, () => new THREE.Vector3());
+        this.hipsAt = new THREE.Vector3().copy(r.boy);
+        // The body, skinned on the rig, and his life
+        this.boy = skinned ? new HillBoy(this) : null;
+    }
+
+    // A loaf thrown to `side` (+1 his left): his hand takes it from the basket and flings it out that way
+    throwAt(side) {
+        if (this.boy) this.boy.throwAt(side);
     }
 
     // The model's willow finish with the weave on it (one for each of the model's willow finishes); the finish as it is
@@ -173,86 +187,6 @@ class HillRider {
             HillRider.woven.set(material, woven);
         }
         return HillRider.woven.get(material);
-    }
-
-    // The face as painted (FACE): where its features sit, as shares of the face across (u, 0.5 the middle) and up it (v,
-    // 0 the chin, 1 the crown); the face's span in metres about its centre (the head's middle in the head node), which
-    // the UVs are laid over from the front
-    static get FACE() {
-        return Object.freeze({ centre: [0, 0.155, 0.02], wideM: 0.16, highM: 0.205, eyes: [0.16, 0.53], brows: [0.6, 0.33, 0.46], mouth: [0.26, 0.42, 0.58], cheeks: [0.27, 0.4] });
-    }
-
-    // His face, painted from scratch on a canvas: soft brows, eyes, a mouth and a little ruddy colour in the cheeks over
-    // the skin (white here: the finish's own colour is the skin's). Simple, so it reads at the camera's distance and is
-    // no one's face. The finish as it is where there is no page
-    static face(material) {
-        if (typeof document === 'undefined' || !document.createElement) return material;
-        if (HillRider.painted) return HillRider.painted;
-        const F = HillRider.FACE, N = 256, c = document.createElement('canvas');
-        c.width = c.height = N;
-        const g = c.getContext && c.getContext('2d');
-        if (!g || !g.createRadialGradient) return material;
-        const X = u => u * N, Y = v => (1 - v) * N;
-        g.fillStyle = '#ffffff';
-        g.fillRect(0, 0, N, N);
-        g.filter = 'blur(1.5px)';
-        for (const side of [-1, 1]) {
-            const cx = X(0.5 + side * F.cheeks[0]), cy = Y(F.cheeks[1]), r = g.createRadialGradient(cx, cy, 0, cx, cy, 34);
-            r.addColorStop(0, 'rgba(214, 120, 108, 0.42)');
-            r.addColorStop(1, 'rgba(214, 120, 108, 0)');
-            g.fillStyle = r;
-            g.fillRect(cx - 40, cy - 40, 80, 80);
-            // A brow: a soft arched stroke
-            g.strokeStyle = 'rgba(92, 64, 44, 0.85)';
-            g.lineWidth = 6;
-            g.lineCap = 'round';
-            g.beginPath();
-            const b0 = X(0.5 + side * F.brows[1]), b1 = X(0.5 + side * (F.brows[2] - 0.12)), by = Y(F.brows[0]);
-            g.moveTo(b0, by + 3);
-            g.quadraticCurveTo((b0 + b1) / 2, by - 4, b1, by + 2);
-            g.stroke();
-            // An eye: a dark almond under a lid line
-            const ex = X(0.5 + side * F.eyes[0]), ey = Y(F.eyes[1]);
-            g.fillStyle = 'rgba(58, 44, 36, 0.9)';
-            g.beginPath();
-            g.ellipse(ex, ey, 8, 5.5, 0, 0, Math.PI * 2);
-            g.fill();
-            g.strokeStyle = 'rgba(120, 80, 60, 0.6)';
-            g.lineWidth = 3;
-            g.beginPath();
-            g.moveTo(ex - 11, ey - 3);
-            g.quadraticCurveTo(ex, ey - 10, ex + 11, ey - 3);
-            g.stroke();
-        }
-        // The mouth: a soft, slightly closed line
-        g.strokeStyle = 'rgba(168, 92, 82, 0.8)';
-        g.lineWidth = 5;
-        g.beginPath();
-        g.moveTo(X(F.mouth[1]), Y(F.mouth[0]));
-        g.quadraticCurveTo(X(0.5), Y(F.mouth[0] - 0.015), X(F.mouth[2]), Y(F.mouth[0]));
-        g.stroke();
-        const map = new THREE.CanvasTexture(c);
-        map.encoding = THREE.sRGBEncoding;
-        const painted = material.clone();
-        painted.map = map;
-        painted.needsUpdate = true;
-        HillRider.painted = painted;
-        return painted;
-    }
-
-    // A copy of the face's shell with UVs laid on it from the front over the face's span (FACE); what faces away takes
-    // the plain skin at the canvas's corner
-    static faceUV(geometry) {
-        const F = HillRider.FACE, g = geometry.clone(), p = g.attributes.position, n = g.attributes.normal;
-        if (!n) return geometry;
-        const uv = new Float32Array(p.count * 2);
-        for (let i = 0; i < p.count; i++) {
-            const front = n.getZ(i) > 0.55;
-            uv[i * 2] = front ? 0.5 + (p.getX(i) - F.centre[0]) / F.wideM : 0.02;
-            uv[i * 2 + 1] = front ? 0.5 + (p.getY(i) - F.centre[1]) / F.highM : 0.02;
-        }
-        g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-        return g;
     }
 
     // A copy of `geometry` with UVs in metres laid on each face from the side it faces most (a box's projection)
@@ -290,6 +224,7 @@ class HillRider {
             this.parts.boy.position.set(0, 0, 0);
             this.parts.boy.quaternion.identity();
             if (this.parts.head) this.parts.head.quaternion.identity();
+            if (this.boy) this.boy.atRest();
             for (const name of ['apron_long', 'apron_hem']) if (this.parts[name]) this.parts[name].quaternion.identity();
         }
         // (where the vehicle's rider is now drawn, in the world)
@@ -372,9 +307,17 @@ class HillRider {
             s.q2.slerp(s.q4, walk);
             this.boyAt.lerp(s.walkHip || (s.walkHip = new THREE.Vector3().fromArray(W.hip)), walk);
         }
+        // Out of the saddle when he pushes hard (HillBoy.live: rise), and stood on foot his weight from foot to foot
+        const boy = this.boy;
+        if (boy && boy.rise > 0) this.boyAt.addScaledVector(s.riseBy || (s.riseBy = new THREE.Vector3(0, 0.03, 0.085)), boy.rise * (1 - walk));
+        this.hipsAt.copy(this.boyAt);
+        if (boy && walk > 0 && this.ridden && this.ridden.speed < 0.05) this.hipsAt.x += 0.014 * walk * (1 - (this.striding === undefined ? 1 : this.striding)) * Math.sin(boy.t * 0.9);
+        // A foot put down further than his leg reaches from the saddle: he slides his hips towards it
+        if (this.footShift) this.hipsAt.add(this.footShift);
         this.boyQ.copy(s.q2);
         this.parts.boy.quaternion.copy(s.q2);
-        this.parts.boy.position.copy(this.boyAt);
+        this.parts.boy.position.copy(this.hipsAt);
+        if (boy) boy.chestTurn(boy.chest.quaternion, walk);
         const headUp = W.headUpRad + (W.down.headUpRad - W.headUpRad) * tired;
         if (this.parts.head) this.parts.head.quaternion.setFromAxisAngle(s.xAxis || (s.xAxis = new THREE.Vector3(1, 0, 0)), -headUp * walk);
         s.hand = s.hand || new THREE.Vector3();
@@ -382,16 +325,43 @@ class HillRider {
         s.elbow = s.elbow || new THREE.Vector3();
         for (const arm of this.arms) {
             s.hand.copy(arm.grip).sub(r.steer).applyQuaternion(this.steerQ).add(r.steer);
-            s.sh.copy(arm.shoulder).sub(r.boy).applyQuaternion(s.q2).add(this.boyAt);
+            // (the gloved hand over the bar, its fingers round it; or on its way to throw a loaf)
+            if (boy) {
+                s.hand.add(s.gripBy || (s.gripBy = new THREE.Vector3().fromArray(HillBoy.GRIP_BY)));
+                const thrown = boy.throwHand(arm, s.hand, s.thrown || (s.thrown = new THREE.Vector3()));
+                if (thrown) s.hand.copy(thrown);
+            }
+            if (boy) boy.shoulderAt(arm, this.hipsAt, this.boyQ, s.sh);
+            else s.sh.copy(arm.shoulder).sub(r.boy).applyQuaternion(s.q2).add(this.boyAt);
             // A shoulder reaches forward to a grip past the arm's length
             const gap = s.sh.distanceTo(s.hand) - (arm.upper + arm.lower) * 0.97;
-            if (gap > 0) s.sh.addScaledVector(s.elbow.subVectors(s.hand, s.sh).normalize(), Math.min(gap, A.shoulderReachM + (W.reachM - A.shoulderReachM) * walk));
-            s.pole.set(arm.side, -0.6, -0.3);
+            const throwing = boy && boy.throwT >= 0 && arm.side === boy.throwSide;
+            if (gap > 0) s.sh.addScaledVector(s.elbow.subVectors(s.hand, s.sh).normalize(), Math.min(gap, (throwing ? 0.1 : A.shoulderReachM) + (W.reachM - A.shoulderReachM) * walk));
+            if (boy) boy.setShoulder(arm, s.sh, this.hipsAt, this.boyQ);
+            s.pole.set(arm.side * 0.55, -0.8, -0.3);
             HillRider.knee(s.sh, s.hand, arm.upper, arm.lower, s.pole, s.elbow);
             s.up.set(0, 0, 1);
             this.point(arm.upperPart, s.sh, s.elbow, s.up);
             this.point(arm.lowerPart, s.elbow, s.hand, s.up);
         }
+    }
+
+    // How far his hips must slide towards the foot he puts down for the leg to reach the cobbles there (this.footShift,
+    // in the frame), as the foot's place is worked out below in update
+    reachDown(bike, lane, share) {
+        const s = this.scratch;
+        this.footShift = this.footShift || new THREE.Vector3();
+        this.footShift.set(0, 0, 0);
+        if (!(share > 0) || !this.boy) return;
+        const leg = this.legs[this.legs[0].side === Vehicle.LEFT ? 0 : 1];
+        s.foot = s.foot || new THREE.Vector3();
+        s.foot.set(leg.side * Vehicle.FOOT_OUT, 0, this.bb.z + Vehicle.FOOT_AHEAD);
+        this.frame.localToWorld(s.foot);
+        lane.project(s.foot.x, s.foot.z, bike.s, s.footAt || (s.footAt = {}));
+        s.foot.y = lane.sample(s.footAt.s).y + lane.cobble(s.footAt.s, s.footAt.across) + HillRider.ANKLE_ON_PEDAL[1];
+        this.frame.worldToLocal(s.foot);
+        const most = (leg.upper + leg.lower) * 0.985, far = s.foot.distanceTo(leg.hip);
+        if (far > most) this.footShift.subVectors(s.foot, leg.hip).multiplyScalar((far - most) / far * share);
     }
 
     // Turns `part` so that its local -y runs from `from` to `to` and its local +z leans towards `front`
@@ -492,12 +462,21 @@ class HillRider {
         this.parts.wheel_rear.rotation.x = this.spin.rear;
         this.parts.cranks.rotation.x = bike.crank;
         // Off the bicycle in a fall: the boy has his own place and pose, the motorbike rider's fall (Vehicle.riderFall)
-        if (v.riderFall && v.riderFall.on) {
+        const ctx = this.ctx || (this.ctx = { walk: 0, tired: 0, look: null, fallen: false, eye: null });
+        ctx.walk = walk;
+        ctx.tired = walk > 0 ? HillRider.tired(bike.walkM || 0) : 0;
+        ctx.look = this.lookAt || null;
+        ctx.eye = this.eye || null;
+        ctx.fallen = !!(v.riderFall && v.riderFall.on);
+        if (this.boy) this.boy.live(dt, bike, ctx);
+        if (ctx.fallen) {
             this.fall(v);
             this.parts.steer.quaternion.identity();
+            if (this.boy) this.boy.after(dt, bike, ctx);
             return;
         }
         if (this.fallen) this.remount();
+        this.reachDown(bike, lane, footShare);
         this.steer(v.barsDrawn ? v.barsDrawn() : 0, bike.footDown ? 0 : v.leanAngle, walk, walk > 0 ? HillRider.tired(bike.walkM || 0) : 0);
 
         const out = HillRider.LEGS_OUT;
@@ -508,6 +487,8 @@ class HillRider {
         this.tuck = this.tuck || { l: 0, r: 0 };
         this.tucked = this.tucked || { l: false, r: false };
         for (const leg of this.legs) {
+            // The hip where his body has it (on the saddle, out of it, leaning into a turn, or on foot)
+            const hip = s.hip.copy(leg.hip).sub(this.rest.boy).applyQuaternion(this.boyQ).add(this.hipsAt);
             // The low side's leg back on its pedal while he leans over (a lean to the right, +, drops the leg on -x)
             const low = -leg.side * v.leanAngle;
             this.tucked[leg.tag] = low > (this.tucked[leg.tag] ? out.untuckRad : out.tuckRad);
@@ -528,7 +509,7 @@ class HillRider {
             s.out.x += Math.sin(this.t * 2 * Math.PI * out.swayHz + phase) * out.swayM * leg.side;
             s.out.y += Math.sin(this.t * 2 * Math.PI * out.swayHz * 0.7 + phase * 1.3) * out.swayM * 0.6
                 + (this.legBounce - bike.bounce) * out.bounceGain + leg.side * bike.lean * out.leanGain;
-            s.out.setLength(length).add(leg.hip);
+            s.out.setLength(length).add(hip);
             on.lerp(s.out, legsShare);
             // The left foot put down on the cobbles at its own place, FOOT_OUT out from the frame and FOOT_AHEAD ahead
             // of the pedals, never under the ground there
@@ -542,9 +523,12 @@ class HillRider {
                 this.frame.worldToLocal(s.foot);
                 on.lerp(s.foot, down);
             }
-            // On foot: the hip where his body has it, the foot at its place in the step on the cobbles
-            const hip = walk > 0 ? s.hip.copy(leg.hip).sub(this.rest.boy).applyQuaternion(this.boyQ).add(this.boyAt) : leg.hip;
+            // On foot: the foot at its place in the step on the cobbles
             if (walk > 0) on.lerp(this.step(leg, bike, lane, s.walkFoot), walk);
+            // (never past the leg's reach: out of the saddle the foot stays on its pedal by the hips' rise, not by
+            // a stretched leg)
+            const most = (leg.upper + leg.lower) * 0.999, far = on.distanceTo(hip);
+            if (far > most) on.sub(hip).multiplyScalar(most / far).add(hip);
             // The knee bends forward over the pedal; held out straight, any pole will do, so it turns with the leg
             s.pole.set(0.15 * leg.side * (1 + legsShare * 3 + down * 2), 0.3 + legsShare * 0.5, 1);
             HillRider.knee(hip, on, leg.upper, leg.lower, s.pole, s.knee);
@@ -573,7 +557,13 @@ class HillRider {
             s.m.makeBasis(s.x, s.y, s.z);
             leg.foot.quaternion.setFromRotationMatrix(s.m);
         }
+        // On the saddle the top tube is under the apron too; on foot it is not (put out of the apron's reach)
+        const T = HillRider.TUBE;
+        this.legPoints[8].fromArray(T[0]);
+        this.legPoints[9].fromArray(T[1]);
+        if (walk > 0.5) this.legPoints[8].y = this.legPoints[9].y = 10;
         this.hangApron();
+        if (this.boy) this.boy.after(dt, bike, ctx);
     }
 
     // The apron hangs in every pose clear of his legs (APRON): its upper part from his waist swung forward just over
@@ -582,11 +572,15 @@ class HillRider {
     // thickness and a little), and the swing is at most mostRad
     static get APRON() { return Object.freeze({ upperM: 0.4, clearM: 0.065, halfWideM: 0.26, mostRad: 1.45 }); }
 
+    // Two points of the bicycle's top tube under the apron on the saddle (in the frame): it drapes over the tube, as
+    // cloth does, and never hangs through it between his legs
+    static get TUBE() { return Object.freeze([[0, 0.885, -0.1], [0, 0.9, 0.06]]); }
+
     hangApron() {
         const { apron_long: long, apron_hem: hem } = this.parts;
         if (!long) return;
         const s = this.scratch, A = HillRider.APRON, pts = this.legPoints;
-        const waist = (s.waist || (s.waist = new THREE.Vector3())).copy(long.position).applyQuaternion(this.boyQ).add(this.boyAt);
+        const waist = (s.waist || (s.waist = new THREE.Vector3())).copy(long.position).applyQuaternion(this.boyQ).add(this.hipsAt);
         // The least swing that leaves every listed point clearM behind the sheet, square to the sheet, the sheet's sides
         // curved back (0.06 m at its edge, `wide` its half width there)
         const need = (from, list) => {
@@ -600,14 +594,17 @@ class HillRider {
             }
             return A.mostRad;
         };
-        const upper = Math.max(0.04, need(waist, [0, 1, 4, 5]));
+        const swing = this.boy ? this.boy.apron : null;
+        const upper = Math.max(0.04, need(waist, [0, 1, 4, 5, 8, 9])) + (swing ? swing.flap : 0);
+        this.apronAngle = upper;
         s.qa = s.qa || new THREE.Quaternion();
         s.qa.setFromAxisAngle(s.xAxis, -upper);
         long.quaternion.copy(this.boyQ).invert().multiply(s.qa);
         if (!hem) return;
         const foot = (s.apronFoot || (s.apronFoot = new THREE.Vector3())).set(waist.x, waist.y - Math.cos(upper) * A.upperM, waist.z + Math.sin(upper) * A.upperM);
-        const lower = need(foot, [1, 2, 3, 5, 6, 7]);
+        const lower = need(foot, [1, 2, 3, 5, 6, 7, 8, 9]) + (swing ? swing.flap * 0.5 : 0);
         hem.quaternion.setFromAxisAngle(s.xAxis, -(lower - upper));
+        if (swing && swing.sway) hem.quaternion.multiply(s.qa.setFromAxisAngle(s.zAxis || (s.zAxis = new THREE.Vector3(0, 0, 1)), swing.sway));
     }
 }
 

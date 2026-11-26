@@ -124,6 +124,20 @@ The ladder holds its level through the scene (`Game.holdQuality`). `Game.dropSho
 | 3 High | land 2 000 / 5 000 m, all trees, 48 near, mid trees to 800 m, cap x 1.2 | none |
 | 4 Full, 5 Rich, 6 Ultra | land 2 500 / 6 000 m, all trees, 48 near, near trees to 220 m, mid to 1 000 m, cap x 1.4 | pixel ratio 2, shadow map 4 096, 4 samples, every effect the player chose |
 
+Each stop with a held shot has a `raise` cap in its data (tools/world/route.json, then the folder's manifest), so the held shot at Ultra stays under LEG_BUDGET (450 000) with a margin. The cap takes the lower of the level's raise and its own. Measured with `world-shot` at Ultra (2026-11-26):
+
+| Stop | Cap: land, scenery share | Held shot |
+|---|---|---|
+| Hospice square (Tremola's end, leg 11's) | 800 / 2 000 m, 1 | 400 560, 420 702 |
+| Lookout over Airolo (legs 1 and 10) | 1 200 / 3 000 m, 0.55 | 421 628, 405 426 |
+| Andermatt hotel (leg 2's end) | 700 / 2 000 m, 0.85 | 377 168 |
+| Airolo car park (leg 12's end) | 1 000 / 2 500 m, 1 | 423 076 |
+| Göschenen car park (leg 3's end) | 700 / 2 000 m, 0.85 | 420 351 |
+| Susten pass (leg 4's end) | 1 000 / 2 500 m, 1 | 427 565 |
+| Gadmen car park (leg 5's end) | 1 000 / 2 500 m, 1 | 410 512 |
+
+Without a cap the held shots read up to 620 334 (Göschenen). The lookout's own land adds little: its scenery (173 000 triangles of trees and houses) is what the share cuts.
+
 A phone or a tablet starts at Lowest to High (`Quality.START`). Those levels raise nothing that each frame pays for. With the pixel ratio 2 and the effects over High, the phone page's held frame went from 6.2 to 8.6 ms (worst 18 ms) on a computer's GPU, so a real phone would stall.
 
 Frame time of the held shot at the Gotthard lookout, without and with the raise (`node tools/terrain-check.mjs world-shot --world gotthard-north --gpu --desk --levels` on the Mac mini, one job alone, 1440 x 900 at a device pixel ratio of 2; the median of 40 frames: the scene's step, the land's update, the draw and its wait):

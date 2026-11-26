@@ -485,9 +485,9 @@ class HillRide {
         // for the panes, which mirror a sky of their own
         for (const group of [this.village, this.props && this.props.group, this.day && this.day.group, this.rider && this.rider.group]) {
             if (!group) continue;
+            // (a mesh of several finishes, the boy's body, has a list of them)
             group.traverse(o => {
-                const m = o.material;
-                if (m && m.isMeshStandardMaterial && !m.envMap) m.envMapIntensity = L.envIntensity;
+                for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.isMeshStandardMaterial && !m.envMap && !m.userData.ownSky) m.envMapIntensity = L.envIntensity;
             });
         }
         this.sun = HillRide.sunDirection(this.lane);
@@ -1043,7 +1043,13 @@ class HillRide {
         this.climbStep(dt, controls);
         // A loaf thrown at a door, once the descent is on (Q left, E right)
         const thrown = typeof input.checkThrow === 'function' ? input.checkThrow() : 0;
-        if (thrown && this.day && !this.climb && !(this.hold && this.hold.phase === 'hold')) this.day.throw(thrown, this.bike);
+        if (thrown && this.day && !this.climb && !(this.hold && this.hold.phase === 'hold') && this.day.throw(thrown, this.bike)) {
+            // His hand flings it, and he watches the door it goes to (the nearest on that side)
+            this.rider.throwAt(thrown);
+            let near = null;
+            for (const d of this.day.doors) if (d.side === thrown && Math.abs(d.s - this.bike.s) < 20 && (!near || Math.abs(d.s - this.bike.s) < Math.abs(near.s - this.bike.s))) near = d;
+            this.thrownDoor = near;
+        }
         // The hold at the start: braked, a foot down, until it is over
         if (this.hold) {
             this.hold.t += dt;
@@ -1086,10 +1092,28 @@ class HillRide {
         if (this.music && !phase) this.music.play();
     }
 
+    // Where the boy looks (HillBoy.live): at the door he threw at while he watches it, else at the next door that waits
+    // once it is ahead within LOOK.doorM, else (null) ahead of him
+    lookTarget() {
+        const day = this.day, bike = this.bike, boy = this.rider && this.rider.boy;
+        if (!day || this.climb || !boy) return null;
+        let door = boy.lookAtDoorT > 0 ? this.thrownDoor : null;
+        if (!door) {
+            const i = day.next;
+            const d = i >= 0 ? day.doors[i] : null;
+            if (d && d.s - bike.s > 3 && d.s - bike.s < HillBoy.LOOK.doorM) door = d;
+        }
+        if (!door) return null;
+        return (this.doorLook || (this.doorLook = new THREE.Vector3())).set(door.x, door.y + 1.3, door.z);
+    }
+
     // Poses the bicycle, moves the camera and the sun with it, and draws
     draw(dt) {
         const game = this.game;
         this.showStart();
+        // (where he looks, and how far the camera is: his near or far body)
+        this.rider.eye = game.camera.position;
+        this.rider.lookAt = this.lookTarget();
         this.rider.update(this.bike, this.lane, dt);
         if (this.day) {
             this.day.eye = game.camera.position;

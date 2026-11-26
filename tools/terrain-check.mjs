@@ -4398,7 +4398,7 @@ const WORLD = {
     // more inside 80 m (tools/world/verify.mjs findHairpins).
     'world-frustum': async (page) => page.evaluate(async (placeSource, pilotSource, hairpinSource, cruise, margin) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
-        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
         const env = game.environment;
         const v = game.vehicle;
         const route = env.route;
@@ -4412,7 +4412,8 @@ const WORLD = {
         const point = new THREE.Vector3();
         const per = hairpins.map(s => ({ s: Math.round(s), frames: 0, out: 0, least: Infinity }));
         let frames = 0, out = 0, least = Infinity, ticks = 0, worstAt = null;
-        const end = Math.min(route.length - 30, hairpins[hairpins.length - 1] + 200);
+        // (to the stage's last hairpin and 200 m on, within the stage: a folder of several stages holds the others)
+        const end = Math.min(game.environment.stage ? game.environment.endS : route.length - 30, (hairpins.length ? hairpins[hairpins.length - 1] : game.environment.startS) + 200);
         while (v.routeS < end && !v.crashed && !game.finished && ticks < 60 * 60 * 30) {
             twistyDev.step(1);
             ticks++;
@@ -4445,7 +4446,7 @@ const WORLD = {
     'world-camera-smooth': async (page) => {
         const result = await page.evaluate(async (placeSource, pilotSource, hairpinSource, cruise, onlyApex) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
-            let hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+            let hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
             if (onlyApex) hairpins = [hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a))];
             const v = game.vehicle;
             const route = game.environment.route;
@@ -4630,7 +4631,7 @@ const WORLD = {
         const count = Number(option('count') || 8), every = Number(option('every') || 4), from = Number(option('from') || 20);
         const apex = await page.evaluate(async (placeSource, pilotSource, hairpinSource, onlyApex, from, at, mode) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
-            const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+            const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
             const apex = at || (onlyApex ? hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a)) : hairpins[0]);
             const v = game.vehicle;
             game.cameraMode = mode;
@@ -4671,7 +4672,7 @@ const WORLD = {
     // --apex <s> rides only the hairpin nearest s and returns a trace of every 6th tick of each level.
     'world-hairpin-assist': async (page) => page.evaluate(async (placeSource, hairpinSource, traceApex) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
-        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route);
+        const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
         const env = game.environment;
         const route = env.route;
         const physics = env.physics;
@@ -4805,7 +4806,7 @@ const WORLD = {
         if (!out) return { error: 'name a folder with --out <dir>' };
         mkdirSync(out, { recursive: true });
         const tag = option('tag') || 'shot';
-        const apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).slice(0, 3).map(Math.round), worldHairpins.toString());
+        const apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS)).slice(0, 3).map(Math.round), worldHairpins.toString());
         const files = [];
         for (let k = 0; k < apexes.length; k++) {
             const rooms = await page.evaluate(async (placeSource, pilotSource, apex) => {
@@ -5844,7 +5845,7 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
     const restart = game.restartFromCheckpoint.bind(game);
     game.restartFromCheckpoint = (reason) => { restarts.push({ s: Math.round(v.projection.s ?? v.routeS), reason }); return restart(reason); };
     game.worldLinger = false;
-    const hairpins = new Function(`return (${hairpinSource})`)()(route);
+    const hairpins = new Function(`return (${hairpinSource})`)()(route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
     let rides = 0;
     // The hairpin rides judge the road and the physics, on the centre line and to either side of it, the oncoming lane
     // too: with the traffic on the road a ride there met a car now and then. The traffic is judged in the site rides
@@ -6783,7 +6784,7 @@ WORLD_PROBES.push('world-camera-walls');
 WORLD['world-camera-walls'] = async (page) => {
     const modes = (option('modes') || '2,3').split(',').map(Number);
     const setup = { lane: Number(option('lane') || 0), swing: Number(option('swing') || 1), far: Number(option('far') || 1), off: flag('off') };
-    let apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route), worldHairpins.toString());
+    let apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS)), worldHairpins.toString());
     const nearest = s => apexes.reduce((a, b) => (Math.abs(b - s) < Math.abs(a - s) ? b : a));
     const ride = (apex, mode, how, until = 0) => page.evaluate(camWallRide, placeAt.toString(), pilotWorld.toString(), apex, mode, how, CAMWALL_BEFORE_M, CAMWALL_AFTER_M, until);
     const shots = option('shots');

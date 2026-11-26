@@ -1,6 +1,6 @@
 // WorldLegs: the legs of the real-map world on the menu, in the order they are ridden, grouped by pass. A leg is a
 // stage of a data folder (WorldData.baseFor). The list is the tour's (js/world/tour.js): a new leg is one row there,
-// and the dialog groups the rows by `pass` and scrolls.
+// and the menu's map (js/world/tourmap.js) draws it.
 //
 // Which legs are open: the first leg always; a leg whose `opensAfter` names a leg the rider has finished; a leg with
 // `open: true` (the Tremola, which every rider could ride before the new legs came, so it is never locked again);
@@ -80,81 +80,5 @@ const WorldLegs = {
 
     storage() {
         try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (error) { return null; }
-    },
-
-    // The leg list over the menu (js/modals.js). onPick(id) rides the leg; Escape goes back to the rider screen.
-    open(doc, { onPick, onBack = null, unlockAll = false } = {}) {
-        WorldLegs.close(doc);
-        const panel = doc.createElement('div');
-        panel.id = 'world-legs';
-        panel.className = 'world-legs';
-        panel.setAttribute('role', 'dialog');
-        panel.setAttribute('aria-label', 'Choose a leg');
-        const box = doc.createElement('div');
-        box.className = 'world-legs-box panel';
-        const title = doc.createElement('h2');
-        title.textContent = 'Choose a leg';
-        box.appendChild(title);
-        const list = doc.createElement('div');
-        list.className = 'world-legs-list';
-        const done = WorldLegs.finished();
-        const first = WorldLegs.suggested({ unlockAll });
-        let focus = null;
-        for (const group of WorldLegs.groups()) {
-            const heading = doc.createElement('div');
-            heading.className = 'world-legs-pass';
-            heading.textContent = group.pass;
-            list.appendChild(heading);
-            group.legs.forEach(leg => {
-                const open = WorldLegs.isOpen(leg.id, { unlockAll });
-                const row = doc.createElement('button');
-                row.className = 'world-legs-row';
-                row.dataset.leg = leg.id;
-                row.disabled = !open;
-                const label = leg.n ? `${leg.n}. ` : '';
-                const state = leg.planned ? 'Coming later' : !open ? `Finish leg ${WorldLegs.find(leg.opensAfter).n} to open` : done.includes(leg.id) ? 'Finished' : '';
-                const ends = leg.from ? `<span class="world-legs-meta">From ${leg.from.charAt(0).toLowerCase()}${leg.from.slice(1)} to ${leg.to.charAt(0).toLowerCase()}${leg.to.slice(1)}</span>` : '';
-                row.innerHTML = `<span class="world-legs-name">${label}${leg.name}</span><span class="world-legs-meta">${leg.km.toFixed(1)} km · ${leg.note}</span>${ends}${state ? `<span class="world-legs-state">${state}</span>` : ''}`;
-                row.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    if (row.disabled) return;
-                    WorldLegs.close(doc);
-                    if (onPick) onPick(leg.id);
-                });
-                if (leg.id === first) focus = row;
-                list.appendChild(row);
-            });
-        }
-        box.appendChild(list);
-        const back = doc.createElement('button');
-        back.className = 'btn world-legs-back';
-        back.dataset.key = 'Escape';
-        back.textContent = 'Back';
-        back.addEventListener('click', (event) => {
-            event.stopPropagation();
-            WorldLegs.close(doc);
-            if (onBack) onBack();
-        });
-        box.appendChild(back);
-        panel.appendChild(box);
-        // Up and down move between the open legs
-        const onKey = (event) => {
-            const isUp = event.code === 'ArrowUp' || event.code === 'KeyW';
-            const isDown = event.code === 'ArrowDown' || event.code === 'KeyS';
-            if (!isUp && !isDown) return false;
-            event.preventDefault();
-            const rows = [...list.querySelectorAll('.world-legs-row:not([disabled])')];
-            const at = rows.indexOf(doc.activeElement);
-            const next = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + (isDown ? 1 : -1)))];
-            if (next) next.focus({ preventScroll: false });
-            return true;
-        };
-        Modals.open(panel, { focus, onKey });
-        return panel;
-    },
-
-    close(doc) {
-        const old = doc && doc.getElementById('world-legs');
-        if (old) Modals.close(old);
     }
 };

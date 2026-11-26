@@ -697,8 +697,8 @@ describe('the boy on the bicycle', () => {
         const bytes = readFileSync(join(root, url));
         return { ok: true, status: 200, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
     };
-    const { SceneAssets, HillRider } = new Function('THREE', 'document', 'console', 'fetch', 'Blob', 'TextDecoder', 'Vehicle',
-        `${loadScript('sceneassets.js')}\n${loadScript('hill/rider.js')}\nreturn { SceneAssets, HillRider };`)(THREE, canvasStub(), console, fetch, Blob, TextDecoder, Vehicle);
+    const { SceneAssets, HillRider, HillBoy } = new Function('THREE', 'document', 'console', 'fetch', 'Blob', 'TextDecoder', 'Vehicle',
+        `${loadScript('sceneassets.js')}\n${loadScript('hill/rider.js')}\n${loadScript('hill/boymaps.js')}\n${loadScript('hill/boy.js')}\nreturn { SceneAssets, HillRider, HillBoy };`)(THREE, canvasStub(), console, fetch, Blob, TextDecoder, Vehicle);
     const lane = flat();
     const at = new THREE.Vector3();
     const world = (part, out = at) => {
@@ -722,30 +722,38 @@ describe('the boy on the bicycle', () => {
         for (const name of ['wheel_front', 'wheel_rear', 'cranks', 'pedal_l', 'pedal_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r', 'boy', 'head', 'basket', 'plate']) {
             expect(rider.parts[name]).toBeTruthy();
         }
-        // The head hangs on the body, so it goes where he goes, in a fall too
-        expect(rider.parts.head.parent).toBe(rider.parts.boy);
+        // The head hangs on the chest and the chest on the body, so it goes where he goes, in a fall too
+        expect(rider.parts.head.parent).toBe(rider.boy.chest);
+        expect(rider.boy.chest.parent).toBe(rider.parts.boy);
+        // He is one skinned body on the rig: no shape of the model's own hangs on his parts
+        expect(rider.boy.mesh.isSkinnedMesh).toBe(true);
+        for (const name of HillRider.BODY.concat(['head', 'apron_long', 'apron_hem'])) expect([name, rider.parts[name].children.filter(o => o.isMesh && !o.isSkinnedMesh).length]).toEqual([name, 0]);
         expect(rider.legs.map(l => l.side).sort()).toEqual([-1, 1]);
     });
 
-    test('his head has the stills\' proportions: the face about 0.72 as wide as high, the cap about 1.28 as wide as the face, and a face finish to paint on', () => {
-        let shell = null, cap = null;
-        rider.parts.head.traverse(o => {
-            if (o.isMesh && o.material.name === 'face') shell = o;
-            if (o.isMesh && o.material.name === 'cap') cap = o;
-        });
-        expect(shell).toBeTruthy();
-        const face = new THREE.Box3().setFromBufferAttribute(shell.geometry.attributes.position), size = face.getSize(new THREE.Vector3());
-        const capSize = new THREE.Box3().setFromBufferAttribute(cap.geometry.attributes.position).getSize(new THREE.Vector3());
+    // A piece of the boy's body at rest (HillBoy: its points by name), as a box in the frame
+    const piece = (name, out = new THREE.Box3()) => {
+        const p = rider.boy.mesh.geometry.attributes.position, v = new THREE.Vector3();
+        for (const [from, count] of rider.boy.pieces[name].ranges) for (let i = from; i < from + count; i++) out.expandByPoint(v.fromBufferAttribute(p, i));
+        return out;
+    };
+
+    test('his head has the stills\' proportions: the face about 0.72 as wide as high, the cap about 1.28 as wide as the face; a nose, eyes and ears of its own', () => {
+        const face = piece('head'), size = face.getSize(new THREE.Vector3());
+        const capSize = piece('cap').getSize(new THREE.Vector3());
         console.log(`hill head: face ${(size.x / size.y).toFixed(2)} as wide as high, cap ${(capSize.x / size.x).toFixed(2)} as wide as the face`);
         expect(size.x / size.y).toBeGreaterThan(0.67);
         expect(size.x / size.y).toBeLessThan(0.77);
         expect(capSize.x / size.x).toBeGreaterThan(1.18);
         expect(capSize.x / size.x).toBeLessThan(1.38);
-        // The painted features sit on the face's front, inside its span
-        const F = HillRider.FACE;
-        expect(F.centre[1] - F.highM / 2).toBeGreaterThan(face.min.y - 0.01);
-        expect(F.centre[1] + F.highM / 2).toBeLessThan(face.max.y + 0.01);
-        expect(F.wideM / 2).toBeGreaterThan(size.x / 2 - 0.01);
+        // Modelled, not painted: the nose stands out ahead of the cheeks, the eyes sit back in their sockets under the
+        // brow, an ear on each side
+        const at = (polar, az) => HillBoy.headPoint(polar, az, new THREE.Vector3());
+        const F = HillBoy.FACE, up = (y) => Math.acos(y / HillBoy.HEAD.crownM);
+        const tip = at(1.83, 0), cheek = at(1.83, 0.55), eye = at(up(F.eyeY), Math.asin(F.eyeX / 0.0735)), brow = at(up(F.eyeY + 0.016), 0.38);
+        expect(tip.z - cheek.z * Math.cos(0.55)).toBeGreaterThan(0.015);
+        expect(brow.z).toBeGreaterThan(eye.z + 0.005);
+        for (const tag of ['l', 'r']) expect(piece(`ear_${tag}`).getCenter(new THREE.Vector3()).x * (tag === 'l' ? 1 : -1)).toBeGreaterThan(size.x / 2 - 0.01);
     });
 
     test('the basket is willow with a low bentwood handle and no lamp, the weave laid on it in metres', () => {
@@ -992,23 +1000,18 @@ describe('the boy on the bicycle', () => {
                 up = up.parent;
             }
         }
-        // Each boot stands on its own sole: the boot and the sole across the foot's node at the same place (the boot was
-        // once built 9 cm inside it, between the legs, and its sole showed beside it like a plate under the foot)
+        // Each boot stands on its own sole: the boot's leg, its foot and the sole across the ankle at the same place (the
+        // boot was once built 9 cm inside it, between the legs, and its sole showed beside it like a plate under the
+        // foot), the sole's underside on the ground under the ankle
         for (const tag of ['l', 'r']) {
-            const box = name => {
-                const b = new THREE.Box3();
-                P[`foot_${tag}`].children.filter(o => o.isMesh && o.material.name === name).forEach(o => b.union(new THREE.Box3().setFromBufferAttribute(o.geometry.attributes.position)));
-                return b.getCenter(new THREE.Vector3());
-            };
-            expect(Math.abs(box('boot').x - box('sole').x)).toBeLessThan(0.01);
+            const x = rider.rest[`foot_${tag}`].x;
+            for (const name of [`boot_${tag}`, `foot_${tag}`, `sole_${tag}`]) expect(Math.abs(piece(name).getCenter(new THREE.Vector3()).x - x)).toBeLessThan(0.006);
+            expect(piece(`sole_${tag}`).min.y).toBeCloseTo(rider.rest[`foot_${tag}`].y - HillRider.ANKLE_ON_PEDAL[1], 3);
         }
-        // And every shape of an arm or a leg on its own limb's line: no shape of it left at the body's middle (the
-        // hands were once built there, and floated before his apron)
-        for (const name of ['upperarm_l', 'upperarm_r', 'forearm_l', 'forearm_r', 'thigh_l', 'thigh_r', 'shin_l', 'shin_r', 'foot_l', 'foot_r']) {
-            for (const o of P[name].children.filter(c => c.isMesh)) {
-                const b = new THREE.Box3().setFromBufferAttribute(o.geometry.attributes.position);
-                expect([name, o.material.name, Math.abs(b.getCenter(new THREE.Vector3()).x) < 0.05]).toEqual([name, o.material.name, true]);
-            }
+        // And every piece of an arm or a leg on its own limb's line: none of it left at the body's middle (the hands were
+        // once built there, and floated before his apron)
+        for (const [name, joint] of [['sleeve_l', 'upperarm_l'], ['sleeve_r', 'upperarm_r'], ['palm_l', 'forearm_l'], ['palm_r', 'forearm_r'], ['leg_l', 'thigh_l'], ['leg_r', 'thigh_r'], ['boot_l', 'shin_l'], ['boot_r', 'shin_r']]) {
+            expect([name, Math.abs(piece(name).getCenter(new THREE.Vector3()).x - rider.rest[joint].x) < 0.02]).toEqual([name, true]);
         }
         const local = (part, out = new THREE.Vector3()) => frame.worldToLocal(part.getWorldPosition(out));
         const first = {}, feet = { l: [], r: [] };

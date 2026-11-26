@@ -564,6 +564,14 @@ describe('stations.mjs', () => {
         return { s, x: s, z: new Float64Array(n), y: new Float64Array(n), heading: new Float64Array(n), width: new Float32Array(n).fill(10), flags: Uint8Array.from({ length: n }, (_, i) => flags[i] ?? 0), radius: new Float64Array(n).fill(Infinity) };
     };
 
+    test('the far sinks are made at the stride the runtime draws the far grid (Horizon.strideFor)', async () => {
+        const { horizonStride, HORIZON_MAX_TRIANGLES } = await import('../../tools/world/farland.mjs');
+        const source = fs.readFileSync(path.join(REPO, 'js', 'world', 'horizon.js'), 'utf8');
+        expect(Number(/MAX_TRIANGLES\(\) \{ return (\d+); \}/.exec(source)[1])).toBe(HORIZON_MAX_TRIANGLES);
+        const Horizon = new Function(`const THREE = {}; ${source}\nreturn Horizon;`)();
+        for (const [nx, nz] of [[129, 129], [176, 247], [247, 176], [400, 400], [80, 60]]) expect(horizonStride({ nx, nz })).toBe(Horizon.strideFor({ nx, nz }));
+    });
+
     test('a dropped station that leaves a gap over twice the spacing fails loudly', () => {
         const samples = straight(1501, Object.fromEntries(Array.from({ length: 1501 }, (_, i) => [i, i * 4 > 600 && i * 4 < 5400 ? FLAG.tunnel : 0])));
         expect(() => placeStations(samples, [{ id: 'a', from: 0, to: 6000 }], [], { spacingM: 1000 })).toThrow(/gap/);

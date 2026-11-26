@@ -136,7 +136,9 @@ class WorldData {
         const span = (s0, s1) => (dir === 1 ? [s0, s1] : [at(s1), at(s0)]);
         const [from, to] = span(stage.from, stage.to);
         const oriented = { ...stage, dir, from, to };
-        const stations = ride.stations.filter(st => st.stage === stage.id).map(st => ({ ...st, s: at(st.s) })).sort((p, q) => p.s - q.s);
+        // (by the stage's own list: a station two stages share, the line between them, is labelled with the first)
+        const own = Array.isArray(stage.stations) ? stage.stations.map(i => ride.stations[i]).filter(Boolean) : ride.stations.filter(st => st.stage === stage.id);
+        const stations = own.map(st => ({ ...st, stage: stage.id, s: at(st.s) })).sort((p, q) => p.s - q.s);
         stations.forEach((st, i) => { st.kind = i === 0 ? 'start' : i === stations.length - 1 ? 'end' : 'gate'; });
         let path = ride.path;
         if (dir === -1) {

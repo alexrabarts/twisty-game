@@ -114,6 +114,10 @@ class WorldEnvironment {
     static get APRON_M() { return 3; }
     // The farthest an apron runs out from the edge before it must have met the land
     static get APRON_RUN_M() { return 6; }
+    // How far under the coarsest land a far section's slope may stand over (landLowAt, which reads the nodes) its foot
+    // goes: the tile as built is held a little lower again under the ride (buildTile's holdY), and a foot at the land
+    // read from the nodes stood over it by up to 0.3 m, open at the bottom
+    static get COARSE_UNDER_M() { return 0.5; }
 
     // Metres from the bike within which a landmark is drawn
     static get LANDMARK_REACH_M() { return 3000; }
@@ -1497,10 +1501,21 @@ class WorldEnvironment {
         // (again: a viaduct's survey in a plan made just now lets go of the rows next to it, surveyViaducts)
         yield* this.goreRowsKept(from, to);
         const rows = this.tubeRows(this.rowsOf(from, to));
-        const foot = this.edgeFoot(missing);
+        const foot = this.edgeFoot(missing, { far: lod > 0 });
         yield;
         const plan = (yield* this.rideWallsSteps(section.index)).plan;
-        const group = yield* RoadMesh.sectionSteps(rows, lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot, roads: this.carriageways, head: section.from - from, tail: to - section.to, plan });
+        // (the land its tubes' portals and footings read: a tile the data has and that is not here yet is waited on, so
+        // the section is built again when it comes. Read as no land, a portal built first had no headwall, and the
+        // land drawn after stood over its roof unfronted: 101 places on the three legs of worlds/susten)
+        const groundAt = (x, z) => {
+            const y = this.ground.tileHeight(x, z);
+            if (y === null) {
+                const key = `${Math.floor(x / WorldData.TILE_M)},${Math.floor(z / WorldData.TILE_M)}`;
+                if (this.hasTileData(key)) missing.add(key);
+            }
+            return y ?? undefined;
+        };
+        const group = yield* RoadMesh.sectionSteps(rows, lod, { groundAt, roof: WorldRoute.ROOF_M, foot, roads: this.carriageways, head: section.from - from, tail: to - section.to, plan });
         this.disposeRoad(section);
         // Its works keep out of the side roads' carriageways (Carriageways): built before a side road's chunk is here,
         // it is built again when that chunk is (buildSide)
@@ -1913,7 +1928,7 @@ class WorldEnvironment {
     // may be drawn at (its 8, 16 and 32 m triangles, as TerrainMesh.vertexY draws them) lies lower than the edge, out
     // at the batter to where it meets the land drawn near;
     // else null, the land meets the edge. Without the tile, an apron of APRON_M. `aprons: false` gives walls only.
-    edgeFoot(missing = null, { aprons = true } = {}) {
+    edgeFoot(missing = null, { aprons = true, far = false } = {}) {
         const n = WorldData.TILE_N, m = WorldData.TILE_M;
         const near = {};
         // The height of the highest road more than DECK_UNDER_M under the edge whose band (carriageway and verge) the
@@ -2161,10 +2176,29 @@ class WorldEnvironment {
             // verge) its foot stands under that road's surface, not on the land under the gap: dropped to the land
             // there, the slope stood as a trench between the two roads with its dark side to the rider (km 2.3)
             if (meets !== null) footY = Math.max(footY, meets - RoadMesh.APRON_UNDER_M);
+            // A section drawn coarser (`far`: WorldStreamer.ROAD_LOD_M, 400 m and more from the bike, and on along the
+            // ride's window however far) stands over tiles drawn at any level (TILE_LOD_M). A coarse tile is drawn lower
+            // than the land at full detail where two legs share one of its cells (TerrainMesh.vertexY: the lower leg's
+            // carved node holds the vertex), and the slope that met the land at full detail ended in the air over it:
+            // the far ribbons of a stack of hairpins hung 27 m over a cleft (leg 3 s 2 626). Its foot goes down to the
+            // lowest the land is drawn there; at full detail that part lies under the land, out of sight
+            let deep = false, shallow = null, under = null;
+            if (far) {
+                const coarse = this.landLowAt(x + ox * Math.max(run, 0.1), z + oz * Math.max(run, 0.1), missing);
+                // (`shallow`: the foot at full detail, for a segment whose deep slope would stand in a road below it,
+                // RoadMesh.edgeWorks)
+                if (coarse !== null && coarse - WorldEnvironment.COARSE_UNDER_M < footY) {
+                    if (meets === null) { shallow = footY; footY = coarse - WorldEnvironment.COARSE_UNDER_M; deep = true; }
+                    // (a slope that ends on a side road's surface in a mouth stays; `under`: how deep a face that closes a
+                    // segment with no slope there goes, RoadMesh.edgeWorks)
+                    else under = coarse - WorldEnvironment.COARSE_UNDER_M;
+                }
+            }
             // Without the tile under the foot yet, the apron is built again when it comes
             if (footLand === null && missing) missing.add(`${Math.floor((x + ox * run) / m)},${Math.floor((z + oz * run) / m)}`);
             // Coloured as the land at its top and at its foot (RoadMesh.edgeWorks blends them), not one sample
-            return { kind: 'apron', y: footY, run, meets: meets !== null, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
+            // (`deep`: a far section's slope taken down to the coarse land: RoadMesh.edgeWorks lays it as one row down)
+            return { kind: 'apron', y: footY, run, meets: meets !== null, deep, shallow, under, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
         };
         // How deep one of the ride's walls must stand to reach the land in front of it as it is drawn (cut and
         // levelled to the walls): asked when the wall is drawn, after every wall's line is known. A side road's wall
@@ -2174,8 +2208,11 @@ class WorldEnvironment {
             for (const o of [0.2, 1, 2]) { const land = landDrawn(x + ox * o, z + oz * o); if (land !== null && land < low) low = land; }
             return low - WorldEnvironment.WALL_UNDER_M;
         };
-        // The land as it is drawn at (x, z), for a slope's foot between two rows (RoadMesh.edgeWorks)
+        // The land as it is drawn at (x, z), for a slope's foot between two rows (RoadMesh.edgeWorks); and, for a far
+        // section's deep slope, the lowest it is drawn there at any level, less COARSE_UNDER_M (the strip's foot is set
+        // 0.2 m under what this gives)
         foot.land = landDrawn;
+        if (far) foot.landLow = (x, z) => { const low = this.landLowAt(x, z, missing); return low === null ? null : low - WorldEnvironment.COARSE_UNDER_M + 0.2; };
         // The lowest side road surface as drawn (WorldGround.sideRoadY: its carriageway, and `more` past its edges) within
         // `r` of (x, z), at about the ride's height y there, or null: the ground the ride lays under its verge stays
         // under it (RoadMesh.edgeWorks). A side road in a mouth is held a few centimetres under the ride (sideHold), and
@@ -2844,7 +2881,16 @@ class WorldEnvironment {
         };
         // A pier stands on the lowest land the tile draws at any level of detail (RoadMesh.sideStructures footAt)
         const footAt = (x, z) => this.landLowAt(x, z, missing);
-        const options = { groundAt, footAt, roof: WorldRoute.ROOF_M };
+        // (a portal's headwall reaches the land drawn behind it: a tile's, or where no tile is here the far grid's, so
+        // the far portal of a long tube drawn whole from one chunk fronts the far land: worlds/susten, the motorway
+        // tunnel under Andermatt, its portal at Göschenen 3.7 km from the chunk, 21 places unfronted)
+        const faceAt = (x, z) => {
+            const y = groundAt(x, z);
+            if (Number.isFinite(y)) return y;
+            const far = this.data.farHeight(x, z);
+            return far === null ? undefined : far;
+        };
+        const options = { groundAt, footAt, faceAt, roof: WorldRoute.ROOF_M };
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
         // detail, as the ride's do, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
@@ -2872,7 +2918,7 @@ class WorldEnvironment {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
             const through = [!!(before.length && before[before.length - 1].bits & 5), !!(after.length && after[0].bits & 5)];
-            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through);
+            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through, options.faceAt);
             Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, tubes: built.tubes, through, rows, stub, edge: edge.id, s0 });
             // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
