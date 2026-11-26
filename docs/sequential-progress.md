@@ -1067,6 +1067,7 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - `tests/unit/world-far-edges.test.js` reads every edge of every section held at level 1, at the rows the section draws, as `world-floating` reads it. Before: 16 086 open edges in 674 places on the nine stages, the worst 37.6 m. After: 913 edges in 509 places (tremola 54, summit-airolo 38, gotthard-north 72, lookout-andermatt 75, hospental-summit 41, airolo-lookout 36, andermatt-goeschenen 31, goeschenen-susten 90, susten-gadmen 72), held so the table only shrinks.
 - The cost, in each stage's fullest window: 400 to 4 200 triangles more of road; the Tremola's goes from 447 452 to 451 626 as read in node. In the page the window's share of 436 000 takes them from the furthest houses and trees.
 - Check: world-far-edges, world-road-cover, world-environment, world-meshes, world-verge, world-parapets and world-junctions pass (on the laptop; heavy's node hosts were held by their swap gates).
+
 ## A free-fly camera in debug mode
 
 - The ask: in debug mode, a camera that moves on six axes anywhere over a world.
