@@ -95,17 +95,20 @@ export function placeStations(samples, stages, junctionS, { spacingM = SPACING_M
     // (where a checkpoint cannot stand within reach of its target, in a gorge of tunnels and galleries, the stage takes
     // one checkpoint fewer, evenly placed again, until no gap is over twice the spacing: the Schöllenen's 6.8 km has
     // one, not two)
-    let n = length >= minGap ? Math.max(1, Math.round(length / spacingM)) : 1;
-    let picks, lost, fewer = false;
-    for (;;) {
-      ({ picks, lost } = stagePicksOf(stage, n));
-      const gap = picks.reduce((m, s, k) => (k ? Math.max(m, s - picks[k - 1]) : m), 0);
-      if (gap <= 2 * spacingM || n <= 1) break;
-      dropped.push(...lost);
-      fewer = true;
-      n--;
+    const gapOf = list => list.reduce((m, s, k) => (k ? Math.max(m, s - list[k - 1]) : m), 0);
+    const n0 = length >= minGap ? Math.max(1, Math.round(length / spacingM)) : 1;
+    let { picks, lost } = stagePicksOf(stage, n0), fewer = false;
+    // (fewer only where that closes the gap; else the stage keeps its own and its gap holds the import, below)
+    for (let n = n0 - 1; n >= 1 && gapOf(picks) > 2 * spacingM; n--) {
+      const tried = stagePicksOf(stage, n);
+      if (gapOf(tried.picks) <= 2 * spacingM || (n === 1 && length <= 4 * spacingM)) {
+        dropped.push(...lost);
+        ({ picks, lost } = tried);
+        fewer = true;
+        break;
+      }
     }
-    if (!fewer) dropped.push(...lost);
+    dropped.push(...lost);
     // (a stage with no place for a checkpoint anywhere, every target in tunnels, galleries and tight bends, has none:
     // its one link is timed whole, as a stage under twice the spacing is, up to four times the spacing long)
     if (picks.length === 2 && fewer && length <= 4 * spacingM) { perStage.push({ stage: stage.id, s: picks }); continue; }
