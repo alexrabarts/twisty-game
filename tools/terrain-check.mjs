@@ -8801,7 +8801,7 @@ WORLD['world-steps'] = async (page) => page.evaluate(async (every, deep) => {
 // graphics level in turn and times the held shot without and with the raise (SHOT_FRAMES frames: the update, the
 // draw and its wait, the GPU timer), and saves the held shot at each. --phone is world-quality's phone (390 x 844 at
 // 3, touch, the CPU 4 times slower). It fails on a step from the chase camera (SHOT_STEP), no bars, or a held shot
-// with the camera under the ground.
+// with the camera under the ground. It reports what the held shot draws (counts, by kind of mesh).
 //   node tools/terrain-check.mjs world-shot --world gotthard-north --gpu [--desk] [--phone] [--levels] [--fly 0,1,3,5,7,9] [--out <dir>]
 const SHOT_RIDE_MS = 14;
 // The ride into the line starts this far before it, so the scene's kinds of mesh have been drawn as in a real ride
@@ -8963,7 +8963,7 @@ WORLD['world-shot'] = async (page) => {
         shots.push({ t: mark.t, file });
     }
     // The held shot, everything streamed
-    const held = await page.evaluate(async () => {
+    const held = await page.evaluate(async (countSource) => {
         const env = game.environment, scene = game.stopScene;
         while (scene.t < Math.max(scene.flyS + 0.5, scene.cardAt + 0.1)) {
             game.stepStopScene(1 / 30);
@@ -8973,8 +8973,21 @@ WORLD['world-shot'] = async (page) => {
         game.stepStopScene(1 / 60);
         game.graphics.render(game.scene, game.camera);
         const cam = game.camera.position;
-        return { cameraOverGroundM: Math.round((cam.y - env.ground.groundY(cam.x, cam.z, null)) * 100) / 100, bars: [...document.querySelectorAll('.stop-bar')].map(b => b.getBoundingClientRect().height), card: !!document.querySelector('#finishBanner.stop-card'), buffer: [game.renderer.domElement.width, game.renderer.domElement.height], level: Quality.LEVELS[game.quality.level].id, raised: scene.raised };
-    });
+        // What the held shot draws, against LEG_BUDGET (reported, not a failure: the Gotthard leg's draws 468 000
+        // triangles at Ultra)
+        const counts = new Function(`return (${countSource})`)()();
+        // (the triangles by kind of mesh, its name less any tile key or number, most first)
+        const parts = {};
+        game.scene.traverse(o => {
+            if (!o.isMesh) return;
+            for (let n = o; n; n = n.parent) { if (!n.visible || n.name === 'ground-cover') return; }
+            const index = o.geometry.index, pos = o.geometry.attributes.position;
+            const name = (o.name || o.parent && o.parent.name || '?').replace(/[-:]?-?\d+(,-?\d+)?(-lod\d)?$/, '').replace(/-\d+$/, '');
+            parts[name] = (parts[name] || 0) + Math.round((index ? index.count : pos.count) / 3 * (o.isInstancedMesh ? o.count : 1));
+        });
+        counts.parts = Object.entries(parts).sort((a, b) => b[1] - a[1]).slice(0, 16);
+        return { counts, cameraOverGroundM: Math.round((cam.y - env.ground.groundY(cam.x, cam.z, null)) * 100) / 100, bars: [...document.querySelectorAll('.stop-bar')].map(b => b.getBoundingClientRect().height), card: !!document.querySelector('#finishBanner.stop-card'), buffer: [game.renderer.domElement.width, game.renderer.domElement.height], level: Quality.LEVELS[game.quality.level].id, raised: scene.raised };
+    }, countScene.toString());
     const heldFile = join(out, `${tag}-held.png`);
     await page.screenshot({ path: heldFile });
     shots.push({ t: 'held', file: heldFile });

@@ -1057,6 +1057,17 @@ class TerrainMesh {
     // vertices a triangle); `tubes` the boxes (TerrainMesh.tubeBox). Returns {positions, shades, lists} with the new
     // vertices after the old, or null when no triangle reaches a box
     static tubeClip(positions, shades, lists, tubes) {
+        const steps = TerrainMesh.tubeClipSteps(positions, shades, lists, tubes);
+        let step = steps.next();
+        while (!step.done) step = steps.next();
+        return step.value;
+    }
+
+    // The same in steps, for a caller that cuts in a frame's budget (the far grid, WorldEnvironment.clipHorizonSteps):
+    // it yields after every TUBE_CLIP_STEP triangles a box cuts and every 4 096 it passes on
+    static get TUBE_CLIP_STEP() { return 8; }
+
+    static *tubeClipSteps(positions, shades, lists, tubes) {
         const cell = 16, hash = new Map();
         tubes.forEach((tube, k) => {
             const [x0, z0, x1, z1] = tube.box;
@@ -1097,17 +1108,39 @@ class TerrainMesh {
             return Math.hypot(x, y, z) / 2;
         };
         let changed = false;
-        const out = lists.map(list => {
+        // (a triangle no box reaches is passed on as it is, read straight from the arrays: most of a tile and nearly
+        // all of the far grid, whose cut runs in one frame when the side roads' tubes change)
+        const seen = new Int32Array(tubes.length).fill(-1);
+        let stamp = 0, passed = 0, worked = 0;
+        const coord = (v, axis) => (v < base ? positions[v * 3 + axis] : extraP[v - base][axis]);
+        const out = [];
+        for (const list of lists) {
             const kept = [];
             for (let i = 0; i + 2 < list.length; i += 3) {
-                const ids = [list[i], list[i + 1], list[i + 2]];
+                const a = list[i], b = list[i + 1], c = list[i + 2];
+                const ax = coord(a, 0), bx = coord(b, 0), cx_ = coord(c, 0), az = coord(a, 2), bz = coord(b, 2), cz_ = coord(c, 2);
+                const x0 = Math.min(ax, bx, cx_), x1 = Math.max(ax, bx, cx_), z0 = Math.min(az, bz, cz_), z1 = Math.max(az, bz, cz_);
+                const reach = [];
+                stamp++;
+                for (let cx = Math.floor(x0 / cell); cx <= Math.floor(x1 / cell); cx++) for (let cz = Math.floor(z0 / cell); cz <= Math.floor(z1 / cell); cz++) {
+                    const inCell = hash.get(cx * 65536 + cz);
+                    if (!inCell) continue;
+                    for (const k of inCell) {
+                        if (seen[k] === stamp) continue;
+                        seen[k] = stamp;
+                        const box = tubes[k].box;
+                        if (box[2] >= x0 && box[0] <= x1 && box[3] >= z0 && box[1] <= z1) reach.push(k);
+                    }
+                }
+                if (!reach.length) {
+                    kept.push(a, b, c);
+                    if (++passed % 4096 === 0) yield;
+                    continue;
+                }
+                if (++worked % TerrainMesh.TUBE_CLIP_STEP === 0) yield;
+                reach.sort((p, q) => p - q);
+                const ids = [a, b, c];
                 const tri = ids.map(P);
-                const x0 = Math.min(tri[0][0], tri[1][0], tri[2][0]), x1 = Math.max(tri[0][0], tri[1][0], tri[2][0]);
-                const z0 = Math.min(tri[0][2], tri[1][2], tri[2][2]), z1 = Math.max(tri[0][2], tri[1][2], tri[2][2]);
-                const near = new Set();
-                for (let cx = Math.floor(x0 / cell); cx <= Math.floor(x1 / cell); cx++) for (let cz = Math.floor(z0 / cell); cz <= Math.floor(z1 / cell); cz++) for (const k of hash.get(cx * 65536 + cz) || []) near.add(k);
-                const reach = [...near].filter(k => { const b = tubes[k].box; return b[2] >= x0 && b[0] <= x1 && b[3] >= z0 && b[1] <= z1; });
-                if (!reach.length) { kept.push(ids[0], ids[1], ids[2]); continue; }
                 // Each tube takes its box out of what the ones before it left
                 let rest = [tri.map((p, k) => Object.assign(p.slice(), { id: ids[k] }))];
                 let cut = false;
@@ -1136,8 +1169,8 @@ class TerrainMesh {
                     for (let k = 1; k + 1 < at.length; k++) kept.push(at[0], at[k], at[k + 1]);
                 }
             }
-            return Uint32Array.from(kept);
-        });
+            out.push(Uint32Array.from(kept));
+        }
         if (!changed) return null;
         const positionsOut = new Float32Array(positions.length + extraP.length * 3), shadesOut = new Float32Array(shades.length + extraP.length * 3);
         positionsOut.set(positions, 0);

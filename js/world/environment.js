@@ -2923,10 +2923,16 @@ class WorldEnvironment {
     // The far grid (Horizon) less every tube's box (TerrainMesh.tubeClip), the ride's and the side roads' drawn now:
     // made again from the whole grid when the side roads' tubes change (setSideTubes)
     clipHorizon() {
+        return WorldStreamer.drain(this.clipHorizonSteps());
+    }
+
+    // The same in steps (TerrainMesh.tubeClipSteps): the cut of the whole grid against every tube took 67 ms in one
+    // frame of the Gotthard leg's fly to the lookout. The grid drawn stays as it was until the cut is done
+    *clipHorizonSteps() {
         if (!this.horizon || !this.horizonWhole) return;
         const whole = this.horizonWhole, geometry = this.horizon.geometry;
         const tubes = [...this.rideTubes(), ...[...this.sideTubes.values()].flat()];
-        const clipped = tubes.length ? TerrainMesh.tubeClip(whole.positions, whole.shades, [whole.index], tubes) : null;
+        const clipped = tubes.length ? yield* TerrainMesh.tubeClipSteps(whole.positions, whole.shades, [whole.index], tubes) : null;
         const before = geometry.index.count / 3;
         if (clipped) {
             geometry.setAttribute('position', new THREE.BufferAttribute(clipped.positions, 3));
@@ -2995,7 +3001,7 @@ class WorldEnvironment {
         if (boxes.length) this.sideTubes.set(k, boxes);
         else this.sideTubes.delete(k);
         if (this.tubeCache) this.tubeCache.clear();
-        if (this.streamer) this.streamer.enqueue('tube:horizon', WorldEnvironment.LATER, () => this.clipHorizon());
+        if (this.streamer) this.streamer.enqueue('tube:horizon', WorldEnvironment.LATER, () => this.clipHorizonSteps());
         const m = WorldData.TILE_M, keys = new Set();
         for (const b of old.concat(boxes)) for (let tx = Math.floor(b.box[0] / m); tx <= Math.floor(b.box[2] / m); tx++) for (let tz = Math.floor(b.box[1] / m); tz <= Math.floor(b.box[3] / m); tz++) keys.add(`${tx},${tz}`);
         for (const key of keys) {
