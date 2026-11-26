@@ -2496,7 +2496,9 @@ class RoadMesh {
     // parapets, the piers and each tube's lining (a long side road's structures took up to 16 ms in one)
     static get SIDE_STRUCTURE_STEP() { return 12; }
 
-    static *sideStructuresSteps(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false]) {
+    // `faceAt(x, z)`: the land a portal's headwall reaches up to (RoadMesh.headwall), `groundAt` by default: a long
+    // side road is drawn whole from one chunk, and its far portal stands where only the far grid is drawn
+    static *sideStructuresSteps(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false], faceAt = groundAt) {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
         const drop = RoadMesh.PARAPET_DROP_M, D = RoadMesh.DECK_M, H = RoadMesh.PARAPET_H_M;
@@ -2556,8 +2558,8 @@ class RoadMesh {
                     for (let j = 0; j + 1 < lines.length; j++) tubes.push({ la: lines[j][0], ra: lines[j][1], rb: lines[j + 1][1], lb: lines[j + 1][0], roof: low, mouth: true });
                     RoadMesh.wings(out, lines, groundAt, guard, forward);
                 };
-                if (sides[k - 1] ? !(sides[k - 1].bits & 5) : !through[0]) mouth(k, -1, RoadMesh.sidePortal(out, a, b, low, groundAt, guard));
-                if (sides[k + 2] ? !(sides[k + 2].bits & 5) : !through[1]) mouth(k + 1, 1, RoadMesh.sidePortal(out, b, a, low, groundAt, guard));
+                if (sides[k - 1] ? !(sides[k - 1].bits & 5) : !through[0]) mouth(k, -1, RoadMesh.sidePortal(out, a, b, low, faceAt, guard));
+                if (sides[k + 2] ? !(sides[k + 2].bits & 5) : !through[1]) mouth(k + 1, 1, RoadMesh.sidePortal(out, b, a, low, faceAt, guard));
                 run = null;
                 continue;
             }

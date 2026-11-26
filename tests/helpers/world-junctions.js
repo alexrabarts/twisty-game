@@ -250,7 +250,7 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                 const p = rows[k], q = rows[k + 1];
                 const t = q.run > p.run ? Math.max(0, Math.min(1, (d - p.run) / (q.run - p.run))) : 0;
                 const h = Math.atan2(q.x - p.x, q.z - p.z);
-                return { x: p.x + (q.x - p.x) * t + lat * Math.cos(h), z: p.z + (q.z - p.z) * t - lat * Math.sin(h), y: p.y + (q.y - p.y) * t };
+                return { x: p.x + (q.x - p.x) * t + lat * Math.cos(h), z: p.z + (q.z - p.z) * t - lat * Math.sin(h), y: p.y + (q.y - p.y) * t, roofed: !!((t < 0.5 ? p.bits : q.bits) & 5) };
             };
             // Where the side road's centre line leaves the ride's carriageway
             let edgeD = 0;
@@ -276,7 +276,9 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     gap = 0;
                     last = { y };
                     const g = groundAt(p.x, p.z);
-                    if (g !== null && g > y + 0.05) road.sunk.push({ d: r2(d), lat: r2(lat), overM: r2(g - y), x: r2(p.x), z: r2(p.z) });
+                    // (a side road in its own tunnel or gallery runs under the land by design: the tube's box, its floor and
+                    // its portals are world-tunnels' to check)
+                    if (g !== null && g > y + 0.05 && !p.roofed) road.sunk.push({ d: r2(d), lat: r2(lat), overM: r2(g - y), x: r2(p.x), z: r2(p.z) });
                 }
             }
             // The ride's stone over the side road in its mouth, drawn and as the physics meets it
@@ -306,7 +308,9 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     // Metres along the side road: the nearest of its places
                     let best = Infinity, bestD = 0;
                     for (let d = 0; d <= Math.min(reachM, road.lengthM); d += 1) { const p = place(d, 0); const far = Math.hypot(p.x - cx, p.z - cz); if (far < best) { best = far; bestD = d; } }
-                    if (bestD <= edgeD + mouthM && best <= width / 2 + 2) road.decks.push({ d: bestD, x: r2(cx), y: r2(cy), z: r2(cz) });
+                    // (a side road that leaves the ride in its own tube has the tube's lining and portal in its mouth, not a
+                    // deck: world-tunnels checks those)
+                    if (bestD <= edgeD + mouthM && best <= width / 2 + 2 && !place(bestD, 0).roofed) road.decks.push({ d: bestD, x: r2(cx), y: r2(cy), z: r2(cz) });
                 }
             }
             // The side road's two drawn edges in the mouth: from the carriageway out to the last place its ribbon is

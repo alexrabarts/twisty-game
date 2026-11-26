@@ -2881,7 +2881,16 @@ class WorldEnvironment {
         };
         // A pier stands on the lowest land the tile draws at any level of detail (RoadMesh.sideStructures footAt)
         const footAt = (x, z) => this.landLowAt(x, z, missing);
-        const options = { groundAt, footAt, roof: WorldRoute.ROOF_M };
+        // (a portal's headwall reaches the land drawn behind it: a tile's, or where no tile is here the far grid's, so
+        // the far portal of a long tube drawn whole from one chunk fronts the far land: worlds/susten, the motorway
+        // tunnel under Andermatt, its portal at Göschenen 3.7 km from the chunk, 21 places unfronted)
+        const faceAt = (x, z) => {
+            const y = groundAt(x, z);
+            if (Number.isFinite(y)) return y;
+            const far = this.data.farHeight(x, z);
+            return far === null ? undefined : far;
+        };
+        const options = { groundAt, footAt, faceAt, roof: WorldRoute.ROOF_M };
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
         // detail, as the ride's do, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
@@ -2909,7 +2918,7 @@ class WorldEnvironment {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
             const through = [!!(before.length && before[before.length - 1].bits & 5), !!(after.length && after[0].bits & 5)];
-            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through);
+            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through, options.faceAt);
             Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, tubes: built.tubes, through, rows, stub, edge: edge.id, s0 });
             // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
