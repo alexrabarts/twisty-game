@@ -562,7 +562,7 @@ describe('WorldCamera', () => {
         return new WorldRoute(samplesOf(points), {});
     };
 
-    // The chase view of the Standard mode, and the bike `input` WorldCamera.update reads
+    // The chase view of the near chase, and the bike `input` WorldCamera.update reads
     const bikeAt = (route, s, speed) => {
         const at = route.curveAt(s, {});
         return { x: at.px, y: 100, z: at.pz, s, index: Math.floor(route.toUnits(s)), speed, lift: 1, offset: { x: 0, y: 3, z: -6 }, fov: 75 };

@@ -8,8 +8,8 @@ import { readFileSync } from 'node:fs';
 export const DT = 1 / 60;
 export const G = 9.81;
 
-// The view modes of Game.setupCamera that have a boom
-export const CHASE_MODES = { standard: 2, high: 3 };
+// The chase views of Game.setupCamera, by their type
+export const CHASE_MODES = { near: 'near', far: 'far' };
 
 // The bike's speed plan: apFactor of the bend's speed at the lean cap, braking brakeMs2 for it, speeding up gainMs2
 export const PILOT = { apFactor: 0.85, brakeMs2: 6, gainMs2: 3, leanCapDeg: 50 };
@@ -29,7 +29,7 @@ export function gameClass(THREE, WorldCamera) {
     return new Function('THREE', 'WorldCamera', 'showCallout', 'TourSystem', 'Course', `${classSource}\nreturn Game;`)(THREE, WorldCamera, () => {}, {}, {});
 }
 
-// The view modes of Game.setupCamera (setupCamera itself reads the window and the saved mode)
+// The view modes of Game.setupCamera (setupCamera itself reads the window and the saved view)
 export function modesOf(THREE) {
     const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
     const text = /this\.cameraModes = (\[[\s\S]*?\]);/.exec(source)[1];
@@ -79,7 +79,7 @@ export function speedPlan(route, s0, s1, cruise, step = 0.5) {
 // distance to a side of the view, 1 in the middle, below 0 out of view), seen (the road 30 m on is in view), under (the
 // least room in a tube of the eye and the near plane's corners, tubeRoom; Infinity in the open), x, z (the
 // bike), ex, ey, ez (the camera)}
-export function chaseRide(game, env, { s0, s1, mode = CHASE_MODES.standard, cruise = 20, lane = 0, roam = false }) {
+export function chaseRide(game, env, { s0, s1, mode = CHASE_MODES.near, cruise = 20, lane = 0, roam = false }) {
     const { THREE, WorldCamera } = game;
     const Game = game.Game || (game.Game = gameClass(THREE, WorldCamera));
     const route = env.route;
@@ -97,12 +97,14 @@ export function chaseRide(game, env, { s0, s1, mode = CHASE_MODES.standard, crui
     const worldCamera = new WorldCamera(route, env.ground, (x, z, y) => Math.min(env.overheadY(x, z, y), env.tubeRoofY(x, z, y)), (x, z, reach) => env.cameraFaces(x, z, reach));
     Object.assign(g, { camera, vehicle, environment: env, worldCamera, cameraIntroActive: false });
     const table = modesOf(THREE);
+    const index = table.findIndex(m => m.type === mode);
+    if (index < 0) throw new Error(`No chase view ${mode}`);
     Object.assign(g, {
-        cameraModes: table, cameraMode: mode, baseCameraOffset: table[mode].offset.clone(),
-        cameraOffset: table[mode].offset.clone(), cameraTarget: new THREE.Vector3(),
+        cameraModes: table, cameraMode: index, baseCameraOffset: table[index].offset.clone(),
+        cameraOffset: table[index].offset.clone(), cameraTarget: new THREE.Vector3(),
         currentCameraPos: camera.position.clone(), currentLookTarget: new THREE.Vector3(),
         tempMatrix: new THREE.Matrix4(), tempVector: new THREE.Vector3(), tempUpVector: new THREE.Vector3(),
-        cameraLerpFactor: table[mode].lerpFactor, cameraLateralOffset: 0, previousYawAngle: start.heading,
+        cameraLerpFactor: table[index].lerpFactor, cameraLateralOffset: 0, previousYawAngle: start.heading,
         currentCameraBanking: 0, updateShadowCamera() {}
     });
     worldCamera.reset(start.heading);
@@ -257,7 +259,7 @@ export function chicanesOf(route, from, to) {
 }
 
 // A whole stage, in parts with the land round each part loaded: {whole, places, rows}
-export async function stageRide(game, env, { mode = CHASE_MODES.standard, cruise = 20, from = null, to = null, part = 400 } = {}) {
+export async function stageRide(game, env, { mode = CHASE_MODES.near, cruise = 20, from = null, to = null, part = 400 } = {}) {
     const s0 = from ?? env.startS + 20, s1 = to ?? env.endS - 30;
     const rows = [];
     for (let a = s0; a < s1; a += part) {
@@ -272,18 +274,18 @@ export async function stageRide(game, env, { mode = CHASE_MODES.standard, cruise
     return rows;
 }
 
-// node tests/helpers/world-chase-ride.js <id> [mode 2|3] [cruise m/s] [from s] [to s]: the peaks over the stage and
+// node tests/helpers/world-chase-ride.js <id> [view near|far] [cruise m/s] [from s] [to s]: the peaks over the stage and
 // its ten worst places, as JSON
 if (import.meta.url === `file://${process.argv[1]}`) {
-    const [id, mode = '2', cruise = '20', from, to] = process.argv.slice(2);
+    const [id, mode = 'near', cruise = '20', from, to] = process.argv.slice(2);
     const { loadGame } = await import('./load-game.js');
     const { diskFetch } = await import('./world-fetch.js');
     const game = loadGame(undefined, []);
     const { fetchFn } = diskFetch();
     const env = await game.WorldEnvironment.load(new game.THREE.Scene(), { id, search: '', fetchFn, models: null, digest: async () => '0' });
-    const rows = await stageRide(game, env, { mode: Number(mode), cruise: Number(cruise), from: from ? Number(from) : null, to: to ? Number(to) : null });
+    const rows = await stageRide(game, env, { mode, cruise: Number(cruise), from: from ? Number(from) : null, to: to ? Number(to) : null });
     const round = n => Math.round(n * 100) / 100;
     const places = worstPlaces(rows, 10).map(p => ({ s: Math.round(p.accelAt), rate: round(p.rate), accel: round(p.accel), sway: round(p.sway), ...shapeAt(env.route, p.accelAt) }));
     const whole = peaksOf(rows);
-    process.stdout.write(JSON.stringify({ id, mode: Number(mode), cruise: Number(cruise), frames: rows.length, whole: { rate: round(whole.rate), accel: round(whole.accel), sway: round(whole.sway), room: round(whole.room), ahead: round(aheadShare(env.route, rows)) }, places }) + '\n');
+    process.stdout.write(JSON.stringify({ id, mode, cruise: Number(cruise), frames: rows.length, whole: { rate: round(whole.rate), accel: round(whole.accel), sway: round(whole.sway), room: round(whole.room), ahead: round(aheadShare(env.route, rows)) }, places }) + '\n');
 }

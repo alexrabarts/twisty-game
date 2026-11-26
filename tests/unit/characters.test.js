@@ -473,7 +473,7 @@ describe('the outfits', () => {
         }));
         return [zone, areas];
     }));
-    // The Standard chase camera is about 6.3 m behind the rider's back with a 75 degree view: a 1080-line frame draws about
+    // The near chase camera is about 6.3 m behind the rider's back with a 75 degree view: a 1080-line frame draws about
     // 1.1 pixels to the centimetre there, so 60 cm2 is about 75 pixels.
     // CONTRAST: how far a colour must be from the back view's main colour to be a mark on it. SAME: under this, two colours
     // are one at that distance (a washed black and a black are).

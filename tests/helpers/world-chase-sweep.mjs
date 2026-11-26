@@ -1,4 +1,4 @@
-// Rides every chicane and every hairpin of a world's stage with the chase camera in the standard and the high view
+// Rides every chicane and every hairpin of a world's stage with the chase camera in the near and the far chase
 // and prints the camera's swing on each as JSON (tests/unit/world-camera-chicane.test.js). It runs as its own node
 // process: under jest's module VM the same rides take about fifteen times as long.
 //   node tests/helpers/world-chase-sweep.mjs <id> [cruise m/s]

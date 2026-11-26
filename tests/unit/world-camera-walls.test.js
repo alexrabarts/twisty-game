@@ -1,14 +1,14 @@
 /**
  * @jest-environment node
  */
-// The chase camera of a world never goes through a wall or sits behind one. In the high view the boom swung over the
+// The chase camera of a world never goes through a wall or sits behind one. In the far chase the boom swung over the
 // retaining wall of the leg above a stacked hairpin; the rule that keeps the camera under a road overhead then put it
 // down under that leg, inside the hill behind the wall's face, in one frame. The camera now reads the walls beside
 // the road (WorldEnvironment.cameraFaces: the ride's and the side roads' retaining walls and parapets, a wall's
 // taper, a bridge's parapet, the houses) and ends its boom short of a face it would cross (WorldCamera.wallShare).
 //
-// Every hairpin of the shipped stage and of the fixture world is ridden by a kinematic bike in the standard and the
-// high view (tests/helpers/world-camera-walls.js): on the centre line at 5 m/s, 7 m/s and the bend's advised speed
+// Every hairpin of the shipped stage and of the fixture world is ridden by a kinematic bike in the near and the
+// far chase (tests/helpers/world-camera-walls.js): on the centre line at 5 m/s, 7 m/s and the bend's advised speed
 // and at the worst lean either way, and 2 m to each side at the worst lean; then with the tuning rows'
 // boom and swing at their most. On every frame the line from the bike to the camera is read against the walls, the
 // houses and the land with the helper's own geometry. The same rides with the rule off find the crossings.
@@ -24,11 +24,11 @@ const game = loadGame(undefined, []);
 const { WorldRoute, WorldCamera } = game;
 
 // The most the camera's distance from the bike may change in a frame at 60 Hz: STEP_M metres at the default boom (the
-// land's spring drawing a high view's 21 m boom in ahead of a wall moves it 0.4 m; the jump this rule removes was 2 m),
+// land's spring drawing a far chase's 21 m boom in ahead of a wall moves it 0.4 m; the jump this rule removes was 2 m),
 // and STEP_SHARE of the distance for every ride, the tuning's boom at its most too (the same spring draws a 38 m boom
 // in by 4.0% of the distance at most in a frame, 2.8% without the tuning; the jumps removed were up to 14% of it)
 // (0.55 m: since the boom turns by the road's mean heading, WorldCamera.roadMean, the worst of the 949 430 frames of the
-// shipped stage at the default boom is 0.504 m, a high view's 14 m boom at the worst lean 2 m out in the hairpin at km 8.0)
+// shipped stage at the default boom is 0.504 m, a far chase's 14 m boom at the worst lean 2 m out in the hairpin at km 8.0)
 const STEP_M = 0.55;
 const STEP_SHARE = 0.05;
 // Without the rule, the frames of the shipped stage on which a wall stood between the bike and the camera
@@ -183,7 +183,7 @@ describe('the chase camera beside a wall on a synthetic straight', () => {
     });
 
     test('the swing gives way to a wall beside the road and the camera stays the margin off it', () => {
-        // A wall 1.2 m to the +x side of the centre line, 12 m high (over the high view's boom)
+        // A wall 1.2 m to the +x side of the centre line, 12 m high (over the far chase's boom)
         const AT = 1.2;
         const data = new Float64Array(WorldCamera.FACE);
         data.set([AT, 0, AT, 400, Y + 12, Y + 12, Y - 2, Y - 2, 0]);

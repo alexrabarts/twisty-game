@@ -2038,19 +2038,15 @@ class Game {
         this.cameraIntroStartPos = new THREE.Vector3(0, 4, -10);
         this.cameraIntroEndPos = new THREE.Vector3(0, 4, -10);
         
-        // Camera mode system - modes carry a `type` so behavior isn't tied to
-        // array order: 'follow' (chase cams), 'onboard' (close rider cam),
-        // 'helmet' (true first-person)
+        // The two chase views, the far one first. `type` names a view in code and in the saved choice
+        // (Game.CAMERA_KEY, Game.cameraViewOf); a fresh player starts in the far one
         this.cameraModes = [
-            { name: 'Onboard', type: 'onboard', offset: new THREE.Vector3(0, 1.2, 0.5), lerpFactor: 0.18 },
-            { name: 'Helmet Cam', type: 'helmet', offset: new THREE.Vector3(0, 1.15, 0.35), lerpFactor: 1.0 },
-            { name: 'Standard', type: 'follow', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 },
-            { name: 'High View', type: 'high', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 }
+            { name: 'Far chase', type: 'far', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 },
+            { name: 'Near chase', type: 'near', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 }
         ];
-
-        // Restore the persisted view (defaults to Onboard)
-        const savedMode = parseInt(localStorage.getItem('twistyCameraMode'), 10);
-        this.cameraMode = (savedMode >= 0 && savedMode < this.cameraModes.length) ? savedMode : 0;
+        let saved = null;
+        try { saved = localStorage.getItem(Game.CAMERA_KEY); } catch (e) { console.warn('Camera view not read:', e); }
+        this.setCameraView(Game.cameraViewOf(saved));
 
         // Dynamic camera offset for mountain roads
         this.baseCameraOffset = this.cameraModes[this.cameraMode].offset.clone();
@@ -2073,58 +2069,30 @@ class Game {
         console.log('Camera setup complete - starting intro animation');
     }
 
-    // True first-person view: camera pinned to the rider's head. The head is
-    // rigidly attached to the bike's orientation (yaw, wheelie/jump pitch, and
-    // lean roll), with a touch of extra rider lean-in toward the corner - so
-    // the world's horizon tilts as the bike lays into a turn.
-    updateHelmetCamera(vehiclePos, adjLerp) {
-        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
+    // The chase view of `type` ('near' or 'far'; any other is the far one) is the one drawn from the next frame
+    setCameraView(type) {
+        const index = this.cameraModes.findIndex(m => m.type === type);
+        this.cameraMode = index >= 0 ? index : 0;
+    }
 
-        // Bike pitch: nose-up during wheelies, flip rotation during jumps
-        let bikePitch = 0;
-        if (this.vehicle.isJumping) {
-            bikePitch = this.vehicle.jumpRotation;
-        } else if (this.vehicle.isWheelie) {
-            bikePitch = -this.vehicle.wheelieAngle;
-        }
+    // The other chase view, kept as the rider's choice and named on screen
+    toggleCameraView() {
+        this.cameraMode = (this.cameraMode + 1) % this.cameraModes.length;
+        const mode = this.cameraModes[this.cameraMode];
+        try { localStorage.setItem(Game.CAMERA_KEY, mode.type); } catch (e) { console.warn('Camera view not saved:', e); }
+        showCallout(`Camera: ${mode.name}`, 'info', 1000);
+        return mode;
+    }
 
-        // Head roll: the bike's lean plus the rider hanging slightly INTO the
-        // corner (same sign convention as the bike mesh, group.rotation.z)
-        const leanIn = THREE.MathUtils.clamp(this.vehicle.leanAngle * 0.2, -0.15, 0.15);
-        const targetRoll = this.vehicle.leanAngle + leanIn;
-        // Light smoothing so engine vibration/lean jitter doesn't shake the horizon
-        this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetRoll, adjLerp(0.45));
-        const roll = this.currentCameraBanking;
+    // Where the chosen view is kept, as its type
+    static get CAMERA_KEY() { return 'twistyCameraMode'; }
 
-        // Full bike-local frame: yaw, then pitch, then roll (interpolated yaw)
-        const helmetYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
-        const mountEuler = new THREE.Euler(bikePitch, helmetYaw, roll, 'YXZ');
-
-        // Mount at the rider's visor - swings with the lean like a real head
-        const cameraPos = this.tempVector.set(0, 1.18, 0.3).applyEuler(mountEuler).add(vehiclePos);
-
-        // Engine/road vibration - subtle, speed dependent, comfort damped
-        const vibration = (0.008 + speedRatio * 0.012) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
-        cameraPos.x += (Math.random() - 0.5) * vibration;
-        cameraPos.y += (Math.random() - 0.5) * vibration * 0.7;
-
-        this.camera.position.copy(cameraPos);
-        this.currentCameraPos.copy(cameraPos);
-
-        // Look ahead through the same head orientation
-        const lookTarget = new THREE.Vector3(0, 1.05, 25).applyEuler(mountEuler).add(vehiclePos);
-        this.currentLookTarget.copy(lookTarget);
-
-        // The horizon banks with the head: roll the up vector around the view axis
-        const forwardDir = new THREE.Vector3().subVectors(lookTarget, cameraPos).normalize();
-        this.tempMatrix.makeRotationAxis(forwardDir, roll);
-        this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
-        this.camera.up.copy(this.tempUpVector);
-        this.camera.lookAt(lookTarget);
-
-        // Wide FOV with speed rush
-        this.camera.fov = 95 + speedRatio * 12;
-        this.camera.updateProjectionMatrix();
+    // The view a saved value names. Before there were two views the key held an index into four (0 Onboard,
+    // 1 Helmet Cam, 2 Standard, 3 High View): Standard is the near chase, and every other was a view nearer the
+    // rider than the far chase or the far chase itself, so they read as far. Nothing saved is far as well
+    static cameraViewOf(saved) {
+        if (saved === 'near' || saved === '2') return 'near';
+        return 'far';
     }
 
     // The eye adapts to a tunnel or a gallery (TubeShade.LIGHT): the exposure (Graphics.adaptation) goes toward `adapt`
@@ -2209,48 +2177,48 @@ class Game {
         if (this.cameraIntroActive) {
             const elapsed = performance.now() - this.cameraIntroStartTime;
             const progress = Math.min(elapsed / this.cameraIntroDuration, 1);
-            
+
             // Use easing function for smooth animation (ease-in-out)
             const easeProgress = progress < 0.5 
                 ? 2 * progress * progress 
                 : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-            
+
             // Interpolate camera position from above to behind vehicle
             this.camera.position.lerpVectors(
                 this.cameraIntroStartPos,
                 this.cameraIntroEndPos,
                 easeProgress
             );
-            
+
             // Look at the vehicle
             this.camera.lookAt(this.vehicle.position.x, this.vehicle.position.y + 1, this.vehicle.position.z);
-            
+
             // End intro when complete
             if (progress >= 1) {
                 this.cameraIntroActive = false;
-                
+
                 // Initialize the follow camera positions to match intro end position
                 // to avoid jump when switching to normal camera
                 this.currentCameraPos.copy(this.camera.position);
                 this.currentLookTarget.copy(this.vehicle.position);
                 this.currentLookTarget.y += 1;
-                
+
                 // Reset banking state
                 this.currentCameraBanking = 0;
-                
+
                 console.log('Camera intro complete - smooth transition to follow camera');
             }
-            
+
             return; // Skip normal camera update during intro
         }
-        
+
         // Safety check - if vehicle doesn't exist or lean angle is extreme, reset banking
         if (!this.vehicle || Math.abs(this.vehicle.leanAngle) > Math.PI) {
             this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, 0, adjLerp(0.2));
             this.camera.rotation.z = this.currentCameraBanking;
             return;
         }
-        
+
         // Normal camera follow behavior (interpolated render position + yaw)
         const vehiclePos = (this.vehicle.renderPosition || this.vehicle.position).clone();
         const vehicleYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
@@ -2299,59 +2267,39 @@ class Game {
         const currentMode = this.cameraModes[this.cameraMode];
         this.baseCameraOffset = currentMode.offset.clone();
         this.cameraLerpFactor = currentMode.lerpFactor;
-        
-        // True first-person view: rigidly mounted at the rider's helmet
-        if (currentMode.type === 'helmet') {
-            this.updateHelmetCamera(vehiclePos, adjLerp);
-            this.updateShadowCamera();
-            return;
+
+        const far = currentMode.type === 'far';
+        // Dynamic camera offset based on lean angle for better mountain road feel
+        const leanInfluence = Game.tune('camera', 'swing', this.vehicle.leanAngle * (far ? 3 : 2)); // More influence in the far view
+
+        // Combine lateral lag with lean influence; a world's boom turns by the route, and WorldCamera takes the
+        // same swing in its own frame (worldCameraInput)
+        this.cameraOffset.x = this.environment.isWorld ? this.baseCameraOffset.x : this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
+
+        // Adjust height based on speed for dramatic effect
+        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
+        // (a leg's camera rises a little with speed; a world's comes down toward the road, WorldCamera.speedHeight)
+        this.cameraOffset.y = this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5;
+        this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (far ? 2 : 1); // Move back with speed
+        // The tuning's camera distance: the boom's length and height together
+        const distance = Game.tune('camera', 'distance', 1);
+        if (distance !== 1) {
+            this.cameraOffset.y *= distance;
+            this.cameraOffset.z *= distance;
         }
 
-        // Mode-specific adjustments
-        if (currentMode.type === 'onboard') {
-            // Onboard camera - minimal lateral movement, rotates with bike
-            this.cameraOffset.x = this.baseCameraOffset.x;
-            this.cameraOffset.y = this.baseCameraOffset.y;
-            this.cameraOffset.z = this.baseCameraOffset.z;
-            
-            // Add small vibration for realism (scaled by the bike's comfort)
-            const onboardShake = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
-            this.cameraOffset.x += Math.sin(performance.now() * 0.01) * 0.02 * onboardShake;
-            this.cameraOffset.y += Math.sin(performance.now() * 0.013) * 0.01 * onboardShake;
-        } else {
-            // Standard and High View cameras
-            // Dynamic camera offset based on lean angle for better mountain road feel
-            const leanInfluence = Game.tune('camera', 'swing', this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2)); // More influence in high view
-            
-            // Combine lateral lag with lean influence; a world's boom turns by the route, and WorldCamera takes the
-            // same swing in its own frame (worldCameraInput)
-            this.cameraOffset.x = this.environment.isWorld ? this.baseCameraOffset.x : this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
-            
-            // Adjust height based on speed for dramatic effect
-            const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            // (a leg's camera rises a little with speed; a world's comes down toward the road, WorldCamera.speedHeight)
-            this.cameraOffset.y = this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5;
-            this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (currentMode.type === 'high' ? 2 : 1); // Move back with speed
-            // The tuning's camera distance: the boom's length and height together
-            const far = Game.tune('camera', 'distance', 1);
-            if (far !== 1) {
-                this.cameraOffset.y *= far;
-                this.cameraOffset.z *= far;
-            }
-            
-            // (No lateral camera swing during wheelies - the 8-unit sideways
-            // jump made the bike read as tipping left while it was straight)
-        }
+        // (No lateral camera swing during wheelies - the 8-unit sideways
+        // jump made the bike read as tipping left while it was straight)
 
         // Calculate camera position relative to vehicle
         const offset = this.cameraOffset.clone();
-        const world = this.environment.isWorld && currentMode.type !== 'onboard';
+        const world = this.environment.isWorld;
         if (!world) offset.applyEuler(vehicleRotation);
         const cameraPos = vehiclePos.clone().add(offset);
 
         // Smooth camera movement with lag - adaptive based on speed and conditions
         let lerpFactor = this.cameraLerpFactor;
-        
+
         if (this.vehicle.fallingOffCliff) {
             lerpFactor = 0.45; // Even faster following during fall
             // Add slight camera shake during fall
@@ -2382,21 +2330,18 @@ class Game {
 
         this.camera.position.copy(this.currentCameraPos);
 
-        // Additional camera shake at high speeds (outside onboard mode)
-        if (currentMode.type !== 'onboard') {
-            const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
-            // The world's land shakes the camera as well as the bike (Vehicle.landRock), and an off-road bike less
-            // (as its bump, Vehicle.landValues)
-            const onLand = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed;
-            const land = onLand ? this.vehicle.landValues() : null;
-            const rough = onLand ? 0.15 * Math.min(1, this.vehicle.speed / land.landCapSpeed) * land.landBumpM / this.vehicle.worldPhysics.landBumpM : 0;
-            const shakeIntensity = (speedFactor * 0.05 + rough) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
-            this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
-            this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
-        }
+        // Additional camera shake at high speeds
+        // The world's land shakes the camera as well as the bike (Vehicle.landRock), and an off-road bike less
+        // (as its bump, Vehicle.landValues)
+        const onLand = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed;
+        const land = onLand ? this.vehicle.landValues() : null;
+        const rough = onLand ? 0.15 * Math.min(1, this.vehicle.speed / land.landCapSpeed) * land.landBumpM / this.vehicle.worldPhysics.landBumpM : 0;
+        const shakeIntensity = (speedRatio * 0.05 + rough) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+        this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
+        this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
 
-        // Under a tunnel roof the camera stays beneath it, shake included: High
-        // View sits 8 above the bike, higher than the 7.5 m roof. The smoothed
+        // Under a tunnel roof the camera stays beneath it, shake included: the far
+        // chase sits 8 above the bike, higher than the 7.5 m roof. The smoothed
         // position keeps the clamp too, so the camera eases out of the tunnel
         // rather than jumping to where it would have been
         // (a world's camera keeps under a tube's roof itself, eased in before the portal: WorldEnvironment.tubeRoofY;
@@ -2408,166 +2353,125 @@ class Game {
             this.currentCameraPos.y = Math.min(this.currentCameraPos.y, this.camera.position.y);
         }
 
-        // Mode-specific FOV and look target
-        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-        
-        if (currentMode.type === 'onboard') {
-            // Onboard camera - wider FOV, look directly ahead
-            this.camera.fov = 90 + speedRatio * 10; // 90 to 100 degrees for immersive onboard view
-            this.camera.updateProjectionMatrix();
-            
-            // Look straight ahead from bike position
-            const lookAheadDistance = 10 + speedRatio * 5;
-            this.tempVector.set(0, 0.5, lookAheadDistance);
-            this.tempVector.applyEuler(vehicleRotation);
+        // The view's FOV and look target
+        // Dynamic FOV - increases with speed for visceral feel
+        const baseFOV = far ? 70 : 75;
+        const maxFOVIncrease = 10; // 75° → 85° at max speed
+        const targetFOV = baseFOV + (speedRatio * maxFOVIncrease);
 
-            const lookTarget = vehiclePos.clone().add(this.tempVector);
-            if (this.environment.isWorld) {
-                // A world looks along the road ahead, which turns before the bike does
-                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, 0.5, this.worldAhead || (this.worldAhead = {}));
-                lookTarget.set(ahead.x, ahead.y, ahead.z);
-            }
+        // Smooth FOV transition; a world's FOV is a spring of WorldCamera.update, toward the same target
+        if (!this.currentFOV) this.currentFOV = baseFOV;
+        this.currentFOV = this.environment.isWorld ? this.worldCamera.fov : THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
+        this.camera.fov = this.currentFOV;
+        this.camera.updateProjectionMatrix();
 
-            this.currentLookTarget.lerp(lookTarget, adjLerp(this.environment.isWorld ? WorldCamera.LOOK_FOLLOW : 0.3)); // Fast response for onboard
-            
-            // Onboard camera banking - calculate BEFORE lookAt with custom up vector
-            // Onboard view banks WITH the bike - aggressive tilt for immersive feel
-            const onboardBankAmount = this.vehicle.leanAngle * 0.9; // 90% banking, same direction
-            const targetOnboardBank = THREE.MathUtils.clamp(onboardBankAmount, -0.7, 0.7); // Max ~40° bank
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetOnboardBank, adjLerp(0.2));
+        // Enhanced camera shake with multiple sources
+        if (!this.cameraShakeOffset) this.cameraShakeOffset = new THREE.Vector3();
 
-            // Create custom up vector rotated around camera's forward direction (view axis)
-            const forwardDir = new THREE.Vector3();
-            forwardDir.subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
-            this.tempMatrix.makeRotationAxis(forwardDir, this.currentCameraBanking);
-            this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
+        // Comfort rating damps every shake source - Tim's scooter
+        // glides where Steve's race bike rattles
+        const comfort = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
 
-            // Apply banking through custom up vector, then lookAt
-            this.camera.up.copy(this.tempUpVector);
-            this.camera.lookAt(this.currentLookTarget);
-        } else {
-            // Standard and High View cameras
-            const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
+        // Base speed shake - increases dramatically at high speeds
+        const speedShake = Math.pow(speedRatio, 2) * 0.12 * comfort;
 
-            // Dynamic FOV - increases with speed for visceral feel
-            const baseFOV = currentMode.type === 'high' ? 70 : 75;
-            const maxFOVIncrease = 10; // 75° → 85° at max speed
-            const targetFOV = baseFOV + (speedFactor * maxFOVIncrease);
+        // Terrain/roughness shake - simulates bumpy road
+        const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedRatio * comfort;
 
-            // Smooth FOV transition; a world's FOV is a spring of WorldCamera.update, toward the same target
-            if (!this.currentFOV) this.currentFOV = baseFOV;
-            this.currentFOV = this.environment.isWorld ? this.worldCamera.fov : THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
-            this.camera.fov = this.currentFOV;
-            this.camera.updateProjectionMatrix();
-
-            // Enhanced camera shake with multiple sources
-            if (!this.cameraShakeOffset) this.cameraShakeOffset = new THREE.Vector3();
-
-            // Comfort rating damps every shake source - Tim's scooter
-            // glides where Steve's race bike rattles
-            const comfort = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
-
-            // Base speed shake - increases dramatically at high speeds
-            const speedShake = Math.pow(speedFactor, 2) * 0.12 * comfort;
-
-            // Terrain/roughness shake - simulates bumpy road
-            const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedFactor * comfort;
-
-            // Landing impact shake - big jolt when landing from jumps
-            let landingShake = 0;
-            if (this.vehicle.isJumping) {
-                this.lastJumpState = true;
-            } else if (this.lastJumpState) {
-                // Just landed - create impact shake (softened by suspension comfort)
-                this.landingShakeIntensity = 0.3 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
-                this.landingShakeTime = performance.now();
-                this.lastJumpState = false;
-            }
-
-            // Decay landing shake over time
-            if (this.landingShakeIntensity > 0) {
-                const timeSinceLanding = (performance.now() - this.landingShakeTime) / 1000;
-                landingShake = this.landingShakeIntensity * Math.exp(-timeSinceLanding * 8);
-                if (landingShake < 0.01) this.landingShakeIntensity = 0;
-            }
-
-            // Wheelie wobble - adds instability feel during wheelies
-            let wheelieShake = 0;
-            if (this.vehicle.isWheelie) {
-                const wheelieAngle = this.vehicle.wheelieAngle * 180 / Math.PI;
-                wheelieShake = (wheelieAngle / 60) * 0.04 * Math.sin(performance.now() * 0.01);
-            }
-
-            // Combine all shake sources
-            const totalShake = speedShake + terrainShake + landingShake + wheelieShake;
-            this.cameraShakeOffset.x = (Math.random() - 0.5) * totalShake;
-            this.cameraShakeOffset.y = (Math.random() - 0.5) * totalShake * 0.6;
-            this.cameraShakeOffset.z = (Math.random() - 0.5) * totalShake * 0.4;
-            
-            // Look ahead of vehicle for better anticipation on mountain roads
-            const lookAheadDistance = (currentMode.type === 'high' ? 5 : 3) + speedRatio * 7; // Look further in high view
-            this.tempVector.set(0, 0, lookAheadDistance);
-            this.tempVector.applyEuler(vehicleRotation);
-
-            const lookTarget = vehiclePos.clone().add(this.tempVector);
-            lookTarget.y += currentMode.type === 'high' ? 2 : 1; // Look higher in high view
-            
-            if (this.environment.isWorld) {
-                // A world looks along the road ahead, which turns before the bike does, and the target gives way
-                // to the bike until the bike is well inside the view (WorldCamera.aim), from where the camera is now
-                const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
-                bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
-                const look = this.worldCamera.aim(this.camera, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
-                this.currentLookTarget.set(look.x, look.y, look.z);
-            } else {
-                // Add lean-based lateral offset for corner viewing (less in high view)
-                const leanLateralOffset = -this.vehicle.leanAngle * (currentMode.type === 'high' ? 2 : 4);
-                this.tempUpVector.set(leanLateralOffset, 0, 0);
-                this.tempUpVector.applyEuler(vehicleRotation);
-                lookTarget.add(this.tempUpVector);
-                this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
-            }
-            
-            // Camera banking BEFORE lookAt - subtle lean feedback
-            const bankFactor = currentMode.type === 'high' ? 0.15 : 0.25; // High view more subtle
-            // Positive lean = right lean, bank camera right (positive rotation around forward axis)
-            const bankAmount = this.vehicle.leanAngle * bankFactor;
-            const targetBank = THREE.MathUtils.clamp(bankAmount, -0.3, 0.3); // Max ~17° bank
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetBank, adjLerp(0.15));
-
-            // Wheelie camera tilt - pitch camera up to follow bike angle
-            let wheelieTilt = 0;
-            if (this.vehicle.isWheelie && this.vehicle.wheelieAngle) {
-                // Tilt camera up proportional to wheelie angle (max ~15°)
-                wheelieTilt = Math.min(this.vehicle.wheelieAngle * 0.4, 0.26); // ~15° max
-            }
-
-            // Smooth wheelie tilt transition
-            if (!this.currentWheelieTilt) this.currentWheelieTilt = 0;
-            this.currentWheelieTilt = THREE.MathUtils.lerp(this.currentWheelieTilt, wheelieTilt, adjLerp(0.1));
-
-            // Adjust look target height during wheelies for subtle upward view
-            if (this.currentWheelieTilt > 0.05) {
-                const tiltInfluence = this.currentWheelieTilt * 1.5; // Reduced from 5 to 1.5
-                this.currentLookTarget.y += tiltInfluence;
-            }
-
-            // Create custom up vector rotated around camera's forward direction (view axis)
-            // This ensures banking works correctly regardless of vehicle's world orientation
-            const forwardDir = new THREE.Vector3();
-            forwardDir.subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
-            this.tempMatrix.makeRotationAxis(forwardDir, this.currentCameraBanking);
-            this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
-
-            // Apply banking through custom up vector, then lookAt
-            this.camera.up.copy(this.tempUpVector);
-            this.camera.lookAt(this.currentLookTarget);
+        // Landing impact shake - big jolt when landing from jumps
+        let landingShake = 0;
+        if (this.vehicle.isJumping) {
+            this.lastJumpState = true;
+        } else if (this.lastJumpState) {
+            // Just landed - create impact shake (softened by suspension comfort)
+            this.landingShakeIntensity = 0.3 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+            this.landingShakeTime = performance.now();
+            this.lastJumpState = false;
         }
-        
+
+        // Decay landing shake over time
+        if (this.landingShakeIntensity > 0) {
+            const timeSinceLanding = (performance.now() - this.landingShakeTime) / 1000;
+            landingShake = this.landingShakeIntensity * Math.exp(-timeSinceLanding * 8);
+            if (landingShake < 0.01) this.landingShakeIntensity = 0;
+        }
+
+        // Wheelie wobble - adds instability feel during wheelies
+        let wheelieShake = 0;
+        if (this.vehicle.isWheelie) {
+            const wheelieAngle = this.vehicle.wheelieAngle * 180 / Math.PI;
+            wheelieShake = (wheelieAngle / 60) * 0.04 * Math.sin(performance.now() * 0.01);
+        }
+
+        // Combine all shake sources
+        const totalShake = speedShake + terrainShake + landingShake + wheelieShake;
+        this.cameraShakeOffset.x = (Math.random() - 0.5) * totalShake;
+        this.cameraShakeOffset.y = (Math.random() - 0.5) * totalShake * 0.6;
+        this.cameraShakeOffset.z = (Math.random() - 0.5) * totalShake * 0.4;
+
+        // Look ahead of vehicle for better anticipation on mountain roads
+        const lookAheadDistance = (far ? 5 : 3) + speedRatio * 7; // Look further in the far view
+        this.tempVector.set(0, 0, lookAheadDistance);
+        this.tempVector.applyEuler(vehicleRotation);
+
+        const lookTarget = vehiclePos.clone().add(this.tempVector);
+        lookTarget.y += far ? 2 : 1; // Look higher in the far view
+
+        if (this.environment.isWorld) {
+            // A world looks along the road ahead, which turns before the bike does, and the target gives way
+            // to the bike until the bike is well inside the view (WorldCamera.aim), from where the camera is now
+            const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
+            bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
+            const look = this.worldCamera.aim(this.camera, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
+            this.currentLookTarget.set(look.x, look.y, look.z);
+        } else {
+            // Add lean-based lateral offset for corner viewing (less in the far view)
+            const leanLateralOffset = -this.vehicle.leanAngle * (far ? 2 : 4);
+            this.tempUpVector.set(leanLateralOffset, 0, 0);
+            this.tempUpVector.applyEuler(vehicleRotation);
+            lookTarget.add(this.tempUpVector);
+            this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
+        }
+
+        // Camera banking BEFORE lookAt - subtle lean feedback
+        const bankFactor = far ? 0.15 : 0.25; // The far view more subtle
+        // Positive lean = right lean, bank camera right (positive rotation around forward axis)
+        const bankAmount = this.vehicle.leanAngle * bankFactor;
+        const targetBank = THREE.MathUtils.clamp(bankAmount, -0.3, 0.3); // Max ~17° bank
+        this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetBank, adjLerp(0.15));
+
+        // Wheelie camera tilt - pitch camera up to follow bike angle
+        let wheelieTilt = 0;
+        if (this.vehicle.isWheelie && this.vehicle.wheelieAngle) {
+            // Tilt camera up proportional to wheelie angle (max ~15°)
+            wheelieTilt = Math.min(this.vehicle.wheelieAngle * 0.4, 0.26); // ~15° max
+        }
+
+        // Smooth wheelie tilt transition
+        if (!this.currentWheelieTilt) this.currentWheelieTilt = 0;
+        this.currentWheelieTilt = THREE.MathUtils.lerp(this.currentWheelieTilt, wheelieTilt, adjLerp(0.1));
+
+        // Adjust look target height during wheelies for subtle upward view
+        if (this.currentWheelieTilt > 0.05) {
+            const tiltInfluence = this.currentWheelieTilt * 1.5; // Reduced from 5 to 1.5
+            this.currentLookTarget.y += tiltInfluence;
+        }
+
+        // Create custom up vector rotated around camera's forward direction (view axis)
+        // This ensures banking works correctly regardless of vehicle's world orientation
+        const forwardDir = new THREE.Vector3();
+        forwardDir.subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
+        this.tempMatrix.makeRotationAxis(forwardDir, this.currentCameraBanking);
+        this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
+
+        // Apply banking through custom up vector, then lookAt
+        this.camera.up.copy(this.tempUpVector);
+        this.camera.lookAt(this.currentLookTarget);
+
         // Update shadow camera to follow player
         this.updateShadowCamera();
     }
-    
+
     // What the world camera reads of the bike and the view mode (WorldCamera.update): the bike's smooth road
     // position, so nothing the camera reads from the route steps where the polyline turns. The carving swing is the
     // legs' chase camera's (the lean shift with its lagged lateral term, and the look point pushed into the corner),
@@ -2585,17 +2489,17 @@ class Game {
         // (the way the bike goes, and whether it is on the ride, for the free-roam camera: WorldCamera.followRider)
         input.yaw = v.yawAngle;
         input.onRide = v.projection.index >= 0 && Math.abs(v.projection.lateral || 0) <= (v.projection.width || 0) / 2 + Game.CAMERA_RIDE_M;
-        input.lift = mode.type === 'high' ? 2 : 1;
+        input.lift = mode.type === 'far' ? 2 : 1;
         input.offset.x = this.cameraOffset.x;
         input.offset.y = this.cameraOffset.y;
         input.offset.z = this.cameraOffset.z;
         const swing = input.swing || (input.swing = {});
-        swing.x = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'high' ? 3 : 2) + this.cameraLateralOffset);
-        swing.look = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'high' ? 2 : 4));
+        swing.x = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'far' ? 3 : 2) + this.cameraLateralOffset);
+        swing.look = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'far' ? 2 : 4));
         swing.follow = follow;
         swing.lookFollow = Math.min(this.cameraLerpFactor * 1.5, 1);
         input.aspect = this.camera.aspect;
-        input.fov = (mode.type === 'high' ? 70 : 75) + (v.speed / v.maxSpeed) * 10;
+        input.fov = (mode.type === 'far' ? 70 : 75) + (v.speed / v.maxSpeed) * 10;
         return input;
     }
 
@@ -4034,13 +3938,7 @@ class Game {
         }
         
         // Check for camera mode switch
-        if (this.input.checkCameraSwitch()) {
-            this.cameraMode = (this.cameraMode + 1) % this.cameraModes.length;
-            localStorage.setItem('twistyCameraMode', String(this.cameraMode));
-            console.log(`Camera mode: ${this.cameraModes[this.cameraMode].name}`);
-            
-            showCallout(`Camera: ${this.cameraModes[this.cameraMode].name}`, 'info', 1000);
-        }
+        if (this.input.checkCameraSwitch()) this.toggleCameraView();
 
         // Run physics in fixed timesteps - ensures consistent movement
         // regardless of variable frame timing
@@ -4414,9 +4312,6 @@ class Game {
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,
             this.weatherSystem ? (this.weatherSystem.flash || 0) * 0.35 : 0
         );
-        // In a first-person view nothing of the rider the camera is inside is drawn (Vehicle.hideAround)
-        const firstPerson = ['helmet', 'onboard'].includes(this.cameraModes[this.cameraMode].type);
-        Vehicle.hideAround(this.vehicle.rider || this.vehicle.group, firstPerson ? this.camera.position : null, this.camera.near);
         this.graphics.render(this.scene, this.camera);
     }
 
@@ -5200,8 +5095,6 @@ class Game {
         });
         bar.tabIndex = -1;
         this.freeFly = { fly, held, look, saved, euler, fromRide, bar, off, at: new THREE.Vector3(), sun: new THREE.Vector3(), near: null, readAt: -Infinity, origin: (env.data && env.data.manifest && env.data.manifest.origin) || FreeFly.ORIGIN };
-        // (from the helmet view the rider was hidden round the camera: Vehicle.hideAround)
-        if (typeof Vehicle !== 'undefined' && Vehicle.hideAround) Vehicle.hideAround(this.vehicle.rider || this.vehicle.group, null, cam.near);
         document.body.classList.add('free-fly');
         Modals.open(bar, {
             cancel: () => this.closeFreeFly(),

@@ -13,7 +13,7 @@ const Y = 100;
 // A deck 12 m along the road, its underside UNDER_M over it
 const DECK = { z0: 200, z1: 212, UNDER_M: 4.3 };
 const overhead = (x, z) => (z >= DECK.z0 && z <= DECK.z1 ? Y + DECK.UNDER_M : Infinity);
-const MODES = { Standard: { x: 0, y: 3, z: -6 }, 'High View': { x: 0, y: 8, z: -12 } };
+const MODES = { 'Near chase': { x: 0, y: 3, z: -6 }, 'Far chase': { x: 0, y: 8, z: -12 } };
 
 function ride(offset, speed, roof) {
     const route = new WorldRoute(samplesOf(straight(400, { y: Y })), {});
@@ -56,16 +56,16 @@ describe('the chase camera under a road overhead', () => {
         }
     }
 
-    test('the high view flew over the deck before, and a boom that fits under it is left alone', () => {
-        expect(ride(MODES['High View'], 15, false).over).toBeGreaterThan(0);
-        const low = ride(MODES.Standard, 15, true), free = ride(MODES.Standard, 15, false);
-        // The standard boom stands 3 m over the road: under a 4.3 m deck with roofClearM to spare, it does not move
+    test('the far chase flew over the deck before, and a boom that fits under it is left alone', () => {
+        expect(ride(MODES['Far chase'], 15, false).over).toBeGreaterThan(0);
+        const low = ride(MODES['Near chase'], 15, true), free = ride(MODES['Near chase'], 15, false);
+        // The near chase's boom stands 3 m over the road: under a 4.3 m deck with roofClearM to spare, it does not move
         expect(low.under).toBeCloseTo(free.under, 2);
-        // and the high view comes down only as far as the deck needs: as high as it can be under it
-        const high = ride(MODES['High View'], 15, true);
+        // and the far chase comes down only as far as the deck needs: as high as it can be under it
+        const high = ride(MODES['Far chase'], 15, true);
         expect(high.room).toBeLessThan(WorldCamera.TUNING.roofClearM + 0.6);
         // At speed it keeps more room under the deck: lower by about roofFastM
-        const slow = ride(MODES['High View'], 8, true), fast = ride(MODES['High View'], 30, true);
+        const slow = ride(MODES['Far chase'], 8, true), fast = ride(MODES['Far chase'], 30, true);
         expect(slow.under - fast.under).toBeGreaterThan(WorldCamera.TUNING.roofFastM * 0.7);
         expect(slow.under - fast.under).toBeLessThan(WorldCamera.TUNING.roofFastM + 0.2);
     });
@@ -76,7 +76,7 @@ describe('the chase camera under a road overhead', () => {
         const a = new WorldCamera(route, { groundY: () => Y }, sky), b = new WorldCamera(route, { groundY: () => Y });
         a.reset(0); b.reset(0);
         for (let z = 100; z < 200; z += 0.25) {
-            const input = { x: 0, y: Y, z, s: z, index: Math.floor(z / 4), speed: 15, lift: 1, offset: MODES['High View'], fov: 75 };
+            const input = { x: 0, y: Y, z, s: z, index: Math.floor(z / 4), speed: 15, lift: 1, offset: MODES['Far chase'], fov: 75 };
             const p = a.update(input, 1 / 60), q = b.update(input, 1 / 60);
             expect(p.y).toBeCloseTo(q.y, 9);
             expect(p.z).toBeCloseTo(q.z, 9);

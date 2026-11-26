@@ -19,8 +19,8 @@ const DT = 1 / 60, G = 9.81;
 export const HOUSE_H_M = 9;
 
 export const MODES = {
-    Standard: { type: 'follow', offset: { x: 0, y: 3, z: -6 }, follow: 0.10 },
-    'High View': { type: 'high', offset: { x: 0, y: 8, z: -12 }, follow: 0.08 }
+    'Near chase': { type: 'near', offset: { x: 0, y: 3, z: -6 }, follow: 0.10 },
+    'Far chase': { type: 'far', offset: { x: 0, y: 8, z: -12 }, follow: 0.08 }
 };
 
 // The ride's hairpins: [{apex, s0, s1}], a turn of 150 degrees or more inside 80 m (as tools/terrain-check.mjs
@@ -153,7 +153,7 @@ export function wallGap(solids, p, upM = 0, withinM = 2) {
 export function cameraRide(game, env, camera, { s0, s1, speed, mode, lean = null, lane = 0, nearM = 0.4, far = 1, swing = 1, solids, watch = null }) {
     const { WorldCamera, WorldAssist } = game;
     const route = env.route, physics = env.physics;
-    const high = mode.type === 'high';
+    const high = mode.type === 'far';
     const at = {}, bike = {}, eye = {};
     const input = { offset: {}, swing: {} };
     const out = { frames: 0, wall: 0, house: 0, land: 0, near: 0, gap: Infinity, first: [], step: 0, stepAt: null, share: 0, shareAt: null, least: Infinity, most: 0 };

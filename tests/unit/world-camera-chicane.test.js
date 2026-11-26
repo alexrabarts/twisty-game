@@ -5,7 +5,7 @@
 // the Gotthard leg, where the ride bends 52 degrees one way and then turns 87 degrees the other way onto the
 // Gotthardstrasse, inside 60 m. The boom turned by the road's heading 4 m behind the bike, so it followed each bend;
 // the carving swing flicked from one side to the other with the lean; and the look ran round each bend as fast as the
-// point on the road did. The view's yaw acceleration there was 10.2 rad/s^2 in the standard view.
+// point on the road did. The view's yaw acceleration there was 10.2 rad/s^2 in the near chase.
 //
 // Now the boom turns by the road's mean heading over a span that grows with speed (WorldCamera.roadMean), the swing
 // takes only the share of the road's turn that the S does not cancel, and the look follows the road's turn through a
@@ -36,7 +36,7 @@ const LIMITS = { accel: 4, rate: 1.6, sway: 1.0, room: 0.3 };
 const OFF_RAD = 0.8;
 
 // In a tunnel or gallery: the least room the eye and the near plane's corners keep under the roof and to the walls (m),
-// and the most the camera's height may move by a second difference in a frame (m). Before, the high view went 2.7 m
+// and the most the camera's height may move by a second difference in a frame (m). Before, the far chase went 2.7 m
 // through the roof of the gallery at km 9.0 of the Gotthard leg, held down only at the bike's own roof; now it keeps
 // 1.98 m and moves by 0.004 m
 const TUBE = { roomM: 1.0, bounceM: 0.01 };
@@ -110,8 +110,8 @@ const CHICANES_MIN = { tremola: 15, 'summit-airolo': 15, 'hospental-summit': 2 }
 // Places where the camera still swings over the limits, by stage: each place's own ceilings (yaw acceleration, yaw
 // rate), which may only fall. Down the Tremola's two stacks of hairpins the boom, behind and above the bike, closes on
 // the walls of the leg above. Read from each face's plane, it came in by half in a frame (10 to 12 rad/s^2 in both
-// views); read from the faces themselves (WorldCamera.wallShare) the standard view keeps under 4.2 rad/s^2, and the high
-// view's longer boom still meets the walls' tops at the first stack (.agent/system/world.md, "Down a stack of hairpins")
+// views); read from the faces themselves (WorldCamera.wallShare) the near chase keeps under 4.2 rad/s^2, and the far
+// chase's longer boom still meets the walls' tops at the first stack (.agent/system/world.md, "Down a stack of hairpins")
 const KNOWN = {
     'summit-airolo': { 2324: [11.5, 2.6], 2337.7: [11.7, 2.6], 2404: [7.4, 1.8], 5220: [4.5, 1.6], 5272.7: [4.6, 1.6], 5336: [4.6, 1.6] }
 };
@@ -140,7 +140,7 @@ describe('the chase camera through every chicane and hairpin of the shipped stag
             const { chicanes } = results[id];
             expect(chicanes.length).toBeGreaterThan(CHICANES_MIN[id] ?? 3);
             const bad = [];
-            for (const c of chicanes) for (const view of ['standard', 'high']) if (over(c, view, id).length) bad.push({ s: c.s, view, over: over(c, view, id), ...c[view] });
+            for (const c of chicanes) for (const view of ['near', 'far']) if (over(c, view, id).length) bad.push({ s: c.s, view, over: over(c, view, id), ...c[view] });
             expect(bad).toEqual([]);
         });
 
@@ -148,7 +148,7 @@ describe('the chase camera through every chicane and hairpin of the shipped stag
             const { hairpins } = results[id];
             const bad = [];
             for (const h of hairpins) {
-                for (const view of ['standard', 'high']) {
+                for (const view of ['near', 'far']) {
                     const keys = over(h, view, id);
                     if (Math.abs(h[view].off) > OFF_RAD) keys.push('off');
                     if (keys.length) bad.push({ s: h.s, view, over: keys, ...h[view] });
@@ -165,17 +165,17 @@ describe('the chase camera through every chicane and hairpin of the shipped stag
         // (the Gotthard leg's tunnel at km 3.5 and its galleries at km 9.0 and 12.4; the Tremola's ride has none)
         if (results['gotthard-north']) expect(results['gotthard-north'].tubes.length).toBeGreaterThanOrEqual(3);
         const bad = [];
-        for (const t of tubes) for (const view of ['standard', 'high']) if (!(t[view].under >= TUBE.roomM) || !(t[view].bounce <= t.most)) bad.push({ from: t.from, to: t.to, view, ...t[view] });
+        for (const t of tubes) for (const view of ['near', 'far']) if (!(t[view].under >= TUBE.roomM) || !(t[view].bounce <= t.most)) bad.push({ from: t.from, to: t.to, view, ...t[view] });
         expect(bad).toEqual([]);
     });
 
     test('the S at km 0.5 of the Gotthard leg is one of the chicanes, and the camera through it is now calm', () => {
         if (!results['gotthard-north']) return;
-        const near = results['gotthard-north'].chicanes.find(c => Math.abs(c.s - 470) < 40);
-        expect(near).toBeDefined();
-        // 10.2 rad/s^2 and 1.13 rad/s in the standard view before
-        expect(near.standard.accel).toBeLessThan(1.5);
-        expect(near.standard.rate).toBeLessThan(0.8);
+        const s = results['gotthard-north'].chicanes.find(c => Math.abs(c.s - 470) < 40);
+        expect(s).toBeDefined();
+        // 10.2 rad/s^2 and 1.13 rad/s in the near chase before
+        expect(s.near.accel).toBeLessThan(1.5);
+        expect(s.near.rate).toBeLessThan(0.8);
     });
 });
 
@@ -215,7 +215,7 @@ describe('free roam and the time trial have one chase camera', () => {
         const p = env.route.sample(500, {});
         env.update(p, 500, null, Infinity);
         await env.streamer.settle(p, 500);
-        for (const mode of [2, 3]) {
+        for (const mode of ['near', 'far']) {
             const trial = chaseRide(game, env, { s0: 380, s1: 620, mode }), roam = chaseRide(game, env, { s0: 380, s1: 620, mode, roam: true });
             expect(roam.length).toBe(trial.length);
             roam.forEach((r, i) => expect(Math.hypot(r.ex - trial[i].ex, r.ey - trial[i].ey, r.ez - trial[i].ez)).toBeLessThan(1e-9));

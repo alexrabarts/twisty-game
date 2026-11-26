@@ -12,15 +12,15 @@
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
 //   world-near-ground world-cover-off world-toggle-ride world-ground-flip world-ground-scan world-ground-off world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-chicane world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
-//   node tools/terrain-check.mjs world-camera-chicane --world gotthard-north [--modes 2,3] [--speed 20] [--from s --to s] [--dump <file>]   (the chase camera's yaw rate, yaw acceleration and sway over the whole stage, its worst places and every chicane)
-//   node tools/terrain-check.mjs camera-swing --legs id,id [--modes 2,3] [--speed 25]   (the same on the classic legs)
-//   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
+//   node tools/terrain-check.mjs world-camera-chicane --world gotthard-north [--modes near,far] [--speed 20] [--from s --to s] [--dump <file>]   (the chase camera's yaw rate, yaw acceleration and sway over the whole stage, its worst places and every chicane)
+//   node tools/terrain-check.mjs camera-swing --legs id,id [--modes near,far] [--speed 25]   (the same on the classic legs)
+//   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes near,far] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T]   (no land in a tunnel's or gallery's box or across its portals; pictures of every portal)
-//   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
-//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes 1,2] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]   (no tile edge drawn as a dark line, no line of a new tone where the tiles meet the far land, out to the horizon)
+//   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes near,far] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
+//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes near] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]   (no tile edge drawn as a dark line, no line of a new tone where the tiles meet the far land, out to the horizon)
 //   node tools/terrain-check.mjs world-look --world gotthard-north --gpu --script <file> [--out <dir>]   (a script of the caller's in a world page; its pictures saved)
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
@@ -101,6 +101,13 @@ const option = name => {
     return at >= 0 ? argv[at + 1] : undefined;
 };
 const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : undefined;
+// The chase views a probe rides (the types of Game.cameraModes): --modes, --mode and --camera name them
+const VIEWS = ['near', 'far'];
+const viewsOption = (name, fallback) => {
+    const list = option(name) ? option(name).split(',') : fallback;
+    for (const view of list) if (!VIEWS.includes(view)) throw new Error(`--${name}: no chase view ${view} (${VIEWS.join(', ')})`);
+    return list;
+};
 const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
@@ -1631,11 +1638,11 @@ const PROBES = {
     preview: (page, i) => inPage(page, 'preview', i),
     finish: (page, i) => inPage(page, 'finish', i),
     // The chase camera's swing on a classic leg: the leg's autopilot rides it whole (--speed, default 25) in the
-    // standard and the high view (--modes), the shake held at zero. Per view: the peaks of the view's yaw rate, yaw
+    // near and the far chase (--modes), the shake held at zero. Per view: the peaks of the view's yaw rate, yaw
     // acceleration and the bike's sideways rate across the view (tests/helpers/world-chase-ride.js swingOf), the
     // bike's least room in the view, and the three worst places by distance ridden, with the bike's own turn there
     'camera-swing': async (page, i) => {
-        const modes = (option('modes') || '2,3').split(',').map(Number);
+        const modes = viewsOption('modes', VIEWS);
         const out = {};
         for (const mode of modes) {
             const ride = await page.evaluate((legIndex, mode, cruise) => {
@@ -1644,7 +1651,7 @@ const PROBES = {
                 twistyDev.freeze();
                 game.rockfalls = null;
                 game.traffic = null;
-                game.cameraMode = mode;
+                game.setCameraView(mode);
                 twistyDev.autopilot({ speed: cruise });
                 const update = game.updateCamera.bind(game);
                 game.updateCamera = (...args) => {
@@ -2836,7 +2843,7 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
 async function floatingView(placeSource, pilotSource, s) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     // Put down at s, and the chase camera eased in behind the stopped bike (as world-hairpin-shots' start view)
     await placeAt(s);
     // The walk may have ridden past the finish: its banner is not part of the view
@@ -3107,7 +3114,7 @@ async function hazeView(placeSource, s, turnDeg, eyeM, bands, skyOver) {
     if (!window.hazeTrack) window.hazeTrack = game.atmosphereTrack;
     const dry = WorldLooks.variants.dry.tremola[0].look;
     game.atmosphereTrack = AtmosphereTrack.forWorld(env.route.stages, env.route, Object.fromEntries(env.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: dry }]])));
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     game.atmosphereWritten = null;
     game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env, weatherSystem: game.weatherSystem });
@@ -3213,7 +3220,7 @@ async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
     if (!window.treeTrack) window.treeTrack = game.atmosphereTrack;
     const rainPart = WorldLooks.tremola.find(part => part.look.weather === 'rain');
     game.atmosphereTrack = rain ? AtmosphereTrack.forWorld(env0.route.stages, env0.route, Object.fromEntries(env0.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: rainPart.look }]]))) : window.treeTrack;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     game.atmosphereWritten = null;
     game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env0, weatherSystem: game.weatherSystem });
@@ -3325,7 +3332,7 @@ async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
     };
 }
 
-// world-watertight: the drawn land is closed. From the helmet, the chase and the high camera at stations along the
+// world-watertight: the drawn land is closed. From the near and the far chase camera at stations along the
 // slice, the land, the road and its edge works are drawn alone (each kind in its own colour, back faces marked) and
 // each pixel is read:
 //   holes      a pixel that shows nothing (the horizon and the far land are not drawn) although its ray passes under
@@ -3340,7 +3347,7 @@ async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
 // corner or centre of one may stand over the ride's carriageway (`footOverRoad`: fill off an upper hairpin leg
 // reaching out over the lower one).
 const WATERTIGHT_EVERY_M = 50;
-const WATERTIGHT_MODES = [1, 2, 3];
+const WATERTIGHT_MODES = ['near', 'far'];
 // Places the play-test found open: 400 to 500 the cut bank on the right (a crack along a tile edge), 2100 and 8700 a
 // fill slope off an upper hairpin leg ending in the air, 4600 a slab of land over a hollow, 6900 a folded cut face
 const WATERTIGHT_VIEWS = [400, 450, 500, 2100, 4600, 6900, 8700];
@@ -3576,7 +3583,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
             }
         });
         for (const mode of modes) {
-            game.cameraMode = mode;
+            game.setCameraView(mode);
             game.worldCamera.reset(v.yawAngle);
             v.speed = 0;
             twistyDev.autopilot({ speed: 0 });
@@ -3672,7 +3679,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
 
 const WORLD = {
     // The drawn land is closed: holes, land undersides and skirts in view, and edge works whose outline stands over
-    // the land, from the helmet, chase and high cameras every --every metres (50) between --from and --to
+    // the land, from the near and the far chase every --every metres (50) between --from and --to
     // The drawn trees' colour against the photos' ranges and the land round them (treeColourView), at TREE_VIEWS
     // (--views s,s,...); --out <dir> saves each view as drawn
     'world-trees': async (page) => {
@@ -3710,7 +3717,7 @@ const WORLD = {
         }
         return { views };
     },
-    'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), option('modes') ? option('modes').split(',').map(Number) : WATERTIGHT_MODES, WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
+    'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), viewsOption('modes', WATERTIGHT_MODES), WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
     // Floating roads and land over the road, as drawn: floatingWalk over the whole slice (every --every metres, 500 by
     // default), then the named views (FLOATING_VIEWS, or --views), each saved to --out when given
     'world-floating': async (page) => {
@@ -3789,7 +3796,7 @@ const WORLD = {
         for (const f of [0.1, 0.3, 0.5, 0.7, 0.9]) {
             const s = Math.round(f * route.length);
             await placeAt(s);
-            game.cameraMode = 2;
+            game.setCameraView('near');
             game.worldCamera.reset(game.vehicle.yawAngle);
             twistyDev.autopilot({ speed: 0 });
             for (let i = 0; i < 240; i++) twistyDev.step(1);
@@ -3817,7 +3824,7 @@ const WORLD = {
             const at = await page.evaluate(async (placeSource, pilotSource, s) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = 2;
+                game.setCameraView('near');
                 await placeAt(Math.max(10, s - 140));
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -3860,15 +3867,15 @@ const WORLD = {
         const tag = option('tag') || 'fx';
         const specs = (option('specs') || 'off;high').split(';');
         const stations = option('at') ? option('at').split(',').map(Number) : [150];
-        // --camera N: the view mode (Game.cameraModes; 1 the helmet, 2 the chase view, the default)
-        const camera = Number(option('camera') || 2);
+        // --camera near|far: the chase view (Game.cameraModes by type; near, the default)
+        const camera = viewsOption('camera', ['near'])[0];
         await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
         const files = [];
         for (const s of stations) {
             const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = camera;
+                game.setCameraView(camera);
                 await placeAt(Math.max(10, s - 140));
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -4481,7 +4488,7 @@ const WORLD = {
         const route = env.route;
         const cam = game.camera;
         twistyDev.freeze();
-        game.cameraMode = 2;
+        game.setCameraView('near');
         const start = Math.max(20, hairpins[0] - 400);
         await placeAt(start);
         game.worldCamera.reset(v.yawAngle);
@@ -4529,7 +4536,7 @@ const WORLD = {
             const route = game.environment.route;
             const cam = game.camera;
             twistyDev.freeze();
-            game.cameraMode = 2;
+            game.setCameraView('near');
             const start = Math.max(20, hairpins[0] - (onlyApex ? 160 : 400));
             await placeAt(start);
             game.worldCamera.reset(v.yawAngle);
@@ -4595,7 +4602,7 @@ const WORLD = {
         return { hairpins: hairpins.length, frames: rows.length, hairpinFrames: near.filter(Boolean).length, crashed: result.crashed, reached: result.reached, end: result.end, stats };
     },
     // The chase camera's swing over the whole stage: the world pilot rides from the start to the end (--speed, default
-    // 20; --from and --to narrow it) in the standard and the high view (--modes), the shake held at zero. Per view: the
+    // 20; --from and --to narrow it) in the near and the far chase (--modes), the shake held at zero. Per view: the
     // peaks of the view's yaw rate (rad/s), its yaw acceleration (rad/s^2, over 0.1 s) and the bike's sideways rate
     // across the view (half views a second), the bike's least room in the view, the ten worst places by yaw acceleration
     // with the road's shape there, the same peaks over every chicane (tests/helpers/world-chase-ride.js chicanesOf,
@@ -4603,7 +4610,7 @@ const WORLD = {
     // under the roof and to the walls (tubeRoom) and the camera's largest second difference of height a frame within
     // 100 m of one. --dump <file> writes every frame.
     'world-camera-chicane': async (page) => {
-        const modes = (option('modes') || '2,3').split(',').map(Number);
+        const modes = viewsOption('modes', VIEWS);
         const out = { modes: {} };
         const dumps = {};
         for (const mode of modes) {
@@ -4616,7 +4623,7 @@ const WORLD = {
                 const route = env.route;
                 const cam = game.camera;
                 twistyDev.freeze();
-                game.cameraMode = mode;
+                game.setCameraView(mode);
                 const start = from || Math.max(20, (env.startS ?? 0) + 20);
                 const end = to || Math.min(route.length - 30, (env.endS ?? route.length) - 30);
                 await placeAt(start);
@@ -4698,8 +4705,8 @@ const WORLD = {
     },
     // A GPU frame sequence through one hairpin: the world pilot rides in from 140 m before the apex nearest --apex
     // (default the first; --at <s> rides to that place of the ride instead), then `--count` pictures (default 8), one
-    // every `--every` frames (default 4), from --from metres before the apex (default 20), in view --mode (default 2,
-    // the standard). The shake is held at zero. Needs --out <dir>; --tag names the files.
+    // every `--every` frames (default 4), from --from metres before the apex (default 20), in the chase view --mode
+    // (near, the default, or far). The shake is held at zero. Needs --out <dir>; --tag names the files.
     'world-camera-frames': async (page) => {
         const out = option('out');
         if (!out) return { error: 'name a folder with --out <dir>' };
@@ -4711,7 +4718,7 @@ const WORLD = {
             const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
             const apex = at || (onlyApex ? hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a)) : hairpins[0]);
             const v = game.vehicle;
-            game.cameraMode = mode;
+            game.setCameraView(mode);
             await placeAt(apex - 140);
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
@@ -4725,7 +4732,7 @@ const WORLD = {
             while (v.routeS < apex - from && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
             game.environment.streamer.pump(Infinity);
             return Math.round(apex);
-        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('apex') || 0), from, Number(option('at') || 0), Number(option('mode') || 2));
+        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('apex') || 0), from, Number(option('at') || 0), viewsOption('mode', ['near'])[0]);
         const files = [];
         for (let k = 0; k < count; k++) {
             const at = await page.evaluate((every) => {
@@ -4889,7 +4896,7 @@ const WORLD = {
             const rooms = await page.evaluate(async (placeSource, pilotSource, apex) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = 2;
+                game.setCameraView('near');
                 await placeAt(apex - 140);
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
@@ -4916,7 +4923,7 @@ const WORLD = {
         // The start, with the village round it
         const startView = await page.evaluate(async (placeSource) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
-            game.cameraMode = 2;
+            game.setCameraView('near');
             await placeAt(10);
             game.worldCamera.reset(game.vehicle.yawAngle);
             game.vehicle.speed = 0;
@@ -5071,7 +5078,7 @@ const WORLD = {
         const shoot = async (name, s, mode) => {
             await page.evaluate(async (placeSource, at, cameraMode) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
-                game.cameraMode = cameraMode;
+                game.setCameraView(cameraMode);
                 await placeAt(at);
                 game.worldCamera.reset(game.vehicle.yawAngle);
                 game.vehicle.speed = 9;
@@ -5085,9 +5092,9 @@ const WORLD = {
             await page.screenshot({ path: file });
             files.push(file);
         };
-        for (let k = 0; k < sites.hairpins.length; k++) await shoot(`hairpin-${k + 1}`, sites.hairpins[k], 2);
-        await shoot('hairpin-high-view', sites.hairpins[0], 3);
-        if (sites.junction) await shoot('junction', sites.junction.s, 2);
+        for (let k = 0; k < sites.hairpins.length; k++) await shoot(`hairpin-${k + 1}`, sites.hairpins[k], 'near');
+        await shoot('hairpin-far-chase', sites.hairpins[0], 'far');
+        if (sites.junction) await shoot('junction', sites.junction.s, 'near');
         const hud = await page.evaluate(() => ({
             guide: !!document.getElementById('world-guide'),
             guideBox: (() => { const b = document.getElementById('world-guide').getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) }; })(),
@@ -5271,14 +5278,14 @@ WORLD_PROBES.push('world-near-ground');
 WORLD['world-near-ground'] = async (page) => {
     const specs = (option('specs') || 'default;off').split(';');
     const stations = option('at') ? option('at').split(',').map(Number) : [1600];
-    const camera = Number(option('camera') || 2);
+    const camera = viewsOption('camera', ['near'])[0];
     await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
     const rows = [];
     for (const s of stations) {
         const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = camera;
+            game.setCameraView(camera);
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -5399,7 +5406,7 @@ WORLD['world-cover-off'] = async (page) => {
         await page.evaluate(async (placeSource, pilotSource, s) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = 2;
+            game.setCameraView('near');
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -5449,7 +5456,7 @@ WORLD['world-cover-off'] = async (page) => {
     return { rows, failures };
 };
 
-// world-toggle-ride: rides from the start to --to (default 7600) in the view --camera (default 3, the high view), and
+// world-toggle-ride: rides from the start to --to (default 7600) in the chase view --camera (default far), and
 // every --every frames (default 240; 0 never) switches --toggle (default landDetail) on or off the way the settings
 // dialog does (EffectSettings.set, then Game.applyGraphicsSettings), the ladder held at its top so Auto caps nothing.
 // Every --check frames (default 20) it draws the frame and checks that every land tile within 300 m of the bike is in
@@ -5469,7 +5476,7 @@ WORLD['world-toggle-ride'] = async (page) => {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, v = game.vehicle, r = game.renderer;
     game.quality.fix(Quality.LEVELS.length - 1);
-    game.cameraMode = camera;
+    game.setCameraView(camera);
     await placeAt(10);
     game.worldCamera.reset(v.yawAngle);
     twistyDev.autopilot({ speed: 22 });
@@ -5598,7 +5605,7 @@ WORLD['world-toggle-ride'] = async (page) => {
         }
     } else game.graphics.render(game.scene, game.camera);
     return { s: Math.round(v.routeS), ...seen, inForce: game.effectLevels ? game.effectLevels[id] : null, drop: dropAfter ? drop : undefined, failures };
-    }, placeAt.toString(), Number(option('to') || 7600), Number(option('every') ?? 240), Number(option('check') || 20), option('toggle') || 'landDetail', Number(option('camera') || 3), flag('levels'), Number(option('skip') || 0), Number(option('drop-after') || 0), Number(option('restore-ms') || 0));
+    }, placeAt.toString(), Number(option('to') || 7600), Number(option('every') ?? 240), Number(option('check') || 20), option('toggle') || 'landDetail', viewsOption('camera', ['far'])[0], flag('levels'), Number(option('skip') || 0), Number(option('drop-after') || 0), Number(option('restore-ms') || 0));
     // --out <dir>: the last frame
     if (option('out')) {
         mkdirSync(option('out'), { recursive: true });
@@ -5680,7 +5687,7 @@ WORLD['world-marmots'] = async (page) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment, marmots = env.marmots, v = game.vehicle;
         await placeAt(from);
-        game.cameraMode = 2;
+        game.setCameraView('near');
         game.worldCamera.reset(v.yawAngle);
         twistyDev.autopilot({ speed: cruise });
         const rows = [], shots = [];
@@ -6052,7 +6059,7 @@ WORLD['world-road-look'] = async (page) => {
         const places = [['finish', env.route.length - 8, null], ['start', env.startS, null], ['side-198', null, [198, 30]]];
         const out = [];
         for (const [name, s, onSide] of places) {
-            game.cameraMode = 2;
+            game.setCameraView('near');
             if (onSide) {
                 await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
                 const sm = env.graph.samples(onSide[0]);
@@ -6179,7 +6186,7 @@ WORLD['world-ground-shots'] = async (page) => {
                 v.leanAngle = 0;
                 v.speed = 0;
                 v.findNearestRoadSegment();
-                game.cameraMode = 2;
+                game.setCameraView('near');
                 game.worldCamera.reset(v.yawAngle);
                 // No input: the rider stops and puts a foot down (Vehicle.updateWorldSpeed, updateFooting)
                 twistyDev.autopilot({ speed: 0, on: false });
@@ -6234,7 +6241,7 @@ WORLD['world-vertex'] = async (page) => {
         }
         const finite = (...n) => n.every(Number.isFinite);
         const out = [];
-        game.cameraMode = 2;
+        game.setCameraView('near');
         for (const s of at) {
             await placeAt(s);
             game.worldCamera.reset(v.yawAngle);
@@ -6360,7 +6367,7 @@ async function wallEye(placeSource, eye) {
     const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle, route = game.environment.route;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     document.querySelectorAll('#finishBanner').forEach(el => el.remove());
     game.worldCamera.reset(v.yawAngle);
@@ -6520,8 +6527,8 @@ WORLD['world-tunnels'] = async (page) => {
 };
 
 // world-tube-shots: pictures inside the ride's tunnels and galleries, the frame alone, as a rider sees them: for each
-// run the chase view riding up to its first portal (`entry`, 30 m out), in the middle of the run from the chase view
-// (`chase`) and the helmet (`helmet`), and riding out of it (`exit`, 25 m before its last portal), with each --at
+// run the near chase riding up to its first portal (`entry`, 30 m out), in the middle of the run (`chase`), and riding
+// out of it (`exit`, 25 m before its last portal), with each --at
 // station shot from the chase view too. The bike is ridden in at 18 m/s from 140 m back, so the eye has adapted as a
 // rider's would (Graphics.adaptation). --level N holds that graphics level (js/quality.js) for every picture. The files
 // are <tag>-<run s>-<view>.png and <tag>-s<s>-chase.png in --out, with <tag>-index.json (each view and the window's
@@ -6543,19 +6550,18 @@ WORLD['world-tube-shots'] = async (page) => {
     // (--at-only: the --at stations alone)
     for (const run of flag('at-only') ? [] : runs) {
         const mid = run.s0 + Math.min((run.s1 - run.s0) / 2, 200);
-        views.push({ run, s: Math.max(10, run.s0 - 30), mode: 2, name: `${Math.round(run.s0)}-entry` });
-        views.push({ run, s: mid, mode: 2, name: `${Math.round(run.s0)}-chase` });
-        views.push({ run, s: mid, mode: 1, name: `${Math.round(run.s0)}-helmet` });
-        views.push({ run, s: Math.max(run.s0 + 5, run.s1 - 25), mode: 2, name: `${Math.round(run.s0)}-exit` });
+        views.push({ run, s: Math.max(10, run.s0 - 30), mode: 'near', name: `${Math.round(run.s0)}-entry` });
+        views.push({ run, s: mid, mode: 'near', name: `${Math.round(run.s0)}-chase` });
+        views.push({ run, s: Math.max(run.s0 + 5, run.s1 - 25), mode: 'near', name: `${Math.round(run.s0)}-exit` });
     }
-    for (const s of (option('at') ? option('at').split(',').map(Number) : [])) views.push({ run: null, s, mode: 2, name: `s${s}-chase` });
+    for (const s of (option('at') ? option('at').split(',').map(Number) : [])) views.push({ run: null, s, mode: 'near', name: `s${s}-chase` });
     const index = [];
     for (const view of views) {
         const at = await page.evaluate(async (placeSource, pilotSource, countSource, view, level) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
             if (level !== null && game.quality) game.quality.fix(level);
-            game.cameraMode = view.mode;
+            game.setCameraView(view.mode);
             await placeAt(Math.max(10, view.s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -6742,7 +6748,7 @@ function stoneChecks(results, failures) {
 }
 
 // world-camera-walls: nothing drawn stands between the chase camera and the bike. The world pilot rides every
-// hairpin (from CAMWALL_BEFORE_M before its apex to CAMWALL_AFTER_M past it) in the standard and the high view, and on
+// hairpin (from CAMWALL_BEFORE_M before its apex to CAMWALL_AFTER_M past it) in the near and the far chase, and on
 // every frame a ray is cast from the camera to the bike and back (a face seen from behind counts too) at the meshes
 // drawn: the road works (retaining walls, parapets, decks, aprons), the land's tiles, the houses and the roads'
 // ribbons. It fails when one is met before the bike. It also casts along the four corners of the view's near plane
@@ -6763,7 +6769,7 @@ async function camWallRide(placeSource, pilotSource, apex, mode, setup, beforeM,
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, v = game.vehicle, cam = game.camera;
     twistyDev.freeze();
-    game.cameraMode = mode;
+    game.setCameraView(mode);
     const linger = game.worldLinger;
     game.worldLinger = false;
     // (a crash in the ride before is not carried into this one: placeAt leaves `crashed` as it was)
@@ -6859,7 +6865,7 @@ async function camWallRide(placeSource, pilotSource, apex, mode, setup, beforeM,
 }
 WORLD_PROBES.push('world-camera-walls');
 WORLD['world-camera-walls'] = async (page) => {
-    const modes = (option('modes') || '2,3').split(',').map(Number);
+    const modes = viewsOption('modes', VIEWS);
     const setup = { lane: Number(option('lane') || 0), swing: Number(option('swing') || 1), far: Number(option('far') || 1), off: flag('off') };
     let apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS)), worldHairpins.toString());
     const nearest = s => apexes.reduce((a, b) => (Math.abs(b - s) < Math.abs(a - s) ? b : a));
@@ -6909,7 +6915,7 @@ const FALL_SHOTS = {
 async function fallShot(placeSource, at, kind, cls, lean, fall, speed, moments) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     game.worldLinger = false;
     if (v.crashed) v.reset();
     // Each fall is a crash of its own: the last one's clock (Game.updateWorldCrash) would restart this one early
@@ -7032,7 +7038,7 @@ async function groupScene(placeSource, kind) {
     };
     const byPlace = () => traffic.motorcycles.slice().sort((a, b) => a.character.place - b.character.place);
     const settle = () => { if (group) { group.halted = group.standing = false; group.stoppedS = 0; } };
-    game.cameraMode = 2;
+    game.setCameraView('near');
     let note = null;
     if (kind === 'start') {
         twistyDev.autopilot({ speed: 0 });
@@ -7150,9 +7156,8 @@ async function roamRun(placeSource) {
     const barriers = [];
     game.scene.traverse(o => { if (/barrier/i.test(o.name || '')) barriers.push(o.name); });
     out.barriers = barriers;
-    // The chase view (Standard): a page starts in the view the rider last chose, Onboard on a fresh one, where the
-    // bike is the bars at the foot of the frame
-    game.cameraMode = Number(window.roamCameraMode ?? 2);
+    // The near chase: a page starts in the view the rider last chose, the far chase on a fresh one
+    game.setCameraView('near');
     for (let i = 0; i < 60; i++) twistyDev.step(1, { render: true });
     out.shots.start = frame();
     // The group on the ride (GROUP.roam): 45 s at 9 m/s on the autopilot. The player leads: no rider ahead of it, and
@@ -7646,7 +7651,7 @@ async function placeScene(placeSource, id) {
     const input = window.placeInput || (window.placeInput = { throttle: game.input.getThrottleInput, brake: game.input.getBrakeInput });
     game.input.getThrottleInput = input.throttle;
     game.input.getBrakeInput = input.brake;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     const byPlace = traffic.motorcycles.slice().sort((a, b) => a.character.place - b.character.place);
     await placeAt(Math.max(10, place.s - 260));
     game.worldCamera.reset(v.yawAngle);
@@ -7705,7 +7710,7 @@ async function junctionEye(placeSource, eye) {
     const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle, route = game.environment.route;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     game.worldCamera.reset(v.yawAngle);
     twistyDev.autopilot({ speed: 0 });
@@ -7742,7 +7747,7 @@ WORLD_PROBES.push('world-ground-scan');
 WORLD['world-ground-scan'] = async (page) => {
     const specs = (option('specs') || 'default;off').split(';');
     const stations = option('at') ? option('at').split(',').map(Number) : [1600];
-    const camera = Number(option('camera') || 2);
+    const camera = viewsOption('camera', ['near'])[0];
     await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
     const rows = [];
     const straight = flag('straight') ? await page.evaluate(() => {
@@ -7763,7 +7768,7 @@ WORLD['world-ground-scan'] = async (page) => {
         const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = camera;
+            game.setCameraView(camera);
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -7882,7 +7887,7 @@ WORLD['world-ground-off'] = async (page) => {
         await page.evaluate(async (placeSource, pilotSource, s) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = 2;
+            game.setCameraView('near');
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -7940,7 +7945,7 @@ WORLD['world-ground-off'] = async (page) => {
 };
 
 // world-ground-flip: the land is drawn whole while the graphics change under it. The bike rides --metres (default 2200)
-// from --from (default 300) in the view of --camera (default 3, the high view) while, every --every frames (default
+// from --from (default 300) in the chase view --camera (default far) while, every --every frames (default
 // 15), the ground texture is set as the settings dialog sets it (each level in turn) or the ladder is fixed at another
 // level and released as Auto does (Rich, Full, High, Ultra: the shadows, the occlusion and the ground texture all
 // change). Each frame is an update and a draw, and then every land tile (TerrainMesh's material) is read:
@@ -7953,11 +7958,11 @@ WORLD['world-ground-off'] = async (page) => {
 WORLD_PROBES.push('world-ground-flip');
 WORLD['world-ground-flip'] = async (page) => {
     const from = Number(option('from') || 300), metres = Number(option('metres') || 2200);
-    const camera = Number(option('camera') || 3), every = Number(option('every') || 15), reach = Number(option('reach') || 300);
+    const camera = viewsOption('camera', ['far'])[0], every = Number(option('every') || 15), reach = Number(option('reach') || 300);
     const result = await page.evaluate(async (placeSource, from, metres, camera, every, reach) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const v = game.vehicle, r = game.renderer, gl = r.getContext(), pixel = new Uint8Array(4);
-        game.cameraMode = camera;
+        game.setCameraView(camera);
         await placeAt(from);
         game.worldCamera.reset(v.yawAngle);
         twistyDev.autopilot({ speed: 22 });
@@ -8153,7 +8158,7 @@ async function treeViews(placeSource, countSource, feetSource, s) {
     const count = new Function(`return (${countSource})`)();
     const feetOf = new Function(`return (${feetSource})`)();
     const env = game.environment, route = env.route, v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     // (twice: a tile's scenery waits for the side roads round it, which the first put-down only asks for)
     await placeAt(s);
     await placeAt(s);
@@ -8214,7 +8219,7 @@ WORLD['world-quality'] = async (page) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const s = Number.isFinite(atS) ? atS : Math.round(share * game.environment.route.length);
         await placeAt(s);
-        game.cameraMode = 2;
+        game.setCameraView('near');
         game.worldCamera.reset(game.vehicle.yawAngle);
         twistyDev.autopilot({ speed: 0 });
         for (let i = 0; i < 240; i++) twistyDev.step(1);
@@ -8594,7 +8599,7 @@ async function modelStation(placeSource, countSource, groupRules, s, only) {
 async function modelPictures(placeSource, b, playM, group) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, route = env.route, v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     // (the bike beside the copy, so its level of detail is the one a rider passing it sees)
     await placeAt(b.near.s);
     await placeAt(b.near.s);
@@ -8943,7 +8948,7 @@ WORLD['world-shot'] = async (page) => {
         game.worldLinger = false;
         await placeAt(env.endS - SHOT_APPROACH_M);
         // (in the chase view, as a ride is: the scene starts from the chase camera's pose)
-        game.cameraMode = 2;
+        game.setCameraView('near');
         game.worldCamera.reset(game.vehicle.yawAngle);
         twistyDev.autopilot({ speed: ride });
         // Ridden to just short of the line with the chase camera (each step updates it), then over the line
@@ -9396,7 +9401,7 @@ function worldChecks(report) {
     }
     // The chase camera over the whole stage (world-camera-chicane): before the camera read the road's mean heading the
     // worst chicane gave a yaw acceleration of 10.2 rad/s^2 behind the world pilot (the Gotthard S at km 0.5, the
-    // standard view) and the worst place 9.9 (the Tremola's pair of hairpins at km 10.8, the high view); the high view
+    // near chase) and the worst place 9.9 (the Tremola's pair of hairpins at km 10.8, the far chase); the far chase
     // went 2.7 m through a gallery's roof. Measured with the rule: 3.2, 4.6 and the eye and the near plane 2.0 m or more
     // inside every tube
     const chicane = results['world-camera-chicane'];
@@ -9479,7 +9484,7 @@ function worldChecks(report) {
 async function bikeShots(placeSource, at, riderId, bikes) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const own = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(at);
     twistyDev.autopilot({ speed: 0 });
     twistyDev.step(1);
@@ -9705,7 +9710,7 @@ WORLD['world-look'] = async (page) => {
 // world-seams: no edge of the drawn land shows as a dark line. A tile's skirt (TerrainMesh.build) is lit as the land
 // above it, so in the frame as drawn a pixel of one is about as light as the land round it, whichever side it is seen
 // from. Every --every metres (SEAM_EVERY_M) of the stage the bike is put down
-// and the frame is read from the helmet and the chase camera (--modes), looking ahead and turned to each side
+// and the frame is read from the near chase (--modes; far too when named), looking ahead and turned to each side
 // (--turns): the whole frame, out to the far land. Read in the light alone (the land's colours white): a pixel of skirt
 // seen from behind (with only land beside it) under SEAM_DARK of the median of the land within SEAM_REACH_PX of it,
 // and of the land straight over it, is dark; a tile
@@ -9714,9 +9719,9 @@ WORLD['world-look'] = async (page) => {
 // along each tile edge with no drawn tile past it, where it is in view, the far land's tone less the tile's, averaged
 // over 5 points along the edge, is more than SEAM_TONE_STEP on the mean of SEAM_TONE_LINE_PX points or more of a
 // view, and one such view fails. --out <dir> saves each view with a seam or a tone line (and --at s,s views, with or without one).
-//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes 1,2] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]
+//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes near] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]
 const SEAM_EVERY_M = 250;
-const SEAM_MODES = [1, 2];
+const SEAM_MODES = ['near'];
 const SEAM_TURNS = [0, -60, 60];
 const SEAM_DARK = 0.7;
 const SEAM_REACH_PX = 6;
@@ -9730,7 +9735,7 @@ async function seamView(placeSource, s, mode, turnDeg, keep, rule) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     game.worldLinger = false;
     const env = game.environment, v = game.vehicle, renderer = game.graphics.renderer;
-    game.cameraMode = mode;
+    game.setCameraView(mode);
     await placeAt(s);
     document.querySelectorAll('#finishBanner').forEach(el => el.remove());
     game.worldCamera.reset(v.yawAngle);
@@ -9974,7 +9979,7 @@ WORLD['world-seams'] = async (page) => {
     const tag = option('tag') || 'seams';
     const span = await page.evaluate(() => { const e = game.environment; return e.stage ? [e.stage.from, e.stage.to] : [0, e.route.length - 1]; });
     const every = Number(option('every') || SEAM_EVERY_M);
-    const modes = option('modes') ? option('modes').split(',').map(Number) : SEAM_MODES;
+    const modes = viewsOption('modes', SEAM_MODES);
     const turns = option('turns') ? option('turns').split(',').map(Number) : SEAM_TURNS;
     const at = option('at') ? option('at').split(',').map(Number) : [];
     const stations = [];
@@ -9998,7 +10003,7 @@ WORLD['world-seams'] = async (page) => {
                 tonePx += view.tonePx;
                 let file = null;
                 if (out && view.png) {
-                    file = join(out, `${tag}-s${s}-${mode === 1 ? 'helmet' : mode === 2 ? 'chase' : `mode${mode}`}${turn ? `-turn${turn}` : ''}.png`);
+                    file = join(out, `${tag}-s${s}-${mode}${turn ? `-turn${turn}` : ''}.png`);
                     writeFileSync(file, Buffer.from(view.png.split(',')[1], 'base64'));
                 }
                 delete view.png;
