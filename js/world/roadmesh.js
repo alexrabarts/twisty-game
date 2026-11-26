@@ -58,6 +58,9 @@ class RoadMesh {
     static get APRON_UNDER_M() { return 0.06; }
     // The longest an apron strip runs along the edge (a far ribbon's rows are up to 16 m apart)
     static get APRON_STRIP_M() { return 2; }
+    // The longest row down a far section's slope that reaches the coarse land: a triangle of a 2 m strip stays under
+    // 20 m2, which no slope's triangle passes (tests/unit/world-environment.test.js)
+    static get DEEP_ROW_M() { return 18; }
     // Near a side road the ground under the verge is laid in pieces this long, each held under that road (edgeWorks)
     static get SIDE_UNDER_PIECE_M() { return 1; }
     // and this far under that road's centre line (its surface is held to the ride's at each of its own points, so it
@@ -1550,7 +1553,7 @@ class RoadMesh {
                 const f = foot ? foot(p[0], p[1], p[2], out[key][0], out[key][1], plan ? false : undefined, !!side.fill) : null;
                 if (!f) return null;
                 const y = Number.isFinite(f.y) ? Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.y)) : p[1] - RoadMesh.DECK_M;
-                const end = { kind: f.kind, y, out: out[key], color: f.color || null, top: f.top || null, at: p, run: Number.isFinite(f.run) ? f.run : null, meets: !!f.meets };
+                const end = { kind: f.kind, y, out: out[key], color: f.color || null, top: f.top || null, at: p, run: Number.isFinite(f.run) ? f.run : null, meets: !!f.meets, deep: !!f.deep };
                 let depth = depthAt(p, end, end.out);
                 if (depth === null) return end;
                 // In over the verge toward the carriageway's edge by as far as the works reach into the other road (and
@@ -1867,7 +1870,10 @@ class RoadMesh {
                     // and down the slope in rows no longer than APRON_STRIP_M * 4 (a foot on land far under the edge
                     // makes a long face, RoadMesh.apronRun)
                     const fall = Math.max(Math.hypot(fA[0] - ta[0], fA[1] - ta[1], fA[2] - ta[2]), Math.hypot(fB[0] - tb[0], fB[1] - tb[1], fB[2] - tb[2]));
-                    const rows = Math.max(1, Math.ceil(fall / (RoadMesh.APRON_STRIP_M * 4)));
+                    // (in rows of DEEP_ROW_M where an end goes down to the coarse land under a far section,
+                    // WorldEnvironment.edgeFoot `deep`: seen from 400 m and more, rows of 8 m cost 8 000 triangles more in
+                    // the Tremola's fullest window and show nothing; one row made triangles of 34 m2)
+                    const rows = Math.max(1, Math.ceil(fall / ((fa && fa.deep) || (fb && fb.deep) ? RoadMesh.DEEP_ROW_M : RoadMesh.APRON_STRIP_M * 4)));
                     // Past a wall's end the wall's face goes on along the edge and tapers out: at the end it stands as
                     // deep as the slope there falls, and over TAPER_M its foot rises to the road's edge; the slope
                     // starts at its foot, so at the wall's end the slope has no height and no side. (Ended at its
@@ -1958,7 +1964,19 @@ class RoadMesh {
                         const gap = [first.foot[0] - other.foot[0], first.foot[2] - other.foot[2]];
                         // (one triangle; a gap under a hand is left)
                         if (Math.hypot(gap[0], gap[1]) > 0.1 && gap[0] * (pb[0] - pa[0]) + gap[1] * (pb[2] - pa[2]) > 0) {
-                            for (const [q, c] of [[first.top, topColor(fa)], [first.foot, footColor(fa)], [other.foot, footColor(fa)]]) { apronOut.positions.push(q[0], q[1], q[2]); apronOut.shades.push(c[0], c[1], c[2]); }
+                            // (down a deep slope in rows, as the slope is: one triangle from the top to the two feet 28 m
+                            // down a far section's slope was 34 m2)
+                            const down = fa.deep ? Math.max(1, Math.ceil(Math.hypot(first.foot[0] - first.top[0], first.foot[1] - first.top[1], first.foot[2] - first.top[2]) / RoadMesh.DEEP_ROW_M)) : 1;
+                            const at2 = (q, t) => [first.top[0] + (q[0] - first.top[0]) * t, first.top[1] + (q[1] - first.top[1]) * t, first.top[2] + (q[2] - first.top[2]) * t];
+                            const tc = topColor(fa), fc = footColor(fa);
+                            const shade = t => [tc[0] + (fc[0] - tc[0]) * t, tc[1] + (fc[1] - tc[1]) * t, tc[2] + (fc[2] - tc[2]) * t];
+                            const put = (q, t) => { const c = shade(t); apronOut.positions.push(q[0], q[1], q[2]); apronOut.shades.push(c[0], c[1], c[2]); };
+                            for (let r = 0; r < down; r++) {
+                                const t0 = r / down, t1 = (r + 1) / down;
+                                if (r === 0) { put(first.top, 0); put(at2(first.foot, t1), t1); put(at2(other.foot, t1), t1); continue; }
+                                put(at2(first.foot, t0), t0); put(at2(first.foot, t1), t1); put(at2(other.foot, t1), t1);
+                                put(at2(first.foot, t0), t0); put(at2(other.foot, t1), t1); put(at2(other.foot, t0), t0);
+                            }
                         }
                     }
                     let a = first;
@@ -2621,6 +2639,8 @@ class RoadMesh {
         }
         group.userData.triangles = triangles;
         group.userData.clamped = ribbon.clamped;
+        // The rows as drawn, each edge where the ribbon has it (tests/unit/world-far-edges.test.js reads them)
+        group.userData.sides = ribbon.sides;
         return group;
     }
 

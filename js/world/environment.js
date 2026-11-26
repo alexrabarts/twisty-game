@@ -114,6 +114,10 @@ class WorldEnvironment {
     static get APRON_M() { return 3; }
     // The farthest an apron runs out from the edge before it must have met the land
     static get APRON_RUN_M() { return 6; }
+    // How far under the coarsest land a far section's slope may stand over (landLowAt, which reads the nodes) its foot
+    // goes: the tile as built is held a little lower again under the ride (buildTile's holdY), and a foot at the land
+    // read from the nodes stood over it by up to 0.3 m, open at the bottom
+    static get COARSE_UNDER_M() { return 0.5; }
 
     // Metres from the bike within which a landmark is drawn
     static get LANDMARK_REACH_M() { return 3000; }
@@ -1497,7 +1501,7 @@ class WorldEnvironment {
         // (again: a viaduct's survey in a plan made just now lets go of the rows next to it, surveyViaducts)
         yield* this.goreRowsKept(from, to);
         const rows = this.tubeRows(this.rowsOf(from, to));
-        const foot = this.edgeFoot(missing);
+        const foot = this.edgeFoot(missing, { far: lod > 0 });
         yield;
         const plan = (yield* this.rideWallsSteps(section.index)).plan;
         const group = yield* RoadMesh.sectionSteps(rows, lod, { groundAt: (x, z) => this.ground.tileHeight(x, z) ?? undefined, roof: WorldRoute.ROOF_M, foot, roads: this.carriageways, head: section.from - from, tail: to - section.to, plan });
@@ -1913,7 +1917,7 @@ class WorldEnvironment {
     // may be drawn at (its 8, 16 and 32 m triangles, as TerrainMesh.vertexY draws them) lies lower than the edge, out
     // at the batter to where it meets the land drawn near;
     // else null, the land meets the edge. Without the tile, an apron of APRON_M. `aprons: false` gives walls only.
-    edgeFoot(missing = null, { aprons = true } = {}) {
+    edgeFoot(missing = null, { aprons = true, far = false } = {}) {
         const n = WorldData.TILE_N, m = WorldData.TILE_M;
         const near = {};
         // The height of the highest road more than DECK_UNDER_M under the edge whose band (carriageway and verge) the
@@ -2161,10 +2165,22 @@ class WorldEnvironment {
             // verge) its foot stands under that road's surface, not on the land under the gap: dropped to the land
             // there, the slope stood as a trench between the two roads with its dark side to the rider (km 2.3)
             if (meets !== null) footY = Math.max(footY, meets - RoadMesh.APRON_UNDER_M);
+            // A section drawn coarser (`far`: WorldStreamer.ROAD_LOD_M, 400 m and more from the bike, and on along the
+            // ride's window however far) stands over tiles drawn at any level (TILE_LOD_M). A coarse tile is drawn lower
+            // than the land at full detail where two legs share one of its cells (TerrainMesh.vertexY: the lower leg's
+            // carved node holds the vertex), and the slope that met the land at full detail ended in the air over it:
+            // the far ribbons of a stack of hairpins hung 27 m over a cleft (leg 3 s 2 626). Its foot goes down to the
+            // lowest the land is drawn there; at full detail that part lies under the land, out of sight
+            let deep = false;
+            if (meets === null && far) {
+                const coarse = this.landLowAt(x + ox * Math.max(run, 0.1), z + oz * Math.max(run, 0.1), missing);
+                if (coarse !== null && coarse - WorldEnvironment.COARSE_UNDER_M < footY) { footY = coarse - WorldEnvironment.COARSE_UNDER_M; deep = true; }
+            }
             // Without the tile under the foot yet, the apron is built again when it comes
             if (footLand === null && missing) missing.add(`${Math.floor((x + ox * run) / m)},${Math.floor((z + oz * run) / m)}`);
             // Coloured as the land at its top and at its foot (RoadMesh.edgeWorks blends them), not one sample
-            return { kind: 'apron', y: footY, run, meets: meets !== null, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
+            // (`deep`: a far section's slope taken down to the coarse land: RoadMesh.edgeWorks lays it as one row down)
+            return { kind: 'apron', y: footY, run, meets: meets !== null, deep, color: landColor(x + ox * Math.max(run, 0.5), z + oz * Math.max(run, 0.5)), top: landColor(x + ox * 0.5, z + oz * 0.5) };
         };
         // How deep one of the ride's walls must stand to reach the land in front of it as it is drawn (cut and
         // levelled to the walls): asked when the wall is drawn, after every wall's line is known. A side road's wall

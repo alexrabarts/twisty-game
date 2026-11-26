@@ -604,7 +604,6 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Check: mean colour difference over the 18 bikes and 4 views 0.069 to 0.065, the trail bike 0.105 to 0.077; its white panels and plate are back. Each far file stays under its budgets (2,050 triangles, 72 KB). crew, bikemodels, characters, model-surfaces, bike-handedness, bike-stands: 6 suites, 504 tests pass. Pictures: ~/Library/Caches/twisty-world/far-check/index.html.
 - Left: mirrors and some plates (the naked middleweight's, the superbike's) are still dark at far: they are small parts merged into the nearest kept colour. A crew bike draws up to 2 more calls.
 
-
 ## Steve's mini moto
 
 - Job: by the owner's word, a black mini moto for Steve, with a seat extension, and a centre of gravity far back, so little steering under acceleration. New detailed bike `bike17_minimoto` (`tools/blender/bikes/bike17_minimoto.py`: 12 inch cast wheels, 1.2 m wheelbase, short upside-down forks, a flat seat on a black extension rack past the rear wheel) and its far file. It is Steve's second bike, between his retro triple and his superbike (the last of a list is the most powerful). A new class `mini` and the entry's `rearLoad` 0.45: at full throttle it leans in at 55 % of its rate (`.agent/system/handling.md`, "A rider far back steers less under the throttle").
@@ -1060,3 +1059,11 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Result, the ride's rows of `world-window` on all nine stages: at most 426 000 to 436 000, mesh margin 143 or more, trees as before or more at the tree-count stations.
 - Left, not the window's: two stops' held shots, which raise the land's detail, stand over the budget past the finish (`hospental-summit` 485 600, `goeschenen-susten` 526 800, nearly all land). Their `raise` caps are the stops' data.
 - Also: `world-build-steps` found a tile's scenery kept after the streamer let the tile go between two steps of its build; a tile let go of during its build now keeps none (579186f).
+
+## A far section's slope goes down to the land at every level
+
+- The ask: the far ribbons of leg 3's stack of hairpins hung 27 m over a cleft at s 2 626 (the walk of leg 3). Close it by rule for every world, and hold it with a test.
+- The cause: a road section is drawn at level 1 from 400 m and on along the ride's window however far, over tiles at any level, but its slope's foot stopped at the land at full detail. Where two legs share a coarse cell, the coarse tile is drawn down to the lower leg (`TerrainMesh.vertexY`), and the slope ended in the air over it. `WorldEnvironment.edgeFoot` `far` now takes a far section's slope down to the lowest the land is drawn there at any level (`landLowAt`, less 0.5 m), in rows of 18 m down, and the piece that closes two slopes at a bend's outside in rows too (one triangle of it was 34 m2).
+- `tests/unit/world-far-edges.test.js` reads every edge of every section held at level 1, at the rows the section draws, as `world-floating` reads it. Before: 16 086 open edges in 674 places on the nine stages, the worst 37.6 m. After: 913 edges in 509 places (tremola 54, summit-airolo 38, gotthard-north 72, lookout-andermatt 75, hospental-summit 41, airolo-lookout 36, andermatt-goeschenen 31, goeschenen-susten 90, susten-gadmen 72), held so the table only shrinks.
+- The cost, in each stage's fullest window: 400 to 4 200 triangles more of road; the Tremola's goes from 447 452 to 451 626 as read in node. In the page the window's share of 436 000 takes them from the furthest houses and trees.
+- Check: world-far-edges, world-road-cover, world-environment, world-meshes, world-verge, world-parapets and world-junctions pass (on the laptop; heavy's node hosts were held by their swap gates).
