@@ -263,6 +263,44 @@ describe('the map on the menu', () => {
         expect(document.querySelector('#world-legs .map-name').textContent).toBe(WorldLegs.find('airolo-lookout').name);
     });
 
+    test('the card and RIDE show the same leg, whether it is hovered, chosen, stepped to or tapped; a closed leg\'s button says why', () => {
+        open();
+        const same = () => {
+            const name = document.querySelector('#world-legs .map-name').textContent;
+            const entry = WorldMap.entries().find(e => e.name === name);
+            const ride = document.querySelector('#world-legs .map-ride');
+            expect(ride.dataset.leg).toBe(entry.id);
+            expect(ride.textContent).toBe(WorldMap.rideText(entry));
+            expect(ride.disabled).toBe(entry.state !== 'open');
+            return { entry, ride };
+        };
+        const planned = WorldLegs.LIST.find(l => l.planned);
+        const pin = id => document.querySelector(`#world-legs .map-pin[data-leg="${id}"]`);
+        // A closed leg chosen, then an open one hovered: both follow the hover, and back on leaving
+        pin(planned.id).click();
+        let shown = same();
+        expect(shown.ride.textContent).toBe('COMING LATER');
+        pin('airolo-lookout').dispatchEvent(new Event('pointerenter'));
+        shown = same();
+        expect(shown.entry.id).toBe('airolo-lookout');
+        expect(shown.ride.textContent).toBe('RIDE LEG 1 →');
+        pin('airolo-lookout').dispatchEvent(new Event('pointerleave'));
+        expect(same().entry.id).toBe(planned.id);
+        // Stepped with the keys
+        press('ArrowLeft');
+        same();
+        press('ArrowRight');
+        same();
+        // A leg closed by the lock rule says which leg opens it
+        pin('lookout-andermatt').click();
+        expect(same().ride.textContent).toBe('FINISH LEG 1 TO OPEN');
+        document.querySelector('#world-legs .map-ride').click();
+        expect(picked).not.toHaveBeenCalled();
+        // The earlier legs too
+        document.querySelector('#world-legs .map-earlier-btn[data-leg="tremola"]').click();
+        expect(same().entry.id).toBe('tremola');
+    });
+
     test('free roam: the button says so', () => {
         open({ roam: true });
         expect(document.querySelector('#world-legs .map-ride').textContent).toBe('ROAM →');

@@ -190,6 +190,14 @@ const WorldMap = {
         return `${m}:${(s - m * 60).toFixed(2).padStart(5, '0')}`;
     },
 
+    // What RIDE says for a leg: the leg it rides, or why it is closed
+    rideText(entry, roam = false) {
+        if (entry.state === 'planned') return 'COMING LATER';
+        if (entry.state === 'locked') return entry.after ? `FINISH LEG ${entry.after} TO OPEN` : 'NOT OPEN YET';
+        if (roam) return 'ROAM →';
+        return entry.n ? `RIDE LEG ${entry.n} →` : 'RIDE →';
+    },
+
     stateText(entry, roam = false) {
         if (entry.state === 'planned') return 'Coming later';
         if (entry.state === 'locked') return entry.after ? `Finish leg ${entry.after} to open` : 'Not open yet';
@@ -561,9 +569,10 @@ const WorldMap = {
             state.textContent = WorldMap.stateText(entry, roam);
             state.dataset.state = entry.done && entry.state === 'open' ? 'done' : entry.state;
             card.dataset.state = entry.state;
-            const pickable = byId.get(chosen);
-            ride.disabled = !pickable || pickable.state !== 'open';
-            ride.textContent = roam ? 'ROAM →' : pickable && pickable.n ? `RIDE LEG ${pickable.n} →` : 'RIDE →';
+            // The button is the card's leg: it rides that leg, or says why that leg is closed
+            ride.disabled = entry.state !== 'open';
+            ride.dataset.leg = entry.id;
+            ride.textContent = WorldMap.rideText(entry, roam);
         };
         const show = (id) => { hovered = id; render(); };
         // On a map that pans, the chosen leg's pin is brought into view
@@ -575,7 +584,7 @@ const WorldMap = {
             room.scrollTop += (r.top + r.height / 2) - (box.top + box.height / 2);
         };
         const go = () => {
-            const entry = byId.get(chosen);
+            const entry = byId.get(hovered || chosen);
             if (!entry || entry.state !== 'open') return;
             WorldMap.close(doc);
             if (onPick) onPick(entry.id);
