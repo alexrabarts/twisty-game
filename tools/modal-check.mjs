@@ -264,6 +264,25 @@ const SEQUENCES = [
         { key: 'Equal', top: 'photo-bar' },
         { key: 'Escape', top: 'none' }
     ] },
+    // The free-fly camera of debug mode (js/world/freefly.js): L opens its bar, the camera's keys and G keep it on top,
+    // Escape and L go back, B puts the bike down and goes back. Keys only: it has no touch way in. Without debug mode L
+    // opens nothing
+    { name: 'roam-freefly-key', page: 'roam', steps: [
+        { key: 'KeyL', top: 'free-fly' },
+        { key: 'KeyW', top: 'free-fly' },
+        { key: 'KeyQ', top: 'free-fly' },
+        { key: 'KeyG', top: 'free-fly' },
+        { key: 'Escape', top: 'none' },
+        { key: 'KeyL', top: 'free-fly' },
+        { key: 'KeyL', top: 'none' },
+        { key: 'KeyL', top: 'free-fly' },
+        { key: 'KeyB', top: 'none' }
+    ] },
+    { name: 'world-freefly-locked', page: 'world', steps: [
+        { key: 'KeyL', top: 'none' },
+        pause,
+        { click: '#world-pause [data-resume]', top: 'none' }
+    ] },
     // (keys only: a touch screen opens it from the pause panel, roam-pause-travel)
     { name: 'roam-travel-key', page: 'roam', steps: [
         { key: 'KeyG', top: 'fast-travel' },

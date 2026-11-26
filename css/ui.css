@@ -3011,6 +3011,53 @@ body.photo-mode .virtual-button-pause {
     max-width: calc(100vw - 32px);
 }
 
+/* The free-fly camera of debug mode (js/world/freefly.js): no HUD, and its help, readout and buttons along the foot */
+body.free-fly #hud,
+body.free-fly .virtual-controls-left,
+body.free-fly .virtual-controls-right,
+body.free-fly .virtual-button-camera,
+body.free-fly .virtual-button-pause {
+    visibility: hidden;
+}
+
+.free-fly-bar {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    font-size: 12px;
+    outline: none;
+}
+
+.free-fly-help,
+.free-fly-readout {
+    margin: 0;
+    text-align: center;
+}
+
+.free-fly-readout {
+    font-variant-numeric: tabular-nums;
+    color: var(--c-text-dim);
+}
+
+.free-fly-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+}
+
+.free-fly-bar [data-fly="ground"][aria-pressed="true"] {
+    border-color: var(--c-accent);
+}
+
 /* The stop scene at a leg's end (js/world/stopscene.js): black bars slide in over the canvas, the HUD fades out under
    them, and the result card sits in the lower bar (its height is --stop-bar) */
 .stop-bar {
