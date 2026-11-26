@@ -1,4 +1,17 @@
 {
+  "world-airolo-lookout-v1": {
+    "kind": "stage",
+    "gates": 4,
+    "metres": 10695,
+    "floorMs": 145216,
+    "gateFloorsMs": [
+      29300,
+      28781,
+      43646,
+      17962,
+      25527
+    ]
+  },
   "world-gotthard-north-v2": {
     "kind": "stage",
     "gates": 6,
@@ -12,6 +25,47 @@
       22761,
       21676,
       26014
+    ]
+  },
+  "world-hospental-summit-v1": {
+    "kind": "stage",
+    "gates": 3,
+    "metres": 8928,
+    "floorMs": 110145,
+    "gateFloorsMs": [
+      31097,
+      29397,
+      26672,
+      22979
+    ]
+  },
+  "world-lookout-andermatt-v1": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 14482,
+    "floorMs": 172770,
+    "gateFloorsMs": [
+      28260,
+      20439,
+      23623,
+      25762,
+      23538,
+      28512,
+      22636
+    ]
+  },
+  "world-summit-airolo-v1": {
+    "kind": "stage",
+    "gates": 5,
+    "metres": 12490,
+    "floorMs": 201317,
+    "gateFloorsMs": [
+      37125,
+      40871,
+      33437,
+      34164,
+      26502,
+      29218
     ]
   },
   "world-tremola-v1": {

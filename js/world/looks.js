@@ -35,6 +35,36 @@ const WorldLooks = {
         { from: 0.678, to: 0.909, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
         { from: 0.909, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
+    // The tour (js/world/tour.js). Leg 1, Airolo (1,184 m) up the modern pass road to the lookout (1,931 m), 10.7 km:
+    // the clear morning of the lookout photos in the valley and on the open ramps, a thin cloud over the galleries and
+    // the Motto Bartola bend (0.52 to 0.78, s 5,560 to 8,340 m), clear again for the last 2.3 km to the lookout
+    'airolo-lookout': [
+        { from: 0, to: 0.52, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.52, to: 0.78, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.08 } },
+        { from: 0.78, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
+    // Leg 2, the lookout over the summit to Andermatt: gotthard-north the other way, its two changes at the same places
+    // (the cloud on the summit plateau and through the galleries, clear down the north side)
+    'lookout-andermatt': [
+        { from: 0, to: 0.11, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.11, to: 0.32, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
+        { from: 0.32, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
+    // Leg 11, Hospental up the north road to the summit: clear up the open valley, the thin cloud of the summit plateau
+    // from s 9,840 m of gotthard-north (0.8 of this leg)
+    'hospental-summit': [
+        { from: 0, to: 0.8, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.8, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } }
+    ],
+    // Leg 12, the summit down the Tremola to Airolo: the Tremola's weather the other way. Dry at the top, the rain over
+    // the stacked hairpins (the grip bound holds as uphill: WorldLooks.grip.rain), mist on the lower ramps, clear in the
+    // valley
+    'summit-airolo': [
+        { from: 0, to: 0.2, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.2, to: 0.47, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } },
+        { from: 0.47, to: 0.75, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.15 } },
+        { from: 0.75, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
     // boundary at 0.53 (s 6,989 m, road 1,677 m) blends over 1.5 km, so the first drops fall at s 6,240 m
@@ -100,7 +130,12 @@ Object.defineProperties(WorldLooks, {
     //                     of the village at the start in the evening), so the leg's one measure is the lookout's
     stageAir: {
         value: Object.freeze({
-            'gotthard-north': Object.freeze({ s: 0.45, v: 0.55, photos: 13 })
+            'gotthard-north': Object.freeze({ s: 0.45, v: 0.55, photos: 13 }),
+            // (the tour's legs over the same land: the lookout's photos are leg 1's end and leg 2's start; leg 11 has
+            // no photo of distant land, leg 12 is the Tremola's own land)
+            'airolo-lookout': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'lookout-andermatt': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'hospental-summit': Object.freeze({ from: 'gotthard-north', photos: 0 })
         })
     },
     // The air of a stage: its own, its `from` stage's, or null (LandShade.HAZE.air)
