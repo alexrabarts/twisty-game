@@ -28,90 +28,96 @@ class Game {
                 skyColor: 0xb8d4e8,
                 fogColor: 0xc8dae8,
                 ambientColor: 0x303030,
-                ambientIntensity: 0.25,
+                ambientIntensity: 0.4,
                 hemisphereTop: 0x8ab8d6,
-                hemisphereBottom: 0x2a3f2a,
-                hemisphereIntensity: 0.3,
+                hemisphereBottom: 0x4a4638,
+                hemisphereIntensity: 0.78,
                 sunColor: 0xfff4e6,
                 sunIntensity: 0.85,
                 fillColor: 0xe6f2ff,
-                fillIntensity: 0.15,
+                fillIntensity: 0.225,
                 rimColor: 0xfff8e1,
                 rimIntensity: 0.25,
                 exposure: 1.0,
-                sunOffset: { x: 60, y: 90 }
+                sunOffset: { x: 60, y: 90, z: 45 }
             },
             sunset: {
                 name: 'Sunset',
                 skyColor: 0xff8866,
-                fogColor: 0xffa588,
-                ambientColor: 0x402020,
-                ambientIntensity: 0.3,
-                hemisphereTop: 0xff8844,
-                hemisphereBottom: 0x4a2a1a,
-                hemisphereIntensity: 0.4,
-                sunColor: 0xff6633,
+                fogColor: 0xf0aa90,
+                ambientColor: 0x30283a,
+                ambientIntensity: 0.48,
+                // (light from above comes from the violet zenith; a red sky
+                // light turned the grey road maroon)
+                hemisphereTop: 0x9088bc,
+                hemisphereBottom: 0x4a3a30,
+                hemisphereIntensity: 1.04,
+                sunColor: 0xffa066,
                 sunIntensity: 0.9,
-                fillColor: 0xff9977,
-                fillIntensity: 0.2,
+                fillColor: 0xd9a8b8,
+                fillIntensity: 0.3,
                 rimColor: 0xffaa66,
                 rimIntensity: 0.3,
                 exposure: 0.92,
-                sunOffset: { x: 95, y: 32 }
+                sunOffset: { x: 95, y: 30, z: -55 }
             },
             twilight: {
                 name: 'Twilight',
                 skyColor: 0x4466aa,
                 fogColor: 0x5577bb,
                 ambientColor: 0x202040,
-                ambientIntensity: 0.35,
+                ambientIntensity: 0.56,
                 hemisphereTop: 0x5577cc,
                 hemisphereBottom: 0x2a2a4a,
-                hemisphereIntensity: 0.35,
+                hemisphereIntensity: 0.91,
                 sunColor: 0x6688cc,
                 sunIntensity: 0.5,
                 fillColor: 0x8899dd,
-                fillIntensity: 0.15,
+                fillIntensity: 0.225,
                 rimColor: 0x99aaee,
                 rimIntensity: 0.2,
-                exposure: 0.82,
-                sunOffset: { x: 80, y: 45 }
+                exposure: 0.95,
+                headlight: 0.8,
+                sunOffset: { x: 80, y: 45, z: 30 }
             },
+            // Moonlit: dark enough that the headlight matters, bright enough
+            // to read the road edge and the rock face
             night: {
                 name: 'Night',
                 skyColor: 0x020408,
-                fogColor: 0x050a12,
-                ambientColor: 0x030306,
-                ambientIntensity: 0.03,
-                hemisphereTop: 0x080f18,
-                hemisphereBottom: 0x020204,
-                hemisphereIntensity: 0.05,
-                sunColor: 0x223344,  // Moon
-                sunIntensity: 0.08,
-                fillColor: 0x0f1520,
-                fillIntensity: 0.02,
-                rimColor: 0x1a2028,
-                rimIntensity: 0.03,
-                exposure: 0.68,
-                sunOffset: { x: 40, y: 70 }
+                fogColor: 0x060a14,
+                ambientColor: 0x0c1020,
+                ambientIntensity: 0.3,
+                hemisphereTop: 0x6f8fd0,
+                hemisphereBottom: 0x161c2c,
+                hemisphereIntensity: 0.5,
+                sunColor: 0x9fb6e6,  // Moon
+                sunIntensity: 0.6,
+                fillColor: 0x1a2440,
+                fillIntensity: 0.1,
+                rimColor: 0x2a3550,
+                rimIntensity: 0.1,
+                exposure: 1.3,
+                headlight: 1.0,
+                sunOffset: { x: 45, y: 70, z: 50 }
             },
             dawn: {
                 name: 'Dawn',
                 skyColor: 0xffa588,
                 fogColor: 0xffb899,
-                ambientColor: 0x403020,
-                ambientIntensity: 0.28,
-                hemisphereTop: 0xffcc99,
+                ambientColor: 0x34303a,
+                ambientIntensity: 0.448,
+                hemisphereTop: 0xa9b3d6,
                 hemisphereBottom: 0x4a3a2a,
-                hemisphereIntensity: 0.35,
+                hemisphereIntensity: 0.91,
                 sunColor: 0xffe0bb,
                 sunIntensity: 0.75,
                 fillColor: 0xffddaa,
-                fillIntensity: 0.18,
+                fillIntensity: 0.27,
                 rimColor: 0xffeecc,
                 rimIntensity: 0.25,
                 exposure: 0.95,
-                sunOffset: { x: -90, y: 35 }
+                sunOffset: { x: 80, y: 28, z: 60 }
             }
         };
 
@@ -191,6 +197,15 @@ class Game {
         this.input = new InputHandler();
         this.soundManager = new SoundManager();
         this.soundManager.masterVolume = 0.3;
+        this.hud = new Hud(document, window);
+
+        // requestAnimationFrame stops on a hidden tab, so nothing else would
+        // silence the engine drone
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.soundManager.stopEngineSound();
+            }
+        });
 
         // Show tour selector and wait for leg selection
         console.log('Showing tour selector...');
@@ -203,6 +218,9 @@ class Game {
     initializeGameWithLeg(leg) {
         // Tear down any menu showcase (bikes / preview environment / RAF loop)
         this.endMenuShowcase();
+
+        // No banner from an earlier run may sit over the new leg
+        this.removeRunOverlays();
 
         // Hide tour selector
         this.tourSystem.hideLegSelector();
@@ -221,13 +239,18 @@ class Game {
             console.log('Environment created successfully');
 
             // Apply landscape configuration for the leg
-            const landscapeConfig = this.tourSystem.getLandscapeConfig();
-            this.environment.applyLandscapeConfig(landscapeConfig);
+            this.environment.applyLandscapeConfig(this.environment.config.look);
+            // Before setWeather below: the far-ring strength is read by applySky
+            const roadBaseY = this.lowestRoadHeight(this.environment, leg);
+            this.graphics.setAtmosphere(this.environment.config.atmosphere, this.environment.config.render, roadBaseY);
+            this.applyShadowBox(this.environment.config.render);
 
             // Initialize weather system
             console.log('Initializing weather system...');
             if (typeof WeatherSystem !== 'undefined') {
                 this.weatherSystem = new WeatherSystem(this.scene, this.camera);
+                this.weatherSystem.baseY = roadBaseY;
+                this.weatherSystem.surfaceGrip = this.environment.config.grip ?? 1;
 
                 // Apply weather from leg
                 const weatherType = leg.weather || 'clear';
@@ -236,6 +259,8 @@ class Game {
 
                 // Apply weather visuals to environment
                 this.environment.applyWeatherVisuals(weatherType, weatherIntensity);
+                this.graphics.setWeather(weatherType, weatherIntensity);
+                this.applyWeatherLighting(weatherType);
 
                 console.log(`Weather set to: ${weatherType} (intensity: ${weatherIntensity})`);
             } else {
@@ -254,9 +279,8 @@ class Game {
         });
 
         console.log('Creating rockfall hazards...');
-        const currentLegIndex = this.tourSystem.getCurrentLegIndex();
         this.rockfalls = (typeof RockfallSystem !== 'undefined')
-            ? new RockfallSystem(this.scene, this.environment, currentLegIndex)
+            ? new RockfallSystem(this.scene, this.environment)
             : null;
 
         console.log('Creating traffic...');
@@ -301,11 +325,11 @@ class Game {
         }
 
         // Reset game state for new leg
-        this.score = 0;
-        this.checkpointsPassed = 0;
-        this.finished = false;
-        this.vehicle.finished = false;
-        this.startTime = performance.now();
+        this.resetRunState();
+
+        // Tag the new scene's textures and vertex colours before the first
+        // frame (the periodic scan would show it washed out for a moment)
+        this.graphics.fixColorSpaces();
 
         // Classify the freshly built scene for distance culling
         this.setupPerformanceCulling();
@@ -315,10 +339,17 @@ class Game {
         if (this.clock) {
             this.clock.getDelta();
         }
+        // The first second after a scene build is slow; do not let the
+        // adaptive resolution read it as the steady frame rate
+        this.lastTime = performance.now();
+        this.frameCount = 0;
+        // Shaders compile during the first seconds of a leg; frame rates
+        // measured then say nothing about the steady state
+        this.adaptGraceUntil = performance.now() + 4000;
 
         // Start leaderboard session
         if (this.leaderboardService) {
-            this.leaderboardService.startRun(leg.id).then(result => {
+            this.leaderboardService.startRun(TourSystem.boardId(leg)).then(result => {
                 if (result === true) {
                     console.log('Leaderboard session started for leg:', leg.id);
                 } else if (result.error) {
@@ -328,6 +359,7 @@ class Game {
                 console.error('Failed to start leaderboard session:', error);
             });
         }
+        this.loadSplitReferences(leg);
 
         console.log('Starting animation loop...');
         // Delay first frame to ensure renderer is fully initialized
@@ -340,6 +372,7 @@ class Game {
     // the FPS counter.
     adaptResolution() {
         if (!this.renderer || this.paused) return;
+        if (this.adaptGraceUntil && performance.now() < this.adaptGraceUntil) return;
 
         if (!this.dprSteps) {
             const maxDpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -387,6 +420,10 @@ class Game {
         this.scene.traverse(obj => {
             if (!obj.isMesh) return;
 
+            // The sky dome is a unit sphere at the origin drawn at infinity;
+            // by its bounds it looks like a small prop far from the player
+            if (obj.userData.isSky || obj.userData.skipCulling) return;
+
             // Never touch the player bike (its shadow matters up close)
             for (let p = obj; p; p = p.parent) {
                 if (p === playerGroup) return;
@@ -410,7 +447,8 @@ class Game {
 
         // Cull at the distance where fog has fully swallowed the scenery
         const fogDensity = this.scene.fog ? this.scene.fog.density : 0.0018;
-        this.cullDistance = Math.min(600, Math.max(250, 2.2 / fogDensity));
+        const cullMax = this.environment && this.environment.config ? this.environment.config.render.cullMax : 600;
+        this.cullDistance = Math.min(cullMax, Math.max(250, 2.2 / fogDensity));
         this.lastCullTime = 0;
 
         console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);
@@ -442,6 +480,10 @@ class Game {
             if (obj.geometry) {
                 obj.geometry.dispose();
             }
+            // Releases the per-instance matrix and colour buffers
+            if (obj.isInstancedMesh) {
+                obj.dispose();
+            }
             const materials = Array.isArray(obj.material) ? obj.material : (obj.material ? [obj.material] : []);
             materials.forEach(material => {
                 Object.values(material).forEach(value => {
@@ -452,6 +494,102 @@ class Game {
                 material.dispose();
             });
         });
+    }
+
+    // Per-run state. Every way of starting a run (new leg, restart button,
+    // R key) goes through here so none of them can leave a stale checkpoint,
+    // combo or timer behind.
+    resetRunState() {
+        this.score = 0;
+        this.combo = 0;
+        this.comboMultiplier = 1;
+        this.checkpointsPassed = 0;
+        this.lastCheckpointIndex = -1;
+        this.checkpointTimes = [];
+        this.lastCheckpointPosition = null;
+        this.lastCheckpointHeading = 0;
+        this.speedStreakTime = 0;
+        this.lastSpeedCheck = 0;
+        this.wasJumping = false;
+        this.lastJumpState = false;
+        this.brakeHeldTime = 0;
+        this.finished = false;
+        this.paused = false;
+        this.startTime = performance.now();
+        if (this.vehicle) {
+            this.vehicle.finished = false;
+        }
+        if (this.environment && this.environment.checkpoints) {
+            this.environment.checkpoints.forEach(cp => { cp.passed = false; });
+        }
+        this.firstInputAt = NaN;
+        if (this.hud) {
+            const leg = this.tourSystem && this.tourSystem.getCurrentLeg();
+            const index = leg ? this.tourSystem.getCurrentLegIndex() : -1;
+            this.hud.startRun(leg ? `Leg ${index + 1} · ${leg.name}` : '');
+            this.hud.setGates(0, this.gateTotal());
+        }
+        this.hideSplit();
+        this.updateScoreDisplay();
+    }
+
+    gateTotal() {
+        return this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : RaceTiming.CHECKPOINTS;
+    }
+
+    removeRunOverlays() {
+        ['finishBanner', 'crashNotification'].forEach(id => {
+            const element = document.getElementById(id);
+            if (element) element.remove();
+        });
+        document.body.classList.remove('run-over');
+        if (this.input) {
+            this.input.setMenuActive(false);
+        }
+    }
+
+    // Put the bike back on the start line of the current leg
+    restartLeg() {
+        this.removeRunOverlays();
+
+        this.vehicle.reset();
+        if (this.environment.roadPath && this.environment.roadPath.length > 0) {
+            const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
+            this.vehicle.position.set(startPos.x, startPos.y, startPos.z);
+            this.vehicle.yawAngle = startPos.heading;
+            // Re-sync segment tracking with the teleported position so the
+            // windowed wall/elevation searches don't use a stale index
+            this.vehicle.findNearestRoadSegment();
+            this.vehicle.updateMesh();
+        }
+        this.cones.reset();
+        if (this.traffic && this.traffic.reset) {
+            this.traffic.reset();
+        }
+        this.resetRunState();
+        this.restartLeaderboardSession();
+
+        const dashboard = document.querySelector('.dashboard');
+        if (dashboard) {
+            dashboard.style.opacity = '1';
+        }
+    }
+
+    // Scene objects that outlive a leg: camera, lights and the sky dome
+    persistentSceneObjects() {
+        const keep = new Set([
+            this.camera,
+            this.ambientLight, this.hemisphereLight, this.fillLight, this.rimLight,
+            this.graphics ? this.graphics.skyMesh : null,
+            this.headlightBeam
+        ]);
+        [this.directionalLight, this.distantLight, this.headlight].forEach(light => {
+            if (light) {
+                keep.add(light);
+                keep.add(light.target);
+            }
+        });
+        return keep;
     }
 
     cleanupCurrentLeg() {
@@ -468,21 +606,7 @@ class Game {
 
         // Clear scene objects (keep camera and lights)
         if (this.scene) {
-            const keep = new Set([
-                this.camera,
-                this.directionalLight,
-                this.directionalLight ? this.directionalLight.target : null,
-                this.distantLight,
-                this.distantLight ? this.distantLight.target : null,
-                this.ambientLight,
-                this.hemisphereLight,
-                this.fillLight,
-                this.rimLight,
-                this.leftHeadlight,
-                this.leftHeadlight ? this.leftHeadlight.target : null,
-                this.rightHeadlight,
-                this.rightHeadlight ? this.rightHeadlight.target : null
-            ]);
+            const keep = this.persistentSceneObjects();
             const objectsToRemove = this.scene.children.filter(child => !keep.has(child));
             objectsToRemove.forEach(obj => {
                 this.scene.remove(obj);
@@ -509,7 +633,9 @@ class Game {
         console.log('Cleaned up current leg');
     }
 
-    returnToMenu() {
+    // options.riderId opens the rider screen on that rider (a new unlock)
+    // instead of the track screen
+    returnToMenu(options = {}) {
         console.log('Returning to menu...');
 
         // Remove finish banner if exists
@@ -528,7 +654,11 @@ class Game {
         this.cleanupCurrentLeg();
 
         // Show leg selector
-        this.tourSystem.showLegSelector();
+        if (options.riderId) {
+            this.tourSystem.showRiderSelector(options.riderId);
+        } else {
+            this.tourSystem.showLegSelector();
+        }
 
         // Hide dashboard
         const dashboard = document.querySelector('.dashboard');
@@ -653,44 +783,43 @@ class Game {
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
         this.renderer.shadowMap.autoUpdate = true;
-        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
         this.renderer.toneMappingExposure = 0.8;
         document.body.appendChild(this.renderer.domElement);
 
-        // Peripheral speed-streak overlay. NOTE: this deliberately avoids
-        // backdrop-filter - blurring a full-resolution canvas costs 10ms+ of
-        // GPU per frame. A static streaky radial gradient composites for free
-        // and still sells the speed at the edges of the view.
-        this.speedBlurOverlay = document.createElement('div');
-        this.speedBlurOverlay.id = 'speedBlurOverlay';
-        this.speedBlurOverlay.style.cssText = `
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            z-index: 5;
-            background:
-                repeating-conic-gradient(from 0deg at 50% 50%,
-                    rgba(255,255,255,0) 0deg 5deg,
-                    rgba(235,240,255,0.055) 5.6deg 6.4deg,
-                    rgba(255,255,255,0) 7deg 12deg),
-                radial-gradient(ellipse at center,
-                    rgba(200,215,235,0) 42%,
-                    rgba(205,220,240,0.10) 70%,
-                    rgba(215,228,245,0.16) 100%);
-            -webkit-mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
-            mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
-            opacity: 0;
-            display: none;
-        `;
-        document.body.appendChild(this.speedBlurOverlay);
+        // Sky, image-based lighting and HDR post-processing
+        this.graphics = new Graphics(this.renderer, this.scene);
+
+        // The post-processing pass blurs the screen edges at speed. Without
+        // it (no float render targets), fall back to a CSS overlay.
+        if (!this.graphics.postEnabled) {
+            // Peripheral speed-streak overlay. NOTE: this deliberately avoids
+            // backdrop-filter - blurring a full-resolution canvas costs 10ms+ of
+            // GPU per frame. A static streaky radial gradient composites for free
+            // and still sells the speed at the edges of the view.
+            this.speedBlurOverlay = document.createElement('div');
+            this.speedBlurOverlay.id = 'speedBlurOverlay';
+            this.speedBlurOverlay.style.cssText = `
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                z-index: 5;
+                background:
+                    repeating-conic-gradient(from 0deg at 50% 50%,
+                        rgba(255,255,255,0) 0deg 5deg,
+                        rgba(235,240,255,0.055) 5.6deg 6.4deg,
+                        rgba(255,255,255,0) 7deg 12deg),
+                    radial-gradient(ellipse at center,
+                        rgba(200,215,235,0) 42%,
+                        rgba(205,220,240,0.10) 70%,
+                        rgba(215,228,245,0.16) 100%);
+                -webkit-mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
+                mask-image: radial-gradient(ellipse at center, transparent 38%, black 80%);
+                opacity: 0;
+                display: none;
+            `;
+            document.body.appendChild(this.speedBlurOverlay);
+        }
         this.lastBlurOpacity = '0';
-        
-        const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
-        pmremGenerator.compileEquirectangularShader();
-        
-        const envScene = new THREE.Scene();
-        envScene.background = new THREE.Color(0xb8d4e8);
-        this.scene.environment = pmremGenerator.fromScene(envScene).texture;
         
         window.addEventListener('resize', () => this.onWindowResize());
     }
@@ -700,6 +829,30 @@ class Game {
         this.scene.background = new THREE.Color(0xb8d4e8);
         // Enhanced fog with warmer tone for golden hour atmosphere
         this.scene.fog = new THREE.FogExp2(0xc8dae8, 0.0018);
+    }
+
+    // The lowest point of the leg's road: the base of the height fog, and the
+    // level above which the weather thins the fog
+    lowestRoadHeight(environment, leg) {
+        const path = environment.roadPath;
+        const last = Math.min(leg.endSegment, path.length - 1);
+        let lowest = Infinity;
+        for (let i = leg.startSegment; i <= last; i++) {
+            lowest = Math.min(lowest, path[i].y || 0);
+        }
+        return Number.isFinite(lowest) ? lowest : 0;
+    }
+
+    // Size the sun's shadow box for the leg: wide canyon walls need more
+    applyShadowBox(render) {
+        const half = render.shadowSpan / 2;
+        const shadow = this.directionalLight.shadow.camera;
+        shadow.left = -half;
+        shadow.right = half;
+        shadow.top = half;
+        shadow.bottom = -half;
+        shadow.far = Math.max(300, render.shadowSpan * 2);
+        shadow.updateProjectionMatrix();
     }
 
     setupLighting() {
@@ -723,7 +876,10 @@ class Game {
         this.directionalLight.shadow.camera.right = 60;
         this.directionalLight.shadow.camera.top = 60;
         this.directionalLight.shadow.camera.bottom = -60;
-        this.directionalLight.shadow.bias = -0.0001;
+        // A low sun grazes the road: without a normal offset the surface
+        // shadows itself in stripes
+        this.directionalLight.shadow.bias = -0.0004;
+        this.directionalLight.shadow.normalBias = 0.06;
         this.scene.add(this.directionalLight);
         
         // Store initial light offset from origin
@@ -747,15 +903,62 @@ class Game {
         this.rimLight.position.set(0, 10, -50);
         this.scene.add(this.rimLight);
 
-        // Vehicle headlights - subtle. Shadow casting disabled: two extra
-        // shadow passes per frame for barely-visible headlight shadows
-        this.leftHeadlight = new THREE.SpotLight(0xffffff, 0.5, 100, Math.PI/6, 0.1, 2);
-        this.leftHeadlight.castShadow = false;
-        this.scene.add(this.leftHeadlight);
+        // Bike headlight: one wide, soft-edged beam. It is switched off
+        // entirely in daylight (see setTimeOfDay): a spot light costs every
+        // lit fragment in the scene whether or not its beam shows.
+        // It falls off with the square of its reach, so the road ahead is lit and
+        // a white house front 60 m away is not lit as brightly as the tarmac
+        // under the wheel (a near-flat falloff blew distant walls out into halos)
+        this.headlight = new THREE.SpotLight(0xfff1d6, 0, 120, 0.52, 0.65, 2);
+        this.headlight.castShadow = false;
+        this.headlight.visible = false;
+        this.scene.add(this.headlight);
 
-        this.rightHeadlight = new THREE.SpotLight(0xffffff, 0.5, 100, Math.PI/6, 0.1, 2);
-        this.rightHeadlight.castShadow = false;
-        this.scene.add(this.rightHeadlight);
+        // Visible beam: light scattering in the night air ahead of the bike
+        const beamGeometry = new THREE.ConeGeometry(3.4, 16, 28, 1, true);
+        beamGeometry.translate(0, -8, 0);
+        beamGeometry.rotateX(-Math.PI / 2); // Apex at the lamp, opening along +Z
+        this.headlightBeam = new THREE.Mesh(beamGeometry, new THREE.ShaderMaterial({
+            uniforms: {
+                uColor: { value: new THREE.Color(0xfff1d6) },
+                uStrength: { value: 0 }
+            },
+            vertexShader: `
+                varying float vAlong;
+                varying vec3 vNormalView;
+                varying vec3 vViewDir;
+                void main() {
+                    vAlong = position.z / 16.0;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    vNormalView = normalize(normalMatrix * normal);
+                    vViewDir = normalize(-mvPosition.xyz);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                uniform float uStrength;
+                varying float vAlong;
+                varying vec3 vNormalView;
+                varying vec3 vViewDir;
+                void main() {
+                    // Bright at the lamp, gone by the end; soft at the silhouette
+                    float along = (1.0 - vAlong) * (1.0 - vAlong);
+                    float rim = pow(abs(dot(normalize(vNormalView), normalize(vViewDir))), 1.6);
+                    gl_FragColor = vec4(uColor * along * rim * uStrength, 1.0);
+                }
+            `,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            fog: false
+        }));
+        this.headlightBeam.rotation.order = 'YXZ';
+        this.headlightBeam.frustumCulled = false;
+        this.headlightBeam.visible = false;
+        this.headlightBeam.userData.skipCulling = true;
+        this.scene.add(this.headlightBeam);
     }
 
     setTimeOfDay(timeKey) {
@@ -786,6 +989,11 @@ class Game {
         this.directionalLight.intensity = config.sunIntensity;
         this.baseSunIntensity = config.sunIntensity;
 
+        // Shadowless companion of the sun: same colour, a quarter of its
+        // strength (it was a fixed white 0.2, also at night)
+        this.distantLight.color = new THREE.Color(config.sunColor);
+        this.distantLight.intensity = config.sunIntensity * 0.25;
+
         // Sun direction: low at dawn/sunset for long dramatic shadows, high
         // at midday-ish times. Used by the per-frame light-follow code.
         this.sunOffset = config.sunOffset || { x: 50, y: 80 };
@@ -795,6 +1003,9 @@ class Game {
             this.renderer.toneMappingExposure = config.exposure;
         }
 
+        // Sky dome, far ranges and reflections follow the time of day
+        this.graphics.setTimeOfDay(timeKey, config);
+
         // Update fill light
         this.fillLight.color = new THREE.Color(config.fillColor);
         this.fillLight.intensity = config.fillIntensity;
@@ -803,42 +1014,40 @@ class Game {
         this.rimLight.color = new THREE.Color(config.rimColor);
         this.rimLight.intensity = config.rimIntensity;
 
-        // Enhance headlights for night mode
-        if (timeKey === 'night') {
-            this.leftHeadlight.intensity = 1.5;
-            this.rightHeadlight.intensity = 1.5;
-        } else {
-            this.leftHeadlight.intensity = 0.5;
-            this.rightHeadlight.intensity = 0.5;
-        }
+        // Headlight only when it is dark enough to see the beam
+        this.headlightStrength = config.headlight || 0;
+        this.headlight.visible = this.headlightStrength > 0;
+        this.headlight.intensity = this.headlightStrength * 10;
+        this.headlightBeam.visible = this.headlight.visible;
+        this.headlightBeam.material.uniforms.uStrength.value = this.headlightStrength * 0.14;
 
         // Show notification (disabled - don't show popup at level start)
         // this.showTimeOfDayNotification(config.name);
     }
 
+    // Under cloud the sun or moon is hidden: most of its light arrives
+    // scattered from the whole sky. Call after setTimeOfDay(), which restores
+    // the clear-sky values. (A full-strength hidden sun also put a hard white
+    // reflection on the wet road.)
+    applyWeatherLighting(weatherType) {
+        const overcast = weatherType === 'rain' || weatherType === 'snow';
+        const hazy = weatherType === 'fog';
+        const config = this.timeConfigs[this.timeOfDay];
+        const direct = overcast ? 0.25 : hazy ? 0.6 : 1;
+        this.baseSunIntensity = config.sunIntensity * direct;
+        this.directionalLight.intensity = this.baseSunIntensity;
+        this.distantLight.intensity = config.sunIntensity * 0.25 * direct;
+        this.hemisphereLight.intensity = config.hemisphereIntensity * (overcast ? 1.35 : hazy ? 1.15 : 1);
+    }
+
     showTimeOfDayNotification(timeName) {
-        const notification = document.createElement('div');
-        notification.className = 'notification';
-        notification.textContent = timeName;
-        notification.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 15px 30px;
-            border-radius: 10px;
-            font-size: 24px;
-            z-index: 1000;
-            animation: fadeInOut 2s ease-out;
-        `;
-        document.body.appendChild(notification);
-        setTimeout(() => notification.remove(), 2000);
+        showCallout(timeName, 'info', 2000);
     }
 
     setupCamera() {
-        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+        // (near 0.25: a 0.1 near plane wastes most of the depth precision and
+        // distant coplanar surfaces flicker)
+        this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.25, 5000);
         
         // Initial camera position - start in follow position
         this.camera.position.set(0, 4, -10); // Behind bike
@@ -938,6 +1147,23 @@ class Game {
         // Wide FOV with speed rush
         this.camera.fov = 95 + speedRatio * 12;
         this.camera.updateProjectionMatrix();
+    }
+
+    // Height of the tunnel roof over the bike, or null in the open. The
+    // camera trails the bike by up to a segment, so a roof one segment either
+    // side counts.
+    tunnelRoofY() {
+        const { environment, vehicle } = this;
+        if (!environment || !vehicle || !environment.setPieces.length) return null;
+        const segment = vehicle.currentRoadSegment || 0;
+        for (const index of [segment, segment - 1, segment + 1]) {
+            const ceiling = Terrain.ceilingAt(environment.terrain, index);
+            if (ceiling === undefined || !environment.roadPath[index]) continue;
+            // The roof rides on the road under it; on a slope the bike's own
+            // segment can be the lower one, so the lower roof counts
+            return Math.min(environment.roadPath[index].y, environment.roadPath[segment].y) + ceiling;
+        }
+        return null;
     }
 
     updateCamera(deltaTime = 1 / 60) {
@@ -1106,7 +1332,7 @@ class Game {
         if (this.currentCameraPos.y < minCameraHeight) {
             this.currentCameraPos.y = minCameraHeight;
         }
-        
+
         this.camera.position.copy(this.currentCameraPos);
 
         // Additional camera shake at high speeds (outside onboard mode)
@@ -1115,6 +1341,16 @@ class Game {
             const shakeIntensity = speedFactor * 0.05 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
             this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
             this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
+        }
+
+        // Under a tunnel roof the camera stays beneath it, shake included: High
+        // View sits 8 above the bike, higher than the 7.5 m roof. The smoothed
+        // position keeps the clamp too, so the camera eases out of the tunnel
+        // rather than jumping to where it would have been
+        const roofY = this.tunnelRoofY();
+        if (roofY !== null && this.camera.position.y > roofY - 1.0) {
+            this.camera.position.y = Math.max(roofY - 1.0, minCameraHeight);
+            this.currentCameraPos.y = Math.min(this.currentCameraPos.y, this.camera.position.y);
         }
 
         // Mode-specific FOV and look target
@@ -1273,7 +1509,7 @@ class Game {
         this.directionalLight.position.set(
             playerPos.x + sunOffset.x,
             playerPos.y + sunOffset.y,
-            playerPos.z
+            playerPos.z + (sunOffset.z || 0)
         );
         this.directionalLight.target.position.copy(playerPos);
         this.directionalLight.target.updateMatrixWorld();
@@ -1282,7 +1518,7 @@ class Game {
         this.distantLight.position.set(
             playerPos.x + sunOffset.x,
             playerPos.y + sunOffset.y,
-            playerPos.z
+            playerPos.z + (sunOffset.z || 0)
         );
         this.distantLight.target.position.copy(playerPos);
         this.distantLight.target.updateMatrixWorld();
@@ -1293,7 +1529,6 @@ class Game {
         if (!this.uiElements) {
             this.uiElements = {
                 dashboard: document.querySelector('.dashboard'),
-                speed: document.getElementById('speed'),
                 speedVignette: document.getElementById('speedVignette')
             };
         }
@@ -1307,27 +1542,10 @@ class Game {
             return;
         }
 
-        // Update speedometer (only write to the DOM when the value changes)
-        const speed = this.vehicle.getSpeed().toFixed(0);
-        if (ui.speed && speed !== this.lastDisplayedSpeed) {
-            this.lastDisplayedSpeed = speed;
-            ui.speed.textContent = speed;
-
-            // Color code speed for speedometer
-            const speedBand = speed < 20 ? 0 : speed < 40 ? 1 : 2;
-            if (speedBand !== this.lastSpeedBand) {
-                this.lastSpeedBand = speedBand;
-                if (speedBand === 0) {
-                    ui.speed.style.color = '#FF4444'; // Red for too slow
-                    ui.speed.style.textShadow = '0 0 15px rgba(255, 68, 68, 0.8)';
-                } else if (speedBand === 1) {
-                    ui.speed.style.color = '#FFAA44'; // Orange for slow
-                    ui.speed.style.textShadow = '0 0 15px rgba(255, 170, 68, 0.8)';
-                } else {
-                    ui.speed.style.color = '#00FF00'; // Green for good speed
-                    ui.speed.style.textShadow = '0 0 15px rgba(0, 255, 0, 0.8)';
-                }
-            }
+        // The HUD writes only when the shown speed changes
+        if (this.hud) {
+            this.hud.setSpeed(this.vehicle.getSpeed(), this.vehicle.maxSpeed * 2.237);
+            this.hud.update(this.raceElapsed(), this.firstInputAt);
         }
 
         // Peripheral motion blur ramps in above ~45% of max speed
@@ -1365,53 +1583,35 @@ class Game {
     
     
     updateWheelieIndicator() {
-        const indicator = document.getElementById('wheelieIndicator');
-        const zoneText = document.getElementById('wheelieZone');
-        const comboText = document.getElementById('wheelieCombo');
-
-        if (this.vehicle.isWheelie) {
-            const angleDegrees = this.vehicle.wheelieAngle * 180 / Math.PI;
-            const maxAngleDegrees = this.vehicle.wheelieCrashAngle * 180 / Math.PI; // 81 degrees
-            const angleRatio = Math.min(1, angleDegrees / maxAngleDegrees); // 0 to 1 as we approach crash
-
-            indicator.classList.add('active');
-
-            // Remove all color classes to prevent position shifts
-            indicator.classList.remove('perfect', 'good', 'danger', 'low');
-
-            // Continuous color transition from green to orange to red
-            let r, g, b;
-            if (angleRatio < 0.5) {
-                // Green to orange (0 to 0.5 ratio)
-                const transition = angleRatio * 2; // 0 to 1
-                r = Math.round(0 + transition * 255); // 0 to 255
-                g = Math.round(255 - transition * 0); // 255 to 255
-                b = 0;
-            } else {
-                // Orange to red (0.5 to 1.0 ratio)
-                const transition = (angleRatio - 0.5) * 2; // 0 to 1
-                r = Math.round(255 - transition * 0); // 255 to 255
-                g = Math.round(165 - transition * 165); // 165 to 0
-                b = 0;
-            }
-
-            // Apply the color continuously
-            indicator.style.color = `rgb(${r}, ${g}, ${b})`;
-            indicator.style.background = `rgba(${r}, ${g}, ${b}, 0.2)`;
-            indicator.style.textShadow = `0 0 20px rgba(${r}, ${g}, ${b}, 0.8)`;
-
-            // Show wheelie text with angle
-            zoneText.textContent = `WHEELIE ${angleDegrees.toFixed(0)}°`;
-
-            // Clear combo text (no longer using combo system)
-            comboText.textContent = '';
-        } else {
-            indicator.classList.remove('active');
-            // Reset styles when not active
-            indicator.style.color = '';
-            indicator.style.background = '';
-            indicator.style.textShadow = '';
+        if (!this.wheelieElements) {
+            this.wheelieElements = {
+                indicator: document.getElementById('wheelieIndicator'),
+                zone: document.getElementById('wheelieZone')
+            };
         }
+        const { indicator, zone } = this.wheelieElements;
+        if (!indicator || !zone) return;
+
+        if (!this.vehicle.isWheelie) {
+            if (this.shownWheelieAngle !== null) {
+                this.shownWheelieAngle = null;
+                indicator.classList.remove('active');
+            }
+            return;
+        }
+
+        // Whole degrees: the DOM is touched only when the shown angle changes
+        const degrees = Math.round(this.vehicle.wheelieAngle * 180 / Math.PI);
+        if (degrees === this.shownWheelieAngle) return;
+        if (this.shownWheelieAngle === null || this.shownWheelieAngle === undefined) indicator.classList.add('active');
+        this.shownWheelieAngle = degrees;
+
+        // Green to amber to red as the angle nears the crash angle
+        const maxDegrees = this.vehicle.wheelieCrashAngle * 180 / Math.PI;
+        const ratio = Math.min(1, Math.max(0, degrees / maxDegrees));
+        const hue = Math.round(140 * (1 - ratio));
+        indicator.style.setProperty('--tone', `hsl(${hue}, 90%, 60%)`);
+        zone.textContent = `WHEELIE ${degrees}°`;
     }
 
     showFinishScreen() {
@@ -1423,9 +1623,11 @@ class Game {
         // Calculate final position
         let finalPosition = 1;
         if (this.traffic && this.traffic.motorcycles) {
-            const playerZ = this.vehicle.position.z;
+            // Track progress, not world Z: half the course runs toward -Z
+            const playerProgress = Math.floor(this.vehicle.currentRoadSegment || 0) + (this.vehicle.segmentProgress || 0);
             this.traffic.motorcycles.forEach(bike => {
-                if (bike.bikeGroup && bike.bikeGroup.position.z > playerZ) {
+                const bikeProgress = Math.floor(bike.currentSegment || 0) + (bike.segmentProgress || 0);
+                if (bikeProgress > playerProgress) {
                     finalPosition++;
                 }
             });
@@ -1439,148 +1641,99 @@ class Game {
         
         const totalScore = this.score;
 
-        // Create finish banner
-        const finishBanner = document.createElement('div');
-        finishBanner.id = 'finishBanner';
-        finishBanner.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #2c3e50, #34495e);
-            border: 3px solid #f39c12;
-            border-radius: 20px;
-            padding: 30px;
-            text-align: center;
-            color: white;
-            font-family: Arial, sans-serif;
-            z-index: 1000;
-            box-shadow: 0 0 30px rgba(0,0,0,0.8);
-            animation: fadeIn 0.5s ease-out;
-        `;
+        const positionColor = finalPosition === 1 ? 'var(--c-gold)' : finalPosition === 2 ? '#d4dbe4' : finalPosition === 3 ? '#e09a5a' : 'var(--c-text)';
 
-        const positionColor = finalPosition === 1 ? '#FFD700' : finalPosition === 2 ? '#C0C0C0' : finalPosition === 3 ? '#CD7F32' : '#95a5a6';
-
-        // Check if this is the last leg
         const isLastLeg = this.tourSystem.isLastLeg();
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
 
         // Record progression: completing a leg unlocks the next leg and,
         // at milestones, new riders
         const finishedLeg = this.tourSystem.getCurrentLeg();
-        let unlockMessage = '';
+        let unlocks = { legs: [], characters: [] };
         if (finishedLeg && this.tourSystem.markLegCompleted) {
-            const unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
-            const parts = [];
-            if (unlocks.newLegs.length > 0) {
-                parts.push(`NEW LEG: ${unlocks.newLegs.join(', ')}`);
-            }
-            if (unlocks.newCharacters.length > 0) {
-                parts.push(`NEW RIDER: ${unlocks.newCharacters.join(', ')}`);
-            }
-            if (parts.length > 0) {
-                unlockMessage = `<div style="color: #2ecc71; font-size: 20px; margin-top: 10px;">🔓 ${parts.join(' &nbsp;•&nbsp; ')}</div>`;
-            }
+            unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
         }
+        const flow = TourSystem.finishFlow(unlocks, isLastLeg);
 
-        // Check for best time (tracked per leg - legs have different lengths)
-        const currentLeg = this.tourSystem.getCurrentLeg();
-        const bestTimeKey = currentLeg ? `motorcycleBestTime_${currentLeg.id}` : 'motorcycleBestTime';
-        this.bestTime = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
-        let bestTimeMessage = '';
-        if (timeSeconds < this.bestTime) {
+        // Time is what ranks a run: compare it with the personal best (per
+        // board) and the record. Best splits are rewritten only by a full run
+        // that beat the best time.
+        const bestTimeKey = finishedLeg ? this.bestTimeKey(finishedLeg) : 'motorcycleBestTime';
+        const previousBest = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
+        const previousBestMs = previousBest < 999999 ? previousBest * 1000 : NaN;
+        const boardMs = this.checkpointTimes[RaceTiming.CHECKPOINTS - 1];
+        const result = RaceTiming.finish(this.finishTime, previousBestMs, boardMs, this.record);
+        this.bestTime = previousBest;
+        if (result.isBest) {
             this.bestTime = timeSeconds;
             localStorage.setItem(bestTimeKey, timeSeconds.toString());
-            bestTimeMessage = '<div style="color: #FFD700; font-size: 22px; margin-top: 10px;">🏆 NEW BEST TIME! 🏆</div>';
+            if (finishedLeg) {
+                RaceTiming.saveSplitsIfBest(localStorage, this.bestSplitsKey(finishedLeg), this.checkpointTimes, true);
+            }
         }
 
+        const finishBanner = document.createElement('div');
+        finishBanner.id = 'finishBanner';
+        finishBanner.className = 'finish-banner';
+
+        const deltaSpan = ms => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}</span>`;
+        const pbLine = result.pbDelta === null
+            ? `<div class="finish-best-badge">${UiIcons.svg('trophy')} FIRST BEST TIME SET</div>`
+            : result.isBest
+                ? `<div class="finish-best-badge">${UiIcons.svg('trophy')} NEW PERSONAL BEST ${deltaSpan(result.pbDelta)}</div>`
+                : `<div class="finish-delta">${deltaSpan(result.pbDelta)} <small>vs your best ${RaceTiming.formatTime(previousBestMs)}</small></div>`;
+        const escape = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+        let recordLine = '';
+        if (this.record && result.recordDelta !== null) {
+            // The board ranks the time to the last gate, so that is what is compared
+            recordLine = `<div class="finish-delta">${deltaSpan(result.recordDelta)} <small>vs record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>
+                <div class="finish-board">Leaderboard time (to the last gate) ${RaceTiming.formatTime(result.boardTime)}</div>`;
+        } else if (this.record) {
+            recordLine = `<div class="finish-delta"><small>Record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>`;
+        }
+
+        const unlockPanel = this.buildUnlockPanel(unlocks);
+        // Until the next bike is in hand, say how far away it is
+        const progress = flow.riders.length > 0 ? '' : this.tourSystem.unlockProgressText();
+        const button = (id, cls, label) => `<button id="${id}" class="finish-btn ${cls}">${label}</button>`;
+        const tourButton = isLastLeg
+            ? button('restartTourBtn', flow.primary === 'restart-tour' ? 'primary' : 'secondary', '<u>R</u>ESTART TOUR')
+            : button('nextLegBtn', flow.primary === 'next-leg' ? 'primary' : 'secondary', '<u>N</u>EXT LEG →');
+        const chooseButton = flow.primary === 'choose-rider'
+            ? button('chooseRiderBtn', 'primary', 'CHOOSE YOUR NEW BIKE →')
+            : '';
+
+        // Two blocks so a short landscape screen can put them side by side
         finishBanner.innerHTML = `
-            <h1 style="color: #f39c12; margin: 0 0 20px 0; font-size: 48px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">
-                ${titleText}
-            </h1>
-            <div style="font-size: 48px; font-weight: bold; margin-bottom: 20px; color: ${positionColor}; text-shadow: 0 0 20px ${positionColor};">
-                ${finalPosition}${positionSuffix} PLACE
-                <div style="font-size: 20px; color: #95a5a6; margin-top: 5px;">out of ${totalRacers} racers</div>
+            <div class="finish-main">
+                <div class="finish-title">${titleText}</div>
+                <div class="finish-time-label">YOUR TIME</div>
+                <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
+                <div class="finish-deltas">
+                    ${pbLine}
+                    ${recordLine}
+                </div>
+                <div class="finish-meta">
+                    <span style="color: ${positionColor};">${finalPosition}${positionSuffix}</span> of ${totalRacers} racers
+                    · ${distance.toFixed(0)} m · ${averageSpeed.toFixed(1)} mph avg
+                </div>
+                <div class="finish-style">Style bonus <strong>${totalScore.toLocaleString()}</strong> pts</div>
             </div>
-            <div style="font-size: 24px; margin-bottom: 20px;">
-                <div style="margin-bottom: 10px;">Distance: <span style="color: #3498db;">${distance.toFixed(0)} meters</span></div>
-                <div style="margin-bottom: 10px;">Time: <span style="color: #e74c3c;">${timeSeconds.toFixed(1)} seconds</span></div>
-                ${bestTimeMessage}
-                ${unlockMessage}
-                <div style="margin-bottom: 10px;">Best Time: <span style="color: #2ecc71;">${this.bestTime < 999999 ? this.bestTime.toFixed(1) + 's' : 'N/A'}</span></div>
-                <div style="margin-bottom: 10px;">Average Speed: <span style="color: #9b59b6;">${averageSpeed.toFixed(1)} mph</span></div>
-            </div>
-            <div style="font-size: 36px; font-weight: bold; color: #f39c12; margin-bottom: 20px;">
-                SCORE: ${totalScore.toLocaleString()}
-            </div>
-            <div style="margin-top: 20px; display: flex; gap: 20px; justify-content: center;">
-                ${isLastLeg ? `
-                    <button id="restartTourBtn" style="
-                        font-size: 20px;
-                        padding: 15px 30px;
-                        background: linear-gradient(135deg, #2ecc71, #27ae60);
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        cursor: pointer;
-                        font-weight: bold;
-                        box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
-                        transition: all 0.3s;
-                    "><u>R</u>ESTART TOUR</button>
-                ` : `
-                    <button id="nextLegBtn" style="
-                        font-size: 20px;
-                        padding: 15px 30px;
-                        background: linear-gradient(135deg, #2ecc71, #27ae60);
-                        color: white;
-                        border: none;
-                        border-radius: 10px;
-                        cursor: pointer;
-                        font-weight: bold;
-                        box-shadow: 0 4px 15px rgba(46, 204, 113, 0.4);
-                        transition: all 0.3s;
-                    "><u>N</u>EXT LEG →</button>
-                `}
-                <button id="restartLegBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #3498db, #2980b9);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
-                    transition: all 0.3s;
-                "><u>R</u>ESTART LEG</button>
-                <button id="returnToMenuBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #e74c3c, #c0392b);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
-                    transition: all 0.3s;
-                ">RETURN TO <u>M</u>ENU</button>
+            <div class="finish-side">
+                ${unlockPanel}
+                ${progress ? `<div class="finish-progress">${UiIcons.svg('unlock')} ${progress}</div>` : ''}
+                <div class="finish-buttons">
+                    ${chooseButton}
+                    ${tourButton}
+                    ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG')}
+                    ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU')}
+                </div>
             </div>
         `;
 
-        // Add CSS animation (once - this method runs on every finish)
-        if (!document.getElementById('finishBannerStyles')) {
-            const style = document.createElement('style');
-            style.id = 'finishBannerStyles';
-            style.textContent = `
-                @keyframes fadeIn {
-                    from { opacity: 0; transform: translate(-50%, -50%) scale(0.8); }
-                    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-
+        // The results card owns the screen: no HUD or touch controls behind it
+        if (this.hud) this.hud.clearTransient();
+        document.body.classList.add('run-over');
         document.body.appendChild(finishBanner);
 
         // Enable R key for restart
@@ -1599,35 +1752,7 @@ class Game {
                 this.input.setMenuActive(false);
             }
 
-            // Restarting without submitting: fresh session for the new attempt
-            this.restartLeaderboardSession();
-
-            // Trigger reset via input system
-            if (this.input) {
-                // Simulate reset action
-                this.vehicle.reset();
-                if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-                    const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
-                    this.vehicle.position.x = startPos.x;
-                    this.vehicle.position.y = startPos.y;
-                    this.vehicle.position.z = startPos.z;
-                    this.vehicle.yawAngle = startPos.heading;
-                    this.vehicle.findNearestRoadSegment();
-                }
-                this.cones.reset();
-                this.finished = false;
-                this.startTime = performance.now();
-                this.score = 0;
-                this.combo = 0;
-                this.comboMultiplier = 1;
-                this.checkpointsPassed = 0;
-                this.lastCheckpointIndex = -1;
-                this.checkpointTimes = [];
-                if (this.environment && this.environment.checkpoints) {
-                    this.environment.checkpoints.forEach(cp => cp.passed = false);
-                }
-                this.updateScoreDisplay();
-            }
+            this.restartLeg();
         });
 
         document.getElementById('returnToMenuBtn').addEventListener('click', () => {
@@ -1670,6 +1795,28 @@ class Game {
             }
         }
 
+        // A new bike: the default action takes the player to the rider screen
+        // with it focused, after the name entry when a run is submittable
+        const chooseRiderBtn = document.getElementById('chooseRiderBtn');
+        if (chooseRiderBtn) {
+            chooseRiderBtn.addEventListener('click', () => {
+                if (this.input) {
+                    this.input.setMenuActive(false);
+                }
+                finishBanner.remove();
+                const open = () => this.returnToMenu({ riderId: flow.riders[0] });
+                if (shouldShowLeaderboard) {
+                    this.showLeaderboardEntryUI(open);
+                } else {
+                    open();
+                }
+            });
+        }
+
+        // Enter takes the default action
+        const primaryBtn = finishBanner.querySelector('.finish-btn.primary');
+        if (primaryBtn) primaryBtn.focus({ preventScroll: true });
+
         // Add event listener for restart tour button (if last leg)
         if (isLastLeg) {
             const restartTourBtn = document.getElementById('restartTourBtn');
@@ -1705,63 +1852,75 @@ class Game {
         console.log(`COURSE FINISHED! Distance: ${distance.toFixed(0)}m, Time: ${timeSeconds.toFixed(1)}s, Score: ${totalScore}`);
     }
 
-    showCrashNotification() {
-        // Create crash notification
+    // The unlock moment on the finish screen: one card per unlocked leg or
+    // bike, with the bike drawn in its own colour and the leg in its light
+    buildUnlockPanel(unlocks) {
+        const legs = (unlocks && unlocks.legs) || [];
+        const characters = (unlocks && unlocks.characters) || [];
+        if (legs.length === 0 && characters.length === 0) return '';
+        const skies = {
+            dawn: ['#f6a96b', '#5b6fa8'],
+            golden: ['#f7c548', '#c86b28'],
+            twilight: ['#c86b9c', '#2b2f63'],
+            night: ['#26305c', '#070a1c'],
+            storm: ['#59677a', '#1e2530']
+        };
+        const bikeCards = characters.map(c => {
+            const colour = '#' + parseInt(c.bikeColor).toString(16).padStart(6, '0');
+            return `
+                <div class="unlock-card unlock-bike" style="--bike: ${colour};">
+                    <svg class="unlock-bike-art" viewBox="0 0 120 64" aria-hidden="true">
+                        <circle cx="26" cy="46" r="14" fill="none" stroke="#e8edf5" stroke-width="5"/>
+                        <circle cx="94" cy="46" r="14" fill="none" stroke="#e8edf5" stroke-width="5"/>
+                        <path d="M26 46 L48 24 L78 24 L94 46" fill="none" stroke="#aab4c4" stroke-width="4" stroke-linejoin="round"/>
+                        <path d="M40 30 Q52 12 74 16 L86 26 Q70 34 50 34 Z" fill="var(--bike)"/>
+                        <path d="M78 14 L88 8" stroke="#e8edf5" stroke-width="4" stroke-linecap="round"/>
+                        <circle cx="56" cy="38" r="6" fill="var(--bike)"/>
+                    </svg>
+                    <div class="unlock-kind">NEW BIKE</div>
+                    <div class="unlock-name">${c.name}</div>
+                    <div class="unlock-sub">${c.bikeLabel}</div>
+                </div>`;
+        });
+        const legCards = legs.map(leg => {
+            const sky = skies[leg.timeOfDay] || ['#4a9eff', '#1a2a4a'];
+            return `
+                <div class="unlock-card unlock-leg" style="--sky-top: ${sky[0]}; --sky-bottom: ${sky[1]};">
+                    <div class="unlock-leg-art" aria-hidden="true"></div>
+                    <div class="unlock-kind">NEW LEG</div>
+                    <div class="unlock-name">${leg.name}</div>
+                    <div class="unlock-sub">${leg.description || ''}</div>
+                </div>`;
+        });
+        return `
+            <div class="unlock-panel">
+                <div class="unlock-head">${UiIcons.svg('unlock')} UNLOCKED</div>
+                <div class="unlock-cards">${bikeCards.join('')}${legCards.join('')}</div>
+            </div>`;
+    }
+
+    // cause: what the rider hit, when the game knows it
+    showCrashNotification(cause) {
+        // A card over the upper half: the crashed bike stays in view below it
         const crashNotification = document.createElement('div');
         crashNotification.id = 'crashNotification';
-        crashNotification.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(135deg, #2c1515, #3e1515);
-            border: 3px solid #e74c3c;
-            border-radius: 20px;
-            padding: 40px;
-            text-align: center;
-            z-index: 9999;
-            color: white;
-            font-family: Arial, sans-serif;
-            animation: fadeIn 0.5s ease-out;
-            box-shadow: 0 10px 40px rgba(231, 76, 60, 0.6);
-            min-width: 400px;
-        `;
-
+        crashNotification.className = 'run-card crash-card';
+        crashNotification.setAttribute('role', 'alertdialog');
+        crashNotification.setAttribute('aria-label', 'Crashed');
+        const tip = this.lastCheckpointPosition
+            ? '<div class="crash-tip"><span class="kbd">C</span> back to the last checkpoint</div>'
+            : '';
         crashNotification.innerHTML = `
-            <div style="font-size: 72px; font-weight: bold; color: #e74c3c; margin-bottom: 20px; text-shadow: 0 0 20px rgba(231, 76, 60, 0.8);">
-                CRASHED!
-            </div>
-            <div style="font-size: 24px; color: #95a5a6; margin-bottom: 30px;">
-                Better luck next time!
-            </div>
-            <div style="margin-top: 30px; display: flex; gap: 20px; justify-content: center;">
-                <button id="restartCrashBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #3498db, #2980b9);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(52, 152, 219, 0.4);
-                    transition: all 0.3s;
-                "><u>R</u>ESTART</button>
-                <button id="menuCrashBtn" style="
-                    font-size: 20px;
-                    padding: 15px 30px;
-                    background: linear-gradient(135deg, #e74c3c, #c0392b);
-                    color: white;
-                    border: none;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    font-weight: bold;
-                    box-shadow: 0 4px 15px rgba(231, 76, 60, 0.4);
-                    transition: all 0.3s;
-                "><u>M</u>ENU</button>
+            <div class="crash-title">CRASHED</div>
+            <div class="crash-sub">${cause || 'Better luck next time!'}</div>
+            ${tip}
+            <div class="run-buttons">
+                <button id="restartCrashBtn" class="btn btn-primary"><u>R</u>estart</button>
+                <button id="menuCrashBtn" class="btn"><u>M</u>enu</button>
             </div>
         `;
 
+        if (this.hud) this.hud.clearTransient();
         document.body.appendChild(crashNotification);
 
         // Enable R key for restart
@@ -1776,32 +1935,7 @@ class Game {
             if (this.input) {
                 this.input.setMenuActive(false);
             }
-            // Reset the vehicle
-            this.vehicle.reset();
-            if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-                const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
-                this.vehicle.position.x = startPos.x;
-                this.vehicle.position.y = startPos.y;
-                this.vehicle.position.z = startPos.z;
-                this.vehicle.yawAngle = startPos.heading;
-                // Re-sync segment tracking with the teleported position so the
-                // windowed wall/elevation searches don't use a stale index
-                this.vehicle.findNearestRoadSegment();
-            }
-            this.cones.reset();
-            this.finished = false;
-            this.startTime = performance.now();
-            this.score = 0;
-            this.combo = 0;
-            this.comboMultiplier = 1;
-            this.checkpointsPassed = 0;
-            this.lastCheckpointIndex = -1;
-            this.checkpointTimes = [];
-            this.restartLeaderboardSession();
-            if (this.environment && this.environment.checkpoints) {
-                this.environment.checkpoints.forEach(cp => cp.passed = false);
-            }
-            this.updateScoreDisplay();
+            this.restartLeg();
         });
 
         document.getElementById('menuCrashBtn').addEventListener('click', () => {
@@ -1932,6 +2066,36 @@ class Game {
     }
 
     // Read-only leaderboard viewer, reachable from the leg-selector menu
+    // Local best times are kept per board, so a leg whose course changed
+    // starts a new record instead of inheriting one set on the old road
+    bestTimeKey(leg) {
+        return `motorcycleBestTime_${TourSystem.boardId(leg)}`;
+    }
+
+    bestSplitsKey(leg) {
+        return RaceTiming.splitsKey(TourSystem.boardId(leg));
+    }
+
+    // What the splits compare against: the local best splits now, and the
+    // online record once it arrives. The start never waits on the network,
+    // and a failed fetch only means no record comparison this run.
+    loadSplitReferences(leg) {
+        this.bestSplits = RaceTiming.loadSplits(localStorage, this.bestSplitsKey(leg));
+        this.record = null;
+        if (!this.leaderboardService) return;
+        const board = TourSystem.boardId(leg);
+        this.recordBoard = board;
+        this.leaderboardService.fetchLeaderboard(board, 10).then(result => {
+            // A leg change while the fetch was in flight makes this stale
+            if (this.recordBoard !== board) return;
+            if (result && result.success) {
+                this.record = RaceTiming.pickRecord(result.entries);
+            } else {
+                console.warn('Record unavailable for', board, result && result.error);
+            }
+        }).catch(error => console.warn('Record fetch failed for', board, error));
+    }
+
     async showLeaderboardViewer(legId) {
         const leg = this.tourSystem.getLegById(legId);
         const legName = leg ? leg.name : legId;
@@ -1942,46 +2106,16 @@ class Game {
 
         const overlay = document.createElement('div');
         overlay.id = 'leaderboardViewer';
-        overlay.style.cssText = `
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.75);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 3000;
-        `;
+        overlay.className = 'lb-viewer';
 
         const panel = document.createElement('div');
-        panel.style.cssText = `
-            background: linear-gradient(135deg, #16213a, #1a1a2e);
-            border: 2px solid #ffd700;
-            border-radius: 16px;
-            padding: 28px 36px;
-            min-width: 380px;
-            max-width: 90vw;
-            max-height: 80vh;
-            overflow-y: auto;
-            color: white;
-            font-family: Arial, sans-serif;
-            text-align: center;
-            box-shadow: 0 0 40px rgba(255, 215, 0, 0.25);
-        `;
+        panel.className = 'lb-panel';
+        const safeLegName = String(legName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
         panel.innerHTML = `
-            <h2 style="color: #ffd700; margin: 0 0 4px 0; letter-spacing: 2px;">🏆 BEST TIMES</h2>
-            <div style="color: #8899bb; margin-bottom: 18px; font-size: 14px;">${legName}</div>
-            <div id="leaderboardViewerBody" style="font-size: 15px; color: #ccd;">Loading…</div>
-            <button id="leaderboardViewerClose" style="
-                margin-top: 22px;
-                padding: 10px 36px;
-                background: linear-gradient(135deg, #3498db, #2980b9);
-                color: white;
-                border: none;
-                border-radius: 8px;
-                font-size: 15px;
-                font-weight: bold;
-                cursor: pointer;
-            ">CLOSE</button>
+            <h2 class="lb-title">${UiIcons.svg('trophy')} Best times</h2>
+            <div class="lb-leg">${safeLegName}</div>
+            <div id="leaderboardViewerBody" class="lb-body">Loading…</div>
+            <button id="leaderboardViewerClose" class="lb-close">Close</button>
         `;
         overlay.appendChild(panel);
         document.body.appendChild(overlay);
@@ -1995,44 +2129,44 @@ class Game {
         const body = panel.querySelector('#leaderboardViewerBody');
 
         // Local best time always shows, even offline
-        const localBest = parseFloat(localStorage.getItem(`motorcycleBestTime_${legId}`) || 'NaN');
+        const localBest = parseFloat(localStorage.getItem(this.bestTimeKey(legId)) || 'NaN');
         const localBestHtml = Number.isFinite(localBest)
-            ? `<div style="margin-bottom: 14px; color: #2ecc71;">Your best: ${localBest.toFixed(1)}s</div>`
-            : `<div style="margin-bottom: 14px; color: #667;">No personal best yet</div>`;
+            ? `<div class="lb-best">Your best: ${RaceTiming.formatTime(localBest * 1000)}</div>`
+            : '<div class="lb-best none">No personal best yet</div>';
 
         if (!this.leaderboardService) {
             body.innerHTML = localBestHtml +
-                '<div style="color: #889;">Online leaderboard unavailable<br>(no connection to the leaderboard service)</div>';
+                '<div class="lb-note">Online leaderboard unavailable<br>(no connection to the leaderboard service)</div>';
             return;
         }
 
         try {
-            const result = await this.leaderboardService.fetchLeaderboard(legId, 10);
+            const result = await this.leaderboardService.fetchLeaderboard(TourSystem.boardId(legId), 10);
             if (result.success && result.entries && result.entries.length > 0) {
                 const rows = result.entries.map((entry, i) => {
                     const rank = entry.rank !== undefined ? entry.rank : i + 1;
-                    const medal = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}.`;
+                    const medal = `${rank}.`;
                     const time = LeaderboardService.formatTime(entry.totalTime);
                     const flag = entry.flagged ? ' ⚠' : '';
                     return `<tr>
-                        <td style="padding: 4px 10px; text-align: right; color: #ffd700;">${medal}</td>
-                        <td style="padding: 4px 10px; letter-spacing: 3px; font-weight: bold;">${entry.playerName}</td>
-                        <td style="padding: 4px 10px; color: #6cf;">${time}${flag}</td>
+                        <td class="lb-rank">${medal}</td>
+                        <td class="lb-name">${String(entry.playerName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</td>
+                        <td class="lb-time">${time}${flag}</td>
                     </tr>`;
                 }).join('');
                 body.innerHTML = localBestHtml +
-                    `<table style="margin: 0 auto; border-collapse: collapse;">${rows}</table>`;
+                    `<table class="lb-table">${rows}</table>`;
             } else if (result.success) {
                 body.innerHTML = localBestHtml +
-                    '<div style="color: #889;">No times posted yet - be the first!</div>';
+                    '<div class="lb-note">No times posted yet - be the first!</div>';
             } else {
                 body.innerHTML = localBestHtml +
-                    '<div style="color: #889;">Could not load the online leaderboard</div>';
+                    '<div class="lb-note">Could not load the online leaderboard</div>';
             }
         } catch (error) {
             console.error('Leaderboard viewer error:', error);
             body.innerHTML = localBestHtml +
-                '<div style="color: #889;">Could not load the online leaderboard</div>';
+                '<div class="lb-note">Could not load the online leaderboard</div>';
         }
     }
 
@@ -2043,7 +2177,7 @@ class Game {
         this.leaderboardService.cancelSession();
         const leg = this.tourSystem.getCurrentLeg();
         if (leg) {
-            this.leaderboardService.startRun(leg.id).then(result => {
+            this.leaderboardService.startRun(TourSystem.boardId(leg)).then(result => {
                 if (result !== true && result.error) {
                     console.warn('Leaderboard session restart failed:', result.message);
                 }
@@ -2073,6 +2207,16 @@ class Game {
         this.endTrackPreview();
 
         if (!this.showcaseBikes) {
+            // Always present the riders in clear daylight, whatever leg was
+            // ridden or previewed last
+            this.setTimeOfDay('golden');
+            this.graphics.setAtmosphere(null);
+            this.graphics.setWeather('clear', 0);
+            this.scene.fog.color.setHex(this.timeConfigs.golden.fogColor);
+            this.scene.fog.density = 0.0018;
+            // Start on the bike instead of flying in from the last camera position
+            this.showcaseSnap = true;
+
             const platformGeometry = new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28);
             const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 });
             const silhouetteMaterial = new THREE.MeshBasicMaterial({ color: 0x05070c });
@@ -2086,22 +2230,42 @@ class Game {
                 v.yawAngle = 0;
                 v.updateMesh();
 
+                // Run again when the modelled bike takes over from the
+                // procedural one, so it works from each material's lit colour
+                // and gives the same result however often it runs.
                 const tier = this.riderTier(c.id);
-                if (tier === 'dimmed') {
-                    v.group.traverse(o => {
-                        if (o.isMesh && o.material) {
-                            if (o.material.color) o.material.color.multiplyScalar(0.22);
-                            if (o.material.emissiveIntensity !== undefined) o.material.emissiveIntensity = 0;
-                        }
-                    });
-                } else if (tier === 'silhouette') {
-                    v.group.traverse(o => {
-                        if (o.isMesh) {
-                            if (o.material && o.material.dispose) o.material.dispose();
-                            o.material = silhouetteMaterial;
-                        }
-                    });
-                }
+                const shade = () => {
+                    if (tier === 'dimmed') {
+                        const uses = new Map();
+                        v.group.traverse(o => {
+                            if (o.isMesh && o.material) uses.set(o.material, (uses.get(o.material) || 0) + 1);
+                        });
+                        const palette = new Set(Object.values(v.palette || {}));
+                        uses.forEach((count, material) => {
+                            if (material.color) {
+                                if (!material.userData.lit) material.userData.lit = material.color.clone();
+                                // The procedural bike darkens a material once
+                                // for each part that wears it, so its shared
+                                // finishes go black and the one-off ones (the
+                                // helmet, the rims) stay readable. A modelled
+                                // bike has few parts: its palette finishes
+                                // take the dark end, the rest the light end.
+                                const factor = v.modelled ? (palette.has(material) ? 0.03 : 0.12) : Math.pow(0.22, count);
+                                material.color.copy(material.userData.lit).multiplyScalar(factor);
+                            }
+                            if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0;
+                        });
+                    } else if (tier === 'silhouette') {
+                        v.group.traverse(o => {
+                            if (o.isMesh && o.material !== silhouetteMaterial) {
+                                if (o.material && o.material.dispose) o.material.dispose();
+                                o.material = silhouetteMaterial;
+                            }
+                        });
+                    }
+                };
+                shade();
+                v.onModel = shade;
 
                 const platform = new THREE.Mesh(platformGeometry, platformMaterial);
                 platform.position.set(v.position.x, v.position.y - 0.06, v.position.z);
@@ -2111,7 +2275,39 @@ class Game {
 
                 this.showcaseBikes[c.id] = v;
             });
+
+            // Showroom floor: glossy, fading out to the horizon haze so the
+            // stage does not end in a hard edge
+            const fadeCanvas = document.createElement('canvas');
+            fadeCanvas.width = 128;
+            fadeCanvas.height = 128;
+            const fadeCtx = fadeCanvas.getContext('2d');
+            const fade = fadeCtx.createRadialGradient(64, 64, 0, 64, 64, 64);
+            fade.addColorStop(0, '#ffffff');
+            fade.addColorStop(0.55, '#ffffff');
+            fade.addColorStop(1, '#000000');
+            fadeCtx.fillStyle = fade;
+            fadeCtx.fillRect(0, 0, 128, 128);
+            const riderCount = Object.keys(this.showcaseBikes).length;
+            const floor = new THREE.Mesh(
+                new THREE.PlaneGeometry(riderCount * 14 + 160, 160),
+                new THREE.MeshStandardMaterial({
+                    color: 0x1b2230,
+                    roughness: 0.4,
+                    metalness: 0.5,
+                    envMapIntensity: 1.2,
+                    alphaMap: new THREE.CanvasTexture(fadeCanvas),
+                    transparent: true
+                })
+            );
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set((riderCount - 1) * 7, -400.13, 0);
+            floor.receiveShadow = true;
+            this.scene.add(floor);
+            this.showcaseExtras.push(floor);
         }
+
+        this.graphics.fixColorSpaces();
 
         this.showcaseMode = 'rider';
         this.showcaseFocusId = focusId;
@@ -2133,12 +2329,17 @@ class Game {
         this.endTrackPreview();
         this.setTimeOfDay(leg.timeOfDay);
         this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
-        this.previewEnv.applyLandscapeConfig(
-            this.tourSystem.getLandscapeConfigFor ? this.tourSystem.getLandscapeConfigFor(leg) : this.tourSystem.getLandscapeConfig()
-        );
+        this.previewEnv.applyLandscapeConfig(this.previewEnv.config.look);
         if (leg.weather && leg.weather !== 'clear') {
             this.previewEnv.applyWeatherVisuals(leg.weather, leg.weatherIntensity || 1);
         }
+        this.graphics.setAtmosphere(
+            this.previewEnv.config.atmosphere,
+            this.previewEnv.config.render,
+            this.lowestRoadHeight(this.previewEnv, leg)
+        );
+        this.graphics.setWeather(leg.weather || 'clear', leg.weatherIntensity || 0);
+        this.applyWeatherLighting(leg.weather || 'clear');
 
         // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
         // keeps the low-poly scenery reading well (wide aerials don't)
@@ -2146,11 +2347,18 @@ class Game {
         const midIdx = Math.floor((leg.startSegment + Math.min(leg.endSegment, path.length - 1)) / 2);
         const mid = path[midIdx];
         this.previewCenter = new THREE.Vector3(mid.x, (mid.y || 0), mid.z);
-        this.previewRadius = 30;
-        // The road hugs a cliff wall, so a full circle would pass through
-        // rock: the camera instead sways through an arc on the open valley
-        // side. Base angle = the road's right-hand normal.
-        this.previewBaseAngle = -mid.heading;
+        // How far out and how high the camera stands comes from the leg: a
+        // leg with trees beside the road has no room for the default 30
+        const preview = Terrain.legConfig(leg.id).preview || { radius: 30, height: 9 };
+        this.previewRadius = preview.radius;
+        this.previewHeight = preview.height;
+        // A full circle would pass through whatever stands beside the road:
+        // the camera instead sways through an arc about the road's normal on
+        // the leg's open side (the right unless `side` is -1), at the radius
+        // and height the leg gives above.
+        this.previewBaseAngle = -mid.heading + (preview.side === -1 ? Math.PI : 0);
+
+        this.graphics.fixColorSpaces();
 
         this.previewLeg = leg;
         this.previewOrbitAngle = this.previewOrbitAngle || 0;
@@ -2178,14 +2386,7 @@ class Game {
     endTrackPreview() {
         if (this.previewEnv) {
             // Remove everything the preview environment added to the scene
-            const keep = new Set([
-                this.camera,
-                this.directionalLight, this.directionalLight && this.directionalLight.target,
-                this.distantLight, this.distantLight && this.distantLight.target,
-                this.ambientLight, this.hemisphereLight, this.fillLight, this.rimLight,
-                this.leftHeadlight, this.leftHeadlight && this.leftHeadlight.target,
-                this.rightHeadlight, this.rightHeadlight && this.rightHeadlight.target
-            ]);
+            const keep = this.persistentSceneObjects();
             // Showcase bikes/platforms survive an env teardown
             if (this.showcaseBikes) Object.values(this.showcaseBikes).forEach(v => keep.add(v.group));
             if (this.showcaseExtras) this.showcaseExtras.forEach(o => keep.add(o));
@@ -2229,7 +2430,12 @@ class Game {
                 const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
                 const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;
                 // Ease toward the orbit point so focus changes glide across
-                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), Math.min(1, dt * 4));
+                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
+                this.showcaseSnap = false;
+                // The sun and its shadow frustum follow the stage
+                this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
+                this.directionalLight.target.position.copy(target);
+                this.directionalLight.target.updateMatrixWorld();
                 this.camera.up.set(0, 1, 0);
                 this.camera.fov = 50;
                 this.camera.updateProjectionMatrix();
@@ -2244,7 +2450,7 @@ class Game {
                 const r = this.previewRadius;
                 this.camera.position.set(
                     c.x + Math.cos(angle) * r,
-                    c.y + 9,
+                    c.y + this.previewHeight,
                     c.z + Math.sin(angle) * r
                 );
                 this.camera.up.set(0, 1, 0);
@@ -2253,7 +2459,8 @@ class Game {
                 this.camera.lookAt(c.x, c.y + 1.5, c.z);
             }
 
-            this.renderer.render(this.scene, this.camera);
+            this.graphics.update(dt);
+            this.graphics.render(this.scene, this.camera);
         };
         this.menuShowcaseRAF = requestAnimationFrame(loop);
     }
@@ -2338,7 +2545,7 @@ class Game {
             this.fps = this.frameCount;
             this.frameCount = 0;
             this.lastTime = now;
-            document.getElementById('fps').textContent = `FPS: ${this.fps}`;
+            if (this.hud) this.hud.setFps(this.fps);
             this.adaptResolution();
         }
 
@@ -2351,13 +2558,18 @@ class Game {
         if (this.input.checkPause()) {
             this.paused = !this.paused;
             if (this.paused) {
+                this.pauseStartedAt = performance.now();
                 this.soundManager.stopEngineSound();
+            } else if (this.pauseStartedAt) {
+                // Time spent paused is not race time
+                this.startTime += performance.now() - this.pauseStartedAt;
+                this.pauseStartedAt = 0;
             }
         }
 
         // Skip all game logic if paused, but continue rendering
         if (this.paused) {
-            this.renderer.render(this.scene, this.camera);
+            this.graphics.render(this.scene, this.camera);
             return;
         }
 
@@ -2365,6 +2577,9 @@ class Game {
         const throttleInput = this.input.getThrottleInput();
         const brakeInput = this.input.getBrakeInput();
         const wheelieInput = this.input.getWheelieInput();
+        if (!Number.isFinite(this.firstInputAt) && (steeringInput || throttleInput || brakeInput || wheelieInput)) {
+            this.firstInputAt = this.raceElapsed();
+        }
 
         // Handle one-shot input actions once per frame (not per physics step)
 
@@ -2394,81 +2609,17 @@ class Game {
 
         // Check for reset
         if (this.input.checkReset()) {
-            // Remove finish banner if it exists
-            const finishBanner = document.getElementById('finishBanner');
-            if (finishBanner) {
-                finishBanner.remove();
-            }
-
-            // Remove crash notification if it exists
-            const crashNotification = document.getElementById('crashNotification');
-            if (crashNotification) {
-                crashNotification.remove();
-            }
-
-            // Disable R key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-
-            // High score is updated when finishing the course, not on reset
-
-            this.vehicle.reset();
-            if (this.environment.roadPath && this.environment.roadPath.length > 0) {
-                // Reset to the leg's starting position (not always segment 0)
-                const startPos = this.tourSystem.getStartingPosition(this.environment.roadPath);
-                this.vehicle.position.x = startPos.x;
-                this.vehicle.position.y = startPos.y;
-                this.vehicle.position.z = startPos.z;
-                this.vehicle.yawAngle = startPos.heading;
-                // Re-sync segment tracking with the teleported position so the
-                // windowed wall/elevation searches don't use a stale index
-                this.vehicle.findNearestRoadSegment();
-            }
-            this.cones.reset();
-            this.finished = false;
-            this.startTime = performance.now();
-
-            // Reset scoring
-            this.score = 0;
-            this.combo = 0;
-            this.comboMultiplier = 1;
-            this.checkpointsPassed = 0;
-            this.lastCheckpointIndex = -1;
-            this.checkpointTimes = []; // Reset checkpoint times
-            this.restartLeaderboardSession();
-
-            // Reset checkpoints
-            if (this.environment && this.environment.checkpoints) {
-                this.environment.checkpoints.forEach(cp => cp.passed = false);
-            }
-
-            // Reset UI
-            this.updateScoreDisplay();
-
-            // Show dashboard again
-            const dashboard = document.querySelector('.dashboard');
-            if (dashboard) {
-                dashboard.style.opacity = '1';
-            }
+            this.restartLeg();
         }
 
-        // Check for next leg (N key)
+        // Next leg (N key): only offered by the finish banner of a non-final
+        // leg, and it must take the same path as the button (name entry)
         if (this.input.checkNextLeg()) {
-            // Remove finish banner if it exists
-            const finishBanner = document.getElementById('finishBanner');
-            if (finishBanner) {
-                finishBanner.remove();
+            const nextLegBtn = document.getElementById('nextLegBtn');
+            if (nextLegBtn) {
+                nextLegBtn.click();
+                return;
             }
-
-            // Disable N key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-
-            this.startNextLeg();
-            // New leg scheduled its own loop; stop this frame
-            return;
         }
 
         // Check for sound toggle
@@ -2491,25 +2642,7 @@ class Game {
             localStorage.setItem('twistyCameraMode', String(this.cameraMode));
             console.log(`Camera mode: ${this.cameraModes[this.cameraMode].name}`);
             
-            // Show notification
-            const notification = document.createElement('div');
-            notification.className = 'notification';
-            notification.textContent = `Camera: ${this.cameraModes[this.cameraMode].name}`;
-            notification.style.cssText = `
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                background: rgba(0, 0, 0, 0.7);
-                color: white;
-                padding: 10px 20px;
-                border-radius: 5px;
-                font-size: 20px;
-                z-index: 1000;
-                animation: fadeInOut 1s ease-out;
-            `;
-            document.body.appendChild(notification);
-            setTimeout(() => notification.remove(), 1000);
+            showCallout(`Camera: ${this.cameraModes[this.cameraMode].name}`, 'info', 1000);
         }
 
         // Run physics in fixed timesteps - ensures consistent movement
@@ -2545,9 +2678,8 @@ class Game {
         }
 
         // Check for finish line crossing
-        if (!this.finished && !this.vehicle.crashed && this.environment.finishLinePosition) {
-            const distanceToFinish = this.vehicle.position.distanceTo(this.environment.finishLinePosition);
-            if (distanceToFinish < 5) { // Within 5 units of finish line
+        if (!this.finished && !this.vehicle.crashed && this.environment.finishGate) {
+            if (this.inGate(this.environment.finishGate, this.vehicle.position)) {
                 this.finished = true;
                 this.vehicle.finished = true; // Prevent crashes after finishing
                 this.finishTime = performance.now() - this.startTime;
@@ -2573,11 +2705,23 @@ class Game {
         // Update traffic
         if (this.traffic) {
             const collision = this.traffic.update(deltaTime, this.vehicle.position);
-            if (collision && collision.hit && !this.vehicle.crashed && !inRoadworksZone) {
+            // The roadworks leave one corridor for both directions, so a car
+            // on its detour (which starts before the zone and ends after it)
+            // cannot be avoided: no crash against it
+            const carOnDetour = collision && collision.car && collision.car.inDetour;
+            if (collision && collision.hit && !this.vehicle.crashed && !inRoadworksZone && !carOnDetour) {
                 this.vehicle.crashed = true;
                 this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
                 this.vehicle.frame.material.color.setHex(0xff00ff);
-                this.showCollisionWarning();
+                // The crash was set after vehicle.update(), so the generic
+                // "just crashed" check above never sees this one. (Not after
+                // the finish: the results banner must stay in charge.)
+                if (!this.finished) {
+                    this.soundManager.playCrashSound();
+                    this.showCrashNotification('You hit a car');
+                } else {
+                    this.showCollisionWarning();
+                }
                 
                 // Calculate impact direction based on car position
                 const car = collision.car;
@@ -2637,7 +2781,7 @@ class Game {
                 this.vehicle.velocity = impactDir.multiplyScalar(Math.min(this.vehicle.speed * 0.4, 7));
                 this.vehicle.velocity.y = 3;
                 this.soundManager.playCrashSound();
-                this.showCrashNotification();
+                this.showCrashNotification('Hit by a rockfall');
                 console.log('CRASHED! Hit by a rockfall');
 
                 if (this.particles) {
@@ -2683,7 +2827,7 @@ class Game {
 
         // Update particle system and spawn particles based on vehicle state
         // Update weather system
-        if (this.weatherSystem && !this.vehicle.crashed) {
+        if (this.weatherSystem) {
             this.weatherSystem.update(rawDeltaTime, this.vehicle.position);
         }
 
@@ -2701,8 +2845,10 @@ class Game {
             if (brakeInput > 0.3 && this.vehicle.speed > 30 && this.brakeHeldTime > 0.4) {
                 const smokeIntensity = brakeInput * Math.min(this.vehicle.speed / 50, 1.0);
                 // Spawn from rear wheel position
+                // (0.7 behind the bike along its heading, not along world Z)
                 const rearWheelPos = this.vehicle.position.clone();
-                rearWheelPos.z -= 0.7; // Rear wheel offset
+                rearWheelPos.x -= Math.sin(this.vehicle.yawAngle) * 0.7;
+                rearWheelPos.z -= Math.cos(this.vehicle.yawAngle) * 0.7;
                 this.particles.createTireSmoke(rearWheelPos, this.vehicle.velocity, smokeIntensity);
             }
 
@@ -2726,14 +2872,7 @@ class Game {
             this.lastJumpState = this.vehicle.isJumping;
         }
 
-        // Update directional light to follow vehicle, keeping the
-        // time-of-day sun direction (low sun = long shadows)
-        const sunOffset = this.sunOffset || { x: 50, y: 80 };
-        this.directionalLight.position.x = this.vehicle.position.x + sunOffset.x;
-        this.directionalLight.position.y = this.vehicle.position.y + sunOffset.y;
-        this.directionalLight.position.z = this.vehicle.position.z;
-        this.directionalLight.target.position.copy(this.vehicle.position);
-        this.directionalLight.target.updateMatrixWorld();
+        // (updateCamera() already re-anchored the sun to the bike)
 
         // Subtle intensity variation for natural lighting, relative to the
         // time-of-day base so night legs stay dark
@@ -2741,29 +2880,61 @@ class Game {
         const baseSunIntensity = this.baseSunIntensity !== undefined ? this.baseSunIntensity : 0.8;
         this.directionalLight.intensity = baseSunIntensity * (1 + Math.sin(time * 0.1) * 0.06);
 
-        // Update headlights (interpolated position/yaw so the beam doesn't judder)
+        // Update the headlight (interpolated position/yaw so the beam doesn't judder)
         const renderPos = this.vehicle.renderPosition || this.vehicle.position;
-        const renderYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
-        const headlightEuler = new THREE.Euler(0, renderYaw, 0);
-        const headlightOffset = new THREE.Vector3(0, 0.5, 0.7);
-        headlightOffset.applyEuler(headlightEuler);
+        if (this.headlight.visible) {
+            const renderYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+            const sinYaw = Math.sin(renderYaw);
+            const cosYaw = Math.cos(renderYaw);
+            // The light source sits well above the lamp and is dipped onto the
+            // road about 30 m ahead: a beam from lamp height only grazes the
+            // tarmac and leaves it black. The visible beam cone below starts
+            // at the real lamp.
+            this.headlight.position.set(renderPos.x + sinYaw * 0.8, renderPos.y + 2.9, renderPos.z + cosYaw * 0.8);
+            this.headlight.target.position.set(renderPos.x + sinYaw * 30, renderPos.y - 0.4, renderPos.z + cosYaw * 30);
+            this.headlight.target.updateMatrixWorld();
 
-        this.leftHeadlight.position.copy(renderPos).add(new THREE.Vector3(-0.3, 0, 0).applyEuler(headlightEuler)).add(headlightOffset);
-        this.rightHeadlight.position.copy(renderPos).add(new THREE.Vector3(0.3, 0, 0).applyEuler(headlightEuler)).add(headlightOffset);
+            this.headlightBeam.position.set(renderPos.x + sinYaw * 0.8, renderPos.y + 0.9, renderPos.z + cosYaw * 0.8);
+            this.headlightBeam.rotation.set(0.045, renderYaw, 0);
+        }
 
-        const targetOffset = new THREE.Vector3(0, 0, 50);
-        targetOffset.applyEuler(headlightEuler);
+        // Rim light: from behind and above the bike, aimed at it. (It used to
+        // keep its default target at the world origin, so on a far leg it
+        // shone almost level across the scene from an arbitrary side and
+        // threw a white glare across the wet road.)
+        const rimYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
+        this.rimLight.position.set(
+            renderPos.x - Math.sin(rimYaw) * 30,
+            renderPos.y + 22,
+            renderPos.z - Math.cos(rimYaw) * 30
+        );
+        this.rimLight.target.position.copy(renderPos);
+        this.rimLight.target.updateMatrixWorld();
 
-        this.leftHeadlight.target.position.copy(renderPos).add(targetOffset);
-        this.rightHeadlight.target.position.copy(renderPos).add(targetOffset);
+        // The far ring of a leg that nears the mountains rises with the ride
+        const env = this.environment;
+        this.graphics.setRingProgress(
+            ((this.vehicle.currentRoadSegment || 0) - env.startSegment) / Math.max(1, env.endSegment - env.startSegment)
+        );
+        this.graphics.update(
+            rawDeltaTime,
+            this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,
+            this.weatherSystem ? (this.weatherSystem.flash || 0) * 0.35 : 0
+        );
+        this.graphics.render(this.scene, this.camera);
+    }
 
-        this.leftHeadlight.target.updateMatrixWorld();
-        this.rightHeadlight.target.updateMatrixWorld();
-
-        // Update rim light to follow behind vehicle
-        this.rimLight.position.set(renderPos.x, 10, renderPos.z - 50);
-
-        this.renderer.render(this.scene, this.camera);
+    // Whether a position is on a gate: a short band along the road, and across
+    // it every metre a bike can legally be at that gate (gate.left and
+    // gate.right, set when the gate is built). Road space comes from the
+    // gate's own position and heading. There is no segment test: the band is
+    // the only guard, and it cannot reach another stretch of road.
+    inGate(gate, position) {
+        const dx = position.x - gate.position.x;
+        const dz = position.z - gate.position.z;
+        const along = dx * Math.sin(gate.heading) + dz * Math.cos(gate.heading);
+        const across = dx * Math.cos(gate.heading) - dz * Math.sin(gate.heading);
+        return Math.abs(along) < 5 && across > -gate.left && across < gate.right;
     }
 
     checkCheckpoints() {
@@ -2774,9 +2945,12 @@ class Game {
                 const dx = this.vehicle.position.x - checkpoint.position.x;
                 const dz = this.vehicle.position.z - checkpoint.position.z;
                 const distance = Math.sqrt(dx * dx + dz * dz);
-                
-                // Check if within checkpoint gate (16 units wide)
-                if (distance < checkpoint.width) {
+
+                // Within the 16 unit circle round the gate (a rider on the
+                // road triggers it exactly where it always did: the high-pass
+                // board is not versioned), or anywhere across the gate's band,
+                // which reaches the rideable ground
+                if (distance < checkpoint.width || this.inGate(checkpoint, this.vehicle.position)) {
                     // Check if this is the next expected checkpoint (in order)
                     const totalCheckpoints = this.environment.checkpoints.length;
                     if (checkpoint.index === this.lastCheckpointIndex + 1 ||
@@ -2792,7 +2966,7 @@ class Game {
                         console.log(`Checkpoint ${checkpoint.index + 1} stored for restart at position: ${checkpoint.position.x.toFixed(1)}, ${checkpoint.position.z.toFixed(1)}`);
 
                         // Record checkpoint pass time
-                        const currentTime = performance.now() - this.startTime;
+                        const currentTime = Math.round(performance.now() - this.startTime);
                         this.checkpointTimes[checkpoint.index] = currentTime;
 
                         // Record in leaderboard service
@@ -2825,7 +2999,8 @@ class Game {
                         }
 
                         // Apply combo multiplier
-                        const points = basePoints * this.comboMultiplier;
+                        // (the multiplier steps in halves: keep the award whole)
+                        const points = Math.round(basePoints * this.comboMultiplier);
                         this.addScore(points);
                         
                         // Increase combo
@@ -2835,7 +3010,7 @@ class Game {
                         }
                         
                         // Show checkpoint notification
-                        this.showCheckpointNotification(checkpoint.index + 1, points);
+                        this.showSplit(checkpoint.index, currentTime, points);
 
                         // Play checkpoint sound
                         this.soundManager.playCheckpointSound();
@@ -2873,25 +3048,7 @@ class Game {
     }
     
     showSpeedBonus() {
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 40%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(255, 140, 0, 0.9);
-            color: white;
-            padding: 20px 40px;
-            border-radius: 10px;
-            font-size: 28px;
-            font-weight: bold;
-            z-index: 500;
-            animation: speedPulse 1s ease-out;
-        `;
-        notification.textContent = 'SPEED STREAK! +250';
-        document.body.appendChild(notification);
-        
-        setTimeout(() => notification.remove(), 1000);
+        showCallout('Speed streak +250', 'gold', 1000);
     }
     
     checkNearMisses() {
@@ -2929,47 +3086,11 @@ class Game {
     }
     
     showNearMissBonus() {
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 35%;
-            right: 50px;
-            background: rgba(255, 215, 0, 0.9);
-            color: black;
-            padding: 15px 30px;
-            border-radius: 8px;
-            font-size: 24px;
-            font-weight: bold;
-            z-index: 500;
-            animation: slideInRight 0.3s ease-out;
-        `;
-        notification.textContent = 'NEAR MISS! +100';
-        document.body.appendChild(notification);
-        
-        setTimeout(() => notification.remove(), 800);
+        showCallout('Near miss +100', 'gold', 900);
     }
     
     showCollisionWarning() {
-        const warning = document.createElement('div');
-        warning.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(255, 0, 0, 0.9);
-            color: white;
-            padding: 30px 50px;
-            border-radius: 15px;
-            font-size: 36px;
-            font-weight: bold;
-            z-index: 600;
-            border: 4px solid white;
-            animation: shake 0.5s ease-out;
-        `;
-        warning.textContent = 'COLLISION!';
-        document.body.appendChild(warning);
-        
-        setTimeout(() => warning.remove(), 1500);
+        showCallout('Collision!', 'bad', 1500);
     }
     
     checkJumpScoring() {
@@ -2984,7 +3105,8 @@ class Game {
                 this.wasJumping = false;
                 
                 // Calculate jump score based on air time and rotation
-                const jumpRotation = Math.abs(this.vehicle.jumpRotation);
+                // land() zeroes jumpRotation, so read the value it saved
+                const jumpRotation = Math.abs(this.vehicle.lastJumpRotation || 0);
                 let jumpScore = 50; // Base jump score
                 
                 // Bonus for flips
@@ -3027,78 +3149,62 @@ class Game {
         }
     }
     
+    // Race time as shown: frozen at the finish and while paused
+    raceElapsed() {
+        if (this.finished) return this.finishTime;
+        if (this.paused && this.pauseStartedAt) return this.pauseStartedAt - this.startTime;
+        return performance.now() - this.startTime;
+    }
+
     updateScoreDisplay() {
-        if (!this.scoreElements) {
-            this.scoreElements = {
-                score: document.getElementById('score'),
-                combo: document.getElementById('comboDisplay')
-            };
+        if (!this.hud) return;
+        if (typeof this.startTime === 'number') {
+            this.hud.setTime(RaceTiming.formatTime(Math.max(0, this.raceElapsed())));
         }
-
-        if (this.scoreElements.score && this.score !== this.lastDisplayedScore) {
-            this.lastDisplayedScore = this.score;
-            this.scoreElements.score.textContent = this.score.toLocaleString();
-        }
-
-        // Only touch the combo display (and restart its pulse animation) when
-        // the combo value actually changes - this runs every frame
-        if (this.combo > 0 && this.combo !== this.lastDisplayedCombo && this.scoreElements.combo) {
-            const comboDisplay = this.scoreElements.combo;
-            comboDisplay.textContent = `COMBO x${this.combo}`;
-            comboDisplay.style.animation = 'none';
-            setTimeout(() => { comboDisplay.style.animation = 'pulse-combo 0.5s ease-in-out'; }, 10);
-        } else if (this.combo === 0 && this.lastDisplayedCombo > 0 && this.scoreElements.combo) {
-            this.scoreElements.combo.textContent = '';
-        }
-        this.lastDisplayedCombo = this.combo;
+        this.hud.setScore(this.score);
+        this.hud.setCombo(this.combo);
     }
     
+    // The split at a gate: elapsed time first, then the gap to the personal
+    // best split and, when the backend sends them, the record split
+    showSplit(index, elapsed, points) {
+        const total = this.gateTotal();
+        const split = RaceTiming.split(index, elapsed, this.bestSplits, this.record);
+        const delta = (ms, label) => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}<small>${label}</small></span>`;
+        const deltas = [];
+        if (split.pbDelta !== null) deltas.push(delta(split.pbDelta, 'PB'));
+        if (split.recordDelta !== null) deltas.push(delta(split.recordDelta, 'REC'));
+        if (deltas.length === 0) deltas.push('<span class="delta-none">FIRST SPLIT<small>SET A BEST</small></span>');
+        this.lastSplit = split;
+        if (this.hud) this.hud.setGates(Math.min(total, index + 1), total);
+        const shown = this.hud && this.hud.showSplit(`
+            <div class="split-gate">CHECKPOINT ${index + 1}/${total}</div>
+            <div class="split-time">${RaceTiming.formatTime(elapsed)}</div>
+            <div class="split-deltas">${deltas.join('')}</div>
+            <div class="split-style">+${points} style</div>`);
+        if (!shown) this.showCheckpointNotification(index + 1, points);
+    }
+
+    hideSplit() {
+        if (this.hud) this.hud.hideSplit(true);
+    }
+
     showCheckpointNotification(checkpointNum, points) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
         const totalCheckpoints = this.environment && this.environment.checkpoints ? this.environment.checkpoints.length : 10;
-        notification.textContent = `CHECKPOINT ${checkpointNum}/${totalCheckpoints}! +${points}`;
-        document.body.appendChild(notification);
-        
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(`Checkpoint ${checkpointNum}/${totalCheckpoints} +${points}`, 'info', 1000);
     }
     
     showJumpBonus(text) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FF69B4';
-        notification.textContent = text;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(text, 'gold', 1000);
     }
 
     showWheelieHelpNotification() {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FFD700';
-        notification.textContent = 'Press SPACE to pop clutch for a wheelie!';
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 3000); // Longer duration for help text
+        const touch = document.body.classList.contains('touch');
+        showCallout(touch ? 'Tip: tap Wheelie' : 'Tip: Space for a wheelie', 'gold', 3000);
     }
 
     showConeHitNotification(points) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#FFA500'; // Orange color for cones
-        notification.textContent = `CONE HIT! +${points}`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(`Cone hit +${points}`, 'warn', 1000);
     }
     
     onWindowResize() {
@@ -3108,6 +3214,9 @@ class Game {
     }
 
     restartFromCheckpoint() {
+        // The run is over once the line is crossed; the finish banner owns
+        // what happens next
+        if (this.finished) return;
         if (!this.lastCheckpointPosition) {
             console.log('No checkpoint position available for restart');
             return;
@@ -3115,30 +3224,28 @@ class Game {
 
         console.log('Restarting from checkpoint at:', this.lastCheckpointPosition.x.toFixed(1), this.lastCheckpointPosition.z.toFixed(1));
 
-        // Apply penalty - lose some score
-        const penalty = 500;
+        // Apply penalty - lose some score (never below zero)
+        const penalty = Math.min(500, this.score);
         this.addScore(-penalty);
 
         // Reset vehicle to checkpoint position
+        // reset() clears every crash, fall, jump and wheelie flag; a partial
+        // reset here left the bike in cliff-fall state after a C restart
+        const distanceSoFar = this.vehicle.distanceTraveled;
+        this.vehicle.reset();
+        this.vehicle.distanceTraveled = distanceSoFar;
         this.vehicle.position.copy(this.lastCheckpointPosition);
         this.vehicle.yawAngle = this.lastCheckpointHeading;
         this.vehicle.speed = 15; // Reset to moderate speed
-        this.vehicle.leanAngle = 0;
-        this.vehicle.leanVelocity = 0;
-        this.vehicle.crashed = false;
-        this.vehicle.isJumping = false;
-        this.vehicle.isWheelie = false;
-        this.vehicle.wheelieAngle = 0;
-        this.vehicle.wheelieVelocity = 0;
-        this.vehicle.jumpRotation = 0;
-        this.vehicle.jumpVelocityY = 0;
         this.vehicle.findNearestRoadSegment();
+        this.vehicle.updateMesh();
 
-        // Reset start time for timing
-        this.startTime = performance.now();
+        // The crash banner belongs to the crash that was just undone
+        this.removeRunOverlays();
 
-        // The clock reset makes checkpoint times non-monotonic, so this run
-        // can no longer be validated - drop the leaderboard session
+        // The clock keeps running (a restart must not produce a record time),
+        // but a teleported run can no longer be validated - drop the
+        // leaderboard session
         if (this.leaderboardService && this.leaderboardService.isActive()) {
             this.leaderboardService.cancelSession();
         }
@@ -3147,18 +3254,20 @@ class Game {
          this.cones.reset();
 
         // Show notification
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = '#ff6600';
-        notification.textContent = `RESTARTED FROM CHECKPOINT (-${penalty} points)`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 2000);
+        showCallout(`Back to checkpoint -${penalty}`, 'warn', 2000);
 
         console.log('Restarted from checkpoint with penalty');
     }
+}
+
+// Short gameplay message in the HUD's call-out stack. tone: info, good, bad, warn or gold
+function showCallout(text, tone = 'info', durationMs = 1000) {
+    const hud = window.game && window.game.hud;
+    if (!hud) {
+        console.warn('Call-out before the HUD exists:', text);
+        return;
+    }
+    hud.callout(text, tone, durationMs);
 }
 
 class SoundManager {
@@ -3423,15 +3532,7 @@ class SoundManager {
     }
 
     showSoundToggleNotification(enabled) {
-        const notification = document.createElement('div');
-        notification.className = 'checkpoint-notification';
-        notification.style.color = enabled ? '#00ff00' : '#ff0000';
-        notification.textContent = `SOUND ${enabled ? 'ON' : 'OFF'}`;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.remove();
-        }, 1000);
+        showCallout(`Sound ${enabled ? 'on' : 'off'}`, enabled ? 'good' : 'info', 1000);
     }
 
 }

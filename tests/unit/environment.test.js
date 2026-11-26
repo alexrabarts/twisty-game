@@ -60,36 +60,6 @@ describe('Environment Boulder Positioning', () => {
         expect(closeDistance).toBe(0.5);
         expect(closeDistance < boulderRadius + 1.0).toBe(true); // Collision
     });
-
-    test('roadworks obstacles should be positioned on correct side', () => {
-        // Test that roadworks are positioned on the mountain side (left)
-        const roadCenter = 0;
-        const mountainSideOffset = -25; // Negative for left side
-
-        // Barrier should be positioned on mountain side
-        expect(mountainSideOffset).toBeLessThan(roadCenter);
-
-        // Not on cliff side
-        const cliffSideOffset = 25; // Positive for right side
-        expect(cliffSideOffset).toBeGreaterThan(roadCenter);
-    });
-
-    test('cliff boulders should be positioned correctly for terrain drop-off', () => {
-        // Test that boulders on drop-off side are positioned much lower
-        const roadY = 10;
-        const baseBoulderSize = 2.0;
-
-        // Left side (mountain) boulder - should be at road level
-        const leftBoulderY = roadY - baseBoulderSize * 0.4;
-        expect(leftBoulderY).toBeCloseTo(9.2, 1); // roadY - 0.8
-
-        // Right side (drop-off) boulder - should be much lower
-        const rightBoulderY = roadY - 45 - baseBoulderSize * 0.4;
-        expect(rightBoulderY).toBeCloseTo(-35.8, 1); // roadY - 45 - 0.8
-
-        // Right side should be significantly lower than left side
-        expect(rightBoulderY).toBeLessThan(leftBoulderY - 40);
-    });
 });
 
 describe('Environment Class Initialization', () => {

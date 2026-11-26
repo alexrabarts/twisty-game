@@ -6,7 +6,7 @@
   "scripts": {
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "test:unit": "node --experimental-vm-modules node_modules/.bin/jest tests/unit",
-    "test:integration": "node tests/integration/run-integration.mjs",
+    "test:integration": "node tools/terrain-check.mjs legs,pages",
     "test:watch": "node --experimental-vm-modules node_modules/.bin/jest --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/.bin/jest --coverage",
     "serve": "python3 -m http.server 8080"
@@ -15,6 +15,7 @@
     "@jest/globals": "^29.7.0",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
-    "puppeteer": "^23.0.0"
+    "puppeteer": "^23.0.0",
+    "three": "0.150.0"
   }
 }

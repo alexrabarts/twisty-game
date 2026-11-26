@@ -10,6 +10,11 @@ class WeatherSystem {
         this.weatherIntensity = 1.0;
         this.particles = null;
         this.particleSystem = null;
+        // The leg's lowest road height; main.js sets it at leg start
+        this.baseY = 0;
+        // The road's own grip on the leg (Terrain.LEGS[i].grip), under the
+        // weather's: the tour's later legs have colder, dirtier tarmac
+        this.surfaceGrip = 1;
         this.originalFogDensity = scene.fog ? scene.fog.density : 0.0008;
         this.lightningTimer = 0;
         this.lightningInterval = 5 + Math.random() * 5; // 5-10 seconds
@@ -60,6 +65,9 @@ class WeatherSystem {
                 this.particleSystem.geometry.dispose();
             }
             if (this.particleSystem.material) {
+                if (this.particleSystem.material.map) {
+                    this.particleSystem.material.map.dispose();
+                }
                 this.particleSystem.material.dispose();
             }
             this.particleSystem = null;
@@ -105,13 +113,16 @@ class WeatherSystem {
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
         geometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 1));
 
+        // Each drop is a sprite of a thin vertical streak
         const material = new THREE.PointsMaterial({
-            color: 0xaaaaaa,
-            size: 0.3,
+            color: 0xb8c4d0,
+            map: this.makeSpriteTexture('streak'),
+            size: 2.2,
             transparent: true,
-            opacity: 0.6,
+            opacity: 0.55,
             depthWrite: false
         });
+        this.capPointSize(material, 90);
 
         this.particleSystem = new THREE.Points(geometry, material);
         this.particleSystem.frustumCulled = false; // Volume always surrounds the camera
@@ -150,11 +161,13 @@ class WeatherSystem {
 
         const material = new THREE.PointsMaterial({
             color: 0xffffff,
-            size: 0.8,
+            map: this.makeSpriteTexture('flake'),
+            size: 0.55,
             transparent: true,
             opacity: 0.9,
             depthWrite: false
         });
+        this.capPointSize(material, 22);
 
         this.particleSystem = new THREE.Points(geometry, material);
         this.particleSystem.frustumCulled = false; // Volume always surrounds the camera
@@ -172,7 +185,48 @@ class WeatherSystem {
         console.log('Snow weather enabled');
     }
 
+    // Point sprites grow without limit as they near the camera: a drop
+    // passing the lens covered a quarter of the screen. Cap the size.
+    capPointSize(material, maxPixels) {
+        material.onBeforeCompile = (shader) => {
+            shader.vertexShader = shader.vertexShader.replace(
+                '#include <fog_vertex>',
+                `#include <fog_vertex>\n\tgl_PointSize = min(gl_PointSize, ${maxPixels.toFixed(1)});`
+            );
+        };
+        // Distinct cap -> distinct program
+        material.customProgramCacheKey = () => `capped-points-${maxPixels}`;
+    }
+
+    // 'streak' is a rain drop smeared by its fall, 'flake' a soft dot
+    makeSpriteTexture(kind) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64;
+        canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return null;
+        if (kind === 'streak') {
+            const gradient = ctx.createLinearGradient(0, 0, 0, 64);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 0)');
+            gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.8)');
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(31, 0, 2, 64);
+        } else {
+            const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
+            gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.7)');
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, 64, 64);
+        }
+        return new THREE.CanvasTexture(canvas);
+    }
+
     update(deltaTime, vehiclePosition) {
+        // Lightning afterglow, read by the renderer for a screen flash
+        this.flash = Math.max(0, (this.flash || 0) - deltaTime * 5);
+
         if (!this.particleSystem) {
             // Update fog dynamically based on position (for fog weather)
             if (this.weatherType === 'fog' && vehiclePosition) {
@@ -234,8 +288,7 @@ class WeatherSystem {
         // Fog is denser in valleys (lower elevation)
         if (!this.scene.fog || !vehiclePosition) return;
 
-        const baseY = 0; // Assume road base level
-        const elevationFactor = Math.max(0, Math.min(1, (vehiclePosition.y - baseY) / 50));
+        const elevationFactor = Math.max(0, Math.min(1, (vehiclePosition.y - this.baseY) / 50));
 
         // Denser fog at low elevation, lighter at high elevation
         const baseDensity = 0.003 * this.weatherIntensity;
@@ -247,6 +300,7 @@ class WeatherSystem {
 
         if (this.lightningTimer >= this.lightningInterval) {
             // Lightning flash!
+            this.flash = 1;
             this.lightningTimer = 0;
             this.lightningInterval = 5 + Math.random() * 10; // Next flash in 5-15 seconds
 
@@ -272,6 +326,15 @@ class WeatherSystem {
     }
 
     getPhysicsMultipliers() {
+        const weather = this.weatherPhysics();
+        return {
+            ...weather,
+            lateralFriction: weather.lateralFriction * this.surfaceGrip,
+            brakeForce: weather.brakeForce * this.surfaceGrip
+        };
+    }
+
+    weatherPhysics() {
         switch(this.weatherType) {
             case 'rain':
                 return {

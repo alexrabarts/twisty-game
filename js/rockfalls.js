@@ -1,18 +1,20 @@
 /**
  * Rockfall hazard system.
- * On later legs, rocks periodically break off the mountain wall ahead of the
+ * On later legs, rocks periodically break off the wall beside the road ahead of the
  * player, tumble down onto the road, bounce, roll across and settle briefly
  * before crumbling away. Hitting one (or being hit) crashes the bike.
  */
 class RockfallSystem {
-    constructor(scene, environment, legIndex) {
+    constructor(scene, environment) {
         this.scene = scene;
         this.environment = environment;
-        this.legIndex = legIndex;
 
-        // Hazard only on the later, harder legs; frequency ramps up
-        this.enabled = legIndex >= 4; // Legs 5-8
-        this.intensity = this.enabled ? (legIndex - 3) / 4 : 0; // 0.25 .. 1.0
+        // The leg's rockfall rate: 0 on the early legs, ramping up to 1
+        this.intensity = environment.config.dressing.rockfall;
+        // Rocks come off whichever side of the road the profile makes a wall
+        // (both, in a gorge); a fall picks the wall at its own segment
+        this.wallSign = Terrain.wallSign(environment.terrain);
+        this.enabled = this.intensity > 0 && this.wallSign !== 0;
 
         this.rocks = [];
         this.maxRocks = 10;
@@ -81,12 +83,17 @@ class RockfallSystem {
                 rock.mesh.position.z += rock.velocity.z * deltaTime;
                 rock.mesh.rotateOnWorldAxis(rock.spinAxis, rock.spinRate * deltaTime);
 
-                // Ground contact: road surface near the path, wall slope on the left
-                const groundY = this.groundYAt(rock.mesh.position.x, rock.mesh.position.z);
+                // Ground contact: the shared terrain model, wall and cliff face included
+                const groundY = this.groundY(rock.mesh.position.x, rock.mesh.position.z);
                 if (rock.mesh.position.y - rock.radius <= groundY && rock.velocity.y < 0) {
                     rock.mesh.position.y = groundY + rock.radius;
-                    rock.bounces++;
-                    if (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5) {
+                    // A rock still high on the wall is on a slope, not at rest: it
+                    // goes on down toward the road and does not settle there (unless
+                    // it has been tumbling for 10 s, so none sits there for good)
+                    const roadY = this.environment.roadPath[this.lastFallSegment || 0].y || 0;
+                    const highUp = rock.mesh.position.y - roadY > 3 && rock.age < 10;
+                    if (!highUp) rock.bounces++;
+                    if (!highUp && (rock.bounces >= 3 || Math.abs(rock.velocity.y) < 2.5)) {
                         rock.settled = true;
                         rock.settleUntil = rock.age + 5 + Math.random() * 4;
                         rock.velocity.set(0, 0, 0);
@@ -128,8 +135,18 @@ class RockfallSystem {
             (vehicle.currentRoadSegment || 0) + aheadSegments,
             path.length - 1
         );
+        // No rock is aimed at a tunnel or a village, or at the
+        // segment beside one: it spreads 12 m along the road and could land in it
+        if (this.environment.inSetPiece && this.environment.inSetPiece(segIdx, 1)) return segIdx;
         const seg = path[segIdx];
+        const walls = Terrain.wallSignsAt(this.environment.terrain, segIdx);
+        // One wall sheds the whole fall; a draw is spent only when there is a choice
+        const wallSign = walls.length > 1
+            ? walls[Math.floor(Math.random() * walls.length)]
+            : (walls[0] ?? this.wallSign);
         const count = 2 + Math.floor(Math.random() * (2 + this.intensity * 2));
+        // groundY searches around the last fall
+        this.lastFallSegment = segIdx;
 
         for (let i = 0; i < count && this.rocks.length < this.maxRocks; i++) {
             const radius = 0.35 + Math.random() * (0.5 + this.intensity * 0.5);
@@ -141,21 +158,24 @@ class RockfallSystem {
             mesh.castShadow = true;
             mesh.receiveShadow = true;
 
-            // Spawn high on the mountain wall (left side of the road)
+            // Spawn high on the wall
             const halfRoad = this.environment.roadWidth / 2;
-            const wallLateral = -(halfRoad + 4 + Math.random() * 6);
+            const wallLateral = wallSign * (halfRoad + 4 + Math.random() * 6);
             const perpX = Math.cos(seg.heading);
             const perpZ = -Math.sin(seg.heading);
             const along = (Math.random() - 0.5) * 24; // Spread along the road
-            mesh.position.set(
-                seg.x + perpX * wallLateral + Math.sin(seg.heading) * along,
+            const spawnX = seg.x + perpX * wallLateral + Math.sin(seg.heading) * along;
+            const spawnZ = seg.z + perpZ * wallLateral + Math.cos(seg.heading) * along;
+            // 18-32 above the road, and never inside a wall that rises faster than that
+            const spawnY = Math.max(
                 (seg.y || 0) + 18 + Math.random() * 14,
-                seg.z + perpZ * wallLateral + Math.cos(seg.heading) * along
+                this.groundY(spawnX, spawnZ) + 5
             );
+            mesh.position.set(spawnX, spawnY, spawnZ);
             this.scene.add(mesh);
 
             // Initial velocity: off the wall toward/over the road
-            const towardRoad = 3.5 + Math.random() * 5;
+            const towardRoad = -wallSign * (3.5 + Math.random() * 5);
             this.rocks.push({
                 mesh,
                 radius,
@@ -173,38 +193,17 @@ class RockfallSystem {
             });
         }
 
-        this.lastFallSegment = segIdx;
         return segIdx;
     }
 
-    // Simplified terrain: road height near the centerline, wall slope rising
-    // on the left. (Rocks that overshoot the right edge fall to the rough
-    // ledge height and settle there - the cliff drop is cosmetic for them.)
-    groundYAt(x, z) {
-        const path = this.environment.roadPath;
-        let closest = null;
-        let bestSq = Infinity;
-        // Coarse scan is fine - rocks live near this.lastFallSegment
-        const from = Math.max(0, (this.lastFallSegment || 0) - 12);
-        const to = Math.min(path.length - 1, (this.lastFallSegment || 0) + 12);
-        for (let i = from; i <= to; i++) {
-            const dx = x - path[i].x;
-            const dz = z - path[i].z;
-            const dSq = dx * dx + dz * dz;
-            if (dSq < bestSq) { bestSq = dSq; closest = path[i]; }
-        }
-        if (!closest) return 0;
-
-        const lateral =
-            (x - closest.x) * Math.cos(closest.heading) +
-            (z - closest.z) * -Math.sin(closest.heading);
-        const halfRoad = this.environment.roadWidth / 2;
-        const roadY = closest.y || 0;
-        if (lateral < -halfRoad) {
-            // Up the wall face: steep rise
-            return roadY + (-lateral - halfRoad) * 1.5;
-        }
-        return roadY;
+    // Ground under (x, z) from the terrain model. Coarse scan is fine - rocks
+    // live near this.lastFallSegment.
+    groundY(x, z) {
+        const environment = this.environment;
+        const last = this.lastFallSegment || 0;
+        const from = Math.max(0, last - 12);
+        const to = Math.min(environment.roadPath.length - 1, last + 12);
+        return Terrain.groundY(environment.terrain, environment.terrainGeometry, x, z, from, to, true);
     }
 
     dispose() {
