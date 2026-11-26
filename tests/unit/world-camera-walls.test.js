@@ -243,11 +243,17 @@ describe('the shipped stage: the chase camera and the walls of every hairpin', (
         expect(result.on.share).toBeLessThanOrEqual(STEP_SHARE);
     });
 
-    test('the same rides with the rule off find the crossings and the jump', () => {
+    // Without the rule the camera crosses the walls, comes within 0.4 m of their faces and steps by more than STEP_M a
+    // frame, each of which the ride with the rule may not do. The jump of 2 m (14% of the distance) it was first held
+    // to here was the road-overhead rule putting a camera that had swung over the leg above down under that leg's deck
+    // in one frame; since a camera over a road's own surface is no longer pulled under it (roofDeckM), that jump is
+    // gone with the rule off too, and the step left is 0.83 m (4.9% of the distance, under STEP_SHARE)
+    test('the same rides with the rule off cross the walls, come near their faces and step over the bound', () => {
         expect(result.off.frames).toBe(result.on.frames);
         expect(result.off.wall).toBeGreaterThan(BEFORE.wall);
-        expect(result.off.step).toBeGreaterThan(1);
-        expect(result.off.share).toBeGreaterThan(2 * STEP_SHARE);
+        expect(result.off.near).toBeGreaterThan(0);
+        expect(result.off.step).toBeGreaterThan(STEP_M);
+        expect(result.off.step).toBeGreaterThan(result.on.step);
     });
 });
 
