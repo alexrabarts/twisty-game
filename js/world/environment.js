@@ -534,7 +534,14 @@ class WorldEnvironment {
         const houses = (this.data.buildings || []).filter(b => b.x >= tx * m && b.x < (tx + 1) * m && b.z >= tz * m && b.z < (tz + 1) * m);
         // (a test that leaves the scenery out replaces buildTile: it is then called as it is)
         const own = this.scenery.buildTile === Scenery.prototype.buildTile;
+        const held = this.streamer.tiles.has(key);
         const group = own ? yield* this.scenery.buildTileSteps(tile, this.data.cover(key), houses, this.lastBike, lod === 0) : this.scenery.buildTile(tile, this.data.cover(key), houses, this.lastBike, lod === 0);
+        // A tile the streamer let go of while its scenery was made in steps keeps none: made whole it was never made, and
+        // kept it stood (and its trees were drawn) outside the window, which held a tile a whole build did not
+        if (held && !this.streamer.tiles.has(key)) {
+            this.scenery.disposeTile(key);
+            return;
+        }
         if (group) {
             group.traverse(o => { if (o.isMesh) o.userData.skipCulling = true; });
             this.sceneryGroup.add(group);
