@@ -617,6 +617,7 @@ class RoadMesh {
         for (const [row, inward] of [[ends[0] ? rows[from] : null, 1], [ends[1] ? rows[to] : null, -1]]) {
             if (!row) continue;
             RoadMesh.wings(out, RoadMesh.mouthLines(rows, inward > 0 ? from : to, -inward, (r, sign) => side(r, sign)), groundAt, null, [Math.sin(row.heading) * inward, Math.cos(row.heading) * inward]);
+            RoadMesh.mouthFloor(out, rows, inward > 0 ? from : to, -inward, groundAt);
             // (the frame square to the row, its forward into the tube)
             RoadMesh.portalFrame(out, side(row, -1), side(row, 1), inward > 0 ? row.heading : row.heading + Math.PI, roof, groundAt);
         }
@@ -681,6 +682,39 @@ class RoadMesh {
                 if (guard && [a, b].some(p => { const over = guard.ceiling(p[0], p[2], p[1]); return over !== null && over - RoadMesh.DECK_M < top; })) continue;
                 if (guard && ![0, 0.5, 1].every(f => guard.clear(a[0] + (b[0] - a[0]) * f, a[2] + (b[2] - a[2]) * f, Math.min(a[1], b[1]), top, 0.3))) continue;
                 RoadMesh.quad(out, a, b, [b[0], Math.max(b[1], gb) + 0.1, b[2]], [a[0], Math.max(a[1], ga) + 0.1, a[2]], RoadMesh.COLORS.concrete);
+            }
+        }
+    }
+
+    // The floor in front of a ride portal, out along `step` from row `at` for TUBE_MOUTH_M: from under the verge's
+    // outer edge out to the wall's line, each side, a hand under the road. The land is cut in front of a portal to the
+    // walls' lines (TerrainMesh.tubeClip, a box marked `mouth`) and the wing walls close its sides, but nothing lay
+    // between the verge and the wing: where the land stood over the road there, the cut left a slot down to nothing
+    // beside the road (leg 4 s 22 522 and leg 3 s 3 200, at a gallery's portal: 571 and 162 pixels seen through).
+    // Only where the land stood at or over the floor there (`groundAt`): where it falls away it was not cut
+    static mouthFloor(out, rows, at, step, groundAt = null) {
+        if (!groundAt) return;
+        const W = RoadMesh.TUBE_WALL_M, drop = 0.03;
+        const up = (a, b, c, d) => {
+            const n = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+            if (n >= 0) RoadMesh.quad(out, a, b, c, d, RoadMesh.COLORS.concrete);
+            else RoadMesh.quad(out, d, c, b, a, RoadMesh.COLORS.concrete);
+        };
+        const at3 = (row, o) => [row.x + o * Math.cos(row.heading), row.y - drop, row.z - o * Math.sin(row.heading)];
+        let walked = 0;
+        for (let j = at; rows[j + step] && walked < RoadMesh.TUBE_MOUTH_M; j += step) {
+            const a = rows[j], b = rows[j + step];
+            walked += Math.hypot(b.x - a.x, b.z - a.z);
+            if ((a.bits & 5) && (b.bits & 5)) continue;
+            const [va, pa] = RoadMesh.verges(a), [vb, pb] = RoadMesh.verges(b);
+            for (const [sign, ea, eb] of [[-1, va, vb], [1, pa, pb]]) {
+                const ia = a.width / 2 + Math.max(0, ea - 0.1), ib = b.width / 2 + Math.max(0, eb - 0.1);
+                const oa = a.width / 2 + W, ob = b.width / 2 + W;
+                if (oa <= ia && ob <= ib) continue;
+                const pa2 = at3(a, sign * oa), pb2 = at3(b, sign * ob);
+                const ga = groundAt(pa2[0], pa2[2]), gb = groundAt(pb2[0], pb2[2]);
+                if (!(Number.isFinite(ga) && ga > pa2[1] - 0.05) && !(Number.isFinite(gb) && gb > pb2[1] - 0.05)) continue;
+                up(at3(a, sign * ia), at3(a, sign * oa), at3(b, sign * ob), at3(b, sign * ib));
             }
         }
     }
