@@ -83,7 +83,7 @@ class WorldCamera {
             // time, and goes back up at roofOut: both slow, so the height changes over the approach and after
             // The boom's height meets that limit over roofBlendM (WorldCamera.softCeiling): taken as the lesser of the
             // two, the camera's climb stopped in one frame where the rising boom met a falling limit
-            roofClearM: 0.35, roofFastM: 0.7, roofFastFrom: 10, roofFastTo: 28, roofHardM: 0.15, roofIn: 1.8, roofOut: 1.2, roofPoints: 12, roofAheadS: 2.6, roofAheadMinM: 30, roofBlendM: 0.5,
+            roofDeckM: 1.4, roofClearM: 0.35, roofFastM: 0.7, roofFastFrom: 10, roofFastTo: 28, roofHardM: 0.15, roofIn: 1.8, roofOut: 1.2, roofPoints: 12, roofAheadS: 2.6, roofAheadMinM: 30, roofBlendM: 0.5,
             // The hard limit tests the boom at marchPoints points and narrows the first hit down by marchRefine halvings.
             // The soft share tests it at softPoints points: a point that the land comes within clearM + softBandM of
             // (at the camera end; less toward the head, which rides 1.2 m over the road) starts to draw the boom in,
@@ -124,6 +124,9 @@ class WorldCamera {
             // A boom that passes a face's end is drawn in from endBandM past it (or endBandShare of the boom's length, the
             // more: a long boom's end sweeps past a face's end as much faster), eased, and held from hardM past it
             endBandM: 3, endBandShare: 0.15,
+            // Past a face's end, a boom that closes on it by closeShare of the head's distance from it is drawn in whole,
+            // one that closes by less by that share (none for one that leaves it)
+            closeShare: 0.5,
             // A house is taken to stand houseM over the land under it
             houseM: 12,
             // The faces are listed within two booms of the bike and reachM more (in whole steps of reachM), and again
@@ -431,15 +434,62 @@ class WorldCamera {
             const px = head.x - d[i], pz = head.z - d[i + 1];
             // Metres out from the face's plane at the head, and gained along the whole boom
             const out = (px * ez - pz * ex) / length, gain = (dx * ez - dz * ex) / length;
-            if (out * gain >= 0) continue;
             const gap = Math.abs(out), rate = Math.abs(gain);
-            if (gap - clear >= rate) continue;
-            const hit = Math.max(0, gap - Math.min(clear, gap * w.nearShare)) / rate;
+            // Where the boom meets the face's plane, if it does
+            let hit = 1, at = 1, along = -1, past = 0, closing = 1;
+            const meets = out * gain < 0 && gap < rate;
+            if (meets) {
+                at = gap / rate;
+                along = (px * ex + pz * ez + (dx * ex + dz * ez) * at) / length;
+            }
+            {
+                // How near the boom passes the face itself, in plan from the boom's segment to the face's (convex along
+                // the boom, its least found by halving), how much of the way from the head to the face it closes, and
+                // where along it it comes within the margin (or nearShare of the bike's own distance), or, passing
+                // wider, is nearest: the share that keeps it clear. (Read from the face's plane, a run of short faces of
+                // the leg above, each on its own plane, came into the boom one plane after another a metre or two
+                // nearer, a short face's end slid by metres in a frame where the face lay nearly in line with the boom,
+                // and the side of the plane the head was on turned in a frame where the bike rode along a face's line:
+                // down a stack of hairpins the hard limit pulled the boom in by half in a frame. A boom that leaves a
+                // face does not close on it)
+                const ll = length * length;
+                const dist = (k) => {
+                    const qx = px + dx * k, qz = pz + dz * k;
+                    const v = Math.max(0, Math.min(1, (qx * ex + qz * ez) / ll));
+                    return Math.hypot(qx - ex * v, qz - ez * v);
+                };
+                let lo = 0, hi = 1;
+                for (let k = 0; k < 20; k++) {
+                    const m1 = lo + (hi - lo) / 3, m2 = hi - (hi - lo) / 3;
+                    if (dist(m1) <= dist(m2)) hi = m2; else lo = m1;
+                }
+                const tMin = (lo + hi) / 2, from = dist(0), least = dist(tMin);
+                closing = Math.max(0, Math.min(1, (from - least) / Math.max(1e-6, w.closeShare * from)));
+                if (!(closing > 0)) continue;
+                past = meets && along >= 0 && along <= length ? 0 : least;
+                const near = Math.min(clear, from * w.nearShare);
+                // (a boom that stays wider than the margin of the face beside it, not past one of its ends, is left
+                // alone: only a face's end draws a passing boom in)
+                if (least > near) {
+                    const qx = px + dx * tMin, qz = pz + dz * tMin, v = (qx * ex + qz * ez) / ll;
+                    if (v > 0 && v < 1) continue;
+                }
+                hit = tMin;
+                if (least <= near) {
+                    let a = 0, b = tMin;
+                    for (let k = 0; k < 20; k++) { const m = (a + b) / 2; if (dist(m) <= near) b = m; else a = m; }
+                    hit = b;
+                }
+                // (the boom's height is read where it meets the plane between the face's ends, else where it comes
+                // nearest the face: a boom climbing steeply away passes over a wall it meets high)
+                if (!past && meets) {
+                    // (meets the plane between the ends: at and along as read there)
+                } else {
+                    at = hit;
+                    along = (px * ex + pz * ez + (dx * ex + dz * ez) * at) / length;
+                }
+            }
             if (hit >= share) continue;
-            // Where the boom meets the plane (or ends, short of it): how far along the face, and how high
-            const at = Math.min(1, gap / rate);
-            const along = (px * ex + pz * ez + (dx * ex + dz * ez) * at) / length;
-            const past = Math.max(0, -along, along - length);
             if (past >= w.hardM + (soft ? band : 0)) continue;
             const u = Math.max(0, Math.min(1, along / length));
             const y = head.y + dy * at;
@@ -453,12 +503,12 @@ class WorldCamera {
             }
             const over = y - top - up;
             if (!soft) {
-                if (over < w.hardOverM) share = hit;
+                if (over < w.hardOverM && closing >= 1) share = hit;
                 continue;
             }
             const low = Math.max(0, Math.min(1, (w.overM + w.overBandM - over) / w.overBandM));
             const inside = Math.max(0, Math.min(1, 1 - (past - w.hardM) / band));
-            const weight = low * low * (3 - 2 * low) * inside * inside * (3 - 2 * inside);
+            const weight = low * low * (3 - 2 * low) * inside * inside * (3 - 2 * inside) * closing * closing * (3 - 2 * closing);
             share = Math.min(share, 1 - weight * (1 - hit));
         }
         return share;
@@ -738,8 +788,11 @@ class WorldCamera {
         out.y = WorldCamera.softFloor(out.y, this.landY(out.x, out.z, bike.index) + t.floorM);
         // The hard limit under a deck: the spring may fall short when a bridge comes at speed
         if (this.overhead) {
+            // (a camera over that road's own surface is not under it: a side road on a bank beside a gallery's exit,
+            // 2.5 m over the ride, came under the camera's place in single frames and put the camera down 2.8 m and
+            // back up the frame after)
             const under = this.overhead(out.x, out.z, bike.y);
-            if (out.y > under - t.roofHardM) out.y = Math.max(under - t.roofHardM, Math.min(out.y, head.y));
+            if (out.y > under - t.roofHardM && out.y < under + t.roofDeckM) out.y = Math.max(under - t.roofHardM, Math.min(out.y, head.y));
         }
 
         this.step = step;

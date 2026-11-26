@@ -32,7 +32,9 @@ const { WorldRoute, WorldCamera } = game;
 const STEP_M = 0.55;
 const STEP_SHARE = 0.05;
 // Without the rule, the frames of the shipped stage on which a wall stood between the bike and the camera
-const BEFORE = { wall: 1500 };
+// (1 610 frames until a camera over a road's own surface was no longer pulled down under it, roofDeckM: with the rule
+// off the camera then stays over the leg above in a stack and crosses its walls in 181 frames)
+const BEFORE = { wall: 150 };
 
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
 
@@ -108,12 +110,32 @@ describe('a wall face and the boom (WorldCamera.wallShare)', () => {
     test('past the face\'s end the boom is free, and eased in over endBandM before it', () => {
         const c = camera(wall(6));
         const at = z => c.wallShare({ x: 0, y: Y + 1.2, z }, { x: 8, y: Y + 3, z: z - 6 }, Y, true);
-        // (the boom meets the plane 3 m behind the head)
-        expect(at(100 + 3 - W.hardM - W.endBandM - 0.1)).toBe(1);
+        // (the boom meets the plane 3 m behind the head; the band is read as how near the boom passes the face's end,
+        // in plan: it comes nearest the end on the slant, before the plane)
+        expect(at(100 + 3 - W.clearM - (W.endBandM + 0.1) * 8 / 6)).toBe(1);
         expect(at(103 + 1)).toBeCloseTo((4 - W.clearM) / 8, 6);
         let last = 1;
-        for (let z = 99; z <= 104; z += 0.25) { const share = at(z); expect(share).toBeLessThanOrEqual(last + 1e-9); last = share; }
-        expect(c.wallShare({ x: 0, y: Y + 1.2, z: 100 + 3 - W.hardM - 0.1 }, { x: 8, y: Y + 3, z: 94 + 3 - W.hardM - 0.1 }, Y, false)).toBe(1);
+        // (round the end the boom is held the margin from the end's corner, a little less than from the plane: the
+        // share may rise by a hundredth as the boom moves from the corner onto the face)
+        for (let z = 95; z <= 104; z += 0.25) { const share = at(z); expect(share).toBeLessThanOrEqual(last + 0.01); last = share; }
+        // held hard only once the boom comes within the hard margin of the face's end
+        expect(c.wallShare({ x: 0, y: Y + 1.2, z: 100 + 3 - 1.5 }, { x: 8, y: Y + 3, z: 94 + 3 - 1.5 }, Y, false)).toBe(1);
+    });
+
+    test('a boom sweeping onto a short face nearly in line with it is drawn in smoothly, not in one frame', () => {
+        // A face 1.3 m long turned 8 degrees off the boom, as the walls of the leg above down a stack of hairpins: the
+        // boom turned a degree at a time draws in by no more than a few hundredths a step (it was a half in one)
+        const a = { x: 4, z: 140 }, h = 1.3;
+        const face = { data: Float64Array.from([a.x, a.z, a.x + h * Math.sin(0.14), a.z - h * Math.cos(0.14), Y + 6, Y + 6, Y - 2, Y - 2, 1]), count: 1 };
+        const c = camera(face);
+        let last = null, worst = 0;
+        for (let deg = -20; deg <= 40; deg += 1) {
+            const r = deg * Math.PI / 180, len = 12;
+            const share = c.wallShare(head, { x: head.x + len * Math.sin(r), y: Y + 4, z: head.z - len * Math.cos(r) }, Y, true);
+            if (last !== null) worst = Math.max(worst, Math.abs(share - last));
+            last = share;
+        }
+        expect(worst).toBeLessThan(0.08);
     });
 
     test('from outside, a wall with a road on it well over the bike is not passed over at any height', () => {
