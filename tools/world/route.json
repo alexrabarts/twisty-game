@@ -205,7 +205,14 @@
     "start": {
      "kind": "carpark",
      "e": 2689632,
-     "n": 1153596
+     "n": 1153596,
+     "raise": {
+      "tileLodM": [
+       1000,
+       2500
+      ],
+      "triangleScale": 1
+     }
     },
     "end": {
      "kind": "restaurant",
@@ -214,8 +221,8 @@
      "keepLine": true,
      "raise": {
       "tileLodM": [
-       1200,
-       3000
+       800,
+       2000
       ],
       "triangleScale": 1
      }
@@ -235,7 +242,14 @@
     "start": {
      "kind": "hotel",
      "e": 2688484,
-     "n": 1165283
+     "n": 1165283,
+     "raise": {
+      "tileLodM": [
+       700,
+       2000
+      ],
+      "triangleScale": 0.85
+     }
     },
     "via": [
      {
@@ -244,8 +258,8 @@
       "n": 1156616,
       "raise": {
        "tileLodM": [
-        1200,
-        3000
+        800,
+        2000
        ],
        "triangleScale": 1
       }
@@ -272,6 +286,13 @@
       "haze": {
        "perM": 0.000133333
       }
+     },
+     "raise": {
+      "tileLodM": [
+       1200,
+       3000
+      ],
+      "triangleScale": 0.55
      }
     }
    }
@@ -288,7 +309,14 @@
     "start": {
      "kind": "carpark",
      "e": 2689632,
-     "n": 1153596
+     "n": 1153596,
+     "raise": {
+      "tileLodM": [
+       1000,
+       2500
+      ],
+      "triangleScale": 1
+     }
     },
     "end": {
      "kind": "lookout",
@@ -308,10 +336,10 @@
      },
      "raise": {
       "tileLodM": [
-       1500,
-       4000
+       1200,
+       3000
       ],
-      "triangleScale": 1
+      "triangleScale": 0.55
      }
     }
    }
@@ -327,13 +355,27 @@
     "start": {
      "kind": "hotel",
      "e": 2688484,
-     "n": 1165283
+     "n": 1165283,
+     "raise": {
+      "tileLodM": [
+       700,
+       2000
+      ],
+      "triangleScale": 0.85
+     }
     },
     "end": {
      "kind": "carpark",
      "e": 2687852,
      "n": 1169199,
-     "legStart": true
+     "legStart": true,
+     "raise": {
+      "tileLodM": [
+       700,
+       2000
+      ],
+      "triangleScale": 0.85
+     }
     }
    }
   },
@@ -349,7 +391,14 @@
      "kind": "carpark",
      "e": 2677064,
      "n": 1175869,
-     "legStart": true
+     "legStart": true,
+     "raise": {
+      "tileLodM": [
+       1000,
+       2500
+      ],
+      "triangleScale": 1
+     }
     }
    }
   },
@@ -364,7 +413,14 @@
     "end": {
      "kind": "carpark",
      "e": 2669643,
-     "n": 1176582
+     "n": 1176582,
+     "raise": {
+      "tileLodM": [
+       1000,
+       2500
+      ],
+      "triangleScale": 1
+     }
     }
    }
   }
