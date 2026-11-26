@@ -268,7 +268,9 @@ class WorldData {
                 chunk.flags[j] = view.getUint8(o + 15);
             }
             this.chunks.set(k, chunk);
-            this.trim(this.chunks, WorldData.MAX_CHUNKS, key => this.pinnedChunks().has(key));
+            // (MAX_CHUNKS of side chunks held beside the ride's own, which are never let go: a ride of 45 km pins more
+            // chunks than MAX_CHUNKS, and each side chunk loaded then went at once and was asked for again, for ever)
+            this.trim(this.chunks, this.pinnedChunks().size + WorldData.MAX_CHUNKS, key => this.pinnedChunks().has(key));
         }));
     }
 
