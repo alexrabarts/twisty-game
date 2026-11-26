@@ -89,8 +89,8 @@ class HillBoyMaps {
         const n1 = HillBoyMaps.noise(11, 64), n2 = HillBoyMaps.noise(12, 256), n3 = HillBoyMaps.noise(13, 32);
         const rand = HillBoyMaps.random(14);
         const g = (x) => Math.exp(-x * x), sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-        const base = [216, 168, 140], blush = [206, 124, 104], lip = [176, 116, 102], brow = [118, 86, 58], hair = [134, 100, 66];
-        const p = new THREE.Vector3();
+        const base = [212, 168, 145], blush = [206, 124, 104], lip = [176, 116, 102], brow = [118, 86, 58], hair = [134, 100, 66];
+        const p = new THREE.Vector3(), q = new THREE.Vector3();
         // A few freckles over the nose and the cheeks (as head points)
         const freckles = [];
         for (let i = 0; i < 46; i++) freckles.push([(rand() - 0.5) * 0.09, -0.005 - rand() * 0.045, 0.6 + rand() * 0.6]);
@@ -108,6 +108,12 @@ class HillBoyMaps {
                     const polar = (v - 0.12) / 0.86 * Math.PI, az = (u - 0.5) * Math.PI * 2;
                     HillBoy.headPoint(polar, az, p, true);
                     const ax = Math.abs(p.x), front = p.z > 0;
+                    // (where the face is modelled in, a little shade; where it stands out, a little light)
+                    if (front) {
+                        const dz = p.z - HillBoy.headPoint(polar, az, q, false).z;
+                        const k = 1 + Math.max(-0.16, Math.min(0.05, dz * 12));
+                        c[0] *= k; c[1] *= k; c[2] *= k;
+                    }
                     if (front) {
                         // The cheeks' colour, the nose's tip and the chin a little red
                         mix(c, blush, 0.45 * g((ax - 0.04) / 0.02) * g((p.y + 0.028) / 0.022) + 0.25 * g(p.x / 0.01) * g((p.y + 0.03) / 0.009) + 0.12 * g(p.x / 0.02) * g((p.y + 0.088) / 0.012));
@@ -168,7 +174,7 @@ class HillBoyMaps {
         const skin = HillBoyMaps.texture(data, W, H, true);
         skin.wrapT = THREE.ClampToEdgeWrapping;
         skin.userData.drawn = 'HillBoyMaps.skin';
-        const skinNormal = HillBoyMaps.normals(height, W, H, 1.6);
+        const skinNormal = HillBoyMaps.normals(height, W, H, 0.55);
         skinNormal.wrapT = THREE.ClampToEdgeWrapping;
         return { skin, skinNormal };
     }

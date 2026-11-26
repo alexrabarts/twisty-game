@@ -22,7 +22,7 @@ class HillBoy {
     static get FAR() { return Object.freeze({ fromM: 13, backM: 11 }); }
 
     // How far his chest bends on past his hips' bend on foot (rad): a rounded back over the bars
-    static get STOOP() { return 0.2; }
+    static get STOOP() { return 0.26; }
 
     // His cost: the most triangles of the near and the far body (each one draw a finish, seven at most)
     static get BUDGET() { return Object.freeze({ near: 52000, far: 10000 }); }
