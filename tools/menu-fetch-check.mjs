@@ -3,7 +3,7 @@
 // page, every model file (.glb) the page asks for, its size and when, through the rider page, stepping riders, bikes
 // and outfits, the map, and the start of a world ride. The rules it holds:
 //   - the rider page fetches the rider file (assets/bikes/rider.glb) and the shown bike's detail file, and no other
-//     bike file: a bike not shown stands in as its far file or the procedural model;
+//     bike file: a rider not shown is not drawn at all;
 //   - each step to a bike not shown before fetches that bike's detail file and nothing else; a step back, or to an
 //     outfit of the same bike, fetches nothing;
 //   - the map fetches nothing;
@@ -82,14 +82,14 @@ try {
     await page.waitForFunction('window.game && window.game.showcaseBikes', { timeout: 120000, polling: 250 });
     await page.evaluate(() => { window.game.renderer.setPixelRatio(0.5); });
     const settle = async () => {
-        await page.waitForFunction(() => { const g = window.game; const v = g.showcaseBikes && g.showcaseBikes[g.showcaseFocusId]; return !v || v.modelled || !v.dressing; }, { timeout: 60000, polling: 200 }).catch(() => null);
+        await page.waitForFunction(() => { const g = window.game; const v = g.showcaseBikes && g.showcaseBikes[g.showcaseFocusId]; return !!v && !!v.modelled; }, { timeout: 60000, polling: 200 }).catch(() => null);
         await pause(1500);
     };
     // The detail file of the bike on show: the tour system's choice for the focused rider
     const shown = () => page.evaluate(() => {
         const t = window.game.tourSystem, c = t.riderDisplayOrder()[t.riderFocusIndex];
-        // (a locked rider next in line is shown, dimmed; one further on is a silhouette, with no file of its own)
-        return { rider: c.id, file: BikeModels.file({ model: t.getSelectedBike(c.id) }), lit: window.game.riderTier(c.id) !== 'silhouette' };
+        // (every rider shown is drawn in the detailed files, a locked one dimmed or as a silhouette)
+        return { rider: c.id, file: BikeModels.file({ model: t.getSelectedBike(c.id) }), lit: true };
     });
     const bikeFiles = list => list.filter(f => f.file.startsWith('assets/bikes/'));
     const seen = new Set();

@@ -3407,6 +3407,11 @@ class Game {
         return firstLocked && firstLocked.id === characterId ? 'dimmed' : 'silhouette';
     }
 
+    // The rider page's stage: one stand, and on it the focused rider on their chosen bike in their chosen outfit, drawn
+    // from the detailed files alone (the owner, 2026-11-26: the menu never shows a procedural or a light model). A
+    // rider's bike is built when the rider is first shown and kept, hidden, while another is shown, so a step back
+    // shows it at once and fetches nothing. A bike whose files are not in yet is not drawn: the stand stays empty
+    // until they arrive (BikeModels.dress fetches each file once and keeps it for the page)
     startRiderShowcase(focusId) {
         this.endTrackPreview();
 
@@ -3421,22 +3426,20 @@ class Game {
             // Start on the bike instead of flying in from the last camera position
             this.showcaseSnap = true;
 
-            const platformGeometry = new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28);
-            const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 });
-            const silhouetteMaterial = new THREE.MeshBasicMaterial({ color: 0x05070c });
-
             this.showcaseBikes = {};
             this.showcaseExtras = [];
-            this.showcaseSilhouette = silhouetteMaterial;
-            this.riderDisplayOrder().forEach((c, i) => {
-                const v = this.buildShowcaseBike(c, i * 14);
-                const platform = new THREE.Mesh(platformGeometry, platformMaterial);
-                platform.position.set(v.position.x, v.position.y - 0.06, v.position.z);
-                platform.receiveShadow = true;
-                this.scene.add(platform);
-                this.showcaseExtras.push(platform);
+            this.showcaseSilhouette = new THREE.MeshBasicMaterial({ color: 0x05070c });
+            // Stage far below the world so previews never collide with track geometry
+            this.showcaseSpot = new THREE.Vector3(0, -400, 0);
 
-            });
+            const platform = new THREE.Mesh(
+                new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28),
+                new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 })
+            );
+            platform.position.set(this.showcaseSpot.x, this.showcaseSpot.y - 0.06, this.showcaseSpot.z);
+            platform.receiveShadow = true;
+            this.scene.add(platform);
+            this.showcaseExtras.push(platform);
 
             // Showroom floor: glossy, fading out to the horizon haze so the
             // stage does not end in a hard edge
@@ -3450,9 +3453,8 @@ class Game {
             fade.addColorStop(1, '#000000');
             fadeCtx.fillStyle = fade;
             fadeCtx.fillRect(0, 0, 128, 128);
-            const riderCount = Object.keys(this.showcaseBikes).length;
             const floor = new THREE.Mesh(
-                new THREE.PlaneGeometry(riderCount * 14 + 160, 160),
+                new THREE.PlaneGeometry(160, 160),
                 new THREE.MeshStandardMaterial({
                     color: 0x1b2230,
                     roughness: 0.4,
@@ -3463,7 +3465,7 @@ class Game {
                 })
             );
             floor.rotation.x = -Math.PI / 2;
-            floor.position.set((riderCount - 1) * 7, -400.13, 0);
+            floor.position.set(this.showcaseSpot.x, this.showcaseSpot.y - 0.13, this.showcaseSpot.z);
             floor.receiveShadow = true;
             this.scene.add(floor);
             this.showcaseExtras.push(floor);
@@ -3477,17 +3479,22 @@ class Game {
         this.startMenuShowcaseLoop();
     }
 
+    // Shows one rider on the stand: builds their bike the first time, and hides every other rider's
     focusRiderShowcase(focusId) {
         this.showcaseFocusId = focusId;
-        // Only the bike in view is fetched: the others keep their stand-in
-        // (their own far level when the file is in memory, else procedural)
-        // until they are focused (BikeModels.dress fetches once), and a
-        // locked rider's silhouette never needs the file
-        const v = this.showcaseBikes && this.showcaseBikes[focusId];
-        if (v && (!v.modelled || v.far) && !v.dressing && this.riderTier(focusId) !== 'silhouette' && typeof BikeModels !== 'undefined') {
-            v.dressing = true;
-            BikeModels.dress(v);
+        if (!this.showcaseBikes) return;
+        if (!this.showcaseBikes[focusId]) {
+            const c = CHARACTERS.find(character => character.id === focusId);
+            if (c) this.buildShowcaseBike(c);
         }
+        this.showShowcaseBikes();
+    }
+
+    // Only the focused rider is drawn, and only once their bike wears its detailed files
+    showShowcaseBikes() {
+        Object.entries(this.showcaseBikes || {}).forEach(([id, v]) => {
+            v.group.visible = id === this.showcaseFocusId && !!v.modelled && !v.far;
+        });
     }
 
     // The bike the selected rider rides: their pick on the rider select
@@ -3502,41 +3509,31 @@ class Game {
         return this.tourSystem.getSelectedOutfit(this.selectedCharacter.id);
     }
 
-    // One character's bike on the rider-select stage at `x`: their chosen
-    // bike as a stand-in (focusRiderShowcase dresses it), shaded by the
-    // rider's unlock tier
-    buildShowcaseBike(c, x) {
+    // One character's bike on the rider page's stand: their chosen bike in their chosen outfit, dressed in its detailed
+    // files (fetched now if they are not in), hidden until it wears them, and shaded by the rider's unlock tier
+    buildShowcaseBike(c) {
         const bikeId = this.tourSystem.getSelectedBike ? this.tourSystem.getSelectedBike(c.id) : null;
         const outfit = this.tourSystem.getSelectedOutfit ? this.tourSystem.getSelectedOutfit(c.id) : null;
-        const v = new Vehicle(this.scene, null, c, bikeId, { model: 'far', outfit });
-        // Stage far below the world so previews never collide with track geometry
-        v.position.set(x, -400, 0);
+        const v = new Vehicle(this.scene, null, c, bikeId, { model: false, outfit });
+        v.position.copy(this.showcaseSpot);
         v.yawAngle = 0;
         v.updateMesh();
+        v.group.visible = false;
 
-        // Run again when the modelled bike takes over from the
-        // procedural one, so it works from each material's lit colour
+        // Run when the detailed model takes over from the procedural one, so it works from each material's lit colour
         // and gives the same result however often it runs.
         const tier = this.riderTier(c.id);
         const silhouetteMaterial = this.showcaseSilhouette;
         const shade = () => {
             if (tier === 'dimmed') {
-                const uses = new Map();
-                v.group.traverse(o => {
-                    if (o.isMesh && o.material) uses.set(o.material, (uses.get(o.material) || 0) + 1);
-                });
                 const palette = new Set(Object.values(v.palette || {}));
-                uses.forEach((count, material) => {
+                const uses = new Set();
+                v.group.traverse(o => { if (o.isMesh && o.material) uses.add(o.material); });
+                uses.forEach((material) => {
                     if (material.color) {
                         if (!material.userData.lit) material.userData.lit = material.color.clone();
-                        // The procedural bike darkens a material once
-                        // for each part that wears it, so its shared
-                        // finishes go black and the one-off ones (the
-                        // helmet, the rims) stay readable. A modelled
-                        // bike has few parts: its palette finishes
-                        // take the dark end, the rest the light end.
-                        const factor = v.modelled ? (palette.has(material) ? 0.03 : 0.12) : Math.pow(0.22, count);
-                        material.color.copy(material.userData.lit).multiplyScalar(factor);
+                        // Its palette finishes take the dark end, the rest the light end, so the shape still reads
+                        material.color.copy(material.userData.lit).multiplyScalar(palette.has(material) ? 0.03 : 0.12);
                     }
                     if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0;
                 });
@@ -3549,21 +3546,26 @@ class Game {
                 });
             }
         };
-        shade();
-        v.onModel = shade;
+        v.onModel = () => {
+            shade();
+            this.showShowcaseBikes();
+        };
         this.showcaseBikes[c.id] = v;
+        // (the swap calls onModel, at once when the files are in, else when they arrive)
+        if (typeof BikeModels !== 'undefined') BikeModels.dress(v);
         return v;
     }
 
-    // The rider select's bike picker moved: that character's stage bike
-    // becomes the bike now chosen
+    // The rider select's bike or outfit picker moved: that character's bike is built again as now chosen, and what the
+    // old one held is freed
     changeShowcaseBike(characterId) {
         const old = this.showcaseBikes && this.showcaseBikes[characterId];
         if (!old) return;
         const c = CHARACTERS.find(character => character.id === characterId);
         this.scene.remove(old.group);
         old.onModel = null;
-        this.buildShowcaseBike(c, old.position.x);
+        delete this.showcaseBikes[characterId];
+        this.buildShowcaseBike(c);
         // What the old bike held is freed, but for what a bike still on the stage wears (the silhouette, a part
         // shared between bikes): a bike stepped through on the menu leaves nothing on the GPU
         const kept = new Set([this.showcaseSilhouette]);
@@ -3577,7 +3579,7 @@ class Game {
                 if (m && !kept.has(m) && m.dispose) m.dispose();
             });
         });
-        if (this.showcaseFocusId === characterId) this.focusRiderShowcase(characterId);
+        this.showShowcaseBikes();
     }
 
     startTrackPreview(legIndex) {
@@ -3689,8 +3691,7 @@ class Game {
             if (this.showcaseMode === 'rider' && this.showcaseBikes) {
                 // A slow turn round the focused bike, as far off as the box needs for the whole bike
                 this.showcaseOrbitAngle += dt * Game.SHOWCASE_TURN;
-                const focus = this.showcaseBikes[this.showcaseFocusId] || Object.values(this.showcaseBikes)[0];
-                const target = focus.position;
+                const target = this.showcaseSpot;
                 const r = view.distance;
                 const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
                 const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;

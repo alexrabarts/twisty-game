@@ -42,7 +42,7 @@ function menu() {
         snapAtmosphere() {}
     });
     g.scene.fog = new THREE.FogExp2(0xffffff, 0.001);
-    return { g, tour, fetched, ...parts };
+    return { g, tour, fetched, THREE, ...parts };
 }
 
 // Until every fetch asked for has arrived and been parsed
@@ -51,14 +51,13 @@ const bikeFiles = list => list.filter(url => url.startsWith('assets/bikes/'));
 
 describe('the menu fetches the bike it shows, and only that bike', () => {
     test('a cold menu asks for the rider file and the shown bike\'s detail file; the other riders stand in with nothing fetched', async () => {
-        const { g, tour, fetched, CHARACTERS, BikeModels } = menu();
+        const { g, tour, fetched, BikeModels } = menu();
         const first = tour.riderDisplayOrder()[0];
         g.startRiderShowcase(first.id);
         await settle();
         expect(bikeFiles(fetched).sort()).toEqual([BikeModels.file({ model: tour.getSelectedBike(first.id) }), BikeModels.RIDER].sort());
         expect(fetched.some(url => url.includes('/far/') || url === BikeModels.RIDER_FAR)).toBe(false);
-        // Every rider stands on the stage, the shown one in its detail file
-        expect(Object.keys(g.showcaseBikes)).toHaveLength(CHARACTERS.length);
+        expect(Object.keys(g.showcaseBikes)).toEqual([first.id]);
         expect(g.showcaseBikes[first.id].modelled).toBe(true);
     });
 
@@ -88,5 +87,51 @@ describe('the menu fetches the bike it shows, and only that bike', () => {
         // Back: nothing
         await step(() => g.focusRiderShowcase(rider.id), []);
         expect(g.showcaseBikes[rider.id].modelled).toBe(true);
+    });
+});
+
+// What is drawn: the owner, 2026-11-26, "the menu must never show a basic or a light model"
+describe('the menu draws the detailed models alone, one rider on one stand', () => {
+    // Every bike drawn on the stage, each with how it is dressed
+    const drawn = g => Object.entries(g.showcaseBikes).filter(([, v]) => v.group.visible && v.group.parent).map(([id, v]) => ({ id, v }));
+
+    test('stepping through every rider: only the focused rider is drawn, in the detailed files, or nothing while they load', async () => {
+        const { g, tour, CHARACTERS } = menu();
+        const order = tour.riderDisplayOrder();
+        g.startRiderShowcase(order[0].id);
+        // (before the files are in: nothing drawn, never the procedural bike)
+        expect(drawn(g)).toEqual([]);
+        for (const c of [...order, ...order.slice().reverse()]) {
+            g.focusRiderShowcase(c.id);
+            for (const { v } of drawn(g)) expect([v.modelled, v.far]).toEqual([true, false]);
+            await settle();
+            const shown = drawn(g);
+            expect(shown.map(s => s.id)).toEqual([c.id]);
+            const v = shown[0].v;
+            expect([c.id, v.modelled, !!v.far]).toEqual([c.id, true, false]);
+            // the detailed rider too: a seated rider of the full file, not the light one
+            expect(v.rider && v.rider.parent === v.group).toBe(true);
+        }
+        expect(Object.keys(g.showcaseBikes)).toHaveLength(CHARACTERS.length);
+    });
+
+    test('no two stands or bikes meet: one stand, and the one bike drawn stands on it', async () => {
+        const { g, tour, THREE } = menu();
+        const order = tour.riderDisplayOrder();
+        g.startRiderShowcase(order[0].id);
+        for (const c of order) {
+            g.focusRiderShowcase(c.id);
+            await settle();
+            const stands = g.showcaseExtras.filter(o => o.geometry && o.geometry.type === 'CylinderGeometry');
+            expect(stands).toHaveLength(1);
+            const shown = drawn(g);
+            expect(shown).toHaveLength(1);
+            const bike = new THREE.Box3().setFromObject(shown[0].v.group);
+            const stand = new THREE.Box3().setFromObject(stands[0]);
+            // The bike's footprint is within the stand's, the stand under it
+            expect(bike.min.x >= stand.min.x && bike.max.x <= stand.max.x && bike.min.z >= stand.min.z && bike.max.z <= stand.max.z).toBe(true);
+            // (a tyre's box may reach a few centimetres into the stand's top, never under it)
+            expect(bike.min.y).toBeGreaterThan(stand.min.y);
+        }
     });
 });
