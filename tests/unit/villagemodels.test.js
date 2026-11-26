@@ -19,7 +19,7 @@ const TAGS = ['body', 'wall', 'shutter', 'glass', 'lamp'];
 
 function load({ failing = [], assets = true, course = false } = {}) {
     const THREE = realThree();
-    const files = ['terrain.js', ...(course ? ['course.js'] : []), 'vehicle.js', 'environment.js', 'tours.js', ...(assets ? ['sceneassets.js'] : [])];
+    const files = ['terrain.js', ...(course ? ['course.js'] : []), 'world/route.js', 'world/legroute.js', 'vehicle.js', 'environment.js', 'tours.js', ...(assets ? ['sceneassets.js'] : [])];
     const source = files.map(loadScript).join('\n;\n');
     const log = [];
     const sink = { log() {}, warn: (...a) => log.push(a.join(' ')), error: (...a) => log.push(a.join(' ')) };
@@ -120,8 +120,9 @@ describe('the village files', () => {
                 expect(geometry.attributes.color.count).toBe(geometry.attributes.position.count);
                 expect(geometry.attributes.uv).toBeUndefined();
             });
-            // Windows are numbered from 0 with no gap, so each can be lit or dark on its own
-            const glass = parts.find(part => part.material.name === 'glass').geometry.attributes.color;
+            // Windows are numbered from 0 with no gap, so each can be lit or dark on its own (the file's own
+            // bytes, which the load keeps on userData.srgb beside the linear daylight colours)
+            const glass = parts.find(part => part.material.name === 'glass').geometry.userData.srgb;
             const numbers = new Set();
             for (let i = 0; i < glass.count; i++) numbers.add(glass.array[i * glass.itemSize]);
             expect(numbers.size).toBeGreaterThanOrEqual(8);
@@ -439,7 +440,7 @@ describe('mountain-dawn with the modelled houses, as instances', () => {
         const meshes = bridge.children.filter(o => o.isMesh);
         expect(meshes.length).toBeGreaterThan(0);
         const model = await game.SceneAssets.loadModel('assets/bridge/stone.glb');
-        const raw = model.meshes.get('bridge_span')[0].geometry.attributes.color;
+        const raw = model.meshes.get('bridge_span')[0].geometry.userData.srgb;
         const decode = v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
         const counts = { outer: 0, inner: 0, top: 0 };
         for (const mesh of meshes) {

@@ -16,6 +16,12 @@ const SKY_PRESETS = {
         sunIntensity: 22, cloudLit: 0xffe2cc, cloudShadow: 0x8d6f8c, coverage: 0.46,
         stars: 0.0, mountain: 0x6b5873, saturation: 1.08, contrast: 1.04, tint: 0xfff4ea, bloom: 0.75
     },
+    // High sun, a clean blue sky: the world's valley and pass stages (R5). A new key, so no leg look changes
+    day: {
+        zenith: 0x2468c0, mid: 0x7ab6ee, glow: 0xffffff, glowStrength: 0.5,
+        sunIntensity: 34, cloudLit: 0xffffff, cloudShadow: 0x9aa8c0, coverage: 0.36,
+        stars: 0.0, mountain: 0x62789a, saturation: 1.08, contrast: 1.04, tint: 0xffffff, bloom: 0.5
+    },
     golden: {
         zenith: 0x1a4fa8, mid: 0x4f97e0, glow: 0xfff1d0, glowStrength: 0.8,
         sunIntensity: 30, cloudLit: 0xffffff, cloudShadow: 0x8496b3, coverage: 0.42,
@@ -48,6 +54,38 @@ const SKY_WEATHER = {
     snow: { coverage: 1.0, cloudLit: 0xe6ebf2, cloudShadow: 0x9aa3b3, sunScale: 0.0, zenith: 0xaab4c4, mid: 0xcfd6e0, stars: 0, saturation: 0.8, fogBlend: 0.45 },
     fog: { coverage: 0.7, sunScale: 0.25, stars: 0, saturation: 0.85, fogBlend: 0.8 }
 };
+
+// The colour grade of the effects (js/effects.js, 'grade'), after the tone map in display light: `shadow` and `light`
+// multiply the darks and the brights (cool shadows, warm highlights), `curve` is the strength of an S-curve of contrast
+// about 0.4 that keeps black and white. A weather's row stands in for its time's; Graphics.update eases from one row to the next, so a
+// blend zone that switches the time or the weather at its middle does not jump
+const GFX_GRADES = {
+    dawn: { shadow: [0.95, 0.98, 1.06], light: [1.04, 1.0, 0.95], curve: 0.1 },
+    day: { shadow: [0.96, 0.99, 1.05], light: [1.03, 1.01, 0.97], curve: 0.12 },
+    golden: { shadow: [0.94, 0.98, 1.07], light: [1.05, 1.01, 0.94], curve: 0.12 },
+    sunset: { shadow: [0.93, 0.97, 1.08], light: [1.06, 1.0, 0.92], curve: 0.14 },
+    twilight: { shadow: [0.95, 0.98, 1.07], light: [1.0, 1.0, 1.02], curve: 0.08 },
+    night: { shadow: [0.95, 0.98, 1.08], light: [1.03, 1.0, 0.96], curve: 0.06 }
+};
+const GFX_GRADE_WEATHER = {
+    rain: { shadow: [0.97, 0.99, 1.04], light: [1.0, 1.0, 0.99], curve: 0.06 },
+    snow: { shadow: [0.97, 0.99, 1.04], light: [1.01, 1.0, 0.99], curve: 0.06 },
+    fog: { shadow: [0.98, 0.99, 1.02], light: [1.01, 1.0, 0.99], curve: 0.04 }
+};
+
+// The samples of the ambient occlusion: a hemisphere round +z, denser near its middle, the same every page
+function gfxAoKernel(count) {
+    const out = [];
+    for (let i = 0; i < count; i++) {
+        const u = (i + 0.5) / count;
+        const phi = i * 2.399963;
+        const z = Math.sqrt(1 - u) * 0.9 + 0.1;
+        const r = Math.sqrt(Math.max(0, 1 - z * z));
+        const scale = 0.15 + 0.85 * ((i + 1) / count) ** 2;
+        out.push(new THREE.Vector3(Math.cos(phi) * r * scale, Math.sin(phi) * r * scale, z * scale));
+    }
+    return out;
+}
 
 const GFX_NOISE_GLSL = `
     float gfxHash(vec2 p) {
@@ -103,6 +141,7 @@ const GFX_SKY_BAKE_FRAGMENT = `
     uniform vec3 uZenith;
     uniform vec3 uMid;
     uniform vec3 uHorizon;
+    uniform float uHorizonSpan;
     uniform vec3 uSunDir;
     uniform vec3 uGlowColor;
     uniform vec3 uCloudLit;
@@ -121,7 +160,7 @@ const GFX_SKY_BAKE_FRAGMENT = `
         float up = d.y;
 
         // Three-stop vertical gradient
-        vec3 sky = mix(uHorizon, uMid, smoothstep(0.0, 0.22, up));
+        vec3 sky = mix(uHorizon, uMid, smoothstep(0.0, uHorizonSpan, up));
         sky = mix(sky, uZenith, smoothstep(0.12, 0.75, up));
 
         float sunDot = max(dot(d, uSunDir), 0.0);
@@ -330,6 +369,140 @@ const GFX_BLOOM_UP = `
     }
 `;
 
+// Ambient occlusion at half resolution, from the depth alone (no normal target): each pixel's view position and normal
+// are rebuilt from the depth, and AO_SAMPLES points of a hemisphere uRadius m round it are tested against the depth.
+// The rotation of the hemisphere repeats every 4 x 4 pixels, which the blur after it averages away. It fades out by
+// uFade m, where the depth's steps would show and the haze hides it anyway
+const GFX_AO = `
+    uniform sampler2D tDepth;
+    uniform vec2 uTexel;
+    uniform vec4 uProj; // proj[2][2], proj[3][2], 1 / proj[0][0], 1 / proj[1][1]
+    uniform vec3 uKernel[AO_SAMPLES];
+    uniform float uRadius;
+    uniform float uIntensity;
+    uniform float uFade;
+    varying vec2 vUv;
+    float aoViewZ(float d) { return -uProj.y / (d * 2.0 - 1.0 + uProj.x); }
+    vec3 aoView(vec2 uv) {
+        float z = aoViewZ(texture2D(tDepth, uv).r);
+        return vec3((uv * 2.0 - 1.0) * uProj.zw * -z, z);
+    }
+    void main() {
+        // A half-resolution pixel's centre is a corner of four depth texels: read the middle of one, so a neighbour a
+        // texel away is never the same texel by rounding (which flattened the normal in whole rows)
+        vec2 at = (floor(vUv / uTexel) + 0.5) * uTexel;
+        float d = texture2D(tDepth, at).r;
+        if (d >= 0.99999) { gl_FragColor = vec4(1.0); return; }
+        vec3 p = aoView(at);
+        float dist = -p.z;
+        if (dist > uFade) { gl_FragColor = vec4(1.0); return; }
+        // The nearer neighbour of each pair, so a silhouette does not tilt the normal
+        vec3 r = aoView(at + vec2(uTexel.x, 0.0)), l = aoView(at - vec2(uTexel.x, 0.0));
+        vec3 u = aoView(at + vec2(0.0, uTexel.y)), w = aoView(at - vec2(0.0, uTexel.y));
+        vec3 dx = abs(r.z - p.z) < abs(p.z - l.z) ? r - p : p - l;
+        vec3 dy = abs(u.z - p.z) < abs(p.z - w.z) ? u - p : p - w;
+        vec3 n = normalize(cross(dx, dy));
+        if (dot(n, p) > 0.0) n = -n;
+        vec2 cell = mod(floor(gl_FragCoord.xy), 4.0);
+        float angle = 6.2831853 * (cell.x * 4.0 + cell.y + 0.5) / 16.0;
+        // A basis of the surface from a helper axis that is never near the normal, turned by the pixel's angle: a
+        // random vector made into a tangent fails where it lies along the normal (a band of the road, a wall's face)
+        vec3 helper = abs(n.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+        vec3 t0 = normalize(cross(helper, n));
+        vec3 b0 = cross(n, t0);
+        vec3 t = t0 * cos(angle) + b0 * sin(angle);
+        vec3 b = cross(n, t);
+        float bias = 0.015 + dist * 0.0015;
+        float occ = 0.0;
+        for (int i = 0; i < AO_SAMPLES; i++) {
+            vec3 k = uKernel[i];
+            vec3 s = p + (t * k.x + b * k.y + n * k.z) * uRadius;
+            vec2 suv = s.xy / (-s.z * uProj.zw) * 0.5 + 0.5;
+            if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) continue;
+            float sz = aoViewZ(texture2D(tDepth, suv).r);
+            float range = smoothstep(0.0, 1.0, uRadius / max(abs(p.z - sz), 1e-4));
+            occ += sz >= s.z + bias ? range : 0.0;
+        }
+        float ao = 1.0 - occ / float(AO_SAMPLES) * uIntensity;
+        // A face seen edge-on has a normal the depth cannot give and samples that fall through it: it keeps its light
+        float facing = dot(n, -normalize(p));
+        ao = mix(1.0, ao, smoothstep(0.06, 0.25, facing));
+        ao = mix(ao, 1.0, smoothstep(uFade * 0.45, uFade, dist));
+        gl_FragColor = vec4(clamp(ao, 0.0, 1.0), 0.0, 0.0, 1.0);
+    }
+`;
+
+// The occlusion's 4 x 4 box, from four bilinear taps each on the corner of four texels (offsets of -1.5 and +0.5), each
+// weighed by how near its depth is to the pixel's: the 4 x 4 rotation pattern goes and a silhouette keeps its edge
+const GFX_AO_BLUR = `
+    uniform sampler2D tAO;
+    uniform sampler2D tDepth;
+    uniform vec2 uTexel;
+    uniform vec4 uProj;
+    varying vec2 vUv;
+    float aoViewZ(float d) { return -uProj.y / (d * 2.0 - 1.0 + uProj.x); }
+    void main() {
+        float z = aoViewZ(texture2D(tDepth, vUv).r);
+        float sum = 0.0, weight = 0.0;
+        for (int i = 0; i < 4; i++) {
+            vec2 o = vec2(i == 0 || i == 2 ? -1.5 : 0.5, i < 2 ? -1.5 : 0.5) * uTexel;
+            float sz = aoViewZ(texture2D(tDepth, vUv + o).r);
+            // A step of more than a tenth of the distance is another surface; a slope seen edge-on is not
+            float wt = abs(sz - z) < max(abs(z) * 0.1, 0.3) ? 1.0 : 0.05;
+            sum += texture2D(tAO, vUv + o).r * wt;
+            weight += wt;
+        }
+        gl_FragColor = vec4(sum / max(weight, 1e-4), 0.0, 0.0, 1.0);
+    }
+`;
+
+// The headlight glare: the bright pass at a quarter of the frame smeared along the screen's horizontal, as a lens
+// streaks a lamp. Run twice, at a step of 1 and of 7 texels, for a long thin streak from 15 taps a pass
+const GFX_STREAK = `
+    uniform sampler2D tSource;
+    uniform vec2 uTexel;
+    uniform float uStep;
+    varying vec2 vUv;
+    void main() {
+        vec3 c = texture2D(tSource, vUv).rgb;
+        float total = 1.0;
+        for (int i = 1; i <= 7; i++) {
+            float w = pow(0.82, float(i));
+            vec2 o = vec2(float(i) * uStep * uTexel.x, 0.0);
+            c += (texture2D(tSource, vUv + o).rgb + texture2D(tSource, vUv - o).rgb) * w;
+            total += 2.0 * w;
+        }
+        gl_FragColor = vec4(c / total, 1.0);
+    }
+`;
+
+// Edge smoothing after the composite (FXAA, the small form): five taps find the edge's direction, and two or four
+// along it blend across it. It reads the display-encoded frame, as FXAA expects
+const GFX_SMOOTH = `
+    uniform sampler2D tSource;
+    uniform vec2 uTexel;
+    varying vec2 vUv;
+    void main() {
+        vec3 nw = texture2D(tSource, vUv + vec2(-1.0, -1.0) * uTexel).rgb;
+        vec3 ne = texture2D(tSource, vUv + vec2(1.0, -1.0) * uTexel).rgb;
+        vec3 sw = texture2D(tSource, vUv + vec2(-1.0, 1.0) * uTexel).rgb;
+        vec3 se = texture2D(tSource, vUv + vec2(1.0, 1.0) * uTexel).rgb;
+        vec4 m = texture2D(tSource, vUv);
+        vec3 weights = vec3(0.299, 0.587, 0.114);
+        float lnw = dot(nw, weights), lne = dot(ne, weights), lsw = dot(sw, weights), lse = dot(se, weights), lm = dot(m.rgb, weights);
+        float lo = min(lm, min(min(lnw, lne), min(lsw, lse)));
+        float hi = max(lm, max(max(lnw, lne), max(lsw, lse)));
+        vec2 dir = vec2(-((lnw + lne) - (lsw + lse)), (lnw + lsw) - (lne + lse));
+        float reduce = max((lnw + lne + lsw + lse) * (0.25 / 8.0), 1.0 / 128.0);
+        float scale = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+        dir = clamp(dir * scale, vec2(-8.0), vec2(8.0)) * uTexel;
+        vec3 a = 0.5 * (texture2D(tSource, vUv + dir * (1.0 / 3.0 - 0.5)).rgb + texture2D(tSource, vUv + dir * (2.0 / 3.0 - 0.5)).rgb);
+        vec3 b = a * 0.5 + 0.25 * (texture2D(tSource, vUv - dir * 0.5).rgb + texture2D(tSource, vUv + dir * 0.5).rgb);
+        float lb = dot(b, weights);
+        gl_FragColor = vec4(lb < lo || lb > hi ? a : b, 1.0);
+    }
+`;
+
 // Light shafts: march from each pixel toward the sun's screen position and
 // gather bright sky (depth 1) on the way, fading with distance
 const GFX_SHAFTS = `
@@ -378,6 +551,17 @@ const GFX_COMPOSITE = `
     uniform float uTime;
     uniform float uFlash;
     uniform vec3 uTint;
+    // The effects (js/effects.js); each at 0 leaves the frame as it was before it
+    uniform sampler2D tAO;
+    uniform float uAO;
+    uniform sampler2D tStreak;
+    uniform float uStreak;
+    uniform float uWet;
+    uniform float uGrade;
+    uniform vec3 uGradeShadow;
+    uniform vec3 uGradeLight;
+    uniform float uGradeCurve;
+    uniform float uGradeDepth;
     varying vec2 vUv;
 
     // Same ACES fit three.js uses for ACESFilmicToneMapping
@@ -424,6 +608,36 @@ const GFX_COMPOSITE = `
             color = acc / 6.0;
         }
 
+        // Ambient occlusion: before the fog and the haze of the air are mixed in by the composite, so the far land
+        // keeps its blue (the occlusion is gone by its fade distance in any case)
+        if (uAO > 0.5) color *= texture2D(tAO, vUv).r;
+
+        // The wet road mirrors what is bright above it: the bloom of each lamp and headlight is drawn out downward
+        // over flat ground near the camera, as a streak of light on wet asphalt
+        if (uWet > 0.001) {
+            // The derivatives come before any branch on the depth: they are not defined inside one
+            float depth = texture2D(tDepth, vUv).r;
+            vec4 view = uProjInv * vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            vec3 world = (uCamWorld * vec4(view.xyz / view.w, 1.0)).xyz;
+            vec3 n = normalize(cross(dFdx(world), dFdy(world)) + vec3(0.0, 1e-6, 0.0));
+            if (depth < 0.9999) {
+                float level = smoothstep(0.82, 0.96, abs(n.y));
+                float reach = level * (1.0 - smoothstep(40.0, 140.0, length(world - uCamWorld[3].xyz))) * uWet;
+                if (reach > 0.01) {
+                    // Twelve taps up the screen from a start that differs from pixel to pixel, so a small light
+                    // draws a smooth streak and not a row of dots
+                    vec3 mirrored = vec3(0.0);
+                    float jitter = grainHash(gl_FragCoord.xy);
+                    for (int i = 0; i < 12; i++) {
+                        float f = (float(i) + jitter) / 12.0;
+                        vec2 uv = vUv + vec2(0.0, f * 0.24);
+                        if (uv.y < 1.0) mirrored += texture2D(tBloom, uv).rgb * (1.0 - f) * (8.0 / 12.0);
+                    }
+                    color += mirrored * reach * 0.8 * uBloom;
+                }
+            }
+        }
+
         // Height fog: the fog thickens toward the floor. Integrate an
         // exponentially falling density along the view ray; sky pixels (depth
         // 1) reach as far as uFogReach, which gives the mist band at the horizon
@@ -465,6 +679,7 @@ const GFX_COMPOSITE = `
         }
 
         color += texture2D(tBloom, vUv).rgb * uBloom;
+        if (uStreak > 0.001) color += texture2D(tStreak, vUv).rgb * vec3(0.8, 0.9, 1.0) * uStreak;
         color += vec3(0.75, 0.82, 1.0) * uFlash;
 
         color = acesFilmic(color);
@@ -472,8 +687,33 @@ const GFX_COMPOSITE = `
         // Grade in display-referred space
         float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color = mix(vec3(luma), color, uSaturation);
-        color = (color - 0.5) * uContrast + 0.5;
+        // Contrast as a power about mid grey (0.18 linear): the old (c - 0.5) * k + 0.5 in linear light sent every
+        // value under 0.5 - 0.5 / k to zero (under sRGB 37 at k 1.04), so shaded land, dark forest and tyres crushed to
+        // black. A power never goes below zero and keeps the order of the darks
+        color = 0.18 * pow(max(color, vec3(0.0)) / 0.18, vec3(uContrast));
         color *= uTint;
+
+        // The colour grade of the time of day (GFX_GRADES): in a display-like power of 1 / 2.2, an S-curve of contrast
+        // about 0.4, then the darks cooled and the brights warmed by their lightness
+        // The sky and the land past GRADE_FAR are not graded: their colours are held to the owner's photos by distance
+        // (world-haze), and the grade is for the near scene
+        float gradeShare = uGrade;
+        if (uGrade > 0.001 && uGradeDepth > 0.5) {
+            float depth = texture2D(tDepth, vUv).r;
+            vec4 view = uProjInv * vec4(vUv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            gradeShare *= depth >= 0.9999 ? 0.0 : 1.0 - smoothstep(400.0, 1000.0, length(view.xyz / view.w));
+        }
+        if (gradeShare > 0.001) {
+            vec3 g = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+            // About 0.4 (a frame's middle in display terms): a power each side, so black and white stay where they are
+            float k = 1.0 + uGradeCurve * 2.0;
+            vec3 lo = 0.4 * pow(g / 0.4, vec3(k));
+            vec3 hi = 1.0 - 0.6 * pow((1.0 - g) / 0.6, vec3(k));
+            g = mix(lo, hi, step(0.4, g));
+            float light = dot(g, vec3(0.2126, 0.7152, 0.0722));
+            g *= mix(uGradeShadow, uGradeLight, smoothstep(0.05, 0.75, light));
+            color = mix(color, pow(max(g, vec3(0.0)), vec3(2.2)), gradeShare);
+        }
 
         float vig = smoothstep(0.35, 0.95, radius);
         color *= 1.0 - uVignette * vig * vig;
@@ -582,12 +822,15 @@ class Graphics {
         this.weatherType = 'clear';
         this.speedRatio = 0;
         this.flash = 0;
+        // What the eye gains in a tunnel (Game.updateTubeAdaptation): a factor on the exposure, 1 in the open
+        this.adaptation = 1;
         this.sunDirection = new THREE.Vector3(0.5, 0.8, 0).normalize();
         this.lastColorScan = 0;
         this.linearFogColor = new THREE.Color();
         this.bufferSize = new THREE.Vector2();
         this.seenTextures = new WeakSet();
         this.seenGeometries = new WeakSet();
+        Graphics.watchAdds();
 
         // HDR post-processing needs float render targets (WebGL2). Without
         // them the renderer tone-maps straight to the canvas instead.
@@ -635,6 +878,7 @@ class Graphics {
             uZenith: { value: new THREE.Color() },
             uMid: { value: new THREE.Color() },
             uHorizon: { value: new THREE.Color() },
+            uHorizonSpan: { value: Graphics.HORIZON_SPAN },
             uSunDir: { value: this.sunDirection.clone() },
             uSunColor: { value: new THREE.Color(1, 1, 1) },
             uGlowColor: { value: new THREE.Color() },
@@ -742,6 +986,17 @@ class Graphics {
         this.atmosphere = atmosphere && this.atmosphereSupported
             ? { heightFog: atmosphere.heightFog, shafts: atmosphere.shafts || 0, baseY }
             : null;
+    }
+
+    // How high the horizon's pale colour reaches up the sky before the mid colour takes over (the sine of the
+    // elevation): a leg's sky keeps it low; a world's is wider (WorldLooks.horizonSpan)
+    static get HORIZON_SPAN() { return 0.22; }
+
+    setHorizonSpan(value) {
+        if (!this.skyUniforms || this.skyUniforms.uHorizonSpan.value === value) return;
+        this.skyUniforms.uHorizonSpan.value = value;
+        // The panorama is baked with it
+        this.panoramaAge = Infinity;
     }
 
     // The far ring's strength, under whatever the weather leaves of it
@@ -930,6 +1185,40 @@ class Graphics {
         this.bakedBlend = this.skyBlend;
     }
 
+    // Every object added to any parent anywhere is noted (three's Object3D.add, wrapped once), so that it is dressed
+    // before its first draw (Graphics.dressAdded): a mesh built or rebuilt at any time, by any code, never shows a frame
+    // with its sRGB colours read as linear (pale), or without what the ride's effects add to it
+    static watchAdds() {
+        if (Graphics.added) return;
+        Graphics.added = [];
+        const add = THREE.Object3D.prototype.add;
+        THREE.Object3D.prototype.add = function (...objects) {
+            const result = add.apply(this, objects);
+            for (const object of objects) if (object && object !== this) Graphics.added.push(object);
+            return result;
+        };
+    }
+
+    // What was added since the last draw and now hangs in `scene`, dressed: its colours decoded (fixColorSpaces), then
+    // whatever the game adds (onAdded: a world's shadows and tree share). What hangs elsewhere is dressed when its own
+    // group is added to the scene, which notes the group in turn
+    dressAdded(scene) {
+        const list = Graphics.added;
+        if (!list || !list.length) return 0;
+        Graphics.added = [];
+        let dressed = 0;
+        for (const object of list) {
+            let top = object;
+            while (top.parent) top = top.parent;
+            if (top !== scene) continue;
+            this.fixColorSpaces(object);
+            if (this.onAdded) this.onAdded(object);
+            dressed++;
+        }
+        this.stats.dressed = (this.stats.dressed || 0) + dressed;
+        return dressed;
+    }
+
     // Colour textures and vertex colours created by the game are authored in
     // sRGB. Tag them once so the renderer decodes them to linear for lighting.
     fixColorSpaces(root = this.scene) {
@@ -949,7 +1238,8 @@ class Graphics {
                 }
             }
             const geometry = obj.geometry;
-            if (geometry && geometry.attributes && geometry.attributes.color && !this.seenGeometries.has(geometry)) {
+            // A geometry built with linear colours (a world terrain tile) says so and is left alone
+            if (geometry && geometry.attributes && geometry.attributes.color && !geometry.userData.linearColors && !this.seenGeometries.has(geometry)) {
                 this.seenGeometries.add(geometry);
                 const attribute = geometry.attributes.color;
                 const array = attribute.array;
@@ -1050,14 +1340,87 @@ class Graphics {
             uSpeed: { value: 0 },
             uTime: { value: 0 },
             uFlash: { value: 0 },
-            uTint: { value: new THREE.Color(1, 1, 1) }
+            uTint: { value: new THREE.Color(1, 1, 1) },
+            tAO: { value: null },
+            uAO: { value: 0 },
+            tStreak: { value: null },
+            uStreak: { value: 0 },
+            uWet: { value: 0 },
+            uGrade: { value: 0 },
+            uGradeShadow: { value: new THREE.Vector3(1, 1, 1) },
+            uGradeLight: { value: new THREE.Vector3(1, 1, 1) },
+            uGradeCurve: { value: 0 },
+            uGradeDepth: { value: 0 }
         });
+
+        // The effects' passes (js/effects.js). Their targets are made the first time an effect is on
+        this.pass = pass;
+        const proj = () => ({ value: new THREE.Vector4() });
+        if (this.atmosphereSupported) {
+            const ao = samples => pass(GFX_AO, {
+                tDepth: { value: null },
+                uTexel: { value: new THREE.Vector2() },
+                uProj: proj(),
+                uKernel: { value: gfxAoKernel(samples) },
+                uRadius: { value: Graphics.AO.radius },
+                uIntensity: { value: Graphics.AO.intensity },
+                uFade: { value: Graphics.AO.fade }
+            }, { defines: { AO_SAMPLES: samples } });
+            this.aoMaterials = [null, ao(Graphics.AO.samples[0]), ao(Graphics.AO.samples[1])];
+            this.aoBlurMaterial = pass(GFX_AO_BLUR, { tAO: { value: null }, tDepth: { value: null }, uTexel: { value: new THREE.Vector2() }, uProj: proj() });
+        }
+        this.streakMaterial = pass(GFX_STREAK, { tSource: { value: null }, uTexel: { value: new THREE.Vector2() }, uStep: { value: 1 } });
+        this.smoothMaterial = pass(GFX_SMOOTH, { tSource: { value: null }, uTexel: { value: new THREE.Vector2() } });
+    }
+
+    // The occlusion's radius (m), its strength, the distance (m) by which it is gone, and the samples of its low and
+    // high levels
+    static get AO() { return { radius: 0.6, intensity: 1.2, fade: 90, samples: [8, 16] }; }
+
+    // Puts the effects of js/effects.js in force: ao 0, 1 or 2, and wet, streaks, grade, smoothing, edgeBlur true or
+    // false. Each is read where it is drawn, so a change shows on the next frame. Nothing here compiles a material
+    setEffects(values) {
+        const fx = this.fx || (this.fx = { ao: 0, wet: false, streaks: false, grade: false, smoothing: false, edgeBlur: true });
+        Object.assign(fx, values);
+        if (!this.postEnabled) return;
+        const options = { type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, stencilBuffer: false };
+        if (fx.ao && this.aoMaterials && !this.aoTargets) {
+            const small = { ...options, type: THREE.UnsignedByteType };
+            this.aoTargets = [new THREE.WebGLRenderTarget(2, 2, small), new THREE.WebGLRenderTarget(2, 2, small)];
+        }
+        if (fx.streaks && !this.streakTargets) this.streakTargets = [new THREE.WebGLRenderTarget(2, 2, options), new THREE.WebGLRenderTarget(2, 2, options)];
+        if (fx.smoothing && !this.smoothTarget) this.smoothTarget = new THREE.WebGLRenderTarget(2, 2, { ...options, type: THREE.UnsignedByteType });
+        // The targets take the frame's size at the next draw
+        this.targetsSized = null;
+    }
+
+    // How strong the glare (0 to 1: the night and the rain) and the wet road's mirror (0 to 1) are this frame; eased in
+    // update, so a time or a weather that switches at a blend's middle does not pop
+    setGlare(glare, wet) {
+        this.glareTarget = Math.max(0, Math.min(1, glare || 0));
+        this.wetTarget = Math.max(0, Math.min(1, wet || 0));
+    }
+
+    // The quality ladder's share of the drawing (js/quality.js, Game.applyQuality): the samples of the HDR scene
+    // target and whether the bloom passes run. Without post-processing neither exists, so there is nothing to set
+    setQuality({ msaa = 4, bloom = true } = {}) {
+        this.bloomOn = bloom;
+        if (!this.postEnabled || this.sceneTarget.samples === msaa) return;
+        // A target's samples are read when its framebuffer is made: the old one goes, the next draw makes it again
+        this.sceneTarget.samples = msaa;
+        this.sceneTarget.dispose();
     }
 
     resizeTargets() {
         this.renderer.getDrawingBufferSize(this.bufferSize);
         const width = Math.max(2, Math.floor(this.bufferSize.x));
         const height = Math.max(2, Math.floor(this.bufferSize.y));
+        if (this.sceneTarget.width === width && this.sceneTarget.height === height && this.targetsSized) return;
+        this.targetsSized = true;
+        const half = v => Math.max(2, Math.floor(v / 2)), quarter = v => Math.max(2, Math.floor(v / 4));
+        if (this.aoTargets) this.aoTargets.forEach(t => t.setSize(half(width), half(height)));
+        if (this.streakTargets) this.streakTargets.forEach(t => t.setSize(quarter(width), quarter(height)));
+        if (this.smoothTarget) this.smoothTarget.setSize(width, height);
         if (this.sceneTarget.width === width && this.sceneTarget.height === height) return;
         this.sceneTarget.setSize(width, height);
         if (this.shaftTarget) {
@@ -1099,6 +1462,8 @@ class Graphics {
             }
         }
 
+        this.easeEffects(deltaTime);
+
         for (const water of GFX_WATER_MATERIALS) {
             if (water.normalMap) {
                 water.normalMap.offset.x = (water.normalMap.offset.x + deltaTime * 0.012) % 1;
@@ -1112,6 +1477,83 @@ class Graphics {
             this.lastColorScan = now;
             this.fixColorSpaces();
         }
+    }
+
+    // The grade's row for the sky in force (the weather's when it is rain, snow or fog), and the glare and the wet road,
+    // each eased toward its target over about a second. The first call snaps
+    easeEffects(deltaTime) {
+        const row = GFX_GRADE_WEATHER[this.weatherType] || GFX_GRADES[this.timeKey] || GFX_GRADES.golden;
+        const now = this.gradeNow || (this.gradeNow = { shadow: [...row.shadow], light: [...row.light], curve: row.curve, glare: 0, wet: 0 });
+        const k = Math.min(1, Math.max(0, deltaTime) * 1.5);
+        for (let i = 0; i < 3; i++) {
+            now.shadow[i] += (row.shadow[i] - now.shadow[i]) * k;
+            now.light[i] += (row.light[i] - now.light[i]) * k;
+        }
+        now.curve += (row.curve - now.curve) * k;
+        now.glare += ((this.glareTarget || 0) - now.glare) * k;
+        now.wet += ((this.wetTarget || 0) - now.wet) * k;
+    }
+
+    // The effects' passes after the scene and the bloom, and their uniforms in the composite
+    renderEffects(camera) {
+        const fx = this.fx || {};
+        const c = this.compositeMaterial.uniforms;
+        const now = this.gradeNow;
+        c.uAO.value = 0;
+        if (fx.ao && this.aoTargets && this.sceneTarget.depthTexture) {
+            const p = camera.projectionMatrix.elements;
+            const depth = this.sceneTarget.depthTexture;
+            const ao = this.aoMaterials[fx.ao];
+            ao.uniforms.tDepth.value = depth;
+            ao.uniforms.uTexel.value.set(1 / this.sceneTarget.width, 1 / this.sceneTarget.height);
+            ao.uniforms.uProj.value.set(p[10], p[14], 1 / p[0], 1 / p[5]);
+            this.renderPass(ao, this.aoTargets[0]);
+            const blur = this.aoBlurMaterial;
+            blur.uniforms.tAO.value = this.aoTargets[0].texture;
+            blur.uniforms.tDepth.value = depth;
+            blur.uniforms.uTexel.value.set(1 / this.aoTargets[0].width, 1 / this.aoTargets[0].height);
+            blur.uniforms.uProj.value.copy(ao.uniforms.uProj.value);
+            this.renderPass(blur, this.aoTargets[1]);
+            c.tAO.value = this.aoTargets[1].texture;
+            c.uAO.value = 1;
+        }
+        // The wet road's mirror draws on the bloom and the depth
+        c.uWet.value = fx.wet && this.bloomOn !== false && this.atmosphereSupported && now ? now.wet : 0;
+        if (c.uWet.value > 0.001) {
+            camera.updateMatrixWorld();
+            c.tDepth.value = this.sceneTarget.depthTexture;
+            c.uProjInv.value.copy(camera.projectionMatrixInverse);
+            c.uCamWorld.value.copy(camera.matrixWorld);
+        }
+        c.uStreak.value = fx.streaks && this.streakDrawn && now ? now.glare * Graphics.STREAK : 0;
+        c.uGrade.value = fx.grade && now ? 1 : 0;
+        c.uGradeDepth.value = c.uGrade.value && this.atmosphereSupported && this.sceneTarget.depthTexture ? 1 : 0;
+        if (c.uGradeDepth.value) {
+            c.tDepth.value = this.sceneTarget.depthTexture;
+            c.uProjInv.value.copy(camera.projectionMatrixInverse);
+        }
+        if (c.uGrade.value) {
+            c.uGradeShadow.value.fromArray(now.shadow);
+            c.uGradeLight.value.fromArray(now.light);
+            c.uGradeCurve.value = now.curve;
+        }
+    }
+
+    // The glare's strength over the bloom at full night or rain
+    static get STREAK() { return 2.5; }
+
+    // The glare's two passes, from the bright pass at a quarter of the frame, before the bloom adds its levels into it
+    renderStreak(source) {
+        const [a, b] = this.streakTargets;
+        const m = this.streakMaterial;
+        m.uniforms.uTexel.value.set(1 / source.width, 1 / source.height);
+        m.uniforms.tSource.value = source.texture;
+        m.uniforms.uStep.value = 1;
+        this.renderPass(m, a);
+        m.uniforms.tSource.value = a.texture;
+        m.uniforms.uStep.value = 7;
+        this.renderPass(m, b);
+        this.compositeMaterial.uniforms.tStreak.value = b.texture;
     }
 
     // Fill the composite pass's atmosphere uniforms, and draw the quarter-
@@ -1164,6 +1606,10 @@ class Graphics {
     }
 
     render(scene, camera) {
+        // Nothing is drawn before it is dressed
+        this.dressAdded(scene);
+        // What must change before each draw (the far shadow cascade's box: js/effects.js, Cascades)
+        if (this.onRender) this.onRender(camera);
         this.ensureSkyInScene();
         if (this.environmentDirty && scene.fog) {
             this.skyUniforms.uHorizon.value.copy(scene.fog.color);
@@ -1182,8 +1628,13 @@ class Graphics {
                 fogColor.convertLinearToSRGB();
             }
             this.renderer.setRenderTarget(null);
+            // (the eye's adaptation to a tunnel, Game.updateTubeAdaptation, on the renderer's own tone map here)
+            const exposure = this.renderer.toneMappingExposure;
+            if (Number.isFinite(this.adaptation)) this.renderer.toneMappingExposure = exposure * this.adaptation;
             this.renderer.render(scene, camera);
+            this.renderer.toneMappingExposure = exposure;
             if (fogColor) fogColor.copy(this.linearFogColor);
+            this.renderedAt = performance.now();
             return;
         }
 
@@ -1195,6 +1646,38 @@ class Graphics {
 
         // Bloom: threshold, blur down a mip chain, then add each level back up
         const targets = this.bloomTargets;
+        if (this.bloomOn !== false) this.renderBloom(targets);
+        else this.streakDrawn = false;
+
+        const c = this.compositeMaterial.uniforms;
+        this.renderAtmosphere(scene, camera);
+        this.renderEffects(camera);
+        c.tScene.value = this.sceneTarget.texture;
+        c.tBloom.value = targets[0].texture;
+        // (and the eye's adaptation to a tunnel: Game.updateTubeAdaptation)
+        c.uExposure.value = renderer.toneMappingExposure * (Number.isFinite(this.adaptation) ? this.adaptation : 1);
+        c.uBloom.value = this.bloomOn === false ? 0 : this.grade.bloom / this.bloomLevels * 1.6;
+        c.uSaturation.value = this.grade.saturation;
+        c.uContrast.value = this.grade.contrast;
+        c.uTint.value.copy(this.grade.tint);
+        const fx = this.fx || {};
+        c.uSpeed.value = fx.edgeBlur === false ? 0 : Math.max(0, (this.speedRatio - 0.45) / 0.55);
+        c.uTime.value = this.time;
+        c.uFlash.value = this.flash;
+        if (fx.smoothing && this.smoothTarget) {
+            // The composite to a target, then the edge smoothing to the canvas
+            this.renderPass(this.compositeMaterial, this.smoothTarget);
+            this.smoothMaterial.uniforms.tSource.value = this.smoothTarget.texture;
+            this.smoothMaterial.uniforms.uTexel.value.set(1 / this.smoothTarget.width, 1 / this.smoothTarget.height);
+            this.renderPass(this.smoothMaterial, null);
+        } else {
+            this.renderPass(this.compositeMaterial, null);
+        }
+        this.renderedAt = performance.now();
+    }
+
+    renderBloom(targets) {
+        const renderer = this.renderer;
         this.prefilterMaterial.uniforms.tSource.value = this.sceneTarget.texture;
         this.prefilterMaterial.uniforms.uThreshold.value = this.grade.threshold;
         this.prefilterMaterial.uniforms.uTexel.value.set(1 / this.sceneTarget.width, 1 / this.sceneTarget.height);
@@ -1206,6 +1689,11 @@ class Graphics {
             this.renderPass(this.downMaterial, targets[i]);
         }
 
+        // The headlight glare reads the bright pass at a quarter before the levels below are added into it
+        const fx = this.fx || {};
+        this.streakDrawn = !!(fx.streaks && this.streakTargets && this.gradeNow && this.gradeNow.glare > 0.001);
+        if (this.streakDrawn) this.renderStreak(targets[1]);
+
         const autoClear = renderer.autoClear;
         renderer.autoClear = false;
         for (let i = targets.length - 2; i >= 0; i--) {
@@ -1214,23 +1702,9 @@ class Graphics {
             this.renderPass(this.upMaterial, targets[i]);
         }
         renderer.autoClear = autoClear;
-
-        const c = this.compositeMaterial.uniforms;
-        this.renderAtmosphere(scene, camera);
-        c.tScene.value = this.sceneTarget.texture;
-        c.tBloom.value = targets[0].texture;
-        c.uExposure.value = renderer.toneMappingExposure;
-        c.uBloom.value = this.grade.bloom / this.bloomLevels * 1.6;
-        c.uSaturation.value = this.grade.saturation;
-        c.uContrast.value = this.grade.contrast;
-        c.uTint.value.copy(this.grade.tint);
-        c.uSpeed.value = Math.max(0, (this.speedRatio - 0.45) / 0.55);
-        c.uTime.value = this.time;
-        c.uFlash.value = this.flash;
-        this.renderPass(this.compositeMaterial, null);
     }
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Graphics, SKY_PRESETS, SKY_WEATHER };
+    module.exports = { Graphics, SKY_PRESETS, SKY_WEATHER, GFX_GRADES, GFX_GRADE_WEATHER };
 }

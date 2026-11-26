@@ -107,8 +107,8 @@ firebase init emulators
 # Start emulators
 firebase emulators:start
 
-# In js/firebase-config.js, the code will automatically
-# use emulators when running on localhost
+# In js/firebase-config.js, the code uses the emulators only when the
+# page URL has ?emulator
 ```
 
 ## Step 10: Run Tests
@@ -129,7 +129,7 @@ cd functions && npm test
 `functions/courses.json` is the server's copy of `Course.boardTable()` (js/course.js):
 one row per converted leg, `{ "<board id>": { "gates": 14, "segments": 700 } }`.
 `tests/unit/board-contract.test.js` fails when the copy and the game differ.
-It is empty until the first leg is converted.
+It holds one row per converted leg (today `mountain-dawn-v3`).
 
 | | Board not in the table | Board in the table |
 |---|---|---|
@@ -138,12 +138,23 @@ It is empty until the first leg is converted.
 | Gates | exactly 5 | exactly the row's `gates` |
 | Ranks on | the last gate time | the finish-line time, which includes 5 s per restart |
 | Limits | 2 s to 5 min cumulative per gate; session 15 min | 6 s to 8 min between gates; finish from `segments x 20 m / 82.28 m/s` plus 5 s per restart, up to 40 min; session 45 min |
-| `startRun` reply | `sessionId`, `sessionToken` | also `protocol: 2` and `gates` |
+| `startRun` reply | `sessionId`, `sessionToken`, `nameMax` | also `protocol: 2` and `gates` |
 
 The store path comes from the server's table, never from the client. An entry
 written under `/leaderboards/{id}` by a server that did not know the row can
 never become part of that board. Entries left under `/courseBoards/{id}` after
 a rollback are deliberately unread; do not clean them up as orphans.
+
+### Player names
+
+A name is 1 to 5 characters on every board. `submitRun` trims it, counts it after
+Unicode NFC normalisation, rejects control and format characters (zero-width and
+bidi marks), and stores it uppercased. Names already on the boards (4 characters)
+stay valid. The limit lives in the server (`NAME_MAX` in `functions/lib/handlers.js`)
+and `startRun` states it as `nameMax`. A client that gets no `nameMax` keeps the
+old rule of exactly 4 characters, so the client and the functions can deploy in
+either order. The 1 to 5 rule reaches players only after
+`firebase deploy --only functions`.
 
 The client submits only when the server states the protocol and gate count of
 the leg it built. A reply without those fields means a server that knows no
@@ -160,10 +171,35 @@ Deploy (the user's step; an agent never runs it):
 cd functions && npm ci && npm test && firebase deploy --only functions
 ```
 
-Effect check: `startRun` for a board in the table returns `protocol` and `gates`.
+Effect check: `startRun` returns `nameMax: 5`, and for a board in the table
+also `protocol` and `gates`.
 Rollback: redeploy the previous commit's functions. `database.rules.json` needs
 no change: `courseBoards` is closed to clients by default, and functions use the
 admin SDK.
+
+## The hill ride's board
+
+`functions/hill-courses.json` is the server's copy of `HillBoard.row()` (js/hill/board.js).
+`tests/unit/hill-board.test.js` fails when the copy and the game differ.
+It holds one row, `village-hill-v1`: 3 gates, and a floor and a ceiling for each of the 4 parts of the course.
+
+| | The hill board |
+|---|---|
+| Protocol | 2 |
+| Store | `/courseBoards/village-hill-v1` |
+| Gates | exactly 3 |
+| Ranks on | the finish-line time, which includes 5 s per fall and 5 s per door missed (both signed in the proof chain) |
+| Limits | each part at most 30 m/s and at least 0.5 m/s (plus 15 s per restart); the whole at least the sum of the floors plus 5 s per restart, at most 15 min; session 30 min |
+
+Deploy (the user's step; an agent never runs it):
+
+```bash
+cd functions && npm ci && npm test && firebase deploy --only functions
+```
+
+Effect check: `startRun` with `legId: "village-hill-v1"` returns `protocol: 2` and `gates: 3`.
+Until the deploy, the server has no row for the board. The client then sends nothing: the end card shows the time, the best and "Board unavailable: the online board for this ride is not open yet".
+`database.rules.json` needs no change: `courseBoards` is closed to clients, and functions use the admin SDK.
 
 ## Database Structure
 

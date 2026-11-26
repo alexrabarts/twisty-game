@@ -135,8 +135,62 @@ class Plant:
         bpy.data.objects.remove(mass)
         bpy.data.textures.remove(texture)
 
+    def clump(self, centre, radius, colour, squash=0.8, rough=0.28, detail=0, stretch=0.15):
+        """One clump of leaves or needles: an icosahedron (20 faces, 80 with `detail` 1) knocked out of round.
+
+        Clumps stand apart, so a crown made of them has a broken outline with sky and branches between them.
+        `colour(point, normal)` gives each point its sRGB colour, with `normal` the way the point looks out.
+        """
+        rand = self.rand
+        verts, faces = icosahedron(detail)
+        # A turn of its own and a stretch along one side, so no two clumps are the same ball
+        turn = rand.random() * 2 * math.pi
+        cos, sin = math.cos(turn), math.sin(turn)
+        long = 1 + stretch * (rand.random() - 0.3)
+        offset = Vector((rand.random() * 50, rand.random() * 50, rand.random() * 50))
+        points = []
+        normals = []
+        for x, y, z in verts:
+            bump = 1 + rough * (noise.noise(Vector((x, y, z)) * 1.7 + offset) + 0.5 * (rand.random() - 0.5))
+            px, pz = x * long, z
+            px, pz = px * cos - pz * sin, px * sin + pz * cos
+            normals.append((x, y, z))
+            points.append((centre[0] + px * radius * bump, centre[1] + y * radius * squash * bump, centre[2] + pz * radius * bump))
+        out = []
+        for face in faces:
+            a, b, c = (Vector(points[i]) for i in face)
+            mid = (a + b + c) / 3 - Vector(centre)
+            out.append(face if (b - a).cross(c - a).dot(mid) >= 0 else (face[0], face[2], face[1]))
+        self.add(points, out, [colour(p, n) for p, n in zip(points, normals)])
+
     def triangles(self):
         return len(self.faces)
+
+
+def icosahedron(detail=0):
+    """The unit icosahedron, its faces split `detail` times: (points, faces)."""
+    t = (1 + 5 ** 0.5) / 2
+    raw = [(-1, t, 0), (1, t, 0), (-1, -t, 0), (1, -t, 0), (0, -1, t), (0, 1, t), (0, -1, -t), (0, 1, -t), (t, 0, -1), (t, 0, 1), (-t, 0, -1), (-t, 0, 1)]
+    verts = [tuple(c / math.sqrt(1 + t * t) for c in v) for v in raw]
+    faces = [(0, 11, 5), (0, 5, 1), (0, 1, 7), (0, 7, 10), (0, 10, 11), (1, 5, 9), (5, 11, 4), (11, 10, 2), (10, 7, 6), (7, 1, 8),
+             (3, 9, 4), (3, 4, 2), (3, 2, 6), (3, 6, 8), (3, 8, 9), (4, 9, 5), (2, 4, 11), (6, 2, 10), (8, 6, 7), (9, 8, 1)]
+    for _ in range(detail):
+        cache = {}
+
+        def middle(i, j):
+            key = (min(i, j), max(i, j))
+            if key not in cache:
+                m = [(verts[i][k] + verts[j][k]) / 2 for k in range(3)]
+                n = math.sqrt(sum(c * c for c in m))
+                verts.append(tuple(c / n for c in m))
+                cache[key] = len(verts) - 1
+            return cache[key]
+        split = []
+        for a, b, c in faces:
+            ab, bc, ca = middle(a, b), middle(b, c), middle(c, a)
+            split += [(a, ab, ca), (b, bc, ab), (c, ca, bc), (ab, bc, ca)]
+        faces = split
+    return verts, faces
 
 
 def patches(point, scale=0.45):
@@ -162,8 +216,10 @@ def finish(scene, plants, path, budget):
 
     objects = []
     for plant in plants:
-        if plant.triangles() > budget:
-            raise SystemExit(f"{plant.name}: {plant.triangles()} triangles is over the budget of {budget}")
+        # One budget for every plant of the file, or a budget by plant
+        most = budget(plant) if callable(budget) else budget
+        if plant.triangles() > most:
+            raise SystemExit(f"{plant.name}: {plant.triangles()} triangles is over the budget of {most}")
         mesh = bpy.data.meshes.new(plant.name)
         mesh.from_pydata([B(v) for v in plant.verts], [], plant.faces)
         mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))

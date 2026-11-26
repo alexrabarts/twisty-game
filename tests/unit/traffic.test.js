@@ -360,7 +360,8 @@ describe('Traffic starts on the shared course (real class)', () => {
         try {
             const { env, scene, leg } = buildEnvironment(game, index);
             expect(leg.id).toBe(id);
-            traffic = new game.Traffic(scene, env);
+            // The player rides as one of the characters; the other five are the crew
+            traffic = new game.Traffic(scene, env, game.CHARACTERS[0].name);
         } finally {
             console.log = quiet;
             Math.random = random;

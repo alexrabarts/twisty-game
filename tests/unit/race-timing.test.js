@@ -3,6 +3,7 @@
  */
 
 import { readFileSync } from 'fs';
+import { jest } from '@jest/globals';
 
 // js/race.js is a classic browser script; evaluate it so the real code is under test
 const source = readFileSync(new URL('../../js/race.js', import.meta.url), 'utf8');
@@ -95,6 +96,27 @@ describe('RaceTiming personal-best split storage', () => {
         const storage = memoryStorage();
         expect(RaceTiming.saveSplitsIfBest(storage, key, [1000, 2000], true, 5)).toBe(false);
         expect(storage.data[key]).toBeUndefined();
+    });
+
+    test('a saved table of another length is dropped with no error and no word: the course\'s split points moved under the same board', () => {
+        // 12 splits saved when the stage had 12 checkpoints; it has 6 now and its board id is the same
+        const old = Array.from({ length: 12 }, (_, i) => (i + 1) * 60000);
+        const storage = memoryStorage({ [key]: JSON.stringify(old) });
+        storage.removeItem = (name) => { delete storage.data[name]; };
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        expect(RaceTiming.loadSplits(storage, key, 6)).toBeNull();
+        expect(storage.data[key]).toBeUndefined();
+        expect(warn).not.toHaveBeenCalled();
+        // The next best ride saves its 6, and they load
+        const now = old.slice(0, 6);
+        expect(RaceTiming.saveSplitsIfBest(storage, key, now, true, 6)).toBe(true);
+        expect(RaceTiming.loadSplits(storage, key, 6)).toEqual(now);
+        // Storage that cannot remove is no error either: the table is ignored on every load
+        const fixed = memoryStorage({ [key]: JSON.stringify(old) });
+        fixed.removeItem = () => { throw new Error('blocked'); };
+        expect(RaceTiming.loadSplits(fixed, key, 6)).toBeNull();
+        expect(warn).not.toHaveBeenCalled();
+        warn.mockRestore();
     });
 
     test('corrupted or missing splits load as null', () => {

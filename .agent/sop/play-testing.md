@@ -15,6 +15,7 @@ twistyDev.autopilot({ speed: 30, lane: -3 });
 - `lane: -3` is the riders' lane. `lane: 1` meets the roadworks ramp and the oncoming car.
 - `twistyDev.view(side, up, back, ahead)` pauses the game and looks at the bike from beside the road. Use it to check scenery.
 - `twistyDev.teleport(segment)` moves the bike.
+- `twistyDev.viewPose({ x, z, eyeHeight, bearing, pitch, roll, vfov })` (world mode only) freezes the ride and draws the game from a camera pose, with the bike and the traffic hidden. The photo match uses it: see `.agent/sop/photo-match.md`.
 
 Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without them.
 
@@ -41,3 +42,43 @@ Rockfalls can crash the autopilot. Set `game.rockfalls = null` for a run without
 - `tests/golden/amendments.json` holds the declared changes to a frozen baseline. A leg listed there is compared with the amended value, and the frozen file does not change.
 
 `twistyDev.step(n)` runs n fixed physics ticks of `Game.animate`, one tick of 1/60 s each, with the loop frozen. Call `twistyDev.freeze()` in the same turn as `start()`. Pass `{ render: true }` to draw the frames. 180 ticks are 3 s.
+
+## The world (Tremola)
+
+The world is one continuous ride on real Swiss roads. It streams the land and the road round the bike. The shipped data in `world/` holds one stage, `tremola` (Airolo to the Gotthard summit, 13.3 km, 12 gates).
+
+1. Run `npm run serve`.
+2. Open `http://localhost:8080/` and choose a rider: RIDE starts the Tremola slice. CLASSIC LEGS on the rider screen opens the legs (`?legs` opens the old menu, where the rider goes on to the legs). `?world=tremola` starts the world without the menu, and `?world=all` rides every stage in the data folder in order.
+
+When the world's data does not load (a fetch error, a status other than 200, data not in the world format), the leg screen opens with a note under the title. `node tools/modal-check.mjs --only menu-world-ride,menu-classic-leg,menu-world-fallback` proves the three menu paths with real clicks.
+
+`?worldData=<path>` reads the world from another folder. The path must be relative and start with `world/` or `tests/fixtures/world/`. Any other value (a URL, `..`, a leading `/`) stops the load, and the page fetches nothing. A folder that is not the shipped `world/` never submits a time. For the 6 km test fixture with two stages, open `?world=all&worldData=tests/fixtures/world/mini`.
+
+Keys in a world ride:
+
+- `C`: back to the last station passed, on a rolling start. It costs 5 s, and the ride stays valid.
+- `R`, on the crash banner or the finish banner: restart the stage from its start. Before a ride is finished, a box asks first. The race and its clock stop while the box is open. `Enter` or YES restarts. `Escape` or CANCEL closes the box, and the ride continues from where it stopped. Any restart also closes the box.
+- `M`, on the crash banner: leave the world for the page without `?world`. The same box asks first.
+- `P` pauses, `Z` changes the camera.
+
+The guide in the top-right corner (top left on a touch device):
+
+- The minimap shows 1.5 km round the bike with north up. The yellow line is the ride, the grey lines are the side roads near the bike, and the red arrow is the bike on its heading.
+- The turn prompt under the map names the next junction within 500 m, with the distance to it: for example `Keep left, 300 m`.
+- `Wrong way` shows in the callouts when the bike is more than 40 m from the ride line, or rides against the route at more than 3 m/s for 5 s. If it is still wrong 10 s later, the game puts the bike back at the last station, the same as `C`, with the same 5 s.
+
+`twistyDev.autopilot({ speed: 20 })` rides a world with its own pilot: it slows for each bend.
+
+Probes (set `TWISTY_CHROME` first; every page blocks `cloudfunctions.net`):
+
+```sh
+node tools/terrain-check.mjs world-finish,world-budget,world-ground,world-camera,world-hud,world-restart --world tremola --gpu
+node tools/terrain-check.mjs world-finish --world tremola --gpu --seed 7 --seeds 3   # three rides, seeds 7 to 9
+node tools/terrain-check.mjs world-shots --world tremola --gpu --out /tmp/shots
+```
+
+- `world-finish` rides the stage to the finish on five seeds of `Math.random` (the traffic), and all five must finish. `--seed` and `--seeds` change the seeds.
+- `world-ground` compares 500 road points and 500 land points with the physics ground, and checks that no land stands above the road.
+- `world-hud` needs a ride of two stages. Without `--worldData` it rides the fixture `tests/fixtures/world/mini`, whatever `--world` says.
+- `world-restart` checks the `C` restart and the restart box: the race does not move while the box is open, and `Escape` and `Enter` answer it.
+- The header of `tools/terrain-check.mjs` lists every world probe. A clean run prints `"failures": []`.

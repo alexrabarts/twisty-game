@@ -1,0 +1,141 @@
+{
+  "world-airolo-lookout-v1": {
+    "kind": "stage",
+    "gates": 4,
+    "metres": 10695,
+    "floorMs": 145216,
+    "gateFloorsMs": [
+      29300,
+      28781,
+      43646,
+      17962,
+      25527
+    ]
+  },
+  "world-andermatt-goeschenen-v1": {
+    "kind": "stage",
+    "gates": 1,
+    "metres": 6422,
+    "floorMs": 99621,
+    "gateFloorsMs": [
+      43955,
+      55666
+    ]
+  },
+  "world-goeschenen-susten-v1": {
+    "kind": "stage",
+    "gates": 10,
+    "metres": 21851,
+    "floorMs": 260667,
+    "gateFloorsMs": [
+      23292,
+      21631,
+      27560,
+      24887,
+      24882,
+      20690,
+      23285,
+      22067,
+      22398,
+      25877,
+      24098
+    ]
+  },
+  "world-gotthard-north-v2": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 14504,
+    "floorMs": 173555,
+    "gateFloorsMs": [
+      23864,
+      26504,
+      21872,
+      30864,
+      22761,
+      21676,
+      26014
+    ]
+  },
+  "world-hospental-summit-v1": {
+    "kind": "stage",
+    "gates": 3,
+    "metres": 8928,
+    "floorMs": 110145,
+    "gateFloorsMs": [
+      31097,
+      29397,
+      26672,
+      22979
+    ]
+  },
+  "world-lookout-andermatt-v1": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 14482,
+    "floorMs": 172770,
+    "gateFloorsMs": [
+      28260,
+      20439,
+      23623,
+      25762,
+      23538,
+      28512,
+      22636
+    ]
+  },
+  "world-summit-airolo-v1": {
+    "kind": "stage",
+    "gates": 5,
+    "metres": 12490,
+    "floorMs": 201317,
+    "gateFloorsMs": [
+      37125,
+      40871,
+      33437,
+      34164,
+      26502,
+      29218
+    ]
+  },
+  "world-susten-gadmen-v1": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 15787,
+    "floorMs": 205761,
+    "gateFloorsMs": [
+      24533,
+      18758,
+      27744,
+      24642,
+      22662,
+      58645,
+      28777
+    ]
+  },
+  "world-tour-susten-v1": {
+    "kind": "tour",
+    "gates": 2,
+    "metres": 44060,
+    "floorMs": 566049,
+    "gateFloorsMs": [
+      99621,
+      260667,
+      205761
+    ]
+  },
+  "world-tremola-v1": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 13187,
+    "floorMs": 208315,
+    "gateFloorsMs": [
+      29222,
+      21738,
+      28260,
+      25487,
+      37028,
+      46842,
+      19738
+    ]
+  }
+}

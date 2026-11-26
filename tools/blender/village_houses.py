@@ -4,7 +4,10 @@
 # along the road with the house centred on 0, and it is 9 m deep. The ground
 # behind the front climbs 7 m at once (js/terrain.js, streetSide), so only a
 # house's front, its top floor and its roof show; all four sides are built
-# all the same, because the houses at the village's ends show a flank.
+# all the same, because the houses at the village's ends show a flank. A world
+# (js/world/scenery.js) stands the same houses at any turn on open ground, so
+# the back and the flanks have windows on every storey too (`lived_in`): a
+# blank wall seen from the road read as a box.
 #
 #   blender --background --factory-startup --python tools/blender/village_houses.py
 #
@@ -89,14 +92,13 @@ def window(sh, f, s, y, w=1.0, h=1.35, shutters=True, box=False, frame=CREAM, si
     if shutters:
         panel = w / 2 + 0.03
         for side, (p0, p1) in (("left", (a - t - panel, a - t)), ("right", (b + t, b + t + panel))):
-            boards = 3
+            # (one panel and its two battens, no edge face: three boards and an edge cost a house about 300 triangles
+            # that its back windows now spend, so a house is as dear as before; from the road the battens are what reads)
+            boards = 1
             for n in range(boards):
                 q0, q1 = p0 + (p1 - p0) * n / boards, p0 + (p1 - p0) * (n + 1) / boards
                 sh.face([f.p(q0, y - 0.03, 0.055), f.p(q1, y - 0.03, 0.055), f.p(q1, y + h + 0.03, 0.055), f.p(q0, y + h + 0.03, 0.055)],
                         sh.jitter(PAINT, 0.07), f.out, "shutter")
-            edge = p0 if side == "left" else p1
-            sh.face([f.p(edge, y - 0.03, 0.0), f.p(edge, y - 0.03, 0.055), f.p(edge, y + h + 0.03, 0.055), f.p(edge, y + h + 0.03, 0.0)],
-                    scale(PAINT, 0.8), f.along * (-1 if side == "left" else 1), "shutter")
             for at in (0.16, 0.8):
                 yy = y + h * at
                 sh.face([f.p(p0, yy, 0.07), f.p(p1, yy, 0.07), f.p(p1, yy + 0.1, 0.07), f.p(p0, yy + 0.1, 0.07)], scale(PAINT, 0.72), f.out, "shutter")
@@ -264,6 +266,47 @@ def shell(name, seed, width, plinth, floors, pitch, ridge, roof, eaves=1.0, verg
     return sh, frames, levels, top
 
 
+def plain_window(sh, f, s, y, w=0.9, h=1.2, shutters=False):
+    """A back window: one pane, the frame's four faces, a sill and a shutter each side, each one face. About 16
+    triangles where a street window is about 70: a house's back takes a dozen of them, and the window's houses share
+    the scenery's triangle cap with the trees (js/world/scenery.js)."""
+    index = sh.windows
+    sh.windows += 1
+    a, b = s - w / 2, s + w / 2
+    corners = [(a, y), (b, y), (b, y + h), (a, y + h)]
+    glow = lambda ss, yy: 1.0 - 0.3 * abs(ss - s) / (w / 2) - 0.14 * (yy - y) / h
+    sh.face([f.p(ss, yy, 0.035) for ss, yy in corners], [(index / 255, glow(ss, yy), 0.0) for ss, yy in corners], f.out, "glass")
+    t = 0.09
+    for box in (((a - t, a), (y - t, y + h + t)), ((b, b + t), (y - t, y + h + t)), ((a, b), (y + h, y + h + t)), ((a, b), (y - t, y))):
+        sh.fbox(f, box[0], box[1], (0.0, 0.08), CREAM, skip=("back", "left", "right", "top", "bottom"))
+    sh.fbox(f, (a - 0.12, b + 0.12), (y - t - 0.08, y - t), (0.0, 0.16), STONE_LIGHT, skip=("back", "left", "right", "bottom"))
+    if shutters:
+        panel = w / 2 + 0.03
+        for p0, p1 in ((a - t - panel, a - t), (b + t, b + t + panel)):
+            sh.face([f.p(p0, y - 0.03, 0.055), f.p(p1, y - 0.03, 0.055), f.p(p1, y + h + 0.03, 0.055), f.p(p0, y + h + 0.03, 0.055)], sh.jitter(PAINT, 0.07), f.out, "shutter")
+
+
+def lived_in(sh, frames, levels, w, ground=True, upper=True):
+    """Windows on the back of every storey and on the flanks' ground floor, where the street front alone had them.
+
+    The upper storeys' windows have shutters, the ground floor's none, as on the backs of the valley's houses; each is
+    a plain window (plain_window), so the house costs a few per cent more and not a tenth."""
+    back = frames["back"]
+    count = max(2, round(w / 4.0))
+    for k in range(len(levels) - 1):
+        if (k == 0 and not ground) or (k > 0 and not upper):
+            continue
+        for n in range(count):
+            s = w * (n + 0.5) / count
+            plain_window(sh, back, s, levels[k] + (0.95 if k == 0 else 0.9), shutters=k > 0)
+    for side in ("left", "right"):
+        if ground:
+            plain_window(sh, frames[side], DEPTH * 0.62, levels[0] + 0.95)
+        # (a house of three storeys or more: its flank's first floor too, the floors over it have theirs)
+        if len(levels) > 3:
+            plain_window(sh, frames[side], DEPTH * 0.38, levels[1] + 0.9, shutters=True)
+
+
 def corner_logs(sh, w, y0, y1):
     """The crossed log ends at the street corners of a log-built storey."""
     f = Frame((-w / 2, 0, 0), (1, 0, 0), (0, 0, -1))
@@ -294,6 +337,7 @@ def chalet():
     for side in ("left", "right"):
         for s in (2.0, 5.2):
             window(sh, frames[side], s, levels[2] + 1.05, w=0.9, h=1.2)
+    lived_in(sh, frames, levels, w)
     chimney(sh, -2.6, 5.8, levels[3], top + 0.55)
     return sh
 
@@ -327,6 +371,7 @@ def farmhouse():
         window(sh, frames[side], DEPTH / 2, levels[2] + 0.9, w=0.85, h=1.1)
         for s in (2.2, 6.6):
             window(sh, frames[side], s, levels[1] + 0.95)
+    lived_in(sh, frames, levels, w)
     chimney(sh, -4.4, DEPTH / 2 + 0.9, levels[2] + 1.6, top + 0.7)
     chimney(sh, 4.9, DEPTH / 2 - 1.0, levels[2] + 1.6, top + 0.6, w=0.6)
     return sh
@@ -367,6 +412,7 @@ def inn():
     for side in ("left", "right"):
         for s in (2.2, 5.4):
             window(sh, frames[side], s, levels[2] + 0.9, w=1.0, h=1.4)
+    lived_in(sh, frames, levels, w)
     chimney(sh, 3.4, 6.2, levels[3] + 0.6, top + 0.5)
     chimney(sh, -3.6, 3.0, levels[3] + 0.5, top + 0.4, w=0.6)
     return sh
@@ -406,6 +452,8 @@ def barn():
     for side in ("left", "right"):
         window(sh, frames[side], DEPTH / 2, levels[2] + 0.5, w=0.8, h=1.0, shutters=False)
         window(sh, frames[side], 2.4, levels[1] + 1.0, w=0.9, h=1.15)
+    # (a barn's stone byre has slits, not windows: only its boarded loft takes windows at the back)
+    lived_in(sh, frames, levels, w, ground=False)
     chimney(sh, 3.0, DEPTH / 2 + 1.2, levels[2] + 1.2, top + 0.6)
     return sh
 
@@ -426,6 +474,7 @@ def cottage():
     window(sh, f, w / 2, levels[2] + 3.2, w=0.7, h=0.8, shutters=False)
     for side in ("left", "right"):
         window(sh, frames[side], 2.4, levels[1] + 1.0, w=0.95, h=1.3)
+    lived_in(sh, frames, levels, w)
     chimney(sh, 2.4, 5.0, levels[2] + 1.6, top + 0.5)
     return sh
 
@@ -439,4 +488,6 @@ def main():
     finish(os.path.join(common.ASSETS, "village", "houses.glb"), shapes, SEED, BUDGET)
 
 
-main()
+# Blender runs a --python script as __main__; the landmark scripts import the house kit from here
+if __name__ == "__main__":
+    main()

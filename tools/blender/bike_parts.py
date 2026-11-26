@@ -38,7 +38,9 @@ def forks(k, x, axle, top, radius, pivot, usd=False, caliper_radius=None, twin=F
             ribs = [(radius * (1.75 if n % 2 else 1.25), length * (0.5 + 0.03 * n)) for n in range(9)]
             k.lathe(ribs, a, "rubber", to=b, seg=10, sharp=80)
         if shields:
-            k.rod(along(a, b, 0.02), along(a, b, 0.5), radius * 1.9, shields, seg=8, top=radius * 1.7)
+            # Off the leg's outer side, so the guard clears the disc inboard of it
+            out = Vector((side * radius * 0.7, 0, 0))
+            k.rod(tuple(Vector(along(a, b, 0.02)) + out), tuple(Vector(along(a, b, 0.5)) + out), radius * 1.9, shields, seg=8, top=radius * 1.7)
         k.box((radius * 3.2, 0.07, 0.06), a, "steel_dark", bevel=0.012)
         if caliper_radius and (twin or side > 0):
             caliper(k, (side * disc_x, axle[0], axle[1]), caliper_radius, math.radians(205))

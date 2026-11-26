@@ -39,6 +39,7 @@ MATERIALS = {
     "rim": (0xB6B9BF, 0.22, 0.92),
     "disc": (0xB9BCC2, 0.32, 1.0),
     "fork_gold": (0xB8923E, 0.3, 0.85),
+    "copper": (0xA8643A, 0.32, 0.9),
     "spring": (0xC42020, 0.4, 0.5),
     "signal": (0xD88A1A, 0.2, 0.0),
     "luggage": (0x33373D, 0.5, 0.65),
@@ -51,6 +52,21 @@ MATERIALS = {
     "helmet": (0xF0F0F2, 0.12, 0.35),
     "helmet_accent": (0xCC1111, 0.2, 0.4),
     "visor": (0x0E1218, 0.06, 0.45),
+    # The rider's gear that a character may colour apart from the suit
+    "pants": (0x16161C, 0.85, 0.0),
+    "pants_accent": (0xCC1111, 0.6, 0.15),
+    "boot": (0x101014, 0.9, 0.0),
+    "boot_accent": (0xCC1111, 0.6, 0.15),
+    "helmet_trim": (0xB8693A, 0.2, 0.45),
+    "backpack": (0x18191C, 0.8, 0.05),
+    # An outfit's own colours (CHARACTERS[].outfits in js/vehicle.js)
+    "suit_trim": (0xD94A26, 0.6, 0.15),
+    "suit_patch": (0xB9BCC0, 0.6, 0.15),
+    "pants_trim": (0xB4B8BC, 0.6, 0.15),
+    "glove_accent": (0x2A2C30, 0.8, 0.05),
+    "visor_accent": (0x2F5FB8, 0.06, 0.45),
+    "neck": (0x37428A, 0.95, 0.0),
+    "sole": (0x0C0C0E, 0.9, 0.0),
 }
 # In a low-detail model the finishes that read alike from a distance are one
 LOW = {"chrome": "steel", "fork_gold": "steel", "disc": "steel", "rim": "steel", "steel_dark": "dark_metal", "caliper": "dark_metal", "spring": "dark_metal",
@@ -92,6 +108,21 @@ def spline(points, steps):
                 for a, b, c, d in zip(p0, p1, p2, p3)))
     out.append(tuple(points[-1]))
     return out
+
+
+# The way a folded side stand points from its hinge, in the bike's axes (x
+# toward the stand's own side, y up, z forward): back along the bike, a little
+# down and a little out
+STAND_UP = (0.07, -0.33, -0.94)
+
+
+# Where the end of a side stand is when it is folded: as far from `pivot` as
+# its `foot` on the ground is, along STAND_UP on the stand's own side
+def stand_up(pivot, foot):
+    length = (Vector(foot) - Vector(pivot)).length
+    side = -1 if pivot[0] < 0 else 1
+    way = Vector((side * STAND_UP[0], STAND_UP[1], STAND_UP[2])).normalized()
+    return tuple(Vector(pivot) + way * length)
 
 
 class Kit:
@@ -254,6 +285,20 @@ class Kit:
         length = (Vector(b) - Vector(a)).length
         top = radius if top is None else top
         return self.lathe([(0, 0), (radius, 0), (top, length), (0, length)], a, mat, to=b, seg=seg, **kw)
+
+    # A side stand, folded up: every bike is drawn as it is ridden, and a stand
+    # left down pointed at the road through every bend. `pivot` is where it
+    # hinges on the frame and `foot` where its foot stands on the ground when
+    # it is down (what a script knows about its bike); the same leg is drawn
+    # swung back along the bike, a little down and out, as STAND_UP says.
+    # `pad` adds the foot's pad at its end
+    def side_stand(self, pivot, foot, radius, mat, seg=6, pad=False):
+        end = stand_up(pivot, foot)
+        self.rod(pivot, end, radius, mat, seg=seg)
+        if pad:
+            back = tuple(e + (e - p) * -0.12 for p, e in zip(pivot, end))
+            self.rod(back, end, radius * 1.9, mat, seg=seg)
+        return end
 
     def cylinder(self, radius, length, at, mat, axis="y", rot=(0, 0, 0), seg=12, top=None, **kw):
         top = radius if top is None else top
@@ -461,7 +506,8 @@ class Kit:
     # occlusion and writes the file. `anchors` are bare named points.
     # `fold` names nodes to make part of the body instead, and `decimate` the
     # share of the body's triangles to keep (both for a low-detail model).
-    def finish(self, path, anchors=None, budget=None, alone=(), fold=(), decimate=None):
+    # `unit` stores the positions as whole units of that many metres (pack_colours).
+    def finish(self, path, anchors=None, budget=None, alone=(), fold=(), decimate=None, unit=None):
         joined = {}
         for name in fold:
             if name in self.nodes:
@@ -491,13 +537,14 @@ class Kit:
             self.scene.collection.objects.link(mark)
             marks.append(mark)
         size = common.export_glb(path, list(joined.values()) + marks, colours=True, texcoords=False)
-        size = pack_colours(path)
+        size = pack_colours(path, unit)
         counts = {name: self.triangles([obj]) for name, obj in joined.items()}
         total = sum(counts.values())
         print(f"{os.path.basename(path)}: {total} triangles, {size} bytes", counts)
         if budget and total > budget:
             raise SystemExit(f"{path}: {total} triangles is over the budget of {budget}")
         self.joined = joined
+        self.size = size
         return joined
 
     # Ambient occlusion into each node's vertex colours, over a short reach

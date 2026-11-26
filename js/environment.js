@@ -279,6 +279,10 @@ class Environment {
   constructor(scene, startSegment = 0, endSegment = 703, legIndex = 0, options = {}) {
     this.scene = scene;
     this.roadPath = []; // Store the path for other uses (full track for physics/AI)
+    // What the rest of the game reads of the road and the land beside it;
+    // both read roadPath and the terrain lazily, so they hold across the build
+    this.route = new LegRoute(this);
+    this.ground = new LegGround(this);
     this.startSegment = startSegment; // Start of visual geometry range
     this.endSegment = endSegment; // End of visual geometry range
     this.legIndex = legIndex; // Current leg index (0-7)
@@ -6504,7 +6508,9 @@ class Environment {
   }
 
   createBulldozer(x, y, z, rotation) {
+    if (!this.terrain.columnWalk) return this.createDetailedBulldozer(x, y, z, rotation);
     const group = new THREE.Group();
+    group.name = "leg-prop:bulldozer";
 
     // Main body
     const bodyGeometry = new THREE.BoxGeometry(3, 2, 4);
@@ -6646,7 +6652,9 @@ class Environment {
   }
 
   createWorkTruck(x, y, z, rotation) {
+    if (!this.terrain.columnWalk) return this.createDetailedWorkTruck(x, y, z, rotation);
     const group = new THREE.Group();
+    group.name = "leg-prop:truck";
 
     // Truck body (smaller than bulldozer)
     const bodyGeometry = new THREE.BoxGeometry(2, 1.5, 4);
@@ -6727,6 +6735,133 @@ class Environment {
         "work truck",
       );
     }
+  }
+
+  // Parts of a machine as one vertex-coloured mesh (Environment.mergeColoredGeometries): a box `[w, h, d]` at
+  // `[x, y, z]`, turned `[rx, ry, rz]`, and a round part `r` round and `length` long along an axis, each with its
+  // colour at its foot and at its top
+  machinePart(kind, size, at, colour, turn = [0, 0, 0], sides = 10, arc = Math.PI * 2) {
+    let geometry;
+    if (kind === "box") geometry = new THREE.BoxGeometry(size[0], size[1], size[2]);
+    else {
+      geometry = new THREE.CylinderGeometry(size[0], size[1] === undefined ? size[0] : size[1], size[2], sides, 1, false, 0, arc);
+      if (kind === "x") geometry.rotateZ(Math.PI / 2);
+      else if (kind === "z") geometry.rotateX(Math.PI / 2);
+    }
+    geometry.rotateX(turn[0]);
+    geometry.rotateY(turn[1]);
+    geometry.rotateZ(turn[2]);
+    geometry.translate(at[0], at[1], at[2]);
+    return { geometry, color: Array.isArray(colour) ? colour : [colour, colour] };
+  }
+
+  // A crawler dozer as the legs other than high-pass draw it (high-pass keeps the boxes the frozen golden binds): its
+  // two tracks round a sprocket, an idler and five rollers each, with the track's shoes; the engine hood with its
+  // grille, the exhaust stack and the air cleaner; a cab of four posts with tinted glass under a roof; the curved
+  // blade on two push arms with its lift rams; a ripper shank behind. One mesh, the same footprint and solid circle
+  createDetailedBulldozer(x, y, z, rotation) {
+    const P = (...args) => this.machinePart(...args);
+    const yellow = [0xb89400, 0xf2c200], dark = [0x1c1c1c, 0x2a2a2a], steel = [0x4a4a48, 0x6a6a66], glass = [0x1b2530, 0x2c3a46];
+    const parts = [];
+    for (const side of [-1, 1]) {
+      const tx = side * 1.8;
+      parts.push(P("box", [0.9, 0.62, 3.4], [tx, 0.5, 0], dark));
+      parts.push(P("x", [0.5, 0.5, 0.9], [tx, 0.5, 1.7], dark, [0, 0, 0], 12));
+      parts.push(P("x", [0.55, 0.55, 0.9], [tx, 0.6, -1.7], dark, [0, 0, 0], 12));
+      for (let k = 0; k < 5; k++) parts.push(P("x", [0.2, 0.2, 0.95], [tx, 0.24, -1.2 + k * 0.6], steel, [0, 0, 0], 8));
+      // The shoes across the top of the track
+      for (let k = 0; k < 9; k++) parts.push(P("box", [0.95, 0.06, 0.12], [tx, 0.84, -1.6 + k * 0.4], dark));
+      // The frame the track runs on, and the fender over it
+      parts.push(P("box", [0.5, 0.3, 3.0], [side * 1.3, 0.6, 0], steel));
+      parts.push(P("box", [1.0, 0.06, 3.6], [tx, 1.05, 0], yellow));
+    }
+    // Hood, grille and the engine's side panels
+    parts.push(P("box", [2.3, 1.2, 2.4], [0, 1.65, 0.9], yellow));
+    parts.push(P("box", [2.0, 0.9, 0.08], [0, 1.6, 2.12], dark));
+    for (let k = 0; k < 6; k++) parts.push(P("box", [1.9, 0.04, 0.1], [0, 1.25 + k * 0.14, 2.16], steel));
+    parts.push(P("box", [2.6, 0.9, 2.0], [0, 1.5, -1.0], yellow));
+    parts.push(P("y", [0.08, 0.08, 1.2], [0.7, 2.75, 1.4], dark, [0, 0, 0], 8));
+    parts.push(P("y", [0.16, 0.16, 0.5], [-0.7, 2.5, 1.5], steel, [0, 0, 0], 8));
+    // Cab: four posts, the glass between them, a roof with a lip, and a beacon
+    for (const [px, pz] of [[-0.95, -0.15], [0.95, -0.15], [-0.95, -1.85], [0.95, -1.85]]) parts.push(P("box", [0.1, 1.6, 0.1], [px, 2.75, pz], yellow));
+    parts.push(P("box", [1.8, 1.4, 0.04], [0, 2.75, -0.15], glass));
+    parts.push(P("box", [1.8, 1.4, 0.04], [0, 2.75, -1.85], glass));
+    for (const side of [-1, 1]) parts.push(P("box", [0.04, 1.4, 1.6], [side * 0.95, 2.75, -1.0], glass));
+    parts.push(P("box", [2.15, 0.12, 2.0], [0, 3.6, -1.0], yellow));
+    parts.push(P("y", [0.09, 0.11, 0.16], [0.6, 3.74, -1.6], [0xc85a00, 0xff8a10], [0, 0, 0], 8));
+    // The blade: a curved plate, its top edge and its cutting edge, on two push arms with lift rams
+    parts.push(P("x", [1.1, 1.1, 4.0], [0, 1.05, 3.0], steel, [0, 0, 0], 12, Math.PI * 0.42));
+    parts.push(P("box", [4.0, 0.12, 0.25], [0, 0.08, 2.95], dark));
+    for (const side of [-1, 1]) {
+      parts.push(P("box", [0.2, 0.25, 2.2], [side * 1.25, 0.6, 1.9], yellow, [0.1, 0, 0]));
+      parts.push(P("z", [0.07, 0.07, 1.5], [side * 0.8, 1.9, 2.3], steel, [-0.7, 0, 0], 8));
+      parts.push(P("box", [0.06, 1.1, 0.5], [side * 2.0, 0.65, 2.35], steel));
+    }
+    // The ripper behind: a frame and its shank into the ground
+    parts.push(P("box", [1.8, 0.25, 0.3], [0, 0.9, -2.3], yellow));
+    parts.push(P("box", [0.2, 1.0, 0.25], [0, 0.45, -2.55], dark, [-0.25, 0, 0]));
+    const mesh = new THREE.Mesh(this.mergeColoredGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.75, metalness: 0.2, flatShading: true }));
+    const group = new THREE.Group();
+    group.name = "leg-prop:bulldozer";
+    group.add(mesh);
+    group.position.set(x, y, z);
+    group.rotation.y = rotation;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    this.scene.add(group);
+    this.registerGrounded(group, "construction bulldozer");
+    this.addSolidCircle(x, y, z, 3, 3, "bulldozer");
+  }
+
+  // A works truck as the legs other than high-pass draw it: a cab with its windscreen, side windows, mirrors,
+  // bumper, grille and lamps; a chassis and a tipper body with dropsides; four wheels with tyres and hubs, the rear
+  // twinned; the amber beacon bar on the cab roof lit as before. One mesh and the beacon, the same solid circles
+  createDetailedWorkTruck(x, y, z, rotation) {
+    const P = (...args) => this.machinePart(...args);
+    const orange = [0xc86a00, 0xffa21a], dark = [0x161616, 0x262626], steel = [0x55565a, 0x7a7b80], glass = [0x1b2530, 0x34424e], white = [0xd8d8d2, 0xf0f0ea];
+    const parts = [];
+    // Chassis rails and the bumper
+    for (const side of [-1, 1]) parts.push(P("box", [0.14, 0.22, 3.9], [side * 0.55, 0.55, -0.1], dark));
+    parts.push(P("box", [2.0, 0.22, 0.18], [0, 0.55, 1.95], steel));
+    // Cab: the box, a sloped windscreen, side windows, the grille and the lamps, mirrors on arms
+    parts.push(P("box", [1.9, 1.0, 1.4], [0, 1.15, 1.25], orange));
+    parts.push(P("box", [1.9, 0.75, 1.1], [0, 2.0, 1.1], orange));
+    parts.push(P("box", [1.7, 0.62, 0.04], [0, 2.02, 1.68], glass, [-0.18, 0, 0]));
+    for (const side of [-1, 1]) {
+      parts.push(P("box", [0.04, 0.5, 0.8], [side * 0.96, 2.05, 1.1], glass));
+      parts.push(P("box", [0.04, 0.32, 0.18], [side * 1.18, 2.0, 1.55], dark));
+      parts.push(P("box", [0.25, 0.03, 0.03], [side * 1.07, 2.0, 1.55], steel));
+      parts.push(P("box", [0.3, 0.16, 0.04], [side * 0.7, 0.95, 1.97], white));
+    }
+    parts.push(P("box", [1.0, 0.45, 0.04], [0, 1.05, 1.96], dark));
+    // The tipper body: a floor, a headboard, two dropsides and a tailgate
+    parts.push(P("box", [2.0, 0.12, 2.5], [0, 0.85, -0.85], steel));
+    parts.push(P("box", [2.0, 0.9, 0.08], [0, 1.35, 0.42], orange));
+    for (const side of [-1, 1]) parts.push(P("box", [0.06, 0.5, 2.5], [side * 1.0, 1.15, -0.85], orange));
+    parts.push(P("box", [2.0, 0.5, 0.06], [0, 1.15, -2.1], orange));
+    // Wheels: a tyre round a hub, the rear twinned
+    for (const [wz, twin] of [[1.4, false], [-1.4, true]]) {
+      for (const side of [-1, 1]) {
+        const at = [side * (twin ? 0.78 : 0.82), 0.35, wz];
+        parts.push(P("x", [0.35, 0.35, twin ? 0.4 : 0.24], at, dark, [0, 0, 0], 14));
+        parts.push(P("x", [0.17, 0.17, (twin ? 0.4 : 0.24) + 0.02], at, steel, [0, 0, 0], 8));
+      }
+    }
+    const mesh = new THREE.Mesh(this.mergeColoredGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.7, metalness: 0.15, flatShading: true }));
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const group = new THREE.Group();
+    group.name = "leg-prop:truck";
+    group.add(mesh);
+    // The beacon bar, lit as before
+    const beacon = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.14, 0.22), new THREE.MeshStandardMaterial({ color: 0xffb000, emissive: 0xffa000, emissiveIntensity: 0.35 }));
+    beacon.position.set(0, 2.45, 1.0);
+    group.add(beacon);
+    group.position.set(x, y, z);
+    group.rotation.y = rotation;
+    this.scene.add(group);
+    this.registerGrounded(group, "work truck");
+    for (const along of [-1, 1]) this.addSolidCircle(x + Math.sin(rotation) * along, y, z + Math.cos(rotation) * along, 2, 3, "work truck");
   }
 
   createShippingContainer(x, y, z, rotation) {

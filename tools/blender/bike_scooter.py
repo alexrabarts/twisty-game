@@ -31,9 +31,10 @@ def build():
     k.begin("disc_rear", (0.09, 0.3, -0.7))
     k.disc((0.098, 0.3, -0.7), 0.105)
     k.begin("disc_front", (0.09, 0.3, 0.7))
-    k.disc((0.088, 0.3, 0.7), 0.12)
+    # Inboard of the fork leg, whose inner face is at x 0.077
+    k.disc((0.068, 0.3, 0.7), 0.12)
 
-    parts.forks(k, x=0.105, axle=(0.3, 0.7), top=(0.7, 0.6), radius=0.02, pivot=(0.08, 0.5, 0.68), caliper_radius=0.12, disc_x=0.088, lower="steel_dark")
+    parts.forks(k, x=0.105, axle=(0.3, 0.7), top=(0.7, 0.6), radius=0.02, pivot=(0.08, 0.5, 0.68), caliper_radius=0.12, disc_x=0.068, lower="steel_dark")
 
     k.begin("handlebar", (0, 1.12, 0.55))
     parts.bars(k, GRIP, clamp=(1.08, 0.53), rise=0.02, mat="dark_metal")

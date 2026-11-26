@@ -1,3 +1,47 @@
+// The steer keys, eased for a world ride (WorldPhysics.steerKeys; the classic legs keep steeringSmoothing). A key is on
+// or off, and the world's bike leans at a rate set by the steering, so a rider who taps a key to hold a line gave it
+// full rate in, the self-righting out, full rate in: the lean rocked by 4 to 6 degrees and the drawn bar with it.
+// Each change of the keys is a straight ramp of the steering instead, over keyS, or over featherS when the two
+// changes before it came within featherGapS of each other (the rider is tapping). Tapped keys then give nearly their
+// mean, a held key and a flick answer as fast as before, and a ramp gives the lean a press of its length gave
+// before, however long the ramp. No DOM: tests/unit/world-steer-ease.test.js rides it
+class SteerEase {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this.key = 0;
+        this.base = 0;
+        this.ramps = [];
+        this.since = Infinity;
+        this.before = Infinity;
+    }
+
+    // The keys are at `key` (-1, 0 or 1) from now on
+    turn(key, ease) {
+        if (key === this.key) return;
+        const tapping = this.since < ease.featherGapS && this.before < ease.featherGapS;
+        this.ramps.push({ step: key - this.key, over: tapping ? ease.featherS : ease.keyS, age: 0 });
+        this.key = key;
+        this.before = this.since;
+        this.since = 0;
+    }
+
+    advance(seconds) {
+        if (!(seconds > 0)) return;
+        this.since += seconds;
+        for (const ramp of this.ramps) ramp.age += seconds;
+        while (this.ramps.length && this.ramps[0].age >= this.ramps[0].over) this.base += this.ramps.shift().step;
+    }
+
+    get value() {
+        let value = this.base;
+        for (const ramp of this.ramps) value += ramp.step * Math.min(1, ramp.age / ramp.over);
+        return Math.max(-1, Math.min(1, value));
+    }
+}
+
 class InputHandler {
     constructor() {
         this.keys = {};
@@ -15,6 +59,8 @@ class InputHandler {
         this.pausePressed = false;
         this.virtualControls = null;
         this.steeringSmoothing = 0.4; // How quickly steering ramps up (0-1, higher = faster)
+        this.steerEase = new SteerEase();
+        this.steerKeys = null; // WorldPhysics.steerKeys on a world ride (getSteeringInput), null on a leg
         this.menuActive = false; // Track if crash/finish menu is showing
         this.setupEventListeners();
         this.setupMobileControls();
@@ -27,6 +73,7 @@ class InputHandler {
             if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
 
             this.keys[event.code] = true;
+            this.advanceSteerEase();
             this.updateInputs();
 
             // One-shot actions fire once per press, not on key auto-repeat
@@ -63,13 +110,18 @@ class InputHandler {
                 console.log('C key pressed - checkpoint restart triggered');
             }
 
+            // A loaf thrown to the left or the right (the hill ride's deliveries; nothing else reads them)
+            if (event.code === 'KeyQ') this.throwPressed = 1;
+            if (event.code === 'KeyE') this.throwPressed = -1;
+
             // Check for camera mode switch
             if (event.code === 'KeyZ') {
                 this.cameraSwitchPressed = true;
             }
 
-            // Check for pause toggle
-            if (event.code === 'KeyP') {
+            // Check for pause toggle; Escape pauses too, and the pause panel is the way to the menu. Once a dialog
+            // is open the dialog stack (js/modals.js) takes every key, so these only ever pause a ride.
+            if (event.code === 'KeyP' || event.code === 'Escape') {
                 this.pausePressed = true;
             }
 
@@ -82,6 +134,7 @@ class InputHandler {
 
         document.addEventListener('keyup', (event) => {
             this.keys[event.code] = false;
+            this.advanceSteerEase();
             this.updateInputs();
 
             // Unhighlight virtual controls
@@ -89,36 +142,21 @@ class InputHandler {
                 this.virtualControls.highlightKey(event.code, false);
             }
 
-            if (event.code === 'KeyR') {
-                this.resetPressed = false;
-            }
-
-            if (event.code === 'KeyM') {
-                this.menuReturnPressed = false;
-                this.soundTogglePressed = false;
-            }
-
-            if (event.code === 'KeyN') {
-                this.nextLegPressed = false;
-            }
-
-            if (event.code === 'KeyC') {
-                this.checkpointRestartPressed = false;
-            }
-
-            if (event.code === 'KeyZ') {
-                this.cameraSwitchPressed = false;
-            }
-
-            if (event.code === 'KeyP') {
-                this.pausePressed = false;
-            }
+            // A one-shot press stays until the frame reads it (check*): a tap shorter than a frame, which a slow
+            // frame makes common, would otherwise be lost. clearActions drops presses nobody read.
         });
     }
 
     // A lost keyup (Alt-Tab while holding a key) would leave it held forever
     releaseAllKeys() {
         this.keys = {};
+        this.clearActions();
+        this.updateInputs();
+    }
+
+    // Drops the one-shot presses not yet read, and leaves held keys (steering, throttle) alone. A box that
+    // held the game calls it, so a key pressed while it was open does not fire once the game goes on.
+    clearActions() {
         this.resetPressed = false;
         this.menuReturnPressed = false;
         this.nextLegPressed = false;
@@ -126,7 +164,6 @@ class InputHandler {
         this.checkpointRestartPressed = false;
         this.cameraSwitchPressed = false;
         this.pausePressed = false;
-        this.updateInputs();
     }
 
     updateInputs() {
@@ -153,6 +190,8 @@ class InputHandler {
             this.targetSteeringInput = -1;  // D/Right now steers left
         }
 
+        if (this.steerKeys) this.steerEase.turn(this.targetSteeringInput, this.steerKeys);
+
         // Steering smoothing happens in getSteeringInput() - updateInputs()
         // runs on every key event and every getter call, so smoothing here
         // made steering response depend on call frequency and frame rate
@@ -166,8 +205,25 @@ class InputHandler {
         this.wheelieInput = (this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['Space'] || virtualSpace) ? 1 : 0;
     }
 
-    getSteeringInput() {
+    // The eased keys run on their own clock, moved on at each key event as well as each frame, so a tap is as long
+    // as the rider made it and not a whole number of frames. A stall (a pause, a hidden tab) counts as 0.1 s
+    advanceSteerEase() {
+        const now = performance.now();
+        if (this.steerKeys) this.steerEase.advance(Math.min((now - (this.steerEaseTime || now)) / 1000, 0.1));
+        this.steerEaseTime = now;
+    }
+
+    // `ease` is WorldPhysics.steerKeys on a world ride: the keys are eased by SteerEase. With none (a classic leg,
+    // whose lean has its own momentum) the steering is smoothed as it always was
+    getSteeringInput(ease = null) {
+        if (ease !== this.steerKeys) {
+            // Between a leg and a world the keys start again; another set of the world's values (the tuning's,
+            // js/tuning.js) only changes the ramps to come
+            if (!ease || !this.steerKeys) this.steerEase.reset();
+            this.steerKeys = ease;
+        }
         // Update inputs before returning (for virtual controls and smoothing)
+        this.advanceSteerEase();
         this.updateInputs();
 
         // Smooth steering towards target, scaled by elapsed time so the ramp
@@ -175,6 +231,10 @@ class InputHandler {
         const now = performance.now();
         const elapsed = Math.min((now - (this.lastSteeringTime || now)) / 1000, 0.1);
         this.lastSteeringTime = now;
+        if (ease) {
+            this.steeringInput = this.steerEase.value;
+            return this.steeringInput;
+        }
         const blend = 1 - Math.pow(1 - this.steeringSmoothing, elapsed * 60);
         this.steeringInput = this.steeringInput + (this.targetSteeringInput - this.steeringInput) * blend;
 
@@ -260,7 +320,23 @@ class InputHandler {
         return false;
     }
 
+    // A throw asked for since the last frame: 1 to the left (Q), -1 to the right (E), 0 for none; the touch buttons too
+    checkThrow() {
+        const touches = this.virtualControls && this.virtualControls.touches;
+        let side = this.throwPressed || 0;
+        if (touches && touches.KeyQ) side = 1;
+        if (touches && touches.KeyE) side = -1;
+        if (touches) touches.KeyQ = touches.KeyE = false;
+        this.throwPressed = 0;
+        return side;
+    }
+
     checkPause() {
+        // The touch pause button (js/virtualcontrols.js), cleared once read as the camera button is
+        if (this.virtualControls && this.virtualControls.getKey('KeyP')) {
+            this.virtualControls.touches['KeyP'] = false;
+            return true;
+        }
         if (this.pausePressed) {
             this.pausePressed = false;
             return true;

@@ -1,0 +1,189 @@
+// The hill ride's bicycle as the game's own bike (js/vehicle.js): the same steering input, countersteer, lean, heading,
+// lateral grip, lowside, foot down, wheelie and fall as every motorbike, through the world's physics path, with the
+// numbers of a heavy delivery bicycle and a boy on it (HillVehicle.DATA, HillVehicle.WORLD). Only the drive is its own:
+// no engine, the boy's push at the pedals, which falls away as the cadence rises (one gear, a freewheel), rod brakes
+// that pull weakly, and the cobbles' drag. Nothing of a motorbike changes: every difference is an override here or a
+// hook whose motorbike value is the one it always had (Vehicle.wheeliePop, wheelieLift, wheelieEndSpeed).
+class HillVehicle extends Vehicle {
+    static get DATA() {
+        return Object.freeze({
+            // A 20 kg delivery bicycle and a 40 kg boy; 26 inch wheels; a delivery bicycle's long wheelbase
+            bikeKg: 20, riderKg: 40, wheelbaseM: 1.15, wheelM: 0.33,
+            // One tall gear: metres for each turn of the cranks, the most turns a minute; the push at the road when the
+            // cranks barely turn. It holds up through the middle and fades only near the most (pushFade, the power of the
+            // cadence's share it falls by), so pedalling adds real speed up to about 15 m/s on the flat
+            developmentM: 9.25, cadenceMostRpm: 120, pushN: 200, pushFade: 3,
+            // Rolling drag on the cobbles, as a share of the weight, and the air's: the drag area (m2) of the boy crouched
+            // a little with his legs out
+            rollCobbles: 0.025, dragAreaM2: 0.5,
+            // The steering: under directMs (walking pace) the bars turn the bicycle; over counterMs the lean does, the
+            // bars drawn as a countersteer (a push of counterGain s of the lean rate the other way, at most counterMostDeg)
+            // over the small angle the turn's own curve needs; a smoothstep by speed between the two
+            steer: Object.freeze({ directMs: 1.5, counterMs: 2.8, counterGain: 0.1, counterMostDeg: 6 }),
+            // Rod brakes: the most they slow the bicycle (m/s2)
+            brakeMs2: 2.4,
+            // The wheelie: the pop is the hard push's (the push share at this speed) times popGain, the push's lift
+            // after it times liftGain (a light bicycle and the boy's weight thrown back: at a crawl it can go over); the
+            // loaded basket takes basketLoad of both; tug is the share of the pop that is the boy's pull on the bars
+            popGain: 1.15, liftGain: 1.5, basketLoad: 0.15, tug: 0.12,
+            // The top speed the drive is held to (none is reached on the hill)
+            maxSpeed: 30
+        });
+    }
+
+    // The world's numbers for the bicycle: WorldPhysics with a bicycle's lean (slower, a lower cap), its grip on cobbles,
+    // its tighter turns at walking pace, no engine braking, its air drag (half rho Cd A over its mass), its foot down
+    static get WORLD() {
+        if (HillVehicle.world) return HillVehicle.world;
+        const D = HillVehicle.DATA;
+        HillVehicle.world = Object.freeze({
+            ...WorldPhysics,
+            leanCapDeg: 42,
+            // Quick to lean (0.9 of a motorbike's), the keys easing in softly to it so a press starts gently
+            leanRate: WorldPhysics.leanRate * 0.9,
+            steerKeys: Object.freeze({ ...WorldPhysics.steerKeys, keyS: WorldPhysics.steerKeys.keyS * 1.9, featherS: WorldPhysics.steerKeys.featherS * 1.9 }),
+            steerSpeed: 8,
+            cobbleGrip: 0.72,
+            radiusFloor: 3,
+            // At a crawl the bars turn the bicycle (full lock about 33 degrees) and it barely leans; the bars hand the turn
+            // to the lean between directMs and counterMs (HillVehicle.lowSpeedShare)
+            lockRadius: 1.75,
+            turnBlendSpeed: D.steer.counterMs,
+            lowLeanSpeed: D.steer.counterMs, lowLeanFullSpeed: D.steer.directMs, lowLeanDeg: 6,
+            idleSpeed: 0, engineBrake: 0, engineBrakeMax: 0, rollDecel: 0,
+            aeroDrag: 0.5 * 1.2 * D.dragAreaM2 / (D.bikeKg + D.riderKg),
+            fallSpeed: 1.2, tipLeanDeg: 14, footDownDecel: 2, footDownSpeed: 0.6,
+            throttleRiseS: 0.25, throttleFallS: 0.1
+        });
+        return HillVehicle.world;
+    }
+
+    // The boy as the vehicle's rider: the catalogue's first character's frame (the vehicle builds a rider from it,
+    // never drawn) with his own weight and no multipliers or traits of his own
+    static rider() {
+        const base = CHARACTERS[0];
+        return { ...base, id: 'hill-boy', kg: HillVehicle.DATA.riderKg, physics: {}, traits: { country: 3, mountain: 3, hairpins: 3, daring: 3 } };
+    }
+
+    constructor() {
+        // Built into a scene of its own, never drawn: the hill ride draws its own bicycle (js/hill/rider.js)
+        super(new THREE.Scene(), null, HillVehicle.rider(), 'naked', { model: false });
+        const D = HillVehicle.DATA;
+        this.surface = { grade: 0, heading: 0, flags: { cobbles: true } };
+        // A route with no strand of its own: every road-following path finds nothing and leaves the bicycle alone; the
+        // grade under the bicycle comes from the lane (HillBicycle writes `surface` before each step)
+        const route = { unitCount: 1, fromUnits: () => 0, project: (x, z, hint, out = {}) => { out.index = -1; return out; }, sample: () => this.surface };
+        // and no ground of the world's: a place is never located, so the height stays the one HillBicycle sets
+        this.environment = { physics: HillVehicle.WORLD, route, ground: { locate: () => null } };
+        this.mass = D.bikeKg + D.riderKg;
+        this.wheelbase = D.wheelbaseM;
+        this.maxSpeed = D.maxSpeed;
+        this.leanDare = 1;
+        this.leanMass = 1;
+        this.footSlope = Infinity;
+        this.wheelieEndSpeed = 0;
+        this.speed = 0;
+    }
+
+    get pedalMostMs() {
+        return HillVehicle.DATA.developmentM * HillVehicle.DATA.cadenceMostRpm / 60;
+    }
+
+    // The share of the boy's full push he has at this speed: all of it as the cranks barely turn, none at the most he
+    // can turn them (the freewheel takes over past it)
+    pushShare(speed) {
+        return Math.max(0, 1 - Math.max(0, speed) / this.pedalMostMs);
+    }
+
+    // The ground under (x, z) for the rider's own fall (Vehicle.stepRiderFall): the cobbles on the lane, the flags beside
+    // it. He slides down the lane's fall as he would down any slope
+    riderGroundY(x, z) {
+        if (!this.lane) return this.position.y;
+        const at = this.groundAt || (this.groundAt = {});
+        this.lane.project(x, z, null, at);
+        const r = this.lane.rule;
+        return this.lane.sample(at.s).y + (Math.abs(at.across) > r.halfWidthM ? 0.1 : this.lane.cobble(at.s, at.across));
+    }
+
+    // The rider kept out of what is solid in his fall (Vehicle.holdRiderOut), and out of the village's buildings: a
+    // body (RIDER_FALL.bodyM) inside a building's footprint is put back out through its nearest wall and loses the
+    // speed into it, so a fall never slides him through a house
+    holdRiderOut(fromX, fromZ, deltaTime) {
+        super.holdRiderOut(fromX, fromZ, deltaTime);
+        const rf = this.riderFall, lane = this.lane;
+        if (!rf || !lane || !lane.solids) return;
+        const p = rf.p, v = rf.v, body = Vehicle.RIDER_FALL.bodyM;
+        for (const c of lane.solids) {
+            const dx = p.x - c.x, dz = p.z - c.z, far = c.hw + c.hd + body;
+            if (Math.abs(dx) > far || Math.abs(dz) > far) continue;
+            const u = dx * c.alongX + dz * c.alongZ, w = dx * c.outX + dz * c.outZ;
+            const inU = c.hw + body - Math.abs(u), inW = c.hd + body - Math.abs(w);
+            if (inU <= 0 || inW <= 0) continue;
+            const nx = inU < inW ? Math.sign(u || 1) * c.alongX : Math.sign(w || -1) * c.outX;
+            const nz = inU < inW ? Math.sign(u || 1) * c.alongZ : Math.sign(w || -1) * c.outZ;
+            const push = Math.min(inU, inW);
+            p.x += nx * push;
+            p.z += nz * push;
+            const into = -(v.x * nx + v.z * nz);
+            if (into > 0) {
+                v.x += nx * into;
+                v.z += nz * into;
+            }
+        }
+    }
+
+    // The share of the turn the bars give at speed v: 1 to directMs, 0 from counterMs, a smoothstep between (no step in
+    // the yaw rate, the bars or the lean limit)
+    lowSpeedShare(v) {
+        const S = HillVehicle.DATA.steer;
+        const x = Math.max(0, Math.min(1, (S.counterMs - v) / (S.counterMs - S.directMs)));
+        return x * x * (3 - 2 * x);
+    }
+
+    // The bars' angle as drawn (radians, + with + steering): the vehicle's own bar angle at a crawl; at speed the angle
+    // the turn's curve needs (atan of wheelbase over radius) plus the countersteer push against the lean rate
+    barsDrawn() {
+        const S = HillVehicle.DATA.steer, world = this.worldPhysics;
+        const share = this.lowSpeedShare(this.speed);
+        const v2 = Math.max(this.speed * this.speed, 1e-6);
+        const lock = Math.atan(this.wheelbase / world.lockRadius);
+        const curve = Math.min(1 / world.radiusFloor, 9.81 * Math.tan(Math.abs(this.leanAngle)) / v2);
+        const most = S.counterMostDeg * Math.PI / 180;
+        const push = Math.max(-most, Math.min(most, S.counterGain * this.leanVelocity));
+        const lean = Math.max(-lock, Math.min(lock, -Math.sign(this.leanAngle) * Math.atan(this.wheelbase * curve) + push));
+        return share * this.handlebarAngle + (1 - share) * lean;
+    }
+
+    // The drive at full pedal (m/s2): his push over the mass, strong through the middle of the cadence, fading near the top
+    worldDrive(v) {
+        const D = HillVehicle.DATA;
+        const share = Math.min(1, Math.max(0, v) / this.pedalMostMs);
+        return D.pushN * (1 - Math.pow(share, D.pushFade)) / this.mass;
+    }
+
+    worldBrakeDecel() {
+        return HillVehicle.DATA.brakeMs2;
+    }
+
+    // The world's speed rule, then the cobbles' rolling drag (the world's engine braking is none for a bicycle)
+    updateWorldSpeed(deltaTime, throttleInput, brakeInput) {
+        super.updateWorldSpeed(deltaTime, throttleInput, brakeInput);
+        if (this.speed > 0 && !this.footDown) {
+            const g = 9.81, slope = Math.atan(this.worldGrade || 0);
+            this.speed = Math.max(0, this.speed - HillVehicle.DATA.rollCobbles * g * Math.cos(slope) * deltaTime);
+        }
+    }
+
+    // A wheelie by a hard push: the pop and the lift are the push he has at this speed, less the loaded basket's share
+    wheeliePop(speed) {
+        const D = HillVehicle.DATA;
+        return D.popGain * (1 - D.basketLoad) * (D.tug + (1 - D.tug) * this.pushShare(speed));
+    }
+
+    wheelieLift(speed) {
+        const D = HillVehicle.DATA;
+        return D.liftGain * (1 - D.basketLoad) * this.pushShare(speed);
+    }
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { HillVehicle };

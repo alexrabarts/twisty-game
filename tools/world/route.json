@@ -1,0 +1,423 @@
+{
+ "comment": "D1 figure-of-8 waypoints in LV95 (EPSG:2056). Hand-placed from WGS84, then moved onto the swissTLM3D through road: pass summits use the TLM Strassenpass points, the two Tremola points sit on the old Via Tremola (4m Strasse, Verbindungsstrasse), which the shortest path would otherwise leave for the modern Durchgangsstrasse. inspect.mjs snaps each one to the nearest TLM_STRASSE vertex (through roads preferred). boundary=true marks a stage boundary; boundary=false is a via point that keeps the shortest path on the intended road. The last Gletsch is the FINISH. Airolo, Ulrichen, Oberwald and Guttannen sit on the junction where the ride leaves the village road, so the shortest path never runs into a spur and back. slices: stage-sized runs of waypoints (by id) for the playable slice. The Tremola slice rides uphill from Airolo, the opposite way to D1. points: places off the D1 line (by id, after the waypoints) that only slices name; `snap: nearest` takes the nearest road of any class. A slice's `stops` name the stop at its start and its end, and `via` the stops on the way (a stopping place, not a leg's end), each a kind (tools/world/stops.mjs STOP_KINDS) and the coordinate of the evidence for it (a cluster of the owner's photos marked as a stop, or a building with a use). The importer finds the car park or rest area by rule. `keepLine: true` on an end stop keeps the stage's timed line where it is (a leg whose board is already ridden): the stop may lie behind it, and the scene turns the group round at the line.",
+ "waypoints": [
+  {
+   "id": 0,
+   "name": "Altdorf",
+   "e": 2691908,
+   "n": 1192837,
+   "boundary": true
+  },
+  {
+   "id": 1,
+   "name": "Amsteg",
+   "e": 2693893,
+   "n": 1181056,
+   "boundary": true
+  },
+  {
+   "id": 2,
+   "name": "Wassen",
+   "e": 2688654,
+   "n": 1173097,
+   "boundary": true
+  },
+  {
+   "id": 3,
+   "name": "Schöllenen",
+   "e": 2688065,
+   "n": 1167031,
+   "boundary": true
+  },
+  {
+   "id": 4,
+   "name": "Andermatt",
+   "e": 2688447,
+   "n": 1165379,
+   "boundary": true
+  },
+  {
+   "id": 5,
+   "name": "Hospental",
+   "e": 2686785,
+   "n": 1163787,
+   "boundary": true
+  },
+  {
+   "id": 6,
+   "name": "Gotthard",
+   "e": 2686073,
+   "n": 1157063,
+   "boundary": true
+  },
+  {
+   "id": 7,
+   "name": "Tremola upper",
+   "e": 2686852,
+   "n": 1155293,
+   "boundary": false
+  },
+  {
+   "id": 8,
+   "name": "Tremola lower",
+   "e": 2687658,
+   "n": 1154241,
+   "boundary": false
+  },
+  {
+   "id": 9,
+   "name": "Airolo",
+   "e": 2689410,
+   "n": 1153817,
+   "boundary": true
+  },
+  {
+   "id": 10,
+   "name": "Bedretto",
+   "e": 2682692,
+   "n": 1151122,
+   "boundary": false
+  },
+  {
+   "id": 11,
+   "name": "Nufenen",
+   "e": 2673017,
+   "n": 1147806,
+   "boundary": true
+  },
+  {
+   "id": 12,
+   "name": "Ulrichen",
+   "e": 2666797,
+   "n": 1150885,
+   "boundary": true
+  },
+  {
+   "id": 13,
+   "name": "Oberwald",
+   "e": 2669819,
+   "n": 1154088,
+   "boundary": false
+  },
+  {
+   "id": 14,
+   "name": "Gletsch",
+   "e": 2670922,
+   "n": 1157131,
+   "boundary": true
+  },
+  {
+   "id": 15,
+   "name": "Furka",
+   "e": 2674851,
+   "n": 1158387,
+   "boundary": true
+  },
+  {
+   "id": 16,
+   "name": "Realp",
+   "e": 2681466,
+   "n": 1161291,
+   "boundary": true
+  },
+  {
+   "id": 17,
+   "name": "Hospental",
+   "e": 2686785,
+   "n": 1163787,
+   "boundary": true
+  },
+  {
+   "id": 18,
+   "name": "Andermatt",
+   "e": 2688447,
+   "n": 1165379,
+   "boundary": true
+  },
+  {
+   "id": 19,
+   "name": "Schöllenen",
+   "e": 2688065,
+   "n": 1167031,
+   "boundary": true
+  },
+  {
+   "id": 20,
+   "name": "Wassen",
+   "e": 2688654,
+   "n": 1173097,
+   "boundary": true
+  },
+  {
+   "id": 21,
+   "name": "Susten",
+   "e": 2677396,
+   "n": 1176068,
+   "boundary": true
+  },
+  {
+   "id": 22,
+   "name": "Gadmen",
+   "e": 2670111,
+   "n": 1176721,
+   "boundary": false
+  },
+  {
+   "id": 23,
+   "name": "Innertkirchen",
+   "e": 2660517,
+   "n": 1173081,
+   "boundary": true
+  },
+  {
+   "id": 24,
+   "name": "Guttannen",
+   "e": 2665035,
+   "n": 1167502,
+   "boundary": false
+  },
+  {
+   "id": 25,
+   "name": "Grimsel",
+   "e": 2668937,
+   "n": 1157087,
+   "boundary": true
+  },
+  {
+   "id": 26,
+   "name": "Gletsch",
+   "e": 2670922,
+   "n": 1157131,
+   "boundary": true,
+   "finish": true
+  }
+ ],
+ "slices": {
+  "tremola": {
+   "name": "Tremola, Airolo to the Gotthard summit",
+   "waypoints": [
+    9,
+    8,
+    7,
+    6
+   ],
+   "stops": {
+    "start": {
+     "kind": "carpark",
+     "e": 2689632,
+     "n": 1153596
+    },
+    "end": {
+     "kind": "restaurant",
+     "e": 2686509,
+     "n": 1156616,
+     "keepLine": true,
+     "raise": {
+      "tileLodM": [
+       1200,
+       3000
+      ],
+      "triangleScale": 1
+     }
+    }
+   }
+  },
+  "gotthard-north": {
+   "name": "Andermatt over the Gotthard to the lookout over Airolo",
+   "waypoints": [
+    28,
+    5,
+    6,
+    29,
+    27
+   ],
+   "stops": {
+    "start": {
+     "kind": "hotel",
+     "e": 2688484,
+     "n": 1165283
+    },
+    "via": [
+     {
+      "kind": "restaurant",
+      "e": 2686509,
+      "n": 1156616,
+      "raise": {
+       "tileLodM": [
+        1200,
+        3000
+       ],
+       "triangleScale": 1
+      }
+     },
+     {
+      "kind": "carpark",
+      "e": 2686048,
+      "n": 1163473,
+      "legStart": true
+     }
+    ],
+    "end": {
+     "kind": "lookout",
+     "e": 2687167,
+     "n": 1154409,
+     "hold": {
+      "e": 2687168.6,
+      "n": 1154416.8,
+      "upM": 1.6,
+      "bearing": 103.05,
+      "pitch": -6.9,
+      "hfov": 71.5,
+      "vfovMost": 56,
+      "haze": {
+       "perM": 0.000133333
+      }
+     }
+    }
+   }
+  },
+  "airolo-lookout": {
+   "name": "Airolo up the pass road to the lookout",
+   "waypoints": [
+    9,
+    30,
+    31,
+    27
+   ],
+   "stops": {
+    "start": {
+     "kind": "carpark",
+     "e": 2689632,
+     "n": 1153596
+    },
+    "end": {
+     "kind": "lookout",
+     "e": 2687167,
+     "n": 1154409,
+     "hold": {
+      "e": 2687168.6,
+      "n": 1154416.8,
+      "upM": 1.6,
+      "bearing": 103.05,
+      "pitch": -6.9,
+      "hfov": 71.5,
+      "vfovMost": 56,
+      "haze": {
+       "perM": 0.000133333
+      }
+     },
+     "raise": {
+      "tileLodM": [
+       1500,
+       4000
+      ],
+      "triangleScale": 1
+     }
+    }
+   }
+  },
+  "andermatt-goeschenen": {
+   "name": "Andermatt through the Schöllenen to Göschenen",
+   "waypoints": [
+    28,
+    3,
+    32
+   ],
+   "stops": {
+    "start": {
+     "kind": "hotel",
+     "e": 2688484,
+     "n": 1165283
+    },
+    "end": {
+     "kind": "carpark",
+     "e": 2687852,
+     "n": 1169199,
+     "legStart": true
+    }
+   }
+  },
+  "goeschenen-susten": {
+   "name": "Göschenen down to Wassen and up to the Susten pass",
+   "waypoints": [
+    32,
+    2,
+    21
+   ],
+   "stops": {
+    "end": {
+     "kind": "carpark",
+     "e": 2677064,
+     "n": 1175869,
+     "legStart": true
+    }
+   }
+  },
+  "susten-gadmen": {
+   "name": "The Susten pass down to Gadmen",
+   "waypoints": [
+    21,
+    22,
+    33
+   ],
+   "stops": {
+    "end": {
+     "kind": "carpark",
+     "e": 2669643,
+     "n": 1176582
+    }
+   }
+  }
+ },
+ "points": [
+  {
+   "id": 27,
+   "name": "Gotthard lookout",
+   "e": 2687136,
+   "n": 1154412,
+   "boundary": true
+  },
+  {
+   "id": 28,
+   "name": "Andermatt car park",
+   "e": 2688356,
+   "n": 1165214,
+   "boundary": true
+  },
+  {
+   "id": 29,
+   "name": "Gotthard hospice",
+   "e": 2686357,
+   "n": 1156605,
+   "boundary": true
+  },
+  {
+   "id": 30,
+   "name": "Pass road lower hairpins",
+   "e": 2688346,
+   "n": 1154312,
+   "boundary": false
+  },
+  {
+   "id": 31,
+   "name": "Motto Bartola",
+   "e": 2685782,
+   "n": 1153422,
+   "boundary": false
+  },
+  {
+   "id": 32,
+   "name": "Göschenen",
+   "e": 2688277,
+   "n": 1169256,
+   "boundary": true
+  },
+  {
+   "id": 33,
+   "name": "Gadmen car park",
+   "e": 2669560,
+   "n": 1176600,
+   "boundary": true
+  }
+ ]
+}

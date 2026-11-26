@@ -28,6 +28,11 @@ class WeatherSystem {
         this.lightningTimer = 0;
         this.lightningInterval = 5 + this.random() * 5; // 5-10 seconds
 
+        // What each weather does to the grip at intensity 1 (WeatherSystem.GRIP); a world rides its own (WorldLooks.grip)
+        this.grip = WeatherSystem.GRIP;
+        // How the rain is drawn (WeatherSystem.RAIN); a world draws its own (WorldLooks.rain). Set before prepare()
+        this.rainLook = WeatherSystem.RAIN;
+
         // Store base physics values (will be set by vehicle)
         this.basePhysics = {
             lateralFriction: 1.0,
@@ -136,7 +141,18 @@ class WeatherSystem {
         const weather = 0.0015 * intensity * rain
             + 0.002 * intensity * snow
             + 0.003 * intensity * (1 - this.fogElevation * 0.5) * mist;
-        fog.density = this.originalFogDensity * (1 - strength) + weather;
+        const density = this.originalFogDensity * (1 - strength) + weather;
+        // The fog's one writer is its guard: a non-finite density (a NaN bike height through fogElevation) keeps the
+        // last finite one, logged once with its inputs, since bloom spreads one NaN pixel over the whole frame
+        if (!Number.isFinite(density)) {
+            if (!this.nonFiniteFogLogged) {
+                this.nonFiniteFogLogged = true;
+                console.error('WeatherSystem.writeFogDensity: non-finite fog density', density, JSON.stringify({ fogElevation: this.fogElevation, mix: this.mix, intensity, originalFogDensity: this.originalFogDensity }));
+            }
+            if (!Number.isFinite(fog.density)) fog.density = Number.isFinite(this.originalFogDensity) ? this.originalFogDensity : 0;
+            return;
+        }
+        fog.density = density;
     }
 
     setupRain() {
@@ -144,16 +160,18 @@ class WeatherSystem {
         // system, which is re-anchored to the camera every update - so the
         // rain volume travels with the player instead of staying near the
         // world origin where the particles were first spawned.
-        const rainCount = 3000;
+        const look = this.rainLook;
+        const rainCount = look.count;
+        const extent = look.extent;
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(rainCount * 3);
         const velocities = new Float32Array(rainCount);
 
         for (let i = 0; i < rainCount; i++) {
             const i3 = i * 3;
-            positions[i3] = (this.random() - 0.5) * 200; // X: -100 to 100 around camera
+            positions[i3] = (this.random() - 0.5) * extent * 2; // X: within the extent round the camera
             positions[i3 + 1] = this.random() * 120 - 30; // Y: -30 to 90 relative to camera
-            positions[i3 + 2] = (this.random() - 0.5) * 200; // Z: -100 to 100 around camera
+            positions[i3 + 2] = (this.random() - 0.5) * extent * 2; // Z: within the extent round the camera
 
             velocities[i] = -30 - this.random() * 20; // Fast falling
         }
@@ -163,16 +181,16 @@ class WeatherSystem {
 
         // Each drop is a sprite of a thin vertical streak
         const material = new THREE.PointsMaterial({
-            color: 0xb8c4d0,
-            map: this.makeSpriteTexture('streak'),
-            size: 2.2,
+            color: look.color,
+            map: this.makeSpriteTexture('streak', look.streakPx),
+            size: look.size,
             transparent: true,
-            opacity: 0.55,
+            opacity: look.opacity,
             depthWrite: false
         });
-        this.capPointSize(material, 90);
+        this.capPointSize(material, look.capPx);
 
-        this.addSystem('rain', geometry, material, rainCount);
+        this.addSystem('rain', geometry, material, rainCount, extent);
 
         console.log('Rain weather prepared');
     }
@@ -212,7 +230,7 @@ class WeatherSystem {
     }
 
     // The points stay out of sight until setMix gives their weather a share
-    addSystem(type, geometry, material, count) {
+    addSystem(type, geometry, material, count, extent = 100) {
         const points = new THREE.Points(geometry, material);
         points.frustumCulled = false; // Volume always surrounds the camera
         points.visible = false;
@@ -221,7 +239,7 @@ class WeatherSystem {
             points.position.copy(this.camera.position);
         }
         this.scene.add(points);
-        this.systems[type] = { points, count, parked: false };
+        this.systems[type] = { points, count, extent, parked: false };
     }
 
     // Point sprites grow without limit as they near the camera: a drop
@@ -238,7 +256,7 @@ class WeatherSystem {
     }
 
     // 'streak' is a rain drop smeared by its fall, 'flake' a soft dot
-    makeSpriteTexture(kind) {
+    makeSpriteTexture(kind, streakPx = 2) {
         const canvas = document.createElement('canvas');
         canvas.width = 64;
         canvas.height = 64;
@@ -250,7 +268,7 @@ class WeatherSystem {
             gradient.addColorStop(0.7, 'rgba(255, 255, 255, 0.8)');
             gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
             ctx.fillStyle = gradient;
-            ctx.fillRect(31, 0, 2, 64);
+            ctx.fillRect(32 - streakPx / 2, 0, streakPx, 64);
         } else {
             const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 30);
             gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
@@ -276,7 +294,7 @@ class WeatherSystem {
         }
 
         // Lightning effect for rain
-        if (this.weatherType === 'rain' && this.systems.rain) {
+        if (this.weatherType === 'rain' && this.systems.rain && this.rainLook.lightning) {
             this.updateLightning(deltaTime);
         }
     }
@@ -304,7 +322,7 @@ class WeatherSystem {
         if (anchor) points.position.set(anchor.x, anchor.y, anchor.z);
         system.parked = false;
 
-        const halfExtent = 100; // Volume is ±100 around the camera
+        const halfExtent = system.extent; // The volume reaches this far round the camera
         const positions = points.geometry.attributes.position.array;
         const velocities = points.geometry.attributes.velocity.array;
 
@@ -372,6 +390,19 @@ class WeatherSystem {
         }
     }
 
+    // The legs' rain: 3000 drops in a box 200 m across round the camera, sprites of a 2 px streak, with lightning
+    static get RAIN() {
+        return WeatherSystem.legRain || (WeatherSystem.legRain = Object.freeze({ count: 3000, extent: 100, color: 0xb8c4d0, size: 2.2, opacity: 0.55, streakPx: 2, capPx: 90, lightning: true }));
+    }
+
+    // The legs' grip under each weather at intensity 1: lateral grip, braking and acceleration
+    static get GRIP() {
+        return WeatherSystem.legGrip || (WeatherSystem.legGrip = Object.freeze({
+            rain: Object.freeze({ lateral: 0.7, brake: 0.8, acceleration: 0.9 }),
+            snow: Object.freeze({ lateral: 0.4, brake: 0.6, acceleration: 0.7 })
+        }));
+    }
+
     getPhysicsMultipliers() {
         const weather = this.weatherPhysics();
         return {
@@ -393,14 +424,15 @@ class WeatherSystem {
             result.brakeForce *= part(brake);
             result.acceleration *= part(acceleration);
         };
+        const { rain, snow } = this.grip;
         apply(this.mix.rain,
-            0.7 * intensity + (1 - intensity),
-            0.8 * intensity + (1 - intensity),
-            0.9 * intensity + (1 - intensity));
+            rain.lateral * intensity + (1 - intensity),
+            rain.brake * intensity + (1 - intensity),
+            rain.acceleration * intensity + (1 - intensity));
         apply(this.mix.snow,
-            0.4 * intensity + (1 - intensity),
-            0.6 * intensity + (1 - intensity),
-            0.7 * intensity + (1 - intensity));
+            snow.lateral * intensity + (1 - intensity),
+            snow.brake * intensity + (1 - intensity),
+            snow.acceleration * intensity + (1 - intensity));
         // Fog and clear air leave the grip alone
         return result;
     }

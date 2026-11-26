@@ -5,7 +5,8 @@
 // three and the browser globals are passed to the scripts as function
 // parameters, so tests/setup.js's global THREE mock is neither used nor
 // replaced: there is nothing to restore after a test file.
-import { createHash } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
+import { TextDecoder as NodeTextDecoder } from 'node:util';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -61,11 +62,18 @@ export function canvasStub() {
     return document;
 }
 
+// The world physics parameters on their own, as the importer and the floor
+// tool read them (no THREE, no DOM)
+export function loadWorldPhysics() {
+    return new Function(`${loadScript('world/physics.js')}\nreturn WorldPhysics;`)();
+}
+
 // The game classes, built once per THREE and per file set. `log` receives the
 // console lines the build prints (FLOATING OBJECTS, TERRAIN-ROAD OVERLAP).
-export function loadGame(THREE = realThree(), log = []) {
-    const files = ['terrain.js', 'course.js', 'race.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
-    const source = files.map(loadScript).join('\n;\n');
+// `sources` replaces a file's text by name ('vehicle.js': an older revision's).
+export function loadGame(THREE = realThree(), log = [], sources = {}) {
+    const files = ['tuning.js', 'terrain.js', 'course.js', 'race.js', 'world/physics.js', 'world/route.js', 'world/legroute.js', 'world/tour.js', 'world/data.js', 'world/graph.js', 'world/worldroute.js', 'world/worldground.js', 'world/streamer.js', 'world/landshade.js', 'world/tubes.js', 'world/roadsurface.js', 'world/roadmesh.js', 'world/terrainmesh.js', 'world/horizon.js', 'world/vegetation.js', 'world/edgestyles.js', 'world/scenery.js', 'world/roadworks.js', 'world/places.js', 'world/placemesh.js', 'world/guide.js', 'world/run.js', 'world/camera.js', 'world/looks.js', 'world/environment.js', 'vehicle.js', 'environment.js', 'tours.js', 'rockfalls.js', 'cones.js', 'traffic.js', 'atmosphere.js'];
+    const source = files.map(name => (sources[name] !== undefined ? sources[name] : loadScript(name))).join('\n;\n');
     const sink = {
         log: (...args) => log.push(args.join(' ')),
         warn: (...args) => log.push(args.join(' ')),
@@ -73,10 +81,10 @@ export function loadGame(THREE = realThree(), log = []) {
     };
     const storage = { getItem: () => null, setItem() {} };
     const factory = new Function(
-        'THREE', 'document', 'localStorage', 'console',
-        `${source}\nreturn { Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack };`
+        'THREE', 'document', 'localStorage', 'console', 'TextDecoder', 'crypto',
+        `${source}\nreturn { Tuning: typeof Tuning === 'undefined' ? undefined : Tuning, WorldPhysics, CHARACTERS, BIKE_MODELS, Environment, TourSystem, RockfallSystem, Vehicle, Terrain, Course, RaceTiming, Cones, Traffic, AtmosphereTrack, Route, PolylineRoute, LegRoute, Ground, LegGround, WorldData, WorldGraph, WorldRoute, WorldGround, WorldStreamer, RoadMesh, RoadSurface, TubeLining, TubeShade, TerrainMesh, Horizon, FarLand, LandShade, RoadClearance, EdgeStyles, Scenery, Roadworks, WorldPlaces, PlaceMesh, WorldGuide, WorldRun, WorldAssist, WorldCamera, WorldLooks, WorldEnvironment };`
     );
-    return { THREE, log, ...factory(THREE, canvasStub(), storage, sink) };
+    return { THREE, log, ...factory(THREE, canvasStub(), storage, sink, NodeTextDecoder, webcrypto) };
 }
 
 // The game with every leg on the shared course, as before the long-leg

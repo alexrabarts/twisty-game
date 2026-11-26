@@ -13,13 +13,15 @@ const read = name => readFileSync(new URL(`../../js/${name}`, import.meta.url), 
 
 const markup = `
     <p id="raceTimer">0:00.00</p>
-    <span id="hudGatePips"></span><b id="hudGateCount">0/5</b>
+    <span id="hudGates"><span id="hudGatePips"></span><b id="hudGateCount">0/5</b></span>
     <span id="score">0</span><span id="comboDisplay"></span>
     <div id="hudSpeed" data-band="-1"><svg><path id="speedFill"/></svg><span id="speed">0</span></div>
     <div id="startCard"><div id="startLeg"></div></div>
     <div id="splitPopup"></div>
     <div id="callouts"></div>
     <div id="hudHint"></div>
+    <div id="hudProgress" hidden><div id="hudProgressBar"><span id="hudProgressMarks"></span></div><b id="hudProgressCount">0/0</b></div>
+    <span id="hudProgressKm"></span><div id="hudStageText"></div>
     <div id="fps" hidden>FPS 0</div>`;
 
 // A window whose media queries answer from `matches`
@@ -30,6 +32,29 @@ const fakeWindow = (search = '', matches = {}) => ({
 });
 
 describe('HudRules', () => {
+    // No HUD number is ever "Infinity", "NaN" or "∞": one formatter for all of them, and the inputs that went
+    // non-finite (a section of no time after a put-down) are guarded where they are made
+    test('every shown number goes through one formatter that refuses what is not a finite number', () => {
+        for (const bad of [Infinity, -Infinity, NaN, undefined, null, '12']) expect(HudRules.number(bad)).toBe('\u2014');
+        expect(HudRules.number(13187.4)).toBe('13,187');
+        expect(HudRules.number(1636, { sign: true })).toBe('+1,636');
+        expect(HudRules.number(-3, { sign: true })).toBe('-3');
+        expect(HudRules.number(41.25, { digits: 1 })).toBe('41.3');
+        // A section of no time, no length or a few milliseconds earns finite points, the speed bonus capped
+        expect(HudRules.checkpointPoints(800, 0, 2)).toBe(200);
+        expect(HudRules.checkpointPoints(Infinity, 30, 1)).toBe(100);
+        expect(HudRules.checkpointPoints(800, 0.001, 1)).toBe(100 + Math.floor((HudRules.SECTION_KMH_MAX - 60) * 1.5));
+        expect(HudRules.checkpointPoints(1000, 36, 1.5)).toBe(Math.round((100 + 60) * 1.5));
+        for (const [d, t, m] of [[800, 0, 1], [0, 0, 1], [800, -1, 5], [NaN, 2, 1], [800, 2, NaN]]) expect(Number.isFinite(HudRules.checkpointPoints(d, t, m))).toBe(true);
+        // The pages that write numbers into the HUD and the run's boxes do it through HudRules.number only
+        for (const file of ['main.js', 'hud.js']) {
+            const src = read(file);
+            const raw = [...src.matchAll(/\.toLocaleString\(/g)].length - (file === 'hud.js' ? 1 : 0);
+            expect({ file, raw }).toEqual({ file, raw: 0 });
+            expect({ file, pointsRaw: /\+\$\{points\}/.test(src) }).toEqual({ file, pointsRaw: false });
+        }
+    });
+
     test('the hint shows at the start and is gone after HINT_MS', () => {
         expect(HudRules.hintVisible(0, NaN)).toBe(true);
         expect(HudRules.hintVisible(HudRules.HINT_MS - 1, NaN)).toBe(true);
@@ -61,6 +86,21 @@ describe('HudRules', () => {
         expect(HudRules.isTouch(fakeWindow('', { '(any-pointer: coarse)': true, '(any-pointer: fine)': true }))).toBe(false);
         expect(HudRules.isTouch(fakeWindow('', { '(pointer: fine)': true }))).toBe(false);
         expect(HudRules.isTouch({})).toBe(false);
+    });
+
+    test('the stage clock, line, share and distance read as the world HUD shows them', () => {
+        expect(HudRules.stageClock(192400)).toBe('3:12.4');
+        expect(HudRules.stageClock(-5)).toBe('0:00.0');
+        expect(HudRules.stageLine(8, 14, 'Tremola', 192400)).toBe('Stage 8/14 · Tremola  3:12.4');
+        // A ride of one stage: its stage clock is the main clock and "Stage 1/1" says nothing
+        expect(HudRules.stageLine(1, 1, 'Tremola', 192400)).toBe('');
+        expect(HudRules.stageLabel(1, 1, 'Tremola')).toBe('Tremola');
+        expect(HudRules.stageLabel(1, 3, 'Mini 1')).toBe('Stage 1/3 · Mini 1');
+        expect(HudRules.stageShare(150, 100, 300)).toBe(0.25);
+        expect(HudRules.stageShare(50, 100, 300)).toBe(0);
+        expect(HudRules.stageShare(900, 100, 300)).toBe(1);
+        expect(HudRules.stageShare(5, 10, 10)).toBe(0);
+        expect(HudRules.kmText(3200, 13300)).toBe('km 3.2 / 13.3');
     });
 
     test('the speed gauge fills with speed and clamps at both ends', () => {
@@ -185,6 +225,150 @@ describe('Hud', () => {
         expect('many' in pips.dataset).toBe(true);
         hud.setGates(0, 5);
         expect('many' in pips.dataset).toBe(false);
+    });
+
+    test('a stage with more gates than MAX_PIPS shows the count and no pips', () => {
+        hud.setGates(3, HudRules.MAX_PIPS + 6);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(0);
+        expect(document.getElementById('hudGateCount').textContent).toBe(`3/${HudRules.MAX_PIPS + 6}`);
+    });
+
+    test('a stage of exactly MAX_PIPS gates still shows every pip, and a new stage starts the pips again', () => {
+        hud.setGates(5, HudRules.MAX_PIPS);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(HudRules.MAX_PIPS);
+        hud.setGates(0, 3);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(3);
+        expect(document.querySelectorAll('#hudGatePips i.on')).toHaveLength(0);
+        expect(document.getElementById('hudGateCount').textContent).toBe('0/3');
+    });
+
+    test('a world ride shows one progress element: the bar with a tick for each checkpoint, the rider\'s place and the count', () => {
+        const box = document.getElementById('hudProgress');
+        const pips = document.getElementById('hudGates');
+        expect(box.hidden).toBe(true);
+        hud.setGates(0, 5);
+        hud.showProgress([0.25, 0.5]);
+        expect(box.hidden).toBe(false);
+        // The pips of the classic legs are out of sight: the checkpoints are shown once
+        expect(pips.hidden).toBe(true);
+        expect(document.querySelectorAll('#hudProgressMarks i')).toHaveLength(2);
+        expect(document.querySelector('#hudProgressMarks i').style.left).toBe('25.00%');
+        hud.setGates(1, 2);
+        expect(document.getElementById('hudProgressCount').textContent).toBe('1/2');
+        expect(document.querySelectorAll('#hudProgressMarks i.on')).toHaveLength(1);
+        // (the pips are not written while the bar shows the checkpoints)
+        expect(document.getElementById('hudGateCount').textContent).toBe('0/5');
+        hud.setProgress(0.4567, 'km 1.2 / 13.3');
+        expect(document.getElementById('hudProgressBar').style.getPropertyValue('--at')).toBe('45.7%');
+        expect(document.getElementById('hudProgressKm').textContent).toBe('km 1.2 / 13.3');
+        expect(document.getElementById('hudStageText').textContent).toBe('');
+        hud.hideProgress();
+        expect(box.hidden).toBe(true);
+        expect(pips.hidden).toBe(false);
+        hud.setGates(2, 5);
+        expect(document.getElementById('hudGateCount').textContent).toBe('2/5');
+    });
+
+    test('the progress of a frame writes only what changed', () => {
+        hud.showProgress([0.5]);
+        hud.setProgress(0.25, 'km 0.5 / 6.0', 'Stage 2/3 · Mini 2  0:03.2');
+        const bar = document.getElementById('hudProgressBar');
+        const setProperty = jest.spyOn(bar.style, 'setProperty');
+        const km = document.getElementById('hudProgressKm').firstChild;
+        hud.setProgress(0.25004, 'km 0.5 / 6.0', 'Stage 2/3 · Mini 2  0:03.2');
+        expect(setProperty).not.toHaveBeenCalled();
+        expect(document.getElementById('hudProgressKm').firstChild).toBe(km);
+        hud.setProgress(0.3, 'km 0.5 / 6.0', 'Stage 2/3 · Mini 2  0:03.3');
+        expect(setProperty).toHaveBeenCalledTimes(1);
+        expect(document.getElementById('hudStageText').textContent).toBe('Stage 2/3 · Mini 2  0:03.3');
+    });
+
+    // The rides as their data has them: the shipped world of one stage, and the fixture of three
+    const ride = path => JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8'));
+    const gatesOf = (data, stage) => data.stations.filter(station => station.kind === 'gate' && station.stage === stage.id);
+
+    test('the count and the ticks are the data\'s checkpoints of the stage, whatever their number', () => {
+        for (const path of ['world/ride.json', 'tests/fixtures/world/mini/ride.json']) {
+            const data = ride(path);
+            for (const stage of data.stages) {
+                const gates = gatesOf(data, stage);
+                const marks = HudRules.progressMarks(data.stations, stage.from, stage.to);
+                expect({ path, stage: stage.id, marks: marks.length }).toEqual({ path, stage: stage.id, marks: gates.length });
+                marks.forEach((share, i) => expect(share).toBeCloseTo((gates[i].s - stage.from) / (stage.to - stage.from), 6));
+                // The start, the end and a stage boundary are no checkpoint: no tick at either end of the bar
+                marks.forEach(share => { expect(share).toBeGreaterThan(0); expect(share).toBeLessThan(1); });
+                hud.showProgress(marks);
+                hud.setGates(0, gates.length);
+                expect(document.querySelectorAll('#hudProgressMarks i')).toHaveLength(gates.length);
+                expect(document.getElementById('hudProgressCount').textContent).toBe(`0/${gates.length}`);
+            }
+        }
+    });
+
+    test('the stage text is absent with one stage and present with three', () => {
+        const one = ride('world/ride.json');
+        const three = ride('tests/fixtures/world/mini/ride.json');
+        expect(one.stages).toHaveLength(1);
+        expect(three.stages).toHaveLength(3);
+        hud.showProgress([]);
+        hud.setProgress(0.1, 'km 0.1 / 13.2', HudRules.stageLine(1, one.stages.length, one.stages[0].name, 3200));
+        expect(document.getElementById('hudStageText').textContent).toBe('');
+        hud.setProgress(0.1, 'km 0.1 / 6.0', HudRules.stageLine(2, three.stages.length, three.stages[1].name, 3200));
+        expect(document.getElementById('hudStageText').textContent).toBe(`Stage 2/3 · ${three.stages[1].name}  0:03.2`);
+        // The start card names the stage the same way
+        expect(HudRules.stageLabel(1, one.stages.length, 'Road')).toBe('Road');
+        expect(HudRules.stageLabel(1, three.stages.length, 'Road')).toBe('Stage 1/3 · Road');
+    });
+
+    // index.html and css/ui.css as they ship
+    const page = () => {
+        const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8');
+        return new DOMParser().parseFromString(html.replace(/<script[\s\S]*?<\/script>/g, ''), 'text/html');
+    };
+
+    test('the page holds one progress element, and the pips and the bar are never shown together', () => {
+        const doc = page();
+        expect(doc.querySelectorAll('.hud-progress-bar')).toHaveLength(1);
+        expect(doc.querySelectorAll('#hudProgressCount')).toHaveLength(1);
+        // The stage line of the old HUD, with its own clock and its own marks, is gone
+        for (const id of ['hudStage', 'hudStageName', 'hudStageKm', 'hudStageMarks', 'hudStageFill']) expect({ id, found: !!doc.getElementById(id) }).toEqual({ id, found: false });
+        const real = new Hud(doc, fakeWindow());
+        expect(doc.getElementById('hudProgress').hidden).toBe(true);
+        real.showProgress([0.5]);
+        expect([doc.getElementById('hudProgress').hidden, doc.getElementById('hudGates').hidden]).toEqual([false, true]);
+        real.hideProgress();
+        expect([doc.getElementById('hudProgress').hidden, doc.getElementById('hudGates').hidden]).toEqual([true, false]);
+        const css = readFileSync(new URL('../../css/ui.css', import.meta.url), 'utf8');
+        expect(css).toMatch(/\.hud-gates\[hidden\] \{\s*display: none;/);
+        expect(css).toMatch(/\.hud-progress\[hidden\] \{\s*display: none;/);
+    });
+
+    test('the bike\'s corner keeps empty, named room for the gear, the revs and the rider mode', () => {
+        const doc = page();
+        const css = readFileSync(new URL('../../css/ui.css', import.meta.url), 'utf8');
+        for (const [id, name] of [['hudGear', 'hud-gear'], ['hudRevs', 'hud-revs'], ['hudMode', 'hud-mode']]) {
+            const slot = doc.getElementById(id);
+            expect({ id, inCorner: !!slot && !!slot.closest('#hudBike'), empty: !!slot && slot.childNodes.length === 0 }).toEqual({ id, inCorner: true, empty: true });
+            expect(css).toMatch(new RegExp(`\\.${name} \\{`));
+        }
+        expect(doc.getElementById('hudSpeed').closest('#hudBike')).not.toBeNull();
+    });
+
+    test('the pause panel brings the key hints back, and a new run or a resume lets them go', () => {
+        const hint = document.getElementById('hudHint');
+        hud.startRun('Road');
+        hud.update(HudRules.HINT_MS, NaN);
+        expect(hint.classList.contains('hidden')).toBe(true);
+        hud.recallHint(true);
+        expect(hint.classList.contains('recall')).toBe(true);
+        hud.recallHint(false);
+        expect([hint.classList.contains('recall'), hint.classList.contains('hidden')]).toEqual([false, true]);
+        hud.recallHint(true);
+        hud.startRun('Road');
+        expect(hint.classList.contains('recall')).toBe(false);
+        const src = read('main.js');
+        expect(src).toMatch(/recallHint\(true\)/);
+        expect(src).toMatch(/recallHint\(false\)/);
     });
 
     test('the many-gates pips are smaller and closer in css/ui.css', () => {

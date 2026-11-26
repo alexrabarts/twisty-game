@@ -8,40 +8,70 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;1,700;1,800&family=Inter:wght@500;600;700;800&display=swap">
     <link rel="stylesheet" href="css/ui.css">
+    <link rel="stylesheet" href="css/settings.css">
 </head>
 <body>
-    <!-- HUD: time first, then checkpoints and style; speed in a corner -->
+    <!-- HUD (.agent/system/ui.md): the top centre column, the bike's corner, the key hints; a world ride adds the map's corner -->
     <div class="hud" id="hud">
         <div class="hud-top">
             <div class="hud-timer panel">
                 <p id="raceTimer" class="hud-time">0:00.00</p>
+                <!-- A world ride only: the one progress element (js/hud.js showProgress). The bar is the stage, with a
+                     tick for each checkpoint and the rider's place; the count stands at its end -->
+                <div id="hudProgress" class="hud-progress" hidden>
+                    <div id="hudProgressBar" class="hud-progress-bar" aria-hidden="true"><i class="hud-progress-fill"></i><span id="hudProgressMarks"></span><b class="hud-progress-at"></b></div>
+                    <b id="hudProgressCount" class="hud-count" aria-label="Checkpoints passed">0/0</b>
+                </div>
                 <div class="hud-meta">
-                    <span class="hud-gates" id="hudGates" aria-label="Checkpoints passed"><span id="hudGatePips"></span><b id="hudGateCount">0/5</b></span>
+                    <span id="hudProgressKm" class="hud-km"></span>
+                    <!-- The classic legs: a pip for each gate -->
+                    <span class="hud-gates" id="hudGates" aria-label="Checkpoints passed"><span id="hudGatePips"></span><b id="hudGateCount" class="hud-count">0/5</b></span>
                     <span class="hud-style"><span id="scoreLabel">STYLE</span> <span id="score">0</span></span>
                     <span id="comboDisplay" class="hud-combo"></span>
                 </div>
+                <!-- A world of more than one stage only: the stage and its clock -->
+                <div id="hudStageText" class="hud-stage-text"></div>
+                <!-- Free roam only: the discoveries (js/world/discoveries.js) -->
+                <div id="hudFinds" class="hud-stage-text"></div>
+                <!-- Free roam only: the best wheelie and style score (js/world/style.js) -->
+                <div id="hudStyleBest" class="hud-stage-text"></div>
+            </div>
+            <!-- A world ride only: js/world/guide.js writes the turn prompt and the advised speed here. Wide screens
+                 show them under the mini map; a phone shows them here in the column -->
+            <div id="hudGuide" class="hud-guide">
+                <div id="hudPrompt" class="hud-prompt"></div>
+                <div id="hudAdvice" class="hud-advice" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 20V9a5 5 0 0 1 10 0v6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M13.5 12.5L17 16l3.5-3.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span></span></div>
+            </div>
+            <!-- Checkpoint split: elapsed time and the gap to the best and the record -->
+            <div id="splitPopup" class="split-popup panel" aria-live="polite"></div>
+            <div id="wheelieIndicator" class="wheelie-indicator">
+                <div id="wheelieZone">WHEELIE!</div>
+                <div id="wheelieCombo" class="wheelie-combo"></div>
             </div>
             <div id="startCard" class="start-card" aria-live="polite">
                 <div id="startLeg" class="start-leg panel"></div>
                 <div class="start-go">GO!</div>
             </div>
-            <div id="wheelieIndicator" class="wheelie-indicator">
-                <div id="wheelieZone">WHEELIE!</div>
-                <div id="wheelieCombo" class="wheelie-combo"></div>
-            </div>
-            <!-- Checkpoint split: elapsed time and the gap to the best and the record -->
-            <div id="splitPopup" class="split-popup panel" aria-live="polite"></div>
             <div id="callouts" class="callouts" aria-live="polite"></div>
         </div>
 
-        <div id="hudSpeed" class="hud-speed" data-band="-1">
-            <svg class="speed-gauge" viewBox="0 0 120 120" aria-hidden="true">
-                <path class="speed-track" d="M18.43 84 A48 48 0 1 1 101.57 84" pathLength="100"/>
-                <path id="speedFill" class="speed-fill" d="M18.43 84 A48 48 0 1 1 101.57 84" pathLength="100"/>
-            </svg>
-            <div class="speed-read">
-                <span id="speed" class="speed-value">0</span>
-                <span class="speed-unit">MPH</span>
+        <!-- The bike's corner: the speed gauge, and room kept for what later work shows beside it. The three slots
+             are empty on purpose: each has its place and size in css/ui.css and draws nothing until it has content -->
+        <div id="hudBike" class="hud-bike">
+            <div class="hud-bike-side">
+                <div id="hudMode" class="hud-mode"></div>
+                <div id="hudGear" class="hud-gear"></div>
+                <div id="hudRevs" class="hud-revs"></div>
+            </div>
+            <div id="hudSpeed" class="hud-speed" data-band="-1">
+                <svg class="speed-gauge" viewBox="0 0 120 120" aria-hidden="true">
+                    <path class="speed-track" d="M18.43 84 A48 48 0 1 1 101.57 84" pathLength="100"/>
+                    <path id="speedFill" class="speed-fill" d="M18.43 84 A48 48 0 1 1 101.57 84" pathLength="100"/>
+                </svg>
+                <div class="speed-read">
+                    <span id="speed" class="speed-value">0</span>
+                    <span class="speed-unit">MPH</span>
+                </div>
             </div>
         </div>
 
@@ -51,6 +81,10 @@
         </div>
 
         <div id="fps" class="fps" hidden>FPS 0</div>
+        <!-- Debug mode only: this ride had a tuning multiplier off 1 and keeps no time (js/tuning.js) -->
+        <div id="hudTuned" class="hud-tuned" hidden>TUNED</div>
+        <!-- Debug mode only: the graphics level in force and whether the frame time or a fixed choice set it (js/quality.js) -->
+        <div id="hudQuality" class="hud-quality" hidden></div>
     </div>
 
     <!-- Speed Vignette - darkens edges at high speed -->
@@ -63,6 +97,7 @@
 
             <!-- Name entry screen -->
             <div id="leaderboardEntryForm">
+                <!-- main.js sets the subtitle, maxlength and placeholder from the server's name rule; 4 is the old-server default -->
                 <p class="leaderboard-entry-subtitle">Enter your name (4 letters)</p>
                 <input
                     type="text"
@@ -74,7 +109,7 @@
                 />
                 <div class="leaderboard-buttons">
                     <button id="leaderboardSubmitBtn" class="leaderboard-submit-btn" disabled>Submit</button>
-                    <button id="leaderboardCancelBtn" class="leaderboard-cancel-btn">Cancel</button>
+                    <button id="leaderboardCancelBtn" class="leaderboard-cancel-btn" data-key="Escape">Cancel</button>
                 </div>
             </div>
 
@@ -84,7 +119,7 @@
                 <div id="leaderboardRankDisplay"></div>
                 <div id="leaderboardFlaggedDisplay"></div>
                 <div class="leaderboard-buttons" style="margin-top: 30px;">
-                    <button id="leaderboardCloseBtn" class="leaderboard-submit-btn">Close</button>
+                    <button id="leaderboardCloseBtn" class="leaderboard-submit-btn" data-key="Escape,Enter">Close</button>
                 </div>
             </div>
 
@@ -92,7 +127,7 @@
             <div id="leaderboardError" style="display: none;">
                 <p class="leaderboard-error-message" id="leaderboardErrorMessage"></p>
                 <div class="leaderboard-buttons" style="margin-top: 30px;">
-                    <button id="leaderboardErrorCloseBtn" class="leaderboard-cancel-btn">Close</button>
+                    <button id="leaderboardErrorCloseBtn" class="leaderboard-cancel-btn" data-key="Escape,Enter">Close</button>
                 </div>
             </div>
         </div>
@@ -119,7 +154,16 @@
     <script src="js/leaderboard.js"></script>
 
     <!-- Game Scripts -->
+    <!-- The one stack every dialog goes through: first, so every script after it can open one -->
+    <script src="js/modals.js"></script>
+    <!-- The tuning's table and multipliers, before everything that reads them; its panel is built in debug mode only -->
+    <script src="js/tuning.js"></script>
+    <script src="js/tuningpanel.js"></script>
+    <script src="js/ridermodes.js"></script>
+    <script src="js/quality.js"></script>
     <script src="js/graphics.js"></script>
+    <script src="js/effects.js"></script>
+    <script src="js/settings.js"></script>
     <script src="js/hud.js"></script>
     <script src="js/virtualcontrols.js"></script>
     <script src="js/input.js"></script>
@@ -127,9 +171,51 @@
     <script src="js/terrain.js"></script>
     <script src="js/course.js"></script>
     <script src="js/race.js"></script>
+    <!-- What the page rides (the world or the legs): the one reader of ?world -->
+    <script src="js/ridemode.js"></script>
+    <script src="js/gamemodes.js"></script>
     <script src="js/tours.js"></script>
     <script src="js/weather.js"></script>
     <script src="js/atmosphere.js"></script>
+    <script src="js/world/route.js"></script>
+    <script src="js/world/legroute.js"></script>
+    <script src="js/world/physics.js"></script>
+    <script src="js/world/tour.js"></script>
+    <script src="js/world/data.js"></script>
+    <script src="js/world/legs.js"></script>
+    <script src="js/world/graph.js"></script>
+    <script src="js/world/worldroute.js"></script>
+    <script src="js/world/worldground.js"></script>
+    <script src="js/world/streamer.js"></script>
+    <script src="js/world/landshade.js"></script>
+    <script src="js/world/landdetail.js"></script>
+    <script src="js/world/groundtex.js"></script>
+    <script src="js/world/groundcover.js"></script>
+    <script src="js/world/tubes.js"></script>
+    <script src="js/world/roadsurface.js"></script>
+    <script src="js/world/roadmesh.js"></script>
+    <script src="js/world/terrainmesh.js"></script>
+    <script src="js/world/horizon.js"></script>
+    <script src="js/world/vegetation.js"></script>
+    <script src="js/world/edgestyles.js"></script>
+    <script src="js/world/scenery.js"></script>
+    <script src="js/world/marmots.js"></script>
+    <script src="js/world/roadworks.js"></script>
+    <script src="js/world/places.js"></script>
+    <script src="js/world/placemesh.js"></script>
+    <script src="js/world/guide.js"></script>
+    <script src="js/world/run.js"></script>
+    <script src="js/world/camera.js"></script>
+    <script src="js/world/freeroam.js"></script>
+    <script src="js/world/travel.js"></script>
+    <script src="js/world/discoveries.js"></script>
+    <script src="js/world/style.js"></script>
+    <script src="js/world/photo.js"></script>
+    <script src="js/world/stopscene.js"></script>
+    <script src="js/world/sidetraffic.js"></script>
+    <script src="js/world/looks.js"></script>
+    <script src="js/world/credits.js"></script>
+    <script src="js/world/environment.js"></script>
     <script src="js/vehicle.js"></script>
     <script src="js/environment.js"></script>
     <script src="js/sceneassets.js"></script>
@@ -139,6 +225,23 @@
     <script src="js/cones.js"></script>
     <script src="js/rockfalls.js"></script>
     <script src="js/traffic.js"></script>
+    <!-- The hill ride (RideMode kind 'hill'): its lane, bicycle, drawing, music, and its time and board -->
+    <script src="js/hill/lane.js"></script>
+    <script src="js/hill/pushbike.js"></script>
+    <script src="js/hill/bicycle.js"></script>
+    <script src="js/hill/rider.js"></script>
+    <script src="js/hill/textures.js"></script>
+    <script src="js/hill/scene.js"></script>
+    <script src="js/hill/props.js"></script>
+    <script src="js/hill/spill.js"></script>
+    <script src="js/hill/music.js"></script>
+    <script src="js/hill/loaf.js"></script>
+    <script src="js/hill/board.js"></script>
+    <script src="js/hill/horse.js"></script>
+    <script src="js/hill/day.js"></script>
+    <script src="js/hill/ride.js"></script>
+    <!-- The sound engine (SoundManager, the gearbox of the sound and the HUD), before the game that makes it -->
+    <script src="js/sound.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>
