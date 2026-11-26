@@ -211,7 +211,13 @@
      "kind": "restaurant",
      "e": 2686509,
      "n": 1156616,
-     "keepLine": true
+     "keepLine": true,
+     "raise": {
+      "tileLodM": [
+       1500,
+       4000
+      ]
+     }
     }
    }
   },
@@ -234,7 +240,13 @@
      {
       "kind": "restaurant",
       "e": 2686509,
-      "n": 1156616
+      "n": 1156616,
+      "raise": {
+       "tileLodM": [
+        1500,
+        4000
+       ]
+      }
      },
      {
       "kind": "carpark",
@@ -291,6 +303,12 @@
       "haze": {
        "perM": 0.000133333
       }
+     },
+     "raise": {
+      "tileLodM": [
+       1500,
+       4000
+      ]
      }
     }
    }

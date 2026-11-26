@@ -317,7 +317,7 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
     const via = stops.filter(st => st.stage === stage.id && st.at === 'via').length;
     stops.push({
       id: def.at === 'via' ? `${stage.id}-via-${via + 1}` : `${stage.id}-${def.at}`, kind: def.kind, stage: stage.id, at: def.at, s: Math.round(made.s * 10) / 10, ...(made.s1 !== undefined ? { s1: Math.round(made.s1 * 10) / 10 } : {}), side: made.side, access: made.access,
-      ...(def.keepLine ? { keepLine: true } : {}), ...(def.legStart ? { legStart: true } : {}), ...(def.hold ? { hold: def.hold } : {}), x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots, ...(plane ? { plane } : {}), ...(view !== null ? { view } : {})
+      ...(def.keepLine ? { keepLine: true } : {}), ...(def.legStart ? { legStart: true } : {}), ...(def.hold ? { hold: def.hold } : {}), ...(def.raise ? { raise: def.raise } : {}), x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots, ...(plane ? { plane } : {}), ...(view !== null ? { view } : {})
     });
   }
   // A stop at a stage's end moves the end (and the next stage's start) to leadM before the turn-in

@@ -59,7 +59,7 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     credit: CREDIT,
     sources: { tlm: TLM_NAME.replace(/^swisstlm3d_|_2056_5728\.gpkg\.zip$/g, ''), alti3d: [] },
     keptRoadClasses: null,
-    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0), ...(w.keepLine ? { keepLine: true } : {}), ...(w.legStart ? { legStart: true } : {}), ...(w.hold ? { hold: holdOf(w.hold) } : {}) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
+    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0), ...(w.keepLine ? { keepLine: true } : {}), ...(w.legStart ? { legStart: true } : {}), ...(w.hold ? { hold: holdOf(w.hold) } : {}), ...(w.raise ? { raise: w.raise } : {}) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
     edges,
     demAt: (x, z) => dem.sample(x + e0, n0 - z),
     // Makes sure every tile under the box is in the cache (downloading what is missing) and loaded.
