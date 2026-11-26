@@ -26,7 +26,7 @@ function edgeProfile(mesh, lod, e) {
 
 // Every shipped data folder: the Tremola's (world/), the Gotthard leg's and the tour's (worlds/*). A leg of the tour
 // ridden against a stage reads that stage's folder, so its land is checked with the folder
-for (const base of ['world/', 'worlds/gotthard/', 'worlds/airolo/']) describe(`the committed land of ${base}`, () => {
+for (const base of ['world/', 'worlds/gotthard/', 'worlds/airolo/', 'worlds/susten/']) describe(`the committed land of ${base}`, () => {
     const tiles = new Map();
     const built = new Map();
     const near = key => tiles.get(key) || null;
