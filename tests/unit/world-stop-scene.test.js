@@ -127,7 +127,7 @@ describe('the scene', () => {
         expect(first.fov).toBeCloseTo(from.fov, 9);
         const dt = 1 / 60;
         const frames = [first];
-        while (scene.t < StopScene.FLY_S + 2) frames.push(scene.step(dt).camera);
+        while (scene.t < scene.flyS + 2) frames.push(scene.step(dt).camera);
         const steps = frames.slice(1).map((c, k) => {
             const p = frames[k];
             return { move: Math.hypot(c.eye.x - p.eye.x, c.eye.y - p.eye.y, c.eye.z - p.eye.z), aim: Math.max(Math.abs(StopScene.turn(p.yaw, c.yaw)), Math.abs(c.pitch - p.pitch), Math.abs(StopScene.turn(p.roll, c.roll))), lens: Math.abs(c.fov - p.fov) };
@@ -141,10 +141,11 @@ describe('the scene', () => {
         }
         for (let k = 1; k < steps.length; k++) {
             expect(Math.abs(steps[k].move - steps[k - 1].move)).toBeLessThan(0.05);
-            expect(Math.abs(steps[k].aim - steps[k - 1].aim)).toBeLessThan(0.002);
+            // (the camera rides the bike's own way past it: where the bike stops slowing, so does its turn, 0.005 rad a frame)
+            expect(Math.abs(steps[k].aim - steps[k - 1].aim)).toBeLessThan(0.005);
             expect(Math.abs(steps[k].lens - steps[k - 1].lens)).toBeLessThan(0.01);
         }
-        // From FLY_S on it is the hold, and the hold stands EYE_CLEAR_M over the ground at least
+        // From flyS on it is the hold, and the hold stands EYE_CLEAR_M over the ground at least
         const hold = StopScene.holdOf(stop, flat, 16 / 9);
         const last = frames[frames.length - 1];
         expect(last.eye.x).toBeCloseTo(hold.eye.x, 9);
@@ -160,6 +161,42 @@ describe('the scene', () => {
         // and it looks out (east, +x: yaw -90 degrees) and down
         expect(hold.yaw).toBeCloseTo(-Math.PI / 2, 1);
         expect(hold.pitch).toBeLessThan(0);
+    });
+
+    // The owner: "i want the chase camera to overtake the bike so it's not in view anymore and land at the edge of the
+    // hill for the photo". The camera keeps the chase, passes the bike along its way in a little faster than it, and
+    // then settles on the hold, clearly slower than before (9 s): about 15 to 20 s on a short way in
+    test('the camera overtakes the bike, the bike leaves the view behind it, and it settles on the hold', () => {
+        const O = StopScene.OVERTAKE;
+        const at = { x: -2.5, z: 380 };
+        const from = { offset: { x: 0, y: 2.8, z: -7 }, yaw: Math.PI, pitch: -0.1, roll: 0, fov: 80 };
+        const scene = new StopScene({ stop, route, riders: [{ bike: {}, s: 380, player: true, at, speed: 14 }], ground: flat, camera: from, aspect: 16 / 9 });
+        expect(scene.flyS).toBeGreaterThanOrEqual(15);
+        expect(scene.flyS).toBeLessThanOrEqual(20);
+        expect(scene.cardAt).toBeGreaterThanOrEqual(scene.flyS + StopScene.HOLD_FIRST_S);
+        const dt = 1 / 60, passed = O.passFromS + O.passS;
+        let ahead = false;
+        const r = Math.PI / 180;
+        while (scene.t < scene.flyS) {
+            const frame = scene.step(dt), cam = frame.camera, bike = frame.riders[0];
+            // (never under the ground; over the road beside the bike as it passes, never in it)
+            expect(cam.eye.y).toBeGreaterThanOrEqual(100 + StopScene.EYE_CLEAR_M * StopScene.ease(scene.t / O.joinS) - 1e-6);
+            expect(Math.hypot(cam.eye.x - bike.x, cam.eye.y - 100, cam.eye.z - bike.z)).toBeGreaterThan(2);
+            if (scene.t < passed) continue;
+            // Past the bike: the bike is out of the view (behind the camera or outside its lens)
+            const dir = { x: -Math.sin(cam.yaw) * Math.cos(cam.pitch), y: Math.sin(cam.pitch), z: -Math.cos(cam.yaw) * Math.cos(cam.pitch) };
+            const to = { x: bike.x - cam.eye.x, y: 100.9 - cam.eye.y, z: bike.z - cam.eye.z };
+            const len = Math.hypot(to.x, to.y, to.z);
+            const angle = Math.acos((dir.x * to.x + dir.y * to.y + dir.z * to.z) / len) / r;
+            const half = Math.atan(Math.tan(cam.fov * r / 2) * Math.hypot(1, 16 / 9)) / r;
+            expect(angle).toBeGreaterThan(half);
+            ahead = true;
+        }
+        expect(ahead).toBe(true);
+        // and it rests on the hold
+        const hold = StopScene.holdOf(stop, flat, 16 / 9), end = scene.step(dt).camera;
+        expect(end.eye.x).toBeCloseTo(hold.eye.x, 6);
+        expect(end.eye.z).toBeCloseTo(hold.eye.z, 6);
     });
 
     test('a hold far away is flown to at FLY_MOST_MS on average at the most, with the card after it', () => {

@@ -46,6 +46,17 @@ class StopScene {
     // leaves from and goes to. On the way the eye goes up by at most ARC_M (over the bikes and the rail), and keeps
     // EYE_CLEAR_M over the ground, that clearance eased in from none so the first frame is the chase camera's own
     static get FLY_S() { return 9; }
+    // The overtake (StopScene.prototype.overtakeAt; the owner: "i want the chase camera to overtake the bike so it's
+    // not in view anymore and land at the edge of the hill for the photo"). The camera keeps the chase for joinS while
+    // it eases onto the way in, drawn sideM to the side the road's other half lies on and upM over the ground there.
+    // From passFromS it gains on the bike over passS, from its place behind to aheadM ahead (a few metres a second
+    // faster than the bike), looking along the way lookM ahead and pitchDeg down, so the bike slides out of the frame
+    // behind it. From holdFrom (once it is ahead, and not long before the player parks on a long way in) it eases over
+    // settleS to the stop's hold, slowing to rest there. All of it a rule of the leg's end stop and its hold (HOLDS,
+    // KINDS): a leg run either way, to any stop, flies the same way
+    static get OVERTAKE() {
+        return Object.freeze({ joinS: 3, sideM: 3.2, upM: 3, passFromS: 1.5, passS: 7, aheadM: 26, lookM: 30, smoothM: 10, kneeM: 8, turnRate: 2.5, pitchDeg: -8, holdAfterPass: 0.85, settleS: 9, settleMostMs: 25 });
+    }
     static get FLY_MOST_MS() { return 25; }
 
     // How long the fly from `eye` to the hold takes
@@ -113,6 +124,8 @@ class StopScene {
     static get PUFF_S() { return 2.6; }
     // The camera keeps this far over the ground under it
     static get EYE_CLEAR_M() { return 1.6; }
+    static get FLOOR_KNEE_M() { return 0.6; }
+    static get FLOOR_RATE() { return 6; }
     // How far the visor turns up about its own middle (rad)
     static get VISOR_UP() { return 1.1; }
 
@@ -188,6 +201,95 @@ class StopScene {
         const under = groundY(eye.x, eye.z);
         if (Number.isFinite(under)) eye.y = Math.max(eye.y, under + StopScene.EYE_CLEAR_M);
         return { eye, ...StopScene.aimOf(eye, look), roll: 0, fov: StopScene.vfovOf(hold.hfov, aspect) };
+    }
+
+    // The point `m` metres along a way in ({points: [{x, z, m}], length}), clamped to it: {x, z, heading}
+    static wayAt(way, m, out = {}) {
+        const pts = way.points;
+        const at = Math.max(0, Math.min(way.length, m));
+        let i = 0;
+        while (i + 2 < pts.length && pts[i + 1].m < at) i++;
+        const p = pts[i], q = pts[Math.min(pts.length - 1, i + 1)];
+        const u = q.m > p.m ? (at - p.m) / (q.m - p.m) : 0;
+        out.x = p.x + (q.x - p.x) * u;
+        out.z = p.z + (q.z - p.z) * u;
+        out.heading = q === p ? 0 : Math.atan2(q.x - p.x, q.z - p.z);
+        return out;
+    }
+
+    // The camera t seconds into the end: the chase camera's pose carried on beside the player, eased onto the
+    // overtake along the player's way in (OVERTAKE), then eased to the hold. At t 0 it is the chase camera to the last
+    // bit; from flyS on it is the hold. `lead` is the player's place and its metres along its way now
+    overtakeAt(t, lead, dt = 0) {
+        const O = StopScene.OVERTAKE, way = this.riders[0].way, hold = this.hold, from = this.from;
+        const r = Math.PI / 180;
+        const ly = Number.isFinite(lead.y) ? lead.y : 0;
+        // The chase pose, carried on beside the player
+        const chase = { x: lead.x + from.offset.x, y: ly + from.offset.y, z: lead.z + from.offset.z, yaw: from.yaw, pitch: from.pitch, roll: from.roll, fov: from.fov };
+        // The overtake's pose: on the way, `lead` metres from the player (from where the chase camera was to aheadM)
+        const pass = StopScene.ease((t - O.passFromS) / O.passS);
+        // (it comes to rest at the way's end smoothly, over kneeM: stopped there at once, its speed fell in one frame)
+        const want = lead.m + -this.back + (this.back + O.aheadM) * pass;
+        const L = way.length, k = O.kneeM;
+        const x = (L - want) / k;
+        const m = L - k * (x > 30 ? x : Math.log1p(Math.exp(x)));
+        const p = StopScene.wayAt(way, m, {});
+        // (its side from the way's direction over a few metres either side, so the side turns smoothly at the way's bends)
+        const a = StopScene.wayAt(way, m - O.smoothM, {}), b = StopScene.wayAt(way, m + O.smoothM, {});
+        const heading = Math.hypot(b.x - a.x, b.z - a.z) > 0.5 ? Math.atan2(b.x - a.x, b.z - a.z) : p.heading;
+        const px = p.x + O.sideM * Math.cos(heading), pz = p.z - O.sideM * Math.sin(heading);
+        // (its height over the ground on the way itself, the ride's lane: no wall or bank beside the road moves it)
+        const g = this.ground(p.x, p.z);
+        // (it looks along the way lookM ahead, and past the way's end on along its last metres: a camera looks down -z)
+        // (the mean of points over smoothM either side, so the aim turns smoothly round the way's corners)
+        const e0 = StopScene.wayAt(way, way.length - 4, {}), e1 = StopScene.wayAt(way, way.length, {});
+        const eh = Math.hypot(e1.x - e0.x, e1.z - e0.z) > 0.1 ? Math.atan2(e1.x - e0.x, e1.z - e0.z) : heading;
+        const look = { x: 0, z: 0 };
+        for (const d of [-O.smoothM, -O.smoothM / 2, 0, O.smoothM / 2, O.smoothM]) {
+            const at = StopScene.wayAt(way, m + O.lookM + d, {}), over = Math.max(0, m + O.lookM + d - way.length);
+            look.x += (at.x + over * Math.sin(eh)) / 5;
+            look.z += (at.z + over * Math.cos(eh)) / 5;
+        }
+        // (and its aim follows that on a critically damped spring at turnRate: where the way in turns sharply off the
+        // road into the stop, the aim along the way turned in a few frames)
+        const aim = Math.atan2(-(look.x - px), -(look.z - pz));
+        if (this.pathYaw === undefined) { this.pathYaw = aim; this.pathYawRate = 0; }
+        if (dt > 0) {
+            const w = O.turnRate;
+            this.pathYawRate += (w * w * StopScene.turn(this.pathYaw, aim) - 2 * w * this.pathYawRate) * dt;
+            this.pathYaw += this.pathYawRate * dt;
+        }
+        const path = { x: px, y: (Number.isFinite(g) ? g : ly) + O.upM, z: pz, yaw: this.pathYaw, pitch: O.pitchDeg * r, roll: 0, fov: from.fov };
+        const w1 = StopScene.ease(t / O.joinS), w2 = StopScene.ease((t - this.holdFrom) / this.settleS);
+        const mix = (a, b, w) => ({
+            x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w, z: a.z + (b.z - a.z) * w,
+            yaw: a.yaw + StopScene.turn(a.yaw, b.yaw) * w, pitch: a.pitch + (b.pitch - a.pitch) * w,
+            roll: a.roll + StopScene.turn(a.roll, b.roll) * w, fov: a.fov + (b.fov - a.fov) * w
+        });
+        const held = { x: hold.eye.x, y: hold.eye.y, z: hold.eye.z, yaw: hold.yaw, pitch: hold.pitch, roll: hold.roll, fov: hold.fov };
+        const c = mix(mix(chase, path, w1), held, w2);
+        // Over the bikes and the rail on the way to the hold, and never under EYE_CLEAR_M over the ground (eased in from
+        // none, so the first frame is the chase camera's own)
+        c.y += (this.arcM || StopScene.ARC_M) * 4 * w2 * (1 - w2);
+        // (a soft floor, so meeting it bends the camera's way up with no kink: knee FLOOR_KNEE_M, from none at the start)
+        // (the ground followed on a critically damped spring at FLOOR_RATE: over the land the floor otherwise bends at
+        // every edge of its triangles, and a finer tile that comes in moves it at once)
+        let under = this.ground(c.x, c.z);
+        if (Number.isFinite(under)) {
+            if (this.floorY === undefined) { this.floorY = under; this.floorRate = 0; }
+            else if (dt > 0) {
+                const w = StopScene.FLOOR_RATE;
+                this.floorRate += (w * w * (under - this.floorY) - 2 * w * this.floorRate) * dt;
+                this.floorY += this.floorRate * dt;
+            }
+            under = this.floorY;
+        }
+        if (Number.isFinite(under)) {
+            const floor = under + StopScene.EYE_CLEAR_M * w1, k = Math.max(1e-6, StopScene.FLOOR_KNEE_M * w1), x = (c.y - floor) / k;
+            c.y = floor + k * (x > 30 ? x : Math.log1p(Math.exp(x)));
+        }
+        const cp = Math.cos(c.pitch);
+        return { eye: { x: c.x, y: c.y, z: c.z }, yaw: c.yaw, pitch: c.pitch, roll: c.roll, fov: c.fov, look: { x: c.x - Math.sin(c.yaw) * cp * 10, y: c.y + Math.sin(c.pitch) * 10, z: c.z - Math.cos(c.yaw) * cp * 10 } };
     }
 
     // The haze t seconds into the fly (over `base`, LandShade.HAZE): eased with the camera from the ride's own to the
@@ -334,7 +436,7 @@ class StopScene {
         const u = q.m > p.m ? (m - p.m) / (q.m - p.m) : 0;
         const parked = t >= tStop;
         const heading = parked ? slot.heading : Math.atan2(q.x - p.x, q.z - p.z);
-        return { x: p.x + (q.x - p.x) * u, z: p.z + (q.z - p.z) * u, heading, speed, parked, arriveS: tStop };
+        return { x: p.x + (q.x - p.x) * u, z: p.z + (q.z - p.z) * u, heading, speed, parked, arriveS: tStop, m };
     }
 
     // The scene. `riders`: [{bike: {group or bikeGroup, rider, arms, legs, character, yawAngle?}, s, at?, speed?}] in
@@ -370,8 +472,25 @@ class StopScene {
         const first = this.riders.length ? this.riders[0].way.points[0] : null;
         const y0 = first ? ground(first.x, first.z) : NaN;
         const eye0 = camera && first ? { x: first.x + camera.offset.x, y: (Number.isFinite(y0) ? y0 : 0) + camera.offset.y, z: first.z + camera.offset.z } : null;
-        this.flyS = eye0 ? StopScene.flyTime(eye0, this.hold) : StopScene.FLY_S;
-        this.arcM = eye0 ? Math.max(StopScene.ARC_M, StopScene.ARC_SHARE * Math.hypot(this.hold.eye.x - eye0.x, this.hold.eye.z - eye0.z)) : StopScene.ARC_M;
+        // How far behind the player along its way the chase camera was: the overtake starts there
+        const O = StopScene.OVERTAKE;
+        const h0 = first ? StopScene.wayAt(this.riders[0].way, 1, {}).heading : 0;
+        this.back = camera ? Math.max(0, -(camera.offset.x * Math.sin(h0) + camera.offset.z * Math.cos(h0))) : 0;
+        // (it settles once it is ahead, over settleS, or longer to a hold far from where it is then: no faster than
+        // settleMostMs on average, so a hold back down the road, the Tremola's, is flown to, not swept to)
+        this.holdFrom = O.passFromS + O.passS * O.holdAfterPass;
+        this.settleS = O.settleS;
+        // (and goes up on the way by ARC_M, or ARC_SHARE of a long settle's length, so it passes over the land, not
+        // through a bank beside it: the Tremola's settle of about 500 m skimmed a hillside at 4 m)
+        this.arcM = StopScene.ARC_M;
+        if (camera && first) {
+            const bike = StopScene.along(this.riders[0].way, this.holdFrom, this.riders[0].slot);
+            const there = StopScene.wayAt(this.riders[0].way, bike.m + O.aheadM, {});
+            const far = Math.hypot(this.hold.eye.x - there.x, this.hold.eye.z - there.z);
+            this.settleS = Math.max(O.settleS, far / O.settleMostMs);
+            this.arcM = Math.max(StopScene.ARC_M, far * StopScene.ARC_SHARE);
+        }
+        this.flyS = eye0 ? this.holdFrom + this.settleS : StopScene.FLY_S;
     }
 
     // The screen's shape changed: the hold's lens is made again for it
@@ -402,9 +521,10 @@ class StopScene {
             at.stand = at.parked && this.t - r.start - at.arriveS >= StopScene.GET_OFF_S;
             out.push(at);
         }
-        // From the chase camera beside the player to the hold (StopScene.flyAt); with no chase camera, the hold
+        // From the chase camera beside the player, past it along its way, to the hold (overtakeAt); with no chase camera,
+        // the hold
         const lead = out[0];
-        const camera = this.from && lead ? StopScene.flyAt(this.from, lead, this.hold, this.t, this.ground, this.flyS, this.arcM) : StopScene.flyAt({ offset: { x: 0, y: 0, z: 0 }, yaw: this.hold.yaw, pitch: this.hold.pitch, roll: 0, fov: this.hold.fov }, this.hold.eye, this.hold, this.flyS, () => NaN, this.flyS);
+        const camera = this.from && lead ? this.overtakeAt(this.t, lead, dt) : StopScene.flyAt({ offset: { x: 0, y: 0, z: 0 }, yaw: this.hold.yaw, pitch: this.hold.pitch, roll: 0, fov: this.hold.fov }, this.hold.eye, this.hold, this.flyS, () => NaN, this.flyS);
         return { riders: out, camera, card: this.t >= this.cardAt, held: this.t >= this.flyS };
     }
 
