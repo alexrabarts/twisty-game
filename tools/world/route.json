@@ -235,12 +235,63 @@
       "kind": "restaurant",
       "e": 2686509,
       "n": 1156616
+     },
+     {
+      "kind": "carpark",
+      "e": 2686048,
+      "n": 1163473,
+      "legStart": true
      }
     ],
     "end": {
      "kind": "lookout",
      "e": 2687167,
-     "n": 1154409
+     "n": 1154409,
+     "hold": {
+      "e": 2687168.6,
+      "n": 1154416.8,
+      "upM": 1.6,
+      "bearing": 103.05,
+      "pitch": -6.9,
+      "hfov": 71.5,
+      "vfovMost": 56,
+      "haze": {
+       "perM": 0.000133333
+      }
+     }
+    }
+   }
+  },
+  "airolo-lookout": {
+   "name": "Airolo up the pass road to the lookout",
+   "waypoints": [
+    9,
+    30,
+    31,
+    27
+   ],
+   "stops": {
+    "start": {
+     "kind": "carpark",
+     "e": 2689632,
+     "n": 1153596
+    },
+    "end": {
+     "kind": "lookout",
+     "e": 2687167,
+     "n": 1154409,
+     "hold": {
+      "e": 2687168.6,
+      "n": 1154416.8,
+      "upM": 1.6,
+      "bearing": 103.05,
+      "pitch": -6.9,
+      "hfov": 71.5,
+      "vfovMost": 56,
+      "haze": {
+       "perM": 0.000133333
+      }
+     }
     }
    }
   }
@@ -266,6 +317,20 @@
    "e": 2686357,
    "n": 1156605,
    "boundary": true
+  },
+  {
+   "id": 30,
+   "name": "Pass road lower hairpins",
+   "e": 2688346,
+   "n": 1154312,
+   "boundary": false
+  },
+  {
+   "id": 31,
+   "name": "Motto Bartola",
+   "e": 2685782,
+   "n": 1153422,
+   "boundary": false
   }
  ]
 }

@@ -264,6 +264,9 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
     const stage = bounds[def.stage];
     // A stop on the way is looked for round the ride's sample nearest its coordinate
     const boundaryS = def.at === 'start' ? stage.from : def.at === 'end' ? stage.to : nearestS(samples, def.x, def.z);
+    // A stop where the group gathers to ride out: a stage's start, or a stop on the way where a leg of the tour starts
+    // (`legStart`, js/world/tour.js)
+    const gathers = def.at === 'start' || !!def.legStart;
     const candidates = areas.filter(a => AREA_KINDS[a.cls]).map(a => ({ a, d: areaDistance(a.ring, def.x, def.z) })).filter(c => c.d <= STOP.areaReachM).sort((p, q) => p.d - q.d);
     if (!candidates.length) throw new Error(`stop ${def.kind} at the ${def.at} of ${stage.id}: no public car park or rest area within ${STOP.areaReachM} m of its coordinate`);
     let made = null;
@@ -279,19 +282,19 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
         if (last && last.to === i - 1) { last.to = i; last.gap = Math.min(last.gap, Math.abs(samples.s[i] - boundaryS)); } else runs.push({ from: i, to: i, gap: Math.abs(samples.s[i] - boundaryS) });
       }
       const run = runs.sort((p, q) => p.gap - q.gap)[0];
-      const near = run ? { i: run.from, s: samples.s[run.from] } : null;
+      const near = run ? { i: run.from, s: samples.s[run.from], s1: samples.s[run.to] } : null;
       const [cx, cz] = centroid(a.ring);
       if (near) {
         const i = near.i;
         const lateral = (cx - samples.x[i]) * Math.cos(samples.heading[i]) - (cz - samples.z[i]) * Math.sin(samples.heading[i]);
-        made = { a, access: 'direct', s: near.s, side: lateral >= 0 ? 1 : -1, path: [[samples.x[i], samples.z[i]]] };
+        made = { a, access: 'direct', s: near.s, s1: near.s1, side: lateral >= 0 ? 1 : -1, path: [[samples.x[i], samples.z[i]]] };
         break;
       }
       // By road: the shortest way in from a node of the ride near the boundary
       let way = null;
       for (const rn of nodesOnRide) {
         if (Math.abs(rn.s - boundaryS) > STOP.searchM) continue;
-        const w = wayIn(edges, adjacency, rn.node, a.ring, def.at === 'start' ? STOP.startPathMaxM : STOP.pathMaxM);
+        const w = wayIn(edges, adjacency, rn.node, a.ring, gathers ? STOP.startPathMaxM : STOP.pathMaxM);
         if (w && (!way || w.length < way.length)) way = { ...w, s: rn.s };
       }
       if (way) {
@@ -302,7 +305,7 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
         break;
       }
     }
-    if (!made) throw new Error(`stop ${def.kind} at the ${def.at} of ${stage.id}: no area the ride reaches within ${def.at === 'start' ? STOP.startPathMaxM : STOP.pathMaxM} m`);
+    if (!made) throw new Error(`stop ${def.kind} at the ${def.at} of ${stage.id}: no area the ride reaches within ${gathers ? STOP.startPathMaxM : STOP.pathMaxM} m`);
     const slots = slotsIn(made.a.ring);
     if (slots.length < STOP.slots) throw new Error(`stop ${def.kind} at the ${def.at} of ${stage.id}: room for ${slots.length} bikes, not ${STOP.slots}`);
     const [cx, cz] = centroid(made.a.ring);
@@ -313,8 +316,8 @@ export function findStops({ stopDefs, samples, edges, ride, areas, bounds, demAt
     const path = [...made.path, [cx, cz], row].map(([x, z]) => [r2(x), r2(z)]).filter((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 0.5);
     const via = stops.filter(st => st.stage === stage.id && st.at === 'via').length;
     stops.push({
-      id: def.at === 'via' ? `${stage.id}-via-${via + 1}` : `${stage.id}-${def.at}`, kind: def.kind, stage: stage.id, at: def.at, s: Math.round(made.s * 10) / 10, side: made.side, access: made.access,
-      ...(def.keepLine ? { keepLine: true } : {}), x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots, ...(plane ? { plane } : {}), ...(view !== null ? { view } : {})
+      id: def.at === 'via' ? `${stage.id}-via-${via + 1}` : `${stage.id}-${def.at}`, kind: def.kind, stage: stage.id, at: def.at, s: Math.round(made.s * 10) / 10, ...(made.s1 !== undefined ? { s1: Math.round(made.s1 * 10) / 10 } : {}), side: made.side, access: made.access,
+      ...(def.keepLine ? { keepLine: true } : {}), ...(def.legStart ? { legStart: true } : {}), ...(def.hold ? { hold: def.hold } : {}), x: r2(cx), z: r2(cz), ring: simplify(made.a.ring, STOP.ringMax).map(([x, z]) => [r2(x), r2(z)]), path, slots, ...(plane ? { plane } : {}), ...(view !== null ? { view } : {})
     });
   }
   // A stop at a stage's end moves the end (and the next stage's start) to leadM before the turn-in

@@ -59,7 +59,7 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     credit: CREDIT,
     sources: { tlm: TLM_NAME.replace(/^swisstlm3d_|_2056_5728\.gpkg\.zip$/g, ''), alti3d: [] },
     keptRoadClasses: null,
-    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0), ...(w.keepLine ? { keepLine: true } : {}) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
+    stages: stages.map(s => ({ id: s.id, name: s.name, waypoints: s.waypoints.map(w => ({ id: w.id, name: w.name, e: w.e - e0, n: -(w.n - n0), snap: w.snap ?? null })), stops: s.stops ? Object.fromEntries(Object.entries(s.stops).map(([at, d]) => { const lv = w => ({ kind: w.kind, x: w.e - e0, z: -(w.n - n0), ...(w.keepLine ? { keepLine: true } : {}), ...(w.legStart ? { legStart: true } : {}), ...(w.hold ? { hold: holdOf(w.hold) } : {}) }); return [at, Array.isArray(d) ? d.map(lv) : lv(d)]; })) : null })),
     edges,
     demAt: (x, z) => dem.sample(x + e0, n0 - z),
     // Makes sure every tile under the box is in the cache (downloading what is missing) and loaded.
@@ -104,6 +104,13 @@ export async function loadTlmSource({ stages, cacheDir, gpkgFile, landmarksFile 
     cobbles: JSON.parse(fs.readFileSync(structuresFile, 'utf8')).cobbles.map(c => ({ name: c.name, classes: c.classes, box: [c.lv95Box[0] - e0, -(c.lv95Box[3] - n0), c.lv95Box[2] - e0, -(c.lv95Box[1] - n0)] })),
     close: () => gpkg.close()
   };
+}
+
+// A stop's held shot in route.json (the eye at LV95 e, n: the camera the stop scene flies to, StopScene.holdOf) in
+// local metres
+function holdOf(h) {
+  const { e, n, ...rest } = h;
+  return { x: Math.round((e - ORIGIN.e0) * 10) / 10, z: Math.round(-(n - ORIGIN.n0) * 10) / 10, ...rest };
 }
 
 // ---- the pipeline ----
